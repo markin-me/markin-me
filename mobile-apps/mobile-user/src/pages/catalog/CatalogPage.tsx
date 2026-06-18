@@ -122,6 +122,15 @@ type NumberValueStore = {
   subscribe: (listener: () => void) => () => void;
 };
 
+type ComboRotationCoordinator = {
+  beginTick: (rotationKey: number) => void;
+  getStartSnapshot: () => number | null;
+  markPending: (cardKey: string, rotationKey: number) => void;
+  markReady: (cardKey: string, rotationKey: number) => void;
+  subscribeStart: (listener: () => void) => () => void;
+  unregister: (cardKey: string) => void;
+};
+
 type ProductRuntimeStore = {
   emit: (productIds: number[]) => void;
   getSnapshot: (productId: number) => number;
@@ -158,6 +167,8 @@ const comboRotationFirstDelayMs = 3000;
 const comboRotationIntervalMs = 4500;
 const comboRotationStepDurationMs = 760;
 const comboRotationPrepareDelayMs = 180;
+const comboRotationBarrierTimeoutMs = 1200;
+const comboRotationCompleteDelayMs = comboRotationStepDurationMs * 2 + 240;
 const catalogCardTapSlop = { bottom: 10, left: 10, right: 10, top: 10 };
 const catalogCategoryMaxConcurrentLoads = 2;
 const catalogCategorySkeletonRows = 6;
@@ -174,6 +185,8 @@ type ComboRotationCommand = {
   key: number;
   nextIndexes: number[];
   nextUrls: string[];
+  pendingCellIndexes: number[];
+  startKey: number;
 };
 
 type CatalogDeliveryMode = FulfillmentMode;
@@ -202,6 +215,91 @@ function createNumberValueStore(initialValue: number | null = null): NumberValue
       return () => {
         listeners.delete(listener);
       };
+    },
+  };
+}
+
+function createComboRotationCoordinator(): ComboRotationCoordinator {
+  let currentRotationKey = 0;
+  let isMinPrepareElapsed = false;
+  let minPrepareTimer: ReturnType<typeof setTimeout> | null = null;
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  let startSnapshot: number | null = null;
+  const listeners = new Set<() => void>();
+  const pendingCards = new Set<string>();
+  const readyCards = new Set<string>();
+
+  const notify = (value: number) => {
+    startSnapshot = value;
+    listeners.forEach((listener) => listener());
+  };
+
+  const clearTimers = () => {
+    if (minPrepareTimer) {
+      clearTimeout(minPrepareTimer);
+      minPrepareTimer = null;
+    }
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = null;
+    }
+  };
+
+  const resetTick = () => {
+    clearTimers();
+    currentRotationKey = 0;
+    isMinPrepareElapsed = false;
+    pendingCards.clear();
+    readyCards.clear();
+  };
+
+  const finishTick = (value: number) => {
+    notify(value);
+    resetTick();
+  };
+
+  const tryStart = () => {
+    if (!currentRotationKey || !isMinPrepareElapsed || !pendingCards.size) return;
+    if (readyCards.size !== pendingCards.size) return;
+    finishTick(currentRotationKey);
+  };
+
+  return {
+    beginTick(rotationKey) {
+      if (currentRotationKey) notify(-currentRotationKey);
+      resetTick();
+      currentRotationKey = rotationKey;
+      minPrepareTimer = setTimeout(() => {
+        if (currentRotationKey !== rotationKey) return;
+        isMinPrepareElapsed = true;
+        tryStart();
+      }, comboRotationPrepareDelayMs);
+      timeoutTimer = setTimeout(() => {
+        if (currentRotationKey !== rotationKey) return;
+        finishTick(-rotationKey);
+      }, comboRotationBarrierTimeoutMs);
+    },
+    getStartSnapshot: () => startSnapshot,
+    markPending(cardKey, rotationKey) {
+      if (!cardKey || !rotationKey || currentRotationKey !== rotationKey) return;
+      pendingCards.add(cardKey);
+    },
+    markReady(cardKey, rotationKey) {
+      if (!cardKey || !rotationKey || currentRotationKey !== rotationKey) return;
+      if (!pendingCards.has(cardKey)) return;
+      readyCards.add(cardKey);
+      tryStart();
+    },
+    subscribeStart(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    unregister(cardKey) {
+      if (!cardKey || !pendingCards.delete(cardKey)) return;
+      readyCards.delete(cardKey);
+      tryStart();
     },
   };
 }
@@ -949,6 +1047,10 @@ function getComboImageSets(combo: CatalogCombo) {
   return [0, 1, 2, 3].map((index) => normalizeComboCellPhotos(combo, index));
 }
 
+function getComboAnimationImageUrls(combo: CatalogCombo) {
+  return Array.from(new Set(getComboImageSets(combo).flat().filter(Boolean)));
+}
+
 function getCategoryLoadStatus(loadStates: CategoryLoadStateMap, categoryId: number) {
   return loadStates[String(categoryId)] || 'idle';
 }
@@ -960,6 +1062,12 @@ function getComboSlideOffset(direction: ComboSlideDirection, width: number, heig
   if (direction === 'down') return { x: 0, y: safeHeight };
   if (direction === 'left') return { x: -safeWidth, y: 0 };
   return { x: 0, y: -safeHeight };
+}
+
+function waitAnimationFrame(callback: () => void) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(callback);
+  });
 }
 
 function isProductConfigurable(product: CatalogProduct) {
@@ -1210,21 +1318,27 @@ function ProductCard({
 
 function AnimatedComboGridCell({
   direction,
+  onPrepared,
   nextIndex,
   nextUrl,
   photos,
-  rotationKey,
+  prepareKey,
+  startKey,
 }: {
   direction: ComboSlideDirection;
+  onPrepared: (prepareKey: number) => void;
   nextIndex: number | null;
   nextUrl: string;
   photos: string[];
-  rotationKey: number;
+  prepareKey: number;
+  startKey: number;
 }) {
   const leaveAnimation = useRef(new Animated.Value(0)).current;
   const enterAnimation = useRef(new Animated.Value(1)).current;
   const mountedRef = useRef(true);
-  const prepareTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadedPrepareKeyRef = useRef(0);
+  const pendingPrepareKeyRef = useRef(0);
+  const startedKeyRef = useRef(0);
   const [slideState, setSlideState] = useState<{
     activeLayer: ComboImageLayer;
     back: ComboLayerState | null;
@@ -1248,13 +1362,15 @@ function AnimatedComboGridCell({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (prepareTimer.current) clearTimeout(prepareTimer.current);
       leaveAnimation.stopAnimation();
       enterAnimation.stopAnimation();
     };
   }, [enterAnimation, leaveAnimation]);
 
   useEffect(() => {
+    loadedPrepareKeyRef.current = 0;
+    pendingPrepareKeyRef.current = 0;
+    startedKeyRef.current = 0;
     setSlideState({
       activeLayer: 'front',
       back: null,
@@ -1267,10 +1383,30 @@ function AnimatedComboGridCell({
   }, [enterAnimation, leaveAnimation, photos]);
 
   useEffect(() => {
-    if (!rotationKey || !nextUrl || nextIndex == null || photos.length < 2) return;
+    if (!prepareKey) {
+      if (pendingPrepareKeyRef.current) {
+        pendingPrepareKeyRef.current = 0;
+        loadedPrepareKeyRef.current = 0;
+        setSlideState((current) => {
+          if (current.phase !== 'ready' || !current.incomingLayer) return current;
+          return {
+            ...current,
+            [current.incomingLayer]: null,
+            incomingLayer: null,
+            phase: 'idle',
+          };
+        });
+      }
+      return;
+    }
+    if (!nextUrl || nextIndex == null || photos.length < 2) return;
     if (nextIndex === activeIndex) return;
 
-    if (prepareTimer.current) clearTimeout(prepareTimer.current);
+    pendingPrepareKeyRef.current = prepareKey;
+    loadedPrepareKeyRef.current = 0;
+    startedKeyRef.current = 0;
+    leaveAnimation.stopAnimation();
+    enterAnimation.stopAnimation();
     leaveAnimation.setValue(0);
     enterAnimation.setValue(0);
     const incomingLayer: ComboImageLayer = slideState.activeLayer === 'front' ? 'back' : 'front';
@@ -1280,46 +1416,62 @@ function AnimatedComboGridCell({
       incomingLayer,
       phase: 'ready',
     }));
+  }, [activeIndex, enterAnimation, leaveAnimation, nextIndex, nextUrl, photos.length, prepareKey, slideState.activeLayer]);
 
-    prepareTimer.current = setTimeout(() => {
-      prepareTimer.current = null;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+  useEffect(() => {
+    if (!startKey || startedKeyRef.current === startKey) return;
+    if (startKey !== pendingPrepareKeyRef.current) return;
+    if (!slideState.incomingLayer || slideState.phase !== 'ready') return;
+    if (!nextUrl || nextIndex == null || photos.length < 2) return;
+
+    startedKeyRef.current = startKey;
+    const incomingLayer = slideState.incomingLayer;
+    setSlideState((current) => ({ ...current, phase: 'leaving' }));
+    waitAnimationFrame(() => {
+      if (!mountedRef.current) return;
+      leaveAnimation.setValue(0);
+      Animated.timing(leaveAnimation, {
+        duration: comboRotationStepDurationMs,
+        easing: Easing.bezier(0.22, 0.61, 0.36, 1),
+        toValue: 1,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (!mountedRef.current || !finished) return;
+
+        setSlideState((current) => ({ ...current, phase: 'entering' }));
+        waitAnimationFrame(() => {
           if (!mountedRef.current) return;
-
-          setSlideState((current) => ({ ...current, phase: 'leaving' }));
-
-          Animated.timing(leaveAnimation, {
+          enterAnimation.setValue(0);
+          Animated.timing(enterAnimation, {
             duration: comboRotationStepDurationMs,
             easing: Easing.bezier(0.22, 0.61, 0.36, 1),
             toValue: 1,
             useNativeDriver: true,
-          }).start(({ finished }) => {
-            if (!mountedRef.current || !finished) return;
-
-            setSlideState((current) => ({ ...current, phase: 'entering' }));
-
-            Animated.timing(enterAnimation, {
-              duration: comboRotationStepDurationMs,
-              easing: Easing.bezier(0.22, 0.61, 0.36, 1),
-              toValue: 1,
-              useNativeDriver: true,
-            }).start(() => {
-              if (!mountedRef.current) return;
-              leaveAnimation.setValue(0);
-              enterAnimation.setValue(1);
-              setSlideState((current) => ({
-                ...current,
-                activeLayer: incomingLayer,
-                incomingLayer: null,
-                phase: 'idle',
-              }));
-            });
+          }).start(() => {
+            if (!mountedRef.current) return;
+            pendingPrepareKeyRef.current = 0;
+            loadedPrepareKeyRef.current = 0;
+            leaveAnimation.setValue(0);
+            enterAnimation.setValue(1);
+            setSlideState((current) => ({
+              ...current,
+              activeLayer: incomingLayer,
+              incomingLayer: null,
+              phase: 'idle',
+            }));
           });
         });
       });
-    }, comboRotationPrepareDelayMs);
-  }, [activeIndex, enterAnimation, leaveAnimation, nextIndex, nextUrl, photos.length, rotationKey, slideState.activeLayer]);
+    });
+  }, [enterAnimation, leaveAnimation, nextIndex, nextUrl, photos.length, slideState.incomingLayer, slideState.phase, startKey]);
+
+  const handleLayerLoad = useCallback((layer: ComboImageLayer) => {
+    const key = pendingPrepareKeyRef.current;
+    if (!key || loadedPrepareKeyRef.current === key) return;
+    if (slideState.phase !== 'ready' || slideState.incomingLayer !== layer) return;
+    loadedPrepareKeyRef.current = key;
+    onPrepared(key);
+  }, [onPrepared, slideState.incomingLayer, slideState.phase]);
 
   if (!currentUrl) return null;
 
@@ -1330,10 +1482,7 @@ function AnimatedComboGridCell({
     const isLeaving = isActive && slideState.phase === 'leaving';
     const isEntering = isIncoming && slideState.phase === 'entering';
     const opacity = isLeaving
-      ? leaveAnimation.interpolate({
-        inputRange: [0, 1],
-        outputRange: [1, 0],
-      })
+      ? 1
       : isEntering
         ? enterAnimation
         : isActiveResting
@@ -1384,34 +1533,134 @@ function AnimatedComboGridCell({
       }}
     >
       {slideState.front?.url ? (
-        <Animated.Image resizeMode="cover" source={{ uri: slideState.front.url }} style={[styles.comboImage, getLayerStyle('front')]} />
+        <Animated.Image
+          resizeMode="cover"
+          source={{ uri: slideState.front.url }}
+          style={[styles.comboImage, getLayerStyle('front')]}
+          onLoad={() => handleLayerLoad('front')}
+        />
       ) : null}
       {slideState.back?.url ? (
-        <Animated.Image resizeMode="cover" source={{ uri: slideState.back.url }} style={[styles.comboImage, getLayerStyle('back')]} />
+        <Animated.Image
+          resizeMode="cover"
+          source={{ uri: slideState.back.url }}
+          style={[styles.comboImage, getLayerStyle('back')]}
+          onLoad={() => handleLayerLoad('back')}
+        />
       ) : null}
     </View>
   );
 }
 
-function ComboCard({ combo, rotationKey, onPress }: { combo: CatalogCombo; rotationKey: number; onPress: () => void }) {
+function ComboCard({
+  cardKey,
+  combo,
+  onPress,
+  rotationCoordinator,
+  rotationStore,
+}: {
+  cardKey: string;
+  combo: CatalogCombo;
+  onPress: () => void;
+  rotationCoordinator: ComboRotationCoordinator;
+  rotationStore: NumberValueStore;
+}) {
   const images = getComboImages(combo);
   const imageSets = useMemo(() => getComboImageSets(combo), [combo]);
   const comboImageIndexesRef = useRef([0, 0, 0, 0]);
+  const loadedRotationCellIndexesRef = useRef(new Set<number>());
+  const rotationCommandRef = useRef<ComboRotationCommand | null>(null);
+  const rotationCompleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rotationRunningRef = useRef(false);
+  const rotationKey = useSyncExternalStore(
+    rotationStore.subscribe,
+    rotationStore.getSnapshot,
+    rotationStore.getSnapshot,
+  ) || 0;
+  const rotationStartSignal = useSyncExternalStore(
+    rotationCoordinator.subscribeStart,
+    rotationCoordinator.getStartSnapshot,
+    rotationCoordinator.getStartSnapshot,
+  ) || 0;
+  const rotationKeyRef = useRef(Number(rotationKey || 0));
+  const lastHandledRotationKeyRef = useRef(rotationKey);
   const [comboImageIndexes, setComboImageIndexes] = useState([0, 0, 0, 0]);
   const [rotationCommand, setRotationCommand] = useState<ComboRotationCommand | null>(null);
   const discountPercent = Number(combo.discount_percent || 0);
   const minPrice = Number(combo.min_price || 0);
   const available = isAvailableValue(combo.is_available);
 
+  const clearComboRotationTimers = useCallback(() => {
+    if (rotationCompleteTimer.current) {
+      clearTimeout(rotationCompleteTimer.current);
+      rotationCompleteTimer.current = null;
+    }
+  }, []);
+
+  const resetPreparedRotation = useCallback(() => {
+    clearComboRotationTimers();
+    rotationCoordinator.unregister(cardKey);
+    loadedRotationCellIndexesRef.current = new Set();
+    rotationCommandRef.current = null;
+    rotationRunningRef.current = false;
+    setRotationCommand(null);
+  }, [cardKey, clearComboRotationTimers, rotationCoordinator]);
+
+  const startPreparedRotation = useCallback((commandKey: number) => {
+    const command = rotationCommandRef.current;
+    if (!command || command.key !== commandKey || command.startKey) return;
+    const isReady = command.pendingCellIndexes.every((index) => loadedRotationCellIndexesRef.current.has(index));
+    if (!isReady) return;
+
+    const startedCommand = {
+      ...command,
+      startKey: command.key,
+    };
+    rotationCommandRef.current = startedCommand;
+    comboImageIndexesRef.current = command.nextIndexes;
+    setComboImageIndexes(command.nextIndexes);
+    setRotationCommand(startedCommand);
+    rotationCompleteTimer.current = setTimeout(() => {
+      if (rotationCommandRef.current?.key !== commandKey) return;
+      rotationCommandRef.current = null;
+      rotationRunningRef.current = false;
+      loadedRotationCellIndexesRef.current = new Set();
+      setRotationCommand(null);
+    }, comboRotationCompleteDelayMs);
+  }, []);
+
+  const handleComboCellPrepared = useCallback((cellIndex: number, commandKey: number) => {
+    const command = rotationCommandRef.current;
+    if (!command || command.key !== commandKey || command.startKey) return;
+    if (!command.pendingCellIndexes.includes(cellIndex)) return;
+    loadedRotationCellIndexesRef.current.add(cellIndex);
+    if (command.pendingCellIndexes.every((index) => loadedRotationCellIndexesRef.current.has(index))) {
+      rotationCoordinator.markReady(cardKey, commandKey);
+    }
+  }, [cardKey, rotationCoordinator]);
+
+  useEffect(() => {
+    rotationKeyRef.current = Number(rotationKey || 0);
+  }, [rotationKey]);
+
   useEffect(() => {
     const initialIndexes = [0, 0, 0, 0];
     comboImageIndexesRef.current = initialIndexes;
     setComboImageIndexes(initialIndexes);
-    setRotationCommand(null);
-  }, [imageSets]);
+    lastHandledRotationKeyRef.current = rotationKeyRef.current;
+    resetPreparedRotation();
+  }, [imageSets, resetPreparedRotation]);
+
+  useEffect(() => () => {
+    clearComboRotationTimers();
+    rotationCoordinator.unregister(cardKey);
+  }, [cardKey, clearComboRotationTimers, rotationCoordinator]);
 
   useEffect(() => {
-    if (rotationKey <= 0) return;
+    const nextRotationKey = Number(rotationKey || 0);
+    if (nextRotationKey <= 0 || nextRotationKey === lastHandledRotationKeyRef.current) return;
+    lastHandledRotationKeyRef.current = nextRotationKey;
+    if (rotationRunningRef.current) return;
     if (!imageSets.some((photos) => photos.length > 1)) return undefined;
 
     const currentIndexes = comboImageIndexesRef.current;
@@ -1422,14 +1671,45 @@ function ComboCard({ combo, rotationKey, onPress }: { combo: CatalogCombo; rotat
       return nextIndex;
     });
     const nextUrls = imageSets.map((photos, index) => photos[nextIndexes[index]] || '');
-    comboImageIndexesRef.current = nextIndexes;
-    setComboImageIndexes(nextIndexes);
-    setRotationCommand({
-      key: rotationKey,
+    const pendingCellIndexes = nextUrls
+      .map((url, index) => (
+        url && imageSets[index]?.length > 1 && nextIndexes[index] !== (currentIndexes[index] || 0)
+          ? index
+          : null
+      ))
+      .filter((index): index is number => index !== null);
+    if (!pendingCellIndexes.length) return undefined;
+
+    resetPreparedRotation();
+    rotationRunningRef.current = true;
+    loadedRotationCellIndexesRef.current = new Set();
+    const command: ComboRotationCommand = {
+      key: nextRotationKey,
       nextIndexes,
       nextUrls,
+      pendingCellIndexes,
+      startKey: 0,
+    };
+    rotationCommandRef.current = command;
+    rotationCoordinator.markPending(cardKey, nextRotationKey);
+    setRotationCommand(command);
+    Array.from(new Set(pendingCellIndexes.map((index) => nextUrls[index]).filter(Boolean))).forEach((url) => {
+      void Image.prefetch(url).catch(() => false);
     });
-  }, [imageSets, rotationKey]);
+    return undefined;
+  }, [cardKey, imageSets, resetPreparedRotation, rotationCoordinator, rotationKey]);
+
+  useEffect(() => {
+    const signal = Number(rotationStartSignal || 0);
+    if (!signal) return;
+    const command = rotationCommandRef.current;
+    if (!command || Math.abs(signal) !== command.key) return;
+    if (signal < 0) {
+      resetPreparedRotation();
+      return;
+    }
+    startPreparedRotation(signal);
+  }, [resetPreparedRotation, rotationStartSignal, startPreparedRotation]);
 
   return (
     <Pressable style={[styles.card, !available && styles.cardDisabled]} onPress={onPress}>
@@ -1442,10 +1722,12 @@ function ComboCard({ combo, rotationKey, onPress }: { combo: CatalogCombo; rotat
               <View key={index} style={styles.comboCell}>
                 <AnimatedComboGridCell
                   direction={comboSlideDirections[index]}
+                  onPrepared={(commandKey) => handleComboCellPrepared(index, commandKey)}
                   nextIndex={rotationCommand?.nextIndexes[index] ?? comboImageIndexes[index] ?? null}
                   nextUrl={rotationCommand?.nextUrls[index] || ''}
                   photos={imageSets[index]}
-                  rotationKey={rotationCommand?.key || 0}
+                  prepareKey={rotationCommand?.key || 0}
+                  startKey={rotationCommand?.startKey || 0}
                 />
               </View>
             ))}
@@ -1486,8 +1768,10 @@ const MemoProductCard = memo(ProductCard, (previous, next) => (
 ));
 
 const MemoComboCard = memo(ComboCard, (previous, next) => (
-  previous.combo === next.combo
-    && previous.rotationKey === next.rotationKey
+  previous.cardKey === next.cardKey
+    && previous.combo === next.combo
+    && previous.rotationCoordinator === next.rotationCoordinator
+    && previous.rotationStore === next.rotationStore
 ));
 
 type CategoryChipsBarHandle = {
@@ -1635,6 +1919,8 @@ export function CatalogPage() {
   const listRef = useRef<FlatList<CatalogListItem>>(null);
   const categoryChipsBarRef = useRef<CategoryChipsBarHandle>(null);
   const catalogScrollY = useRef(new Animated.Value(0)).current;
+  const comboRotationCoordinatorRef = useRef<ComboRotationCoordinator>(createComboRotationCoordinator());
+  const comboRotationStoreRef = useRef<NumberValueStore>(createNumberValueStore(0));
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const programmaticScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chipInteractionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1693,7 +1979,6 @@ export function CatalogPage() {
   const [categoryLoadStates, setCategoryLoadStates] = useState<CategoryLoadStateMap>({});
   const [cartLines, setCartLines] = useState<CartLine[]>([]);
   const [productQuantities, setProductQuantities] = useState<Record<number, number>>({});
-  const [comboRotationKey, setComboRotationKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState('');
@@ -1828,13 +2113,15 @@ export function CatalogPage() {
   );
 
   useEffect(() => {
-    if (isAndroid) return undefined;
     let intervalTimer: ReturnType<typeof setInterval> | null = null;
+    const runComboRotationTick = () => {
+      const rotationKey = Date.now();
+      comboRotationCoordinatorRef.current.beginTick(rotationKey);
+      comboRotationStoreRef.current.set(rotationKey);
+    };
     const firstTimer = setTimeout(() => {
-      setComboRotationKey(Date.now());
-      intervalTimer = setInterval(() => {
-        setComboRotationKey(Date.now());
-      }, comboRotationIntervalMs);
+      runComboRotationTick();
+      intervalTimer = setInterval(runComboRotationTick, comboRotationIntervalMs);
     }, comboRotationFirstDelayMs);
 
     return () => {
@@ -2575,6 +2862,7 @@ export function CatalogPage() {
     const bottom = offsetY + viewportHeight * 1.15;
     const categoryIdsToLoad = new Set<number>();
     const comboIds: number[] = [];
+    const comboImageUrls: string[] = [];
     const imageUrls: string[] = [];
     const productIds: number[] = [];
 
@@ -2592,6 +2880,7 @@ export function CatalogPage() {
       item.cards.forEach((card) => {
         if (card.type === 'combo') {
           comboIds.push(Number(card.combo.id || 0));
+          comboImageUrls.push(...getComboAnimationImageUrls(card.combo));
           return;
         }
         productIds.push(Number(card.product.id || 0));
@@ -2609,7 +2898,10 @@ export function CatalogPage() {
     ].join('|');
     if (visibleCatalogRowsKey.current === key) return;
     visibleCatalogRowsKey.current = key;
-    prefetchCatalogImageUrls(imageUrls.slice(0, catalogInitialRenderCards));
+    prefetchCatalogImageUrls([
+      ...imageUrls.slice(0, catalogInitialRenderCards),
+      ...comboImageUrls,
+    ]);
     scheduleVisibleWarmups(normalizeCatalogProductIds(productIds), normalizeCatalogProductIds(comboIds));
   }, [catalogItemLayouts, catalogItems, ensureCategoryLoaded, prefetchCatalogImageUrls, scheduleVisibleWarmups]);
 
@@ -2919,13 +3211,14 @@ export function CatalogPage() {
     return (
       <MemoComboCard
         key={card.cardKey}
+        cardKey={card.cardKey}
         combo={card.combo}
         onPress={() => navigation.navigate('combo', { comboId: Number(card.combo.id), openNonce: Date.now() })}
-        rotationKey={isAndroid ? 0 : comboRotationKey}
+        rotationCoordinator={comboRotationCoordinatorRef.current}
+        rotationStore={comboRotationStoreRef.current}
       />
     );
   }, [
-    comboRotationKey,
     buildProductCardViewModel,
     handleDecreaseProduct,
     handleIncreaseProduct,
