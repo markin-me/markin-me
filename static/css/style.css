@@ -4423,6 +4423,72 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   padding:0 12px 0 0;
   overflow:visible;
 }
+
+[data-view-content="categories"] .category-list-header,
+[data-view-content="categories"] .category-row{
+  --category-row-switch-field-w:clamp(72px, 5.6vw, 92px);
+  grid-template-columns:70px minmax(280px,1fr) repeat(4, var(--category-row-switch-field-w));
+}
+[data-view-content="categories"] .category-list-header{
+  position:sticky;
+  top:-12px;
+  z-index:5;
+  display:grid;
+  align-items:center;
+  gap:8px;
+  height:22px;
+  min-height:22px;
+  margin:-12px -12px 10px;
+  padding:12px 24px 0 12px;
+  box-sizing:border-box;
+  color:var(--color-text-muted);
+  background:var(--color-surface);
+  font-size:9px;
+  line-height:10px;
+  pointer-events:none;
+}
+[data-view-content="categories"] .category-list-header span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  text-align:center;
+}
+[data-view-content="categories"] .category-list-header span:nth-child(-n+2){
+  text-align:left;
+}
+[data-view-content="categories"] .order-row.category-row{
+  align-items:center;
+  gap:8px;
+  padding-right:12px;
+  overflow:visible;
+}
+.category-row-icon{
+  min-width:0;
+}
+.category-row-title{
+  min-width:0;
+  overflow:hidden;
+}
+.category-row-title .order-line{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.category-row-switch{
+  display:inline-flex;
+  align-self:center;
+  justify-self:center;
+  pointer-events:auto;
+}
+.category-row-switch-field{
+  width:100%;
+  min-width:0;
+  justify-self:end;
+  align-self:center;
+  text-align:center;
+}
 .product-main-head{
   min-width:0;
   align-self:center;

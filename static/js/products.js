@@ -6144,17 +6144,31 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       .slice()
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
 
+    function categorySwitchHtml(field, checked, label) {
+      return `
+        <div class="category-row-switch-field field-wrap">
+          <label class="switch switch-compact category-row-switch" aria-label="${escapeHtml(label)}">
+            <input class="switch-input" type="checkbox" data-category-toggle="${escapeHtml(field)}" ${Number(checked) ? "checked" : ""} />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
+        </div>
+      `;
+    }
+
     categoriesMainList.innerHTML = list.map((c) => {
       const active = c.id === state.selectedCategoryId ? "is-active" : "";
       return `
         <div class="order-row category-row ${active}" data-id="${c.id}" draggable="true">
-          <div>
+          <div class="category-row-icon">
             ${renderCategoryIcon(c.icon, "category-icon")}
           </div>
-          <div>
+          <div class="category-row-title">
             <div class="order-line"><b>${escapeHtml(c.title)}</b></div>
           </div>
-          <div class="pill">${c.is_active ? "Активна" : "Выключена"}</div>
+          ${categorySwitchHtml("is_active", c.is_active, "Активен")}
+          ${categorySwitchHtml("site_visibility", c.site_visibility, "На сайте")}
+          ${categorySwitchHtml("checkout_visibility", c.checkout_visibility !== 0, "При заказе")}
+          ${categorySwitchHtml("cart_visibility", c.cart_visibility, "В корзине")}
         </div>
       `;
     }).join("");
@@ -6172,7 +6186,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
     // click select
     $$(".category-row", categoriesMainList).forEach((row) => {
-      row.addEventListener("click", () => {
+      row.addEventListener("click", (event) => {
+        if (event.target.closest(".category-row-switch")) return;
         const id = Number(row.dataset.id);
         const cat = state.categories.find((x) => x.id === id);
         if (!cat) return;
@@ -6186,6 +6201,48 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         const id = Number(row.dataset.id);
         const cat = state.categories.find((x) => x.id === id);
         if (cat) openCategoryEditor({ mode: "edit", category: cat });
+      });
+    });
+
+    categoriesMainList.querySelectorAll("[data-category-toggle]").forEach((input) => {
+      input.addEventListener("click", (event) => event.stopPropagation());
+      input.addEventListener("change", async (event) => {
+        event.stopPropagation();
+        const checkbox = event.currentTarget;
+        const row = checkbox.closest(".category-row[data-id]");
+        const id = Number(row?.dataset.id || 0);
+        const field = String(checkbox.dataset.categoryToggle || "");
+        const allowedFields = new Set(["is_active", "site_visibility", "checkout_visibility", "cart_visibility"]);
+        if (!(id > 0) || !allowedFields.has(field)) return;
+        const cat = state.categories.find((x) => Number(x.id) === id);
+        if (!cat) return;
+
+        const previous = Number(cat[field]) ? 1 : 0;
+        const next = checkbox.checked ? 1 : 0;
+        checkbox.disabled = true;
+        cat[field] = next;
+
+        const payload = {
+          tenant_id: TENANT_ID,
+          title: cat.title || "",
+          code: cat.code || "",
+          icon: cat.icon || "",
+          sort_order: cat.sort_order == null ? null : Number(cat.sort_order),
+          is_active: Number(cat.is_active) ? 1 : 0,
+          site_visibility: Number(cat.site_visibility) ? 1 : 0,
+          cart_visibility: Number(cat.cart_visibility) ? 1 : 0,
+          checkout_visibility: Number(cat.checkout_visibility) ? 1 : 0,
+        };
+
+        try {
+          await api(`/api/prod_categories/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+        } catch (e) {
+          cat[field] = previous;
+          checkbox.checked = Boolean(previous);
+          showToast("Не удалось сохранить категорию.");
+        } finally {
+          checkbox.disabled = false;
+        }
       });
     });
   }
