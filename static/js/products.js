@@ -1718,8 +1718,63 @@
   }
 
   function setToolbarTitle(text, iconClass) {
-    if (toolbarText) toolbarText.textContent = text || "";
+    if (toolbarText) {
+      toolbarText.classList.remove("products-category-toolbar-chips");
+      toolbarText.parentElement?.classList.remove("products-category-toolbar-title");
+      toolbarText.textContent = text || "";
+    }
     if (toolbarIcon && iconClass) toolbarIcon.className = "fas " + iconClass;
+  }
+
+  function getCategoryHeaderItems(categoryId) {
+    const id = Number(categoryId || 0);
+    if (!(id > 0)) return [];
+    const current = state.categories.find((c) => Number(c.id) === id);
+    if (!current) return [];
+    const parentId = Number(current.parent_id || 0);
+    const parent = parentId > 0
+      ? state.categories.find((c) => Number(c.id) === parentId)
+      : current;
+    if (!parent) return [];
+    const children = state.categories
+      .filter((c) => Number(c.parent_id) === Number(parent.id))
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+    return [parent, ...children];
+  }
+
+  function getCategoryNavActiveId(categoryId) {
+    const current = state.categories.find((c) => Number(c.id) === Number(categoryId || 0));
+    const parentId = Number(current?.parent_id || 0);
+    return parentId > 0 ? parentId : Number(current?.id || 0);
+  }
+
+  function renderProductsCategoryToolbarChips(categoryId) {
+    if (!toolbarText) return;
+    const items = getCategoryHeaderItems(categoryId);
+    if (!items.length) {
+      setToolbarTitle("Товары", "fa-box");
+      return;
+    }
+
+    const activeId = Number(categoryId || 0);
+    toolbarText.parentElement?.classList.add("products-category-toolbar-title");
+    toolbarText.classList.add("products-category-toolbar-chips");
+    toolbarText.innerHTML = items.map((item) => {
+      const isActive = Number(item.id) === activeId;
+      return `<button class="chip products-category-toolbar-chip ${isActive ? "is-active" : ""}" type="button" data-products-category-chip="${Number(item.id)}">${escapeHtml(item.title || "")}</button>`;
+    }).join("");
+    if (toolbarIcon) toolbarIcon.className = "fas fa-box";
+
+    if (!toolbarText.dataset.wheelBound) {
+      toolbarText.dataset.wheelBound = "1";
+      toolbarText.addEventListener("wheel", (event) => {
+        if (!toolbarText.classList.contains("products-category-toolbar-chips")) return;
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        event.preventDefault();
+        toolbarText.scrollLeft += event.deltaY;
+      }, { passive: false });
+    }
   }
 
   function syncActiveMenuItems() {
@@ -1776,7 +1831,8 @@
     state.mode = "products";
     if (categoryId) state.currentCategoryId = categoryId;
     const cat = getCurrentCategory();
-    setToolbarTitle(cat ? cat.title : "Товары", "fa-box");
+    if (cat) renderProductsCategoryToolbarChips(cat.id);
+    else setToolbarTitle("Товары", "fa-box");
     showView("products");
     showDetailsEmpty();
     syncActiveMenuItems();
@@ -3191,7 +3247,7 @@ function buildOptionGroupPayload(formValues) {
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
 
     categoriesNav.innerHTML = list.map((c) => {
-      const isActive = state.mode === "products" && c.id === state.currentCategoryId;
+      const isActive = state.mode === "products" && Number(c.id) === getCategoryNavActiveId(state.currentCategoryId);
       return `
         <button class="stage-item ${isActive ? "is-active" : ""}" type="button" data-category-id="${c.id}">
           ${renderCategoryIcon(c.icon, "stage-icon")}
@@ -19953,6 +20009,19 @@ const isViewMode = state.comboPanel.mode === "view";
         if (!btn) return;
         const id = Number(btn.dataset.categoryId);
         if (!Number.isFinite(id)) return;
+
+        enterProductsMode(id);
+        renderCategoriesNav();
+        await refreshProductsOnly();
+      });
+    }
+
+    if (toolbarText) {
+      toolbarText.addEventListener("click", async (e) => {
+        const btn = e.target.closest("[data-products-category-chip]");
+        if (!btn) return;
+        const id = Number(btn.dataset.productsCategoryChip);
+        if (!Number.isFinite(id) || id <= 0 || id === Number(state.currentCategoryId || 0)) return;
 
         enterProductsMode(id);
         renderCategoriesNav();

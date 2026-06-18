@@ -17865,6 +17865,33 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   align-items:center;
   gap:10px;
 }
+.products-category-toolbar-title{
+  min-width:0;
+  flex:1 1 auto;
+}
+.products-category-toolbar-chips{
+  display:flex;
+  flex-wrap:nowrap;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+  max-width:100%;
+  overflow-x:auto;
+  overflow-y:hidden;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.products-category-toolbar-chips::-webkit-scrollbar{
+  display:none;
+}
+.products-category-toolbar-chip{
+  flex:0 0 auto;
+  cursor:pointer;
+}
+.products-category-toolbar-chip.is-active{
+  background:var(--primary-14);
+  border-color:var(--primary-25);
+}
 .products-filter-dropdown{
   min-width:220px;
 }

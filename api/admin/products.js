@@ -1798,6 +1798,59 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         });
       }
 
+      const [childRows] = await db.query(
+        'SELECT id FROM prod_categories WHERE tenant_id=? AND parent_id=?',
+        [tenantId, categoryId]
+      );
+      const matchedCategoryIds = [categoryId, ...(Array.isArray(childRows) ? childRows : []).map((row) => Number(row.id || 0)).filter((id) => Number.isFinite(id) && id > 0)];
+      if (matchedCategoryIds.length > 1) {
+        const baseSql =
+          `SELECT ${productSelectFields}, MIN(pc.sort_order) AS link_sort_order, MAX(s.qty) AS stock_qty
+           FROM prod_product_categories pc
+           JOIN prod_products p
+             ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
+           LEFT JOIN prod_product_stocks s
+             ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+           WHERE pc.tenant_id=? AND pc.category_id IN (?)${searchSql}
+           GROUP BY p.id
+           ORDER BY COALESCE(MIN(pc.sort_order), 999999) ASC, p.id ASC`;
+        const baseParams = [storeId, tenantId, matchedCategoryIds, ...searchParams];
+        const [rows] = paginationRequested
+          ? await db.query(`${baseSql} LIMIT ? OFFSET ?`, [...baseParams, limit, offset])
+          : await db.query(baseSql, baseParams);
+
+        for (const r of rows) {
+          r.photos = helpers.safeJsonArray(r.photos_json);
+          decorateProductNutritionRow(r);
+        }
+        const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, rows);
+        rows.forEach((r) => {
+          r.blocks_config = blocksConfigMap.get(Number(r.id)) || getDefaultProductBlocksConfig();
+        });
+
+        if (!paginationRequested) {
+          return res.json({ ok: true, data: rows, category_id: categoryId });
+        }
+
+        const [[cntRow]] = await db.query(
+          `SELECT COUNT(DISTINCT p.id) AS c
+           FROM prod_product_categories pc
+           JOIN prod_products p
+             ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
+           WHERE pc.tenant_id=? AND pc.category_id IN (?)${searchSql}`,
+          [tenantId, matchedCategoryIds, ...searchParams]
+        );
+
+        return res.json({
+          ok: true,
+          data: rows,
+          category_id: categoryId,
+          total: Number(cntRow?.c || 0),
+          limit,
+          offset,
+        });
+      }
+
       const baseSql =
         `SELECT ${productSelectFields}, pc.sort_order AS link_sort_order, s.qty AS stock_qty
          FROM prod_product_categories pc
