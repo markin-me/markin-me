@@ -369,7 +369,7 @@
   const CHECKOUT_DRAFT_KEY = `shop_checkout_draft_t${tenantId}`;
   const ADDRESS_DRAFT_KEY = `shop_address_draft_t${tenantId}`;
   const AUTO_ADD_DISMISSED_KEY = `shop_auto_add_dismissed_t${tenantId}_s${getActiveStoreId()}`;
-  const CATALOG_SNAPSHOT_VERSION = 1;
+  const CATALOG_SNAPSHOT_VERSION = 2;
   const CATALOG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const CATALOG_SNAPSHOT_KEY = `shop_catalog_snapshot_v${CATALOG_SNAPSHOT_VERSION}_t${tenantId}_s${getActiveStoreId()}`;
   let catalogSnapshotSaveTimer = null;
@@ -4094,6 +4094,7 @@
     categories: [],
     activeCategoryId: null,
     activeCategoryTitle: "Каталог",
+    activeSubcategoryByCategory: new Map(),
     productsByCategory: new Map(),
     combosByCategory: new Map(),
     productCache: new Map(),
@@ -4855,6 +4856,56 @@
     return state.categories.filter((c) => !isAllCategory(c));
   }
 
+  function getCategoryChildren(category) {
+    return (Array.isArray(category?.children) ? category.children : [])
+      .filter((item) => Number(item?.id || 0) > 0 && !isAllCategory(item));
+  }
+
+  function collectCatalogCategoryIds(categories = getVisibleCategories()) {
+    const ids = [];
+    (Array.isArray(categories) ? categories : []).forEach((category) => {
+      const parentId = Number(category?.id || 0);
+      if (parentId > 0) ids.push(parentId);
+      getCategoryChildren(category).forEach((child) => {
+        const childId = Number(child?.id || 0);
+        if (childId > 0) ids.push(childId);
+      });
+    });
+    return Array.from(new Set(ids));
+  }
+
+  function getActiveSubcategoryId(categoryId) {
+    const id = Number(categoryId || 0);
+    if (!(id > 0) || !(state.activeSubcategoryByCategory instanceof Map)) return 0;
+    const activeId = Number(state.activeSubcategoryByCategory.get(id) || 0);
+    return activeId > 0 ? activeId : 0;
+  }
+
+  function mergeCatalogEntriesById(lists) {
+    const result = [];
+    const seen = new Set();
+    (Array.isArray(lists) ? lists : []).forEach((list) => {
+      (Array.isArray(list) ? list : []).forEach((item) => {
+        const id = Number(item?.id || 0);
+        if (!(id > 0) || seen.has(id)) return;
+        seen.add(id);
+        result.push(item);
+      });
+    });
+    return result;
+  }
+
+  function getCatalogDisplayList(category, sourceMap) {
+    if (!(sourceMap instanceof Map)) return [];
+    const activeSubcategoryId = getActiveSubcategoryId(category?.id);
+    if (activeSubcategoryId > 0) return sourceMap.get(activeSubcategoryId) || [];
+    const ids = [
+      Number(category?.id || 0),
+      ...getCategoryChildren(category).map((child) => Number(child?.id || 0)),
+    ].filter((id) => id > 0);
+    return mergeCatalogEntriesById(ids.map((id) => sourceMap.get(id) || []));
+  }
+
   function updateCategoriesActiveUi() {
     $$(".shop-cat-item", elCatsList).forEach((x) => {
       const id = Number(x.getAttribute("data-cat-id"));
@@ -4867,6 +4918,26 @@
         x.classList.toggle("is-active", Number(state.activeCategoryId) === id);
       });
     }
+
+    updateCatalogSubcategoryChipsActive(state.activeCategoryId);
+  }
+
+  function bindMobileHeaderCollapseOnScroll() {
+    if (bindMobileHeaderCollapseOnScroll._bound) return;
+    bindMobileHeaderCollapseOnScroll._bound = true;
+    const update = () => {
+      const collapsed = isMobileViewport()
+        && isShopPage()
+        && document.body.classList.contains("shop-main")
+        && !document.body.classList.contains("modal-open")
+        && !document.body.classList.contains("sheet-open")
+        && Number(window.scrollY || 0) > 44;
+      document.body.classList.toggle("shop-header-collapsed", collapsed);
+      updateStickySubcategoryRows();
+    };
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    update();
   }
   
   function isMobileViewport() {
@@ -12156,27 +12227,42 @@ async function initAddresses() {
     if (!Number.isFinite(id)) return;
     const header = elProductsGrid?.querySelector?.(`.shop-category-header[data-cat-id="${id}"]`);
     if (!header) return;
+    let targetEl = header;
+    let node = header.nextElementSibling;
+    while (node && !(node.classList && node.classList.contains("shop-category-header"))) {
+      if (node.classList && node.classList.contains("sp-card")) {
+        targetEl = node;
+        break;
+      }
+      node = node.nextElementSibling;
+    }
 
     isProgrammaticCategoryScroll = true;
-    const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile) {
-      const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
-      const chipsH = elCatChipsWrap?.getBoundingClientRect ? elCatChipsWrap.getBoundingClientRect().height : 0;
-      const offset = headerH + chipsH + 55;
-      const rect = header.getBoundingClientRect();
-      const top = window.scrollY + rect.top - offset;
-      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
-    } else {
-      const scroller = elProductsScroller;
-      const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
-      const offset = Math.max(0, padTop || 0) + 55;
-      if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
-        const top = header.offsetTop - offset;
-        elProductsScroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
-      } else if (typeof header.scrollIntoView === "function") {
-        header.scrollIntoView({ behavior: "smooth", block: "start" });
+    const runScroll = () => {
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      if (isMobile) {
+        const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
+        const headerVisibleH = (document.body.classList.contains("shop-header-collapsed") || Number(window.scrollY || 0) > 44) ? 0 : headerH;
+        const chipsH = elCatChipsWrap?.getBoundingClientRect ? elCatChipsWrap.getBoundingClientRect().height : 0;
+        const subcategoryRow = elProductsGrid?.querySelector?.(`.shop-category-subcategory-row[data-parent-cat-id="${id}"]`);
+        const subcategoryH = subcategoryRow?.getBoundingClientRect ? subcategoryRow.getBoundingClientRect().height : 0;
+        const offset = headerVisibleH + chipsH + subcategoryH + 12;
+        const rect = targetEl.getBoundingClientRect();
+        const top = window.scrollY + rect.top - offset;
+        window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      } else {
+        const scroller = elProductsScroller;
+        const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
+        const offset = Math.max(0, padTop || 0) + 18;
+        if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
+          const top = targetEl.offsetTop - offset;
+          elProductsScroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+        } else if (typeof targetEl.scrollIntoView === "function") {
+          targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
       }
-    }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(runScroll));
 
     setTimeout(() => {
       isProgrammaticCategoryScroll = false;
@@ -12188,6 +12274,33 @@ async function initAddresses() {
 
   function refreshCategoryHeaders() {
     categoryHeaders = Array.from(elProductsGrid?.querySelectorAll?.(".shop-category-header") || []);
+  }
+
+  function updateStickySubcategoryRows() {
+    if (!elProductsGrid) return;
+    const rows = Array.from(elProductsGrid.querySelectorAll(".shop-category-subcategory-row"));
+    if (!rows.length) return;
+    if (!isMobileViewport()) {
+      rows.forEach((row) => row.classList.remove("is-sticky-past"));
+      return;
+    }
+
+    const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
+    const stickyTop = (document.body.classList.contains("shop-header-collapsed") ? 0 : headerH) + 48;
+    let stuckIndex = -1;
+    rows.forEach((row, index) => {
+      const top = row.getBoundingClientRect().top;
+      if (top <= stickyTop + 1) stuckIndex = index;
+    });
+
+    rows.forEach((row, index) => {
+      let nextHeader = row.nextElementSibling;
+      while (nextHeader && !nextHeader.classList?.contains("shop-category-header")) {
+        nextHeader = nextHeader.nextElementSibling;
+      }
+      const nextCategoryReached = Boolean(nextHeader && nextHeader.getBoundingClientRect().top <= stickyTop + 1);
+      row.classList.toggle("is-sticky-past", (stuckIndex > 0 && index < stuckIndex) || nextCategoryReached);
+    });
   }
 
   function scrollChipsToCategory(categoryId) {
@@ -12267,12 +12380,13 @@ async function initAddresses() {
     const scroller = isMobile ? window : (elProductsScroller || window);
     if (!scroller || !scroller.addEventListener) return;
     scroller.addEventListener("scroll", () => {
-      if (categoryScrollRaf) return;
-      categoryScrollRaf = requestAnimationFrame(() => {
-        categoryScrollRaf = null;
-        updateActiveCategoryFromScroll();
+        if (categoryScrollRaf) return;
+        categoryScrollRaf = requestAnimationFrame(() => {
+          categoryScrollRaf = null;
+          updateStickySubcategoryRows();
+          updateActiveCategoryFromScroll();
+        });
       });
-    });
 
     // Desktop fallback: also listen on window in case scroll container changes
     if (!isMobile && scroller !== window) {
@@ -12280,6 +12394,7 @@ async function initAddresses() {
         if (categoryScrollRaf) return;
         categoryScrollRaf = requestAnimationFrame(() => {
           categoryScrollRaf = null;
+          updateStickySubcategoryRows();
           updateActiveCategoryFromScroll();
         });
       });
@@ -12376,6 +12491,7 @@ async function initAddresses() {
     });
 
     if (elCatChipsWrap) elCatChipsWrap.classList.remove("hidden");
+    bindMobileHeaderCollapseOnScroll();
     scrollChipsToCategory(state.activeCategoryId);
     bindCategoryChipsWheelScroll();
   }
@@ -13333,6 +13449,91 @@ async function initAddresses() {
     }
   }
 
+  function updateCatalogSubcategoryChipsActive(categoryId) {
+    const parentId = Number(categoryId || 0);
+    if (!(parentId > 0)) return;
+    const activeId = getActiveSubcategoryId(parentId);
+    Array.from(elProductsGrid?.querySelectorAll?.(`.shop-subcategory-chip[data-parent-cat-id="${parentId}"]`) || [])
+      .forEach((chip) => {
+        const id = Number(chip.getAttribute("data-sub-cat-id") || 0);
+        chip.classList.toggle("is-active", id === activeId);
+      });
+  }
+
+  function renderCategorySectionHeader(header, category) {
+    const parentId = Number(category?.id || 0);
+    header.setAttribute("data-cat-id", String(parentId));
+    header.setAttribute("data-cat-title", str(category?.title));
+    header.innerHTML = "";
+
+    const title = document.createElement("div");
+    title.className = "shop-category-header__title";
+    title.textContent = str(category?.title);
+    header.appendChild(title);
+  }
+
+  function renderCategorySubcategoryRow(row, category) {
+    const parentId = Number(category?.id || 0);
+    row.className = "shop-category-subcategory-row";
+    row.setAttribute("data-parent-cat-id", String(parentId));
+    row.innerHTML = "";
+    const children = getCategoryChildren(category);
+    if (!children.length) return;
+
+    const chips = document.createElement("div");
+    chips.className = "shop-subcategory-chips no-scrollbar";
+
+    const makeChip = (child, label) => {
+      const childId = Number(child?.id || 0);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-subcategory-chip";
+      btn.setAttribute("data-parent-cat-id", String(parentId));
+      btn.setAttribute("data-sub-cat-id", String(childId));
+      btn.textContent = label;
+      btn.classList.toggle("is-active", childId === getActiveSubcategoryId(parentId));
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        selectCatalogSubcategory(parentId, child);
+      });
+      return btn;
+    };
+
+    chips.appendChild(makeChip({ id: 0, title: "\u0412\u0441\u0435" }, "\u0412\u0441\u0435"));
+    children.forEach((child) => {
+      chips.appendChild(makeChip(child, str(child.title)));
+    });
+    row.appendChild(chips);
+    updateCatalogSubcategoryChipsActive(parentId);
+  }
+
+  async function selectCatalogSubcategory(parentId, subcategory) {
+    const categoryId = Number(parentId || 0);
+    if (!(categoryId > 0)) return;
+    const subcategoryId = Number(subcategory?.id || 0);
+    const parentCategory = getVisibleCategories().find((category) => Number(category?.id || 0) === categoryId) || null;
+    if (parentCategory) {
+      setActiveCategory(parentCategory.id, parentCategory.title, { scroll: false });
+    }
+    if (!(state.activeSubcategoryByCategory instanceof Map)) state.activeSubcategoryByCategory = new Map();
+    if (subcategoryId > 0) state.activeSubcategoryByCategory.set(categoryId, subcategoryId);
+    else state.activeSubcategoryByCategory.delete(categoryId);
+
+    updateCatalogSubcategoryChipsActive(categoryId);
+    const targetCategoryId = subcategoryId > 0 ? subcategoryId : categoryId;
+    const hasCachedProducts = state.productsByCategory instanceof Map && state.productsByCategory.has(targetCategoryId);
+    const hasCachedCombos = state.combosByCategory instanceof Map && state.combosByCategory.has(targetCategoryId);
+    renderProducts();
+    scrollToCategory(categoryId);
+    saveCatalogSnapshotFromState();
+    if (!hasCachedProducts || !hasCachedCombos) {
+      await loadProductsForCategory(targetCategoryId, { limit: 200, lite: true });
+      renderProducts();
+      scrollToCategory(categoryId);
+      saveCatalogSnapshotFromState();
+    }
+  }
+
   function scheduleComboDetailsPrefetch(comboIds, opts = {}) {
     const ids = Array.isArray(comboIds)
       ? comboIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
@@ -13399,13 +13600,22 @@ async function initAddresses() {
       if (!header) {
         header = document.createElement("div");
         header.className = "shop-category-header";
-        header.setAttribute("data-cat-id", String(cid));
-        header.setAttribute("data-cat-title", str(c.title));
-        header.textContent = str(c.title);
+        renderCategorySectionHeader(header, c);
         elProductsGrid.appendChild(header);
       } else if (!appendOnly) {
-        header.setAttribute("data-cat-title", str(c.title));
-        header.textContent = str(c.title);
+        renderCategorySectionHeader(header, c);
+      }
+
+      const children = getCategoryChildren(c);
+      let subcategoryRow = elProductsGrid.querySelector(`.shop-category-subcategory-row[data-parent-cat-id="${cid}"]`);
+      if (children.length) {
+        if (!subcategoryRow) {
+          subcategoryRow = document.createElement("div");
+          header.after(subcategoryRow);
+        }
+        renderCategorySubcategoryRow(subcategoryRow, c);
+      } else if (subcategoryRow) {
+        subcategoryRow.remove();
       }
 
       let insertBefore = null;
@@ -13433,7 +13643,7 @@ async function initAddresses() {
         }
       }
 
-      const products = state.productsByCategory.get(cid) || [];
+      const products = getCatalogDisplayList(c, state.productsByCategory);
       totalProducts += products.length;
       const frag = document.createDocumentFragment();
       const prefetchProductIds = [];
@@ -13600,7 +13810,7 @@ async function initAddresses() {
       }
 
       // ???????? ?????-??????? ? ???? ?????????
-      const combos = state.combosByCategory.get(cid) || [];
+      const combos = getCatalogDisplayList(c, state.combosByCategory);
       combos.forEach((combo) => {
         const comboId = Number(combo.id);
         if (!Number.isFinite(comboId)) return;
@@ -13788,6 +13998,7 @@ async function initAddresses() {
 
     updateCartBadge();
     refreshCategoryHeaders();
+    updateStickySubcategoryRows();
     queueVisibleProductStockRefresh("render_products", appendOnly ? 120 : 40);
   }
 
@@ -16355,9 +16566,14 @@ function updateCartBadge() {
   }
 
   async function selectCategory(categoryId, title) {
-    setActiveCategory(categoryId, title, { scroll: true });
+    const id = Number(categoryId);
+    if (Number.isFinite(id) && id > 0 && state.activeSubcategoryByCategory instanceof Map) {
+      state.activeSubcategoryByCategory.delete(id);
+    }
+    setActiveCategory(categoryId, title, { scroll: false });
     // Don't block click -> scroll; load in background.
     ensureCategoryLoaded(categoryId, { limit: 200 });
+    scrollToCategory(id);
     await warmupCartProducts();
     renderCart();
   }
@@ -17718,30 +17934,33 @@ function updateCartBadge() {
 
   async function loadProductsByCategory() {
     const categories = getVisibleCategories();
-    const categoryIds = categories.map(c => Number(c.id));
+    const categoryIds = collectCatalogCategoryIds(categories);
 
     let productsByCategory = {};
     let combosByCategory = {};
 
     try {
-      const json = await apiJson('/api/public/products/batch/categories', {
-        method: 'POST',
-        body: { category_ids: categoryIds },
-      });
-      productsByCategory = json.data || {};
-      combosByCategory = json.combos || {};
+      for (let index = 0; index < categoryIds.length; index += 50) {
+        const chunk = categoryIds.slice(index, index + 50);
+        const json = await apiJson('/api/public/products/batch/categories', {
+          method: 'POST',
+          body: { category_ids: chunk },
+        });
+        productsByCategory = { ...productsByCategory, ...(json.data || {}) };
+        combosByCategory = { ...combosByCategory, ...(json.combos || {}) };
+      }
     } catch (e) {
       console.warn("loadProductsByCategory: batch failed, falling back", e);
       // fallback: загружаем по одному
       const entries = await Promise.all(
-        categories.map(async (c) => {
+        categoryIds.map(async (categoryId) => {
           try {
-            const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(c.id)}`);
-            combosByCategory[c.id] = Array.isArray(json.combos) ? json.combos : [];
-            return [Number(c.id), Array.isArray(json.data) ? json.data : []];
+            const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(categoryId)}`);
+            combosByCategory[categoryId] = Array.isArray(json.combos) ? json.combos : [];
+            return [Number(categoryId), Array.isArray(json.data) ? json.data : []];
           } catch (e2) {
-            combosByCategory[c.id] = [];
-            return [Number(c.id), []];
+            combosByCategory[categoryId] = [];
+            return [Number(categoryId), []];
           }
         })
       );

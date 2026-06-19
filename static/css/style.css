@@ -16127,15 +16127,27 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   gap:8px;
 }
 
+.category-editor-subcategory-head{
+  display:grid;
+  grid-template-columns:40px minmax(0, 1fr) repeat(4, 58px) 40px;
+  gap:8px;
+  align-items:end;
+  color:var(--color-text-muted);
+  font-size:10px;
+  font-weight:500;
+  line-height:1.1;
+  text-align:center;
+}
+
 .category-editor-subcategory-row{
   display:grid;
-  grid-template-columns:40px minmax(0, 1fr) 40px;
+  grid-template-columns:40px minmax(0, 1fr) repeat(4, 58px) 40px;
   gap:8px;
   align-items:center;
 }
 
 .category-editor-subcategory-row--view{
-  grid-template-columns:40px minmax(0, 1fr);
+  grid-template-columns:40px minmax(0, 1fr) repeat(4, 58px) 40px;
 }
 
 .category-editor-subcategory-photo{
@@ -16164,6 +16176,10 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   height:100%;
   object-fit:cover;
   display:block;
+}
+
+.category-editor-subcategory-switch{
+  justify-self:center;
 }
 
 .category-editor-subcategory-remove{

@@ -6924,15 +6924,37 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       const subcategories = state.categories
         .filter((item) => Number(item.parent_id) === Number(cat.id))
         .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+      const readonlySwitch = (checked, label) => `
+        <label class="switch switch-compact category-editor-subcategory-switch" aria-label="${escapeHtml(label)}">
+          <input class="switch-input" type="checkbox" disabled ${Number(checked) ? "checked" : ""} />
+          <span class="switch-ui" aria-hidden="true"></span>
+        </label>
+      `;
       viewState.subcategoriesList.innerHTML = subcategories.length
-        ? subcategories.map((item) => `
+        ? `
+          <div class="category-editor-subcategory-head" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span>Активен</span>
+            <span>На сайте</span>
+            <span>При заказе</span>
+            <span>В корзине</span>
+            <span></span>
+          </div>
+          ${subcategories.map((item) => `
             <div class="category-editor-subcategory-row category-editor-subcategory-row--view">
               <span class="category-editor-subcategory-photo" aria-hidden="true">
                 ${looksLikeUrl(item.icon) ? `<img src="${escapeHtml(item.icon)}" alt="" />` : `<i class="${escapeHtml(item.icon || "fas fa-folder")}"></i>`}
               </span>
               <input class="control" type="text" value="${escapeHtml(item.title || "")}" readonly tabindex="-1" />
+              ${readonlySwitch(item.is_active, "Активен")}
+              ${readonlySwitch(item.site_visibility, "На сайте")}
+              ${readonlySwitch(item.checkout_visibility, "При заказе")}
+              ${readonlySwitch(item.cart_visibility, "В корзине")}
+              <span></span>
             </div>
-          `).join("")
+          `).join("")}
+        `
         : '<div class="category-editor-subcategory-empty">Подкатегории не заданы</div>';
     }
 
@@ -19169,7 +19191,15 @@ const isViewMode = state.comboPanel.mode === "view";
         ? state.categories
           .filter((item) => Number(item.parent_id) === Number(cat.id))
           .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id)
-          .map((item) => ({ id: Number(item.id), title: String(item.title || ""), icon: String(item.icon || "") }))
+          .map((item) => ({
+            id: Number(item.id),
+            title: String(item.title || ""),
+            icon: String(item.icon || ""),
+            is_active: Number(item.is_active) ? 1 : 0,
+            site_visibility: Number(item.site_visibility) ? 1 : 0,
+            checkout_visibility: Number(item.checkout_visibility) ? 1 : 0,
+            cart_visibility: Number(item.cart_visibility) ? 1 : 0,
+          }))
         : [],
     };
 
@@ -19198,19 +19228,43 @@ const isViewMode = state.comboPanel.mode === "view";
     const subcategoryAddBtn = wrapper.querySelector("[data-category-subcategory-add]");
     const canHaveSubcategories = !isEdit || String(cat?.code || "") !== "all";
 
+    function subcategorySwitchHtml(field, checked, label) {
+      return `
+        <label class="switch switch-compact category-editor-subcategory-switch" aria-label="${escapeHtml(label)}">
+          <input class="switch-input" type="checkbox" data-subcategory-toggle="${escapeHtml(field)}" ${Number(checked) ? "checked" : ""} />
+          <span class="switch-ui" aria-hidden="true"></span>
+        </label>
+      `;
+    }
+
     function renderSubcategoryInputs() {
       if (!subcategoriesList) return;
-      subcategoriesList.innerHTML = draft.subcategories.map((item, index) => `
-        <div class="category-editor-subcategory-row" data-subcategory-index="${index}">
-          <button class="category-editor-subcategory-photo" type="button" data-subcategory-photo aria-label="Загрузить иконку подкатегории">
-            ${looksLikeUrl(item.icon) ? `<img src="${escapeHtml(item.icon)}" alt="" />` : `<i class="${escapeHtml(item.icon || "fas fa-plus")}"></i>`}
-          </button>
-          <input class="control" type="text" value="${escapeHtml(item.title)}" placeholder="Название подкатегории" data-subcategory-title />
-          <button class="category-editor-subcategory-remove" type="button" data-subcategory-remove aria-label="Удалить подкатегорию">
-            <i class="fas fa-times" aria-hidden="true"></i>
-          </button>
-        </div>
-      `).join("");
+      subcategoriesList.innerHTML = `
+        ${draft.subcategories.length ? `<div class="category-editor-subcategory-head" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span>Активен</span>
+          <span>На сайте</span>
+          <span>При заказе</span>
+          <span>В корзине</span>
+          <span></span>
+        </div>` : ""}
+        ${draft.subcategories.map((item, index) => `
+          <div class="category-editor-subcategory-row" data-subcategory-index="${index}">
+            <button class="category-editor-subcategory-photo" type="button" data-subcategory-photo aria-label="Загрузить иконку подкатегории">
+              ${looksLikeUrl(item.icon) ? `<img src="${escapeHtml(item.icon)}" alt="" />` : `<i class="${escapeHtml(item.icon || "fas fa-plus")}"></i>`}
+            </button>
+            <input class="control" type="text" value="${escapeHtml(item.title)}" placeholder="Название подкатегории" data-subcategory-title />
+            ${subcategorySwitchHtml("is_active", item.is_active, "Активен")}
+            ${subcategorySwitchHtml("site_visibility", item.site_visibility, "На сайте")}
+            ${subcategorySwitchHtml("checkout_visibility", item.checkout_visibility, "При заказе")}
+            ${subcategorySwitchHtml("cart_visibility", item.cart_visibility, "В корзине")}
+            <button class="category-editor-subcategory-remove" type="button" data-subcategory-remove aria-label="Удалить подкатегорию">
+              <i class="fas fa-times" aria-hidden="true"></i>
+            </button>
+          </div>
+        `).join("")}
+      `;
 
       subcategoriesList.querySelectorAll("[data-subcategory-title]").forEach((input) => {
         input.addEventListener("input", () => {
@@ -19218,6 +19272,17 @@ const isViewMode = state.comboPanel.mode === "view";
           const index = Number(row?.dataset.subcategoryIndex);
           if (!Number.isInteger(index) || !draft.subcategories[index]) return;
           draft.subcategories[index].title = input.value;
+        });
+      });
+
+      subcategoriesList.querySelectorAll("[data-subcategory-toggle]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const row = input.closest("[data-subcategory-index]");
+          const index = Number(row?.dataset.subcategoryIndex);
+          const field = String(input.dataset.subcategoryToggle || "");
+          if (!Number.isInteger(index) || !draft.subcategories[index]) return;
+          if (!["is_active", "site_visibility", "checkout_visibility", "cart_visibility"].includes(field)) return;
+          draft.subcategories[index][field] = input.checked ? 1 : 0;
         });
       });
 
@@ -19248,7 +19313,15 @@ const isViewMode = state.comboPanel.mode === "view";
       subcategoriesSection.classList.remove("hidden");
       renderSubcategoryInputs();
       subcategoryAddBtn?.addEventListener("click", () => {
-        draft.subcategories.push({ id: null, title: "", icon: "" });
+        draft.subcategories.push({
+          id: null,
+          title: "",
+          icon: "",
+          is_active: 1,
+          site_visibility: 1,
+          checkout_visibility: 1,
+          cart_visibility: 0,
+        });
         renderSubcategoryInputs();
         subcategoriesList?.querySelector("[data-subcategory-index]:last-child [data-subcategory-title]")?.focus();
       });
@@ -19761,7 +19834,18 @@ const isViewMode = state.comboPanel.mode === "view";
                 const existing = state.categories.find((categoryItem) => Number(categoryItem.id) === Number(item.id));
                 if (!existing) continue;
                 const existingIcon = String(existing.icon || "").trim();
-                if (title === String(existing.title || "").trim() && icon === existingIcon) continue;
+                const nextIsActive = Number(item.is_active) ? 1 : 0;
+                const nextSiteVisibility = Number(item.site_visibility) ? 1 : 0;
+                const nextCartVisibility = Number(item.cart_visibility) ? 1 : 0;
+                const nextCheckoutVisibility = Number(item.checkout_visibility) ? 1 : 0;
+                if (
+                  title === String(existing.title || "").trim()
+                  && icon === existingIcon
+                  && nextIsActive === (Number(existing.is_active) ? 1 : 0)
+                  && nextSiteVisibility === (Number(existing.site_visibility) ? 1 : 0)
+                  && nextCartVisibility === (Number(existing.cart_visibility) ? 1 : 0)
+                  && nextCheckoutVisibility === (Number(existing.checkout_visibility) ? 1 : 0)
+                ) continue;
                 await api(`/api/prod_categories/${item.id}`, {
                   method: "PUT",
                   body: JSON.stringify({
@@ -19769,10 +19853,10 @@ const isViewMode = state.comboPanel.mode === "view";
                     code: existing.code || "",
                     icon,
                     sort_order: existing.sort_order == null ? null : Number(existing.sort_order),
-                    is_active: Number(existing.is_active) ? 1 : 0,
-                    site_visibility: Number(existing.site_visibility) ? 1 : 0,
-                    cart_visibility: Number(existing.cart_visibility) ? 1 : 0,
-                    checkout_visibility: Number(existing.checkout_visibility) ? 1 : 0,
+                    is_active: nextIsActive,
+                    site_visibility: nextSiteVisibility,
+                    cart_visibility: nextCartVisibility,
+                    checkout_visibility: nextCheckoutVisibility,
                   }),
                 });
                 continue;
@@ -19785,10 +19869,10 @@ const isViewMode = state.comboPanel.mode === "view";
                   title,
                   code: `subcat-${savedCategoryId}-${Date.now().toString(36)}-${index}`,
                   icon,
-                  is_active: 1,
-                  site_visibility: 1,
-                  cart_visibility: 0,
-                  checkout_visibility: 1,
+                  is_active: Number(item.is_active) ? 1 : 0,
+                  site_visibility: Number(item.site_visibility) ? 1 : 0,
+                  cart_visibility: Number(item.cart_visibility) ? 1 : 0,
+                  checkout_visibility: Number(item.checkout_visibility) ? 1 : 0,
                 }),
               });
             }

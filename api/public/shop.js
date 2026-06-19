@@ -12057,14 +12057,31 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     if (cached) return { payload: cached, cacheHit: true };
 
     const [rows] = await db.query(
-      `SELECT id, tenant_id, code, title, icon, site_visibility, is_active, sort_order
+      `SELECT id, tenant_id, code, title, icon, site_visibility, is_active, sort_order, parent_id
        FROM prod_categories
-       WHERE tenant_id=? AND parent_id IS NULL AND is_active=1 AND site_visibility=1
-       ORDER BY sort_order ASC, id ASC`,
+       WHERE tenant_id=? AND is_active=1 AND site_visibility=1
+       ORDER BY parent_id ASC, sort_order ASC, id ASC`,
       [tenantId]
     );
 
-    const payload = { ok: true, data: rows };
+    const parents = [];
+    const parentById = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const item = { ...row, children: [] };
+      if (row.parent_id == null) {
+        parents.push(item);
+        parentById.set(Number(row.id), item);
+      }
+    });
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const parentId = Number(row.parent_id || 0);
+      if (!(parentId > 0)) return;
+      const parent = parentById.get(parentId);
+      if (!parent) return;
+      parent.children.push({ ...row, children: [] });
+    });
+
+    const payload = { ok: true, data: parents };
     setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.categories);
     return { payload, cacheHit: false };
   }
