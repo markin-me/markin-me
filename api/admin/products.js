@@ -1363,6 +1363,45 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
   });
 
+  router.delete('/prod_categories/:id', async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        conn.release();
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [rows] = await conn.query(
+        'SELECT id, parent_id FROM prod_categories WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      const category = rows[0];
+      if (!category) {
+        conn.release();
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+      if (category.parent_id == null) {
+        conn.release();
+        return res.status(400).json({ ok: false, error: 'ROOT_CATEGORY_DELETE_FORBIDDEN' });
+      }
+
+      await conn.beginTransaction();
+      await conn.query('DELETE FROM prod_product_categories WHERE tenant_id=? AND category_id=?', [tenantId, id]);
+      await conn.query('DELETE FROM prod_checkout_constructor_block_categories WHERE tenant_id=? AND category_id=?', [tenantId, id]);
+      await conn.query('DELETE FROM prod_categories WHERE tenant_id=? AND id=?', [tenantId, id]);
+      await conn.commit();
+      conn.release();
+      res.json({ ok: true });
+    } catch (e) {
+      try { await conn.rollback(); } catch {}
+      conn.release();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // ------------------------------
   // Products that use a given product as ingredient (for "Пересчитать в составе")
   // GET /api/admin/products/used-as-ingredient/:ingredientId

@@ -1723,7 +1723,13 @@
       toolbarText.parentElement?.classList.remove("products-category-toolbar-title");
       toolbarText.textContent = text || "";
     }
-    if (toolbarIcon && iconClass) toolbarIcon.className = "fas " + iconClass;
+    if (toolbarIcon && iconClass) {
+      toolbarIcon.className = "fas " + iconClass;
+      toolbarIcon.removeAttribute("role");
+      toolbarIcon.removeAttribute("tabindex");
+      toolbarIcon.removeAttribute("title");
+      toolbarIcon.removeAttribute("aria-label");
+    }
   }
 
   function getCategoryHeaderItems(categoryId) {
@@ -1764,7 +1770,21 @@
       const isActive = Number(item.id) === activeId;
       return `<button class="chip products-category-toolbar-chip ${isActive ? "is-active" : ""}" type="button" data-products-category-chip="${Number(item.id)}">${escapeHtml(item.title || "")}</button>`;
     }).join("");
-    if (toolbarIcon) toolbarIcon.className = "fas fa-box";
+    const parent = items[0] || null;
+    const canCreateSubcategory = parent && String(parent.code || "") !== "all";
+    if (toolbarIcon && canCreateSubcategory) {
+      toolbarIcon.className = "fas fa-ellipsis-v products-category-toolbar-menu";
+      toolbarIcon.setAttribute("role", "button");
+      toolbarIcon.setAttribute("tabindex", "0");
+      toolbarIcon.setAttribute("title", "Добавить подкатегорию");
+      toolbarIcon.setAttribute("aria-label", "Добавить подкатегорию");
+    } else if (toolbarIcon) {
+      toolbarIcon.className = "fas fa-box";
+      toolbarIcon.removeAttribute("role");
+      toolbarIcon.removeAttribute("tabindex");
+      toolbarIcon.removeAttribute("title");
+      toolbarIcon.removeAttribute("aria-label");
+    }
 
     if (!toolbarText.dataset.wheelBound) {
       toolbarText.dataset.wheelBound = "1";
@@ -1775,6 +1795,88 @@
         toolbarText.scrollLeft += event.deltaY;
       }, { passive: false });
     }
+  }
+
+  function closeCreateSubcategoryModal() {
+    document.querySelectorAll(".product-photo-grid-modal-overlay[data-create-subcategory-modal='1']").forEach((el) => el.remove());
+  }
+
+  function openCreateSubcategoryModal() {
+    const items = getCategoryHeaderItems(state.currentCategoryId);
+    const parent = items[0] || null;
+    const parentId = Number(parent?.id || 0);
+    if (!(parentId > 0) || String(parent?.code || "") === "all") return;
+
+    closeCreateSubcategoryModal();
+    const overlay = document.createElement("div");
+    overlay.className = "product-photo-grid-modal-overlay";
+    overlay.setAttribute("data-create-subcategory-modal", "1");
+    const card = document.createElement("div");
+    card.className = "product-photo-grid-modal-card create-subcategory-modal-card";
+    card.innerHTML = `
+      <div class="product-photo-grid-modal-head">
+        <div class="product-photo-grid-modal-title create-subcategory-modal-title">Введите название подкатегории</div>
+        <button type="button" class="product-photo-grid-modal-close" aria-label="Закрыть"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="product-photo-grid-modal-body create-subcategory-modal-body">
+        <input class="create-subcategory-modal-input" type="text" autocomplete="off" />
+      </div>
+      <div class="product-photo-grid-modal-foot">
+        <button type="button" class="btn" data-role="cancel">Отмена</button>
+        <button type="button" class="btn btn-primary" data-role="save">Сохранить</button>
+      </div>
+    `;
+
+    const input = card.querySelector(".create-subcategory-modal-input");
+    const saveBtn = card.querySelector('[data-role="save"]');
+    const close = () => closeCreateSubcategoryModal();
+    const save = async () => {
+      const title = String(input?.value || "").trim();
+      if (!title) {
+        input?.focus();
+        return;
+      }
+      if (saveBtn) saveBtn.disabled = true;
+      try {
+        await api("/api/prod_categories", {
+          method: "POST",
+          body: JSON.stringify({
+            parent_id: parentId,
+            title,
+            code: `subcat-${parentId}-${Date.now().toString(36)}`,
+            is_active: 1,
+            site_visibility: 1,
+            cart_visibility: 0,
+            checkout_visibility: 1,
+          }),
+        });
+        close();
+        await loadCategories();
+        renderCategoriesNav();
+        renderProductsCategoryToolbarChips(state.currentCategoryId);
+        showToast("Подкатегория добавлена", "success");
+      } catch (e) {
+        console.error(e);
+        showToast("Не удалось добавить подкатегорию.");
+        if (saveBtn) saveBtn.disabled = false;
+      }
+    };
+
+    card.querySelector(".product-photo-grid-modal-close")?.addEventListener("click", close);
+    card.querySelector('[data-role="cancel"]')?.addEventListener("click", close);
+    saveBtn?.addEventListener("click", save);
+    input?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        save();
+      }
+    });
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close();
+    });
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => input?.focus());
   }
 
   function syncActiveMenuItems() {
@@ -6824,7 +6926,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
       viewState.subcategoriesList.innerHTML = subcategories.length
         ? subcategories.map((item) => `
-            <div class="category-editor-subcategory-row is-saved">
+            <div class="category-editor-subcategory-row category-editor-subcategory-row--view">
+              <span class="category-editor-subcategory-photo" aria-hidden="true">
+                ${looksLikeUrl(item.icon) ? `<img src="${escapeHtml(item.icon)}" alt="" />` : `<i class="${escapeHtml(item.icon || "fas fa-folder")}"></i>`}
+              </span>
               <input class="control" type="text" value="${escapeHtml(item.title || "")}" readonly tabindex="-1" />
             </div>
           `).join("")
@@ -14565,37 +14670,86 @@ const isViewMode = state.comboPanel.mode === "view";
 
       const searchInput = pickerContent.querySelector("#categoryPickerSearchInput");
       const listContent = pickerContent.querySelector("#categoryPickerListContent");
+      const expandedCategoryIds = new Set();
 
       function renderList() {
         const query = String(searchInput?.value || "").trim().toLowerCase();
-        const list = state.categories
+        const allCategories = state.categories
           .slice()
-          .filter((c) => !query || String(c.title || "").toLowerCase().includes(query))
           .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+        const childrenByParent = new Map();
+        allCategories.forEach((c) => {
+          const parentId = Number(c.parent_id || 0);
+          if (!(parentId > 0)) return;
+          if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+          childrenByParent.get(parentId).push(c);
+        });
+        const parents = allCategories.filter((c) => c.parent_id == null);
+        const list = [];
+        parents.forEach((parent) => {
+          const parentId = Number(parent.id);
+          const children = childrenByParent.get(parentId) || [];
+          const parentMatches = !query || String(parent.title || "").toLowerCase().includes(query);
+          const matchingChildren = children.filter((child) => !query || String(child.title || "").toLowerCase().includes(query));
+          if (!parentMatches && !matchingChildren.length) return;
+
+          list.push({ category: parent, level: 0, hasChildren: children.length > 0 });
+          if (query || expandedCategoryIds.has(parentId)) {
+            (query ? matchingChildren : children).forEach((child) => {
+              list.push({ category: child, level: 1, hasChildren: false });
+            });
+          }
+        });
 
         if (!listContent) return;
-        listContent.innerHTML = list.map((c) => {
+        listContent.innerHTML = list.map(({ category: c, level, hasChildren }) => {
           const id = Number(c.id);
           const isAll = c.code === "all";
           const checked = categoryPickerSelection.has(id);
           const iconHtml = renderCategoryIcon(c.icon, "category-picker-icon");
+          const expanded = expandedCategoryIds.has(id) || Boolean(query);
+          const chevronHtml = hasChildren
+            ? `<button class="category-picker-chevron ${expanded ? "is-expanded" : ""}" type="button" data-cat-expand="${id}" aria-label="${expanded ? "Свернуть подкатегории" : "Показать подкатегории"}"><i class="fas fa-chevron-right"></i></button>`
+            : "";
           return `
-            <div class="option-picker-row ${checked ? "is-selected" : ""} ${isAll ? "is-disabled" : ""}" data-cat-id="${id}" ${isAll ? 'data-disabled="true"' : ''}>
+            <div class="option-picker-row category-picker-row ${checked ? "is-selected" : ""} ${isAll ? "is-disabled" : ""} ${level ? "is-child" : ""}" data-cat-id="${id}" data-cat-level="${level}" ${isAll ? 'data-disabled="true"' : ''}>
               ${iconHtml}
               <div class="option-picker-meta">
                 <div class="options-row-title">${escapeHtml(c.title || "")}</div>
               </div>
+              ${chevronHtml}
             </div>
           `;
         }).join("");
 
         listContent.querySelectorAll(".option-picker-row[data-cat-id]").forEach((row) => {
-          row.addEventListener("click", () => {
+          row.addEventListener("click", (event) => {
+            const expandBtn = event.target.closest("[data-cat-expand]");
+            if (expandBtn) {
+              event.preventDefault();
+              event.stopPropagation();
+              const expandId = Number(expandBtn.dataset.catExpand);
+              if (!Number.isFinite(expandId)) return;
+              if (expandedCategoryIds.has(expandId)) expandedCategoryIds.delete(expandId);
+              else expandedCategoryIds.add(expandId);
+              renderList();
+              return;
+            }
             if (row.dataset.disabled === "true") return;
             const id = Number(row.dataset.catId);
             if (!Number.isFinite(id)) return;
-            if (categoryPickerSelection.has(id)) categoryPickerSelection.delete(id);
-            else categoryPickerSelection.add(id);
+            if (categoryPickerSelection.has(id)) {
+              categoryPickerSelection.delete(id);
+              state.categories
+                .filter((item) => Number(item.parent_id) === id)
+                .forEach((item) => categoryPickerSelection.delete(Number(item.id)));
+            }
+            else {
+              categoryPickerSelection.add(id);
+              const category = state.categories.find((item) => Number(item.id) === id);
+              const parentId = Number(category?.parent_id || 0);
+              if (parentId > 0) categoryPickerSelection.add(parentId);
+            }
             renderList();
           });
         });
@@ -19010,11 +19164,12 @@ const isViewMode = state.comboPanel.mode === "view";
     const draft = {
       iconFile: null,
       iconPreview: "",
+      deletedSubcategoryIds: [],
       subcategories: isEdit && cat
         ? state.categories
           .filter((item) => Number(item.parent_id) === Number(cat.id))
           .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id)
-          .map((item) => ({ id: Number(item.id), title: String(item.title || "") }))
+          .map((item) => ({ id: Number(item.id), title: String(item.title || ""), icon: String(item.icon || "") }))
         : [],
     };
 
@@ -19046,13 +19201,14 @@ const isViewMode = state.comboPanel.mode === "view";
     function renderSubcategoryInputs() {
       if (!subcategoriesList) return;
       subcategoriesList.innerHTML = draft.subcategories.map((item, index) => `
-        <div class="category-editor-subcategory-row ${item.id ? "is-saved" : ""}" data-subcategory-index="${index}">
+        <div class="category-editor-subcategory-row" data-subcategory-index="${index}">
+          <button class="category-editor-subcategory-photo" type="button" data-subcategory-photo aria-label="Загрузить иконку подкатегории">
+            ${looksLikeUrl(item.icon) ? `<img src="${escapeHtml(item.icon)}" alt="" />` : `<i class="${escapeHtml(item.icon || "fas fa-plus")}"></i>`}
+          </button>
           <input class="control" type="text" value="${escapeHtml(item.title)}" placeholder="Название подкатегории" data-subcategory-title />
-          ${item.id ? "" : `
-            <button class="category-editor-subcategory-remove" type="button" data-subcategory-remove aria-label="Удалить строку">
-              <i class="fas fa-times" aria-hidden="true"></i>
-            </button>
-          `}
+          <button class="category-editor-subcategory-remove" type="button" data-subcategory-remove aria-label="Удалить подкатегорию">
+            <i class="fas fa-times" aria-hidden="true"></i>
+          </button>
         </div>
       `).join("");
 
@@ -19070,8 +19226,20 @@ const isViewMode = state.comboPanel.mode === "view";
           const row = button.closest("[data-subcategory-index]");
           const index = Number(row?.dataset.subcategoryIndex);
           if (!Number.isInteger(index)) return;
+          const item = draft.subcategories[index];
+          const id = Number(item?.id || 0);
+          if (id > 0 && !draft.deletedSubcategoryIds.includes(id)) draft.deletedSubcategoryIds.push(id);
           draft.subcategories.splice(index, 1);
           renderSubcategoryInputs();
+        });
+      });
+
+      subcategoriesList.querySelectorAll("[data-subcategory-photo]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const row = button.closest("[data-subcategory-index]");
+          const index = Number(row?.dataset.subcategoryIndex);
+          if (!Number.isInteger(index) || !draft.subcategories[index]) return;
+          openCategoryPhotoGridModal({ subcategoryIndex: index });
         });
       });
     }
@@ -19080,7 +19248,7 @@ const isViewMode = state.comboPanel.mode === "view";
       subcategoriesSection.classList.remove("hidden");
       renderSubcategoryInputs();
       subcategoryAddBtn?.addEventListener("click", () => {
-        draft.subcategories.push({ id: null, title: "" });
+        draft.subcategories.push({ id: null, title: "", icon: "" });
         renderSubcategoryInputs();
         subcategoriesList?.querySelector("[data-subcategory-index]:last-child [data-subcategory-title]")?.focus();
       });
@@ -19128,11 +19296,21 @@ const isViewMode = state.comboPanel.mode === "view";
     const initialIcon = isEdit && cat ? (cat.icon || "") : "";
     renderIconPreview(initialIcon);
 
-    function getCategoryIconValue() {
+    function getCategoryIconValue(target = {}) {
+      const subcategoryIndex = Number(target?.subcategoryIndex);
+      if (Number.isInteger(subcategoryIndex) && draft.subcategories[subcategoryIndex]) {
+        return String(draft.subcategories[subcategoryIndex].icon || "").trim();
+      }
       return String(form.querySelector("#ce_icon")?.value || "").trim();
     }
 
-    function setCategoryIconValue(value) {
+    function setCategoryIconValue(value, target = {}) {
+      const subcategoryIndex = Number(target?.subcategoryIndex);
+      if (Number.isInteger(subcategoryIndex) && draft.subcategories[subcategoryIndex]) {
+        draft.subcategories[subcategoryIndex].icon = String(value || "").trim();
+        renderSubcategoryInputs();
+        return;
+      }
       const iconInput = form.querySelector("#ce_icon");
       if (iconInput) iconInput.value = String(value || "").trim();
       if (draft.iconPreview) {
@@ -19177,8 +19355,10 @@ const isViewMode = state.comboPanel.mode === "view";
 
     let categoryPhotoModalEscHandler = null;
     let categoryPhotoModalPasteHandler = null;
+    let categoryPhotoModalTarget = {};
     function closeCategoryPhotoGridModal() {
       document.querySelectorAll(".product-photo-grid-modal-overlay[data-category-photo-modal='1']").forEach((el) => el.remove());
+      categoryPhotoModalTarget = {};
       if (categoryPhotoModalEscHandler) {
         document.removeEventListener("keydown", categoryPhotoModalEscHandler);
         categoryPhotoModalEscHandler = null;
@@ -19189,8 +19369,11 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
 
-    function openCategoryPhotoGridModal() {
+    function openCategoryPhotoGridModal(target = {}) {
+      const modalTarget = target && typeof target === "object" ? target : {};
+      categoryPhotoModalTarget = modalTarget;
       closeCategoryPhotoGridModal();
+      categoryPhotoModalTarget = modalTarget;
       const overlay = document.createElement("div");
       overlay.className = "product-photo-grid-modal-overlay";
       overlay.setAttribute("data-category-photo-modal", "1");
@@ -19306,7 +19489,7 @@ const isViewMode = state.comboPanel.mode === "view";
         }
       };
       const renderGrid = () => {
-        const iconValue = getCategoryIconValue();
+        const iconValue = getCategoryIconValue(modalTarget);
         const iconSize = Number(categoryIconSizeCache[iconValue] || 0);
         const sizeLabel = formatCategoryIconSize(iconSize);
         const photoHtml = iconValue
@@ -19324,7 +19507,7 @@ const isViewMode = state.comboPanel.mode === "view";
         if (grid) grid.innerHTML = photoHtml + addTileHtml;
         if (iconValue && categoryIconSizeCache[iconValue] === undefined) {
           fetchCategoryIconSize(iconValue).then(() => {
-            if (getCategoryIconValue() === iconValue && document.body.contains(card)) renderGrid();
+            if (getCategoryIconValue(modalTarget) === iconValue && document.body.contains(card)) renderGrid();
           });
         }
       };
@@ -19336,7 +19519,7 @@ const isViewMode = state.comboPanel.mode === "view";
         if (!url) throw new Error("UPLOAD_ERROR");
         const size = Array.isArray(result?.sizes) ? Number(result.sizes[0] || 0) : 0;
         if (size > 0) categoryIconSizeCache[url] = size;
-        setCategoryIconValue(url);
+        setCategoryIconValue(url, modalTarget);
         renderGrid();
       };
       const close = () => closeCategoryPhotoGridModal();
@@ -19352,7 +19535,7 @@ const isViewMode = state.comboPanel.mode === "view";
       });
       card.addEventListener("click", async (event) => {
         if (event.target.closest('[data-role="remove-photo"]')) {
-          setCategoryIconValue("");
+          setCategoryIconValue("", modalTarget);
           renderGrid();
           return;
         }
@@ -19485,10 +19668,11 @@ const isViewMode = state.comboPanel.mode === "view";
           if (!url) throw new Error("UPLOAD_ERROR");
           const size = Array.isArray(result?.sizes) ? Number(result.sizes[0] || 0) : 0;
           if (size > 0) categoryIconSizeCache[url] = size;
-          setCategoryIconValue(url);
+          const uploadTarget = categoryPhotoModalTarget;
+          setCategoryIconValue(url, uploadTarget);
           if (document.querySelector(".product-photo-grid-modal-overlay[data-category-photo-modal='1']")) {
             closeCategoryPhotoGridModal();
-            openCategoryPhotoGridModal();
+            openCategoryPhotoGridModal(uploadTarget);
           }
         } catch {
           showToast("Не удалось загрузить фото категории.");
@@ -19562,19 +19746,28 @@ const isViewMode = state.comboPanel.mode === "view";
           }
 
           if (canHaveSubcategories && savedCategoryId > 0) {
+            for (const subcategoryId of draft.deletedSubcategoryIds) {
+              const id = Number(subcategoryId || 0);
+              if (!(id > 0)) continue;
+              await api(`/api/prod_categories/${id}`, { method: "DELETE" });
+            }
+
             for (const [index, item] of draft.subcategories.entries()) {
               const title = String(item.title || "").trim();
+              const icon = String(item.icon || "").trim();
               if (!title) continue;
 
               if (item.id) {
                 const existing = state.categories.find((categoryItem) => Number(categoryItem.id) === Number(item.id));
-                if (!existing || title === String(existing.title || "").trim()) continue;
+                if (!existing) continue;
+                const existingIcon = String(existing.icon || "").trim();
+                if (title === String(existing.title || "").trim() && icon === existingIcon) continue;
                 await api(`/api/prod_categories/${item.id}`, {
                   method: "PUT",
                   body: JSON.stringify({
                     title,
                     code: existing.code || "",
-                    icon: existing.icon || "",
+                    icon,
                     sort_order: existing.sort_order == null ? null : Number(existing.sort_order),
                     is_active: Number(existing.is_active) ? 1 : 0,
                     site_visibility: Number(existing.site_visibility) ? 1 : 0,
@@ -19591,6 +19784,7 @@ const isViewMode = state.comboPanel.mode === "view";
                   parent_id: savedCategoryId,
                   title,
                   code: `subcat-${savedCategoryId}-${Date.now().toString(36)}-${index}`,
+                  icon,
                   is_active: 1,
                   site_visibility: 1,
                   cart_visibility: 0,
@@ -20026,6 +20220,19 @@ const isViewMode = state.comboPanel.mode === "view";
         enterProductsMode(id);
         renderCategoriesNav();
         await refreshProductsOnly();
+      });
+    }
+
+    if (toolbarIcon) {
+      toolbarIcon.addEventListener("click", () => {
+        if (!toolbarIcon.classList.contains("products-category-toolbar-menu")) return;
+        openCreateSubcategoryModal();
+      });
+      toolbarIcon.addEventListener("keydown", (event) => {
+        if (!toolbarIcon.classList.contains("products-category-toolbar-menu")) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openCreateSubcategoryModal();
       });
     }
 

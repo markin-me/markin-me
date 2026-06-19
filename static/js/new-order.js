@@ -167,6 +167,7 @@
     categories: [],
     productCategories: [],
     activeCategoryId: null,
+    activeProductCategoryId: null,
     quantities: new Map(),
     productVariants: new Map(),
     selectedVariants: new Map(),
@@ -355,6 +356,7 @@
       productsGridEl.classList.add("hidden");
       if (productsEmptyEl) productsEmptyEl.classList.add("hidden");
       if (checkoutEditorEl) checkoutEditorEl.classList.remove("hidden");
+      if (checkoutBlockChipsEl) checkoutBlockChipsEl.classList.remove("new-order-category-chips");
       if (checkoutEditorEl) {
         checkoutEditorEl.classList.toggle("is-readonly", !state.checkoutEditMode);
       }
@@ -365,10 +367,7 @@
 
     productsGridEl.classList.remove("hidden");
     if (checkoutEditorEl) checkoutEditorEl.classList.add("hidden");
-    if (checkoutBlockChipsEl) {
-      checkoutBlockChipsEl.innerHTML = "";
-      checkoutBlockChipsEl.classList.add("hidden");
-    }
+    renderCategoryChips();
     updateEditControls();
   }
 
@@ -7614,6 +7613,7 @@
       data: {
         manifest: state.cacheManifest && typeof state.cacheManifest === "object" ? state.cacheManifest : null,
         activeCategoryId: state.activeCategoryId,
+        activeProductCategoryId: state.activeProductCategoryId,
         categories: Array.isArray(state.categories) ? state.categories : [],
         productCategories: Array.isArray(state.productCategories) ? state.productCategories : [],
         rightDeliveryTypes: Array.isArray(state.rightDeliveryTypes) ? state.rightDeliveryTypes : [],
@@ -7659,6 +7659,7 @@
 
     state.categories = Array.isArray(snapshot.categories) ? snapshot.categories : [];
     state.productCategories = Array.isArray(snapshot.productCategories) ? snapshot.productCategories : [];
+    state.activeProductCategoryId = Number(snapshot.activeProductCategoryId || 0) || null;
     state.rightDeliveryTypes = (Array.isArray(snapshot.rightDeliveryTypes) ? snapshot.rightDeliveryTypes : [])
       .map(normalizeRightDeliveryTypeRef)
       .filter((item) => item.code)
@@ -7735,10 +7736,18 @@
     const cachedActive = snapshot.activeCategoryId;
     if (String(cachedActive) === CHECKOUT_SCREEN_ID) {
       state.activeCategoryId = CHECKOUT_SCREEN_ID;
+      state.activeProductCategoryId = null;
     } else {
       const activeId = Number(cachedActive || 0);
-      const hasActive = state.categories.some((c) => Number(c?.id || 0) === activeId);
-      state.activeCategoryId = hasActive ? activeId : CHECKOUT_SCREEN_ID;
+      const activeCategory = state.categories.find((c) => Number(c?.id || 0) === activeId);
+      if (activeCategory) {
+        const parentId = Number(activeCategory.parent_id || 0);
+        state.activeCategoryId = parentId > 0 ? parentId : activeId;
+        if (!state.activeProductCategoryId) state.activeProductCategoryId = activeId;
+      } else {
+        state.activeCategoryId = CHECKOUT_SCREEN_ID;
+        state.activeProductCategoryId = null;
+      }
     }
     return true;
   }
@@ -13500,8 +13509,10 @@
     if (!isCheckoutScreenActive() || !list.length) {
       checkoutBlockChipsEl.innerHTML = "";
       checkoutBlockChipsEl.classList.add("hidden");
+      checkoutBlockChipsEl.classList.remove("new-order-category-chips");
       return;
     }
+    checkoutBlockChipsEl.classList.remove("new-order-category-chips");
     checkoutBlockChipsEl.innerHTML = list.map((block, index) => `
       <button
         type="button"
@@ -17277,9 +17288,103 @@
     return `<i class="${escapeHtml(cls)}"></i>`;
   }
 
+  function getCategoryById(categoryId) {
+    const id = Number(categoryId || 0);
+    if (!(id > 0)) return null;
+    return (Array.isArray(state.categories) ? state.categories : []).find((cat) => Number(cat?.id || 0) === id) || null;
+  }
+
+  function getRootCategoryId(categoryId) {
+    const cat = getCategoryById(categoryId);
+    const parentId = Number(cat?.parent_id || 0);
+    return parentId > 0 ? parentId : Number(cat?.id || 0);
+  }
+
+  function getCategoryChildren(categoryId) {
+    const parentId = Number(categoryId || 0);
+    if (!(parentId > 0)) return [];
+    return (Array.isArray(state.categories) ? state.categories : [])
+      .filter((cat) => Number(cat?.parent_id || 0) === parentId)
+      .slice()
+      .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+  }
+
+  function getCategoryChipItems(categoryId) {
+    const rootId = getRootCategoryId(categoryId);
+    const root = getCategoryById(rootId);
+    if (!root) return [];
+    return [root, ...getCategoryChildren(rootId)];
+  }
+
+  function getActiveProductCategoryId() {
+    const activeId = Number(state.activeProductCategoryId || 0);
+    const rootId = Number(state.activeCategoryId || 0);
+    if (activeId > 0 && getRootCategoryId(activeId) === rootId) return activeId;
+    return rootId > 0 ? rootId : 0;
+  }
+
+  function getProductCategoryLoadIds(categoryId) {
+    const id = Number(categoryId || 0);
+    if (!(id > 0)) return [];
+    const cat = getCategoryById(id);
+    if (!cat) return [id];
+    if (Number(cat.parent_id || 0) > 0) return [id];
+    return [id, ...getCategoryChildren(id).map((child) => Number(child?.id || 0)).filter((childId) => childId > 0)];
+  }
+
+  function buildCombinedCategoryPayload(categoryIds) {
+    const ids = Array.isArray(categoryIds) ? categoryIds : [];
+    const source = [];
+    const combos = [];
+    const activeOnly = [];
+    const currentProducts = [];
+    const seenSource = new Set();
+    const seenActive = new Set();
+    const seenCurrent = new Set();
+    const pushUnique = (target, seen, item, keyPrefix = "product") => {
+      const keyId = Number(item?.combo_id || item?.id || item?.product_id || 0);
+      const key = `${keyPrefix}:${keyId || target.length}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      target.push(item);
+    };
+    ids.forEach((id) => {
+      const payload = state.categoryProductsCache.get(Number(id || 0));
+      if (!payload) return;
+      (Array.isArray(payload.source) ? payload.source : []).forEach((item) => pushUnique(source, seenSource, item, "product"));
+      (Array.isArray(payload.combos) ? payload.combos : []).forEach((item) => pushUnique(combos, seenSource, item, "combo"));
+      (Array.isArray(payload.activeOnly) ? payload.activeOnly : []).forEach((item) => pushUnique(activeOnly, seenActive, item, "product"));
+      (Array.isArray(payload.currentProducts) ? payload.currentProducts : []).forEach((item) => {
+        const prefix = Number(item?.is_combo || 0) === 1 || item?.type === "combo" ? "combo" : "product";
+        pushUnique(currentProducts, seenCurrent, item, prefix);
+      });
+    });
+    return { source, combos, activeOnly, currentProducts };
+  }
+
+  function renderCategoryChips() {
+    if (!checkoutBlockChipsEl) return;
+    if (isCheckoutScreenActive()) return;
+    const items = getCategoryChipItems(state.activeCategoryId);
+    if (!items.length) {
+      checkoutBlockChipsEl.innerHTML = "";
+      checkoutBlockChipsEl.classList.add("hidden");
+      checkoutBlockChipsEl.classList.remove("new-order-category-chips");
+      return;
+    }
+    const activeId = getActiveProductCategoryId();
+    checkoutBlockChipsEl.innerHTML = items.map((cat) => {
+      const id = Number(cat?.id || 0);
+      return `<button type="button" class="new-order-checkout-block-chip ${id === activeId ? "is-active" : ""}" data-action="new-order-category-chip" data-category-id="${id}">${escapeHtml(cat?.title || "")}</button>`;
+    }).join("");
+    checkoutBlockChipsEl.classList.add("new-order-category-chips");
+    checkoutBlockChipsEl.classList.remove("hidden");
+  }
+
   function renderCategories() {
     categoriesListEl.innerHTML = "";
-    const rows = Array.isArray(state.categories) ? state.categories : [];
+    const rows = (Array.isArray(state.categories) ? state.categories : [])
+      .filter((cat) => cat?.parent_id == null);
 
     const checkoutScreenActive = String(state.activeCategoryId) === CHECKOUT_SCREEN_ID;
     const checkoutRow = document.createElement("button");
@@ -18453,6 +18558,23 @@
     const preferCache = opts.preferCache !== false;
     try {
       const cid = Number(categoryId || 0);
+      const loadIds = getProductCategoryLoadIds(cid);
+      if (loadIds.length > 1) {
+        const missing = loadIds.filter((id) => !state.categoryProductsCache.has(id));
+        if (!preferCache || missing.length) {
+          await preloadAllCategoryProducts(loadIds);
+        }
+        const combinedPayload = buildCombinedCategoryPayload(loadIds);
+        state.currentProducts = combinedPayload.currentProducts;
+        seedRightOrderProductsByIdCache(combinedPayload.activeOnly);
+        await warmRightOrderProductPricingContext(combinedPayload.activeOnly, {
+          includeOptionDetails: true,
+          includeOptionTargets: true,
+        });
+        renderProducts(state.currentProducts);
+        return;
+      }
+
       if (preferCache && state.categoryProductsCache.has(cid)) {
         const cachedPayload = state.categoryProductsCache.get(cid);
         if (cachedPayload && Array.isArray(cachedPayload.activeOnly)) {
@@ -18523,6 +18645,7 @@
       if (!rawCategoryId) return;
       if (rawCategoryId === CHECKOUT_SCREEN_ID) {
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
+        state.activeProductCategoryId = null;
         schedulePersistBootstrapSnapshot(0);
         void loadCheckoutProductsForSelectedCategories();
         renderCategories();
@@ -18536,6 +18659,7 @@
         state.checkoutDraft = null;
       }
       state.activeCategoryId = cid;
+      state.activeProductCategoryId = cid;
       schedulePersistBootstrapSnapshot(0);
       renderCategories();
       renderMainContentMode();
@@ -19410,6 +19534,7 @@
           return;
         }
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
+        state.activeProductCategoryId = null;
         state.checkoutEditMode = true;
         state.checkoutDraft = {
           blocks: Array.isArray(state.checkoutSavedDraft?.blocks)
@@ -19458,6 +19583,21 @@
         );
 
         checkoutBlockChipsEl.addEventListener("click", (e) => {
+          const categoryChip = e.target.closest("[data-action='new-order-category-chip'][data-category-id]");
+          if (categoryChip) {
+            const categoryId = Number(categoryChip.getAttribute("data-category-id") || 0);
+            if (!(categoryId > 0)) return;
+            const rootId = getRootCategoryId(categoryId);
+            if (!(rootId > 0)) return;
+            state.activeCategoryId = rootId;
+            state.activeProductCategoryId = categoryId;
+            schedulePersistBootstrapSnapshot(0);
+            renderCategories();
+            renderMainContentMode();
+            void loadProductsForCategory(categoryId);
+            return;
+          }
+
           const chip = e.target.closest("[data-action='checkout-scroll-to-block'][data-block-id]");
           if (!chip) return;
           const blockId = Number(chip.getAttribute("data-block-id") || 0);
@@ -20424,9 +20564,24 @@
   function ensureValidActiveCategory() {
     if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) return;
     const activeId = Number(state.activeCategoryId || 0);
-    const hasActive = Array.isArray(state.categories)
-      && state.categories.some((c) => Number(c?.id || 0) === activeId);
-    if (!hasActive) state.activeCategoryId = CHECKOUT_SCREEN_ID;
+    const activeCategory = getCategoryById(activeId);
+    if (!activeCategory) {
+      state.activeCategoryId = CHECKOUT_SCREEN_ID;
+      state.activeProductCategoryId = null;
+      return;
+    }
+    const parentId = Number(activeCategory.parent_id || 0);
+    if (parentId > 0) {
+      state.activeCategoryId = parentId;
+      state.activeProductCategoryId = activeId;
+      return;
+    }
+    const activeProductId = Number(state.activeProductCategoryId || 0);
+    if (activeProductId > 0 && getRootCategoryId(activeProductId) !== activeId) {
+      state.activeProductCategoryId = activeId;
+    } else if (!(activeProductId > 0)) {
+      state.activeProductCategoryId = activeId;
+    }
   }
 
   function getPreloadCategoryIds() {
@@ -20440,7 +20595,7 @@
     if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) {
       await loadCheckoutProductsForSelectedCategories();
     } else if (state.activeCategoryId) {
-      await loadProductsForCategory(state.activeCategoryId, { preferCache: true });
+      await loadProductsForCategory(getActiveProductCategoryId(), { preferCache: true });
     } else if (productsEmptyEl) {
       productsEmptyEl.textContent = "РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… РєР°С‚РµРіРѕСЂРёР№";
       productsEmptyEl.classList.remove("hidden");
@@ -21461,6 +21616,7 @@
   function captureCheckoutSession() {
     return {
       activeCategoryId: state.activeCategoryId,
+      activeProductCategoryId: state.activeProductCategoryId,
       quantities: mapToObject(state.quantities),
       selectedVariants: mapToObject(state.selectedVariants),
       ingredientStateByProduct: mapOfMapsToObject(state.ingredientStateByProduct),
@@ -21480,6 +21636,8 @@
     const activeCategoryRaw = src.activeCategoryId;
     if (String(activeCategoryRaw) === CHECKOUT_SCREEN_ID) state.activeCategoryId = CHECKOUT_SCREEN_ID;
     else state.activeCategoryId = Number(activeCategoryRaw || 0) || CHECKOUT_SCREEN_ID;
+    state.activeProductCategoryId = Number(src.activeProductCategoryId || 0) || null;
+    if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) state.activeProductCategoryId = null;
 
     state.quantities = objectToMap(src.quantities || {});
     state.selectedVariants = objectToMap(src.selectedVariants || {});

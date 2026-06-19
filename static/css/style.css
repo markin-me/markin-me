@@ -1984,7 +1984,7 @@ body.page-home .page-col-right .panel{
   flex:0 0 auto;
   margin-left:auto;
 }
-.new-order-toolbar.is-checkout-screen .new-order-toolbar-title{
+.new-order-toolbar .new-order-toolbar-title{
   display:none;
 }
 .settings-chat-subheader-switch{
@@ -9611,6 +9611,10 @@ body.page-cash #clientAddresses .shop-address-actions{
   padding-right:4px;
 }
 
+.new-order-checkout-block-chips.new-order-category-chips{
+  padding-right:4px;
+}
+
 .new-order-checkout-block-chip{
   height:30px;
   border-radius:999px;
@@ -9627,6 +9631,12 @@ body.page-cash #clientAddresses .shop-address-actions{
 
 .new-order-checkout-block-chip:hover{
   border-color:var(--color-primary);
+  color:var(--color-primary);
+}
+
+.new-order-checkout-block-chip.is-active{
+  border-color:var(--primary-25);
+  background:var(--primary-12);
   color:var(--color-primary);
 }
 
@@ -15408,6 +15418,33 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   user-select:none;
   min-width:0;
 }
+.category-picker-row.is-child{
+  margin-left:24px;
+}
+.category-picker-chevron{
+  width:32px;
+  height:32px;
+  margin-left:auto;
+  border:0;
+  border-radius:999px;
+  background:transparent;
+  color:var(--color-text-muted);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  flex:0 0 auto;
+}
+.category-picker-chevron:hover{
+  background:var(--color-surface-2);
+  color:var(--color-text);
+}
+.category-picker-chevron i{
+  transition:transform .15s ease;
+}
+.category-picker-chevron.is-expanded i{
+  transform:rotate(90deg);
+}
 .option-picker-photo{
   flex-shrink:0;
   width:40px;
@@ -16092,12 +16129,41 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 
 .category-editor-subcategory-row{
   display:grid;
-  grid-template-columns:minmax(0, 1fr) 40px;
+  grid-template-columns:40px minmax(0, 1fr) 40px;
   gap:8px;
+  align-items:center;
 }
 
-.category-editor-subcategory-row.is-saved{
-  grid-template-columns:minmax(0, 1fr);
+.category-editor-subcategory-row--view{
+  grid-template-columns:40px minmax(0, 1fr);
+}
+
+.category-editor-subcategory-photo{
+  width:40px;
+  height:40px;
+  border:1px dashed var(--color-primary);
+  border-radius:10px;
+  background:var(--color-surface);
+  color:var(--color-primary);
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  cursor:pointer;
+}
+
+.category-editor-subcategory-row--view .category-editor-subcategory-photo{
+  cursor:default;
+}
+
+.category-editor-subcategory-photo:hover{
+  background:rgba(255, 122, 0, 0.06);
+}
+
+.category-editor-subcategory-photo img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
 }
 
 .category-editor-subcategory-remove{
@@ -17868,6 +17934,32 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 .products-category-toolbar-title{
   min-width:0;
   flex:1 1 auto;
+}
+.products-category-toolbar-menu{
+  width:32px;
+  height:32px;
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:var(--color-surface);
+  color:var(--color-text);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  flex:0 0 auto;
+  line-height:1;
+  text-align:center;
+}
+.products-category-toolbar-menu::before{
+  display:block;
+  width:100%;
+  line-height:30px;
+  text-align:center;
+}
+.products-category-toolbar-menu:hover{
+  border-color:var(--color-primary);
+  color:var(--color-primary);
+  background:var(--primary-12);
 }
 .products-category-toolbar-chips{
   display:flex;
@@ -28993,6 +29085,40 @@ body.page-chat .page-col-right > .client-info-panel > .panel-body{
   gap: 10px;
   padding: 10px 14px;
   border-top: 1px solid var(--color-border);
+}
+
+.create-subcategory-modal-card{
+  width:min(440px, calc(100vw - 32px));
+  height:auto;
+  min-height:0;
+  grid-template-rows:56px auto 64px;
+}
+
+.create-subcategory-modal-title{
+  font-size:20px;
+}
+
+.create-subcategory-modal-body{
+  padding:18px 14px;
+  overflow:visible;
+}
+
+.create-subcategory-modal-input{
+  width:100%;
+  min-height:42px;
+  border:1px solid var(--color-border);
+  border-radius:10px;
+  background:var(--color-surface);
+  color:var(--color-text);
+  font:inherit;
+  font-weight:600;
+  padding:0 12px;
+  outline:none;
+}
+
+.create-subcategory-modal-input:focus{
+  border-color:var(--color-primary);
+  box-shadow:0 0 0 3px var(--primary-12);
 }
 
 .product-recalc-modal-card{
