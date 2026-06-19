@@ -12240,6 +12240,7 @@ async function initAddresses() {
     isProgrammaticCategoryScroll = true;
     const runScroll = () => {
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      const scrollTarget = isMobile ? targetEl : header;
       if (isMobile) {
         const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
         const headerVisibleH = (document.body.classList.contains("shop-header-collapsed") || Number(window.scrollY || 0) > 44) ? 0 : headerH;
@@ -12247,18 +12248,18 @@ async function initAddresses() {
         const subcategoryRow = elProductsGrid?.querySelector?.(`.shop-category-subcategory-row[data-parent-cat-id="${id}"]`);
         const subcategoryH = subcategoryRow?.getBoundingClientRect ? subcategoryRow.getBoundingClientRect().height : 0;
         const offset = headerVisibleH + chipsH + subcategoryH + 12;
-        const rect = targetEl.getBoundingClientRect();
+        const rect = scrollTarget.getBoundingClientRect();
         const top = window.scrollY + rect.top - offset;
         window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
       } else {
         const scroller = elProductsScroller;
         const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
-        const offset = Math.max(0, padTop || 0) + 18;
+        const offset = Math.max(0, padTop || 0) + 75;
         if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
-          const top = targetEl.offsetTop - offset;
+          const top = scrollTarget.offsetTop - offset;
           elProductsScroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
-        } else if (typeof targetEl.scrollIntoView === "function") {
-          targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
+        } else if (typeof scrollTarget.scrollIntoView === "function") {
+          scrollTarget.scrollIntoView({ behavior: "smooth", block: "start" });
         }
       }
     };
