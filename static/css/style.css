@@ -14620,7 +14620,7 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
 
 .product-price-grid{
   display:grid;
-  grid-template-columns:repeat(3,minmax(0,1fr));
+  grid-template-columns:repeat(2,minmax(0,1fr));
   gap:10px;
 }
 
@@ -14661,6 +14661,17 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
 .product-price-card.is-auto .product-price-field .control{
   color:var(--color-text-muted);
   cursor:default;
+}
+
+.product-promo-editor{
+  display:grid;
+  gap:12px;
+}
+
+.product-promo-switch{
+  justify-content:flex-start;
+  gap:10px;
+  font-weight:800;
 }
 
 .product-nutrition-warning{

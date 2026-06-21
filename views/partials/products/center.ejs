@@ -250,6 +250,14 @@
       </div>
       <div class="product-price-grid">
         <div class="field-wrap product-nutrition-field product-price-field">
+          <label class="field-label" for="pe_price">Цена</label>
+          <input class="control" id="pe_price" name="price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
+        <div class="field-wrap product-nutrition-field product-price-field">
+          <label class="field-label" for="pe_old_price">Старая цена</label>
+          <input class="control" id="pe_old_price" name="old_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
+        <div class="field-wrap product-nutrition-field product-price-field">
           <label class="field-label" for="pe_cost_price">Себест.</label>
           <input class="control" id="pe_cost_price" name="cost_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
         </div>
@@ -257,13 +265,8 @@
           <label class="field-label" for="pe_margin_percent">Маржа %</label>
           <input class="control" id="pe_margin_percent" name="margin_percent" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
         </div>
-        <div class="field-wrap product-nutrition-field product-price-field">
-          <label class="field-label" for="pe_price">Цена</label>
-          <input class="control" id="pe_price" name="price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
-        </div>
       </div>
     </div>
-    <input id="pe_old_price" name="old_price" type="hidden" value="0" />
 
     <!-- Единицы в один ряд: Норма / Ед. изм / Остаток -->
     <div class="form-row-3">
@@ -494,6 +497,25 @@
     <div class="info-card product-options-card" id="pePromotionsBlock" data-product-block="promotions">
       <div class="option-section-header">
         <div class="kv-label">Участие в акциях</div>
+      </div>
+      <div class="product-promo-editor">
+        <label class="switch-row product-promo-switch">
+          <span class="switch switch-compact">
+            <input class="switch-input" id="pe_promo_enabled" name="promo_enabled" type="checkbox" />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </span>
+          <span>Акция включена</span>
+        </label>
+        <div class="form-row-2">
+          <div class="field-wrap">
+            <label class="field-label" for="pe_promo_title">Название скидки</label>
+            <input class="control" id="pe_promo_title" name="promo_title" type="text" autocomplete="off" placeholder="Например, скидка на гарнир" />
+          </div>
+          <div class="field-wrap">
+            <label class="field-label" for="pe_promo_discount_percent">Скидка %</label>
+            <input class="control" id="pe_promo_discount_percent" name="promo_discount_percent" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+          </div>
+        </div>
       </div>
       <div class="info-accordion" id="peDiscountAccordion"></div>
       <div class="empty-hint hidden" id="peDiscountEmpty">Товар не участвует в акциях</div>

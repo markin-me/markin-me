@@ -4387,8 +4387,7 @@
       if (product) {
         if (qty !== undefined) product.stock_qty = qty;
         if (isAvailable !== undefined) product.is_available = isAvailable;
-        state.productCache.set(pid, product);
-        mergeProductPassport(pid, { product });
+        mergeProductIntoCache(product, "product_refresh_by_id");
       }
     }
 
@@ -4527,7 +4526,7 @@
             if (!Array.isArray(product.photos)) product.photos = safePhotos(product);
             cacheStockFromProductPayload(product, "product_refresh_opened");
             product.is_available = isProductAvailable(product);
-            state.productCache.set(openedProductId, product);
+            mergeProductIntoCache(product, "product_refresh_opened");
           }
         } catch {}
 
@@ -5775,6 +5774,16 @@
               : makeCartKey(productId, normalizedOptionItems, ingredients, variantSelection),
             product_id: productId,
             qty,
+            old_price: Number(item?.old_price || 0),
+            unit_price_before_discount: item?.unit_price_before_discount != null ? Number(item.unit_price_before_discount) : null,
+            discount: item?.discount && typeof item.discount === "object"
+              ? {
+                  ...item.discount,
+                  original_line_total: item.discount?.original_line_total != null
+                    ? Number(item.discount.original_line_total)
+                    : null,
+                }
+              : null,
             option_item_ids: normalizedOptionItems.map((opt) => opt.id),
             option_items: normalizedOptionItems,
             ingredients: ingredients,
@@ -6173,8 +6182,15 @@
       let originalUnit = Number(pricing?.unitPrice || 0);
       if (itemProduct?.original_price && Number(itemProduct.original_price) > 0) {
         originalUnit = roundPrice(Number(itemProduct.original_price) + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
-      } else if (itemProduct?.old_price && Number(itemProduct.old_price) > Number(pricing?.unitPrice || 0)) {
-        originalUnit = roundPrice(Number(itemProduct.old_price) + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
+      } else {
+        const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+          itemProduct,
+          Number(parts.baseProductUnit || pricing?.unitPrice || 0),
+          Number(itemProduct?.old_price || 0)
+        );
+        if (scaledOldBase > Number(pricing?.unitPrice || 0)) {
+          originalUnit = roundPrice(scaledOldBase + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
+        }
       }
       const paidQty = Number.isFinite(Number(pricing?.paidQty))
         ? Math.max(0, Number(pricing.paidQty))
@@ -6605,6 +6621,16 @@
         option_items: Array.isArray(item.option_items) ? item.option_items : [],
         ingredients: Array.isArray(item.ingredients) ? item.ingredients : [],
         ingredient_price_diff: Number(item.ingredient_price_diff || 0),
+        old_price: Number(item.old_price || 0),
+        unit_price_before_discount: item.unit_price_before_discount != null ? Number(item.unit_price_before_discount) : null,
+        discount: item.discount && typeof item.discount === "object"
+          ? {
+              ...item.discount,
+              original_line_total: item.discount?.original_line_total != null
+                ? Number(item.discount.original_line_total)
+                : null,
+            }
+          : null,
         variant_group_id: variantGroupId,
         variant_value_index: variantValueIndex,
         variant_label: hasVariantSelection ? str(item.variant_label || "") : "",
@@ -7447,9 +7473,16 @@
         if (product?.original_price && Number(product.original_price) > 0) {
           // Цена до API-скидки + опции + ингредиенты
           originalUnit = roundPrice(Number(product.original_price) + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
-        } else if (product?.old_price && Number(product.old_price) > pricing.unitPrice) {
-          // Старая цена из админки + опции + ингредиенты
-          originalUnit = roundPrice(Number(product.old_price) + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
+        } else {
+          const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+            product,
+            Number(parts.baseProductUnit || pricing.unitPrice || 0),
+            Number(product?.old_price || 0)
+          );
+          if (scaledOldBase > pricing.unitPrice) {
+            // Старая цена из админки + опции + ингредиенты
+            originalUnit = roundPrice(scaledOldBase + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
+          }
         }
         
         // Для auto_add товаров учитываем только платные позиции.
@@ -7460,9 +7493,7 @@
         totalBeforeDiscount += roundPrice(originalUnit * paidQty);
         
         // Если old_price > текущей цены и нет API-скидки, добавляем эту разницу к totalDiscount
-        if (!pricing.discountAmount && product?.old_price && Number(product.old_price) > pricing.unitPrice) {
-          const oldPriceDiff = roundPrice((Number(product.old_price) - pricing.unitPrice + (parts.optionTotal || 0) + (parts.ingredientDiff || 0)) * paidQty);
-          // Уже учтено в totalBeforeDiscount, добавляем в totalDiscount
+        if (!pricing.discountAmount && originalUnit > pricing.unitPrice) {
           totalDiscount += roundPrice((originalUnit - pricing.unitPrice) * paidQty);
         }
       }
@@ -7796,7 +7827,11 @@
     const lineTotal = roundPrice(Number(pricingData?.lineTotal || 0));
     const unitPrice = roundPrice(Number(pricingData?.unitPrice || (qty > 0 ? lineTotal / qty : 0)));
     const oldLineFromArg = oldLineTotal != null ? roundPrice(Number(oldLineTotal || 0)) : 0;
-    const oldPricePerUnit = Number(product?.old_price || 0);
+    const oldPricePerUnit = scaleProductBasePriceForCurrentUnit(
+      product,
+      Number(pricingData?.parts?.baseProductUnit || unitPrice || 0),
+      Number(product?.old_price || 0)
+    );
     const oldLineFromProduct = oldPricePerUnit > 0 ? roundPrice(oldPricePerUnit * qty) : 0;
     const originalLineTotal = oldLineFromArg > 0 ? oldLineFromArg : oldLineFromProduct;
     const showOldLine = originalLineTotal > lineTotal;
@@ -8015,7 +8050,7 @@
     if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
     cacheStockFromProductPayload(p, "product_warmup");
     p.is_available = isProductAvailable(p);
-    state.productCache.set(id, p);
+    mergeProductIntoCache(p, "product_warmup");
     return p;
   }
 
@@ -12599,7 +12634,7 @@ async function initAddresses() {
     const currentPrice = roundPrice(Number.isFinite(currentPriceRaw) ? currentPriceRaw : 0);
     const originalPriceRaw = product.original_price != null
       ? Number(product.original_price)
-      : Number(product.old_price || 0);
+      : scaleProductBasePriceForCurrentUnit(product, currentPrice, Number(product.old_price || 0));
     const originalPrice = roundPrice(Number.isFinite(originalPriceRaw) ? originalPriceRaw : 0);
     if (!(originalPrice > currentPrice && currentPrice >= 0)) return "";
 
@@ -12880,7 +12915,8 @@ async function initAddresses() {
     let price = calculatedPrice != null
       ? calculatedPrice
       : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
-    let showOld = old > 0 && old > price;
+    const scaledOld = scaleProductBasePriceForCurrentUnit(product, price, old);
+    let showOld = scaledOld > 0 && scaledOld > price;
 
     // Обработка скидок из API (бейдж теперь на картинке, здесь только цена)
     if (product.discount && product.discount.discount_amount > 0) {
@@ -12910,7 +12946,7 @@ async function initAddresses() {
       return `<span class="sp-cart-total${totalClass}">${escapeHtml(totalText)}</span>`;
     }
     if (showOld) {
-      const oldPrice = product.discount ? Number(product.original_price) : old;
+      const oldPrice = product.discount ? Number(product.original_price) : scaledOld;
       return `<span class="sp-price-stack"><span class="sp-old-price">${catalogMoneyNoKopeks(oldPrice)} ₽</span><span class="sp-current-price">${catalogMoneyNoKopeks(price)} ₽</span></span>`;
     }
     return `<span class="sp-current-price">${catalogMoneyNoKopeks(price)} ₽</span>`;
@@ -14812,8 +14848,12 @@ async function initAddresses() {
         ? false
         : (!pricing.isAuto || !group ? true : Number(group.allow_customer_qty ?? 1) === 1);
       const allowRemove = true;
-      const old = Number(product.old_price || 0);
       const parts = pricing.parts;
+      const old = scaleProductBasePriceForCurrentUnit(
+        product,
+        Number(parts?.baseProductUnit || pricing?.unitPrice || 0),
+        Number(product.old_price || 0)
+      );
       const oldUnit = old > 0 ? (old + parts.optionTotal + parts.ingredientDiff) : 0;
       if (!isUnavailable) total += pricing.lineTotal;
 
@@ -16756,9 +16796,9 @@ function updateCartBadge() {
       if (!Array.isArray(product.photos)) product.photos = safePhotos(product);
       cacheStockFromProductPayload(product, "passport_background_refresh");
       product.is_available = isProductAvailable(product);
-      state.productCache.set(id, product);
+      const mergedProduct = mergeProductIntoCache(product, "passport_background_refresh");
       const patch = {
-        product,
+        product: mergedProduct || product,
         updated_at: payload.updated_at || product.updated_at || null,
       };
       if (Array.isArray(payload.ingredients)) patch.ingredients = payload.ingredients;
@@ -17904,6 +17944,17 @@ function updateCartBadge() {
     return unitPrice;
   }
 
+  function scaleProductBasePriceForCurrentUnit(product, currentUnitPrice, basePriceRaw) {
+    const basePrice = Number(basePriceRaw || 0);
+    if (!(basePrice > 0)) return 0;
+    const currentUnit = Number(currentUnitPrice || 0);
+    const productBasePrice = Number(product?.price || 0);
+    if (currentUnit > 0 && productBasePrice > 0) {
+      return roundPrice(basePrice * (currentUnit / productBasePrice));
+    }
+    return roundPrice(basePrice);
+  }
+
   function getQtyInBase(ing, qty) {
     const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id;
     const fromUnitId = Number(ing.unit_id || 0);
@@ -17975,8 +18026,7 @@ function updateCartBadge() {
         if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
         cacheStockFromProductPayload(p, "products_by_category");
         p.is_available = isProductAvailable(p);
-        state.productCache.set(Number(p.id), p);
-        mergeProductPassport(Number(p.id), { product: p });
+        mergeProductIntoCache(p, "products_by_category");
       }
       state.combosByCategory.set(id, Array.isArray(combosByCategory[id]) ? combosByCategory[id] : []);
       return [id, list];
@@ -18021,8 +18071,7 @@ function updateCartBadge() {
         if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
         cacheStockFromProductPayload(p, "products_for_category");
         p.is_available = isProductAvailable(p);
-        state.productCache.set(Number(p.id), p);
-        mergeProductPassport(Number(p.id), { product: p });
+        mergeProductIntoCache(p, "products_for_category");
       }
       const combos = Array.isArray(json.combos) ? json.combos : [];
       // В lite режиме не перезаписываем комбо пустым массивом, если они уже загружены

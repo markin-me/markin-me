@@ -42,9 +42,13 @@
       cacheStockFromProductPayload(p, "product_ensure_late");
     }
     p.is_available = isProductAvailable(p);
-    state.productCache.set(id, p);
-    if (typeof mergeProductPassport === "function") {
-      mergeProductPassport(id, { product: p });
+    if (typeof mergeProductIntoCache === "function") {
+      mergeProductIntoCache(p, "product_ensure_late");
+    } else {
+      state.productCache.set(id, p);
+      if (typeof mergeProductPassport === "function") {
+        mergeProductPassport(id, { product: p });
+      }
     }
     if (!p.is_available && pruneUnavailableCartItems()) {
       renderCart();
@@ -407,7 +411,11 @@ function applyProductPassportPayload(productId, payload) {
       cacheStockFromProductPayload(product, "product_passport_batch");
     }
     product.is_available = isProductAvailable(product);
-    state.productCache.set(pid, product);
+    if (typeof mergeProductIntoCache === "function") {
+      mergeProductIntoCache(product, "product_passport_batch");
+    } else {
+      state.productCache.set(pid, product);
+    }
   }
 
   const patch = { product };
@@ -537,9 +545,13 @@ async function preloadProductsByIdsToCache(productIds) {
         cacheStockFromProductPayload(product, "product_details_batch_target");
       }
       product.is_available = isProductAvailable(product);
-      state.productCache.set(id, product);
-      if (typeof mergeProductPassport === "function") {
-        mergeProductPassport(id, { product });
+      if (typeof mergeProductIntoCache === "function") {
+        mergeProductIntoCache(product, "product_details_batch_target");
+      } else {
+        state.productCache.set(id, product);
+        if (typeof mergeProductPassport === "function") {
+          mergeProductPassport(id, { product });
+        }
       }
     });
   } catch (e) {
@@ -4836,7 +4848,7 @@ optionGroups.forEach((group) => {
     const totalBeforeDiscount = roundPrice(unitPrice * Number(qty || 1));
     
     // Зачёркнутая цена: либо скидка, либо product.old_price из БД
-    const oldBase = Number(product.old_price || 0);
+    const oldBase = scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
     const oldUnit = oldBase > 0 ? roundPrice(oldBase + optionTotal + ingredientsPriceDiff) : 0;
     const totalOldFromDb = oldUnit > discountedUnitPrice ? roundPrice(oldUnit * Number(qty || 1)) : 0;
     
@@ -5621,7 +5633,7 @@ optionGroups.forEach((group) => {
       autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
     };
     const pricing = computeItemPricing(draftResolvedItem, totals);
-    const oldUnitBase = Number(product.old_price || 0);
+    const oldUnitBase = scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
     const parts = pricing?.parts || {};
     const oldUnit = oldUnitBase > 0
       ? (oldUnitBase + Number(parts.optionTotal || 0) + Number(parts.ingredientDiff || 0))
@@ -5718,6 +5730,62 @@ optionGroups.forEach((group) => {
     
     // Рассчитываем разницу цены ингредиентов для сохранения в корзину
     const ingredientsPriceDiff = calculateIngredientPrice();
+    const draftResolvedItem = {
+      product,
+      product_id: Number(product.id || 0),
+      qty: safeQty,
+      option_item_ids: optionItemIds,
+      option_items: selectedItems,
+      ingredients: ingredientQuantities,
+      ingredient_price_diff: Number(ingredientsPriceDiff || 0),
+      variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
+      variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
+      variant_label: variantLabel,
+      variant_group_title: hasVariantSelection ? variantGroupTitle : "",
+      variant_unit: hasVariantSelection ? variantUnit : "",
+      variant_unit_price: Number(variantUnitPrice || 0),
+      unit_price_override: null,
+      auto_add: 0,
+      auto_add_group_id: null,
+    };
+    const resolvedItems = cartItemsResolved();
+    const pricingTotals = {
+      nonAutoTotal: computeNonAutoTotal(resolvedItems),
+      autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
+    };
+    const pricing = computeItemPricing(draftResolvedItem, pricingTotals);
+    const oldUnitBase = scaleProductBasePriceForCurrentUnit(
+      product,
+      variantUnitPrice || Number(product.price || 0),
+      Number(product.old_price || 0)
+    );
+    const pricingParts = pricing?.parts || {};
+    const oldUnit = oldUnitBase > 0
+      ? (oldUnitBase + Number(pricingParts.optionTotal || 0) + Number(pricingParts.ingredientDiff || 0))
+      : 0;
+    const hasDiscount = Number(pricing?.discountAmount || 0) > 0;
+    const showOld =
+      !pricing?.isAuto &&
+      (hasDiscount || (oldUnit > 0 && oldUnit > Number(pricing?.unitPrice || 0)));
+    const originalLineTotal = hasDiscount
+      ? roundPrice(Number(pricing?.lineTotal || 0) + Number(pricing?.discountAmount || 0))
+      : roundPrice(oldUnit * safeQty);
+    const cartPricingSnapshot = buildFavoriteSnapshotFromResolvedItem(draftResolvedItem, {
+      pricing,
+      oldLineTotal: showOld ? originalLineTotal : null,
+    });
+    const cartOldPrice = Number(cartPricingSnapshot?.old_price || 0);
+    const cartUnitPriceBeforeDiscount = showOld && safeQty > 0
+      ? roundPrice(originalLineTotal / safeQty)
+      : null;
+    const cartDiscount = cartPricingSnapshot?.discount && typeof cartPricingSnapshot.discount === "object"
+      ? {
+          ...cartPricingSnapshot.discount,
+          original_line_total: cartPricingSnapshot.discount?.original_line_total != null
+            ? Number(cartPricingSnapshot.discount.original_line_total)
+            : null,
+        }
+      : null;
 
     if (editMode && editingItem) {
       // режим редактирования: обновляем qty и конфигурацию, с merge если совпало
@@ -5734,6 +5802,9 @@ optionGroups.forEach((group) => {
         sameItem.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
         sameItem.variant_unit = hasVariantSelection ? variantUnit : "";
         sameItem.variant_unit_price = Number(variantUnitPrice || 0);
+        sameItem.old_price = cartOldPrice;
+        sameItem.unit_price_before_discount = cartUnitPriceBeforeDiscount;
+        sameItem.discount = cartDiscount;
 
         // удаляем старую строку
         state.cart = state.cart.filter((it) => it.key !== editingItem.key);
@@ -5750,6 +5821,9 @@ optionGroups.forEach((group) => {
         editingItem.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
         editingItem.variant_unit = hasVariantSelection ? variantUnit : "";
         editingItem.variant_unit_price = Number(variantUnitPrice || 0);
+        editingItem.old_price = cartOldPrice;
+        editingItem.unit_price_before_discount = cartUnitPriceBeforeDiscount;
+        editingItem.discount = cartDiscount;
         editingItem.qty = safeQty;
         if (editingItem.auto_add == null) editingItem.auto_add = 0;
         if (editingItem.auto_add_group_id == null) editingItem.auto_add_group_id = null;
@@ -5767,6 +5841,9 @@ optionGroups.forEach((group) => {
         existing.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
         existing.variant_unit = hasVariantSelection ? variantUnit : "";
         existing.variant_unit_price = Number(variantUnitPrice || 0);
+        existing.old_price = cartOldPrice;
+        existing.unit_price_before_discount = cartUnitPriceBeforeDiscount;
+        existing.discount = cartDiscount;
         if (existing.auto_add == null) existing.auto_add = 0;
         if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
       } else {
@@ -5784,6 +5861,9 @@ optionGroups.forEach((group) => {
           variant_group_title: hasVariantSelection ? variantGroupTitle : "",
           variant_unit: hasVariantSelection ? variantUnit : "",
           variant_unit_price: Number(variantUnitPrice || 0),
+          old_price: cartOldPrice,
+          unit_price_before_discount: cartUnitPriceBeforeDiscount,
+          discount: cartDiscount,
           auto_add: 0,
           auto_add_group_id: null,
         });
@@ -10945,12 +11025,19 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           Number(parts.optionTotal || 0) +
           Number(parts.ingredientDiff || 0)
         );
-      } else if (Number(product?.old_price || 0) > Number(pricing?.unitPrice || 0)) {
-        originalUnit = roundPrice(
-          Number(product.old_price || 0) +
-          Number(parts.optionTotal || 0) +
-          Number(parts.ingredientDiff || 0)
+      } else {
+        const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+          product,
+          Number(parts.baseProductUnit || pricing?.unitPrice || 0),
+          Number(product?.old_price || 0)
         );
+        if (scaledOldBase > Number(pricing?.unitPrice || 0)) {
+          originalUnit = roundPrice(
+            scaledOldBase +
+            Number(parts.optionTotal || 0) +
+            Number(parts.ingredientDiff || 0)
+          );
+        }
       }
 
       previewItems.push({
@@ -14309,14 +14396,21 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           Number(parts.optionTotal || 0) +
           Number(parts.ingredientDiff || 0)
         );
-      } else if (Number(product?.old_price || 0) > Number(pricing.unitPrice || 0)) {
-        originalUnit = roundPrice(
-          Number(product.old_price || 0) +
-          Number(parts.optionTotal || 0) +
-          Number(parts.ingredientDiff || 0)
-        );
       } else {
-        originalUnit = roundPrice(originalUnit);
+        const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+          product,
+          Number(parts.baseProductUnit || pricing.unitPrice || 0),
+          Number(product?.old_price || 0)
+        );
+        if (scaledOldBase > Number(pricing.unitPrice || 0)) {
+          originalUnit = roundPrice(
+            scaledOldBase +
+            Number(parts.optionTotal || 0) +
+            Number(parts.ingredientDiff || 0)
+          );
+        } else {
+          originalUnit = roundPrice(originalUnit);
+        }
       }
 
       const originalQty = Number.isFinite(Number(pricing.paidQty))
@@ -14697,12 +14791,19 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           Number(parts.optionTotal || 0) +
           Number(parts.ingredientDiff || 0)
         );
-      } else if (Number(product?.old_price || 0) > Number(pricing?.unitPrice || 0)) {
-        originalUnit = roundPrice(
-          Number(product.old_price || 0) +
-          Number(parts.optionTotal || 0) +
-          Number(parts.ingredientDiff || 0)
+      } else {
+        const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+          product,
+          Number(parts.baseProductUnit || pricing?.unitPrice || 0),
+          Number(product?.old_price || 0)
         );
+        if (scaledOldBase > Number(pricing?.unitPrice || 0)) {
+          originalUnit = roundPrice(
+            scaledOldBase +
+            Number(parts.optionTotal || 0) +
+            Number(parts.ingredientDiff || 0)
+          );
+        }
       }
 
       const baseTotal = roundPrice(Number(pricing?.lineTotal || 0));
@@ -15511,14 +15612,21 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           + Number(parts.optionTotal || 0)
           + Number(parts.ingredientDiff || 0)
         );
-      } else if (Number(product?.old_price || 0) > Number(pricing.unitPrice || 0)) {
-        originalUnit = roundPrice(
-          Number(product.old_price || 0)
-          + Number(parts.optionTotal || 0)
-          + Number(parts.ingredientDiff || 0)
+      } else {
+        const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+          product,
+          Number(parts.baseProductUnit || pricing.unitPrice || 0),
+          Number(product?.old_price || 0)
         );
-      } else if (Number(item?.unit_price_before_discount || 0) > Number(pricing.unitPrice || 0)) {
-        originalUnit = roundPrice(Number(item.unit_price_before_discount || 0));
+        if (scaledOldBase > Number(pricing.unitPrice || 0)) {
+          originalUnit = roundPrice(
+            scaledOldBase
+            + Number(parts.optionTotal || 0)
+            + Number(parts.ingredientDiff || 0)
+          );
+        } else if (Number(item?.unit_price_before_discount || 0) > Number(pricing.unitPrice || 0)) {
+          originalUnit = roundPrice(Number(item.unit_price_before_discount || 0));
+        }
       }
 
       const originalQty = Number.isFinite(Number(pricing.paidQty))
@@ -15567,12 +15675,19 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           + Number(parts.optionTotal || 0)
           + Number(parts.ingredientDiff || 0)
         );
-      } else if (Number(product?.old_price || 0) > Number(pricing.unitPrice || 0)) {
-        originalUnit = roundPrice(
-          Number(product.old_price || 0)
-          + Number(parts.optionTotal || 0)
-          + Number(parts.ingredientDiff || 0)
+      } else {
+        const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+          product,
+          Number(parts.baseProductUnit || pricing.unitPrice || 0),
+          Number(product?.old_price || 0)
         );
+        if (scaledOldBase > Number(pricing.unitPrice || 0)) {
+          originalUnit = roundPrice(
+            scaledOldBase
+            + Number(parts.optionTotal || 0)
+            + Number(parts.ingredientDiff || 0)
+          );
+        }
       }
 
       const originalQty = Number.isFinite(Number(pricing.paidQty))
@@ -15814,12 +15929,19 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           + Number(parts.optionTotal || 0)
           + Number(parts.ingredientDiff || 0)
         );
-      } else if (Number(product?.old_price || 0) > Number(pricing?.unitPrice || 0)) {
-        originalUnit = roundPrice(
-          Number(product.old_price || 0)
-          + Number(parts.optionTotal || 0)
-          + Number(parts.ingredientDiff || 0)
+      } else {
+        const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+          product,
+          Number(parts.baseProductUnit || pricing?.unitPrice || 0),
+          Number(product?.old_price || 0)
         );
+        if (scaledOldBase > Number(pricing?.unitPrice || 0)) {
+          originalUnit = roundPrice(
+            scaledOldBase
+            + Number(parts.optionTotal || 0)
+            + Number(parts.ingredientDiff || 0)
+          );
+        }
       }
 
       const localLineTotal = localLineTotalsByCartKey
@@ -37104,14 +37226,21 @@ function setBottomNavActive(tab) {
             (Number(parts.optionTotal) || 0) +
             (Number(parts.ingredientDiff) || 0)
           );
-        } else if (product?.old_price && Number(product.old_price) > Number(pricing.unitPrice || 0)) {
-          originalUnit = roundPrice(
-            Number(product.old_price) +
-            (Number(parts.optionTotal) || 0) +
-            (Number(parts.ingredientDiff) || 0)
-          );
         } else {
-          originalUnit = roundPrice(originalUnit);
+          const scaledOldBase = scaleProductBasePriceForCurrentUnit(
+            product,
+            Number(parts.baseProductUnit || pricing.unitPrice || 0),
+            Number(product?.old_price || 0)
+          );
+          if (scaledOldBase > Number(pricing.unitPrice || 0)) {
+            originalUnit = roundPrice(
+              scaledOldBase +
+              (Number(parts.optionTotal) || 0) +
+              (Number(parts.ingredientDiff) || 0)
+            );
+          } else {
+            originalUnit = roundPrice(originalUnit);
+          }
         }
 
         // Для auto_add в breakdown используем ту же базу, что и в computeCartTotals:

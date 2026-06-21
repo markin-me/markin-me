@@ -2413,6 +2413,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       readPublicTableStamp('prod_products', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_product_categories', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_product_stocks', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
+      readPublicTableStamp('mkt_discounts', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
+      readPublicTableStamp('mkt_discount_products', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combos', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combo_set_blocks', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combo_blocks', 'tenant_id=?', [tenantId]),
@@ -13183,7 +13185,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         if (allCategoryId && categoryId === allCategoryId) {
           const [rows] = await db.query(
-            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
+            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
               p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
               p.client_composition, p.tech_process,
               p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
@@ -13217,7 +13219,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
 
         const [rows] = await db.query(
-          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
+          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
             p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
             p.client_composition, p.tech_process,
             p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
@@ -13592,8 +13594,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
 
       const sortedIds = [...ids].sort((a, b) => a - b);
-      const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
-      const cacheKey = makePublicCacheKey('products-batch-by-ids', { tenantId, storeId, ids: sortedIds, productsStamp });
+      const productsVersion = await buildPublicProductsListVersion(tenantId, storeId);
+      const cacheKey = makePublicCacheKey('products-batch-by-ids', { tenantId, storeId, ids: sortedIds, productsVersion });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
@@ -14894,8 +14896,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
 
       const sortedIds = [...ids].sort((a, b) => a - b);
-      const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
-      const cacheKey = makePublicCacheKey('products-batch-passports-v2', { tenantId, storeId, ids: sortedIds, productsStamp });
+      const productsVersion = await buildPublicProductsListVersion(tenantId, storeId);
+      const cacheKey = makePublicCacheKey('products-batch-passports-v2', { tenantId, storeId, ids: sortedIds, productsVersion });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');

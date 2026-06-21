@@ -12607,9 +12607,11 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     let cost = 0;
     let price = 0;
+    let oldPrice = 0;
     let weight = 0;
     let hasCost = false;
     let hasPrice = false;
+    let hasOldPrice = false;
     let hasWeight = false;
     const lines = [];
     ingredients.forEach((ing) => {
@@ -12647,13 +12649,19 @@ const isViewMode = state.comboPanel.mode === "view";
       const baseQty = ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : 1;
       const costBase = baseQty > 0 ? Number(ing.ingredient_cost_price || 0) / baseQty : Number(ing.ingredient_cost_price || 0);
       const catalogPriceBase = baseQty > 0 ? Number(ing.ingredient_price || 0) / baseQty : Number(ing.ingredient_price || 0);
+      const catalogOldPrice = Number(ing.ingredient_old_price || 0) > 0 ? Number(ing.ingredient_old_price || 0) : Number(ing.ingredient_price || 0);
+      const catalogOldPriceBase = baseQty > 0 ? catalogOldPrice / baseQty : catalogOldPrice;
       const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
+      const oldPriceBase = ing.price_override != null ? Number(ing.price_override) : catalogOldPriceBase;
       const lineCost = costBase * qtyInBase;
       const linePrice = priceBase * qtyInBase;
+      const lineOldPrice = oldPriceBase * qtyInBase;
       cost += lineCost;
       price += linePrice;
+      oldPrice += lineOldPrice;
       hasCost = true;
       hasPrice = true;
+      hasOldPrice = true;
       lines.push({
         name: ing.ingredient_name || "",
         quantity: qty,
@@ -12665,9 +12673,11 @@ const isViewMode = state.comboPanel.mode === "view";
     const scale = hasWeight && weight > 0 && targetQty > 0 ? targetQty / weight : 1;
     const costPrice = hasCost ? Math.round(cost * scale * 100) / 100 : null;
     const salePrice = hasPrice ? Math.round(price * scale * 100) / 100 : null;
+    const saleOldPrice = hasOldPrice ? Math.round(oldPrice * scale * 100) / 100 : null;
     return {
       cost_price: costPrice,
       price: salePrice,
+      old_price: saleOldPrice != null && salePrice != null && saleOldPrice > salePrice ? saleOldPrice : null,
       margin_percent: calcMarginFromPrice(costPrice, salePrice),
       base_qty: hasWeight ? Math.round(weight * scale * 1000) / 1000 : null,
       scale,
@@ -12732,7 +12742,11 @@ const isViewMode = state.comboPanel.mode === "view";
     const costChanged = valuesDifferentForRecalc(product.cost_price, payload.cost_price)
       || normalizeProductValueSource(product.cost_price_source) !== normalizeProductValueSource(payload.cost_price_source);
     const priceChanged = valuesDifferentForRecalc(product.price, payload.price)
-      || normalizeProductValueSource(product.price_source) !== normalizeProductValueSource(payload.price_source);
+      || valuesDifferentForRecalc(product.old_price, payload.old_price)
+      || normalizeProductValueSource(product.price_source) !== normalizeProductValueSource(payload.price_source)
+      || Number(product.promo_enabled || 0) !== Number(payload.promo_enabled || 0)
+      || String(product.promo_title || "").trim() !== String(payload.promo_title || "").trim()
+      || valuesDifferentForRecalc(product.promo_discount_percent, payload.promo_discount_percent);
     const baseAffectsComposition = ingredientsChanged || unitChanged || baseQtyChanged;
     const fields = {
       nutrition: nutritionChanged || baseAffectsComposition,
@@ -12839,6 +12853,11 @@ const isViewMode = state.comboPanel.mode === "view";
                           : "";
                         return `<label class="product-recalc-modal-field"><input type="checkbox" data-role="field-check" data-field="${field.key}"${checked}>${escapeHtml(field.label)}${badge}</label>`;
                       }).join("")}
+                      <div class="field-wrap product-nutrition-field product-price-field">
+                        <label class="field-label">\u0421\u0442\u0430\u0440\u0430\u044f \u0446\u0435\u043d\u0430</label>
+                        <input class="control" data-role="old-price-input" type="text" inputmode="decimal" autocomplete="off" />
+                        <small data-role="old-price-preview">\u0421\u0442\u0430\u0440\u0430\u044f \u0446\u0435\u043d\u0430: ${escapeHtml(formatRecalcValue(item.current?.old_price, "\u20bd"))} \u2192 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044f...</small>
+                      </div>
                     </div>
                   </div>
                   <div class="product-nutrition-card product-price-card product-recalc-price-card ${isAuto ? "is-auto" : ""}">
@@ -12900,6 +12919,7 @@ const isViewMode = state.comboPanel.mode === "view";
           product_pcs_factor: item.product_pcs_factor ?? cached?.product?.product_pcs_factor,
           product_pcs_base_unit_id: item.product_pcs_base_unit_id ?? cached?.product?.product_pcs_base_unit_id,
           price: item.current?.price ?? cached?.product?.price,
+          old_price: item.current?.old_price ?? cached?.product?.old_price,
           cost_price: item.current?.cost_price ?? cached?.product?.cost_price,
           margin_percent: item.current?.margin_percent ?? cached?.product?.margin_percent,
           price_source: item.sources?.price ?? cached?.product?.price_source,
@@ -12937,6 +12957,7 @@ const isViewMode = state.comboPanel.mode === "view";
         if (virtual) {
           next.ingredient_cost_price = virtual.cost_price ?? next.ingredient_cost_price;
           next.ingredient_price = virtual.price ?? next.ingredient_price;
+          next.ingredient_old_price = virtual.old_price ?? next.ingredient_old_price;
           next.margin_percent = virtual.margin_percent ?? next.margin_percent;
         }
         return next;
@@ -12956,7 +12977,7 @@ const isViewMode = state.comboPanel.mode === "view";
       row.querySelector('[data-role="source-manual"]')?.classList.toggle("is-active", !isAuto);
       const hint = row.querySelector('[data-role="price-source-hint"]');
       if (hint) hint.textContent = isAuto ? "Считается из состава" : "Ручной ввод";
-      row.querySelectorAll('[data-role="cost-input"],[data-role="margin-input"],[data-role="price-input"]').forEach((input) => {
+      row.querySelectorAll('[data-role="cost-input"],[data-role="margin-input"],[data-role="price-input"],[data-role="old-price-input"]').forEach((input) => {
         input.readOnly = isAuto;
       });
     };
@@ -12968,16 +12989,20 @@ const isViewMode = state.comboPanel.mode === "view";
         const calculated = item.calculated || {};
         const cost = roundMoney(calculated.cost_price);
         const price = roundMoney(calculated.price);
+        const oldPrice = roundMoney(calculated.old_price);
         const margin = calculated.margin_percent != null ? roundMoney(calculated.margin_percent) : calcMarginFromPrice(cost, price);
         const costEl = row.querySelector('[data-role="cost-preview"]');
         const priceEl = row.querySelector('[data-role="price-preview"]');
+        const oldPriceEl = row.querySelector('[data-role="old-price-preview"]');
         const marginEl = row.querySelector('[data-role="margin-preview"]');
         const costInput = row.querySelector('[data-role="cost-input"]');
         const priceInput = row.querySelector('[data-role="price-input"]');
+        const oldPriceInput = row.querySelector('[data-role="old-price-input"]');
         const marginInput = row.querySelector('[data-role="margin-input"]');
         const breakdownEl = row.querySelector('[data-role="breakdown"]');
         if (costInput) costInput.value = cost != null ? formatNumberForInputFixed(cost, 2) : "";
         if (priceInput) priceInput.value = price != null ? formatNumberForInputFixed(price, 2) : "";
+        if (oldPriceInput) oldPriceInput.value = oldPrice != null ? formatNumberForInputFixed(oldPrice, 2) : "";
         if (marginInput) marginInput.value = margin != null ? formatNumberForInputFixed(margin, 2) : "";
         if (costEl) {
           costEl.textContent = `Себест.: ${formatRecalcValue(item.current?.cost_price, " ₽")} → ${formatRecalcValue(cost, " ₽")}`;
@@ -12986,6 +13011,7 @@ const isViewMode = state.comboPanel.mode === "view";
           priceEl.textContent = `Цена: ${formatRecalcValue(item.current?.price, " ₽")} → ${formatRecalcValue(price, " ₽")}`;
         }
         if (marginEl) marginEl.textContent = `Маржа: ${formatRecalcValue(item.current?.margin_percent, "%")} → ${formatRecalcValue(margin, "%")}`;
+        if (oldPriceEl) oldPriceEl.textContent = `\u0421\u0442\u0430\u0440\u0430\u044f \u0446\u0435\u043d\u0430: ${formatRecalcValue(item.current?.old_price, "\u20bd")} \u2192 ${formatRecalcValue(oldPrice, "\u20bd")}`;
         if (breakdownEl) breakdownEl.textContent = renderRecalcBreakdown(calculated);
         syncRowSourceMode(row, item);
       });
@@ -13002,6 +13028,7 @@ const isViewMode = state.comboPanel.mode === "view";
             ...(item.calculated || {}),
             cost_price: parseNumberFromInput(row.querySelector('[data-role="cost-input"]')?.value),
             price: parseNumberFromInput(row.querySelector('[data-role="price-input"]')?.value),
+            old_price: parseNumberFromInput(row.querySelector('[data-role="old-price-input"]')?.value),
             margin_percent: parseNumberFromInput(row.querySelector('[data-role="margin-input"]')?.value),
           };
         }
@@ -13082,11 +13109,21 @@ const isViewMode = state.comboPanel.mode === "view";
       item.calculated = {
         cost_price: item.current?.cost_price ?? null,
         price: item.current?.price ?? null,
+        old_price: item.current?.old_price ?? null,
         margin_percent: item.current?.margin_percent ?? null,
         ...(item.calculated || {}),
       };
       const row = getRowByIndex(index);
       if (!row) return;
+      row.querySelectorAll('[data-role="old-price-head-input"],[data-role="old-price-top-input"]').forEach((input) => {
+        input.closest(".field-wrap")?.remove();
+      });
+      const oldPriceField = row.querySelector('[data-role="old-price-input"]')?.closest(".field-wrap");
+      const priceField = row.querySelector('[data-role="price-input"]')?.closest(".field-wrap");
+      const priceGrid = row.querySelector(".product-price-grid");
+      if (oldPriceField && priceField && priceGrid && oldPriceField.parentElement !== priceGrid) {
+        priceField.insertAdjacentElement("afterend", oldPriceField);
+      }
       row.querySelector('[data-role="source-auto"]')?.addEventListener("click", () => {
         setItemSourceMode(item, "auto");
         const costCheck = row.querySelector('[data-field="cost_price"]');
@@ -13105,6 +13142,7 @@ const isViewMode = state.comboPanel.mode === "view";
       });
       const costInput = row.querySelector('[data-role="cost-input"]');
       const priceInput = row.querySelector('[data-role="price-input"]');
+      const oldPriceInput = row.querySelector('[data-role="old-price-input"]');
       const marginInput = row.querySelector('[data-role="margin-input"]');
       costInput?.addEventListener("input", () => {
         setItemSourceMode(item, "manual");
@@ -13120,6 +13158,12 @@ const isViewMode = state.comboPanel.mode === "view";
         if (priceCheck) priceCheck.checked = true;
         const margin = calcMarginFromPrice(parseNumberFromInput(costInput?.value), parseNumberFromInput(priceInput.value));
         if (marginInput && margin != null) marginInput.value = formatNumberForInputFixed(margin, 2);
+        recalcModalCascade();
+      });
+      oldPriceInput?.addEventListener("input", () => {
+        setItemSourceMode(item, "manual");
+        const priceCheck = row.querySelector('[data-field="price"]');
+        if (priceCheck) priceCheck.checked = true;
         recalcModalCascade();
       });
       marginInput?.addEventListener("input", () => {
@@ -13198,6 +13242,7 @@ const isViewMode = state.comboPanel.mode === "view";
               const updated = updatedProducts.find((product) => Number(product.id) === Number(ing.ingredient_id));
               if (!updated) return;
               ing.ingredient_price = updated.price;
+              ing.ingredient_old_price = updated.old_price;
               ing.ingredient_cost_price = updated.cost_price;
               ing.margin_percent = updated.margin_percent;
             });
@@ -13682,6 +13727,9 @@ const isViewMode = state.comboPanel.mode === "view";
             show_tech_process: form.show_tech_process?.checked ? 1 : 0,
             price: priceValue,
             old_price: parseNumberFromInput(form.old_price.value),
+            promo_enabled: form.promo_enabled?.checked ? 1 : 0,
+            promo_title: String(form.promo_title?.value || "").trim(),
+            promo_discount_percent: parseNumberFromInput(form.promo_discount_percent?.value),
             cost_price: costPriceValue,
             price_source: normalizeProductValueSource(draft.valueSources?.price),
             margin_percent: marginPercentValue,
@@ -14141,6 +14189,9 @@ const isViewMode = state.comboPanel.mode === "view";
       draft.blocksConfig = normalizeProductBlocksConfig(product.blocks_config);
       form.price.value = product.price != null ? formatNumberForInput(product.price) : "";
       form.old_price.value = product.old_price != null ? formatNumberForInput(product.old_price) : "";
+      if (form.promo_enabled) form.promo_enabled.checked = Number(product.promo_enabled || 0) === 1;
+      if (form.promo_title) form.promo_title.value = product.promo_title || "";
+      if (form.promo_discount_percent) form.promo_discount_percent.value = product.promo_discount_percent != null ? formatNumberForInput(product.promo_discount_percent) : "";
       form.cost_price.value = product.cost_price != null ? formatNumberForInput(product.cost_price) : "";
       if (form.margin_percent) {
         const marginValue = product.margin_percent != null
@@ -14312,6 +14363,10 @@ const isViewMode = state.comboPanel.mode === "view";
       costPriceInput: $("#pe_cost_price", wrapper),
       marginPercentInput: $("#pe_margin_percent", wrapper),
       priceInput: $("#pe_price", wrapper),
+      oldPriceInput: $("#pe_old_price", wrapper),
+      promoEnabledInput: $("#pe_promo_enabled", wrapper),
+      promoTitleInput: $("#pe_promo_title", wrapper),
+      promoDiscountInput: $("#pe_promo_discount_percent", wrapper),
       discountAccordion: $("#peDiscountAccordion", wrapper),
       discountEmpty: $("#peDiscountEmpty", wrapper),
       descriptionBlock: $("#peDescriptionAccordion", wrapper),
@@ -14352,6 +14407,40 @@ const isViewMode = state.comboPanel.mode === "view";
       return margin;
     }
 
+    function isProductPromoEnabled() {
+      return Boolean(ui.promoEnabledInput?.checked);
+    }
+
+    function getProductPromoDiscountPercent() {
+      const value = parseNumberFromInput(ui.promoDiscountInput?.value);
+      if (value == null) return 0;
+      return Math.min(100, Math.max(0, value));
+    }
+
+    function applyProductPromoPrice({ preserveExistingOldPrice = true } = {}) {
+      if (!ui.priceInput || !ui.oldPriceInput || !isProductPromoEnabled()) return;
+      let basePrice = parseNumberFromInput(ui.oldPriceInput.value);
+      if (!preserveExistingOldPrice || basePrice == null || basePrice <= 0) {
+        basePrice = parseNumberFromInput(ui.priceInput.value);
+      }
+      if (basePrice == null) return;
+      ui.oldPriceInput.value = formatNumberForInputFixed(basePrice, 2);
+      const discountPercent = getProductPromoDiscountPercent();
+      const nextPrice = Math.max(0, basePrice * (100 - discountPercent) / 100);
+      ui.priceInput.value = formatNumberForInputFixed(nextPrice, 2);
+      updateMarginFromCostAndPrice();
+    }
+
+    function disableProductPromoPrice() {
+      if (!ui.priceInput || !ui.oldPriceInput) return;
+      const oldPrice = parseNumberFromInput(ui.oldPriceInput.value);
+      if (oldPrice != null && oldPrice > 0) {
+        ui.priceInput.value = formatNumberForInputFixed(oldPrice, 2);
+      }
+      ui.oldPriceInput.value = "";
+      updateMarginFromCostAndPrice();
+    }
+
     function applyCompositionPriceValues() {
       if (!isCompositionPriceMode()) return;
       const cost = calcTotalCostFromIngredientsGlobal();
@@ -14360,9 +14449,15 @@ const isViewMode = state.comboPanel.mode === "view";
         ui.costPriceInput.value = formatNumberForInput(Math.round(cost * 100) / 100);
       }
       if (price != null && ui.priceInput) {
-        ui.priceInput.value = formatNumberForInput(Math.round(price * 100) / 100);
+        ui.priceInput.value = formatNumberForInputFixed(price, 2);
+        if (ui.oldPriceInput && isProductPromoEnabled()) {
+          ui.oldPriceInput.value = formatNumberForInputFixed(price, 2);
+          applyProductPromoPrice({ preserveExistingOldPrice: true });
+        } else if (ui.oldPriceInput) {
+          ui.oldPriceInput.value = "";
+        }
       }
-      const margin = calcMarginFromPrice(cost, price);
+      const margin = calcMarginFromPrice(cost, parseNumberFromInput(ui.priceInput?.value) ?? price);
       if (margin != null && ui.marginPercentInput) {
         ui.marginPercentInput.value = formatNumberForInputFixed(margin, 2);
       }
@@ -14378,9 +14473,12 @@ const isViewMode = state.comboPanel.mode === "view";
       }
       if (ui.costPriceInput) ui.costPriceInput.readOnly = isView || isAuto;
       if (ui.marginPercentInput) ui.marginPercentInput.readOnly = isView || isAuto;
-      if (ui.priceInput) ui.priceInput.readOnly = isView || isAuto;
+      if (ui.priceInput) ui.priceInput.readOnly = isView || isAuto || isProductPromoEnabled();
+      if (ui.oldPriceInput) ui.oldPriceInput.readOnly = isView || isAuto;
       if (ui.priceSourceAutoBtn) ui.priceSourceAutoBtn.disabled = isView;
       if (ui.priceSourceManualBtn) ui.priceSourceManualBtn.disabled = isView;
+      if (ui.promoTitleInput) ui.promoTitleInput.readOnly = isView || !isProductPromoEnabled();
+      if (ui.promoDiscountInput) ui.promoDiscountInput.readOnly = isView || !isProductPromoEnabled();
       if (applyValues) applyCompositionPriceValues();
     }
 
@@ -14422,6 +14520,29 @@ const isViewMode = state.comboPanel.mode === "view";
         const num = parseNumberFromInput(ui.marginPercentInput.value);
         ui.marginPercentInput.value = num == null ? "" : formatNumberForInputFixed(num, 2);
         updatePriceFromCostAndMargin();
+      });
+      ui.oldPriceInput?.addEventListener("input", () => {
+        if (isProductPromoEnabled()) applyProductPromoPrice({ preserveExistingOldPrice: true });
+      });
+      ui.oldPriceInput?.addEventListener("blur", () => {
+        const num = parseNumberFromInput(ui.oldPriceInput.value);
+        ui.oldPriceInput.value = num == null ? "" : formatNumberForInputFixed(num, 2);
+        if (isProductPromoEnabled()) applyProductPromoPrice({ preserveExistingOldPrice: true });
+      });
+      ui.promoEnabledInput?.addEventListener("change", () => {
+        if (isProductPromoEnabled()) applyProductPromoPrice({ preserveExistingOldPrice: false });
+        else disableProductPromoPrice();
+        syncPriceSourceMode();
+      });
+      ui.promoDiscountInput?.addEventListener("input", () => {
+        const nextValue = normalizeLimitedDecimalInput(ui.promoDiscountInput.value, 3);
+        if (ui.promoDiscountInput.value !== nextValue) ui.promoDiscountInput.value = nextValue;
+        applyProductPromoPrice({ preserveExistingOldPrice: true });
+      });
+      ui.promoDiscountInput?.addEventListener("blur", () => {
+        const value = getProductPromoDiscountPercent();
+        ui.promoDiscountInput.value = value > 0 ? formatNumberForInput(value) : "";
+        applyProductPromoPrice({ preserveExistingOldPrice: true });
       });
       ui.baseQtyInput?.addEventListener("input", () => {
         draft.valueSources.base_qty = "manual";
@@ -17962,8 +18083,8 @@ const isViewMode = state.comboPanel.mode === "view";
     /** Расчёт себестоимости, цены и веса по массиву ингредиентов (формат API). Для пересчёта блюд, где текущий товар в составе. */
     function calcTotalsFromComposition(recipeBaseUnitId, ingredientsArray) {
       if (!Array.isArray(ingredientsArray) || ingredientsArray.length === 0) return null;
-      let cost = 0, price = 0, weight = 0;
-      let hasCost = false, hasPrice = false, hasWeight = false;
+      let cost = 0, price = 0, oldPrice = 0, weight = 0;
+      let hasCost = false, hasPrice = false, hasOldPrice = false, hasWeight = false;
       const baseUnitIdNum = Number(recipeBaseUnitId || 0);
       ingredientsArray.forEach(ing => {
         const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id || ing.unit_id;
@@ -17984,11 +18105,16 @@ const isViewMode = state.comboPanel.mode === "view";
           const baseQty = ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : 1;
           const costBase = baseQty > 0 ? Number(ing.ingredient_cost_price || 0) / baseQty : Number(ing.ingredient_cost_price || 0);
           const catalogPriceBase = baseQty > 0 ? Number(ing.ingredient_price || 0) / baseQty : Number(ing.ingredient_price || 0);
+          const catalogOldPrice = Number(ing.ingredient_old_price || 0) > 0 ? Number(ing.ingredient_old_price || 0) : Number(ing.ingredient_price || 0);
+          const catalogOldPriceBase = baseQty > 0 ? catalogOldPrice / baseQty : catalogOldPrice;
           const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
+          const oldPriceBase = ing.price_override != null ? Number(ing.price_override) : catalogOldPriceBase;
           cost += costBase * qtyInIngBase;
           price += priceBase * qtyInIngBase;
+          oldPrice += oldPriceBase * qtyInIngBase;
           hasCost = true;
           hasPrice = true;
+          hasOldPrice = true;
         }
         if (baseUnitIdNum && fromUnitId) {
           let w = null;
@@ -17998,7 +18124,14 @@ const isViewMode = state.comboPanel.mode === "view";
           if (w != null) { weight += w; hasWeight = true; }
         }
       });
-      return (hasCost || hasPrice || hasWeight) ? { cost: hasCost ? Math.round(cost * 100) / 100 : null, price: hasPrice ? Math.round(price * 100) / 100 : null, weight: hasWeight ? Math.round(weight * 1000) / 1000 : null } : null;
+      const salePrice = hasPrice ? Math.round(price * 100) / 100 : null;
+      const saleOldPrice = hasOldPrice ? Math.round(oldPrice * 100) / 100 : null;
+      return (hasCost || hasPrice || hasWeight) ? {
+        cost: hasCost ? Math.round(cost * 100) / 100 : null,
+        price: salePrice,
+        old_price: saleOldPrice != null && salePrice != null && saleOldPrice > salePrice ? saleOldPrice : null,
+        weight: hasWeight ? Math.round(weight * 1000) / 1000 : null,
+      } : null;
     }
 
     // Функция для обновления placeholder себестоимости (доступна на уровне openProductModal)
@@ -18032,15 +18165,24 @@ const isViewMode = state.comboPanel.mode === "view";
       const priceInput = ui.priceInput;
       const calculatedPrice = calcTotalPriceFromIngredientsGlobal();
       const calculatedCost = calcTotalCostFromIngredientsGlobal();
+      let displayPrice = calculatedPrice;
       
       // Обновляем placeholder цены товара
       if (priceInput) {
         priceInput.placeholder = calculatedPrice != null ? formatMoney(calculatedPrice) : "0";
         if (isCompositionPriceMode() && calculatedPrice != null) {
-          priceInput.value = formatNumberForInputFixed(calculatedPrice, 2);
+          if (ui.oldPriceInput && isProductPromoEnabled()) {
+            ui.oldPriceInput.value = formatNumberForInputFixed(calculatedPrice, 2);
+            const discountPercent = getProductPromoDiscountPercent();
+            displayPrice = Math.max(0, calculatedPrice * (100 - discountPercent) / 100);
+            priceInput.value = formatNumberForInputFixed(displayPrice, 2);
+          } else {
+            priceInput.value = formatNumberForInputFixed(calculatedPrice, 2);
+            if (ui.oldPriceInput) ui.oldPriceInput.value = "";
+          }
         }
       }
-      const margin = calcMarginFromPrice(calculatedCost, calculatedPrice);
+      const margin = calcMarginFromPrice(calculatedCost, displayPrice);
       if (isCompositionPriceMode() && margin != null && ui.marginPercentInput) {
         ui.marginPercentInput.value = formatNumberForInputFixed(margin, 2);
       }
@@ -18125,6 +18267,7 @@ const isViewMode = state.comboPanel.mode === "view";
             const payload = {};
             if (totals.cost != null) { payload.cost_price = totals.cost; payload.cost_price_source = "auto"; }
             if (totals.price != null) { payload.price = totals.price; payload.price_source = "auto"; }
+            if (Object.prototype.hasOwnProperty.call(totals, "old_price")) { payload.old_price = totals.old_price; }
             if (totals.weight != null) { payload.base_qty = totals.weight; payload.base_qty_source = "auto"; }
             if (Object.keys(payload).length === 0) continue;
             await apiPatchProductRecalc(productId, payload);
@@ -18830,6 +18973,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
                 const productName = fullProduct?.name || '';
                 const productPrice = Number(fullProduct?.price || 0);
+                const productOldPrice = Number(fullProduct?.old_price || 0);
                 const productCostPrice = Number(fullProduct?.cost_price || 0);
                 const productPhotos = Array.isArray(fullProduct?.photos) ? fullProduct.photos : (Array.isArray(fullProduct?.photos_json) ? fullProduct.photos_json : []);
                 const baseUnitId = Number(fullProduct?.base_unit_id || fullProduct?.unit_id || unitId || 0);
@@ -18851,6 +18995,7 @@ const isViewMode = state.comboPanel.mode === "view";
                   ingredient_id: productId,
                   ingredient_name: productName,
                   ingredient_price: productPrice,
+                  ingredient_old_price: productOldPrice,
                   ingredient_cost_price: productCostPrice,
                   ingredient_base_unit_id: baseUnitId || null,
                   ingredient_base_qty: baseQty,
@@ -19050,6 +19195,7 @@ const isViewMode = state.comboPanel.mode === "view";
             // Get product name and price from catalog
             const productName = fullProduct?.name || '';
             const productPrice = Number(fullProduct?.price || 0);
+            const productOldPrice = Number(fullProduct?.old_price || 0);
             const productCostPrice = Number(fullProduct?.cost_price || 0);
             const productPhotos = Array.isArray(fullProduct?.photos) ? fullProduct.photos : (Array.isArray(fullProduct?.photos_json) ? fullProduct.photos_json : []);
             const baseUnitId = Number(fullProduct?.base_unit_id || fullProduct?.unit_id || unitId || 0);
@@ -19076,6 +19222,7 @@ const isViewMode = state.comboPanel.mode === "view";
               ingredient_id: productId,
               ingredient_name: productName,
               ingredient_price: productPrice,
+              ingredient_old_price: productOldPrice,
               ingredient_cost_price: productCostPrice,
               ingredient_base_unit_id: baseUnitId || null,
               ingredient_base_qty: baseQty,

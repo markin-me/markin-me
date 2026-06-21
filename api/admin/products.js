@@ -7,6 +7,8 @@ const multer = require('multer');
 module.exports = function makeAdminProductsRouter({ db, helpers }) {
   const router = express.Router();
   let hasCategoryCheckoutVisibilityColumn = null;
+  let productPromoColumnsReady = false;
+  let ensureProductPromoColumnsPromise = null;
   let discountDeletedColumnsReady = false;
   let ensureDiscountDeletedColumnsPromise = null;
   const PRODUCT_BLOCK_KEYS = Object.freeze([
@@ -193,6 +195,40 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     const sale = helpers.numOrNull(price);
     if (cost == null || sale == null || sale <= 0) return null;
     return Math.round((((sale - cost) / sale) * 100) * 1000) / 1000;
+  }
+
+  async function ensureProductPromoColumns() {
+    if (productPromoColumnsReady) return true;
+    if (ensureProductPromoColumnsPromise) return ensureProductPromoColumnsPromise;
+    ensureProductPromoColumnsPromise = (async () => {
+      try {
+        const [columnRows] = await db.query("SHOW COLUMNS FROM prod_products");
+        const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row.Field || "")));
+        if (!existing.has("promo_enabled")) {
+          await db.query("ALTER TABLE prod_products ADD COLUMN `promo_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `old_price`");
+          existing.add("promo_enabled");
+        }
+        if (!existing.has("promo_title")) {
+          await db.query("ALTER TABLE prod_products ADD COLUMN `promo_title` VARCHAR(255) NULL AFTER `promo_enabled`");
+          existing.add("promo_title");
+        }
+        if (!existing.has("promo_discount_percent")) {
+          await db.query("ALTER TABLE prod_products ADD COLUMN `promo_discount_percent` DECIMAL(8,3) NULL AFTER `promo_title`");
+          existing.add("promo_discount_percent");
+        }
+        productPromoColumnsReady = existing.has("promo_enabled") && existing.has("promo_title") && existing.has("promo_discount_percent");
+        return productPromoColumnsReady;
+      } finally {
+        ensureProductPromoColumnsPromise = null;
+      }
+    })();
+    return ensureProductPromoColumnsPromise;
+  }
+
+  function normalizePromoDiscountPercent(value) {
+    const n = helpers.numOrNull(value);
+    if (n == null) return null;
+    return Math.min(100, Math.max(0, n));
   }
 
   function firstProductPhoto(photosJson) {
@@ -480,7 +516,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     if (!product) return null;
     const [ingredients] = await db.query(
       `SELECT i.ingredient_id, i.quantity, i.unit_id, i.price_override,
-              p.price AS ingredient_price, p.cost_price AS ingredient_cost_price,
+              p.price AS ingredient_price, p.old_price AS ingredient_old_price, p.cost_price AS ingredient_cost_price,
               p.base_qty AS ingredient_base_qty,
               p.base_unit_id AS ingredient_base_unit_id,
               p.unit_id AS ingredient_unit_id
@@ -547,9 +583,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     };
     let cost = 0;
     let price = 0;
+    let oldPrice = 0;
     let weight = 0;
     let hasCost = false;
     let hasPrice = false;
+    let hasOldPrice = false;
     let hasWeight = false;
     const recipeBaseUnitId = Number(product.base_unit_id || product.unit_id || 0);
     let measureUnitId = recipeBaseUnitId;
@@ -574,11 +612,16 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         const ingredientBaseQty = helpers.numOrNull(ing.ingredient_base_qty) || 1;
         const costBase = ingredientBaseQty > 0 ? Number(ing.ingredient_cost_price || 0) / ingredientBaseQty : Number(ing.ingredient_cost_price || 0);
         const catalogPriceBase = ingredientBaseQty > 0 ? Number(ing.ingredient_price || 0) / ingredientBaseQty : Number(ing.ingredient_price || 0);
+        const catalogOldPrice = Number(ing.ingredient_old_price || 0) > 0 ? Number(ing.ingredient_old_price || 0) : Number(ing.ingredient_price || 0);
+        const catalogOldPriceBase = ingredientBaseQty > 0 ? catalogOldPrice / ingredientBaseQty : catalogOldPrice;
         const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
+        const oldPriceBase = ing.price_override != null ? Number(ing.price_override) : catalogOldPriceBase;
         cost += costBase * qtyInIngredientBase;
         price += priceBase * qtyInIngredientBase;
+        oldPrice += oldPriceBase * qtyInIngredientBase;
         hasCost = true;
         hasPrice = true;
+        hasOldPrice = true;
       }
       if (measureUnitId) {
         const qtyInMeasureUnit = toUnitQty(ing.quantity, fromUnitId, measureUnitId, ingredientId);
@@ -591,9 +634,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     const scale = hasWeight && weight > 0 && targetQty != null && targetQty > 0 ? targetQty / weight : 1;
     const costPrice = hasCost ? Math.round(cost * scale * 100) / 100 : null;
     const salePrice = hasPrice ? Math.round(price * scale * 100) / 100 : null;
+    const saleOldPrice = hasOldPrice ? Math.round(oldPrice * scale * 100) / 100 : null;
     return {
       cost_price: costPrice,
       price: salePrice,
+      old_price: saleOldPrice != null && salePrice != null && saleOldPrice > salePrice ? saleOldPrice : null,
       margin_percent: calcProductMarginPercent(costPrice, salePrice),
       base_qty: hasWeight ? Math.round(weight * 1000) / 1000 : null,
     };
@@ -648,7 +693,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
     async function walk(childId, pathIds, pathNames, depth) {
       const [parents] = await db.query(
-        `SELECT p.id, p.name, p.price, p.cost_price, p.margin_percent, p.base_qty,
+        `SELECT p.id, p.name, p.price, p.old_price, p.cost_price, p.margin_percent, p.base_qty,
                 p.unit_id, p.base_unit_id, p.photos_json,
                 p.price_source, p.cost_price_source, p.base_qty_source,
                 u.code AS unit_code, u.short_title AS unit_short_title, u.title AS unit_title,
@@ -684,6 +729,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
             current: {
               cost_price: parent.cost_price,
               price: parent.price,
+              old_price: parent.old_price,
               margin_percent: parent.margin_percent,
               base_qty: parent.base_qty,
             },
@@ -1471,6 +1517,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
   router.post('/admin/products/recalculate-dependents', async (req, res) => {
     try {
+      await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
       const items = Array.isArray(req.body?.items) ? req.body.items : [];
       const normalized = items
@@ -1496,6 +1543,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           let totals = {
             cost_price: helpers.numOrNull(provided.cost_price),
             price: helpers.numOrNull(provided.price),
+            old_price: helpers.numOrNull(provided.old_price),
             margin_percent: helpers.numOrNull(provided.margin_percent),
           };
           if ((fields.cost_price && totals.cost_price == null) || (fields.price && totals.price == null)) {
@@ -1509,6 +1557,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           if (fields.price && totals?.price != null) {
             updates.push("price=?", "price_source=?");
             params.push(totals.price, normalizeProductValueSource(item.sources?.price));
+            updates.push("old_price=?");
+            params.push(totals.old_price != null && totals.old_price > totals.price ? totals.old_price : null);
           }
           if (totals?.margin_percent != null) {
             updates.push("margin_percent=?");
@@ -1533,7 +1583,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       }
       const updatedRows = updatedIds.length
         ? await db.query(
-            `SELECT id, name, price, cost_price, margin_percent, price_source, cost_price_source,
+            `SELECT id, name, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, margin_percent, price_source, cost_price_source,
                     client_composition, base_qty, base_qty_source, photos_json, is_active, site_visibility, fulfillment_mode
              FROM prod_products
              WHERE tenant_id=? AND id IN (${updatedIds.map(() => "?").join(",")})`,
@@ -1558,6 +1608,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
   router.post('/admin/products/dependent-recalc-values', async (req, res) => {
     try {
+      await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
       const ids = Array.isArray(req.body?.product_ids) ? req.body.product_ids : [];
       const productIds = Array.from(new Set(
@@ -1571,6 +1622,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           calculated: {
             cost_price: totals?.cost_price ?? null,
             price: totals?.price ?? null,
+            old_price: totals?.old_price ?? null,
             margin_percent: totals?.margin_percent ?? null,
           },
         });
@@ -1584,6 +1636,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
   router.get('/admin/products/:id/dependent-recalc-preview', async (req, res) => {
     try {
+      await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
@@ -1597,6 +1650,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   // GET one product (for recalc: need base_unit_id, base_qty)
   router.get('/prod_products/:id', async (req, res) => {
     try {
+      await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
@@ -1733,6 +1787,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   // ------------------------------
   router.get('/prod_products', async (req, res) => {
     try {
+      await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const allCategoryId = await helpers.getAllCategoryId(db, tenantId);
@@ -1747,7 +1802,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const listMode = helpers.toBool(req.query.list, false);
       const listSelectFields = `
         p.id, p.tenant_id, p.name, p.sku, p.description_short, p.description,
-        p.price, p.old_price, p.cost_price,
+        p.price, p.old_price, p.promo_enabled, p.promo_title, p.promo_discount_percent, p.cost_price,
         p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent,
         p.unit_id, p.base_unit_id, p.base_qty,
         p.photos_json, p.blocks_config_json,
@@ -1942,6 +1997,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
   router.post('/prod_products', async (req, res) => {
     try {
+      await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
 
@@ -1959,6 +2015,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const price = helpers.numOrNull(req.body.price) ?? 0;
       const old_price = helpers.numOrNull(req.body.old_price);
+      const promo_enabled = helpers.toBool(req.body.promo_enabled, false) ? 1 : 0;
+      const promo_title = helpers.strOrNull(req.body.promo_title);
+      const promo_discount_percent = normalizePromoDiscountPercent(req.body.promo_discount_percent);
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const margin_percent = helpers.numOrNull(req.body.margin_percent);
       const price_source = normalizeProductValueSource(req.body.price_source);
@@ -1984,13 +2043,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const [result] = await db.query(
         `INSERT INTO prod_products
-          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json, is_active, site_visibility,
+          (tenant_id, name, sku, description_short, description, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json, is_active, site_visibility,
            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
            show_description_short, show_description, show_client_composition, show_tech_process)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
-          price, old_price, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json,
+          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
           show_description_short, show_description, show_client_composition, show_tech_process
@@ -2017,6 +2076,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
   router.put('/prod_products/:id', async (req, res) => {
     try {
+      await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
@@ -2035,6 +2095,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const price = helpers.numOrNull(req.body.price) ?? 0;
       const old_price = helpers.numOrNull(req.body.old_price);
+      const promo_enabled = helpers.toBool(req.body.promo_enabled, false) ? 1 : 0;
+      const promo_title = helpers.strOrNull(req.body.promo_title);
+      const promo_discount_percent = normalizePromoDiscountPercent(req.body.promo_discount_percent);
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const margin_percent = helpers.numOrNull(req.body.margin_percent);
       const price_source = normalizeProductValueSource(req.body.price_source);
@@ -2075,13 +2138,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       await db.query(
         `UPDATE prod_products
-         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
+         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, promo_enabled=?, promo_title=?, promo_discount_percent=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
              nutrition_protein_100g=?, nutrition_fat_100g=?, nutrition_carbs_100g=?, client_composition=?, tech_process=?,
              show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?, updated_at=CURRENT_TIMESTAMP
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
-          price, old_price, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json,
+          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
           show_description_short, show_description, show_client_composition, show_tech_process,
@@ -2112,6 +2175,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   // PATCH /api/prod_products/:id — только cost_price, price, base_qty (для пересчёта по составу)
   router.patch('/prod_products/:id', async (req, res) => {
     try {
+      await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
@@ -2119,6 +2183,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const hasCostPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'cost_price');
       const hasPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'price');
       const hasOldPrice = Object.prototype.hasOwnProperty.call(req.body || {}, 'old_price');
+      const hasPromoEnabled = Object.prototype.hasOwnProperty.call(req.body || {}, 'promo_enabled');
+      const hasPromoTitle = Object.prototype.hasOwnProperty.call(req.body || {}, 'promo_title');
+      const hasPromoDiscountPercent = Object.prototype.hasOwnProperty.call(req.body || {}, 'promo_discount_percent');
       const hasBaseQty = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_qty');
       const hasCostPriceSource = Object.prototype.hasOwnProperty.call(req.body || {}, 'cost_price_source');
       const hasPriceSource = Object.prototype.hasOwnProperty.call(req.body || {}, 'price_source');
@@ -2130,6 +2197,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const price = helpers.numOrNull(req.body.price);
       const old_price = helpers.numOrNull(req.body.old_price);
+      const promo_enabled = helpers.toBool(req.body.promo_enabled, false) ? 1 : 0;
+      const promo_title = helpers.strOrNull(req.body.promo_title);
+      const promo_discount_percent = normalizePromoDiscountPercent(req.body.promo_discount_percent);
       const base_qty = helpers.numOrNull(req.body.base_qty);
       const stock_qty = helpers.numOrNull(req.body.stock);
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
@@ -2140,6 +2210,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (hasCostPrice) { updates.push('cost_price=?'); params.push(cost_price); }
       if (hasPrice) { updates.push('price=?'); params.push(price ?? 0); }
       if (hasOldPrice) { updates.push('old_price=?'); params.push(old_price); }
+      if (hasPromoEnabled) { updates.push('promo_enabled=?'); params.push(promo_enabled); }
+      if (hasPromoTitle) { updates.push('promo_title=?'); params.push(promo_title); }
+      if (hasPromoDiscountPercent) { updates.push('promo_discount_percent=?'); params.push(promo_discount_percent); }
       if (hasBaseQty) { updates.push('base_qty=?'); params.push(base_qty); }
       if (hasCostPriceSource) { updates.push('cost_price_source=?'); params.push(normalizeProductValueSource(req.body.cost_price_source)); }
       if (hasPriceSource) { updates.push('price_source=?'); params.push(normalizeProductValueSource(req.body.price_source)); }
@@ -3954,7 +4027,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const params = [];
       let sql =
-        `SELECT p.id, p.name, p.price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active,
+        `SELECT p.id, p.name, p.price, p.old_price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active,
            (SELECT 1 FROM prod_variant_assignments va
             INNER JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
             WHERE va.tenant_id = p.tenant_id AND va.product_id = p.id AND va.is_active = 1 AND vg.is_active = 1 LIMIT 1) AS has_variants,
@@ -5143,6 +5216,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
            i.sort_order,
            p.name AS ingredient_name,
            p.price AS ingredient_price,
+           p.old_price AS ingredient_old_price,
            p.cost_price AS ingredient_cost_price,
            p.base_unit_id AS ingredient_base_unit_id,
            p.base_qty AS ingredient_base_qty,
