@@ -8357,6 +8357,14 @@ optionGroups.forEach((group) => {
         }
       }
       selectedIndexByBlock[blockIndex] = currentSelected;
+      const pickerProducts = (block.products || []).map((prod, originalIndex) => ({
+        prod,
+        originalIndex,
+      }));
+      const selectedPickerEntry = pickerProducts.find((entry) => entry.originalIndex === currentSelected) || null;
+      const orderedPickerProducts = selectedPickerEntry
+        ? [selectedPickerEntry].concat(pickerProducts.filter((entry) => entry.originalIndex !== currentSelected))
+        : pickerProducts;
 
       const animateOpenPickerCardCollapse = () => {
         const expandEl = container.querySelector(".shop-combo-picker-expand");
@@ -8377,7 +8385,8 @@ optionGroups.forEach((group) => {
         return true;
       };
 
-      (block.products || []).forEach((prod, idx) => {
+      orderedPickerProducts.forEach(({ prod, originalIndex }) => {
+        const idx = originalIndex;
         if (!isComboPickerProductAvailable(prod)) return;
         const pickerProductId = Number(prod.product_id || 0);
         const hasPickerProductId = Number.isFinite(pickerProductId) && pickerProductId > 0;
@@ -9198,8 +9207,10 @@ optionGroups.forEach((group) => {
         }
       } else {
         requestAnimationFrame(() => {
-          scrollComboPickerToSelectedRow();
-          setTimeout(scrollComboPickerToSelectedRow, 80);
+          const detailEl = container.querySelector(".shop-combo-detail-scroll");
+          const listEl = container.querySelector(".shop-combo-picker-list");
+          if (detailEl) detailEl.scrollTop = 0;
+          if (listEl) listEl.scrollTop = 0;
         });
       }
 
