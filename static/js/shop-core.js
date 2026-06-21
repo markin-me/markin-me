@@ -16655,6 +16655,11 @@ function updateCartBadge() {
       state.activeSubcategoryByCategory.delete(id);
     }
     setActiveCategory(categoryId, title, { scroll: false });
+    if (Number.isFinite(id) && id > 0) {
+      updateCatalogSubcategoryChipsActive(id);
+    }
+    renderProducts();
+    saveCatalogSnapshotFromState();
     // Don't block click -> scroll; load in background.
     ensureCategoryLoaded(categoryId, { limit: 200 });
     scrollToCategory(id);

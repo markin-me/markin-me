@@ -1912,6 +1912,49 @@ async function warmInitialCatalogPayload(opts = {}) {
   await Promise.allSettled([productTask, comboTask]);
 }
 
+function getIngredientUnitPricing(ing) {
+  const ingredientBaseQty = ing?.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+  const cachedProduct = state.productCache.get(Number(ing?.ingredient_id || 0)) || null;
+  const ingredientCurrentBasePrice = Number(
+    cachedProduct?.price != null && Number(cachedProduct.price || 0) > 0
+      ? cachedProduct.price
+      : ing?.ingredient_price || 0
+  );
+  const currentPricePerUnit = ing?.price_override != null && Number(ing.price_override) >= 0
+    ? Number(ing.price_override)
+    : (
+        ingredientBaseQty > 0 && ingredientCurrentBasePrice > 0
+          ? ingredientCurrentBasePrice / ingredientBaseQty
+          : (ingredientCurrentBasePrice > 0 ? ingredientCurrentBasePrice : 0)
+      );
+
+  if (ing?.price_override != null && Number(ing.price_override) >= 0) {
+    return {
+      currentPricePerUnit,
+      originalPricePerUnit: currentPricePerUnit,
+    };
+  }
+
+  const ingredientOriginalBasePrice = Number(
+    cachedProduct?.original_price != null && Number(cachedProduct.original_price || 0) > 0
+      ? cachedProduct.original_price
+      : (
+          cachedProduct?.old_price != null && Number(cachedProduct.old_price || 0) > 0
+            ? cachedProduct.old_price
+            : 0
+        )
+  );
+  const originalPricePerUnit =
+    ingredientBaseQty > 0 && ingredientOriginalBasePrice > 0
+      ? ingredientOriginalBasePrice / ingredientBaseQty
+      : (ingredientOriginalBasePrice > 0 ? ingredientOriginalBasePrice : currentPricePerUnit);
+
+  return {
+    currentPricePerUnit,
+    originalPricePerUnit,
+  };
+}
+
 function buildProductDetailsContent(
   product,
   optionGroups,
@@ -4297,10 +4340,7 @@ function buildProductDetailsContent(
       const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
       
       // Рассчитываем цену за единицу с учетом base_qty (как в админке)
-      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
-      const ingredientPrice = Number(ing.ingredient_price || 0);
-      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
-      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      const { currentPricePerUnit: pricePerUnit } = getIngredientUnitPricing(ing);
       
       // Цена текущего количества
       const currentQtyInBase = getQtyInBase(ing, currentQty);
@@ -4838,10 +4878,16 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   let optionGroups = normalizeProductOptionGroups(productDetailsConfig?.optionGroups);
   const ingredients = Array.isArray(productDetailsConfig?.ingredients) ? productDetailsConfig.ingredients : [];
   const variants = Array.isArray(productDetailsConfig?.variants) ? productDetailsConfig.variants : [];
+  const ingredientProductIds = ingredients
+    .map((ing) => Number(ing?.ingredient_id || 0))
+    .filter((id) => id > 0 && !state.productCache.has(id));
   const optionTargetProductIds = optionGroups
     .flatMap((group) => Array.isArray(group?.items) ? group.items : [])
     .map((item) => Number(item?.target_product_id || item?.product_id || 0))
     .filter((id) => id > 0 && !state.productCache.has(id));
+  if (ingredientProductIds.length > 0) {
+    await Promise.all(ingredientProductIds.map((ingredientPid) => ensureProduct(ingredientPid).catch(() => null)));
+  }
   if (optionTargetProductIds.length > 0) {
     await Promise.all(optionTargetProductIds.map((optionPid) => ensureProduct(optionPid).catch(() => null)));
     optionGroups = normalizeProductOptionGroups(optionGroups);
@@ -5141,10 +5187,7 @@ optionGroups.forEach((group) => {
       const baseQty = Number(ing.quantity ?? 1); // Базовое количество из БД
       
       // Рассчитываем цену за единицу с учетом base_qty
-      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
-      const ingredientPrice = Number(ing.ingredient_price || 0);
-      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
-      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      const { currentPricePerUnit: pricePerUnit } = getIngredientUnitPricing(ing);
       
       // Конверсия базового количества в базовые единицы
       const qtyInBase = getQtyInBase(ing, baseQty);
@@ -5154,35 +5197,91 @@ optionGroups.forEach((group) => {
     return total;
   };
 
-  // Рассчитывает разницу цены ингредиентов от базового состава
-  const calculateIngredientPrice = () => {
+  function getIngredientUnitPricing(ing) {
+    const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+    const cachedProduct = state.productCache.get(Number(ing.ingredient_id || 0)) || null;
+    const ingredientCurrentBasePrice = Number(
+      cachedProduct?.price != null && Number(cachedProduct.price || 0) > 0
+        ? cachedProduct.price
+        : ing.ingredient_price || 0
+    );
+    const currentPricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0
+      ? Number(ing.price_override)
+      : (
+          ingredientBaseQty > 0 && ingredientCurrentBasePrice > 0
+            ? ingredientCurrentBasePrice / ingredientBaseQty
+            : (ingredientCurrentBasePrice > 0 ? ingredientCurrentBasePrice : 0)
+        );
+
+    if (ing.price_override != null && Number(ing.price_override) >= 0) {
+      return {
+        currentPricePerUnit,
+        originalPricePerUnit: currentPricePerUnit,
+      };
+    }
+
+    const ingredientOriginalBasePrice = Number(
+      cachedProduct?.original_price != null && Number(cachedProduct.original_price || 0) > 0
+        ? cachedProduct.original_price
+        : (
+            cachedProduct?.old_price != null && Number(cachedProduct.old_price || 0) > 0
+              ? cachedProduct.old_price
+              : 0
+          )
+    );
+    const originalPricePerUnit =
+      ingredientBaseQty > 0 && ingredientOriginalBasePrice > 0
+        ? ingredientOriginalBasePrice / ingredientBaseQty
+        : (ingredientOriginalBasePrice > 0 ? ingredientOriginalBasePrice : currentPricePerUnit);
+
+    return {
+      currentPricePerUnit,
+      originalPricePerUnit,
+    };
+  }
+
+  function calculateIngredientPricing() {
     let currentTotal = 0;
-    let baseTotal = 0;
-    
-    ingredients.forEach(ing => {
+    let baseCurrentTotal = 0;
+    let originalTotal = 0;
+    let baseOriginalTotal = 0;
+
+    ingredients.forEach((ing) => {
       const state = ingredientState.get(Number(ing.ingredient_id));
       const currentQty = state ? (state.quantity ?? Number(ing.quantity ?? 1)) : Number(ing.quantity ?? 1);
-      const baseQty = Number(ing.quantity ?? 1); // Базовое количество из БД
-      
-      // Рассчитываем цену за единицу с учетом base_qty
-      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
-      const ingredientPrice = Number(ing.ingredient_price || 0);
-      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
-      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
-      
-      // Цена текущего количества
+      const baseQty = Number(ing.quantity ?? 1);
+      const { currentPricePerUnit, originalPricePerUnit } = getIngredientUnitPricing(ing);
       const currentQtyInBase = getQtyInBase(ing, currentQty);
-      const currentIngredientTotal = currentQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * currentQtyInBase : 0;
-      currentTotal += currentIngredientTotal;
-      
-      // Цена базового количества
       const baseQtyInBase = getQtyInBase(ing, baseQty);
-      const baseIngredientTotal = baseQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * baseQtyInBase : 0;
-      baseTotal += baseIngredientTotal;
+
+      const currentIngredientTotal = currentQtyInBase != null && Number.isFinite(currentPricePerUnit)
+        ? currentPricePerUnit * currentQtyInBase
+        : 0;
+      const baseIngredientCurrentTotal = baseQtyInBase != null && Number.isFinite(currentPricePerUnit)
+        ? currentPricePerUnit * baseQtyInBase
+        : 0;
+      const currentIngredientOriginalTotal = currentQtyInBase != null && Number.isFinite(originalPricePerUnit)
+        ? originalPricePerUnit * currentQtyInBase
+        : currentIngredientTotal;
+      const baseIngredientOriginalTotal = baseQtyInBase != null && Number.isFinite(originalPricePerUnit)
+        ? originalPricePerUnit * baseQtyInBase
+        : baseIngredientCurrentTotal;
+
+      currentTotal += currentIngredientTotal;
+      baseCurrentTotal += baseIngredientCurrentTotal;
+      originalTotal += currentIngredientOriginalTotal;
+      baseOriginalTotal += baseIngredientOriginalTotal;
     });
-    
-    // Возвращаем разницу: текущие - базовые
-    return currentTotal - baseTotal;
+
+    return {
+      currentDiff: currentTotal - baseCurrentTotal,
+      originalDiff: originalTotal - baseOriginalTotal,
+    };
+  }
+
+  // Рассчитывает разницу цены ингредиентов от базового состава
+  const calculateIngredientPrice = () => {
+    return calculateIngredientPricing().currentDiff;
   };
 
   // Повторяем backend-логику расчёта скидки (без tenant-round внутри скидки):
@@ -5239,7 +5338,9 @@ optionGroups.forEach((group) => {
     const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
     const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
     const basePrice = Number(variantUnitPrice || 0) + optionTotal;
-    const ingredientsPriceDiff = calculateIngredientPrice(); // Разница от базового состава
+    const ingredientPricing = calculateIngredientPricing();
+    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0); // Разница от базового состава
+    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
     const unitPrice = roundPrice(basePrice + ingredientsPriceDiff);
 
     // Скидка считается как на бэке, tenant-round применяется к итоговой цене.
@@ -5253,8 +5354,8 @@ optionGroups.forEach((group) => {
     // Зачёркнутая цена: либо скидка, либо product.old_price из БД
     const oldBase = scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
     const baseOriginalComparable = oldBase > Number(variantUnitPrice || 0)
-      ? roundPrice(oldBase + ingredientsPriceDiff)
-      : roundPrice(Number(variantUnitPrice || 0) + ingredientsPriceDiff);
+      ? roundPrice(oldBase + ingredientsOriginalPriceDiff)
+      : roundPrice(Number(variantUnitPrice || 0) + ingredientsOriginalPriceDiff);
     const totalOldFromDb = roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * Number(qty || 1));
     
     // Приоритет: если есть скидка — показываем цену до скидки, иначе old_price
@@ -5355,11 +5456,7 @@ optionGroups.forEach((group) => {
       
       const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
       
-      // Рассчитываем цену за единицу с учетом base_qty (как в админке)
-      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
-      const ingredientPrice = Number(ing.ingredient_price || 0);
-      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
-      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      const { currentPricePerUnit: pricePerUnit } = getIngredientUnitPricing(ing);
       
       // Цена текущего количества
       const currentQtyInBase = getQtyInBase(ing, currentQty);
@@ -6021,7 +6118,9 @@ optionGroups.forEach((group) => {
       ? getVariantUnitPrice(product, variants, variantState)
       : Number(product.price || 0);
     const safeQty = Math.max(1, Number(qty || 1));
-    const ingredientsPriceDiff = calculateIngredientPrice();
+    const ingredientPricing = calculateIngredientPricing();
+    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0);
+    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
 
     const draftResolvedItem = {
       product,
@@ -6054,8 +6153,8 @@ optionGroups.forEach((group) => {
     const oldUnitBase = scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
     const parts = pricing?.parts || {};
     const baseOriginalComparable = oldUnitBase > Number(variantUnitPrice || 0)
-      ? roundPrice(oldUnitBase + Number(parts.ingredientDiff || 0))
-      : roundPrice(Number(variantUnitPrice || 0) + Number(parts.ingredientDiff || 0));
+      ? roundPrice(oldUnitBase + ingredientsOriginalPriceDiff)
+      : roundPrice(Number(variantUnitPrice || 0) + ingredientsOriginalPriceDiff);
     const hasDiscount = Number(pricing?.discountAmount || 0) > 0;
     const showOld =
       !pricing?.isAuto &&
@@ -6150,7 +6249,9 @@ optionGroups.forEach((group) => {
     const nextKey = makeCartKey(product.id, selectedItems, ingredientQuantities, variantSelection);
     
     // Рассчитываем разницу цены ингредиентов для сохранения в корзину
-    const ingredientsPriceDiff = calculateIngredientPrice();
+    const ingredientPricing = calculateIngredientPricing();
+    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0);
+    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
     const draftResolvedItem = {
       product,
       product_id: Number(product.id || 0),
@@ -6185,8 +6286,8 @@ optionGroups.forEach((group) => {
     );
     const pricingParts = pricing?.parts || {};
     const baseOriginalComparable = oldUnitBase > Number(variantUnitPrice || 0)
-      ? roundPrice(oldUnitBase + Number(pricingParts.ingredientDiff || 0))
-      : roundPrice(Number(variantUnitPrice || 0) + Number(pricingParts.ingredientDiff || 0));
+      ? roundPrice(oldUnitBase + ingredientsOriginalPriceDiff)
+      : roundPrice(Number(variantUnitPrice || 0) + ingredientsOriginalPriceDiff);
     const hasDiscount = Number(pricing?.discountAmount || 0) > 0;
     const showOld =
       !pricing?.isAuto &&
