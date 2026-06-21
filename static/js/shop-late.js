@@ -181,6 +181,332 @@
     return Number(item.product_price || 0);
   }
 
+  function getOptionItemTargetProduct(item) {
+    const targetProductId = Number(item?.target_product_id || item?.product_id || 0);
+    return Number.isFinite(targetProductId) && targetProductId > 0
+      ? state.productCache.get(targetProductId) || null
+      : null;
+  }
+
+  function getOptionItemDefaultVariantMeta(item, product = null) {
+    const variants = Array.isArray(item?.variants) ? item.variants : [];
+    const productDefaultGroupId = Number(product?.default_variant?.variant_group_id || 0);
+    const productDefaultIndex = Number(product?.default_variant?.variant_value_index);
+
+    for (const group of variants) {
+      const values = Array.isArray(group?.values) ? group.values : [];
+      if (!values.length) continue;
+      const groupId = Number(group?.variant_group_id || group?.id || 0);
+      if (
+        groupId > 0 &&
+        productDefaultGroupId > 0 &&
+        groupId === productDefaultGroupId &&
+        Number.isFinite(productDefaultIndex) &&
+        productDefaultIndex >= 0 &&
+        productDefaultIndex < values.length
+      ) {
+        return { group, index: productDefaultIndex };
+      }
+      const defaultIndex = group?.default_value_index != null ? Number(group.default_value_index) : 0;
+      if (Number.isFinite(defaultIndex) && defaultIndex >= 0 && defaultIndex < values.length) {
+        return { group, index: defaultIndex };
+      }
+    }
+    return null;
+  }
+
+  function getOptionItemResolvedDisplayBasePrice(item, product = null) {
+    if (item?.price_mode === "fixed") {
+      return roundPrice(Number(item?.price_value || 0));
+    }
+    const productDefaultVariantPrice = Number(product?.default_variant?.variant_unit_price || 0);
+    if (productDefaultVariantPrice > 0) return roundPrice(productDefaultVariantPrice);
+    const defaultVariant = getOptionItemDefaultVariantMeta(item, product);
+    if (defaultVariant?.group && Number.isFinite(defaultVariant.index)) {
+      const resolvedDefaultVariantPrice = Number(
+        getOptionItemVariantUnitPrice(item, defaultVariant.group, defaultVariant.index) || 0
+      );
+      if (resolvedDefaultVariantPrice > 0) return roundPrice(resolvedDefaultVariantPrice);
+    }
+    const productDisplayPrice = Number(product?.display_price || product?.discounted_price || 0);
+    if (productDisplayPrice > 0) return roundPrice(productDisplayPrice);
+    const productBasePrice = Number(product?.price || 0);
+    if (productBasePrice > 0) return roundPrice(productBasePrice);
+    const itemDisplayPrice = Number(item?.product_price || item?.price || item?.discounted_price || 0);
+    if (itemDisplayPrice > 0) return roundPrice(itemDisplayPrice);
+    return 0;
+  }
+
+  function getOptionItemResolvedOriginalBasePrice(item, product = null) {
+    if (item?.price_mode === "fixed") return 0;
+    const discountOriginalPrice = Number(product?.original_price ?? item?.original_price ?? 0);
+    if (discountOriginalPrice > 0) return roundPrice(discountOriginalPrice);
+    const adminOldPrice = Number(product?.old_price ?? item?.old_price ?? 0);
+    if (adminOldPrice > 0) {
+      const defaultCurrentPrice = getOptionItemResolvedDisplayBasePrice(item, product);
+      if (
+        defaultCurrentPrice > 0 &&
+        typeof scaleProductBasePriceForCurrentUnit === "function" &&
+        product
+      ) {
+        const scaledOldPrice = scaleProductBasePriceForCurrentUnit(product, defaultCurrentPrice, adminOldPrice);
+        if (scaledOldPrice > 0) return roundPrice(scaledOldPrice);
+      }
+      return roundPrice(adminOldPrice);
+    }
+    return 0;
+  }
+
+  function getDiscountBadgeTextForPricePair(currentPrice, originalPrice) {
+    const current = roundPrice(Number(currentPrice || 0));
+    const original = roundPrice(Number(originalPrice || 0));
+    if (!(original > current && current >= 0)) return "";
+    const percent = Math.round(((original - current) / original) * 100);
+    if (percent > 0) return `-${percent}%`;
+    const amountDiff = roundPrice(original - current);
+    return amountDiff > 0 ? `-${moneyNoSign(amountDiff)} ₽` : "";
+  }
+
+  function getOptionItemPriceScaleRatio(item, variantData = null, product = null) {
+    const targetProduct = product || getOptionItemTargetProduct(item);
+    const baseDisplayPrice = getOptionItemResolvedDisplayBasePrice(item, targetProduct);
+    if (!(baseDisplayPrice > 0) || item?.price_mode === "fixed") {
+      return 1;
+    }
+
+    const variantGroups = Array.isArray(item?.variants) ? item.variants : [];
+    const explicitVariantGroupId = Number(variantData?.variant_group_id || 0);
+    const explicitVariantIndex = Number(variantData?.variant_value_index);
+    const explicitGroup = explicitVariantGroupId > 0
+      ? variantGroups.find((group) => Number(group?.variant_group_id || group?.id || 0) === explicitVariantGroupId) || null
+      : null;
+
+    const resolvedVariant = explicitGroup && Number.isFinite(explicitVariantIndex) && explicitVariantIndex >= 0
+      ? { group: explicitGroup, index: explicitVariantIndex }
+      : getOptionItemDefaultVariantMeta(item, targetProduct);
+
+    if (!resolvedVariant?.group || !Number.isFinite(resolvedVariant.index)) {
+      return 1;
+    }
+
+    const rawSelectedPrice = Number(getOptionItemVariantUnitPrice(item, resolvedVariant.group, resolvedVariant.index) || 0);
+    if (!(rawSelectedPrice > 0)) {
+      return 1;
+    }
+
+    const defaultVariant = getOptionItemDefaultVariantMeta(item, targetProduct);
+    const rawDefaultPrice = defaultVariant?.group
+      ? Number(getOptionItemVariantUnitPrice(item, defaultVariant.group, defaultVariant.index) || 0)
+      : baseDisplayPrice;
+    if (!(rawDefaultPrice > 0)) {
+      return 1;
+    }
+
+    const ratio = rawSelectedPrice / rawDefaultPrice;
+    return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  }
+
+  function getOptionItemCurrentDisplayPrice(item, variantData = null, product = null) {
+    const targetProduct = product || getOptionItemTargetProduct(item);
+    const baseDisplayPrice = getOptionItemResolvedDisplayBasePrice(item, targetProduct);
+    if (item?.price_mode === "fixed") {
+      return roundPrice(baseDisplayPrice + Number(variantData?.variant_price_diff || 0));
+    }
+    const ratio = getOptionItemPriceScaleRatio(item, variantData, targetProduct);
+    return roundPrice(baseDisplayPrice * ratio);
+  }
+
+  function getOptionItemPhotos(item, cachedProduct = null) {
+    const directPhotos = Array.isArray(item?.photos)
+      ? item.photos
+      : (
+        typeof item?.product_photos_json === "string"
+          ? (() => {
+              try {
+                return JSON.parse(item.product_photos_json);
+              } catch {
+                return [];
+              }
+            })()
+          : (Array.isArray(item?.product_photos_json) ? item.product_photos_json : [])
+      );
+    const normalizedDirect = Array.isArray(directPhotos)
+      ? directPhotos.map((photo) => str(photo || "").trim()).filter(Boolean)
+      : [];
+    if (normalizedDirect.length) return normalizedDirect;
+    if (cachedProduct) {
+      return safePhotos(cachedProduct).map((photo) => str(photo || "").trim()).filter(Boolean);
+    }
+    return [];
+  }
+
+  function normalizeOptionItemForDisplay(item) {
+    if (!item || typeof item !== "object") return item;
+    const targetProductId = Number(item.target_product_id || item.product_id || 0);
+    const cachedProduct = getOptionItemTargetProduct(item);
+    const photos = getOptionItemPhotos(item, cachedProduct);
+    const photo = str(item.photo || item.product_photo || photos[0] || "").trim();
+    return {
+      ...item,
+      target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+      product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+      title: str(item.title || item.product_name || item.name || ""),
+      name: str(item.name || item.product_name || item.title || ""),
+      price: getOptionItemResolvedDisplayBasePrice(item, cachedProduct) || getOptionItemPrice(item),
+      product_price: Number(item.product_price || cachedProduct?.price || 0),
+      product_photos_json: photos,
+      photos,
+      photo,
+      old_price: Number(item.old_price || cachedProduct?.old_price || 0),
+      original_price: item.original_price != null
+        ? Number(item.original_price || 0)
+        : Number(cachedProduct?.original_price || 0),
+      discounted_price: item.discounted_price != null
+        ? Number(item.discounted_price || 0)
+        : Number(cachedProduct?.discounted_price || 0),
+      discount: item.discount && typeof item.discount === "object"
+        ? { ...item.discount }
+        : (cachedProduct?.discount && typeof cachedProduct.discount === "object" ? { ...cachedProduct.discount } : null),
+      buy_x_get_y_badge: item.buy_x_get_y_badge || cachedProduct?.buy_x_get_y_badge || null,
+      variants: Array.isArray(item?.variants) ? item.variants : [],
+    };
+  }
+
+  function normalizeProductOptionGroups(optionGroups) {
+    return (Array.isArray(optionGroups) ? optionGroups : []).map((group) => ({
+      ...group,
+      items: (Array.isArray(group?.items) ? group.items : []).map((item) => normalizeOptionItemForDisplay(item)),
+    }));
+  }
+
+  function getOptionItemDisplayPricing(item, variantData = null) {
+    const product = getOptionItemTargetProduct(item);
+    const currentPrice = getOptionItemCurrentDisplayPrice(item, variantData, product);
+    const baseOriginalPrice = getOptionItemResolvedOriginalBasePrice(item, product);
+    const priceScaleRatio = getOptionItemPriceScaleRatio(item, variantData, product);
+    const originalPrice = baseOriginalPrice > 0
+      ? roundPrice(baseOriginalPrice * priceScaleRatio)
+      : 0;
+    const showOld = originalPrice > currentPrice;
+    const badgeText = showOld ? getDiscountBadgeTextForPricePair(currentPrice, originalPrice) : "";
+    return {
+      currentPrice,
+      originalPrice: showOld ? originalPrice : 0,
+      showOld,
+      badgeText,
+    };
+  }
+
+  function renderOptionItemPrice(priceEl, item, variantData = null) {
+    if (!priceEl) return;
+    const pricing = getOptionItemDisplayPricing(item, variantData);
+    const oldText = pricing.showOld ? money(pricing.originalPrice) : "";
+    const currentText = money(pricing.currentPrice);
+    const badgeHtml = pricing.badgeText
+      ? `<span class="sp-discount-badge sp-discount-badge--cart cart-discount-badge">${escapeHtml(pricing.badgeText)}</span>`
+      : "";
+    const oldHtml = pricing.showOld
+      ? `<span class="cart-old">${escapeHtml(oldText)}</span>`
+      : "";
+    priceEl.innerHTML = `<span class="cart-price-group"><span class="cart-price-stack"><span class="cart-price">${escapeHtml(currentText)}</span>${oldHtml}</span>${badgeHtml}</span>`;
+  }
+
+  function getSelectedOptionItemVariantData(item) {
+    if (!item || typeof item !== "object") return null;
+    const groupId = Number(item?.variant_group_id || 0);
+    const valueIndex = Number(item?.variant_value_index);
+    if (!(groupId > 0) || !Number.isFinite(valueIndex) || valueIndex < 0) return null;
+    return {
+      variant_group_id: groupId,
+      variant_value_index: valueIndex,
+      variant_label: str(item?.variant_label || "").trim(),
+      variant_group_title: str(item?.variant_group_title || "").trim(),
+      variant_unit: str(item?.variant_unit || "").trim(),
+      unit_id:
+        item?.unit_id != null && Number.isFinite(Number(item.unit_id))
+          ? Number(item.unit_id)
+          : null,
+      variant_price_diff: Number(item?.variant_price_diff || 0),
+    };
+  }
+
+  function getSelectedOptionItemsPricingTotals(optionItems) {
+    return (Array.isArray(optionItems) ? optionItems : []).reduce((totals, item) => {
+      const qty = Math.max(0, Number(item?.qty || item?.quantity || 1)) || 1;
+      const pricing = getOptionItemDisplayPricing(item, getSelectedOptionItemVariantData(item));
+      const currentLine = roundPrice(Number(pricing.currentPrice || 0) * qty);
+      const originalComparableUnit = pricing.showOld
+        ? Number(pricing.originalPrice || 0)
+        : Number(pricing.currentPrice || 0);
+      const originalComparableLine = roundPrice(originalComparableUnit * qty);
+      totals.currentTotal = roundPrice(Number(totals.currentTotal || 0) + currentLine);
+      totals.originalComparableTotal = roundPrice(Number(totals.originalComparableTotal || 0) + originalComparableLine);
+      return totals;
+    }, {
+      currentTotal: 0,
+      originalComparableTotal: 0,
+    });
+  }
+
+  function decorateOptionItemThumb(thumbHost, item, variantData = null) {
+    if (!thumbHost || !thumbHost.appendChild) return;
+    const product = getOptionItemTargetProduct(item);
+    if (!product) return;
+
+    thumbHost.style.position = "relative";
+
+    const existingDiscountBadge = thumbHost.querySelector(".sp-card-discount-badge");
+    if (existingDiscountBadge) existingDiscountBadge.remove();
+    const existingBogoBadge = thumbHost.querySelector(".sp-card-bogo-badge");
+    if (existingBogoBadge) existingBogoBadge.remove();
+
+    if (typeof createCatalogBuyXGetYBadge === "function") {
+      const bogoBadge = createCatalogBuyXGetYBadge(product);
+      if (bogoBadge) {
+        bogoBadge.style.position = "absolute";
+        bogoBadge.style.top = "4px";
+        bogoBadge.style.left = "4px";
+        thumbHost.appendChild(bogoBadge);
+      }
+    }
+  }
+
+  function syncProductHeroBadges(mediaEl, product, currentPrice = null, originalPrice = 0) {
+    if (!mediaEl || !product) return;
+
+    const currentDiscountBadge = mediaEl.querySelector(".shop-product-hero-discount-badge");
+    if (currentDiscountBadge) currentDiscountBadge.remove();
+
+    const currentBogoBadge = mediaEl.querySelector(".shop-product-hero-bogo-badge");
+    if (currentBogoBadge) currentBogoBadge.remove();
+
+    const resolvedCurrentPrice = currentPrice != null
+      ? roundPrice(Number(currentPrice || 0))
+      : roundPrice(Number(product?.display_price != null ? product.display_price : product?.price || 0));
+    const resolvedOriginalPrice = roundPrice(Number(originalPrice || 0));
+    const badgeText = getDiscountBadgeTextForPricePair(resolvedCurrentPrice, resolvedOriginalPrice);
+
+    if (badgeText && typeof createCatalogDiscountBadge === "function") {
+      const discountBadge = createCatalogDiscountBadge(badgeText);
+      if (discountBadge) {
+        discountBadge.classList.add("shop-product-hero-discount-badge");
+        mediaEl.appendChild(discountBadge);
+      }
+    }
+
+    if (typeof createCatalogBuyXGetYBadge === "function") {
+      const bogoBadge = createCatalogBuyXGetYBadge(product);
+      if (bogoBadge) {
+        bogoBadge.classList.add("shop-product-hero-bogo-badge");
+        if (badgeText) {
+          bogoBadge.style.left = "12px";
+          bogoBadge.style.right = "auto";
+        }
+        mediaEl.appendChild(bogoBadge);
+      }
+    }
+  }
+
   function getOptionGroupUiType(group) {
     if (!group) return "single";
     
@@ -202,8 +528,13 @@
   function buildOptionItemVariantState(item, variantGroup, valueIndex, valueRaw = null) {
     const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
     const safeIndex = Number(valueIndex);
-    const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, safeIndex);
-    const priceDiff = unitPrice - Number(item?.price || 0);
+    const targetProduct = getOptionItemTargetProduct(item);
+    const baseDisplayPrice = getOptionItemResolvedDisplayBasePrice(item, targetProduct);
+    const unitPrice = getOptionItemCurrentDisplayPrice(item, {
+      variant_group_id: Number(variantGroup?.variant_group_id || variantGroup?.id || 0),
+      variant_value_index: safeIndex,
+    }, targetProduct);
+    const priceDiff = unitPrice - baseDisplayPrice;
     const unitLabel = str(
       variantGroup?.unit_short_title ||
       variantGroup?.unit_code ||
@@ -291,6 +622,13 @@
             nutrition_portion_grams: item.nutrition_portion_grams,
             unit_to_grams_factor: item.unit_to_grams_factor,
             variants: Array.isArray(item.variants) ? item.variants : [],
+            old_price: Number(item.old_price || 0),
+            original_price: Number(item.original_price || 0),
+            discounted_price: Number(item.discounted_price || 0),
+            discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
+            buy_x_get_y_badge: item.buy_x_get_y_badge || null,
+            price_mode: item.price_mode,
+            price_value: item.price_value,
           };
           const variant = getVariantData(itemId);
           if (variant) Object.assign(entry, variant);
@@ -317,6 +655,13 @@
               nutrition_portion_grams: item.nutrition_portion_grams,
               unit_to_grams_factor: item.unit_to_grams_factor,
               variants: Array.isArray(item.variants) ? item.variants : [],
+              old_price: Number(item.old_price || 0),
+              original_price: Number(item.original_price || 0),
+              discounted_price: Number(item.discounted_price || 0),
+              discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
+              buy_x_get_y_badge: item.buy_x_get_y_badge || null,
+              price_mode: item.price_mode,
+              price_value: item.price_value,
             };
             const variant = getVariantData(itemId);
             if (variant) Object.assign(entry, variant);
@@ -344,6 +689,13 @@
               nutrition_portion_grams: item.nutrition_portion_grams,
               unit_to_grams_factor: item.unit_to_grams_factor,
               variants: Array.isArray(item.variants) ? item.variants : [],
+              old_price: Number(item.old_price || 0),
+              original_price: Number(item.original_price || 0),
+              discounted_price: Number(item.discounted_price || 0),
+              discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
+              buy_x_get_y_badge: item.buy_x_get_y_badge || null,
+              price_mode: item.price_mode,
+              price_value: item.price_value,
             };
             const variant = getVariantData(itemId);
             if (variant) Object.assign(entry, variant);
@@ -478,7 +830,7 @@ function applyProductPassportPayload(productId, payload) {
   ) {
     productDetailsConfigCache.set(pid, {
       promise: Promise.resolve({
-        optionGroups: passport.optionGroups,
+        optionGroups: normalizeProductOptionGroups(passport.optionGroups),
         ingredients: passport.ingredients,
         variants: normalizeComboVariantList(passport.variants),
       }),
@@ -985,36 +1337,31 @@ function buildProductOptionGroupsFromBatch(productId, assignments, optionGroupsB
           ? (Number(details?.group?.is_required ?? 1) === 1)
           : false,
       items: activeItems.map((item) => {
-        let photo = "";
-        try {
-          const arr =
-            typeof item.product_photos_json === "string"
-              ? JSON.parse(item.product_photos_json)
-              : Array.isArray(item.product_photos_json)
-                ? item.product_photos_json
-                : [];
-          if (Array.isArray(arr) && arr[0]) photo = arr[0];
-        } catch {}
-
-        return {
+        return normalizeOptionItemForDisplay({
           id: Number(item.id),
           target_product_id: Number(item.target_product_id || 0),
           title: str(item.product_name || item.name || ""),
-          price: getOptionItemPrice(item),
           product_price: Number(item.product_price || 0),
           product_base_qty: Number(item.product_base_qty || 1) || 1,
           product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
           product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
           qty_min: item.qty_min ?? 1,
           qty_max: item.qty_max ?? 1,
-          photo,
           nutrition_per_100g: item.nutrition_per_100g || null,
           nutrition_per_portion: item.nutrition_per_portion || null,
           base_qty_grams: item.base_qty_grams,
           nutrition_portion_grams: item.nutrition_portion_grams,
           unit_to_grams_factor: item.unit_to_grams_factor,
           variants: Array.isArray(item?.variants) ? item.variants : [],
-        };
+          product_photos_json: item.product_photos_json,
+          old_price: item.old_price,
+          original_price: item.original_price,
+          discounted_price: item.discounted_price,
+          discount: item.discount,
+          buy_x_get_y_badge: item.buy_x_get_y_badge,
+          price_mode: item.price_mode,
+          price_value: item.price_value,
+        });
       }),
     });
   });
@@ -1033,7 +1380,7 @@ async function preloadProductDetailsConfigBatch(productIds) {
         Array.isArray(passport?.variants)
       ) {
         const details = {
-          optionGroups: passport.optionGroups,
+          optionGroups: normalizeProductOptionGroups(passport.optionGroups),
           ingredients: passport.ingredients,
           variants: normalizeComboVariantList(passport.variants),
         };
@@ -1169,7 +1516,7 @@ async function preloadProductDetailsConfigBatch(productIds) {
       comboProductIngredientsCache.set(id, Promise.resolve(ingredients));
       comboProductVariantsCache.set(id, Promise.resolve(variants));
       productDetailsConfigCache.set(id, {
-        promise: Promise.resolve({ optionGroups, ingredients, variants }),
+        promise: Promise.resolve({ optionGroups: normalizeProductOptionGroups(optionGroups), ingredients, variants }),
         ts: Date.now(),
       });
       if (typeof mergeProductPassport === "function") {
@@ -1228,10 +1575,28 @@ async function resolveProductIngredients(productId) {
 async function resolveProductOptionGroups(productId) {
   const pid = Number(productId || 0);
   const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
-  if (Array.isArray(passport?.optionGroups)) return passport.optionGroups;
+  if (Array.isArray(passport?.optionGroups)) {
+    const optionProductIds = passport.optionGroups
+      .flatMap((group) => Array.isArray(group?.items) ? group.items : [])
+      .map((item) => Number(item?.target_product_id || item?.product_id || 0))
+      .filter((id) => id > 0 && !state.productCache.has(id));
+    if (optionProductIds.length > 0) {
+      await Promise.all(optionProductIds.map((optionPid) => ensureProduct(optionPid).catch(() => null)));
+    }
+    return normalizeProductOptionGroups(passport.optionGroups);
+  }
   await preloadProductPassportsBatch([pid], { details: true }).catch(() => {});
   const warmedPassport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
-  if (Array.isArray(warmedPassport?.optionGroups)) return warmedPassport.optionGroups;
+  if (Array.isArray(warmedPassport?.optionGroups)) {
+    const optionProductIds = warmedPassport.optionGroups
+      .flatMap((group) => Array.isArray(group?.items) ? group.items : [])
+      .map((item) => Number(item?.target_product_id || item?.product_id || 0))
+      .filter((id) => id > 0 && !state.productCache.has(id));
+    if (optionProductIds.length > 0) {
+      await Promise.all(optionProductIds.map((optionPid) => ensureProduct(optionPid).catch(() => null)));
+    }
+    return normalizeProductOptionGroups(warmedPassport.optionGroups);
+  }
   const assignments = await loadProductOptionAssignments(productId);
   const activeAssignments = assignments.filter((a) => Number(a.is_active || 0) === 1);
   const groups = [];
@@ -1270,50 +1635,38 @@ async function resolveProductOptionGroups(productId) {
           ? (Number(details?.group?.is_required ?? 1) === 1)
           : false,
 
-      items: activeItems.map((item) => {
-        // photo берём от товара, который привязан к пункту опции
-        let photo = "";
-        try {
-          const arr =
-            typeof item.product_photos_json === "string"
-              ? JSON.parse(item.product_photos_json)
-              : Array.isArray(item.product_photos_json)
-                ? item.product_photos_json
-                : [];
-          if (Array.isArray(arr) && arr[0]) photo = arr[0];
-        } catch {}
-
-        // Варианты товара-опции (если есть)
-        const variants = Array.isArray(item.variants) ? item.variants : [];
-
-        return {
-          id: Number(item.id),
-          target_product_id: Number(item.target_product_id || 0),
-          title: str(item.product_name || item.name || ""),
-          price: getOptionItemPrice(item),
-          product_price: Number(item.product_price || 0),
-          product_base_qty: Number(item.product_base_qty || 1) || 1,
-          product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
-          product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
-          qty_min: item.qty_min ?? 1,
-          qty_max: item.qty_max ?? 1,
-          photo,
-          nutrition_per_100g: item.nutrition_per_100g || null,
-          nutrition_per_portion: item.nutrition_per_portion || null,
-          base_qty_grams: item.base_qty_grams,
-          nutrition_portion_grams: item.nutrition_portion_grams,
-          unit_to_grams_factor: item.unit_to_grams_factor,
-          // Варианты для этого товара-опции
-          variants: variants,
-        };
-      }),
+      items: activeItems.map((item) => normalizeOptionItemForDisplay({
+        id: Number(item.id),
+        target_product_id: Number(item.target_product_id || 0),
+        title: str(item.product_name || item.name || ""),
+        product_price: Number(item.product_price || 0),
+        product_base_qty: Number(item.product_base_qty || 1) || 1,
+        product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
+        product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
+        qty_min: item.qty_min ?? 1,
+        qty_max: item.qty_max ?? 1,
+        nutrition_per_100g: item.nutrition_per_100g || null,
+        nutrition_per_portion: item.nutrition_per_portion || null,
+        base_qty_grams: item.base_qty_grams,
+        nutrition_portion_grams: item.nutrition_portion_grams,
+        unit_to_grams_factor: item.unit_to_grams_factor,
+        variants: Array.isArray(item.variants) ? item.variants : [],
+        product_photos_json: item.product_photos_json,
+        old_price: item.old_price,
+        original_price: item.original_price,
+        discounted_price: item.discounted_price,
+        discount: item.discount,
+        buy_x_get_y_badge: item.buy_x_get_y_badge,
+        price_mode: item.price_mode,
+        price_value: item.price_value,
+      })),
     });
   }
 
   if (typeof mergeProductPassport === "function") {
     mergeProductPassport(pid, { optionGroups: groups });
   }
-  return groups;
+  return normalizeProductOptionGroups(groups);
 }
 
 async function resolveProductVariants(productId) {
@@ -1363,7 +1716,7 @@ async function resolveProductDetailsConfig(productId) {
     Array.isArray(passport?.variants)
   ) {
     const details = {
-      optionGroups: passport.optionGroups,
+      optionGroups: normalizeProductOptionGroups(passport.optionGroups),
       ingredients: passport.ingredients,
       variants: normalizeComboVariantList(passport.variants),
     };
@@ -1378,7 +1731,7 @@ async function resolveProductDetailsConfig(productId) {
     Array.isArray(warmedPassport?.variants)
   ) {
     const details = {
-      optionGroups: warmedPassport.optionGroups,
+      optionGroups: normalizeProductOptionGroups(warmedPassport.optionGroups),
       ingredients: warmedPassport.ingredients,
       variants: normalizeComboVariantList(warmedPassport.variants),
     };
@@ -2597,13 +2950,19 @@ function buildProductDetailsContent(
           const cardContent = document.createElement("div");
           cardContent.className = "shop-pd-option-card-content";
 
+          const thumbWrap = document.createElement("div");
+          thumbWrap.className = "shop-pd-option-thumb-wrap";
           const thumb = document.createElement(
             selected?.photo ? "img" : "div"
           );
           thumb.className = "shop-pd-option-thumb";
           if (selected?.photo) thumb.src = selected.photo;
           else thumb.textContent = "—";
-          cardContent.appendChild(thumb);
+          thumbWrap.appendChild(thumb);
+          if (selected) {
+            decorateOptionItemThumb(thumbWrap, selected, groupState.variantByItemId.get(selectedId));
+          }
+          cardContent.appendChild(thumbWrap);
 
           const info = document.createElement("div");
           info.className = "shop-pd-option-info";
@@ -2636,7 +2995,7 @@ function buildProductDetailsContent(
           const priceEl = document.createElement("div");
           priceEl.className = "shop-pd-option-price";
           if (selected) {
-            priceEl.textContent = money(getPriceWithVariant());
+            renderOptionItemPrice(priceEl, selected, groupState.variantByItemId.get(selectedId));
           }
           info.appendChild(priceEl);
           
@@ -2732,21 +3091,50 @@ function buildProductDetailsContent(
           const row = document.createElement("div");
           row.className = "shop-pd-option-card-content";
 
-          row.innerHTML = `
-            ${
-              item.photo
-                ? `<img class="shop-pd-option-thumb" src="${item.photo}">`
-                : `<div class="shop-pd-option-thumb">—</div>`
-            }
-            <div class="shop-pd-option-info">
-              <div class="shop-pd-option-name">${str(item.title)}</div>
-              ${hasVariants ? `<div class="shop-pd-option-variant-label" style="display:none;"></div>` : ``}
-              <div class="shop-pd-option-price">${money(item.price || 0)}</div>
-            </div>
-          `;
+          const thumbWrap = document.createElement("div");
+          thumbWrap.className = "shop-pd-option-thumb-wrap";
+          if (item.photo) {
+            const img = createOptimizedImage(item.photo, {
+              type: 'thumb',
+              className: 'shop-pd-option-thumb',
+              alt: ''
+            });
+            thumbWrap.appendChild(img);
+          } else {
+            const placeholder = document.createElement("div");
+            placeholder.className = "shop-pd-option-thumb";
+            placeholder.textContent = "—";
+            thumbWrap.appendChild(placeholder);
+          }
+          row.appendChild(thumbWrap);
+
+          const infoWrap = document.createElement("div");
+          infoWrap.className = "shop-pd-option-info";
+
+          const nameWrap = document.createElement("div");
+          nameWrap.className = "shop-pd-option-name";
+          nameWrap.textContent = str(item.title);
+          infoWrap.appendChild(nameWrap);
+
+          if (hasVariants) {
+            const variantLabel = document.createElement("div");
+            variantLabel.className = "shop-pd-option-variant-label";
+            variantLabel.style.display = "none";
+            infoWrap.appendChild(variantLabel);
+          }
+
+          const initialPriceEl = document.createElement("div");
+          initialPriceEl.className = "shop-pd-option-price";
+          infoWrap.appendChild(initialPriceEl);
+
+          row.appendChild(infoWrap);
 
           let variantLabelEl = hasVariants ? row.querySelector(".shop-pd-option-variant-label") : null;
           const priceEl = row.querySelector(".shop-pd-option-price");
+          if (priceEl) {
+            renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
+          }
+          decorateOptionItemThumb(thumbWrap, item, groupState.variantByItemId.get(itemId));
           const savedVariant = groupState.variantByItemId.get(itemId);
           
           // Автоматически выбираем дефолтный вариант при рендере, если он ещё не выбран
@@ -2783,8 +3171,9 @@ function buildProductDetailsContent(
                 
                 // Обновляем отображение цены и лейбла варианта
                 if (priceEl) {
-                  priceEl.textContent = money(unitPrice);
+                  renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
                 }
+                decorateOptionItemThumb(thumbWrap, item, groupState.variantByItemId.get(itemId));
                 if (variantLabelEl) {
                   variantLabelEl.textContent = formatValueLabel(values[defaultIdx]);
                   variantLabelEl.style.display = "block";
@@ -2796,10 +3185,9 @@ function buildProductDetailsContent(
             variantLabelEl.textContent = savedVariant.variant_label;
             variantLabelEl.style.display = "block";
             if (priceEl) {
-              const basePrice = Number(item.price || 0);
-              const priceDiff = savedVariant.variant_price_diff || 0;
-              priceEl.textContent = money(basePrice + priceDiff);
+              renderOptionItemPrice(priceEl, item, savedVariant);
             }
+            decorateOptionItemThumb(thumbWrap, item, savedVariant);
           }
 
           // gear + accordion (only inside list for single)
@@ -2948,9 +3336,7 @@ function buildProductDetailsContent(
 
                 // 3) Мгновенно обновляем цену и вариант в карточке списка
                 if (priceEl) {
-                  const base = Number(item.price || 0);
-                  const diff = Number.isFinite(priceDiff) ? priceDiff : 0;
-                  priceEl.textContent = money(base + diff);
+                  renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
                 }
 
                 // 4) Перекрашиваем кнопки вариантов в скролле
@@ -3119,7 +3505,10 @@ function buildProductDetailsContent(
             checkbox.checked = newIsSelected;
             checkbox.classList.toggle("is-checked", newIsSelected);
             if (priceEl) {
-              priceEl.textContent = money(getPriceWithVariant());
+              renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
+            }
+            if (thumbWrap) {
+              decorateOptionItemThumb(thumbWrap, item, groupState.variantByItemId.get(itemId));
             }
             if (variantLabelEl) {
               const variantData = groupState.variantByItemId.get(itemId);
@@ -3136,19 +3525,23 @@ function buildProductDetailsContent(
           cardContent.className = "shop-pd-option-card-content";
 
           // Фото
+          const thumbWrap = document.createElement("div");
+          thumbWrap.className = "shop-pd-option-thumb-wrap";
           if (item.photo) {
             const img = createOptimizedImage(item.photo, {
               type: 'thumb',
               className: 'shop-pd-option-thumb',
               alt: ''
             });
-            cardContent.appendChild(img);
+            thumbWrap.appendChild(img);
           } else {
             const placeholder = document.createElement("div");
             placeholder.className = "shop-pd-option-thumb";
             placeholder.textContent = "—";
-            cardContent.appendChild(placeholder);
+            thumbWrap.appendChild(placeholder);
           }
+          decorateOptionItemThumb(thumbWrap, item, groupState.variantByItemId.get(itemId));
+          cardContent.appendChild(thumbWrap);
 
           // Информация
           const infoWrap = document.createElement("div");
@@ -3178,7 +3571,7 @@ function buildProductDetailsContent(
           // Вторая строка: цена
           priceEl = document.createElement("div");
           priceEl.className = "shop-pd-option-price";
-          priceEl.textContent = money(getPriceWithVariant());
+          renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
           infoWrap.appendChild(priceEl);
 
           cardContent.appendChild(infoWrap);
@@ -3580,7 +3973,7 @@ function buildProductDetailsContent(
 
             // Обновляем цену с учётом варианта
             if (priceEl) {
-              priceEl.textContent = money(getItemPriceWithVariant());
+              renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
             }
 
             // Обновляем отображение выбранного варианта
@@ -3651,7 +4044,7 @@ function buildProductDetailsContent(
           // Вторая строка: цена
           priceEl = document.createElement("div");
           priceEl.className = "shop-pd-option-price";
-          priceEl.textContent = money(getItemPriceWithVariant());
+          renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
           infoWrap.appendChild(priceEl);
 
           cardContent.appendChild(infoWrap);
@@ -4160,7 +4553,7 @@ function buildProductDetailsContent(
   footer.appendChild(actionBtn);
   wrap.appendChild(footer);
 
-  return { wrap, actionBtn, qtyWrap, basePriceEl: null, refreshVariantAvailability };
+  return { wrap, actionBtn, qtyWrap, basePriceEl: null, refreshVariantAvailability, heroMedia: media };
 }
 
 
@@ -4441,11 +4834,18 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
 
   container.innerHTML = "";
 
-  const {
-    optionGroups,
-    ingredients,
-    variants,
-  } = await resolveProductDetailsConfig(product.id);
+  const productDetailsConfig = await resolveProductDetailsConfig(product.id);
+  let optionGroups = normalizeProductOptionGroups(productDetailsConfig?.optionGroups);
+  const ingredients = Array.isArray(productDetailsConfig?.ingredients) ? productDetailsConfig.ingredients : [];
+  const variants = Array.isArray(productDetailsConfig?.variants) ? productDetailsConfig.variants : [];
+  const optionTargetProductIds = optionGroups
+    .flatMap((group) => Array.isArray(group?.items) ? group.items : [])
+    .map((item) => Number(item?.target_product_id || item?.product_id || 0))
+    .filter((id) => id > 0 && !state.productCache.has(id));
+  if (optionTargetProductIds.length > 0) {
+    await Promise.all(optionTargetProductIds.map((optionPid) => ensureProduct(optionPid).catch(() => null)));
+    optionGroups = normalizeProductOptionGroups(optionGroups);
+  }
   const selectionState = new Map();
   const ingredientState = new Map();
   const variantState = {
@@ -4732,6 +5132,7 @@ optionGroups.forEach((group) => {
 
   let actionBtnRef = null;
   let basePriceElRef = null;
+  let heroMediaRef = null;
 
   // Рассчитывает цену базовых ингредиентов (по ing.quantity из БД)
   const calculateBaseIngredientPrice = () => {
@@ -4833,7 +5234,9 @@ optionGroups.forEach((group) => {
     actionBtnRef.disabled = false;
 
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
-    const optionTotal = optionItemsTotal(selectedItems);
+    const optionPricingTotals = getSelectedOptionItemsPricingTotals(selectedItems);
+    const optionTotal = Number(optionPricingTotals.currentTotal || 0);
+    const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
     const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
     const basePrice = Number(variantUnitPrice || 0) + optionTotal;
     const ingredientsPriceDiff = calculateIngredientPrice(); // Разница от базового состава
@@ -4849,13 +5252,21 @@ optionGroups.forEach((group) => {
     
     // Зачёркнутая цена: либо скидка, либо product.old_price из БД
     const oldBase = scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
-    const oldUnit = oldBase > 0 ? roundPrice(oldBase + optionTotal + ingredientsPriceDiff) : 0;
-    const totalOldFromDb = oldUnit > discountedUnitPrice ? roundPrice(oldUnit * Number(qty || 1)) : 0;
+    const baseOriginalComparable = oldBase > Number(variantUnitPrice || 0)
+      ? roundPrice(oldBase + ingredientsPriceDiff)
+      : roundPrice(Number(variantUnitPrice || 0) + ingredientsPriceDiff);
+    const totalOldFromDb = roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * Number(qty || 1));
     
     // Приоритет: если есть скидка — показываем цену до скидки, иначе old_price
     const hasApiDiscount = discountAmount > 0;
-    const totalOld = hasApiDiscount ? totalBeforeDiscount : totalOldFromDb;
+    const optionOldDelta = Math.max(0, optionOriginalComparableTotal - optionTotal);
+    const totalOld = hasApiDiscount
+      ? roundPrice(totalBeforeDiscount + optionOldDelta * Number(qty || 1))
+      : totalOldFromDb;
     const showOld = totalOld > 0 && totalOld > totalPrice;
+    const originalUnitComparable = hasApiDiscount
+      ? roundPrice(unitPrice + optionOldDelta)
+      : roundPrice(baseOriginalComparable + optionOriginalComparableTotal);
 
     actionBtnRef.innerHTML = `
       <span class="shop-pd-action-prices">
@@ -4872,6 +5283,9 @@ optionGroups.forEach((group) => {
       } else {
         basePriceElRef.textContent = money(product.price || 0);
       }
+    }
+    if (heroMediaRef) {
+      syncProductHeroBadges(heroMediaRef, product, discountedUnitPrice, showOld ? originalUnitComparable : 0);
     }
     // Синхронизация с мобильной кнопкой «В корзину»
     if (elMobileProductPrice) {
@@ -5385,7 +5799,7 @@ optionGroups.forEach((group) => {
     refreshVariantAvailabilityUi();
   };
 
-  const { wrap, actionBtn, basePriceEl, refreshVariantAvailability } = buildProductDetailsContent(
+  const { wrap, actionBtn, basePriceEl, refreshVariantAvailability, heroMedia } = buildProductDetailsContent(
     product,
     optionGroups,
     selectionState,
@@ -5419,6 +5833,7 @@ optionGroups.forEach((group) => {
 
   actionBtnRef = actionBtn;
   basePriceElRef = basePriceEl;
+  heroMediaRef = heroMedia || null;
   ingredientsWrapRef = wrap.querySelector(".shop-pd-ingredients");
   refreshVariantAvailabilityUi = () => {
     if (typeof refreshVariantAvailability !== "function") return;
@@ -5633,18 +6048,24 @@ optionGroups.forEach((group) => {
       autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
     };
     const pricing = computeItemPricing(draftResolvedItem, totals);
+    const optionPricingTotals = getSelectedOptionItemsPricingTotals(selectedItems);
+    const optionCurrentTotal = Number(optionPricingTotals.currentTotal || 0);
+    const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
     const oldUnitBase = scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
     const parts = pricing?.parts || {};
-    const oldUnit = oldUnitBase > 0
-      ? (oldUnitBase + Number(parts.optionTotal || 0) + Number(parts.ingredientDiff || 0))
-      : 0;
+    const baseOriginalComparable = oldUnitBase > Number(variantUnitPrice || 0)
+      ? roundPrice(oldUnitBase + Number(parts.ingredientDiff || 0))
+      : roundPrice(Number(variantUnitPrice || 0) + Number(parts.ingredientDiff || 0));
     const hasDiscount = Number(pricing?.discountAmount || 0) > 0;
     const showOld =
       !pricing?.isAuto &&
-      (hasDiscount || (oldUnit > 0 && oldUnit > Number(pricing?.unitPrice || 0)));
+      (
+        hasDiscount ||
+        roundPrice(baseOriginalComparable + optionOriginalComparableTotal) > Number(pricing?.unitPrice || 0)
+      );
     const originalLineTotal = hasDiscount
-      ? roundPrice(Number(pricing?.lineTotal || 0) + Number(pricing?.discountAmount || 0))
-      : roundPrice(oldUnit * safeQty);
+      ? roundPrice((Number(pricing?.unitPrice || 0) + Math.max(0, optionOriginalComparableTotal - optionCurrentTotal)) * safeQty)
+      : roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * safeQty);
 
     return buildFavoriteSnapshotFromResolvedItem(draftResolvedItem, {
       pricing,
@@ -5754,22 +6175,28 @@ optionGroups.forEach((group) => {
       autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
     };
     const pricing = computeItemPricing(draftResolvedItem, pricingTotals);
+    const optionPricingTotals = getSelectedOptionItemsPricingTotals(selectedItems);
+    const optionCurrentTotal = Number(optionPricingTotals.currentTotal || 0);
+    const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
     const oldUnitBase = scaleProductBasePriceForCurrentUnit(
       product,
       variantUnitPrice || Number(product.price || 0),
       Number(product.old_price || 0)
     );
     const pricingParts = pricing?.parts || {};
-    const oldUnit = oldUnitBase > 0
-      ? (oldUnitBase + Number(pricingParts.optionTotal || 0) + Number(pricingParts.ingredientDiff || 0))
-      : 0;
+    const baseOriginalComparable = oldUnitBase > Number(variantUnitPrice || 0)
+      ? roundPrice(oldUnitBase + Number(pricingParts.ingredientDiff || 0))
+      : roundPrice(Number(variantUnitPrice || 0) + Number(pricingParts.ingredientDiff || 0));
     const hasDiscount = Number(pricing?.discountAmount || 0) > 0;
     const showOld =
       !pricing?.isAuto &&
-      (hasDiscount || (oldUnit > 0 && oldUnit > Number(pricing?.unitPrice || 0)));
+      (
+        hasDiscount ||
+        roundPrice(baseOriginalComparable + optionOriginalComparableTotal) > Number(pricing?.unitPrice || 0)
+      );
     const originalLineTotal = hasDiscount
-      ? roundPrice(Number(pricing?.lineTotal || 0) + Number(pricing?.discountAmount || 0))
-      : roundPrice(oldUnit * safeQty);
+      ? roundPrice((Number(pricing?.unitPrice || 0) + Math.max(0, optionOriginalComparableTotal - optionCurrentTotal)) * safeQty)
+      : roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * safeQty);
     const cartPricingSnapshot = buildFavoriteSnapshotFromResolvedItem(draftResolvedItem, {
       pricing,
       oldLineTotal: showOld ? originalLineTotal : null,
@@ -11018,7 +11445,14 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         ingredients: normalizedIngredients,
       }, productId);
 
+      const storedOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
+      const storedOriginalUnitPrice = Number(item?.unit_price_before_discount || 0);
       let originalUnit = roundPrice(Number(pricing?.unitPrice || 0));
+      if (storedOriginalUnitPrice > 0) {
+        originalUnit = roundPrice(storedOriginalUnitPrice);
+      } else if (storedOriginalLineTotal > 0 && qtyForBase > 0) {
+        originalUnit = roundPrice(storedOriginalLineTotal / qtyForBase);
+      } else 
       if (Number(product?.original_price || 0) > 0) {
         originalUnit = roundPrice(
           Number(product.original_price || 0) +
@@ -14783,9 +15217,15 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       const paidQty = Number.isFinite(Number(pricing?.paidQty))
         ? Math.max(0, Number(pricing.paidQty))
         : qty;
+      const storedOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
+      const storedOriginalUnitPrice = Number(item?.unit_price_before_discount || 0);
 
       let originalUnit = roundPrice(Number(pricing?.unitPrice || 0));
-      if (Number(product?.original_price || 0) > 0) {
+      if (storedOriginalUnitPrice > 0) {
+        originalUnit = roundPrice(storedOriginalUnitPrice);
+      } else if (storedOriginalLineTotal > 0 && paidQty > 0) {
+        originalUnit = roundPrice(storedOriginalLineTotal / paidQty);
+      } else if (Number(product?.original_price || 0) > 0) {
         originalUnit = roundPrice(
           Number(product.original_price || 0) +
           Number(parts.optionTotal || 0) +
@@ -14807,7 +15247,11 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       }
 
       const baseTotal = roundPrice(Number(pricing?.lineTotal || 0));
-      const originalTotal = roundPrice(Math.max(originalUnit * paidQty, baseTotal));
+      const originalTotal = roundPrice(Math.max(
+        storedOriginalLineTotal > 0 ? storedOriginalLineTotal : 0,
+        originalUnit * paidQty,
+        baseTotal
+      ));
       lineStates.push({
         key,
         baseTotal,
@@ -15921,9 +16365,15 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       const paidQty = Number.isFinite(Number(pricing?.paidQty))
         ? Math.max(0, Number(pricing.paidQty))
         : qty;
+      const storedOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
+      const storedOriginalUnitPrice = Number(item?.unit_price_before_discount || 0);
 
       let originalUnit = roundPrice(Number(pricing?.unitPrice || 0));
-      if (Number(product?.original_price || 0) > 0) {
+      if (storedOriginalUnitPrice > 0) {
+        originalUnit = roundPrice(storedOriginalUnitPrice);
+      } else if (storedOriginalLineTotal > 0 && paidQty > 0) {
+        originalUnit = roundPrice(storedOriginalLineTotal / paidQty);
+      } else if (Number(product?.original_price || 0) > 0) {
         originalUnit = roundPrice(
           Number(product.original_price || 0)
           + Number(parts.optionTotal || 0)
@@ -15950,7 +16400,11 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       const baseTotal = Number.isFinite(localLineTotal)
         ? roundPrice(Math.max(0, localLineTotal))
         : roundPrice(Number(pricing?.lineTotal || 0));
-      const originalTotal = roundPrice(Math.max(originalUnit * paidQty, baseTotal));
+      const originalTotal = roundPrice(Math.max(
+        storedOriginalLineTotal > 0 ? storedOriginalLineTotal : 0,
+        originalUnit * paidQty,
+        baseTotal
+      ));
       lineStates.push({
         key,
         baseTotal,

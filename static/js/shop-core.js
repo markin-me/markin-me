@@ -8006,16 +8006,31 @@
     const itemLineTotal = Number.isFinite(itemLineTotalRaw)
       ? itemLineTotalRaw
       : Number(item.price || 0);
-    const discountOriginal = item.discount?.original_line_total;
+    const discountOriginal = Number(item?.discount?.original_line_total || 0);
     const itemOldPrice = Number(item.old_price || 0);
+    const itemUnitPriceBeforeDiscount = Number(item.unit_price_before_discount || 0);
     const qtyForOldPrice = Number(item.qty || item.quantity || 1);
-    const itemOldLineTotal = discountOriginal || (itemOldPrice > 0 ? itemOldPrice * qtyForOldPrice : 0);
+    const itemOldLineTotal =
+      discountOriginal > 0
+        ? discountOriginal
+        : (
+            itemOldPrice > 0
+              ? itemOldPrice * qtyForOldPrice
+              : (
+                  itemUnitPriceBeforeDiscount > 0
+                    ? itemUnitPriceBeforeDiscount * qtyForOldPrice
+                    : 0
+                )
+          );
     const itemShowOld = itemOldLineTotal > itemLineTotal;
+    const itemDiscountPercent = itemShowOld && itemOldLineTotal > 0
+      ? Math.round(((itemOldLineTotal - itemLineTotal) / itemOldLineTotal) * 100)
+      : 0;
     const itemPriceHtml = itemShowOld
-      ? `<span class="cart-old">${money(itemOldLineTotal)}</span>${money(itemLineTotal)}`
-      : money(itemLineTotal);
+      ? `<div class="cart-price-group"><div class="cart-price-stack"><div class="cart-price">${money(itemLineTotal)}</div><div class="cart-old">${money(itemOldLineTotal)}</div></div>${itemDiscountPercent > 0 ? `<span class="sp-discount-badge sp-discount-badge--cart cart-discount-badge">-${itemDiscountPercent}%</span>` : ""}</div>`
+      : `<div class="cart-price-group"><div class="cart-price-stack"><div class="cart-price">${money(itemLineTotal)}</div></div></div>`;
     html += `<div class="cart-right">`;
-    html += `<div class="cart-price">${itemPriceHtml}</div>`;
+    html += itemPriceHtml;
     html += `</div>`;
 
     html += `</div>`;
@@ -14854,7 +14869,12 @@ async function initAddresses() {
         Number(parts?.baseProductUnit || pricing?.unitPrice || 0),
         Number(product.old_price || 0)
       );
-      const oldUnit = old > 0 ? (old + parts.optionTotal + parts.ingredientDiff) : 0;
+      const storedOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
+      const storedOriginalUnit = Number(item?.unit_price_before_discount || 0);
+      const fallbackOriginalUnit = storedOriginalUnit > 0
+        ? storedOriginalUnit
+        : (old > 0 ? (old + Number(parts.optionTotal || 0) + Number(parts.ingredientDiff || 0)) : 0);
+      const oldUnit = fallbackOriginalUnit;
       if (!isUnavailable) total += pricing.lineTotal;
 
       // ?????-?????????
@@ -15061,10 +15081,16 @@ async function initAddresses() {
           };
           const currentPricing = computeItemPricing(currentItemResolved, currentTotals);
           const currentParts = currentPricing.parts || {};
+          const currentStoredOriginalLineTotal = Number(currentItemResolved?.discount?.original_line_total || 0);
+          const currentStoredOriginalUnit = Number(currentItemResolved?.unit_price_before_discount || 0);
           const currentOld = Number(currentItemResolved.product?.old_price || 0);
-          const currentOldUnit = currentOld > 0
-            ? (currentOld + Number(currentParts.optionTotal || 0) + Number(currentParts.ingredientDiff || 0))
-            : 0;
+          const currentOldUnit = currentStoredOriginalUnit > 0
+            ? currentStoredOriginalUnit
+            : (
+                currentOld > 0
+                  ? (currentOld + Number(currentParts.optionTotal || 0) + Number(currentParts.ingredientDiff || 0))
+                  : 0
+              );
           const currentHasDiscount = Number(currentPricing.discountAmount || 0) > 0;
           const currentShowOld =
             !isGiftReward &&
@@ -15073,8 +15099,15 @@ async function initAddresses() {
           const currentOriginalLineTotal = isGiftReward
             ? 0
             : currentHasDiscount
-            ? (currentPricing.lineTotal + Number(currentPricing.discountAmount || 0))
-            : (currentOldUnit * newQty);
+            ? Math.max(
+                currentPricing.lineTotal + Number(currentPricing.discountAmount || 0),
+                currentStoredOriginalLineTotal > 0 ? currentStoredOriginalLineTotal : 0
+              )
+            : (
+                currentStoredOriginalLineTotal > 0
+                  ? currentStoredOriginalLineTotal
+                  : (currentOldUnit * newQty)
+              );
 
           priceState.sync(
             currentPricing.lineTotal,
@@ -15131,13 +15164,23 @@ async function initAddresses() {
       const originalLineTotal = isGiftReward
         ? 0
         : hasDiscount
-          ? (pricing.lineTotal + pricing.discountAmount)
-          : (oldUnit * qty);
+          ? Math.max(
+              pricing.lineTotal + pricing.discountAmount,
+              storedOriginalLineTotal > 0 ? storedOriginalLineTotal : 0
+            )
+          : (
+              storedOriginalLineTotal > 0
+                ? storedOriginalLineTotal
+                : (oldUnit * qty)
+            );
       const initialLineState = getImmediateShopCartLineState(key, getImmediateShopCartPricingSnapshot());
       const initialLineCurrentTotal = Number(initialLineState?.currentTotal || pricing.lineTotal || 0);
       const initialLineOriginalTotal = isGiftReward
         ? 0
-        : Number(initialLineState?.originalTotal || 0);
+        : Math.max(
+            Number(initialLineState?.originalTotal || 0),
+            showOld ? Number(originalLineTotal || 0) : 0
+          );
       const priceState = initialLineState
         ? createCartPriceGroup(
             initialLineCurrentTotal,
@@ -17882,7 +17925,12 @@ function updateCartBadge() {
     const tiers = Array.isArray(variantGroup?.discount_tiers) ? variantGroup.discount_tiers : [];
     const tier = tiers.find((t) => Number(t.sort_order) === idx);
     const discountPercent = Number(tier?.discount_percent || 0) || 0;
-    if (discountPercent !== 0) {
+    const baseValue = parseVariantValueNumber(values[0]);
+    const shouldApplyTier =
+      Number.isFinite(baseValue) &&
+      baseValue > 0 &&
+      Math.abs(numericValue - baseValue) > 0.000001;
+    if (shouldApplyTier && discountPercent !== 0) {
       unitPrice = unitPrice * (1 - discountPercent / 100);
     }
     return unitPrice;
@@ -17938,7 +17986,8 @@ function updateCartBadge() {
     const tiers = Array.isArray(group.discount_tiers) ? group.discount_tiers : [];
     const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
     const discountPercent = Number(tier?.discount_percent || 0) || 0;
-    if (discountPercent !== 0) {
+    const shouldApplyTier = Math.abs(qtyInBase - baseQty) > 0.000001;
+    if (shouldApplyTier && discountPercent !== 0) {
       unitPrice = unitPrice * (1 - discountPercent / 100);
     }
     return unitPrice;

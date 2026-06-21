@@ -4046,8 +4046,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
     const tiers = Array.isArray(variant.discount_tiers) ? variant.discount_tiers : [];
     const discountPercent = getTierDiscountPercentForVariantIndex(tiers, selectedIndex);
+    const shouldApplyTier = Math.abs(qtyInBase - baseQty) > 0.000001;
 
-    if (discountPercent !== 0) {
+    if (shouldApplyTier && discountPercent !== 0) {
       unitPrice = unitPrice * (1 - discountPercent / 100);
     }
 
@@ -4102,7 +4103,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const tiers = Array.isArray(variantGroup.discount_tiers) ? variantGroup.discount_tiers : [];
     const tier = tiers.find((t) => Number(t.sort_order) === Number(defaultVariantIndex));
     const discountPercent = Number(tier?.discount_percent || 0) || 0;
-    if (discountPercent !== 0) {
+    const shouldApplyTier = Math.abs(selectedValue - baseValue) > 0.000001;
+    if (shouldApplyTier && discountPercent !== 0) {
       resolvedPrice = resolvedPrice * (1 - discountPercent / 100);
     }
 
@@ -14168,13 +14170,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const list = Array.isArray(values) ? values : [];
       if (!list.length || !Number.isFinite(idx) || idx < 0 || idx >= list.length) return price;
       const selectedValue = parseVariantValueNumber(list[idx]);
-      if (Number.isFinite(productBaseQty) && productBaseQty > 0 && Number.isFinite(selectedValue) && selectedValue > 0) {
-        let out = price * (selectedValue / productBaseQty);
-        const tier = (Array.isArray(discountTiers) ? discountTiers : []).find((t) => Number(t.sort_order) === idx);
-        const discountPercent = Number(tier?.discount_percent || 0) || 0;
-        if (discountPercent !== 0) out *= (1 - discountPercent / 100);
-        return out;
-      }
+        if (Number.isFinite(productBaseQty) && productBaseQty > 0 && Number.isFinite(selectedValue) && selectedValue > 0) {
+          let out = price * (selectedValue / productBaseQty);
+          const tier = (Array.isArray(discountTiers) ? discountTiers : []).find((t) => Number(t.sort_order) === idx);
+          const discountPercent = Number(tier?.discount_percent || 0) || 0;
+          const shouldApplyTier = Math.abs(selectedValue - productBaseQty) > 0.000001;
+          if (shouldApplyTier && discountPercent !== 0) out *= (1 - discountPercent / 100);
+          return out;
+        }
       return price;
     };
 
@@ -15903,7 +15906,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const tiers = Array.isArray(discountTiers) ? discountTiers : [];
           const tier = tiers.find((t) => Number(t.sort_order) === idx);
           const discountPercent = Number(tier?.discount_percent || 0) || 0;
-          if (discountPercent !== 0) out = out * (1 - discountPercent / 100);
+          const shouldApplyTier = Math.abs(selectedValue - productBaseQty) > 0.000001;
+          if (shouldApplyTier && discountPercent !== 0) out = out * (1 - discountPercent / 100);
           return out;
         }
         return price;
