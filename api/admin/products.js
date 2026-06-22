@@ -231,6 +231,40 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     return Math.min(100, Math.max(0, n));
   }
 
+  function applyCompositionPromoPricing(product, salePrice, saleOldPrice) {
+    const price = helpers.numOrNull(salePrice);
+    const oldPrice = helpers.numOrNull(saleOldPrice);
+    if (price == null) {
+      return { price: null, old_price: null };
+    }
+    const normalizedOldPrice = oldPrice != null && oldPrice > price ? oldPrice : null;
+    const promoEnabled = Number(product?.promo_enabled || 0) === 1;
+    const promoDiscountPercent = normalizePromoDiscountPercent(product?.promo_discount_percent);
+    if (!promoEnabled || promoDiscountPercent == null || promoDiscountPercent <= 0) {
+      return {
+        price,
+        old_price: normalizedOldPrice,
+      };
+    }
+    const promoBaseOldPrice = normalizedOldPrice != null ? normalizedOldPrice : price;
+    const discountedPrice = Math.round((promoBaseOldPrice * (100 - promoDiscountPercent) / 100) * 100) / 100;
+    return {
+      price: discountedPrice,
+      old_price: promoBaseOldPrice > discountedPrice ? promoBaseOldPrice : null,
+    };
+  }
+
+  function resolveCompositionOldPriceBase(priceOverride, catalogPriceBase, catalogOldPriceBase) {
+    if (priceOverride == null) return catalogOldPriceBase;
+    const overridePrice = Number(priceOverride);
+    const currentBase = Number(catalogPriceBase || 0);
+    const oldBase = Number(catalogOldPriceBase || 0);
+    if (currentBase > 0 && oldBase > currentBase) {
+      return overridePrice * (oldBase / currentBase);
+    }
+    return overridePrice;
+  }
+
   function firstProductPhoto(photosJson) {
     try {
       const arr = typeof photosJson === "string" ? JSON.parse(photosJson || "[]") : photosJson;
@@ -508,7 +542,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     const id = Number(productId || 0);
     if (!Number.isFinite(id) || id <= 0) return null;
     const [[product]] = await db.query(
-      `SELECT id, base_unit_id, unit_id, base_qty
+      `SELECT id, base_unit_id, unit_id, base_qty, promo_enabled, promo_discount_percent
        FROM prod_products
        WHERE tenant_id=? AND id=? LIMIT 1`,
       [tenantId, id]
@@ -615,7 +649,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         const catalogOldPrice = Number(ing.ingredient_old_price || 0) > 0 ? Number(ing.ingredient_old_price || 0) : Number(ing.ingredient_price || 0);
         const catalogOldPriceBase = ingredientBaseQty > 0 ? catalogOldPrice / ingredientBaseQty : catalogOldPrice;
         const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
-        const oldPriceBase = ing.price_override != null ? Number(ing.price_override) : catalogOldPriceBase;
+        const oldPriceBase = resolveCompositionOldPriceBase(ing.price_override, catalogPriceBase, catalogOldPriceBase);
         cost += costBase * qtyInIngredientBase;
         price += priceBase * qtyInIngredientBase;
         oldPrice += oldPriceBase * qtyInIngredientBase;
@@ -633,13 +667,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
     const scale = hasWeight && weight > 0 && targetQty != null && targetQty > 0 ? targetQty / weight : 1;
     const costPrice = hasCost ? Math.round(cost * scale * 100) / 100 : null;
-    const salePrice = hasPrice ? Math.round(price * scale * 100) / 100 : null;
-    const saleOldPrice = hasOldPrice ? Math.round(oldPrice * scale * 100) / 100 : null;
+    const rawSalePrice = hasPrice ? Math.round(price * scale * 100) / 100 : null;
+    const rawSaleOldPrice = hasOldPrice ? Math.round(oldPrice * scale * 100) / 100 : null;
+    const salePricing = applyCompositionPromoPricing(product, rawSalePrice, rawSaleOldPrice);
     return {
       cost_price: costPrice,
-      price: salePrice,
-      old_price: saleOldPrice != null && salePrice != null && saleOldPrice > salePrice ? saleOldPrice : null,
-      margin_percent: calcProductMarginPercent(costPrice, salePrice),
+      price: salePricing.price,
+      old_price: salePricing.old_price,
+      margin_percent: calcProductMarginPercent(costPrice, salePricing.price),
       base_qty: hasWeight ? Math.round(weight * 1000) / 1000 : null,
     };
   }
@@ -1656,7 +1691,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [rows] = await db.query(
-        `SELECT p.id, p.name, p.sku, p.description_short, p.description, p.price, p.old_price, p.cost_price,
+        `SELECT p.id, p.name, p.sku, p.description_short, p.description, p.price, p.old_price,
+                p.promo_enabled, p.promo_title, p.promo_discount_percent, p.cost_price,
                 p.unit_id, p.base_unit_id, p.base_qty, p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent, p.photos_json, p.blocks_config_json, p.is_active, p.site_visibility,
                 p.fulfillment_mode,
                 p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,

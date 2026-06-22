@@ -12614,6 +12614,38 @@ const isViewMode = state.comboPanel.mode === "view";
     let hasOldPrice = false;
     let hasWeight = false;
     const lines = [];
+    const normalizeCompositionPromoDiscountPercent = (value) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return null;
+      return Math.min(100, Math.max(0, n));
+    };
+    const resolveCompositionOldPriceBase = (priceOverride, catalogPriceBase, catalogOldPriceBase) => {
+      if (priceOverride == null) return catalogOldPriceBase;
+      const overridePrice = Number(priceOverride);
+      const currentBase = Number(catalogPriceBase || 0);
+      const oldBase = Number(catalogOldPriceBase || 0);
+      if (currentBase > 0 && oldBase > currentBase) {
+        return overridePrice * (oldBase / currentBase);
+      }
+      return overridePrice;
+    };
+    const applyCompositionPromoPricing = (sourceProduct, salePrice, saleOldPrice) => {
+      const priceValue = Number(salePrice);
+      if (!Number.isFinite(priceValue)) return { price: null, old_price: null };
+      const oldPriceValue = Number(saleOldPrice);
+      const normalizedOldPrice = Number.isFinite(oldPriceValue) && oldPriceValue > priceValue ? oldPriceValue : null;
+      const promoEnabled = Number(sourceProduct?.promo_enabled || 0) === 1;
+      const promoDiscountPercent = normalizeCompositionPromoDiscountPercent(sourceProduct?.promo_discount_percent);
+      if (!promoEnabled || promoDiscountPercent == null || promoDiscountPercent <= 0) {
+        return { price: priceValue, old_price: normalizedOldPrice };
+      }
+      const promoBaseOldPrice = normalizedOldPrice != null ? normalizedOldPrice : priceValue;
+      const discountedPrice = Math.round((promoBaseOldPrice * (100 - promoDiscountPercent) / 100) * 100) / 100;
+      return {
+        price: discountedPrice,
+        old_price: promoBaseOldPrice > discountedPrice ? promoBaseOldPrice : null,
+      };
+    };
     ingredients.forEach((ing) => {
       const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id || ing.unit_id;
       const fromUnitId = Number(ing.unit_id || 0);
@@ -12652,7 +12684,7 @@ const isViewMode = state.comboPanel.mode === "view";
       const catalogOldPrice = Number(ing.ingredient_old_price || 0) > 0 ? Number(ing.ingredient_old_price || 0) : Number(ing.ingredient_price || 0);
       const catalogOldPriceBase = baseQty > 0 ? catalogOldPrice / baseQty : catalogOldPrice;
       const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
-      const oldPriceBase = ing.price_override != null ? Number(ing.price_override) : catalogOldPriceBase;
+      const oldPriceBase = resolveCompositionOldPriceBase(ing.price_override, catalogPriceBase, catalogOldPriceBase);
       const lineCost = costBase * qtyInBase;
       const linePrice = priceBase * qtyInBase;
       const lineOldPrice = oldPriceBase * qtyInBase;
@@ -12672,13 +12704,14 @@ const isViewMode = state.comboPanel.mode === "view";
     });
     const scale = hasWeight && weight > 0 && targetQty > 0 ? targetQty / weight : 1;
     const costPrice = hasCost ? Math.round(cost * scale * 100) / 100 : null;
-    const salePrice = hasPrice ? Math.round(price * scale * 100) / 100 : null;
-    const saleOldPrice = hasOldPrice ? Math.round(oldPrice * scale * 100) / 100 : null;
+    const rawSalePrice = hasPrice ? Math.round(price * scale * 100) / 100 : null;
+    const rawSaleOldPrice = hasOldPrice ? Math.round(oldPrice * scale * 100) / 100 : null;
+    const salePricing = applyCompositionPromoPricing(product, rawSalePrice, rawSaleOldPrice);
     return {
       cost_price: costPrice,
-      price: salePrice,
-      old_price: saleOldPrice != null && salePrice != null && saleOldPrice > salePrice ? saleOldPrice : null,
-      margin_percent: calcMarginFromPrice(costPrice, salePrice),
+      price: salePricing.price,
+      old_price: salePricing.old_price,
+      margin_percent: calcMarginFromPrice(costPrice, salePricing.price),
       base_qty: hasWeight ? Math.round(weight * scale * 1000) / 1000 : null,
       scale,
       breakdown: lines.map((line) => ({
@@ -14445,12 +14478,15 @@ const isViewMode = state.comboPanel.mode === "view";
       if (!isCompositionPriceMode()) return;
       const cost = calcTotalCostFromIngredientsGlobal();
       const price = calcTotalPriceFromIngredientsGlobal();
+      const compositionOldPrice = calcTotalOldPriceFromIngredientsGlobal();
       if (cost != null && ui.costPriceInput) {
         ui.costPriceInput.value = formatNumberForInput(Math.round(cost * 100) / 100);
       }
       if (price != null && ui.priceInput) {
         ui.priceInput.value = formatNumberForInputFixed(price, 2);
-        if (ui.oldPriceInput && isProductPromoEnabled()) {
+        if (ui.oldPriceInput && compositionOldPrice != null) {
+          ui.oldPriceInput.value = formatNumberForInputFixed(compositionOldPrice, 2);
+        } else if (ui.oldPriceInput && isProductPromoEnabled()) {
           ui.oldPriceInput.value = formatNumberForInputFixed(price, 2);
           applyProductPromoPrice({ preserveExistingOldPrice: true });
         } else if (ui.oldPriceInput) {
@@ -18052,6 +18088,38 @@ const isViewMode = state.comboPanel.mode === "view";
       return hasValidPrice ? total : null;
     }
 
+    function calcTotalOldPriceFromIngredientsGlobal() {
+      let total = 0;
+      let hasValidOldPrice = false;
+      const resolveCompositionOldPriceBase = (priceOverride, catalogPriceBase, catalogOldPriceBase) => {
+        if (priceOverride == null) return catalogOldPriceBase;
+        const overridePrice = Number(priceOverride);
+        const currentBase = Number(catalogPriceBase || 0);
+        const oldBase = Number(catalogOldPriceBase || 0);
+        if (currentBase > 0 && oldBase > currentBase) {
+          return overridePrice * (oldBase / currentBase);
+        }
+        return overridePrice;
+      };
+      if (draftIngredients && draftIngredients.size > 0) {
+        draftIngredients.forEach((ing) => {
+          const baseQty = ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : 1;
+          const catalogPriceBase = baseQty > 0 ? Number(ing.ingredient_price || 0) / baseQty : Number(ing.ingredient_price || 0);
+          const catalogOldPrice = Number(ing.ingredient_old_price || 0) > 0 ? Number(ing.ingredient_old_price || 0) : Number(ing.ingredient_price || 0);
+          const catalogOldPriceBase = baseQty > 0 ? catalogOldPrice / baseQty : catalogOldPrice;
+          const oldPriceBase = resolveCompositionOldPriceBase(ing.price_override, catalogPriceBase, catalogOldPriceBase);
+          const qtyInBase = getIngredientQuantityInBase(ing);
+          if (qtyInBase != null) {
+            total += oldPriceBase * qtyInBase;
+            hasValidOldPrice = true;
+          }
+        });
+      }
+      const oldPrice = hasValidOldPrice ? total : null;
+      const currentPrice = calcTotalPriceFromIngredientsGlobal();
+      return oldPrice != null && currentPrice != null && oldPrice > currentPrice ? oldPrice : null;
+    }
+
     // Сумма веса состава в базовой единице товара (рецепта)
     function calcTotalWeightInBaseUnitGlobal() {
       const baseUnitId = Number(ui.baseUnitSelect?.value || 0);
@@ -18081,11 +18149,43 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     /** Расчёт себестоимости, цены и веса по массиву ингредиентов (формат API). Для пересчёта блюд, где текущий товар в составе. */
-    function calcTotalsFromComposition(recipeBaseUnitId, ingredientsArray) {
+    function calcTotalsFromComposition(recipeBaseUnitId, ingredientsArray, sourceProduct = null) {
       if (!Array.isArray(ingredientsArray) || ingredientsArray.length === 0) return null;
       let cost = 0, price = 0, oldPrice = 0, weight = 0;
       let hasCost = false, hasPrice = false, hasOldPrice = false, hasWeight = false;
       const baseUnitIdNum = Number(recipeBaseUnitId || 0);
+      const normalizeCompositionPromoDiscountPercent = (value) => {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return null;
+        return Math.min(100, Math.max(0, n));
+      };
+      const resolveCompositionOldPriceBase = (priceOverride, catalogPriceBase, catalogOldPriceBase) => {
+        if (priceOverride == null) return catalogOldPriceBase;
+        const overridePrice = Number(priceOverride);
+        const currentBase = Number(catalogPriceBase || 0);
+        const oldBase = Number(catalogOldPriceBase || 0);
+        if (currentBase > 0 && oldBase > currentBase) {
+          return overridePrice * (oldBase / currentBase);
+        }
+        return overridePrice;
+      };
+      const applyCompositionPromoPricing = (productLike, salePrice, saleOldPrice) => {
+        const priceValue = Number(salePrice);
+        if (!Number.isFinite(priceValue)) return { price: null, old_price: null };
+        const oldPriceValue = Number(saleOldPrice);
+        const normalizedOldPrice = Number.isFinite(oldPriceValue) && oldPriceValue > priceValue ? oldPriceValue : null;
+        const promoEnabled = Number(productLike?.promo_enabled || 0) === 1;
+        const promoDiscountPercent = normalizeCompositionPromoDiscountPercent(productLike?.promo_discount_percent);
+        if (!promoEnabled || promoDiscountPercent == null || promoDiscountPercent <= 0) {
+          return { price: priceValue, old_price: normalizedOldPrice };
+        }
+        const promoBaseOldPrice = normalizedOldPrice != null ? normalizedOldPrice : priceValue;
+        const discountedPrice = Math.round((promoBaseOldPrice * (100 - promoDiscountPercent) / 100) * 100) / 100;
+        return {
+          price: discountedPrice,
+          old_price: promoBaseOldPrice > discountedPrice ? promoBaseOldPrice : null,
+        };
+      };
       ingredientsArray.forEach(ing => {
         const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id || ing.unit_id;
         const fromUnitId = Number(ing.unit_id || 0);
@@ -18108,7 +18208,7 @@ const isViewMode = state.comboPanel.mode === "view";
           const catalogOldPrice = Number(ing.ingredient_old_price || 0) > 0 ? Number(ing.ingredient_old_price || 0) : Number(ing.ingredient_price || 0);
           const catalogOldPriceBase = baseQty > 0 ? catalogOldPrice / baseQty : catalogOldPrice;
           const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
-          const oldPriceBase = ing.price_override != null ? Number(ing.price_override) : catalogOldPriceBase;
+          const oldPriceBase = resolveCompositionOldPriceBase(ing.price_override, catalogPriceBase, catalogOldPriceBase);
           cost += costBase * qtyInIngBase;
           price += priceBase * qtyInIngBase;
           oldPrice += oldPriceBase * qtyInIngBase;
@@ -18124,12 +18224,13 @@ const isViewMode = state.comboPanel.mode === "view";
           if (w != null) { weight += w; hasWeight = true; }
         }
       });
-      const salePrice = hasPrice ? Math.round(price * 100) / 100 : null;
-      const saleOldPrice = hasOldPrice ? Math.round(oldPrice * 100) / 100 : null;
+      const rawSalePrice = hasPrice ? Math.round(price * 100) / 100 : null;
+      const rawSaleOldPrice = hasOldPrice ? Math.round(oldPrice * 100) / 100 : null;
+      const salePricing = applyCompositionPromoPricing(sourceProduct, rawSalePrice, rawSaleOldPrice);
       return (hasCost || hasPrice || hasWeight) ? {
         cost: hasCost ? Math.round(cost * 100) / 100 : null,
-        price: salePrice,
-        old_price: saleOldPrice != null && salePrice != null && saleOldPrice > salePrice ? saleOldPrice : null,
+        price: salePricing.price,
+        old_price: salePricing.old_price,
         weight: hasWeight ? Math.round(weight * 1000) / 1000 : null,
       } : null;
     }
@@ -18164,6 +18265,7 @@ const isViewMode = state.comboPanel.mode === "view";
     function updatePricePlaceholderGlobal() {
       const priceInput = ui.priceInput;
       const calculatedPrice = calcTotalPriceFromIngredientsGlobal();
+      const calculatedOldPrice = calcTotalOldPriceFromIngredientsGlobal();
       const calculatedCost = calcTotalCostFromIngredientsGlobal();
       let displayPrice = calculatedPrice;
       
@@ -18171,7 +18273,9 @@ const isViewMode = state.comboPanel.mode === "view";
       if (priceInput) {
         priceInput.placeholder = calculatedPrice != null ? formatMoney(calculatedPrice) : "0";
         if (isCompositionPriceMode() && calculatedPrice != null) {
-          if (ui.oldPriceInput && isProductPromoEnabled()) {
+          if (ui.oldPriceInput && calculatedOldPrice != null) {
+            ui.oldPriceInput.value = formatNumberForInputFixed(calculatedOldPrice, 2);
+          } else if (ui.oldPriceInput && isProductPromoEnabled()) {
             ui.oldPriceInput.value = formatNumberForInputFixed(calculatedPrice, 2);
             const discountPercent = getProductPromoDiscountPercent();
             displayPrice = Math.max(0, calculatedPrice * (100 - discountPercent) / 100);
@@ -18262,7 +18366,7 @@ const isViewMode = state.comboPanel.mode === "view";
             if (!prod) continue;
             const ingRes = await apiGetProductIngredients(productId);
             const ingredients = Array.isArray(ingRes?.data) ? ingRes.data : [];
-            const totals = calcTotalsFromComposition(prod.base_unit_id, ingredients);
+            const totals = calcTotalsFromComposition(prod.base_unit_id, ingredients, prod);
             if (!totals) continue;
             const payload = {};
             if (totals.cost != null) { payload.cost_price = totals.cost; payload.cost_price_source = "auto"; }
@@ -18298,6 +18402,7 @@ const isViewMode = state.comboPanel.mode === "view";
             ingredient_id: Number(ing.ingredient_id),
             ingredient_name: ing.ingredient_name,
             ingredient_price: Number(ing.ingredient_price || 0),
+            ingredient_old_price: ing.ingredient_old_price != null ? Number(ing.ingredient_old_price) : null,
             ingredient_cost_price: ing.ingredient_cost_price != null ? Number(ing.ingredient_cost_price) : 0,
             ingredient_base_unit_id: ing.ingredient_base_unit_id != null ? Number(ing.ingredient_base_unit_id) : null,
             ingredient_base_qty: ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : null,
