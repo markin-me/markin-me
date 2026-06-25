@@ -178,6 +178,12 @@
   const productsBulkMenuWrap = $("#productsBulkMenuWrap");
   const productsBulkMenuToggleBtn = $("#productsBulkMenuToggleBtn");
   const productsBulkMenu = $("#productsBulkMenu");
+  const productsBulkCategoryMode = $("#productsBulkCategoryMode");
+  const productsBulkCategorySelectWrap = $("#productsBulkCategorySelectWrap");
+  const productsBulkCategoryTrigger = $("#productsBulkCategoryTrigger");
+  const productsBulkCategoryTriggerText = $("#productsBulkCategoryTriggerText");
+  const productsBulkCategoryMenu = $("#productsBulkCategoryMenu");
+  const productsBulkCategoryPickerBtn = $("#productsBulkCategoryPickerBtn");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
   const optionsGroupsList = $("#optionsGroupsList");
@@ -609,6 +615,14 @@
     };
   }
 
+  function getDefaultProductsBulkCategoryState() {
+    return {
+      mode: "none",
+      selectedCategoryIds: new Set(),
+      pickerOpen: false,
+    };
+  }
+
   const state = {
     mode: "products", // products | categories | ...
     categories: [],
@@ -627,6 +641,7 @@
     selectedProductId: null,
     selectedProductIds: new Set(),
     productsBulkActions: getDefaultProductsBulkActions(),
+    productsBulkCategory: getDefaultProductsBulkCategoryState(),
     productsBulkApplying: false,
     productRowVariantsExpanded: new Set(),
     productRowVariantsCache: new Map(),
@@ -5258,9 +5273,44 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     productsBulkMenuWrap.classList.remove("is-open");
   }
 
+  function closeProductsBulkCategoryMenu() {
+    if (productsBulkCategoryMenu) productsBulkCategoryMenu.classList.add("hidden");
+    if (productsBulkCategorySelectWrap) productsBulkCategorySelectWrap.classList.remove("is-open");
+    if (productsBulkCategoryTrigger) productsBulkCategoryTrigger.setAttribute("aria-expanded", "false");
+  }
+
+  function getProductsBulkCategoryModeLabel(mode) {
+    const value = String(mode || "none");
+    const option = Array.from(productsBulkCategoryMode?.options || []).find((item) => String(item.value) === value);
+    return option ? option.textContent : "-";
+  }
+
+  function setProductsBulkCategoryMode(nextMode) {
+    const mode = String(nextMode || "none");
+    if (productsBulkCategoryMode) productsBulkCategoryMode.value = mode;
+    if (mode === "none") {
+      resetProductsBulkCategoryAction();
+    } else {
+      if (state.productsBulkCategory?.pickerOpen) closeProductsBulkCategoryPicker();
+      state.productsBulkCategory = getDefaultProductsBulkCategoryState();
+      state.productsBulkCategory.mode = mode;
+    }
+    closeProductsBulkCategoryMenu();
+    syncProductsBulkActionsUi();
+  }
+
+  function hasProductsBulkCategoryModeSelected() {
+    return String(state.productsBulkCategory?.mode || "none") !== "none";
+  }
+
+  function hasValidProductsBulkCategoryAction() {
+    return hasProductsBulkCategoryModeSelected() && (state.productsBulkCategory?.selectedCategoryIds instanceof Set) && state.productsBulkCategory.selectedCategoryIds.size > 0;
+  }
+
   function countSelectedProductsBulkActions() {
     const actions = state.productsBulkActions || {};
-    return Object.values(actions).reduce((acc, value) => acc + (value ? 1 : 0), 0);
+    return Object.values(actions).reduce((acc, value) => acc + (value ? 1 : 0), 0)
+      + (hasProductsBulkCategoryModeSelected() ? 1 : 0);
   }
 
   function setProductsBulkAction(actionKey, nextValue) {
@@ -5285,6 +5335,24 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     }
   }
 
+  function closeProductsBulkCategoryPicker() {
+    if (!state.productsBulkCategory?.pickerOpen) return;
+    const closeFn = window._closeCategoryPickerFn;
+    if (typeof closeFn === "function") {
+      closeFn();
+    } else if (state.productsBulkCategory) {
+      state.productsBulkCategory.pickerOpen = false;
+    }
+  }
+
+  function resetProductsBulkCategoryAction({ closePicker = true } = {}) {
+    if (closePicker) closeProductsBulkCategoryPicker();
+    state.productsBulkCategory = getDefaultProductsBulkCategoryState();
+    if (productsBulkCategoryMode) productsBulkCategoryMode.value = "none";
+    closeProductsBulkCategoryMenu();
+    if (productsBulkCategoryPickerBtn) productsBulkCategoryPickerBtn.classList.add("hidden");
+  }
+
   function syncProductsBulkActionsUi() {
     if (productsBulkMenu) {
       productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((input) => {
@@ -5292,17 +5360,39 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         input.checked = Boolean(state.productsBulkActions?.[key]);
       });
     }
+    if (productsBulkCategoryMode) {
+      productsBulkCategoryMode.value = String(state.productsBulkCategory?.mode || "none");
+    }
+    if (productsBulkCategoryTriggerText) {
+      productsBulkCategoryTriggerText.textContent = getProductsBulkCategoryModeLabel(state.productsBulkCategory?.mode || "none");
+    }
+    if (productsBulkCategoryTrigger) {
+      productsBulkCategoryTrigger.disabled = state.productsBulkApplying;
+    }
+    if (productsBulkCategoryMenu) {
+      productsBulkCategoryMenu.querySelectorAll("[data-bulk-category-mode]").forEach((btn) => {
+        btn.classList.toggle("is-active", String(btn.dataset.bulkCategoryMode || "none") === String(state.productsBulkCategory?.mode || "none"));
+      });
+    }
+    if (productsBulkCategoryPickerBtn) {
+      productsBulkCategoryPickerBtn.classList.toggle("hidden", !hasProductsBulkCategoryModeSelected());
+      productsBulkCategoryPickerBtn.disabled = state.productsBulkApplying;
+    }
     if (productsBulkActionsSelectedCount) {
       productsBulkActionsSelectedCount.textContent = String(countSelectedProductsBulkActions());
     }
     if (productsBulkApplyBtn) {
-      productsBulkApplyBtn.disabled = state.productsBulkApplying || countSelectedProductsBulkActions() === 0 || state.selectedProductIds.size === 0;
+      const hasAnyAction = Object.values(state.productsBulkActions || {}).some(Boolean) || hasValidProductsBulkCategoryAction();
+      productsBulkApplyBtn.disabled = state.productsBulkApplying || !hasAnyAction || state.selectedProductIds.size === 0;
     }
     if (productsBulkCancelBtn) {
       productsBulkCancelBtn.disabled = state.productsBulkApplying;
     }
     if (productsBulkMenuToggleBtn) {
       productsBulkMenuToggleBtn.disabled = state.productsBulkApplying;
+    }
+    if (productsBulkCategoryMode) {
+      productsBulkCategoryMode.disabled = state.productsBulkApplying;
     }
   }
 
@@ -5318,6 +5408,50 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (actions.fulfillment_stock) payload.fulfillment_mode = "stock";
     if (actions.fulfillment_made_to_order) payload.fulfillment_mode = "made_to_order";
     return payload;
+  }
+
+  function getBulkCategoryObjectsByIds(categoryIds) {
+    return (Array.isArray(categoryIds) ? categoryIds : [])
+      .map((id) => state.categories.find((item) => Number(item?.id) === Number(id)) || { id: Number(id) })
+      .filter((item) => Number.isFinite(Number(item?.id)) && Number(item.id) > 0);
+  }
+
+  async function getProductCategoryIdsForBulk(productId) {
+    const id = Number(productId || 0);
+    if (!(id > 0)) return [];
+    const cachedDetails = getCachedProductDetails(id);
+    if (Array.isArray(cachedDetails?.categories) && cachedDetails.categories.length) {
+      return cachedDetails.categories
+        .map((category) => Number(category?.id ?? category))
+        .filter((categoryId) => Number.isFinite(categoryId) && categoryId > 0);
+    }
+    const res = await api(`/api/prod_products/${id}/categories?tenant_id=${TENANT_ID}`);
+    return (Array.isArray(res?.data) ? res.data : [])
+      .map((category) => Number(category?.id ?? category))
+      .filter((categoryId) => Number.isFinite(categoryId) && categoryId > 0);
+  }
+
+  function buildBulkCategoryIds(mode, currentCategoryIds) {
+    const selectedIds = Array.from(state.productsBulkCategory?.selectedCategoryIds || [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    const allCategoryId = Number(state.allCategoryId || 0);
+    const filteredSelectedIds = selectedIds.filter((id) => id !== allCategoryId);
+    const currentIds = Array.from(new Set((Array.isArray(currentCategoryIds) ? currentCategoryIds : [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)));
+    if (mode === "add") {
+      return Array.from(new Set([...currentIds, ...filteredSelectedIds]));
+    }
+    if (mode === "remove") {
+      const removeSet = new Set(filteredSelectedIds);
+      return currentIds.filter((id) => !removeSet.has(id));
+    }
+    if (mode === "replace") {
+      const keptIds = currentIds.filter((id) => allCategoryId > 0 && id === allCategoryId);
+      return Array.from(new Set([...keptIds, ...filteredSelectedIds]));
+    }
+    return currentIds;
   }
 
   function applyProductsBulkPayloadToLocalProduct(product, payload) {
@@ -5368,15 +5502,219 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     syncProductsBulkActionsUi();
   }
 
+  function updateProductsBulkCategoryLocalState(productId, categoryIds) {
+    const id = Number(productId || 0);
+    if (!(id > 0)) return;
+    const categoryObjects = getBulkCategoryObjectsByIds(categoryIds);
+    const product = state.products.find((item) => Number(item?.id) === id);
+    if (product) product.category_ids = categoryIds.slice();
+    const cached = getCachedProductDetails(id);
+    setCachedProductDetails(id, {
+      product: cached?.product || product || { id },
+      categories: categoryObjects,
+      optionAssignments: cached?.optionAssignments || [],
+      ingredients: cached?.ingredients || null,
+    });
+    clearCachedProductView(id);
+    if (Number(state.selectedProductId || 0) === id) {
+      state.selectedProductCategories = categoryObjects;
+    }
+  }
+
+  let productsBulkCategoryPickerSelection = null;
+  let productsBulkCategoryPickerSavedFooterState = null;
+
+  function closeProductsBulkCategoryPickerOverlay() {
+    productsBulkCategoryPickerSelection = null;
+    const productInfoPanel = $("#productInfoPanel");
+    if (productInfoPanel) {
+      const existingPicker = productInfoPanel.querySelector("#productsBulkCategoryPickerOverlay");
+      if (existingPicker) existingPicker.remove();
+    }
+    const cancelBtn = $("#productFooterCancelBtn");
+    const saveBtn = $("#productFooterSaveBtn");
+    if (cancelBtn) delete cancelBtn.dataset.pickerType;
+    if (saveBtn) delete saveBtn.dataset.pickerType;
+    delete window._closeCategoryPickerFn;
+    delete window._saveCategoryPickerFn;
+    if (state.productsBulkCategory) state.productsBulkCategory.pickerOpen = false;
+
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const deleteBtn = $("#productFooterDeleteEditBtn");
+    const moreBtn = $("#productFooterMoreEditBtn");
+    if (footer && footerView && footerEditMode && cancelBtn && saveBtn && productsBulkCategoryPickerSavedFooterState) {
+      footer.classList.toggle("hidden", !!productsBulkCategoryPickerSavedFooterState.footerHidden);
+      footerView.classList.toggle("hidden", !!productsBulkCategoryPickerSavedFooterState.viewHidden);
+      footerEditMode.classList.toggle("hidden", !!productsBulkCategoryPickerSavedFooterState.editHidden);
+      if (deleteBtn) deleteBtn.classList.toggle("hidden", !!productsBulkCategoryPickerSavedFooterState.deleteBtnHidden);
+      if (moreBtn) moreBtn.classList.toggle("hidden", !!productsBulkCategoryPickerSavedFooterState.moreBtnHidden);
+      cancelBtn.classList.remove("is-fullwidth");
+      cancelBtn.classList.toggle("is-confirm", !!productsBulkCategoryPickerSavedFooterState.cancelBtnIsConfirm);
+      if (cancelBtn.dataset.pickerOriginalHtml) {
+        cancelBtn.innerHTML = cancelBtn.dataset.pickerOriginalHtml;
+        delete cancelBtn.dataset.pickerOriginalHtml;
+      }
+      cancelBtn.title = "";
+      cancelBtn.setAttribute("aria-label", "");
+    }
+    productsBulkCategoryPickerSavedFooterState = null;
+    syncProductsBulkActionsUi();
+  }
+
+  function renderProductsBulkCategoryPickerList(searchInput, listContent) {
+    if (!listContent) return;
+    const query = String(searchInput?.value || "").trim().toLowerCase();
+    const allCategories = state.categories
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+    const childrenByParent = new Map();
+    allCategories.forEach((category) => {
+      const parentId = Number(category.parent_id || 0);
+      if (!(parentId > 0)) return;
+      if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+      childrenByParent.get(parentId).push(category);
+    });
+    const rows = [];
+    allCategories.filter((category) => category.parent_id == null).forEach((parent) => {
+      const parentId = Number(parent.id);
+      const children = childrenByParent.get(parentId) || [];
+      const parentMatches = !query || String(parent.title || "").toLowerCase().includes(query);
+      const matchingChildren = children.filter((child) => !query || String(child.title || "").toLowerCase().includes(query));
+      if (!parentMatches && !matchingChildren.length) return;
+      rows.push({ category: parent, level: 0, hasChildren: children.length > 0 });
+      (query ? matchingChildren : children).forEach((child) => rows.push({ category: child, level: 1, hasChildren: false }));
+    });
+
+    listContent.innerHTML = rows.map(({ category, level, hasChildren }) => {
+      const id = Number(category.id);
+      const isAll = category.code === "all";
+      const checked = productsBulkCategoryPickerSelection?.has(id);
+      const iconHtml = renderCategoryIcon(category.icon, "category-picker-icon");
+      const chevronHtml = hasChildren ? '<span class="category-picker-chevron is-expanded"><i class="fas fa-chevron-right"></i></span>' : "";
+      return `
+        <div class="option-picker-row category-picker-row ${checked ? "is-selected" : ""} ${isAll ? "is-disabled" : ""} ${level ? "is-child" : ""}" data-cat-id="${id}" data-cat-level="${level}" ${isAll ? 'data-disabled="true"' : ''}>
+          ${iconHtml}
+          <div class="option-picker-meta">
+            <div class="options-row-title">${escapeHtml(category.title || "")}</div>
+          </div>
+          ${chevronHtml}
+        </div>
+      `;
+    }).join("");
+
+    listContent.querySelectorAll(".option-picker-row[data-cat-id]").forEach((row) => {
+      row.addEventListener("click", () => {
+        if (row.dataset.disabled === "true") return;
+        const id = Number(row.dataset.catId);
+        if (!Number.isFinite(id)) return;
+        if (!(productsBulkCategoryPickerSelection instanceof Set)) productsBulkCategoryPickerSelection = new Set();
+        if (productsBulkCategoryPickerSelection.has(id)) {
+          productsBulkCategoryPickerSelection.delete(id);
+          state.categories
+            .filter((item) => Number(item.parent_id) === id)
+            .forEach((item) => productsBulkCategoryPickerSelection.delete(Number(item.id)));
+        } else {
+          productsBulkCategoryPickerSelection.add(id);
+          const category = state.categories.find((item) => Number(item.id) === id);
+          const parentId = Number(category?.parent_id || 0);
+          if (parentId > 0) productsBulkCategoryPickerSelection.add(parentId);
+        }
+        renderProductsBulkCategoryPickerList(searchInput, listContent);
+      });
+    });
+  }
+
+  function openProductsBulkCategoryPickerOverlay() {
+    const productInfoPanel = $("#productInfoPanel");
+    if (!productInfoPanel) return false;
+    productsBulkCategoryPickerSelection = new Set(state.productsBulkCategory?.selectedCategoryIds || []);
+    const existingPicker = productInfoPanel.querySelector(".picker-overlay");
+    if (existingPicker) existingPicker.remove();
+
+    const pickerOverlay = document.createElement("div");
+    pickerOverlay.className = "picker-overlay";
+    pickerOverlay.id = "productsBulkCategoryPickerOverlay";
+    const pickerContent = document.createElement("div");
+    pickerContent.className = "picker-overlay-content";
+    pickerContent.innerHTML = `
+      <div class="picker-overlay-header">
+        <div class="panel-title">Категории</div>
+      </div>
+      <div class="picker-overlay-body">
+        <div class="info-card">
+          <div class="option-picker-search" style="margin-bottom: 16px;">
+            <input class="control" id="productsBulkCategoryPickerSearch" type="search" placeholder="Поиск по названию" />
+          </div>
+          <div class="option-picker-list" id="productsBulkCategoryPickerList"></div>
+        </div>
+      </div>
+    `;
+    pickerOverlay.appendChild(pickerContent);
+    productInfoPanel.appendChild(pickerOverlay);
+
+    const searchInput = pickerContent.querySelector("#productsBulkCategoryPickerSearch");
+    const listContent = pickerContent.querySelector("#productsBulkCategoryPickerList");
+    if (searchInput) searchInput.addEventListener("input", () => renderProductsBulkCategoryPickerList(searchInput, listContent));
+    renderProductsBulkCategoryPickerList(searchInput, listContent);
+
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const cancelBtn = $("#productFooterCancelBtn");
+    const saveBtn = $("#productFooterSaveBtn");
+    const deleteBtn = $("#productFooterDeleteEditBtn");
+    const moreBtn = $("#productFooterMoreEditBtn");
+    if (footer && footerView && footerEditMode && cancelBtn && saveBtn) {
+      productsBulkCategoryPickerSavedFooterState = {
+        footerHidden: footer.classList.contains("hidden"),
+        viewHidden: footerView.classList.contains("hidden"),
+        editHidden: footerEditMode.classList.contains("hidden"),
+        deleteBtnHidden: deleteBtn ? deleteBtn.classList.contains("hidden") : false,
+        moreBtnHidden: moreBtn ? moreBtn.classList.contains("hidden") : false,
+        cancelBtnIsConfirm: cancelBtn.classList.contains("is-confirm"),
+      };
+      footer.classList.remove("hidden");
+      footerView.classList.add("hidden");
+      footerEditMode.classList.remove("hidden");
+      if (deleteBtn) deleteBtn.classList.add("hidden");
+      if (moreBtn) moreBtn.classList.add("hidden");
+      cancelBtn.classList.remove("is-confirm");
+      cancelBtn.classList.add("is-fullwidth");
+      if (!cancelBtn.dataset.pickerOriginalHtml) cancelBtn.dataset.pickerOriginalHtml = cancelBtn.innerHTML;
+      cancelBtn.textContent = "Отменить";
+      cancelBtn.title = "Отменить";
+      cancelBtn.setAttribute("aria-label", "Отменить");
+      cancelBtn.dataset.pickerType = "category";
+      saveBtn.dataset.pickerType = "category";
+    }
+    window._closeCategoryPickerFn = closeProductsBulkCategoryPickerOverlay;
+    window._saveCategoryPickerFn = async () => {
+      state.productsBulkCategory.selectedCategoryIds = new Set(productsBulkCategoryPickerSelection || []);
+      closeProductsBulkCategoryPickerOverlay();
+    };
+    state.productsBulkCategory.pickerOpen = true;
+    syncProductsBulkActionsUi();
+    return true;
+  }
+
+  function openProductsBulkCategoryPicker() {
+    if (!hasProductsBulkCategoryModeSelected()) return;
+    openProductsBulkCategoryPickerOverlay();
+  }
+
   function clearProductsBulkSelection() {
     if (!state.selectedProductIds.size) {
       resetProductsBulkActions();
+      resetProductsBulkCategoryAction();
       closeProductsBulkMenu();
       syncProductsBulkFooter();
       return;
     }
     state.selectedProductIds.clear();
     resetProductsBulkActions();
+    resetProductsBulkCategoryAction();
     closeProductsBulkMenu();
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
@@ -5396,6 +5734,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     }
     if (state.selectedProductIds.size === 0) {
       resetProductsBulkActions();
+      resetProductsBulkCategoryAction();
       closeProductsBulkMenu();
     }
     syncProductRowSelectionUI(productsList);
@@ -5418,6 +5757,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     });
     if (state.selectedProductIds.size === 0) {
       resetProductsBulkActions();
+      resetProductsBulkCategoryAction();
       closeProductsBulkMenu();
     }
     syncProductRowSelectionUI(productsList);
@@ -14817,11 +15157,17 @@ const isViewMode = state.comboPanel.mode === "view";
     syncNutritionKcalInput();
     syncNutritionWarning();
 
-    function openCatPicker() {
-      if (isView) return;
+    function openCatPicker(options = {}) {
+      const pickerContext = String(options?.context || "product");
+      const isBulkPicker = pickerContext === "bulk";
+      if (isView && !isBulkPicker) return;
       
-      // Initialize selection from current draft
-      categoryPickerSelection = new Set(draft.categories);
+      // Initialize selection from current context
+      categoryPickerSelection = new Set(
+        options?.initialSelection instanceof Set
+          ? Array.from(options.initialSelection)
+          : Array.from(draft.categories)
+      );
       
       // Create category picker overlay for right panel
       const pickerOverlay = document.createElement("div");
@@ -15000,19 +15346,22 @@ const isViewMode = state.comboPanel.mode === "view";
           cancelBtn.dataset.pickerType = "category";
           saveBtn.dataset.pickerType = "category";
           window._closeCategoryPickerFn = () => {
-            closeCatPicker();
+            closeCatPicker(options);
           };
           window._saveCategoryPickerFn = async () => {
-            // Update draft with new selection
-            draft.categories = new Set(categoryPickerSelection || []);
-            renderCategoryChips();
-            closeCatPicker();
+            if (typeof options?.onSave === "function") {
+              await options.onSave(new Set(categoryPickerSelection || []));
+            } else {
+              draft.categories = new Set(categoryPickerSelection || []);
+              renderCategoryChips();
+            }
+            closeCatPicker(options);
           };
         }
       }
     }
 
-    function closeCatPicker() {
+    function closeCatPicker(options = {}) {
       categoryPickerSelection = null;
       
       // Remove picker overlay
@@ -15031,6 +15380,7 @@ const isViewMode = state.comboPanel.mode === "view";
       if (saveBtn) delete saveBtn.dataset.pickerType;
       delete window._closeCategoryPickerFn;
       delete window._saveCategoryPickerFn;
+      delete window._openCategoryPickerFn;
       
       // Restore footer to original state
       const footer = $("#productInfoFooter");
@@ -15085,7 +15435,14 @@ const isViewMode = state.comboPanel.mode === "view";
       
       categoryPickerSavedFooterState = null;
       categoryPickerSavedHandlers = null;
+      if (typeof options?.onClose === "function") {
+        options.onClose();
+      }
     }
+
+    window._openCategoryPickerFn = (options = {}) => {
+      openCatPicker(options);
+    };
 
     function renderCategoryChips() {
       const selected = Array.from(draft.categories)
@@ -20653,8 +21010,56 @@ const isViewMode = state.comboPanel.mode === "view";
       productsBulkCancelBtn.addEventListener("click", () => {
         if (state.productsBulkApplying) return;
         resetProductsBulkActions();
+        resetProductsBulkCategoryAction();
         closeProductsBulkMenu();
         syncProductsBulkFooter();
+      });
+    }
+
+    if (productsBulkCategoryMode) {
+      productsBulkCategoryMode.addEventListener("change", () => {
+        setProductsBulkCategoryMode(productsBulkCategoryMode.value);
+      });
+    }
+
+    if (productsBulkCategoryTrigger) {
+      productsBulkCategoryTrigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (state.productsBulkApplying) return;
+        const isOpen = productsBulkCategorySelectWrap?.classList.contains("is-open");
+        if (isOpen) {
+          closeProductsBulkCategoryMenu();
+        } else {
+          closeProductsBulkMenu();
+          if (productsBulkCategoryMenu) productsBulkCategoryMenu.classList.remove("hidden");
+          if (productsBulkCategorySelectWrap) productsBulkCategorySelectWrap.classList.add("is-open");
+          productsBulkCategoryTrigger.setAttribute("aria-expanded", "true");
+        }
+      });
+    }
+
+    if (productsBulkCategoryMenu) {
+      productsBulkCategoryMenu.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const option = event.target.closest("[data-bulk-category-mode]");
+        if (!option) return;
+        setProductsBulkCategoryMode(option.dataset.bulkCategoryMode || "none");
+      });
+    }
+
+    document.addEventListener("click", (event) => {
+      if (productsBulkCategorySelectWrap && !productsBulkCategorySelectWrap.contains(event.target)) {
+        closeProductsBulkCategoryMenu();
+      }
+    });
+
+    if (productsBulkCategoryPickerBtn) {
+      productsBulkCategoryPickerBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (state.productsBulkApplying) return;
+        openProductsBulkCategoryPicker();
       });
     }
 
@@ -20662,13 +21067,16 @@ const isViewMode = state.comboPanel.mode === "view";
       productsBulkApplyBtn.addEventListener("click", async () => {
         if (state.productsBulkApplying) return;
         const payload = buildProductsBulkPayload();
-        if (!Object.keys(payload).length) return;
+        const categoryMode = String(state.productsBulkCategory?.mode || "none");
+        const hasBulkCategoryAction = hasValidProductsBulkCategoryAction();
+        if (!Object.keys(payload).length && !hasBulkCategoryAction) return;
         const ids = Array.from(state.selectedProductIds).map((id) => Number(id)).filter(Number.isFinite);
         if (!ids.length) return;
         state.productsBulkApplying = true;
         syncProductsBulkActionsUi();
         const skippedNoIngredients = [];
         const failedNames = [];
+        let activeProductNeedsRefresh = false;
         try {
           for (const id of ids) {
             const product = state.products.find((item) => Number(item?.id) === id);
@@ -20676,9 +21084,10 @@ const isViewMode = state.comboPanel.mode === "view";
               failedNames.push(String(id));
               continue;
             }
+            const itemPayload = { ...payload };
 
             if (
-              normalizeProductFulfillmentMode(payload.fulfillment_mode) === "made_to_order" &&
+              normalizeProductFulfillmentMode(itemPayload.fulfillment_mode) === "made_to_order" &&
               normalizeProductFulfillmentMode(product.fulfillment_mode) !== "made_to_order"
             ) {
               try {
@@ -20694,23 +21103,47 @@ const isViewMode = state.comboPanel.mode === "view";
               }
             }
 
+            if (hasBulkCategoryAction) {
+              let nextCategoryIds = null;
+              try {
+                const currentCategoryIds = await getProductCategoryIdsForBulk(id);
+                nextCategoryIds = buildBulkCategoryIds(categoryMode, currentCategoryIds);
+                const currentKey = currentCategoryIds.slice().sort((a, b) => a - b).join(",");
+                const nextKey = nextCategoryIds.slice().sort((a, b) => a - b).join(",");
+                if (currentKey !== nextKey) itemPayload.category_ids = nextCategoryIds;
+              } catch (e) {
+                failedNames.push(product.name || String(id));
+                continue;
+              }
+            }
+
+            if (!Object.keys(itemPayload).length) continue;
+
             try {
               await api(`/api/prod_products/${id}`, {
                 method: "PATCH",
-                body: JSON.stringify(payload),
+                body: JSON.stringify(itemPayload),
               });
             } catch (e) {
               failedNames.push(product.name || String(id));
               continue;
             }
 
-            applyProductsBulkPayloadToLocalProduct(product, payload);
-            syncProductRowAfterBulkPayload(product, payload);
-            if (Object.prototype.hasOwnProperty.call(payload, "fulfillment_mode")) {
-              syncProductEditorFulfillmentControl(id, payload.fulfillment_mode);
+            applyProductsBulkPayloadToLocalProduct(product, itemPayload);
+            if (Object.prototype.hasOwnProperty.call(itemPayload, "fulfillment_mode")) {
+              syncProductEditorFulfillmentControl(id, itemPayload.fulfillment_mode);
               clearCachedProductDetails(id);
               clearCachedProductView(id);
             }
+            if (Object.prototype.hasOwnProperty.call(itemPayload, "category_ids")) {
+              updateProductsBulkCategoryLocalState(id, itemPayload.category_ids);
+              if (Number(state.selectedProductId || 0) === id) activeProductNeedsRefresh = true;
+            }
+            syncProductRowAfterBulkPayload(product, itemPayload);
+          }
+          if (activeProductNeedsRefresh && Number(state.selectedProductId || 0) > 0) {
+            const activeProduct = state.products.find((item) => Number(item?.id) === Number(state.selectedProductId));
+            if (activeProduct && typeof showProductDetails === "function") showProductDetails(activeProduct);
           }
           syncProductsListEmptyState();
           setCachedCategoryProducts(state.currentCategoryId, {
@@ -20729,6 +21162,7 @@ const isViewMode = state.comboPanel.mode === "view";
             showToast(`Не удалось применить действие к товару${suffix}`);
           }
           resetProductsBulkActions();
+          resetProductsBulkCategoryAction();
           closeProductsBulkMenu();
           syncProductsBulkFooter();
         } catch (e) {

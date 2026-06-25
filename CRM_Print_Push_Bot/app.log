@@ -1,0 +1,2264 @@
+2026-02-10 23:22:51,275 INFO Сервер печати запущен: polling https://markin-me.ru
+2026-02-10 23:23:28,549 INFO Задание 12 отправлено в печать
+2026-02-10 23:24:28,802 INFO Сервер печати остановлен
+2026-02-10 23:27:01,196 INFO Сервер печати запущен: polling https://markin-me.ru
+2026-02-10 23:27:16,170 INFO Задание 14 отправлено в печать
+2026-02-10 23:30:32,507 INFO Сервер печати остановлен
+2026-02-10 23:30:38,354 INFO Сервер печати запущен: polling https://markin-me.ru
+2026-02-10 23:30:48,497 INFO Задание 15 отправлено в печать
+2026-02-10 23:40:35,580 INFO Задание 16 отправлено в печать
+2026-02-10 23:40:46,869 INFO Сервер печати остановлен
+2026-02-11 19:46:26,753 INFO Сервер печати запущен: polling http://localhost:3000
+2026-02-11 19:46:29,700 INFO Задание 52 отправлено в печать
+2026-02-11 19:46:32,182 INFO Задание 53 отправлено в печать
+2026-02-11 19:46:35,017 INFO Задание 54 отправлено в печать
+2026-02-11 19:46:37,408 INFO Задание 55 отправлено в печать
+2026-02-11 19:54:48,047 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-11 19:54:48,049 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1348, in do_open
+    h.request(req.get_method(), req.selector, req.data, headers,
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1282, in request
+    self._send_request(method, url, body, headers, encode_chunked)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1328, in _send_request
+    self.endheaders(body, encode_chunked=encode_chunked)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1277, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1037, in _send_output
+    self.send(msg)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 975, in send
+    self.connect()
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 941, in connect
+    self.sock = self._create_connection(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 850, in create_connection
+    raise exceptions[0]
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 835, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 519, in open
+    response = self._open(req, data)
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 536, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1377, in http_open
+    return self.do_open(http.client.HTTPConnection, req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1351, in do_open
+    raise URLError(err)
+urllib.error.URLError: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-02-11 19:54:54,123 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1348, in do_open
+    h.request(req.get_method(), req.selector, req.data, headers,
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1282, in request
+    self._send_request(method, url, body, headers, encode_chunked)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1328, in _send_request
+    self.endheaders(body, encode_chunked=encode_chunked)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1277, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1037, in _send_output
+    self.send(msg)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 975, in send
+    self.connect()
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 941, in connect
+    self.sock = self._create_connection(
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 850, in create_connection
+    raise exceptions[0]
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 835, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 519, in open
+    response = self._open(req, data)
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 536, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1377, in http_open
+    return self.do_open(http.client.HTTPConnection, req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1351, in do_open
+    raise URLError(err)
+urllib.error.URLError: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-02-11 20:04:15,202 INFO Задание 56 отправлено в печать
+2026-02-11 20:28:44,755 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 519, in open
+    response = self._open(req, data)
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 536, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1377, in http_open
+    return self.do_open(http.client.HTTPConnection, req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1352, in do_open
+    r = h.getresponse()
+        ^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1374, in getresponse
+    response.begin()
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 318, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 279, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 705, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: timed out
+2026-02-11 20:28:48,848 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-12 10:25:13,769 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:14,915 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-12 10:25:16,261 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:18,309 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:20,327 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:22,851 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:24,873 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:26,916 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:34,932 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-12 10:25:34,938 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:36,976 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:45,017 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:47,019 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:49,042 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:51,046 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-12 10:25:51,046 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:53,070 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:55,079 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:57,095 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:25:59,133 ERROR Ошибка запроса к CRM (/api/print/jobs/next)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 824, in _poll_loop
+    job = self._fetch_next_job(token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 885, in _fetch_next_job
+    with urllib.request.urlopen(req, timeout=6) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 525, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 634, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 563, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+2026-02-12 10:50:40,377 INFO Сервер печати остановлен
+2026-02-12 15:20:40,063 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-12 15:20:56,103 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-12 15:21:22,204 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-12 15:21:42,224 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-12 15:21:58,226 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-12 15:22:24,252 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-12 15:22:44,283 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-12 15:23:04,398 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-12 15:23:30,434 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-12 15:23:56,468 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-02-12 15:24:16,484 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-12 17:35:34,536 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-12 18:14:04,107 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-15 10:25:08,719 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-15 10:25:28,799 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-15 10:25:45,708 WARNING Heartbeat отклонен CRM: HTTP 500 (http://localhost:3000/api/print/agent/heartbeat)
+2026-02-25 13:17:29,247 INFO Сервер печати запущен: polling http://localhost:3000
+2026-02-25 13:17:32,764 INFO Задание 39 отправлено в печать
+2026-02-25 13:17:35,557 INFO Задание 40 отправлено в печать
+2026-02-25 13:17:36,184 INFO Повторная задача public_id:0f7f8bc6-4cd0-43d3-9f58-4f280b62f3b1 - печать пропущена
+2026-02-25 13:17:38,823 INFO Задание 57 отправлено в печать
+2026-02-25 13:17:41,184 INFO Задание 65 отправлено в печать
+2026-02-25 13:17:43,532 INFO Задание 66 отправлено в печать
+2026-02-25 13:17:45,791 INFO Задание 67 отправлено в печать
+2026-02-25 13:18:46,102 INFO Задание 68 отправлено в печать
+2026-02-25 13:20:25,664 INFO Задание 69 отправлено в печать
+2026-02-25 20:35:39,911 INFO Сервер печати запущен: polling https://markin-me.ru
+2026-02-25 20:37:02,971 INFO Задание 125 отправлено в печать
+2026-02-25 20:38:28,249 INFO Задание 124 отправлено в печать
+2026-02-25 20:42:37,581 INFO Сервер печати запущен: polling https://markin-me.ru
+2026-02-25 20:46:24,584 INFO Задание 123 отправлено в печать
+2026-02-25 20:49:12,786 INFO Задание 127 отправлено в печать
+2026-02-25 20:49:31,121 INFO Сервер печати остановлен
+2026-03-24 12:41:14,722 WARNING Heartbeat отклонен CRM: HTTP 403 (https://markin-me.ru/api/print/agent/heartbeat)
+2026-03-24 16:38:16,044 WARNING Heartbeat отклонен CRM: HTTP 403 (https://markin-me.ru/api/print/agent/heartbeat)
+2026-03-24 17:25:16,531 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 17:25:34,968 ERROR Ошибка печати задания 70
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:25:53,311 ERROR Ошибка печати задания 70
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:26:12,007 ERROR Ошибка печати задания 70
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:26:23,297 ERROR Ошибка печати задания 70
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:27:06,407 ERROR Ошибка печати задания 70
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:27:20,835 ERROR Ошибка печати задания 71
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:27:33,897 ERROR Ошибка печати задания 71
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:27:48,612 ERROR Ошибка печати задания 71
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:28:00,325 ERROR Ошибка печати задания 71
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:28:14,845 ERROR Ошибка печати задания 71
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1152, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-24 17:36:20,657 INFO Сервер печати остановлен
+2026-03-24 17:37:12,293 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 17:41:58,388 INFO Сервер печати остановлен
+2026-03-24 17:42:00,705 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 17:42:11,429 INFO Сервер печати остановлен
+2026-03-24 17:43:49,341 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 17:44:50,628 INFO Сервер печати остановлен
+2026-03-24 17:45:05,861 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 17:48:16,789 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-03-24 17:48:32,559 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 17:51:11,545 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-03-24 17:51:12,477 WARNING Ошибка запроса к CRM (/api/print/messages/next): <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-03-24 17:51:49,450 INFO Сервер печати остановлен
+2026-03-24 17:51:50,538 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 18:01:23,698 INFO Сервер печати остановлен
+2026-03-24 18:01:55,369 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 18:02:07,613 WARNING Ошибка запроса к CRM (/api/print/messages/next): <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-03-24 18:06:44,493 WARNING Heartbeat не отправлен: http://localhost:3000/api/print/agent/heartbeat
+2026-03-24 18:27:13,157 INFO Сервер печати остановлен
+2026-03-24 18:36:32,886 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 18:38:00,604 INFO Сервер печати остановлен
+2026-03-24 18:38:14,340 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 18:44:21,155 INFO Сервер печати остановлен
+2026-03-24 18:44:37,241 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-24 18:49:36,160 INFO Задание 72 отправлено в печать
+2026-03-24 19:08:10,859 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-24 19:08:13,285 INFO Связь с CRM восстановлена
+2026-03-24 19:08:21,387 INFO Повторная задача public_id:3c961f27-7238-4d63-a8f7-ed05b3bf436e - печать пропущена
+2026-03-24 19:09:55,659 INFO Задание 74 отправлено в печать
+2026-03-24 19:13:06,288 INFO Задание 75 отправлено в печать
+2026-03-24 19:13:19,147 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-24 19:13:21,680 INFO Связь с CRM восстановлена
+2026-03-24 19:14:18,290 INFO Задание 76 отправлено в печать
+2026-03-24 19:17:29,599 INFO Задание 77 отправлено в печать
+2026-03-24 19:23:30,715 INFO Задание 78 отправлено в печать
+2026-03-24 19:29:59,464 INFO Задание 79 отправлено в печать
+2026-03-24 19:31:24,331 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-24 19:31:26,590 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-03-24 19:31:30,043 INFO Связь с CRM восстановлена
+2026-03-24 19:32:50,620 INFO Задание 80 отправлено в печать
+2026-03-24 19:37:49,309 INFO Задание 81 отправлено в печать
+2026-03-24 20:04:27,589 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-24 20:04:30,074 INFO Связь с CRM восстановлена
+2026-03-24 20:05:57,496 ERROR Ошибка печати задания 82
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 503, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B (копия 3)' сейчас недоступен (offline)
+2026-03-24 20:06:06,565 ERROR Ошибка печати задания 82
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 503, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B (копия 3)' сейчас недоступен (offline)
+2026-03-24 20:06:14,704 ERROR Ошибка печати задания 82
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 503, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B (копия 3)' сейчас недоступен (offline)
+2026-03-24 20:06:22,500 ERROR Ошибка печати задания 82
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 503, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B (копия 3)' сейчас недоступен (offline)
+2026-03-24 20:06:32,070 ERROR Ошибка печати задания 82
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 503, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B (копия 3)' сейчас недоступен (offline)
+2026-03-24 20:06:45,247 INFO Сервер печати остановлен
+2026-03-25 13:13:56,199 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-25 13:14:32,462 ERROR Ошибка печати задания 84
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-25 13:14:50,031 ERROR Ошибка печати задания 84
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-25 13:15:17,905 ERROR Ошибка печати задания 84
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-25 14:47:54,068 ERROR Ошибка печати задания 84
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1249, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 454, in print_pdf_bytes
+    self._print_images(images, job_name)
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 548, in _print_images
+    raise RuntimeError(
+RuntimeError: Ошибка печати на 'Microsoft Print to PDF': StartDoc failed. Проверьте доступ к принтеру, службу 'Диспетчер печати' и драйвер принтера.
+2026-03-25 14:47:56,195 INFO Сервер печати остановлен
+2026-03-25 17:15:21,065 INFO Сервер печати запущен: polling http://localhost:3000
+2026-03-25 17:15:29,483 INFO Звук заказа пропущен по стартовому курсору: job_id=84 <= startup_cursor=84
+2026-03-25 17:15:31,400 INFO Задание 84 отправлено в печать
+2026-03-25 17:20:27,193 INFO Звук заказа пропущен по стартовому курсору: job_id=83 <= startup_cursor=84
+2026-03-25 17:20:29,050 INFO Задание 83 отправлено в печать
+2026-03-25 17:36:35,393 INFO Задание 85 отправлено в печать
+2026-03-25 20:04:51,764 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:04:53,870 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:04:55,974 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:04:58,078 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:00,184 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:02,541 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-25 20:05:02,645 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:04,855 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:07,138 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:09,354 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:11,581 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:13,802 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:16,024 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:18,239 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:20,469 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:22,684 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:24,903 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:27,115 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:27,116 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-03-25 20:05:30,833 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:33,050 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:35,264 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:37,476 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:39,711 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:41,951 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:44,169 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:46,382 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:48,594 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:50,809 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:53,024 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:55,239 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:05:55,239 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-03-25 20:05:58,965 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:01,225 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:03,475 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:05,737 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:07,962 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:10,175 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:12,412 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:14,629 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:16,840 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:19,054 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:21,268 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:23,497 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:23,498 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-03-25 20:06:27,209 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:29,424 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:31,639 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:33,853 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:36,191 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:38,408 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:40,642 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:42,862 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:45,081 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:47,294 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:49,600 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:51,818 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:51,819 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-03-25 20:06:55,538 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:06:57,794 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:00,029 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:02,283 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:04,508 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:06,720 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:09,035 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:11,250 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:13,510 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:15,770 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:17,983 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:20,299 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:20,300 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-03-25 20:07:24,014 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:26,315 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:28,603 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:30,831 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:33,161 WARNING Ключ API отклонен CRM: HTTP 403
+2026-03-25 20:07:36,508 INFO Связь с CRM восстановлена
+2026-03-25 20:28:55,806 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-25 20:29:12,061 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): timed out
+2026-03-25 20:29:15,264 INFO Связь с CRM восстановлена
+2026-03-26 10:27:44,365 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 10:27:53,430 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-26 10:28:31,618 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): timed out
+2026-03-26 10:28:57,894 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): timed out
+2026-03-26 10:29:13,768 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 10:29:45,336 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 10:29:45,337 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-03-26 10:30:03,415 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 10:30:23,695 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 10:30:40,269 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 10:31:00,552 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 10:31:16,629 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 10:31:22,700 INFO Связь с CRM восстановлена
+2026-03-26 13:43:55,182 WARNING CRM /api/print/poll вернул HTTP 500
+2026-03-26 13:44:04,245 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-26 13:44:07,553 INFO Связь с CRM восстановлена
+2026-03-26 13:44:12,126 INFO Задание 86 отправлено в печать
+2026-03-26 13:44:22,013 INFO Задание 87 отправлено в печать
+2026-03-26 14:42:08,537 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-30 11:18:57,398 INFO Сервер печати запущен: polling https://posham.ru
+2026-03-30 11:19:44,612 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:19:45,198 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:19:46,431 INFO Задание 108 отправлено в печать
+2026-03-30 11:23:52,696 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:23:52,805 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:23:53,974 INFO Задание 109 отправлено в печать
+2026-03-30 11:28:00,222 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:28:00,328 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:28:01,315 INFO Задание 110 отправлено в печать
+2026-03-30 11:29:17,810 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:29:17,914 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:29:19,102 INFO Задание 111 отправлено в печать
+2026-03-30 11:29:51,867 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:29:51,966 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:29:53,047 INFO Задание 112 отправлено в печать
+2026-03-30 11:31:04,866 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:31:04,970 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:31:05,959 INFO Задание 113 отправлено в печать
+2026-03-30 11:32:15,827 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:32:15,932 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:32:17,182 INFO Задание 114 отправлено в печать
+2026-03-30 11:33:26,572 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:33:26,673 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:33:27,716 INFO Задание 115 отправлено в печать
+2026-03-30 11:34:55,126 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:34:55,231 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:34:56,248 INFO Задание 116 отправлено в печать
+2026-03-30 11:37:18,356 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:37:18,463 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-03-30 11:37:19,556 INFO Задание 117 отправлено в печать
+2026-03-30 11:43:44,824 INFO Сервер печати остановлен
+2026-03-30 11:44:14,740 INFO Сервер печати запущен: polling https://posham.ru
+2026-03-30 11:44:32,618 INFO Сервер печати остановлен
+2026-03-30 13:00:52,114 INFO Сервер печати запущен: polling https://posham-admin.ru
+2026-03-30 13:05:41,112 INFO Сервер печати остановлен
+2026-03-30 13:05:43,710 INFO Сервер печати запущен: polling https://posham-admin.ru
+2026-03-30 13:18:46,125 INFO Сервер печати остановлен
+2026-03-30 13:19:42,847 INFO Сервер печати запущен: polling https://posham-admin.ru
+2026-03-30 13:21:06,486 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:07,360 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:07,742 ERROR Ошибка печати задания 629
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:21:14,562 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:14,673 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:15,147 ERROR Ошибка печати задания 629
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:21:21,080 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:21,195 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:21,543 ERROR Ошибка печати задания 629
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:21:27,843 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:27,965 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:28,346 ERROR Ошибка печати задания 629
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:21:34,277 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:34,389 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:21:34,856 ERROR Ошибка печати задания 629
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:22:15,089 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:15,204 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:15,719 ERROR Ошибка печати задания 630
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:22:21,931 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:22,062 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:22,427 ERROR Ошибка печати задания 630
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:22:27,812 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:27,931 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:28,438 ERROR Ошибка печати задания 630
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:22:33,770 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:33,882 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:34,377 ERROR Ошибка печати задания 630
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:22:39,830 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:40,047 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:22:40,411 ERROR Ошибка печати задания 630
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:31:54,768 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:31:54,890 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:31:55,445 ERROR Ошибка печати задания 631
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    try:
+    
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:32:05,325 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:32:05,438 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:32:05,868 ERROR Ошибка печати задания 631
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    try:
+    
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:32:17,598 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:32:17,714 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:32:18,147 ERROR Ошибка печати задания 631
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    try:
+    
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:32:24,529 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:32:24,741 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:32:25,155 ERROR Ошибка печати задания 631
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    try:
+    
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 13:32:30,777 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:32:31,012 INFO Звук нового заказа проигран: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 13:32:31,460 ERROR Ошибка печати задания 631
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1290, in _process_job
+    try:
+    
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 487, in print_pdf_bytes
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 536, in _print_images
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 14:02:35,550 INFO Сервер печати запущен: polling https://posham-admin.ru
+2026-03-30 14:02:38,990 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 14:02:38,991 INFO Звук нового заказа поставлен в очередь: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 14:02:39,389 ERROR Ошибка печати задания 633
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1319, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 502, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 551, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 14:02:44,276 INFO Звук заказа пропущен для повторной попытки печати: job_id=633, attempts=2
+2026-03-30 14:02:44,654 ERROR Ошибка печати задания 633
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1319, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 502, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 551, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 14:02:49,962 INFO Звук заказа пропущен для повторной попытки печати: job_id=633, attempts=3
+2026-03-30 14:02:50,334 ERROR Ошибка печати задания 633
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1319, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 502, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 551, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 14:02:55,537 INFO Звук заказа пропущен для повторной попытки печати: job_id=633, attempts=4
+2026-03-30 14:02:55,904 ERROR Ошибка печати задания 633
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1319, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 502, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 551, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 14:02:56,334 INFO Пробую проиграть звук нового сообщения: /static/uploads/tenants/1/sounds/e91161f1a733c497b7e53d1901689edb.mp3
+2026-03-30 14:02:56,946 INFO Звук нового сообщения поставлен в очередь: /static/uploads/tenants/1/sounds/e91161f1a733c497b7e53d1901689edb.mp3
+2026-03-30 14:03:01,412 INFO Звук заказа пропущен для повторной попытки печати: job_id=633, attempts=5
+2026-03-30 14:03:01,790 ERROR Ошибка печати задания 633
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1319, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 502, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 551, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-03-30 14:05:42,668 INFO Сервер печати остановлен
+2026-03-30 14:18:38,756 INFO Сервер печати запущен: polling https://posham-admin.ru
+2026-03-30 14:18:42,820 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 14:18:42,821 INFO Звук нового заказа поставлен в очередь: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 14:18:44,415 INFO Задание 634 отправлено в печать
+2026-03-30 14:18:52,470 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 14:18:52,470 INFO Звук нового заказа поставлен в очередь: /static/uploads/tenants/1/sounds/cfe1cb8ed153705cc442597ccf64a0a0.mp3
+2026-03-30 14:18:53,788 INFO Задание 635 отправлено в печать
+2026-03-30 14:20:43,237 INFO Сервер печати остановлен
+2026-03-30 16:06:44,954 INFO Сервер печати запущен: polling https://posham-admin.r
+2026-03-30 16:06:45,882 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-03-30 16:06:46,216 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-03-30 16:06:47,700 INFO Сервер печати остановлен
+2026-03-30 16:11:59,373 INFO Сервер печати запущен: polling https://posham-admin.ru
+2026-03-30 16:12:10,254 INFO Сервер печати остановлен
+2026-04-10 18:20:14,594 INFO Сервер печати запущен: polling https://posham.ru
+2026-04-10 18:20:18,891 INFO Звук заказа пропущен по стартовому курсору: job_id=129 <= startup_cursor=174
+2026-04-10 18:20:19,246 ERROR Ошибка печати задания 129
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:20:23,484 INFO Звук заказа пропущен по стартовому курсору: job_id=129 <= startup_cursor=174
+2026-04-10 18:20:23,813 ERROR Ошибка печати задания 129
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:20:28,586 INFO Звук заказа пропущен по стартовому курсору: job_id=129 <= startup_cursor=174
+2026-04-10 18:20:28,844 ERROR Ошибка печати задания 129
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:20:33,004 INFO Звук заказа пропущен по стартовому курсору: job_id=129 <= startup_cursor=174
+2026-04-10 18:20:33,279 ERROR Ошибка печати задания 129
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:20:39,046 INFO Звук заказа пропущен по стартовому курсору: job_id=129 <= startup_cursor=174
+2026-04-10 18:20:39,384 ERROR Ошибка печати задания 129
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:20:45,616 INFO Звук заказа пропущен по стартовому курсору: job_id=130 <= startup_cursor=174
+2026-04-10 18:20:45,919 ERROR Ошибка печати задания 130
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:20:50,364 INFO Звук заказа пропущен по стартовому курсору: job_id=130 <= startup_cursor=174
+2026-04-10 18:20:50,742 ERROR Ошибка печати задания 130
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:20:55,569 INFO Звук заказа пропущен по стартовому курсору: job_id=130 <= startup_cursor=174
+2026-04-10 18:20:55,861 ERROR Ошибка печати задания 130
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:00,950 INFO Звук заказа пропущен по стартовому курсору: job_id=130 <= startup_cursor=174
+2026-04-10 18:21:01,331 ERROR Ошибка печати задания 130
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:06,351 INFO Звук заказа пропущен по стартовому курсору: job_id=130 <= startup_cursor=174
+2026-04-10 18:21:06,636 ERROR Ошибка печати задания 130
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:10,689 INFO Звук заказа пропущен по стартовому курсору: job_id=131 <= startup_cursor=174
+2026-04-10 18:21:10,969 ERROR Ошибка печати задания 131
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:15,586 INFO Звук заказа пропущен по стартовому курсору: job_id=131 <= startup_cursor=174
+2026-04-10 18:21:15,870 ERROR Ошибка печати задания 131
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:22,055 INFO Звук заказа пропущен по стартовому курсору: job_id=131 <= startup_cursor=174
+2026-04-10 18:21:22,365 ERROR Ошибка печати задания 131
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:26,446 INFO Звук заказа пропущен по стартовому курсору: job_id=131 <= startup_cursor=174
+2026-04-10 18:21:26,737 ERROR Ошибка печати задания 131
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:31,324 INFO Звук заказа пропущен по стартовому курсору: job_id=131 <= startup_cursor=174
+2026-04-10 18:21:31,588 ERROR Ошибка печати задания 131
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:35,829 INFO Звук заказа пропущен по стартовому курсору: job_id=132 <= startup_cursor=174
+2026-04-10 18:21:36,140 ERROR Ошибка печати задания 132
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:40,553 INFO Звук заказа пропущен по стартовому курсору: job_id=132 <= startup_cursor=174
+2026-04-10 18:21:41,003 ERROR Ошибка печати задания 132
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:45,863 INFO Звук заказа пропущен по стартовому курсору: job_id=132 <= startup_cursor=174
+2026-04-10 18:21:46,217 ERROR Ошибка печати задания 132
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:50,434 INFO Звук заказа пропущен по стартовому курсору: job_id=132 <= startup_cursor=174
+2026-04-10 18:21:50,716 ERROR Ошибка печати задания 132
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:21:55,133 INFO Звук заказа пропущен по стартовому курсору: job_id=132 <= startup_cursor=174
+2026-04-10 18:21:55,449 ERROR Ошибка печати задания 132
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:01,765 INFO Звук заказа пропущен по стартовому курсору: job_id=133 <= startup_cursor=174
+2026-04-10 18:22:02,119 ERROR Ошибка печати задания 133
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:06,720 INFO Звук заказа пропущен по стартовому курсору: job_id=133 <= startup_cursor=174
+2026-04-10 18:22:07,034 ERROR Ошибка печати задания 133
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:11,790 INFO Звук заказа пропущен по стартовому курсору: job_id=133 <= startup_cursor=174
+2026-04-10 18:22:12,155 ERROR Ошибка печати задания 133
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:16,527 INFO Звук заказа пропущен по стартовому курсору: job_id=133 <= startup_cursor=174
+2026-04-10 18:22:16,915 ERROR Ошибка печати задания 133
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:21,418 INFO Звук заказа пропущен по стартовому курсору: job_id=133 <= startup_cursor=174
+2026-04-10 18:22:21,721 ERROR Ошибка печати задания 133
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:26,826 INFO Звук заказа пропущен по стартовому курсору: job_id=134 <= startup_cursor=174
+2026-04-10 18:22:27,160 ERROR Ошибка печати задания 134
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:31,591 INFO Звук заказа пропущен по стартовому курсору: job_id=134 <= startup_cursor=174
+2026-04-10 18:22:31,893 ERROR Ошибка печати задания 134
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:36,575 INFO Звук заказа пропущен по стартовому курсору: job_id=134 <= startup_cursor=174
+2026-04-10 18:22:36,890 ERROR Ошибка печати задания 134
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:41,377 INFO Звук заказа пропущен по стартовому курсору: job_id=134 <= startup_cursor=174
+2026-04-10 18:22:41,752 ERROR Ошибка печати задания 134
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:48,734 INFO Звук заказа пропущен по стартовому курсору: job_id=134 <= startup_cursor=174
+2026-04-10 18:22:49,094 ERROR Ошибка печати задания 134
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:54,116 INFO Звук заказа пропущен по стартовому курсору: job_id=135 <= startup_cursor=174
+2026-04-10 18:22:54,420 ERROR Ошибка печати задания 135
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:22:58,762 INFO Звук заказа пропущен по стартовому курсору: job_id=135 <= startup_cursor=174
+2026-04-10 18:22:59,073 ERROR Ошибка печати задания 135
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:04,103 INFO Звук заказа пропущен по стартовому курсору: job_id=135 <= startup_cursor=174
+2026-04-10 18:23:04,444 ERROR Ошибка печати задания 135
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:08,928 INFO Звук заказа пропущен по стартовому курсору: job_id=135 <= startup_cursor=174
+2026-04-10 18:23:09,252 ERROR Ошибка печати задания 135
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:14,555 INFO Звук заказа пропущен по стартовому курсору: job_id=135 <= startup_cursor=174
+2026-04-10 18:23:14,866 ERROR Ошибка печати задания 135
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:20,304 INFO Звук заказа пропущен по стартовому курсору: job_id=136 <= startup_cursor=174
+2026-04-10 18:23:20,602 ERROR Ошибка печати задания 136
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:26,262 INFO Звук заказа пропущен по стартовому курсору: job_id=136 <= startup_cursor=174
+2026-04-10 18:23:26,616 ERROR Ошибка печати задания 136
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:31,141 INFO Звук заказа пропущен по стартовому курсору: job_id=136 <= startup_cursor=174
+2026-04-10 18:23:31,500 ERROR Ошибка печати задания 136
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:36,936 INFO Звук заказа пропущен по стартовому курсору: job_id=136 <= startup_cursor=174
+2026-04-10 18:23:37,228 ERROR Ошибка печати задания 136
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:41,756 INFO Звук заказа пропущен по стартовому курсору: job_id=136 <= startup_cursor=174
+2026-04-10 18:23:42,155 ERROR Ошибка печати задания 136
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:47,339 INFO Звук заказа пропущен по стартовому курсору: job_id=137 <= startup_cursor=174
+2026-04-10 18:23:47,640 ERROR Ошибка печати задания 137
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:52,004 INFO Звук заказа пропущен по стартовому курсору: job_id=137 <= startup_cursor=174
+2026-04-10 18:23:52,308 ERROR Ошибка печати задания 137
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:23:57,255 INFO Звук заказа пропущен по стартовому курсору: job_id=137 <= startup_cursor=174
+2026-04-10 18:23:57,560 ERROR Ошибка печати задания 137
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:01,756 INFO Звук заказа пропущен по стартовому курсору: job_id=137 <= startup_cursor=174
+2026-04-10 18:24:02,069 ERROR Ошибка печати задания 137
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:06,149 INFO Звук заказа пропущен по стартовому курсору: job_id=137 <= startup_cursor=174
+2026-04-10 18:24:06,432 ERROR Ошибка печати задания 137
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:10,878 INFO Звук заказа пропущен по стартовому курсору: job_id=138 <= startup_cursor=174
+2026-04-10 18:24:11,168 ERROR Ошибка печати задания 138
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:15,220 INFO Звук заказа пропущен по стартовому курсору: job_id=138 <= startup_cursor=174
+2026-04-10 18:24:15,500 ERROR Ошибка печати задания 138
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:21,454 INFO Звук заказа пропущен по стартовому курсору: job_id=138 <= startup_cursor=174
+2026-04-10 18:24:21,729 ERROR Ошибка печати задания 138
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:26,734 INFO Звук заказа пропущен по стартовому курсору: job_id=138 <= startup_cursor=174
+2026-04-10 18:24:27,090 ERROR Ошибка печати задания 138
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:31,223 INFO Звук заказа пропущен по стартовому курсору: job_id=138 <= startup_cursor=174
+2026-04-10 18:24:31,503 ERROR Ошибка печати задания 138
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:35,739 INFO Звук заказа пропущен по стартовому курсору: job_id=139 <= startup_cursor=174
+2026-04-10 18:24:36,038 ERROR Ошибка печати задания 139
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:41,323 INFO Звук заказа пропущен по стартовому курсору: job_id=139 <= startup_cursor=174
+2026-04-10 18:24:41,731 ERROR Ошибка печати задания 139
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:47,906 INFO Звук заказа пропущен по стартовому курсору: job_id=139 <= startup_cursor=174
+2026-04-10 18:24:48,190 ERROR Ошибка печати задания 139
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:52,755 INFO Звук заказа пропущен по стартовому курсору: job_id=139 <= startup_cursor=174
+2026-04-10 18:24:53,047 ERROR Ошибка печати задания 139
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:24:57,251 INFO Звук заказа пропущен по стартовому курсору: job_id=139 <= startup_cursor=174
+2026-04-10 18:24:57,593 ERROR Ошибка печати задания 139
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:02,146 INFO Звук заказа пропущен по стартовому курсору: job_id=140 <= startup_cursor=174
+2026-04-10 18:25:02,417 ERROR Ошибка печати задания 140
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:08,368 INFO Звук заказа пропущен по стартовому курсору: job_id=140 <= startup_cursor=174
+2026-04-10 18:25:08,664 ERROR Ошибка печати задания 140
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:13,027 INFO Звук заказа пропущен по стартовому курсору: job_id=140 <= startup_cursor=174
+2026-04-10 18:25:13,318 ERROR Ошибка печати задания 140
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:17,473 INFO Звук заказа пропущен по стартовому курсору: job_id=140 <= startup_cursor=174
+2026-04-10 18:25:17,754 ERROR Ошибка печати задания 140
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:22,704 INFO Звук заказа пропущен по стартовому курсору: job_id=140 <= startup_cursor=174
+2026-04-10 18:25:22,989 ERROR Ошибка печати задания 140
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:27,345 INFO Звук заказа пропущен по стартовому курсору: job_id=141 <= startup_cursor=174
+2026-04-10 18:25:27,609 ERROR Ошибка печати задания 141
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:35,054 INFO Звук заказа пропущен по стартовому курсору: job_id=141 <= startup_cursor=174
+2026-04-10 18:25:35,411 ERROR Ошибка печати задания 141
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:40,194 INFO Звук заказа пропущен по стартовому курсору: job_id=141 <= startup_cursor=174
+2026-04-10 18:25:40,586 ERROR Ошибка печати задания 141
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:45,299 INFO Звук заказа пропущен по стартовому курсору: job_id=141 <= startup_cursor=174
+2026-04-10 18:25:45,611 ERROR Ошибка печати задания 141
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:50,202 INFO Звук заказа пропущен по стартовому курсору: job_id=141 <= startup_cursor=174
+2026-04-10 18:25:50,522 ERROR Ошибка печати задания 141
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:54,831 INFO Звук заказа пропущен по стартовому курсору: job_id=142 <= startup_cursor=174
+2026-04-10 18:25:55,165 ERROR Ошибка печати задания 142
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:25:59,528 INFO Звук заказа пропущен по стартовому курсору: job_id=145 <= startup_cursor=174
+2026-04-10 18:25:59,816 ERROR Ошибка печати задания 145
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:26:04,408 INFO Звук заказа пропущен по стартовому курсору: job_id=148 <= startup_cursor=174
+2026-04-10 18:26:04,746 ERROR Ошибка печати задания 148
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:26:09,463 INFO Звук заказа пропущен по стартовому курсору: job_id=151 <= startup_cursor=174
+2026-04-10 18:26:09,815 ERROR Ошибка печати задания 151
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:26:14,103 INFO Звук заказа пропущен по стартовому курсору: job_id=153 <= startup_cursor=174
+2026-04-10 18:26:14,498 ERROR Ошибка печати задания 153
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:26:19,357 INFO Звук заказа пропущен по стартовому курсору: job_id=156 <= startup_cursor=174
+2026-04-10 18:26:19,662 ERROR Ошибка печати задания 156
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:26:24,464 INFO Звук заказа пропущен по стартовому курсору: job_id=158 <= startup_cursor=174
+2026-04-10 18:26:24,815 ERROR Ошибка печати задания 158
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:26:29,923 INFO Звук заказа пропущен по стартовому курсору: job_id=161 <= startup_cursor=174
+2026-04-10 18:26:30,386 ERROR Ошибка печати задания 161
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:26:34,990 INFO Звук заказа пропущен по стартовому курсору: job_id=163 <= startup_cursor=174
+2026-04-10 18:26:35,400 ERROR Ошибка печати задания 163
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:26:50,555 INFO Сервер печати запущен: polling https://posham.ru
+2026-04-10 18:27:47,822 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-04-10 18:27:48,221 INFO Звук нового заказа поставлен в очередь: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-04-10 18:27:48,547 ERROR Ошибка печати задания 175
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:27:52,598 INFO Звук заказа пропущен для повторной попытки печати: job_id=175, attempts=2
+2026-04-10 18:27:52,876 ERROR Ошибка печати задания 175
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:27:57,860 INFO Звук заказа пропущен для повторной попытки печати: job_id=175, attempts=3
+2026-04-10 18:27:58,144 ERROR Ошибка печати задания 175
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:28:02,205 INFO Звук заказа пропущен для повторной попытки печати: job_id=175, attempts=4
+2026-04-10 18:28:02,482 ERROR Ошибка печати задания 175
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:28:07,862 INFO Звук заказа пропущен для повторной попытки печати: job_id=175, attempts=5
+2026-04-10 18:28:08,149 ERROR Ошибка печати задания 175
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 1432, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 572, in print_pdf_bytes
+    self._print_images(images, job_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\Desktop\CRM_Print_Push_Bot\Print_server.py", line 621, in _print_images
+    raise RuntimeError(f"Принтер '{printer_name}' сейчас недоступен (offline)")
+RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступен (offline)
+2026-04-10 18:33:40,323 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-04-10 18:33:40,324 INFO Звук нового заказа поставлен в очередь: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-04-10 18:33:41,566 INFO Задание 176 отправлено в печать
+2026-04-10 18:35:40,761 INFO Пробую проиграть звук нового сообщения: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
+2026-04-10 18:35:41,329 INFO Звук нового сообщения поставлен в очередь: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
+2026-04-10 22:12:59,861 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-04-10 22:13:00,232 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:13:07,008 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:13:24,838 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:13:40,189 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:13:48,824 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:13:57,148 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:13:59,400 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:14:09,929 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:14:14,798 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:14:25,968 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:14:32,033 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:14:36,560 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:14:56,907 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:15:01,180 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:15:11,806 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:15:15,569 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:15:22,340 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:15:30,617 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:15:32,885 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:15:43,489 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:15:47,257 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:16:03,825 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:16:06,106 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:16:16,867 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:16:20,659 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:16:27,613 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:16:36,069 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:16:38,340 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:16:48,954 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:16:52,755 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:16:59,585 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:17:07,914 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:17:10,187 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:17:20,799 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:17:24,589 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:17:31,395 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:17:39,734 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [Errno 11001] getaddrinfo failed
+2026-04-10 22:17:42,009 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-04-10 22:17:50,343 INFO Связь с CRM восстановлена
+2026-04-10 22:18:44,323 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-04-10 22:18:44,951 INFO Связь с CRM восстановлена
+2026-04-10 22:26:17,126 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-04-10 22:26:17,481 INFO Связь с CRM восстановлена
+2026-04-10 22:26:31,545 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-04-10 22:26:31,946 INFO Связь с CRM восстановлена
+2026-04-10 22:29:59,823 WARNING CRM /api/print/poll вернул HTTP 502
+2026-04-10 22:45:41,452 INFO Пробую проиграть звук нового сообщения: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
+2026-04-10 22:45:41,471 INFO Звук нового сообщения поставлен в очередь: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
+2026-04-10 23:25:49,142 INFO Сервер печати остановлен

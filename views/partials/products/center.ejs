@@ -129,6 +129,28 @@
         </div>
         <div class="products-bulk-actions" id="productsBulkActions">
           <span class="products-bulk-actions-count">Выбрано: <b id="productsBulkActionsSelectedCount">0</b></span>
+          <div class="products-bulk-category-control">
+            <label class="products-bulk-category-label" for="productsBulkCategoryMode">Категории</label>
+            <select class="control control-sm products-bulk-category-select native-hidden" id="productsBulkCategoryMode" aria-label="Категории">
+              <option value="none">-</option>
+              <option value="add">Добавить</option>
+              <option value="remove">Удалить</option>
+              <option value="replace">Переместить</option>
+            </select>
+            <div class="products-bulk-category-select-wrap" id="productsBulkCategorySelectWrap">
+              <button class="products-bulk-category-trigger" type="button" id="productsBulkCategoryTrigger" aria-haspopup="menu" aria-expanded="false">
+                <span id="productsBulkCategoryTriggerText">-</span>
+                <i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="products-bulk-category-menu hidden" id="productsBulkCategoryMenu" role="menu" aria-label="Категории">
+                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="none" role="menuitem">-</button>
+                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="add" role="menuitem">Добавить</button>
+                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="remove" role="menuitem">Удалить</button>
+                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="replace" role="menuitem">Переместить</button>
+              </div>
+            </div>
+            <button class="btn btn-ghost icon-btn hidden" type="button" id="productsBulkCategoryPickerBtn" aria-label="Выбрать категории">+</button>
+          </div>
           <div class="products-bulk-menu-wrap" id="productsBulkMenuWrap">
             <button class="btn btn-ghost icon-btn" type="button" id="productsBulkMenuToggleBtn" aria-label="Действия">...</button>
             <div class="products-bulk-menu hidden" id="productsBulkMenu">

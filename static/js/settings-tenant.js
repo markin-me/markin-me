@@ -46390,11 +46390,42 @@
 
 
 
-    function getDragAfterElement(container, y) {
+    function getSettingsListDragItems(container, type) {
+      if (type === "order-time-options") {
+        return [...container.querySelectorAll(".settings-row-wrapper")];
+      }
+      return [...container.querySelectorAll(".settings-row")];
+    }
 
 
 
-      const draggableElements = [...container.querySelectorAll(".settings-row:not(.is-dragging)")];
+
+
+    function getSettingsListDragId(element, type) {
+      const row = type === "order-time-options" ? element.querySelector(".settings-row") : element;
+      return row ? row.dataset.id : "";
+    }
+
+
+
+
+
+    function getSettingsListOrder(container, type) {
+      return getSettingsListDragItems(container, type)
+        .map((el) => getSettingsListDragId(el, type))
+        .filter(Boolean)
+        .join(",");
+    }
+
+
+
+
+
+    function getDragAfterElement(container, y, type) {
+
+
+
+      const draggableElements = getSettingsListDragItems(container, type).filter((el) => !el.classList.contains("is-dragging"));
 
 
 
@@ -46474,7 +46505,11 @@
 
 
 
-        dragEl = row;
+        dragEl = type === "order-time-options" ? row.closest(".settings-row-wrapper") : row;
+
+
+
+        if (!dragEl) return;
 
 
 
@@ -46506,15 +46541,7 @@
 
 
 
-        orderBefore = [...listEl.querySelectorAll(".settings-row")]
-
-
-
-          .map((el) => el.dataset.id)
-
-
-
-          .join(",");
+        orderBefore = getSettingsListOrder(listEl, type);
 
 
 
@@ -46542,15 +46569,7 @@
 
 
 
-        const orderAfter = [...listEl.querySelectorAll(".settings-row")]
-
-
-
-          .map((el) => el.dataset.id)
-
-
-
-          .join(",");
+        const orderAfter = getSettingsListOrder(listEl, type);
 
 
 
@@ -46598,7 +46617,7 @@
 
 
 
-        const afterElement = getDragAfterElement(listEl, e.clientY);
+        const afterElement = getDragAfterElement(listEl, e.clientY, type);
 
 
 

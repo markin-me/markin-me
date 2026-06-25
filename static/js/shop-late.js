@@ -35896,6 +35896,7 @@ function setBottomNavActive(tab) {
       draft.method_user_selected = true;
       saveCheckoutDraft(draft);
       syncCheckoutMode(code);
+      refreshCheckoutTimeAvailability();
       updateDeliveryPricing();
       updateMobileDeliveryProgress();
       void refreshCheckoutDeliveryRulesInBackground({ reason: "method-change" });
@@ -36065,6 +36066,7 @@ function setBottomNavActive(tab) {
         draft.pickup_store_id = selectedId;
         saveCheckoutDraft(draft);
       }
+      refreshCheckoutTimeAvailability();
       if (typeof updateHeaderAddressWidget === "function") updateHeaderAddressWidget();
       if (typeof updateAddressChip === "function") updateAddressChip();
     };
@@ -36455,54 +36457,102 @@ function setBottomNavActive(tab) {
     wrap.appendChild(timeLabel);
 
     const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
-    const storeIsOpen = Boolean(cfg.storeIsOpen);
     const storeTimezone = cfg.storeTimezone || "+0";
-    const storeHours = cfg.storeHours || [];
-    const timeSegment = getTimeSegment(storeIsOpen, storeTimezone, storeHours);
-
-    // Filter options based on time segment
-    let filteredTimeOptions = timeOptions;
-    let defaultFallback = "asap";
-
-    if (timeSegment === "OPEN") {
-      // Rule 1: Store open - all options available, default "asap"
-      filteredTimeOptions = timeOptions;
-      defaultFallback = "asap";
-
-    } else if (timeSegment === "CLOSED_BEFORE_MIDNIGHT") {
-      // Rule 2: After closing, before midnight - only "on_date"
-      filteredTimeOptions = timeOptions.filter(opt => opt.code === "on_date");
-      defaultFallback = "on_date";
-
-    } else if (timeSegment === "CLOSED_AFTER_MIDNIGHT") {
-      // Rule 3: After midnight, before opening - "at_time" and "on_date"
-      filteredTimeOptions = timeOptions.filter(opt =>
-        opt.code === "at_time" || opt.code === "on_date"
-      );
-      defaultFallback = "at_time";
-    }
-
-    // Exact guard: if "at_time" has no actual slots right now, hide it to prevent empty picker.
-    const detailedTimeOptionByCode = (cfg.timeOptions || []).reduce((acc, option) => {
+    const timeOptionByCodeInitial = (cfg.timeOptions || []).reduce((acc, option) => {
       if (option && option.code) acc[option.code] = option;
       return acc;
     }, {});
-    const atTimeOption = detailedTimeOptionByCode.at_time;
-    if (atTimeOption && Number(atTimeOption.has_time_window) === 1) {
-      const atTimeSlots = buildTimeSlots(atTimeOption, null, storeTimezone);
-      if (!atTimeSlots.length) {
-        filteredTimeOptions = filteredTimeOptions.filter(opt => opt.code !== "at_time");
-        if (defaultFallback === "at_time") defaultFallback = "on_date";
-      }
+
+    function isHoursOpenNow(hours, timezone) {
+      if (!Array.isArray(hours) || !hours.length) return false;
+      const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+      const offsetMs = offsetHours * 60 * 60 * 1000;
+      const localDate = new Date(Date.now() + offsetMs);
+      const currentDay = localDate.getUTCDay();
+      const currentMinutes = localDate.getUTCHours() * 60 + localDate.getUTCMinutes();
+      const entry = hours.find((row) => Number(row?.day_of_week) === currentDay);
+      if (!entry || Number(entry.is_closed) === 1) return false;
+      let opens = parseTimeToMinutes(entry.opens_at);
+      let closes = parseTimeToMinutes(entry.closes_at);
+      if (opens === null || closes === null) return false;
+      if (closes <= opens) closes += 24 * 60;
+      return currentMinutes >= opens && currentMinutes < closes;
     }
 
-    const availableTimeOptions = filteredTimeOptions.length ? filteredTimeOptions : timeOptions;
+    function findCheckoutStoreById(storeId) {
+      const id = Number(storeId || 0);
+      if (!(id > 0)) return null;
+      const stores = Array.isArray(window._pickupStores) ? window._pickupStores : [];
+      return stores.find((store) => Number(store?.id || 0) === id) || null;
+    }
 
-    // Always use defaultFallback for the segment, ignore saved draft
-    // Draft can cause wrong defaults (e.g., "on_date" when store is OPEN and should be "asap")
-    const fallbackCode = availableTimeOptions.some(opt => opt.code === defaultFallback)
-      ? defaultFallback
-      : (availableTimeOptions[0]?.code || defaultFallback);
+    function getCheckoutTimeScheduleContext() {
+      const methodCode = String(methodSelect?.getValue?.() || methodDefault || "takeaway").trim();
+      if (methodCode === "delivery") {
+        const deliveryStore = findCheckoutStoreById(state.selectedAddress?.delivery_store_id);
+        const hours = Array.isArray(deliveryStore?.delivery_hours) && deliveryStore.delivery_hours.length
+          ? deliveryStore.delivery_hours
+          : (Array.isArray(cfg.storeDeliveryHours) && cfg.storeDeliveryHours.length ? cfg.storeDeliveryHours : cfg.storeHours || []);
+        const timezone = String(deliveryStore?.timezone || storeTimezone || "+0").trim() || "+0";
+        return {
+          hours,
+          timezone,
+          isOpen: deliveryStore ? isHoursOpenNow(hours, timezone) : Boolean(cfg.deliveryIsOpen),
+        };
+      }
+
+      const pickupStore = findCheckoutStoreById(selectedPickupStoreId);
+      const hours = Array.isArray(pickupStore?.storeHours) && pickupStore.storeHours.length
+        ? pickupStore.storeHours
+        : (Array.isArray(cfg.storeHours) ? cfg.storeHours : []);
+      const timezone = String(pickupStore?.timezone || storeTimezone || "+0").trim() || "+0";
+      return {
+        hours,
+        timezone,
+        isOpen: pickupStore ? isHoursOpenNow(hours, timezone) : Boolean(cfg.storeIsOpen),
+      };
+    }
+
+    function getCheckoutTimeTimezone() {
+      return getCheckoutTimeScheduleContext().timezone || storeTimezone || "+0";
+    }
+
+    function getCheckoutAvailableTimeState() {
+      const schedule = getCheckoutTimeScheduleContext();
+      const timeSegment = getTimeSegment(schedule.isOpen, schedule.timezone, schedule.hours);
+      let filteredTimeOptions = timeOptions;
+      let defaultFallback = "asap";
+
+      if (timeSegment === "OPEN") {
+        filteredTimeOptions = timeOptions;
+        defaultFallback = "asap";
+      } else if (timeSegment === "CLOSED_BEFORE_MIDNIGHT") {
+        filteredTimeOptions = timeOptions.filter(opt => opt.code === "on_date");
+        defaultFallback = "on_date";
+      } else if (timeSegment === "CLOSED_AFTER_MIDNIGHT") {
+        filteredTimeOptions = timeOptions.filter(opt => opt.code === "at_time" || opt.code === "on_date");
+        defaultFallback = "at_time";
+      }
+
+      const atTimeOption = timeOptionByCodeInitial.at_time;
+      if (atTimeOption && Number(atTimeOption.has_time_window) === 1) {
+        const atTimeSlots = buildTimeSlots(atTimeOption, null, schedule.timezone);
+        if (!atTimeSlots.length) {
+          filteredTimeOptions = filteredTimeOptions.filter(opt => opt.code !== "at_time");
+          if (defaultFallback === "at_time") defaultFallback = "on_date";
+        }
+      }
+
+      const availableOptions = filteredTimeOptions.length ? filteredTimeOptions : timeOptions;
+      const fallbackCode = availableOptions.some(opt => opt.code === defaultFallback)
+        ? defaultFallback
+        : (availableOptions[0]?.code || defaultFallback);
+      return { availableOptions, fallbackCode };
+    }
+
+    let currentAvailableTimeOptions = getCheckoutAvailableTimeState().availableOptions;
+    let currentAvailableTimeCodes = new Set(currentAvailableTimeOptions.map((option) => option.code));
+    const fallbackCode = getCheckoutAvailableTimeState().fallbackCode;
     const timeDefault = fallbackCode;
 
     function getTimeOptionIconElement(code, iconRaw) {
@@ -36529,7 +36579,7 @@ function setBottomNavActive(tab) {
       });
     }
 
-    const timeSelect = createTimeIconPicker(availableTimeOptions, timeDefault);
+    const timeSelect = createTimeIconPicker(timeOptions, timeDefault);
     if (timeSelect && typeof timeSelect.destroy === "function") {
       registerCheckoutCleanup(() => timeSelect.destroy());
     }
@@ -36677,7 +36727,7 @@ function setBottomNavActive(tab) {
     timeModesGrid.className = "shop-checkout-card-grid shop-checkout-card-grid--modes";
     bindCheckoutHorizontalWheelScroll(timeModesGrid);
     const timeModeButtons = new Map();
-    availableTimeOptions.forEach((option) => {
+    timeOptions.forEach((option) => {
       const card = createCheckoutCardOption({
         title: option.title || option.code || "",
         value: option.code === "asap" ? getCheckoutEtaLabel() : "",
@@ -36827,12 +36877,12 @@ function setBottomNavActive(tab) {
 
     function getTimeOptionTitle(code) {
       if (timeOptionByCode[code]?.title) return str(timeOptionByCode[code].title).trim();
-      const fallback = availableTimeOptions.find((option) => option.code === code);
+      const fallback = timeOptions.find((option) => option.code === code);
       return str(fallback?.title || code || "").trim();
     }
 
     function getCheckoutStoreTodayDate() {
-      const now = getStoreDateNow(storeTimezone || "+0");
+      const now = getStoreDateNow(getCheckoutTimeTimezone());
       return new Date(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     }
 
@@ -36871,10 +36921,29 @@ function setBottomNavActive(tab) {
       return button;
     }
 
+    function refreshCheckoutTimeAvailability() {
+      const nextState = getCheckoutAvailableTimeState();
+      currentAvailableTimeOptions = nextState.availableOptions;
+      currentAvailableTimeCodes = new Set(currentAvailableTimeOptions.map((option) => option.code));
+
+      const selectedCode = timeSelect.getValue();
+      if (!currentAvailableTimeCodes.has(selectedCode)) {
+        timeInput.value = "";
+        timeSelect.setValue(nextState.fallbackCode, false);
+      }
+
+      timeModeButtons.forEach((card, code) => {
+        card.classList.toggle("hidden", !currentAvailableTimeCodes.has(code));
+      });
+      refreshTimeInputVisibility();
+      updateTimeSlotsOptions();
+    }
+
     function openAtTimeSelectionSheet() {
+      if (!currentAvailableTimeCodes.has("at_time")) return;
       const config = timeOptionByCode.at_time;
       timeSelect.setValue("at_time", false);
-      const initialSlots = buildTimeSlots(config, null, storeTimezone);
+      const initialSlots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
       let selectedSlot = initialSlots.includes(timeInput.value)
         ? timeInput.value
         : (initialSlots[0] || "");
@@ -36901,7 +36970,7 @@ function setBottomNavActive(tab) {
           body.appendChild(scroll);
 
           const renderSlots = () => {
-            const slots = buildTimeSlots(config, null, storeTimezone);
+            const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
             slotsGrid.innerHTML = "";
             if (!slots.length) {
               const empty = document.createElement("div");
@@ -36931,6 +37000,7 @@ function setBottomNavActive(tab) {
     }
 
     function openOnDateSelectionSheet() {
+      if (!currentAvailableTimeCodes.has("on_date")) return;
       const config = timeOptionByCode.on_date;
       timeSelect.setValue("on_date", false);
       const selectableDates = getCheckoutSelectableDates();
@@ -37005,7 +37075,7 @@ function setBottomNavActive(tab) {
           };
 
           const renderSlots = () => {
-            const slots = buildTimeSlots(config, sheetDate, storeTimezone);
+            const slots = buildTimeSlots(config, sheetDate, getCheckoutTimeTimezone());
             slotsGrid.innerHTML = "";
             if (!slots.length) {
               const empty = document.createElement("div");
@@ -37044,6 +37114,7 @@ function setBottomNavActive(tab) {
     function syncTimeModeCards() {
       const selectedCode = timeSelect.getValue();
       timeModeButtons.forEach((card, code) => {
+        card.classList.toggle("hidden", !currentAvailableTimeCodes.has(code));
         card.classList.toggle("is-active", code === selectedCode);
         card.setAttribute("aria-pressed", code === selectedCode ? "true" : "false");
         if (code === "asap") {
@@ -37125,7 +37196,7 @@ function setBottomNavActive(tab) {
         }
         dateSlotsWrap.style.display = "";
         dateRow2.classList.add("is-combined");
-        const slots = buildTimeSlots(config, selectedDate, storeTimezone);
+        const slots = buildTimeSlots(config, selectedDate, getCheckoutTimeTimezone());
         const slotOptions = slots.map(value => ({ code: value, title: value }));
         const preferred = timeInput.value || storedDraftTime || "";
         const defaultSlot = slotOptions.find(slot => slot.code === preferred)
@@ -37145,7 +37216,7 @@ function setBottomNavActive(tab) {
         return;
       }
       dateRow2.classList.remove("is-combined");
-      const slots = buildTimeSlots(config, null, storeTimezone);
+      const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
       const slotOptions = slots.map(value => ({ code: value, title: value }));
       const preferred = timeInput.value || storedDraftTime || "";
       const defaultSlot = slotOptions.find(slot => slot.code === preferred)
@@ -37170,8 +37241,7 @@ function setBottomNavActive(tab) {
       refreshTimeInputVisibility();
       updateTimeSlotsOptions();
     });
-    refreshTimeInputVisibility();
-    updateTimeSlotsOptions();
+    refreshCheckoutTimeAvailability();
 
     function getDeliveryCostForTotal(baseTotal) {
       if (Array.isArray(deliveryRules.priceTiers) && deliveryRules.priceTiers.length) {
@@ -38849,7 +38919,7 @@ function setBottomNavActive(tab) {
         if (payload.time_option_code === "on_date") {
           payload.scheduled_at = `${getDateString(selectedDate)} ${timeInput.value}:00`;
         } else {
-          payload.scheduled_at = `${getTodayDateString(storeTimezone)} ${timeInput.value}:00`;
+          payload.scheduled_at = `${getTodayDateString(getCheckoutTimeTimezone())} ${timeInput.value}:00`;
         }
       }
 
