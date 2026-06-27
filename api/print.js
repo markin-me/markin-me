@@ -213,7 +213,24 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       )
     );
 
-    return generateReceiptHtmlForOrder(order, storeTimezone);
+    const templateHtml = await getActivePrintTemplateHtml(tenantId, "receipt");
+    if (!templateHtml) {
+      throw new Error("PRINT_RECEIPT_TEMPLATE_NOT_CONFIGURED");
+    }
+    return generateReceiptHtmlForOrder(order, storeTimezone, templateHtml);
+  }
+
+  async function getActivePrintTemplateHtml(tenantId, documentType) {
+    const [rows] = await db.query(
+      `SELECT template_html
+       FROM print_templates
+       WHERE tenant_id=? AND document_type=? AND is_active=1
+       ORDER BY id ASC
+       LIMIT 1`,
+      [tenantId, documentType]
+    );
+    const html = String(rows[0]?.template_html || "").trim();
+    return html || null;
   }
 
   function parseLocalDate(value) {
@@ -602,7 +619,22 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     };
   }
 
-  function generateReceiptHtmlForOrder(order, storeTimezone) {
+  function resolveTemplatePath(source, path) {
+    return String(path || "").split(".").reduce((value, key) => {
+      if (value == null) return "";
+      return value[key];
+    }, source);
+  }
+
+  function renderPrintTemplate(templateHtml, data, rawKeys = new Set()) {
+    return String(templateHtml || "").replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, key) => {
+      const value = resolveTemplatePath(data, key);
+      if (value == null) return "";
+      return rawKeys.has(key) || key.endsWith("_html") ? String(value) : escapeHtml(value);
+    });
+  }
+
+  function generateReceiptHtmlForOrder(order, storeTimezone, templateHtml = "") {
     const receiptOrder = getDisplayOrder(order) || order;
     const hasRefunds = hasOrderRefunds(order);
     const createdAtStr = String(receiptOrder.created_at || "").replace(" ", "T");
@@ -867,6 +899,82 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     const bonusValue = bonusSummary.blocked && !(bonusSummary.amount > 0)
       ? "0 ₽"
       : `+${money(bonusSummary.amount || 0)}`;
+    const summaryHtml = `
+    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ""}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ""}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ""}
+    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сумма товаров</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ""}
+    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ""}
+    ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Промокод</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ""}
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
+    ${showBonusRow ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Бонусы</div><div class="receipt-summary-value">${bonusValue}</div></div>` : ""}
+    <div class="receipt-total">ИТОГО: ${money(total)}</div>
+    `;
+
+    const firstProductItem = productItems[0] || receiptItems[0] || {};
+    const firstVariant = Array.isArray(firstProductItem?.variants) ? firstProductItem.variants[0] || {} : {};
+    const firstIngredient = Array.isArray(firstProductItem?.ingredients) ? firstProductItem.ingredients[0] || {} : {};
+    const firstOption = Array.isArray(firstProductItem?.options) ? firstProductItem.options[0] || {} : {};
+    const giftItem = receiptItems.find((item) => isGiftRewardOrderItem(item)) || {};
+    const templateData = {
+      order: {
+        id: receiptOrder.id,
+        created_at: dateStr,
+        schedule_text: scheduleText || (isUrgent ? "Быстрее" : ""),
+        address_comment: receiptOrder.address_comment || "",
+        comment: receiptOrder.comment || "",
+        promo_code: receiptPromoCode,
+      },
+      customer: {
+        name: receiptOrder.customer_name || "",
+        phone: receiptOrder.customer_phone || "",
+      },
+      delivery: {
+        type: methodTitle || "",
+        address: address || "",
+        cost: money(deliveryCost),
+      },
+      payment: {
+        method: paymentTitle || "",
+        change_from: showChange ? money(changeFrom) : "",
+        change_amount: showChange ? money(changeAmount) : "",
+      },
+      totals: {
+        subtotal: discountAmount > 0 ? money(subtotal) : "",
+        total: money(total),
+      },
+      discounts: {
+        total: discountAmount > 0 ? money(discountAmount) : "",
+      },
+      bonuses: {
+        amount: showBonusRow ? bonusValue : "",
+      },
+      item: {
+        quantity: firstProductItem?.quantity || firstProductItem?.qty || "",
+        name: firstProductItem?.product_name || firstProductItem?.name || "",
+        total: renderLinePrice(firstProductItem, Number(firstProductItem?.price || 0) * Number(firstProductItem?.quantity || firstProductItem?.qty || 1)),
+        variant_label: firstVariant?.label || firstVariant?.value || "",
+        ingredient_quantity: firstIngredient?.quantity ?? firstIngredient?.qty ?? "",
+        ingredient_unit: firstIngredient?.unit_label || firstIngredient?.unit || firstIngredient?.unitLabel || firstIngredient?.unit_short_title || firstIngredient?.unit_title || "",
+        ingredient_name: firstIngredient?.name || "",
+        option_variant: firstOption?.variant_label || firstOption?.variantLabel || "",
+        option_title: firstOption?.title || "",
+        client_composition: firstProductItem?.client_composition || "",
+      },
+      gift: {
+        quantity: giftItem?.quantity || giftItem?.qty || "",
+        name: giftItem?.product_name || giftItem?.name || "",
+      },
+      receipt: {
+        items_html: itemsHtml,
+        summary_html: summaryHtml,
+      },
+    };
+
+    if (String(templateHtml || "").trim()) {
+      return renderPrintTemplate(templateHtml, templateData, new Set(["receipt.items_html", "receipt.summary_html", "item.total"]));
+    }
+
     return `
 <!DOCTYPE html>
 <html>
@@ -1071,15 +1179,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
   </div>
   <div class="receipt-divider"></div>
   <div class="receipt-section">
-    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ""}
-    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ""}
-    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ""}
-    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сумма товаров</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ""}
-    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ""}
-    ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Промокод</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ""}
-    <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
-    ${showBonusRow ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Бонусы</div><div class="receipt-summary-value">${bonusValue}</div></div>` : ""}
-    <div class="receipt-total">ИТОГО: ${money(total)}</div>
+    ${summaryHtml}
   </div>
   <div style="margin-top: 20px; text-align: center; font-size: 10pt;">
     <div>Спасибо за заказ!</div>
@@ -1694,9 +1794,6 @@ function makePrintApiRouter({ db, helpers }) {
       const agentName = agentNameRaw == null ? null : String(agentNameRaw).trim().slice(0, 255);
       const agentVersion = agentVersionRaw == null ? null : String(agentVersionRaw).trim().slice(0, 64);
       let running = runningRaw === false || runningRaw === "false" || runningRaw === 0 || runningRaw === "0" ? 0 : 1;
-      if (printerOnlineRaw !== undefined && printerOnlineRaw !== null) {
-        running = printerOnline;
-      }
 
       await db.query(
         `
@@ -1725,6 +1822,117 @@ function makePrintApiRouter({ db, helpers }) {
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // POST /api/print/printers/sync - sync local Windows printers for the token.
+  router.post("/printers/sync", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, success: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, success: false, error: "API_KEY_INVALID" });
+      }
+
+      const printersRaw = req.body?.printers;
+      if (!Array.isArray(printersRaw)) {
+        return res.status(400).json({ ok: false, success: false, error: "PRINTERS_REQUIRED" });
+      }
+
+      const printersByName = new Map();
+      for (const item of printersRaw) {
+        if (!item || typeof item !== "object") continue;
+        const systemName = String(item.system_name || "").trim().slice(0, 255);
+        if (!systemName) continue;
+        const displayNameRaw = String(item.display_name || systemName).trim();
+        const statusRaw = String(item.status || "").trim().toLowerCase();
+        printersByName.set(systemName, {
+          systemName,
+          displayName: (displayNameRaw || systemName).slice(0, 255),
+          isDefault: item.is_default === true || item.is_default === "true" || item.is_default === 1 || item.is_default === "1" ? 1 : 0,
+          status: statusRaw === "offline" ? "offline" : "online"
+        });
+      }
+
+      const tenantId = Number(tokenRow.tenant_id);
+      const storeId = Number(tokenRow.store_id);
+      const tokenId = Number(tokenRow.id);
+      const printerNames = Array.from(printersByName.keys());
+
+      for (const printer of printersByName.values()) {
+        const [defaultRows] = await db.query(
+          "SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=? AND is_default=1 LIMIT 1",
+          [tenantId, storeId, tokenId]
+        );
+        const hasDefaultPrinter = defaultRows.length > 0;
+        await db.query(
+          `
+          INSERT INTO print_printers
+            (tenant_id, store_id, token_id, system_name, display_name, is_default, status, last_seen_at, created_at, updated_at)
+          VALUES
+            (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+          ON DUPLICATE KEY UPDATE
+            tenant_id=VALUES(tenant_id),
+            store_id=VALUES(store_id),
+            display_name=VALUES(display_name),
+            is_default=IF(?, is_default, VALUES(is_default)),
+            status=VALUES(status),
+            last_seen_at=NOW(),
+            updated_at=NOW()
+          `,
+          [
+            tenantId,
+            storeId,
+            tokenId,
+            printer.systemName,
+            printer.displayName,
+            printer.isDefault,
+            printer.status,
+            hasDefaultPrinter ? 1 : 0
+          ]
+        );
+      }
+
+      if (printerNames.length > 0) {
+        await db.query(
+          `
+          UPDATE print_printers
+          SET status='offline', updated_at=NOW()
+          WHERE tenant_id=? AND store_id=? AND token_id=?
+            AND system_name NOT IN (?)
+          `,
+          [tenantId, storeId, tokenId, printerNames]
+        );
+      } else {
+        await db.query(
+          `
+          UPDATE print_printers
+          SET status='offline', updated_at=NOW()
+          WHERE tenant_id=? AND store_id=? AND token_id=?
+          `,
+          [tenantId, storeId, tokenId]
+        );
+      }
+
+      const [syncedPrinters] = await db.query(
+        `
+        SELECT system_name, display_name, is_default, status, last_seen_at
+        FROM print_printers
+        WHERE tenant_id=? AND store_id=? AND token_id=?
+        ORDER BY is_default DESC, display_name ASC, system_name ASC
+        `,
+        [tenantId, storeId, tokenId]
+      );
+
+      await touchTokenUsage(tokenId);
+      return res.json({ ok: true, success: true, data: { printers: syncedPrinters || [] } });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, success: false, error: "DB_ERROR" });
     }
   });
 

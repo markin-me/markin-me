@@ -5351,6 +5351,16 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   background:var(--color-surface);
   border-top:none;
 }
+.settings-production-zone-form{
+  align-content:start;
+}
+.settings-production-zone-store-group{
+  display:grid;
+  gap:8px;
+}
+.settings-production-zone-store-group + .settings-production-zone-store-group{
+  margin-top:14px;
+}
 #sitePanel{
   flex:1 1 auto;
   min-height:0;

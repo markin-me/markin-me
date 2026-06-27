@@ -1176,7 +1176,7 @@
           </div>
           <div class="settings-site-field">
             <label class="field-label">ПОДКЛЮЧЕННЫЙ ПРИНТЕР</label>
-            <input class="control" type="text" id="settingsPrintApiPrinterName" readonly />
+            <select class="control" id="settingsPrintApiPrinterName"></select>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;">
             <div class="settings-site-field" style="margin:0;">
@@ -1245,6 +1245,360 @@
                 <i class="fas fa-times"></i>
               </button>
               <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintApiSaveSettingsBtn">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsProductionZonePanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Производственная зона</div>
+          <div class="settings-list-subtitle">Принтер для этикеток товаров в филиале.</div>
+        </div>
+        <div class="settings-site-form settings-panel-scroll no-scrollbar settings-production-zone-form">
+          <div class="settings-site-field">
+            <label class="field-label">НАЗВАНИЕ ЗОНЫ</label>
+            <input class="control" type="text" id="settingsProductionZoneName" placeholder="Например: Кухня" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ФИЛИАЛ</label>
+            <select class="control" id="settingsProductionZoneStore"></select>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ПРИНТЕР ЭТИКЕТОК</label>
+            <select class="control" id="settingsProductionZonePrinter"></select>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ШАБЛОН ПЕЧАТИ</label>
+            <select class="control" id="settingsProductionZoneTemplate"></select>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsProductionZoneFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsProductionZoneEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsProductionZoneFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsProductionZoneCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsProductionZoneSaveBtn">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPrintTemplateReceiptPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Шаблон для печати</div>
+          <div class="settings-list-subtitle">Чек заказа</div>
+        </div>
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
+          <div class="settings-site-field">
+            <label class="field-label">ПРИМЕР ЧЕКА</label>
+            <div style="display:flex;justify-content:center;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:12px;">
+              <div style="width:260px;background:#fff;color:#111;border:1px solid #d1d5db;border-radius:4px;padding:12px;font-family:'Courier New',monospace;font-size:12px;font-weight:700;line-height:1.35;box-shadow:0 8px 18px rgba(15,23,42,.08);">
+                <div style="text-align:center;font-weight:700;font-size:16px;">ЗАКАЗ #{{ order.id }}</div>
+                <div style="text-align:center;margin:4px 0 8px;border-bottom:1px dashed #111;padding-bottom:8px;">{{ order.created_at }}</div>
+                <div style="border-top:1px dashed #111;margin:8px 0;"></div>
+                <div style="margin:8px 0;">{{ order.schedule_text }}</div>
+                <div style="border-top:1px dashed #111;margin:8px 0;"></div>
+                <div style="margin:8px 0;">
+                  <div>{{ customer.name }}</div>
+                  <div>{{ customer.phone }}</div>
+                </div>
+                <div style="margin:8px 0;">
+                  <div>{{ delivery.type }}</div>
+                  <div>{{ delivery.address }}</div>
+                </div>
+                <div style="margin:8px 0;">{{ order.address_comment }}</div>
+                <div style="margin:8px 0;">{{ order.comment }}</div>
+                <div style="border-top:1px dashed #111;margin:8px 0;"></div>
+                <div style="font-weight:700;text-transform:uppercase;margin-bottom:5px;">ТОВАРЫ</div>
+                <div style="padding-left:2px;">
+                  <div style="padding:3px 0 2px;">
+                    <div style="display:flex;align-items:flex-start;gap:6px;">
+                      <span style="flex-shrink:0;">{{ item.quantity }} x</span>
+                      <span style="flex:1;min-width:0;">{{ item.name }}</span>
+                      <span style="flex-shrink:0;text-align:right;">{{ item.total }}</span>
+                    </div>
+                    <div style="margin:2px 0 1px;font-size:11px;">
+                      <div style="margin-left:16px;">&bull; {{ item.variant_label }}</div>
+                      <div style="margin-left:16px;">&bull; {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
+                      <div style="margin-left:16px;">&bull; {{ item.option_variant }} {{ item.option_title }}</div>
+                    </div>
+                  </div>
+                  <div style="border-top:1px dotted #111;margin-top:3px;padding-top:4px;">
+                    <div style="display:flex;align-items:flex-start;gap:6px;">
+                      <span style="flex-shrink:0;">{{ gift.quantity }} x</span>
+                      <span style="flex:1;min-width:0;">{{ gift.name }} (Подарок)</span>
+                      <span style="flex-shrink:0;text-align:right;">0</span>
+                    </div>
+                  </div>
+                </div>
+                <div style="border-top:1px dashed #111;margin:8px 0;"></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;"><span>Оплата</span><strong>{{ payment.method }}</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;"><span>Сдача с</span><strong>{{ payment.change_from }}</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;"><span>Сдача</span><strong>{{ payment.change_amount }}</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;"><span>Сумма товаров</span><strong>{{ totals.subtotal }}</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;"><span>Скидка</span><strong>-{{ discounts.total }}</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;"><span>Промокод</span><strong>{{ order.promo_code }}</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;"><span>Доставка</span><strong>{{ delivery.cost }}</strong></div>
+                <div style="display:flex;justify-content:space-between;gap:8px;"><span>Бонусы</span><strong>+{{ bonuses.amount }}</strong></div>
+                <div style="text-align:center;font-size:15px;font-weight:700;border-top:1px dashed #111;border-bottom:1px dashed #111;margin:12px 0;padding:8px 0;">ИТОГО: {{ totals.total }}</div>
+                <div style="text-align:center;margin-top:10px;">Спасибо за заказ!</div>
+              </div>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">HTML</label>
+            <textarea class="control" id="settingsPrintTemplateReceiptHtml" readonly spellcheck="false" style="min-height:520px;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.45;resize:none;white-space:pre;"><!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Чек заказа #${receiptOrder.id}</title>
+  <style>
+    @media print {
+      @page { size: 80mm auto; margin: 0; }
+      body { margin: 0; }
+    }
+    body {
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      line-height: 1.35;
+      color: #111;
+      width: 72mm;
+      margin: 0 auto;
+      padding: 6px;
+    }
+    .receipt-header { text-align: center; font-weight: 700; font-size: 16px; }
+    .receipt-date { text-align: center; margin: 4px 0 8px; }
+    .receipt-row { display: flex; justify-content: space-between; gap: 8px; }
+    .receipt-divider { border-top: 1px dashed #111; margin: 8px 0; }
+    .receipt-item { margin-bottom: 6px; }
+    .receipt-item-name { font-weight: 700; }
+    .receipt-total { font-size: 15px; font-weight: 700; }
+    .receipt-footer { text-align: center; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="receipt-header">ЗАКАЗ #${receiptOrder.id}</div>
+  <div class="receipt-date">${dateStr}</div>
+
+  <div class="receipt-divider"></div>
+  ${scheduleTextHtml}
+  <div class="receipt-section">
+    ${customerNameHtml}
+    ${customerPhoneHtml}
+  </div>
+
+  <div class="receipt-section">
+    <div>${methodTitle}</div>
+    <div>${address}</div>
+  </div>
+
+  ${addressCommentHtml}
+  ${orderCommentHtml}
+
+  <div class="receipt-divider"></div>
+
+  <div class="receipt-section">
+    <div class="receipt-items-group receipt-items-group--product">
+      <div class="receipt-items-group-title">ТОВАРЫ</div>
+      <div class="receipt-items-group-list">
+        <div class="receipt-item">
+          <div class="receipt-item-row">
+            <span class="receipt-item-qty">${item.quantity} x</span>
+            <span class="receipt-item-name">${item.name}</span>
+            <span class="receipt-item-price">${item.total}</span>
+          </div>
+          <div class="receipt-composition">
+            <div class="receipt-composition-item receipt-composition-item--sub">&bull; ${variantLabel}</div>
+            <div class="receipt-composition-item receipt-composition-item--sub">&bull; ${ingredientQty} ${ingredientUnit} ${ingredientName}</div>
+            <div class="receipt-composition-item receipt-composition-item--sub">&bull; ${optionVariant} ${optionTitle}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="receipt-divider"></div>
+
+  <div class="receipt-section">
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${paymentTitle}</div></div>
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Сумма товаров</div><div class="receipt-summary-value">${money(subtotal)}</div></div>
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Промокод</div><div class="receipt-summary-value">${receiptPromoCode}</div></div>
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Бонусы</div><div class="receipt-summary-value">${bonusValue}</div></div>
+    <div class="receipt-total">ИТОГО: ${money(total)}</div>
+  </div>
+
+  <div class="receipt-footer">Спасибо за заказ!</div>
+</body>
+</html></textarea>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsPrintTemplateReceiptFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsPrintTemplateReceiptEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsPrintTemplateReceiptFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsPrintTemplateReceiptCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintTemplateReceiptSaveBtn">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPrintTemplateLabelPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Шаблон для печати</div>
+          <div class="settings-list-subtitle">Этикетка товара 58 x 60 мм</div>
+        </div>
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
+          <div class="settings-site-field">
+            <label class="field-label">ПРИМЕР ЭТИКЕТКИ</label>
+            <div style="display:flex;justify-content:center;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:12px;overflow:auto;">
+              <div style="width:58mm;height:60mm;background:#fff;color:#111;border:1px solid #d1d5db;border-radius:3px;padding:3mm;font-family:'Courier New',monospace;font-size:9pt;font-weight:700;line-height:1.22;box-shadow:0 8px 18px rgba(15,23,42,.08);box-sizing:border-box;overflow:hidden;">
+                <div style="display:flex;justify-content:center;gap:2mm;font-size:9pt;">
+                  <span>ЗАКАЗ #{{ order.id }}</span>
+                  <span>{{ order.created_at }}</span>
+                </div>
+                <div style="text-align:center;">{{ order.schedule_text }}</div>
+                <div style="display:flex;align-items:flex-start;gap:2mm;margin-top:2mm;">
+                  <span style="flex-shrink:0;">{{ item.quantity }} x</span>
+                  <span style="flex:1;min-width:0;">{{ item.name }}</span>
+                  <span style="flex-shrink:0;text-align:right;">{{ item.total }}</span>
+                </div>
+                <div style="margin-top:1mm;font-size:8pt;">
+                  <div style="margin-left:4mm;">&bull; {{ item.variant_label }}</div>
+                  <div style="margin-left:4mm;">&bull; {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
+                  <div style="margin-left:4mm;">&bull; {{ item.option_variant }} {{ item.option_title }}</div>
+                  <div style="margin-left:4mm;">&bull; {{ item.client_composition }}</div>
+                </div>
+                <div style="border-top:1px dotted #111;margin:1.5mm 0;"></div>
+                <div style="display:flex;align-items:flex-start;gap:2mm;">
+                  <span style="flex-shrink:0;">{{ gift.quantity }} x</span>
+                  <span style="flex:1;min-width:0;">{{ gift.name }} (Подарок)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">HTML</label>
+            <textarea class="control" id="settingsPrintTemplateLabelHtml" readonly spellcheck="false" style="min-height:520px;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.45;resize:none;white-space:pre;"><!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Этикетка заказа #{{ order.id }}</title>
+  <style>
+    @media print {
+      @page { size: 58mm 60mm; margin: 0; }
+      body { margin: 0; }
+    }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      width: 58mm;
+      height: 60mm;
+      padding: 3mm;
+      font-family: 'Courier New', monospace;
+      font-size: 9pt;
+      font-weight: 700;
+      line-height: 1.22;
+      color: #111;
+      background: #fff;
+      overflow: hidden;
+    }
+    .label-header {
+      display: flex;
+      justify-content: center;
+      gap: 2mm;
+      font-size: 9pt;
+    }
+    .label-schedule {
+      text-align: center;
+    }
+    .label-item-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 2mm;
+      margin-top: 2mm;
+    }
+    .label-item-qty,
+    .label-item-price {
+      flex-shrink: 0;
+    }
+    .label-item-name {
+      flex: 1;
+      min-width: 0;
+      word-wrap: break-word;
+    }
+    .label-item-price {
+      text-align: right;
+    }
+    .label-composition {
+      margin-top: 1mm;
+      font-size: 8pt;
+    }
+    .label-composition-item {
+      margin-left: 4mm;
+      word-wrap: break-word;
+    }
+    .label-gift {
+      border-top: 1px dotted #111;
+      margin-top: 1.5mm;
+      padding-top: 1.5mm;
+    }
+  </style>
+</head>
+<body>
+  <div class="label-header">
+    <span>ЗАКАЗ #{{ order.id }}</span>
+    <span>{{ order.created_at }}</span>
+  </div>
+  <div class="label-schedule">{{ order.schedule_text }}</div>
+  <div class="label-item-row">
+    <span class="label-item-qty">{{ item.quantity }} x</span>
+    <span class="label-item-name">{{ item.name }}</span>
+    <span class="label-item-price">{{ item.total }}</span>
+  </div>
+  <div class="label-composition">
+    <div class="label-composition-item">&bull; {{ item.variant_label }}</div>
+    <div class="label-composition-item">&bull; {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
+    <div class="label-composition-item">&bull; {{ item.option_variant }} {{ item.option_title }}</div>
+    <div class="label-composition-item">&bull; {{ item.client_composition }}</div>
+  </div>
+
+  <div class="label-gift">
+    <div class="label-item-row">
+      <span class="label-item-qty">{{ gift.quantity }} x</span>
+      <span class="label-item-name">{{ gift.name }} (Подарок)</span>
+    </div>
+  </div>
+</body>
+</html></textarea>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsPrintTemplateLabelFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsPrintTemplateLabelEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsPrintTemplateLabelFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsPrintTemplateLabelCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintTemplateLabelSaveBtn">Сохранить</button>
             </div>
           </div>
         </div>

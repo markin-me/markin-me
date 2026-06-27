@@ -5349,6 +5349,34 @@ async function fetchStoreWithHours(tenantId, storeId) {
     }
   }
 
+  async function selectPrintApiPrinters(tenantId, storeId, tokenId) {
+    if (!tokenId) return [];
+    let [rows] = await db.query(
+      `SELECT id, system_name, display_name, is_default, status, last_seen_at, updated_at
+       FROM print_printers
+       WHERE tenant_id=? AND store_id=? AND token_id=?
+       ORDER BY is_default DESC, display_name ASC, system_name ASC`,
+      [tenantId, storeId, tokenId]
+    );
+    if (!rows.length) {
+      [rows] = await db.query(
+        `SELECT id, system_name, display_name, is_default, status, last_seen_at, updated_at
+         FROM print_printers
+         WHERE tenant_id=? AND store_id=?
+         ORDER BY is_default DESC, display_name ASC, system_name ASC`,
+        [tenantId, storeId]
+      );
+    }
+    return rows || [];
+  }
+
+  async function selectPrintApiData(tenantId, storeId) {
+    const row = await selectPrintApiRow(tenantId, storeId);
+    if (!row) return null;
+    const printers = await selectPrintApiPrinters(tenantId, storeId, Number(row.id));
+    return { ...row, printers };
+  }
+
   router.get('/print-api', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -5360,7 +5388,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const storeExists = await ensureStoreExists(tenantId, storeId);
       if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
 
-      const row = await selectPrintApiRow(tenantId, storeId);
+      const row = await selectPrintApiData(tenantId, storeId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('Ошибка получения print API:', err);
@@ -5400,7 +5428,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId, storeId, token]
       );
 
-      const row = await selectPrintApiRow(tenantId, storeId);
+      const row = await selectPrintApiData(tenantId, storeId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('Ошибка генерации print API:', err);
@@ -5483,10 +5511,533 @@ async function fetchStoreWithHours(tenantId, storeId) {
         throw updateErr;
       }
 
-      const row = await selectPrintApiRow(tenantId, storeId);
+      if (hasOwn("default_printer_id")) {
+        const defaultPrinterId = Number(req.body.default_printer_id || 0);
+        if (defaultPrinterId > 0) {
+          const [printerRows] = await db.query(
+            `SELECT id FROM print_printers
+             WHERE id=? AND tenant_id=? AND store_id=?
+             LIMIT 1`,
+            [defaultPrinterId, tenantId, storeId]
+          );
+          if (!printerRows.length) {
+            return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
+          }
+          await db.query(
+            `UPDATE print_printers
+             SET is_default=IF(id=?,1,0), updated_at=NOW()
+             WHERE tenant_id=? AND store_id=?`,
+            [defaultPrinterId, tenantId, storeId]
+          );
+        }
+      }
+
+      const row = await selectPrintApiData(tenantId, storeId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('Ошибка обновления print API настроек:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  function getDefaultReceiptTemplateHtml() {
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Чек заказа #{{ order.id }}</title>
+  <style>
+    @media print {
+      @page { size: 80mm auto; margin: 0; }
+      body { margin: 0; }
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 5mm 3mm;
+      font-family: 'Courier New', monospace;
+      font-size: 11pt;
+      font-weight: bold;
+      line-height: 1.3;
+      width: 80mm;
+      max-width: 80mm;
+      background: white;
+    }
+    .receipt-header { text-align: center; font-size: 16pt; margin-bottom: 10px; }
+    .receipt-date { text-align: center; margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
+    .receipt-section { margin: 10px 0; }
+    .receipt-divider { border-top: 1px dashed #000; margin: 10px 0; }
+    .receipt-items-group-title { text-transform: uppercase; margin: 2px 0 5px; }
+    .receipt-items-group-list { padding-left: 2px; }
+    .receipt-items-type-divider { border-top: 1px dashed #000; margin: 8px 0; }
+    .receipt-item { padding: 3px 0 2px; }
+    .receipt-item + .receipt-item { border-top: 1px dotted #000; margin-top: 3px; padding-top: 4px; }
+    .receipt-item-row { display: flex; align-items: flex-start; gap: 6px; }
+    .receipt-item-qty, .receipt-item-price { flex-shrink: 0; }
+    .receipt-item-name { flex: 1; min-width: 0; word-wrap: break-word; }
+    .receipt-item-price { text-align: right; }
+    .receipt-composition { margin: 2px 0 1px; font-size: 9pt; }
+    .receipt-composition-item { margin: 1px 0; word-wrap: break-word; }
+    .receipt-composition-item--group { margin-left: 8px; }
+    .receipt-composition-item--sub { margin-left: 16px; }
+    .receipt-summary-row { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; }
+    .receipt-summary-label { flex: 1; }
+    .receipt-summary-value { flex-shrink: 0; text-align: right; }
+    .receipt-total { text-align: center; font-size: 14pt; margin: 15px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 10px 0; }
+    .receipt-footer { margin-top: 20px; text-align: center; font-size: 10pt; }
+    .receipt-old-price { text-decoration: line-through; margin-right: 4px; }
+  </style>
+</head>
+<body>
+  <div class="receipt-header">ЗАКАЗ #{{ order.id }}</div>
+  <div class="receipt-date">{{ order.created_at }}</div>
+  <div class="receipt-divider"></div>
+  <div class="receipt-section">{{ order.schedule_text }}</div>
+  <div class="receipt-section">
+    <div>{{ customer.name }}</div>
+    <div>{{ customer.phone }}</div>
+  </div>
+  <div class="receipt-section">
+    <div>{{ delivery.type }}</div>
+    <div>{{ delivery.address }}</div>
+  </div>
+  <div class="receipt-section">{{ order.address_comment }}</div>
+  <div class="receipt-section">{{ order.comment }}</div>
+  <div class="receipt-divider"></div>
+  <div class="receipt-section">{{ receipt.items_html }}</div>
+  <div class="receipt-divider"></div>
+  <div class="receipt-section">{{ receipt.summary_html }}</div>
+  <div class="receipt-footer">Спасибо за заказ!</div>
+</body>
+</html>`;
+  }
+
+  function getDefaultLabelTemplateHtml() {
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Этикетка заказа #{{ order.id }}</title>
+  <style>
+    @media print {
+      @page { size: 58mm 60mm; margin: 0; }
+      body { margin: 0; }
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 58mm;
+      height: 60mm;
+      padding: 3mm;
+      font-family: 'Courier New', monospace;
+      font-size: 9pt;
+      font-weight: 700;
+      line-height: 1.22;
+      color: #111;
+      background: #fff;
+      overflow: hidden;
+    }
+    .label-header { display: flex; justify-content: center; gap: 2mm; font-size: 9pt; }
+    .label-schedule { text-align: center; }
+    .label-item { margin-top: 2mm; }
+    .label-item-row { display: flex; align-items: flex-start; gap: 2mm; }
+    .label-item-qty, .label-item-price { flex-shrink: 0; }
+    .label-item-name { flex: 1; min-width: 0; word-wrap: break-word; }
+    .label-composition { margin-top: 1mm; font-size: 8pt; }
+    .label-composition-item { margin-left: 4mm; word-wrap: break-word; }
+  </style>
+</head>
+<body>
+  <div class="label-header">
+    <span>ЗАКАЗ #{{ order.id }}</span>
+    <span>{{ order.created_at }}</span>
+  </div>
+  <div class="label-schedule">{{ order.schedule_text }}</div>
+  <div class="label-item">
+    <div class="label-item-row">
+      <span class="label-item-qty">{{ item.quantity }} x</span>
+      <span class="label-item-name">{{ item.name }}</span>
+      <span class="label-item-price">{{ item.total }}</span>
+    </div>
+    <div class="label-composition">
+      <div class="label-composition-item">• {{ item.variant_label }}</div>
+      <div class="label-composition-item">• {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
+      <div class="label-composition-item">• {{ item.option_variant }} {{ item.option_title }}</div>
+      <div class="label-composition-item">• {{ item.client_composition }}</div>
+    </div>
+  </div>
+  <div class="label-item">
+    <div class="label-item-row">
+      <span class="label-item-qty">{{ gift.quantity }} x</span>
+      <span class="label-item-name">{{ gift.name }} (Подарок)</span>
+    </div>
+  </div>
+</body>
+</html>`;
+  }
+
+  function getDefaultPrintTemplateHtml(documentType) {
+    return documentType === "label" ? getDefaultLabelTemplateHtml() : getDefaultReceiptTemplateHtml();
+  }
+
+  function getDefaultReceiptTemplateHtml() {
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430 #{{ order.id }}</title>
+  <style>
+    @media print { @page { size: 80mm auto; margin: 0; } body { margin: 0; } }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { margin: 0; padding: 5mm 3mm; font-family: 'Courier New', monospace; font-size: 11pt; font-weight: bold; line-height: 1.3; width: 80mm; max-width: 80mm; background: white; }
+    .receipt-header { text-align: center; font-size: 16pt; margin-bottom: 10px; }
+    .receipt-date { text-align: center; margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
+    .receipt-section { margin: 10px 0; }
+    .receipt-divider { border-top: 1px dashed #000; margin: 10px 0; }
+    .receipt-item-row, .receipt-summary-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+    .receipt-item-name, .receipt-summary-label { flex: 1; min-width: 0; word-wrap: break-word; }
+    .receipt-item-qty, .receipt-item-price, .receipt-summary-value { flex-shrink: 0; text-align: right; }
+    .receipt-composition { margin: 2px 0 1px; font-size: 9pt; }
+    .receipt-composition-item--group { margin-left: 8px; }
+    .receipt-composition-item--sub { margin-left: 16px; }
+    .receipt-total { text-align: center; font-size: 14pt; margin: 15px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 10px 0; }
+    .receipt-footer { margin-top: 20px; text-align: center; font-size: 10pt; }
+    .receipt-old-price { text-decoration: line-through; margin-right: 4px; }
+  </style>
+</head>
+<body>
+  <div class="receipt-header">\u0417\u0410\u041a\u0410\u0417 #{{ order.id }}</div>
+  <div class="receipt-date">{{ order.created_at }}</div>
+  <div class="receipt-divider"></div>
+  <div class="receipt-section">{{ order.schedule_text }}</div>
+  <div class="receipt-section"><div>{{ customer.name }}</div><div>{{ customer.phone }}</div></div>
+  <div class="receipt-section"><div>{{ delivery.type }}</div><div>{{ delivery.address }}</div></div>
+  <div class="receipt-section">{{ order.address_comment }}</div>
+  <div class="receipt-section">{{ order.comment }}</div>
+  <div class="receipt-divider"></div>
+  <div class="receipt-section">{{ receipt.items_html }}</div>
+  <div class="receipt-divider"></div>
+  <div class="receipt-section">{{ receipt.summary_html }}</div>
+  <div class="receipt-footer">\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u0437\u0430\u043a\u0430\u0437!</div>
+</body>
+</html>`;
+  }
+
+  function getDefaultLabelTemplateHtml() {
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0437\u0430\u043a\u0430\u0437\u0430 #{{ order.id }}</title>
+  <style>
+    @media print { @page { size: 58mm 60mm; margin: 0; } body { margin: 0; } }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 58mm; height: 60mm; padding: 3mm; font-family: 'Courier New', monospace; font-size: 9pt; font-weight: 700; line-height: 1.22; color: #111; background: #fff; overflow: hidden; }
+    .label-header { display: flex; justify-content: center; gap: 2mm; font-size: 9pt; }
+    .label-schedule { text-align: center; }
+    .label-item-row { display: flex; align-items: flex-start; gap: 2mm; margin-top: 2mm; }
+    .label-item-qty, .label-item-price { flex-shrink: 0; }
+    .label-item-name { flex: 1; min-width: 0; word-wrap: break-word; }
+    .label-composition { margin-top: 1mm; font-size: 8pt; }
+    .label-composition-item { margin-left: 4mm; word-wrap: break-word; }
+  </style>
+</head>
+<body>
+  <div class="label-header"><span>\u0417\u0410\u041a\u0410\u0417 #{{ order.id }}</span><span>{{ order.created_at }}</span></div>
+  <div class="label-schedule">{{ order.schedule_text }}</div>
+  <div class="label-item-row"><span class="label-item-qty">{{ item.quantity }} x</span><span class="label-item-name">{{ item.name }}</span><span class="label-item-price">{{ item.total }}</span></div>
+  <div class="label-composition">
+    <div class="label-composition-item">\u2022 {{ item.variant_label }}</div>
+    <div class="label-composition-item">\u2022 {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
+    <div class="label-composition-item">\u2022 {{ item.option_variant }} {{ item.option_title }}</div>
+    <div class="label-composition-item">\u2022 {{ item.client_composition }}</div>
+  </div>
+  <div class="label-item-row"><span class="label-item-qty">{{ gift.quantity }} x</span><span class="label-item-name">{{ gift.name }} (\u041f\u043e\u0434\u0430\u0440\u043e\u043a)</span></div>
+</body>
+</html>`;
+  }
+
+  async function ensureDefaultPrintTemplates(tenantId) {
+    const defaults = [
+      { documentType: "receipt", title: "Чек заказа" },
+      { documentType: "label", title: "Этикетка товара" },
+    ];
+    for (const item of defaults) {
+      if (item.documentType === "receipt") item.title = "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430";
+      if (item.documentType === "label") item.title = "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430";
+      await db.query(
+        `INSERT INTO print_templates (tenant_id, store_id, document_type, title, template_html, is_active)
+         VALUES (?, NULL, ?, ?, ?, 1)
+         ON DUPLICATE KEY UPDATE
+           title=COALESCE(NULLIF(title,''), VALUES(title)),
+           template_html=COALESCE(NULLIF(template_html,''), VALUES(template_html)),
+           is_active=1`,
+        [tenantId, item.documentType, item.title, getDefaultPrintTemplateHtml(item.documentType)]
+      );
+    }
+  }
+
+  async function selectPrintTemplatesData(tenantId) {
+    await ensureDefaultPrintTemplates(tenantId);
+    const [rows] = await db.query(
+      `SELECT id, tenant_id, store_id, document_type, title, template_html, is_active, created_at, updated_at
+       FROM print_templates
+       WHERE tenant_id=? AND is_active=1
+       ORDER BY FIELD(document_type,'receipt','label'), id ASC`,
+      [tenantId]
+    );
+    return rows || [];
+  }
+
+  router.get('/print-templates', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      const templates = await selectPrintTemplatesData(tenantId);
+      res.json({ ok: true, data: { templates } });
+    } catch (err) {
+      console.error('Ошибка получения шаблонов печати:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/print-templates/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const templateId = Number(req.params.id || 0);
+      const title = helpers.strOrNull(req.body?.title);
+      const templateHtml = String(req.body?.template_html ?? "").trim();
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!Number.isFinite(templateId) || templateId <= 0) return res.status(400).json({ ok: false, error: 'BAD_TEMPLATE_ID' });
+      if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+      if (!templateHtml) return res.status(400).json({ ok: false, error: 'TEMPLATE_HTML_REQUIRED' });
+      const [rows] = await db.query(
+        `SELECT id FROM print_templates WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
+        [tenantId, templateId]
+      );
+      if (!rows.length) return res.status(404).json({ ok: false, error: 'TEMPLATE_NOT_FOUND' });
+      await db.query(
+        `UPDATE print_templates
+         SET title=?, template_html=?, updated_at=NOW()
+         WHERE tenant_id=? AND id=?`,
+        [title, templateHtml, tenantId, templateId]
+      );
+      const templates = await selectPrintTemplatesData(tenantId);
+      res.json({ ok: true, data: { templates }, template_id: templateId });
+    } catch (err) {
+      console.error('Ошибка сохранения шаблона печати:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  async function selectProductionZonesData(tenantId) {
+    const [zoneRows] = await db.query(
+      `SELECT z.id, z.name, z.description, z.sort_order, z.is_active,
+              r.id AS rule_id, r.store_id, r.printer_id, r.template_id, r.is_enabled,
+              s.name AS store_name,
+              p.display_name AS printer_display_name,
+              p.system_name AS printer_system_name,
+              p.status AS printer_status,
+              pt.title AS template_title
+       FROM prod_production_zones z
+       LEFT JOIN prod_store_print_rules r
+         ON r.id=(
+           SELECT rr.id
+           FROM prod_store_print_rules rr
+           WHERE rr.tenant_id=z.tenant_id
+             AND rr.production_zone_id=z.id
+             AND rr.document_type='label'
+           ORDER BY rr.updated_at DESC, rr.id DESC
+           LIMIT 1
+         )
+       LEFT JOIN ten_stores s
+         ON s.tenant_id=z.tenant_id
+        AND s.id=r.store_id
+       LEFT JOIN print_printers p
+         ON p.tenant_id=z.tenant_id
+        AND p.id=r.printer_id
+       LEFT JOIN print_templates pt
+         ON pt.tenant_id=z.tenant_id
+        AND pt.id=r.template_id
+       WHERE z.tenant_id=? AND z.is_active=1
+       ORDER BY z.sort_order ASC, z.name ASC, z.id ASC`,
+      [tenantId]
+    );
+    const [storeRows] = await db.query(
+      `SELECT id, name
+       FROM ten_stores
+       WHERE tenant_id=?
+       ORDER BY name ASC, id ASC`,
+      [tenantId]
+    );
+    const [printerRows] = await db.query(
+      `SELECT id, store_id, system_name, display_name, is_default, status
+       FROM print_printers
+       WHERE tenant_id=? AND status='online'
+       ORDER BY store_id ASC, is_default DESC, display_name ASC, system_name ASC`,
+      [tenantId]
+    );
+    const [ruleRows] = await db.query(
+      `SELECT id, store_id, production_zone_id, printer_id, template_id, is_enabled
+       FROM prod_store_print_rules
+       WHERE tenant_id=? AND document_type='label'
+       ORDER BY updated_at DESC, id DESC`,
+      [tenantId]
+    );
+    const templates = await selectPrintTemplatesData(tenantId);
+    return {
+      zones: zoneRows || [],
+      stores: storeRows || [],
+      printers: printerRows || [],
+      rules: ruleRows || [],
+      templates
+    };
+  }
+
+  router.get('/production-zones', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      const data = await selectProductionZonesData(tenantId);
+      res.json({ ok: true, data });
+    } catch (err) {
+      console.error('Ошибка получения производственных зон:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/production-zones', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const name = helpers.strOrNull(req.body?.name);
+      const storeId = Number(req.body?.store_id || 0);
+      const printerId = Number(req.body?.printer_id || 0);
+      const templateId = Number(req.body?.template_id || 0);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+      if (!Number.isFinite(storeId) || storeId <= 0) return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      if (!Number.isFinite(printerId) || printerId <= 0) return res.status(400).json({ ok: false, error: 'BAD_PRINTER_ID' });
+      if (!Number.isFinite(templateId) || templateId <= 0) return res.status(400).json({ ok: false, error: 'BAD_TEMPLATE_ID' });
+      const storeExists = await ensureStoreExists(tenantId, storeId);
+      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      const [printerRows] = await db.query(
+        `SELECT id FROM print_printers
+         WHERE id=? AND tenant_id=? AND store_id=? AND status='online'
+         LIMIT 1`,
+        [printerId, tenantId, storeId]
+      );
+      if (!printerRows.length) return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
+      const [templateRows] = await db.query(
+        `SELECT id FROM print_templates
+         WHERE id=? AND tenant_id=? AND is_active=1
+         LIMIT 1`,
+        [templateId, tenantId]
+      );
+      if (!templateRows.length) return res.status(404).json({ ok: false, error: 'PRINT_TEMPLATE_NOT_FOUND' });
+      const [sortRows] = await db.query(
+        `SELECT COALESCE(MAX(sort_order),0)+10 AS next_sort
+         FROM prod_production_zones
+         WHERE tenant_id=?`,
+        [tenantId]
+      );
+      const sortOrder = Number(sortRows[0]?.next_sort || 10);
+      let insertResult;
+      try {
+        [insertResult] = await db.query(
+          `INSERT INTO prod_production_zones (tenant_id, name, description, sort_order, is_active)
+           VALUES (?,?,?,?,1)`,
+          [tenantId, name, null, sortOrder]
+        );
+      } catch (insertErr) {
+        if (String(insertErr?.code || "") === "ER_DUP_ENTRY") {
+          return res.status(409).json({ ok: false, error: 'ZONE_NAME_EXISTS' });
+        }
+        throw insertErr;
+      }
+      const zoneId = Number(insertResult.insertId || 0);
+      await db.query(
+        `INSERT INTO prod_store_print_rules
+           (tenant_id, store_id, production_zone_id, document_type, printer_id, template_id, copies, is_enabled, sort_order)
+         VALUES (?,?,?,?,?,?,1,1,0)
+         ON DUPLICATE KEY UPDATE
+           printer_id=VALUES(printer_id),
+           template_id=VALUES(template_id),
+           copies=1,
+           is_enabled=1,
+           updated_at=NOW()`,
+        [tenantId, storeId, zoneId, 'label', printerId, templateId]
+      );
+      const data = await selectProductionZonesData(tenantId);
+      res.json({ ok: true, data, zone_id: zoneId });
+    } catch (err) {
+      console.error('Ошибка создания производственной зоны:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/production-zones/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const zoneId = Number(req.params.id || 0);
+      const name = helpers.strOrNull(req.body?.name);
+      const storeId = Number(req.body?.store_id || 0);
+      const printerId = Number(req.body?.printer_id || 0);
+      const templateId = Number(req.body?.template_id || 0);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!Number.isFinite(zoneId) || zoneId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ZONE_ID' });
+      if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+      if (!Number.isFinite(storeId) || storeId <= 0) return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      if (!Number.isFinite(printerId) || printerId <= 0) return res.status(400).json({ ok: false, error: 'BAD_PRINTER_ID' });
+      if (!Number.isFinite(templateId) || templateId <= 0) return res.status(400).json({ ok: false, error: 'BAD_TEMPLATE_ID' });
+      const [zoneRows] = await db.query(
+        `SELECT id FROM prod_production_zones WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
+        [tenantId, zoneId]
+      );
+      if (!zoneRows.length) return res.status(404).json({ ok: false, error: 'ZONE_NOT_FOUND' });
+      const storeExists = await ensureStoreExists(tenantId, storeId);
+      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      const [printerRows] = await db.query(
+        `SELECT id FROM print_printers
+         WHERE id=? AND tenant_id=? AND store_id=? AND status='online'
+         LIMIT 1`,
+        [printerId, tenantId, storeId]
+      );
+      if (!printerRows.length) return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
+      const [templateRows] = await db.query(
+        `SELECT id FROM print_templates
+         WHERE id=? AND tenant_id=? AND is_active=1
+         LIMIT 1`,
+        [templateId, tenantId]
+      );
+      if (!templateRows.length) return res.status(404).json({ ok: false, error: 'PRINT_TEMPLATE_NOT_FOUND' });
+      try {
+        await db.query(
+          `UPDATE prod_production_zones
+           SET name=?, description=NULL, updated_at=NOW()
+           WHERE tenant_id=? AND id=?`,
+          [name, tenantId, zoneId]
+        );
+      } catch (updateErr) {
+        if (String(updateErr?.code || "") === "ER_DUP_ENTRY") {
+          return res.status(409).json({ ok: false, error: 'ZONE_NAME_EXISTS' });
+        }
+        throw updateErr;
+      }
+      await db.query(
+        `INSERT INTO prod_store_print_rules
+           (tenant_id, store_id, production_zone_id, document_type, printer_id, template_id, copies, is_enabled, sort_order)
+         VALUES (?,?,?,?,?,?,1,1,0)
+         ON DUPLICATE KEY UPDATE
+           printer_id=VALUES(printer_id),
+           template_id=VALUES(template_id),
+           copies=1,
+           is_enabled=1,
+           updated_at=NOW()`,
+        [tenantId, storeId, zoneId, 'label', printerId, templateId]
+      );
+      const data = await selectProductionZonesData(tenantId);
+      res.json({ ok: true, data, zone_id: zoneId });
+    } catch (err) {
+      console.error('Ошибка обновления производственной зоны:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });

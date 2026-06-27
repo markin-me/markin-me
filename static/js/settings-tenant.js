@@ -6097,6 +6097,22 @@
 
 
 
+    const printTemplatesSectionPanel = document.getElementById("printTemplatesPanel");
+
+
+
+    const productionZonesPanel = document.getElementById("productionZonesPanel");
+
+
+
+    const productionZonesList = document.getElementById("productionZonesList");
+
+
+
+    const productionZonesEmpty = document.getElementById("productionZonesEmpty");
+
+
+
     const deliveryPanel = document.getElementById("deliveryPanel");
 
 
@@ -6473,6 +6489,14 @@
 
 
 
+      const isPrintTemplates = section === "print-templates";
+
+
+
+      const isProductionZones = section === "production-zones";
+
+
+
       if (settingsChatWidgetSwitchWrap) {
 
 
@@ -6517,7 +6541,7 @@
 
 
 
-        settingsAddOrderBtn.classList.toggle("hidden", section === "site" || section === "system" || isChats || isApi);
+        settingsAddOrderBtn.classList.toggle("hidden", section === "site" || section === "system" || isChats || isApi || isPrintTemplates);
 
 
 
@@ -6530,6 +6554,18 @@
 
 
           settingsAddOrderBtn.setAttribute("aria-label", "\u041d\u043e\u0432\u0430\u044f \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438");
+
+
+
+        } else if (isProductionZones) {
+
+
+
+          settingsAddOrderBtn.title = "\u041d\u043e\u0432\u0430\u044f \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u0430\u044f \u0437\u043e\u043d\u0430";
+
+
+
+          settingsAddOrderBtn.setAttribute("aria-label", "\u041d\u043e\u0432\u0430\u044f \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u0430\u044f \u0437\u043e\u043d\u0430");
 
 
 
@@ -6633,7 +6669,15 @@
 
 
 
-      const hideTenantCards = isStores || isSite || isSystem || isDelivery || isApi;
+      const isPrintTemplates = section === "print-templates";
+
+
+
+      const isProductionZones = section === "production-zones";
+
+
+
+      const hideTenantCards = isStores || isSite || isSystem || isDelivery || isApi || isPrintTemplates || isProductionZones;
 
 
 
@@ -6665,6 +6709,14 @@
 
 
 
+      if (printTemplatesSectionPanel) printTemplatesSectionPanel.classList.toggle("hidden", !isPrintTemplates);
+
+
+
+      if (productionZonesPanel) productionZonesPanel.classList.toggle("hidden", !isProductionZones);
+
+
+
     }
 
 
@@ -6693,7 +6745,11 @@
                 ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0430\u0442\u0430"
                 : section === "api"
                   ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u043f\u0440\u0438\u043d\u0442\u0435\u0440\u0430"
-                  : section === "system"
+                  : section === "print-templates"
+                    ? "\u0428\u0430\u0431\u043b\u043e\u043d\u044b \u043f\u0435\u0447\u0430\u0442\u0438"
+                    : section === "production-zones"
+                      ? "\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0435 \u0437\u043e\u043d\u044b"
+                    : section === "system"
                     ? "\u0421\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0435"
                     : section === "delivery"
                       ? "\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430"
@@ -6719,7 +6775,11 @@
               ? "\u0417\u0432\u0443\u043a\u0438, \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a \u0438 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f"
               : section === "api"
                 ? "\u0414\u043b\u044f \u043f\u0435\u0447\u0430\u0442\u0438 \u0437\u0430\u043a\u0430\u0437\u043e\u0432"
-                : section === "delivery"
+                : section === "print-templates"
+                  ? "HTML-\u0448\u0430\u0431\u043b\u043e\u043d\u044b \u043f\u0435\u0447\u0430\u0442\u0438"
+                  : section === "production-zones"
+                    ? "\u041f\u0440\u0438\u043d\u0442\u0435\u0440\u044b \u044d\u0442\u0438\u043a\u0435\u0442\u043e\u043a \u043f\u043e \u0437\u043e\u043d\u0430\u043c"
+                  : section === "delivery"
                   ? "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430..."
                   : "";
 
@@ -6817,7 +6877,23 @@
 
 
 
-                  : section === "system"
+                  : section === "print-templates"
+
+
+
+                    ? "fas fa-receipt"
+
+
+
+                    : section === "production-zones"
+
+
+
+                      ? "fas fa-layer-group"
+
+
+
+                    : section === "system"
 
 
 
@@ -6862,6 +6938,42 @@
 
 
         if (settingsCenterTitle) settingsCenterTitle.textContent = "API";
+
+
+
+        if (settingsCenterSubtitle) settingsCenterSubtitle.textContent = "";
+
+
+
+      }
+
+
+
+      if (section === "print-templates") {
+
+
+
+        if (settingsCenterTitle) settingsCenterTitle.textContent = "\u0428\u0430\u0431\u043b\u043e\u043d\u044b \u043f\u0435\u0447\u0430\u0442\u0438";
+
+
+
+        if (settingsCenterSubtitle) settingsCenterSubtitle.textContent = "";
+
+
+
+        ensurePrintTemplatesLoaded();
+
+
+
+      }
+
+
+
+      if (section === "production-zones") {
+
+
+
+        if (settingsCenterTitle) settingsCenterTitle.textContent = "\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0435 \u0437\u043e\u043d\u044b";
 
 
 
@@ -6989,6 +7101,14 @@
 
 
 
+        const isPrintTemplates = section === "print-templates";
+
+
+
+        const isProductionZones = section === "production-zones";
+
+
+
         const isSystem = section === "system";
 
 
@@ -7017,7 +7137,11 @@
                 ? "\u0427\u0430\u0442\u044b"
                 : isApi
                   ? "API"
-                  : "\u041a\u043e\u043c\u043f\u0430\u043d\u0438\u044f";
+                  : isPrintTemplates
+                    ? "\u0428\u0430\u0431\u043b\u043e\u043d\u044b \u043f\u0435\u0447\u0430\u0442\u0438"
+                    : isProductionZones
+                      ? "\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0435 \u0437\u043e\u043d\u044b"
+                    : "\u041a\u043e\u043c\u043f\u0430\u043d\u0438\u044f";
 
 
 
@@ -7073,7 +7197,7 @@
 
 
 
-        if (isChats || isApi) {
+        if (isChats || isApi || isPrintTemplates || isProductionZones) {
 
 
 
@@ -7093,7 +7217,7 @@
 
 
 
-        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isStores || isSite || isSystem);
+        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isStores || isSite || isSystem || isPrintTemplates || isProductionZones);
 
 
 
@@ -7101,7 +7225,7 @@
 
 
 
-        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isStores || isSite || isSystem);
+        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isStores || isSite || isSystem || isPrintTemplates || isProductionZones);
 
 
 
@@ -7126,6 +7250,18 @@
 
 
 
+
+
+
+        if (isProductionZones) {
+
+
+
+          loadProductionZones();
+
+
+
+        }
 
 
 
@@ -7299,6 +7435,14 @@
 
 
 
+    const printTemplateReceiptCard = document.getElementById("settingsPrintTemplateReceiptCard");
+
+
+
+    const printTemplateLabelCard = document.getElementById("settingsPrintTemplateLabelCard");
+
+
+
     const systemPollingCard = document.getElementById("settingsSystemPollingCard");
 
 
@@ -7395,6 +7539,102 @@
 
 
     const printApiPanel = document.getElementById("settingsPrintApiPanel");
+
+
+
+    const printTemplateReceiptPanel = document.getElementById("settingsPrintTemplateReceiptPanel");
+
+
+
+    const printTemplateLabelPanel = document.getElementById("settingsPrintTemplateLabelPanel");
+
+
+
+    const printTemplateReceiptHtml = document.getElementById("settingsPrintTemplateReceiptHtml");
+
+
+
+    const printTemplateLabelHtml = document.getElementById("settingsPrintTemplateLabelHtml");
+
+
+
+    const printTemplateReceiptFooterView = document.getElementById("settingsPrintTemplateReceiptFooterView");
+
+
+
+    const printTemplateReceiptFooterEdit = document.getElementById("settingsPrintTemplateReceiptFooterEdit");
+
+
+
+    const printTemplateLabelFooterView = document.getElementById("settingsPrintTemplateLabelFooterView");
+
+
+
+    const printTemplateLabelFooterEdit = document.getElementById("settingsPrintTemplateLabelFooterEdit");
+
+
+
+    const printTemplateReceiptEditBtn = document.getElementById("settingsPrintTemplateReceiptEditBtn");
+
+
+
+    const printTemplateReceiptCancelBtn = document.getElementById("settingsPrintTemplateReceiptCancelBtn");
+
+
+
+    const printTemplateReceiptSaveBtn = document.getElementById("settingsPrintTemplateReceiptSaveBtn");
+
+
+
+    const printTemplateLabelEditBtn = document.getElementById("settingsPrintTemplateLabelEditBtn");
+
+
+
+    const printTemplateLabelCancelBtn = document.getElementById("settingsPrintTemplateLabelCancelBtn");
+
+
+
+    const printTemplateLabelSaveBtn = document.getElementById("settingsPrintTemplateLabelSaveBtn");
+
+
+
+    const productionZonePanel = document.getElementById("settingsProductionZonePanel");
+
+
+
+    const productionZoneNameInput = document.getElementById("settingsProductionZoneName");
+
+
+
+    const productionZoneStoreSelect = document.getElementById("settingsProductionZoneStore");
+
+
+
+    const productionZonePrinterSelect = document.getElementById("settingsProductionZonePrinter");
+
+
+
+    const productionZoneTemplateSelect = document.getElementById("settingsProductionZoneTemplate");
+
+
+
+    const productionZoneFooterView = document.getElementById("settingsProductionZoneFooterView");
+
+
+
+    const productionZoneFooterEdit = document.getElementById("settingsProductionZoneFooterEdit");
+
+
+
+    const productionZoneEditBtn = document.getElementById("settingsProductionZoneEditBtn");
+
+
+
+    const productionZoneCancelBtn = document.getElementById("settingsProductionZoneCancelBtn");
+
+
+
+    const productionZoneSaveBtn = document.getElementById("settingsProductionZoneSaveBtn");
 
 
 
@@ -8252,6 +8492,74 @@
 
 
       mode: "view"
+
+
+
+    };
+
+
+
+    const productionZonesState = {
+
+
+
+      loaded: false,
+
+
+
+      zones: [],
+
+
+
+      stores: [],
+
+
+
+      printers: [],
+
+
+
+      rules: [],
+
+
+
+      selectedId: null,
+
+
+
+      selectedStoreId: null,
+
+
+
+      snapshot: null,
+
+
+
+      mode: "view"
+
+
+
+    };
+
+
+
+    const printTemplatesState = {
+
+
+
+      loaded: false,
+
+
+
+      templates: [],
+
+
+
+      snapshots: {},
+
+
+
+      modes: { receipt: "view", label: "view" }
 
 
 
@@ -19780,6 +20088,18 @@
 
 
 
+      if (printTemplateReceiptPanel) printTemplateReceiptPanel.classList.toggle("hidden", tabId !== "print-template-receipt");
+
+
+
+      if (printTemplateLabelPanel) printTemplateLabelPanel.classList.toggle("hidden", tabId !== "print-template-label");
+
+
+
+      if (productionZonePanel) productionZonePanel.classList.toggle("hidden", tabId !== "production-zone");
+
+
+
       if (systemMapPanel) systemMapPanel.classList.toggle("hidden", tabId !== "system-map");
 
 
@@ -19803,6 +20123,18 @@
 
 
       toggleRightPanelFooter(settingsPrintApiFooterView, settingsPrintApiFooterEdit, tabId === "print-api");
+
+
+
+      toggleRightPanelFooter(printTemplateReceiptFooterView, printTemplateReceiptFooterEdit, tabId === "print-template-receipt");
+
+
+
+      toggleRightPanelFooter(printTemplateLabelFooterView, printTemplateLabelFooterEdit, tabId === "print-template-label");
+
+
+
+      toggleRightPanelFooter(productionZoneFooterView, productionZoneFooterEdit, tabId === "production-zone");
 
 
 
@@ -20181,6 +20513,24 @@
 
 
 
+          if (tabId === "print-template-receipt" && printTemplateReceiptCard) printTemplateReceiptCard.classList.remove("is-active");
+
+
+
+          if (tabId === "print-template-label" && printTemplateLabelCard) printTemplateLabelCard.classList.remove("is-active");
+
+
+
+          if (tabId === "production-zone") {
+            productionZonesState.selectedId = null;
+            productionZonesState.selectedStoreId = null;
+            productionZonesState.snapshot = null;
+            productionZonesState.mode = "view";
+            renderProductionZonesList();
+          }
+
+
+
           if (tabId === "system-map" && systemMapCard) systemMapCard.classList.remove("is-active");
 
 
@@ -20376,6 +20726,14 @@
 
 
       if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
+
+
+
+      if (tabId === "print-template-receipt" && printTemplateReceiptCard) printTemplateReceiptCard.classList.add("is-active");
+
+
+
+      if (tabId === "print-template-label" && printTemplateLabelCard) printTemplateLabelCard.classList.add("is-active");
 
 
 
@@ -26650,6 +27008,33 @@
       if (!file || !String(file.type || "").startsWith("image/")) {
         throw new Error("Выберите файл изображения.");
       }
+
+
+
+      if (tabId === "print-template-receipt") {
+
+
+
+        openPrintTemplate("receipt");
+
+
+
+      }
+
+
+
+      if (tabId === "print-template-label") {
+
+
+
+        openPrintTemplate("label");
+
+
+
+      }
+
+
+
       const objectUrl = URL.createObjectURL(file);
       try {
         const img = await loadSiteMenuIconImage(objectUrl);
@@ -26811,6 +27196,90 @@
 
 
 
+
+
+
+    if (printTemplateReceiptCard) {
+
+
+
+      printTemplateReceiptCard.addEventListener("click", () => {
+
+
+
+        if (rightDefault) rightDefault.classList.add("hidden");
+
+
+
+        ensureTab("print-template-receipt", "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430");
+
+
+
+      });
+
+
+
+    }
+
+
+
+    if (printTemplateLabelCard) {
+
+
+
+      printTemplateLabelCard.addEventListener("click", () => {
+
+
+
+        if (rightDefault) rightDefault.classList.add("hidden");
+
+
+
+        ensureTab("print-template-label", "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430");
+
+
+
+      });
+
+
+
+    }
+
+
+
+    if (printTemplateReceiptEditBtn) {
+      printTemplateReceiptEditBtn.addEventListener("click", () => setPrintTemplateMode("receipt", "edit"));
+    }
+
+
+
+    if (printTemplateReceiptCancelBtn) {
+      printTemplateReceiptCancelBtn.addEventListener("click", () => fillPrintTemplatePanel("receipt"));
+    }
+
+
+
+    if (printTemplateReceiptSaveBtn) {
+      printTemplateReceiptSaveBtn.addEventListener("click", () => savePrintTemplate("receipt"));
+    }
+
+
+
+    if (printTemplateLabelEditBtn) {
+      printTemplateLabelEditBtn.addEventListener("click", () => setPrintTemplateMode("label", "edit"));
+    }
+
+
+
+    if (printTemplateLabelCancelBtn) {
+      printTemplateLabelCancelBtn.addEventListener("click", () => fillPrintTemplatePanel("label"));
+    }
+
+
+
+    if (printTemplateLabelSaveBtn) {
+      printTemplateLabelSaveBtn.addEventListener("click", () => savePrintTemplate("label"));
+    }
 
 
 
@@ -27023,6 +27492,10 @@
 
 
           applyPrintApiNotificationSettings(info);
+
+
+
+          applyPrintApiDeviceState(info);
 
 
 
@@ -27363,6 +27836,26 @@
 
 
 
+
+
+
+    if (settingsPrintApiPrinterName) {
+
+
+
+      settingsPrintApiPrinterName.addEventListener("change", () => {
+
+
+
+        markPrintApiSettingsDirty();
+
+
+
+      });
+
+
+
+    }
 
 
 
@@ -39358,6 +39851,22 @@
 
 
 
+        if (section === "production-zones") {
+
+
+
+          startCreateProductionZone();
+
+
+
+          return;
+
+
+
+        }
+
+
+
         if (section !== "stores") return;
 
 
@@ -41872,7 +42381,7 @@
 
 
 
-    function setPrintApiDeviceState(statusText, printerText) {
+    function setPrintApiDeviceState(statusText, printerText, printers = []) {
 
 
 
@@ -41880,7 +42389,36 @@
 
 
 
-      if (settingsPrintApiPrinterName) settingsPrintApiPrinterName.value = String(printerText || "");
+      if (settingsPrintApiPrinterName) {
+        const items = Array.isArray(printers) ? printers : [];
+        settingsPrintApiPrinterName.innerHTML = "";
+        if (!items.length) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = String(printerText || "Нет подключенных принтеров");
+          settingsPrintApiPrinterName.appendChild(opt);
+        } else {
+          items.forEach((printer) => {
+            const opt = document.createElement("option");
+            const id = Number(printer && printer.id);
+            const systemName = String((printer && printer.system_name) || "");
+            const displayName = String((printer && printer.display_name) || systemName);
+            const status = String((printer && printer.status) || "");
+            opt.value = id > 0 ? String(id) : "";
+            const isDefault = Number(printer && printer.is_default) === 1;
+            const flags = [];
+            if (isDefault) flags.push("по умолчанию");
+            if (status) flags.push(status);
+            opt.textContent = `${displayName || systemName}${displayName && systemName && displayName !== systemName ? ` (${systemName})` : ""}${flags.length ? ` - ${flags.join(", ")}` : ""}`;
+            if (status === "offline") opt.className = "muted";
+            if (isDefault) opt.selected = true;
+            settingsPrintApiPrinterName.appendChild(opt);
+          });
+          if (!settingsPrintApiPrinterName.value && settingsPrintApiPrinterName.options.length) {
+            settingsPrintApiPrinterName.selectedIndex = 0;
+          }
+        }
+      }
 
 
 
@@ -41888,7 +42426,510 @@
 
 
 
+    function getProductionZoneStoreName(storeId) {
+      const store = productionZonesState.stores.find((item) => Number(item.id) === Number(storeId));
+      return store ? String(store.name || "") : "";
+    }
 
+
+
+    function getPrintTemplateByType(documentType) {
+      return printTemplatesState.templates.find((template) => String(template.document_type || "") === String(documentType || "")) || null;
+    }
+
+
+
+    function getPrintTemplateById(templateId) {
+      return printTemplatesState.templates.find((template) => Number(template.id) === Number(templateId)) || null;
+    }
+
+
+
+    async function loadPrintTemplates() {
+      try {
+        const res = await authFetch("/api/admin/tenant/print-templates");
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) throw new Error("LOAD_FAILED");
+        printTemplatesState.loaded = true;
+        printTemplatesState.templates = Array.isArray(data.data.templates) ? data.data.templates : [];
+        fillPrintTemplatePanel("receipt");
+        fillPrintTemplatePanel("label");
+        return printTemplatesState.templates;
+      } catch (err) {
+        console.error("Не удалось загрузить шаблоны печати:", err);
+        return null;
+      }
+    }
+
+
+
+    async function ensurePrintTemplatesLoaded() {
+      if (printTemplatesState.loaded) return true;
+      const templates = await loadPrintTemplates();
+      return Array.isArray(templates);
+    }
+
+
+
+    function getPrintTemplateTextarea(documentType) {
+      return documentType === "label" ? printTemplateLabelHtml : printTemplateReceiptHtml;
+    }
+
+
+
+    function setPrintTemplateMode(documentType, mode) {
+      const isLabel = documentType === "label";
+      const textarea = getPrintTemplateTextarea(documentType);
+      const footerView = isLabel ? printTemplateLabelFooterView : printTemplateReceiptFooterView;
+      const footerEdit = isLabel ? printTemplateLabelFooterEdit : printTemplateReceiptFooterEdit;
+      printTemplatesState.modes[documentType] = mode === "edit" ? "edit" : "view";
+      const isEdit = printTemplatesState.modes[documentType] === "edit";
+      if (textarea) textarea.readOnly = !isEdit;
+      if (footerView) footerView.classList.toggle("hidden", isEdit);
+      if (footerEdit) footerEdit.classList.toggle("hidden", !isEdit);
+    }
+
+
+
+    function fillPrintTemplatePanel(documentType) {
+      const template = getPrintTemplateByType(documentType);
+      const textarea = getPrintTemplateTextarea(documentType);
+      if (!template || !textarea) return;
+      textarea.value = String(template.template_html || "");
+      const card = documentType === "label" ? printTemplateLabelCard : printTemplateReceiptCard;
+      const title = card ? card.querySelector(".product-title") : null;
+      if (title) title.textContent = String(template.title || (documentType === "label" ? "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430" : "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430"));
+      printTemplatesState.snapshots[documentType] = { ...template };
+      setPrintTemplateMode(documentType, "view");
+    }
+
+
+
+    async function openPrintTemplate(documentType) {
+      await ensurePrintTemplatesLoaded();
+      fillPrintTemplatePanel(documentType);
+    }
+
+
+
+    async function savePrintTemplate(documentType) {
+      let template = getPrintTemplateByType(documentType);
+      const textarea = getPrintTemplateTextarea(documentType);
+      if (!template) {
+        await loadPrintTemplates();
+        template = getPrintTemplateByType(documentType);
+      }
+      if (!template || !textarea) {
+        alert("\u0428\u0430\u0431\u043b\u043e\u043d \u043f\u0435\u0447\u0430\u0442\u0438 \u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d.");
+        return;
+      }
+      const templateHtml = String(textarea.value || "").trim();
+      if (!templateHtml) {
+        alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 HTML \u0448\u0430\u0431\u043b\u043e\u043d\u0430.");
+        return;
+      }
+      const saveBtn = documentType === "label" ? printTemplateLabelSaveBtn : printTemplateReceiptSaveBtn;
+      const idleText = saveBtn ? String(saveBtn.textContent || "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c") : "";
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435...";
+      }
+      try {
+        const res = await authFetch(`/api/admin/tenant/print-templates/${template.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            title: template.title || (documentType === "label" ? "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430" : "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430"),
+            template_html: templateHtml
+          })
+        });
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) {
+          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0435\u0447\u0430\u0442\u0438.");
+          return;
+        }
+        printTemplatesState.loaded = true;
+        printTemplatesState.templates = Array.isArray(data.data.templates) ? data.data.templates : [];
+        fillPrintTemplatePanel(documentType);
+        if (documentType === "label") {
+          populateProductionZoneTemplates(Number(productionZoneTemplateSelect && productionZoneTemplateSelect.value || 0));
+        }
+      } catch (err) {
+        console.error("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0435\u0447\u0430\u0442\u0438:", err);
+        alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0435\u0447\u0430\u0442\u0438.");
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = idleText || "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c";
+        }
+      }
+    }
+
+
+
+    function getProductionZonePrinterName(printerId) {
+      const printer = productionZonesState.printers.find((item) => Number(item.id) === Number(printerId));
+      if (!printer) return "";
+      return String(printer.display_name || printer.system_name || "");
+    }
+
+
+
+    function getProductionZonePrintersForStore(storeId) {
+      return productionZonesState.printers.filter((printer) => Number(printer.store_id) === Number(storeId));
+    }
+
+
+
+    function getProductionZoneRule(zoneId, storeId) {
+      return productionZonesState.rules.find((rule) => (
+        Number(rule.production_zone_id) === Number(zoneId)
+        && Number(rule.store_id) === Number(storeId)
+      )) || null;
+    }
+
+
+
+    function setProductionZoneFormMode(mode) {
+      productionZonesState.mode = mode === "edit" ? "edit" : "view";
+      const isEdit = productionZonesState.mode === "edit";
+      [productionZoneNameInput, productionZoneStoreSelect, productionZonePrinterSelect, productionZoneTemplateSelect].forEach((el) => {
+        if (el) el.disabled = !isEdit;
+      });
+      if (productionZoneFooterView) productionZoneFooterView.classList.toggle("hidden", isEdit);
+      if (productionZoneFooterEdit) productionZoneFooterEdit.classList.toggle("hidden", !isEdit);
+    }
+
+
+
+    function populateProductionZoneStores(selectedStoreId) {
+      if (!productionZoneStoreSelect) return;
+      productionZoneStoreSelect.innerHTML = "";
+      productionZonesState.stores.forEach((store) => {
+        const opt = document.createElement("option");
+        opt.value = String(store.id);
+        opt.textContent = String(store.name || `#${store.id}`);
+        if (Number(store.id) === Number(selectedStoreId)) opt.selected = true;
+        productionZoneStoreSelect.appendChild(opt);
+      });
+    }
+
+
+
+    function populateProductionZonePrinters(storeId, selectedPrinterId) {
+      if (!productionZonePrinterSelect) return;
+      const printers = getProductionZonePrintersForStore(storeId);
+      productionZonePrinterSelect.innerHTML = "";
+      if (!printers.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "\u041d\u0435\u0442 online-\u043f\u0440\u0438\u043d\u0442\u0435\u0440\u043e\u0432";
+        productionZonePrinterSelect.appendChild(opt);
+        return;
+      }
+      printers.forEach((printer) => {
+        const opt = document.createElement("option");
+        opt.value = String(printer.id);
+        const name = String(printer.display_name || printer.system_name || "");
+        opt.textContent = printer.is_default ? `${name} - \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e` : name;
+        if (Number(printer.id) === Number(selectedPrinterId)) opt.selected = true;
+        productionZonePrinterSelect.appendChild(opt);
+      });
+      if (!productionZonePrinterSelect.value && productionZonePrinterSelect.options.length) {
+        productionZonePrinterSelect.selectedIndex = 0;
+      }
+    }
+
+
+
+    function populateProductionZoneTemplates(selectedTemplateId) {
+      if (!productionZoneTemplateSelect) return;
+      const templates = printTemplatesState.templates;
+      productionZoneTemplateSelect.innerHTML = "";
+      if (!templates.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "\u041d\u0435\u0442 \u0448\u0430\u0431\u043b\u043e\u043d\u043e\u0432 \u043f\u0435\u0447\u0430\u0442\u0438";
+        productionZoneTemplateSelect.appendChild(opt);
+        return;
+      }
+      templates.forEach((template) => {
+        const opt = document.createElement("option");
+        opt.value = String(template.id);
+        const type = String(template.document_type || "") === "receipt" ? "\u0427\u0435\u043a" : "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430";
+        opt.textContent = `${String(template.title || "\u0428\u0430\u0431\u043b\u043e\u043d \u043f\u0435\u0447\u0430\u0442\u0438")} - ${type}`;
+        if (Number(template.id) === Number(selectedTemplateId)) opt.selected = true;
+        productionZoneTemplateSelect.appendChild(opt);
+      });
+      if (!productionZoneTemplateSelect.value && productionZoneTemplateSelect.options.length) {
+        productionZoneTemplateSelect.selectedIndex = 0;
+      }
+    }
+
+
+
+    function fillProductionZoneForm(zone, mode) {
+      const firstStoreId = productionZonesState.stores[0] ? Number(productionZonesState.stores[0].id) : 0;
+      const storeId = Number(zone && zone.store_id || firstStoreId || 0);
+      const rule = zone && zone.id ? getProductionZoneRule(zone.id, storeId) : null;
+      const printerId = Number((rule && rule.printer_id) || (zone && zone.printer_id) || 0);
+      const templateId = Number((rule && rule.template_id) || (zone && zone.template_id) || 0);
+      if (productionZoneNameInput) productionZoneNameInput.value = String(zone && zone.name || "");
+      populateProductionZoneStores(storeId);
+      populateProductionZonePrinters(storeId, printerId);
+      populateProductionZoneTemplates(templateId);
+      productionZonesState.snapshot = zone ? { ...zone } : null;
+      setProductionZoneFormMode(mode || "view");
+    }
+
+
+
+    function renderProductionZonesList() {
+      if (!productionZonesList) return;
+      productionZonesList.innerHTML = "";
+      const zones = productionZonesState.zones || [];
+      if (!zones.length) {
+        if (productionZonesEmpty) productionZonesEmpty.classList.remove("hidden");
+        return;
+      }
+      if (productionZonesEmpty) productionZonesEmpty.classList.add("hidden");
+      const stores = productionZonesState.stores.length ? productionZonesState.stores : [{ id: 0, name: "\u0424\u0438\u043b\u0438\u0430\u043b" }];
+      stores.forEach((store) => {
+        const section = document.createElement("div");
+        section.className = "settings-production-zone-store-group";
+        const heading = document.createElement("div");
+        heading.className = "settings-list-title";
+        heading.textContent = String(store.name || `#${store.id}`);
+        section.appendChild(heading);
+
+        zones.forEach((zone) => {
+          const rule = getProductionZoneRule(zone.id, store.id);
+          const rowData = { ...zone, store_id: store.id };
+          if (rule) {
+            rowData.rule_id = rule.id;
+            rowData.printer_id = rule.printer_id;
+            rowData.template_id = rule.template_id;
+            rowData.is_enabled = rule.is_enabled;
+          }
+
+          const row = document.createElement("button");
+          row.type = "button";
+          row.className = "settings-home-card settings-card";
+          row.classList.toggle(
+            "is-active",
+            Number(productionZonesState.selectedId) === Number(zone.id)
+              && Number(productionZonesState.selectedStoreId || 0) === Number(store.id)
+          );
+          row.dataset.productionZoneId = String(zone.id);
+
+          const avatar = document.createElement("div");
+          avatar.className = "product-avatar";
+          avatar.innerHTML = '<i class="fas fa-layer-group"></i>';
+
+          const info = document.createElement("div");
+          info.className = "order-col";
+          const title = document.createElement("div");
+          title.className = "product-title";
+          title.textContent = String(zone.name || "");
+          const subtitle = document.createElement("div");
+          subtitle.className = "muted";
+          const printerName = getProductionZonePrinterName(rule && rule.printer_id);
+          const template = getPrintTemplateById(rule && rule.template_id);
+          const templateTitle = template ? String(template.title || "") : "";
+          subtitle.textContent = printerName
+            ? `${printerName}${templateTitle ? ` - ${templateTitle}` : ""}`
+            : "\u041f\u0440\u0430\u0432\u0438\u043b\u043e \u043f\u0435\u0447\u0430\u0442\u0438 \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u043e";
+          info.appendChild(title);
+          info.appendChild(subtitle);
+
+          const action = document.createElement("div");
+          action.className = "order-col";
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = rule ? "\u041e\u0442\u043a\u0440\u044b\u0442\u044c" : "\u041d\u0430\u0441\u0442\u0440\u043e\u0438\u0442\u044c";
+          action.appendChild(badge);
+
+          row.appendChild(avatar);
+          row.appendChild(info);
+          row.appendChild(action);
+          row.addEventListener("click", () => selectProductionZone(rowData, "view"));
+          section.appendChild(row);
+        });
+        productionZonesList.appendChild(section);
+      });
+    }
+
+
+
+    async function loadProductionZones(options = {}) {
+      try {
+        const res = await authFetch("/api/admin/tenant/production-zones");
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) throw new Error("LOAD_FAILED");
+        productionZonesState.loaded = true;
+        productionZonesState.zones = Array.isArray(data.data.zones) ? data.data.zones : [];
+        productionZonesState.stores = Array.isArray(data.data.stores) ? data.data.stores : [];
+        productionZonesState.printers = Array.isArray(data.data.printers) ? data.data.printers : [];
+        productionZonesState.rules = Array.isArray(data.data.rules) ? data.data.rules : [];
+        if (Array.isArray(data.data.templates)) {
+          printTemplatesState.templates = data.data.templates;
+          if (data.data.templates.length) printTemplatesState.loaded = true;
+        }
+        if (options.selectId) {
+          const selected = productionZonesState.zones.find((zone) => Number(zone.id) === Number(options.selectId));
+          if (selected) productionZonesState.selectedId = Number(selected.id);
+        }
+        renderProductionZonesList();
+        return data.data;
+      } catch (err) {
+        console.error("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0435 \u0437\u043e\u043d\u044b:", err);
+        return null;
+      }
+    }
+
+
+
+    async function ensureProductionZonesLoaded() {
+      if (productionZonesState.loaded) return true;
+      const data = await loadProductionZones();
+      return Boolean(data);
+    }
+
+
+
+    function selectProductionZone(zone, mode) {
+      if (!zone) return;
+      productionZonesState.selectedId = Number(zone.id);
+      productionZonesState.selectedStoreId = Number(zone.store_id || 0);
+      renderProductionZonesList();
+      fillProductionZoneForm(zone, mode || "view");
+      if (rightDefault) rightDefault.classList.add("hidden");
+      ensureTab("production-zone", String(zone.name || "\u041f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u0430\u044f \u0437\u043e\u043d\u0430"));
+    }
+
+
+
+    async function startCreateProductionZone() {
+      await ensurePrintTemplatesLoaded();
+      await ensureProductionZonesLoaded();
+      const firstStoreId = productionZonesState.stores[0] ? Number(productionZonesState.stores[0].id) : 0;
+      const draft = { id: 0, name: "", store_id: firstStoreId, printer_id: 0 };
+      productionZonesState.selectedId = null;
+      productionZonesState.selectedStoreId = firstStoreId;
+      renderProductionZonesList();
+      fillProductionZoneForm(draft, "edit");
+      if (rightDefault) rightDefault.classList.add("hidden");
+      ensureTab("production-zone", "\u041d\u043e\u0432\u0430\u044f \u0437\u043e\u043d\u0430");
+    }
+
+
+
+    async function saveProductionZone() {
+      const name = String(productionZoneNameInput && productionZoneNameInput.value || "").trim();
+      const storeId = Number(productionZoneStoreSelect && productionZoneStoreSelect.value || 0);
+      const printerId = Number(productionZonePrinterSelect && productionZonePrinterSelect.value || 0);
+      const templateId = Number(productionZoneTemplateSelect && productionZoneTemplateSelect.value || 0);
+      if (!name) {
+        alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u0437\u043e\u043d\u044b.");
+        return;
+      }
+      if (!storeId) {
+        alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0444\u0438\u043b\u0438\u0430\u043b.");
+        return;
+      }
+      if (!printerId) {
+        alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 online-\u043f\u0440\u0438\u043d\u0442\u0435\u0440.");
+        return;
+      }
+      if (!templateId) {
+        alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0435\u0447\u0430\u0442\u0438.");
+        return;
+      }
+      const id = Number(productionZonesState.snapshot && productionZonesState.snapshot.id || 0);
+      const url = id > 0 ? `/api/admin/tenant/production-zones/${id}` : "/api/admin/tenant/production-zones";
+      const method = id > 0 ? "PUT" : "POST";
+      const idleText = productionZoneSaveBtn ? String(productionZoneSaveBtn.textContent || "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c") : "";
+      if (productionZoneSaveBtn) {
+        productionZoneSaveBtn.disabled = true;
+        productionZoneSaveBtn.textContent = "\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435...";
+      }
+      try {
+        const res = await authFetch(url, {
+          method,
+          body: JSON.stringify({ name, store_id: storeId, printer_id: printerId, template_id: templateId })
+        });
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) {
+          const error = data && data.error;
+          if (error === "ZONE_NAME_EXISTS") alert("\u0417\u043e\u043d\u0430 \u0441 \u0442\u0430\u043a\u0438\u043c \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435\u043c \u0443\u0436\u0435 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u0435\u0442.");
+          else if (error === "PRINT_PRINTER_NOT_FOUND") alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 online-\u043f\u0440\u0438\u043d\u0442\u0435\u0440 \u044d\u0442\u043e\u0433\u043e \u0444\u0438\u043b\u0438\u0430\u043b\u0430.");
+          else alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u0443\u044e \u0437\u043e\u043d\u0443.");
+          return;
+        }
+        productionZonesState.loaded = true;
+        productionZonesState.zones = Array.isArray(data.data.zones) ? data.data.zones : [];
+        productionZonesState.stores = Array.isArray(data.data.stores) ? data.data.stores : [];
+        productionZonesState.printers = Array.isArray(data.data.printers) ? data.data.printers : [];
+        productionZonesState.rules = Array.isArray(data.data.rules) ? data.data.rules : [];
+        if (Array.isArray(data.data.templates)) {
+          printTemplatesState.templates = data.data.templates;
+          if (data.data.templates.length) printTemplatesState.loaded = true;
+        }
+        const savedId = Number(data.zone_id || id || 0);
+        const saved = productionZonesState.zones.find((zone) => Number(zone.id) === savedId) || productionZonesState.zones[0] || null;
+        if (saved) selectProductionZone(saved, "view");
+        else renderProductionZonesList();
+      } catch (err) {
+        console.error("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u0443\u044e \u0437\u043e\u043d\u0443:", err);
+        alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u0443\u044e \u0437\u043e\u043d\u0443.");
+      } finally {
+        if (productionZoneSaveBtn) {
+          productionZoneSaveBtn.disabled = false;
+          productionZoneSaveBtn.textContent = idleText || "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c";
+        }
+      }
+    }
+
+
+
+
+
+
+
+    if (productionZoneStoreSelect) {
+      productionZoneStoreSelect.addEventListener("change", () => {
+        const storeId = Number(productionZoneStoreSelect.value || 0);
+        const zoneId = Number(productionZonesState.snapshot && productionZonesState.snapshot.id || 0);
+        const rule = zoneId > 0 ? getProductionZoneRule(zoneId, storeId) : null;
+        populateProductionZonePrinters(storeId, Number(rule && rule.printer_id || 0));
+        populateProductionZoneTemplates(Number(rule && rule.template_id || 0));
+      });
+    }
+
+
+
+    if (productionZoneEditBtn) {
+      productionZoneEditBtn.addEventListener("click", () => {
+        setProductionZoneFormMode("edit");
+      });
+    }
+
+
+
+    if (productionZoneCancelBtn) {
+      productionZoneCancelBtn.addEventListener("click", () => {
+        if (productionZonesState.snapshot) {
+          fillProductionZoneForm(productionZonesState.snapshot, "view");
+        } else {
+          setProductionZoneFormMode("view");
+        }
+      });
+    }
+
+
+
+    if (productionZoneSaveBtn) {
+      productionZoneSaveBtn.addEventListener("click", saveProductionZone);
+    }
 
 
 
@@ -41904,7 +42945,7 @@
 
 
 
-      setPrintApiDeviceState(statusText, printerText);
+      setPrintApiDeviceState(statusText, printerText, []);
 
 
 
@@ -41976,7 +43017,7 @@
 
 
 
-      setPrintApiDeviceState(statusText, printerText);
+      setPrintApiDeviceState(statusText, printerText, info.printers);
 
 
 
@@ -42337,6 +43378,7 @@
 
 
         printer_name: String((settingsPrintApiPrinterName && settingsPrintApiPrinterName.value) || ""),
+        default_printer_id: Number(settingsPrintApiPrinterName && settingsPrintApiPrinterName.value) || 0,
 
 
 
@@ -42668,7 +43710,9 @@
 
 
 
-        sound_new_message_url: settingsPrintApiMessageSoundUrl ? String(settingsPrintApiMessageSoundUrl.value || "").trim() || null : null
+        sound_new_message_url: settingsPrintApiMessageSoundUrl ? String(settingsPrintApiMessageSoundUrl.value || "").trim() || null : null,
+
+        default_printer_id: Number(settingsPrintApiPrinterName && settingsPrintApiPrinterName.value) || 0
 
 
 
@@ -42897,6 +43941,10 @@
 
 
         }
+
+
+
+        if (token) applyPrintApiDeviceState(info);
 
 
 
@@ -61255,11 +62303,11 @@
 
 
 
-        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isDelivery || isSystem || section === "stores" || section === "site");
+        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isDelivery || isSystem || section === "stores" || section === "site" || section === "print-templates" || section === "production-zones");
 
 
 
-        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isDelivery || isSystem || section === "stores" || section === "site");
+        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isDelivery || isSystem || section === "stores" || section === "site" || section === "print-templates" || section === "production-zones");
 
 
 

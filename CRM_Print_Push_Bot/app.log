@@ -2262,3 +2262,669 @@ RuntimeError: Принтер 'Xprinter XP-365B' сейчас недоступе�
 2026-04-10 22:45:41,452 INFO Пробую проиграть звук нового сообщения: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
 2026-04-10 22:45:41,471 INFO Звук нового сообщения поставлен в очередь: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
 2026-04-10 23:25:49,142 INFO Сервер печати остановлен
+2026-06-25 15:40:27,392 WARNING Не удалось синхронизировать список принтеров: HTTP Error 401: Unauthorized
+2026-06-25 15:42:13,953 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-25 15:42:14,234 WARNING Не удалось синхронизировать список принтеров: HTTP Error 401: Unauthorized
+2026-06-25 15:42:21,764 INFO Сервер печати остановлен
+2026-06-25 15:42:21,766 INFO Звук заказа пропущен по стартовому курсору: job_id=256 <= startup_cursor=261
+2026-06-25 15:42:21,766 ERROR Ошибка печати задания 256
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1546, in _process_job
+    self.printer.print_pdf_bytes(pdf_bytes, job_name=job_name, copies=copies)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 582, in print_pdf_bytes
+    raise RuntimeError("Windows printing is not available")
+RuntimeError: Windows printing is not available
+2026-06-25 15:43:40,106 WARNING Не удалось синхронизировать список принтеров: HTTP Error 401: Unauthorized
+2026-06-25 16:08:10,464 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-25 16:08:17,409 INFO Звук заказа пропущен по стартовому курсору: job_id=256 <= startup_cursor=261
+2026-06-25 16:08:17,409 ERROR Ошибка печати задания 256
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:08:23,022 INFO Звук заказа пропущен по стартовому курсору: job_id=256 <= startup_cursor=261
+2026-06-25 16:08:23,022 ERROR Ошибка печати задания 256
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:08:28,939 INFO Звук заказа пропущен по стартовому курсору: job_id=256 <= startup_cursor=261
+2026-06-25 16:08:28,939 ERROR Ошибка печати задания 256
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:08:34,869 INFO Звук заказа пропущен по стартовому курсору: job_id=256 <= startup_cursor=261
+2026-06-25 16:08:34,869 ERROR Ошибка печати задания 256
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:08:41,196 INFO Звук заказа пропущен по стартовому курсору: job_id=257 <= startup_cursor=261
+2026-06-25 16:08:41,196 ERROR Ошибка печати задания 257
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:08:46,726 INFO Звук заказа пропущен по стартовому курсору: job_id=257 <= startup_cursor=261
+2026-06-25 16:08:46,726 ERROR Ошибка печати задания 257
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:08:52,570 INFO Звук заказа пропущен по стартовому курсору: job_id=257 <= startup_cursor=261
+2026-06-25 16:08:52,571 ERROR Ошибка печати задания 257
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:08:58,079 INFO Звук заказа пропущен по стартовому курсору: job_id=257 <= startup_cursor=261
+2026-06-25 16:08:58,080 ERROR Ошибка печати задания 257
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:04,311 INFO Звук заказа пропущен по стартовому курсору: job_id=257 <= startup_cursor=261
+2026-06-25 16:09:04,311 ERROR Ошибка печати задания 257
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:10,303 INFO Звук заказа пропущен по стартовому курсору: job_id=258 <= startup_cursor=261
+2026-06-25 16:09:10,303 ERROR Ошибка печати задания 258
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:17,387 INFO Звук заказа пропущен по стартовому курсору: job_id=258 <= startup_cursor=261
+2026-06-25 16:09:17,387 ERROR Ошибка печати задания 258
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:22,979 INFO Звук заказа пропущен по стартовому курсору: job_id=258 <= startup_cursor=261
+2026-06-25 16:09:22,979 ERROR Ошибка печати задания 258
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:29,211 INFO Звук заказа пропущен по стартовому курсору: job_id=258 <= startup_cursor=261
+2026-06-25 16:09:29,211 ERROR Ошибка печати задания 258
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:34,815 INFO Звук заказа пропущен по стартовому курсору: job_id=258 <= startup_cursor=261
+2026-06-25 16:09:34,816 ERROR Ошибка печати задания 258
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:40,845 INFO Звук заказа пропущен по стартовому курсору: job_id=259 <= startup_cursor=261
+2026-06-25 16:09:40,845 ERROR Ошибка печати задания 259
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:46,409 INFO Звук заказа пропущен по стартовому курсору: job_id=259 <= startup_cursor=261
+2026-06-25 16:09:46,410 ERROR Ошибка печати задания 259
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:52,630 INFO Звук заказа пропущен по стартовому курсору: job_id=259 <= startup_cursor=261
+2026-06-25 16:09:52,630 ERROR Ошибка печати задания 259
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:09:58,207 INFO Звук заказа пропущен по стартовому курсору: job_id=259 <= startup_cursor=261
+2026-06-25 16:09:58,207 ERROR Ошибка печати задания 259
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:05,146 INFO Звук заказа пропущен по стартовому курсору: job_id=259 <= startup_cursor=261
+2026-06-25 16:10:05,147 ERROR Ошибка печати задания 259
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:10,932 INFO Звук заказа пропущен по стартовому курсору: job_id=260 <= startup_cursor=261
+2026-06-25 16:10:10,932 ERROR Ошибка печати задания 260
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:18,605 INFO Звук заказа пропущен по стартовому курсору: job_id=260 <= startup_cursor=261
+2026-06-25 16:10:18,605 ERROR Ошибка печати задания 260
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:24,142 INFO Звук заказа пропущен по стартовому курсору: job_id=260 <= startup_cursor=261
+2026-06-25 16:10:24,142 ERROR Ошибка печати задания 260
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:29,960 INFO Звук заказа пропущен по стартовому курсору: job_id=260 <= startup_cursor=261
+2026-06-25 16:10:29,960 ERROR Ошибка печати задания 260
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:36,002 INFO Звук заказа пропущен по стартовому курсору: job_id=260 <= startup_cursor=261
+2026-06-25 16:10:36,002 ERROR Ошибка печати задания 260
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:42,230 INFO Звук заказа пропущен по стартовому курсору: job_id=261 <= startup_cursor=261
+2026-06-25 16:10:42,230 ERROR Ошибка печати задания 261
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:48,008 INFO Звук заказа пропущен по стартовому курсору: job_id=261 <= startup_cursor=261
+2026-06-25 16:10:48,008 ERROR Ошибка печати задания 261
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:53,748 INFO Звук заказа пропущен по стартовому курсору: job_id=261 <= startup_cursor=261
+2026-06-25 16:10:53,749 ERROR Ошибка печати задания 261
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:10:59,226 INFO Звук заказа пропущен по стартовому курсору: job_id=261 <= startup_cursor=261
+2026-06-25 16:10:59,227 ERROR Ошибка печати задания 261
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:11:05,315 INFO Звук заказа пропущен по стартовому курсору: job_id=261 <= startup_cursor=261
+2026-06-25 16:11:05,315 ERROR Ошибка печати задания 261
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:12:48,969 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-25 16:12:52,769 INFO Связь с CRM восстановлена
+2026-06-25 16:13:19,690 INFO Звук заказа пропущен по стартовому курсору: job_id=255 <= startup_cursor=261
+2026-06-25 16:13:19,690 ERROR Ошибка печати задания 255
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:13:26,608 INFO Звук заказа пропущен по стартовому курсору: job_id=255 <= startup_cursor=261
+2026-06-25 16:13:26,609 ERROR Ошибка печати задания 255
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:13:32,434 INFO Звук заказа пропущен по стартовому курсору: job_id=255 <= startup_cursor=261
+2026-06-25 16:13:32,434 ERROR Ошибка печати задания 255
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1581, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 586, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:18:06,518 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-25 16:18:10,419 INFO Связь с CRM восстановлена
+2026-06-25 16:20:43,946 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-25 16:20:47,685 INFO Связь с CRM восстановлена
+2026-06-25 16:20:49,101 INFO Сервер печати остановлен
+2026-06-25 16:20:59,038 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-25 16:21:51,218 INFO Сервер печати остановлен
+2026-06-25 16:21:56,475 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-25 16:26:19,384 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-25 16:26:53,443 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-25 16:26:53,461 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-25 16:26:53,461 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-25 16:26:53,462 ERROR Ошибка печати задания 262
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1583, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 588, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:27:00,556 INFO Звук заказа пропущен для повторной попытки печати: job_id=262, attempts=2
+2026-06-25 16:27:00,556 ERROR Ошибка печати задания 262
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1583, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 588, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:27:06,141 INFO Звук заказа пропущен для повторной попытки печати: job_id=262, attempts=3
+2026-06-25 16:27:06,142 ERROR Ошибка печати задания 262
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1583, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 588, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:27:13,794 INFO Звук заказа пропущен для повторной попытки печати: job_id=262, attempts=4
+2026-06-25 16:27:13,795 ERROR Ошибка печати задания 262
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1583, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 588, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:27:22,557 INFO Звук заказа пропущен для повторной попытки печати: job_id=262, attempts=5
+2026-06-25 16:27:22,558 ERROR Ошибка печати задания 262
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1583, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=self._selected_printer_system_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 588, in print_pdf_bytes
+    raise RuntimeError("PDF render is not available")
+RuntimeError: PDF render is not available
+2026-06-25 16:28:16,181 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-25 16:28:43,034 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-25 16:28:43,039 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-25 16:28:43,040 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-25 16:28:44,507 INFO Задание 263 отправлено в печать
+2026-06-25 16:31:25,156 WARNING Не удалось синхронизировать список принтеров: timed out
+2026-06-25 20:03:01,962 WARNING Не удалось синхронизировать список принтеров: HTTP 500 {"ok":false,"success":false,"error":"DB_ERROR"}
+2026-06-25 20:03:01,971 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-25 20:03:02,246 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-25 20:03:04,374 INFO Связь с CRM восстановлена
+2026-06-25 20:47:54,919 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-25 20:47:57,995 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-25 20:48:02,067 INFO Связь с CRM восстановлена
+2026-06-25 20:48:02,068 INFO Пробую проиграть звук нового сообщения: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
+2026-06-25 20:48:02,082 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3: HTTP Error 404: Not Found
+2026-06-25 20:48:02,083 WARNING Не удалось проиграть звук нового сообщения: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
+2026-06-25 20:50:14,615 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-25 20:50:19,300 INFO Связь с CRM восстановлена
+2026-06-26 09:09:59,153 WARNING Не удалось синхронизировать список принтеров: HTTP 500 {"ok":false,"success":false,"error":"DB_ERROR"}
+2026-06-26 09:09:59,168 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 09:09:59,445 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-26 09:10:01,577 INFO Связь с CRM восстановлена
+2026-06-26 09:11:50,416 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 09:11:54,289 INFO Связь с CRM восстановлена
+2026-06-26 09:46:50,449 WARNING Не удалось синхронизировать список принтеров: [WinError 10054] Удаленный хост принудительно разорвал существующее подключение
+2026-06-26 09:48:03,123 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 09:48:06,800 INFO Связь с CRM восстановлена
+2026-06-26 14:05:50,633 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-26 14:45:07,620 WARNING Не удалось синхронизировать список принтеров: timed out
+2026-06-26 14:47:35,621 WARNING Не удалось синхронизировать список принтеров: timed out
+2026-06-26 14:50:44,892 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 14:50:47,225 INFO Связь с CRM восстановлена
+2026-06-26 15:13:50,258 WARNING Не удалось синхронизировать список принтеров: [WinError 10054] Удаленный хост принудительно разорвал существующее подключение
+2026-06-26 15:14:36,765 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 15:14:40,503 INFO Связь с CRM восстановлена
+2026-06-26 19:40:13,570 WARNING Не удалось синхронизировать список принтеров: timed out
+2026-06-26 19:40:13,709 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 19:40:13,988 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-26 19:40:17,318 INFO Связь с CRM восстановлена
+2026-06-26 19:47:14,112 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 19:47:19,018 INFO Связь с CRM восстановлена
+2026-06-26 19:55:13,200 WARNING Не удалось синхронизировать список принтеров: timed out
+2026-06-26 20:07:31,191 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 20:07:34,954 INFO Связь с CRM восстановлена
+2026-06-26 20:19:00,098 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-26 20:19:03,875 INFO Связь с CRM восстановлена

@@ -1,5 +1,5 @@
 {
-  "crm_base_url": "https://posham.ru",
-  "token": "b18b219c94999e926d3179f033a2ac0924f84fb4f3d1a55ecc7e7d942637a430",
+  "crm_base_url": "http://localhost:3000",
+  "token": "f1847e20c35349fd7f3b719a5b64134a1d481e6ca46047d8940185db5a78ca96",
   "copies": 1
 }
