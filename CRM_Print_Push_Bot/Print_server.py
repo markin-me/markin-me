@@ -200,6 +200,7 @@ def _safe_int(value, fallback):
 
 
 HTML_JOB_PREFIX = "__HTML_BASE64__:"
+META_JOB_PREFIX = "__PRINT_META__:"
 BROWSER_TIMEOUT = _safe_float(os.environ.get("PRINT_BROWSER_TIMEOUT"), 25.0)
 CRM_HTTP_TIMEOUT = max(3.0, _safe_float(os.environ.get("CRM_HTTP_TIMEOUT"), 15.0))
 CRM_FETCH_RETRIES = max(1, _safe_int(os.environ.get("CRM_FETCH_RETRIES"), 2))
@@ -455,6 +456,25 @@ def _decode_html_job(payload):
         return html_bytes.decode("utf-8")
     except Exception:
         return html_bytes.decode("utf-8", "ignore")
+
+
+def _is_meta_job(payload):
+    return isinstance(payload, str) and payload.startswith(META_JOB_PREFIX)
+
+
+def _decode_meta_job(payload):
+    if not _is_meta_job(payload):
+        return {}
+    encoded = payload[len(META_JOB_PREFIX) :]
+    try:
+        meta_bytes = base64.b64decode(encoded)
+    except Exception as exc:
+        raise RuntimeError("Неверный meta payload: " + str(exc))
+    try:
+        data = json.loads(meta_bytes.decode("utf-8"))
+    except Exception:
+        data = {}
+    return data if isinstance(data, dict) else {}
 
 
 def _get_printer_state(printer_name):
@@ -1164,7 +1184,7 @@ class PrintServer:
                 self._stop_event.wait(self._poll_interval)
                 continue
 
-            job = bundle.get("job")
+            drained_any_job = False
             message_event = bundle.get("message_event")
             message_cursor = bundle.get("message_cursor")
             try:
@@ -1174,9 +1194,30 @@ class PrintServer:
             if cursor_id > 0:
                 self._last_message_event_id = max(self._last_message_event_id, cursor_id)
 
-            if job:
+            while not self._stop_event.is_set():
+                job = bundle.get("job")
+                if not job:
+                    break
+                drained_any_job = True
                 self._process_job(token, job)
-            if message_event:
+                try:
+                    bundle = self._fetch_poll_bundle(token)
+                except Exception:
+                    logging.exception("Ошибка запроса к CRM (/api/print/poll)")
+                    self._note_connection_error()
+                    break
+                if not isinstance(bundle, dict):
+                    break
+                message_event = bundle.get("message_event") if not drained_any_job else message_event
+                message_cursor = bundle.get("message_cursor")
+                try:
+                    cursor_id = int(message_cursor or 0)
+                except Exception:
+                    cursor_id = 0
+                if cursor_id > 0:
+                    self._last_message_event_id = max(self._last_message_event_id, cursor_id)
+
+            if message_event and not drained_any_job:
                 self._play_message_notification_with_delay()
             self._maybe_force_reconnect()
             self._stop_event.wait(self._poll_interval)
@@ -1522,14 +1563,20 @@ class PrintServer:
         if not job_id:
             return
         order = job.get("order") if isinstance(job.get("order"), dict) else {}
-        cache_key = _get_order_cache_key(order) or f"job:{job_id}"
+        job_payload = job.get("pdf_base64") or job.get("pdfBase64")
+        meta_payload = _decode_meta_job(job_payload) if _is_meta_job(job_payload) else {}
+        is_label_job = isinstance(meta_payload, dict) and str(meta_payload.get("kind") or "").strip().lower() == "label"
+        cache_key = None
+        if is_label_job:
+            cache_key = f"label_job:{job_id}"
+        else:
+            cache_key = _get_order_cache_key(order) or f"job:{job_id}"
 
         if cache_key and self.cache.has(cache_key):
             logging.info("Повторная задача %s - печать пропущена", cache_key)
             self._post_job_result(token, job_id, "ack", {})
             return
 
-        job_payload = job.get("pdf_base64") or job.get("pdfBase64")
         if not job_payload:
             self._post_job_result(token, job_id, "fail", {"error": "missing_pdf"})
             return
@@ -1550,41 +1597,53 @@ class PrintServer:
             copies = self._copies_getter()
         except Exception:
             copies = 1
+        try:
+            if isinstance(meta_payload, dict) and meta_payload.get("copies") is not None:
+                copies = max(1, int(meta_payload.get("copies") or 1))
+        except Exception:
+            pass
+
+        printer_name = self._selected_printer_system_name
+        if isinstance(meta_payload, dict):
+            meta_printer_name = str(meta_payload.get("printer_name") or "").strip()
+            if meta_printer_name:
+                printer_name = meta_printer_name
 
         try:
-            should_play_order_sound = True
-            try:
-                numeric_job_id = int(job_id)
-            except Exception:
-                numeric_job_id = 0
-            try:
-                job_attempts = int(job.get("attempts") or 0)
-            except Exception:
-                job_attempts = 0
-            if self._orders_cursor_initialized and numeric_job_id > 0 and numeric_job_id <= int(self._startup_job_cursor_id or 0):
-                should_play_order_sound = False
-                logging.info(
-                    "Звук заказа пропущен по стартовому курсору: job_id=%s <= startup_cursor=%s",
-                    numeric_job_id,
-                    int(self._startup_job_cursor_id or 0),
-                )
-            elif job_attempts > 1:
-                should_play_order_sound = False
-                logging.info(
-                    "Звук заказа пропущен для повторной попытки печати: job_id=%s, attempts=%s",
-                    job_id,
-                    job_attempts,
-                )
+            should_play_order_sound = not is_label_job
             if should_play_order_sound:
-                if not self._sound_new_order_url:
-                    # Подстраховка: принудительно обновляем настройки звука перед воспроизведением.
-                    self._refresh_notification_settings(token, force=True)
-                self._play_order_notification_sound()
+                try:
+                    numeric_job_id = int(job_id)
+                except Exception:
+                    numeric_job_id = 0
+                try:
+                    job_attempts = int(job.get("attempts") or 0)
+                except Exception:
+                    job_attempts = 0
+                if self._orders_cursor_initialized and numeric_job_id > 0 and numeric_job_id <= int(self._startup_job_cursor_id or 0):
+                    should_play_order_sound = False
+                    logging.info(
+                        "Звук заказа пропущен по стартовому курсору: job_id=%s <= startup_cursor=%s",
+                        numeric_job_id,
+                        int(self._startup_job_cursor_id or 0),
+                    )
+                elif job_attempts > 1:
+                    should_play_order_sound = False
+                    logging.info(
+                        "Звук заказа пропущен для повторной попытки печати: job_id=%s, attempts=%s",
+                        job_id,
+                        job_attempts,
+                    )
+                if should_play_order_sound:
+                    if not self._sound_new_order_url:
+                        # Подстраховка: принудительно обновляем настройки звука перед воспроизведением.
+                        self._refresh_notification_settings(token, force=True)
+                    self._play_order_notification_sound()
             self.printer.print_pdf_bytes(
                 pdf_bytes,
                 job_name=job_name,
                 copies=copies,
-                printer_name=self._selected_printer_system_name,
+                printer_name=printer_name,
             )
         except Exception as e:
             logging.exception("Ошибка печати задания %s", job_id)
@@ -1599,6 +1658,14 @@ class PrintServer:
             logging.warning("Не удалось отправить ack для задания %s", job_id)
 
     def _prepare_job_pdf(self, payload, job_name, job_id):
+        if _is_meta_job(payload):
+            meta = _decode_meta_job(payload)
+            html = str(meta.get("html") or "").strip()
+            if not html:
+                raise RuntimeError("HTML-паттерн пустой")
+            if not self._renderer.is_available():
+                raise RuntimeError("Браузер для HTML не найден")
+            return self._renderer.render(html, job_name=job_name)
         if _is_html_job(payload):
             html = _decode_html_job(payload)
             if not html.strip():

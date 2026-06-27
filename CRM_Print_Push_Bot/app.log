@@ -3010,3 +3010,251 @@ RuntimeError: PDF render is not available
 2026-06-26 20:58:52,626 WARNING Не удалось синхронизировать список принтеров: timed out
 2026-06-27 09:25:01,289 WARNING CRM /api/print/poll вернул HTTP 500
 2026-06-27 09:25:03,730 INFO Связь с CRM восстановлена
+2026-06-27 10:27:38,391 INFO Сервер печати остановлен
+2026-06-27 10:27:48,538 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 10:28:57,720 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:29:27,304 WARNING Не удалось синхронизировать список принтеров: HTTP 500 {"ok":false,"success":false,"error":"DB_ERROR"}
+2026-06-27 10:29:27,565 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:30:19,822 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:30:22,277 WARNING Не удалось синхронизировать список принтеров: HTTP 500 {"ok":false,"success":false,"error":"DB_ERROR"}
+2026-06-27 10:30:34,839 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:30:40,327 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-27 10:30:50,309 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:30:53,686 WARNING Не удалось синхронизировать список принтеров: HTTP 500 {"ok":false,"success":false,"error":"DB_ERROR"}
+2026-06-27 10:31:23,749 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:31:26,114 WARNING Не удалось синхронизировать список принтеров: HTTP 500 {"ok":false,"success":false,"error":"DB_ERROR"}
+2026-06-27 10:31:29,971 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-06-27 10:31:40,820 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:32:03,472 WARNING Не удалось синхронизировать список принтеров: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-06-27 10:32:05,284 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:32:18,049 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-06-27 10:32:24,174 WARNING CRM /api/print/poll вернул HTTP 500
+2026-06-27 10:32:38,415 WARNING Не удалось синхронизировать список принтеров: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-06-27 10:32:50,868 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:33:13,443 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:33:23,640 WARNING Не удалось синхронизировать список принтеров: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-06-27 10:33:36,090 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:33:58,704 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:33:58,705 WARNING Слишком много ошибок связи подряд (14). Перезапускаю transport polling.
+2026-06-27 10:34:10,352 WARNING Не удалось синхронизировать список принтеров: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-06-27 10:34:22,780 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:34:45,380 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:34:55,529 WARNING Не удалось синхронизировать список принтеров: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-06-27 10:35:07,946 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:35:30,572 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:35:30,572 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-06-27 10:35:42,240 WARNING Не удалось синхронизировать список принтеров: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-06-27 10:35:54,616 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:36:17,230 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 10:36:24,335 INFO Сервер печати остановлен
+2026-06-27 10:37:19,856 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 11:00:17,055 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 11:01:43,714 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 11:01:48,125 ERROR Ошибка печати задания 267
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1617, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=printer_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 612, in print_pdf_bytes
+    images = self._render_pdf_to_images(pdf_bytes)
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 621, in _render_pdf_to_images
+    pdf = pdfium.PdfDocument(pdf_bytes)
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 76, in __init__
+    self.raw, to_hold, to_close = _open_pdf(self._input, self._password, self._autoclose)
+                                  ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 584, in _open_pdf
+    raise PdfiumError(f"Failed to load document (PDFium: {pdfium_i.ErrorToStr.get(err_code)}).", err_code=err_code)
+pypdfium2._helpers.misc.PdfiumError: Failed to load document (PDFium: Data format error).
+2026-06-27 11:01:51,775 ERROR Ошибка печати задания 267
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1617, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=printer_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 612, in print_pdf_bytes
+    images = self._render_pdf_to_images(pdf_bytes)
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 621, in _render_pdf_to_images
+    pdf = pdfium.PdfDocument(pdf_bytes)
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 76, in __init__
+    self.raw, to_hold, to_close = _open_pdf(self._input, self._password, self._autoclose)
+                                  ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 584, in _open_pdf
+    raise PdfiumError(f"Failed to load document (PDFium: {pdfium_i.ErrorToStr.get(err_code)}).", err_code=err_code)
+pypdfium2._helpers.misc.PdfiumError: Failed to load document (PDFium: Data format error).
+2026-06-27 11:01:57,153 ERROR Ошибка печати задания 267
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1617, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=printer_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 612, in print_pdf_bytes
+    images = self._render_pdf_to_images(pdf_bytes)
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 621, in _render_pdf_to_images
+    pdf = pdfium.PdfDocument(pdf_bytes)
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 76, in __init__
+    self.raw, to_hold, to_close = _open_pdf(self._input, self._password, self._autoclose)
+                                  ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 584, in _open_pdf
+    raise PdfiumError(f"Failed to load document (PDFium: {pdfium_i.ErrorToStr.get(err_code)}).", err_code=err_code)
+pypdfium2._helpers.misc.PdfiumError: Failed to load document (PDFium: Data format error).
+2026-06-27 11:02:00,797 ERROR Ошибка печати задания 267
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1617, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=printer_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 612, in print_pdf_bytes
+    images = self._render_pdf_to_images(pdf_bytes)
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 621, in _render_pdf_to_images
+    pdf = pdfium.PdfDocument(pdf_bytes)
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 76, in __init__
+    self.raw, to_hold, to_close = _open_pdf(self._input, self._password, self._autoclose)
+                                  ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 584, in _open_pdf
+    raise PdfiumError(f"Failed to load document (PDFium: {pdfium_i.ErrorToStr.get(err_code)}).", err_code=err_code)
+pypdfium2._helpers.misc.PdfiumError: Failed to load document (PDFium: Data format error).
+2026-06-27 11:02:04,470 ERROR Ошибка печати задания 267
+Traceback (most recent call last):
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 1617, in _process_job
+    self.printer.print_pdf_bytes(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pdf_bytes,
+        ^^^^^^^^^^
+    ...<2 lines>...
+        printer_name=printer_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 612, in print_pdf_bytes
+    images = self._render_pdf_to_images(pdf_bytes)
+  File "C:\Users\Markin ME\Desktop\markin-me\CRM_Print_Push_Bot\Print_server.py", line 621, in _render_pdf_to_images
+    pdf = pdfium.PdfDocument(pdf_bytes)
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 76, in __init__
+    self.raw, to_hold, to_close = _open_pdf(self._input, self._password, self._autoclose)
+                                  ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Markin ME\AppData\Roaming\Python\Python314\site-packages\pypdfium2\_helpers\document.py", line 584, in _open_pdf
+    raise PdfiumError(f"Failed to load document (PDFium: {pdfium_i.ErrorToStr.get(err_code)}).", err_code=err_code)
+pypdfium2._helpers.misc.PdfiumError: Failed to load document (PDFium: Data format error).
+2026-06-27 11:02:54,283 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:02:54,287 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 11:02:54,288 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:02:55,744 INFO Задание 268 отправлено в печать
+2026-06-27 11:02:58,751 INFO Повторная задача public_id:3a029206-b9af-4938-85b1-cedb78b900ea - печать пропущена
+2026-06-27 11:03:03,788 INFO Повторная задача public_id:3a029206-b9af-4938-85b1-cedb78b900ea - печать пропущена
+2026-06-27 11:03:53,626 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:03:53,629 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 11:03:53,630 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:03:54,758 INFO Задание 271 отправлено в печать
+2026-06-27 11:03:59,682 INFO Повторная задача public_id:e79e2ae0-8ffa-4ca7-a2f2-698f367fb325 - печать пропущена
+2026-06-27 11:04:03,205 INFO Повторная задача public_id:e79e2ae0-8ffa-4ca7-a2f2-698f367fb325 - печать пропущена
+2026-06-27 11:05:26,288 INFO Звук заказа пропущен по стартовому курсору: job_id=264 <= startup_cursor=267
+2026-06-27 11:05:27,431 INFO Задание 264 отправлено в печать
+2026-06-27 11:05:32,246 INFO Звук заказа пропущен по стартовому курсору: job_id=265 <= startup_cursor=267
+2026-06-27 11:05:33,452 INFO Задание 265 отправлено в печать
+2026-06-27 11:05:39,758 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:05:39,781 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 11:05:39,781 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:05:40,838 INFO Задание 274 отправлено в печать
+2026-06-27 11:06:51,552 INFO Повторная задача public_id:c729721c-7e1b-4d51-a1ce-1016139731bc - печать пропущена
+2026-06-27 11:08:44,527 WARNING Не удалось синхронизировать список принтеров: [WinError 10054] Удаленный хост принудительно разорвал существующее подключение
+2026-06-27 11:08:54,928 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 11:31:05,759 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:31:05,764 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 11:31:05,765 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:31:07,060 INFO Задание 275 отправлено в печать
+2026-06-27 11:31:11,945 INFO Повторная задача public_id:3594d089-e30e-4488-be00-b9758f7e7e4f - печать пропущена
+2026-06-27 11:31:15,491 INFO Повторная задача public_id:3594d089-e30e-4488-be00-b9758f7e7e4f - печать пропущена
+2026-06-27 11:44:22,312 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 11:45:00,532 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:45:00,536 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 11:45:00,536 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 11:45:01,941 INFO Задание 278 отправлено в печать
+2026-06-27 11:45:07,209 INFO Задание 279 отправлено в печать
+2026-06-27 11:45:14,303 INFO Задание 280 отправлено в печать
+2026-06-27 13:08:19,754 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 13:08:19,762 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 13:08:19,763 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 13:08:20,982 INFO Задание 281 отправлено в печать
+2026-06-27 13:10:05,046 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 13:10:05,050 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 13:10:05,051 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 13:10:06,145 INFO Задание 282 отправлено в печать
+2026-06-27 13:10:12,658 INFO Задание 283 отправлено в печать
+2026-06-27 13:10:17,658 INFO Задание 284 отправлено в печать
+2026-06-27 13:21:03,803 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 13:21:35,063 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-27 13:21:48,529 INFO Связь с CRM восстановлена
+2026-06-27 13:22:18,087 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-27 13:22:35,889 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): timed out
+2026-06-27 13:22:38,177 INFO Связь с CRM восстановлена
+2026-06-27 13:53:50,499 WARNING Не удалось синхронизировать список принтеров: [WinError 10054] Удаленный хост принудительно разорвал существующее подключение
+2026-06-27 14:00:35,951 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-27 14:00:42,115 INFO Связь с CRM восстановлена
+2026-06-27 14:01:26,913 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 14:01:26,946 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 14:01:26,947 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 14:01:28,527 INFO Задание 285 отправлено в печать
+2026-06-27 14:01:31,688 INFO Задание 286 отправлено в печать
+2026-06-27 14:01:34,686 INFO Задание 287 отправлено в печать
+2026-06-27 14:09:27,732 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-27 14:09:31,884 INFO Связь с CRM восстановлена
+2026-06-27 14:11:42,836 WARNING Не удалось синхронизировать список принтеров: [WinError 10054] Удаленный хост принудительно разорвал существующее подключение
+2026-06-27 14:13:57,326 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-27 14:14:05,704 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 14:14:15,851 WARNING Не удалось синхронизировать список принтеров: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-06-27 14:14:28,342 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 14:14:50,798 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 14:15:00,879 WARNING Не удалось синхронизировать список принтеров: <urlopen error [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение>
+2026-06-27 14:15:13,280 WARNING Таймаут/сеть при запросе к CRM (/api/print/poll, timeout=15.0s): [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение
+2026-06-27 14:15:13,281 WARNING Слишком много ошибок связи подряд (12). Перезапускаю transport polling.
+2026-06-27 14:15:29,326 INFO Связь с CRM восстановлена
+2026-06-27 14:15:44,731 INFO Сервер печати остановлен
+2026-06-27 14:15:53,596 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 14:16:23,815 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 14:16:23,823 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 14:16:23,824 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 14:16:25,202 INFO Задание 288 отправлено в печать
+2026-06-27 14:16:28,207 INFO Задание 289 отправлено в печать
+2026-06-27 14:16:31,145 INFO Задание 290 отправлено в печать
+2026-06-27 14:21:00,930 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 14:21:01,356 WARNING Не удалось синхронизировать список принтеров: [WinError 10054] Удаленный хост принудительно разорвал существующее подключение
+2026-06-27 14:21:01,357 WARNING Не удалось синхронизировать список принтеров: [WinError 10054] Удаленный хост принудительно разорвал существующее подключение
+2026-06-27 14:21:52,266 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 14:21:52,296 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 14:21:52,297 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 14:21:53,668 INFO Задание 291 отправлено в печать
+2026-06-27 14:21:57,136 INFO Задание 292 отправлено в печать
+2026-06-27 14:22:00,283 INFO Задание 293 отправлено в печать
+2026-06-27 14:28:15,853 INFO Сервер печати остановлен
+2026-06-27 14:28:21,886 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-27 14:29:11,266 INFO Пробую проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 14:29:11,273 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3: HTTP Error 404: Not Found
+2026-06-27 14:29:11,274 WARNING Не удалось проиграть звук нового заказа: /static/uploads/tenants/1/sounds/0ad8bf6c87bd35c7137d3765aa87bea7.mp3
+2026-06-27 14:29:12,660 INFO Задание 294 отправлено в печать
+2026-06-27 14:29:15,926 INFO Задание 295 отправлено в печать
+2026-06-27 14:29:18,853 INFO Задание 296 отправлено в печать

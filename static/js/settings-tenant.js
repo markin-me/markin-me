@@ -42495,7 +42495,9 @@
       const template = getPrintTemplateByType(documentType);
       const textarea = getPrintTemplateTextarea(documentType);
       if (!template || !textarea) return;
-      textarea.value = String(template.template_html || "");
+      const defaultHtml = String(template.default_template_html || "");
+      const templateHtml = String(template.template_html || "");
+      textarea.value = defaultHtml || templateHtml;
       const card = documentType === "label" ? printTemplateLabelCard : printTemplateReceiptCard;
       const title = card ? card.querySelector(".product-title") : null;
       if (title) title.textContent = String(template.title || (documentType === "label" ? "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430" : "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430"));

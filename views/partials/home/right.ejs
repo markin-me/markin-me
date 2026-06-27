@@ -1465,27 +1465,21 @@
           <div class="settings-site-field">
             <label class="field-label">ПРИМЕР ЭТИКЕТКИ</label>
             <div style="display:flex;justify-content:center;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:12px;overflow:auto;">
-              <div style="width:58mm;height:60mm;background:#fff;color:#111;border:1px solid #d1d5db;border-radius:3px;padding:3mm;font-family:'Courier New',monospace;font-size:9pt;font-weight:700;line-height:1.22;box-shadow:0 8px 18px rgba(15,23,42,.08);box-sizing:border-box;overflow:hidden;">
-                <div style="display:flex;justify-content:center;gap:2mm;font-size:9pt;">
-                  <span>ЗАКАЗ #{{ order.id }}</span>
-                  <span>{{ order.created_at }}</span>
+              <div style="width:58mm;height:60mm;background:#fff;color:#111;border:1px solid #d1d5db;border-radius:3px;padding:3mm;font-family:'Courier New',monospace;font-size:8.5pt;font-weight:700;line-height:1.18;box-shadow:0 8px 18px rgba(15,23,42,.08);box-sizing:border-box;overflow:hidden;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;gap:2mm;font-size:9pt;">
+                  <span style="white-space:nowrap;">№{{ order.id }}</span>
+                  <span style="white-space:nowrap;text-align:right;">{{ order.created_at_short }}</span>
                 </div>
-                <div style="text-align:center;">{{ order.schedule_text }}</div>
-                <div style="display:flex;align-items:flex-start;gap:2mm;margin-top:2mm;">
-                  <span style="flex-shrink:0;">{{ item.quantity }} x</span>
-                  <span style="flex:1;min-width:0;">{{ item.name }}</span>
-                  <span style="flex-shrink:0;text-align:right;">{{ item.total }}</span>
+                <div style="margin-top:1mm;font-size:8pt;font-weight:700;">{{ order.schedule_text }}</div>
+                <div style="margin-top:1.25mm;font-size:9pt;font-weight:700;word-wrap:break-word;">{{ item.name }}</div>
+                <div style="margin-top:1mm;font-size:8pt;line-height:1.16;">
+                  <div style="margin-left:4mm;word-wrap:break-word;">&bull; {{ item.variant_label }}</div>
+                  <div style="margin-left:4mm;word-wrap:break-word;">&bull; {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
+                  <div style="margin-left:4mm;word-wrap:break-word;">&bull; {{ item.option_variant }} {{ item.option_title }}</div>
+                  <div style="margin-left:4mm;word-wrap:break-word;">&bull; {{ item.client_composition }}</div>
                 </div>
                 <div style="margin-top:1mm;font-size:8pt;">
-                  <div style="margin-left:4mm;">&bull; {{ item.variant_label }}</div>
-                  <div style="margin-left:4mm;">&bull; {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
-                  <div style="margin-left:4mm;">&bull; {{ item.option_variant }} {{ item.option_title }}</div>
-                  <div style="margin-left:4mm;">&bull; {{ item.client_composition }}</div>
-                </div>
-                <div style="border-top:1px dotted #111;margin:1.5mm 0;"></div>
-                <div style="display:flex;align-items:flex-start;gap:2mm;">
-                  <span style="flex-shrink:0;">{{ gift.quantity }} x</span>
-                  <span style="flex:1;min-width:0;">{{ gift.name }} (Подарок)</span>
+                  <div style="margin-left:4mm;word-wrap:break-word;">&bull; {{ gift.name }} (Подарок)</div>
                 </div>
               </div>
             </div>
@@ -1496,94 +1490,36 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Этикетка заказа #{{ order.id }}</title>
+  <title>Этикетка товара #{{ order.id }}</title>
   <style>
-    @media print {
-      @page { size: 58mm 60mm; margin: 0; }
-      body { margin: 0; }
-    }
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    body {
-      width: 58mm;
-      height: 60mm;
-      padding: 3mm;
-      font-family: 'Courier New', monospace;
-      font-size: 9pt;
-      font-weight: 700;
-      line-height: 1.22;
-      color: #111;
-      background: #fff;
-      overflow: hidden;
-    }
-    .label-header {
-      display: flex;
-      justify-content: center;
-      gap: 2mm;
-      font-size: 9pt;
-    }
-    .label-schedule {
-      text-align: center;
-    }
-    .label-item-row {
-      display: flex;
-      align-items: flex-start;
-      gap: 2mm;
-      margin-top: 2mm;
-    }
-    .label-item-qty,
-    .label-item-price {
-      flex-shrink: 0;
-    }
-    .label-item-name {
-      flex: 1;
-      min-width: 0;
-      word-wrap: break-word;
-    }
-    .label-item-price {
-      text-align: right;
-    }
-    .label-composition {
-      margin-top: 1mm;
-      font-size: 8pt;
-    }
-    .label-composition-item {
-      margin-left: 4mm;
-      word-wrap: break-word;
-    }
-    .label-gift {
-      border-top: 1px dotted #111;
-      margin-top: 1.5mm;
-      padding-top: 1.5mm;
-    }
+    @media print { @page { size: 58mm 60mm; margin: 0; } body { margin: 0; } }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 58mm; height: 60mm; padding: 3mm; font-family: 'Courier New', monospace; font-size: 8.5pt; font-weight: 700; line-height: 1.18; color: #111; background: #fff; overflow: hidden; }
+    .label-header { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; font-size: 9pt; }
+    .label-order { font-weight: 700; white-space: nowrap; }
+    .label-datetime { font-weight: 700; white-space: nowrap; text-align: right; }
+    .label-schedule { margin-top: 1mm; font-size: 8pt; font-weight: 700; }
+    .label-item-name { margin-top: 1.25mm; font-size: 9pt; font-weight: 700; word-wrap: break-word; }
+    .label-composition { margin-top: 1mm; font-size: 8pt; line-height: 1.16; }
+    .label-composition-item { margin-left: 4mm; word-wrap: break-word; }
+    .label-gift { margin-top: 1mm; font-size: 8pt; }
   </style>
 </head>
 <body>
   <div class="label-header">
-    <span>ЗАКАЗ #{{ order.id }}</span>
-    <span>{{ order.created_at }}</span>
+    <span class="label-order">№{{ order.id }}</span>
+    <span class="label-datetime">{{ order.created_at_short }}</span>
   </div>
   <div class="label-schedule">{{ order.schedule_text }}</div>
-  <div class="label-item-row">
-    <span class="label-item-qty">{{ item.quantity }} x</span>
-    <span class="label-item-name">{{ item.name }}</span>
-    <span class="label-item-price">{{ item.total }}</span>
-  </div>
+  <div class="label-item-name">{{ item.name }}</div>
   <div class="label-composition">
     <div class="label-composition-item">&bull; {{ item.variant_label }}</div>
     <div class="label-composition-item">&bull; {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
     <div class="label-composition-item">&bull; {{ item.option_variant }} {{ item.option_title }}</div>
     <div class="label-composition-item">&bull; {{ item.client_composition }}</div>
   </div>
-
   <div class="label-gift">
-    <div class="label-item-row">
-      <span class="label-item-qty">{{ gift.quantity }} x</span>
-      <span class="label-item-name">{{ gift.name }} (Подарок)</span>
-    </div>
+    <div class="label-composition-item">&bull; {{ gift.name }} (Подарок)</div>
   </div>
 </body>
 </html></textarea>

@@ -5,6 +5,7 @@ const { URL } = require("url");
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || "https://markin-me.ru").replace(/\/+$/, "");
 const LOCAL_CRM_BASE_URL = `http://127.0.0.1:${Number(process.env.PORT || 3000)}`;
 const HTML_JOB_PREFIX = "__HTML_BASE64__:";
+const META_JOB_PREFIX = "__PRINT_META__:";
 const newStatusIdCache = new Map();
 const RUS_NEW_LOWER = "\u043d\u043e\u0432";
 const RUS_NEW_TITLE_LIKE = "%\u041d\u043e\u0432%";
@@ -145,6 +146,230 @@ function encodeHtmlJobPayload(html) {
   return `${HTML_JOB_PREFIX}${Buffer.from(rawHtml, "utf-8").toString("base64")}`;
 }
 
+function encodeMetaJobPayload(meta) {
+  try {
+    const json = JSON.stringify(meta || {});
+    if (!json || json === "{}") return "";
+    return `${META_JOB_PREFIX}${Buffer.from(json, "utf-8").toString("base64")}`;
+  } catch {
+    return "";
+  }
+}
+
+function formatScheduleText(order) {
+  const title = String(order?.time_option_title || "").trim();
+  const scheduledAt = String(order?.scheduled_at || "").trim();
+  if (!scheduledAt) return title;
+  return title ? `${title}: ${scheduledAt}` : scheduledAt;
+}
+
+function formatLabelScheduleText(order) {
+  const title = String(order?.time_option_title || "").trim();
+  const scheduledAt = String(order?.scheduled_at || "").trim();
+  if (!title) return scheduledAt;
+  if (title.includes("Ко времени")) {
+    const match = scheduledAt.match(/(\d{2}):(\d{2})/);
+    return match ? `${title}: ${match[1]}:${match[2]}` : title;
+  }
+  if (title.includes("На дату")) {
+    const match = scheduledAt.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+    if (match) return `${title}: ${match[3]}.${match[2]} ${match[4]}:${match[5]}`;
+  }
+  return title || scheduledAt;
+}
+
+function formatLabelDateTime(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!match) return raw;
+  return `${match[4]}:${match[5]} ${match[3]}.${match[2]}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function resolveTemplatePath(source, path) {
+  return String(path || "").split(".").reduce((value, key) => {
+    if (value == null) return "";
+    return value[key];
+  }, source);
+}
+
+function renderPrintTemplate(templateHtml, data, rawKeys = new Set()) {
+  return String(templateHtml || "").replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, key) => {
+    const value = resolveTemplatePath(data, key);
+    if (value == null) return "";
+    return rawKeys.has(key) || key.endsWith("_html") ? String(value) : escapeHtml(value);
+  });
+}
+
+async function fetchActivePrintTemplateHtml(db, tenantId, documentType, templateId = null) {
+  const hasTemplateId = Number(templateId || 0) > 0;
+  const [rows] = await db.query(
+    hasTemplateId
+      ? `SELECT template_html
+         FROM print_templates
+         WHERE tenant_id=? AND id=? AND document_type=? AND is_active=1
+         LIMIT 1`
+      : `SELECT template_html
+         FROM print_templates
+         WHERE tenant_id=? AND document_type=? AND is_active=1
+         ORDER BY id ASC
+         LIMIT 1`,
+    hasTemplateId ? [tenantId, templateId, documentType] : [tenantId, documentType]
+  );
+  return String(rows[0]?.template_html || "").trim() || null;
+}
+
+async function buildProductionLabelJobs(db, { tenantId, storeId, order }) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (!items.length) return [];
+
+  const productIds = [...new Set(
+    items
+      .map((item) => Number(item?.product_id || 0))
+      .filter((id) => id > 0)
+  )];
+  if (!productIds.length) return [];
+
+  const [productRows] = await db.query(
+    `SELECT id, name, production_zone_id
+     FROM prod_products
+     WHERE tenant_id=? AND id IN (${productIds.map(() => "?").join(",")})`,
+    [tenantId, ...productIds]
+  );
+  const productById = new Map();
+  productRows.forEach((row) => {
+    productById.set(Number(row.id), {
+      id: Number(row.id),
+      name: String(row.name || "").trim(),
+      production_zone_id: Number(row.production_zone_id || 0) > 0 ? Number(row.production_zone_id) : null,
+    });
+  });
+
+  const zoneIds = [...new Set(
+    productRows
+      .map((row) => Number(row.production_zone_id || 0))
+      .filter((id) => id > 0)
+  )];
+  if (!zoneIds.length) return [];
+
+  const [ruleRows] = await db.query(
+    `SELECT rr.production_zone_id, rr.printer_id, rr.template_id, rr.copies, rr.is_enabled,
+            p.system_name AS printer_system_name, p.display_name AS printer_display_name
+       FROM prod_store_print_rules rr
+       LEFT JOIN print_printers p
+         ON p.tenant_id=rr.tenant_id
+        AND p.id=rr.printer_id
+       WHERE rr.tenant_id=? AND rr.store_id=? AND rr.document_type='label' AND rr.is_enabled=1
+         AND rr.production_zone_id IN (${zoneIds.map(() => "?").join(",")})
+       ORDER BY rr.updated_at DESC, rr.id DESC`,
+    [tenantId, storeId, ...zoneIds]
+  );
+
+  const ruleByZoneId = new Map();
+  ruleRows.forEach((row) => {
+    const zoneId = Number(row.production_zone_id || 0);
+    if (!(zoneId > 0) || ruleByZoneId.has(zoneId)) return;
+    ruleByZoneId.set(zoneId, {
+      printer_id: Number(row.printer_id || 0) || null,
+      template_id: Number(row.template_id || 0) || null,
+      copies: Math.max(1, Number(row.copies || 1) || 1),
+      printer_system_name: String(row.printer_system_name || "").trim(),
+      printer_display_name: String(row.printer_display_name || "").trim(),
+    });
+  });
+
+  const [zoneRows] = await db.query(
+    `SELECT id, name
+     FROM prod_production_zones
+     WHERE tenant_id=? AND is_active=1 AND id IN (${zoneIds.map(() => "?").join(",")})`,
+    [tenantId, ...zoneIds]
+  );
+  const zoneById = new Map(zoneRows.map((row) => [Number(row.id), { id: Number(row.id), name: String(row.name || "").trim() }]));
+
+  const labelJobs = [];
+  for (const item of items) {
+    const productId = Number(item?.product_id || 0);
+    const qty = Math.max(1, Number(item?.quantity || item?.qty || 1) || 1);
+    if (!(productId > 0) || !(qty > 0)) continue;
+    const product = productById.get(productId) || null;
+    const zoneId = Number(product?.production_zone_id || 0);
+    if (!(zoneId > 0)) continue;
+    const rule = ruleByZoneId.get(zoneId) || null;
+    if (!rule?.printer_system_name || !rule?.template_id) continue;
+    const zone = zoneById.get(zoneId) || null;
+    const templateHtml = await fetchActivePrintTemplateHtml(db, tenantId, "label", rule.template_id);
+    if (!templateHtml) continue;
+
+    const scheduleText = formatScheduleText(order);
+    const itemData = {
+      quantity: qty,
+      name: String(item?.name || product?.name || "").trim(),
+      total: String(item?.line_total ?? item?.total ?? item?.total_price ?? ""),
+      variant_label: String(item?.variant_label || "").trim(),
+      ingredients: Array.isArray(item?.ingredients) ? item.ingredients : [],
+      options: Array.isArray(item?.options) ? item.options : [],
+      client_composition: String(item?.client_composition || "").trim(),
+    };
+    const compositionLines = [];
+    if (itemData.variant_label) compositionLines.push(itemData.variant_label);
+    if (Array.isArray(itemData.ingredients) && itemData.ingredients.length) {
+      itemData.ingredients.forEach((ingredient) => {
+        const ingredientLine = [
+          ingredient?.qty ?? ingredient?.quantity ?? ingredient?.amount ?? "",
+          ingredient?.unit_label || ingredient?.unit || ingredient?.unit_title || "",
+          ingredient?.name || ingredient?.title || "",
+        ].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+        if (ingredientLine) compositionLines.push(ingredientLine);
+      });
+    }
+    if (Array.isArray(itemData.options) && itemData.options.length) {
+      itemData.options.forEach((option) => {
+        const optionLine = [option?.variant_label || option?.variantLabel || "", option?.title || option?.name || ""].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+        if (optionLine) compositionLines.push(optionLine);
+      });
+    }
+    if (itemData.client_composition) compositionLines.push(itemData.client_composition);
+    itemData.composition_html = compositionLines.length
+      ? compositionLines.map((line) => `<div class="label-composition-item">&bull; ${escapeHtml(line)}</div>`).join("")
+      : "";
+    const giftData = Number(item?.is_gift_reward || 0) === 1
+      ? { html: `<div class="label-composition-item">&bull; ${escapeHtml(String(itemData.name || "").trim())} (Подарок)</div>` }
+      : { html: "" };
+    const templateData = {
+      order: {
+        id: order?.id || null,
+        created_at: order?.created_at || "",
+        created_at_short: formatLabelDateTime(order?.created_at || ""),
+        schedule_text: formatLabelScheduleText(order),
+      },
+      item: itemData,
+      gift: giftData,
+      zone: {
+        id: zone?.id || zoneId,
+        name: zone?.name || "",
+      }
+    };
+    const html = renderPrintTemplate(templateHtml, templateData, new Set());
+    if (!html || !String(html).trim()) continue;
+    labelJobs.push({
+      job_name: zone?.name ? `CRM Label ${zone.name}` : "CRM Label",
+      html,
+      printer_name: rule.printer_system_name,
+      copies: Math.max(1, qty * Math.max(1, Number(rule.copies || 1) || 1)),
+      kind: "label",
+    });
+  }
+  return labelJobs;
+}
+
 async function getPrintTokenRow(db, tenantId, storeId) {
   const [rows] = await db.query(
     `SELECT id, token FROM print_api_tokens WHERE tenant_id=? AND store_id=? AND is_active=1 ORDER BY id DESC LIMIT 1`,
@@ -219,6 +444,56 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, cr
   return true;
 }
 
+async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order }) {
+  const jobs = await buildProductionLabelJobs(db, { tenantId, storeId, order });
+  if (!jobs.length) return 0;
+  const orderId = Number(order?.id || order?.order_id || order?.orderId || 0);
+  const publicId = order?.public_id || order?.publicId || null;
+  const createdAtValue = String(order?.created_at || "").trim() || null;
+  for (let index = 0; index < jobs.length; index += 1) {
+    const job = jobs[index];
+    const syntheticOrderId = -(orderId * 1000 + (index + 1));
+    const payload = encodeMetaJobPayload({
+      kind: job.kind || "label",
+      printer_name: job.printer_name || "",
+      copies: Number(job.copies || 1) || 1,
+      html: job.html || "",
+      job_name: job.job_name || "CRM Label",
+    });
+    if (!payload) continue;
+    await db.query(
+      `
+      INSERT INTO print_jobs
+        (tenant_id, store_id, token_id, order_id, public_id, job_name, pdf_base64, status, attempts, last_error, locked_at, acked_at, created_at, updated_at)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, COALESCE(?, NOW()), COALESCE(?, NOW()))
+      ON DUPLICATE KEY UPDATE
+        token_id=VALUES(token_id),
+        public_id=VALUES(public_id),
+        job_name=VALUES(job_name),
+        pdf_base64=VALUES(pdf_base64),
+        status='pending',
+        last_error=NULL,
+        locked_at=NULL,
+        acked_at=NULL,
+        updated_at=COALESCE(VALUES(updated_at), NOW())
+      `,
+      [
+        tenantId,
+        storeId,
+        tokenId,
+        syntheticOrderId,
+        publicId,
+        job.job_name || "CRM Label",
+        payload,
+        createdAtValue,
+        createdAtValue,
+      ]
+    );
+  }
+  return jobs.length;
+}
+
 async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipReasons }) {
   const mutedReasons = new Set(
     Array.isArray(silentSkipReasons)
@@ -288,6 +563,25 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
     createdAt,
   });
   if (!enqueued) return fail("ENQUEUE_RETURNED_FALSE");
+
+  try {
+    await enqueueLabelPrintJobs(db, {
+      tenantId: resolvedTenantId,
+      storeId: resolvedStoreId,
+      tokenId: Number(tokenRow.id),
+      order: {
+        ...order,
+        created_at: createdAt,
+      },
+    });
+  } catch (labelErr) {
+    console.error("Label enqueue failed:", {
+      orderId: orderIdDebug || null,
+      tenantId: resolvedTenantId,
+      storeId: resolvedStoreId,
+      error: String(labelErr?.message || labelErr || "unknown_error"),
+    });
+  }
   return true;
 }
 

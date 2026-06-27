@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -169,7 +169,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
         });
       }
     } catch (err) {
-      console.error('Ошибка публикации storefront chat_widget change:', err);
+      console.error('РћС€РёР±РєР° РїСѓР±Р»РёРєР°С†РёРё storefront chat_widget change:', err);
     }
   }
   let storeAddressIdentityColumnsReady = false;
@@ -345,7 +345,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       || normalizedName.includes('wifi')
       || normalizedName.includes('wlan')
       || normalizedName.includes('wireless')
-      || normalizedName.includes('беспровод')
+      || normalizedName.includes('Р±РµСЃРїСЂРѕРІРѕРґ')
     ) {
       score += 1000;
     }
@@ -353,7 +353,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     if (
       normalizedName.includes('ethernet')
       || normalizedName.includes('lan')
-      || normalizedName.includes('локальн')
+      || normalizedName.includes('Р»РѕРєР°Р»СЊРЅ')
     ) {
       score += 800;
     }
@@ -697,7 +697,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       pushTarget({
         id: `dev-current:${currentHost.host}`,
         kind: 'dev-current',
-        label: `Текущий адрес: ${currentHost.host}`,
+        label: `РўРµРєСѓС‰РёР№ Р°РґСЂРµСЃ: ${currentHost.host}`,
         host: currentHost.host
       });
     }
@@ -719,7 +719,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       pushTarget({
         id: `dev-local:${currentHost.host}`,
         kind: 'dev-localhost',
-        label: `Этот компьютер: ${currentHost.host}`,
+        label: `Р­С‚РѕС‚ РєРѕРјРїСЊСЋС‚РµСЂ: ${currentHost.host}`,
         host: currentHost.host
       });
     }
@@ -1071,14 +1071,14 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       const matchingAddress = resolvedAddresses.find((address) => expectedARecords.includes(address));
       if (matchingAddress) {
         result.dns = true;
-        result.dns_detail = `A-записи настроены: ${resolvedAddresses.join(', ')}`;
+        result.dns_detail = `A-Р·Р°РїРёСЃРё РЅР°СЃС‚СЂРѕРµРЅС‹: ${resolvedAddresses.join(', ')}`;
       } else {
         result.dns_detail = expectedARecords.length
-          ? `Ожидаем IP ${expectedARecords.join(', ')}`
-          : `Найдены IP: ${resolvedAddresses.join(', ')}`;
+          ? `РћР¶РёРґР°РµРј IP ${expectedARecords.join(', ')}`
+          : `РќР°Р№РґРµРЅС‹ IP: ${resolvedAddresses.join(', ')}`;
       }
     } catch (e) {
-      result.dns_detail = e && e.code === 'ENOTFOUND' ? 'A-запись не найдена' : 'Не удалось проверить A-запись';
+      result.dns_detail = e && e.code === 'ENOTFOUND' ? 'A-Р·Р°РїРёСЃСЊ РЅРµ РЅР°Р№РґРµРЅР°' : 'РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕРІРµСЂРёС‚СЊ A-Р·Р°РїРёСЃСЊ';
     }
 
     if (result.dns) {
@@ -1092,13 +1092,13 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
         if (httpResponse.statusCode >= 200 && httpResponse.statusCode < 400) {
           result.http = true;
           result.http_detail = httpResponse.statusCode >= 300
-            ? 'Есть редирект на сайт'
-            : 'Сайт отвечает';
+            ? 'Р•СЃС‚СЊ СЂРµРґРёСЂРµРєС‚ РЅР° СЃР°Р№С‚'
+            : 'РЎР°Р№С‚ РѕС‚РІРµС‡Р°РµС‚';
         } else {
           result.http_detail = `HTTP ${httpResponse.statusCode}`;
         }
       } catch (e) {
-        result.http_detail = e && e.message === 'timeout' ? 'Сайт не ответил вовремя' : 'Сайт недоступен';
+        result.http_detail = e && e.message === 'timeout' ? 'РЎР°Р№С‚ РЅРµ РѕС‚РІРµС‚РёР» РІРѕРІСЂРµРјСЏ' : 'РЎР°Р№С‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ';
       }
 
       try {
@@ -1121,16 +1121,16 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
           && Number(payload.tenant_id) === Number(tenantId)
         ) {
           result.ssl = true;
-          result.ssl_detail = 'Сертификат активен';
+          result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ Р°РєС‚РёРІРµРЅ';
         } else {
-          result.ssl_detail = 'Сертификат еще не готов';
+          result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ РµС‰Рµ РЅРµ РіРѕС‚РѕРІ';
         }
       } catch (e) {
-        result.ssl_detail = 'Сертификат еще не готов';
+        result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ РµС‰Рµ РЅРµ РіРѕС‚РѕРІ';
       }
     } else {
-      result.http_detail = 'Сначала настройте A-записи';
-      result.ssl_detail = 'Сначала настройте A-записи';
+      result.http_detail = 'РЎРЅР°С‡Р°Р»Р° РЅР°СЃС‚СЂРѕР№С‚Рµ A-Р·Р°РїРёСЃРё';
+      result.ssl_detail = 'РЎРЅР°С‡Р°Р»Р° РЅР°СЃС‚СЂРѕР№С‚Рµ A-Р·Р°РїРёСЃРё';
     }
 
     return result;
@@ -1167,10 +1167,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     if (value === null) return null;
     const raw = String(value).trim().toLowerCase();
     if (!raw) return null;
-    if (raw === 'm' || raw === 'male' || raw === 'man' || raw === 'м' || raw === 'муж' || raw === 'мужской') {
+    if (raw === 'm' || raw === 'male' || raw === 'man' || raw === 'Рј' || raw === 'РјСѓР¶' || raw === 'РјСѓР¶СЃРєРѕР№') {
       return 'm';
     }
-    if (raw === 'f' || raw === 'female' || raw === 'woman' || raw === 'ж' || raw === 'жен' || raw === 'женский') {
+    if (raw === 'f' || raw === 'female' || raw === 'woman' || raw === 'Р¶' || raw === 'Р¶РµРЅ' || raw === 'Р¶РµРЅСЃРєРёР№') {
       return 'f';
     }
     return '__invalid__';
@@ -1555,9 +1555,9 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   function maskMapProviderSecret(value) {
     const raw = normalizeMapProviderAccountString(value, 1024);
     if (!raw) return '';
-    if (raw.length <= 2) return `${raw[0]}•`;
-    if (raw.length <= 8) return `${raw.slice(0, 1)}••••${raw.slice(-1)}`;
-    return `${raw.slice(0, 4)}••••${raw.slice(-4)}`;
+    if (raw.length <= 2) return `${raw[0]}вЂў`;
+    if (raw.length <= 8) return `${raw.slice(0, 1)}вЂўвЂўвЂўвЂў${raw.slice(-1)}`;
+    return `${raw.slice(0, 4)}вЂўвЂўвЂўвЂў${raw.slice(-4)}`;
   }
 
   function serializeTenantMapProviderAccountsForClient(rawValue) {
@@ -1574,16 +1574,16 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   }
 
   const defaultSiteMenuItems = Object.freeze([
-    { key: 'my-orders', title: 'Мои заказы', icon_class: 'fas fa-receipt', enabled: true, sort_order: 0 },
-    { key: 'favorites', title: 'Избранное', icon_class: 'fas fa-heart', enabled: true, sort_order: 1 },
-    { key: 'benefits', title: 'Выгоды', icon_class: 'fas fa-tags', enabled: true, sort_order: 2 },
-    { key: 'promocodes', title: 'Промокоды', icon_class: 'fas fa-ticket-alt', enabled: true, sort_order: 3 },
-    { key: 'discounts', title: 'Скидки', icon_class: 'fas fa-percent', enabled: true, sort_order: 4 },
-    { key: 'gifts', title: 'Подарки', icon_class: 'fas fa-gift', enabled: true, sort_order: 5 },
-    { key: 'addresses', title: 'Адреса', icon_class: 'fas fa-map-marker-alt', enabled: true, sort_order: 6 },
-    { key: 'bought-before', title: 'Уже покупали', icon_class: 'fas fa-shopping-bag', enabled: true, sort_order: 7 },
-    { key: 'tasks', title: 'Задания', icon_class: 'fas fa-tasks', enabled: true, sort_order: 8 },
-    { key: 'product-rating', title: 'Оценка товаров', icon_class: 'fas fa-star-half-alt', enabled: true, sort_order: 9 },
+    { key: 'my-orders', title: 'РњРѕРё Р·Р°РєР°Р·С‹', icon_class: 'fas fa-receipt', enabled: true, sort_order: 0 },
+    { key: 'favorites', title: 'РР·Р±СЂР°РЅРЅРѕРµ', icon_class: 'fas fa-heart', enabled: true, sort_order: 1 },
+    { key: 'benefits', title: 'Р’С‹РіРѕРґС‹', icon_class: 'fas fa-tags', enabled: true, sort_order: 2 },
+    { key: 'promocodes', title: 'РџСЂРѕРјРѕРєРѕРґС‹', icon_class: 'fas fa-ticket-alt', enabled: true, sort_order: 3 },
+    { key: 'discounts', title: 'РЎРєРёРґРєРё', icon_class: 'fas fa-percent', enabled: true, sort_order: 4 },
+    { key: 'gifts', title: 'РџРѕРґР°СЂРєРё', icon_class: 'fas fa-gift', enabled: true, sort_order: 5 },
+    { key: 'addresses', title: 'РђРґСЂРµСЃР°', icon_class: 'fas fa-map-marker-alt', enabled: true, sort_order: 6 },
+    { key: 'bought-before', title: 'РЈР¶Рµ РїРѕРєСѓРїР°Р»Рё', icon_class: 'fas fa-shopping-bag', enabled: true, sort_order: 7 },
+    { key: 'tasks', title: 'Р—Р°РґР°РЅРёСЏ', icon_class: 'fas fa-tasks', enabled: true, sort_order: 8 },
+    { key: 'product-rating', title: 'РћС†РµРЅРєР° С‚РѕРІР°СЂРѕРІ', icon_class: 'fas fa-star-half-alt', enabled: true, sort_order: 9 },
   ]);
 
   function normalizeSiteMenuItems(rawValue, { fallbackToDefault = true } = {}) {
@@ -2188,11 +2188,11 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       const requiredColumns = [
         {
           name: 'require_client_data',
-          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Обязательны ли данные клиента (имя/телефон)'",
+          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'РћР±СЏР·Р°С‚РµР»СЊРЅС‹ Р»Рё РґР°РЅРЅС‹Рµ РєР»РёРµРЅС‚Р° (РёРјСЏ/С‚РµР»РµС„РѕРЅ)'",
         },
         {
           name: 'show_on_site',
-          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Показывать способ на сайте'",
+          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'РџРѕРєР°Р·С‹РІР°С‚СЊ СЃРїРѕСЃРѕР± РЅР° СЃР°Р№С‚Рµ'",
         },
       ];
 
@@ -2514,13 +2514,13 @@ function buildStoreGeocodeQuery(address, city) {
 
 function normalizeStoreComparableStreet(value) {
   return normalizeLocalAddressText(value)
-    .replace(/\b(?:улица|ул|переулок|пер|проспект|пр-кт|проезд|пр-д|шоссе|площадь|пл|бульвар|бул|набережная|наб|микрорайон|мкр|квартал|кв-л)\b/g, ' ')
+    .replace(/\b(?:СѓР»РёС†Р°|СѓР»|РїРµСЂРµСѓР»РѕРє|РїРµСЂ|РїСЂРѕСЃРїРµРєС‚|РїСЂ-РєС‚|РїСЂРѕРµР·Рґ|РїСЂ-Рґ|С€РѕСЃСЃРµ|РїР»РѕС‰Р°РґСЊ|РїР»|Р±СѓР»СЊРІР°СЂ|Р±СѓР»|РЅР°Р±РµСЂРµР¶РЅР°СЏ|РЅР°Р±|РјРёРєСЂРѕСЂР°Р№РѕРЅ|РјРєСЂ|РєРІР°СЂС‚Р°Р»|РєРІ-Р»)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function isStoreOrdinalAddressPair(token, nextToken) {
-  return /^\d+$/.test(String(token || '').trim()) && /^(й|я|ый|ая)$/.test(String(nextToken || '').trim());
+  return /^\d+$/.test(String(token || '').trim()) && /^(Р№|СЏ|С‹Р№|Р°СЏ)$/.test(String(nextToken || '').trim());
 }
 
 function isStoreStandaloneHouseToken(token) {
@@ -3058,7 +3058,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
       }
 
-      // Создаём WebP-вариант логотипа / иконки (оригинал оставляем как fallback)
+      // РЎРѕР·РґР°С‘Рј WebP-РІР°СЂРёР°РЅС‚ Р»РѕРіРѕС‚РёРїР° / РёРєРѕРЅРєРё (РѕСЂРёРіРёРЅР°Р» РѕСЃС‚Р°РІР»СЏРµРј РєР°Рє fallback)
       await helpers.ensureWebpVariant(
         file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), file.filename)
       );
@@ -3085,13 +3085,13 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, url, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
-      console.error('Ошибка загрузки tenant ассета:', err);
+      console.error('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё tenant Р°СЃСЃРµС‚Р°:', err);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
     }
   });
 
   // ------------------------------
-  // Upload: звуки уведомлений (минимальные ограничения по формату)
+  // Upload: Р·РІСѓРєРё СѓРІРµРґРѕРјР»РµРЅРёР№ (РјРёРЅРёРјР°Р»СЊРЅС‹Рµ РѕРіСЂР°РЅРёС‡РµРЅРёСЏ РїРѕ С„РѕСЂРјР°С‚Сѓ)
   // POST /api/admin/tenant/upload-sound
   // form-data: { file, field }  field: sound_new_order_url | sound_order_cancelled_url
   // ------------------------------
@@ -3160,14 +3160,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, url, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
-      console.error('Ошибка загрузки звука:', err);
+      console.error('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё Р·РІСѓРєР°:', err);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
     }
   });
 
   /**
    * GET /api/admin/tenant
-   * Возвращает Компания (tenant) для текущего пользователя
+   * Р’РѕР·РІСЂР°С‰Р°РµС‚ РљРѕРјРїР°РЅРёСЏ (tenant) РґР»СЏ С‚РµРєСѓС‰РµРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
    */
   router.get('/', async (req, res) => {
     try {
@@ -3190,8 +3190,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const tenant = rows[0];
 
-      // Вычисляем ссылку для Telegram mini app без хранения в БД.
-      // Подстраиваемся под текущий домен и протокол (localhost, markin-me.ru и т.п.).
+      // Р’С‹С‡РёСЃР»СЏРµРј СЃСЃС‹Р»РєСѓ РґР»СЏ Telegram mini app Р±РµР· С…СЂР°РЅРµРЅРёСЏ РІ Р‘Р”.
+      // РџРѕРґСЃС‚СЂР°РёРІР°РµРјСЃСЏ РїРѕРґ С‚РµРєСѓС‰РёР№ РґРѕРјРµРЅ Рё РїСЂРѕС‚РѕРєРѕР» (localhost, markin-me.ru Рё С‚.Рї.).
       const forwardedProto = req.headers['x-forwarded-proto'];
       const forwardedHost = req.headers['x-forwarded-host'];
 
@@ -3215,7 +3215,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         })
       });
     } catch (err) {
-      console.error('Ошибка получения tenant профиля:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ tenant РїСЂРѕС„РёР»СЏ:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -3602,7 +3602,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * PUT /api/admin/tenant
-   * Обновление отдельных полей профиля (пока только timezone)
+   * РћР±РЅРѕРІР»РµРЅРёРµ РѕС‚РґРµР»СЊРЅС‹С… РїРѕР»РµР№ РїСЂРѕС„РёР»СЏ (РїРѕРєР° С‚РѕР»СЊРєРѕ timezone)
    * body: { timezone }
    */
   router.put('/', async (req, res) => {
@@ -3946,7 +3946,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
           );
         }
       } catch (chatRuntimeErr) {
-        console.error('Ошибка синхронизации runtime чата tenant:', chatRuntimeErr);
+        console.error('РћС€РёР±РєР° СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё runtime С‡Р°С‚Р° tenant:', chatRuntimeErr);
       }
 
       if (prevChatWidgetEnabled !== nextChatWidgetEnabledResolved) {
@@ -3974,7 +3974,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, tenant: await buildTenantResponse(rows[0] || null, req) });
     } catch (err) {
-      console.error('Ошибка обновления tenant профиля:', err);
+      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ tenant РїСЂРѕС„РёР»СЏ:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -3992,7 +3992,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
 
-      // Получаем timezone филиала
+      // РџРѕР»СѓС‡Р°РµРј timezone С„РёР»РёР°Р»Р°
       let storeTimezone = '+0';
       if (storeId) {
         const [storeRows] = await db.query(
@@ -4004,7 +4004,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         }
       }
 
-      // Если нет timezone у филиала, берем у тенанта
+      // Р•СЃР»Рё РЅРµС‚ timezone Сѓ С„РёР»РёР°Р»Р°, Р±РµСЂРµРј Сѓ С‚РµРЅР°РЅС‚Р°
       if (!storeTimezone || storeTimezone === '+0') {
         const [tenantRows] = await db.query(
           'SELECT timezone FROM ten_tenants WHERE id=? LIMIT 1',
@@ -4015,10 +4015,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
         }
       }
 
-      // Получаем РЕАЛЬНОЕ UTC время (не от MySQL, а от Node.js)
+      // РџРѕР»СѓС‡Р°РµРј Р Р•РђР›Р¬РќРћР• UTC РІСЂРµРјСЏ (РЅРµ РѕС‚ MySQL, Р° РѕС‚ Node.js)
       const realUtcNow = Date.now();
 
-      // Вычисляем время филиала
+      // Р’С‹С‡РёСЃР»СЏРµРј РІСЂРµРјСЏ С„РёР»РёР°Р»Р°
       const offsetMinutes = helpers.parseTimezoneOffsetToMinutes(storeTimezone ?? "+0");
       const offsetMs = offsetMinutes * 60 * 1000;
       const storeTime = realUtcNow + offsetMs;
@@ -4084,7 +4084,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       }));
       res.json({ ok: true, stores: enriched });
     } catch (err) {
-      console.error('Ошибка получения списка точек продаж:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРёСЃРєР° С‚РѕС‡РµРє РїСЂРѕРґР°Р¶:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4217,7 +4217,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const store = await fetchStoreWithHours(tenantId, nextId);
       res.json({ ok: true, store });
       } catch (err) {
-        console.error('Ошибка создания Филиалы:', err);
+        console.error('РћС€РёР±РєР° СЃРѕР·РґР°РЅРёСЏ Р¤РёР»РёР°Р»С‹:', err);
         res.status(500).json({ ok: false, error: 'DB_ERROR' });
       }
     });
@@ -4462,7 +4462,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         const store = await fetchStoreWithHours(tenantId, id);
         res.json({ ok: true, store });
       } catch (err) {
-        console.error('Ошибка обновления Филиалы:', err);
+        console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ Р¤РёР»РёР°Р»С‹:', err);
         res.status(500).json({ ok: false, error: 'DB_ERROR' });
       }
     });
@@ -4485,7 +4485,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
       res.json({ ok: true, items: rows || [] });
     } catch (err) {
-      console.error('Ошибка получения списка статусов:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРёСЃРєР° СЃС‚Р°С‚СѓСЃРѕРІ:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4504,7 +4504,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
       res.json({ ok: true, items: rows || [] });
     } catch (err) {
-      console.error('Ошибка получения способов оплаты:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРѕСЃРѕР±РѕРІ РѕРїР»Р°С‚С‹:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4524,7 +4524,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
       res.json({ ok: true, items: rows || [] });
     } catch (err) {
-      console.error('Ошибка получения способов получения:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРѕСЃРѕР±РѕРІ РїРѕР»СѓС‡РµРЅРёСЏ:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4544,7 +4544,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
       res.json({ ok: true, items: rows || [] });
     } catch (err) {
-      console.error('Ошибка получения интервалов времени:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ РёРЅС‚РµСЂРІР°Р»РѕРІ РІСЂРµРјРµРЅРё:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4646,7 +4646,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, item: rows[0] || null });
     } catch (err) {
-      console.error('Ошибка обновления списка:', err);
+      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ СЃРїРёСЃРєР°:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   }
@@ -4683,7 +4683,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true });
     } catch (err) {
-      console.error('Ошибка сохранения сортировки:', err);
+      console.error('РћС€РёР±РєР° СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРѕСЂС‚РёСЂРѕРІРєРё:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   }
@@ -4736,7 +4736,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
       const previousIcon = previousRows && previousRows[0] ? previousRows[0].icon : null;
 
-      // Создаём WebP-вариант иконки списка (оригинал остаётся как fallback)
+      // РЎРѕР·РґР°С‘Рј WebP-РІР°СЂРёР°РЅС‚ РёРєРѕРЅРєРё СЃРїРёСЃРєР° (РѕСЂРёРіРёРЅР°Р» РѕСЃС‚Р°С‘С‚СЃСЏ РєР°Рє fallback)
       await helpers.ensureWebpVariant(
         file.path ||
           path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), 'lists', file.filename)
@@ -4763,7 +4763,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, url, item: rows[0] || null });
     } catch (err) {
-      console.error('Ошибка загрузки иконки:', err);
+      console.error('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё РёРєРѕРЅРєРё:', err);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
     }
   });
@@ -4780,7 +4780,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const items = await loadDeliveryZonesForTenant(tenantId);
       return res.json({ ok: true, items });
     } catch (err) {
-      console.error('Ошибка получения зон доставки:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ Р·РѕРЅ РґРѕСЃС‚Р°РІРєРё:', err);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4838,7 +4838,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const item = await loadDeliveryZoneForTenant(tenantId, zoneId);
       return res.json({ ok: true, item });
     } catch (err) {
-      console.error('Ошибка создания зоны доставки:', err);
+      console.error('РћС€РёР±РєР° СЃРѕР·РґР°РЅРёСЏ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё:', err);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4922,7 +4922,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const item = await loadDeliveryZoneForTenant(tenantId, zoneId);
       return res.json({ ok: true, item });
     } catch (err) {
-      console.error('Ошибка обновления зоны доставки:', err);
+      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё:', err);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4949,7 +4949,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
       return res.json({ ok: true });
     } catch (err) {
-      console.error('Ошибка удаления зоны доставки:', err);
+      console.error('РћС€РёР±РєР° СѓРґР°Р»РµРЅРёСЏ Р·РѕРЅС‹ РґРѕСЃС‚Р°РІРєРё:', err);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4960,7 +4960,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * GET /api/admin/tenant/delivery-settings
-   * Возвращает список настроек доставки с привязанными филиалами
+   * Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃРїРёСЃРѕРє РЅР°СЃС‚СЂРѕРµРє РґРѕСЃС‚Р°РІРєРё СЃ РїСЂРёРІСЏР·Р°РЅРЅС‹РјРё С„РёР»РёР°Р»Р°РјРё
    */
   router.get('/delivery-settings', async (req, res) => {
     try {
@@ -4977,7 +4977,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId]
       );
 
-      // Получаем связи с филиалами
+      // РџРѕР»СѓС‡Р°РµРј СЃРІСЏР·Рё СЃ С„РёР»РёР°Р»Р°РјРё
       const settingIds = settings.map(s => s.id);
       let storeLinks = [];
       if (settingIds.length) {
@@ -4991,7 +4991,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         storeLinks = links;
       }
 
-      // Группируем store_id по delivery_setting_id
+      // Р“СЂСѓРїРїРёСЂСѓРµРј store_id РїРѕ delivery_setting_id
       const storeMap = new Map();
       storeLinks.forEach(link => {
         if (!storeMap.has(link.delivery_setting_id)) {
@@ -5008,14 +5008,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, items: enriched });
     } catch (err) {
-      console.error('Ошибка получения настроек доставки:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ РЅР°СЃС‚СЂРѕРµРє РґРѕСЃС‚Р°РІРєРё:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
   /**
    * POST /api/admin/tenant/delivery-settings
-   * Создаёт новую настройку доставки
+   * РЎРѕР·РґР°С‘С‚ РЅРѕРІСѓСЋ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё
    * body: { name, delivery_cost, min_order_amount, free_delivery_from, is_active, store_ids }
    */
   router.post('/delivery-settings', async (req, res) => {
@@ -5071,7 +5071,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const newId = result.insertId;
 
-      // Сохраняем связи с филиалами
+      // РЎРѕС…СЂР°РЅСЏРµРј СЃРІСЏР·Рё СЃ С„РёР»РёР°Р»Р°РјРё
       if (storeIds.length) {
         const linkValues = storeIds.map(storeId => [newId, storeId, tenantId]);
         const linkPlaceholders = linkValues.map(() => '(?, ?, ?)').join(',');
@@ -5090,14 +5090,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, item: { ...rows[0], store_ids: storeIds, default_store_id: defaultStoreId } });
     } catch (err) {
-      console.error('Ошибка создания настройки доставки:', err);
+      console.error('РћС€РёР±РєР° СЃРѕР·РґР°РЅРёСЏ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
   /**
    * PUT /api/admin/tenant/delivery-settings/:id
-   * Обновляет настройку доставки
+   * РћР±РЅРѕРІР»СЏРµС‚ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё
    */
   router.put('/delivery-settings/:id', async (req, res) => {
     try {
@@ -5106,7 +5106,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
 
-      // Проверяем существование
+      // РџСЂРѕРІРµСЂСЏРµРј СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёРµ
       const currentItems = await loadDeliverySettingsForTenant(tenantId, id);
       const current = currentItems[0] || null;
       if (!current) {
@@ -5209,7 +5209,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         );
       }
 
-      // Обновляем связи с филиалами
+      // РћР±РЅРѕРІР»СЏРµРј СЃРІСЏР·Рё СЃ С„РёР»РёР°Р»Р°РјРё
       if (req.body.store_ids !== undefined) {
         const storeIds = Array.isArray(req.body.store_ids)
           ? req.body.store_ids.map(Number).filter(v => Number.isFinite(v) && v > 0)
@@ -5230,7 +5230,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         }
       }
 
-      // Возвращаем обновлённую запись
+      // Р’РѕР·РІСЂР°С‰Р°РµРј РѕР±РЅРѕРІР»С‘РЅРЅСѓСЋ Р·Р°РїРёСЃСЊ
       const [rows] = await db.query(
         `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
          FROM ten_delivery_settings
@@ -5247,14 +5247,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const item = rows[0];
       res.json({ ok: true, item: { ...item, store_ids: storeIds, default_store_id: item.default_store_id != null ? Number(item.default_store_id) : null } });
     } catch (err) {
-      console.error('Ошибка обновления настройки доставки:', err);
+      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
   /**
    * DELETE /api/admin/tenant/delivery-settings/:id
-   * Удаляет настройку доставки
+   * РЈРґР°Р»СЏРµС‚ РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё
    */
   router.delete('/delivery-settings/:id', async (req, res) => {
     try {
@@ -5263,7 +5263,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
 
-      // Удаляем связи
+      // РЈРґР°Р»СЏРµРј СЃРІСЏР·Рё
       await db.query(
         `DELETE FROM \`${deliverySettingPriceTiersTable}\` WHERE tenant_id=? AND delivery_setting_id=?`,
         [tenantId, id]
@@ -5273,7 +5273,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId, id]
       );
 
-      // Удаляем настройку
+      // РЈРґР°Р»СЏРµРј РЅР°СЃС‚СЂРѕР№РєСѓ
       await db.query(
         'DELETE FROM ten_delivery_settings WHERE tenant_id=? AND id=?',
         [tenantId, id]
@@ -5281,14 +5281,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true });
     } catch (err) {
-      console.error('Ошибка удаления настройки доставки:', err);
+      console.error('РћС€РёР±РєР° СѓРґР°Р»РµРЅРёСЏ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
   /**
    * GET /api/admin/tenant/print-api?store_id=1
-   * Возвращает токен для печати по филиалу
+   * Р’РѕР·РІСЂР°С‰Р°РµС‚ С‚РѕРєРµРЅ РґР»СЏ РїРµС‡Р°С‚Рё РїРѕ С„РёР»РёР°Р»Сѓ
    */
   async function selectPrintApiRow(tenantId, storeId) {
     try {
@@ -5391,7 +5391,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const row = await selectPrintApiData(tenantId, storeId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
-      console.error('Ошибка получения print API:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ print API:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -5399,7 +5399,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
   /**
    * POST /api/admin/tenant/print-api
    * body: { store_id }
-   * Создаёт или пересоздаёт токен для печати
+   * РЎРѕР·РґР°С‘С‚ РёР»Рё РїРµСЂРµСЃРѕР·РґР°С‘С‚ С‚РѕРєРµРЅ РґР»СЏ РїРµС‡Р°С‚Рё
    */
   router.post('/print-api', async (req, res) => {
     try {
@@ -5431,7 +5431,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const row = await selectPrintApiData(tenantId, storeId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
-      console.error('Ошибка генерации print API:', err);
+      console.error('РћС€РёР±РєР° РіРµРЅРµСЂР°С†РёРё print API:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -5535,7 +5535,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const row = await selectPrintApiData(tenantId, storeId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
-      console.error('Ошибка обновления print API настроек:', err);
+      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ print API РЅР°СЃС‚СЂРѕРµРє:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -5617,7 +5617,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Этикетка заказа #{{ order.id }}</title>
+  <title>Этикетка товара #{{ order.id }}</title>
   <style>
     @media print {
       @page { size: 58mm 60mm; margin: 0; }
@@ -5629,131 +5629,38 @@ async function fetchStoreWithHours(tenantId, storeId) {
       height: 60mm;
       padding: 3mm;
       font-family: 'Courier New', monospace;
-      font-size: 9pt;
+      font-size: 8.5pt;
       font-weight: 700;
-      line-height: 1.22;
+      line-height: 1.18;
       color: #111;
       background: #fff;
       overflow: hidden;
     }
-    .label-header { display: flex; justify-content: center; gap: 2mm; font-size: 9pt; }
-    .label-schedule { text-align: center; }
-    .label-item { margin-top: 2mm; }
-    .label-item-row { display: flex; align-items: flex-start; gap: 2mm; }
-    .label-item-qty, .label-item-price { flex-shrink: 0; }
-    .label-item-name { flex: 1; min-width: 0; word-wrap: break-word; }
-    .label-composition { margin-top: 1mm; font-size: 8pt; }
+    .label-header { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; font-size: 9pt; }
+    .label-order { font-weight: 700; white-space: nowrap; }
+    .label-datetime { font-weight: 700; white-space: nowrap; text-align: right; }
+    .label-schedule { margin-top: 1mm; font-size: 8pt; font-weight: 700; }
+    .label-item-name { margin-top: 1.25mm; font-size: 9pt; font-weight: 700; word-wrap: break-word; }
+    .label-composition { margin-top: 1mm; font-size: 8pt; line-height: 1.16; }
     .label-composition-item { margin-left: 4mm; word-wrap: break-word; }
+    .label-gift { margin-top: 1mm; font-size: 8pt; }
   </style>
 </head>
 <body>
   <div class="label-header">
-    <span>ЗАКАЗ #{{ order.id }}</span>
-    <span>{{ order.created_at }}</span>
+    <span class="label-order">№{{ order.id }}</span>
+    <span class="label-datetime">{{ order.created_at_short }}</span>
   </div>
   <div class="label-schedule">{{ order.schedule_text }}</div>
-  <div class="label-item">
-    <div class="label-item-row">
-      <span class="label-item-qty">{{ item.quantity }} x</span>
-      <span class="label-item-name">{{ item.name }}</span>
-      <span class="label-item-price">{{ item.total }}</span>
-    </div>
-    <div class="label-composition">
-      <div class="label-composition-item">• {{ item.variant_label }}</div>
-      <div class="label-composition-item">• {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
-      <div class="label-composition-item">• {{ item.option_variant }} {{ item.option_title }}</div>
-      <div class="label-composition-item">• {{ item.client_composition }}</div>
-    </div>
-  </div>
-  <div class="label-item">
-    <div class="label-item-row">
-      <span class="label-item-qty">{{ gift.quantity }} x</span>
-      <span class="label-item-name">{{ gift.name }} (Подарок)</span>
-    </div>
-  </div>
+  <div class="label-item-name">{{ item.name }}</div>
+  <div class="label-composition">{{ item.composition_html }}</div>
+  <div class="label-gift">{{ gift.html }}</div>
 </body>
 </html>`;
   }
 
   function getDefaultPrintTemplateHtml(documentType) {
     return documentType === "label" ? getDefaultLabelTemplateHtml() : getDefaultReceiptTemplateHtml();
-  }
-
-  function getDefaultReceiptTemplateHtml() {
-    return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430 #{{ order.id }}</title>
-  <style>
-    @media print { @page { size: 80mm auto; margin: 0; } body { margin: 0; } }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { margin: 0; padding: 5mm 3mm; font-family: 'Courier New', monospace; font-size: 11pt; font-weight: bold; line-height: 1.3; width: 80mm; max-width: 80mm; background: white; }
-    .receipt-header { text-align: center; font-size: 16pt; margin-bottom: 10px; }
-    .receipt-date { text-align: center; margin-bottom: 10px; border-bottom: 1px dashed #000; padding-bottom: 10px; }
-    .receipt-section { margin: 10px 0; }
-    .receipt-divider { border-top: 1px dashed #000; margin: 10px 0; }
-    .receipt-item-row, .receipt-summary-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
-    .receipt-item-name, .receipt-summary-label { flex: 1; min-width: 0; word-wrap: break-word; }
-    .receipt-item-qty, .receipt-item-price, .receipt-summary-value { flex-shrink: 0; text-align: right; }
-    .receipt-composition { margin: 2px 0 1px; font-size: 9pt; }
-    .receipt-composition-item--group { margin-left: 8px; }
-    .receipt-composition-item--sub { margin-left: 16px; }
-    .receipt-total { text-align: center; font-size: 14pt; margin: 15px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 10px 0; }
-    .receipt-footer { margin-top: 20px; text-align: center; font-size: 10pt; }
-    .receipt-old-price { text-decoration: line-through; margin-right: 4px; }
-  </style>
-</head>
-<body>
-  <div class="receipt-header">\u0417\u0410\u041a\u0410\u0417 #{{ order.id }}</div>
-  <div class="receipt-date">{{ order.created_at }}</div>
-  <div class="receipt-divider"></div>
-  <div class="receipt-section">{{ order.schedule_text }}</div>
-  <div class="receipt-section"><div>{{ customer.name }}</div><div>{{ customer.phone }}</div></div>
-  <div class="receipt-section"><div>{{ delivery.type }}</div><div>{{ delivery.address }}</div></div>
-  <div class="receipt-section">{{ order.address_comment }}</div>
-  <div class="receipt-section">{{ order.comment }}</div>
-  <div class="receipt-divider"></div>
-  <div class="receipt-section">{{ receipt.items_html }}</div>
-  <div class="receipt-divider"></div>
-  <div class="receipt-section">{{ receipt.summary_html }}</div>
-  <div class="receipt-footer">\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u0437\u0430\u043a\u0430\u0437!</div>
-</body>
-</html>`;
-  }
-
-  function getDefaultLabelTemplateHtml() {
-    return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0437\u0430\u043a\u0430\u0437\u0430 #{{ order.id }}</title>
-  <style>
-    @media print { @page { size: 58mm 60mm; margin: 0; } body { margin: 0; } }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { width: 58mm; height: 60mm; padding: 3mm; font-family: 'Courier New', monospace; font-size: 9pt; font-weight: 700; line-height: 1.22; color: #111; background: #fff; overflow: hidden; }
-    .label-header { display: flex; justify-content: center; gap: 2mm; font-size: 9pt; }
-    .label-schedule { text-align: center; }
-    .label-item-row { display: flex; align-items: flex-start; gap: 2mm; margin-top: 2mm; }
-    .label-item-qty, .label-item-price { flex-shrink: 0; }
-    .label-item-name { flex: 1; min-width: 0; word-wrap: break-word; }
-    .label-composition { margin-top: 1mm; font-size: 8pt; }
-    .label-composition-item { margin-left: 4mm; word-wrap: break-word; }
-  </style>
-</head>
-<body>
-  <div class="label-header"><span>\u0417\u0410\u041a\u0410\u0417 #{{ order.id }}</span><span>{{ order.created_at }}</span></div>
-  <div class="label-schedule">{{ order.schedule_text }}</div>
-  <div class="label-item-row"><span class="label-item-qty">{{ item.quantity }} x</span><span class="label-item-name">{{ item.name }}</span><span class="label-item-price">{{ item.total }}</span></div>
-  <div class="label-composition">
-    <div class="label-composition-item">\u2022 {{ item.variant_label }}</div>
-    <div class="label-composition-item">\u2022 {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div>
-    <div class="label-composition-item">\u2022 {{ item.option_variant }} {{ item.option_title }}</div>
-    <div class="label-composition-item">\u2022 {{ item.client_composition }}</div>
-  </div>
-  <div class="label-item-row"><span class="label-item-qty">{{ gift.quantity }} x</span><span class="label-item-name">{{ gift.name }} (\u041f\u043e\u0434\u0430\u0440\u043e\u043a)</span></div>
-</body>
-</html>`;
   }
 
   async function ensureDefaultPrintTemplates(tenantId) {
@@ -5785,7 +5692,25 @@ async function fetchStoreWithHours(tenantId, storeId) {
        ORDER BY FIELD(document_type,'receipt','label'), id ASC`,
       [tenantId]
     );
-    return rows || [];
+    return (rows || []).map((row) => {
+      const documentType = String(row.document_type || "");
+      if (documentType !== "receipt" && documentType !== "label") return row;
+      const defaultTemplateHtml = getDefaultPrintTemplateHtml(documentType);
+      const templateHtml = String(row.template_html || "");
+      const legacyLabelSignature = documentType === "label" && [
+        "label-header { display: flex; justify-content: center; gap: 2mm; font-size: 9pt; }",
+        "label-item-row { display: flex; align-items: flex-start; gap: 2mm; margin-top: 2mm; }",
+        "label-item-price { flex-shrink: 0; }"
+      ].every((part) => templateHtml.includes(part));
+      const normalizedTemplateHtml = legacyLabelSignature ? defaultTemplateHtml : templateHtml;
+      const isCustomized = String(normalizedTemplateHtml || "").trim() !== String(defaultTemplateHtml || "").trim();
+      return {
+        ...row,
+        default_template_html: defaultTemplateHtml,
+        template_html: normalizedTemplateHtml,
+        is_customized: isCustomized ? 1 : 0,
+      };
+    });
   }
 
   router.get('/print-templates', async (req, res) => {
@@ -5795,7 +5720,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const templates = await selectPrintTemplatesData(tenantId);
       res.json({ ok: true, data: { templates } });
     } catch (err) {
-      console.error('Ошибка получения шаблонов печати:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ С€Р°Р±Р»РѕРЅРѕРІ РїРµС‡Р°С‚Рё:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -5824,7 +5749,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const templates = await selectPrintTemplatesData(tenantId);
       res.json({ ok: true, data: { templates }, template_id: templateId });
     } catch (err) {
-      console.error('Ошибка сохранения шаблона печати:', err);
+      console.error('РћС€РёР±РєР° СЃРѕС…СЂР°РЅРµРЅРёСЏ С€Р°Р±Р»РѕРЅР° РїРµС‡Р°С‚Рё:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -5900,7 +5825,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const data = await selectProductionZonesData(tenantId);
       res.json({ ok: true, data });
     } catch (err) {
-      console.error('Ошибка получения производственных зон:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ РїСЂРѕРёР·РІРѕРґСЃС‚РІРµРЅРЅС‹С… Р·РѕРЅ:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -5969,7 +5894,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const data = await selectProductionZonesData(tenantId);
       res.json({ ok: true, data, zone_id: zoneId });
     } catch (err) {
-      console.error('Ошибка создания производственной зоны:', err);
+      console.error('РћС€РёР±РєР° СЃРѕР·РґР°РЅРёСЏ РїСЂРѕРёР·РІРѕРґСЃС‚РІРµРЅРЅРѕР№ Р·РѕРЅС‹:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -6037,7 +5962,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const data = await selectProductionZonesData(tenantId);
       res.json({ ok: true, data, zone_id: zoneId });
     } catch (err) {
-      console.error('Ошибка обновления производственной зоны:', err);
+      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ РїСЂРѕРёР·РІРѕРґСЃС‚РІРµРЅРЅРѕР№ Р·РѕРЅС‹:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -6070,18 +5995,18 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true });
     } catch (err) {
-      console.error('Ошибка смены пароля tenant:', err);
+      console.error('РћС€РёР±РєР° СЃРјРµРЅС‹ РїР°СЂРѕР»СЏ tenant:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
   // ------------------------------
-  // Telegram: привязка чатов к филиалам
+  // Telegram: РїСЂРёРІСЏР·РєР° С‡Р°С‚РѕРІ Рє С„РёР»РёР°Р»Р°Рј
   // ------------------------------
 
   /**
    * POST /api/admin/tenant/stores/:id/telegram/connect
-   * Генерирует одноразовую ссылку для привязки чата к филиалу.
+   * Р“РµРЅРµСЂРёСЂСѓРµС‚ РѕРґРЅРѕСЂР°Р·РѕРІСѓСЋ СЃСЃС‹Р»РєСѓ РґР»СЏ РїСЂРёРІСЏР·РєРё С‡Р°С‚Р° Рє С„РёР»РёР°Р»Сѓ.
    */
   router.post('/stores/:id/telegram/connect', async (req, res) => {
     try {
@@ -6117,7 +6042,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * POST /api/admin/tenant/stores/:id/telegram/add-by-keys
-   * Подключить чат по API key (chat_id) и Secret key из бота (как у Тильды).
+   * РџРѕРґРєР»СЋС‡РёС‚СЊ С‡Р°С‚ РїРѕ API key (chat_id) Рё Secret key РёР· Р±РѕС‚Р° (РєР°Рє Сѓ РўРёР»СЊРґС‹).
    */
   router.post('/stores/:id/telegram/add-by-keys', async (req, res) => {
     try {
@@ -6169,7 +6094,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * GET /api/admin/tenant/stores/:id/telegram
-   * Список привязок Telegram для филиала.
+   * РЎРїРёСЃРѕРє РїСЂРёРІСЏР·РѕРє Telegram РґР»СЏ С„РёР»РёР°Р»Р°.
    */
   router.get('/stores/:id/telegram', async (req, res) => {
     try {
@@ -6208,7 +6133,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * DELETE /api/admin/tenant/stores/:storeId/telegram/:bindingId
-   * Удалить привязку.
+   * РЈРґР°Р»РёС‚СЊ РїСЂРёРІСЏР·РєСѓ.
    */
   router.delete('/stores/:storeId/telegram/:bindingId', async (req, res) => {
     try {
@@ -6232,7 +6157,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * POST /api/admin/tenant/stores/:id/max/add-by-keys
-   * Подключить MAX-аккаунт по API key (max_user_id) и Secret key из системного MAX-бота.
+   * РџРѕРґРєР»СЋС‡РёС‚СЊ MAX-Р°РєРєР°СѓРЅС‚ РїРѕ API key (max_user_id) Рё Secret key РёР· СЃРёСЃС‚РµРјРЅРѕРіРѕ MAX-Р±РѕС‚Р°.
    */
   router.post('/stores/:id/max/add-by-keys', async (req, res) => {
     try {
@@ -6283,7 +6208,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * GET /api/admin/tenant/stores/:id/max
-   * Список MAX-привязок для филиала.
+   * РЎРїРёСЃРѕРє MAX-РїСЂРёРІСЏР·РѕРє РґР»СЏ С„РёР»РёР°Р»Р°.
    */
   router.get('/stores/:id/max', async (req, res) => {
     try {
@@ -6322,7 +6247,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * DELETE /api/admin/tenant/stores/:storeId/max/:bindingId
-   * Удалить MAX-привязку филиала.
+   * РЈРґР°Р»РёС‚СЊ MAX-РїСЂРёРІСЏР·РєСѓ С„РёР»РёР°Р»Р°.
    */
   router.delete('/stores/:storeId/max/:bindingId', async (req, res) => {
     try {
@@ -6346,7 +6271,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * GET /api/admin/tenant/notifications
-   * Сводка по всем филиалам: есть ли привязка Telegram.
+   * РЎРІРѕРґРєР° РїРѕ РІСЃРµРј С„РёР»РёР°Р»Р°Рј: РµСЃС‚СЊ Р»Рё РїСЂРёРІСЏР·РєР° Telegram.
    */
   router.get('/notifications', async (req, res) => {
     try {
@@ -6379,12 +6304,12 @@ async function fetchStoreWithHours(tenantId, storeId) {
   });
 
   // ------------------------------
-  // Глобальные Telegram-уведомления на уровне компании
+  // Р“Р»РѕР±Р°Р»СЊРЅС‹Рµ Telegram-СѓРІРµРґРѕРјР»РµРЅРёСЏ РЅР° СѓСЂРѕРІРЅРµ РєРѕРјРїР°РЅРёРё
   // ------------------------------
 
   /**
    * GET /api/admin/tenant/telegram
-   * Список глобальных Telegram привязок компании + филиалы со статусами.
+   * РЎРїРёСЃРѕРє РіР»РѕР±Р°Р»СЊРЅС‹С… Telegram РїСЂРёРІСЏР·РѕРє РєРѕРјРїР°РЅРёРё + С„РёР»РёР°Р»С‹ СЃРѕ СЃС‚Р°С‚СѓСЃР°РјРё.
    */
   router.get('/telegram', async (req, res) => {
     try {
@@ -6404,7 +6329,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId]
       );
 
-      // Для каждой привязки получаем включённые филиалы
+      // Р”Р»СЏ РєР°Р¶РґРѕР№ РїСЂРёРІСЏР·РєРё РїРѕР»СѓС‡Р°РµРј РІРєР»СЋС‡С‘РЅРЅС‹Рµ С„РёР»РёР°Р»С‹
       for (const b of bindings) {
         const [enabledStores] = await db.query(
           `SELECT store_id, is_enabled FROM ten_tenant_telegram_stores
@@ -6437,7 +6362,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * POST /api/admin/tenant/telegram/add-by-keys
-   * Подключить глобальный Telegram по API key и Secret key.
+   * РџРѕРґРєР»СЋС‡РёС‚СЊ РіР»РѕР±Р°Р»СЊРЅС‹Р№ Telegram РїРѕ API key Рё Secret key.
    */
   router.post('/telegram/add-by-keys', async (req, res) => {
     try {
@@ -6450,7 +6375,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const chatId = Number(apiKey);
       if (!Number.isFinite(chatId)) return res.status(400).json({ ok: false, error: 'API_KEY_INVALID' });
 
-      // Проверяем secret_key в pending
+      // РџСЂРѕРІРµСЂСЏРµРј secret_key РІ pending
       const [pending] = await db.query(
         'SELECT id, telegram_chat_id FROM ten_telegram_pending WHERE secret_key=? AND expires_at > NOW() LIMIT 1',
         [secretKey]
@@ -6459,7 +6384,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const row = pending[0];
       if (Number(row.telegram_chat_id) !== chatId) return res.status(400).json({ ok: false, error: 'API_KEY_MISMATCH' });
 
-      // Проверяем, не привязан ли уже этот чат
+      // РџСЂРѕРІРµСЂСЏРµРј, РЅРµ РїСЂРёРІСЏР·Р°РЅ Р»Рё СѓР¶Рµ СЌС‚РѕС‚ С‡Р°С‚
       const [existing] = await db.query(
         'SELECT id FROM ten_tenant_telegram WHERE tenant_id=? AND telegram_chat_id=? LIMIT 1',
         [tenantId, chatId]
@@ -6483,7 +6408,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * DELETE /api/admin/tenant/telegram/:bindingId
-   * Удалить глобальную привязку.
+   * РЈРґР°Р»РёС‚СЊ РіР»РѕР±Р°Р»СЊРЅСѓСЋ РїСЂРёРІСЏР·РєСѓ.
    */
   router.delete('/telegram/:bindingId', async (req, res) => {
     try {
@@ -6506,7 +6431,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   /**
    * POST /api/admin/tenant/telegram/:bindingId/stores
-   * Обновить настройки филиалов для глобальной привязки.
+   * РћР±РЅРѕРІРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё С„РёР»РёР°Р»РѕРІ РґР»СЏ РіР»РѕР±Р°Р»СЊРЅРѕР№ РїСЂРёРІСЏР·РєРё.
    * Body: { store_id: number, is_enabled: boolean }
    */
   router.post('/telegram/:bindingId/stores', async (req, res) => {
@@ -6517,14 +6442,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const isEnabled = req.body.is_enabled === true || req.body.is_enabled === 1;
       if (!tenantId || !bindingId || !storeId) return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
 
-      // Проверяем, что привязка принадлежит tenant
+      // РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ РїСЂРёРІСЏР·РєР° РїСЂРёРЅР°РґР»РµР¶РёС‚ tenant
       const [binding] = await db.query(
         'SELECT id FROM ten_tenant_telegram WHERE id=? AND tenant_id=? LIMIT 1',
         [bindingId, tenantId]
       );
       if (!binding.length) return res.status(404).json({ ok: false, error: 'BINDING_NOT_FOUND' });
 
-      // Проверяем, что филиал принадлежит tenant
+      // РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ С„РёР»РёР°Р» РїСЂРёРЅР°РґР»РµР¶РёС‚ tenant
       const [store] = await db.query(
         'SELECT id FROM ten_stores WHERE id=? AND tenant_id=? LIMIT 1',
         [storeId, tenantId]
@@ -6532,7 +6457,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!store.length) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
 
       if (isEnabled) {
-        // Upsert: добавляем или обновляем
+        // Upsert: РґРѕР±Р°РІР»СЏРµРј РёР»Рё РѕР±РЅРѕРІР»СЏРµРј
         await db.query(
           `INSERT INTO ten_tenant_telegram_stores (tenant_telegram_id, store_id, is_enabled)
            VALUES (?, ?, 1)
@@ -6540,7 +6465,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
           [bindingId, storeId]
         );
       } else {
-        // Удаляем запись (или можно обновить is_enabled=0)
+        // РЈРґР°Р»СЏРµРј Р·Р°РїРёСЃСЊ (РёР»Рё РјРѕР¶РЅРѕ РѕР±РЅРѕРІРёС‚СЊ is_enabled=0)
         await db.query(
           'DELETE FROM ten_tenant_telegram_stores WHERE tenant_telegram_id=? AND store_id=?',
           [bindingId, storeId]
@@ -6554,7 +6479,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
     }
   });
 
-  // ───────── Проверка подключения домена ─────────
+  // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ РџСЂРѕРІРµСЂРєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ РґРѕРјРµРЅР° в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   router.post('/check-domain', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -6573,7 +6498,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const result = { dns: false, http: false, ssl: false, dns_detail: '', http_detail: '', ssl_detail: '' };
 
-      // 1. DNS check — resolve domain
+      // 1. DNS check вЂ” resolve domain
       try {
         const addresses = await dns.resolve4(domain);
         if (addresses && addresses.length) {
@@ -6581,10 +6506,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
           result.dns_detail = addresses.join(', ');
         }
       } catch (e) {
-        result.dns_detail = e.code === 'ENOTFOUND' ? 'Домен не найден' : (e.message || 'Ошибка DNS');
+        result.dns_detail = e.code === 'ENOTFOUND' ? 'Р”РѕРјРµРЅ РЅРµ РЅР°Р№РґРµРЅ' : (e.message || 'РћС€РёР±РєР° DNS');
       }
 
-      // 2. HTTP check — try to reach the domain
+      // 2. HTTP check вЂ” try to reach the domain
       if (result.dns) {
         try {
           await new Promise((resolve, reject) => {
@@ -6595,15 +6520,15 @@ async function fetchStoreWithHours(tenantId, storeId) {
             req2.on('timeout', () => { req2.destroy(); reject(new Error('timeout')); });
           });
           result.http = true;
-          result.http_detail = 'Сайт доступен';
+          result.http_detail = 'РЎР°Р№С‚ РґРѕСЃС‚СѓРїРµРЅ';
         } catch (e) {
-          result.http_detail = 'Сайт недоступен';
+          result.http_detail = 'РЎР°Р№С‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ';
         }
       } else {
-        result.http_detail = 'DNS не настроен';
+        result.http_detail = 'DNS РЅРµ РЅР°СЃС‚СЂРѕРµРЅ';
       }
 
-      // 3. SSL check — try HTTPS connection
+      // 3. SSL check вЂ” try HTTPS connection
       if (result.dns) {
         try {
           await new Promise((resolve, reject) => {
@@ -6614,18 +6539,18 @@ async function fetchStoreWithHours(tenantId, storeId) {
             req2.on('timeout', () => { req2.destroy(); reject(new Error('timeout')); });
           });
           result.ssl = true;
-          result.ssl_detail = 'Сертификат действителен';
+          result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ РґРµР№СЃС‚РІРёС‚РµР»РµРЅ';
         } catch (e) {
           if (e.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || e.code === 'CERT_HAS_EXPIRED' || e.code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
-            result.ssl_detail = 'Сертификат недействителен';
+            result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ РЅРµРґРµР№СЃС‚РІРёС‚РµР»РµРЅ';
           } else if (e.message === 'timeout') {
-            result.ssl_detail = 'Таймаут соединения';
+            result.ssl_detail = 'РўР°Р№РјР°СѓС‚ СЃРѕРµРґРёРЅРµРЅРёСЏ';
           } else {
-            result.ssl_detail = 'SSL не настроен';
+            result.ssl_detail = 'SSL РЅРµ РЅР°СЃС‚СЂРѕРµРЅ';
           }
         }
       } else {
-        result.ssl_detail = 'DNS не настроен';
+        result.ssl_detail = 'DNS РЅРµ РЅР°СЃС‚СЂРѕРµРЅ';
       }
 
       res.json({ ok: true, result });
