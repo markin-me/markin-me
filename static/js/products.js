@@ -195,6 +195,11 @@
   const productsBulkCategoryTriggerText = $("#productsBulkCategoryTriggerText");
   const productsBulkCategoryMenu = $("#productsBulkCategoryMenu");
   const productsBulkCategoryPickerBtn = $("#productsBulkCategoryPickerBtn");
+  const productsBulkProductionZoneId = $("#productsBulkProductionZoneId");
+  const productsBulkProductionZoneSelectWrap = $("#productsBulkProductionZoneSelectWrap");
+  const productsBulkProductionZoneTrigger = $("#productsBulkProductionZoneTrigger");
+  const productsBulkProductionZoneTriggerText = $("#productsBulkProductionZoneTriggerText");
+  const productsBulkProductionZoneMenu = $("#productsBulkProductionZoneMenu");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
   const optionsGroupsList = $("#optionsGroupsList");
@@ -634,6 +639,12 @@
     };
   }
 
+  function getDefaultProductsBulkProductionZoneState() {
+    return {
+      productionZoneId: null,
+    };
+  }
+
   const state = {
     mode: "products", // products | categories | ...
     categories: [],
@@ -655,6 +666,7 @@
     selectedProductIds: new Set(),
     productsBulkActions: getDefaultProductsBulkActions(),
     productsBulkCategory: getDefaultProductsBulkCategoryState(),
+    productsBulkProductionZone: getDefaultProductsBulkProductionZoneState(),
     productsBulkApplying: false,
     productRowVariantsExpanded: new Set(),
     productRowVariantsCache: new Map(),
@@ -5219,6 +5231,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field === "is_active") product.is_active = value ? 1 : 0;
     if (field === "site_visibility") product.site_visibility = value ? 1 : 0;
     if (field === "fulfillment_mode") product.fulfillment_mode = normalizeProductFulfillmentMode(value);
+    if (field === "production_zone_id") product.production_zone_id = normalizeProductProductionZoneId(value);
   }
 
   function getInlineProductComparableValue(product, field) {
@@ -5296,6 +5309,12 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (productsBulkCategoryTrigger) productsBulkCategoryTrigger.setAttribute("aria-expanded", "false");
   }
 
+  function closeProductsBulkProductionZoneMenu() {
+    if (productsBulkProductionZoneMenu) productsBulkProductionZoneMenu.classList.add("hidden");
+    if (productsBulkProductionZoneSelectWrap) productsBulkProductionZoneSelectWrap.classList.remove("is-open");
+    if (productsBulkProductionZoneTrigger) productsBulkProductionZoneTrigger.setAttribute("aria-expanded", "false");
+  }
+
   function getProductsBulkCategoryModeLabel(mode) {
     const value = String(mode || "none");
     const option = Array.from(productsBulkCategoryMode?.options || []).find((item) => String(item.value) === value);
@@ -5324,10 +5343,91 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return hasProductsBulkCategoryModeSelected() && (state.productsBulkCategory?.selectedCategoryIds instanceof Set) && state.productsBulkCategory.selectedCategoryIds.size > 0;
   }
 
+  function getProductsBulkProductionZoneLabel(zoneId) {
+    const value = normalizeProductProductionZoneId(zoneId);
+    if (!value) return "-";
+    const zone = (state.productionZones || []).find((item) => Number(item?.id || 0) === value);
+    return getProductProductionZoneLabel(zone);
+  }
+
+  function hasProductsBulkProductionZoneSelected() {
+    return normalizeProductProductionZoneId(state.productsBulkProductionZone?.productionZoneId) != null;
+  }
+
+  async function ensureProductsBulkProductionZonesLoaded() {
+    if (state.productionZonesLoaded) return;
+    try {
+      const zonesResult = await apiGetProductionZones();
+      const zones = Array.isArray(zonesResult?.data?.zones) ? zonesResult.data.zones : [];
+      state.productionZones = zones.filter((zone) => Number(zone?.is_active ?? 1) === 1);
+      state.productionZonesLoaded = true;
+    } catch (e) {
+      console.error("Failed to load production zones for bulk products", e);
+      state.productionZones = [];
+      state.productionZonesLoaded = true;
+    } finally {
+      renderProductsBulkProductionZoneOptions();
+      syncProductsBulkProductionZoneSelect();
+    }
+  }
+
+  function setProductsBulkProductionZone(nextZoneId) {
+    const zoneId = normalizeProductProductionZoneId(nextZoneId);
+    state.productsBulkProductionZone = {
+      productionZoneId: zoneId,
+    };
+    if (productsBulkProductionZoneId) {
+      productsBulkProductionZoneId.value = zoneId ? String(zoneId) : "";
+    }
+    closeProductsBulkProductionZoneMenu();
+    syncProductsBulkActionsUi();
+  }
+
+  function renderProductsBulkProductionZoneOptions() {
+    if (!productsBulkProductionZoneId || !productsBulkProductionZoneMenu) return;
+    const currentValue = normalizeProductProductionZoneId(productsBulkProductionZoneId.value);
+    productsBulkProductionZoneId.innerHTML = '<option value="">-</option>';
+    productsBulkProductionZoneMenu.innerHTML = '<button class="products-bulk-production-zone-option" type="button" data-bulk-production-zone-id="" role="menuitem">-</button>';
+    (state.productionZones || []).forEach((zone) => {
+      const zoneId = Number(zone?.id || 0);
+      if (!Number.isFinite(zoneId) || zoneId <= 0) return;
+      const label = getProductProductionZoneLabel(zone);
+      const option = document.createElement("option");
+      option.value = String(zoneId);
+      option.textContent = label;
+      productsBulkProductionZoneId.appendChild(option);
+      const button = document.createElement("button");
+      button.className = "products-bulk-production-zone-option";
+      button.type = "button";
+      button.dataset.bulkProductionZoneId = String(zoneId);
+      button.textContent = label;
+      productsBulkProductionZoneMenu.appendChild(button);
+    });
+    if (currentValue != null) productsBulkProductionZoneId.value = String(currentValue);
+  }
+
+  function syncProductsBulkProductionZoneSelect() {
+    if (!productsBulkProductionZoneId) return;
+    const stateValue = normalizeProductProductionZoneId(state.productsBulkProductionZone?.productionZoneId);
+    const value = normalizeProductProductionZoneId(productsBulkProductionZoneId.value || stateValue || "");
+    const zone = value ? (state.productionZones || []).find((item) => Number(item?.id || 0) === value) : null;
+    productsBulkProductionZoneId.value = zone ? String(value) : "";
+    if (productsBulkProductionZoneTriggerText) {
+      productsBulkProductionZoneTriggerText.textContent = getProductProductionZoneLabel(zone);
+    }
+    if (productsBulkProductionZoneMenu) {
+      productsBulkProductionZoneMenu.querySelectorAll("[data-bulk-production-zone-id]").forEach((button) => {
+        const buttonValue = normalizeProductProductionZoneId(button.dataset.bulkProductionZoneId);
+        button.classList.toggle("is-active", buttonValue === value);
+      });
+    }
+  }
+
   function countSelectedProductsBulkActions() {
     const actions = state.productsBulkActions || {};
     return Object.values(actions).reduce((acc, value) => acc + (value ? 1 : 0), 0)
-      + (hasProductsBulkCategoryModeSelected() ? 1 : 0);
+      + (hasProductsBulkCategoryModeSelected() ? 1 : 0)
+      + (hasProductsBulkProductionZoneSelected() ? 1 : 0);
   }
 
   function setProductsBulkAction(actionKey, nextValue) {
@@ -5370,6 +5470,13 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (productsBulkCategoryPickerBtn) productsBulkCategoryPickerBtn.classList.add("hidden");
   }
 
+  function resetProductsBulkProductionZoneAction() {
+    state.productsBulkProductionZone = getDefaultProductsBulkProductionZoneState();
+    if (productsBulkProductionZoneId) productsBulkProductionZoneId.value = "";
+    closeProductsBulkProductionZoneMenu();
+    syncProductsBulkActionsUi();
+  }
+
   function syncProductsBulkActionsUi() {
     if (productsBulkMenu) {
       productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((input) => {
@@ -5398,8 +5505,14 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (productsBulkActionsSelectedCount) {
       productsBulkActionsSelectedCount.textContent = String(countSelectedProductsBulkActions());
     }
+    if (productsBulkProductionZoneTrigger) {
+      productsBulkProductionZoneTrigger.disabled = state.productsBulkApplying;
+    }
+    if (productsBulkProductionZoneId) {
+      productsBulkProductionZoneId.disabled = state.productsBulkApplying;
+    }
     if (productsBulkApplyBtn) {
-      const hasAnyAction = Object.values(state.productsBulkActions || {}).some(Boolean) || hasValidProductsBulkCategoryAction();
+      const hasAnyAction = Object.values(state.productsBulkActions || {}).some(Boolean) || hasValidProductsBulkCategoryAction() || hasProductsBulkProductionZoneSelected();
       productsBulkApplyBtn.disabled = state.productsBulkApplying || !hasAnyAction || state.selectedProductIds.size === 0;
     }
     if (productsBulkCancelBtn) {
@@ -5411,6 +5524,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (productsBulkCategoryMode) {
       productsBulkCategoryMode.disabled = state.productsBulkApplying;
     }
+    renderProductsBulkProductionZoneOptions();
+    syncProductsBulkProductionZoneSelect();
+    if (!state.productionZonesLoaded) ensureProductsBulkProductionZonesLoaded();
   }
 
   function buildProductsBulkPayload() {
@@ -5424,6 +5540,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (actions.zero_stock) payload.stock = 0;
     if (actions.fulfillment_stock) payload.fulfillment_mode = "stock";
     if (actions.fulfillment_made_to_order) payload.fulfillment_mode = "made_to_order";
+    const zoneId = normalizeProductProductionZoneId(state.productsBulkProductionZone?.productionZoneId);
+    if (zoneId) payload.production_zone_id = zoneId;
     return payload;
   }
 
@@ -21135,6 +21253,7 @@ const isViewMode = state.comboPanel.mode === "view";
         if (state.productsBulkApplying) return;
         resetProductsBulkActions();
         resetProductsBulkCategoryAction();
+        resetProductsBulkProductionZoneAction();
         closeProductsBulkMenu();
         syncProductsBulkFooter();
       });
@@ -21172,9 +21291,45 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
+    if (productsBulkProductionZoneId) {
+      productsBulkProductionZoneId.addEventListener("change", () => {
+        setProductsBulkProductionZone(productsBulkProductionZoneId.value);
+      });
+    }
+
+    if (productsBulkProductionZoneTrigger) {
+      productsBulkProductionZoneTrigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (state.productsBulkApplying) return;
+        const isOpen = productsBulkProductionZoneSelectWrap?.classList.contains("is-open");
+        if (isOpen) {
+          closeProductsBulkProductionZoneMenu();
+        } else {
+          closeProductsBulkCategoryMenu();
+          closeProductsBulkMenu();
+          if (productsBulkProductionZoneMenu) productsBulkProductionZoneMenu.classList.remove("hidden");
+          if (productsBulkProductionZoneSelectWrap) productsBulkProductionZoneSelectWrap.classList.add("is-open");
+          productsBulkProductionZoneTrigger.setAttribute("aria-expanded", "true");
+        }
+      });
+    }
+
+    if (productsBulkProductionZoneMenu) {
+      productsBulkProductionZoneMenu.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const option = event.target.closest("[data-bulk-production-zone-id]");
+        if (!option) return;
+        setProductsBulkProductionZone(option.dataset.bulkProductionZoneId || "");
+      });
+    }
+
     document.addEventListener("click", (event) => {
       if (productsBulkCategorySelectWrap && !productsBulkCategorySelectWrap.contains(event.target)) {
         closeProductsBulkCategoryMenu();
+      }
+      if (productsBulkProductionZoneSelectWrap && !productsBulkProductionZoneSelectWrap.contains(event.target)) {
+        closeProductsBulkProductionZoneMenu();
       }
     });
 
@@ -21241,6 +21396,11 @@ const isViewMode = state.comboPanel.mode === "view";
               }
             }
 
+            const bulkProductionZoneId = normalizeProductProductionZoneId(state.productsBulkProductionZone?.productionZoneId);
+            if (bulkProductionZoneId != null && Number(product.production_zone_id || 0) !== bulkProductionZoneId) {
+              itemPayload.production_zone_id = bulkProductionZoneId;
+            }
+
             if (!Object.keys(itemPayload).length) continue;
 
             try {
@@ -21261,6 +21421,10 @@ const isViewMode = state.comboPanel.mode === "view";
             }
             if (Object.prototype.hasOwnProperty.call(itemPayload, "category_ids")) {
               updateProductsBulkCategoryLocalState(id, itemPayload.category_ids);
+              if (Number(state.selectedProductId || 0) === id) activeProductNeedsRefresh = true;
+            }
+            if (Object.prototype.hasOwnProperty.call(itemPayload, "production_zone_id")) {
+              applyInlineProductValue(product, "production_zone_id", itemPayload.production_zone_id);
               if (Number(state.selectedProductId || 0) === id) activeProductNeedsRefresh = true;
             }
             syncProductRowAfterBulkPayload(product, itemPayload);
@@ -21285,8 +21449,11 @@ const isViewMode = state.comboPanel.mode === "view";
             const suffix = failedNames.length === 1 ? `: ${failedNames[0]}` : ` (${failedNames.length})`;
             showToast(`Не удалось применить действие к товару${suffix}`);
           }
+          state.selectedProductIds.clear();
+          syncProductRowSelectionUI(productsList);
           resetProductsBulkActions();
           resetProductsBulkCategoryAction();
+          resetProductsBulkProductionZoneAction();
           closeProductsBulkMenu();
           syncProductsBulkFooter();
         } catch (e) {

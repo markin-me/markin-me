@@ -128,7 +128,21 @@
           <span>Выбрано: <b id="productsBulkSelectedCount">0</b></span>
         </div>
         <div class="products-bulk-actions" id="productsBulkActions">
-          <span class="products-bulk-actions-count">Выбрано: <b id="productsBulkActionsSelectedCount">0</b></span>
+          <div class="products-bulk-production-zone-control">
+            <label class="products-bulk-production-zone-label" for="productsBulkProductionZoneId">Зона производства</label>
+            <select class="control control-sm products-bulk-production-zone-select native-hidden" id="productsBulkProductionZoneId" aria-label="Зона производства">
+              <option value="">-</option>
+            </select>
+            <div class="products-bulk-production-zone-select-wrap" id="productsBulkProductionZoneSelectWrap">
+              <button class="products-bulk-production-zone-trigger" type="button" id="productsBulkProductionZoneTrigger" aria-haspopup="menu" aria-expanded="false">
+                <span id="productsBulkProductionZoneTriggerText">-</span>
+                <i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="products-bulk-production-zone-menu hidden" id="productsBulkProductionZoneMenu" role="menu" aria-label="Зона производства">
+                <button type="button" class="products-bulk-production-zone-option" data-bulk-production-zone-id="" role="menuitem">-</button>
+              </div>
+            </div>
+          </div>
           <div class="products-bulk-category-control">
             <label class="products-bulk-category-label" for="productsBulkCategoryMode">Категории</label>
             <select class="control control-sm products-bulk-category-select native-hidden" id="productsBulkCategoryMode" aria-label="Категории">
@@ -336,6 +350,7 @@
       </label>
     </div>
 
+    <div class="product-fulfillment-row">
     <div class="field-wrap product-fulfillment-mode-field">
       <label class="field-label" for="pe_fulfillment_mode">Режим продажи</label>
       <select class="control hidden" id="pe_fulfillment_mode" name="fulfillment_mode">
@@ -368,6 +383,7 @@
           <button class="new-order-right-select-option" type="button" data-value="">-</button>
         </div>
       </div>
+    </div>
     </div>
 
     <div class="product-nutrition-card" id="peNutritionBlock">
