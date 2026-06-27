@@ -36,6 +36,17 @@
     return PRODUCT_FULFILLMENT_MODES.find((item) => item.value === normalized)?.label || PRODUCT_FULFILLMENT_MODES[0].label;
   }
 
+  function normalizeProductProductionZoneId(value) {
+    const id = Number(value || 0);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+
+  function getProductProductionZoneLabel(zone) {
+    if (!zone) return "-";
+    const name = String(zone.name || "").trim();
+    return name || "-";
+  }
+
   function getDefaultProductBlocksConfig() {
     return {
       nutrition: false,
@@ -636,6 +647,8 @@
     productViewCache: new Map(),
     comboSetDetailsCache: new Map(),
     comboRowPhotosCache: new Map(),
+    productionZones: [],
+    productionZonesLoaded: false,
     currentCategoryId: null,
     allCategoryId: null,
     selectedProductId: null,
@@ -1310,6 +1323,10 @@
     if (query) params.set("q", query);
     const qs = params.toString();
     return api(`/api/admin/catalog/products${qs ? `?${qs}` : ""}`);
+  }
+
+  async function apiGetProductionZones() {
+    return api("/api/admin/tenant/production-zones");
   }
 
   async function apiGetComboBlocks() {
@@ -14112,6 +14129,7 @@ const isViewMode = state.comboPanel.mode === "view";
             base_qty: parseNumberFromInput(form.base_qty?.value),
             base_qty_source: normalizeProductValueSource(draft.valueSources?.base_qty),
             stock: parseNumberFromInput(form.stock?.value),
+            production_zone_id: normalizeProductProductionZoneId(form.production_zone_id?.value),
             is_active: form.is_active.checked ? 1 : 0,
             site_visibility: form.site_visibility.checked ? 1 : 0,
             fulfillment_mode: fulfillmentMode,
@@ -14586,6 +14604,9 @@ const isViewMode = state.comboPanel.mode === "view";
       if (form.fulfillment_mode) {
         form.fulfillment_mode.value = normalizeProductFulfillmentMode(product.fulfillment_mode);
       }
+      if (form.production_zone_id) {
+        form.production_zone_id.value = product.production_zone_id ? String(product.production_zone_id) : "";
+      }
     } else {
       if (form.cost_price) {
         form.cost_price.value = formatNumberForInput(0);
@@ -14596,6 +14617,9 @@ const isViewMode = state.comboPanel.mode === "view";
       if (form.fulfillment_mode) {
         form.fulfillment_mode.value = "stock";
       }
+      if (form.production_zone_id) {
+        form.production_zone_id.value = "";
+      }
     }
 
     const fulfillmentWrap = $("#peFulfillmentModeWrap", wrapper);
@@ -14603,6 +14627,11 @@ const isViewMode = state.comboPanel.mode === "view";
     const fulfillmentMenu = $("#peFulfillmentModeMenu", wrapper);
     const fulfillmentText = $("#peFulfillmentModeText", wrapper);
     const fulfillmentSelect = form.fulfillment_mode || $("#pe_fulfillment_mode", wrapper);
+    const productionZoneWrap = $("#peProductionZoneWrap", wrapper);
+    const productionZoneTrigger = $("#peProductionZoneTrigger", wrapper);
+    const productionZoneMenu = $("#peProductionZoneMenu", wrapper);
+    const productionZoneText = $("#peProductionZoneText", wrapper);
+    const productionZoneSelect = form.production_zone_id || $("#pe_production_zone_id", wrapper);
 
     function syncFulfillmentModeSelect() {
       if (!fulfillmentSelect) return;
@@ -14614,6 +14643,50 @@ const isViewMode = state.comboPanel.mode === "view";
           option.classList.toggle("is-selected", String(option.dataset.value || "") === value);
         });
       }
+    }
+
+    function renderProductionZoneOptions() {
+      if (!productionZoneSelect || !productionZoneMenu) return;
+      const currentValue = normalizeProductProductionZoneId(productionZoneSelect.value);
+      productionZoneSelect.innerHTML = '<option value="">-</option>';
+      productionZoneMenu.innerHTML = '<button class="new-order-right-select-option" type="button" data-value="">-</button>';
+      (state.productionZones || []).forEach((zone) => {
+        const zoneId = Number(zone?.id || 0);
+        if (!Number.isFinite(zoneId) || zoneId <= 0) return;
+        const label = getProductProductionZoneLabel(zone);
+        const option = document.createElement("option");
+        option.value = String(zoneId);
+        option.textContent = label;
+        productionZoneSelect.appendChild(option);
+
+        const button = document.createElement("button");
+        button.className = "new-order-right-select-option";
+        button.type = "button";
+        button.dataset.value = String(zoneId);
+        button.textContent = label;
+        productionZoneMenu.appendChild(button);
+      });
+      if (currentValue != null) productionZoneSelect.value = String(currentValue);
+    }
+
+    function syncProductionZoneSelect() {
+      if (!productionZoneSelect) return;
+      const value = normalizeProductProductionZoneId(productionZoneSelect.value);
+      const zone = value ? (state.productionZones || []).find((item) => Number(item?.id || 0) === value) : null;
+      productionZoneSelect.value = zone ? String(value) : "";
+      if (productionZoneText) productionZoneText.textContent = getProductProductionZoneLabel(zone);
+      if (productionZoneMenu) {
+        productionZoneMenu.querySelectorAll("[data-value]").forEach((option) => {
+          const optionValue = normalizeProductProductionZoneId(option.dataset.value);
+          option.classList.toggle("is-selected", optionValue === value);
+        });
+      }
+    }
+
+    function closeProductionZoneMenu() {
+      productionZoneWrap?.classList.remove("is-open");
+      productionZoneMenu?.classList.add("hidden");
+      productionZoneTrigger?.setAttribute("aria-expanded", "false");
     }
 
     function closeFulfillmentModeMenu() {
@@ -14648,6 +14721,57 @@ const isViewMode = state.comboPanel.mode === "view";
         });
       });
     }
+
+    if (productionZoneTrigger && productionZoneMenu && productionZoneSelect) {
+      renderProductionZoneOptions();
+      syncProductionZoneSelect();
+      productionZoneTrigger.disabled = isView;
+      productionZoneTrigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (isView) return;
+        const nextOpen = !productionZoneWrap?.classList.contains("is-open");
+        productionZoneWrap?.classList.toggle("is-open", nextOpen);
+        productionZoneMenu.classList.toggle("hidden", !nextOpen);
+        productionZoneTrigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+        if (nextOpen) {
+          setTimeout(() => document.addEventListener("click", closeProductionZoneMenu, { once: true }), 0);
+        }
+      });
+      productionZoneMenu.addEventListener("click", (event) => {
+        const option = event.target.closest("[data-value]");
+        if (!option || !productionZoneMenu.contains(option)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (isView) return;
+        const zoneId = normalizeProductProductionZoneId(option.dataset.value);
+        productionZoneSelect.value = zoneId ? String(zoneId) : "";
+        syncProductionZoneSelect();
+        closeProductionZoneMenu();
+      });
+    }
+
+    (async () => {
+      try {
+        if (!state.productionZonesLoaded) {
+          const zonesResult = await apiGetProductionZones();
+          const zones = Array.isArray(zonesResult?.data?.zones) ? zonesResult.data.zones : [];
+          state.productionZones = zones.filter((zone) => Number(zone?.is_active ?? 1) === 1);
+          state.productionZonesLoaded = true;
+        }
+      } catch (e) {
+        console.error("Failed to load production zones", e);
+        state.productionZones = [];
+        state.productionZonesLoaded = true;
+      } finally {
+        renderProductionZoneOptions();
+        if ((isEdit || isView) && product && productionZoneSelect) {
+          const productZoneId = normalizeProductProductionZoneId(product.production_zone_id);
+          productionZoneSelect.value = productZoneId ? String(productZoneId) : "";
+        }
+        syncProductionZoneSelect();
+      }
+    })();
 
     if (isView) {
       $$("input, select, textarea", form).forEach((el) => {

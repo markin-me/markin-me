@@ -1695,6 +1695,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
                 p.promo_enabled, p.promo_title, p.promo_discount_percent, p.cost_price,
                 p.unit_id, p.base_unit_id, p.base_qty, p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent, p.photos_json, p.blocks_config_json, p.is_active, p.site_visibility,
                 p.fulfillment_mode,
+                p.production_zone_id,
                 p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
                 p.client_composition, p.tech_process,
                 p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
@@ -1844,6 +1845,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         p.photos_json, p.blocks_config_json,
         p.is_active, p.site_visibility,
         p.fulfillment_mode,
+        p.production_zone_id,
         p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
         p.client_composition, p.tech_process,
         p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
@@ -2063,7 +2065,16 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
       const base_qty = helpers.numOrNull(req.body.base_qty);
       const stock_qty = helpers.numOrNull(req.body.stock);
+      const production_zone_id = helpers.numOrNull(req.body.production_zone_id);
       const fulfillment_mode = normalizeProductFulfillmentMode(req.body.fulfillment_mode);
+
+      if (production_zone_id != null) {
+        const [zoneRows] = await db.query(
+          `SELECT id FROM prod_production_zones WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
+          [tenantId, production_zone_id]
+        );
+        if (!zoneRows.length) return res.status(400).json({ ok: false, error: 'BAD_PRODUCTION_ZONE_ID' });
+      }
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
@@ -2079,13 +2090,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const [result] = await db.query(
         `INSERT INTO prod_products
-          (tenant_id, name, sku, description_short, description, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json, is_active, site_visibility,
+          (tenant_id, name, sku, description_short, description, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json, is_active, site_visibility,
            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
            show_description_short, show_description, show_client_composition, show_tech_process)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
-          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json,
+          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
           show_description_short, show_description, show_client_composition, show_tech_process
@@ -2143,7 +2154,16 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
       const base_qty = helpers.numOrNull(req.body.base_qty);
       const stock_qty = helpers.numOrNull(req.body.stock);
+      const production_zone_id = helpers.numOrNull(req.body.production_zone_id);
       const fulfillment_mode = normalizeProductFulfillmentMode(req.body.fulfillment_mode);
+
+      if (production_zone_id != null) {
+        const [zoneRows] = await db.query(
+          `SELECT id FROM prod_production_zones WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
+          [tenantId, production_zone_id]
+        );
+        if (!zoneRows.length) return res.status(400).json({ ok: false, error: 'BAD_PRODUCTION_ZONE_ID' });
+      }
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
@@ -2174,13 +2194,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       await db.query(
         `UPDATE prod_products
-         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, promo_enabled=?, promo_title=?, promo_discount_percent=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
+         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, promo_enabled=?, promo_title=?, promo_discount_percent=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, production_zone_id=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
              nutrition_protein_100g=?, nutrition_fat_100g=?, nutrition_carbs_100g=?, client_composition=?, tech_process=?,
              show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?, updated_at=CURRENT_TIMESTAMP
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
-          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, photos_json, blocks_config_json,
+          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
           show_description_short, show_description, show_client_composition, show_tech_process,
@@ -2229,6 +2249,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const hasIsActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active');
       const hasSiteVisibility = Object.prototype.hasOwnProperty.call(req.body || {}, 'site_visibility');
       const hasFulfillmentMode = Object.prototype.hasOwnProperty.call(req.body || {}, 'fulfillment_mode');
+      const hasProductionZoneId = Object.prototype.hasOwnProperty.call(req.body || {}, 'production_zone_id');
       const hasStock = Object.prototype.hasOwnProperty.call(req.body || {}, 'stock');
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const price = helpers.numOrNull(req.body.price);
@@ -2238,9 +2259,17 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const promo_discount_percent = normalizePromoDiscountPercent(req.body.promo_discount_percent);
       const base_qty = helpers.numOrNull(req.body.base_qty);
       const stock_qty = helpers.numOrNull(req.body.stock);
+      const production_zone_id = helpers.numOrNull(req.body.production_zone_id);
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const fulfillment_mode = normalizeProductFulfillmentMode(req.body.fulfillment_mode);
+      if (hasProductionZoneId && production_zone_id != null) {
+        const [zoneRows] = await db.query(
+          `SELECT id FROM prod_production_zones WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
+          [tenantId, production_zone_id]
+        );
+        if (!zoneRows.length) return res.status(400).json({ ok: false, error: 'BAD_PRODUCTION_ZONE_ID' });
+      }
       const updates = [];
       const params = [];
       if (hasCostPrice) { updates.push('cost_price=?'); params.push(cost_price); }
@@ -2256,6 +2285,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (hasIsActive) { updates.push('is_active=?'); params.push(is_active); }
       if (hasSiteVisibility) { updates.push('site_visibility=?'); params.push(site_visibility); }
       if (hasFulfillmentMode) { updates.push('fulfillment_mode=?'); params.push(fulfillment_mode); }
+      if (hasProductionZoneId) { updates.push('production_zone_id=?'); params.push(production_zone_id); }
       if (updates.length > 0) {
         params.push(tenantId, id);
         await db.query(
