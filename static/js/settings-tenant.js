@@ -6073,6 +6073,10 @@
 
 
 
+    const settingsApiAddBtn = document.getElementById("settingsApiAddBtn");
+
+
+
     const settingsTenantCards = document.getElementById("settingsTenantCards");
 
 
@@ -6094,6 +6098,14 @@
 
 
     const apiSectionPanel = document.getElementById("apiPanel");
+
+
+
+    const apiPanelCards = document.getElementById("apiPanelCards");
+
+
+
+    const settingsApiCardsHeader = document.getElementById("settingsApiCardsHeader");
 
 
 
@@ -6744,7 +6756,7 @@
               : section === "chats"
                 ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0430\u0442\u0430"
                 : section === "api"
-                  ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u043f\u0440\u0438\u043d\u0442\u0435\u0440\u0430"
+                  ? "API"
                   : section === "print-templates"
                     ? "\u0428\u0430\u0431\u043b\u043e\u043d\u044b \u043f\u0435\u0447\u0430\u0442\u0438"
                     : section === "production-zones"
@@ -6785,6 +6797,12 @@
 
 
 
+      }
+
+
+
+      if (settingsApiAddBtn) {
+        settingsApiAddBtn.classList.toggle("hidden", section !== "api");
       }
 
 
@@ -7330,6 +7348,10 @@
 
 
           setActiveRightTab("");
+
+          if (isPrintApiTabId(tabId)) {
+            clearPrintApiTabState(tabId);
+          }
 
 
 
@@ -8844,6 +8866,7 @@
 
 
     const storeTabs = new Map();
+    const printApiTabs = new Map();
 
 
 
@@ -8876,6 +8899,15 @@
 
 
   let printApiDraftMode = false;
+
+
+
+  let printApiListLoaded = false;
+
+
+
+    let printApiListItems = [];
+    let printApiActiveStoreId = 0;
 
 
 
@@ -8939,6 +8971,10 @@
 
 
   };
+
+  function isPrintApiTabId(tabId) {
+    return String(tabId || "").startsWith("print-api");
+  }
 
 
 
@@ -19974,6 +20010,10 @@
 
     function setActiveRightTab(tabId) {
 
+      if (isPrintApiTabId(activeRightTabId)) {
+        persistActivePrintApiTabState();
+      }
+
 
 
       activeRightTabId = tabId;
@@ -20088,7 +20128,7 @@
 
 
 
-      if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
+      if (printApiPanel) printApiPanel.classList.toggle("hidden", !isPrintApiTabId(tabId));
 
 
 
@@ -20126,7 +20166,7 @@
 
 
 
-      toggleRightPanelFooter(settingsPrintApiFooterView, settingsPrintApiFooterEdit, tabId === "print-api");
+      toggleRightPanelFooter(settingsPrintApiFooterView, settingsPrintApiFooterEdit, isPrintApiTabId(tabId));
 
 
 
@@ -20206,22 +20246,11 @@
 
 
 
-      if (tabId === "print-api") {
-
-
-
+      if (isPrintApiTabId(tabId)) {
+        renderActivePrintApiTab();
         ensurePrintApiReady();
-
-
-
       } else {
-
-
-
         stopPrintApiAutoRefresh();
-
-
-
       }
 
 
@@ -20418,6 +20447,8 @@
 
           e.stopPropagation();
 
+          const wasActive = activeRightTabId === tabId;
+
 
 
           tab.remove();
@@ -20436,6 +20467,22 @@
 
 
 
+          }
+
+
+
+          if (isPrintApiTabId(tabId)) {
+            clearPrintApiTabState(tabId);
+          }
+
+
+
+          if (wasActive) {
+            const nextPrintApiTab = Array.from(rightTabs.querySelectorAll(".product-tab")).map((item) => item.getAttribute("data-right-tab") || "").find((key) => isPrintApiTabId(key) && String(key || "") !== String(tabId || "")) || "";
+            if (nextPrintApiTab) {
+              setActiveRightTab(nextPrintApiTab);
+              return;
+            }
           }
 
 
@@ -20513,7 +20560,7 @@
 
 
 
-          if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
+          if (isPrintApiTabId(tabId) && printApiCard) printApiCard.classList.remove("is-active");
 
 
 
@@ -20729,7 +20776,7 @@
 
 
 
-      if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
+          if (isPrintApiTabId(tabId) && printApiCard) printApiCard.classList.add("is-active");
 
 
 
@@ -27187,7 +27234,17 @@
 
 
 
-        ensureTab("print-api", "API");
+        const firstOpenTab = Array.from(printApiTabs.keys())[0] || "";
+
+        if (firstOpenTab) {
+
+          setActiveRightTab(firstOpenTab);
+
+          return;
+
+        }
+
+        startCreatePrintApi();
 
 
 
@@ -27222,6 +27279,16 @@
       });
 
 
+
+    }
+
+
+
+    if (settingsApiAddBtn) {
+
+      settingsApiAddBtn.addEventListener("click", () => {
+        startCreatePrintApi();
+      });
 
     }
 
@@ -42358,25 +42425,26 @@
 
 
       });
+    }
 
 
 
-      if (list.length) {
-
-
-
-        const preferred = storesState.selectedId || activeStoreId || list[0].id;
-
-
-
-        settingsPrintApiStore.value = String(preferred);
-
-
-
-      }
-
-
-
+    function resetPrintApiFormForCreate() {
+      if (settingsPrintApiStore) settingsPrintApiStore.value = "";
+      if (settingsPrintApiToken) settingsPrintApiToken.value = "";
+      resetPrintApiDeviceState({
+        statusText: "Сначала выберите филиал",
+        printerText: "Нет токена подключения"
+      });
+      applyPrintApiNotificationSettings({
+        notify_new_order_enabled: 1,
+        notify_new_message_enabled: 1,
+        sound_new_order_url: "",
+        sound_new_message_url: ""
+      });
+      if (settingsPrintApiGenerateBtn) settingsPrintApiGenerateBtn.textContent = "Сгенерировать токен";
+      updatePrintApiOriginalFromCurrentForm();
+      clearPrintApiSettingsDirty();
     }
 
 
@@ -42422,6 +42490,12 @@
             settingsPrintApiPrinterName.selectedIndex = 0;
           }
         }
+      }
+
+
+
+      if (printApiListLoaded) {
+        renderPrintApiCards();
       }
 
 
@@ -42769,6 +42843,241 @@
 
 
 
+    function renderPrintApiCards() {
+      if (!apiPanelCards) return;
+      apiPanelCards.innerHTML = "";
+      const stores = Array.isArray(storesState.items) ? storesState.items : [];
+      const rows = Array.isArray(printApiListItems) ? printApiListItems : [];
+      const rowByStoreId = new Map(rows.map((row) => [Number(row.store_id || 0), row]));
+      if (settingsApiCardsHeader) settingsApiCardsHeader.classList.toggle("hidden", !stores.length);
+      if (!stores.length) return;
+      stores.forEach((store) => {
+        const rowData = rowByStoreId.get(Number(store.id)) || {};
+        const isConnected = Number(rowData.agent_online || 0) === 1;
+        const hasToken = Boolean(rowData.token);
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "settings-home-card settings-card settings-api-card";
+        row.classList.toggle("is-active", Number(settingsPrintApiStore && settingsPrintApiStore.value || 0) === Number(store.id));
+
+        const avatar = document.createElement("div");
+        avatar.className = "product-avatar";
+        avatar.innerHTML = '<i class="fas fa-plug"></i>';
+
+        const info = document.createElement("div");
+        info.className = "order-col";
+        const title = document.createElement("div");
+        title.className = "product-title";
+        title.textContent = "API для печати на удалённом принтере";
+        const subtitle = document.createElement("div");
+        subtitle.className = "muted";
+        subtitle.textContent = String(store.name || `Филиал #${store.id}`);
+        info.appendChild(title);
+        info.appendChild(subtitle);
+
+        const status = document.createElement("div");
+        status.className = "order-col settings-api-card-status";
+        const dot = document.createElement("span");
+        dot.className = `settings-api-status-dot ${isConnected ? "is-online" : "is-offline"}`;
+        dot.title = isConnected ? "Соединение установлено" : "Соединение не установлено";
+        status.appendChild(dot);
+
+        const action = document.createElement("div");
+        action.className = "order-col settings-api-card-actions";
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = hasToken ? "Открыть" : "Создать";
+        action.appendChild(badge);
+
+        row.appendChild(avatar);
+        row.appendChild(info);
+        row.appendChild(status);
+        row.appendChild(action);
+        row.addEventListener("click", () => openPrintApiForStore(Number(store.id), String(store.name || `Филиал #${store.id}`)));
+        apiPanelCards.appendChild(row);
+      });
+    }
+
+
+
+    function getPrintApiTabKey(storeId) {
+      return `print-api-store-${Number(storeId || 0)}`;
+    }
+
+
+
+    function getPrintApiNewTabKey() {
+      return "print-api-new";
+    }
+
+
+
+    function getPrintApiTabState(key) {
+      return printApiTabs.get(String(key || "")) || null;
+    }
+
+
+
+    function setPrintApiTabState(key, state) {
+      if (!key) return;
+      printApiTabs.set(String(key), { ...(state || {}) });
+    }
+
+
+
+    function clearPrintApiTabState(key) {
+      if (!key) return;
+      printApiTabs.delete(String(key));
+    }
+
+
+
+    function syncPrintApiTabsHeader() {
+      if (!rightTabs) return;
+      rightTabs.querySelectorAll(".product-tab").forEach((tab) => {
+        const tabId = tab.getAttribute("data-right-tab") || "";
+        tab.classList.toggle("is-active", tabId === activeRightTabId);
+      });
+    }
+
+
+
+    function collectPrintApiFormSnapshot() {
+      return {
+        store_id: Number(settingsPrintApiStore && settingsPrintApiStore.value) || 0,
+        token: String((settingsPrintApiToken && settingsPrintApiToken.value) || ""),
+        printer_status: String((settingsPrintApiPrinterStatus && settingsPrintApiPrinterStatus.value) || ""),
+        printer_name: String((settingsPrintApiPrinterName && settingsPrintApiPrinterName.value) || ""),
+        default_printer_id: Number(settingsPrintApiPrinterName && settingsPrintApiPrinterName.value) || 0,
+        notify_new_order_enabled: settingsPrintApiNotifyNewOrder && settingsPrintApiNotifyNewOrder.checked ? 1 : 0,
+        notify_new_message_enabled: settingsPrintApiNotifyNewMessage && settingsPrintApiNotifyNewMessage.checked ? 1 : 0,
+        sound_new_order_url: String((settingsPrintApiOrderSoundUrl && settingsPrintApiOrderSoundUrl.value) || ""),
+        sound_new_message_url: String((settingsPrintApiMessageSoundUrl && settingsPrintApiMessageSoundUrl.value) || "")
+      };
+    }
+
+
+
+    function applyPrintApiSnapshot(snapshot) {
+      const safe = snapshot || {};
+      if (settingsPrintApiStore) settingsPrintApiStore.value = safe.store_id ? String(safe.store_id) : "";
+      if (settingsPrintApiToken) settingsPrintApiToken.value = String(safe.token || "");
+      setPrintApiDeviceState(safe.printer_status, safe.printer_name);
+      applyPrintApiNotificationSettings(safe);
+      if (settingsPrintApiGenerateBtn) {
+        settingsPrintApiGenerateBtn.textContent = safe.token ? "Пересоздать токен" : "Сгенерировать токен";
+      }
+      clearPrintApiSettingsDirty();
+    }
+
+
+
+    function persistActivePrintApiTabState() {
+      if (!isPrintApiTabId(activeRightTabId)) return;
+      const active = getPrintApiTabState(activeRightTabId);
+      if (!active) return;
+      active.snapshot = collectPrintApiFormSnapshot();
+      active.store_id = Number(active.snapshot.store_id || active.store_id || 0);
+      active.isDraft = active.isDraft || activeRightTabId === getPrintApiNewTabKey();
+      setPrintApiTabState(activeRightTabId, active);
+    }
+
+
+
+    function renderActivePrintApiTab() {
+      const active = getPrintApiTabState(activeRightTabId);
+      if (!active) {
+        resetPrintApiFormForCreate();
+        setPrintApiDraftMode(true);
+        return;
+      }
+      if (active.isDraft) {
+        resetPrintApiFormForCreate();
+        setPrintApiDraftMode(true);
+        return;
+      }
+      applyPrintApiSnapshot(active.snapshot || {});
+      setPrintApiDraftMode(Boolean(active.isDraft));
+    }
+
+
+
+    async function loadPrintApiCards() {
+      try {
+        const res = await authFetch("/api/admin/tenant/print-api/list?_ts=" + Date.now());
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) throw new Error("LOAD_FAILED");
+        printApiListLoaded = true;
+        printApiListItems = Array.isArray(data.data.items) ? data.data.items : [];
+        renderPrintApiCards();
+        return data.data;
+      } catch (err) {
+        console.error("Не удалось загрузить список print API:", err);
+        printApiListLoaded = false;
+        printApiListItems = [];
+        renderPrintApiCards();
+        return null;
+      }
+    }
+
+
+
+    async function openPrintApiForStore(storeId, title) {
+      if (!storeId) return;
+      const tabId = getPrintApiTabKey(storeId);
+      let tab = getPrintApiTabState(tabId);
+      if (!tab) {
+        tab = {
+          key: tabId,
+          storeId: Number(storeId),
+          title: title || "Филиал",
+          isDraft: false,
+          snapshot: null
+        };
+        setPrintApiTabState(tabId, tab);
+      }
+      if (rightDefault) rightDefault.classList.add("hidden");
+      ensureTab(tabId, tab.title || "Филиал");
+      if (!storesState.loaded) {
+        await loadStores();
+      }
+      populatePrintApiStores(storesState.items);
+      printApiActiveStoreId = Number(storeId);
+      renderPrintApiCards();
+      setActiveRightTab(tabId);
+      await loadPrintApiToken(storeId);
+    }
+
+
+
+    async function startCreatePrintApi() {
+      if (!storesState.loaded) {
+        await loadStores();
+      }
+      if (!printApiListLoaded) {
+        await loadPrintApiCards();
+      }
+      const tabId = getPrintApiNewTabKey();
+      const tab = {
+        key: tabId,
+        title: "Новый API",
+        storeId: 0,
+        isDraft: true,
+        snapshot: null
+      };
+      setPrintApiTabState(tabId, tab);
+      if (rightDefault) rightDefault.classList.add("hidden");
+      ensureTab(tabId, tab.title || "Новый API");
+      populatePrintApiStores(storesState.items);
+      resetPrintApiFormForCreate();
+      setPrintApiDraftMode(true);
+      printApiActiveStoreId = 0;
+      renderPrintApiCards();
+      setActiveRightTab(tabId);
+    }
+
+
+
     async function loadProductionZones(options = {}) {
       try {
         const res = await authFetch("/api/admin/tenant/production-zones");
@@ -43075,7 +43384,7 @@
 
 
 
-      if (activeRightTabId !== "print-api") return;
+      if (!isPrintApiTabId(activeRightTabId)) return;
 
 
 
@@ -43628,7 +43937,7 @@
 
 
 
-      if (activeRightTabId === "print-api" && originalStoreId > 0) {
+      if (isPrintApiTabId(activeRightTabId) && originalStoreId > 0) {
 
 
 
@@ -43700,6 +44009,50 @@
 
 
 
+      let currentInfo = await fetchPrintApiInfo(storeId);
+
+
+
+      if (!currentInfo) {
+
+
+
+        const createRes = await authFetch("/api/admin/tenant/print-api", {
+
+
+
+          method: "POST",
+
+
+
+          headers: { "Content-Type": "application/json" },
+
+
+
+          body: JSON.stringify({ store_id: storeId })
+
+
+
+        });
+
+
+
+        const createData = await createRes.json().catch(() => null);
+
+
+
+        if (!createData || createData.ok !== true) throw new Error(createData?.error || "PRINT_API_CREATE_FAILED");
+
+
+
+        currentInfo = createData.data || null;
+
+
+
+      }
+
+
+
       const payload = {
 
 
@@ -43758,7 +44111,11 @@
 
 
 
-      return data.data || null;
+      if (data.data) currentInfo = data.data;
+
+
+
+      return currentInfo || data.data || null;
 
 
 
@@ -43838,7 +44195,7 @@
 
 
 
-      if (activeRightTabId !== "print-api") return;
+      if (!isPrintApiTabId(activeRightTabId)) return;
 
 
 
@@ -44362,7 +44719,7 @@
 
 
 
-      if (activeRightTabId !== "print-api") {
+      if (!isPrintApiTabId(activeRightTabId)) {
 
 
 
@@ -62500,6 +62857,20 @@
           closeDeliveryCreateMenu();
 
 
+
+        }
+
+
+
+        if (section === "api") {
+
+          if (!storesState.loaded) {
+            loadStores().then(() => {
+              loadPrintApiCards();
+            });
+          } else {
+            loadPrintApiCards();
+          }
 
         }
 

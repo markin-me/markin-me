@@ -5377,6 +5377,34 @@ async function fetchStoreWithHours(tenantId, storeId) {
     return { ...row, printers };
   }
 
+  async function selectPrintApiList(tenantId) {
+    const [rows] = await db.query(
+      `SELECT
+          s.id AS store_id,
+          s.name AS store_name,
+          t.id AS token_id,
+          t.token,
+          t.is_active,
+          t.agent_name,
+          t.agent_version,
+          t.last_heartbeat_at,
+          t.agent_running,
+          IF(
+            t.last_heartbeat_at IS NOT NULL
+            AND t.last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
+            1,
+            0
+          ) AS agent_online
+       FROM ten_stores s
+       LEFT JOIN print_api_tokens t
+         ON t.tenant_id = s.tenant_id AND t.store_id = s.id
+       WHERE s.tenant_id=?
+       ORDER BY s.id ASC`,
+      [tenantId]
+    );
+    return rows || [];
+  }
+
   router.get('/print-api', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -5392,6 +5420,18 @@ async function fetchStoreWithHours(tenantId, storeId) {
       res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ print API:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/print-api/list', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      const rows = await selectPrintApiList(tenantId);
+      res.json({ ok: true, data: { items: rows } });
+    } catch (err) {
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ print API list:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });

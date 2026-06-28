@@ -3389,3 +3389,5 @@ pypdfium2._helpers.misc.PdfiumError: Failed to load document (PDFium: Data forma
 2026-06-28 14:06:53,056 INFO Сервер печати запущен: polling http://localhost:3000
 2026-06-28 14:10:45,141 INFO Сервер печати запущен: polling http://localhost:3000
 2026-06-28 14:13:30,102 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 14:15:42,410 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 15:07:13,577 INFO Сервер печати запущен: polling http://localhost:3000

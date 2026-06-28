@@ -1,20 +1,23 @@
 <% if (activePage === "settings") { %>
   <div class="center-stack">
-    <div class="panel toolbar-island">
-      <div class="toolbar">
-        <div class="toolbar-title">
-          <i class="fas fa-store" id="settingsCenterIcon"></i>
-          <div class="toolbar-title-text">
-            <span id="settingsCenterTitle">Компания</span>
-            <span class="muted" id="settingsCenterSubtitle"></span>
+      <div class="panel toolbar-island">
+        <div class="toolbar">
+          <div class="toolbar-title">
+            <i class="fas fa-store" id="settingsCenterIcon"></i>
+            <div class="toolbar-title-text">
+              <span id="settingsCenterTitle">Компания</span>
+              <span class="muted" id="settingsCenterSubtitle"></span>
+            </div>
           </div>
-        </div>
-        <div class="toolbar-right">
-          <label class="switch settings-chat-subheader-switch hidden" id="settingsChatWidgetSwitchWrap" title="Вкл/выкл чата на витрине">
-            <input class="switch-input" type="checkbox" id="settingsChatWidgetEnabledSwitch" />
-            <span class="switch-ui" aria-hidden="true"></span>
-            <span class="switch-text">Вкл/выкл чата</span>
-          </label>
+          <div class="toolbar-right">
+            <button class="btn btn-icon btn-primary hidden" id="settingsApiAddBtn" type="button" title="Добавить API" aria-label="Добавить API">
+              <i class="fas fa-plus"></i>
+            </button>
+            <label class="switch settings-chat-subheader-switch hidden" id="settingsChatWidgetSwitchWrap" title="Вкл/выкл чата на витрине">
+              <input class="switch-input" type="checkbox" id="settingsChatWidgetEnabledSwitch" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Вкл/выкл чата</span>
+            </label>
           <div class="settings-delivery-map-search-toolbar hidden" id="settingsDeliveryMapSearchToolbar">
             <div class="settings-delivery-map-search-wrap" id="settingsDeliveryMapSearchWrap">
               <div class="settings-delivery-map-search-field">
@@ -230,16 +233,9 @@
     <div class="panel orders-center-panel hidden" id="apiPanel">
       <div class="panel-body no-scrollbar">
         <div class="orders-list settings-cards" id="apiPanelCards">
-          <button class="settings-home-card settings-card" id="settingsPrintApiCard" type="button">
-            <div class="product-avatar"><i class="fas fa-plug"></i></div>
-            <div class="order-col">
-              <div class="product-title">Настройка принтера</div>
-              <div class="muted">Печать заказов и уведомления</div>
-            </div>
-            <div class="order-col">
-              <span class="badge">Открыть</span>
-            </div>
-          </button>
+          <div class="settings-api-cards-header hidden" id="settingsApiCardsHeader">
+            <div class="settings-list-title">API для печати на удалённом принтере</div>
+          </div>
         </div>
       </div>
     </div>
