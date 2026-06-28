@@ -18,15 +18,24 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import sys
+if os.name == "nt":
+    try:
+        import winreg
+    except Exception:
+        winreg = None
+else:
+    winreg = None
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 try:
     import customtkinter as ctk
     import tkinter as tk
+    from tkinter import ttk
     from tkinter import messagebox
     UI_BACKEND = "ctk"
 except Exception:
     import tkinter as tk
+    from tkinter import ttk
     from tkinter import messagebox
     ctk = tk
     UI_BACKEND = "tk"
@@ -181,7 +190,8 @@ def set_runtime_crm_base_url(value):
 DEFAULT_CONFIG = {
     "crm_base_url": normalize_crm_base_url(DEFAULT_CRM_BASE_URL),
     "token": "",
-    "copies": 1
+    "copies": 1,
+    "autostart": False
 }
 
 
@@ -595,6 +605,56 @@ def _wrap_text_to_lines(text, max_width):
     if current:
         lines.append(" ".join(current))
     return lines
+
+
+class _Tooltip:
+    def __init__(self, widget, text_getter):
+        self.widget = widget
+        self.text_getter = text_getter
+        self.tip = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _show(self, _event=None):
+        text = str(self.text_getter() or "").strip()
+        if not text or self.tip:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 12
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+            self.tip = tk.Toplevel(self.widget)
+            self.tip.wm_overrideredirect(True)
+            self.tip.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(
+                self.tip,
+                text=text,
+                bg="#222222",
+                fg="#ffffff",
+                relief="solid",
+                borderwidth=1,
+                padx=8,
+                pady=4,
+                justify="left",
+            )
+            label.pack()
+        except Exception:
+            self.tip = None
+
+    def _hide(self, _event=None):
+        if self.tip:
+            try:
+                self.tip.destroy()
+            except Exception:
+                pass
+            self.tip = None
+
+
+def _ellipsis_text(text, max_len):
+    raw = str(text or "").strip()
+    if not raw or len(raw) <= max_len:
+        return raw
+    return raw[: max(0, max_len - 1)].rstrip() + "…"
 
 
 class Printer:
@@ -1698,6 +1758,8 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         self._tray_icon = None
         self._tray_thread = None
         self._in_tray = False
+        self._autostart_var = tk.BooleanVar(value=False)
+        self._autostart_icon = None
         self._printer_timer = None
         self._ctrl_handlers = {
             86: self._force_paste,  # V
@@ -1768,30 +1830,22 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         small_font = ("Segoe UI", 11)
 
         if UI_BACKEND == "ctk":
-            self.header_label = ctk.CTkLabel(
-                self,
-                text=APP_NAME,
-                font=header_font,
-                text_color=UI_COLORS["text"]
-            )
-        else:
-            self.header_label = tk.Label(
-                self,
-                text=APP_NAME,
-                font=header_font,
-                bg=UI_COLORS["bg"],
-                fg=UI_COLORS["text"]
-            )
-        self.header_label.pack(pady=(18, 12))
-
-        if UI_BACKEND == "ctk":
             self.card_frame = ctk.CTkFrame(self, fg_color=UI_COLORS["card"], corner_radius=12)
         else:
             self.card_frame = tk.Frame(self, bg=UI_COLORS["card"])
         self.card_frame.pack(padx=20, pady=(0, 10), fill="x")
 
         if UI_BACKEND == "ctk":
+            self.card_frame.grid_columnconfigure(0, weight=1)
             self.card_frame.grid_columnconfigure(1, weight=1)
+            self.card_frame.grid_columnconfigure(2, weight=1)
+            self.store_label = ctk.CTkLabel(
+                self.card_frame,
+                text="",
+                font=("Segoe UI", 16, "bold"),
+                text_color=UI_COLORS["text"],
+                anchor="center"
+            )
             self.crm_url_label = ctk.CTkLabel(
                 self.card_frame,
                 text="CRM URL:",
@@ -1805,12 +1859,6 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
                 fg_color=UI_COLORS["bg"],
                 border_color="#3a3a3a",
                 text_color=UI_COLORS["text"]
-            )
-            self.crm_url_status = ctk.CTkLabel(
-                self.card_frame,
-                text="",
-                font=small_font,
-                text_color=UI_COLORS["muted"]
             )
             self.token_label = ctk.CTkLabel(
                 self.card_frame,
@@ -1826,14 +1874,19 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
                 border_color="#3a3a3a",
                 text_color=UI_COLORS["text"]
             )
-            self.token_status = ctk.CTkLabel(
+        else:
+            self.card_frame.columnconfigure(0, weight=1)
+            self.card_frame.columnconfigure(1, weight=1)
+            self.card_frame.columnconfigure(2, weight=1)
+            self.store_label = tk.Label(
                 self.card_frame,
                 text="",
-                font=label_font,
-                text_color=UI_COLORS["ok"]
+                font=("Segoe UI", 16, "bold"),
+                bg=UI_COLORS["card"],
+                fg=UI_COLORS["text"],
+                anchor="center",
+                justify="center"
             )
-        else:
-            self.card_frame.columnconfigure(1, weight=1)
             self.crm_url_label = tk.Label(
                 self.card_frame,
                 text="CRM URL:",
@@ -1850,20 +1903,6 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
                 highlightthickness=1,
                 highlightbackground="#3a3a3a"
             )
-            self.crm_url_status = tk.Label(
-                self.card_frame,
-                text="",
-                font=small_font,
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["muted"]
-            )
-            self.token_label = tk.Label(
-                self.card_frame,
-                text="X-Api-Key:",
-                font=label_font,
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["text"]
-            )
             self.token_entry = tk.Entry(
                 self.card_frame,
                 textvariable=self.token_var,
@@ -1873,229 +1912,123 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
                 highlightthickness=1,
                 highlightbackground="#3a3a3a"
             )
-            self.token_status = tk.Label(
+            self.token_label = tk.Label(
                 self.card_frame,
-                text="",
+                text="X-Api-Key:",
                 font=label_font,
                 bg=UI_COLORS["card"],
-                fg=UI_COLORS["ok"]
+                fg=UI_COLORS["text"]
             )
 
-        self.crm_url_label.grid(row=0, column=0, padx=(16, 8), pady=(14, 6), sticky="w")
-        self.crm_url_entry.grid(row=0, column=1, padx=(0, 8), pady=(14, 6), sticky="ew")
-        self.crm_url_status.grid(row=0, column=2, padx=(0, 16), pady=(14, 6), sticky="e")
+        self.store_label.grid(row=0, column=0, columnspan=3, padx=16, pady=(12, 8), sticky="ew")
+
+        self.crm_url_label.grid(row=1, column=0, columnspan=3, padx=16, pady=(0, 4), sticky="w")
+        self.crm_url_entry.grid(row=2, column=0, columnspan=3, padx=16, pady=(0, 8), sticky="ew")
         self.crm_url_entry.bind("<Button-3>", self._show_context_menu)
 
-        self.token_label.grid(row=1, column=0, padx=(16, 8), pady=(4, 6), sticky="w")
-        self.token_entry.grid(row=1, column=1, padx=(0, 8), pady=(4, 6), sticky="ew")
-        self.token_status.grid(row=1, column=2, padx=(0, 16), pady=(4, 6), sticky="e")
+        self.token_label.grid(row=3, column=0, columnspan=3, padx=16, pady=(0, 4), sticky="w")
+        self.token_entry.grid(row=4, column=0, columnspan=3, padx=16, pady=(0, 8), sticky="ew")
         self.token_entry.bind("<Button-3>", self._show_context_menu)
-
-        if UI_BACKEND == "ctk":
-            self.store_label = ctk.CTkLabel(
-                self.card_frame,
-                text="",
-                font=small_font,
-                text_color=UI_COLORS["text"],
-                anchor="center"
-            )
-        else:
-            self.store_label = tk.Label(
-                self.card_frame,
-                text="",
-                font=small_font,
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["text"],
-                anchor="center",
-                justify="center"
-            )
-        self.store_label.grid(row=2, column=0, columnspan=3, padx=16, pady=(0, 14), sticky="ew")
-        self.card_frame.grid_rowconfigure(2, minsize=28)
-
-        copies_label_kwargs = dict(
-            font=small_font,
-            text="Копий на печать:"
-        )
-        copies_spinbox_kwargs = dict(
-            from_=1,
-            to=50,
-            textvariable=self._copies_var
-        )
-
-        copies_frame = ctk.CTkFrame(self.card_frame, fg_color=UI_COLORS["card"], corner_radius=8) if UI_BACKEND == "ctk" else tk.Frame(self.card_frame, bg=UI_COLORS["card"])
-        copies_frame.grid_columnconfigure(0, weight=1)
-        copies_inner = ctk.CTkFrame(copies_frame, fg_color=UI_COLORS["card"], corner_radius=0) if UI_BACKEND == "ctk" else tk.Frame(copies_frame, bg=UI_COLORS["card"])
-        self.copies_label = ctk.CTkLabel(
-            copies_inner,
-            text_color=UI_COLORS["muted"],
-            **copies_label_kwargs
-        ) if UI_BACKEND == "ctk" else tk.Label(
-            copies_inner,
-            bg=UI_COLORS["card"],
-            fg=UI_COLORS["muted"],
-            **copies_label_kwargs
-        )
-        copies_control = self._build_copies_control(small_font, copies_inner)
-        self.copies_label.grid(row=0, column=0, padx=(0, 12), pady=8, sticky="e")
-        copies_control.grid(row=0, column=1, pady=8, sticky="w")
-        copies_inner.grid(row=0, column=0)
-        self.card_frame.grid_rowconfigure(4, minsize=40)
-        copies_frame.grid(row=4, column=0, columnspan=3, padx=16, pady=(0, 10), sticky="ew")
+        self.card_frame.grid_rowconfigure(0, minsize=28)
+        self.card_frame.grid_rowconfigure(4, minsize=28)
 
         if UI_BACKEND == "ctk":
             self.printer_frame = ctk.CTkFrame(self.card_frame, fg_color=UI_COLORS["card"], corner_radius=0)
-            self.printer_label = ctk.CTkLabel(
-                self.printer_frame,
-                text="Принтер:",
-                font=small_font,
-                text_color=UI_COLORS["muted"]
-            )
-            self.printer_name_label = ctk.CTkLabel(
-                self.printer_frame,
-                text="Не выбран",
-                font=small_font,
-                text_color=UI_COLORS["text"],
-                anchor="w"
-            )
-            self.printer_settings_button = ctk.CTkButton(
-                self.printer_frame,
-                text="Устройства и принтеры",
-                height=28,
-                fg_color=UI_COLORS["accent"],
-                hover_color=UI_COLORS["accent_hover"],
-                text_color="#ffffff",
-                command=self._open_windows_printers
-            )
-            self.printer_state_label = ctk.CTkLabel(
-                self.printer_frame,
-                text="Отключен",
-                font=small_font,
-                text_color=UI_COLORS["error"]
-            )
-            self.printers_list_label = ctk.CTkLabel(
-                self.printer_frame,
-                text="",
-                font=small_font,
-                text_color=UI_COLORS["muted"],
-                anchor="w",
-                justify="left"
-            )
         else:
             self.printer_frame = tk.Frame(self.card_frame, bg=UI_COLORS["card"])
-            self.printer_label = tk.Label(
-                self.printer_frame,
-                text="Принтер:",
-                font=small_font,
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["muted"]
-            )
-            self.printer_name_label = tk.Label(
-                self.printer_frame,
-                text="Не выбран",
-                font=small_font,
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["text"],
-                anchor="w",
-                justify="left"
-            )
-            self.printer_settings_button = tk.Button(
-                self.printer_frame,
-                text="Устройства и принтеры",
-                bg=UI_COLORS["accent"],
-                fg="#ffffff",
-                activebackground=UI_COLORS["accent_hover"],
-                relief="flat",
-                command=self._open_windows_printers
-            )
-            self.printer_state_label = tk.Label(
-                self.printer_frame,
-                text="Отключен",
-                font=small_font,
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["error"]
-            )
-            self.printers_list_label = tk.Label(
-                self.printer_frame,
-                text="",
-                font=small_font,
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["muted"],
-                anchor="w",
-                justify="left"
-            )
 
-        self.printer_frame.grid(row=3, column=0, columnspan=3, padx=16, pady=(0, 10), sticky="ew")
-        self.printer_frame.grid_columnconfigure(2, weight=1)
-        self.printer_settings_button.grid(row=0, column=0, padx=(0, 8), pady=0, sticky="w")
-        self.printer_label.grid(row=0, column=1, padx=(0, 8), pady=0, sticky="w")
-        self.printer_name_label.grid(row=0, column=2, padx=(0, 8), pady=0, sticky="ew")
-        self.printer_state_label.grid(row=0, column=3, padx=(0, 0), pady=0, sticky="e")
-        self.printers_list_label.grid(row=1, column=0, columnspan=4, padx=(0, 0), pady=(8, 0), sticky="ew")
+        self.printer_frame.grid(row=5, column=0, columnspan=3, padx=16, pady=(8, 10), sticky="ew")
+        self.printer_frame.grid_columnconfigure(0, weight=1)
+        self.printer_frame.grid_columnconfigure(1, weight=0)
+        self.printer_frame.grid_columnconfigure(2, weight=0)
 
-        if UI_BACKEND == "ctk":
-            self.status_label = ctk.CTkLabel(
-                self,
-                text="",
-                font=small_font,
-                text_color=UI_COLORS["muted"]
-            )
-        else:
-            self.status_label = tk.Label(
-                self,
-                text="",
-                font=small_font,
-                bg=UI_COLORS["bg"],
-                fg=UI_COLORS["muted"]
-            )
-        self.status_label.pack(pady=(0, 14))
+        self.printers_section_label = tk.Label(
+            self.printer_frame,
+            text="Подключённые принтеры",
+            font=("Segoe UI", 11, "bold"),
+            bg=UI_COLORS["card"],
+            fg=UI_COLORS["text"],
+            anchor="w",
+            justify="left"
+        )
+        self.printers_section_label.grid(row=0, column=0, padx=(0, 10), pady=(0, 6), sticky="w")
+        self.autostart_button = tk.Canvas(
+            self.printer_frame,
+            width=30,
+            height=30,
+            bg=UI_COLORS["card"],
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.printer_settings_button = tk.Canvas(
+            self.printer_frame,
+            width=30,
+            height=30,
+            bg=UI_COLORS["card"],
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.autostart_button.grid(row=0, column=1, padx=(0, 6), pady=(0, 6), sticky="e")
+        self.printer_settings_button.grid(row=0, column=2, padx=(0, 0), pady=(0, 6), sticky="e")
+        self.autostart_button.bind("<Button-1>", lambda _e: self._toggle_autostart())
+        _Tooltip(self.autostart_button, lambda: "Автозапуск Windows")
+        self.printer_settings_button.bind("<Button-1>", lambda _e: self._open_windows_printers())
+        _Tooltip(self.printer_settings_button, lambda: "Устройства и принтеры")
+        self._render_autostart_icon()
+        self._render_printer_settings_icon()
 
-        if UI_BACKEND == "ctk":
-            self.buttons_frame = ctk.CTkFrame(self, fg_color=UI_COLORS["bg"])
-        else:
-            self.buttons_frame = tk.Frame(self, bg=UI_COLORS["bg"])
-        self.buttons_frame.pack(padx=20, pady=(0, 16), fill="x")
-
-        if UI_BACKEND == "ctk":
-            self.buttons_frame.grid_columnconfigure(0, weight=1)
-            self.buttons_frame.grid_columnconfigure(1, weight=1)
-            self.start_button = ctk.CTkButton(
-                self.buttons_frame,
-                text="Запустить",
-                fg_color=UI_COLORS["accent"],
-                hover_color=UI_COLORS["accent_hover"],
-                text_color="#ffffff",
-                command=self._on_start_click
-            )
-            self.background_button = ctk.CTkButton(
-                self.buttons_frame,
-                text="Работать в фоне",
-                fg_color=UI_COLORS["accent"],
-                hover_color=UI_COLORS["accent_hover"],
-                text_color="#ffffff",
-                command=self._on_background_click
-            )
-        else:
-            self.buttons_frame.columnconfigure(0, weight=1)
-            self.buttons_frame.columnconfigure(1, weight=1)
-            self.start_button = tk.Button(
-                self.buttons_frame,
-                text="Запустить",
-                bg=UI_COLORS["accent"],
-                fg="#ffffff",
-                activebackground=UI_COLORS["accent_hover"],
-                command=self._on_start_click
-            )
-            self.background_button = tk.Button(
-                self.buttons_frame,
-                text="Работать в фоне",
-                bg=UI_COLORS["accent"],
-                fg="#ffffff",
-                activebackground=UI_COLORS["accent_hover"],
-                command=self._on_background_click
-            )
-
-        self.start_button.grid(row=0, column=0, padx=(0, 10), sticky="ew")
-        self.background_button.grid(row=0, column=1, padx=(10, 0), sticky="ew")
+        self.printers_table_container = tk.Frame(self.printer_frame, bg=UI_COLORS["card"])
+        self.printers_table_container.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 0))
+        self.printers_table_container.grid_columnconfigure(0, weight=1)
+        self._table_style = ttk.Style(self)
+        try:
+            self._table_style.theme_use("clam")
+        except Exception:
+            pass
+        self._table_style.configure(
+            "Printers.Treeview",
+            background=UI_COLORS["card"],
+            fieldbackground=UI_COLORS["card"],
+            foreground=UI_COLORS["text"],
+            rowheight=42,
+            borderwidth=0,
+            relief="flat",
+            font=("Segoe UI", 10),
+        )
+        self._table_style.configure(
+            "Printers.Treeview.Heading",
+            background="#313131",
+            foreground=UI_COLORS["muted"],
+            relief="flat",
+            font=("Segoe UI", 10, "bold"),
+        )
+        self._table_style.map(
+            "Printers.Treeview",
+            background=[("selected", "#3a3a3a")],
+            foreground=[("selected", UI_COLORS["text"])],
+        )
+        self.printers_table_tree = ttk.Treeview(
+            self.printers_table_container,
+            columns=("name", "status", "settings"),
+            show="headings",
+            style="Printers.Treeview",
+            selectmode="none",
+            height=1,
+        )
+        self.printers_table_tree.grid(row=0, column=0, sticky="ew")
+        self.printers_table_tree.heading("name", text="Название")
+        self.printers_table_tree.heading("status", text="Статус")
+        self.printers_table_tree.heading("settings", text="Настройки")
+        self.printers_table_tree.column("name", anchor="w", width=260, stretch=True)
+        self.printers_table_tree.column("status", anchor="center", width=100, stretch=False)
+        self.printers_table_tree.column("settings", anchor="center", width=100, stretch=False)
+        self.printers_table_tree.bind("<Motion>", self._on_printers_tree_motion)
+        self.printers_table_tree.bind("<Button-1>", self._on_printers_tree_click)
+        self.printers_table_tree.bind("<MouseWheel>", self._on_printers_tree_mousewheel)
+        self.printers_table_tree.bind("<Button-4>", self._on_printers_tree_mousewheel)
+        self.printers_table_tree.bind("<Button-5>", self._on_printers_tree_mousewheel)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -2105,6 +2038,48 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         self._build_context_menu()
 
         self.after(0, self._center_window)
+        self.after(0, self._apply_window_chrome)
+        self.after(250, self._apply_window_chrome)
+        self.after(0, self._start_minimized_to_tray)
+
+    def _apply_window_chrome(self):
+        if os.name != "nt":
+            return
+        try:
+            import ctypes as _ctypes
+            user32 = _ctypes.windll.user32
+            hwnd = self.winfo_id()
+            parent_hwnd = user32.GetParent(hwnd)
+            if parent_hwnd:
+                hwnd = parent_hwnd
+            GWL_STYLE = -16
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            get_window_long = getattr(user32, "GetWindowLongPtrW", None) or getattr(user32, "GetWindowLongW", None)
+            set_window_long = getattr(user32, "SetWindowLongPtrW", None) or getattr(user32, "SetWindowLongW", None)
+            if not get_window_long or not set_window_long:
+                return
+            style = get_window_long(hwnd, GWL_STYLE)
+            style &= ~WS_MINIMIZEBOX
+            style &= ~WS_MAXIMIZEBOX
+            set_window_long(hwnd, GWL_STYLE, style)
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            user32.SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+            user32.RedrawWindow(hwnd, None, None, 0x0400 | 0x0080 | 0x0001)
+        except Exception:
+            pass
 
     def _center_window(self):
         try:
@@ -2339,11 +2314,8 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         self._server.set_crm_base_url(crm_base_url)
         token = (data.get("token") or "").strip()
         self.token_var.set(token)
-        copies = data.get("copies") or DEFAULT_CONFIG["copies"]
-        try:
-            self._copies_var.set(str(int(copies)))
-        except Exception:
-            self._copies_var.set(str(DEFAULT_CONFIG["copies"]))
+        self._autostart_var.set(bool(data.get("autostart", False)))
+        self._render_autostart_icon()
         self._set_crm_url_status(None, "")
         self._set_token_status(None, "")
         self._run_crm_url_check()
@@ -2352,8 +2324,95 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
     def _save_config(self):
         crm_base_url = self._get_crm_base_url()
         token = self._get_token()
-        copies = self._get_copies()
-        save_config({"crm_base_url": crm_base_url, "token": token, "copies": copies})
+        save_config({
+            "crm_base_url": crm_base_url,
+            "token": token,
+            "autostart": bool(self._autostart_var.get()),
+        })
+
+    def _get_autostart_registry_path(self):
+        return r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+    def _get_autostart_command(self):
+        if getattr(sys, "frozen", False):
+            exe_path = os.path.abspath(sys.executable)
+            return f'"{exe_path}"'
+        script_path = os.path.abspath(__file__)
+        python_exe = os.path.abspath(sys.executable)
+        return f'"{python_exe}" "{script_path}"'
+
+    def _is_autostart_enabled(self):
+        if os.name != "nt" or not winreg:
+            return bool(self._autostart_var.get())
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self._get_autostart_registry_path(), 0, winreg.KEY_READ) as key:
+                value, _ = winreg.QueryValueEx(key, APP_NAME)
+                return bool(str(value or "").strip())
+        except Exception:
+            return False
+
+    def _set_autostart_registry(self, enabled):
+        if os.name != "nt" or not winreg:
+            return False
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self._get_autostart_registry_path(), 0, winreg.KEY_SET_VALUE) as key:
+                if enabled:
+                    winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, self._get_autostart_command())
+                else:
+                    try:
+                        winreg.DeleteValue(key, APP_NAME)
+                    except FileNotFoundError:
+                        pass
+            return True
+        except Exception:
+            return False
+
+    def _on_autostart_change(self):
+        enabled = bool(self._autostart_var.get())
+        if os.name == "nt":
+            if not self._set_autostart_registry(enabled):
+                self._autostart_var.set(False)
+                self._set_status("Не удалось изменить автозапуск", ok=False)
+                return
+        self._save_config()
+        self._render_autostart_icon()
+
+    def _toggle_autostart(self):
+        self._autostart_var.set(not bool(self._autostart_var.get()))
+        self._on_autostart_change()
+
+    def _render_autostart_icon(self):
+        canvas = getattr(self, "autostart_button", None)
+        if not canvas:
+            return
+        try:
+            canvas.delete("all")
+        except Exception:
+            return
+        enabled = bool(self._autostart_var.get())
+        fill = UI_COLORS["accent"] if enabled else "#5f5f5f"
+        outline = UI_COLORS["accent_hover"] if enabled else "#8c8c8c"
+        icon = "#ffffff"
+        canvas.create_oval(2, 2, 28, 28, outline=outline, width=1.5, fill=fill)
+        canvas.create_polygon(12, 9, 12, 21, 21, 15, outline=icon, fill=icon)
+
+    def _render_printer_settings_icon(self):
+        canvas = getattr(self, "printer_settings_button", None)
+        if not canvas:
+            return
+        try:
+            canvas.delete("all")
+        except Exception:
+            return
+        canvas.create_oval(2, 2, 28, 28, outline=UI_COLORS["accent_hover"], width=1.5, fill=UI_COLORS["accent"])
+        canvas.create_text(15, 15, text="⚙", fill="#ffffff", font=("Segoe UI", 13, "bold"))
+
+    def _start_minimized_to_tray(self):
+        if self._in_tray:
+            return
+        if not (PYSTRAY_AVAILABLE and PIL_AVAILABLE):
+            return
+        self._hide_to_tray()
 
     def _schedule_token_check(self):
         if self._token_check_timer:
@@ -2440,34 +2499,117 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         self._schedule_printer_refresh(2000)
 
     def _set_printer_status(self, connected):
-        text = "Подключен" if connected else "Отключен"
-        color = UI_COLORS["ok"] if connected else UI_COLORS["error"]
-        if UI_BACKEND == "ctk":
-            self.printer_state_label.configure(text=text, text_color=color)
-        else:
-            self.printer_state_label.config(text=text, fg=color)
+        return
 
     def _set_printer_name(self, printer_name):
-        text = str(printer_name or "").strip() or "Не выбран"
-        if UI_BACKEND == "ctk":
-            self.printer_name_label.configure(text=text)
-        else:
-            self.printer_name_label.config(text=text)
+        return
 
-    def _set_printers_list(self, text):
-        value = str(text or "").strip()
-        if UI_BACKEND == "ctk":
-            self.printers_list_label.configure(text=value)
-        else:
-            self.printers_list_label.config(text=value)
+    def _get_printer_display_name(self, system_name):
+        system_name = str(system_name or "").strip()
+        synced = getattr(self._server, "_synced_printers_by_system_name", {}) or {}
+        synced_item = synced.get(system_name.lower(), {}) if system_name else {}
+        display_name = str(synced_item.get("display_name") or "").strip()
+        if not display_name:
+            display_name = system_name
+        if display_name and system_name and display_name.lower() != system_name.lower():
+            return f"{display_name} ({system_name})"
+        return display_name or system_name
 
-    def _build_printers_list_text(self):
+    def _clear_printers_table(self):
+        try:
+            for item in self.printers_table_tree.get_children():
+                self.printers_table_tree.delete(item)
+        except Exception:
+            pass
+
+    def _on_printers_tree_mousewheel(self, event):
+        try:
+            if getattr(event, "num", None) == 4:
+                delta = -1
+            elif getattr(event, "num", None) == 5:
+                delta = 1
+            else:
+                delta = -1 if getattr(event, "delta", 0) > 0 else 1
+            self.printers_table_tree.yview_scroll(delta, "units")
+        except Exception:
+            pass
+
+    def _on_printers_tree_motion(self, event):
+        try:
+            region = self.printers_table_tree.identify("region", event.x, event.y)
+            column = self.printers_table_tree.identify_column(event.x)
+            if region == "cell" and column == "#3":
+                self.printers_table_tree.configure(cursor="hand2")
+            else:
+                self.printers_table_tree.configure(cursor="")
+        except Exception:
+            pass
+
+    def _on_printers_tree_click(self, event):
+        try:
+            region = self.printers_table_tree.identify("region", event.x, event.y)
+            column = self.printers_table_tree.identify_column(event.x)
+            row_id = self.printers_table_tree.identify_row(event.y)
+            if region == "cell" and column == "#3" and row_id:
+                tags = self.printers_table_tree.item(row_id, "tags") or []
+                printer_name = str(tags[1] if len(tags) > 1 else "").strip()
+                if printer_name:
+                    self._open_printer_settings(printer_name)
+                    return "break"
+        except Exception:
+            pass
+
+    def _open_printer_settings(self, printer_name):
+        printer_name = str(printer_name or "").strip()
+        if not printer_name:
+            return
+        if os.name != "nt":
+            self._set_status("Настройки принтера доступны только в Windows", ok=False)
+            return
+        opened = False
+        for cmd in (
+            ["rundll32.exe", "printui.dll,PrintUIEntry", "/e", "/n", printer_name],
+            ["rundll32.exe", "printui.dll,PrintUIEntry", "/p", "/n", printer_name],
+        ):
+            try:
+                subprocess.Popen(cmd)
+                opened = True
+                break
+            except Exception:
+                continue
+        if not opened:
+            self._set_status("Не удалось открыть настройки принтера", ok=False)
+
+    def _render_printers_table(self):
+        self._clear_printers_table()
         if not WINDOWS_PRINTING_AVAILABLE:
-            return "Список принтеров недоступен: установите pywin32 для текущего Python"
+            label = tk.Label(
+                self.printers_table_container,
+                text="Список принтеров недоступен: установите pywin32 для текущего Python",
+                font=("Segoe UI", 10),
+                bg=UI_COLORS["card"],
+                fg=UI_COLORS["muted"],
+                anchor="w",
+                justify="left",
+                wraplength=360
+            )
+            label.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+            return
 
         names = _list_printers()
         if not names:
-            return "Подключенные принтеры не найдены"
+            label = tk.Label(
+                self.printers_table_container,
+                text="Подключенные принтеры не найдены",
+                font=("Segoe UI", 10),
+                bg=UI_COLORS["card"],
+                fg=UI_COLORS["muted"],
+                anchor="w",
+                justify="left",
+                wraplength=360
+            )
+            label.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+            return
 
         default_name = str(getattr(self._server, "_selected_printer_system_name", "") or "").strip()
         try:
@@ -2476,42 +2618,39 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         except Exception:
             default_name = ""
 
-        synced = getattr(self._server, "_synced_printers_by_system_name", {}) or {}
-        lines = ["Подключенные принтеры:"]
-        for name in names[:8]:
+        try:
+            self.printers_table_tree.configure(height=max(1, min(6, len(names))))
+        except Exception:
+            pass
+        for row_index, name in enumerate(names):
             system_name = str(name or "").strip()
             if not system_name:
                 continue
             _, is_online = _get_printer_state(system_name)
-            crm_info = synced.get(system_name.lower()) if isinstance(synced, dict) else None
-            display_name = str((crm_info or {}).get("display_name") or "").strip()
-            title = system_name
-            if display_name and display_name != system_name:
-                title = f"{display_name} ({system_name})"
-            markers = []
-            if default_name and system_name.lower() == default_name.lower():
-                markers.append("по умолчанию")
-            markers.append("online" if is_online else "offline")
-            lines.append(f"- {title}: {', '.join(markers)}")
-        if len(names) > 8:
-            lines.append(f"... еще {len(names) - 8}")
-        return "\n".join(lines)
+            is_default = bool(default_name and system_name.lower() == default_name.lower())
+            display_name = self._get_printer_display_name(system_name)
+            name_text = display_name + (" (по умолчанию)" if is_default else "")
+            status_text = "🟢 Подключен" if is_online else "🔴 Отключен"
+            row_tag = f"printer_{row_index}"
+            self.printers_table_tree.insert(
+                "",
+                "end",
+                iid=row_tag,
+                values=(name_text, status_text, "⚙"),
+                tags=("printer_row", system_name),
+            )
+        self.printers_table_tree.tag_configure("printer_row", foreground=UI_COLORS["text"])
+
+        try:
+            self.printers_table_tree.yview_moveto(0)
+        except Exception:
+            pass
 
     def _refresh_printer_ui(self):
         if not WINDOWS_PRINTING_AVAILABLE:
-            self._set_printer_name("Печать недоступна")
-            self._set_printer_status(False)
-            self._set_printers_list(self._build_printers_list_text())
+            self._render_printers_table()
             return
-
-        selected_printer = str(getattr(self._server, "_selected_printer_system_name", "") or "").strip()
-        if selected_printer:
-            printer_name, printer_online = _get_printer_state(selected_printer)
-        else:
-            printer_name, printer_online = _get_default_printer_state()
-        self._set_printer_name(printer_name)
-        self._set_printer_status(bool(printer_name and printer_online))
-        self._set_printers_list(self._build_printers_list_text())
+        self._render_printers_table()
 
     def _open_windows_printers(self):
         opened = False
@@ -2706,110 +2845,86 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
 
     def _set_token_status(self, ok, detail):
         if ok is True:
-            symbol = "Ok"
-            color = UI_COLORS["ok"]
-            text = f"Точка: {detail}" if detail else "CRM найдена"
+            point_name = _ellipsis_text(detail, 44) if detail else ""
+            text = f"Точка: {point_name}" if point_name else "Точка:"
+            border_color = UI_COLORS["ok"]
             self._token_ok = True
         elif ok is False:
-            symbol = "X"
-            color = UI_COLORS["error"]
             if detail == "crm_unavailable" or self._crm_url_ok is False:
                 text = self._crm_url_problem or "CRM недоступна"
             else:
                 text = "Введите корректный X-Api-Key"
+            border_color = UI_COLORS["error"]
             self._token_ok = False
         else:
-            symbol = ""
-            color = None
             text = ""
+            border_color = "#3a3a3a"
             self._token_ok = False
 
         if UI_BACKEND == "ctk":
-            if color:
-                self.token_status.configure(text=symbol, text_color=color)
-            else:
-                self.token_status.configure(text=symbol)
+            try:
+                self.token_entry.configure(border_color=border_color)
+            except Exception:
+                pass
             self.store_label.configure(text=text)
+            self._sync_point_tooltip(detail if ok is True else "")
         else:
-            if color:
-                self.token_status.config(text=symbol, fg=color)
-            else:
-                self.token_status.config(text=symbol)
+            try:
+                self.token_entry.configure(highlightbackground=border_color, highlightcolor=border_color)
+            except Exception:
+                try:
+                    self.token_entry.config(highlightbackground=border_color, highlightcolor=border_color)
+                except Exception:
+                    pass
             self.store_label.config(text=text)
+            self._sync_point_tooltip(detail if ok is True else "")
+
+    def _sync_point_tooltip(self, detail):
+        text = str(detail or "").strip()
+        if not hasattr(self, "_point_tooltip"):
+            self._point_tooltip = _Tooltip(self.store_label, lambda: getattr(self, "_point_tooltip_text", ""))
+        self._point_tooltip_text = text
 
     def _set_crm_url_status(self, ok, reason):
         if ok == "checking":
-            text = ""
-            color = UI_COLORS["muted"]
+            border_color = "#3a3a3a"
         elif ok is True:
-            text = "OK"
-            color = UI_COLORS["ok"]
+            border_color = UI_COLORS["ok"]
             self._crm_url_ok = True
             self._crm_url_problem = ""
         elif ok is False:
-            text = "X"
-            color = UI_COLORS["error"]
+            border_color = UI_COLORS["error"]
             self._crm_url_ok = False
             self._crm_url_problem = "CRM недоступна"
         else:
-            text = ""
-            color = UI_COLORS["muted"]
+            border_color = "#3a3a3a"
             self._crm_url_ok = None
             self._crm_url_problem = ""
 
         if UI_BACKEND == "ctk":
-            self.crm_url_status.configure(text=text, text_color=color)
+            try:
+                self.crm_url_entry.configure(border_color=border_color)
+            except Exception:
+                pass
         else:
-            self.crm_url_status.config(text=text, fg=color)
+            try:
+                self.crm_url_entry.configure(highlightbackground=border_color, highlightcolor=border_color)
+            except Exception:
+                try:
+                    self.crm_url_entry.config(highlightbackground=border_color, highlightcolor=border_color)
+                except Exception:
+                    pass
 
     def _set_status(self, text, ok=None, color=None):
-        if color is None:
-            if ok is True:
-                color = UI_COLORS["ok"]
-            elif ok is False:
-                color = UI_COLORS["error"]
-            else:
-                color = UI_COLORS["muted"]
-        if UI_BACKEND == "ctk":
-            self.status_label.configure(text=text, text_color=color)
-        else:
-            self.status_label.config(text=text, fg=color)
+        return
 
     def _set_running_state(self, is_running):
         self._server_running = bool(is_running)
-        self._set_token_entry_enabled(not self._server_running)
-        if self._server_running:
-            status_text = f"Запущен: синхронизация с {self._get_crm_base_url()}"
-            self._set_status(status_text, color=UI_COLORS["text"])
-            if UI_BACKEND == "ctk":
-                self.start_button.configure(
-                    text="Остановить",
-                    fg_color=UI_COLORS["stop"],
-                    hover_color=UI_COLORS["stop_hover"]
-                )
-            else:
-                self.start_button.config(
-                    text="Остановить",
-                    bg=UI_COLORS["stop"],
-                    activebackground=UI_COLORS["stop_hover"]
-                )
-        else:
-            self._set_status("Остановлен", color=UI_COLORS["muted"])
-            if UI_BACKEND == "ctk":
-                self.start_button.configure(
-                    text="Запустить",
-                    fg_color=UI_COLORS["accent"],
-                    hover_color=UI_COLORS["accent_hover"]
-                )
-            else:
-                self.start_button.config(
-                    text="Запустить",
-                    bg=UI_COLORS["accent"],
-                    activebackground=UI_COLORS["accent_hover"]
-                )
+        self._set_token_entry_enabled(True)
+        return
 
     def _set_token_entry_enabled(self, enabled):
-        state = "normal" if enabled else "disabled"
+        state = "normal" if enabled else "normal"
         color = UI_COLORS["text"] if enabled else UI_COLORS["disabled_text"]
         for widget in (self.crm_url_entry, self.token_entry):
             entry = self._resolve_entry_widget(widget)
@@ -2878,11 +2993,6 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
                     except Exception:
                         pass
             return False
-        copies_raw = self._get_copies_raw()
-        if copies_raw is None or copies_raw <= 0:
-            logging.warning("Не введено число копий")
-            self._set_status("Введите количество копий больше 0", ok=False)
-            return False
         printer_name, printer_online = _get_default_printer_state()
         if not auto and not self._confirm_start_without_printer(printer_name, printer_online):
             if not printer_name:
@@ -2906,24 +3016,10 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
             return False
 
     def _on_start_click(self):
-        if self._server_running:
-            try:
-                self._server.stop()
-                self._set_running_state(False)
-            except Exception:
-                logging.exception("Не удалось остановить сервер")
-                self._set_status("Ошибка остановки", ok=False)
-            return
         self._start_server_if_ready(auto=False)
 
     def _on_background_click(self):
-        if PYSTRAY_AVAILABLE and PIL_AVAILABLE:
-            self._hide_to_tray()
-            return
-        try:
-            self.iconify()
-        except Exception:
-            pass
+        self._hide_to_tray()
 
     def _schedule_ui(self, func):
         try:
@@ -2996,13 +3092,15 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
             except Exception:
                 pass
         self._schedule_ui(do_restore)
-        self._stop_tray_icon()
 
     def _exit_from_tray(self):
         self._stop_tray_icon()
-        self._schedule_ui(self._on_close)
+        self._schedule_ui(lambda: self._on_close(force_exit=True))
 
-    def _on_close(self):
+    def _on_close(self, force_exit=False):
+        if not force_exit and PYSTRAY_AVAILABLE and PIL_AVAILABLE:
+            self._hide_to_tray()
+            return
         self._stop_tray_icon()
         if self._printer_timer:
             try:

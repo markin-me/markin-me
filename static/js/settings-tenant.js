@@ -7618,6 +7618,10 @@
 
 
 
+    const productionZoneCopiesInput = document.getElementById("settingsProductionZoneCopies");
+
+
+
     const productionZoneFooterView = document.getElementById("settingsProductionZoneFooterView");
 
 
@@ -42594,7 +42598,7 @@
     function setProductionZoneFormMode(mode) {
       productionZonesState.mode = mode === "edit" ? "edit" : "view";
       const isEdit = productionZonesState.mode === "edit";
-      [productionZoneNameInput, productionZoneStoreSelect, productionZonePrinterSelect, productionZoneTemplateSelect].forEach((el) => {
+      [productionZoneNameInput, productionZoneStoreSelect, productionZonePrinterSelect, productionZoneTemplateSelect, productionZoneCopiesInput].forEach((el) => {
         if (el) el.disabled = !isEdit;
       });
       if (productionZoneFooterView) productionZoneFooterView.classList.toggle("hidden", isEdit);
@@ -42675,10 +42679,12 @@
       const rule = zone && zone.id ? getProductionZoneRule(zone.id, storeId) : null;
       const printerId = Number((rule && rule.printer_id) || (zone && zone.printer_id) || 0);
       const templateId = Number((rule && rule.template_id) || (zone && zone.template_id) || 0);
+      const copies = Math.max(1, Number((rule && rule.copies) || 1) || 1);
       if (productionZoneNameInput) productionZoneNameInput.value = String(zone && zone.name || "");
       populateProductionZoneStores(storeId);
       populateProductionZonePrinters(storeId, printerId);
       populateProductionZoneTemplates(templateId);
+      if (productionZoneCopiesInput) productionZoneCopiesInput.value = String(copies);
       productionZonesState.snapshot = zone ? { ...zone } : null;
       setProductionZoneFormMode(mode || "view");
     }
@@ -42737,8 +42743,9 @@
           const printerName = getProductionZonePrinterName(rule && rule.printer_id);
           const template = getPrintTemplateById(rule && rule.template_id);
           const templateTitle = template ? String(template.title || "") : "";
+          const copiesText = Math.max(1, Number(rule && rule.copies || 1) || 1);
           subtitle.textContent = printerName
-            ? `${printerName}${templateTitle ? ` - ${templateTitle}` : ""}`
+            ? `${printerName}${templateTitle ? ` - ${templateTitle}` : ""}${copiesText > 1 ? ` - ${copiesText} коп.` : ""}`
             : "\u041f\u0440\u0430\u0432\u0438\u043b\u043e \u043f\u0435\u0447\u0430\u0442\u0438 \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u043e";
           info.appendChild(title);
           info.appendChild(subtitle);
@@ -42830,6 +42837,7 @@
       const storeId = Number(productionZoneStoreSelect && productionZoneStoreSelect.value || 0);
       const printerId = Number(productionZonePrinterSelect && productionZonePrinterSelect.value || 0);
       const templateId = Number(productionZoneTemplateSelect && productionZoneTemplateSelect.value || 0);
+      const copies = Math.max(1, Number(productionZoneCopiesInput && productionZoneCopiesInput.value || 1) || 1);
       if (!name) {
         alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u0437\u043e\u043d\u044b.");
         return;
@@ -42857,7 +42865,7 @@
       try {
         const res = await authFetch(url, {
           method,
-          body: JSON.stringify({ name, store_id: storeId, printer_id: printerId, template_id: templateId })
+          body: JSON.stringify({ name, store_id: storeId, printer_id: printerId, template_id: templateId, copies })
         });
         const data = await res.json();
         if (!data || !data.ok || !data.data) {

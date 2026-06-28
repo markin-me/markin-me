@@ -105,3 +105,6 @@ cd mobile-apps/mobile-admin && npx expo start
 
 npm --prefix mobile-apps/mobile-user run start
 npm --prefix "mobile-apps/mobile-user" run web
+
+
+python .\CRM_Print_Push_Bot\Print_server.py

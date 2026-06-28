@@ -5802,7 +5802,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       [tenantId]
     );
     const [ruleRows] = await db.query(
-      `SELECT id, store_id, production_zone_id, printer_id, template_id, is_enabled
+      `SELECT id, store_id, production_zone_id, printer_id, template_id, copies, is_enabled
        FROM prod_store_print_rules
        WHERE tenant_id=? AND document_type='label'
        ORDER BY updated_at DESC, id DESC`,
@@ -5837,6 +5837,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const storeId = Number(req.body?.store_id || 0);
       const printerId = Number(req.body?.printer_id || 0);
       const templateId = Number(req.body?.template_id || 0);
+      const copies = Math.max(1, Number(req.body?.copies || 1) || 1);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
       if (!Number.isFinite(storeId) || storeId <= 0) return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
@@ -5882,14 +5883,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
       await db.query(
         `INSERT INTO prod_store_print_rules
            (tenant_id, store_id, production_zone_id, document_type, printer_id, template_id, copies, is_enabled, sort_order)
-         VALUES (?,?,?,?,?,?,1,1,0)
+         VALUES (?,?,?,?,?,?,?,1,0)
          ON DUPLICATE KEY UPDATE
            printer_id=VALUES(printer_id),
            template_id=VALUES(template_id),
-           copies=1,
+           copies=VALUES(copies),
            is_enabled=1,
            updated_at=NOW()`,
-        [tenantId, storeId, zoneId, 'label', printerId, templateId]
+        [tenantId, storeId, zoneId, 'label', printerId, templateId, copies]
       );
       const data = await selectProductionZonesData(tenantId);
       res.json({ ok: true, data, zone_id: zoneId });
@@ -5907,6 +5908,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const storeId = Number(req.body?.store_id || 0);
       const printerId = Number(req.body?.printer_id || 0);
       const templateId = Number(req.body?.template_id || 0);
+      const copies = Math.max(1, Number(req.body?.copies || 1) || 1);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       if (!Number.isFinite(zoneId) || zoneId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ZONE_ID' });
       if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
@@ -5950,14 +5952,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
       await db.query(
         `INSERT INTO prod_store_print_rules
            (tenant_id, store_id, production_zone_id, document_type, printer_id, template_id, copies, is_enabled, sort_order)
-         VALUES (?,?,?,?,?,?,1,1,0)
+         VALUES (?,?,?,?,?,?,?,1,0)
          ON DUPLICATE KEY UPDATE
            printer_id=VALUES(printer_id),
            template_id=VALUES(template_id),
-           copies=1,
+           copies=VALUES(copies),
            is_enabled=1,
            updated_at=NOW()`,
-        [tenantId, storeId, zoneId, 'label', printerId, templateId]
+        [tenantId, storeId, zoneId, 'label', printerId, templateId, copies]
       );
       const data = await selectProductionZonesData(tenantId);
       res.json({ ok: true, data, zone_id: zoneId });

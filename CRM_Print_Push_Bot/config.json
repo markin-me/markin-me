@@ -1,5 +1,6 @@
 {
   "crm_base_url": "http://localhost:3000",
-  "token": "f1847e20c35349fd7f3b719a5b64134a1d481e6ca46047d8940185db5a78ca96",
-  "copies": 1
+  "token": "e4f1d0f1bf7794b3a8ec6f3e8aeca4441b0a2da28b24e6d47d48a3ae427e2368",
+  "copies": 1,
+  "autostart": true
 }

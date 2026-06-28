@@ -363,11 +363,28 @@ async function buildProductionLabelJobs(db, { tenantId, storeId, order }) {
       job_name: zone?.name ? `CRM Label ${zone.name}` : "CRM Label",
       html,
       printer_name: rule.printer_system_name,
-      copies: Math.max(1, qty * Math.max(1, Number(rule.copies || 1) || 1)),
+      copies: qty,
       kind: "label",
     });
   }
   return labelJobs;
+}
+
+async function getReceiptPrintCopies(db, { tenantId, storeId }) {
+  const [rows] = await db.query(
+    `SELECT rr.copies
+       FROM prod_store_print_rules rr
+       INNER JOIN print_templates pt
+               ON pt.tenant_id=rr.tenant_id
+              AND pt.id=rr.template_id
+              AND pt.document_type='receipt'
+              AND pt.is_active=1
+      WHERE rr.tenant_id=? AND rr.store_id=? AND rr.is_enabled=1
+      ORDER BY rr.updated_at DESC, rr.id DESC
+      LIMIT 1`,
+    [tenantId, storeId]
+  );
+  return Math.max(1, Number(rows[0]?.copies || 1) || 1);
 }
 
 async function getPrintTokenRow(db, tenantId, storeId) {
@@ -408,7 +425,13 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, cr
   if (!orderId) return false;
   const publicId = order?.public_id || order?.publicId || null;
   const jobName = publicId ? `CRM Receipt ${publicId}` : `CRM Receipt #${orderId}`;
-  const jobPayload = encodeHtmlJobPayload(html);
+  const copies = Math.max(1, Number(order?.receipt_copies || order?.copies || 1) || 1);
+  const jobPayload = encodeMetaJobPayload({
+    kind: "receipt",
+    html,
+    copies,
+    job_name: jobName,
+  });
   if (!jobPayload) return false;
   const createdAtValue = String(createdAt || "").trim() || null;
 
@@ -542,6 +565,11 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
   const orderId = order.id || order.order_id || order.orderId;
   if (!orderId) return fail("ORDER_ID_MISSING");
 
+  const receiptCopies = await getReceiptPrintCopies(db, {
+    tenantId: resolvedTenantId,
+    storeId: resolvedStoreId,
+  });
+
   let html = "";
   for (let attempt = 1; attempt <= 3; attempt++) {
     html = await fetchReceiptHtml(tokenRow.token, orderId);
@@ -558,7 +586,10 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
     tenantId: resolvedTenantId,
     storeId: resolvedStoreId,
     tokenId: Number(tokenRow.id),
-    order,
+    order: {
+      ...order,
+      receipt_copies: receiptCopies,
+    },
     html,
     createdAt,
   });
