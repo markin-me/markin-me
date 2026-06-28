@@ -568,6 +568,49 @@ def _list_printers():
     return names
 
 
+def _get_printer_queue_size(printer_name):
+    if not WINDOWS_PRINTING_AVAILABLE or os.name != "nt":
+        return 0
+    printer_name = str(printer_name or "").strip()
+    if not printer_name:
+        return 0
+    try:
+        handle = win32print.OpenPrinter(printer_name)
+    except Exception:
+        return 0
+    try:
+        try:
+            jobs = win32print.EnumJobs(handle, 0, 999, 1)
+        except Exception:
+            jobs = []
+        return len(jobs or [])
+    finally:
+        try:
+            win32print.ClosePrinter(handle)
+        except Exception:
+            pass
+
+
+def _clear_printer_queue(printer_name):
+    if not WINDOWS_PRINTING_AVAILABLE or os.name != "nt":
+        raise RuntimeError("queue_clear_not_supported")
+    printer_name = str(printer_name or "").strip()
+    if not printer_name:
+        raise RuntimeError("printer_not_found")
+    handle = win32print.OpenPrinter(printer_name)
+    try:
+        jobs = win32print.EnumJobs(handle, 0, 999, 1) or []
+        for job in jobs:
+            job_id = int(job.get("JobId") or job.get("JobID") or 0)
+            if job_id > 0:
+                win32print.SetJob(handle, job_id, 0, None, win32print.JOB_CONTROL_DELETE)
+    finally:
+        try:
+            win32print.ClosePrinter(handle)
+        except Exception:
+            pass
+
+
 def _build_printers_sync_payload():
     default_printer = ""
     if WINDOWS_PRINTING_AVAILABLE:
@@ -1767,6 +1810,8 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
             88: self._force_cut,    # X
             65: self._force_select_all  # A
         }
+        self._printer_status_dots = {}
+        self._printer_queue_widgets = {}
 
         self._build_ui()
         self._bind_clipboard_shortcuts()
@@ -1982,6 +2027,8 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         self.printers_table_container = tk.Frame(self.printer_frame, bg=UI_COLORS["card"])
         self.printers_table_container.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 0))
         self.printers_table_container.grid_columnconfigure(0, weight=1)
+        self.printer_frame.grid_rowconfigure(1, weight=1)
+        self.printers_table_container.grid_rowconfigure(0, weight=1)
         self._table_style = ttk.Style(self)
         try:
             self._table_style.theme_use("clam")
@@ -2005,30 +2052,44 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
             font=("Segoe UI", 10, "bold"),
         )
         self._table_style.map(
+            "Printers.Treeview.Heading",
+            background=[("active", "#313131"), ("pressed", "#313131")],
+            foreground=[("active", UI_COLORS["muted"]), ("pressed", UI_COLORS["muted"])],
+            relief=[("active", "flat"), ("pressed", "flat")],
+        )
+        self._table_style.map(
             "Printers.Treeview",
             background=[("selected", "#3a3a3a")],
             foreground=[("selected", UI_COLORS["text"])],
         )
         self.printers_table_tree = ttk.Treeview(
             self.printers_table_container,
-            columns=("name", "status", "settings"),
+            columns=("status", "name", "queue", "settings"),
             show="headings",
             style="Printers.Treeview",
             selectmode="none",
             height=1,
         )
-        self.printers_table_tree.grid(row=0, column=0, sticky="ew")
+        self.printers_table_tree.grid(row=0, column=0, sticky="nsew")
+        self.printers_table_tree.heading("status", text="")
         self.printers_table_tree.heading("name", text="Название")
-        self.printers_table_tree.heading("status", text="Статус")
-        self.printers_table_tree.heading("settings", text="Настройки")
-        self.printers_table_tree.column("name", anchor="w", width=260, stretch=True)
-        self.printers_table_tree.column("status", anchor="center", width=100, stretch=False)
-        self.printers_table_tree.column("settings", anchor="center", width=100, stretch=False)
+        self.printers_table_tree.heading("queue", text="Очередь")
+        self.printers_table_tree.heading("settings", text="")
+        self.printers_table_tree.column("status", anchor="center", width=44, stretch=False)
+        self.printers_table_tree.column("name", anchor="w", width=180, stretch=True)
+        self.printers_table_tree.column("queue", anchor="center", width=108, stretch=False)
+        self.printers_table_tree.column("settings", anchor="center", width=42, stretch=False)
         self.printers_table_tree.bind("<Motion>", self._on_printers_tree_motion)
         self.printers_table_tree.bind("<Button-1>", self._on_printers_tree_click)
         self.printers_table_tree.bind("<MouseWheel>", self._on_printers_tree_mousewheel)
         self.printers_table_tree.bind("<Button-4>", self._on_printers_tree_mousewheel)
         self.printers_table_tree.bind("<Button-5>", self._on_printers_tree_mousewheel)
+        self.printers_table_tree.bind("<Button-1>", self._on_printers_tree_click, add="+")
+        self.printers_table_tree.bind("<Configure>", lambda _e: self._sync_printer_status_dots(), add="+")
+        self.printers_table_tree.bind("<Motion>", self._update_printer_name_tooltip, add="+")
+        self.printers_table_tree.bind("<Leave>", self._hide_printer_name_tooltip, add="+")
+        self._printer_name_tooltip = None
+        self._printer_name_tooltip_row_id = ""
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -2521,6 +2582,147 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
                 self.printers_table_tree.delete(item)
         except Exception:
             pass
+        self._clear_printer_status_dots()
+        self._clear_printer_queue_widgets()
+
+    def _clear_printer_status_dots(self):
+        dots = getattr(self, "_printer_status_dots", {}) or {}
+        for widget in dots.values():
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+        self._printer_status_dots = {}
+
+    def _sync_printer_status_dots(self):
+        dots = getattr(self, "_printer_status_dots", {}) or {}
+        if not dots:
+            return
+        try:
+            self.printers_table_tree.update_idletasks()
+        except Exception:
+            pass
+        for row_id, widget in list(dots.items()):
+            try:
+                bbox = self.printers_table_tree.bbox(row_id, "status")
+            except Exception:
+                bbox = None
+            if not bbox:
+                try:
+                    widget.place_forget()
+                except Exception:
+                    pass
+                continue
+            x, y, w, h = bbox
+            try:
+                widget.place(x=x + max(0, (w - 10) // 2), y=y + max(0, (h - 10) // 2), width=10, height=10)
+            except Exception:
+                pass
+
+    def _clear_printer_queue_widgets(self):
+        widgets = getattr(self, "_printer_queue_widgets", {}) or {}
+        for item in widgets.values():
+            try:
+                for widget in item.values():
+                    widget.destroy()
+            except Exception:
+                pass
+        self._printer_queue_widgets = {}
+
+    def _sync_printer_queue_widgets(self):
+        widgets = getattr(self, "_printer_queue_widgets", {}) or {}
+        if not widgets:
+            return
+        try:
+            self.printers_table_tree.update_idletasks()
+        except Exception:
+            pass
+        for row_id, item in list(widgets.items()):
+            try:
+                bbox = self.printers_table_tree.bbox(row_id, "queue")
+            except Exception:
+                bbox = None
+            if not bbox:
+                for widget in item.values():
+                    try:
+                        widget.place_forget()
+                    except Exception:
+                        pass
+                continue
+            x, y, w, h = bbox
+            if item.get("count"):
+                try:
+                    item["count"].place(x=x + 8, y=y + max(0, (h - 18) // 2), width=18, height=18)
+                except Exception:
+                    pass
+            if item.get("open"):
+                try:
+                    item["open"].place(x=x + 28, y=y + max(0, (h - 24) // 2), width=24, height=24)
+                except Exception:
+                    pass
+            if item.get("clear"):
+                try:
+                    item["clear"].place(x=x + 56, y=y + max(0, (h - 24) // 2), width=24, height=24)
+                except Exception:
+                    pass
+
+    def _hide_printer_name_tooltip(self, event=None):
+        tip = getattr(self, "_printer_name_tooltip", None)
+        self._printer_name_tooltip_row_id = ""
+        if not tip:
+            return
+        try:
+            tip.destroy()
+        except Exception:
+            pass
+        self._printer_name_tooltip = None
+
+    def _show_printer_name_tooltip(self, row_id, text, x_root, y_root):
+        self._hide_printer_name_tooltip()
+        tip = tk.Toplevel(self)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{x_root + 12}+{y_root + 18}")
+        label = tk.Label(
+            tip,
+            text=text,
+            bg="#202020",
+            fg=UI_COLORS["text"],
+            font=("Segoe UI", 10),
+            relief="solid",
+            bd=1,
+            padx=8,
+            pady=4,
+        )
+        label.pack()
+        self._printer_name_tooltip = tip
+        self._printer_name_tooltip_row_id = str(row_id)
+
+    def _update_printer_name_tooltip(self, event):
+        try:
+            row_id = self.printers_table_tree.identify_row(event.y)
+            column = self.printers_table_tree.identify_column(event.x)
+            if not row_id or column != "#2":
+                self._hide_printer_name_tooltip()
+                return
+            text = str(self.printers_table_tree.set(row_id, "name") or "").strip()
+            if not text:
+                self._hide_printer_name_tooltip()
+                return
+            try:
+                bbox = self.printers_table_tree.bbox(row_id, "name")
+            except Exception:
+                bbox = None
+            if not bbox:
+                self._hide_printer_name_tooltip()
+                return
+            x, y, w, _h = bbox
+            if len(text) <= 26 and w >= 180:
+                self._hide_printer_name_tooltip()
+                return
+            if self._printer_name_tooltip_row_id != row_id:
+                self._show_printer_name_tooltip(row_id, text, event.x_root, event.y_root)
+        except Exception:
+            self._hide_printer_name_tooltip()
 
     def _on_printers_tree_mousewheel(self, event):
         try:
@@ -2533,12 +2735,14 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
             self.printers_table_tree.yview_scroll(delta, "units")
         except Exception:
             pass
+        self.after_idle(self._sync_printer_status_dots)
+        self.after_idle(self._sync_printer_queue_widgets)
 
     def _on_printers_tree_motion(self, event):
         try:
             region = self.printers_table_tree.identify("region", event.x, event.y)
             column = self.printers_table_tree.identify_column(event.x)
-            if region == "cell" and column == "#3":
+            if region == "cell" and column == "#4":
                 self.printers_table_tree.configure(cursor="hand2")
             else:
                 self.printers_table_tree.configure(cursor="")
@@ -2547,10 +2751,9 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
 
     def _on_printers_tree_click(self, event):
         try:
-            region = self.printers_table_tree.identify("region", event.x, event.y)
             column = self.printers_table_tree.identify_column(event.x)
             row_id = self.printers_table_tree.identify_row(event.y)
-            if region == "cell" and column == "#3" and row_id:
+            if column == "#4" and row_id:
                 tags = self.printers_table_tree.item(row_id, "tags") or []
                 printer_name = str(tags[1] if len(tags) > 1 else "").strip()
                 if printer_name:
@@ -2579,6 +2782,36 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
                 continue
         if not opened:
             self._set_status("Не удалось открыть настройки принтера", ok=False)
+
+    def _open_printer_queue_window(self, printer_name):
+        printer_name = str(printer_name or "").strip()
+        if not printer_name:
+            return
+        if os.name != "nt":
+            self._set_status("Очередь печати доступна только в Windows", ok=False)
+            return
+        try:
+            subprocess.Popen(["rundll32.exe", "printui.dll,PrintUIEntry", "/o", "/n", printer_name])
+        except Exception:
+            self._set_status("Не удалось открыть очередь печати", ok=False)
+
+    def _clear_printer_queue_action(self, printer_name):
+        printer_name = str(printer_name or "").strip()
+        if not printer_name:
+            return
+        if os.name != "nt" or not WINDOWS_PRINTING_AVAILABLE:
+            self._set_status("Очистка очереди доступна только в Windows", ok=False)
+            return
+
+        def worker():
+            try:
+                _clear_printer_queue(printer_name)
+            except Exception as err:
+                self.after(0, lambda msg=str(err): self._set_status(f"Не удалось очистить очередь печати: {msg}", ok=False))
+                return
+            self.after(0, self._refresh_printer_ui)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _render_printers_table(self):
         self._clear_printers_table()
@@ -2630,21 +2863,78 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
             is_default = bool(default_name and system_name.lower() == default_name.lower())
             display_name = self._get_printer_display_name(system_name)
             name_text = display_name + (" (по умолчанию)" if is_default else "")
-            status_text = "🟢 Подключен" if is_online else "🔴 Отключен"
+            status_text = ""
+            queue_count = _get_printer_queue_size(system_name)
             row_tag = f"printer_{row_index}"
             self.printers_table_tree.insert(
                 "",
                 "end",
                 iid=row_tag,
-                values=(name_text, status_text, "⚙"),
+                values=(status_text, name_text, "", "⚙"),
                 tags=("printer_row", system_name),
             )
+        self._clear_printer_status_dots()
+        self._clear_printer_queue_widgets()
+        for row_index, name in enumerate(names):
+            system_name = str(name or "").strip()
+            if not system_name:
+                continue
+            _, is_online = _get_printer_state(system_name)
+            row_id = f"printer_{row_index}"
+            self._printer_status_dots[row_id] = tk.Label(
+                self.printers_table_tree,
+                text="●",
+                fg="#2ecc71" if is_online else "#e74c3c",
+                bg="#2a2a2a",
+                font=("Segoe UI", 11, "bold"),
+                bd=0,
+                highlightthickness=0,
+            )
+            queue_count = _get_printer_queue_size(system_name)
+            count_label = tk.Label(
+                self.printers_table_tree,
+                text=str(queue_count),
+                fg=UI_COLORS["text"],
+                bg="#2a2a2a",
+                font=("Segoe UI", 9, "bold"),
+                bd=0,
+                highlightthickness=0,
+            )
+            open_btn = tk.Canvas(
+                self.printers_table_tree,
+                width=22,
+                height=22,
+                bg="#2a2a2a",
+                highlightthickness=0,
+                bd=0,
+                cursor="hand2",
+            )
+            open_btn.create_text(11, 11, text="🖨", fill=UI_COLORS["text"], font=("Segoe UI", 10))
+            open_btn.bind("<Button-1>", lambda _e, p=system_name: self._open_printer_queue_window(p))
+            clear_btn = tk.Canvas(
+                self.printers_table_tree,
+                width=22,
+                height=22,
+                bg="#2a2a2a",
+                highlightthickness=0,
+                bd=0,
+                cursor="hand2",
+            )
+            clear_btn.create_text(11, 11, text="🗑", fill=UI_COLORS["text"], font=("Segoe UI", 10))
+            clear_btn.bind("<Button-1>", lambda _e, p=system_name: self._clear_printer_queue_action(p))
+            self._printer_queue_widgets[row_id] = {
+                "count": count_label,
+                "open": open_btn,
+                "clear": clear_btn,
+            }
         self.printers_table_tree.tag_configure("printer_row", foreground=UI_COLORS["text"])
 
         try:
             self.printers_table_tree.yview_moveto(0)
         except Exception:
             pass
+        self.after_idle(self._sync_printer_status_dots)
+        self.after_idle(self._sync_printer_queue_widgets)
 
     def _refresh_printer_ui(self):
         if not WINDOWS_PRINTING_AVAILABLE:
@@ -3099,6 +3389,10 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
 
     def _on_close(self, force_exit=False):
         if not force_exit and PYSTRAY_AVAILABLE and PIL_AVAILABLE:
+            try:
+                self.withdraw()
+            except Exception:
+                pass
             self._hide_to_tray()
             return
         self._stop_tray_icon()

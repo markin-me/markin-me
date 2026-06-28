@@ -3363,3 +3363,29 @@ pypdfium2._helpers.misc.PdfiumError: Failed to load document (PDFium: Data forma
 2026-06-28 12:33:19,942 INFO Сервер печати запущен: polling http://localhost:3000
 2026-06-28 12:35:40,627 INFO Сервер печати запущен: polling http://localhost:3000
 2026-06-28 12:38:07,323 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 12:41:35,173 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 12:45:30,434 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 12:45:34,644 INFO Сервер печати остановлен
+2026-06-28 12:45:40,448 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 12:47:58,945 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 12:49:41,012 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 12:54:48,019 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 12:54:49,152 WARNING Связь с CRM потеряна, запускаю авто-восстановление
+2026-06-28 12:54:52,158 INFO Связь с CRM восстановлена
+2026-06-28 12:54:52,159 INFO Пробую проиграть звук нового сообщения: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
+2026-06-28 12:54:52,173 WARNING Не удалось загрузить звук http://localhost:3000/static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3: HTTP Error 404: Not Found
+2026-06-28 12:54:52,173 WARNING Не удалось проиграть звук нового сообщения: /static/uploads/tenants/1/sounds/4f742d642b7046d37b952cdfa8be86d7.mp3
+2026-06-28 12:58:53,952 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:02:50,503 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:04:59,985 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:08:16,498 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:11:16,047 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:24:17,268 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:28:51,541 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:47:51,128 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:51:20,888 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 13:53:27,578 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 14:00:19,827 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 14:06:53,056 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 14:10:45,141 INFO Сервер печати запущен: polling http://localhost:3000
+2026-06-28 14:13:30,102 INFO Сервер печати запущен: polling http://localhost:3000

@@ -1936,6 +1936,58 @@ function makePrintApiRouter({ db, helpers }) {
     }
   });
 
+  // PUT /api/print/printers/rename - update display name for a synced printer.
+  router.put("/printers/rename", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, success: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, success: false, error: "API_KEY_INVALID" });
+      }
+
+      const systemName = String(req.body?.system_name || "").trim().slice(0, 255);
+      const displayName = String(req.body?.display_name || "").trim().slice(0, 255);
+      if (!systemName) {
+        return res.status(400).json({ ok: false, success: false, error: "SYSTEM_NAME_REQUIRED" });
+      }
+      if (!displayName) {
+        return res.status(400).json({ ok: false, success: false, error: "DISPLAY_NAME_REQUIRED" });
+      }
+
+      const tenantId = Number(tokenRow.tenant_id);
+      const storeId = Number(tokenRow.store_id);
+      const tokenId = Number(tokenRow.id);
+      const [result] = await db.query(
+        `UPDATE print_printers
+         SET display_name=?, updated_at=NOW()
+         WHERE tenant_id=? AND store_id=? AND token_id=? AND system_name=?`,
+        [displayName, tenantId, storeId, tokenId, systemName]
+      );
+
+      if (!result || !Number(result.affectedRows || 0)) {
+        return res.status(404).json({ ok: false, success: false, error: "PRINTER_NOT_FOUND" });
+      }
+
+      const [printers] = await db.query(
+        `SELECT system_name, display_name, is_default, status, last_seen_at
+         FROM print_printers
+         WHERE tenant_id=? AND store_id=? AND token_id=?
+         ORDER BY is_default DESC, display_name ASC, system_name ASC`,
+        [tenantId, storeId, tokenId]
+      );
+
+      await touchTokenUsage(tokenId);
+      return res.json({ ok: true, success: true, data: { printers: printers || [] } });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, success: false, error: "DB_ERROR" });
+    }
+  });
+
   // GET /api/print/jobs/next - РїРѕР»СѓС‡РёС‚СЊ СЃР»РµРґСѓСЋС‰СѓСЋ Р·Р°РґР°С‡Сѓ РїРµС‡Р°С‚Рё
   router.get("/jobs/next", async (req, res) => {
     try {
