@@ -412,12 +412,23 @@
     var placeholder = str(opts && opts.placeholderImage).trim() || "/static/img/placeholder.png";
     var mainPhoto = photos[0] || placeholder;
     var badgeHtml = renderBuyXGetYBadgeHtml(item);
+    var quickPrintHtml = "";
+    if (opts && opts.showQuickLabelPrint) {
+      quickPrintHtml = (
+        '<button type="button" class="order-item-quick-label-btn icon-btn btn-xs" ' +
+        'data-action="order-print-item-label" data-item-index="' + Number(opts && opts.itemIndex != null ? opts.itemIndex : 0) + '" ' +
+        'title="\u041f\u0435\u0447\u0430\u0442\u044c \u044d\u0442\u0438\u043a\u0435\u0442\u043a\u0443">' +
+          '<i class="fas fa-print"></i>' +
+        '</button>'
+      );
+    }
     var imageHtml = '<img class="cart-thumb" src="' + escapeHtml(mainPhoto) + '" alt="" />';
-    if (!badgeHtml) return imageHtml;
+    if (!badgeHtml && !quickPrintHtml) return imageHtml;
     return (
       '<span class="order-item-thumb-wrap">' +
-        badgeHtml +
         imageHtml +
+        badgeHtml +
+        quickPrintHtml +
       "</span>"
     );
   }
@@ -548,7 +559,10 @@
           '<div class="cart-title">' + escapeHtml(String(qty) + " x " + titleText) + "</div>" +
           detailsHtml +
         "</div>" +
-        '<div class="cart-right">' + priceHtml + "</div>" +
+        '<div class="cart-footer">' +
+          '<div class="cart-footer-left">' + quickPrintHtml + "</div>" +
+          '<div class="cart-footer-right">' + priceHtml + "</div>" +
+        "</div>" +
       "</div>"
     );
   }
@@ -558,7 +572,8 @@
     var pricingList = buildReadonlyOrderDisplayPricingList(normalized, opts || {});
     return normalized.map(function (item, index) {
       var itemOpts = Object.assign({}, opts || {}, {
-        displayPricing: pricingList[index] || getOrderItemDisplayPricing(item)
+        displayPricing: pricingList[index] || getOrderItemDisplayPricing(item),
+        itemIndex: index
       });
       return renderReadonlyOrderItem(item, itemOpts);
     }).join("");

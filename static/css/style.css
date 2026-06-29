@@ -9122,7 +9122,14 @@ body.page-cash #clientAddresses .shop-address-actions{
 .order-item-footer{
   margin-top:auto;
   display:flex;
-  justify-content:flex-end;
+  justify-content:space-between;
+  align-items:flex-end;
+  gap:12px;
+}
+.order-item-footer-left{
+  display:flex;
+  align-items:center;
+  flex:0 0 auto;
 }
 .order-item-price{
   display:inline-flex;
@@ -13892,14 +13899,52 @@ body.page-cash #cashOrdersRightPane .orders-info > #cashPaymentFooter{
 
 .order-item-thumb-wrap{
   position:relative;
-  display:inline-block;
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:4px;
   width:70px;
-  height:70px;
+  height:auto;
   flex-shrink:0;
 }
 
 .order-item-thumb-wrap > .cart-thumb{
   display:block;
+}
+
+.order-item-thumb-wrap{
+  position:relative;
+}
+
+.order-item-quick-label-btn{
+  margin-top:2px;
+  width:26px;
+  height:26px;
+  border-radius:999px;
+  padding:0;
+  border:1px solid var(--color-border);
+  background:var(--color-surface);
+  color:var(--color-text);
+  box-shadow:none;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  pointer-events:auto;
+  margin:0;
+  vertical-align:top;
+}
+
+.order-items .cart-row--readonly-order .cart-right{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  justify-content:flex-end;
+  gap:6px;
+}
+
+.order-item-quick-label-btn i{
+  font-size:12px;
+  line-height:1;
 }
 
 .order-item-bogo-badge{

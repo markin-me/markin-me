@@ -3401,7 +3401,14 @@ body.page-orders #clientAddresses .shop-address-actions{
 .order-item-footer{
   margin-top:auto;
   display:flex;
-  justify-content:flex-end;
+  justify-content:space-between;
+  align-items:flex-end;
+  gap:12px;
+}
+.order-item-footer-left{
+  display:flex;
+  align-items:center;
+  flex:0 0 auto;
 }
 .order-item-price{
   display:inline-flex;

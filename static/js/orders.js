@@ -3283,6 +3283,11 @@
                 <div class="order-item-title">${titleHtml}</div>
                 ${comboDetailsHtml}
                 <div class="order-item-footer">
+                  <div class="order-item-footer-left">
+                    <button type="button" class="order-item-quick-label-btn" data-action="order-print-item-label" data-item-index="${itemIdx}" title="Печать этикетки">
+                      <i class="fas fa-print"></i>
+                    </button>
+                  </div>
                   <div class="order-item-price">${priceHtml}</div>
                 </div>
               </div>
@@ -3384,6 +3389,11 @@
               <div class="order-item-title">${titleHtml}</div>
               ${subHtml}
               <div class="order-item-footer">
+                <div class="order-item-footer-left">
+                  <button type="button" class="order-item-quick-label-btn" data-action="order-print-item-label" data-item-index="${itemIdx}" title="Печать этикетки">
+                    <i class="fas fa-print"></i>
+                  </button>
+                </div>
                 <div class="order-item-price">${priceHtml}</div>
               </div>
             </div>
@@ -3404,6 +3414,7 @@
           placeholderImage: "/static/img/placeholder.png",
           preserveStoredLineTotals: true,
           surface: "admin",
+          showQuickLabelPrint: true,
         }) || "");
       } catch (e) {
         console.warn("Failed to render readonly order items in admin:", e);
@@ -6882,6 +6893,39 @@
     if (!isOrderPrintable(order)) return;
     
     printOrderReceipt(order);
+  });
+
+  document.addEventListener("click", async (e) => {
+    const btn = e.target.closest('[data-action="order-print-item-label"]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const itemIndex = Number(btn.getAttribute("data-item-index") || 0);
+    if (!Number.isFinite(itemIndex) || itemIndex < 0) return;
+
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    const fallbackOrderId = Number(activeTab?.orderId || state.activeOrderId || 0);
+    const order = getActiveOrder()
+      || state.orders.find((o) => Number(o.id) === fallbackOrderId)
+      || activeTab?.order
+      || null;
+    if (!order) return;
+
+    const orderId = Number(order?.id || 0);
+    if (!(orderId > 0)) return;
+
+    btn.disabled = true;
+    try {
+      await apiJson(`/api/admin/orders/${orderId}/print-item-label`, {
+        method: "POST",
+        body: { item_index: itemIndex },
+      });
+    } catch (err) {
+      console.error("Failed to print order item label:", err);
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   // Р¤СѓРЅРєС†РёСЏ РїРµС‡Р°С‚Рё С‡РµРєР° С‡РµСЂРµР· СЃРёСЃС‚РµРјРЅСѓСЋ РїРµС‡Р°С‚СЊ Р±СЂР°СѓР·РµСЂР°

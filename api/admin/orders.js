@@ -1,6 +1,6 @@
 
 const express = require("express");
-const { sendOrderToPrintBot } = require("../printPush");
+const { sendOrderToPrintBot, enqueueSingleLabelPrintJob } = require("../printPush");
 const {
   applyStockDeductionForOrderItems,
   checkStockAvailabilityForOrderItems,
@@ -1832,6 +1832,34 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const parsed = r.items ? JSON.parse(r.items) : [];
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
+
+    const itemProductIds = [...new Set(items
+      .map((item) => Number(item?.product_id || 0))
+      .filter((productId) => productId > 0))];
+    if (itemProductIds.length) {
+      const [productRows] = await db.query(
+        `SELECT id, production_zone_id
+           FROM prod_products
+          WHERE tenant_id=? AND id IN (${itemProductIds.map(() => "?").join(",")})`,
+        [tenantId, ...itemProductIds]
+      );
+      const productZoneById = new Map();
+      (Array.isArray(productRows) ? productRows : []).forEach((row) => {
+        const productId = Number(row?.id || 0);
+        const zoneId = Number(row?.production_zone_id || 0);
+        if (productId > 0 && zoneId > 0) productZoneById.set(productId, zoneId);
+      });
+      items.forEach((item) => {
+        if (!item || typeof item !== "object") return;
+        const productId = Number(item?.product_id || 0);
+        if (!(productId > 0)) return;
+        const zoneId = productZoneById.get(productId);
+        if (zoneId > 0 && !Number(item?.production_zone_id || 0)) {
+          item.production_zone_id = zoneId;
+        }
+      });
+    }
+
     await enrichOrderItemsWithBuyXGetYBadges(tenantId, storeId, items);
     const discountsJson = parseOrderDiscountsJson(r.discounts_json);
     const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
@@ -2354,6 +2382,56 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       res.json({ ok: true, data: { html } });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // POST /api/admin/orders/:id/print-item-label
+  router.post("/:id/print-item-label", async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      const itemIndex = Number(req.body?.item_index);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: "BAD_ID" });
+      }
+      if (!Number.isFinite(itemIndex) || itemIndex < 0) {
+        return res.status(400).json({ ok: false, error: "BAD_ITEM_INDEX" });
+      }
+      const payload = await fetchOrderPayload(tenantId, storeId, id);
+      if (!payload) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+      const [tokenRows] = await db.query(
+        `SELECT id, token
+           FROM print_api_tokens
+          WHERE tenant_id=? AND store_id=?
+          ORDER BY id DESC
+          LIMIT 1`,
+        [tenantId, storeId]
+      );
+      const tokenRow = tokenRows && tokenRows[0] ? tokenRows[0] : null;
+      if (!tokenRow || !String(tokenRow.token || "").trim()) {
+        return res.status(404).json({ ok: false, error: "PRINT_API_TOKEN_NOT_FOUND" });
+      }
+      const createdAt = payload.created_at || null;
+      const ok = await enqueueSingleLabelPrintJob(db, {
+        tenantId,
+        storeId,
+        tokenId: Number(tokenRow.id),
+        order: {
+          ...payload,
+          created_at: createdAt,
+        },
+        itemIndex,
+      });
+      if (!ok) {
+        return res.status(400).json({ ok: false, error: "PRINT_LABEL_NOT_AVAILABLE" });
+      }
+      res.json({ ok: true });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: "DB_ERROR" });
@@ -3370,7 +3448,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const productCategoryIdsById = new Map();
       if (productIds.length) {
         const [productRows] = await db.query(
-          `SELECT id, name, price, old_price, photos_json
+          `SELECT id, name, price, old_price, photos_json, production_zone_id
            FROM prod_products
            WHERE tenant_id=? AND id IN (${productIds.map(() => "?").join(",")})`,
           [tenantId, ...productIds]
@@ -3386,6 +3464,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             price: Number(row?.price || 0),
             old_price: Number(row?.old_price || 0),
             photos,
+            production_zone_id: Number(row?.production_zone_id || 0) > 0 ? Number(row.production_zone_id) : null,
           });
         });
         const [productCategoryRows] = await db.query(
@@ -3592,7 +3671,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
         const productId = Number(item?.product_id || 0);
         if (!(productId > 0)) continue;
+        const itemProductionZoneId = Number(item?.production_zone_id || 0);
         const productMeta = productMetaById.get(productId) || null;
+        const productMetaZoneId = Number(productMeta?.production_zone_id || 0);
+        if (productMetaZoneId > 0) {
+          item.production_zone_id = productMetaZoneId;
+        } else if (itemProductionZoneId > 0) {
+          item.production_zone_id = itemProductionZoneId;
+        }
         const rawPhotos = Array.isArray(item?.photos) ? item.photos.map((x) => toText(x)).filter(Boolean) : [];
         const optionIdsForItem = Array.isArray(item?.option_item_ids)
           ? item.option_item_ids.map((id) => Number(id)).filter((id) => id > 0)

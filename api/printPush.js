@@ -517,6 +517,23 @@ async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order }) 
   return jobs.length;
 }
 
+async function enqueueSingleLabelPrintJob(db, { tenantId, storeId, tokenId, order, itemIndex }) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const index = Number(itemIndex || 0);
+  if (!Array.isArray(items) || !items.length || !Number.isFinite(index) || index < 0 || index >= items.length) return 0;
+  const selectedItem = items[index];
+  if (!selectedItem || Number(selectedItem?.product_id || 0) <= 0) return 0;
+  const singleOrder = {
+    ...order,
+    items: [{
+      ...selectedItem,
+      qty: 1,
+      quantity: 1,
+    }],
+  };
+  return enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order: singleOrder });
+}
+
 async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipReasons }) {
   const mutedReasons = new Set(
     Array.isArray(silentSkipReasons)
@@ -616,5 +633,5 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
   return true;
 }
 
-module.exports = { sendOrderToPrintBot };
+module.exports = { sendOrderToPrintBot, enqueueSingleLabelPrintJob };
 
