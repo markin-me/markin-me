@@ -467,15 +467,18 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, cr
   return true;
 }
 
-async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order }) {
+async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order, reprintNonce = 0 }) {
   const jobs = await buildProductionLabelJobs(db, { tenantId, storeId, order });
   if (!jobs.length) return 0;
   const orderId = Number(order?.id || order?.order_id || order?.orderId || 0);
   const publicId = order?.public_id || order?.publicId || null;
   const createdAtValue = String(order?.created_at || "").trim() || null;
+  const nonceValue = Number(reprintNonce || 0) > 0 ? Number(reprintNonce || 0) : 0;
   for (let index = 0; index < jobs.length; index += 1) {
     const job = jobs[index];
-    const syntheticOrderId = -(orderId * 1000 + (index + 1));
+    const syntheticOrderId = nonceValue > 0
+      ? -(orderId * 1000 + nonceValue + (index + 1))
+      : -(orderId * 1000 + (index + 1));
     const payload = encodeMetaJobPayload({
       kind: job.kind || "label",
       printer_name: job.printer_name || "",
@@ -517,11 +520,18 @@ async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order }) 
   return jobs.length;
 }
 
-async function enqueueSingleLabelPrintJob(db, { tenantId, storeId, tokenId, order, itemIndex }) {
+async function enqueueSingleLabelPrintJob(db, { tenantId, storeId, tokenId, order, itemIndex, productId, reprintNonce }) {
   const items = Array.isArray(order?.items) ? order.items : [];
-  const index = Number(itemIndex || 0);
-  if (!Array.isArray(items) || !items.length || !Number.isFinite(index) || index < 0 || index >= items.length) return 0;
-  const selectedItem = items[index];
+  const resolvedProductId = Number(productId || 0);
+  let selectedItem = null;
+  if (Number.isFinite(resolvedProductId) && resolvedProductId > 0) {
+    selectedItem = items.find((item) => Number(item?.product_id || 0) === resolvedProductId) || null;
+  }
+  let index = Number(itemIndex || 0);
+  if (!selectedItem && Number.isFinite(index) && index >= 0 && index < items.length) {
+    selectedItem = items[index];
+  }
+  if (!Array.isArray(items) || !items.length || !selectedItem) return 0;
   if (!selectedItem || Number(selectedItem?.product_id || 0) <= 0) return 0;
   const singleOrder = {
     ...order,
@@ -531,7 +541,13 @@ async function enqueueSingleLabelPrintJob(db, { tenantId, storeId, tokenId, orde
       quantity: 1,
     }],
   };
-  return enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order: singleOrder });
+  return enqueueLabelPrintJobs(db, {
+    tenantId,
+    storeId,
+    tokenId,
+    order: singleOrder,
+    reprintNonce,
+  });
 }
 
 async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipReasons }) {

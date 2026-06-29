@@ -2394,17 +2394,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
-      const itemIndex = Number(req.body?.item_index);
+      const rawItemIndex = Number(req.body?.item_index);
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
-      if (!Number.isFinite(itemIndex) || itemIndex < 0) {
+      if (!Number.isFinite(rawItemIndex) || rawItemIndex < 0) {
         return res.status(400).json({ ok: false, error: "BAD_ITEM_INDEX" });
       }
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (!payload) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
+      const productId = Number(req.body?.product_id);
       const [tokenRows] = await db.query(
         `SELECT id, token
            FROM print_api_tokens
@@ -2418,6 +2419,17 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         return res.status(404).json({ ok: false, error: "PRINT_API_TOKEN_NOT_FOUND" });
       }
       const createdAt = payload.created_at || null;
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      let itemIndex = rawItemIndex;
+      if (Number.isFinite(productId) && productId > 0) {
+        const matchedIndex = items.findIndex((item) => Number(item?.product_id || 0) === productId);
+        if (matchedIndex >= 0) {
+          itemIndex = matchedIndex;
+        }
+      }
+      if (!Number.isFinite(itemIndex) || itemIndex < 0) {
+        return res.status(400).json({ ok: false, error: "BAD_ITEM_INDEX" });
+      }
       const ok = await enqueueSingleLabelPrintJob(db, {
         tenantId,
         storeId,
@@ -2427,6 +2439,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           created_at: createdAt,
         },
         itemIndex,
+        reprintNonce: Date.now() % 1000000,
       });
       if (!ok) {
         return res.status(400).json({ ok: false, error: "PRINT_LABEL_NOT_AVAILABLE" });

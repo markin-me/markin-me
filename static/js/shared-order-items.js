@@ -533,6 +533,17 @@
       ? opts.displayPricing
       : getOrderItemDisplayPricing(item);
     var priceHtml = renderPriceGroup(pricing, opts || {});
+    var canQuickLabelPrint = Number(item && item.production_zone_id || 0) > 0;
+    var quickPrintHtml = canQuickLabelPrint
+      ? (
+          '<button type="button" class="order-item-quick-label-btn icon-btn btn-xs" ' +
+          'data-action="order-print-item-label" data-item-index="' + Number(opts && opts.itemIndex != null ? opts.itemIndex : 0) + '" ' +
+          'data-product-id="' + Number(item && item.product_id || 0) + '" ' +
+          'title="\u041f\u0435\u0447\u0430\u0442\u044c \u044d\u0442\u0438\u043a\u0435\u0442\u043a\u0443">' +
+            '<i class="fas fa-print"></i>' +
+          '</button>'
+        )
+      : "";
     var rowClasses = ["cart-row", "cart-row--readonly-order"];
     var thumbHtml = "";
     var titleText = "";
@@ -544,7 +555,9 @@
       titleText = str(item.name || item.combo_title || "\u041a\u043e\u043c\u0431\u043e").trim() || "\u041a\u043e\u043c\u0431\u043e";
       detailsHtml = renderComboDetails(item);
     } else {
-      thumbHtml = renderProductThumbHtml(item, opts);
+      thumbHtml = renderProductThumbHtml(item, Object.assign({}, opts || {}, {
+        showQuickLabelPrint: false
+      }));
       var details = renderProductDetails(item);
       var productName = str(item.product_name || item.name || "\u0422\u043e\u0432\u0430\u0440").trim() || "\u0422\u043e\u0432\u0430\u0440";
       var titleBase = [details.primaryVariantLine, productName].filter(Boolean).join(" ").trim() || productName;

@@ -3284,7 +3284,7 @@
                 ${comboDetailsHtml}
                 <div class="order-item-footer">
                   <div class="order-item-footer-left">
-                    <button type="button" class="order-item-quick-label-btn" data-action="order-print-item-label" data-item-index="${itemIdx}" title="Печать этикетки">
+                    <button type="button" class="order-item-quick-label-btn" data-action="order-print-item-label" data-item-index="${itemIdx}" data-product-id="${Number(it?.product_id || 0)}" title="Печать этикетки">
                       <i class="fas fa-print"></i>
                     </button>
                   </div>
@@ -3390,7 +3390,7 @@
               ${subHtml}
               <div class="order-item-footer">
                 <div class="order-item-footer-left">
-                  <button type="button" class="order-item-quick-label-btn" data-action="order-print-item-label" data-item-index="${itemIdx}" title="Печать этикетки">
+                  <button type="button" class="order-item-quick-label-btn" data-action="order-print-item-label" data-item-index="${itemIdx}" data-product-id="${Number(it?.product_id || 0)}" title="Печать этикетки">
                     <i class="fas fa-print"></i>
                   </button>
                 </div>
@@ -6902,6 +6902,7 @@
     e.stopPropagation();
 
     const itemIndex = Number(btn.getAttribute("data-item-index") || 0);
+    const productId = Number(btn.getAttribute("data-product-id") || 0);
     if (!Number.isFinite(itemIndex) || itemIndex < 0) return;
 
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
@@ -6919,7 +6920,7 @@
     try {
       await apiJson(`/api/admin/orders/${orderId}/print-item-label`, {
         method: "POST",
-        body: { item_index: itemIndex },
+        body: { item_index: itemIndex, product_id: productId > 0 ? productId : undefined },
       });
     } catch (err) {
       console.error("Failed to print order item label:", err);
