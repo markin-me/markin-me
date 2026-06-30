@@ -2250,6 +2250,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const hasSiteVisibility = Object.prototype.hasOwnProperty.call(req.body || {}, 'site_visibility');
       const hasFulfillmentMode = Object.prototype.hasOwnProperty.call(req.body || {}, 'fulfillment_mode');
       const hasProductionZoneId = Object.prototype.hasOwnProperty.call(req.body || {}, 'production_zone_id');
+      const hasCategoryIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'category_ids');
       const hasStock = Object.prototype.hasOwnProperty.call(req.body || {}, 'stock');
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const price = helpers.numOrNull(req.body.price);
@@ -2292,6 +2293,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           `UPDATE prod_products SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
           params
         );
+      }
+      if (hasCategoryIds) {
+        const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
+        await helpers.setProductCategories(db, tenantId, id, categoryIds);
       }
       if (hasStock) {
         await db.query(
