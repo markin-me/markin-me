@@ -1758,7 +1758,10 @@
       if (!track) return;
       const firstSlide = track.querySelector(".shop-bonus-cards-carousel__slide");
       const step = firstSlide ? firstSlide.getBoundingClientRect().width : track.clientWidth;
-      track.scrollBy({ left: direction * Math.max(1, step), behavior: "smooth" });
+      track.scrollBy({
+        left: direction * Math.max(1, step),
+        behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+      });
     };
     const scrollToIndex = (index) => {
       if (!track) return;
@@ -12301,16 +12304,25 @@ async function initAddresses() {
         const offset = headerVisibleH + chipsH + subcategoryH + 12;
         const rect = scrollTarget.getBoundingClientRect();
         const top = window.scrollY + rect.top - offset;
-        window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+        window.scrollTo({
+          top: Math.max(0, top),
+          behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+        });
       } else {
         const scroller = elProductsScroller;
         const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
         const offset = Math.max(0, padTop || 0) + 75;
         if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
           const top = scrollTarget.offsetTop - offset;
-          elProductsScroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+          elProductsScroller.scrollTo({
+            top: Math.max(0, top),
+            behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+          });
         } else if (typeof scrollTarget.scrollIntoView === "function") {
-          scrollTarget.scrollIntoView({ behavior: "smooth", block: "start" });
+          scrollTarget.scrollIntoView({
+            behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+            block: "start",
+          });
         }
       }
     };
@@ -12375,7 +12387,10 @@ async function initAddresses() {
     const current = scroller.scrollLeft || 0;
     if (Math.abs(current - target) < 2) return;
     if (typeof scroller.scrollTo === "function") {
-      scroller.scrollTo({ left: target, behavior: "smooth" });
+      scroller.scrollTo({
+        left: target,
+        behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+      });
     } else {
       scroller.scrollLeft = target;
     }
@@ -12460,11 +12475,19 @@ async function initAddresses() {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "shop-cat-item";
+      if (document.body?.classList.contains("page-kso")) btn.classList.add("shop-cat-item--kso");
       btn.setAttribute("data-cat-id", String(c.id));
 
       if (Number(state.activeCategoryId) === Number(c.id)) btn.classList.add("is-active");
 
-      btn.appendChild(createCatIcon(c.icon));
+      if (document.body?.classList.contains("page-kso")) {
+        const media = document.createElement("div");
+        media.className = "shop-cat-media";
+        media.appendChild(createCatIcon(c.icon));
+        btn.appendChild(media);
+      } else {
+        btn.appendChild(createCatIcon(c.icon));
+      }
 
       const text = document.createElement("div");
       text.className = "shop-cat-text";
@@ -13309,11 +13332,18 @@ async function initAddresses() {
     for (let i = 0; i < n; i += 1) {
       const item = document.createElement("div");
       item.className = "shop-cat-item shop-cat-item--skeleton";
+      if (document.body?.classList.contains("page-kso")) item.classList.add("shop-cat-item--kso");
       item.setAttribute("aria-hidden", "true");
 
-      const icon = document.createElement("div");
-      icon.className = "shop-cat-icon shop-skeleton-shimmer";
-      item.appendChild(icon);
+      if (document.body?.classList.contains("page-kso")) {
+        const media = document.createElement("div");
+        media.className = "shop-cat-media shop-skeleton-shimmer";
+        item.appendChild(media);
+      } else {
+        const icon = document.createElement("div");
+        icon.className = "shop-cat-icon shop-skeleton-shimmer";
+        item.appendChild(icon);
+      }
 
       const text = document.createElement("div");
       text.className = "shop-cat-text";
@@ -15936,7 +15966,7 @@ function removeFromCartByKey(cartKey, productId) {
       btn.type = "button";
       btn.id = "shopKsoFloatingCartBtn";
       btn.className = "shop-kso-floating-cart-btn hidden";
-      btn.innerHTML = '<i class="fas fa-shopping-cart" aria-hidden="true"></i><span class="shop-kso-floating-cart-btn__badge hidden" id="shopKsoFloatingCartBadge">0</span>';
+      btn.innerHTML = '<span class="shop-kso-floating-cart-btn__badge hidden" id="shopKsoFloatingCartBadge">0</span><span class="shop-kso-floating-cart-btn__content"><i class="fas fa-shopping-cart" aria-hidden="true"></i><span class="shop-kso-floating-cart-btn__label">Корзина</span></span>';
       btn.addEventListener("click", () => {
         if (typeof openCartSheet === "function") openCartSheet();
       });
@@ -15948,13 +15978,14 @@ function removeFromCartByKey(cartKey, productId) {
   function syncKsoFloatingCartButton() {
     const btn = ensureKsoFloatingCartButton();
     if (!btn) return;
-    const count = cartCountTotal();
+    const items = cartItemsResolved();
+    const total = computeCartTotals(items).total;
     const badge = btn.querySelector("#shopKsoFloatingCartBadge");
     if (badge) {
-      badge.textContent = String(count);
-      badge.classList.toggle("hidden", count <= 0);
+      badge.textContent = money(total);
+      badge.classList.toggle("hidden", total <= 0);
     }
-    btn.classList.toggle("hidden", count <= 0);
+    btn.classList.toggle("hidden", total <= 0);
   }
 
 function updateCartBadge() {

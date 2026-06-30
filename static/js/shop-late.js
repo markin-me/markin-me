@@ -9111,7 +9111,10 @@ optionGroups.forEach((group) => {
               const containerRect = scrollContainer.getBoundingClientRect();
               const targetTopInContent = scrollContainer.scrollTop + (targetRect.top - containerRect.top);
               if (typeof scrollContainer.scrollTo === "function") {
-                scrollContainer.scrollTo({ top: targetTopInContent, behavior: "smooth" });
+                scrollContainer.scrollTo({
+                  top: targetTopInContent,
+                  behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+                });
               } else {
                 scrollContainer.scrollTop = targetTopInContent;
               }
@@ -9761,7 +9764,10 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const target = Math.max(0, active.offsetLeft - 12);
     const scroller = active.parentElement;
     if (scroller && typeof scroller.scrollTo === "function") {
-      scroller.scrollTo({ left: target, behavior: "smooth" });
+      scroller.scrollTo({
+        left: target,
+        behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+      });
     } else {
       if (scroller) scroller.scrollLeft = target;
     }
@@ -9777,7 +9783,10 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const delta = headerRect.top - wrapRect.top;
     const offset = isMobileSheet ? 8 : (chipsWrap.offsetHeight || 0) + 8;
     const nextTop = wrap.scrollTop + delta - offset;
-    wrap.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+    wrap.scrollTo({
+      top: Math.max(0, nextTop),
+      behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+    });
   }
 
   function renderFavoriteCategoryChipButtons(targetEl, sections) {
@@ -38456,8 +38465,9 @@ function setBottomNavActive(tab) {
         if (typeof setActiveNav === "function") setActiveNav("menu");
         try {
           const scroller = document.querySelector(".shop-products-panel .panel-body");
-          if (scroller && typeof scroller.scrollTo === "function") scroller.scrollTo({ top: 0, behavior: "smooth" });
-          else window.scrollTo({ top: 0, behavior: "smooth" });
+          const behavior = document.body?.classList.contains("page-kso") ? "auto" : "smooth";
+          if (scroller && typeof scroller.scrollTo === "function") scroller.scrollTo({ top: 0, behavior });
+          else window.scrollTo({ top: 0, behavior });
         } catch {}
       };
 
@@ -39110,6 +39120,7 @@ function setBottomNavActive(tab) {
 
   function initPullToRefresh() {
     if (!isShopPage()) return;
+    if (document.body && document.body.classList.contains("page-kso")) return;
     const PULL_THRESHOLD = 70;
     let pullStartY = null;
     let pullDistance = 0;
@@ -39358,8 +39369,9 @@ function initShopLate() {
               window.requestAnimationFrame(() => {
                 try {
                   const scroller = document.querySelector(".shop-products-panel .panel-body");
-                  if (scroller && typeof scroller.scrollTo === "function") scroller.scrollTo({ top: 0, behavior: "smooth" });
-                  else window.scrollTo({ top: 0, behavior: "smooth" });
+                  const behavior = document.body?.classList.contains("page-kso") ? "auto" : "smooth";
+                  if (scroller && typeof scroller.scrollTo === "function") scroller.scrollTo({ top: 0, behavior });
+                  else window.scrollTo({ top: 0, behavior });
                 } catch {}
               });
             }
@@ -39454,9 +39466,15 @@ function initShopLate() {
           }
 
           if (canScrollPanel && scroller) {
-            scroller.scrollTo({ top: 0, behavior: "smooth" });
+            scroller.scrollTo({
+              top: 0,
+              behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+            });
           } else {
-            window.scrollTo({ top: 0, behavior: "smooth" });
+            window.scrollTo({
+              top: 0,
+              behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
+            });
           }
         });
       }
