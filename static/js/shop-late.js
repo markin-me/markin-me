@@ -6555,10 +6555,11 @@ optionGroups.forEach((group) => {
   async function openProductDetails(productId, { cartKey, prefillItem, onBack, readOnly } = {}) {
     const p = await ensureProduct(productId);
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    const isKsoPage = Boolean(document.body && document.body.classList.contains("page-kso"));
     const hasCustomOnBack = typeof onBack === "function";
     const resolvedOnBack = hasCustomOnBack ? onBack : showCartView;
 
-    if (isMobile) {
+    if (isMobile && !isKsoPage) {
       if (!hasLiveCartSheetContext()) {
         openCartSheet();
       }
@@ -6572,6 +6573,34 @@ optionGroups.forEach((group) => {
         }
         openCartSheetCtx.showSheetProduct(p, sheetArgs);
       }
+      return;
+    }
+
+    if (isKsoPage && window.AppModal && typeof window.AppModal.open === "function") {
+      const modalBody = document.createElement("div");
+      modalBody.className = "shop-kso-product-modal-body";
+      window.AppModal.open({
+        title: p.name || "Товар",
+        content: modalBody,
+        closeOnBackdrop: true,
+        closeOnEsc: true,
+        showCancel: false,
+        showSave: false,
+        onClose: () => {
+          if (window.AppModal?.body) {
+            window.AppModal.body.classList.remove("shop-kso-product-modal-body-host");
+          }
+        },
+      });
+      if (window.AppModal?.body) {
+        window.AppModal.body.classList.add("shop-kso-product-modal-body-host");
+      }
+      await renderProductDetailsInto(modalBody, p, {
+        onBack: () => window.AppModal?.close?.("back"),
+        cartKey,
+        prefillItem,
+        readOnly,
+      });
       return;
     }
 

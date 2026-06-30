@@ -812,6 +812,38 @@
         </div>
       </div>
 
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsKsoPanel">
+        <div class="settings-site-form settings-panel-scroll">
+          <div class="settings-site-field">
+            <label class="field-label">СУБДОМЕН</label>
+            <div class="control-subdomain-wrap">
+              <span class="control-subdomain-prefix" id="ksoSubdomainPrefix"></span>
+              <input class="control-subdomain-input" type="text" placeholder="myshop" id="ksoSubdomainInput" readonly />
+              <span class="control-subdomain-suffix" id="ksoSubdomainSuffix"></span>
+            </div>
+            <div class="settings-subdomain-actions">
+              <button class="btn btn-sm btn-secondary" type="button" id="ksoGoBtn">Перейти на КСО</button>
+              <button class="btn btn-sm btn-icon btn-secondary" type="button" id="ksoCopyLinkBtn" title="Скопировать ссылку">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="panel-footer" id="settingsKsoFooter">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsKsoFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsKsoEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsKsoFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsKsoCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsKsoSaveBtn" type="button">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="info-card settings-right-panel hidden" id="settingsBrandPanel">
         <div class="settings-site-form">
           <div class="settings-site-field">

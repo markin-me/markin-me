@@ -6782,6 +6782,7 @@
     scheduleSyncAllProductCardsFromCart();
     renderCart();
     updateCartBadge();
+    syncKsoFloatingCartButton();
 
     if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
       const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
@@ -15927,6 +15928,35 @@ function removeFromCartByKey(cartKey, productId) {
     renderCart(force);
   }
 
+  function ensureKsoFloatingCartButton() {
+    if (!document.body || !document.body.classList.contains("page-kso")) return null;
+    let btn = document.getElementById("shopKsoFloatingCartBtn");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.type = "button";
+      btn.id = "shopKsoFloatingCartBtn";
+      btn.className = "shop-kso-floating-cart-btn hidden";
+      btn.innerHTML = '<i class="fas fa-shopping-cart" aria-hidden="true"></i><span class="shop-kso-floating-cart-btn__badge hidden" id="shopKsoFloatingCartBadge">0</span>';
+      btn.addEventListener("click", () => {
+        if (typeof openCartSheet === "function") openCartSheet();
+      });
+      document.body.appendChild(btn);
+    }
+    return btn;
+  }
+
+  function syncKsoFloatingCartButton() {
+    const btn = ensureKsoFloatingCartButton();
+    if (!btn) return;
+    const count = cartCountTotal();
+    const badge = btn.querySelector("#shopKsoFloatingCartBadge");
+    if (badge) {
+      badge.textContent = String(count);
+      badge.classList.toggle("hidden", count <= 0);
+    }
+    btn.classList.toggle("hidden", count <= 0);
+  }
+
 function updateCartBadge() {
   const n = cartCountTotal();
 
@@ -15960,6 +15990,7 @@ function updateCartBadge() {
   if (typeof window.handleShopBenefitsOrderStateChange === "function") {
     window.handleShopBenefitsOrderStateChange("updateCartBadge");
   }
+  syncKsoFloatingCartButton();
 }
 
   let clearCartAllBusy = false;

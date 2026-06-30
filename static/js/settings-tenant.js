@@ -1470,6 +1470,10 @@
 
 
 
+  var _ksoUrl = "";
+
+
+
 
 
 
@@ -1554,6 +1558,62 @@
 
 
 
+  function updateKsoLink(tenant) {
+
+
+
+    const subdomain = tenant && tenant.subdomain ? String(tenant.subdomain).trim() : "";
+
+
+
+    const setup = tenant && tenant.domain_setup ? tenant.domain_setup : null;
+
+
+
+    const configuredProtocol = setup && setup.subdomain_protocol ? `${String(setup.subdomain_protocol).trim().replace(/:$/, "")}:` : "";
+
+
+
+    const configuredBaseHost = setup && setup.subdomain_base_host ? String(setup.subdomain_base_host).trim() : "";
+
+
+
+    const fallbackHostname = String(window.location.hostname || "");
+
+
+
+    const fallbackIsLocal = fallbackHostname.endsWith("localhost");
+
+
+
+    const fallbackPort = fallbackIsLocal && window.location.port ? `:${window.location.port}` : "";
+
+
+
+    const fallbackProtocol = window.location.protocol || "http:";
+
+
+
+    const fallbackBaseHost = configuredBaseHost || `${fallbackHostname}${fallbackPort}`;
+
+
+
+    const subdomainProtocol = configuredProtocol || fallbackProtocol;
+
+
+
+    _ksoUrl = subdomain ? `${subdomainProtocol}//${subdomain}.${fallbackBaseHost}/kso` : "";
+
+
+
+    renderKsoLinkParts();
+
+
+
+  }
+
+
+
 
 
 
@@ -1623,6 +1683,74 @@
 
 
     }
+
+
+
+  }
+
+
+
+    function renderKsoLinkParts() {
+
+
+
+    var suffix = document.getElementById("ksoSubdomainSuffix");
+
+
+
+    var prefix = document.getElementById("ksoSubdomainPrefix");
+
+
+
+    var input = document.getElementById("ksoSubdomainInput");
+
+
+
+    var tenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+
+
+
+    if (input) {
+
+
+
+      input.value = String(tenant && tenant.subdomain ? tenant.subdomain : "");
+
+
+
+    }
+
+
+
+    var setup = domainSetup || {};
+
+
+
+    var hostname = String(setup.subdomain_base_host || window.location.hostname || "localhost").trim();
+
+
+
+    var protocol = String(setup.subdomain_protocol || "").trim().replace(/:$/, "");
+
+
+
+    var fallbackProtocol = String(window.location.protocol || "http:").replace(/:$/, "");
+
+
+
+    var isLocal = hostname.endsWith("localhost") && !hostname.includes(":");
+
+
+
+    var port = !setup.subdomain_base_host && isLocal && window.location.port ? ":" + window.location.port : "";
+
+
+
+    if (prefix) prefix.textContent = (protocol || fallbackProtocol) + "://";
+
+
+
+    if (suffix) suffix.textContent = "." + hostname + port + "/kso";
 
 
 
@@ -4513,6 +4641,7 @@
 
 
     renderSubdomainLinkParts();
+    renderKsoLinkParts();
 
 
 
@@ -4961,6 +5090,7 @@
 
 
       updateShopLink(tenant);
+      updateKsoLink(tenant);
       applySiteMenuItemsFromTenant(tenant);
 
 
@@ -7402,6 +7532,7 @@
     const siteCard = document.getElementById("settingsSiteCard");
     const pwaQrCard = document.getElementById("settingsPwaQrCard");
     const domainCard = document.getElementById("settingsDomainCard");
+    const ksoCard = document.getElementById("settingsKsoCard");
 
 
 
@@ -7504,6 +7635,7 @@
 
     const domainPanel = document.getElementById("settingsDomainPanel");
     const pwaQrPanel = document.getElementById("settingsPwaQrPanel");
+    const ksoPanel = document.getElementById("settingsKsoPanel");
 
 
 
@@ -20065,6 +20197,7 @@
 
 
       if (domainPanel) domainPanel.classList.toggle("hidden", tabId !== "domain");
+      if (ksoPanel) ksoPanel.classList.toggle("hidden", tabId !== "kso");
       if (pwaQrPanel) pwaQrPanel.classList.toggle("hidden", tabId !== "pwa-qr");
       if (tabId !== "pwa-qr" && tenantPwaDesignerExpanded) {
         closeTenantPwaDesignerExpanded();
@@ -20183,6 +20316,7 @@
 
 
       toggleRightPanelFooter(domainFooterView, domainFooterEdit, tabId === "domain");
+      toggleRightPanelFooter(ksoFooterView, ksoFooterEdit, tabId === "kso");
 
 
 
@@ -20500,6 +20634,7 @@
 
 
           if (tabId === "domain" && domainCard) domainCard.classList.remove("is-active");
+          if (tabId === "kso" && ksoCard) ksoCard.classList.remove("is-active");
           if (tabId === "pwa-qr" && pwaQrCard) pwaQrCard.classList.remove("is-active");
 
 
@@ -20715,6 +20850,7 @@
 
 
       if (tabId === "domain" && domainCard) domainCard.classList.add("is-active");
+      if (tabId === "kso" && ksoCard) ksoCard.classList.add("is-active");
       if (tabId === "pwa-qr" && pwaQrCard) pwaQrCard.classList.add("is-active");
       if (tabId === "pwa-qr") scheduleTenantPwaDesignerRender();
 
@@ -20922,6 +21058,10 @@
 
 
     const domainFooterEdit = document.getElementById("settingsDomainFooterEdit");
+    const ksoGoBtn = document.getElementById("ksoGoBtn");
+    const ksoCopyLinkBtn = document.getElementById("ksoCopyLinkBtn");
+    const ksoFooterView = document.getElementById("settingsKsoFooterView");
+    const ksoFooterEdit = document.getElementById("settingsKsoFooterEdit");
 
 
 
@@ -20994,6 +21134,16 @@
     }
 
 
+
+    if (ksoCard) {
+
+      ksoCard.addEventListener("click", () => {
+
+        ensureTab("kso", "Касса самообслуживания");
+
+      });
+
+    }
 
     if (pwaQrCard) {
 
@@ -21294,6 +21444,7 @@
         updateTenantCache(data.tenant);
         applyBrandFromTenant(data.tenant);
         updateShopLink(data.tenant);
+        updateKsoLink(data.tenant);
         const nextDomains = normalizeTenantDomains(data.tenant.domains);
         const added = nextDomains.find((item) => item.domain_ascii === toAsciiHostForDisplay(value));
         selectedTenantDomainId = added ? added.id : selectedTenantDomainId;
@@ -21328,6 +21479,7 @@
         updateTenantCache(data.tenant);
         applyBrandFromTenant(data.tenant);
         updateShopLink(data.tenant);
+        updateKsoLink(data.tenant);
         applyDomainSetup(data.tenant);
         siteOriginal = {
           ...siteOriginal,
@@ -21371,6 +21523,7 @@
         updateTenantCache(data.tenant);
         applyBrandFromTenant(data.tenant);
         updateShopLink(data.tenant);
+        updateKsoLink(data.tenant);
         applyDomainSetup(data.tenant);
       }
 
@@ -22109,6 +22262,7 @@
 
 
             updateShopLink(data.tenant);
+            updateKsoLink(data.tenant);
 
 
 
@@ -22185,6 +22339,7 @@
 
 
             updateShopLink(data.tenant);
+            updateKsoLink(data.tenant);
 
 
 
@@ -25227,6 +25382,7 @@
 
 
           updateShopLink(data.tenant);
+          updateKsoLink(data.tenant);
 
 
 
@@ -26692,6 +26848,7 @@
 
 
             updateShopLink(data.tenant);
+            updateKsoLink(data.tenant);
 
 
 
@@ -27139,6 +27296,74 @@
 
 
         ensureTab("site-menu-items", "Пункты меню на сайте");
+
+
+
+      });
+
+
+
+    }
+
+
+
+    if (ksoGoBtn) {
+
+
+
+      ksoGoBtn.addEventListener("click", function () {
+
+
+
+        if (_ksoUrl) window.open(_ksoUrl, "_blank");
+
+
+
+      });
+
+
+
+    }
+
+
+
+    if (ksoCopyLinkBtn) {
+
+
+
+      ksoCopyLinkBtn.addEventListener("click", function () {
+
+
+
+        if (!_ksoUrl) return;
+
+
+
+        navigator.clipboard.writeText(_ksoUrl).then(function () {
+
+
+
+          var icon = ksoCopyLinkBtn.querySelector("i");
+
+
+
+          if (icon) {
+
+
+
+            icon.className = "fas fa-check";
+
+
+
+            setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
+
+
+
+          }
+
+
+
+        });
 
 
 

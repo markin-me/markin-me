@@ -1,0 +1,11 @@
+<%- include('../layouts/shop', {
+  pageTitle: pageTitle,
+  tenant: tenant,
+  tenantId: tenantId,
+  pageClass: 'page-shop page-kso',
+  leftPartial: '../partials/shop/left',
+  centerPartial: '../partials/shop/center',
+  rightPartial: '../partials/shop/right',
+  extraPartial: '../partials/shop/mobileNav',
+  pageScripts: ['/static/js/shared-order-items.js?v=20260421a', '/static/js/shop-core.js?v=20260507r', '/static/js/shop-install.js?v=20260408c']
+}) %>

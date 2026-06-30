@@ -1063,6 +1063,25 @@ async function renderShop(req, res) {
   }
 }
 
+async function renderKso(req, res) {
+  try {
+    const tenant = req._resolvedTenant || await resolveTenant(req);
+    const mapConfig = normalizeTenantMapConfig(tenant);
+    const tenantView = tenant && typeof tenant === 'object'
+      ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
+      : tenant;
+
+    const pageTitle = (tenant && (tenant.site_name || tenant.name))
+      ? `${tenant.site_name || tenant.name} - КСО`
+      : 'Касса самообслуживания';
+    const tenantId = tenantView && tenantView.id ? tenantView.id : 1;
+    res.render('pages/kso', { pageTitle, tenant: tenantView, tenantId });
+  } catch (err) {
+    console.error('Ошибка загрузки страницы KSO:', err);
+    res.status(500).send('Ошибка загрузки страницы');
+  }
+}
+
 async function renderShopInstallPage(req, res) {
   try {
     const tenant = req._resolvedTenant || await resolveTenant(req);
@@ -1633,6 +1652,9 @@ app.use(async (req, res, next) => {
     const tenant = await findTenantByHost(getRequestRoutingHost(req));
     if (tenant) {
       req._resolvedTenant = tenant;
+      if (req.path === '/kso') {
+        return renderKso(req, res);
+      }
       if (req.path === '/install-app' || req.path === '/shop/install-app') {
         return renderShopInstallPage(req, res);
       }
@@ -1767,6 +1789,7 @@ app.get('/dashboard/settings', (req, res) =>
 app.get('/install-app', renderShopInstallPage);
 app.get('/shop/install-app', renderShopInstallPage);
 app.get('/shop', renderShop);
+app.get('/kso', renderKso);
 
 app.get('/auth', (req, res) => res.redirect('/login'));
 
