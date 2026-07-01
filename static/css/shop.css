@@ -25870,6 +25870,132 @@ body.page-kso .sp-sub-line{
   min-height:auto;
 }
 
+body.page-kso .sp-card .qty-pill{
+  --qty-pill-h: 98px;
+  --qty-pill-side: 98px;
+  gap: 18px;
+  height: 98px;
+}
+
+body.page-kso .sp-card .qty-pill__btn{
+  font-size: 38px;
+}
+
+body.page-kso .sp-card .qty-pill__center{
+  font-size: 36px;
+  font-weight: 900;
+  padding: 0 22px;
+  gap: 20px;
+  min-height: 98px;
+  height: 98px;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-current-price{
+  font-size: 44px;
+  font-weight: 900;
+}
+
+body.page-kso .sp-card .sp-current-price{
+  font-size: 44px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-cart-total{
+  font-size: 44px;
+  font-weight: 900;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-cart-old-total{
+  font-size: 18px;
+}
+
+body.page-kso .sp-card .sp-old-price{
+  font-size: 24px;
+  font-weight: 800;
+}
+
+body.page-kso .sp-card .sp-unit-price-label,
+body.page-kso .sp-card .qty-pill .sp-unit-price-label{
+  display:none !important;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-unit-price-label{
+  display:none !important;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-price-stack{
+  font-size: 44px;
+  transform: translateY(0);
+  gap: 2px;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-price-stack .sp-old-price{
+  font-size: 24px;
+  font-weight: 800;
+}
+
+body.page-kso .sp-card .sp-bottom{
+  flex: 0 0 124px;
+  min-height: 124px;
+  padding-top: 14px;
+}
+
+body.page-kso .sp-card .qty-pill__btn{
+  min-width: 104px;
+  min-height: 104px;
+  width: 104px;
+  height: 104px;
+  font-size: 40px;
+}
+
+body.page-kso .sp-card .qty-pill__btn i{
+  font-size: 44px;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-cart-old-total{
+  font-size: 15px;
+}
+
+body.page-kso .sp-card .qty-pill--big{
+  --qty-pill-h: 98px;
+  --qty-pill-side: 98px;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-price-stack .sp-current-price{
+  font-size: 40px !important;
+  font-weight: 900 !important;
+  line-height: 1 !important;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-price-stack .sp-old-price{
+  font-size: 22px !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-cart-total{
+  font-size: 40px !important;
+  font-weight: 900 !important;
+}
+
+body.page-kso .sp-card .qty-pill__center .sp-cart-old-total{
+  font-size: 20px !important;
+  font-weight: 800 !important;
+}
+
+body.page-kso .sp-card .qty-pill__btn{
+  min-width: 92px !important;
+  min-height: 92px !important;
+  width: 92px !important;
+  height: 92px !important;
+  font-size: 36px !important;
+}
+
+body.page-kso .sp-card .qty-pill__btn i{
+  font-size: 40px !important;
+}
+
   .shop-footer{
     position:fixed;
     left:0;right:0;bottom:0;
@@ -26736,4 +26862,80 @@ body.page-shop-install{
 .shop-bonus-program-modal-confirm:disabled{
   opacity:.68;
   cursor:default;
+}
+
+/* KSO hard overrides: final win for product action row */
+body.page-kso .page-col-center .sp-card .sp-bottom{
+  flex: 0 0 82px !important;
+  min-height: 82px !important;
+  padding-top: 8px !important;
+}
+
+body.page-kso .page-col-center .sp-card .qty-pill{
+  --qty-pill-h: 60px !important;
+  --qty-pill-side: 54px !important;
+  height: 60px !important;
+  gap: 6px !important;
+}
+
+body.page-kso .page-col-center .sp-card .qty-pill__center{
+  height: 60px !important;
+  min-height: 60px !important;
+  padding: 0 4px !important;
+  font-size: 26px !important;
+  gap: 4px !important;
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
+}
+
+body.page-kso .page-col-center .sp-card .qty-pill__btn{
+  width: 54px !important;
+  min-width: 54px !important;
+  height: 54px !important;
+  min-height: 54px !important;
+  font-size: 28px !important;
+}
+
+body.page-kso .page-col-center .sp-card .qty-pill__btn i{
+  font-size: 28px !important;
+}
+
+body.page-kso .page-col-center .sp-card .qty-pill__center .sp-current-price{
+  font-size: 30px !important;
+  line-height: 1 !important;
+  font-weight: 900 !important;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+body.page-kso .page-col-center .sp-card .qty-pill__center .sp-cart-total{
+  font-size: 30px !important;
+  line-height: 1 !important;
+  font-weight: 900 !important;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+body.page-kso .page-col-center .sp-card .qty-pill__center .sp-old-price{
+  font-size: 15px !important;
+  line-height: 1 !important;
+  font-weight: 800 !important;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+body.page-kso .page-col-center .sp-card .qty-pill__center .sp-cart-old-total{
+  font-size: 15px !important;
+  line-height: 1 !important;
+  font-weight: 800 !important;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+body.page-kso .page-col-center .sp-card .sp-unit-price-label{
+  display:none !important;
 }
