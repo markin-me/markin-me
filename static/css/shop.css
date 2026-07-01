@@ -3936,6 +3936,8 @@ body.page-kso .shop-products-panel .panel-body{
 body.page-kso .shop-cats-list,
 body.page-kso .shop-categories-list{
   gap:14px;
+  padding-top: var(--kso-cat-focus-pad, 0px);
+  padding-bottom: var(--kso-cat-focus-pad, 0px);
 }
 
 body.page-kso .shop-cat-item{
@@ -3949,14 +3951,15 @@ body.page-kso .shop-cat-item{
   transform:scale(1);
   transform-origin:center;
   transition:transform 220ms ease, opacity 220ms ease;
+  will-change: transform, opacity;
 }
 
 body.page-kso .shop-cat-item:hover{
-  transform:scale(1.01);
+  transform:scale(1.03);
 }
 
 body.page-kso .shop-cat-item.is-active{
-  transform:scale(1.06);
+  transform:scale(1.14);
   z-index:1;
 }
 
@@ -3994,6 +3997,10 @@ body.page-kso .shop-cat-item.is-active .shop-cat-media{
   border-color:var(--primary-45);
   background:color-mix(in srgb, var(--color-surface), var(--primary-12) 10%);
   box-shadow:0 0 0 3px var(--primary-12), 0 10px 24px rgba(255, 122, 0, .12);
+}
+
+body.page-kso .shop-cat-item:not(.is-active){
+  opacity:.78;
 }
 
 body.page-kso .shop-cat-media .shop-cat-icon{

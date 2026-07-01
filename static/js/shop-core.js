@@ -4170,6 +4170,7 @@
   let categoryHeaders = [];
   let isProgrammaticCategoryScroll = false;
   let categoryScrollRaf = null;
+  let categoryFocusRaf = null;
   const STOCK_SYNC_INTERVAL_MS = 120000;
   let stockEventsSource = null;
   let stockEventsStoreId = null;
@@ -4922,6 +4923,79 @@
     }
 
     updateCatalogSubcategoryChipsActive(state.activeCategoryId);
+    if (document.body?.classList.contains("page-kso")) {
+      scheduleCategoryFocusUpdate();
+      scrollActiveCategoryToCenter();
+    }
+  }
+
+  function getCategoriesScrollHost() {
+    return elCatsList ? (elCatsList.closest(".panel-body") || elCatsList.parentElement || null) : null;
+  }
+
+  function syncCategoryFocusPadding() {
+    if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
+    const host = getCategoriesScrollHost();
+    if (!host) return;
+    const firstItem = elCatsList.querySelector(".shop-cat-item");
+    const hostHeight = Number(host.clientHeight || 0);
+    const itemHeight = Number(firstItem?.offsetHeight || 0);
+    if (!(hostHeight > 0) || !(itemHeight > 0)) return;
+    const pad = Math.max(0, Math.round((hostHeight / 2) - (itemHeight / 2)));
+    host.style.setProperty("--kso-cat-focus-pad", `${pad}px`);
+  }
+
+  function scheduleCategoryFocusUpdate() {
+    if (!document.body?.classList.contains("page-kso")) return;
+    if (categoryFocusRaf) return;
+    categoryFocusRaf = requestAnimationFrame(() => {
+      categoryFocusRaf = null;
+      syncCategoryFocusPadding();
+      updateCategoryFocusState();
+    });
+  }
+
+  function scrollActiveCategoryToCenter() {
+    if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
+    const host = getCategoriesScrollHost();
+    const active = elCatsList.querySelector(".shop-cat-item.is-active");
+    if (!host || !active) return;
+    if (typeof active.scrollIntoView === "function") {
+      active.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+      return;
+    }
+
+    const activeCenter = active.offsetTop + (active.offsetHeight / 2);
+    const targetTop = Math.max(0, activeCenter - (host.clientHeight / 2));
+    if (Math.abs((host.scrollTop || 0) - targetTop) < 2) return;
+    host.scrollTop = targetTop;
+  }
+
+  function updateCategoryFocusState() {
+    if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
+    const host = getCategoriesScrollHost();
+    if (!host) return;
+
+    const items = Array.from(elCatsList.querySelectorAll(".shop-cat-item"));
+    if (!items.length) return;
+
+    const hostRect = host.getBoundingClientRect ? host.getBoundingClientRect() : null;
+    if (!hostRect) return;
+    const hostCenter = hostRect.top + (hostRect.height / 2);
+    const maxDistance = Math.max(1, hostRect.height * 0.7);
+
+    items.forEach((item) => {
+      const rect = item.getBoundingClientRect ? item.getBoundingClientRect() : null;
+      if (!rect) return;
+      const center = rect.top + (rect.height / 2);
+      const distance = Math.abs(center - hostCenter);
+      const ratio = Math.max(0, 1 - (distance / maxDistance));
+      const scale = 0.78 + (ratio * 0.30);
+      const opacity = 0.42 + (ratio * 0.58);
+      item.style.transform = `scale(${scale.toFixed(3)})`;
+      item.style.opacity = opacity.toFixed(3);
+      item.style.zIndex = String(Math.round(ratio * 10));
+    });
   }
 
   function bindMobileHeaderCollapseOnScroll() {
@@ -12301,9 +12375,10 @@ async function initAddresses() {
         const chipsH = elCatChipsWrap?.getBoundingClientRect ? elCatChipsWrap.getBoundingClientRect().height : 0;
         const subcategoryRow = elProductsGrid?.querySelector?.(`.shop-category-subcategory-row[data-parent-cat-id="${id}"]`);
         const subcategoryH = subcategoryRow?.getBoundingClientRect ? subcategoryRow.getBoundingClientRect().height : 0;
-        const offset = headerVisibleH + chipsH + subcategoryH + 12;
         const rect = scrollTarget.getBoundingClientRect();
-        const top = window.scrollY + rect.top - offset;
+        const visibleTop = headerVisibleH + chipsH + subcategoryH + 12;
+        const targetCenterOffset = Math.max(0, (window.innerHeight / 2) - (rect.height / 2) - 200);
+        const top = window.scrollY + rect.top - visibleTop - targetCenterOffset;
         window.scrollTo({
           top: Math.max(0, top),
           behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
@@ -12311,9 +12386,9 @@ async function initAddresses() {
       } else {
         const scroller = elProductsScroller;
         const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
-        const offset = Math.max(0, padTop || 0) + 75;
         if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
-          const top = scrollTarget.offsetTop - offset;
+          const targetCenterOffset = Math.max(0, (scroller.clientHeight / 2) - (scrollTarget.offsetHeight / 2) - 200);
+          const top = scrollTarget.offsetTop - Math.max(0, padTop || 0) - targetCenterOffset;
           elProductsScroller.scrollTo({
             top: Math.max(0, top),
             behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
@@ -12399,6 +12474,7 @@ async function initAddresses() {
   function updateActiveCategoryFromScroll() {
     if (!categoryHeaders.length) return;
     if (isProgrammaticCategoryScroll) return;
+    const isKsoPage = document.body?.classList.contains("page-kso");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     let containerTop = 0;
@@ -12414,7 +12490,10 @@ async function initAddresses() {
         : 0;
       const scroller = elProductsScroller;
       const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
-      offset = Math.max(0, padTop || 0) + 105;
+      const baseOffset = Math.max(0, padTop || 0) + 105;
+      offset = isKsoPage
+        ? Math.max(0, (elProductsScroller?.clientHeight || 0) * 0.5)
+        : baseOffset;
     }
 
     let activeHeader = categoryHeaders[0];
@@ -12466,6 +12545,15 @@ async function initAddresses() {
         });
       });
     }
+
+    if (document.body?.classList.contains("page-kso")) {
+      const host = getCategoriesScrollHost();
+      if (host && !host.dataset.categoryFocusBound) {
+        host.addEventListener("scroll", scheduleCategoryFocusUpdate, { passive: true });
+        window.addEventListener("resize", scheduleCategoryFocusUpdate);
+        host.dataset.categoryFocusBound = "1";
+      }
+    }
   }
 
   function renderCategories() {
@@ -12506,6 +12594,12 @@ async function initAddresses() {
 
       elCatsList.appendChild(btn);
     });
+
+    if (document.body?.classList.contains("page-kso")) {
+      syncCategoryFocusPadding();
+      scrollActiveCategoryToCenter();
+      scheduleCategoryFocusUpdate();
+    }
   }
 
   function renderCategoryChips() {
