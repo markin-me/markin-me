@@ -14032,20 +14032,23 @@ async function initAddresses() {
         const bottom = document.createElement("div");
         bottom.className = "sp-bottom";
         const minPrice = Number(combo.min_price) || 0;
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "sp-combo-btn";
-        btn.innerHTML = `<span class="sp-combo-btn__text">от ${catalogMoneyNoKopeks(minPrice)} ₽</span><span class="sp-combo-btn__arrow" aria-hidden="true">›</span>`;
-        bottom.appendChild(btn);
+        const { pill, btnPlus } = createQtyPill({
+          variant: "buy",
+          centerHtml: `<span class="sp-current-price">от ${catalogMoneyNoKopeks(minPrice)} ₽</span>`,
+          minusEnabled: false,
+          plusEnabled: true,
+        });
+        pill.classList.add("is-empty", "sp-combo-pill");
+        bottom.appendChild(pill);
         info.appendChild(bottom);
         card.appendChild(info);
 
-        btn.addEventListener("click", (e) => {
+        btnPlus.addEventListener("click", (e) => {
           e.stopPropagation();
           openComboDetails(comboId);
         });
         card.addEventListener("click", (e) => {
-          if (!e.target.closest(".sp-combo-btn")) {
+          if (!e.target.closest(".qty-pill")) {
             openComboDetails(comboId);
           }
         });
@@ -14054,7 +14057,7 @@ async function initAddresses() {
         };
         card.addEventListener("pointerenter", warmComboDetailsOnIntent, { passive: true, once: true });
         card.addEventListener("touchstart", warmComboDetailsOnIntent, { passive: true, once: true });
-        btn.addEventListener("focus", warmComboDetailsOnIntent, { once: true });
+        btnPlus.addEventListener("focus", warmComboDetailsOnIntent, { once: true });
 
         frag.appendChild(card);
         totalProducts += 1;

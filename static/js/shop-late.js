@@ -9280,6 +9280,7 @@ optionGroups.forEach((group) => {
   async function openComboDetails(comboId, { cartKey, prefillItem, onBack } = {}) {
     const safeComboId = Number(comboId || 0);
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    const isKsoPage = Boolean(document.body && document.body.classList.contains("page-kso"));
     const hasCustomOnBack = typeof onBack === "function";
     let data = null;
     try {
@@ -9298,6 +9299,29 @@ optionGroups.forEach((group) => {
       return;
     }
     if (!data) return;
+
+    if (isKsoPage && window.AppModal && typeof window.AppModal.open === "function") {
+      const modalBody = document.createElement("div");
+      modalBody.className = "shop-kso-combo-modal-body";
+      window.AppModal.open({
+        title: data.title || "Комбо",
+        content: modalBody,
+        closeOnBackdrop: true,
+        closeOnEsc: true,
+        showCancel: false,
+        showSave: false,
+        onClose: () => {
+          if (window.AppModal?.body) {
+            window.AppModal.body.classList.remove("shop-kso-combo-modal-body-host");
+          }
+        },
+      });
+      if (window.AppModal?.body) {
+        window.AppModal.body.classList.add("shop-kso-combo-modal-body-host");
+      }
+      renderComboDetailsInto(modalBody, data, { onBack: () => window.AppModal?.close?.("back"), cartKey, prefillItem });
+      return;
+    }
 
     if (isMobile) {
       if (!hasLiveCartSheetContext()) {

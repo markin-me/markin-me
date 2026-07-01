@@ -139,14 +139,24 @@
   </div>
 
   <!-- Универсальная модалка (на мобиле = bottom sheet) -->
-  <%- include('../partials/shop/companyChat') %>
+  <% const isKsoPage = typeof pageClass === 'string' && pageClass.split(/\s+/).includes('page-kso'); %>
+  <% if (!isKsoPage) { %>
+    <%- include('../partials/shop/companyChat') %>
+  <% } %>
   <%- include('../partials/modal') %>
 
   <% if (typeof extraPartial !== 'undefined' && extraPartial) { %>
     <%- include(extraPartial) %>
   <% } %>
 
-  <script>window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260507l') %>";window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js?typing_hotfix=14&v=20260412a') %>";</script>
+  <script>
+    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260507l') %>";
+    <% if (!isKsoPage) { %>
+      window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js?typing_hotfix=14&v=20260412a') %>";
+    <% } else { %>
+      window.__shopChatUrl = "";
+    <% } %>
+  </script>
   <script src="<%= assetUrl('/static/js/theme.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/appModal.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/shop-pwa-presence.js?v=20260407a') %>" defer></script>

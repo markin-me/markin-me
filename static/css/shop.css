@@ -27071,6 +27071,19 @@ body.page-kso .page-col-center .shop-products-grid > .shop-category-subcategory-
   font-size:20px !important;
   line-height:1 !important;
 }
+body.page-kso .page-col-center .sp-card--combo .shop-combo-old{
+  font-size:18px !important;
+  line-height:1 !important;
+}
+body.page-kso .page-col-center .sp-card--combo .sp-bottom{
+  flex: 0 0 82px !important;
+  min-height: 82px !important;
+  padding-top: 8px !important;
+  display:flex !important;
+  align-items:flex-end !important;
+  justify-content:space-between !important;
+  gap:16px !important;
+}
 body.page-kso .center-stack > .panel:first-child{
   display:none !important;
 }

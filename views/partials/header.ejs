@@ -8,6 +8,7 @@
         </div>
         <div class="logo-text" id="headerBrandName">По щам</div>
         <% const hasCitySelector = (typeof showCitySelector !== 'undefined' && showCitySelector === true); %>
+        <% const isKsoPage = typeof pageClass === 'string' && pageClass.split(/\s+/).includes('page-kso'); %>
         <% const tenantChatWidgetRaw = (typeof tenant !== 'undefined' && tenant) ? tenant.chat_widget_enabled : undefined; %>
         <% const tenantChatWidgetNorm = String(tenantChatWidgetRaw == null ? '' : tenantChatWidgetRaw).trim().toLowerCase(); %>
         <% const isCompanyChatEnabled = !(
@@ -47,7 +48,7 @@
             <i class="fas fa-tags"></i>
             <span class="shop-benefits-badge hidden" id="shopCartBenefitsBadge">0</span>
           </button>
-          <% if (hasCitySelector) { %>
+          <% if (hasCitySelector && !isKsoPage) { %>
             <button class="header-btn shop-company-chat-btn<%= isCompanyChatEnabled ? '' : ' hidden' %>" id="shopHeaderCompanyChatOpenBtn" type="button" aria-label="Чат с компанией" title="Чат с компанией"<% if (!isCompanyChatEnabled) { %> aria-hidden="true" tabindex="-1"<% } %>>
               <i class="fas fa-comment-dots" aria-hidden="true"></i>
               <span class="shop-company-chat-unread hidden" id="shopHeaderCompanyChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>
