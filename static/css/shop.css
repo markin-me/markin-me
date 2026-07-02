@@ -3817,13 +3817,58 @@ body.page-orders #clientAddresses .shop-address-actions{
 }
 
 body.page-kso .app-modal{
-  width:min(920px, calc(100vw - 48px));
-  height:min(900px, calc(100vh - 48px));
+  width:min(720px, calc(100vw - 48px));
+  height:min(1280px, calc(100vh - 48px));
   max-height:calc(100vh - 48px);
 }
 
 body.page-kso .app-modal-body{
   padding:0 16px 16px;
+}
+
+body.page-kso .app-modal-header{
+  justify-content:flex-end;
+  min-height:64px;
+  padding:10px 16px;
+}
+
+body.page-kso .app-modal-header .app-modal-title,
+body.page-kso .app-modal-header .modal-title,
+body.page-kso .app-modal-header [data-modal-title],
+body.page-kso .app-modal-header #shopSheetBackBtn,
+body.page-kso .app-modal-header #shopSheetFavBtn,
+body.page-kso .app-modal-header .app-modal-back-btn,
+body.page-kso .app-modal-header .shop-sheet-fav,
+body.page-kso .cart-desktop-fav,
+body.page-kso #shopCartFavBtn,
+body.page-kso #shopNavFav{
+  display:none !important;
+}
+
+body.page-kso .app-modal-header .shop-kso-modal-close-btn{
+  width:auto;
+  min-width:142px;
+  height:48px;
+  padding:0 18px;
+  border-radius:16px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  color:#1f2937;
+  display:inline-flex !important;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  font-size:16px;
+  line-height:1;
+  font-weight:900;
+  box-shadow:
+    0 14px 28px rgba(17, 24, 39, .12),
+    0 6px 14px rgba(17, 24, 39, .08);
+}
+
+body.page-kso .app-modal-header .shop-kso-modal-close-btn i{
+  font-size:18px;
+  line-height:1;
 }
 
 body.page-kso{
@@ -3912,6 +3957,223 @@ body.page-kso .shop-kso-floating-cart-btn__label{
   font-weight:900;
   line-height:1;
   white-space:nowrap;
+}
+
+body.page-kso .shop-kso-floating-cart-wrap{
+  position:fixed;
+  right:24px;
+  bottom:24px;
+  z-index:220;
+  display:flex;
+  align-items:flex-end;
+  gap:12px;
+  width:auto;
+  height:auto;
+}
+
+body.page-kso .shop-kso-floating-cart-wrap.hidden{
+  display:none;
+}
+
+body.page-kso.kso-method-pending .shop-kso-floating-cart-wrap{
+  display:none !important;
+}
+
+body.page-kso .shop-kso-floating-cart-wrap .shop-kso-floating-cart-btn{
+  position:relative;
+  right:auto;
+  bottom:auto;
+}
+
+body.page-kso .shop-kso-floating-cart-clear{
+  position:relative;
+  right:auto;
+  bottom:auto;
+  min-width:102px;
+  min-height:102px;
+  padding:18px 26px;
+  border-radius:30px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  color:#1f2937;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  box-shadow:
+    0 18px 36px rgba(17, 24, 39, .12),
+    0 8px 18px rgba(17, 24, 39, .08),
+    inset 0 1px 0 rgba(255, 255, 255, .18);
+  cursor:pointer;
+  flex:0 0 auto;
+  transition:all var(--dur-fast) var(--ease-smooth);
+}
+
+body.page-kso .shop-kso-floating-cart-clear.hidden{
+  display:none;
+}
+
+body.page-kso .shop-kso-floating-cart-clear:hover{
+  border-color:#d1d5db;
+  background:#fff;
+  box-shadow:
+    0 20px 40px rgba(17, 24, 39, .14),
+    0 10px 20px rgba(17, 24, 39, .1);
+}
+
+body.page-kso .shop-kso-floating-cart-clear.is-confirm{
+  width:auto;
+  min-width:250px;
+  border-radius:30px;
+  padding:18px 26px;
+  font-size:18px;
+  font-weight:900;
+  white-space:nowrap;
+}
+
+body.page-kso .shop-kso-floating-cart-clear i{
+  font-size:30px;
+  line-height:1;
+}
+
+body.page-kso .shop-cart-items-section__clear{
+  display:none !important;
+}
+
+body.page-kso .shop-cart-item-container .cart-swipe-actions,
+body.page-kso .shop-cart-item-row .cart-desktop-actions{
+  display:none !important;
+}
+
+body.page-kso .shop-cart-item-row{
+  position:relative;
+}
+
+body.page-kso .shop-kso-cart-item-remove{
+  position:absolute;
+  top:16px;
+  right:16px;
+  width:48px;
+  height:48px;
+  border-radius:16px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  color:#1f2937;
+  display:inline-grid;
+  place-items:center;
+  padding:0;
+  box-shadow:
+    0 14px 28px rgba(17, 24, 39, .12),
+    0 6px 14px rgba(17, 24, 39, .08);
+  cursor:pointer;
+  z-index:2;
+}
+
+body.page-kso .shop-kso-cart-item-remove i{
+  font-size:18px;
+  line-height:1;
+}
+
+body.page-kso .shop-kso-method-gate{
+  position:fixed;
+  left:0;
+  right:0;
+  top:var(--header-height, 64px);
+  bottom:0;
+  z-index:210;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:32px;
+  background:#f3f4f6;
+}
+
+body.page-kso .shop-kso-method-gate.hidden{
+  display:none;
+}
+
+body.page-kso .shop-kso-method-gate__panel{
+  width:min(980px, 100%);
+  display:grid;
+  gap:34px;
+  justify-items:center;
+}
+
+body.page-kso .shop-kso-method-gate__title{
+  font-size:42px;
+  line-height:1.1;
+  font-weight:900;
+  color:#142033;
+  text-align:center;
+}
+
+body.page-kso .shop-kso-method-gate__text{
+  max-width:620px;
+  font-size:22px;
+  line-height:1.35;
+  font-weight:700;
+  color:#4b5563;
+  text-align:center;
+}
+
+body.page-kso .shop-kso-method-gate__grid{
+  width:100%;
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));
+  gap:28px;
+}
+
+body.page-kso .shop-kso-method-card{
+  min-height:280px;
+  border:0;
+  border-radius:30px;
+  background:#fff;
+  color:#142033;
+  box-shadow:0 18px 42px rgba(17,24,39,.12);
+  display:grid;
+  place-items:center;
+  align-content:center;
+  gap:24px;
+  cursor:pointer;
+}
+
+body.page-kso .shop-kso-method-card__icon{
+  width:118px;
+  height:118px;
+  border-radius:30px;
+  display:grid;
+  place-items:center;
+  background:linear-gradient(135deg, #ff9d49, #ff6a12);
+  color:#fff;
+  font-size:54px;
+}
+
+body.page-kso .shop-kso-method-card__icon img{
+  width:72px;
+  height:72px;
+  object-fit:contain;
+  display:block;
+}
+
+body.page-kso .shop-kso-method-card__title{
+  font-size:30px;
+  line-height:1.15;
+  font-weight:900;
+  text-align:center;
+}
+
+body.page-kso .shop-cart-benefits-service-section,
+body.page-kso .shop-checkout-benefits-trigger,
+body.page-kso .shop-checkout-benefits-content,
+body.page-kso .shop-checkout-benefits-section,
+body.page-kso .shop-mobile-benefits-promo-wrap,
+body.page-kso .shop-mobile-cart-actions-benefits,
+body.page-kso .shop-mobile-cart-actions-gift-claim{
+  display:none !important;
+}
+
+body.page-kso .order-summary-discount,
+body.page-kso .order-summary-discount-breakdown{
+  display:none !important;
 }
 
 body.page-kso .page-col-center,
@@ -11894,6 +12156,10 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
   }
   body.page-shop .page-col-left{
     display: none !important;
+  }
+  body.page-kso .page-col-left{
+    display: flex !important;
+    min-width: 0;
   }
   body.page-shop .page-col-center{
     display: flex !important;

@@ -2194,6 +2194,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
           name: 'show_on_site',
           sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'РџРѕРєР°Р·С‹РІР°С‚СЊ СЃРїРѕСЃРѕР± РЅР° СЃР°Р№С‚Рµ'",
         },
+        {
+          name: 'show_on_kso',
+          sql: "TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Show delivery type on KSO'",
+        },
       ];
 
       for (const column of requiredColumns) {
@@ -2239,10 +2243,11 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       table: 'order_delivery_types',
       hasFinal: false,
       defaultField: 'is_default',
-      detailFields: ['require_client_data', 'show_on_site'],
+      detailFields: ['require_client_data', 'show_on_site', 'show_on_kso'],
       patchFields: {
         require_client_data: (value) => (helpers.toBool(value, true) ? 1 : 0),
         show_on_site: (value) => (helpers.toBool(value, true) ? 1 : 0),
+        show_on_kso: (value) => (helpers.toBool(value, false) ? 1 : 0),
       }
     },
     'order-time-options': {
@@ -4516,7 +4521,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       await ensureOrderDeliveryTypeColumns();
 
       const [rows] = await db.query(
-        `SELECT id, code, title, icon, sort, is_active, is_default, require_client_data, show_on_site
+        `SELECT id, code, title, icon, sort, is_active, is_default, require_client_data, show_on_site, show_on_kso
          FROM order_delivery_types
          WHERE tenant_id=? AND store_id=1
          ORDER BY sort ASC, id ASC`,

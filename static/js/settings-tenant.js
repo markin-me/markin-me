@@ -47346,6 +47346,30 @@
 
 
 
+        switches.appendChild(createSwitch("На КСО", Number(item.show_on_kso ?? 0) === 1, async (checked) => {
+
+
+
+          const data = await updateSettingsItem(type, item.id, { show_on_kso: checked ? 1 : 0 });
+
+
+
+          if (!data || !data.ok) {
+
+
+
+            alert("Не удалось сохранить видимость на КСО.");
+
+
+
+          }
+
+
+
+        }));
+
+
+
       }
 
 
@@ -47386,7 +47410,7 @@
 
 
 
-        switches.appendChild(createSwitch("На сайте", Number(item.show_on_site ?? 1) === 1, async (checked) => {
+        switches.appendChild(createSwitch("Витрина", Number(item.show_on_site ?? 1) === 1, async (checked) => {
 
 
 

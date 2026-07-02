@@ -8303,7 +8303,15 @@
     return favoritesCacheState.items.slice();
   }
 
+  function isKsoFavoritesDisabledPage() {
+    return Boolean(document.body && document.body.classList.contains("page-kso"));
+  }
+
   async function fetchFavoritesList({ force = false } = {}) {
+    if (isKsoFavoritesDisabledPage()) {
+      resetFavoritesCache();
+      return [];
+    }
     const token = getCustomerToken();
     if (!token) {
       resetFavoritesCache();
@@ -8321,6 +8329,11 @@
   }
 
   async function addFavoriteItemSnapshot(item) {
+    if (isKsoFavoritesDisabledPage()) {
+      const err = new Error("KSO_FAVORITES_DISABLED");
+      err.httpStatus = 403;
+      throw err;
+    }
     const token = getCustomerToken();
     if (!token) {
       const err = new Error("UNAUTHORIZED");
@@ -8343,6 +8356,7 @@
   }
 
   async function removeFavoriteById(favoriteId) {
+    if (isKsoFavoritesDisabledPage()) return false;
     const id = Number(favoriteId || 0);
     if (!Number.isFinite(id) || id <= 0) return false;
     const token = getCustomerToken();
@@ -9454,7 +9468,7 @@
     }
     cartHeaderOrderConfigPromise = (async () => {
       try {
-        const resp = await fetch("/api/public/order-config");
+        const resp = await fetch(document.body?.classList.contains("page-kso") ? "/api/public/order-config?kso=1" : "/api/public/order-config");
         const data = await resp.json().catch(() => null);
         if (resp.ok && data?.ok && data.data) {
           const mergedConfig = existingConfig && typeof existingConfig === "object"
@@ -10029,6 +10043,7 @@
 
   function updateCartModeHeaderUi(root = document) {
     const scope = root && typeof root.querySelectorAll === "function" ? root : document;
+    const isKsoPage = Boolean(document.body && document.body.classList.contains("page-kso"));
     const mode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
     const line = str(getCartHeaderAddressLine() || "").trim();
     const text = line || getCartModeHeaderPlaceholder(mode);
@@ -10054,6 +10069,10 @@
     headers.push(...scope.querySelectorAll(".shop-cart-mode-header"));
 
     headers.forEach((headerEl) => {
+      if (isKsoPage) {
+        headerEl.classList.add("hidden");
+        return;
+      }
       const addressBtn = headerEl.querySelector(".shop-cart-mode-header__address");
       const iconEl = headerEl.querySelector(".shop-cart-mode-header__address-icon");
       const textEl = headerEl.querySelector(".shop-cart-mode-header__address-text");
@@ -10162,6 +10181,10 @@
   function buildCartModeHeader() {
     const section = document.createElement("section");
     section.className = "shop-cart-mode-header";
+    if (document.body && document.body.classList.contains("page-kso")) {
+      section.classList.add("hidden");
+      section.setAttribute("aria-hidden", "true");
+    }
 
     const toggleWrap = document.createElement("div");
     toggleWrap.className = "shop-cart-mode-header__toggle-wrap";
@@ -10601,6 +10624,7 @@ function setSheetHeaderMode(
 ) {
   const header = document.querySelector(".app-modal-header");
   if (!header) return;
+  const isKsoModal = Boolean(document.body && document.body.classList.contains("page-kso"));
 
   // Удаляем предыдущий бейдж скидки
   const oldBadge = header.querySelector(".shop-sheet-discount-badge");
@@ -10624,6 +10648,21 @@ function setSheetHeaderMode(
     header.querySelector(".app-modal-title") ||
     header.querySelector(".modal-title") ||
     header.querySelector("[data-modal-title]");
+
+  if (isKsoModal) {
+    const sheetBackBtn = header.querySelector("#shopSheetBackBtn");
+    if (sheetBackBtn) sheetBackBtn.remove();
+    const sheetFavBtn = header.querySelector("#shopSheetFavBtn");
+    if (sheetFavBtn) sheetFavBtn.remove();
+    if (closeBtn) {
+      closeBtn.classList.remove("hidden");
+      closeBtn.classList.add("shop-kso-modal-close-btn");
+      closeBtn.innerHTML = '<i class="fas fa-xmark" aria-hidden="true"></i><span>Закрыть</span>';
+      closeBtn.setAttribute("aria-label", "Закрыть");
+    }
+    if (titleEl) titleEl.classList.add("hidden");
+    return;
+  }
 
   // ensure back btn (left)
   let backBtn = header.querySelector("#shopSheetBackBtn");
@@ -14747,9 +14786,12 @@ async function initAddresses() {
           if (navigator.vibrate) navigator.vibrate(20);
           deleteCartItemWithAnimation(swipeContainer, null, key);
         });
-        swipeActions.appendChild(favBtn);
-        swipeActions.appendChild(deleteBtn);
-        swipeContainer.appendChild(swipeActions);
+        const isKsoCartRow = Boolean(document.body && document.body.classList.contains("page-kso"));
+        if (!isKsoCartRow) {
+          swipeActions.appendChild(favBtn);
+          swipeActions.appendChild(deleteBtn);
+          swipeContainer.appendChild(swipeActions);
+        }
 
         const row = document.createElement("div");
         row.className = "cart-row cart-swipe-content cart-row--combo shop-cart-item-row";
@@ -14858,19 +14900,33 @@ async function initAddresses() {
           e.stopPropagation();
           deleteCartItemWithAnimation(swipeContainer, null, key);
         });
-        desktopActions.appendChild(desktopFavBtn);
-        desktopActions.appendChild(desktopDeleteBtn);
-        bindFavoriteButtonsForCartRow(
-          [favBtn, desktopFavBtn],
-          () => buildFavoriteSnapshotFromResolvedItem(item, { oldLineTotal: lineTotalOld }),
-          {
-            afterToggle: () => {
-              if (swipeContainer.classList.contains("is-swiped")) {
-                resetSwipe(swipeContainer);
-              }
-            },
-          }
-        );
+        if (!isKsoCartRow) {
+          desktopActions.appendChild(desktopFavBtn);
+          desktopActions.appendChild(desktopDeleteBtn);
+          bindFavoriteButtonsForCartRow(
+            [favBtn, desktopFavBtn],
+            () => buildFavoriteSnapshotFromResolvedItem(item, { oldLineTotal: lineTotalOld }),
+            {
+              afterToggle: () => {
+                if (swipeContainer.classList.contains("is-swiped")) {
+                  resetSwipe(swipeContainer);
+                }
+              },
+            }
+          );
+        }
+        if (isKsoCartRow) {
+          const ksoRemoveBtn = document.createElement("button");
+          ksoRemoveBtn.type = "button";
+          ksoRemoveBtn.className = "shop-kso-cart-item-remove";
+          ksoRemoveBtn.innerHTML = '<i class="fas fa-xmark" aria-hidden="true"></i>';
+          ksoRemoveBtn.setAttribute("aria-label", "Удалить");
+          ksoRemoveBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            deleteCartItemWithAnimation(swipeContainer, null, key);
+          });
+          row.appendChild(ksoRemoveBtn);
+        }
         const updateComboQty = () => {
           const cartItem = state.cart.find((x) => x.key === key);
           const newQty = Math.max(1, Number(cartItem?.qty || 0));
@@ -14952,7 +15008,7 @@ async function initAddresses() {
         mid.appendChild(bottomRow);
         row.appendChild(mid);
 
-        initSwipeGesture(swipeContainer, row, null, key);
+        if (!isKsoCartRow) initSwipeGesture(swipeContainer, row, null, key);
         swipeContainer.appendChild(row);
         appendCartNode(swipeContainer);
         return;
@@ -15009,6 +15065,7 @@ async function initAddresses() {
       const swipeContainer = document.createElement("div");
       swipeContainer.className = "cart-swipe-container shop-cart-item-container";
       swipeContainer.setAttribute("data-cart-key", String(key || ""));
+      const isKsoCartRow = Boolean(document.body && document.body.classList.contains("page-kso"));
 
       // ?????? ???????? (?? ?????????)
       const swipeActions = document.createElement("div");
@@ -15036,9 +15093,11 @@ async function initAddresses() {
         deleteBtn.style.opacity = "0.5";
       }
 
-      swipeActions.appendChild(favBtn);
-      swipeActions.appendChild(deleteBtn);
-      swipeContainer.appendChild(swipeActions);
+      if (!isKsoCartRow) {
+        swipeActions.appendChild(favBtn);
+        swipeActions.appendChild(deleteBtn);
+        swipeContainer.appendChild(swipeActions);
+      }
 
       // ???????? ?????????? ????????
       const row = document.createElement("div");
@@ -15341,23 +15400,25 @@ async function initAddresses() {
         desktopDeleteBtn.style.opacity = "0.5";
       }
 
-      desktopActions.appendChild(desktopFavBtn);
-      desktopActions.appendChild(desktopDeleteBtn);
-      bindFavoriteButtonsForCartRow(
-        [favBtn, desktopFavBtn],
-        () =>
-          buildFavoriteSnapshotFromResolvedItem(item, {
-            pricing,
-            oldLineTotal: showOld ? originalLineTotal : null,
-          }),
-        {
-          afterToggle: () => {
-            if (swipeContainer.classList.contains("is-swiped")) {
-              resetSwipe(swipeContainer);
-            }
-          },
-        }
-      );
+      if (!isKsoCartRow) {
+        desktopActions.appendChild(desktopFavBtn);
+        desktopActions.appendChild(desktopDeleteBtn);
+        bindFavoriteButtonsForCartRow(
+          [favBtn, desktopFavBtn],
+          () =>
+            buildFavoriteSnapshotFromResolvedItem(item, {
+              pricing,
+              oldLineTotal: showOld ? originalLineTotal : null,
+            }),
+          {
+            afterToggle: () => {
+              if (swipeContainer.classList.contains("is-swiped")) {
+                resetSwipe(swipeContainer);
+              }
+            },
+          }
+        );
+      }
       const bottomRow = document.createElement("div");
       bottomRow.className = "cart-bottom-row";
       const bottomMain = document.createElement("div");
@@ -15371,11 +15432,29 @@ async function initAddresses() {
       bottomRow.appendChild(bottomControls);
       mid.appendChild(bottomRow);
       row.appendChild(mid);
+      if (isKsoCartRow) {
+        const ksoRemoveBtn = document.createElement("button");
+        ksoRemoveBtn.type = "button";
+        ksoRemoveBtn.className = "shop-kso-cart-item-remove";
+        ksoRemoveBtn.innerHTML = '<i class="fas fa-xmark" aria-hidden="true"></i>';
+        ksoRemoveBtn.setAttribute("aria-label", "Удалить");
+        ksoRemoveBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (!allowRemove) return;
+          deleteCartItemWithAnimation(swipeContainer, product.id, key);
+        });
+        if (!allowRemove) {
+          ksoRemoveBtn.disabled = true;
+          ksoRemoveBtn.style.pointerEvents = "none";
+          ksoRemoveBtn.style.opacity = "0.5";
+        }
+        row.appendChild(ksoRemoveBtn);
+      }
 
       swipeContainer.appendChild(row);
 
       // ????????????? ?????-??????
-      initSwipeGesture(swipeContainer, row, product.id, key);
+      if (!isKsoCartRow) initSwipeGesture(swipeContainer, row, product.id, key);
 
       appendCartNode(swipeContainer);
     });
@@ -16057,6 +16136,40 @@ function removeFromCartByKey(cartKey, productId) {
 
   function ensureKsoFloatingCartButton() {
     if (!document.body || !document.body.classList.contains("page-kso")) return null;
+    let wrap = document.getElementById("shopKsoFloatingCartWrap");
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = "shopKsoFloatingCartWrap";
+      wrap.className = "shop-kso-floating-cart-wrap hidden";
+      document.body.appendChild(wrap);
+    }
+    let clearBtn = document.getElementById("shopKsoFloatingCartClearBtn");
+    if (!clearBtn) {
+      clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.id = "shopKsoFloatingCartClearBtn";
+      clearBtn.className = "shop-kso-floating-cart-clear hidden";
+      clearBtn.innerHTML = '<i class="fas fa-trash-can" aria-hidden="true"></i>';
+      clearBtn.title = "Очистить корзину";
+      clearBtn.setAttribute("aria-label", "Очистить корзину");
+      wrap.appendChild(clearBtn);
+      if (typeof attachTwoStepClear === "function") {
+        attachTwoStepClear(clearBtn, async () => {
+          const cleared = await clearCartAll();
+          if (cleared === false) return;
+          if (typeof closeShopSheetIfOpen === "function") {
+            closeShopSheetIfOpen();
+          } else if (window.AppModal?.isOpen?.()) {
+            window.AppModal.close("sheet");
+          }
+        }, {
+          defaultHtml: '<i class="fas fa-trash-can" aria-hidden="true"></i>',
+          confirmText: "Очистить корзину?",
+          compactCheckout: false,
+          resetMs: 5000,
+        });
+      }
+    }
     let btn = document.getElementById("shopKsoFloatingCartBtn");
     if (!btn) {
       btn = document.createElement("button");
@@ -16067,7 +16180,7 @@ function removeFromCartByKey(cartKey, productId) {
       btn.addEventListener("click", () => {
         if (typeof openCartSheet === "function") openCartSheet();
       });
-      document.body.appendChild(btn);
+      wrap.appendChild(btn);
     }
     return btn;
   }
@@ -16075,6 +16188,8 @@ function removeFromCartByKey(cartKey, productId) {
   function syncKsoFloatingCartButton() {
     const btn = ensureKsoFloatingCartButton();
     if (!btn) return;
+    const wrap = document.getElementById("shopKsoFloatingCartWrap");
+    const clearBtn = document.getElementById("shopKsoFloatingCartClearBtn");
     const items = cartItemsResolved();
     const total = computeCartTotals(items).total;
     const badge = btn.querySelector("#shopKsoFloatingCartBadge");
@@ -16082,8 +16197,149 @@ function removeFromCartByKey(cartKey, productId) {
       badge.textContent = money(total);
       badge.classList.toggle("hidden", total <= 0);
     }
-    btn.classList.toggle("hidden", total <= 0);
+    const isCartOpen = !!window.AppModal?.isOpen?.()
+      && !!openCartSheetCtx
+      && !!window.AppModal?.body?.classList?.contains("shop-cart-sheet-body");
+    const shouldShowCart = total > 0;
+    const shouldShowClear = shouldShowCart && isCartOpen;
+    btn.classList.toggle("hidden", !shouldShowCart);
+    if (wrap) wrap.classList.toggle("hidden", !shouldShowCart);
+    if (clearBtn) {
+      clearBtn.classList.toggle("hidden", !shouldShowClear);
+      clearBtn.classList.toggle("is-confirm", shouldShowClear && clearBtn.classList.contains("is-confirm"));
+      if (!shouldShowClear && typeof clearBtn.reset === "function") clearBtn.reset();
+    }
   }
+  window.syncKsoFloatingCartButton = syncKsoFloatingCartButton;
+
+  const KSO_IDLE_RESET_MS = 5 * 60 * 1000;
+  let ksoIdleResetTimer = 0;
+  let ksoIdleEventsBound = false;
+
+  function isKsoPage() {
+    return Boolean(document.body && document.body.classList.contains("page-kso"));
+  }
+
+  function resolveKsoIconClass(iconRaw) {
+    const raw = String(iconRaw || "").trim();
+    if (!raw) return "fas fa-utensils";
+    if (raw.includes("/") || raw.startsWith("http")) return "";
+    if (raw.includes(" ")) return raw;
+    if (raw.startsWith("fa-")) return `fas ${raw}`;
+    return `fas fa-${raw}`;
+  }
+
+  function getKsoMethodFallbackIcon(method) {
+    const code = String(method?.code || "").trim();
+    if (code === "delivery") return "fas fa-truck";
+    if (code === "pickup") return "fas fa-store";
+    if (code === "takeaway") return "fas fa-bag-shopping";
+    return "fas fa-utensils";
+  }
+
+  function renderKsoMethodIcon(target, method) {
+    if (!target) return;
+    const iconRaw = String(method?.icon || "").trim();
+    const isUrl = iconRaw.includes("/") || iconRaw.startsWith("http");
+    if (isUrl) {
+      const img = document.createElement("img");
+      img.src = iconRaw;
+      img.alt = "";
+      target.appendChild(img);
+      return;
+    }
+    const icon = document.createElement("i");
+    icon.className = resolveKsoIconClass(iconRaw || getKsoMethodFallbackIcon(method));
+    icon.setAttribute("aria-hidden", "true");
+    target.appendChild(icon);
+  }
+
+  function getKsoMethods() {
+    const config = getShopOrderConfigSnapshot();
+    return (Array.isArray(config?.methods) ? config.methods : [])
+      .filter((method) => Number(method?.show_on_kso || 0) === 1);
+  }
+
+  function setKsoSelectedMethod(method) {
+    const code = String(method?.code || "").trim();
+    if (!code) return;
+    window.__ksoSelectedMethodCode = code;
+    window._deliveryMode = code === "delivery" ? "delivery" : "pickup";
+    const draft = loadCheckoutDraft();
+    draft.method_code = code;
+    draft.method_user_selected = true;
+    saveCheckoutDraft(draft);
+    document.body.classList.remove("kso-method-pending");
+    const overlay = document.getElementById("shopKsoMethodGate");
+    if (overlay) overlay.classList.add("hidden");
+    resetKsoIdleTimer();
+  }
+
+  function showKsoMethodGate() {
+    if (!isKsoPage()) return;
+    let overlay = document.getElementById("shopKsoMethodGate");
+    if (!overlay) {
+      overlay = document.createElement("section");
+      overlay.id = "shopKsoMethodGate";
+      overlay.className = "shop-kso-method-gate";
+      document.body.appendChild(overlay);
+    }
+    const methods = getKsoMethods();
+    document.body.classList.add("kso-method-pending");
+    overlay.classList.remove("hidden");
+    if (!methods.length) {
+      overlay.innerHTML = '<div class="shop-kso-method-gate__panel"><div class="shop-kso-method-gate__title">КСО не настроено</div><div class="shop-kso-method-gate__text">Включите способы получения для КСО в настройках.</div></div>';
+      return;
+    }
+    overlay.innerHTML = '<div class="shop-kso-method-gate__panel"><div class="shop-kso-method-gate__title">Как получить заказ?</div><div class="shop-kso-method-gate__grid"></div></div>';
+    const grid = overlay.querySelector(".shop-kso-method-gate__grid");
+    methods.forEach((method) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-kso-method-card";
+      btn.innerHTML = `<span class="shop-kso-method-card__icon"></span><span class="shop-kso-method-card__title">${escapeHtml(method?.title || method?.code || "")}</span>`;
+      renderKsoMethodIcon(btn.querySelector(".shop-kso-method-card__icon"), method);
+      btn.addEventListener("click", () => setKsoSelectedMethod(method));
+      grid.appendChild(btn);
+    });
+  }
+
+  async function resetKsoToMethodGate() {
+    if (!isKsoPage()) return;
+    window.__ksoSelectedMethodCode = "";
+    try {
+      if (window.AppModal?.isOpen?.()) window.AppModal.close("kso-idle");
+    } catch {}
+    try {
+      await clearCartAll();
+    } catch {}
+    showKsoMethodGate();
+  }
+
+  function resetKsoIdleTimer() {
+    if (!isKsoPage()) return;
+    window.clearTimeout(ksoIdleResetTimer);
+    ksoIdleResetTimer = window.setTimeout(() => {
+      void resetKsoToMethodGate();
+    }, KSO_IDLE_RESET_MS);
+  }
+
+  function bindKsoIdleReset() {
+    if (!isKsoPage() || ksoIdleEventsBound) return;
+    ksoIdleEventsBound = true;
+    ["pointerdown", "click", "keydown", "scroll", "touchstart"].forEach((eventName) => {
+      window.addEventListener(eventName, resetKsoIdleTimer, { passive: true, capture: true });
+    });
+    resetKsoIdleTimer();
+  }
+
+  function initKsoMethodGate() {
+    if (!isKsoPage()) return;
+    window.__ksoSelectedMethodCode = "";
+    bindKsoIdleReset();
+    showKsoMethodGate();
+  }
+  window.initKsoMethodGate = initKsoMethodGate;
 
 function updateCartBadge() {
   const n = cartCountTotal();
@@ -16276,7 +16532,7 @@ function updateCartBadge() {
       btn.title = confirmText;
       btn.setAttribute("aria-label", confirmText);
       if (timer) clearTimeout(timer);
-      timer = setTimeout(reset, 6500);
+      timer = setTimeout(reset, Number(options.resetMs) > 0 ? Number(options.resetMs) : 6500);
       setMobileCheckoutCompact(true);
     };
 
@@ -17050,7 +17306,7 @@ function updateCartBadge() {
 
   async function loadShopBootstrap() {
     if (shopBootstrapPromise) return shopBootstrapPromise;
-    shopBootstrapPromise = apiJson("/api/public/shop/bootstrap")
+    shopBootstrapPromise = apiJson(document.body?.classList.contains("page-kso") ? "/api/public/shop/bootstrap?kso=1" : "/api/public/shop/bootstrap")
       .then((json) => applyShopBootstrapData(json?.data || null))
       .finally(() => {
         shopBootstrapPromise = null;
@@ -18623,6 +18879,7 @@ async function initCore() {
     }
 
     await orderConfigBootstrapPromise;
+    if (typeof initKsoMethodGate === "function") initKsoMethodGate();
 
     if (productsReadyForFirstPaint) {
       if (hasSnapshotPaint && elProductsGrid?.querySelector(".sp-card[data-product-id]")) {

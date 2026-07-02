@@ -1679,6 +1679,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           name: 'show_on_site',
           sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'РџРѕРєР°Р·С‹РІР°С‚СЊ СЃРїРѕСЃРѕР± РЅР° СЃР°Р№С‚Рµ'",
         },
+        {
+          name: 'show_on_kso',
+          sql: "TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Show delivery type on KSO'",
+        },
       ];
 
       for (const column of requiredColumns) {
@@ -17200,6 +17204,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   async function loadPublicOrderConfigPayload(req) {
     const tenantId = helpers.getTenantId(req);
     const storeId = helpers.getStoreId(req);
+    const isKsoConfig = String(req.query?.kso || '').trim() === '1';
     await ensureOrderDeliveryTypeColumns();
 
       const [statuses] = await db.query(
@@ -17220,9 +17225,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       // Р СџР вЂўР В Р вЂўР ВР СљР вЂўР СњР С›Р вЂ™Р С’Р СњР С›: order_delivery_types (Р В±РЎвЂ№Р Р†РЎв‚¬Р В°РЎРЏ order_methods)
       const [methods] = await db.query(
-        `SELECT id, code, title, icon, sort, is_default, require_client_data
+        `SELECT id, code, title, icon, sort, is_default, require_client_data, show_on_site, show_on_kso
          FROM order_delivery_types
-         WHERE tenant_id=? AND store_id=? AND is_active=1 AND show_on_site=1
+         WHERE tenant_id=? AND store_id=? AND is_active=1 AND ${isKsoConfig ? 'show_on_kso=1' : 'show_on_site=1'}
          ORDER BY is_default DESC, sort ASC, id ASC`,
         [tenantId, storeId]
       );

@@ -6595,6 +6595,7 @@ optionGroups.forEach((group) => {
       if (window.AppModal?.body) {
         window.AppModal.body.classList.add("shop-kso-product-modal-body-host");
       }
+      applyKsoModalHeaderUi();
       await renderProductDetailsInto(modalBody, p, {
         onBack: () => window.AppModal?.close?.("back"),
         cartKey,
@@ -9319,6 +9320,7 @@ optionGroups.forEach((group) => {
       if (window.AppModal?.body) {
         window.AppModal.body.classList.add("shop-kso-combo-modal-body-host");
       }
+      applyKsoModalHeaderUi();
       renderComboDetailsInto(modalBody, data, { onBack: () => window.AppModal?.close?.("back"), cartKey, prefillItem });
       return;
     }
@@ -9422,6 +9424,26 @@ optionGroups.forEach((group) => {
       || header.querySelector(".modal-close")
       || header.querySelector(".btn-close")
       || null;
+  }
+
+  function applyKsoModalHeaderUi() {
+    if (!document.body || !document.body.classList.contains("page-kso")) return;
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return;
+    header.classList.add("shop-kso-modal-header");
+    const titleEl =
+      header.querySelector(".app-modal-title") ||
+      header.querySelector(".modal-title") ||
+      header.querySelector("[data-modal-title]");
+    if (titleEl) titleEl.classList.add("hidden");
+    header.querySelectorAll("#shopSheetBackBtn, #shopSheetFavBtn, .app-modal-back-btn").forEach((el) => el.remove());
+    const closeBtn = getShopModalCloseButton();
+    if (closeBtn) {
+      closeBtn.classList.remove("hidden");
+      closeBtn.classList.add("shop-kso-modal-close-btn");
+      closeBtn.innerHTML = '<i class="fas fa-xmark" aria-hidden="true"></i><span>Закрыть</span>';
+      closeBtn.setAttribute("aria-label", "Закрыть");
+    }
   }
 
   function setShopModalHeaderShellMode(active = false) {
@@ -23170,6 +23192,9 @@ function openCartSheet() {
   if (openCartSheetCtx && openCartSheetCtx.wrapEl) {
     if (typeof setActiveNav === "function") setActiveNav("cart");
     setAppModalMode("shop");
+    if (typeof window.syncKsoFloatingCartButton === "function") {
+      window.syncKsoFloatingCartButton();
+    }
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'cart';
     sheetNavigationState.data = null;
@@ -23199,9 +23224,16 @@ function openCartSheet() {
         if (typeof setActiveNav === "function") {
           setActiveNav(openCartSheetCtx?.sourceScreen === "home" ? "home" : "menu");
         }
+        if (typeof window.syncKsoFloatingCartButton === "function") {
+          window.syncKsoFloatingCartButton();
+        }
       },
     });
     if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
+    applyKsoModalHeaderUi();
+    if (typeof window.syncKsoFloatingCartButton === "function") {
+      window.syncKsoFloatingCartButton();
+    }
     setCartSheetScreenMode("cart");
     if (openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
       const renderSignature = buildCartSheetRenderSignature();
@@ -23214,6 +23246,9 @@ function openCartSheet() {
       }
     }
     if (typeof openCartSheetCtx.showSheetCart === "function") openCartSheetCtx.showSheetCart();
+    if (typeof window.syncKsoFloatingCartButton === "function") {
+      window.syncKsoFloatingCartButton();
+    }
     return;
   }
 
@@ -23954,6 +23989,9 @@ function openCartSheet() {
   clearBtn.className = "shop-cart-clear";
   clearBtn.textContent = "Г—";
   clearBtn.title = "Очистить корзину";
+  if (document.body?.classList.contains("page-kso")) {
+    clearBtn.classList.add("hidden");
+  }
 
   const btn = document.createElement("button");
   btn.type = "button";
@@ -24139,6 +24177,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
+  applyKsoModalHeaderUi();
 
   openCartSheetCtx = {
     wrapEl: wrap,
@@ -24170,6 +24209,9 @@ function applySheetAddressTitle(backMode = "cart") {
     benefitsPromoInputValue: "",
     benefitsPromoDirty: false,
   };
+  if (typeof window.syncKsoFloatingCartButton === "function") {
+    window.syncKsoFloatingCartButton();
+  }
 
   void syncCartSheetUpsellWhenReady(openCartSheetCtx);
   setCartSheetFooterMode(openCartSheetCtx, items.length ? "cart" : "hidden");
@@ -25815,6 +25857,7 @@ function renderSheetAddressList() {
 
   // --- Delivery / Pickup toggle: header helpers ---
   function showHeaderToggle() {
+    if (document.body?.classList.contains("page-kso")) return;
     const header = document.querySelector(".app-modal-header");
     if (!header) return;
     const titleEl = header.querySelector(".app-modal-title");
@@ -35486,6 +35529,14 @@ function setBottomNavActive(tab) {
       icon: x.icon,
       require_client_data: Number(x?.require_client_data ?? 1),
     }));
+    const ksoSelectedMethodCode = document.body?.classList.contains("page-kso")
+      ? str(window.__ksoSelectedMethodCode || "").trim()
+      : "";
+    if (ksoSelectedMethodCode && methods.some((method) => method.code === ksoSelectedMethodCode)) {
+      draft.method_code = ksoSelectedMethodCode;
+      draft.method_user_selected = true;
+      saveCheckoutDraft(draft);
+    }
     const methodUserSelected = Boolean(draft.method_user_selected);
     // Determine preferred method: from draft, or from delivery mode toggle
     let preferredMethodCode = methodUserSelected ? draft.method_code : null;
@@ -39354,7 +39405,9 @@ function initShopLate() {
         });
       }
       bindNavToggle(elNavProfile, "profile", () => openProfileSheet());
-      bindNavToggle(elNavFav, "favorites", openFavoritesSheet);
+      if (!document.body?.classList.contains("page-kso")) {
+        bindNavToggle(elNavFav, "favorites", openFavoritesSheet);
+      }
 
       // Обработчик кнопки "назад" на Android (popstate)
       // Добавляем запись в историю при открытии bottom sheet, чтобы можно было обработать "назад"
