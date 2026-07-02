@@ -14494,13 +14494,22 @@ async function initAddresses() {
         effectiveOriginalLineTotal = Number(effectiveLineStateOrTotal || 0);
       }
     }
-    return applyCartPriceGroupState(
+    const meta = applyCartPriceGroupState(
       priceGroupEl.querySelector(".cart-price"),
       priceGroupEl.querySelector(".cart-old"),
       priceGroupEl.querySelector(".cart-discount-badge"),
       effectiveLineStateOrTotal,
       effectiveOriginalLineTotal
     );
+    const badgeEl = priceGroupEl.querySelector(".cart-discount-badge");
+    if (badgeEl && Array.isArray(priceGroupEl.__cartBadgeMirrors)) {
+      priceGroupEl.__cartBadgeMirrors.forEach((mirror) => {
+        if (!mirror) return;
+        mirror.textContent = badgeEl.textContent;
+        mirror.className = badgeEl.className;
+      });
+    }
+    return meta;
   }
 
   window.setShopCartPriceGroupDomState = setCartPriceGroupDomState;
@@ -14525,9 +14534,25 @@ async function initAddresses() {
     const badgeEl = document.createElement("span");
     badgeEl.className = "sp-discount-badge sp-discount-badge--cart cart-discount-badge hidden";
     wrap.appendChild(badgeEl);
+    wrap.__cartBadgeMirrors = [];
 
-    const sync = (nextLineTotal, nextOriginalLineTotal) =>
-      applyCartPriceGroupState(currentEl, oldEl, badgeEl, nextLineTotal, nextOriginalLineTotal);
+    const syncMirrors = () => {
+      wrap.__cartBadgeMirrors.forEach((mirror) => {
+        if (!mirror) return;
+        mirror.textContent = badgeEl.textContent;
+        mirror.className = badgeEl.className;
+      });
+    };
+    const sync = (nextLineTotal, nextOriginalLineTotal) => {
+      const meta = applyCartPriceGroupState(currentEl, oldEl, badgeEl, nextLineTotal, nextOriginalLineTotal);
+      syncMirrors();
+      return meta;
+    };
+    const createBadgeMirror = () => {
+      const mirror = badgeEl.cloneNode(true);
+      wrap.__cartBadgeMirrors.push(mirror);
+      return mirror;
+    };
 
     sync(lineTotal, originalLineTotal);
 
@@ -14536,8 +14561,26 @@ async function initAddresses() {
       currentEl,
       oldEl,
       badgeEl,
+      createBadgeMirror,
       sync,
     };
+  }
+
+  function syncCartRowMinusButton(btnMinus, qty) {
+    if (!btnMinus) return;
+    const shouldRemove = Number(qty || 0) <= 1;
+    btnMinus.classList.toggle("is-remove", shouldRemove);
+    btnMinus.innerHTML = shouldRemove
+      ? '<i class="fas fa-trash-can" aria-hidden="true"></i>'
+      : "\u2212";
+    btnMinus.setAttribute("aria-label", shouldRemove ? "\u0423\u0434\u0430\u043b\u0438\u0442\u044c" : "\u0423\u043c\u0435\u043d\u044c\u0448\u0438\u0442\u044c");
+  }
+
+  function buildCartRowQtyLabel(qty) {
+    const label = document.createElement("div");
+    label.className = "cart-row-qty-label";
+    label.textContent = `${Math.max(0, Number(qty || 0))} \u0448\u0442`;
+    return label;
   }
 
   function bindCartItemsSectionControls(rootEl) {
@@ -14786,8 +14829,8 @@ async function initAddresses() {
           if (navigator.vibrate) navigator.vibrate(20);
           deleteCartItemWithAnimation(swipeContainer, null, key);
         });
-        const isKsoCartRow = Boolean(document.body && document.body.classList.contains("page-kso"));
-        if (!isKsoCartRow) {
+        const useLegacyCartRowActions = false;
+        if (useLegacyCartRowActions) {
           swipeActions.appendChild(favBtn);
           swipeActions.appendChild(deleteBtn);
           swipeContainer.appendChild(swipeActions);
@@ -14877,6 +14920,7 @@ async function initAddresses() {
           minusEnabled: qty > 0,
           plusEnabled: !comboPlusBlockedByLimit,
         });
+        syncCartRowMinusButton(btnMinus, qty);
         const comboInitialLineState = getImmediateShopCartLineState(key, getImmediateShopCartPricingSnapshot());
         const comboPriceState = comboInitialLineState
           ? createCartPriceGroup(
@@ -14900,7 +14944,7 @@ async function initAddresses() {
           e.stopPropagation();
           deleteCartItemWithAnimation(swipeContainer, null, key);
         });
-        if (!isKsoCartRow) {
+        if (useLegacyCartRowActions) {
           desktopActions.appendChild(desktopFavBtn);
           desktopActions.appendChild(desktopDeleteBtn);
           bindFavoriteButtonsForCartRow(
@@ -14915,23 +14959,16 @@ async function initAddresses() {
             }
           );
         }
-        if (isKsoCartRow) {
-          const ksoRemoveBtn = document.createElement("button");
-          ksoRemoveBtn.type = "button";
-          ksoRemoveBtn.className = "shop-kso-cart-item-remove";
-          ksoRemoveBtn.innerHTML = '<i class="fas fa-xmark" aria-hidden="true"></i>';
-          ksoRemoveBtn.setAttribute("aria-label", "Удалить");
-          ksoRemoveBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            deleteCartItemWithAnimation(swipeContainer, null, key);
-          });
-          row.appendChild(ksoRemoveBtn);
-        }
+        const comboQtyLabel = buildCartRowQtyLabel(qty);
+        center.textContent = "";
+        center.appendChild(comboPriceState.wrap);
+        center.appendChild(comboQtyLabel);
         const updateComboQty = () => {
           const cartItem = state.cart.find((x) => x.key === key);
           const newQty = Math.max(1, Number(cartItem?.qty || 0));
-          center.textContent = String(newQty);
+          comboQtyLabel.textContent = `${newQty} \u0448\u0442`;
           t.textContent = `${newQty} x ${comboTitleText}`;
+          syncCartRowMinusButton(btnMinus, newQty);
           // Минус не блокируем на qty = 1 — он должен работать как удаление
           btnMinus.classList.toggle("is-disabled", newQty <= 0);
           const pricingSnapshot = getImmediateShopCartPricingSnapshot();
@@ -14996,19 +15033,22 @@ async function initAddresses() {
         }
         const bottomRow = document.createElement("div");
         bottomRow.className = "cart-bottom-row";
+        const bottomBadges = document.createElement("div");
+        bottomBadges.className = "cart-bottom-row__badges";
+        if (comboPriceState.badgeEl) bottomBadges.appendChild(comboPriceState.createBadgeMirror());
+        bottomRow.appendChild(bottomBadges);
         const bottomMain = document.createElement("div");
         bottomMain.className = "cart-bottom-row__main";
-        bottomMain.appendChild(comboPriceState.wrap);
         bottomRow.appendChild(bottomMain);
         const bottomControls = document.createElement("div");
         bottomControls.className = "cart-bottom-row__controls";
         bottomControls.appendChild(q);
         bottomControls.appendChild(desktopActions);
         bottomRow.appendChild(bottomControls);
-        mid.appendChild(bottomRow);
         row.appendChild(mid);
+        row.appendChild(bottomRow);
 
-        if (!isKsoCartRow) initSwipeGesture(swipeContainer, row, null, key);
+        if (useLegacyCartRowActions) initSwipeGesture(swipeContainer, row, null, key);
         swipeContainer.appendChild(row);
         appendCartNode(swipeContainer);
         return;
@@ -15065,7 +15105,7 @@ async function initAddresses() {
       const swipeContainer = document.createElement("div");
       swipeContainer.className = "cart-swipe-container shop-cart-item-container";
       swipeContainer.setAttribute("data-cart-key", String(key || ""));
-      const isKsoCartRow = Boolean(document.body && document.body.classList.contains("page-kso"));
+      const useLegacyCartRowActions = false;
 
       // ?????? ???????? (?? ?????????)
       const swipeActions = document.createElement("div");
@@ -15093,7 +15133,7 @@ async function initAddresses() {
         deleteBtn.style.opacity = "0.5";
       }
 
-      if (!isKsoCartRow) {
+      if (useLegacyCartRowActions) {
         swipeActions.appendChild(favBtn);
         swipeActions.appendChild(deleteBtn);
         swipeContainer.appendChild(swipeActions);
@@ -15136,7 +15176,6 @@ async function initAddresses() {
       const cartBuyXGetYBadge = createCatalogBuyXGetYBadge(product);
       if (cartBuyXGetYBadge) {
         cartBuyXGetYBadge.classList.add("cart-bogo-badge");
-        thumbWrap.appendChild(cartBuyXGetYBadge);
       }
       row.appendChild(thumbWrap);
 
@@ -15226,6 +15265,7 @@ async function initAddresses() {
         minusEnabled: qty > 0 && allowQty,
         plusEnabled: allowQty && !plusBlockedByLimit,
       });
+      syncCartRowMinusButton(btnMinus, qty);
       pill.classList.toggle("is-empty", qty <= 0);
       let qtyControlNode = pill;
       if (isUnavailable) {
@@ -15250,8 +15290,9 @@ async function initAddresses() {
         const cartItem = getCartItemByKey(key);
         const newQty = Math.max(0, Number(cartItem?.qty || 0));
 
-        center.textContent = String(newQty);
+        regularQtyLabel.textContent = `${newQty} \u0448\u0442`;
         t.textContent = `${newQty} x ${titleText}`;
+        syncCartRowMinusButton(btnMinus, newQty);
 
         const resolvedItems = cartItemsResolved();
         const displayItems = cartItemsResolved(state.cart, { includeDormantAutoAdd: true });
@@ -15374,6 +15415,10 @@ async function initAddresses() {
             initialLineOriginalTotal
           )
         : createCartPriceGroup(pricing.lineTotal, showOld ? originalLineTotal : 0);
+      const regularQtyLabel = buildCartRowQtyLabel(qty);
+      center.textContent = "";
+      center.appendChild(priceState.wrap);
+      center.appendChild(regularQtyLabel);
 
       // ?????????? ?????? ????????
       const desktopActions = document.createElement("div");
@@ -15400,7 +15445,7 @@ async function initAddresses() {
         desktopDeleteBtn.style.opacity = "0.5";
       }
 
-      if (!isKsoCartRow) {
+      if (useLegacyCartRowActions) {
         desktopActions.appendChild(desktopFavBtn);
         desktopActions.appendChild(desktopDeleteBtn);
         bindFavoriteButtonsForCartRow(
@@ -15421,40 +15466,25 @@ async function initAddresses() {
       }
       const bottomRow = document.createElement("div");
       bottomRow.className = "cart-bottom-row";
+      const bottomBadges = document.createElement("div");
+      bottomBadges.className = "cart-bottom-row__badges";
+      if (cartBuyXGetYBadge) bottomBadges.appendChild(cartBuyXGetYBadge);
+      if (priceState.badgeEl) bottomBadges.appendChild(priceState.createBadgeMirror());
+      bottomRow.appendChild(bottomBadges);
       const bottomMain = document.createElement("div");
       bottomMain.className = "cart-bottom-row__main";
-      bottomMain.appendChild(priceState.wrap);
       bottomRow.appendChild(bottomMain);
       const bottomControls = document.createElement("div");
       bottomControls.className = "cart-bottom-row__controls";
       bottomControls.appendChild(q);
       bottomControls.appendChild(desktopActions);
       bottomRow.appendChild(bottomControls);
-      mid.appendChild(bottomRow);
       row.appendChild(mid);
-      if (isKsoCartRow) {
-        const ksoRemoveBtn = document.createElement("button");
-        ksoRemoveBtn.type = "button";
-        ksoRemoveBtn.className = "shop-kso-cart-item-remove";
-        ksoRemoveBtn.innerHTML = '<i class="fas fa-xmark" aria-hidden="true"></i>';
-        ksoRemoveBtn.setAttribute("aria-label", "Удалить");
-        ksoRemoveBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (!allowRemove) return;
-          deleteCartItemWithAnimation(swipeContainer, product.id, key);
-        });
-        if (!allowRemove) {
-          ksoRemoveBtn.disabled = true;
-          ksoRemoveBtn.style.pointerEvents = "none";
-          ksoRemoveBtn.style.opacity = "0.5";
-        }
-        row.appendChild(ksoRemoveBtn);
-      }
-
+      row.appendChild(bottomRow);
       swipeContainer.appendChild(row);
 
       // ????????????? ?????-??????
-      if (!isKsoCartRow) initSwipeGesture(swipeContainer, row, product.id, key);
+      if (useLegacyCartRowActions) initSwipeGesture(swipeContainer, row, product.id, key);
 
       appendCartNode(swipeContainer);
     });
@@ -15550,8 +15580,14 @@ async function initAddresses() {
             centerText: "0",
             minusEnabled: false,
           });
+          syncCartRowMinusButton(btnMinus, 0);
           btnMinus.disabled = true;
           pill.classList.add("is-disabled");
+          const ghostPriceState = createCartPriceGroup(0, 0);
+          const ghostQtyLabel = buildCartRowQtyLabel(0);
+          center.textContent = "";
+          center.appendChild(ghostPriceState.wrap);
+          center.appendChild(ghostQtyLabel);
 
           btnPlus.addEventListener("click", async (e) => {
             e.stopPropagation();
@@ -15564,24 +15600,25 @@ async function initAddresses() {
               restored.auto_add = 1;
               restored.auto_add_group_id = groupId;
             }
-            center.textContent = String(getCartItemByKey(targetKey)?.qty || restored?.qty || 0);
+            ghostQtyLabel.textContent = `${getCartItemByKey(targetKey)?.qty || restored?.qty || 0} \u0448\u0442`;
           });
 
           q.appendChild(pill);
-          const ghostPriceState = createCartPriceGroup(0, 0);
 
           const bottomRow = document.createElement("div");
           bottomRow.className = "cart-bottom-row";
+          const bottomBadges = document.createElement("div");
+          bottomBadges.className = "cart-bottom-row__badges";
+          bottomRow.appendChild(bottomBadges);
           const bottomMain = document.createElement("div");
           bottomMain.className = "cart-bottom-row__main";
-          bottomMain.appendChild(ghostPriceState.wrap);
           bottomRow.appendChild(bottomMain);
           const bottomControls = document.createElement("div");
           bottomControls.className = "cart-bottom-row__controls";
           bottomControls.appendChild(q);
           bottomRow.appendChild(bottomControls);
-          mid.appendChild(bottomRow);
           row.appendChild(mid);
+          row.appendChild(bottomRow);
 
           appendCartNode(row);
         });
