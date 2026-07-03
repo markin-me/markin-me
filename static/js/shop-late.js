@@ -24212,6 +24212,9 @@ function applySheetAddressTitle(backMode = "cart") {
   if (typeof window.syncKsoFloatingCartButton === "function") {
     window.syncKsoFloatingCartButton();
   }
+  if (typeof moveKsoCartUpsellToFooter === "function") {
+    moveKsoCartUpsellToFooter(openCartSheetCtx);
+  }
 
   void syncCartSheetUpsellWhenReady(openCartSheetCtx);
   setCartSheetFooterMode(openCartSheetCtx, items.length ? "cart" : "hidden");

@@ -17899,6 +17899,27 @@ function updateCartBadge() {
     const visibleProducts = allProducts.filter((p) => visibleIds.has(Number(p.id)));
     const productsById = new Map(visibleProducts.map((p) => [Number(p.id), p]));
     ensureUpsellConfigObserver(scrollEl, productsById);
+    if (openCartSheetCtx?.listEl === listEl) moveKsoCartUpsellToFooter(openCartSheetCtx);
+  }
+
+  function moveKsoCartUpsellToFooter(ctx = openCartSheetCtx) {
+    if (!document.body?.classList.contains("page-kso")) return;
+    const listEl = ctx?.listEl || null;
+    const footerEl = ctx?.footerEl || document.querySelector(".shop-cart-sheet .shop-cart-sheet-footer");
+    if (!listEl || !footerEl) return;
+    const upsellNodes = Array.from(new Set([
+      ...Array.from(listEl.querySelectorAll(".shop-cart-upsell")),
+      ...Array.from(footerEl.querySelectorAll(".shop-cart-upsell")),
+    ]));
+    const upsellEl = upsellNodes[0] || null;
+    if (!upsellEl) return;
+    upsellNodes.slice(1).forEach((node) => node.remove());
+    const actionsEl = ctx?.cartActionsEl || footerEl.querySelector(".shop-cart-footer-actions");
+    if (actionsEl && upsellEl.nextElementSibling !== actionsEl) {
+      footerEl.insertBefore(upsellEl, actionsEl);
+    } else if (!actionsEl && upsellEl.parentElement !== footerEl) {
+      footerEl.insertBefore(upsellEl, footerEl.firstChild);
+    }
   }
 
     function formatUpsellVariantValueLabel(value, unitShortTitle) {
