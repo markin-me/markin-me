@@ -5855,6 +5855,82 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  // POST /api/public/auth/kso-login
+  // KSO-only login by phone: find or create customer without birthday.
+  router.post('/auth/kso-login', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const phoneRaw = str(req.body.phone);
+      const phone = helpers.normalizePhone(phoneRaw);
+      const guestChatClientId = readIncomingGuestChatClientId(req);
+
+      if (!phone || phone.length < 10) {
+        return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
+      }
+
+      const [ex] = await db.query(
+        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, is_active, photo
+         FROM cust_customers
+         WHERE tenant_id=? AND phone=?
+         LIMIT 1`,
+        [tenantId, phone]
+      );
+
+      let customerId = null;
+      if (!ex.length) {
+        const [ins] = await db.query(
+          `INSERT INTO cust_customers
+           (tenant_id, name, phone, birthday, is_active, registration_date)
+           VALUES (?,NULL,?,NULL,1,CURDATE())`,
+          [tenantId, phone]
+        );
+        customerId = Number(ins.insertId);
+      } else {
+        const c = ex[0];
+        if (Number(c.is_active || 0) !== 1) {
+          return res.status(403).json({ ok: false, error: 'CLIENT_BLOCKED' });
+        }
+        customerId = Number(c.id);
+      }
+
+      const token = makeToken32();
+      await dualWriteSession(db, {
+        tenantId,
+        storeId: 1,
+        customerId,
+        token,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        isActive: 1,
+      });
+
+      const [me] = await db.query(
+        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, photo
+         FROM cust_customers
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, customerId]
+      );
+
+      await mergeGuestChatIntoCustomerIfNeeded(tenantId, guestChatClientId, customerId);
+
+      res.json({ ok: true, token, customer: me[0] || null });
+
+      setImmediate(async () => {
+        try {
+          await notifyCustomerLogin({ db, tenantId, customerId });
+        } catch (err) {
+          console.error('MAX login notify error:', err.message || err);
+        }
+      });
+    } catch (e) {
+      if (e?.httpStatus === 404 || e?.message === 'NOT_FOUND') {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+      console.error('AUTH_KSO_LOGIN_ERROR:', e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // POST /api/public/auth/login
   // body: { phone, birthday, name? } ; birthday = dd.mm.yyyy
   router.post('/auth/login', async (req, res) => {

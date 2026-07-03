@@ -24243,6 +24243,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   async function showSheetCheckout() {
+    const isKsoCheckout = Boolean(document.body?.classList?.contains("page-kso"));
     invalidateAddressSheetUiState();
     clearBenefitsInnerOverlayHost();
     resetMobileBenefitsPromoUi();
@@ -24251,18 +24252,23 @@ function applySheetAddressTitle(backMode = "cart") {
     hideInlineAddressToggle();
     showHeaderToggle();
     setCartSheetScreenMode("cart");
-    setSheetCheckoutOverlayActive(true);
+    if (isKsoCheckout && checkoutWrap.parentElement !== wrap) {
+      wrap.insertBefore(checkoutWrap, benefitsWrap);
+    } else if (!isKsoCheckout && checkoutWrap.parentElement !== checkoutOverlayPanel) {
+      checkoutOverlayPanel.insertBefore(checkoutWrap, checkoutOverlayFooterHost);
+    }
+    setSheetCheckoutOverlayActive(!isKsoCheckout);
     checkoutWrap.classList.remove("hidden");
     benefitsWrap.classList.add("hidden");
     benefitsWrap.classList.remove("shop-checkout-benefits-content--modal-layout");
     hideCheckoutBenefitDetailView({ clearContent: true });
-    list.classList.remove("hidden");
+    list.classList.toggle("hidden", isKsoCheckout);
     addressWrap.classList.add("hidden");
     productWrap.classList.add("hidden");
     pickupSheetWrap.classList.add("hidden");
     resetCartBonusRedeemScrollPosition();
 
-    setCartSheetFooterMode(openCartSheetCtx, cartItemsResolved().length ? "cart" : "hidden");
+    setCartSheetFooterMode(openCartSheetCtx, cartItemsResolved().length ? (isKsoCheckout ? "checkout" : "cart") : "hidden");
     const mobileBenefitsPromoWrap = document.getElementById("shopMobileBenefitsPromoWrap");
     if (mobileBenefitsPromoWrap) mobileBenefitsPromoWrap.classList.add("hidden");
     
@@ -26731,8 +26737,10 @@ function renderSheetAddressList() {
   }
 
   function buildLoginContent({ onSuccess }) {
+    const isKsoAuth = Boolean(document.body?.classList?.contains("page-kso"));
     const wrap = document.createElement("div");
     wrap.className = "shop-auth";
+    if (isKsoAuth) wrap.classList.add("shop-auth--kso");
 
     const note = document.createElement("div");
     note.className = "shop-auth-text muted";
@@ -26768,6 +26776,27 @@ function renderSheetAddressList() {
     nextBtn.textContent = "Продолжить";
     form.appendChild(nextBtn);
 
+    const ksoKeypad = document.createElement("div");
+    ksoKeypad.className = "shop-auth-kso-keypad";
+    if (!isKsoAuth) ksoKeypad.classList.add("hidden");
+    ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "backspace"].forEach((key) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-auth-kso-key";
+      btn.dataset.key = key;
+      if (key === "backspace") {
+        btn.setAttribute("aria-label", "Удалить цифру");
+        btn.innerHTML = '<i class="fas fa-backspace" aria-hidden="true"></i>';
+      } else if (key === "clear") {
+        btn.setAttribute("aria-label", "Очистить номер");
+        btn.innerHTML = '<i class="fas fa-times" aria-hidden="true"></i>';
+      } else {
+        btn.textContent = key;
+      }
+      ksoKeypad.appendChild(btn);
+    });
+    form.appendChild(ksoKeypad);
+
     const maxLoginBtn = document.createElement("button");
     maxLoginBtn.type = "button";
     maxLoginBtn.className = "shop-auth-social-btn shop-auth-social-btn--max";
@@ -26794,6 +26823,11 @@ function renderSheetAddressList() {
     socialRow.appendChild(tgLoginBtn);
 
     (async function syncMaxLoginButtonVisibility() {
+      if (isKsoAuth) {
+        maxLoginBtn.style.display = "none";
+        socialRow.style.display = "none";
+        return;
+      }
       try {
         const probe = await apiJson("/api/public/max/auth-link");
         const hasLink = !!(probe && probe.ok !== false && probe.link);
@@ -26806,6 +26840,11 @@ function renderSheetAddressList() {
     })();
 
     (async function syncTgLoginButtonVisibility() {
+      if (isKsoAuth) {
+        tgLoginBtn.style.display = "none";
+        socialRow.style.display = "none";
+        return;
+      }
       try {
         const probe = await apiJson("/api/public/tg/auth-link");
         const hasLink = !!(probe && probe.ok !== false && probe.link);
@@ -26979,6 +27018,7 @@ function renderSheetAddressList() {
     let autoContinueLockPhone = "";
     phone.addEventListener("input", () => {
       enforcePhonePrefix(phone);
+      if (isKsoAuth) return;
       const n = normalizePhone(phone.value);
       if (n && n.length === 11 && n.startsWith("7")) {
         if (nextBtn.style.display !== "none" && !nextBtn.disabled && autoContinueLockPhone !== n) {
@@ -26990,6 +27030,23 @@ function renderSheetAddressList() {
       }
     });
     phone.addEventListener("focus", () => enforcePhonePrefix(phone));
+    ksoKeypad.addEventListener("click", (event) => {
+      const btn = event.target?.closest?.(".shop-auth-kso-key");
+      if (!btn) return;
+      event.preventDefault();
+      enforcePhonePrefix(phone);
+      const key = String(btn.dataset.key || "");
+      const digits = normalizePhone(phone.value).replace(/^7/, "").slice(0, 10);
+      if (key === "clear") {
+        phone.value = "+7";
+      } else if (key === "backspace") {
+        phone.value = `+7${digits.slice(0, -1)}`;
+      } else if (/^\d$/.test(key) && digits.length < 10) {
+        phone.value = `+7${digits}${key}`;
+      }
+      enforcePhonePrefix(phone);
+      phone.focus();
+    });
     nameInput.addEventListener("input", () => {
       if (getAuthNameValue()) {
         setNameError("");
@@ -27095,6 +27152,29 @@ function renderSheetAddressList() {
       }
       nextBtn.disabled = true;
       try {
+        if (isKsoAuth) {
+          const json = await apiJson("/api/public/auth/kso-login", {
+            method: "POST",
+            body: {
+              phone: phone.value,
+              chat_guest_client_id: getGuestChatClientIdForAuth(),
+            },
+            headers: { "x-customer-token": "" },
+          });
+          if (json.token) {
+            setCustomerToken(json.token);
+            fetchMeSafeVerifiedToken = String(json.token);
+          }
+          if (json.customer) setCustomerCache(json.customer);
+          if (typeof window.refreshShopHomeBonusConfigUi === "function") {
+            await window.refreshShopHomeBonusConfigUi({ force: true });
+          }
+          const me = json.customer || await fetchMeSafe();
+          await refreshAddressState({ force: true });
+          if (me && typeof onSuccess === "function") onSuccess(me);
+          else alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u043e\u0439\u0442\u0438");
+          return;
+        }
         const status = await checkPhoneStatus();
         const needsNameInput = Boolean(status.needsNameInput || !status.hasName);
         if (status.requiresMessengerLogin) {
@@ -27178,6 +27258,10 @@ function renderSheetAddressList() {
     });
 
     loginBtn.addEventListener("click", async () => {
+      if (isKsoAuth) {
+        nextBtn.click();
+        return;
+      }
       enforcePhonePrefix(phone);
       const n = normalizePhone(phone.value);
       if (!n || n.length !== 11 || !n.startsWith("7")) {
@@ -32757,6 +32841,7 @@ function renderSheetAddressList() {
   async function requireAuthForCheckout({ isSheet }) {
     const me = await fetchMeSafe();
     if (me) {
+      if (document.body?.classList?.contains("page-kso")) return true;
       if (hasCompletedCustomerName(me)) return true;
       openRequiredCustomerNamePrompt({
         me,
@@ -32771,6 +32856,10 @@ function renderSheetAddressList() {
     if (isSheet) {
       openLoginSheet({
         onSuccess: async () => {
+          if (document.body?.classList?.contains("page-kso")) {
+            await openSheetCheckoutFlow();
+            return;
+          }
           if (window.AppModal?.isOpen?.()) {
             window.AppModal.close("sheet");
           }
@@ -35165,6 +35254,7 @@ function setBottomNavActive(tab) {
     const checkoutViewToken = checkoutViewRenderToken;
     const registerCheckoutCleanup = registerCheckoutViewCleanup;
     const isCheckoutViewCurrent = () => checkoutViewToken === checkoutViewRenderToken;
+    const isKsoCheckout = Boolean(document.body?.classList?.contains("page-kso"));
 
     const items = cartItemsResolved();
     if (!items.length) {
@@ -35262,14 +35352,14 @@ function setBottomNavActive(tab) {
     if (hasCustomerToken && me) {
       let benefitsSnapshot = getBenefitsStoreSnapshot(initialBenefitsPreviewRequest);
       checkoutBenefitsPreview = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || null;
-      if (!checkoutBenefitsPreview) {
+      if (!checkoutBenefitsPreview && !isKsoCheckout) {
         benefitsSnapshot = await ensureBenefitsStoreHydrated({
           previewRequest: initialBenefitsPreviewRequest,
           force: false,
           warmDetails: false,
         });
         checkoutBenefitsPreview = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || null;
-      } else if (benefitsSnapshot?.needsExactHydration) {
+      } else if (benefitsSnapshot?.needsExactHydration || (isKsoCheckout && !checkoutBenefitsPreview)) {
         Promise.resolve(ensureBenefitsStoreHydrated({
           previewRequest: initialBenefitsPreviewRequest,
           force: false,
@@ -35466,6 +35556,7 @@ function setBottomNavActive(tab) {
     });
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout";
+    if (isKsoCheckout) wrap.classList.add("shop-checkout--kso");
 
 
     const showMobileNameInput = false;
@@ -35538,6 +35629,9 @@ function setBottomNavActive(tab) {
     if (ksoSelectedMethodCode && methods.some((method) => method.code === ksoSelectedMethodCode)) {
       draft.method_code = ksoSelectedMethodCode;
       draft.method_user_selected = true;
+      draft.time_option_code = "asap";
+      draft.scheduled_at = "";
+      draft.scheduled_date = null;
       saveCheckoutDraft(draft);
     }
     const methodUserSelected = Boolean(draft.method_user_selected);
@@ -36314,6 +36408,7 @@ function setBottomNavActive(tab) {
       if (mobileCommentWrap) mobileCommentWrap.classList.add("hidden");
     }
     const getCommentValue = () => {
+      if (isKsoCheckout) return "";
       return str(comment.value).trim();
     };
 
@@ -36669,7 +36764,7 @@ function setBottomNavActive(tab) {
     let currentAvailableTimeOptions = getCheckoutAvailableTimeState().availableOptions;
     let currentAvailableTimeCodes = new Set(currentAvailableTimeOptions.map((option) => option.code));
     const fallbackCode = getCheckoutAvailableTimeState().fallbackCode;
-    const timeDefault = fallbackCode;
+    const timeDefault = isKsoCheckout ? "asap" : fallbackCode;
 
     function getTimeOptionIconElement(code, iconRaw) {
       const fallbackIcons = {
@@ -36703,7 +36798,7 @@ function setBottomNavActive(tab) {
     // --- Hidden input для итогового значения времени ---
     const timeInput = document.createElement("input");
     timeInput.type = "hidden";
-    timeInput.value = extractTimeValue(draft.scheduled_at);
+    timeInput.value = isKsoCheckout ? "" : extractTimeValue(draft.scheduled_at);
 
     // --- Состояние выбора даты ---
     const tomorrow = new Date();
@@ -36837,8 +36932,42 @@ function setBottomNavActive(tab) {
     const checkoutMainSection = document.createElement("section");
     checkoutMainSection.className = "shop-checkout-card-section shop-checkout-card-section--combined";
 
+    if (isKsoCheckout && me) {
+      const customerSection = createCheckoutCardSection("Клиент");
+      customerSection.root.classList.add("shop-checkout-card-subsection", "shop-checkout-customer-section");
+      const customerCard = document.createElement("div");
+      customerCard.className = "shop-checkout-customer-card";
+      const customerName = document.createElement("div");
+      customerName.className = "shop-checkout-customer-name";
+      customerName.textContent = hasCompletedCustomerName(me) ? str(me.name || "").trim() : "Клиент";
+      const customerPhone = document.createElement("div");
+      customerPhone.className = "shop-checkout-customer-phone";
+      customerPhone.textContent = me?.phone ? formatPhonePlus7(me.phone) : str(phone.value || "");
+      customerCard.appendChild(customerName);
+      customerCard.appendChild(customerPhone);
+      customerSection.root.appendChild(customerCard);
+      checkoutMainSection.appendChild(customerSection.root);
+    }
+
+    if (isKsoCheckout && typeof buildCartBonusRedeemSection === "function") {
+      const bonusRedeemSection = buildCartBonusRedeemSection();
+      if (bonusRedeemSection) {
+        bonusRedeemSection.classList.add("shop-checkout-card-subsection", "shop-checkout-kso-bonus-section");
+        checkoutMainSection.appendChild(bonusRedeemSection);
+        if (typeof bindCartBonusRedeemSection === "function") {
+          bindCartBonusRedeemSection(bonusRedeemSection);
+        }
+        if (typeof window.refreshShopCartBonusRedeemUi === "function") {
+          try {
+            window.refreshShopCartBonusRedeemUi();
+          } catch {}
+        }
+      }
+    }
+
     const timeSection = createCheckoutCardSection("Дата и время получения");
     timeSection.root.classList.add("shop-checkout-card-subsection");
+    if (isKsoCheckout) timeSection.root.classList.add("hidden");
     const timeModesGrid = document.createElement("div");
     timeModesGrid.className = "shop-checkout-card-grid shop-checkout-card-grid--modes";
     bindCheckoutHorizontalWheelScroll(timeModesGrid);
@@ -37038,6 +37167,12 @@ function setBottomNavActive(tab) {
     }
 
     function refreshCheckoutTimeAvailability() {
+      if (isKsoCheckout) {
+        timeInput.value = "";
+        timeSelect.setValue("asap", true);
+        timeModeButtons.forEach((card) => card.classList.add("hidden"));
+        return;
+      }
       const nextState = getCheckoutAvailableTimeState();
       currentAvailableTimeOptions = nextState.availableOptions;
       currentAvailableTimeCodes = new Set(currentAvailableTimeOptions.map((option) => option.code));
@@ -37268,6 +37403,12 @@ function setBottomNavActive(tab) {
     }
 
     function renderTimeSelectionCards() {
+      if (isKsoCheckout) {
+        timeInput.value = "";
+        timeSelect.setValue("asap", true);
+        timeModeButtons.forEach((card) => card.classList.add("hidden"));
+        return;
+      }
       syncTimeModeCards();
     }
 
@@ -37435,7 +37576,7 @@ function setBottomNavActive(tab) {
     const commentSection = document.createElement("section");
     commentSection.className = "shop-checkout-card-subsection shop-checkout-card-subsection--comment";
     commentSection.appendChild(comment);
-    checkoutMainSection.appendChild(commentSection);
+    if (!isKsoCheckout) checkoutMainSection.appendChild(commentSection);
     wrap.appendChild(checkoutMainSection);
     wrap.appendChild(timeInput);
 
@@ -38375,11 +38516,11 @@ function setBottomNavActive(tab) {
           method_user_selected: Boolean(draft.method_user_selected),
           delivery_address: str(address.value).trim() || null,
           pickup_store_id: selectedPickupStoreId || null,
-          comment: getCommentValue() || null,
+          comment: isKsoCheckout ? null : (getCommentValue() || null),
           address_comment: draft?.address_comment ?? null,
-          time_option_code: timeSelect.getValue() || timeDefault || "asap",
-          scheduled_at: timeInput.value || "",
-          scheduled_date: getDateString(selectedDate),
+          time_option_code: isKsoCheckout ? "asap" : (timeSelect.getValue() || timeDefault || "asap"),
+          scheduled_at: isKsoCheckout ? "" : (timeInput.value || ""),
+          scheduled_date: isKsoCheckout ? null : getDateString(selectedDate),
           payment_code: paySelect.getValue() || null,
           change_from: getChangeFromValue(),
         });
@@ -38404,11 +38545,11 @@ function setBottomNavActive(tab) {
           method_user_selected: Boolean(draft.method_user_selected),
           delivery_address: str(address.value).trim() || null,
           pickup_store_id: selectedPickupStoreId || null,
-          comment: getCommentValue() || null,
+          comment: isKsoCheckout ? null : (getCommentValue() || null),
           address_comment: draft?.address_comment ?? null,
-          time_option_code: timeSelect.getValue() || timeDefault || "asap",
-          scheduled_at: timeInput.value || "",
-          scheduled_date: getDateString(selectedDate),
+          time_option_code: isKsoCheckout ? "asap" : (timeSelect.getValue() || timeDefault || "asap"),
+          scheduled_at: isKsoCheckout ? "" : (timeInput.value || ""),
+          scheduled_date: isKsoCheckout ? null : getDateString(selectedDate),
           payment_code: paySelect.getValue() || null,
           change_from: getChangeFromValue(),
         });
@@ -38515,6 +38656,61 @@ function setBottomNavActive(tab) {
     }
 
     function showOrderSuccess(orderId, publicId, totalPrice) {
+      if (isKsoCheckout) {
+        const orderLabel = orderId ? `#${escapeHtml(String(orderId))}` : (publicId ? `#${escapeHtml(String(publicId))}` : "");
+        let remaining = 60;
+        let resetDone = false;
+        let countdownTimer = 0;
+        let resetTimer = 0;
+
+        const goHome = () => {
+          if (resetDone) return;
+          resetDone = true;
+          window.clearInterval(countdownTimer);
+          window.clearTimeout(resetTimer);
+          if (typeof window.resetKsoToMethodGate === "function") {
+            void window.resetKsoToMethodGate();
+          } else {
+            if (window.AppModal?.isOpen?.()) window.AppModal.close("kso-order-success");
+            if (typeof showKsoMethodGate === "function") showKsoMethodGate();
+          }
+        };
+
+        resultWrap.innerHTML = `
+          <div class="shop-kso-order-success">
+            <div class="shop-kso-order-success__eyebrow">Заказ оформлен</div>
+            <div class="shop-kso-order-success__number">${orderLabel}</div>
+            <div class="shop-kso-order-success__text">Сфотографируйте номер и покажите на кассе</div>
+            <div class="shop-kso-order-success__timer">Возврат на главную через <span data-kso-order-countdown>${remaining}</span> сек.</div>
+            <button type="button" class="shop-kso-order-success__home">На главную</button>
+          </div>`;
+        resultWrap.classList.remove("hidden");
+        wrap.classList.add("hidden");
+        container?.classList?.add("shop-checkout-content--kso-success");
+        if (container) container.scrollTop = 0;
+        setCartSheetFooterMode(openCartSheetCtx, "hidden");
+        if (actions?.backBtn) actions.backBtn.classList.add("hidden");
+        if (actions?.submitBtn) actions.submitBtn.disabled = false;
+        if (elCheckoutFooterActions) elCheckoutFooterActions.classList.add("hidden");
+        if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
+        if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
+        if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
+
+        const countdownEl = resultWrap.querySelector("[data-kso-order-countdown]");
+        countdownTimer = window.setInterval(() => {
+          remaining = Math.max(0, remaining - 1);
+          if (countdownEl) countdownEl.textContent = String(remaining);
+        }, 1000);
+        resetTimer = window.setTimeout(goHome, 60000);
+        resultWrap.querySelector(".shop-kso-order-success__home")?.addEventListener("click", goHome);
+        registerCheckoutCleanup(() => {
+          window.clearInterval(countdownTimer);
+          window.clearTimeout(resetTimer);
+          container?.classList?.remove("shop-checkout-content--kso-success");
+        });
+        return;
+      }
+
       resultWrap.innerHTML = `
         <div class="shop-order-result-card">
           <div class="shop-order-result-icon"><i class="fas fa-check-circle"></i></div>
@@ -38849,9 +39045,9 @@ function setBottomNavActive(tab) {
         delivery_zone_id: methodCode === "delivery" ? state.selectedAddress?.delivery_zone_id ?? null : null,
         delivery_store_id: methodCode === "delivery" ? state.selectedAddress?.delivery_store_id ?? null : null,
         pickup_store_id: selectedPickupStoreId || null,
-        comment: getCommentValue() || null,
+        comment: isKsoCheckout ? null : (getCommentValue() || null),
         address_comment: (currentDraft && currentDraft.address_comment) ? str(currentDraft.address_comment).trim() || null : null,
-        time_option_code: timeSelect.getValue() || timeDefault || "asap",
+        time_option_code: isKsoCheckout ? "asap" : (timeSelect.getValue() || timeDefault || "asap"),
         scheduled_at: null,
         payment_code: paySelect.getValue() || null,
         cutlery_qty: 0,
@@ -38984,7 +39180,7 @@ function setBottomNavActive(tab) {
         return;
       }
 
-      if (!hasCompletedCustomerName(me)) {
+      if (!isKsoCheckout && !hasCompletedCustomerName(me)) {
         openRequiredCustomerNamePrompt({
           me,
           note: "Укажите имя, чтобы оформить заказ.",
@@ -39056,8 +39252,8 @@ function setBottomNavActive(tab) {
         comment: payload.comment,
         address_comment: payload.address_comment ?? currentDraft?.address_comment ?? null,
         time_option_code: payload.time_option_code,
-        scheduled_at: timeInput.value || "",
-        scheduled_date: getDateString(selectedDate),
+        scheduled_at: isKsoCheckout ? "" : (timeInput.value || ""),
+        scheduled_date: isKsoCheckout ? null : getDateString(selectedDate),
         payment_code: payload.payment_code,
         change_from: payload.change_from,
       });

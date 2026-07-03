@@ -10982,7 +10982,8 @@ function showCheckoutView() {
   setHeaderFavoritesButtonActive(false);
   cartViewMode = "checkout";
   openProductCtx = null;
-  if (elCartContent) elCartContent.classList.remove("hidden");
+  const isKsoCheckout = Boolean(document.body?.classList?.contains("page-kso"));
+  if (elCartContent) elCartContent.classList.toggle("hidden", isKsoCheckout);
   if (elAddressContent) elAddressContent.classList.add("hidden");
   if (elPickupContent) elPickupContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.add("hidden");
@@ -11010,8 +11011,8 @@ function showCheckoutView() {
     elCartHeaderTitle.classList.toggle("is-empty-address", !line);
   }
 
-  setCartFooterMode("cart");
-  syncCartFooterVisibilityForCartMode(cartItemsResolved().length);
+  setCartFooterMode(isKsoCheckout ? "checkout" : "cart");
+  if (!isKsoCheckout) syncCartFooterVisibilityForCartMode(cartItemsResolved().length);
   renderCartIfDirty();
   if (typeof window.syncShopCartPricingSummaryUi === "function") {
     Promise.resolve(window.syncShopCartPricingSummaryUi()).catch(() => {});
@@ -11023,7 +11024,7 @@ function showCheckoutView() {
   if (typeof updateMobileDeliveryProgress === "function") {
     Promise.resolve(updateMobileDeliveryProgress()).catch(() => {});
   }
-  setDesktopCheckoutOverlayActive(true);
+  setDesktopCheckoutOverlayActive(!isKsoCheckout);
   queueMobileUiStateSync("showCheckoutView");
 }
 
@@ -16250,7 +16251,11 @@ function removeFromCartByKey(cartKey, productId) {
   window.syncKsoFloatingCartButton = syncKsoFloatingCartButton;
 
   const KSO_IDLE_RESET_MS = 5 * 60 * 1000;
+  const KSO_IDLE_WARNING_MS = 30 * 1000;
   let ksoIdleResetTimer = 0;
+  let ksoIdleWarningTimer = 0;
+  let ksoIdleWarningCountdownTimer = 0;
+  let ksoIdleResetInProgress = false;
   let ksoIdleEventsBound = false;
 
   function isKsoPage() {
@@ -16312,8 +16317,82 @@ function removeFromCartByKey(cartKey, productId) {
     resetKsoIdleTimer();
   }
 
+  function ensureKsoIdleWarningOverlay() {
+    if (!isKsoPage()) return null;
+    let overlay = document.getElementById("shopKsoIdleWarning");
+    if (!overlay) {
+      overlay = document.createElement("section");
+      overlay.id = "shopKsoIdleWarning";
+      overlay.className = "shop-kso-idle-warning hidden";
+      overlay.innerHTML = `
+        <div class="shop-kso-idle-warning__panel">
+          <div class="shop-kso-idle-warning__title">Р’С‹ РµС‰С‘ Р·РґРµСЃСЊ?</div>
+          <div class="shop-kso-idle-warning__count" data-kso-idle-count>30</div>
+          <div class="shop-kso-idle-warning__text">Р—Р°РєР°Р· Р±СѓРґРµС‚ СЃР±СЂРѕС€РµРЅ РїСЂРё Р±РµР·РґРµР№СЃС‚РІРёРё</div>
+          <div class="shop-kso-idle-warning__actions">
+            <button type="button" class="shop-kso-idle-warning__btn shop-kso-idle-warning__btn--primary" data-kso-idle-continue>РџСЂРѕРґРѕР»Р¶РёС‚СЊ</button>
+            <button type="button" class="shop-kso-idle-warning__btn shop-kso-idle-warning__btn--secondary" data-kso-idle-home>РќР° РіР»Р°РІРЅСѓСЋ</button>
+          </div>
+        </div>
+      `;
+      const titleEl = overlay.querySelector(".shop-kso-idle-warning__title");
+      const textEl = overlay.querySelector(".shop-kso-idle-warning__text");
+      const continueBtn = overlay.querySelector("[data-kso-idle-continue]");
+      const homeBtn = overlay.querySelector("[data-kso-idle-home]");
+      if (titleEl) titleEl.textContent = "Вы ещё здесь?";
+      if (textEl) textEl.textContent = "Заказ будет сброшен при бездействии";
+      if (continueBtn) continueBtn.textContent = "Продолжить";
+      if (homeBtn) homeBtn.textContent = "На главную";
+      document.body.appendChild(overlay);
+      overlay.addEventListener("click", (event) => {
+        const homeBtn = event.target?.closest?.("[data-kso-idle-home]");
+        if (homeBtn) {
+          event.preventDefault();
+          event.stopPropagation();
+          void resetKsoToMethodGate();
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        hideKsoIdleWarning();
+        resetKsoIdleTimer();
+      });
+    }
+    return overlay;
+  }
+
+  function hideKsoIdleWarning() {
+    window.clearInterval(ksoIdleWarningCountdownTimer);
+    ksoIdleWarningCountdownTimer = 0;
+    const overlay = document.getElementById("shopKsoIdleWarning");
+    if (overlay) overlay.classList.add("hidden");
+  }
+
+  function showKsoIdleWarning() {
+    if (!isKsoPage()) return;
+    const overlay = ensureKsoIdleWarningOverlay();
+    if (!overlay) return;
+    let remaining = Math.ceil(KSO_IDLE_WARNING_MS / 1000);
+    const countEl = overlay.querySelector("[data-kso-idle-count]");
+    const render = () => {
+      if (countEl) countEl.textContent = String(Math.max(0, remaining));
+    };
+    render();
+    overlay.classList.remove("hidden");
+    window.clearInterval(ksoIdleWarningCountdownTimer);
+    ksoIdleWarningCountdownTimer = window.setInterval(() => {
+      remaining -= 1;
+      render();
+    }, 1000);
+  }
+
   function showKsoMethodGate() {
     if (!isKsoPage()) return;
+    try {
+      window.scrollTo({ top: 0, behavior: "auto" });
+      document.querySelector(".shop-products-panel .panel-body")?.scrollTo?.({ top: 0, behavior: "auto" });
+      document.querySelector(".shop-cats-list, .shop-categories-list")?.scrollTo?.({ top: 0, behavior: "auto" });
+    } catch {}
     let overlay = document.getElementById("shopKsoMethodGate");
     if (!overlay) {
       overlay = document.createElement("section");
@@ -16343,29 +16422,52 @@ function removeFromCartByKey(cartKey, productId) {
 
   async function resetKsoToMethodGate() {
     if (!isKsoPage()) return;
-    window.__ksoSelectedMethodCode = "";
+    if (ksoIdleResetInProgress) return;
+    ksoIdleResetInProgress = true;
     try {
-      if (window.AppModal?.isOpen?.()) window.AppModal.close("kso-idle");
-    } catch {}
-    try {
-      await clearCartAll();
-    } catch {}
-    showKsoMethodGate();
+      window.clearTimeout(ksoIdleResetTimer);
+      window.clearTimeout(ksoIdleWarningTimer);
+      hideKsoIdleWarning();
+      window.__ksoSelectedMethodCode = "";
+      try {
+        if (window.AppModal?.isOpen?.()) window.AppModal.close("kso-idle");
+      } catch {}
+      try {
+        await clearCartAll();
+      } catch {}
+      try {
+        if (typeof clearCustomer === "function") clearCustomer({ fullReset: true });
+      } catch {}
+      showKsoMethodGate();
+    } finally {
+      ksoIdleResetInProgress = false;
+    }
   }
 
   function resetKsoIdleTimer() {
     if (!isKsoPage()) return;
+    hideKsoIdleWarning();
+    window.clearTimeout(ksoIdleWarningTimer);
     window.clearTimeout(ksoIdleResetTimer);
+    ksoIdleWarningTimer = window.setTimeout(() => {
+      showKsoIdleWarning();
+    }, Math.max(0, KSO_IDLE_RESET_MS - KSO_IDLE_WARNING_MS));
     ksoIdleResetTimer = window.setTimeout(() => {
       void resetKsoToMethodGate();
     }, KSO_IDLE_RESET_MS);
+  }
+
+  function handleKsoIdleActivity(event) {
+    const target = event?.target;
+    if (target?.closest?.("#shopKsoIdleWarning")) return;
+    resetKsoIdleTimer();
   }
 
   function bindKsoIdleReset() {
     if (!isKsoPage() || ksoIdleEventsBound) return;
     ksoIdleEventsBound = true;
     ["pointerdown", "click", "keydown", "scroll", "touchstart"].forEach((eventName) => {
-      window.addEventListener(eventName, resetKsoIdleTimer, { passive: true, capture: true });
+      window.addEventListener(eventName, handleKsoIdleActivity, { passive: true, capture: true });
     });
     resetKsoIdleTimer();
   }
@@ -16377,6 +16479,7 @@ function removeFromCartByKey(cartKey, productId) {
     showKsoMethodGate();
   }
   window.initKsoMethodGate = initKsoMethodGate;
+  window.resetKsoToMethodGate = resetKsoToMethodGate;
 
 function updateCartBadge() {
   const n = cartCountTotal();
