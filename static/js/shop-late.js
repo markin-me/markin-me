@@ -4279,12 +4279,12 @@ function buildProductDetailsContent(
     ingredientsWrap.className = "shop-pd-ingredients";
 
     const title = document.createElement("div");
-    title.className = "shop-pd-section-title";
-    title.textContent = "Состав (можно настроить):";
+    title.className = "shop-pd-section-title shop-pd-ingredient-title";
+    title.textContent = "Состав товара:";
     ingredientsWrap.appendChild(title);
 
     const ingredientsCards = document.createElement("div");
-    ingredientsCards.className = "shop-pd-option-cards";
+    ingredientsCards.className = "shop-pd-ingredient-cards";
     ingredientsWrap.appendChild(ingredientsCards);
 
     ingredients.forEach((ing) => {
@@ -4339,80 +4339,66 @@ function buildProductDetailsContent(
       ingredientState?.set(ingId, state);
       const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
       
-      // Рассчитываем цену за единицу с учетом base_qty (как в админке)
-      const { currentPricePerUnit: pricePerUnit } = getIngredientUnitPricing(ing);
-      
-      // Цена текущего количества
-      const currentQtyInBase = getQtyInBase(ing, currentQty);
-      const currentTotalPrice = currentQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * currentQtyInBase : 0;
-      
-      // Цена базового количества (из БД)
-      const baseQty = Number(ing.quantity ?? 1);
-      const baseQtyInBase = getQtyInBase(ing, baseQty);
-      const baseTotalPrice = baseQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * baseQtyInBase : 0;
-      
-      // Разница от базового состава
-      const totalPrice = currentTotalPrice - baseTotalPrice;
-
       const block = document.createElement("div");
-      block.className = "shop-pd-option-card";
+      block.className = "shop-pd-option-card shop-pd-ingredient-card";
       block.setAttribute("data-ingredient-id", ingId);
 
       const cardContent = document.createElement("div");
-      cardContent.className = "shop-pd-option-card-content";
-      cardContent.style.display = "flex";
-      cardContent.style.alignItems = "center";
-      cardContent.style.width = "100%";
-      cardContent.style.gap = "8px";
+      cardContent.className = "shop-pd-option-card-content shop-pd-ingredient-card-content";
 
       const photo = document.createElement("div");
-      photo.className = "shop-pd-option-thumb";
+      photo.className = "shop-pd-option-thumb shop-pd-ingredient-photo";
       if (ing.ingredient_photos && ing.ingredient_photos.length > 0) {
         const img = createOptimizedImage(ing.ingredient_photos[0], {
           type: 'thumb',
           className: '',
           alt: ''
         });
-        img.style.width = "100%";
-        img.style.height = "100%";
-        img.style.objectFit = "cover";
         photo.appendChild(img);
       } else {
         photo.textContent = "—";
       }
 
       const info = document.createElement("div");
-      info.className = "shop-pd-option-info";
-      info.style.flex = "1";
-      info.style.minWidth = "0";
+      info.className = "shop-pd-option-info shop-pd-ingredient-info";
 
       const name = document.createElement("div");
-      name.className = "shop-pd-option-name";
+      name.className = "shop-pd-option-name shop-pd-ingredient-name";
       name.textContent = ing.ingredient_name || "";
 
+      const qtyDisplay = document.createElement("div");
+      qtyDisplay.className = "shop-pd-ingredient-qty-value";
+      qtyDisplay.textContent = `${currentQty} ${unitLabel}`.trim();
+      const createIngredientQtyPlaceholder = (side) => {
+        const placeholder = document.createElement("span");
+        placeholder.className = `shop-pd-ingredient-qty-placeholder shop-pd-ingredient-qty-placeholder--${side}`;
+        placeholder.setAttribute("aria-hidden", "true");
+        return placeholder;
+      };
+
       if (isVariable) {
-        // Variable ingredient - show controls
         const controls = document.createElement("div");
         controls.className = "shop-pd-ingredient-controls";
-        controls.style.display = "flex";
-        controls.style.alignItems = "center";
-        controls.style.gap = "8px";
+        const canMinus = currentQty > min;
+        const canPlus = currentQty < max && !isIngUnavailableForPlus();
 
-        const btnMinus = document.createElement("button");
-        btnMinus.type = "button";
-        btnMinus.className = "btn btn-sm qty-btn qty-minus";
-        btnMinus.textContent = "−";
-        btnMinus.disabled = currentQty <= min;
+        let btnMinus = null;
+        if (canMinus) {
+          btnMinus = document.createElement("button");
+          btnMinus.type = "button";
+          btnMinus.className = "shop-pd-ingredient-qty-btn shop-pd-ingredient-qty-btn--minus";
+          btnMinus.setAttribute("data-action", "ingredient-minus");
+          btnMinus.textContent = "−";
+        }
 
-        const qtyDisplay = document.createElement("div");
-        qtyDisplay.className = "qty-display";
-        qtyDisplay.textContent = `${currentQty} ${unitLabel}`;
-
-        const btnPlus = document.createElement("button");
-        btnPlus.type = "button";
-        btnPlus.className = "btn btn-sm qty-btn qty-plus";
-        btnPlus.textContent = "+";
-        btnPlus.disabled = currentQty >= max || isIngUnavailableForPlus();
+        let btnPlus = null;
+        if (canPlus) {
+          btnPlus = document.createElement("button");
+          btnPlus.type = "button";
+          btnPlus.className = "shop-pd-ingredient-qty-btn shop-pd-ingredient-qty-btn--plus";
+          btnPlus.setAttribute("data-action", "ingredient-plus");
+          btnPlus.textContent = "+";
+        }
 
         const bindPressFx = (btn) => {
           if (!btn) return;
@@ -4430,30 +4416,18 @@ function buildProductDetailsContent(
         bindPressFx(btnMinus);
         bindPressFx(btnPlus);
 
-        controls.appendChild(btnMinus);
+        controls.appendChild(btnMinus || createIngredientQtyPlaceholder("minus"));
         controls.appendChild(qtyDisplay);
-        controls.appendChild(btnPlus);
-
-        const priceInfo = document.createElement("div");
-        priceInfo.className = "shop-pd-option-price";
-        // Всегда создаем элемент ingredient-total, скрываем если 0
-        const priceSign = totalPrice >= 0 ? "+" : "";
-        priceInfo.innerHTML = `
-          <div class="ingredient-total">${Math.abs(totalPrice) > 0.01 ? `${priceSign}${money(totalPrice)}` : ""}</div>
-        `;
-        if (Math.abs(totalPrice) <= 0.01) {
-          priceInfo.style.display = "none";
-        }
+        controls.appendChild(btnPlus || createIngredientQtyPlaceholder("plus"));
 
         info.appendChild(name);
-        info.appendChild(priceInfo);
+        info.appendChild(controls);
         
         cardContent.appendChild(photo);
         cardContent.appendChild(info);
-        cardContent.appendChild(controls);
 
         // Handlers: минус — вычитаем шаг, округляем до шага от min, ограничиваем min..max
-        btnMinus.addEventListener("click", (e) => {
+        if (btnMinus) btnMinus.addEventListener("click", (e) => {
           e.stopPropagation();
           const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
           let newQty = currentStateQty - step;
@@ -4478,10 +4452,9 @@ function buildProductDetailsContent(
           }
         });
 
-        btnPlus.addEventListener("click", (e) => {
+        if (btnPlus) btnPlus.addEventListener("click", (e) => {
           e.stopPropagation();
           if (isIngUnavailableForPlus()) {
-            btnPlus.disabled = true;
             showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
             return;
           }
@@ -4501,7 +4474,6 @@ function buildProductDetailsContent(
               ingredientState?.set(ingId, nextState);
             }, { showToastOnOut: true });
             if (!applied) {
-              btnPlus.disabled = true;
               return;
             }
             refreshNutritionCard();
@@ -4510,22 +4482,12 @@ function buildProductDetailsContent(
         });
 
       } else {
-        // Fixed ingredient - show only info
-        const qtyInfo = document.createElement("div");
-        qtyInfo.className = "shop-pd-option-price";
-        qtyInfo.style.fontSize = "13px";
-        qtyInfo.style.color = "var(--text-muted, #888)";
-        qtyInfo.textContent = `${currentQty} ${unitLabel}`;
-
-        const priceInfo = document.createElement("div");
-        priceInfo.className = "shop-pd-option-price";
-        priceInfo.innerHTML = `
-          <div class="ingredient-total">+${money(totalPrice)}</div>
-        `;
+        const controls = document.createElement("div");
+        controls.className = "shop-pd-ingredient-controls shop-pd-ingredient-controls--fixed";
+        controls.appendChild(qtyDisplay);
 
         info.appendChild(name);
-        info.appendChild(qtyInfo);
-        info.appendChild(priceInfo);
+        info.appendChild(controls);
         
         cardContent.appendChild(photo);
         cardContent.appendChild(info);
@@ -4535,6 +4497,63 @@ function buildProductDetailsContent(
 
       ingredientsCards.appendChild(block);
     });
+
+    ingredientsCards.addEventListener("click", (e) => {
+      const btn = e.target && e.target.closest
+        ? e.target.closest('[data-action="ingredient-minus"], [data-action="ingredient-plus"]')
+        : null;
+      if (!btn || !ingredientsCards.contains(btn)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+
+      const block = btn.closest("[data-ingredient-id]");
+      const ingId = Number(block?.getAttribute("data-ingredient-id") || 0);
+      if (!Number.isFinite(ingId) || ingId <= 0) return;
+      const ing = ingredients.find((item) => Number(item?.ingredient_id || 0) === ingId);
+      if (!ing) return;
+
+      const isVariableIng = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+      if (!isVariableIng) return;
+
+      const defaultQty = Number(ing.quantity ?? 1);
+      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+      const min = rawMin !== null ? rawMin : 0;
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+      const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? defaultQty);
+      const isPlus = btn.getAttribute("data-action") === "ingredient-plus";
+
+      let newQty = currentStateQty + (isPlus ? step : -step);
+      if (!isPlus && newQty <= 0) {
+        newQty = 0;
+      } else {
+        if (step > 0) {
+          const stepsFromMin = Math.round((newQty - min) / step);
+          newQty = min + (stepsFromMin * step);
+        }
+        newQty = Math.max(min, Math.min(max, newQty));
+      }
+      if (newQty === currentStateQty) return;
+
+      const applyNextQty = () => {
+        const prevState = ingredientState?.get(ingId);
+        const nextState = prevState && typeof prevState === "object"
+          ? { ...prevState, quantity: newQty }
+          : { quantity: newQty };
+        ingredientState?.set(ingId, nextState);
+      };
+
+      if (isPlus) {
+        const applied = runGuardedMutation(applyNextQty, { showToastOnOut: true });
+        if (!applied) return;
+      } else {
+        applyNextQty();
+      }
+
+      refreshNutritionCard();
+      if (typeof onIngredientChange === "function") onIngredientChange();
+    }, true);
 
     scroll.appendChild(ingredientsWrap);
   }
@@ -5455,48 +5474,97 @@ optionGroups.forEach((group) => {
       state.quantity = currentQty;
       
       const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
-      
-      const { currentPricePerUnit: pricePerUnit } = getIngredientUnitPricing(ing);
-      
-      // Цена текущего количества
-      const currentQtyInBase = getQtyInBase(ing, currentQty);
-      const currentTotalPrice = currentQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * currentQtyInBase : 0;
-      
-      // Цена базового количества (из БД)
-      const baseQty = Number(ing.quantity ?? 1);
-      const baseQtyInBase = getQtyInBase(ing, baseQty);
-      const baseTotalPrice = baseQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * baseQtyInBase : 0;
-      
-      // Разница от базового состава
-      const totalPrice = currentTotalPrice - baseTotalPrice;
-      
-      const qtyDisplay = block.querySelector(".qty-display");
-      if (qtyDisplay) qtyDisplay.textContent = `${currentQty} ${unitLabel}`;
-      
-      const priceInfoEl = block.querySelector(".shop-pd-ingredient-price");
-      let totalEl = block.querySelector(".ingredient-total");
-      
-      // Если элемента нет, создаем его
-      if (!totalEl && priceInfoEl) {
-        totalEl = document.createElement("div");
-        totalEl.className = "ingredient-total";
-        priceInfoEl.appendChild(totalEl);
+
+      const qtyDisplay = block.querySelector(".shop-pd-ingredient-qty-value");
+      if (qtyDisplay) qtyDisplay.textContent = `${currentQty} ${unitLabel}`.trim();
+
+      const controls = block.querySelector(".shop-pd-ingredient-controls");
+      if (controls && isVariableIng) {
+        controls.querySelector(".shop-pd-ingredient-qty-btn--minus")?.remove();
+        controls.querySelector(".shop-pd-ingredient-qty-btn--plus")?.remove();
+        controls.querySelector(".shop-pd-ingredient-qty-placeholder--minus")?.remove();
+        controls.querySelector(".shop-pd-ingredient-qty-placeholder--plus")?.remove();
+        const canMinus = currentQty > min;
+        const canPlus = currentQty < max && !isIngUnavailableForPlus();
+        controls.classList.remove("shop-pd-ingredient-controls--fixed");
+        const createIngredientQtyPlaceholder = (side) => {
+          const placeholder = document.createElement("span");
+          placeholder.className = `shop-pd-ingredient-qty-placeholder shop-pd-ingredient-qty-placeholder--${side}`;
+          placeholder.setAttribute("aria-hidden", "true");
+          return placeholder;
+        };
+        let btnMinus = null;
+        let btnPlus = null;
+
+        if (canMinus) {
+          btnMinus = document.createElement("button");
+          btnMinus.type = "button";
+          btnMinus.className = "shop-pd-ingredient-qty-btn shop-pd-ingredient-qty-btn--minus";
+          btnMinus.setAttribute("data-action", "ingredient-minus");
+          btnMinus.textContent = "−";
+          btnMinus.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
+            let newQty = currentStateQty - step;
+            if (isVariableIng && newQty <= 0) {
+              newQty = 0;
+            } else {
+              if (step > 0) {
+                const stepsFromMin = Math.round((newQty - min) / step);
+                newQty = min + (stepsFromMin * step);
+              }
+              newQty = Math.max(min, Math.min(max, newQty));
+            }
+            if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
+              const prevState = ingredientState?.get(ingId);
+              const nextState = prevState && typeof prevState === "object"
+                ? { ...prevState, quantity: newQty }
+                : { quantity: newQty };
+              ingredientState?.set(ingId, nextState);
+              refreshNutritionCard();
+              onIngredientChange();
+            }
+          });
+        }
+
+        if (canPlus) {
+          btnPlus = document.createElement("button");
+          btnPlus.type = "button";
+          btnPlus.className = "shop-pd-ingredient-qty-btn shop-pd-ingredient-qty-btn--plus";
+          btnPlus.setAttribute("data-action", "ingredient-plus");
+          btnPlus.textContent = "+";
+          btnPlus.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (isIngUnavailableForPlus()) {
+              showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+              return;
+            }
+            const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
+            let newQty = currentStateQty + step;
+            if (step > 0) {
+              const stepsFromMin = Math.round((newQty - min) / step);
+              newQty = min + (stepsFromMin * step);
+            }
+            newQty = Math.max(min, Math.min(max, newQty));
+            if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
+              const applied = runGuardedMutation(() => {
+                const prevState = ingredientState?.get(ingId);
+                const nextState = prevState && typeof prevState === "object"
+                  ? { ...prevState, quantity: newQty }
+                  : { quantity: newQty };
+                ingredientState?.set(ingId, nextState);
+              }, { showToastOnOut: true });
+              if (!applied) return;
+              refreshNutritionCard();
+              onIngredientChange();
+            }
+          });
+        }
+        if (qtyDisplay) {
+          controls.insertBefore(btnMinus || createIngredientQtyPlaceholder("minus"), qtyDisplay);
+          controls.appendChild(btnPlus || createIngredientQtyPlaceholder("plus"));
+        }
       }
-      
-      // Показываем разницу от базового состава, скрываем если 0
-      if (Math.abs(totalPrice) > 0.01) {
-        const priceSign = totalPrice >= 0 ? "+" : "";
-        if (totalEl) totalEl.textContent = `${priceSign}${money(totalPrice)}`;
-        if (priceInfoEl) priceInfoEl.style.display = "";
-      } else {
-        if (totalEl) totalEl.textContent = "";
-        if (priceInfoEl) priceInfoEl.style.display = "none";
-      }
-      
-      const btnMinus = block.querySelector(".qty-minus");
-      const btnPlus = block.querySelector(".qty-plus");
-      if (btnMinus) btnMinus.disabled = currentQty <= min;
-      if (btnPlus) btnPlus.disabled = currentQty >= max || isIngUnavailableForPlus();
     });
   };
 
