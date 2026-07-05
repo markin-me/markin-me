@@ -18798,6 +18798,20 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   color: var(--color-text);
   margin: 0 0 -8px;
 }
+.shop-pd-variants-title{
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1.15;
+  color: var(--color-text);
+  margin: 0 0 -8px;
+}
+.shop-pd-variant-group-title{
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0;
+}
 .shop-pd-option-accordion{
   border: 0;
   background: transparent;
@@ -19516,6 +19530,14 @@ div.shop-pd-option-thumb{
 }
 
 .shop-pd-section-title.shop-pd-options-title{
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1.15;
+  color: var(--color-text);
+  margin-bottom: -8px;
+}
+
+.shop-pd-section-title.shop-pd-variants-title{
   font-size: 17px;
   font-weight: 900;
   line-height: 1.15;

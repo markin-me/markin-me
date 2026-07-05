@@ -2732,8 +2732,13 @@ function buildProductDetailsContent(
     const variantWrap = document.createElement("div");
     variantWrap.className = "shop-pd-options";
 
+    const variantSectionTitle = document.createElement("div");
+    variantSectionTitle.className = "shop-pd-section-title shop-pd-variants-title";
+    variantSectionTitle.textContent = "Варианты товара:";
+    variantWrap.appendChild(variantSectionTitle);
+
     const variantTitle = document.createElement("div");
-    variantTitle.className = "shop-pd-section-title";
+    variantTitle.className = "shop-pd-variant-group-title";
     variantTitle.textContent = variantGroup.title || "Варианты";
     variantWrap.appendChild(variantTitle);
 
