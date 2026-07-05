@@ -18891,6 +18891,22 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   margin: 0 -8px -8px;
   padding: 8px;
 }
+.shop-pd-option-product-more{
+  justify-self: center;
+  min-height: 32px;
+  min-width: 148px;
+  margin: 0 8px 2px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
+  color: var(--shop-buy-text);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(20, 29, 48, 0.16);
+}
 .shop-pd-option-product-card{
   position: relative;
   box-sizing: border-box;

@@ -2956,6 +2956,8 @@ function buildProductDetailsContent(
       }
       return `Выберите до ${maxCount} ${getOptionWord(maxCount)}`;
     };
+    const expandedOptionGroups = renderProductDetailsInto._expandedOptionGroups || new Map();
+    renderProductDetailsInto._expandedOptionGroups = expandedOptionGroups;
 
     const getOptionVariantContext = (item, groupState, allowVariants) => {
       const itemId = Number(item?.id);
@@ -3199,7 +3201,7 @@ function buildProductDetailsContent(
       return card;
     };
 
-    const renderProductOptionCardsGroup = (group, groupState, groupType, titleText) => {
+    const renderProductOptionCardsGroup = (group, groupState, groupType, titleText, { append = true } = {}) => {
       if (!["single", "multiple_group", "multiple_item"].includes(groupType)) return false;
 
       const allowVariants = Boolean(group.allow_variants);
@@ -3225,7 +3227,7 @@ function buildProductDetailsContent(
       block.appendChild(itemsWrap);
 
       const rerender = () => {
-        const nextBlock = renderProductOptionCardsGroup(group, groupState, groupType, titleText);
+        const nextBlock = renderProductOptionCardsGroup(group, groupState, groupType, titleText, { append: false });
         if (nextBlock && block.parentNode) block.replaceWith(nextBlock);
       };
       const notifyChanged = () => {
@@ -3244,6 +3246,10 @@ function buildProductDetailsContent(
         });
         if (firstAvailable?.id) groupState.selectedId = Number(firstAvailable.id);
       }
+
+      const groupKey = Number(group?.id || 0) || titleText;
+      const isExpanded = expandedOptionGroups.get(groupKey) === true;
+      let availableCardCount = 0;
 
       (group.items || []).forEach((item) => {
         const itemId = Number(item.id);
@@ -3310,6 +3316,9 @@ function buildProductDetailsContent(
             notifyChanged();
           };
         }
+
+        availableCardCount += 1;
+        if (!isExpanded && availableCardCount > 3) return;
 
         const card = createOptionProductCard({
           item,
@@ -3403,7 +3412,21 @@ function buildProductDetailsContent(
         itemsWrap.appendChild(card);
       });
 
-      optionsWrap.appendChild(block);
+      if (availableCardCount > 3) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "shop-pd-option-product-more";
+        toggle.textContent = isExpanded ? "Показать меньше" : "Показать все";
+        toggle.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          expandedOptionGroups.set(groupKey, !isExpanded);
+          rerender();
+        });
+        block.appendChild(toggle);
+      }
+
+      if (append) optionsWrap.appendChild(block);
       return block;
     };
 
