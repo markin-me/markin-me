@@ -2904,10 +2904,514 @@ function buildProductDetailsContent(
     optionsWrap = document.createElement("div");
     optionsWrap.className = "shop-pd-options";
 
+    const optionsTitle = document.createElement("div");
+    optionsTitle.className = "shop-pd-section-title shop-pd-options-title";
+    optionsTitle.textContent = "Опции товара:";
+    optionsWrap.appendChild(optionsTitle);
+
+    const getOptionWord = (count) => {
+      const abs = Math.abs(Number(count || 0));
+      const mod10 = abs % 10;
+      const mod100 = abs % 100;
+      if (mod10 === 1 && mod100 !== 11) return "опции";
+      if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "опций";
+      return "опций";
+    };
+
+    const getOptionGroupSelectedCount = (groupState, groupType) => {
+      if (!groupState) return 0;
+      if (groupType === "single") return Number(groupState.selectedId || 0) > 0 ? 1 : 0;
+      if (groupType === "multiple_group") return groupState.selectedIds?.size || 0;
+      if (groupType === "multiple_item") {
+        let count = 0;
+        groupState.qtyById?.forEach((qty) => {
+          if (Number(qty || 0) > 0) count += 1;
+        });
+        return count;
+      }
+      return 0;
+    };
+
+    const getOptionGroupMaxCount = (group, groupState, groupType) => {
+      const stateMax = Number(groupState?.maxSelect);
+      if (Number.isFinite(stateMax) && stateMax > 0) return stateMax;
+      const groupMax = Number(group?.max_select);
+      if (Number.isFinite(groupMax) && groupMax > 0) return groupMax;
+      if (groupType === "single") return 1;
+      if (groupType === "multiple_item") {
+        const totalMax = (group.items || []).reduce((sum, item) => {
+          const max = Number(item?.qty_max ?? 1);
+          return sum + (Number.isFinite(max) && max > 0 ? 1 : 0);
+        }, 0);
+        return totalMax || 1;
+      }
+      return Math.max(1, (group.items || []).length);
+    };
+
+    const getOptionGroupHint = (group, groupState, groupType) => {
+      const maxCount = getOptionGroupMaxCount(group, groupState, groupType);
+      if (group?.is_required) {
+        const selectedCount = getOptionGroupSelectedCount(groupState, groupType);
+        return `Выбрано ${selectedCount} из ${maxCount} ${getOptionWord(maxCount)}`;
+      }
+      return `Выберите до ${maxCount} ${getOptionWord(maxCount)}`;
+    };
+
+    const getOptionVariantContext = (item, groupState, allowVariants) => {
+      const itemId = Number(item?.id);
+      const variantGroup = allowVariants && Array.isArray(item?.variants) ? item.variants[0] : null;
+      const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+      const hasVariants = Boolean(variantGroup && values.length);
+      const unitLabel = str(
+        variantGroup?.unit_short_title ||
+        variantGroup?.unit_code ||
+        variantGroup?.unit_title ||
+        ""
+      ).trim();
+      const hasLetters = (value) => /[a-zа-я]/i.test(String(value || ""));
+      const formatValueLabel = (value) => {
+        const valueText = str(value);
+        if (!valueText) return "";
+        if (!unitLabel || hasLetters(valueText)) return valueText;
+        return `${valueText} ${unitLabel}`;
+      };
+      const currentVariant = groupState?.variantByItemId?.get(itemId);
+      const defaultIdx = variantGroup?.default_value_index != null
+        ? Number(variantGroup.default_value_index)
+        : (values.length ? 0 : null);
+      const selectedIdx = Number.isFinite(Number(currentVariant?.variant_value_index))
+        ? Number(currentVariant.variant_value_index)
+        : defaultIdx;
+
+      if (
+        hasVariants &&
+        !currentVariant &&
+        Number.isFinite(selectedIdx) &&
+        selectedIdx >= 0 &&
+        selectedIdx < values.length
+      ) {
+        groupState.variantByItemId.set(
+          itemId,
+          buildOptionItemVariantState(item, variantGroup, selectedIdx, values[selectedIdx])
+        );
+      }
+
+      return {
+        hasVariants,
+        variantGroup,
+        values,
+        selectedIdx: Number.isFinite(Number(selectedIdx)) ? Number(selectedIdx) : null,
+        formatValueLabel,
+      };
+    };
+
+    const createOptionProductSpinSide = (side, enabled, onClick) => {
+      if (!enabled) {
+        const placeholder = document.createElement("span");
+        placeholder.className = `shop-pd-option-product-spin-placeholder is-${side}`;
+        return placeholder;
+      }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `shop-pd-option-product-spin-btn is-${side}`;
+      btn.textContent = side === "minus" ? "−" : "+";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof onClick === "function") onClick(e);
+      });
+      return btn;
+    };
+
+    const renderOptionProductSpinCenter = (center, item, variantData, variantLabel, qtyMultiplier = 1) => {
+      if (!center) return;
+      const pricing = getOptionItemDisplayPricing(item, variantData);
+      const qty = Math.max(1, Number(qtyMultiplier || 1));
+      const currentTotal = roundPrice(Number(pricing.currentPrice || 0) * qty);
+      const oldTotal = pricing.showOld
+        ? roundPrice(Number(pricing.originalPrice || 0) * qty)
+        : 0;
+      center.innerHTML = "";
+
+      const oldPrice = document.createElement("div");
+      oldPrice.className = "shop-pd-option-product-old";
+      oldPrice.textContent = pricing.showOld ? money(oldTotal) : "";
+      center.appendChild(oldPrice);
+
+      const price = document.createElement("div");
+      price.className = "shop-pd-option-product-price";
+      price.textContent = money(currentTotal);
+      center.appendChild(price);
+
+      const value = document.createElement("div");
+      value.className = "shop-pd-option-product-value";
+      value.textContent = variantLabel || "";
+      center.appendChild(value);
+    };
+
+    const createOptionProductCard = ({
+      item,
+      groupState,
+      groupType,
+      allowVariants,
+      isSelected,
+      isUnavailable,
+      onCardClick,
+      onVariantChange,
+      selectForSpin,
+      resetQty,
+      selectedQty = 0,
+      qtyText = "",
+      canQtyMinus = false,
+      canQtyPlus = false,
+      onQtyMinus,
+      onQtyPlus,
+    }) => {
+      const itemId = Number(item.id);
+      const variantCtx = getOptionVariantContext(item, groupState, allowVariants);
+      const currentVariant = groupState.variantByItemId.get(itemId);
+      const variantLabel = variantCtx.hasVariants && variantCtx.selectedIdx != null
+        ? variantCtx.formatValueLabel(variantCtx.values[variantCtx.selectedIdx])
+        : "";
+      const photoQty = Number(selectedQty || 0);
+      const pricing = getOptionItemDisplayPricing(item, currentVariant);
+
+      const card = document.createElement("div");
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.className = "shop-pd-option-product-card";
+      card.classList.toggle("is-selected", !!isSelected);
+      card.classList.toggle("is-unavailable", !!isUnavailable);
+      card.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (typeof onCardClick === "function") onCardClick(e);
+      });
+      card.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        if (typeof onCardClick === "function") onCardClick(e);
+      });
+
+      const photoWrap = document.createElement("div");
+      photoWrap.className = "shop-pd-option-product-photo";
+      if (item.photo) {
+        photoWrap.appendChild(createOptimizedImage(item.photo, {
+          type: "thumb",
+          className: "shop-pd-option-product-img",
+          alt: "",
+        }));
+      } else {
+        const placeholder = document.createElement("div");
+        placeholder.className = "shop-pd-option-product-img is-placeholder";
+        placeholder.textContent = "—";
+        photoWrap.appendChild(placeholder);
+      }
+      if (isSelected && photoQty > 0) {
+        const qtyOverlay = document.createElement("div");
+        qtyOverlay.className = "shop-pd-option-product-photo-qty";
+        qtyOverlay.textContent = String(photoQty);
+        photoWrap.appendChild(qtyOverlay);
+      }
+      card.appendChild(photoWrap);
+
+      if (pricing.badgeText) {
+        const badge = document.createElement("span");
+        badge.className = "shop-pd-option-product-discount";
+        badge.textContent = pricing.badgeText;
+        card.appendChild(badge);
+      }
+
+      if (groupType === "multiple_item" && isSelected && typeof resetQty === "function") {
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "shop-pd-option-product-reset";
+        reset.textContent = "×";
+        reset.setAttribute("aria-label", "Сбросить количество");
+        reset.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          resetQty();
+        });
+        card.appendChild(reset);
+      }
+
+      const name = document.createElement("div");
+      name.className = "shop-pd-option-product-name";
+      name.textContent = str(item.title);
+      card.appendChild(name);
+
+      const spin = document.createElement("div");
+      spin.className = "shop-pd-option-product-spin";
+      const center = document.createElement("div");
+      center.className = "shop-pd-option-product-spin-center";
+
+      const canSwitchVariant = (nextIdx) => {
+        if (!variantCtx.hasVariants) return false;
+        if (!Number.isFinite(nextIdx) || nextIdx < 0 || nextIdx >= variantCtx.values.length) return false;
+        if (!isSelected) return true;
+        return canApplyDraftMutation(() => {
+          groupState.variantByItemId.set(
+            itemId,
+            buildOptionItemVariantState(item, variantCtx.variantGroup, nextIdx, variantCtx.values[nextIdx])
+          );
+        });
+      };
+      const currentIdx = variantCtx.selectedIdx;
+      const prevIdx = Number.isFinite(currentIdx) ? currentIdx - 1 : null;
+      const nextIdx = Number.isFinite(currentIdx) ? currentIdx + 1 : null;
+      const hasPrevVariant = variantCtx.hasVariants && canSwitchVariant(prevIdx);
+      const hasNextVariant = variantCtx.hasVariants && canSwitchVariant(nextIdx);
+
+      const applyVariantIdx = (idx) => {
+        if (!canSwitchVariant(idx)) return;
+        const mutator = () => {
+          if (!isSelected && typeof selectForSpin === "function" && selectForSpin() === false) {
+            return;
+          }
+          groupState.variantByItemId.set(
+            itemId,
+            buildOptionItemVariantState(item, variantCtx.variantGroup, idx, variantCtx.values[idx])
+          );
+        };
+        const applied = runGuardedMutation(mutator, { showToastOnOut: true });
+        if (!applied) return;
+        if (typeof onVariantChange === "function") onVariantChange();
+      };
+
+      const useQtyButtons = groupType !== "multiple_item";
+      const leftEnabled = variantCtx.hasVariants ? hasPrevVariant : (useQtyButtons && canQtyMinus);
+      const rightEnabled = variantCtx.hasVariants ? hasNextVariant : (useQtyButtons && canQtyPlus);
+      const leftAction = variantCtx.hasVariants ? () => applyVariantIdx(prevIdx) : onQtyMinus;
+      const rightAction = variantCtx.hasVariants ? () => applyVariantIdx(nextIdx) : onQtyPlus;
+
+      spin.appendChild(createOptionProductSpinSide("minus", leftEnabled, leftAction));
+      renderOptionProductSpinCenter(
+        center,
+        item,
+        currentVariant,
+        variantLabel,
+        groupType === "multiple_item" ? selectedQty : 1
+      );
+      spin.appendChild(center);
+      spin.appendChild(createOptionProductSpinSide("plus", rightEnabled, rightAction));
+      card.appendChild(spin);
+
+      return card;
+    };
+
+    const renderProductOptionCardsGroup = (group, groupState, groupType, titleText) => {
+      if (!["single", "multiple_group", "multiple_item"].includes(groupType)) return false;
+
+      const allowVariants = Boolean(group.allow_variants);
+      const block = document.createElement("div");
+      block.className = "shop-pd-option-block shop-pd-option-product-block";
+
+      const titleRow = document.createElement("div");
+      titleRow.className = "shop-pd-option-product-head";
+      const minSelect = groupState.minSelect ?? group.min_select ?? 0;
+      const maxSelect = groupState.maxSelect ?? group.max_select ?? null;
+      const titleName = document.createElement("div");
+      titleName.className = "shop-pd-section-title shop-pd-option-product-title";
+      titleName.textContent = titleText;
+      const titleHint = document.createElement("div");
+      titleHint.className = "shop-pd-option-product-hint";
+      titleHint.textContent = getOptionGroupHint(group, groupState, groupType);
+      titleRow.appendChild(titleName);
+      titleRow.appendChild(titleHint);
+      block.appendChild(titleRow);
+
+      const itemsWrap = document.createElement("div");
+      itemsWrap.className = "shop-pd-option-product-cards";
+      block.appendChild(itemsWrap);
+
+      const rerender = () => {
+        const nextBlock = renderProductOptionCardsGroup(group, groupState, groupType, titleText);
+        if (nextBlock && block.parentNode) block.replaceWith(nextBlock);
+      };
+      const notifyChanged = () => {
+        refreshNutritionCard();
+        if (typeof onSelectionChange === "function") onSelectionChange();
+      };
+
+      if (groupType === "single" && group?.is_required && (!groupState.selectedId || Number(groupState.selectedId) <= 0)) {
+        const firstAvailable = (group.items || []).find((item) => {
+          const itemId = Number(item.id);
+          const optionProductId = Number(item.target_product_id || 0);
+          if (!(Number.isFinite(optionProductId) && optionProductId > 0)) return true;
+          return canApplyDraftMutation(() => {
+            groupState.selectedId = itemId;
+          });
+        });
+        if (firstAvailable?.id) groupState.selectedId = Number(firstAvailable.id);
+      }
+
+      (group.items || []).forEach((item) => {
+        const itemId = Number(item.id);
+        const optionProductId = Number(item.target_product_id || 0);
+        const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
+
+        let selected = false;
+        let unavailable = false;
+        let qtyText = "";
+        let canQtyMinus = false;
+        let canQtyPlus = false;
+        let onQtyMinus = null;
+        let onQtyPlus = null;
+
+        if (groupType === "single") {
+          selected = Number(groupState.selectedId || 0) === itemId;
+          unavailable = !selected && hasOptionProductId && !canApplyDraftMutation(() => {
+            groupState.selectedId = itemId;
+          });
+          if (unavailable) return;
+        } else if (groupType === "multiple_group") {
+          selected = groupState.selectedIds.has(itemId);
+          unavailable = !selected && hasOptionProductId && !canApplyDraftMutation(() => {
+            groupState.selectedIds.add(itemId);
+          });
+          if (unavailable) return;
+        } else if (groupType === "multiple_item") {
+          const itemMin = Number(item.qty_min ?? 1);
+          const itemMax = Number(item.qty_max ?? 1);
+          const currentQty = Number(groupState.qtyById.get(itemId) || 0);
+          selected = currentQty > 0;
+          const canApplyOptionQtyMutation = (nextQty) => {
+            if (!hasOptionProductId) return true;
+            const safeQty = Math.max(0, Number(nextQty || 0));
+            return canApplyDraftMutation(() => {
+              if (safeQty > 0) groupState.qtyById.set(itemId, safeQty);
+              else groupState.qtyById.delete(itemId);
+            });
+          };
+          const targetQty = Math.max(currentQty, itemMin, 1);
+          unavailable = !selected && !canApplyOptionQtyMutation(targetQty);
+          if (unavailable) return;
+          qtyText = currentQty > 0 ? `${currentQty} шт` : "";
+          canQtyMinus = currentQty > itemMin;
+          canQtyPlus = currentQty < itemMax && canApplyOptionQtyMutation(currentQty > 0 ? currentQty + 1 : Math.max(itemMin, 1));
+          onQtyMinus = () => {
+            const current = Number(groupState.qtyById.get(itemId) || 0);
+            const nextQty = Math.max(itemMin, current - 1);
+            groupState.qtyById.set(itemId, nextQty);
+            rerender();
+            notifyChanged();
+          };
+          onQtyPlus = () => {
+            const current = Number(groupState.qtyById.get(itemId) || 0);
+            const nextQty = current > 0 ? Math.min(itemMax, current + 1) : Math.max(itemMin, 1);
+            const applied = runGuardedMutation(() => {
+              groupState.qtyById.set(itemId, nextQty);
+              if (allowVariants && typeof setDefaultVariantForOptionItem === "function") {
+                setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+              }
+            }, { showToastOnOut: true });
+            if (!applied) return;
+            rerender();
+            notifyChanged();
+          };
+        }
+
+        const card = createOptionProductCard({
+          item,
+          groupState,
+          groupType,
+          allowVariants,
+          isSelected: selected,
+          isUnavailable: unavailable,
+          qtyText,
+          selectedQty: groupType === "multiple_item"
+            ? Number(groupState.qtyById.get(itemId) || 0)
+            : (selected ? 1 : 0),
+          canQtyMinus,
+          canQtyPlus,
+          onQtyMinus,
+          onQtyPlus,
+          resetQty: () => {
+            groupState.qtyById.delete(itemId);
+            rerender();
+            notifyChanged();
+          },
+          selectForSpin: () => {
+            if (selected) return true;
+            if (groupType === "single") {
+              groupState.selectedId = itemId;
+              return true;
+            }
+            if (groupType === "multiple_group") {
+              const count = groupState.selectedIds.size;
+              if (maxSelect != null && count >= maxSelect) return false;
+              groupState.selectedIds.add(itemId);
+              return true;
+            }
+            if (groupType === "multiple_item") {
+              const itemMin = Number(item.qty_min ?? 1);
+              groupState.qtyById.set(itemId, Math.max(itemMin, 1));
+              return true;
+            }
+            return true;
+          },
+          onVariantChange: () => {
+            rerender();
+            notifyChanged();
+          },
+          onCardClick: () => {
+            if (groupType === "single") {
+              if (selected && !group?.is_required) {
+                groupState.selectedId = 0;
+              } else if (!selected) {
+                const applied = runGuardedMutation(() => {
+                  groupState.selectedId = itemId;
+                  if (allowVariants && typeof setDefaultVariantForOptionItem === "function") {
+                    setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+                  }
+                }, { showToastOnOut: true });
+                if (!applied) return;
+              }
+            } else if (groupType === "multiple_group") {
+              const count = groupState.selectedIds.size;
+              if (selected) {
+                if (minSelect > 0 && count <= minSelect) return;
+                groupState.selectedIds.delete(itemId);
+              } else {
+                if (maxSelect != null && count >= maxSelect) return;
+                const applied = runGuardedMutation(() => {
+                  groupState.selectedIds.add(itemId);
+                  if (allowVariants && typeof setDefaultVariantForOptionItem === "function") {
+                    setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+                  }
+                }, { showToastOnOut: true });
+                if (!applied) return;
+              }
+            } else if (groupType === "multiple_item") {
+              const current = Number(groupState.qtyById.get(itemId) || 0);
+              const itemMin = Number(item.qty_min ?? 1);
+              const itemMax = Number(item.qty_max ?? 1);
+              const nextQty = current > 0 ? Math.min(itemMax, current + 1) : Math.max(itemMin, 1);
+              if (nextQty <= current) return;
+              const applied = runGuardedMutation(() => {
+                groupState.qtyById.set(itemId, nextQty);
+                if (allowVariants && typeof setDefaultVariantForOptionItem === "function") {
+                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+                }
+              }, { showToastOnOut: true });
+              if (!applied) return;
+            }
+            rerender();
+            notifyChanged();
+          },
+        });
+        itemsWrap.appendChild(card);
+      });
+
+      optionsWrap.appendChild(block);
+      return block;
+    };
+
     optionGroups.forEach((group) => {
       const groupState = selectionState.get(group.id);
       const groupType = groupState?.type || getOptionGroupUiType(group);
       const titleText = group.title || "Опция";
+      if (renderProductOptionCardsGroup(group, groupState, groupType, titleText)) return;
 
       if (groupType === "single") {
         if (
