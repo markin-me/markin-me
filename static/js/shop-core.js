@@ -329,6 +329,16 @@
   const elCheckoutBenefitsContent = $("#shopCheckoutBenefitsContent");
   const elCheckoutBenefitDetailContent = $("#shopCheckoutBenefitDetailContent");
   const elProfileContent = $("#shopProfileContent");
+  const elProfilePage = $("#shopProfilePage");
+  const elProfilePageContent = $("#shopProfilePageContent");
+  const elProfilePageSettingsBtn = $("#shopProfilePageSettingsBtn");
+  const elProfileSettingsPage = $("#shopProfileSettingsPage");
+  const elProfileSettingsPageContent = $("#shopProfileSettingsPageContent");
+  const elProfileSettingsBackBtn = $("#shopProfileSettingsBackBtn");
+  const elProfileSettingsLogoutBtn = $("#shopProfileSettingsLogoutBtn");
+  const elProfileSettingsPageFooter = $("#shopProfileSettingsPageFooter");
+  const elProfileSettingsSaveBtn = $("#shopProfileSettingsSaveBtn");
+  const elProfileSettingsCancelBtn = $("#shopProfileSettingsCancelBtn");
   const elProductContent = $("#shopProductContent");
   const elProfileHeaderActions = $("#shopProfileHeaderActions");
   const elProfileCloseBtn = $("#shopProfileCloseBtn");
@@ -10925,7 +10935,10 @@ function setSheetHeaderMode(
     });
   }
 
-function showCartView() {
+  function showCartView() {
+    document.body.classList.remove("shop-profile-page-active");
+    document.body.classList.remove("shop-profile-settings-page-active");
+    if (elProfileSettingsPage) elProfileSettingsPage.classList.add("hidden");
   cleanupDesktopFavoritesPanelIfNeeded();
   setHeaderFavoritesButtonActive(false);
   cartViewMode = "cart";
@@ -10938,7 +10951,8 @@ function showCartView() {
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elCartContent) elCartContent.classList.remove("hidden");
-  if (elProfileContent) elProfileContent.classList.add("hidden");
+    if (elProfileContent) elProfileContent.classList.add("hidden");
+    if (elProfilePage) elProfilePage.classList.add("hidden");
   hideDesktopBenefitsPanels({ clearDetail: true });
 
   const line = getCartHeaderAddressLine();
@@ -11168,6 +11182,10 @@ function showPickupListView(backMode = "checkout") {
 }
 
   function showProfileView() {
+    document.body.classList.add("shop-profile-page-active");
+    document.body.classList.remove("shop-profile-settings-page-active");
+    if (elProfileSettingsPage) elProfileSettingsPage.classList.add("hidden");
+    setActiveNav("profile");
     cleanupDesktopFavoritesPanelIfNeeded();
     setHeaderFavoritesButtonActive(false);
     cartViewMode = "profile";
@@ -11178,6 +11196,7 @@ function showPickupListView(backMode = "checkout") {
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
     if (elProductContent) elProductContent.classList.add("hidden");
     if (elProfileContent) elProfileContent.classList.remove("hidden");
+    if (elProfilePage) elProfilePage.classList.remove("hidden");
     hideDesktopBenefitsPanels({ clearDetail: true });
     setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true, showBack: false });
     setCartFooterMode("hidden");
@@ -16315,6 +16334,14 @@ function removeFromCartByKey(cartKey, productId) {
     const overlay = document.getElementById("shopKsoMethodGate");
     if (overlay) overlay.classList.add("hidden");
     resetKsoIdleTimer();
+  }
+
+  function showProfileSettingsView() {
+    document.body.classList.remove("shop-profile-page-active");
+    document.body.classList.add("shop-profile-settings-page-active");
+    if (elProfilePage) elProfilePage.classList.add("hidden");
+    if (elProfileSettingsPage) elProfileSettingsPage.classList.remove("hidden");
+    setCartFooterMode("hidden");
   }
 
   function ensureKsoIdleWarningOverlay() {

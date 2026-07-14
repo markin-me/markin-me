@@ -30589,12 +30589,15 @@ function renderSheetAddressList() {
     window.bindRepeatOrderItemRows = bindRepeatOrderItemRows;
   }
 
-  function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "" } = {}) {
+  function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false } = {}) {
     host.innerHTML = "";
 
     const wrap = document.createElement("div");
     wrap.className = "shop-profile";
     wrap.classList.toggle("shop-profile--orders-only", !!ordersOnly);
+    const mobileEditActions = settingsPage ? elProfileSettingsPageFooter : elMobileAddressActions;
+    const mobileEditSaveBtn = settingsPage ? elProfileSettingsSaveBtn : elMobileAddressSaveBtn;
+    const mobileEditCancelBtn = settingsPage ? elProfileSettingsCancelBtn : elMobileAddressCancelBtn;
 
     const top = document.createElement("div");
     top.className = "shop-profile-top";
@@ -30616,7 +30619,7 @@ function renderSheetAddressList() {
     photoInput.className = "hidden";
 
     const photoActions = document.createElement("div");
-    photoActions.className = "shop-profile-photo-actions hidden";
+    photoActions.className = `shop-profile-photo-actions${settingsPage ? "" : " hidden"}`;
 
     const photoBtn = document.createElement("button");
     photoBtn.type = "button";
@@ -30626,7 +30629,8 @@ function renderSheetAddressList() {
     const photoRemoveBtn = document.createElement("button");
     photoRemoveBtn.type = "button";
     photoRemoveBtn.className = "btn shop-profile-photo-btn shop-profile-photo-btn--ghost";
-    photoRemoveBtn.textContent = "Удалить фото";
+    photoRemoveBtn.innerHTML = '<i class="fas fa-trash-can" aria-hidden="true"></i>';
+    photoRemoveBtn.setAttribute("aria-label", "Удалить фото");
 
     photo.appendChild(photoImg);
     photo.appendChild(photoPlaceholder);
@@ -30769,7 +30773,7 @@ function renderSheetAddressList() {
       const progressHtml = activeBonusLevel && buildProgressHtml
         ? buildProgressHtml(activeBonusLevel)
         : "";
-      if (progressHtml) {
+      if (progressHtml && !settingsPage) {
         const bonusProgress = document.createElement("div");
         bonusProgress.className = "shop-profile-bonus-progress";
         bonusProgress.innerHTML = progressHtml;
@@ -30789,7 +30793,7 @@ function renderSheetAddressList() {
     }
     wrap.appendChild(top);
 
-    if (!ordersOnly && typeof onLogout === "function") {
+    if (!ordersOnly && !settingsPage && typeof onLogout === "function") {
       const profileLogoutBtn = document.createElement("button");
       profileLogoutBtn.type = "button";
       profileLogoutBtn.className = "btn shop-profile-logout-btn";
@@ -32868,21 +32872,19 @@ function renderSheetAddressList() {
       nameActions.classList.toggle("hidden", !isEditing || isMobile);
       if (isMobile && elMobileAddressActions) {
         if (isEditing) {
-          elMobileAddressActions.classList.remove("hidden");
-          if (elMobileAddressSaveBtn) {
-            elMobileAddressSaveBtn.textContent = "Сохранить";
-            elMobileAddressSaveBtn.disabled = false;
-            elMobileAddressSaveBtn.onclick = () => nameSave.click();
+          mobileEditActions.classList.remove("hidden");
+          if (mobileEditSaveBtn) {
+            mobileEditSaveBtn.disabled = false;
+            mobileEditSaveBtn.onclick = () => nameSave.click();
           }
-          if (elMobileAddressCancelBtn) {
-            elMobileAddressCancelBtn.textContent = "Отмена";
-            elMobileAddressCancelBtn.disabled = false;
-            elMobileAddressCancelBtn.onclick = () => nameCancel.click();
+          if (mobileEditCancelBtn) {
+            mobileEditCancelBtn.disabled = false;
+            mobileEditCancelBtn.onclick = () => nameCancel.click();
           }
         } else if (!isBirthdayEditing) {
-          elMobileAddressActions.classList.add("hidden");
-          if (elMobileAddressSaveBtn) elMobileAddressSaveBtn.onclick = null;
-          if (elMobileAddressCancelBtn) elMobileAddressCancelBtn.onclick = null;
+          mobileEditActions.classList.add("hidden");
+          if (mobileEditSaveBtn) mobileEditSaveBtn.onclick = null;
+          if (mobileEditCancelBtn) mobileEditCancelBtn.onclick = null;
         }
       }
       if (isEditing) {
@@ -32903,23 +32905,21 @@ function renderSheetAddressList() {
       birthdayInput.classList.toggle("hidden", !isBirthdayEditing);
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
       birthdayActions.classList.toggle("hidden", !isBirthdayEditing || isMobile);
-      if (isMobile && elMobileAddressActions) {
+      if (isMobile && mobileEditActions) {
         if (isBirthdayEditing) {
-          elMobileAddressActions.classList.remove("hidden");
-          if (elMobileAddressSaveBtn) {
-            elMobileAddressSaveBtn.textContent = "Сохранить";
-            elMobileAddressSaveBtn.disabled = false;
-            elMobileAddressSaveBtn.onclick = () => birthdaySave.click();
+          mobileEditActions.classList.remove("hidden");
+          if (mobileEditSaveBtn) {
+            mobileEditSaveBtn.disabled = false;
+            mobileEditSaveBtn.onclick = () => birthdaySave.click();
           }
-          if (elMobileAddressCancelBtn) {
-            elMobileAddressCancelBtn.textContent = "Отмена";
-            elMobileAddressCancelBtn.disabled = false;
-            elMobileAddressCancelBtn.onclick = () => birthdayCancel.click();
+          if (mobileEditCancelBtn) {
+            mobileEditCancelBtn.disabled = false;
+            mobileEditCancelBtn.onclick = () => birthdayCancel.click();
           }
         } else if (!isEditing) {
-          elMobileAddressActions.classList.add("hidden");
-          if (elMobileAddressSaveBtn) elMobileAddressSaveBtn.onclick = null;
-          if (elMobileAddressCancelBtn) elMobileAddressCancelBtn.onclick = null;
+          mobileEditActions.classList.add("hidden");
+          if (mobileEditSaveBtn) mobileEditSaveBtn.onclick = null;
+          if (mobileEditCancelBtn) mobileEditCancelBtn.onclick = null;
         }
       }
       if (isBirthdayEditing) {
@@ -33024,7 +33024,7 @@ function renderSheetAddressList() {
       setTimeout(() => document.addEventListener("click", onDocClick), 0);
     }
 
-    if (!photoWrap.__photoMenuBound) {
+    if (!settingsPage && !photoWrap.__photoMenuBound) {
       photoWrap.__photoMenuBound = true;
       photoWrap.addEventListener("click", (e) => {
         const target = e.target;
@@ -33188,7 +33188,8 @@ function renderSheetAddressList() {
     }
     if (!forceOpen) rememberPreviousPanel();
     showProfileView();
-    if (!elProfileContent) return;
+    const profileHost = elProfilePageContent || elProfileContent;
+    if (!profileHost) return;
 
     const me = meOverride || await fetchMeSafe();
     if (!me) {
@@ -33207,8 +33208,8 @@ function renderSheetAddressList() {
           openProfilePanel(me2, { forceOpen: true });
         },
       });
-      elProfileContent.innerHTML = "";
-      elProfileContent.appendChild(loginWrap);
+      profileHost.innerHTML = "";
+      profileHost.appendChild(loginWrap);
       if (elProfileHeaderActions) elProfileHeaderActions.classList.add("hidden");
       setCartHeader({
         title: "Вход",
@@ -33221,7 +33222,7 @@ function renderSheetAddressList() {
     }
 
     const ctx = buildProfileContent({
-      host: elProfileContent,
+      host: profileHost,
       me,
       onLogout: async () => {
         const loggedOut = await handleProfileLogout();
@@ -33238,8 +33239,12 @@ function renderSheetAddressList() {
     if (elProfileSettingsBtn && elProfileMenu) {
       elProfileSettingsBtn.onclick = (e) => {
         e.stopPropagation();
-        elProfileMenu.classList.toggle("hidden");
+        void openProfileSettingsPage(me);
       };
+    }
+
+    if (elProfilePageSettingsBtn) {
+      elProfilePageSettingsBtn.onclick = () => void openProfileSettingsPage(me);
     }
 
     if (elProfileEditBtn && elProfileMenu) {
@@ -33266,6 +33271,34 @@ function renderSheetAddressList() {
     if (elProfileMenu && elProfileSettingsBtn) {
       attachProfileMenuOutsideClose(elProfileMenu, elProfileSettingsBtn);
     }
+  }
+
+  async function openProfileSettingsPage(meOverride) {
+    const me = meOverride || await fetchMeSafe();
+    if (!me || !elProfileSettingsPageContent) return;
+    showProfileSettingsView();
+    buildProfileContent({
+      host: elProfileSettingsPageContent,
+      me,
+      onLogout: async () => {
+        const loggedOut = await handleProfileLogout();
+        if (loggedOut) showCartView();
+      },
+      initialTab: "settings",
+      settingsPage: true,
+    });
+    const tabs = elProfileSettingsPageContent.querySelector(".shop-profile-tabs");
+    if (tabs) tabs.classList.add("hidden");
+    if (elProfileSettingsBackBtn) {
+      elProfileSettingsBackBtn.onclick = () => void openProfilePanel(me, { forceOpen: true });
+    }
+    if (elProfileSettingsLogoutBtn) {
+      elProfileSettingsLogoutBtn.onclick = async () => {
+        const loggedOut = await handleProfileLogout();
+        if (loggedOut) showCartView();
+      };
+    }
+    window.history.pushState({ profileSettings: true }, "", window.location.href);
   }
 
   function mountProfileModalMenu({ onEdit, onLogout }) {
@@ -33342,6 +33375,11 @@ function renderSheetAddressList() {
   async function openProfileSheet({ initialTab, onLoginSuccess, ordersOnly = false, sourceScreen = "" } = {}) {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (!isMobile) {
+      await openProfilePanel(null, { initialTab, onLoginSuccess });
+      return;
+    }
+
+    if (!ordersOnly) {
       await openProfilePanel(null, { initialTab, onLoginSuccess });
       return;
     }
@@ -40203,7 +40241,12 @@ function initShopLate() {
           openCartSheet();
         });
       }
-      bindNavToggle(elNavProfile, "profile", () => openProfileSheet());
+      if (elNavProfile) {
+        elNavProfile.addEventListener("click", () => {
+          closeShopSheetIfOpen();
+          void openProfilePanel(null, { forceOpen: true });
+        });
+      }
       if (!document.body?.classList.contains("page-kso")) {
         bindNavToggle(elNavFav, "favorites", openFavoritesSheet);
       }
@@ -40278,6 +40321,11 @@ function initShopLate() {
       let isHandlingBackButton = false;
       window.addEventListener("popstate", (e) => {
         if (isHandlingBackButton) return;
+
+        if (document.body?.classList.contains("shop-profile-settings-page-active")) {
+          void openProfilePanel(null, { forceOpen: true });
+          return;
+        }
       
         if (handleAndroidBackButton()) {
           // Предотвращаем стандартное поведение браузера
@@ -40318,6 +40366,12 @@ function initShopLate() {
 
       if (elNavMenu) {
         elNavMenu.addEventListener("click", () => {
+          if (document.body?.classList.contains("shop-profile-page-active")) {
+            showCartView();
+            setActiveNav("menu");
+            return;
+          }
+
           const isAnySheetOpen =
             window.AppModal &&
             typeof window.AppModal.isOpen === "function" &&

@@ -64,8 +64,8 @@
   <% } %>
 
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260601a') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260601a') %>" /></noscript>
+  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260714profile-photo5') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260714profile-photo5') %>" /></noscript>
   <link rel="preload" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" /></noscript>
 </head>
@@ -138,6 +138,13 @@
     </section>
   </div>
 
+  <% if (typeof profilePartial !== 'undefined' && profilePartial) { %>
+    <%- include(profilePartial) %>
+  <% } %>
+  <% if (typeof profileSettingsPartial !== 'undefined' && profileSettingsPartial) { %>
+    <%- include(profileSettingsPartial) %>
+  <% } %>
+
   <!-- Универсальная модалка (на мобиле = bottom sheet) -->
   <% const isKsoPage = typeof pageClass === 'string' && pageClass.split(/\s+/).includes('page-kso'); %>
   <% if (!isKsoPage) { %>
@@ -150,7 +157,7 @@
   <% } %>
 
   <script>
-    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260507l') %>";
+    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260714profile-footer') %>";
     <% if (!isKsoPage) { %>
       window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js?typing_hotfix=14&v=20260412a') %>";
     <% } else { %>

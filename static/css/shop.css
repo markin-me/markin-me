@@ -19297,6 +19297,201 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 @media (max-width: 768px){
+  body.shop-profile-page-active > header{
+    display: none !important;
+  }
+
+  body.shop-profile-page-active .shop-main{
+    display: none !important;
+  }
+
+  body.shop-profile-settings-page-active > header,
+  body.shop-profile-settings-page-active .shop-main,
+  body.shop-profile-settings-page-active .shop-mobile-bottom-container{
+    display: none !important;
+  }
+
+  .shop-profile-settings-page{
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: block;
+    width: 100vw;
+    overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--color-surface-2);
+  }
+
+  .shop-profile-settings-page.hidden{
+    display: none !important;
+  }
+
+  .shop-profile-settings-page-header{
+    min-height: 64px;
+    display: grid;
+    grid-template-columns: 48px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+  }
+
+  .shop-profile-settings-page-header h1{
+    margin: 0;
+    text-align: center;
+    font-size: 20px;
+  }
+
+  .shop-profile-settings-logout{
+    border: 0;
+    padding: 8px 0;
+    background: transparent;
+    color: var(--color-primary);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .shop-profile-settings-page-content{
+    padding: 24px 16px 32px;
+  }
+
+  .shop-profile-settings-page-footer{
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 25;
+    display: flex;
+    gap: 10px;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    background: var(--color-surface);
+    border-radius: 0;
+    box-shadow: 0 -4px 14px rgba(0,0,0,.08);
+  }
+
+  .shop-profile-settings-page-footer.hidden{
+    display: none !important;
+  }
+
+  .shop-profile-settings-page-footer .btn{
+    flex: 1 1 0;
+    min-height: 44px;
+    border-radius: 999px;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-top{
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-photo-wrap{
+    justify-items: center;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-photo-actions{
+    width: max-content !important;
+    max-width: 100%;
+    align-self: center;
+    display: flex !important;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-photo-btn{
+    width: 160px !important;
+    min-width: 160px !important;
+    flex: 0 0 160px !important;
+    min-width: 0;
+    padding: 12px 24px;
+    border-radius: 999px;
+    background: var(--color-primary);
+    color: #fff;
+    font-weight: 800;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-photo-btn--ghost{
+    width: 42px !important;
+    min-width: 42px !important;
+    max-width: 42px !important;
+    height: 42px;
+    padding: 0;
+    flex: 0 0 42px !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    border-radius: 50%;
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+  }
+
+  .shop-profile-settings-page-content .shop-profile-photo-btn--ghost i{
+    display: block;
+    line-height: 1;
+    margin: 0;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-photo-btn--ghost.hidden{
+    display: none !important;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-photo-menu{
+    display: none !important;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-bonus-progress,
+  .shop-profile-settings-page-content .shop-profile-logout-btn{
+    display: none !important;
+  }
+
+  .shop-profile-settings-page-content .shop-profile-info{
+    background: var(--color-surface);
+    border-radius: 24px;
+    padding: 16px;
+  }
+
+  .shop-profile-page{
+    position: fixed;
+    inset: 0 0 calc(var(--shop-bottomnav-h) + env(safe-area-inset-bottom)) 0;
+    z-index: 20;
+    display: block;
+    width: 100vw;
+    min-height: 0;
+    padding: 0 0 calc(var(--shop-bottomnav-h) + 24px + env(safe-area-inset-bottom));
+    background: var(--color-surface-2);
+    overflow-y: auto;
+  }
+
+  .shop-profile-page.hidden{
+    display: none !important;
+  }
+
+  .shop-profile-page-header{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 64px;
+    margin: 0;
+    padding: 0 16px;
+    background: var(--color-surface);
+    border-radius: 0;
+  }
+
+  .shop-profile-page-header h1{
+    margin: 0;
+    font-size: 28px;
+  }
+
+  .shop-profile-page-content{
+    min-height: 0;
+    padding: 16px;
+  }
+}
   .shop-pd-ingredient-cards{
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
