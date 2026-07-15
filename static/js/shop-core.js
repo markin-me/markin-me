@@ -16345,6 +16345,18 @@ function removeFromCartByKey(cartKey, productId) {
       wrap.className = "shop-kso-floating-cart-wrap hidden";
       document.body.appendChild(wrap);
     }
+    let homeBtn = document.getElementById("shopKsoFloatingCartHomeBtn");
+    if (!homeBtn) {
+      homeBtn = document.createElement("button");
+      homeBtn.type = "button";
+      homeBtn.id = "shopKsoFloatingCartHomeBtn";
+      homeBtn.className = "shop-kso-floating-cart-home hidden";
+      homeBtn.innerHTML = '<i class="fas fa-house" aria-hidden="true"></i><span>На главную</span>';
+      homeBtn.addEventListener("click", () => {
+        void resetKsoToMethodGate();
+      });
+      wrap.appendChild(homeBtn);
+    }
     let clearBtn = document.getElementById("shopKsoFloatingCartClearBtn");
     if (!clearBtn) {
       clearBtn = document.createElement("button");
@@ -16391,6 +16403,7 @@ function removeFromCartByKey(cartKey, productId) {
     const btn = ensureKsoFloatingCartButton();
     if (!btn) return;
     const wrap = document.getElementById("shopKsoFloatingCartWrap");
+    const homeBtn = document.getElementById("shopKsoFloatingCartHomeBtn");
     const clearBtn = document.getElementById("shopKsoFloatingCartClearBtn");
     const items = cartItemsResolved();
     const total = computeCartTotals(items).total;
@@ -16406,6 +16419,7 @@ function removeFromCartByKey(cartKey, productId) {
     const shouldShowClear = shouldShowCart && isCartOpen;
     btn.classList.toggle("hidden", !shouldShowCart);
     if (wrap) wrap.classList.toggle("hidden", !shouldShowCart);
+    if (homeBtn) homeBtn.classList.toggle("hidden", !shouldShowClear);
     if (clearBtn) {
       clearBtn.classList.toggle("hidden", !shouldShowClear);
       clearBtn.classList.toggle("is-confirm", shouldShowClear && clearBtn.classList.contains("is-confirm"));

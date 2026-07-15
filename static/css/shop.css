@@ -3826,6 +3826,61 @@ body.page-kso .app-modal-body{
   padding:0 16px 16px;
 }
 
+body.page-kso .app-modal-body:has(> .shop-kso-product-modal-body){
+  min-height:0;
+  overflow:hidden;
+}
+
+body.page-kso .app-modal-body > .shop-kso-product-modal-body{
+  position:relative;
+  width:100%;
+  height:100%;
+  min-height:0;
+  overflow:hidden;
+}
+
+body.page-kso .shop-kso-product-modal-body > .shop-pd{
+  width:100%;
+  height:100%;
+  min-height:0;
+}
+
+body.page-kso .shop-kso-product-modal-body .shop-pd-scroll{
+  min-height:0;
+  overflow:auto;
+  padding-bottom:88px;
+}
+
+body.page-kso .shop-kso-product-modal-body .shop-pd-footer{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  width:auto;
+  margin:0;
+  padding:12px 0 0;
+  border-top:1px solid var(--color-border);
+  background:var(--color-surface);
+  gap:12px;
+  z-index:2;
+}
+
+body.page-kso .shop-kso-product-modal-body .shop-pd-footer .qty-pill-wrap{
+  flex:0 0 144px;
+}
+
+body.page-kso .shop-kso-product-modal-body .shop-pd-footer .qty-pill,
+body.page-kso .shop-kso-product-modal-body .shop-pd-footer .shop-pd-action{
+  min-height:56px;
+  border-radius:18px;
+}
+
+body.page-kso .shop-kso-product-modal-body .shop-pd-footer .shop-pd-action{
+  flex:1 1 auto;
+  width:auto;
+  margin:0;
+}
+
 body.page-kso .app-modal-header{
   justify-content:flex-end;
   min-height:64px;
@@ -3994,7 +4049,8 @@ body.page-kso .shop-kso-floating-cart-wrap .shop-kso-floating-cart-btn{
   bottom:auto;
 }
 
-body.page-kso .shop-kso-floating-cart-clear{
+body.page-kso .shop-kso-floating-cart-clear,
+body.page-kso .shop-kso-floating-cart-home{
   position:relative;
   right:auto;
   bottom:auto;
@@ -4017,11 +4073,13 @@ body.page-kso .shop-kso-floating-cart-clear{
   transition:all var(--dur-fast) var(--ease-smooth);
 }
 
-body.page-kso .shop-kso-floating-cart-clear.hidden{
+body.page-kso .shop-kso-floating-cart-clear.hidden,
+body.page-kso .shop-kso-floating-cart-home.hidden{
   display:none;
 }
 
-body.page-kso .shop-kso-floating-cart-clear:hover{
+body.page-kso .shop-kso-floating-cart-clear:hover,
+body.page-kso .shop-kso-floating-cart-home:hover{
   border-color:#d1d5db;
   background:#fff;
   box-shadow:
@@ -4055,6 +4113,19 @@ body.page-kso .shop-cart-item-row .cart-desktop-actions{
 
 body.page-kso .shop-cart-item-row{
   position:relative;
+}
+
+body.page-kso .shop-kso-floating-cart-home{
+  min-width:180px;
+  gap:10px;
+  font-size:18px;
+  font-weight:900;
+  white-space:nowrap;
+}
+
+body.page-kso .shop-kso-floating-cart-home i{
+  font-size:26px;
+  line-height:1;
 }
 
 body.page-kso .shop-cart-sheet .shop-cart-footer,
