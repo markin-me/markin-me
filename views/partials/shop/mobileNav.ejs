@@ -132,13 +132,10 @@
 
   <!-- Навигация (всегда видна) -->
   <nav class="shop-nav" aria-label="Навигация">
-    <button class="shop-nav-btn" id="shopNavHome" type="button" data-tab="home" aria-label="Главная">
-      <i class="fas fa-house"></i>
-    </button>
-
     <button class="shop-nav-btn is-active" id="shopNavMenu" type="button" data-tab="menu" aria-label="Каталог">
-      <span class="shop-nav-catalog-icon" aria-hidden="true">
-        <span></span><span></span><span></span><span></span>
+      <span class="shop-nav-logo-icon" aria-hidden="true">
+        <img id="shopNavLogoImg" class="shop-nav-logo-img hidden" alt="" />
+        <span id="shopNavLogoFallback">П</span>
       </span>
     </button>
 
@@ -153,7 +150,8 @@
     </button>
 
     <button class="shop-nav-btn" id="shopNavProfile" type="button" data-tab="profile" aria-label="Профиль">
-      <i class="fas fa-user"></i>
+      <i class="fas fa-user shop-nav-profile-fallback"></i>
+      <img class="shop-nav-profile-img hidden" id="shopNavProfileImg" alt="" />
     </button>
   </nav>
 </div>

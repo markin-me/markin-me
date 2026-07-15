@@ -135,6 +135,8 @@
     const tenant = getTenantFromStorage();
     const logoImg = document.getElementById('headerLogoImg');
     const logoFallback = document.getElementById('headerLogoFallback');
+    const navLogoImg = document.getElementById('shopNavLogoImg');
+    const navLogoFallback = document.getElementById('shopNavLogoFallback');
     const brandNameEl = document.getElementById('headerBrandName');
     const favicon = document.getElementById('appFavicon');
     const appleIcon = document.getElementById('appAppleTouchIcon');
@@ -146,6 +148,9 @@
       }
       if (logoFallback && brandName) {
         logoFallback.textContent = String(brandName).trim().slice(0, 1).toUpperCase();
+      }
+      if (navLogoFallback && brandName) {
+        navLogoFallback.textContent = String(brandName).trim().slice(0, 1).toUpperCase();
       }
 
       const logo =
@@ -183,8 +188,13 @@
 
       if (appleIcon && apple) {
         appleIcon.href = apple;
+        }
+        if (navLogoImg && navLogoImg.getAttribute('src') !== String(logo)) {
+          navLogoImg.src = logo;
+        }
+        navLogoImg?.classList.remove('hidden');
+        navLogoFallback?.classList.add('hidden');
       }
-    }
 
     updateManifestBranding(tenant);
   }

@@ -245,7 +245,6 @@
     $("[data-shop-products-empty]");
 
   const elNavCategories = $("#shopNavCategories");
-  const elNavHome = $("#shopNavHome");
   const elNavMenu = $("#shopNavMenu");
   const elNavCart = $("#shopNavCart");
   const elNavProfile = $("#shopNavProfile");
@@ -1096,6 +1095,10 @@
     const header = document.querySelector(".app-modal-header");
     if (!header) return;
     header.classList.toggle("is-shop-sheet-shell", !!active);
+    if (!active) {
+      header.querySelector("#shopProfileModalBackBtn")?.remove();
+      window.AppModal?.body?.classList.remove("shop-profile-return-sheet");
+    }
   }
 
   function buildBonusLevelPreviewCardHtml(level, options = {}) {
@@ -1839,7 +1842,7 @@
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
         if (shouldReturnToBonusLevelOnClose(event) && returnTo === "bonus-level") {
-          returnToBonusLevelSheet(sourceLevel);
+          returnToBonusLevelSheet(sourceLevel, options);
         }
       },
     });
@@ -1851,6 +1854,9 @@
       );
     }
     setBonusCardsSheetHeader(true);
+    if (options.returnTo === "bonus-level" && typeof setProfileModalSubpageHeader === "function") {
+      setProfileModalSubpageHeader(() => window.AppModal?.close?.("close"));
+    }
     syncMobileUiState("bonus-cards-sheet-open");
     void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap, options));
   }
@@ -2040,10 +2046,10 @@
     return String(event?.reason || "").trim() === "close";
   }
 
-  function returnToBonusLevelSheet(level) {
+  function returnToBonusLevelSheet(level, options = {}) {
     if (!level) return;
     setTimeout(() => {
-      openHomeBonusLevelSheet(level);
+      openHomeBonusLevelSheet(level, { returnToProfile: options.returnToProfile === true });
     }, 0);
   }
 
@@ -2061,19 +2067,20 @@
     const returnTo = options && typeof options === "object" ? options.returnTo : null;
     if (returnTo === false || returnTo === "none") {
       if (window.AppModal?.isOpen?.()) window.AppModal.close("sheet");
+      if (options.returnToProfile === true) returnToProfileModalFromSubpage();
       return;
     }
     if (returnTo === "bonus-cards") {
       returnToBonusCardsSheet(level, options);
       return;
     }
-    returnToBonusLevelSheet(level);
+    returnToBonusLevelSheet(level, options);
   }
 
   function maybeReturnFromBonusNestedSheet(event, level, options = {}) {
     if (!shouldReturnToBonusLevelOnClose(event)) return;
     const returnTo = options && typeof options === "object" ? options.returnTo : null;
-    if (returnTo === false || returnTo === "none") return;
+    if ((returnTo === false || returnTo === "none") && options.returnToProfile !== true) return;
     returnFromBonusNestedSheet(level, options);
   }
 
@@ -2133,7 +2140,7 @@
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
         if (shouldReturnToBonusLevelOnClose(event)) {
-          returnToBonusLevelSheet(sourceLevel);
+          returnToBonusLevelSheet(sourceLevel, options);
         }
       },
     });
@@ -2145,6 +2152,9 @@
       );
     }
     setBonusCardsSheetHeader(true);
+    if (sourceLevel && typeof setProfileModalSubpageHeader === "function") {
+      setProfileModalSubpageHeader(() => window.AppModal?.close?.("close"));
+    }
     syncMobileUiState("bonus-accruals-sheet-open");
     if (!getCustomerToken()) {
       render('<div class="shop-bonus-sheet-empty">Войдите, чтобы увидеть начисления</div>');
@@ -2535,8 +2545,10 @@
     });
   }
 
-  function openHomeReferralsSheet() {
+  function openHomeReferralsSheet(options = {}) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    const returnToProfile = options?.returnToProfile === true;
+    if (returnToProfile) closeActiveProfileModalForSubpage();
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-referrals-sheet";
     wrap.innerHTML = `
@@ -2653,12 +2665,17 @@
             "shop-cart-sheet-screen-benefits",
             "shop-bonus-cards-sheet-body"
           );
+          window.AppModal.body.classList.remove("shop-profile-return-sheet");
         }
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
-        if (shouldReturnToBonusLevelOnClose(event) && returnTo === "bonus-level") {
-          returnToBonusLevelSheet(sourceLevel);
+        if (
+          returnToProfile
+          && window.matchMedia?.("(max-width: 768px)").matches === true
+          && typeof showProfileView === "function"
+        ) {
+          showProfileView();
         }
       },
     });
@@ -2670,10 +2687,11 @@
       );
     }
     setBonusCardsSheetHeader(true);
+    if (returnToProfile) setProfileModalSubpageHeader();
     syncMobileUiState("referrals-sheet-open");
   }
 
-  function bindHomeReferralCard(root = document) {
+  function bindHomeReferralCard(root = document, options = {}) {
     const host = root && typeof root.querySelectorAll === "function" ? root : document;
     host.querySelectorAll("[data-home-referral-share]").forEach((button) => {
       if (button.dataset.homeReferralShareBound === "1") return;
@@ -2701,12 +2719,54 @@
         if (event.target?.closest?.("[data-home-referral-share]")) return;
         event.preventDefault();
         event.stopPropagation();
-        openHomeReferralsSheet();
+        openHomeReferralsSheet(options);
       });
     });
   }
 
   window.buildHomeBonusLevelProgressHtml = buildHomeBonusLevelProgressHtml;
+
+  window.renderProfileBonusCards = function renderProfileBonusCards(host) {
+    if (!host) return;
+    const level = getHomeBonusFirstLevel(state.homeBonusConfig);
+    const bonusHtml = level
+      ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
+      : "";
+    const referralHtml = isHomeBonusJoined() ? buildHomeReferralCardHtml(state.homeBonusConfig) : "";
+    host.innerHTML = `<div class="shop-home-cards-scroll no-scrollbar"><div class="shop-home-cards-track">${bonusHtml ? `<div class="shop-home-cards-slide">${bonusHtml}</div>` : ""}${referralHtml ? `<div class="shop-home-cards-slide">${referralHtml}</div>` : ""}</div></div>`;
+    const cardsScroll = host.querySelector(".shop-home-cards-scroll");
+    cardsScroll?.addEventListener("wheel", (event) => {
+      const maxScrollLeft = Math.max(0, cardsScroll.scrollWidth - cardsScroll.clientWidth);
+      if (maxScrollLeft <= 0) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, cardsScroll.scrollLeft + delta));
+      if (Math.abs(nextScrollLeft - cardsScroll.scrollLeft) < 0.5) return;
+      event.preventDefault();
+      cardsScroll.scrollLeft = nextScrollLeft;
+    }, { passive: false });
+    if (level) {
+      bindBonusLevelPreviewCardActions(host, level, { returnTo: "none", returnToProfile: true });
+      const bonusCard = host.querySelector(".bonus-level-preview-card");
+      if (bonusCard && bonusCard.dataset.profileBonusCardBound !== "1") {
+        bonusCard.addEventListener("click", () => openHomeBonusLevelSheet(level, { returnToProfile: true }));
+        bonusCard.dataset.profileBonusCardBound = "1";
+      }
+    }
+    bindHomeReferralCard(host, { returnToProfile: true });
+    void loadHomeReferralStats().then((data) => {
+      const count = host.querySelector("[data-home-referral-invite-count]");
+      if (count) count.textContent = String(Math.max(0, Math.floor(Number(data?.stats?.referrals_total || 0))));
+      renderHomeReferralQr(host.querySelector("[data-home-referral-qr]"), data?.invite_url || "");
+    }).catch(() => {});
+  };
+
+  window.renderProfileSiteMenu = function renderProfileSiteMenu(host) {
+    if (!host) return;
+    host.innerHTML = buildHomeMainSiteMenuRowHtml(state.homeBonusConfig);
+    bindHomeMainSiteMenuRow(host, { returnToProfile: true });
+    void updateHomeBonusSiteMenuBadges(host);
+  };
 
   function buildHomeMainSiteMenuRowHtml(config = state.homeBonusConfig) {
     const allowedKeys = new Set(["my-orders", "favorites", "benefits", "addresses", "bought-before", "tasks", "product-rating"]);
@@ -2949,7 +3009,7 @@
     }
   }
 
-  async function openHomeBonusSiteMenuBenefits(section = "", sourceLevel = null) {
+  async function openHomeBonusSiteMenuBenefits(section = "", sourceLevel = null, options = {}) {
     try {
       await ensureShopLateLoaded();
       if (typeof window.openShopBenefitsSheet === "function") {
@@ -2958,6 +3018,7 @@
           section: String(section || "").trim(),
           returnContext: {
             levelId: Number(sourceLevel?.id || 0) || null,
+            returnToProfile: options.returnToProfile === true,
           },
         });
       }
@@ -2967,12 +3028,12 @@
     }
   }
 
-  function bindHomeBonusSiteMenuRow(wrap, sourceLevel = null) {
+  function bindHomeBonusSiteMenuRow(wrap, sourceLevel = null, options = {}) {
     if (!wrap || !wrap.querySelectorAll) return;
     wrap.querySelectorAll("[data-open-shop-benefits-section]").forEach((button) => {
       if (button.dataset.shopBenefitsBound === "1") return;
       button.addEventListener("click", () => {
-        void openHomeBonusSiteMenuBenefits(button.dataset.openShopBenefitsSection || "", sourceLevel);
+        void openHomeBonusSiteMenuBenefits(button.dataset.openShopBenefitsSection || "", sourceLevel, options);
       });
       button.dataset.shopBenefitsBound = "1";
     });
@@ -2980,36 +3041,98 @@
 
   function restoreHomeNavAfterHomeSiteMenuOpen() {
     if (typeof setActiveNav !== "function") return;
-    setActiveNav("home");
+    setActiveNav("menu");
     requestAnimationFrame(() => {
-      if (typeof setActiveNav === "function") setActiveNav("home");
+      if (typeof setActiveNav === "function") setActiveNav("menu");
     });
     setTimeout(() => {
-      if (typeof setActiveNav === "function") setActiveNav("home");
+      if (typeof setActiveNav === "function") setActiveNav("menu");
     }, 120);
   }
 
-  async function openHomeMainSiteMenuItem(key) {
+  function closeActiveProfileModalForSubpage() {
+    if (
+      window.AppModal?.isOpen?.()
+      && window.AppModal?.body?.classList.contains("shop-profile-sheet-body")
+    ) {
+      window.AppModal.close("navigate");
+    }
+  }
+
+  function returnToProfileModalFromSubpage() {
+    if (window.AppModal?.isOpen?.()) {
+      window.AppModal.close("navigate");
+    }
+    setTimeout(() => {
+      const isMobile = window.matchMedia?.("(max-width: 768px)").matches === true;
+      if (isMobile && typeof showProfileView === "function") {
+        showProfileView();
+        return;
+      }
+      if (typeof openProfileSheet === "function") {
+        void openProfileSheet({ forceModal: true });
+      }
+    }, 0);
+  }
+
+  function setProfileModalSubpageHeader(onBack = returnToProfileModalFromSubpage) {
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.add("shop-profile-return-sheet");
+    }
+    if (typeof setSheetHeaderMode === "function") {
+      setSheetHeaderMode("subscreen", { onBack, showBackInHeader: false });
+    }
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return;
+    header.querySelectorAll(
+      ".shop-profile-modal-settings, .shop-profile-header-actions, #shopProfileModalSettingsBtn, #shopProfileModalBackBtn, #shopProfileModalLogoutBtn"
+    ).forEach((element) => element.remove());
+    header.querySelector("#shopSheetBackBtn")?.remove();
+    const title = header.querySelector(".app-modal-title, .modal-title, [data-modal-title]");
+    const backBtn = document.createElement("button");
+    backBtn.id = "shopProfileModalBackBtn";
+    backBtn.type = "button";
+    backBtn.className = "btn btn-icon shop-profile-modal-back-btn";
+    backBtn.setAttribute("aria-label", "Назад");
+    backBtn.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+    backBtn.onclick = () => {
+      if (typeof onBack === "function") onBack();
+    };
+    header.insertBefore(backBtn, title || header.firstChild);
+    const closeBtn = header.querySelector("#appModalCloseBtn, .app-modal-close, [data-modal-close]");
+    if (closeBtn) closeBtn.classList.add("hidden");
+  }
+
+  async function openHomeMainSiteMenuItem(key, { returnToProfile = false } = {}) {
     const normalizedKey = String(key || "").trim();
     try {
       await ensureShopLateLoaded();
+      if (returnToProfile) closeActiveProfileModalForSubpage();
       if (normalizedKey === "my-orders" && typeof window.openProfileOrdersSheet === "function") {
-        await window.openProfileOrdersSheet({ sourceScreen: "home" });
+        await window.openProfileOrdersSheet({
+          sourceScreen: returnToProfile ? "profile" : "home",
+          returnToProfile,
+        });
         restoreHomeNavAfterHomeSiteMenuOpen();
         return;
       }
       if (normalizedKey === "favorites" && typeof openFavoritesSheet === "function") {
-        openFavoritesSheet({ force: true, forceOpen: true, sourceScreen: "home-site-menu" });
+        openFavoritesSheet({
+          force: true,
+          forceOpen: true,
+          sourceScreen: returnToProfile ? "profile" : "home-site-menu",
+          returnToProfile,
+        });
         restoreHomeNavAfterHomeSiteMenuOpen();
         return;
       }
       if (normalizedKey === "addresses" && typeof openCartSheet === "function") {
         openCartSheet();
         if (openCartSheetCtx && typeof openCartSheetCtx === "object") {
-          openCartSheetCtx.sourceScreen = "home";
+          openCartSheetCtx.sourceScreen = returnToProfile ? "profile" : "home";
           openCartSheetCtx.benefitsSourceScreen = "";
           if (typeof openCartSheetCtx.showSheetAddressList === "function") {
-            openCartSheetCtx.showSheetAddressList("header");
+            openCartSheetCtx.showSheetAddressList(returnToProfile ? "profile" : "header");
           }
         }
         restoreHomeNavAfterHomeSiteMenuOpen();
@@ -3019,6 +3142,7 @@
         await window.openShopBenefitsSheet({
           sourceScreen: "home-site-menu",
           section: normalizedKey === "tasks" ? "progress" : "",
+          returnContext: returnToProfile ? { returnToProfile: true } : null,
         });
         restoreHomeNavAfterHomeSiteMenuOpen();
       }
@@ -3027,12 +3151,12 @@
     }
   }
 
-  function bindHomeMainSiteMenuRow(wrap) {
+  function bindHomeMainSiteMenuRow(wrap, options = {}) {
     if (!wrap || !wrap.querySelectorAll) return;
     wrap.querySelectorAll("[data-shop-home-site-menu-key]").forEach((button) => {
       if (button.dataset.homeSiteMenuBound === "1") return;
       button.addEventListener("click", () => {
-        void openHomeMainSiteMenuItem(button.dataset.shopHomeSiteMenuKey || "");
+        void openHomeMainSiteMenuItem(button.dataset.shopHomeSiteMenuKey || "", options);
       });
       button.dataset.homeSiteMenuBound = "1";
     });
@@ -3067,12 +3191,12 @@
     return '<button class="shop-bonus-level-metric-action" type="button" data-open-bonus-favorite-categories>Выбрать</button>';
   }
 
-  function updateHomeBonusFavoriteCategoriesSlot(wrap, level) {
+  function updateHomeBonusFavoriteCategoriesSlot(wrap, level, options = {}) {
     const slot = wrap?.querySelector("[data-bonus-favorite-categories-slot]");
     if (!slot) return;
     slot.innerHTML = buildHomeBonusFavoriteCategoriesSlotHtml(level);
     slot.querySelector("[data-open-bonus-favorite-categories]")?.addEventListener("click", () => {
-      void openHomeBonusFavoriteCategoriesSheet(level);
+      void openHomeBonusFavoriteCategoriesSheet(level, options);
     });
   }
 
@@ -3273,6 +3397,9 @@
       );
     }
     setBonusCardsSheetHeader(true);
+    if (typeof setProfileModalSubpageHeader === "function") {
+      setProfileModalSubpageHeader(() => window.AppModal?.close?.("close"));
+    }
     syncMobileUiState("bonus-favorite-categories-sheet-open");
     try {
       const data = await loadHomeBonusFavoriteCategories(level);
@@ -3285,6 +3412,7 @@
 
   function openHomeBonusCashbackSheet(level, options = {}) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    if (options.returnToProfile === true) closeActiveProfileModalForSubpage();
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet shop-bonus-cashback-sheet";
     const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
@@ -3405,11 +3533,16 @@
       );
     }
     setBonusCardsSheetHeader(true);
+    if (typeof setProfileModalSubpageHeader === "function") {
+      setProfileModalSubpageHeader(() => window.AppModal?.close?.("close"));
+    }
     syncMobileUiState("bonus-cashback-sheet-open");
   }
 
-  function openHomeBonusLevelSheet(level) {
+  function openHomeBonusLevelSheet(level, options = {}) {
     if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    const returnToProfile = options?.returnToProfile === true;
+    if (returnToProfile) closeActiveProfileModalForSubpage();
     const title = String(level?.title || "Уровень").trim() || "Уровень";
     const favoriteLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
     const favoriteBonusText = formatShopBonusFavoriteCategoriesRange(level);
@@ -3462,10 +3595,18 @@
             "shop-cart-sheet-screen-benefits",
             "shop-bonus-cards-sheet-body"
           );
+          window.AppModal.body.classList.remove("shop-profile-return-sheet");
         }
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
+        if (
+          returnToProfile
+          && window.matchMedia?.("(max-width: 768px)").matches === true
+          && typeof showProfileView === "function"
+        ) {
+          showProfileView();
+        }
       },
     });
     if (window.AppModal?.body) {
@@ -3476,6 +3617,7 @@
       );
     }
     setBonusCardsSheetHeader(true);
+    if (returnToProfile) setProfileModalSubpageHeader();
     syncMobileUiState("bonus-level-sheet-open");
     wrap.querySelector("[data-open-bonus-cards-current]")?.addEventListener("click", () => {
       const accountLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
@@ -3483,32 +3625,33 @@
         initialLevelId: accountLevelId || Number(level?.id || 0) || 0,
         returnTo: "bonus-level",
         sourceLevel: level,
+        returnToProfile,
       });
     });
     wrap.querySelector(".shop-bonus-level-accruals-link")?.addEventListener("click", () => {
-      void openHomeBonusAccrualsSheet({ sourceLevel: level });
+      void openHomeBonusAccrualsSheet({ sourceLevel: level, returnToProfile });
     });
     wrap.querySelector("[data-open-bonus-cashback]")?.addEventListener("click", () => {
-      openHomeBonusCashbackSheet(level);
+      openHomeBonusCashbackSheet(level, { returnToProfile });
     });
-    bindHomeBonusSiteMenuRow(wrap, level);
+    bindHomeBonusSiteMenuRow(wrap, level, { returnToProfile });
     void updateHomeBonusSiteMenuBadges(wrap);
     if (favoriteCategoriesEnabled) {
-      updateHomeBonusFavoriteCategoriesSlot(wrap, level);
+      updateHomeBonusFavoriteCategoriesSlot(wrap, level, { returnToProfile });
       void loadHomeBonusFavoriteCategories(level).then(() => {
-        updateHomeBonusFavoriteCategoriesSlot(wrap, level);
+        updateHomeBonusFavoriteCategoriesSlot(wrap, level, { returnToProfile });
       }).catch((err) => {
         console.error("load bonus favorite categories error:", err);
       });
     }
   }
 
-  window.returnToShopBonusLevelSheet = function returnToShopBonusLevelSheet(levelId = null) {
+  window.returnToShopBonusLevelSheet = function returnToShopBonusLevelSheet(levelId = null, options = {}) {
     const numericLevelId = Number(levelId || 0);
     const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
     const level = levels.find((item) => Number(item?.id || 0) === numericLevelId)
       || getHomeBonusFirstLevel(state.homeBonusConfig);
-    if (level) openHomeBonusLevelSheet(level);
+    if (level) openHomeBonusLevelSheet(level, { returnToProfile: options.returnToProfile === true });
   };
 
   function bindHomeBonusLevelTitle(level) {
@@ -5166,7 +5309,6 @@
 
     const tab = normalizeTab(stateSnapshot.tab);
     const navMap = {
-      home: elNavHome,
       menu: elNavMenu,
       benefits: elNavCategories,
       cart: elNavCart,
@@ -5538,12 +5680,14 @@
       if (benefitsBackScreen === "nav" || benefitsBackScreen === "home-site-menu") {
         closeShopSheetIfOpen();
         if (benefitsBackScreen === "home-site-menu" && typeof setActiveNav === "function") {
-          setActiveNav("home");
+          setActiveNav("menu");
         }
       } else if (benefitsBackScreen === "bonus-level") {
         const levelId = Number(openCartSheetCtx?.benefitsReturnContext?.levelId || sheetNavigationState?.data?.returnContext?.levelId || 0);
         if (typeof window.returnToShopBonusLevelSheet === "function") {
-          window.returnToShopBonusLevelSheet(levelId);
+          const returnToProfile = openCartSheetCtx?.benefitsReturnContext?.returnToProfile === true
+            || sheetNavigationState?.data?.returnContext?.returnToProfile === true;
+          window.returnToShopBonusLevelSheet(levelId, { returnToProfile });
         } else {
           closeShopSheetIfOpen();
         }
@@ -11195,8 +11339,9 @@ function showPickupListView(backMode = "checkout") {
     if (elAddressContent) elAddressContent.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
     if (elProductContent) elProductContent.classList.add("hidden");
-    if (elProfileContent) elProfileContent.classList.remove("hidden");
-    if (elProfilePage) elProfilePage.classList.remove("hidden");
+    const isMobileProfile = window.matchMedia?.("(max-width: 768px)").matches === true;
+    if (elProfileContent) elProfileContent.classList.toggle("hidden", isMobileProfile);
+    if (elProfilePage) elProfilePage.classList.toggle("hidden", !isMobileProfile);
     hideDesktopBenefitsPanels({ clearDetail: true });
     setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true, showBack: false });
     setCartFooterMode("hidden");

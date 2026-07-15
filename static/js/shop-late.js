@@ -7,6 +7,7 @@
     if (!saveBtn || !cancelBtn) return;
 
     if (mode === "shop") {
+      clearProfileModalMenu();
       saveBtn.classList.add("hidden");
       cancelBtn.classList.remove("hidden");
       cancelBtn.textContent = "Закрыть";
@@ -9965,6 +9966,7 @@ optionGroups.forEach((group) => {
     header.querySelectorAll(".shop-favorites-header-chips-wrap").forEach((el) => el.remove());
     const orderBackBtn = header.querySelector(".app-modal-back-btn");
     if (orderBackBtn) orderBackBtn.remove();
+    header.querySelector("#shopProfileModalBackBtn")?.remove();
     const discountBadge = header.querySelector(".shop-sheet-discount-badge");
     if (discountBadge) discountBadge.remove();
 
@@ -10137,14 +10139,16 @@ optionGroups.forEach((group) => {
   function returnToProfileFromSheet() {
     closeShopSheetIfOpen();
     setTimeout(() => {
-      openProfileSheet({ initialTab: "addresses" });
+      openProfileSheet({});
     }, 0);
   }
 
   function clearProfileModalMenu() {
     const header = document.querySelector(".app-modal-header");
     if (!header) return;
-    header.querySelectorAll(".shop-profile-modal-settings, .shop-profile-menu").forEach((el) => el.remove());
+    header.querySelectorAll(
+      ".shop-profile-modal-settings, .shop-profile-menu, .shop-profile-header-actions, .app-modal-back-btn, #shopProfileModalSettingsBtn, #shopProfileModalBackBtn, #shopProfileModalLogoutBtn"
+    ).forEach((el) => el.remove());
   }
 
   let categoriesSheetCache = null;
@@ -10313,9 +10317,9 @@ function sortRepeatOrderItemsForDisplay(items) {
     .map((entry) => entry.item);
 }
 
-function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = "" } = {}) {
+function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = "", returnToProfile = false } = {}) {
   const favoritesSourceScreen = str(sourceScreen || "");
-  const isMobileSheet = window.matchMedia("(max-width: 1100px)").matches;
+  const isMobileSheet = returnToProfile || window.matchMedia("(max-width: 1100px)").matches;
   if (isMobileSheet && !window.AppModal) return;
   const isAnySheetOpen =
     Boolean(window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen());
@@ -10325,6 +10329,10 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const body = window.AppModal?.body;
     if (!body) return;
     body.classList.toggle("shop-favorites-sheet-body", !!active);
+    if (!active) {
+      body.classList.remove("shop-profile-return-sheet");
+      document.getElementById("shopProfileModalBackBtn")?.remove();
+    }
   }
 
   const wrap = document.createElement("div");
@@ -11347,7 +11355,12 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
 
       lastFavoritesRenderSignature = nextFavoritesSignature;
       const reopenFavorites = () => {
-        void openFavoritesSheet({ force: false, forceOpen: true });
+        void openFavoritesSheet({
+          force: false,
+          forceOpen: true,
+          sourceScreen: favoritesSourceScreen,
+          returnToProfile,
+        });
       };
       bindRepeatOrderItemRows(list, repeatItems, { onBack: reopenFavorites });
     } catch (e) {
@@ -11497,6 +11510,9 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   // Если до этого был product/combo режим, возвращаем стандартный хедер списка.
   setSheetHeaderMode("");
   setShopModalHeaderShellMode(true);
+  if (returnToProfile && typeof setProfileModalSubpageHeader === "function") {
+    setProfileModalSubpageHeader();
+  }
 
   setFavoritesSheetBodyState(true);
   void renderFavorites({ forceReload: force });
@@ -23814,6 +23830,7 @@ function openCartSheet() {
         if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
         if (window.AppModal?.body) {
           window.AppModal.body.classList.remove("shop-cart-sheet-body");
+          window.AppModal.body.classList.remove("shop-profile-return-sheet");
         }
         setCartSheetScreenMode("");
         openProductCtx = null;
@@ -24749,6 +24766,7 @@ function applySheetAddressTitle(backMode = "cart") {
       }
 
       if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
+      if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-profile-return-sheet");
       openProductCtx = null;
       // Сбрасываем состояние навигации
       sheetNavigationState.type = null;
@@ -25055,16 +25073,28 @@ function applySheetAddressTitle(backMode = "cart") {
           || 0
         );
         if (typeof window.returnToShopBonusLevelSheet === "function") {
-          window.returnToShopBonusLevelSheet(levelId);
+          window.returnToShopBonusLevelSheet(levelId, {
+            returnToProfile: returnContext?.returnToProfile === true,
+          });
           return;
         }
         closeShopSheetIfOpen();
         return;
       }
+      if (returnContext?.returnToProfile === true) {
+        closeShopSheetIfOpen();
+        setTimeout(() => {
+          if (typeof openProfileSheet === "function") {
+            const forceModal = window.matchMedia?.("(min-width: 769px)").matches === true;
+            void openProfileSheet({ forceModal });
+          }
+        }, 0);
+        return;
+      }
       if (nextScreen === "nav" || nextScreen === "home-site-menu") {
         closeShopSheetIfOpen();
         if (nextScreen === "home-site-menu" && typeof setActiveNav === "function") {
-          setActiveNav("home");
+          setActiveNav("menu");
         }
         return;
       }
@@ -25076,7 +25106,7 @@ function applySheetAddressTitle(backMode = "cart") {
     };
     const closeBenefitsModal = async () => {
       clearCheckoutBenefitsDetailReturnState();
-      if (isMobile) {
+      if (isMobile || returnContext?.returnToProfile === true) {
         await closeBenefitsWithSave();
         return;
       }
@@ -25121,16 +25151,19 @@ function applySheetAddressTitle(backMode = "cart") {
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle(benefitsSheetTitle);
+    const returnToProfile = returnContext?.returnToProfile === true;
     setSheetHeaderMode("subscreen", {
       onBack: () => {
         void closeBenefitsModal();
       },
-      showBackInHeader: false,
+      showBackInHeader: returnToProfile,
     });
     setShopModalCloseBehavior("default");
     setShopModalHeaderShellMode(true);
     const benefitsCloseBtn = getShopModalCloseButton();
-    if (benefitsCloseBtn) {
+    if (returnToProfile && benefitsCloseBtn) {
+      benefitsCloseBtn.classList.add("hidden");
+    } else if (benefitsCloseBtn) {
       const benefitsCloseCaptureHandler = (event) => {
         if (event) {
           event.preventDefault();
@@ -25144,6 +25177,11 @@ function applySheetAddressTitle(backMode = "cart") {
       benefitsCloseBtn.addEventListener("click", benefitsCloseCaptureHandler, true);
       benefitsCloseBtn._shopBenefitsCaptureHandler = benefitsCloseCaptureHandler;
       benefitsCloseBtn.onclick = null;
+    }
+    if (returnToProfile && typeof setProfileModalSubpageHeader === "function") {
+      setProfileModalSubpageHeader(() => {
+        void closeBenefitsModal();
+      });
     }
 
     sheetNavigationState.type = "cart";
@@ -25656,15 +25694,19 @@ function applySheetAddressTitle(backMode = "cart") {
         addressCloseBtn.onclick = null;
       }
     } else {
+      const returnToProfile = resolvedBackMode === "profile";
       hideInlineAddressToggle();
       if (window.AppModal?.setTitle) window.AppModal.setTitle("");
       setSheetHeaderMode("subscreen", {
         onBack: resolveSheetBackHandler(resolvedBackMode),
         showBackInHeader: true,
       });
-      setShopModalBackButtonIconMode("close");
+      setShopModalBackButtonIconMode(returnToProfile ? "arrow" : "close");
       setShopModalHeaderShellMode(true);
       showHeaderToggle();
+      if (returnToProfile && typeof setProfileModalSubpageHeader === "function") {
+        setProfileModalSubpageHeader();
+      }
     }
     setCartSheetScreenMode("address");
     syncMobileCartModeHeaderStickyState();
@@ -27115,6 +27157,22 @@ function renderSheetAddressList() {
   }
 
   let fetchMeSafeVerifiedToken = "";
+
+  function syncHeaderProfilePhoto(customer) {
+    const photoUrl = str(customer?.photo || "").trim();
+    const image = document.getElementById("shopHeaderProfileImg");
+    const fallback = document.querySelector("#shopProfileBtn .shop-header-profile-fallback");
+    if (!image || !fallback) return;
+    if (photoUrl) {
+      image.src = photoUrl;
+      image.classList.remove("hidden");
+      fallback.classList.add("hidden");
+      return;
+    }
+    image.src = "";
+    image.classList.add("hidden");
+    fallback.classList.remove("hidden");
+  }
 
   async function fetchMeSafe(opts = {}) {
     const force = !!opts?.force;
@@ -30589,12 +30647,13 @@ function renderSheetAddressList() {
     window.bindRepeatOrderItemRows = bindRepeatOrderItemRows;
   }
 
-  function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false } = {}) {
+  function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false, returnToProfile = false } = {}) {
     host.innerHTML = "";
 
     const wrap = document.createElement("div");
     wrap.className = "shop-profile";
     wrap.classList.toggle("shop-profile--orders-only", !!ordersOnly);
+    wrap.classList.toggle("shop-profile--main-page", !settingsPage && !ordersOnly);
     const mobileEditActions = settingsPage ? elProfileSettingsPageFooter : elMobileAddressActions;
     const mobileEditSaveBtn = settingsPage ? elProfileSettingsSaveBtn : elMobileAddressSaveBtn;
     const mobileEditCancelBtn = settingsPage ? elProfileSettingsCancelBtn : elMobileAddressCancelBtn;
@@ -30792,6 +30851,21 @@ function renderSheetAddressList() {
       }
     }
     wrap.appendChild(top);
+
+    if (!settingsPage && !ordersOnly) {
+      const profileBonusCards = document.createElement("div");
+      profileBonusCards.className = "shop-profile-bonus-cards shop-home-bonus-card";
+      if (typeof window.renderProfileBonusCards === "function") {
+        window.renderProfileBonusCards(profileBonusCards);
+      }
+      wrap.appendChild(profileBonusCards);
+      const profileSiteMenu = document.createElement("div");
+      profileSiteMenu.className = "shop-profile-site-menu";
+      if (typeof window.renderProfileSiteMenu === "function") {
+        window.renderProfileSiteMenu(profileSiteMenu);
+      }
+      wrap.appendChild(profileSiteMenu);
+    }
 
     if (!ordersOnly && !settingsPage && typeof onLogout === "function") {
       const profileLogoutBtn = document.createElement("button");
@@ -31235,6 +31309,28 @@ function renderSheetAddressList() {
     themeRow.appendChild(themeTitle);
     themeRow.appendChild(themeSwitch);
     settingsWrap.appendChild(themeRow);
+
+    const chatNotificationsRow = document.createElement("div");
+    chatNotificationsRow.className = "shop-profile-settings-row";
+    const chatNotificationsTitle = document.createElement("div");
+    chatNotificationsTitle.className = "shop-profile-settings-title";
+    chatNotificationsTitle.textContent = "Уведомления о новых сообщениях";
+    const chatNotificationsSwitch = document.createElement("label");
+    chatNotificationsSwitch.className = "switch";
+    const chatNotificationsInput = document.createElement("input");
+    chatNotificationsInput.type = "checkbox";
+    chatNotificationsInput.className = "switch-input";
+    chatNotificationsInput.checked = window.shopCompanyChatNotifications?.isEnabled?.() !== false;
+    chatNotificationsInput.addEventListener("change", () => {
+      window.shopCompanyChatNotifications?.setEnabled?.(chatNotificationsInput.checked);
+    });
+    const chatNotificationsUi = document.createElement("span");
+    chatNotificationsUi.className = "switch-ui";
+    chatNotificationsSwitch.appendChild(chatNotificationsInput);
+    chatNotificationsSwitch.appendChild(chatNotificationsUi);
+    chatNotificationsRow.appendChild(chatNotificationsTitle);
+    chatNotificationsRow.appendChild(chatNotificationsSwitch);
+    settingsWrap.appendChild(chatNotificationsRow);
 
     const updateRow = document.createElement("div");
     updateRow.className = "shop-profile-settings-row";
@@ -31712,6 +31808,13 @@ function renderSheetAddressList() {
 
     if (ordersOnly) {
       wrap.appendChild(ordersPanel);
+    }
+    if (settingsPage) {
+      Array.from(settingsWrap.children).forEach((row) => {
+        if (row !== chatNotificationsRow) row.remove();
+      });
+      settingsPanel.classList.add("is-active");
+      wrap.appendChild(settingsPanel);
     }
 
     host.appendChild(wrap);
@@ -32450,6 +32553,7 @@ function renderSheetAddressList() {
         const profileActions = document.querySelector(".shop-profile-header-actions");
         if (profileActions) profileActions.classList.add("hidden");
         
+        document.getElementById("shopProfileModalBackBtn")?.remove();
         setSheetHeaderMode("order", {
           onBack: () => showOrdersList()
         });
@@ -32523,6 +32627,9 @@ function renderSheetAddressList() {
         if (profileActions) profileActions.classList.toggle("hidden", !!ordersOnly);
         
         setSheetHeaderMode("", {});
+        if (ordersOnly && returnToProfile && typeof setProfileModalSubpageHeader === "function") {
+          setProfileModalSubpageHeader();
+        }
       } else {
         // Десктоп: восстанавливаем заголовок
         setCartHeader({ 
@@ -32844,6 +32951,20 @@ function renderSheetAddressList() {
 
     function setProfilePhoto(url) {
       const v = str(url || "").trim();
+      syncHeaderProfilePhoto(v ? { photo: v } : null);
+      const navProfileImg = document.getElementById("shopNavProfileImg");
+      const navProfileFallback = document.querySelector("#shopNavProfile .shop-nav-profile-fallback");
+      if (navProfileImg && navProfileFallback) {
+        if (v) {
+          navProfileImg.src = v;
+          navProfileImg.classList.remove("hidden");
+          navProfileFallback.classList.add("hidden");
+        } else {
+          navProfileImg.src = "";
+          navProfileImg.classList.add("hidden");
+          navProfileFallback.classList.remove("hidden");
+        }
+      }
       if (!v) {
         photoImg.src = "";
         photoImg.classList.add("hidden");
@@ -33176,19 +33297,27 @@ function renderSheetAddressList() {
     saveCheckoutDraft({});
     try { await apiJson("/api/public/auth/logout", { method: "POST", body: {} }); } catch {}
     clearCustomer({ fullReset: true });
+    syncHeaderProfilePhoto(null);
     await refreshAddressState();
     if (closeModal && window.AppModal) window.AppModal.close("sheet");
     return true;
   }
 
   async function openProfilePanel(meOverride, { forceOpen = false, initialTab, onLoginSuccess, onLoginCancel } = {}) {
+    const isMobileProfile = window.matchMedia?.("(max-width: 768px)").matches === true;
+    if (!isMobileProfile) {
+      await openProfileSheet({ initialTab, onLoginSuccess });
+      return;
+    }
     if (!forceOpen && cartViewMode === "profile") {
       await restorePreviousPanel();
       return;
     }
     if (!forceOpen) rememberPreviousPanel();
     showProfileView();
-    const profileHost = elProfilePageContent || elProfileContent;
+    const profileHost = isMobileProfile
+      ? (elProfilePageContent || elProfileContent)
+      : elProfileContent;
     if (!profileHost) return;
 
     const me = meOverride || await fetchMeSafe();
@@ -33273,8 +33402,111 @@ function renderSheetAddressList() {
     }
   }
 
+  let activeProfileModalPage = null;
+
+  function showProfileModalHeader(me) {
+    const header = document.querySelector(".app-modal-header");
+    const actions = header?.querySelector(".app-modal-actions");
+    if (!header || !actions) return;
+    clearProfileModalMenu();
+    const closeBtn = actions.querySelector(".app-modal-close, [data-modal-close], #appModalCloseBtn");
+    const settingsBtn = document.createElement("button");
+    settingsBtn.id = "shopProfileModalSettingsBtn";
+    settingsBtn.type = "button";
+    settingsBtn.className = "btn btn-icon shop-profile-modal-settings-btn";
+    settingsBtn.setAttribute("aria-label", "Настройки профиля");
+    settingsBtn.innerHTML = '<i class="fas fa-gear" aria-hidden="true"></i>';
+    settingsBtn.onclick = () => void openProfileSettingsPage(me);
+    actions.insertBefore(settingsBtn, closeBtn || actions.lastElementChild);
+  }
+
   async function openProfileSettingsPage(meOverride) {
     const me = meOverride || await fetchMeSafe();
+    const isDesktopModal = window.matchMedia?.("(min-width: 769px)").matches === true
+      && window.AppModal?.isOpen?.()
+      && !!window.AppModal?.body;
+    if (isDesktopModal && window.AppModal?.body) {
+      if (!me) return;
+      const settingsPage = document.getElementById("shopProfileSettingsPage");
+      const settingsContent = document.getElementById("shopProfileSettingsPageContent");
+      if (!settingsPage || !settingsContent) return;
+      const settingsPageParent = settingsPage.parentElement;
+      const settingsPageNextSibling = settingsPage.nextSibling;
+      settingsPage.classList.remove("hidden");
+      settingsPage.classList.add("shop-profile-content", "shop-profile-settings-page-in-modal");
+      settingsPage.querySelector(".shop-profile-settings-page-header")?.classList.add("hidden");
+      buildProfileContent({
+        host: settingsContent,
+        me,
+        onLogout: async () => {
+          const loggedOut = await handleProfileLogout({ closeModal: true });
+          if (loggedOut) setActiveNav("menu");
+        },
+        initialTab: "settings",
+        settingsPage: true,
+      });
+      const tabs = settingsContent.querySelector(".shop-profile-tabs");
+      if (tabs) tabs.classList.add("hidden");
+      window.AppModal.body.replaceChildren(settingsPage);
+      const title = document.querySelector(".app-modal-title");
+      if (title) title.textContent = "Настройки профиля";
+      const actions = document.querySelector(".app-modal-actions");
+      if (actions) {
+        const settingsBtn = actions.querySelector("#shopProfileModalSettingsBtn");
+        if (settingsBtn) settingsBtn.classList.add("hidden");
+        actions.closest(".app-modal-header")?.querySelectorAll(".app-modal-back-btn, #shopProfileModalBackBtn, #shopProfileModalLogoutBtn").forEach((el) => el.remove());
+        let backBtn = actions.querySelector("#shopProfileModalBackBtn");
+        if (!backBtn) {
+          backBtn = document.createElement("button");
+          backBtn.id = "shopProfileModalBackBtn";
+          backBtn.type = "button";
+          backBtn.className = "btn btn-icon shop-profile-modal-back-btn";
+          backBtn.setAttribute("aria-label", "Назад");
+          backBtn.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+        }
+        const header = title?.closest(".app-modal-header");
+        if (header && title && backBtn.parentElement !== header) {
+          header.insertBefore(backBtn, title);
+        }
+        backBtn.onclick = () => {
+          const profilePage = activeProfileModalPage || document.getElementById("shopProfilePage");
+          if (!profilePage || !window.AppModal?.body) return;
+          sheetNavigationState.type = "profile";
+          sheetNavigationState.screen = null;
+          sheetNavigationState.data = null;
+          settingsPage.classList.add("hidden");
+          settingsPage.classList.remove("shop-profile-content", "shop-profile-settings-page-in-modal");
+          settingsPage.querySelector(".shop-profile-settings-page-header")?.classList.remove("hidden");
+          window.AppModal.body.replaceChildren(profilePage);
+          if (settingsPageParent) {
+            settingsPageParent.insertBefore(
+              settingsPage,
+              settingsPageNextSibling && settingsPageNextSibling.parentNode === settingsPageParent ? settingsPageNextSibling : null
+            );
+          }
+          if (title) title.textContent = "Профиль";
+          actions.closest(".app-modal-header")?.querySelectorAll(".app-modal-back-btn, #shopProfileModalBackBtn, #shopProfileModalLogoutBtn").forEach((el) => el.remove());
+          const currentSettingsBtn = actions.querySelector("#shopProfileModalSettingsBtn");
+          const settingsBtn = currentSettingsBtn?.cloneNode(true);
+          if (currentSettingsBtn && settingsBtn) currentSettingsBtn.replaceWith(settingsBtn);
+          if (settingsBtn) {
+            settingsBtn.classList.remove("hidden");
+            settingsBtn.onclick = () => void openProfileSettingsPage(me);
+          }
+        };
+        let logoutBtn = actions.querySelector("#shopProfileModalLogoutBtn");
+        if (!logoutBtn) {
+          logoutBtn = document.createElement("button");
+          logoutBtn.id = "shopProfileModalLogoutBtn";
+          logoutBtn.type = "button";
+          logoutBtn.className = "shop-profile-modal-logout";
+          logoutBtn.textContent = "Выйти";
+          actions.insertBefore(logoutBtn, actions.lastElementChild);
+        }
+        logoutBtn.onclick = () => void handleProfileLogout({ closeModal: true });
+      }
+      return;
+    }
     if (!me || !elProfileSettingsPageContent) return;
     showProfileSettingsView();
     buildProfileContent({
@@ -33372,10 +33604,24 @@ function renderSheetAddressList() {
     };
   }
 
-  async function openProfileSheet({ initialTab, onLoginSuccess, ordersOnly = false, sourceScreen = "" } = {}) {
+  async function openProfileSheet({ initialTab, onLoginSuccess, ordersOnly = false, sourceScreen = "", returnToProfile = false, forceModal = false } = {}) {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (!isMobile) {
-      await openProfilePanel(null, { initialTab, onLoginSuccess });
+    if (!isMobile || forceModal) {
+      const me = await fetchMeSafe();
+      if (!me) {
+        openLoginSheet({
+          onSuccess: (me2) => {
+            if (typeof onLoginSuccess === "function") {
+              onLoginSuccess(me2);
+              return;
+            }
+            openProfileModal(me2, { initialTab, ordersOnly, sourceScreen, returnToProfile });
+          },
+        });
+        return;
+      }
+      setActiveNav("profile");
+      openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile });
       return;
     }
 
@@ -33394,28 +33640,77 @@ function renderSheetAddressList() {
             onLoginSuccess(me2);
             return;
           }
-          openProfileModal(me2, { initialTab, ordersOnly, sourceScreen });
+          openProfileModal(me2, { initialTab, ordersOnly, sourceScreen, returnToProfile });
         },
       });
       return;
     }
     setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "profile");
-    openProfileModal(me, { initialTab, ordersOnly, sourceScreen });
+    openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile });
   }
 
-  function openProfileModal(me, { initialTab, ordersOnly = false, sourceScreen = "" } = {}) {
+  function openDesktopChatProfileModal(me) {
+    const chatModal = window.shopCompanyChatModal;
+    if (!chatModal || !me) {
+      openProfileModal(me);
+      return;
+    }
+    const profileWrap = document.createElement("div");
+    profileWrap.className = "shop-profile-content shop-profile-chat-modal-content";
+    buildProfileContent({
+      host: profileWrap,
+      me,
+      onLogout: () => void handleProfileLogout({ closeModal: true }),
+    });
+    chatModal.openCustom({
+      title: "Профиль",
+      content: profileWrap,
+      settings: () => openDesktopChatProfileSettings(me),
+    });
+  }
+
+  function openDesktopChatProfileSettings(me) {
+    const chatModal = window.shopCompanyChatModal;
+    if (!chatModal || !me) return;
+    const settingsWrap = document.createElement("div");
+    settingsWrap.className = "shop-profile-content shop-profile-chat-modal-content";
+    buildProfileContent({
+      host: settingsWrap,
+      me,
+      settingsPage: true,
+      onLogout: () => void handleProfileLogout({ closeModal: true }),
+    });
+    chatModal.updateCustom({
+      title: "Настройки профиля",
+      content: settingsWrap,
+      back: () => openDesktopChatProfileModal(me),
+      logout: () => void handleProfileLogout({ closeModal: true }),
+    });
+  }
+
+  function openProfileModal(me, { initialTab, ordersOnly = false, sourceScreen = "", returnToProfile = false } = {}) {
     if (!window.AppModal) return;
 
-    const wrap = document.createElement("div");
-    wrap.className = "shop-profile-content";
+    const page = !ordersOnly ? document.getElementById("shopProfilePage") : null;
+    const pageParent = page?.parentElement || null;
+    const pageNextSibling = page?.nextSibling || null;
+    const wrap = page || document.createElement("div");
+    if (!page) wrap.className = "shop-profile-content";
     wrap.classList.toggle("shop-profile-orders-sheet-content", !!ordersOnly);
+    wrap.classList.remove("hidden");
+    if (page) {
+      activeProfileModalPage = page;
+      page.classList.add("shop-profile-content", "shop-profile-page-in-modal");
+      page.querySelector(".shop-profile-page-header")?.classList.add("hidden");
+    }
     const ctx = buildProfileContent({
-      host: wrap,
+      host: page ? document.getElementById("shopProfilePageContent") : wrap,
       me,
       onLogout: () => handleProfileLogout({ closeModal: true }),
       initialTab,
       ordersOnly,
       sourceScreen,
+      returnToProfile,
     });
     window._profileContext = ctx;
 
@@ -33435,9 +33730,27 @@ function renderSheetAddressList() {
       title: ordersOnly ? "Мои заказы" : "Профиль",
       content: wrap,
       onClose: () => {
+        clearProfileModalMenu();
+        activeProfileModalPage = null;
+        const settingsPage = document.getElementById("shopProfileSettingsPage");
+        if (settingsPage) {
+          settingsPage.classList.add("hidden");
+          settingsPage.classList.remove("shop-profile-content", "shop-profile-settings-page-in-modal");
+          settingsPage.querySelector(".shop-profile-settings-page-header")?.classList.remove("hidden");
+        }
+        if (page) {
+          page.querySelector(".shop-profile-page-header")?.classList.remove("hidden");
+          page.classList.add("hidden");
+          page.classList.remove("shop-profile-content", "shop-profile-page-in-modal");
+          page.classList.remove("shop-profile-orders-sheet-content");
+          if (pageParent) {
+            pageParent.insertBefore(page, pageNextSibling && pageNextSibling.parentNode === pageParent ? pageNextSibling : null);
+          }
+        }
         if (window.AppModal?.body) {
           window.AppModal.body.classList.remove("shop-profile-orders-sheet-body");
           window.AppModal.body.classList.remove("shop-profile-sheet-body");
+          window.AppModal.body.classList.remove("shop-profile-return-sheet");
         }
         setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "menu");
         // Сбрасываем состояние навигации
@@ -33454,11 +33767,17 @@ function renderSheetAddressList() {
       window.AppModal.body.classList.toggle("shop-profile-orders-sheet-body", !!ordersOnly);
       window.AppModal.body.classList.toggle("shop-profile-sheet-body", !ordersOnly);
     }
+    if (!ordersOnly && window.AppModal?.body) {
+      showProfileModalHeader(me);
+    }
     if (ordersOnly) {
       const settingsBtn = document.querySelector(".shop-profile-modal-settings");
       if (settingsBtn) settingsBtn.classList.add("hidden");
       const profileActions = document.querySelector(".shop-profile-header-actions");
       if (profileActions) profileActions.classList.add("hidden");
+      if (returnToProfile && typeof setProfileModalSubpageHeader === "function") {
+        setProfileModalSubpageHeader();
+      }
     }
     
     // Обновляем бейдж сразу после открытия модального окна
@@ -33470,8 +33789,8 @@ function renderSheetAddressList() {
     return ctx;
   }
 
-  async function openProfileOrdersSheet({ sourceScreen = "" } = {}) {
-    await openProfileSheet({ initialTab: "orders", ordersOnly: true, sourceScreen });
+  async function openProfileOrdersSheet({ sourceScreen = "", returnToProfile = false } = {}) {
+    await openProfileSheet({ initialTab: "orders", ordersOnly: true, sourceScreen, returnToProfile });
   }
 
   window.openProfileOrdersSheet = openProfileOrdersSheet;
@@ -33523,8 +33842,8 @@ function renderSheetAddressList() {
 function setActiveNav(key) {
   const activeKeyRaw = String(key || "").trim().toLowerCase();
   const activeKey = activeKeyRaw === "categories" ? "menu" : activeKeyRaw;
+  document.body.classList.toggle("shop-catalog-tab-active", activeKey === "menu");
   const map = {
-    home: $("#shopNavHome"),
     menu: elNavMenu,
     benefits: elNavCategories,
     cart: elNavCart,
@@ -40077,6 +40396,13 @@ function setBottomNavActive(tab) {
 
 function initShopLate() {
   try {
+    setActiveNav("menu");
+    syncHeaderProfilePhoto(getCustomerCache());
+    if (getCustomerToken()) {
+      Promise.resolve(fetchMeSafe())
+        .then((customer) => syncHeaderProfilePhoto(customer))
+        .catch(() => {});
+    }
     Promise.resolve(maybePromptCustomerNameCompletionAfterSocialLogin()).catch((e) => {
       console.warn("maybePromptCustomerNameCompletionAfterSocialLogin failed:", e);
     });
@@ -40244,7 +40570,7 @@ function initShopLate() {
       if (elNavProfile) {
         elNavProfile.addEventListener("click", () => {
           closeShopSheetIfOpen();
-          void openProfilePanel(null, { forceOpen: true });
+          void openProfileSheet({});
         });
       }
       if (!document.body?.classList.contains("page-kso")) {
@@ -40343,30 +40669,10 @@ function initShopLate() {
         }
       });
 
-      // "Каталог":
-      // 1) если открыт любой шит/модалка — закрываем и возвращаемся в каталог
-      // 2) если ничего не открыто — скроллим каталог наверх (внутренний скролл-контейнер на мобилке)
-      const elNavHome = $("#shopNavHome");
-      if (elNavHome) {
-        elNavHome.addEventListener("click", () => {
-          const isAnySheetOpen =
-            window.AppModal &&
-            typeof window.AppModal.isOpen === "function" &&
-            window.AppModal.isOpen();
-
-          if (isAnySheetOpen) closeShopSheetIfOpen();
-          setActiveNav("home");
-          requestAnimationFrame(() => {
-            const root = document.scrollingElement || document.documentElement || document.body;
-            if (root) root.scrollTop = 0;
-            window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-          });
-        });
-      }
-
       if (elNavMenu) {
         elNavMenu.addEventListener("click", () => {
           if (document.body?.classList.contains("shop-profile-page-active")) {
+            closeShopSheetIfOpen();
             showCartView();
             setActiveNav("menu");
             return;
@@ -40903,7 +41209,7 @@ function initShopLate() {
               sheetNavigationState.data = null;
               setActiveOrderDetailsSheetBodyState(false);
               if (window._activeOrdersSourceScreen === "home" && typeof setActiveNav === "function") {
-                setActiveNav("home");
+                setActiveNav("menu");
               }
               if (window._activeOrdersSourceScreen === "catalog") {
                 window.requestAnimationFrame(() => {
@@ -40973,7 +41279,7 @@ function initShopLate() {
               sheetNavigationState.data = null;
               setActiveOrderDetailsSheetBodyState(false);
               if (window._activeOrdersSourceScreen === "home" && typeof setActiveNav === "function") {
-                setActiveNav("home");
+                setActiveNav("menu");
               }
               if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
                 window.updateActiveOrdersBadge();

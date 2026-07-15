@@ -16306,7 +16306,7 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   height: 50px;
 
   display: none;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
   gap: 8px;
 
@@ -18791,6 +18791,71 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   display: grid;
   gap: 8px;
 }
+.shop-company-chat-custom-logout{
+  width: auto;
+  min-width: 48px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--shop-buy);
+  font-weight: 600;
+}
+.shop-profile-chat-modal-content{
+  min-height: 100%;
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--color-surface-2);
+}
+
+.shop-nav-logo-icon{
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: 800;
+}
+.shop-nav-logo-img{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
+.shop-nav-profile-img{
+  width: 26px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.shop-header-profile-img{
+  width: 30px;
+  height: 30px;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+@media (min-width: 769px){
+  body.page-shop .header-actions #theme-toggle,
+  body.page-shop .header-actions #shopActiveOrdersBadge,
+  body.page-shop .header-actions #shopCartBenefitsTriggerBtn,
+  body.page-shop .header-actions #shopHeaderFavBtn{
+    display: none !important;
+  }
+}
+
+body.page-shop.shop-catalog-tab-active #shopHomeBonusCard{
+  display: none !important;
+}
+
+body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
+  display: none !important;
+}
 .shop-pd-options-title{
   font-size: 17px;
   font-weight: 900;
@@ -19297,6 +19362,17 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 }
 
 @media (max-width: 768px){
+  body.page-shop > header{
+    display: none !important;
+  }
+  body.page-shop .center-stack > .panel:first-child .toolbar{
+    top: 0;
+  }
+  body.page-shop .main-container{
+    padding-top: 0;
+    min-height: 100dvh;
+  }
+
   body.shop-profile-page-active > header{
     display: none !important;
   }
@@ -19452,6 +19528,36 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
     background: var(--color-surface);
     border-radius: 24px;
     padding: 16px;
+  }
+
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-top,
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-tabs,
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-logout-btn{
+    display: none !important;
+  }
+
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-bonus-progress{
+    margin-bottom: 16px;
+  }
+
+  .shop-profile-page-content .shop-profile-bonus-cards{
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .shop-profile-page-content .shop-profile-bonus-cards .shop-home-cards-scroll{
+    width: 100%;
+  }
+
+  .shop-profile-page-content .shop-profile-site-menu .shop-bonus-site-menu-scroll{
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px 10px;
+    overflow: visible;
+  }
+
+  .shop-profile-page-content .shop-profile-site-menu .shop-bonus-site-menu-item{
+    min-width: 0;
   }
 
   .shop-profile-page{
@@ -25216,6 +25322,245 @@ body.page-shop .app-modal-body::after{
 }
 
 @media (min-width: 769px){
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile-page-header,
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile--main-page > .shop-profile-top,
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile--main-page > .shop-profile-tabs{
+    display: none !important;
+  }
+
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile-page-content{
+    padding: 0;
+  }
+
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile--main-page{
+    display: grid;
+    gap: 16px;
+    align-content: start;
+  }
+
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile--main-page > .shop-profile-bonus-progress{
+    order: 1;
+  }
+
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile--main-page > .shop-profile-bonus-cards{
+    order: 2;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile--main-page > .shop-profile-site-menu{
+    order: 3;
+  }
+
+  body:has(.app-modal-body.shop-profile-sheet-body) .shop-profile-site-menu .shop-bonus-site-menu-scroll{
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px 10px;
+    overflow: visible;
+  }
+}
+
+@media (min-width: 769px){
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal-header .shop-profile-modal-back-btn,
+  body:has(.shop-profile-settings-page-in-modal) .app-modal-header .shop-profile-modal-back-btn{
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+    margin-right: 8px;
+    border-radius: 50%;
+    background: var(--color-surface-2);
+  }
+
+  body:has(.shop-profile-settings-page-in-modal) .app-modal-header .shop-profile-modal-logout{
+    border: 0;
+    padding: 8px 0;
+    background: transparent;
+    color: var(--color-primary);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .shop-profile-page-in-modal .shop-profile-page-header,
+  .shop-profile-page-in-modal .shop-profile--main-page > .shop-profile-top,
+  .shop-profile-page-in-modal .shop-profile--main-page > .shop-profile-tabs{
+    display: none !important;
+  }
+
+  .shop-profile-page-in-modal .shop-profile--main-page{
+    display: grid;
+    gap: 16px;
+    align-content: start;
+  }
+
+  .shop-profile-page-in-modal .shop-profile--main-page > .shop-profile-bonus-progress{
+    order: 1;
+  }
+
+  .shop-profile-page-in-modal .shop-profile--main-page > .shop-profile-bonus-cards{
+    order: 2;
+    display: block !important;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .shop-profile-page-in-modal .shop-profile-bonus-cards.shop-home-bonus-card{
+    display: block !important;
+  }
+
+  .shop-profile-page-in-modal .shop-home-cards-track{
+    gap: 10px;
+    padding: 0 6px;
+  }
+
+  .shop-profile-page-in-modal .shop-home-cards-slide,
+  .shop-profile-page-in-modal .shop-home-bonus-card .bonus-level-preview-card{
+    width: min(300px, calc(100% - 24px));
+    min-width: 0;
+    max-width: 300px;
+  }
+
+  .shop-profile-page-in-modal .shop-profile--main-page > .shop-profile-site-menu{
+    order: 3;
+  }
+
+  .shop-profile-page-in-modal .shop-profile-site-menu .shop-bonus-site-menu-scroll{
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px 10px;
+    overflow: visible;
+  }
+
+  .shop-profile-page-in-modal .shop-profile-logout-btn{
+    display: none !important;
+  }
+
+  .shop-profile-settings-page-in-modal .shop-profile-settings-page-content{
+    padding: 24px 16px 32px;
+  }
+
+  .shop-profile-settings-page-in-modal .shop-profile-top{
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .shop-profile-settings-page-in-modal .shop-profile-photo-wrap{
+    justify-items: center;
+  }
+
+  .shop-profile-settings-page-in-modal .shop-profile-photo-actions{
+    width: max-content !important;
+    max-width: 100%;
+    align-self: center;
+    display: flex !important;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .shop-profile-settings-page-in-modal .shop-profile-photo-btn{
+    width: 160px !important;
+    min-width: 160px !important;
+    flex: 0 0 160px !important;
+    padding: 12px 24px;
+    border-radius: 999px;
+    background: var(--color-primary);
+    color: #fff;
+    font-weight: 800;
+  }
+
+  .shop-profile-settings-page-in-modal .shop-profile-photo-btn--ghost{
+    width: 42px !important;
+    min-width: 42px !important;
+    max-width: 42px !important;
+    height: 42px;
+    padding: 0;
+    flex: 0 0 42px !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+  }
+
+  .shop-profile-settings-page-in-modal .shop-profile-bonus-progress,
+  .shop-profile-settings-page-in-modal .shop-profile-logout-btn{
+    display: none !important;
+  }
+
+  .shop-profile-settings-page-in-modal .shop-profile-info{
+    background: var(--color-surface);
+    border-radius: 24px;
+    padding: 16px;
+  }
+}
+
+@media (min-width: 769px){
+  body:has(.app-modal-body.shop-profile-return-sheet) .modal-backdrop,
+  body:has(.app-modal-body.shop-profile-sheet-body) .modal-backdrop{
+    background: rgba(15, 23, 42, 0.66);
+  }
+
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal,
+  body:has(.app-modal-body.shop-profile-sheet-body) .app-modal{
+    top: 20px;
+    right: 20px;
+    left: auto;
+    width: min(486px, calc(100vw - 40px));
+    max-width: calc(100vw - 40px);
+    min-height: calc(100dvh - 40px);
+    height: calc(100dvh - 40px);
+    max-height: calc(100dvh - 40px);
+    border: 0;
+    border-radius: 34px;
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.35);
+    transform: translateX(44px);
+    opacity: 0.98;
+    transition: transform 280ms cubic-bezier(.2,.9,.25,1), opacity 220ms ease;
+  }
+
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal.is-open,
+  body:has(.app-modal-body.shop-profile-sheet-body) .app-modal.is-open{
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal-header.is-shop-sheet-shell,
+  body:has(.app-modal-body.shop-profile-sheet-body) .app-modal-header.is-shop-sheet-shell{
+    min-height: 74px;
+    padding: 12px 16px;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    box-shadow: none;
+  }
+
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal-header .app-modal-title,
+  body:has(.app-modal-body.shop-profile-sheet-body) .app-modal-header .app-modal-title{
+    padding-left: 0;
+    text-align: center;
+    font-size: 22px;
+    line-height: 1.2;
+    font-weight: 700;
+    white-space: normal;
+  }
+
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal-header .app-modal-close,
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal-header [data-modal-close],
+  body:has(.app-modal-body.shop-profile-return-sheet) #appModalCloseBtn,
+  body:has(.app-modal-body.shop-profile-sheet-body) .app-modal-header .app-modal-close,
+  body:has(.app-modal-body.shop-profile-sheet-body) .app-modal-header [data-modal-close],
+  body:has(.app-modal-body.shop-profile-sheet-body) #appModalCloseBtn{
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+    padding: 0;
+  }
+}
+
+@media (min-width: 769px){
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-benefits) .modal-backdrop{
     background: rgba(15, 23, 42, 0.66);
   }
@@ -25468,6 +25813,16 @@ body.page-shop .app-modal-body::after{
 
   body:has(.app-modal-body.shop-cart-sheet-body.shop-cart-sheet-screen-address) .shop-address-list-view--with-inline-toggle .shop-delivery-toggle{
     min-width: 230px;
+  }
+}
+
+@media (min-width: 769px){
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal-header .app-modal-close,
+  body:has(.app-modal-body.shop-profile-return-sheet) .app-modal-header [data-modal-close],
+  body:has(.app-modal-body.shop-profile-return-sheet) #appModalCloseBtn,
+  body:has(.app-modal-body.shop-profile-return-sheet) #shopProfileModalSettingsBtn,
+  body:has(.app-modal-body.shop-profile-return-sheet) .shop-profile-modal-settings{
+    display: none !important;
   }
 }
 
