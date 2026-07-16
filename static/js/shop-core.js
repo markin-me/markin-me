@@ -949,7 +949,7 @@
     return section;
   }
 
-  function buildCartBonusRedeemSection() {
+  function buildCartBonusRedeemSection({ emptyCart = false } = {}) {
     const level = getCartBonusAccountLevel();
     if (!level) return buildCartBonusJoinSection();
     const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
@@ -960,7 +960,7 @@
       state.cartBonusRedeemEnabled = false;
     }
     const section = document.createElement("section");
-    section.className = "shop-cart-bonus-redeem-section";
+    section.className = `shop-cart-bonus-redeem-section${emptyCart ? " shop-cart-bonus-redeem-section--empty-cart" : ""}`;
     const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
     section.innerHTML = `
       <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card">
@@ -975,15 +975,15 @@
           </div>
         </div>
         <div class="shop-cart-bonus-redeem-actions">
-          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${state.cartBonusRedeemEnabled && canRedeem ? "" : " is-active"}" type="button" data-cart-bonus-accrual-button>
+          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? "" : " is-active"}${emptyCart ? " is-disabled" : ""}" type="button" data-cart-bonus-accrual-button ${emptyCart ? "disabled" : ""}>
             <span class="shop-cart-bonus-action-pill__label">Начислить</span>
-            <span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>+${formatShopBonusMoney(0)}</span>
+            ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>+${formatShopBonusMoney(0)}</span>`}
           </button>
-          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--redeem${state.cartBonusRedeemEnabled && canRedeem ? " is-active" : ""}${canRedeem ? "" : " is-disabled"}" type="button" data-cart-bonus-redeem-button ${canRedeem ? "" : "disabled"}>
+          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--redeem${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? " is-active" : ""}${canRedeem && !emptyCart ? "" : " is-disabled"}" type="button" data-cart-bonus-redeem-button ${canRedeem && !emptyCart ? "" : "disabled"}>
             <span class="shop-cart-bonus-action-pill__label" data-cart-bonus-redeem-label>${escapeHtml(redeemLabel)}</span>
-            <span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-redeem-button-amount>-${formatShopBonusMoney(0)}</span>
+            ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-redeem-button-amount>-${formatShopBonusMoney(0)}</span>`}
           </button>
-          <input class="shop-cart-bonus-redeem-input" type="checkbox" data-cart-bonus-redeem-toggle ${state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem ? "" : "disabled"} />
+          <input class="shop-cart-bonus-redeem-input" type="checkbox" data-cart-bonus-redeem-toggle ${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem && !emptyCart ? "" : "disabled"} />
         </div>
       </div>
     `;
@@ -14906,11 +14906,15 @@ async function initAddresses() {
       if (emptyPlaceholderEl) emptyPlaceholderEl.classList.add("hidden");
       if (listEl) {
         renderCartEmptyStateIntoList(listEl, cartModeHeader);
+        const bonusRedeemSection = buildCartBonusRedeemSection({ emptyCart: true });
+        if (bonusRedeemSection) listEl.appendChild(bonusRedeemSection);
+        else refreshCartBonusSectionAfterConfigLoad(listEl, totalEl);
       }
       if (totalEl) totalEl.textContent = money(0);
       if (listEl && bindInteractive) {
         bindCartItemsSectionControls(listEl);
         bindCartModeHeaderSticky(listEl);
+        bindCartBonusRedeemSection(listEl);
       }
       return { items: activeItems, total: 0, displayItems: items };
     }
@@ -18114,11 +18118,95 @@ function updateCartBadge() {
     if (scrollEl) scrollEl.style.display = hasCards ? "" : "none";
   }
 
+  function enableCheckoutUpsellAutoScroll(scrollEl) {
+    if (!scrollEl) return;
+    const cards = Array.from(scrollEl.children).filter((node) => node.classList?.contains("cart-upsell-card"));
+    if (!cards.length) return;
+    const gap = 8;
+    const cycleWidth = cards.reduce((width, card) => width + (card.getBoundingClientRect().width || 110), 0) + (cards.length * gap);
+    const viewportWidth = Math.max(scrollEl.clientWidth, Math.min(window.innerWidth || 0, 480));
+    const sideRepeatCount = Math.max(2, Math.ceil(viewportWidth / Math.max(1, cycleWidth)) + 1);
+    const createCloneSet = () => {
+      const fragment = document.createDocumentFragment();
+      cards.forEach((card) => {
+        const clone = card.cloneNode(true);
+        clone.classList.add("cart-upsell-card--marquee-clone");
+        clone.setAttribute("aria-hidden", "true");
+        clone.addEventListener("click", (event) => {
+          event.preventDefault();
+          card.click();
+        });
+        fragment.appendChild(clone);
+      });
+      return fragment;
+    };
+    for (let repeatIndex = 0; repeatIndex < sideRepeatCount; repeatIndex += 1) {
+      scrollEl.insertBefore(createCloneSet(), cards[0]);
+      scrollEl.appendChild(createCloneSet());
+    }
+
+    if (scrollEl._checkoutUpsellAutoScrollController) {
+      scrollEl._checkoutUpsellAutoScrollController.abort();
+    }
+    const controller = new AbortController();
+    scrollEl._checkoutUpsellAutoScrollController = controller;
+    let position = cycleWidth * sideRepeatCount;
+    let interactionPaused = false;
+    let resumeAt = 0;
+    let lastFrame = 0;
+    let internalScroll = false;
+    scrollEl.scrollLeft = position;
+    const normalizePosition = () => {
+      const lowerBound = cycleWidth * Math.max(1, sideRepeatCount - 1);
+      const upperBound = cycleWidth * (sideRepeatCount + 1);
+      while (position < lowerBound) position += cycleWidth;
+      while (position > upperBound) position -= cycleWidth;
+      internalScroll = true;
+      scrollEl.scrollLeft = position;
+      internalScroll = false;
+    };
+    const pause = () => {
+      interactionPaused = true;
+      position = scrollEl.scrollLeft;
+    };
+    const resume = () => {
+      position = scrollEl.scrollLeft;
+      normalizePosition();
+      resumeAt = performance.now() + 3000;
+      interactionPaused = false;
+    };
+    scrollEl.addEventListener("scroll", () => {
+      if (!internalScroll) position = scrollEl.scrollLeft;
+    }, { passive: true, signal: controller.signal });
+    scrollEl.addEventListener("pointerdown", pause, { passive: true, signal: controller.signal });
+    scrollEl.addEventListener("pointerup", resume, { passive: true, signal: controller.signal });
+    scrollEl.addEventListener("pointercancel", resume, { passive: true, signal: controller.signal });
+    const step = (now) => {
+      if (controller.signal.aborted || !scrollEl.isConnected) return;
+      const elapsed = lastFrame ? Math.min(40, now - lastFrame) : 0;
+      lastFrame = now;
+      if (
+        !interactionPaused
+        && now >= resumeAt
+        && document.body?.classList.contains("shop-checkout-overlay-open")
+      ) {
+        position += elapsed * 0.022;
+        normalizePosition();
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   function appendUpsellToList(listEl) {
     if (!listEl) return;
     var allProducts = state.upsellProducts || [];
     if (allProducts.length === 0) {
-      var old = listEl.querySelector(".shop-cart-upsell");
+      var old = listEl.querySelector(".shop-cart-upsell") || (
+        openCartSheetCtx?.listEl === listEl
+          ? openCartSheetCtx?.checkoutUpsellHostEl?.querySelector(".shop-cart-upsell")
+          : null
+      );
       if (old) old.remove();
       return;
     }
@@ -18130,7 +18218,11 @@ function updateCartBadge() {
       allProducts.filter(function(p) { return !cartProductIds.has(Number(p.id)); }).map(function(p) { return Number(p.id); })
     );
 
-    var upsellEl = listEl.querySelector(".shop-cart-upsell");
+    var upsellEl = listEl.querySelector(".shop-cart-upsell") || (
+      openCartSheetCtx?.listEl === listEl
+        ? openCartSheetCtx?.checkoutUpsellHostEl?.querySelector(".shop-cart-upsell")
+        : null
+    );
     var scrollEl;
 
     if (!upsellEl) {
@@ -18150,7 +18242,10 @@ function updateCartBadge() {
       }, { passive: false });
       upsellEl.appendChild(titleEl);
       upsellEl.appendChild(scrollEl);
-      listEl.appendChild(upsellEl);
+      var checkoutUpsellHost = openCartSheetCtx?.listEl === listEl
+        ? openCartSheetCtx?.checkoutUpsellHostEl
+        : null;
+      (checkoutUpsellHost || listEl).appendChild(upsellEl);
     } else {
       scrollEl = upsellEl.querySelector(".shop-cart-upsell-scroll");
       if (!scrollEl) {
@@ -18163,6 +18258,16 @@ function updateCartBadge() {
         listEl.appendChild(upsellEl);
       }
     }
+
+    const marqueeTrack = scrollEl.querySelector(":scope > .shop-cart-upsell-marquee-track");
+    if (marqueeTrack) {
+      marqueeTrack.querySelectorAll(":scope > .cart-upsell-card:not(.cart-upsell-card--marquee-clone)").forEach((card) => {
+        scrollEl.appendChild(card);
+      });
+      marqueeTrack.remove();
+      scrollEl.scrollLeft = 0;
+    }
+    scrollEl.querySelectorAll(":scope > .cart-upsell-card--marquee-clone").forEach((card) => card.remove());
 
     // Синхронизируем карточки: убираем лишние, добавляем недостающие
     var existingCards = scrollEl.querySelectorAll(".cart-upsell-card");
@@ -18188,6 +18293,9 @@ function updateCartBadge() {
     const visibleProducts = allProducts.filter((p) => visibleIds.has(Number(p.id)));
     const productsById = new Map(visibleProducts.map((p) => [Number(p.id), p]));
     ensureUpsellConfigObserver(scrollEl, productsById);
+    if (openCartSheetCtx?.checkoutUpsellHostEl?.contains(upsellEl)) {
+      enableCheckoutUpsellAutoScroll(scrollEl);
+    }
     if (openCartSheetCtx?.listEl === listEl) moveKsoCartUpsellToFooter(openCartSheetCtx);
   }
 
@@ -18603,6 +18711,15 @@ function updateCartBadge() {
     if (window.matchMedia("(max-width: 768px)").matches && elMobileCartActionsCart) {
       elMobileCartActionsCart.classList.toggle("hidden", !hasItemsNow);
     }
+    if (typeof window.syncShopCartPricingSummaryUi === "function") {
+      Promise.resolve(window.syncShopCartPricingSummaryUi({ reason: "upsell.add" }))
+        .then((snapshot) => {
+          if (typeof window.refreshOpenShopCheckoutPricingUi === "function") {
+            window.refreshOpenShopCheckoutPricingUi(snapshot || undefined);
+          }
+        })
+        .catch(() => {});
+    }
   }
 
   async function loadUnitConversions() {
@@ -18984,6 +19101,7 @@ function updateCartBadge() {
     if (window.matchMedia && !window.matchMedia("(max-width: 768px)").matches) return false;
     if (document.body?.classList.contains("shop-company-chat-open")) return false;
     if (document.body?.classList.contains("shop-details-page-active")) return false;
+    if (document.body?.classList.contains("shop-cart-page-active")) return false;
     if (document.body?.classList.contains("modal-open") || document.body?.classList.contains("sheet-open")) return false;
     if (window.AppModal?.isOpen?.()) return false;
     return true;

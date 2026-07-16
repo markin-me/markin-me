@@ -16508,6 +16508,55 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return fragment;
   }
 
+  function mountCartPageCheckoutActionInSummary(sectionEl) {
+    if (!document.body?.classList.contains("shop-cart-page-active")) return;
+    if (!sectionEl || sectionEl.closest(".shop-cart-list") !== openCartSheetCtx?.listEl) return;
+    const card = sectionEl.querySelector(".shop-cart-pricing-summary-card");
+    const actions = openCartSheetCtx?.cartActionsEl;
+    if (!card || !actions) return;
+    card.appendChild(actions);
+
+    const floatingHost = document.getElementById("shopCartPageFloatingCheckout");
+    const floatingButton = document.getElementById("shopCartPageFloatingCheckoutButton");
+    const checkoutButton = actions.querySelector(".shop-checkout-btn");
+    const cartPageContent = document.getElementById("shopCartPageContent");
+    if (!floatingHost || !floatingButton || !checkoutButton || !cartPageContent) return;
+
+    const syncFloatingCheckout = () => {
+      const hasItems = cartItemsResolved().length > 0;
+      floatingButton.innerHTML = checkoutButton.innerHTML;
+      floatingButton.disabled = checkoutButton.disabled || !hasItems;
+      floatingHost.classList.toggle("hidden", !hasItems);
+      if (!hasItems) return;
+
+      const inlineRect = checkoutButton.getBoundingClientRect();
+      const mobileNav = document.querySelector(".shop-mobile-bottom-container:not(.hidden)");
+      const navTop = mobileNav?.getBoundingClientRect().top || window.innerHeight;
+      const inlineButtonIsFullyVisible = inlineRect.top >= 0 && inlineRect.bottom <= navTop;
+      floatingHost.classList.toggle("is-inline-visible", inlineButtonIsFullyVisible);
+    };
+
+    if (floatingButton.dataset.cartCheckoutBound !== "1") {
+      floatingButton.addEventListener("click", () => {
+        floatingHost.classList.add("hidden");
+        checkoutButton.click();
+      });
+      floatingButton.dataset.cartCheckoutBound = "1";
+    }
+    if (cartPageContent.dataset.floatingCheckoutBound !== "1") {
+      let frameId = 0;
+      cartPageContent.addEventListener("scroll", () => {
+        if (frameId) return;
+        frameId = requestAnimationFrame(() => {
+          frameId = 0;
+          syncFloatingCheckout();
+        });
+      }, { passive: true });
+      cartPageContent.dataset.floatingCheckoutBound = "1";
+    }
+    requestAnimationFrame(syncFloatingCheckout);
+  }
+
   function applyCartPricingLineStatesToList(listEl, lineStates) {
     if (!listEl || !listEl.querySelectorAll) return;
     const statesByKey = new Map(
@@ -16610,6 +16659,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       content.innerHTML = "";
       delete content.dataset.ready;
       sectionEl.classList.add("hidden");
+      document.getElementById("shopCartPageFloatingCheckout")?.classList.add("hidden");
       return;
     }
 
@@ -16749,6 +16799,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     summary.appendChild(totalRow);
 
     content.appendChild(summary);
+    mountCartPageCheckoutActionInSummary(sectionEl);
   }
 
   async function buildCartPricingSummaryState() {
@@ -17465,6 +17516,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       content.innerHTML = "";
       delete content.dataset.ready;
       sectionEl.classList.add("hidden");
+      document.getElementById("shopCartPageFloatingCheckout")?.classList.add("hidden");
       return;
     }
 
@@ -17604,6 +17656,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     summary.appendChild(totalRow);
 
     content.appendChild(summary);
+    mountCartPageCheckoutActionInSummary(sectionEl);
   }
 
   let cartPricingSnapshotCacheKey = "";
@@ -23831,6 +23884,10 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
 
 function openCartSheet() {
   if (!window.AppModal) return;
+  const cartPage = document.getElementById("shopCartPage");
+  const cartPageContent = document.getElementById("shopCartPageContent");
+  const cartPageHeaderContent = document.getElementById("shopCartPageHeaderContent");
+  const useCartPage = window.matchMedia("(max-width: 768px)").matches && !!cartPage && !!cartPageContent;
   const buildCartSheetRenderSignature = () => {
     const rows = cartItemsResolved().map((item) => {
       const key = str(item?.key || "");
@@ -23866,6 +23923,86 @@ function openCartSheet() {
     body.classList.toggle("shop-cart-sheet-screen-cart", mode === "cart");
     body.classList.toggle("shop-cart-sheet-screen-benefits", mode === "benefits");
     body.classList.toggle("shop-cart-sheet-screen-address", mode === "address");
+  }
+
+  function showCartPage(wrapEl) {
+    if (!useCartPage || !wrapEl) return false;
+    cartPageContent.appendChild(wrapEl);
+    cartPage.classList.remove("hidden");
+    document.body.classList.add("shop-cart-page-active");
+    return true;
+  }
+
+  function mountCartPageModeHeader() {
+    if (!useCartPage || !cartPageHeaderContent || !list) return;
+    const nextHeader = list.querySelector(".shop-cart-mode-header:not(.shop-cart-mode-header--sticky-proxy)");
+    const currentHeader = cartPageHeaderContent.querySelector(".shop-cart-mode-header");
+    if (nextHeader && nextHeader !== currentHeader) {
+      if (currentHeader) currentHeader.remove();
+      cartPageHeaderContent.appendChild(nextHeader);
+    }
+    const header = cartPageHeaderContent.querySelector(".shop-cart-mode-header");
+    if (!header) return;
+    const expandedHeaderHeight = Math.max(0, Number(header.scrollHeight || header.getBoundingClientRect().height || 0));
+    if (expandedHeaderHeight > 0) {
+      cartPage.style.setProperty("--shop-cart-page-header-height", `${Math.ceil(expandedHeaderHeight)}px`);
+    }
+    const sync = () => {
+      const activeHeader = cartPageHeaderContent.querySelector(".shop-cart-mode-header");
+      if (!activeHeader) return;
+      const scrollTop = Math.max(0, Number(cartPageContent.scrollTop || 0));
+      activeHeader.classList.toggle("is-pickup", window._deliveryMode === "pickup");
+      const toggleProgress = Math.min(1, scrollTop / 72);
+      const detailsProgress = Math.min(1, Math.max(0, (scrollTop - 72) / 96));
+      const toggleWrap = activeHeader.querySelector(".shop-cart-mode-header__toggle-wrap");
+      const meta = activeHeader.querySelector(".shop-cart-mode-header__meta");
+
+      if (toggleWrap) {
+        toggleWrap.style.maxHeight = `${Math.round(52 * (1 - toggleProgress))}px`;
+        toggleWrap.style.marginBottom = `${Math.round(12 * (1 - toggleProgress))}px`;
+        toggleWrap.style.opacity = String(1 - toggleProgress);
+        toggleWrap.style.transform = `translateY(${-10 * toggleProgress}px)`;
+        toggleWrap.style.pointerEvents = toggleProgress >= 0.98 ? "none" : "";
+      }
+      if (meta) {
+        const metaHeight = Math.max(0, Number(meta.scrollHeight || 0));
+        meta.style.maxHeight = `${Math.round(metaHeight * (1 - detailsProgress))}px`;
+        meta.style.marginTop = `${Math.round(12 * (1 - detailsProgress))}px`;
+        meta.style.opacity = String(1 - detailsProgress);
+        meta.style.transform = `translateY(${-8 * detailsProgress}px)`;
+        meta.style.pointerEvents = detailsProgress >= 0.98 ? "none" : "";
+      }
+      const compactPadding = 16 - (6 * detailsProgress);
+      activeHeader.style.paddingTop = `${compactPadding}px`;
+      activeHeader.style.paddingBottom = `${compactPadding}px`;
+      if (scrollTop <= 2) {
+        const currentHeaderHeight = Math.max(0, Math.ceil(activeHeader.getBoundingClientRect().height || 0));
+        if (currentHeaderHeight > 0) {
+          cartPage.style.setProperty("--shop-cart-page-header-height", `${currentHeaderHeight}px`);
+        }
+      }
+    };
+    if (!cartPageContent.dataset.cartHeaderScrollBound) {
+      cartPageContent.addEventListener("scroll", sync, { passive: true });
+      cartPageContent.dataset.cartHeaderScrollBound = "1";
+    }
+    if (!header.dataset.cartPageModeSyncBound) {
+      header.addEventListener("click", () => {
+        requestAnimationFrame(sync);
+        setTimeout(sync, 120);
+      });
+      header.dataset.cartPageModeSyncBound = "1";
+    }
+    if (typeof ResizeObserver === "function" && !header.dataset.cartPageHeightObserverBound) {
+      const heightObserver = new ResizeObserver(() => {
+        if (cartPageContent.scrollTop > 2 || !header.isConnected) return;
+        const height = Math.max(0, Math.ceil(header.getBoundingClientRect().height || 0));
+        if (height > 0) cartPage.style.setProperty("--shop-cart-page-header-height", `${height}px`);
+      });
+      heightObserver.observe(header);
+      header.dataset.cartPageHeightObserverBound = "1";
+    }
+    sync();
   }
 
   function isDesktopAddressViewport() {
@@ -23965,6 +24102,10 @@ function openCartSheet() {
 
   if (openCartSheetCtx && openCartSheetCtx.wrapEl) {
     if (typeof setActiveNav === "function") setActiveNav("cart");
+    if (showCartPage(openCartSheetCtx.wrapEl)) {
+      if (typeof openCartSheetCtx.showSheetCart === "function") openCartSheetCtx.showSheetCart();
+      return;
+    }
     setAppModalMode("shop");
     if (typeof window.syncKsoFloatingCartButton === "function") {
       window.syncKsoFloatingCartButton();
@@ -24055,17 +24196,31 @@ function openCartSheet() {
   checkoutOverlayHost.appendChild(checkoutOverlayPanel);
 
   const checkoutOverlayHeader = document.createElement("div");
-  checkoutOverlayHeader.className = "shop-checkout-overlay-header";
+  checkoutOverlayHeader.className = useCartPage
+    ? "shop-checkout-overlay-header shop-page-header shop-checkout-page-header"
+    : "shop-checkout-overlay-header";
   const checkoutOverlayTitle = document.createElement("div");
   checkoutOverlayTitle.className = "shop-checkout-overlay-title";
   checkoutOverlayTitle.textContent = "Оформление заказа";
   const checkoutOverlayCloseBtn = document.createElement("button");
   checkoutOverlayCloseBtn.type = "button";
-  checkoutOverlayCloseBtn.className = "shop-checkout-overlay-close";
-  checkoutOverlayCloseBtn.setAttribute("aria-label", "Закрыть оформление");
-  checkoutOverlayCloseBtn.innerHTML = '<i class="fas fa-times"></i>';
-  checkoutOverlayHeader.appendChild(checkoutOverlayTitle);
-  checkoutOverlayHeader.appendChild(checkoutOverlayCloseBtn);
+  checkoutOverlayCloseBtn.className = useCartPage
+    ? "shop-checkout-overlay-close shop-page-header-btn shop-checkout-page-back"
+    : "shop-checkout-overlay-close";
+  checkoutOverlayCloseBtn.setAttribute("aria-label", useCartPage ? "Назад в корзину" : "Закрыть оформление");
+  checkoutOverlayCloseBtn.innerHTML = useCartPage
+    ? '<i class="fas fa-arrow-left" aria-hidden="true"></i>'
+    : '<i class="fas fa-times"></i>';
+  if (useCartPage) {
+    const checkoutOverlayHeaderSpacer = document.createElement("span");
+    checkoutOverlayHeaderSpacer.className = "shop-checkout-page-header-spacer";
+    checkoutOverlayHeader.appendChild(checkoutOverlayCloseBtn);
+    checkoutOverlayHeader.appendChild(checkoutOverlayTitle);
+    checkoutOverlayHeader.appendChild(checkoutOverlayHeaderSpacer);
+  } else {
+    checkoutOverlayHeader.appendChild(checkoutOverlayTitle);
+    checkoutOverlayHeader.appendChild(checkoutOverlayCloseBtn);
+  }
   checkoutOverlayPanel.appendChild(checkoutOverlayHeader);
 
   const checkoutWrap = document.createElement("div");
@@ -24122,8 +24277,18 @@ function openCartSheet() {
     showSheetCart();
   });
   checkoutOverlayCloseBtn.addEventListener("click", () => {
+    if (useCartPage && window.history.state?.shopCartCheckout === true) {
+      window.history.back();
+      return;
+    }
     showSheetCart();
   });
+  window.addEventListener("popstate", (event) => {
+    if (!useCartPage || !document.body?.classList.contains("shop-checkout-overlay-open")) return;
+    if (checkoutOverlayPanel.querySelector(".shop-checkout-benefits-overlay-host.is-active")) return;
+    event.stopImmediatePropagation();
+    showSheetCart();
+  }, true);
 
   const pickupSheetListView = document.createElement("div");
   pickupSheetListView.className = "shop-pickup-list-view";
@@ -24826,7 +24991,7 @@ function openCartSheet() {
     }
     
     // Показываем мобильные кнопки
-    elMobileCartActions.classList.remove("hidden");
+    elMobileCartActions.classList.toggle("hidden", useCartPage);
     if (items.length > 0) {
       if (elMobileCartActionsCart) elMobileCartActionsCart.classList.remove("hidden");
     } else {
@@ -24900,8 +25065,11 @@ function applySheetAddressTitle(backMode = "cart") {
   sheetNavigationState.screen = 'cart';
   sheetNavigationState.data = null;
 
-  setAppModalMode("shop");
-  window.AppModal.open({
+  if (useCartPage) {
+    showCartPage(wrap);
+  } else {
+    setAppModalMode("shop");
+    window.AppModal.open({
     title: "Корзина",
     content: wrap,
     onClose: () => {
@@ -24943,7 +25111,19 @@ function applySheetAddressTitle(backMode = "cart") {
         setActiveNav(openCartSheetCtx?.sourceScreen === "home" ? "home" : "menu");
       }
     },
-  });
+    });
+  }
+
+  function moveCartPageUpsellToCheckoutFooter() {
+    if (!useCartPage) return;
+    const upsell = list.querySelector(".shop-cart-upsell")
+      || checkoutOverlayFooterHost.querySelector(".shop-cart-upsell");
+    if (!upsell) return;
+    const actionsReference = checkoutActions?.parentElement === checkoutOverlayFooterHost
+      ? checkoutActions
+      : null;
+    checkoutOverlayFooterHost.insertBefore(upsell, actionsReference);
+  }
   
   // Обновляем бейдж сразу после открытия модального окна корзины
   if (typeof window.updateActiveOrdersBadge === "function") {
@@ -24952,8 +25132,10 @@ function applySheetAddressTitle(backMode = "cart") {
     }, 100);
   }
 
-  if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
-  applyKsoModalHeaderUi();
+  if (!useCartPage) {
+    if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
+    applyKsoModalHeaderUi();
+  }
 
   openCartSheetCtx = {
     wrapEl: wrap,
@@ -24965,6 +25147,7 @@ function applySheetAddressTitle(backMode = "cart") {
     checkoutBtn: btn,
     clearBtn,
     checkoutEl: checkoutWrap,
+    checkoutUpsellHostEl: checkoutOverlayFooterHost,
     benefitsEl: benefitsWrap,
     benefitDetailEl: benefitDetailWrap,
     productEl: productWrap,
@@ -24985,6 +25168,7 @@ function applySheetAddressTitle(backMode = "cart") {
     benefitsPromoInputValue: "",
     benefitsPromoDirty: false,
   };
+  moveCartPageUpsellToCheckoutFooter();
   if (typeof window.syncKsoFloatingCartButton === "function") {
     window.syncKsoFloatingCartButton();
   }
@@ -24999,7 +25183,10 @@ function applySheetAddressTitle(backMode = "cart") {
   let sheetEditingId = null;
 
   function isAddressSheetListActive(mode) {
-    if (!window.AppModal || typeof window.AppModal.isOpen !== "function" || !window.AppModal.isOpen()) {
+    const cartSurfaceOpen = useCartPage
+      ? document.body?.classList.contains("shop-cart-page-active")
+      : window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen();
+    if (!cartSurfaceOpen) {
       return false;
     }
     if (sheetNavigationState.type !== "cart" || sheetNavigationState.screen !== "addressList") {
@@ -25034,6 +25221,14 @@ function applySheetAddressTitle(backMode = "cart") {
       checkoutOverlayPanel.insertBefore(checkoutWrap, checkoutOverlayFooterHost);
     }
     setSheetCheckoutOverlayActive(!isKsoCheckout);
+    moveCartPageUpsellToCheckoutFooter();
+    if (useCartPage && window.history.state?.shopCartCheckout !== true) {
+      window.history.pushState(
+        { ...(window.history.state || {}), shopCartCheckout: true },
+        "",
+        window.location.href
+      );
+    }
     checkoutWrap.classList.remove("hidden");
     benefitsWrap.classList.add("hidden");
     benefitsWrap.classList.remove("shop-checkout-benefits-content--modal-layout");
@@ -25044,7 +25239,10 @@ function applySheetAddressTitle(backMode = "cart") {
     pickupSheetWrap.classList.add("hidden");
     resetCartBonusRedeemScrollPosition();
 
-    setCartSheetFooterMode(openCartSheetCtx, cartItemsResolved().length ? (isKsoCheckout ? "checkout" : "cart") : "hidden");
+    setCartSheetFooterMode(
+      openCartSheetCtx,
+      cartItemsResolved().length ? ((isKsoCheckout || useCartPage) ? "checkout" : "cart") : "hidden"
+    );
     const mobileBenefitsPromoWrap = document.getElementById("shopMobileBenefitsPromoWrap");
     if (mobileBenefitsPromoWrap) mobileBenefitsPromoWrap.classList.add("hidden");
     
@@ -25704,8 +25902,9 @@ function applySheetAddressTitle(backMode = "cart") {
     if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
       const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
       appendUpsellToList(openCartSheetCtx.listEl);
+      mountCartPageModeHeader();
       if (typeof updateCartModeHeaderUi === "function") {
-        updateCartModeHeaderUi(openCartSheetCtx.listEl);
+        updateCartModeHeaderUi(useCartPage ? cartPageHeaderContent : openCartSheetCtx.listEl);
       }
       if (openCartSheetCtx.checkoutBtn) {
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
@@ -25759,7 +25958,7 @@ function applySheetAddressTitle(backMode = "cart") {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile) {
       if (elMobileCartActions) {
-        elMobileCartActions.classList.remove("hidden");
+        elMobileCartActions.classList.toggle("hidden", useCartPage);
       }
       // Managed by unified mobile bottom renderer.
       // На экране корзины всегда показываем блок (полоска прогресса видна и при пустой корзине)
@@ -26667,7 +26866,11 @@ function renderSheetAddressList() {
   // --- Delivery / Pickup toggle: header helpers ---
   function showHeaderToggle() {
     if (document.body?.classList.contains("page-kso")) return;
-    const header = document.querySelector(".app-modal-header");
+    if (useCartPage) {
+      mountCartPageModeHeader();
+      return;
+    }
+    const header = useCartPage ? cartPageHeaderContent : document.querySelector(".app-modal-header");
     if (!header) return;
     const titleEl = header.querySelector(".app-modal-title");
     if (titleEl) titleEl.classList.add("hidden");
@@ -26681,12 +26884,13 @@ function renderSheetAddressList() {
   }
 
   function hideHeaderToggle() {
+    if (useCartPage) return;
     deliveryToggleWrap.classList.add("hidden");
     // Move back out of header if needed
     if (deliveryToggleWrap.parentNode) {
       deliveryToggleWrap.remove();
     }
-    const header = document.querySelector(".app-modal-header");
+    const header = useCartPage ? cartPageHeaderContent : document.querySelector(".app-modal-header");
     if (header) {
       const titleEl = header.querySelector(".app-modal-title");
       if (titleEl) titleEl.classList.remove("hidden");
@@ -28667,6 +28871,13 @@ function renderSheetAddressList() {
     if (!openCartSheetCtx || typeof openCartSheetCtx !== "object") return false;
     const listEl = openCartSheetCtx.listEl;
     if (!listEl || !listEl.isConnected) return false;
+    const cartPage = document.getElementById("shopCartPage");
+    if (
+      document.body?.classList.contains("shop-cart-page-active")
+      && cartPage?.contains(listEl)
+    ) {
+      return true;
+    }
     if (window.AppModal?.body && !window.AppModal.body.contains(listEl)) return false;
     return true;
   }
@@ -37660,6 +37871,10 @@ function setBottomNavActive(tab) {
 
     container.style.position = "relative";
     const checkoutSelectionOverlayContainer = container.closest(".shop-checkout-overlay-panel") || container;
+    const usesCheckoutPageHistory = Boolean(
+      document.body?.classList.contains("shop-cart-page-active")
+      && checkoutSelectionOverlayContainer.classList?.contains("shop-checkout-overlay-panel")
+    );
     const checkoutSelectionOverlayHost = document.createElement("div");
     checkoutSelectionOverlayHost.className = "shop-checkout-benefits-overlay-host";
     if (checkoutSelectionOverlayContainer !== container) {
@@ -37672,7 +37887,16 @@ function setBottomNavActive(tab) {
       }
     });
 
-    function closeCheckoutSelectionSheet() {
+    function closeCheckoutSelectionSheet({ fromHistory = false } = {}) {
+      if (
+        usesCheckoutPageHistory
+        && !fromHistory
+        && checkoutSelectionOverlayHost.classList.contains("is-active")
+        && window.history.state?.shopCheckoutSelection === true
+      ) {
+        window.history.back();
+        return;
+      }
       checkoutSelectionOverlayHost.classList.remove("is-active");
       checkoutSelectionOverlayHost.innerHTML = "";
       if (checkoutSelectionOverlayContainer && checkoutSelectionOverlayContainer.classList) {
@@ -37681,6 +37905,16 @@ function setBottomNavActive(tab) {
       }
       syncMobileNestedCheckoutSheetState(false);
     }
+
+    const handleCheckoutSelectionPopState = (event) => {
+      if (!usesCheckoutPageHistory || !checkoutSelectionOverlayHost.classList.contains("is-active")) return;
+      event.stopImmediatePropagation();
+      closeCheckoutSelectionSheet({ fromHistory: true });
+    };
+    window.addEventListener("popstate", handleCheckoutSelectionPopState, true);
+    registerCheckoutCleanup(() => {
+      window.removeEventListener("popstate", handleCheckoutSelectionPopState, true);
+    });
 
     function openCheckoutSelectionSheet({
       title = "",
@@ -37691,13 +37925,15 @@ function setBottomNavActive(tab) {
       showApply = true,
       bodyClass = "",
     } = {}) {
-      closeCheckoutSelectionSheet();
+      closeCheckoutSelectionSheet({ fromHistory: true });
       const overlay = document.createElement("div");
       overlay.className = "shop-checkout-benefits-overlay is-sheet";
       const panel = document.createElement("div");
       panel.className = "shop-checkout-benefits-overlay-panel is-sheet";
       const header = document.createElement("div");
-      header.className = "shop-checkout-benefits-overlay-header";
+      header.className = usesCheckoutPageHistory
+        ? "shop-checkout-benefits-overlay-header shop-page-header shop-checkout-selection-page-header"
+        : "shop-checkout-benefits-overlay-header";
       const titleWrap = document.createElement("div");
       titleWrap.className = "shop-checkout-benefits-overlay-title-wrap";
       const titleEl = document.createElement("div");
@@ -37706,11 +37942,24 @@ function setBottomNavActive(tab) {
       titleWrap.appendChild(titleEl);
       const closeBtn = document.createElement("button");
       closeBtn.type = "button";
-      closeBtn.className = "shop-checkout-benefits-overlay-close";
-      closeBtn.innerHTML = '<i class="fas fa-times"></i>';
+      closeBtn.className = usesCheckoutPageHistory
+        ? "shop-checkout-benefits-overlay-close shop-page-header-btn"
+        : "shop-checkout-benefits-overlay-close";
+      closeBtn.setAttribute("aria-label", usesCheckoutPageHistory ? "Назад к оформлению" : "Закрыть");
+      closeBtn.innerHTML = usesCheckoutPageHistory
+        ? '<i class="fas fa-arrow-left" aria-hidden="true"></i>'
+        : '<i class="fas fa-times"></i>';
       closeBtn.addEventListener("click", () => closeCheckoutSelectionSheet());
-      header.appendChild(titleWrap);
-      header.appendChild(closeBtn);
+      if (usesCheckoutPageHistory) {
+        const headerSpacer = document.createElement("span");
+        headerSpacer.className = "shop-checkout-selection-page-header-spacer";
+        header.appendChild(closeBtn);
+        header.appendChild(titleWrap);
+        header.appendChild(headerSpacer);
+      } else {
+        header.appendChild(titleWrap);
+        header.appendChild(closeBtn);
+      }
       const body = document.createElement("div");
       body.className = "shop-checkout-benefits-overlay-body shop-checkout-selection-sheet";
       if (bodyClass) {
@@ -37751,6 +38000,13 @@ function setBottomNavActive(tab) {
       panel.addEventListener("click", (event) => event.stopPropagation());
       checkoutSelectionOverlayHost.appendChild(overlay);
       checkoutSelectionOverlayHost.classList.add("is-active");
+      if (usesCheckoutPageHistory && window.history.state?.shopCheckoutSelection !== true) {
+        window.history.pushState(
+          { ...(window.history.state || {}), shopCartCheckout: true, shopCheckoutSelection: true },
+          "",
+          window.location.href
+        );
+      }
       if (checkoutSelectionOverlayContainer && checkoutSelectionOverlayContainer.classList) {
         const containerRect = checkoutSelectionOverlayContainer.getBoundingClientRect();
         if (containerRect && containerRect.height > 0) {
@@ -40703,6 +40959,14 @@ function initShopLate() {
       // Корзина: при просмотре карточки товара — сразу переключаем на корзину, а не закрываем
       if (elNavCart) {
         elNavCart.addEventListener("click", () => {
+          if (document.body?.classList.contains("shop-cart-page-active")) {
+            setActiveNav("cart");
+            return;
+          }
+          if (document.body?.classList.contains("shop-profile-page-active")) {
+            closeShopSheetIfOpen();
+            showCartView();
+          }
           const sheetOpen = window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen();
           const notOnCart =
             sheetOpen &&
@@ -40727,6 +40991,12 @@ function initShopLate() {
       }
       if (elNavProfile) {
         elNavProfile.addEventListener("click", () => {
+          if (document.body?.classList.contains("shop-profile-page-active")) {
+            setActiveNav("profile");
+            return;
+          }
+          document.getElementById("shopCartPage")?.classList.add("hidden");
+          document.body.classList.remove("shop-cart-page-active");
           closeShopSheetIfOpen();
           void openProfileSheet({});
         });
@@ -40829,6 +41099,12 @@ function initShopLate() {
 
       if (elNavMenu) {
         elNavMenu.addEventListener("click", () => {
+          if (document.body?.classList.contains("shop-cart-page-active")) {
+            document.getElementById("shopCartPage")?.classList.add("hidden");
+            document.body.classList.remove("shop-cart-page-active");
+            setActiveNav("menu");
+            return;
+          }
           if (document.body?.classList.contains("shop-profile-page-active")) {
             closeShopSheetIfOpen();
             showCartView();
