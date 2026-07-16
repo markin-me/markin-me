@@ -3847,7 +3847,8 @@ body.page-kso .shop-kso-product-modal-body > .shop-pd{
 
 body.page-kso .shop-kso-product-modal-body .shop-pd-scroll{
   min-height:0;
-  overflow:auto;
+  overflow-x:hidden;
+  overflow-y:auto;
   padding-bottom:88px;
 }
 
@@ -4622,6 +4623,7 @@ body.page-kso .app-modal .textarea{
 
 .app-modal-body{
   padding:0 12px 12px;
+  overflow-x:hidden;
   overflow-y:auto;
   flex:1;
   min-height:0;
@@ -13040,7 +13042,8 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 .shop-combo-detail-scroll{
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: var(--sp-pad);
 }
 
@@ -13375,9 +13378,9 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 }
 .shop-combo-picker-variants-row{
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 8px;
-  overflow-x: auto;
+  overflow-x: hidden;
   padding-bottom: 4px;
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -15747,7 +15750,8 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
 .shop-cart-sheet .shop-product-content .shop-pd-scroll{
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   background: var(--color-surface);
 }
@@ -15768,7 +15772,8 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
 .shop-cart-sheet .shop-product-content .shop-combo-detail-scroll{
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding-bottom: calc(12px + var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
   background: var(--color-surface);
@@ -18546,7 +18551,8 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 .shop-pd-scroll{
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: grid;
   gap: 14px;
   grid-auto-rows: minmax(min-content, auto);
@@ -19038,8 +19044,8 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin: 0 -8px -8px;
-  padding: 8px;
+  margin: 0 0 -8px;
+  padding: 8px 0;
 }
 .shop-pd-option-product-more{
   justify-self: center;
@@ -19064,7 +19070,7 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   grid-template-rows: auto auto 1fr;
   align-items: stretch;
   width: 100%;
-  aspect-ratio: 2 / 3;
+  aspect-ratio: 2 / 3.35;
   min-width: 0;
   min-height: 0;
   padding: 0 0 7px;
@@ -19086,6 +19092,7 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
 }
 .shop-pd-option-product-photo{
   position: relative;
+  container-type: inline-size;
   width: 100%;
   aspect-ratio: 1 / 1;
   min-width: 0;
@@ -19124,10 +19131,14 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   justify-content: center;
   border-radius: inherit;
   background: rgba(0, 0, 0, 0.34);
+  box-sizing: border-box;
+  padding: 0 4px;
   color: #fff;
-  font-size: 32px;
+  font-size: clamp(18px, 22cqw, 32px);
   font-weight: 900;
   line-height: 1;
+  white-space: nowrap;
+  text-align: center;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
 }
 .shop-pd-option-product-discount{
@@ -19171,16 +19182,19 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   box-shadow: 0 8px 18px rgba(20, 29, 48, 0.16);
 }
 .shop-pd-option-product-name{
-  display: block;
+  display: -webkit-box;
   min-width: 0;
+  height: 24px;
   margin: 5px 7px 0;
   overflow: hidden;
   color: var(--color-text);
   font-size: 10px;
   font-weight: 800;
   line-height: 1.2;
-  white-space: nowrap;
+  text-align: center;
   text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .shop-pd-option-product-spin{
   align-self: end;
@@ -19281,8 +19295,8 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   grid-template-columns: repeat(3, minmax(0, 1fr));
   justify-content: start;
   gap: 12px;
-  margin: 0 -8px -8px;
-  padding: 8px;
+  margin: 0 0 -8px;
+  padding: 8px 0;
 }
 .shop-pd-ingredient-title{
   font-size: 16px;
@@ -19297,7 +19311,7 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   align-items: stretch;
   width: 100%;
   height: auto;
-  aspect-ratio: 2 / 3;
+  aspect-ratio: 2 / 3.35;
   min-height: 0;
   padding: 0;
   overflow: visible;
@@ -19340,22 +19354,25 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   object-fit: cover;
 }
 .shop-pd-ingredient-info{
+  display: grid;
+  grid-template-rows: minmax(24px, 1fr) auto;
   min-height: 0;
   justify-content: space-between;
   gap: 4px;
   padding-top: 5px;
 }
 .shop-pd-ingredient-name.shop-pd-option-name{
-  display: block;
-  min-height: 14px;
+  display: -webkit-box;
+  height: 24px;
   overflow: hidden;
   color: var(--color-text);
   font-size: 10px;
   font-weight: 700;
   line-height: 1.2;
-  text-align: left;
-  white-space: nowrap;
+  text-align: center;
   text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .shop-pd-ingredient-controls{
   display: grid;
@@ -19682,8 +19699,8 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     gap: 12px;
     overflow-x: visible;
     overflow-y: visible;
-    margin: 8px -8px -8px;
-    padding: 8px;
+    margin: 8px 0 -8px;
+    padding: 8px 0;
   }
   .shop-pd-ingredient-card{
     flex: none;
@@ -20991,7 +21008,8 @@ body.page-kso .shop-checkout-customer-phone{
 .shop-product-content{
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 4px 12px;
 }
 
