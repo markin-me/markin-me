@@ -19464,7 +19464,7 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     z-index: 20;
     display: block;
     width: 100vw;
-    overflow-y: auto;
+    overflow: hidden;
     padding-bottom: env(safe-area-inset-bottom);
     background: var(--color-surface-2);
   }
@@ -19501,6 +19501,8 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   }
 
   .shop-profile-settings-page-content{
+    height: 100%;
+    overflow-y: auto;
     padding: 24px 16px 32px;
   }
 
@@ -19640,7 +19642,9 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     min-height: 0;
     padding: 0 0 calc(var(--shop-bottomnav-h) + 24px + env(safe-area-inset-bottom));
     background: var(--color-surface-2);
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   .shop-profile-page.hidden{
@@ -19665,6 +19669,8 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   }
 
   .shop-profile-page-content{
+    flex: 1;
+    overflow-y: auto;
     min-height: 0;
     padding: 16px;
   }

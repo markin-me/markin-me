@@ -3117,7 +3117,7 @@ function buildProductDetailsContent(
       if (isSelected && photoQty > 0) {
         const qtyOverlay = document.createElement("div");
         qtyOverlay.className = "shop-pd-option-product-photo-qty";
-        qtyOverlay.textContent = String(photoQty);
+        qtyOverlay.textContent = variantLabel || String(photoQty);
         photoWrap.appendChild(qtyOverlay);
       }
       card.appendChild(photoWrap);
