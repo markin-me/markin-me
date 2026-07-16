@@ -19461,6 +19461,107 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     min-height: 100dvh;
   }
 
+  .shop-details-page{
+    position: fixed;
+    inset: 0;
+    z-index: 10030;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--color-surface);
+  }
+
+  .shop-page-header{
+    min-height: 64px;
+    display: grid;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: 0 4px 12px rgba(20, 29, 48, 0.08);
+  }
+
+  .shop-page-header-btn{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+    font-size: 18px;
+  }
+
+  .shop-page-footer{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: 0 -4px 14px rgba(0,0,0,.08);
+  }
+
+  .shop-details-page.hidden{
+    display: none !important;
+  }
+
+  .shop-details-page > .shop-product-content{
+    flex: 1;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    padding: 0 12px;
+    overflow: hidden;
+  }
+
+  .shop-details-page-header{
+    flex: 0 0 64px;
+    grid-template-columns: 48px minmax(0, 1fr) 48px;
+  }
+
+  .shop-details-page-header-title{
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 18px;
+    font-weight: 900;
+    line-height: 1.2;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .shop-details-page-favorite{
+    justify-self: end;
+  }
+
+  .shop-details-page-favorite.is-active{
+    color: var(--shop-buy);
+  }
+
+  .shop-details-page.is-combo-picker .shop-details-page-favorite,
+  .shop-details-page.is-combo-picker > .shop-mobile-product-actions{
+    display: none !important;
+  }
+
+  body.shop-details-page-active .shop-mobile-bottom-container{
+    display: none !important;
+  }
+
+  body.shop-details-page-active .shop-product-hero-header{
+    display: none !important;
+  }
+
   body.shop-profile-page-active > header{
     display: none !important;
   }
@@ -27218,6 +27319,16 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     border-bottom: none;
     box-shadow: 0 10px 22px var(--overlay-bg);
     margin-bottom: 0;
+  }
+
+  .shop-details-page > .shop-mobile-product-actions {
+    --shop-mobile-action-h: 44px;
+    flex: 0 0 auto;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    border: 0;
+    border-top: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: 0 -4px 14px rgba(0,0,0,.08);
   }
   
   .shop-mobile-product-actions.hidden {

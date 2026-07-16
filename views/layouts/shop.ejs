@@ -145,6 +145,8 @@
     <%- include(profileSettingsPartial) %>
   <% } %>
 
+  <%- include('../partials/shop/detailsPage') %>
+
   <!-- Универсальная модалка (на мобиле = bottom sheet) -->
   <% const isKsoPage = typeof pageClass === 'string' && pageClass.split(/\s+/).includes('page-kso'); %>
   <% if (!isKsoPage) { %>

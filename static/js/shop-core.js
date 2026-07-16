@@ -18983,6 +18983,7 @@ function updateCartBadge() {
     if (!("ontouchstart" in window) && Number(navigator.maxTouchPoints || 0) <= 0) return false;
     if (window.matchMedia && !window.matchMedia("(max-width: 768px)").matches) return false;
     if (document.body?.classList.contains("shop-company-chat-open")) return false;
+    if (document.body?.classList.contains("shop-details-page-active")) return false;
     if (document.body?.classList.contains("modal-open") || document.body?.classList.contains("sheet-open")) return false;
     if (window.AppModal?.isOpen?.()) return false;
     return true;

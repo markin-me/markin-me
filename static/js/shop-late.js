@@ -5403,7 +5403,7 @@ async function openProductBuyXGetYBenefitDetail(product) {
 }
 
 
-async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly } = {}) {
+async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton } = {}) {
   if (!container) return;
   const productIdForRender = Number(product?.id || 0);
   const isMobileViewport = window.matchMedia("(max-width: 768px)").matches;
@@ -6793,6 +6793,15 @@ optionGroups.forEach((group) => {
     );
   }
 
+  if (favoriteButton) {
+    favoriteButton.classList.remove("is-active", "is-busy");
+    delete favoriteButton.dataset.favoriteId;
+    bindFavoriteButtonsForCartRow(
+      [favoriteButton],
+      () => buildCurrentProductFavoriteSnapshot()
+    );
+  }
+
   container.appendChild(wrap);
 
   actionBtn.addEventListener("click", async () => {
@@ -7153,6 +7162,140 @@ optionGroups.forEach((group) => {
   }
 }
 
+  const standaloneDetailsPage = document.getElementById("shopDetailsPage");
+  const standaloneDetailsContent = document.getElementById("shopDetailsPageContent");
+  const standaloneDetailsBackBtn = document.getElementById("shopDetailsPageBackBtn");
+  const standaloneDetailsTitle = document.getElementById("shopDetailsPageTitle");
+  let standaloneDetailsFavoriteButton = document.getElementById("shopDetailsPageFavoriteBtn");
+  let standaloneDetailsBackHandler = null;
+  let standaloneDetailsReturnTarget = "catalog";
+  let standaloneDetailsStepBackHandler = null;
+
+  function getFreshStandaloneFavoriteButton() {
+    if (!standaloneDetailsFavoriteButton) return null;
+    const freshButton = standaloneDetailsFavoriteButton.cloneNode(true);
+    standaloneDetailsFavoriteButton.replaceWith(freshButton);
+    standaloneDetailsFavoriteButton = freshButton;
+    return freshButton;
+  }
+
+  function finishStandaloneDetailsClose() {
+    const backHandler = standaloneDetailsBackHandler;
+    const returnTarget = standaloneDetailsReturnTarget;
+    document.body?.classList.remove("shop-details-page-active");
+    standaloneDetailsPage?.classList.remove("is-combo-picker");
+    standaloneDetailsPage?.classList.add("hidden");
+    if (standaloneDetailsContent) standaloneDetailsContent.innerHTML = "";
+    if (standaloneDetailsTitle) standaloneDetailsTitle.textContent = "";
+    standaloneDetailsBackHandler = null;
+    standaloneDetailsReturnTarget = "catalog";
+    standaloneDetailsStepBackHandler = null;
+    openProductCtx = null;
+    if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
+    if (typeof setActiveNav === "function") {
+      setActiveNav(returnTarget === "cart" ? "cart" : "menu");
+    }
+    if (typeof backHandler === "function") backHandler();
+  }
+
+  function closeStandaloneDetailsPage() {
+    if (window.history.state?.shopDetailsPage === true) {
+      window.history.back();
+      return;
+    }
+    finishStandaloneDetailsClose();
+  }
+
+  function prepareStandaloneDetailsPage({ title, onBack, returnTarget }) {
+    if (!standaloneDetailsPage || !standaloneDetailsContent) return null;
+    standaloneDetailsBackHandler = typeof onBack === "function" ? onBack : null;
+    standaloneDetailsReturnTarget = returnTarget || "catalog";
+    if (standaloneDetailsTitle) standaloneDetailsTitle.textContent = String(title || "");
+    document.body?.classList.add("shop-details-page-active");
+    standaloneDetailsPage.classList.remove("hidden");
+    standaloneDetailsContent.scrollTop = 0;
+    window.history.pushState(
+      { ...(window.history.state || {}), shopDetailsPage: true },
+      "",
+      window.location.href
+    );
+    return getFreshStandaloneFavoriteButton();
+  }
+
+  function openStandaloneDetailsStep({ title, onBack }) {
+    if (!standaloneDetailsPage || !document.body?.classList.contains("shop-details-page-active")) return false;
+    standaloneDetailsStepBackHandler = typeof onBack === "function" ? onBack : null;
+    standaloneDetailsPage.classList.add("is-combo-picker");
+    if (standaloneDetailsTitle) standaloneDetailsTitle.textContent = String(title || "");
+    if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
+    if (window.history.state?.shopDetailsStep !== "combo-picker") {
+      window.history.pushState(
+        { ...(window.history.state || {}), shopDetailsPage: true, shopDetailsStep: "combo-picker" },
+        "",
+        window.location.href
+      );
+    }
+    return true;
+  }
+
+  function closeStandaloneDetailsStep() {
+    if (window.history.state?.shopDetailsStep === "combo-picker") {
+      window.history.back();
+      return;
+    }
+    const stepBackHandler = standaloneDetailsStepBackHandler;
+    standaloneDetailsStepBackHandler = null;
+    standaloneDetailsPage?.classList.remove("is-combo-picker");
+    if (typeof stepBackHandler === "function") stepBackHandler();
+  }
+
+  standaloneDetailsBackBtn?.addEventListener("click", closeStandaloneDetailsPage);
+  window.addEventListener("popstate", (event) => {
+    if (!document.body?.classList.contains("shop-details-page-active")) return;
+    event.stopImmediatePropagation();
+    if (standaloneDetailsStepBackHandler) {
+      const stepBackHandler = standaloneDetailsStepBackHandler;
+      standaloneDetailsStepBackHandler = null;
+      standaloneDetailsPage?.classList.remove("is-combo-picker");
+      stepBackHandler();
+      return;
+    }
+    finishStandaloneDetailsClose();
+  }, true);
+
+  async function openStandaloneProductPage(product, { cartKey, prefillItem, readOnly, onBack, returnTarget } = {}) {
+    if (!standaloneDetailsPage || !standaloneDetailsContent) return false;
+    const favoriteButton = prepareStandaloneDetailsPage({
+      title: product?.name || product?.title || "Товар",
+      onBack,
+      returnTarget,
+    });
+    await renderProductDetailsInto(standaloneDetailsContent, product, {
+      onBack: closeStandaloneDetailsPage,
+      cartKey,
+      prefillItem,
+      readOnly,
+      favoriteButton,
+    });
+    return true;
+  }
+
+  function openStandaloneComboPage(combo, { cartKey, prefillItem, onBack, returnTarget } = {}) {
+    if (!standaloneDetailsPage || !standaloneDetailsContent) return false;
+    const favoriteButton = prepareStandaloneDetailsPage({
+      title: combo?.title || "Комбо",
+      onBack,
+      returnTarget,
+    });
+    renderComboDetailsInto(standaloneDetailsContent, combo, {
+      onBack: closeStandaloneDetailsPage,
+      cartKey,
+      prefillItem,
+      favoriteButton,
+    });
+    return true;
+  }
+
   async function openProductDetails(productId, { cartKey, prefillItem, onBack, readOnly } = {}) {
     const p = await ensureProduct(productId);
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -7161,19 +7304,13 @@ optionGroups.forEach((group) => {
     const resolvedOnBack = hasCustomOnBack ? onBack : showCartView;
 
     if (isMobile && !isKsoPage) {
-      if (!hasLiveCartSheetContext()) {
-        openCartSheet();
-      }
-      if (openCartSheetCtx?.showSheetProduct) {
-        if (!cartKey && !hasCustomOnBack && openCartSheetCtx && typeof openCartSheetCtx === "object") {
-          openCartSheetCtx.sourceScreen = "menu";
-        }
-        const sheetArgs = { cartKey, prefillItem, readOnly: readOnly === true };
-        if (hasCustomOnBack) {
-          sheetArgs.onBack = resolvedOnBack;
-        }
-        openCartSheetCtx.showSheetProduct(p, sheetArgs);
-      }
+      await openStandaloneProductPage(p, {
+        cartKey,
+        prefillItem,
+        readOnly,
+        onBack: hasCustomOnBack ? onBack : null,
+        returnTarget: cartKey ? "cart" : (hasCustomOnBack ? "custom" : "catalog"),
+      });
       return;
     }
 
@@ -7216,8 +7353,9 @@ optionGroups.forEach((group) => {
     return roundPrice(d >= 100 ? 0 : p * (1 - d / 100));
   }
 
-  function renderComboDetailsInto(container, combo, { onBack, cartKey, prefillItem } = {}) {
+  function renderComboDetailsInto(container, combo, { onBack, cartKey, prefillItem, favoriteButton } = {}) {
     if (!container) return;
+    const isStandaloneComboPage = container === standaloneDetailsContent;
     const comboIdForRender = Number(combo?.id || combo?.combo_id || 0);
     const isStaticComboView = !cartKey && !prefillItem;
     const shouldRandomizeInitialPreset = isStaticComboView;
@@ -7567,7 +7705,7 @@ optionGroups.forEach((group) => {
 
       // На мобилке привязываем футер комбо к блоку над навигацией (как у товаров)
       const isMobileCombo = window.matchMedia("(max-width: 768px)").matches;
-      if (isMobileCombo && openCartSheetCtx && elMobileProductActions && elMobileQtyWrap && elMobileAddToCartBtn) {
+      if (isMobileCombo && (openCartSheetCtx || container === standaloneDetailsContent) && elMobileProductActions && elMobileQtyWrap && elMobileAddToCartBtn) {
         footer.style.display = "none";
         elMobileCartActions.classList.add("hidden");
         if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
@@ -7741,6 +7879,15 @@ optionGroups.forEach((group) => {
       return buildFavoriteSnapshotFromResolvedItem(resolvedComboItem, {
         oldLineTotal: showOld ? roundPrice(oldUnitPrice * safeQty) : null,
       });
+    }
+
+    if (favoriteButton) {
+      favoriteButton.classList.remove("is-active", "is-busy");
+      delete favoriteButton.dataset.favoriteId;
+      bindFavoriteButtonsForCartRow(
+        [favoriteButton],
+        () => buildCurrentComboFavoriteSnapshot()
+      );
     }
 
     function cloneComboDraftValue(value) {
@@ -8513,7 +8660,11 @@ optionGroups.forEach((group) => {
 
     function renderMainView() {
       reconcileComboSelectionsForMainView();
-      if (openCartSheetCtx) {
+      if (isStandaloneComboPage) {
+        standaloneDetailsPage?.classList.remove("is-combo-picker");
+        if (standaloneDetailsTitle) standaloneDetailsTitle.textContent = String(combo.title || "Комбо");
+        if (elMobileProductActions) elMobileProductActions.classList.remove("hidden");
+      } else if (openCartSheetCtx) {
         openCartSheetCtx.comboStepBack = null;
         sheetNavigationState.screen = "combo";
         setSheetHeaderMode("product", {
@@ -8825,6 +8976,14 @@ optionGroups.forEach((group) => {
       scrollEl.scrollTop = Math.max(0, targetTop);
     }
 
+    function returnFromBlockPicker() {
+      if (isStandaloneComboPage) {
+        closeStandaloneDetailsStep();
+        return;
+      }
+      renderMainView();
+    }
+
     function renderBlockPicker(blockIndex, scrollToRestore) {
       let normalizedBlockIndex = Number(blockIndex);
       if (!Number.isFinite(normalizedBlockIndex)) normalizedBlockIndex = 0;
@@ -8836,6 +8995,12 @@ optionGroups.forEach((group) => {
 
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
+      if (isStandaloneComboPage) {
+        openStandaloneDetailsStep({
+          title: combo.title || "Комбо",
+          onBack: renderMainView,
+        });
+      }
       if (typeof window.queueProductStockAvailabilityRefresh === "function") {
         window.queueProductStockAvailabilityRefresh(
           block.products.map((prod) => Number(prod?.product_id || 0)).filter((id) => Number.isFinite(id) && id > 0),
@@ -8926,9 +9091,9 @@ optionGroups.forEach((group) => {
       }
 
       // Десктоп: кнопка «Назад» возвращает на шаг назад (в основное представление комбо), а не закрывает панель
-      if (!openCartSheetCtx) {
+      if (!openCartSheetCtx && !isStandaloneComboPage) {
         const doStepBack = () => {
-          renderMainView();
+          returnFromBlockPicker();
           window._comboStepBackCallback = null;
         };
         window._comboStepBackCallback = doStepBack;
@@ -9211,7 +9376,7 @@ optionGroups.forEach((group) => {
           }
           if (expandedPickerProductIndex === idx) {
             expandedPickerProductIndex = null;
-            renderMainView();
+            returnFromBlockPicker();
           } else {
             if (idx !== currentSelected) {
               const applied = await guardComboDraftMutation(async () => {
@@ -9235,7 +9400,7 @@ optionGroups.forEach((group) => {
                 });
               } catch {}
             }
-            renderMainView();
+            returnFromBlockPicker();
           }
         });
         actionsWrap.appendChild(radio);
@@ -9273,7 +9438,7 @@ optionGroups.forEach((group) => {
               });
             } catch {}
           }
-          renderMainView();
+          returnFromBlockPicker();
         });
 
         const previewHasRenderableDetails = (preview) => {
@@ -9902,6 +10067,16 @@ optionGroups.forEach((group) => {
     }
     if (!data) return;
 
+    if (isMobile && !isKsoPage) {
+      openStandaloneComboPage(data, {
+        cartKey,
+        prefillItem,
+        onBack: hasCustomOnBack ? onBack : null,
+        returnTarget: cartKey ? "cart" : (hasCustomOnBack ? "custom" : "catalog"),
+      });
+      return;
+    }
+
     if (isKsoPage && window.AppModal && typeof window.AppModal.open === "function") {
       const modalBody = document.createElement("div");
       modalBody.className = "shop-kso-combo-modal-body";
@@ -9923,23 +10098,6 @@ optionGroups.forEach((group) => {
       }
       applyKsoModalHeaderUi();
       renderComboDetailsInto(modalBody, data, { onBack: () => window.AppModal?.close?.("back"), cartKey, prefillItem });
-      return;
-    }
-
-    if (isMobile) {
-      if (!hasLiveCartSheetContext()) {
-        openCartSheet();
-      }
-      if (openCartSheetCtx?.showSheetCombo) {
-        if (!cartKey && !hasCustomOnBack && openCartSheetCtx && typeof openCartSheetCtx === "object") {
-          openCartSheetCtx.sourceScreen = "menu";
-        }
-        const sheetArgs = { cartKey, prefillItem };
-        if (hasCustomOnBack) {
-          sheetArgs.onBack = onBack;
-        }
-        openCartSheetCtx.showSheetCombo(data, sheetArgs);
-      }
       return;
     }
 
