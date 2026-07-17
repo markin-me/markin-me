@@ -14054,14 +14054,13 @@ async function initAddresses() {
     const hasCachedProducts = state.productsByCategory instanceof Map && state.productsByCategory.has(targetCategoryId);
     const hasCachedCombos = state.combosByCategory instanceof Map && state.combosByCategory.has(targetCategoryId);
     renderProducts();
-    scrollToCategory(categoryId);
     saveCatalogSnapshotFromState();
     if (!hasCachedProducts || !hasCachedCombos) {
       await loadProductsForCategory(targetCategoryId, { limit: 200, lite: true });
       renderProducts();
-      scrollToCategory(categoryId);
       saveCatalogSnapshotFromState();
     }
+    scrollToCategory(categoryId, { alignFirstCard: true });
   }
 
   function scheduleComboDetailsPrefetch(comboIds, opts = {}) {

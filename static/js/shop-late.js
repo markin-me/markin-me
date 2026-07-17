@@ -24649,15 +24649,15 @@ function openCartSheet() {
         </div>
         <div class="shop-address-form-field">
           <label class="shop-address-form-sr-label" for="shopSheetAddrEntrance">Подъезд</label>
-          <input class="control" data-a="entrance" id="shopSheetAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
+          <input class="control" data-a="entrance" id="shopSheetAddrEntrance" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Подъезд" aria-label="Подъезд" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
         <div class="shop-address-form-field">
           <label class="shop-address-form-sr-label" for="shopSheetAddrFloor">Этаж</label>
-          <input class="control" data-a="floor" id="shopSheetAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
+          <input class="control" data-a="floor" id="shopSheetAddrFloor" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Этаж" aria-label="Этаж" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
         <div class="shop-address-form-field">
           <label class="shop-address-form-sr-label" for="shopSheetAddrApartment">Квартира</label>
-          <input class="control" data-a="apartment" id="shopSheetAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
+          <input class="control" data-a="apartment" id="shopSheetAddrApartment" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Квартира" aria-label="Квартира" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
         </div>
       </div>
       <div class="shop-address-form-row shop-address-form-row--full">
@@ -26490,26 +26490,14 @@ function applySheetAddressTitle(backMode = "cart") {
         onBack: () => {
           closeAddressDesktopPanelModal();
         },
-        showBackInHeader: false,
+        showBackInHeader: true,
       });
       setShopModalBackButtonIconMode("arrow");
       setShopModalHeaderShellMode(true);
       showInlineAddressToggle();
       const addressCloseBtn = getShopModalCloseButton();
       if (addressCloseBtn) {
-        const addressCloseCaptureHandler = (event) => {
-          if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === "function") {
-              event.stopImmediatePropagation();
-            }
-          }
-          closeAddressDesktopPanelModal();
-        };
-        addressCloseBtn.addEventListener("click", addressCloseCaptureHandler, true);
-        addressCloseBtn._shopAddressCaptureHandler = addressCloseCaptureHandler;
-        addressCloseBtn.onclick = null;
+        addressCloseBtn.classList.add("hidden");
       }
     } else {
       const returnToProfile = resolvedBackMode === "profile";
@@ -26950,25 +26938,13 @@ function applySheetAddressTitle(backMode = "cart") {
         onBack: () => {
           showSheetAddressList(resolvedBackMode);
         },
-        showBackInHeader: false,
+        showBackInHeader: true,
       });
       setShopModalBackButtonIconMode("arrow");
       setShopModalHeaderShellMode(true);
       const addressCloseBtn = getShopModalCloseButton();
       if (addressCloseBtn) {
-        const addressCloseCaptureHandler = (event) => {
-          if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === "function") {
-              event.stopImmediatePropagation();
-            }
-          }
-          showSheetAddressList(resolvedBackMode);
-        };
-        addressCloseBtn.addEventListener("click", addressCloseCaptureHandler, true);
-        addressCloseBtn._shopAddressCaptureHandler = addressCloseCaptureHandler;
-        addressCloseBtn.onclick = null;
+        addressCloseBtn.classList.add("hidden");
       }
     } else {
       setSheetHeaderMode("cart");
@@ -31865,15 +31841,15 @@ function renderSheetAddressList() {
           </div>
           <div class="shop-address-form-field">
             <label class="shop-address-form-sr-label" for="shopProfileAddrEntrance">Подъезд</label>
-            <input class="control" data-a="entrance" id="shopProfileAddrEntrance" type="text" placeholder="Подъезд" aria-label="Подъезд" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
+            <input class="control" data-a="entrance" id="shopProfileAddrEntrance" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Подъезд" aria-label="Подъезд" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
           </div>
           <div class="shop-address-form-field">
             <label class="shop-address-form-sr-label" for="shopProfileAddrFloor">Этаж</label>
-            <input class="control" data-a="floor" id="shopProfileAddrFloor" type="text" placeholder="Этаж" aria-label="Этаж" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
+            <input class="control" data-a="floor" id="shopProfileAddrFloor" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Этаж" aria-label="Этаж" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
           </div>
           <div class="shop-address-form-field">
             <label class="shop-address-form-sr-label" for="shopProfileAddrApartment">Квартира</label>
-            <input class="control" data-a="apartment" id="shopProfileAddrApartment" type="text" placeholder="Квартира" aria-label="Квартира" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
+            <input class="control" data-a="apartment" id="shopProfileAddrApartment" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Квартира" aria-label="Квартира" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" />
           </div>
         </div>
         <div class="shop-address-form-row shop-address-form-row--full">
