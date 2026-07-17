@@ -26217,12 +26217,30 @@ function applySheetAddressTitle(backMode = "cart") {
   let addressPageReturnCheckoutScrollTop = 0;
 
   function closeMobileAddressFormPage() {
+    const returnScreen = str(openCartSheetCtx?.addressFormReturnScreen || "").trim();
     document.body.classList.remove("shop-address-form-page-active");
     addressFormPageTitle.classList.add("hidden");
     addressPageToggleHost.classList.remove("hidden");
     resetSheetAddressFormValues();
     sheetEditingId = null;
-    showSheetAddressList(openCartSheetCtx?.addressBackMode || "cart");
+    if (returnScreen === "addressList") {
+      showSheetAddressList(openCartSheetCtx?.addressBackMode || "cart");
+      return;
+    }
+    if (returnScreen === "pickupList") {
+      showSheetPickupList();
+      return;
+    }
+    document.body.classList.remove("shop-address-page-active");
+    if (returnScreen === "checkout") {
+      void showSheetCheckout();
+      return;
+    }
+    if (returnScreen === "profile") {
+      returnToProfileFromSheet();
+      return;
+    }
+    showSheetCart();
   }
 
   function closeMobileAddressPage() {
@@ -27816,6 +27834,9 @@ function renderSheetAddressList() {
       updateAddressChip();
       const backMode = openCartSheetCtx?.addressBackMode || "cart";
       if (useCartPage && document.body.classList.contains("shop-address-form-page-active")) {
+        if (backMode === "checkout" && openCartSheetCtx) {
+          openCartSheetCtx.addressFormReturnScreen = "checkout";
+        }
         requestMobileAddressPageBack();
       } else if (backMode === "profile") {
         returnToProfileFromSheet();
@@ -34736,6 +34757,69 @@ function renderSheetAddressList() {
 
   window.openProfileOrdersSheet = openProfileOrdersSheet;
 
+  let checkoutAuthPageHistoryBound = false;
+
+  function resetCheckoutAuthPageUi() {
+    cartViewMode = "cart";
+    if (window.history.state?.shopCheckoutAuthPage === true) {
+      const nextHistoryState = { ...(window.history.state || {}) };
+      delete nextHistoryState.shopCheckoutAuthPage;
+      window.history.replaceState(nextHistoryState, "", window.location.href);
+    }
+    document.body.classList.remove("shop-checkout-auth-page-active", "shop-profile-page-active");
+    elProfilePage?.classList.add("hidden");
+    document.getElementById("shopCheckoutAuthBackBtn")?.remove();
+    const profileTitle = document.getElementById("shopProfilePageTitle");
+    if (profileTitle) profileTitle.textContent = "Профиль";
+    document.getElementById("shopProfilePageActions")?.classList.remove("hidden");
+    if (typeof setActiveNav === "function") setActiveNav("cart");
+  }
+
+  function closeCheckoutAuthPageToCart() {
+    resetCheckoutAuthPageUi();
+    openCartSheet();
+  }
+
+  function ensureCheckoutAuthPageHistory() {
+    if (!checkoutAuthPageHistoryBound) {
+      window.addEventListener("popstate", (event) => {
+        if (!document.body.classList.contains("shop-checkout-auth-page-active")) return;
+        if (event.state?.shopCheckoutAuthPage === true) return;
+        closeCheckoutAuthPageToCart();
+      }, true);
+      checkoutAuthPageHistoryBound = true;
+    }
+    if (window.history.state?.shopCheckoutAuthPage !== true) {
+      window.history.pushState({
+        ...(window.history.state || {}),
+        shopCheckoutAuthPage: true,
+      }, "", window.location.href);
+    }
+  }
+
+  function applyCheckoutAuthPageHeader() {
+    const header = elProfilePage?.querySelector(".shop-profile-page-header");
+    const title = document.getElementById("shopProfilePageTitle");
+    const actions = document.getElementById("shopProfilePageActions");
+    if (!header || !title) return;
+    title.textContent = "Вход";
+    actions?.classList.add("hidden");
+    let backButton = document.getElementById("shopCheckoutAuthBackBtn");
+    if (!backButton) {
+      backButton = document.createElement("button");
+      backButton.id = "shopCheckoutAuthBackBtn";
+      backButton.type = "button";
+      backButton.className = "shop-page-header-btn";
+      backButton.setAttribute("aria-label", "Назад");
+      backButton.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      header.insertBefore(backButton, title);
+    }
+    backButton.onclick = () => {
+      if (window.history.state?.shopCheckoutAuthPage === true) window.history.back();
+      else closeCheckoutAuthPageToCart();
+    };
+  }
+
   async function requireAuthForCheckout({ isSheet }) {
     const me = await fetchMeSafe();
     if (me) {
@@ -34751,7 +34835,24 @@ function renderSheetAddressList() {
       return false;
     }
 
-    if (isSheet) {
+    const useMobileCartPage = window.matchMedia("(max-width: 768px)").matches
+      && document.body.classList.contains("shop-cart-page-active");
+    if (useMobileCartPage) {
+      ensureCheckoutAuthPageHistory();
+      document.body.classList.add("shop-checkout-auth-page-active");
+      await openProfilePanel(null, {
+        forceOpen: true,
+        onLoginCancel: () => {
+          if (window.history.state?.shopCheckoutAuthPage === true) window.history.back();
+          else closeCheckoutAuthPageToCart();
+        },
+        onLoginSuccess: () => {
+          resetCheckoutAuthPageUi();
+          void startCheckoutFlow({ isSheet: true, forceAddressRefresh: true });
+        },
+      });
+      applyCheckoutAuthPageHeader();
+    } else if (isSheet) {
       openLoginSheet({
         onSuccess: async () => {
           if (document.body?.classList?.contains("page-kso")) {
@@ -41545,6 +41646,9 @@ function initShopLate() {
       if (elNavCart) {
         elNavCart.addEventListener("click", () => {
           if (document.body?.classList.contains("shop-cart-page-active")) {
+            if (typeof openCartSheetCtx?.showSheetCart === "function") {
+              openCartSheetCtx.showSheetCart();
+            }
             setActiveNav("cart");
             return;
           }

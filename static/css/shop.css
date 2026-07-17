@@ -20278,6 +20278,30 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     display: none !important;
   }
 
+  body.shop-checkout-auth-page-active .shop-profile-page{
+    inset: 0;
+    z-index: 10040;
+    padding-bottom: 0;
+  }
+
+  body.shop-checkout-auth-page-active .shop-profile-page-header{
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+  }
+
+  body.shop-checkout-auth-page-active .shop-profile-page-header h1{
+    min-width: 0;
+    overflow: hidden;
+    font-size: 20px;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body.shop-checkout-auth-page-active .shop-mobile-bottom-container{
+    display: none !important;
+  }
+
   .shop-bonus-program-page{
     position: fixed;
     inset: 0;

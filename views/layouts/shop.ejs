@@ -64,8 +64,8 @@
   <% } %>
 
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260717notification-permission-modal') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260717notification-permission-modal') %>" /></noscript>
+  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260717checkout-auth-page') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260717checkout-auth-page') %>" /></noscript>
   <link rel="preload" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" /></noscript>
 </head>
@@ -160,7 +160,7 @@
   <% } %>
 
   <script>
-    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260717notification-system-prompt') %>";
+    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260717checkout-auth-cart-return') %>";
     <% if (!isKsoPage) { %>
       window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js?typing_hotfix=14&v=20260717notification-permission-feedback') %>";
     <% } else { %>
