@@ -23998,6 +23998,23 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     scrollCheckoutBenefitsToInitialSection(container, initialSection);
   }
 
+let checkoutFlowRunId = 0;
+
+function cancelPendingCheckoutFlow() {
+  checkoutFlowRunId += 1;
+}
+
+function clearCheckoutRouteHistoryState() {
+  const currentState = window.history.state;
+  if (!currentState || typeof currentState !== "object") return;
+  const nextState = { ...currentState };
+  const routeKeys = ["shopAddressPage", "shopAddressFormPage", "shopAddressSource", "shopCartCheckout"];
+  const hasCheckoutRouteState = routeKeys.some((key) => Object.prototype.hasOwnProperty.call(nextState, key));
+  if (!hasCheckoutRouteState) return;
+  routeKeys.forEach((key) => delete nextState[key]);
+  window.history.replaceState(nextState, "", window.location.href);
+}
+
 function openCartSheet() {
   if (!window.AppModal) return;
   const cartPage = document.getElementById("shopCartPage");
@@ -25357,7 +25374,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   async function showSheetCheckout() {
-    document.body.classList.remove("shop-address-page-active");
+    document.body.classList.remove("shop-address-page-active", "shop-address-form-page-active");
     const isKsoCheckout = Boolean(document.body?.classList?.contains("page-kso"));
     invalidateAddressSheetUiState();
     clearBenefitsInnerOverlayHost();
@@ -26099,7 +26116,9 @@ function applySheetAddressTitle(backMode = "cart") {
   };
 
   function showSheetCart() {
-    document.body.classList.remove("shop-address-page-active");
+    cancelPendingCheckoutFlow();
+    clearCheckoutRouteHistoryState();
+    document.body.classList.remove("shop-address-page-active", "shop-address-form-page-active");
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     clearBenefitsInnerOverlayHost();
@@ -26217,6 +26236,7 @@ function applySheetAddressTitle(backMode = "cart") {
   let addressPageReturnCheckoutScrollTop = 0;
 
   function closeMobileAddressFormPage() {
+    cancelPendingCheckoutFlow();
     const returnScreen = str(openCartSheetCtx?.addressFormReturnScreen || "").trim();
     document.body.classList.remove("shop-address-form-page-active");
     addressFormPageTitle.classList.add("hidden");
@@ -26244,6 +26264,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function closeMobileAddressPage() {
+    cancelPendingCheckoutFlow();
     document.body.classList.remove("shop-address-form-page-active");
     document.body.classList.remove("shop-address-page-active");
     addressWrap.classList.add("hidden");
@@ -29507,6 +29528,7 @@ function renderSheetAddressList() {
   }
 
   async function startCheckoutFlow({ isSheet, forceAddressRefresh = true } = {}) {
+    const runId = ++checkoutFlowRunId;
     try { void preloadCartEnhancers(); } catch {}
     Promise.resolve(queueCheckoutOpenPrewarm("start-checkout", {
       immediate: true,
@@ -29515,6 +29537,7 @@ function renderSheetAddressList() {
     if (forceAddressRefresh || state._addressesInitialized !== true) {
       await refreshAddressState({ force: !!forceAddressRefresh });
     }
+    if (runId !== checkoutFlowRunId) return false;
 
     const isPickupMode = window._deliveryMode === "pickup";
     const hasPickupStore = Number(window._selectedPickupStoreId || 0) > 0;
@@ -29523,17 +29546,21 @@ function renderSheetAddressList() {
 
     if (isPickupMode) {
       if (hasPickupStore) {
+        if (runId !== checkoutFlowRunId) return false;
         return isSheet ? openSheetCheckoutFlow() : openDesktopCheckoutFlow();
       }
+      if (runId !== checkoutFlowRunId) return false;
       return isSheet
         ? openSheetCheckoutAddressFlow({ preferredMode: "pickup", hasAddresses })
         : openDesktopCheckoutAddressFlow({ preferredMode: "pickup", hasAddresses });
     }
 
     if (hasSelectedAddress) {
+      if (runId !== checkoutFlowRunId) return false;
       return isSheet ? openSheetCheckoutFlow() : openDesktopCheckoutFlow();
     }
 
+    if (runId !== checkoutFlowRunId) return false;
     return isSheet
       ? openSheetCheckoutAddressFlow({ preferredMode: "delivery", hasAddresses })
       : openDesktopCheckoutAddressFlow({ preferredMode: "delivery", hasAddresses });
@@ -34838,15 +34865,18 @@ function renderSheetAddressList() {
     const useMobileCartPage = window.matchMedia("(max-width: 768px)").matches
       && document.body.classList.contains("shop-cart-page-active");
     if (useMobileCartPage) {
+      const checkoutAuthResumeId = ++checkoutFlowRunId;
       ensureCheckoutAuthPageHistory();
       document.body.classList.add("shop-checkout-auth-page-active");
       await openProfilePanel(null, {
         forceOpen: true,
         onLoginCancel: () => {
+          cancelPendingCheckoutFlow();
           if (window.history.state?.shopCheckoutAuthPage === true) window.history.back();
           else closeCheckoutAuthPageToCart();
         },
         onLoginSuccess: () => {
+          if (checkoutAuthResumeId !== checkoutFlowRunId) return;
           resetCheckoutAuthPageUi();
           void startCheckoutFlow({ isSheet: true, forceAddressRefresh: true });
         },
