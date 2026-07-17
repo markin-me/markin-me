@@ -12540,6 +12540,7 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
   border: 0;
   background: #fff;
   border-radius: var(--shop-radius);
+  box-shadow: 0 4px 14px rgba(31, 42, 58, 0.08);
   overflow: hidden;
   display: flex;
   flex-direction: column;
