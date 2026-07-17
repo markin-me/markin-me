@@ -1814,6 +1814,18 @@
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet";
     renderBonusCardsSheetContent(wrap, options);
+    if (isMobileBonusProgramPageAvailable()) {
+      const sourceLevel = options.sourceLevel || bonusProgramPageLevel || getHomeBonusFirstLevel(state.homeBonusConfig);
+      showBonusProgramPage({
+        title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
+        content: wrap,
+        onBack: () => returnToBonusProgramMainPage(sourceLevel),
+        screen: "levels",
+        level: sourceLevel,
+      });
+      void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap, options));
+      return;
+    }
     sheetNavigationState.type = "bonus-cards";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = {
@@ -2119,6 +2131,28 @@
       });
     };
     render('<div class="shop-bonus-sheet-empty">Загружаем...</div>');
+    if (isMobileBonusProgramPageAvailable()) {
+      showBonusProgramPage({
+        title: "Начисления",
+        content: wrap,
+        onBack: () => returnToBonusProgramMainPage(sourceLevel),
+        screen: "accruals",
+        level: sourceLevel,
+      });
+      if (!getCustomerToken()) {
+        render('<div class="shop-bonus-sheet-empty">Войдите, чтобы увидеть начисления</div>');
+        return;
+      }
+      try {
+        const json = await apiJson("/api/public/bonus/transactions");
+        transactions = Array.isArray(json?.data) ? json.data : [];
+        render();
+      } catch (err) {
+        console.error("load bonus transactions error:", err);
+        render('<div class="shop-bonus-sheet-empty">Не удалось загрузить начисления</div>');
+      }
+      return;
+    }
     sheetNavigationState.type = "bonus-accruals";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = null;
@@ -2649,6 +2683,15 @@
         wrap.innerHTML = buildHomeReferralsSheetHtml(null, false, "Не удалось загрузить рефералов");
         bindHomeReferralsSheetActions(wrap, null);
       });
+    if (isMobileBonusProgramPageAvailable()) {
+      showBonusProgramPage({
+        title: "Рефералы",
+        content: wrap,
+        onBack: closeBonusProgramPageToProfile,
+        screen: "referrals",
+      });
+      return;
+    }
     sheetNavigationState.type = "referrals";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = null;
@@ -3010,9 +3053,19 @@
   }
 
   async function openHomeBonusSiteMenuBenefits(section = "", sourceLevel = null, options = {}) {
+    const bonusPage = document.getElementById("shopBonusProgramPage");
+    const restoreBonusPage = () => {
+      if (!isMobileBonusProgramPageAvailable() || !bonusPage) return;
+      bonusPage.classList.remove("hidden");
+      document.body.classList.add("shop-bonus-program-page-active");
+    };
     try {
       await ensureShopLateLoaded();
       if (typeof window.openShopBenefitsSheet === "function") {
+        if (isMobileBonusProgramPageAvailable() && bonusPage) {
+          bonusPage.classList.add("hidden");
+          document.body.classList.remove("shop-bonus-program-page-active");
+        }
         await window.openShopBenefitsSheet({
           sourceScreen: "bonus-level",
           section: String(section || "").trim(),
@@ -3023,6 +3076,7 @@
         });
       }
     } catch (err) {
+      restoreBonusPage();
       console.error("open shop benefits from bonus menu error:", err);
       showToast("Не удалось открыть выгоды");
     }
@@ -3320,7 +3374,8 @@
           const categoryId = Number(btn.dataset.bonusFavoriteCategoryId || 0);
           btn.classList.toggle("is-selected", picked.has(categoryId));
         });
-        const saveBtn = wrap.querySelector("[data-save-bonus-favorite-categories]");
+        const saveBtn = wrap.querySelector("[data-save-bonus-favorite-categories]")
+          || document.querySelector("#shopBonusProgramPage [data-save-bonus-favorite-categories]");
         if (saveBtn) saveBtn.disabled = picked.size <= selectedIds.size || picked.size > limit;
       };
       wrap.querySelectorAll("[data-bonus-favorite-category-id]").forEach((btn) => {
@@ -3356,7 +3411,8 @@
           };
           state.homeBonusFavoriteCategoriesByLevel.set(getHomeBonusFavoriteCategoriesCacheKey(levelId), nextData);
           writeHomeBonusFavoriteCategoriesStorage(levelId, nextData);
-          returnFromBonusNestedSheet(level, options);
+          if (isMobileBonusProgramPageAvailable()) requestBonusProgramHistoryBack();
+          else returnFromBonusNestedSheet(level, options);
         } catch (err) {
           console.error("save bonus favorite categories error:", err);
         }
@@ -3366,6 +3422,30 @@
     const cachedData = getHomeBonusFavoriteCategoriesCache(levelId);
     if (cachedData) render(cachedData);
     else renderLoading();
+    if (isMobileBonusProgramPageAvailable()) {
+      const syncPageFooter = () => {
+        const saveButton = wrap.querySelector("[data-save-bonus-favorite-categories]");
+        setBonusProgramPageFooter(saveButton || null);
+      };
+      showBonusProgramPage({
+        title: "Выбрать категории",
+        content: wrap,
+        footer: wrap.querySelector("[data-save-bonus-favorite-categories]"),
+        onBack: () => returnToBonusProgramMainPage(level),
+        screen: "categories",
+        level,
+      });
+      try {
+        const data = await loadHomeBonusFavoriteCategories(level);
+        render(data || {});
+        syncPageFooter();
+      } catch (err) {
+        console.error("load bonus favorite categories error:", err);
+        wrap.innerHTML = '<div class="shop-bonus-sheet-empty">Не удалось загрузить категории</div>';
+        setBonusProgramPageFooter(null);
+      }
+      return;
+    }
     sheetNavigationState.type = "bonus-favorite-categories";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = { levelId };
@@ -3502,6 +3582,16 @@
       setTimeout(() => document.addEventListener("click", close), 0);
     });
 
+    if (isMobileBonusProgramPageAvailable()) {
+      showBonusProgramPage({
+        title: "Кешбэк",
+        content: wrap,
+        onBack: () => returnToBonusProgramMainPage(level),
+        screen: "cashback",
+        level,
+      });
+      return;
+    }
     sheetNavigationState.type = "bonus-cashback";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
@@ -3570,7 +3660,7 @@
             <span>${escapeHtml(formatShopBonusPercent(level?.cashback_percent, 0))}</span>
           </div>
         </div>
-        ${favoriteCategoriesEnabled ? `<div class="shop-bonus-level-metric-card">
+        ${favoriteCategoriesEnabled ? `<div class="shop-bonus-level-metric-card" data-open-bonus-favorite-categories-card role="button" tabindex="0">
           <div class="shop-bonus-level-metric-label">${escapeHtml(favoriteCategoriesText)}</div>
           <div data-bonus-favorite-categories-slot>
             ${buildHomeBonusFavoriteCategoriesSlotHtml(level)}
@@ -3579,10 +3669,21 @@
       </div>
       ${buildHomeBonusSiteMenuRowHtml()}
     `);
-    sheetNavigationState.type = "bonus-level";
-    sheetNavigationState.screen = "main";
-    sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
-    window.AppModal.open({
+    const useBonusProgramPage = isMobileBonusProgramPageAvailable();
+    if (useBonusProgramPage) {
+      showBonusProgramPage({
+        title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
+        content: wrap,
+        onBack: closeBonusProgramPageToProfile,
+        screen: "main",
+        level,
+      });
+    } else {
+      sheetNavigationState.type = "bonus-level";
+      sheetNavigationState.screen = "main";
+      sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
+    }
+    if (!useBonusProgramPage) window.AppModal.open({
       title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
       content: wrap,
       showCancel: false,
@@ -3609,15 +3710,15 @@
         }
       },
     });
-    if (window.AppModal?.body) {
+    if (!useBonusProgramPage && window.AppModal?.body) {
       window.AppModal.body.classList.add(
         "shop-cart-sheet-body",
         "shop-cart-sheet-screen-benefits",
         "shop-bonus-cards-sheet-body"
       );
     }
-    setBonusCardsSheetHeader(true);
-    if (returnToProfile) setProfileModalSubpageHeader();
+    if (!useBonusProgramPage) setBonusCardsSheetHeader(true);
+    if (!useBonusProgramPage && returnToProfile) setProfileModalSubpageHeader();
     syncMobileUiState("bonus-level-sheet-open");
     wrap.querySelector("[data-open-bonus-cards-current]")?.addEventListener("click", () => {
       const accountLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
@@ -3638,6 +3739,17 @@
     void updateHomeBonusSiteMenuBadges(wrap);
     if (favoriteCategoriesEnabled) {
       updateHomeBonusFavoriteCategoriesSlot(wrap, level, { returnToProfile });
+      const favoriteCategoriesCard = wrap.querySelector("[data-open-bonus-favorite-categories-card]");
+      const openFavoriteCategories = (event) => {
+        if (event?.target?.closest?.("[data-open-bonus-favorite-categories]")) return;
+        void openHomeBonusFavoriteCategoriesSheet(level, { returnToProfile });
+      };
+      favoriteCategoriesCard?.addEventListener("click", openFavoriteCategories);
+      favoriteCategoriesCard?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openFavoriteCategories(event);
+      });
       void loadHomeBonusFavoriteCategories(level).then(() => {
         updateHomeBonusFavoriteCategoriesSlot(wrap, level, { returnToProfile });
       }).catch((err) => {
@@ -3651,6 +3763,10 @@
     const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
     const level = levels.find((item) => Number(item?.id || 0) === numericLevelId)
       || getHomeBonusFirstLevel(state.homeBonusConfig);
+    if (isMobileBonusProgramPageAvailable()) {
+      document.getElementById("shopCartPage")?.classList.add("hidden");
+      document.body.classList.remove("shop-cart-page-active", "shop-benefits-page-active");
+    }
     if (level) openHomeBonusLevelSheet(level, { returnToProfile: options.returnToProfile === true });
   };
 
@@ -11080,6 +11196,7 @@ function setSheetHeaderMode(
   }
 
   function showCartView() {
+  deactivateBonusProgramPage();
     document.body.classList.remove("shop-profile-page-active");
     document.body.classList.remove("shop-profile-settings-page-active");
     if (elProfileSettingsPage) elProfileSettingsPage.classList.add("hidden");
@@ -11326,6 +11443,7 @@ function showPickupListView(backMode = "checkout") {
 }
 
   function showProfileView() {
+    deactivateBonusProgramPage();
     document.body.classList.add("shop-profile-page-active");
     document.body.classList.remove("shop-profile-settings-page-active");
     if (elProfileSettingsPage) elProfileSettingsPage.classList.add("hidden");
@@ -16783,6 +16901,11 @@ function updateCartBadge() {
         if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
         updateMobileDeliveryProgress();
       }
+      const cartPageFloatingCheckout = document.getElementById("shopCartPageFloatingCheckout");
+      const cartPageFloatingCheckoutButton = document.getElementById("shopCartPageFloatingCheckoutButton");
+      cartPageFloatingCheckout?.classList.add("hidden");
+      cartPageFloatingCheckout?.classList.remove("is-inline-visible");
+      if (cartPageFloatingCheckoutButton) cartPageFloatingCheckoutButton.disabled = true;
       queueMobileUiStateSync("clearCartAll");
       return true;
     } finally {
@@ -18118,6 +18241,157 @@ function updateCartBadge() {
     if (scrollEl) scrollEl.style.display = hasCards ? "" : "none";
   }
 
+  let bonusProgramPageBackHandler = null;
+  let bonusProgramPageLevel = null;
+  let bonusProgramHistoryBound = false;
+  let bonusProgramHistoryRestoring = false;
+
+  function getBonusProgramLevelById(levelId = null) {
+    const numericLevelId = Number(levelId || 0);
+    const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
+    return levels.find((item) => Number(item?.id || 0) === numericLevelId)
+      || bonusProgramPageLevel
+      || getHomeBonusFirstLevel(state.homeBonusConfig);
+  }
+
+  function requestBonusProgramHistoryBack() {
+    if (window.history.state?.shopBonusProgramPage === true) {
+      window.history.back();
+      return;
+    }
+    if (typeof bonusProgramPageBackHandler === "function") bonusProgramPageBackHandler();
+  }
+
+  function renderBonusProgramHistoryState(historyState) {
+    const screen = String(historyState?.shopBonusProgramScreen || "main");
+    const level = getBonusProgramLevelById(historyState?.shopBonusProgramLevelId);
+    bonusProgramHistoryRestoring = true;
+    try {
+      if (screen === "referrals") openHomeReferralsSheet({ returnToProfile: true });
+      else if (screen === "levels") openHomeBonusCardsSheet({ sourceLevel: level });
+      else if (screen === "accruals") void openHomeBonusAccrualsSheet({ sourceLevel: level, returnToProfile: true });
+      else if (screen === "cashback") openHomeBonusCashbackSheet(level, { returnToProfile: true });
+      else if (screen === "categories") void openHomeBonusFavoriteCategoriesSheet(level, { returnToProfile: true });
+      else openHomeBonusLevelSheet(level, { returnToProfile: true });
+    } finally {
+      bonusProgramHistoryRestoring = false;
+    }
+  }
+
+  function ensureBonusProgramHistoryBinding() {
+    if (bonusProgramHistoryBound) return;
+    window.addEventListener("popstate", (event) => {
+      if (event.state?.shopBenefitsPage === true) return;
+      if (event.state?.shopBonusProgramPage === true) {
+        renderBonusProgramHistoryState(event.state);
+        return;
+      }
+      const page = document.getElementById("shopBonusProgramPage");
+      if (!page || page.classList.contains("hidden")) return;
+      closeBonusProgramPageToProfile();
+    });
+    bonusProgramHistoryBound = true;
+  }
+
+  function isMobileBonusProgramPageAvailable() {
+    return window.matchMedia?.("(max-width: 768px)").matches === true;
+  }
+
+  function ensureBonusProgramPage() {
+    let page = document.getElementById("shopBonusProgramPage");
+    if (page) return page;
+    page = document.createElement("section");
+    page.id = "shopBonusProgramPage";
+    page.className = "shop-bonus-program-page hidden";
+    page.innerHTML = `
+      <header class="shop-page-header shop-bonus-program-page-header">
+        <button class="shop-page-header-btn" type="button" data-bonus-program-page-back aria-label="Назад">
+          <i class="fas fa-arrow-left" aria-hidden="true"></i>
+        </button>
+        <h1 data-bonus-program-page-title></h1>
+        <span aria-hidden="true"></span>
+      </header>
+      <div class="shop-bonus-program-page-content no-scrollbar" data-bonus-program-page-content></div>
+      <footer class="shop-page-footer shop-bonus-program-page-footer hidden" data-bonus-program-page-footer></footer>
+    `;
+    page.querySelector("[data-bonus-program-page-back]")?.addEventListener("click", requestBonusProgramHistoryBack);
+    document.body.appendChild(page);
+    return page;
+  }
+
+  function showBonusProgramPage({ title, content, footer = null, onBack, screen, level = null }) {
+    if (!isMobileBonusProgramPageAvailable()) return false;
+    const page = ensureBonusProgramPage();
+    const contentHost = page.querySelector("[data-bonus-program-page-content]");
+    const footerHost = page.querySelector("[data-bonus-program-page-footer]");
+    page.querySelector("[data-bonus-program-page-title]").textContent = String(title || "");
+    contentHost.replaceChildren(content);
+    contentHost.scrollTop = 0;
+    footerHost.replaceChildren();
+    if (footer) footerHost.appendChild(footer);
+    footerHost.classList.toggle("hidden", !footer);
+    page.dataset.bonusProgramScreen = String(screen || "main");
+    bonusProgramPageBackHandler = typeof onBack === "function" ? onBack : null;
+    if (level) bonusProgramPageLevel = level;
+    ensureBonusProgramHistoryBinding();
+    const levelId = Number((level || bonusProgramPageLevel)?.id || 0) || null;
+    const currentHistoryState = window.history.state || {};
+    if (
+      !bonusProgramHistoryRestoring
+      && (
+        currentHistoryState.shopBonusProgramPage !== true
+        || currentHistoryState.shopBonusProgramScreen !== String(screen || "main")
+        || Number(currentHistoryState.shopBonusProgramLevelId || 0) !== Number(levelId || 0)
+      )
+    ) {
+      window.history.pushState({
+        ...currentHistoryState,
+        shopBonusProgramPage: true,
+        shopBonusProgramScreen: String(screen || "main"),
+        shopBonusProgramLevelId: levelId,
+      }, "", window.location.href);
+    }
+    page.classList.remove("hidden");
+    document.body.classList.add("shop-bonus-program-page-active");
+    document.body.classList.remove("shop-profile-page-active");
+    if (elProfilePage) elProfilePage.classList.add("hidden");
+    if (typeof setActiveNav === "function") setActiveNav("profile");
+    if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
+    if (elMobileBonusCardsActions) elMobileBonusCardsActions.classList.add("hidden");
+    queueMobileUiStateSync(`bonus-program-page-${String(screen || "main")}`);
+    return true;
+  }
+
+  function closeBonusProgramPageToProfile() {
+    const page = document.getElementById("shopBonusProgramPage");
+    page?.classList.add("hidden");
+    document.body.classList.remove("shop-bonus-program-page-active");
+    bonusProgramPageBackHandler = null;
+    bonusProgramPageLevel = null;
+    showProfileView();
+  }
+
+  function deactivateBonusProgramPage() {
+    const page = document.getElementById("shopBonusProgramPage");
+    page?.classList.add("hidden");
+    document.body.classList.remove("shop-bonus-program-page-active");
+    bonusProgramPageBackHandler = null;
+  }
+
+  function setBonusProgramPageFooter(footer = null) {
+    const page = document.getElementById("shopBonusProgramPage");
+    const footerHost = page?.querySelector("[data-bonus-program-page-footer]");
+    if (!footerHost) return;
+    footerHost.replaceChildren();
+    if (footer) footerHost.appendChild(footer);
+    footerHost.classList.toggle("hidden", !footer);
+  }
+
+  function returnToBonusProgramMainPage(level = bonusProgramPageLevel) {
+    const targetLevel = level || getHomeBonusFirstLevel(state.homeBonusConfig);
+    if (targetLevel) openHomeBonusLevelSheet(targetLevel, { returnToProfile: true });
+  }
+
   function enableCheckoutUpsellAutoScroll(scrollEl) {
     if (!scrollEl) return;
     const cards = Array.from(scrollEl.children).filter((node) => node.classList?.contains("cart-upsell-card"));
@@ -19102,6 +19376,9 @@ function updateCartBadge() {
     if (document.body?.classList.contains("shop-company-chat-open")) return false;
     if (document.body?.classList.contains("shop-details-page-active")) return false;
     if (document.body?.classList.contains("shop-cart-page-active")) return false;
+    if (document.body?.classList.contains("shop-orders-page-active")) return false;
+    if (document.body?.classList.contains("shop-favorites-page-active")) return false;
+    if (document.body?.classList.contains("shop-bonus-program-page-active")) return false;
     if (document.body?.classList.contains("modal-open") || document.body?.classList.contains("sheet-open")) return false;
     if (window.AppModal?.isOpen?.()) return false;
     return true;
@@ -19133,6 +19410,18 @@ function updateCartBadge() {
   }
 
   async function runShopPullRefresh() {
+    if (
+      document.body?.classList.contains("shop-orders-page-active")
+      || document.body?.classList.contains("shop-favorites-page-active")
+    ) {
+      setShopPullRefreshProgress(0, false);
+      if (shopPullRefreshState) {
+        shopPullRefreshState.pulling = false;
+        shopPullRefreshState.refreshing = false;
+        shopPullRefreshState.distance = 0;
+      }
+      return;
+    }
     setShopPullRefreshProgress(SHOP_PULL_REFRESH_THRESHOLD, true);
     window.location.reload();
     setTimeout(() => {
@@ -19466,6 +19755,10 @@ function bindIosBackSwipeGuard() {
   const VERTICAL_TOLERANCE_PX = 14;
 
   document.addEventListener("touchstart", (event) => {
+    if (document.body?.classList.contains("shop-bonus-program-page-active")) {
+      tracking = false;
+      return;
+    }
     const touch = event.touches && event.touches[0];
     if (!touch) return;
     startX = touch.clientX;

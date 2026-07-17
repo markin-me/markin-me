@@ -10477,8 +10477,9 @@ function sortRepeatOrderItemsForDisplay(items) {
 
 function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = "", returnToProfile = false } = {}) {
   const favoritesSourceScreen = str(sourceScreen || "");
+  const isMobilePage = window.matchMedia("(max-width: 768px)").matches;
   const isMobileSheet = returnToProfile || window.matchMedia("(max-width: 1100px)").matches;
-  if (isMobileSheet && !window.AppModal) return;
+  if (isMobileSheet && !isMobilePage && !window.AppModal) return;
   const isAnySheetOpen =
     Boolean(window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen());
   const currentSheetType = str(sheetNavigationState?.type || "");
@@ -10516,6 +10517,9 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   let renderSeq = 0;
   let lastFavoritesRenderSignature = "";
   let currentSwipedContainer = null;
+  let favoritesPageHeader = null;
+  let favoritesPageChipsHost = null;
+  let favoritesPageScrollEl = null;
   const favoritesUseSwipe = window.matchMedia("(max-width: 1100px)").matches;
 
   function closeCurrentSwiped(animate = true, exceptContainer = null) {
@@ -10539,10 +10543,11 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
 
   function ensureFavoritesHeaderChipsMounted() {
     if (!isMobileSheet) return null;
-    const header = document.querySelector(".app-modal-header");
+    const header = favoritesPageHeader || document.querySelector(".app-modal-header");
     if (!header) return null;
-    if (headerChipsWrap.parentElement !== header) {
-      header.appendChild(headerChipsWrap);
+    const mountHost = favoritesPageChipsHost || header;
+    if (headerChipsWrap.parentElement !== mountHost) {
+      mountHost.appendChild(headerChipsWrap);
     }
     return header;
   }
@@ -10551,6 +10556,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const header = ensureFavoritesHeaderChipsMounted() || document.querySelector(".app-modal-header");
     if (!header) return;
     header.classList.toggle("has-favorites-category-chips", !!active);
+    if (favoritesPageChipsHost) favoritesPageChipsHost.classList.toggle("hidden", !active);
     headerChipsWrap.classList.toggle("hidden", !active);
   }
 
@@ -10590,12 +10596,13 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     if (!Number.isFinite(id) || id <= 0) return;
     const header = list.querySelector(`.shop-category-header[data-cat-id="${id}"]`);
     if (!header) return;
-    const wrapRect = wrap.getBoundingClientRect();
+    const scrollRoot = favoritesPageScrollEl || wrap;
+    const wrapRect = scrollRoot.getBoundingClientRect();
     const headerRect = header.getBoundingClientRect();
     const delta = headerRect.top - wrapRect.top;
     const offset = isMobileSheet ? 8 : (chipsWrap.offsetHeight || 0) + 8;
-    const nextTop = wrap.scrollTop + delta - offset;
-    wrap.scrollTo({
+    const nextTop = scrollRoot.scrollTop + delta - offset;
+    scrollRoot.scrollTo({
       top: Math.max(0, nextTop),
       behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
     });
@@ -11332,6 +11339,16 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
 
       renderFavoriteCategoryChips(sections);
 
+      const reopenFavorites = () => {
+        if (isMobilePage) return;
+        void openFavoritesSheet({
+          force: false,
+          forceOpen: true,
+          sourceScreen: favoritesSourceScreen,
+          returnToProfile,
+        });
+      };
+
       const renderFavoriteEntry = ({ fav, snapshot, rowIndex }) => {
         const favoriteId = Number(fav?.id || 0);
         const isAvailable = availabilityByIndex.get(rowIndex) !== false;
@@ -11388,6 +11405,23 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         if (isUnavailable) {
           applyFavoriteUnavailableView(card);
         }
+        card.style.cursor = "pointer";
+        card.setAttribute("role", "button");
+        card.setAttribute("tabindex", "0");
+        const openFavoriteDetails = () => {
+          void openOrderItemForRepeat(snapshot, { onBack: reopenFavorites }).catch((error) => {
+            console.warn("Failed to open favorite details:", error);
+          });
+        };
+        card.addEventListener("click", (event) => {
+          if (event.target && event.target.closest("button, a, input, select, textarea, label")) return;
+          openFavoriteDetails();
+        });
+        card.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          openFavoriteDetails();
+        });
 
         content.appendChild(card);
         swipeContainer.appendChild(content);
@@ -11512,15 +11546,6 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       }
 
       lastFavoritesRenderSignature = nextFavoritesSignature;
-      const reopenFavorites = () => {
-        void openFavoritesSheet({
-          force: false,
-          forceOpen: true,
-          sourceScreen: favoritesSourceScreen,
-          returnToProfile,
-        });
-      };
-      bindRepeatOrderItemRows(list, repeatItems, { onBack: reopenFavorites });
     } catch (e) {
       if (currentSeq !== renderSeq) return;
       console.warn("Failed to load favorites:", e);
@@ -11614,6 +11639,96 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     };
 
     void renderFavorites({ forceReload: force });
+    return;
+  }
+
+  if (isMobilePage) {
+    const profilePage = document.getElementById("shopProfilePage");
+    const pageParent = profilePage?.parentElement || document.body;
+    let page = document.getElementById("shopFavoritesPage");
+    if (!page) {
+      page = document.createElement("section");
+      page.id = "shopFavoritesPage";
+      page.className = "shop-favorites-page hidden";
+      page.innerHTML = `
+        <header class="shop-page-header shop-favorites-page-header">
+          <button class="shop-page-header-btn" type="button" data-favorites-page-back aria-label="Назад">
+            <i class="fas fa-arrow-left" aria-hidden="true"></i>
+          </button>
+          <h1>Избранное</h1>
+          <div class="shop-favorites-page-header-spacer" aria-hidden="true"></div>
+        </header>
+        <div class="shop-favorites-page-chips-host hidden"></div>
+        <div class="shop-favorites-page-content"></div>
+      `;
+      pageParent.appendChild(page);
+    }
+    favoritesPageHeader = page.querySelector(".shop-favorites-page-header");
+    favoritesPageChipsHost = page.querySelector(".shop-favorites-page-chips-host");
+    favoritesPageChipsHost.replaceChildren();
+    favoritesPageChipsHost.classList.add("hidden");
+    favoritesPageHeader.classList.remove("has-favorites-category-chips");
+    const pageContent = page.querySelector(".shop-favorites-page-content");
+    favoritesPageScrollEl = pageContent;
+    pageContent.replaceChildren(wrap);
+
+    const closePage = () => {
+      closeCurrentSwiped(false);
+      currentSwipedContainer = null;
+      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+      document.body.classList.remove("shop-favorites-page-active");
+      page.classList.add("hidden");
+      if (page._shopFavoritesPopHandler) {
+        window.removeEventListener("popstate", page._shopFavoritesPopHandler, true);
+        page._shopFavoritesPopHandler = null;
+      }
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
+      if (returnToProfile || favoritesSourceScreen === "profile") {
+        if (typeof showProfileView === "function") showProfileView();
+        if (typeof setActiveNav === "function") setActiveNav("profile");
+      } else if (typeof setActiveNav === "function") {
+        setActiveNav(favoritesSourceScreen === "home-site-menu" || favoritesSourceScreen === "home" ? "home" : "menu");
+      }
+    };
+    const requestBack = () => {
+      if (window.history.state?.shopFavoritesPage === true) {
+        window.history.back();
+        return;
+      }
+      closePage();
+    };
+
+    page.querySelector("[data-favorites-page-back]").onclick = requestBack;
+    sheetNavigationState.type = "favorites";
+    sheetNavigationState.screen = "list";
+    sheetNavigationState.data = { sourceScreen: favoritesSourceScreen, returnToProfile };
+    document.body.classList.add("shop-favorites-page-active");
+    page.classList.remove("hidden");
+    pageContent.scrollTop = 0;
+    if (window.history.state?.shopFavoritesPage !== true) {
+      window.history.pushState(
+        {
+          ...(window.history.state || {}),
+          shopFavoritesPage: true,
+          shopFavoritesSource: favoritesSourceScreen || (returnToProfile ? "profile" : "home"),
+        },
+        "",
+        window.location.href
+      );
+    }
+    page._shopFavoritesPopHandler = (event) => {
+      if (!document.body.classList.contains("shop-favorites-page-active")) return;
+      if (event.state?.shopFavoritesPage === true) return;
+      event.stopImmediatePropagation();
+      closePage();
+    };
+    window.addEventListener("popstate", page._shopFavoritesPopHandler, true);
+    void renderFavorites({ forceReload: force });
+    if (typeof window.updateActiveOrdersBadge === "function") {
+      window.updateActiveOrdersBadge();
+    }
     return;
   }
 
@@ -22460,7 +22575,8 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     shell.appendChild(emptyState);
 
     let syncManualPromoApplyState = null;
-    if (typeof onApplyManualPromo === "function" && (!normalizedSectionFilter || normalizedSectionFilter === "promos")) {
+    const showManualPromoEntry = !normalizedSectionFilter || normalizedSectionFilter === "promos";
+    if (typeof onApplyManualPromo === "function" && showManualPromoEntry) {
       const promoEntryState = typeof getManualPromoInputState === "function"
         ? (getManualPromoInputState() || {})
         : {};
@@ -23919,10 +24035,16 @@ function openCartSheet() {
 
   function setCartSheetScreenMode(mode) {
     const body = window.AppModal?.body;
-    if (!body) return;
-    body.classList.toggle("shop-cart-sheet-screen-cart", mode === "cart");
-    body.classList.toggle("shop-cart-sheet-screen-benefits", mode === "benefits");
-    body.classList.toggle("shop-cart-sheet-screen-address", mode === "address");
+    if (body) {
+      body.classList.toggle("shop-cart-sheet-screen-cart", mode === "cart");
+      body.classList.toggle("shop-cart-sheet-screen-benefits", mode === "benefits");
+      body.classList.toggle("shop-cart-sheet-screen-address", mode === "address");
+    }
+    if (cartPage) {
+      cartPage.classList.toggle("shop-cart-page-screen-cart", mode === "cart");
+      cartPage.classList.toggle("shop-cart-page-screen-benefits", mode === "benefits");
+      cartPage.classList.toggle("shop-cart-page-screen-address", mode === "address");
+    }
   }
 
   function showCartPage(wrapEl) {
@@ -24002,6 +24124,7 @@ function openCartSheet() {
       heightObserver.observe(header);
       header.dataset.cartPageHeightObserverBound = "1";
     }
+    cartPageContent._shopCartHeaderSync = sync;
     sync();
   }
 
@@ -24321,6 +24444,26 @@ function openCartSheet() {
   deliveryToggle.appendChild(togglePickupBtn);
   deliveryToggleWrap.appendChild(deliveryToggle);
 
+  const addressPageHeader = document.createElement("header");
+  addressPageHeader.className = "shop-page-header shop-address-page-header";
+  const addressPageBackBtn = document.createElement("button");
+  addressPageBackBtn.type = "button";
+  addressPageBackBtn.className = "shop-page-header-btn";
+  addressPageBackBtn.setAttribute("aria-label", "Назад");
+  addressPageBackBtn.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+  const addressPageToggleHost = document.createElement("div");
+  addressPageToggleHost.className = "shop-address-page-toggle-host";
+  const addressFormPageTitle = document.createElement("div");
+  addressFormPageTitle.className = "shop-address-form-page-title hidden";
+  addressFormPageTitle.textContent = "Новый адрес";
+  const addressPageHeaderSpacer = document.createElement("div");
+  addressPageHeaderSpacer.className = "shop-address-page-header-spacer";
+  addressPageHeader.appendChild(addressPageBackBtn);
+  addressPageHeader.appendChild(addressPageToggleHost);
+  addressPageHeader.appendChild(addressFormPageTitle);
+  addressPageHeader.appendChild(addressPageHeaderSpacer);
+  addressWrap.appendChild(addressPageHeader);
+
   const addressListTop = document.createElement("div");
   addressListTop.className = "shop-address-list-top";
 
@@ -24430,6 +24573,14 @@ function openCartSheet() {
   addressWrap.appendChild(addressFormView);
 
   const formGet = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
+  function resetSheetAddressFormValues() {
+    ["lookup", "street", "house", "entrance", "floor", "apartment", "comment"].forEach((key) => {
+      const field = formGet(key);
+      if (field) field.value = "";
+    });
+    resetSheetAddressFormResolvedState(null);
+    closeSheetAddressLookupPopover();
+  }
   let sheetAddressFormResolved = null;
   const sheetAddressLookupState = {
     open: false,
@@ -25206,6 +25357,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   async function showSheetCheckout() {
+    document.body.classList.remove("shop-address-page-active");
     const isKsoCheckout = Boolean(document.body?.classList?.contains("page-kso"));
     invalidateAddressSheetUiState();
     clearBenefitsInnerOverlayHost();
@@ -25364,10 +25516,26 @@ function applySheetAddressTitle(backMode = "cart") {
 
     const benefitsModalShell = document.createElement("div");
     benefitsModalShell.className = "shop-checkout-benefits-modal-shell";
+    const benefitsPageHeader = document.createElement("header");
+    benefitsPageHeader.className = "shop-page-header shop-benefits-page-header hidden";
+    const benefitsPageBackBtn = document.createElement("button");
+    benefitsPageBackBtn.type = "button";
+    benefitsPageBackBtn.className = "shop-page-header-btn";
+    benefitsPageBackBtn.setAttribute("aria-label", "Назад");
+    benefitsPageBackBtn.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+    const benefitsPageTitle = document.createElement("div");
+    benefitsPageTitle.className = "shop-benefits-page-title";
+    benefitsPageTitle.textContent = benefitsSheetTitle;
+    const benefitsPageHeaderSpacer = document.createElement("div");
+    benefitsPageHeaderSpacer.className = "shop-benefits-page-header-spacer";
+    benefitsPageHeader.appendChild(benefitsPageBackBtn);
+    benefitsPageHeader.appendChild(benefitsPageTitle);
+    benefitsPageHeader.appendChild(benefitsPageHeaderSpacer);
     const benefitsScrollEl = document.createElement("div");
     benefitsScrollEl.className = "shop-checkout-benefits-modal-scroll";
     const benefitsFooterEl = document.createElement("div");
     benefitsFooterEl.className = "shop-checkout-benefits-modal-footer";
+    benefitsModalShell.appendChild(benefitsPageHeader);
     benefitsModalShell.appendChild(benefitsScrollEl);
     benefitsModalShell.appendChild(benefitsFooterEl);
     benefitsWrap.innerHTML = "";
@@ -25416,7 +25584,25 @@ function applySheetAddressTitle(backMode = "cart") {
         hadPendingPromoInput: shouldCommitManualPromo && !!nextPromoValue,
       };
     };
-    const closeBenefitsWithSave = async () => {
+    let benefitsPagePopHandler = null;
+    const deactivateBenefitsPage = () => {
+      document.body.classList.remove("shop-benefits-page-active");
+      if (benefitsPagePopHandler) {
+        window.removeEventListener("popstate", benefitsPagePopHandler, true);
+        benefitsPagePopHandler = null;
+      }
+    };
+    const closeBenefitsWithSave = async ({ fromHistory = false } = {}) => {
+      if (
+        useCartPage
+        && document.body.classList.contains("shop-benefits-page-active")
+        && window.history.state?.shopBenefitsPage === true
+        && !fromHistory
+      ) {
+        window.history.back();
+        return;
+      }
+      deactivateBenefitsPage();
       clearCheckoutBenefitsDetailReturnState();
       persistBenefitsState();
       restoreCheckoutDeliveryProgressAfterBenefits();
@@ -25438,6 +25624,13 @@ function applySheetAddressTitle(backMode = "cart") {
         return;
       }
       if (returnContext?.returnToProfile === true) {
+        if (useCartPage) {
+          cartPage.classList.add("hidden");
+          document.body.classList.remove("shop-cart-page-active");
+          if (typeof showProfileView === "function") showProfileView();
+          if (typeof setActiveNav === "function") setActiveNav("profile");
+          return;
+        }
         closeShopSheetIfOpen();
         setTimeout(() => {
           if (typeof openProfileSheet === "function") {
@@ -25470,6 +25663,31 @@ function applySheetAddressTitle(backMode = "cart") {
       restoreCheckoutDeliveryProgressAfterBenefits();
       closeShopSheetIfOpen();
     };
+    if (useCartPage && isMobile) {
+      document.body.classList.add("shop-benefits-page-active");
+      benefitsPageHeader.classList.remove("hidden");
+      if (window.history.state?.shopBenefitsPage !== true) {
+        window.history.pushState(
+          {
+            ...(window.history.state || {}),
+            shopBenefitsPage: true,
+            shopBenefitsSource: benefitsSourceScreen,
+          },
+          "",
+          window.location.href
+        );
+      }
+      benefitsPagePopHandler = (event) => {
+        if (!document.body.classList.contains("shop-benefits-page-active")) return;
+        if (event.state?.shopBenefitsPage === true) return;
+        event.stopImmediatePropagation();
+        void closeBenefitsWithSave({ fromHistory: true });
+      };
+      window.addEventListener("popstate", benefitsPagePopHandler, true);
+      benefitsPageBackBtn.addEventListener("click", () => {
+        void closeBenefitsModal();
+      });
+    }
     const animateBenefitsModalEnter = () => {
       if (isMobile || previousSheetScreen === "benefits") return;
       const modalEl = document.getElementById("appModal") || document.querySelector(".app-modal");
@@ -25881,6 +26099,7 @@ function applySheetAddressTitle(backMode = "cart") {
   };
 
   function showSheetCart() {
+    document.body.classList.remove("shop-address-page-active");
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     clearBenefitsInnerOverlayHost();
@@ -25994,7 +26213,110 @@ function applySheetAddressTitle(backMode = "cart") {
     openProductCtx = null;
   }
 
+  let addressPageReturnCartScrollTop = 0;
+  let addressPageReturnCheckoutScrollTop = 0;
+
+  function closeMobileAddressFormPage() {
+    document.body.classList.remove("shop-address-form-page-active");
+    addressFormPageTitle.classList.add("hidden");
+    addressPageToggleHost.classList.remove("hidden");
+    resetSheetAddressFormValues();
+    sheetEditingId = null;
+    showSheetAddressList(openCartSheetCtx?.addressBackMode || "cart");
+  }
+
+  function closeMobileAddressPage() {
+    document.body.classList.remove("shop-address-form-page-active");
+    document.body.classList.remove("shop-address-page-active");
+    addressWrap.classList.add("hidden");
+    setAddressSheetBodyState(false);
+    if (elMobileAddressConfirm) elMobileAddressConfirm.classList.add("hidden");
+    const mobileAddressConfirmBtn = document.getElementById("shopMobileAddressConfirmBtn");
+    if (mobileAddressConfirmBtn) mobileAddressConfirmBtn.onclick = null;
+    const returnMode = openCartSheetCtx?.addressBackMode || "cart";
+    if (returnMode === "profile") {
+      cartPage.classList.add("hidden");
+      document.body.classList.remove("shop-cart-page-active");
+      showProfileView();
+    } else if (returnMode === "header") {
+      cartPage.classList.add("hidden");
+      document.body.classList.remove("shop-cart-page-active");
+      if (typeof setActiveNav === "function") setActiveNav("menu");
+    } else if (returnMode === "cart") {
+      setSheetCheckoutOverlayActive(false);
+      checkoutWrap.classList.add("hidden");
+      benefitsWrap.classList.add("hidden");
+      productWrap.classList.add("hidden");
+      pickupSheetWrap.classList.add("hidden");
+      list.classList.remove("hidden");
+      setCartSheetFooterMode(openCartSheetCtx, cartItemsResolved().length ? "cart" : "hidden");
+      setCartSheetScreenMode("cart");
+      sheetNavigationState.type = "cart";
+      sheetNavigationState.screen = "cart";
+      sheetNavigationState.data = null;
+      mountCartPageModeHeader();
+      const restoreCartCheckoutAction = () => {
+        const pricingSummarySection = list.querySelector(".shop-cart-pricing-summary-section:not(.hidden)");
+        if (pricingSummarySection) mountCartPageCheckoutActionInSummary(pricingSummarySection);
+        cartActions.classList.remove("hidden");
+      };
+      restoreCartCheckoutAction();
+      requestAnimationFrame(restoreCartCheckoutAction);
+      if (typeof updateCartModeHeaderUi === "function") {
+        updateCartModeHeaderUi(cartPageHeaderContent);
+      }
+      if (typeof setActiveNav === "function") setActiveNav("cart");
+    } else {
+      const backHandler = resolveSheetBackHandler(returnMode);
+      backHandler();
+    }
+    requestAnimationFrame(() => {
+      if (returnMode === "checkout") checkoutOverlayPanel.scrollTop = addressPageReturnCheckoutScrollTop;
+      else if (returnMode === "cart" && cartPageContent) {
+        cartPageContent.scrollTop = addressPageReturnCartScrollTop;
+        cartPageContent._shopCartHeaderSync?.();
+      }
+    });
+  }
+
+  function requestMobileAddressPageBack() {
+    if (document.body.classList.contains("shop-address-form-page-active")) {
+      if (useCartPage && window.history.state?.shopAddressFormPage === true) {
+        window.history.back();
+        return;
+      }
+      closeMobileAddressFormPage();
+      return;
+    }
+    if (useCartPage && window.history.state?.shopAddressPage === true) {
+      window.history.back();
+      return;
+    }
+    closeMobileAddressPage();
+  }
+
+  addressPageBackBtn.addEventListener("click", requestMobileAddressPageBack);
+  window.addEventListener("popstate", (event) => {
+    if (!useCartPage || !document.body.classList.contains("shop-address-page-active")) return;
+    if (document.body.classList.contains("shop-address-form-page-active")) {
+      if (event.state?.shopAddressFormPage === true) return;
+      event.stopImmediatePropagation();
+      closeMobileAddressFormPage();
+      return;
+    }
+    if (event.state?.shopAddressPage === true) return;
+    event.stopImmediatePropagation();
+    closeMobileAddressPage();
+  }, true);
+
   function showSheetAddressList(backMode) {
+    document.body.classList.remove("shop-address-form-page-active");
+    addressFormPageTitle.classList.add("hidden");
+    addressPageToggleHost.classList.remove("hidden");
+    if (useCartPage && !document.body.classList.contains("shop-address-page-active")) {
+      addressPageReturnCartScrollTop = Number(cartPageContent?.scrollTop || 0);
+      addressPageReturnCheckoutScrollTop = Number(checkoutOverlayPanel?.scrollTop || 0);
+    }
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     const previousSheetScreen = str(sheetNavigationState?.screen || "").trim().toLowerCase();
@@ -26003,14 +26325,14 @@ function applySheetAddressTitle(backMode = "cart") {
     benefitsWrap.classList.add("hidden");
     benefitsWrap.classList.remove("shop-checkout-benefits-content--modal-layout");
     hideCheckoutBenefitDetailView({ clearContent: true });
-    list.classList.add("hidden");
+    if (!useCartPage) list.classList.add("hidden");
     addressWrap.classList.remove("hidden");
     addressListView.classList.remove("hidden");
     addressFormView.classList.add("hidden");
     productWrap.classList.add("hidden");
     pickupSheetWrap.classList.add("hidden");
 
-    setCartSheetFooterMode(openCartSheetCtx, "hidden");
+    if (!useCartPage) setCartSheetFooterMode(openCartSheetCtx, "hidden");
     const resolvedBackMode =
       backMode !== undefined
         ? backMode || "cart"
@@ -26018,6 +26340,19 @@ function applySheetAddressTitle(backMode = "cart") {
     if (openCartSheetCtx) {
       openCartSheetCtx.addressBackMode = resolvedBackMode;
       openCartSheetCtx.addressFormReturnScreen = null;
+    }
+
+    if (useCartPage) {
+      document.body.classList.add("shop-address-page-active");
+      addressPageToggleHost.appendChild(deliveryToggleWrap);
+      deliveryToggleWrap.classList.remove("hidden");
+      if (window.history.state?.shopAddressPage !== true) {
+        window.history.pushState(
+          { ...(window.history.state || {}), shopAddressPage: true, shopAddressSource: resolvedBackMode },
+          "",
+          window.location.href
+        );
+      }
     }
 
     const isDesktopAddressPanel = isDesktopAddressBackMode(resolvedBackMode) && isDesktopAddressViewport();
@@ -26060,7 +26395,7 @@ function applySheetAddressTitle(backMode = "cart") {
       });
       setShopModalBackButtonIconMode(returnToProfile ? "arrow" : "close");
       setShopModalHeaderShellMode(true);
-      showHeaderToggle();
+      if (!useCartPage) showHeaderToggle();
       if (returnToProfile && typeof setProfileModalSubpageHeader === "function") {
         setProfileModalSubpageHeader();
       }
@@ -26407,7 +26742,9 @@ function applySheetAddressTitle(backMode = "cart") {
 
     // ensure stores loaded then populate city
     await ensureStoresLoaded();
-    if (formAsyncToken !== addressSheetAsyncToken || !window.AppModal || typeof window.AppModal.isOpen !== "function" || !window.AppModal.isOpen()) {
+    const addressSurfaceAvailable = useCartPage
+      || (window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen());
+    if (formAsyncToken !== addressSheetAsyncToken || !addressSurfaceAvailable) {
       return;
     }
     populateCitySelect(get("city"), prefill?.city);
@@ -26433,7 +26770,7 @@ function applySheetAddressTitle(backMode = "cart") {
     benefitsWrap.classList.add("hidden");
     benefitsWrap.classList.remove("shop-checkout-benefits-content--modal-layout");
     hideCheckoutBenefitDetailView({ clearContent: true });
-    list.classList.add("hidden");
+    if (!useCartPage) list.classList.add("hidden");
     addressWrap.classList.remove("hidden");
     addressListView.classList.add("hidden");
     addressFormView.classList.remove("hidden");
@@ -26442,6 +26779,24 @@ function applySheetAddressTitle(backMode = "cart") {
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (useCartPage && isMobile) {
+      document.body.classList.add("shop-address-page-active", "shop-address-form-page-active");
+      addressPageToggleHost.classList.add("hidden");
+      addressFormPageTitle.textContent = sheetEditingId ? "Редактировать адрес" : "Новый адрес";
+      addressFormPageTitle.classList.remove("hidden");
+      if (window.history.state?.shopAddressFormPage !== true) {
+        window.history.pushState(
+          {
+            ...(window.history.state || {}),
+            shopAddressPage: true,
+            shopAddressFormPage: true,
+            shopAddressSource: resolvedBackMode,
+          },
+          "",
+          window.location.href
+        );
+      }
+    }
     if (isMobile) {
       if (elMobileAddressSaveBtn) {
         elMobileAddressSaveBtn.onclick = () => {
@@ -26657,15 +27012,51 @@ function applySheetAddressTitle(backMode = "cart") {
     return showSheetCart();
   }
 
-  async function confirmSelectedDeliveryAddress() {
+  async function confirmSelectedDeliveryAddress({ navigate = true } = {}) {
     const pendingAddress = pendingAddressSelection;
     if (!pendingAddress) return;
+    setSelectedAddress(pendingAddress._local ? { ...pendingAddress, _local: true } : { ...pendingAddress });
+    syncSelectedAddressToCheckoutDraft();
+    window._deliveryMode = "delivery";
+    const draft = loadCheckoutDraft();
+    draft.method_code = "delivery";
+    draft.method_user_selected = true;
+    saveCheckoutDraft(draft);
+    updateAddressChip();
+    if (typeof updateCartModeHeaderUi === "function") {
+      updateCartModeHeaderUi(cartPageHeaderContent || openCartSheetCtx?.listEl);
+    }
+    if (typeof window.invalidateShopCartPricingSnapshotCache === "function") {
+      window.invalidateShopCartPricingSnapshotCache();
+    }
+    const syncCartDeliveryUi = async () => {
+      const tasks = [];
+      if (typeof window.warmCheckoutDeliveryConditions === "function") {
+        tasks.push(Promise.resolve(window.warmCheckoutDeliveryConditions("selected-address")));
+      }
+      if (typeof updateMobileDeliveryProgress === "function") {
+        tasks.push(Promise.resolve(updateMobileDeliveryProgress()));
+      }
+      if (typeof window.syncShopCartPricingSummaryUi === "function") {
+        tasks.push(Promise.resolve(window.syncShopCartPricingSummaryUi()));
+      }
+      await Promise.allSettled(tasks);
+      if (typeof updateCartModeHeaderUi === "function") {
+        updateCartModeHeaderUi(cartPageHeaderContent || openCartSheetCtx?.listEl);
+      }
+      cartPageContent?._shopCartHeaderSync?.();
+    };
+    void syncCartDeliveryUi();
     const token = getCustomerToken();
     if (token && pendingAddress.id) {
       try {
         await apiJson(`/api/public/me/addresses/${pendingAddress.id}/default`, { method: "PUT" });
         await refreshAddressState({ force: true });
         updateAddressChip();
+        if (typeof window.invalidateShopCartPricingSnapshotCache === "function") {
+          window.invalidateShopCartPricingSnapshotCache();
+        }
+        await syncCartDeliveryUi();
       } catch (e) {
         alert("Не удалось выбрать адрес");
         return;
@@ -26675,16 +27066,11 @@ function applySheetAddressTitle(backMode = "cart") {
       syncSelectedAddressToCheckoutDraft();
       updateAddressChip();
     }
-    window._deliveryMode = "delivery";
-    const draft = loadCheckoutDraft();
-    draft.method_code = "delivery";
-    draft.method_user_selected = true;
-    saveCheckoutDraft(draft);
     updateHeaderAddressWidget();
-    finishAddressSelectionNavigation();
+    if (navigate) finishAddressSelectionNavigation();
   }
 
-  function confirmSelectedPickupStore() {
+  function confirmSelectedPickupStore({ navigate = true } = {}) {
     if (!pendingPickupStoreSelection) return;
     window._selectedPickupStoreId = Number(pendingPickupStoreSelection);
     if (window._updatePickupAddressCallback) {
@@ -26697,7 +27083,7 @@ function applySheetAddressTitle(backMode = "cart") {
     draft.pickup_store_id = Number(pendingPickupStoreSelection);
     saveCheckoutDraft(draft);
     updateHeaderAddressWidget();
-    finishAddressSelectionNavigation();
+    if (navigate) finishAddressSelectionNavigation();
   }
 
 function renderSheetAddressList() {
@@ -26828,6 +27214,9 @@ function renderSheetAddressList() {
     row.addEventListener("click", () => {
       pendingAddressSelection = a;
       updateRadios();
+      if (useCartPage) {
+        void confirmSelectedDeliveryAddress({ navigate: false });
+      }
       setAddressListConfirmFooter({
         mode: "delivery",
         enabled: true,
@@ -27230,6 +27619,9 @@ function renderSheetAddressList() {
       row.addEventListener("click", () => {
         pendingPickupStoreSelection = Number(store.id);
         updatePickupRadios();
+        if (useCartPage) {
+          confirmSelectedPickupStore({ navigate: false });
+        }
         setAddressListConfirmFooter({
           mode: "pickup",
           enabled: true,
@@ -27362,6 +27754,10 @@ function renderSheetAddressList() {
   const cancelBtn = formGet("cancel");
 
   cancelBtn?.addEventListener("click", () => {
+    if (useCartPage && document.body.classList.contains("shop-address-form-page-active")) {
+      requestMobileAddressPageBack();
+      return;
+    }
     if (openCartSheetCtx?.addressBackMode === "profile") {
       returnToProfileFromSheet();
       return;
@@ -27419,7 +27815,9 @@ function renderSheetAddressList() {
       syncSelectedAddressToCheckoutDraft();
       updateAddressChip();
       const backMode = openCartSheetCtx?.addressBackMode || "cart";
-      if (backMode === "profile") {
+      if (useCartPage && document.body.classList.contains("shop-address-form-page-active")) {
+        requestMobileAddressPageBack();
+      } else if (backMode === "profile") {
         returnToProfileFromSheet();
       } else if (backMode === "desktop-panel") {
         closeAddressDesktopPanelModal();
@@ -34057,8 +34455,113 @@ function renderSheetAddressList() {
     });
   }
 
+  function openProfileOrdersPage(me, { sourceScreen = "", returnToProfile = false } = {}) {
+    const profilePage = document.getElementById("shopProfilePage");
+    const pageParent = profilePage?.parentElement || document.body;
+    let page = document.getElementById("shopProfileOrdersPage");
+    if (!page) {
+      page = document.createElement("section");
+      page.id = "shopProfileOrdersPage";
+      page.className = "shop-orders-page hidden";
+      page.innerHTML = `
+        <header class="shop-page-header shop-orders-page-header">
+          <button class="shop-page-header-btn" type="button" data-orders-page-back aria-label="Назад">
+            <i class="fas fa-arrow-left" aria-hidden="true"></i>
+          </button>
+          <h1>Мои заказы</h1>
+          <div class="shop-orders-page-header-spacer" aria-hidden="true"></div>
+        </header>
+        <div class="shop-orders-page-content"></div>
+      `;
+      pageParent.appendChild(page);
+    }
+
+    const closePage = () => {
+      document.body.classList.remove("shop-orders-page-active");
+      page.classList.add("hidden");
+      if (page._shopOrdersPopHandler) {
+        window.removeEventListener("popstate", page._shopOrdersPopHandler, true);
+        page._shopOrdersPopHandler = null;
+      }
+      if (returnToProfile || sourceScreen === "profile") {
+        if (typeof showProfileView === "function") showProfileView();
+        if (typeof setActiveNav === "function") setActiveNav("profile");
+      } else if (typeof setActiveNav === "function") {
+        setActiveNav(sourceScreen === "home" ? "home" : "menu");
+      }
+    };
+    const requestBack = () => {
+      if (window.history.state?.shopOrdersPage === true) {
+        window.history.back();
+        return;
+      }
+      closePage();
+    };
+
+    page.querySelector("[data-orders-page-back]").onclick = requestBack;
+    const content = page.querySelector(".shop-orders-page-content");
+    const ctx = buildProfileContent({
+      host: content,
+      me,
+      onLogout: () => handleProfileLogout({ closeModal: false }),
+      initialTab: "orders",
+      ordersOnly: true,
+      sourceScreen,
+      returnToProfile,
+    });
+    window._profileContext = ctx;
+    sheetNavigationState.type = "profile";
+    sheetNavigationState.screen = "orders";
+    sheetNavigationState.data = { sourceScreen, returnToProfile };
+    document.body.classList.add("shop-orders-page-active");
+    page.classList.remove("hidden");
+    content.scrollTop = 0;
+
+    if (window.history.state?.shopOrdersPage !== true) {
+      window.history.pushState(
+        {
+          ...(window.history.state || {}),
+          shopOrdersPage: true,
+          shopOrdersSource: sourceScreen || (returnToProfile ? "profile" : "home"),
+        },
+        "",
+        window.location.href
+      );
+    }
+    page._shopOrdersPopHandler = (event) => {
+      if (!document.body.classList.contains("shop-orders-page-active")) return;
+      if (event.state?.shopOrdersPage === true) return;
+      event.stopImmediatePropagation();
+      closePage();
+    };
+    window.addEventListener("popstate", page._shopOrdersPopHandler, true);
+    if (typeof window.updateActiveOrdersBadge === "function") {
+      window.updateActiveOrdersBadge();
+    }
+    return ctx;
+  }
+
   function openProfileModal(me, { initialTab, ordersOnly = false, sourceScreen = "", returnToProfile = false } = {}) {
+    if (ordersOnly && window.matchMedia("(max-width: 768px)").matches) {
+      return openProfileOrdersPage(me, { sourceScreen, returnToProfile });
+    }
     if (!window.AppModal) return;
+
+    let ordersPagePopHandler = null;
+    const cleanupOrdersPageState = () => {
+      document.body.classList.remove("shop-orders-page-active");
+      if (ordersPagePopHandler) {
+        window.removeEventListener("popstate", ordersPagePopHandler, true);
+        ordersPagePopHandler = null;
+      }
+    };
+    const requestOrdersPageBack = () => {
+      if (ordersOnly && window.history.state?.shopOrdersPage === true) {
+        window.history.back();
+        return;
+      }
+      window.AppModal.close("back");
+    };
 
     const page = !ordersOnly ? document.getElementById("shopProfilePage") : null;
     const pageParent = page?.parentElement || null;
@@ -34099,6 +34602,7 @@ function renderSheetAddressList() {
       title: ordersOnly ? "Мои заказы" : "Профиль",
       content: wrap,
       onClose: () => {
+        cleanupOrdersPageState();
         clearProfileModalMenu();
         activeProfileModalPage = null;
         const settingsPage = document.getElementById("shopProfileSettingsPage");
@@ -34121,7 +34625,12 @@ function renderSheetAddressList() {
           window.AppModal.body.classList.remove("shop-profile-sheet-body");
           window.AppModal.body.classList.remove("shop-profile-return-sheet");
         }
-        setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "menu");
+        if (ordersOnly && (returnToProfile || sourceScreen === "profile")) {
+          if (typeof showProfileView === "function") showProfileView();
+          setActiveNav("profile");
+        } else {
+          setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "menu");
+        }
         // Сбрасываем состояние навигации
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
@@ -34140,13 +34649,32 @@ function renderSheetAddressList() {
       showProfileModalHeader(me);
     }
     if (ordersOnly) {
+      document.body.classList.add("shop-orders-page-active");
       const settingsBtn = document.querySelector(".shop-profile-modal-settings");
       if (settingsBtn) settingsBtn.classList.add("hidden");
       const profileActions = document.querySelector(".shop-profile-header-actions");
       if (profileActions) profileActions.classList.add("hidden");
-      if (returnToProfile && typeof setProfileModalSubpageHeader === "function") {
-        setProfileModalSubpageHeader();
+      if (typeof setProfileModalSubpageHeader === "function") {
+        setProfileModalSubpageHeader(requestOrdersPageBack);
       }
+      if (window.history.state?.shopOrdersPage !== true) {
+        window.history.pushState(
+          {
+            ...(window.history.state || {}),
+            shopOrdersPage: true,
+            shopOrdersSource: sourceScreen || (returnToProfile ? "profile" : "home"),
+          },
+          "",
+          window.location.href
+        );
+      }
+      ordersPagePopHandler = (event) => {
+        if (!document.body.classList.contains("shop-orders-page-active")) return;
+        if (event.state?.shopOrdersPage === true) return;
+        event.stopImmediatePropagation();
+        window.AppModal.close("back");
+      };
+      window.addEventListener("popstate", ordersPagePopHandler, true);
     }
     
     // Обновляем бейдж сразу после открытия модального окна
@@ -40773,6 +41301,14 @@ function setBottomNavActive(tab) {
     document.addEventListener(
       "touchstart",
       (e) => {
+        if (
+          document.body?.classList.contains("shop-orders-page-active")
+          || document.body?.classList.contains("shop-favorites-page-active")
+        ) {
+          pullStartY = null;
+          pullDistance = 0;
+          return;
+        }
         if (getScrollTopForRefresh() === 0) {
           pullStartY = e.touches[0].pageY;
           pullDistance = 0;
@@ -40798,7 +41334,12 @@ function setBottomNavActive(tab) {
     document.addEventListener(
       "touchend",
       () => {
-        if (pullStartY !== null && pullDistance >= PULL_THRESHOLD) {
+        if (
+          !document.body?.classList.contains("shop-orders-page-active")
+          && !document.body?.classList.contains("shop-favorites-page-active")
+          && pullStartY !== null
+          && pullDistance >= PULL_THRESHOLD
+        ) {
           refreshShopData();
         }
         pullStartY = null;
