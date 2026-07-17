@@ -20346,6 +20346,54 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     display: none !important;
   }
 
+  body.shop-company-chat-page-active .shop-mobile-bottom-container,
+  body.shop-company-chat-page-active #shopCatChipsWrap,
+  body.shop-company-chat-page-active .shop-category-subcategory-row{
+    display: none !important;
+  }
+
+  body.shop-company-chat-page-active .shop-company-chat-overlay{
+    z-index: 10100;
+    background: var(--color-surface-2);
+  }
+
+  body.shop-company-chat-page-active .shop-company-chat-modal{
+    inset: 0;
+    min-height: 100dvh;
+    height: 100dvh;
+    max-height: 100dvh;
+    transform: none;
+    transition: none;
+  }
+
+  body.shop-company-chat-page-active .shop-company-chat-page-header{
+    flex: 0 0 64px;
+    min-height: 64px;
+    height: 64px;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    padding: 0 16px;
+  }
+
+  body.shop-company-chat-page-active .shop-company-chat-page-header .shop-company-chat-modal__title{
+    grid-column: 2;
+    min-width: 0;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body.shop-company-chat-page-active .shop-company-chat-page-header .shop-company-chat-modal__close{
+    left: 16px;
+    right: auto;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  body.shop-company-chat-page-active .shop-company-chat-page-header:has(.shop-company-chat-modal__back:not(.hidden)) .shop-company-chat-modal__close{
+    display: none !important;
+  }
+
   .shop-profile-page-header{
     display: flex;
     align-items: center;
@@ -25666,6 +25714,9 @@ body.page-kso .shop-checkout-customer-phone{
 /* Hide universal modal footer in shop */
 body.page-shop .app-modal-footer{
   display:none;
+}
+body.page-shop .app-modal-body.shop-notification-permission-modal-body + .app-modal-footer{
+  display:flex;
 }
 body.page-shop .app-modal-body::after{
   height:0;

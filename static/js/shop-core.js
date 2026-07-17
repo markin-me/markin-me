@@ -2773,7 +2773,9 @@
     if (!host) return;
     const level = getHomeBonusFirstLevel(state.homeBonusConfig);
     const bonusHtml = level
-      ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
+      ? (isHomeBonusJoined()
+        ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
+        : buildHomeGuestBonusCardHtml(level))
       : "";
     const referralHtml = isHomeBonusJoined() ? buildHomeReferralCardHtml(state.homeBonusConfig) : "";
     host.innerHTML = `<div class="shop-home-cards-scroll no-scrollbar"><div class="shop-home-cards-track">${bonusHtml ? `<div class="shop-home-cards-slide">${bonusHtml}</div>` : ""}${referralHtml ? `<div class="shop-home-cards-slide">${referralHtml}</div>` : ""}</div></div>`;
@@ -2789,10 +2791,25 @@
       cardsScroll.scrollLeft = nextScrollLeft;
     }, { passive: false });
     if (level) {
-      bindBonusLevelPreviewCardActions(host, level, { returnTo: "none", returnToProfile: true });
+      if (isHomeBonusJoined()) {
+        bindBonusLevelPreviewCardActions(host, level, { returnTo: "none", returnToProfile: true });
+      } else {
+        const joinButton = host.querySelector(".shop-home-bonus-card__action");
+        joinButton?.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void joinHomeBonusProgram({
+            onSuccess: () => window.renderProfileBonusCards(host),
+          });
+        });
+      }
       const bonusCard = host.querySelector(".bonus-level-preview-card");
       if (bonusCard && bonusCard.dataset.profileBonusCardBound !== "1") {
-        bonusCard.addEventListener("click", () => openHomeBonusLevelSheet(level, { returnToProfile: true }));
+        bonusCard.addEventListener("click", () => {
+          if (isHomeBonusJoined()) {
+            openHomeBonusLevelSheet(level, { returnToProfile: true });
+          }
+        });
         bonusCard.dataset.profileBonusCardBound = "1";
       }
     }
@@ -13583,6 +13600,7 @@ async function initAddresses() {
     });
     return __shopChatPromise;
   }
+  window.ensureShopChatLoaded = ensureShopChatLoaded;
 
   let __shopLatePromise = null;
   function ensureShopLateLoaded() {
@@ -18281,7 +18299,7 @@ function updateCartBadge() {
   function ensureBonusProgramHistoryBinding() {
     if (bonusProgramHistoryBound) return;
     window.addEventListener("popstate", (event) => {
-      if (event.state?.shopBenefitsPage === true) return;
+      if (event.state?.shopBenefitsPage === true || event.state?.shopCompanyChatPage === true) return;
       if (event.state?.shopBonusProgramPage === true) {
         renderBonusProgramHistoryState(event.state);
         return;
@@ -19755,7 +19773,10 @@ function bindIosBackSwipeGuard() {
   const VERTICAL_TOLERANCE_PX = 14;
 
   document.addEventListener("touchstart", (event) => {
-    if (document.body?.classList.contains("shop-bonus-program-page-active")) {
+    if (
+      document.body?.classList.contains("shop-bonus-program-page-active")
+      || document.body?.classList.contains("shop-company-chat-page-active")
+    ) {
       tracking = false;
       return;
     }

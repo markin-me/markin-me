@@ -32087,10 +32087,54 @@ function renderSheetAddressList() {
     const chatNotificationsInput = document.createElement("input");
     chatNotificationsInput.type = "checkbox";
     chatNotificationsInput.className = "switch-input";
-    chatNotificationsInput.checked = window.shopCompanyChatNotifications?.isEnabled?.() !== false;
-    chatNotificationsInput.addEventListener("change", () => {
-      window.shopCompanyChatNotifications?.setEnabled?.(chatNotificationsInput.checked);
+    chatNotificationsInput.checked = window.shopCompanyChatNotifications?.isEnabled?.() === true;
+    chatNotificationsInput.disabled = !window.shopCompanyChatNotifications;
+    chatNotificationsInput.addEventListener("change", async () => {
+      const notificationsApi = window.shopCompanyChatNotifications;
+      if (!notificationsApi?.setEnabled) {
+        chatNotificationsInput.checked = false;
+        return;
+      }
+      const shouldEnable = chatNotificationsInput.checked;
+      chatNotificationsInput.disabled = true;
+      try {
+        const enabled = await notificationsApi.setEnabled(shouldEnable);
+        chatNotificationsInput.checked = enabled;
+        if (shouldEnable && !enabled) {
+          const status = notificationsApi.getStatus?.() || {};
+          let message = "Разрешение на уведомления не предоставлено. Нажмите на свитч ещё раз и подтвердите системный запрос браузера.";
+          if (status.supported === false) {
+            message = "Этот браузер не поддерживает push-уведомления.";
+          } else if (status.secureContext === false) {
+            message = "Уведомления доступны только при защищённом HTTPS-подключении.";
+          } else if (status.permission === "denied") {
+            message = "Уведомления заблокированы в настройках браузера. Разрешите уведомления для этого сайта и повторите попытку.";
+          }
+          const permissionText = document.createElement("div");
+          permissionText.className = "shop-profile-notification-permission";
+          permissionText.textContent = message;
+          window.AppModal.open({
+            title: "Уведомления",
+            content: permissionText,
+            cancelText: "Закрыть",
+            showSave: false,
+            showCancel: true,
+            onClose: () => {
+              window.AppModal?.body?.classList.remove("shop-notification-permission-modal-body");
+            },
+          });
+          window.AppModal.body?.classList.add("shop-notification-permission-modal-body");
+        }
+      } finally {
+        chatNotificationsInput.disabled = false;
+      }
     });
+    if (!window.shopCompanyChatNotifications && typeof window.ensureShopChatLoaded === "function") {
+      void window.ensureShopChatLoaded().then(() => {
+        chatNotificationsInput.checked = window.shopCompanyChatNotifications?.isEnabled?.() === true;
+        chatNotificationsInput.disabled = !window.shopCompanyChatNotifications;
+      });
+    }
     const chatNotificationsUi = document.createElement("span");
     chatNotificationsUi.className = "switch-ui";
     chatNotificationsSwitch.appendChild(chatNotificationsInput);
@@ -34066,7 +34110,7 @@ function renderSheetAddressList() {
     clearCustomer({ fullReset: true });
     syncHeaderProfilePhoto(null);
     await refreshAddressState();
-    if (closeModal && window.AppModal) window.AppModal.close("sheet");
+    window.location.replace(window.location.pathname + window.location.search);
     return true;
   }
 

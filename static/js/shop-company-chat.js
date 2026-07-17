@@ -1825,7 +1825,10 @@
     if (!isWebPushSupported()) return false;
     if (!isWebPushSecureContext()) return false;
     if (!("Notification" in window)) return false;
-    return String(Notification.permission || "default") === "default";
+    try {
+      if (localStorage.getItem(chatNotificationsStorageKey) !== null) return false;
+    } catch {}
+    return String(Notification.permission || "default") !== "denied";
   }
 
   function ensureNotificationPermissionPrompt() {
@@ -1852,6 +1855,7 @@
     if (closeBtn) {
       closeBtn.addEventListener("click", function (event) {
         event.preventDefault();
+        void setChatNotificationsEnabled(false);
         hideNotificationPermissionPrompt();
       });
     }
@@ -1860,15 +1864,9 @@
     if (allowBtn) {
       allowBtn.addEventListener("click", function (event) {
         event.preventDefault();
-        requestMessageAlertNotificationPermission()
-          .catch(function () { return String(Notification.permission || "default"); })
+        setChatNotificationsEnabled(true)
           .finally(function () {
             hideNotificationPermissionPrompt();
-            queueWebPushSubscriptionSync({
-              clientId: getActiveChatClientId(),
-              force: true,
-              immediate: true,
-            });
           });
       });
     }
@@ -2238,6 +2236,29 @@
     }).catch(function () {});
   }
 
+  async function unsubscribeWebPushNotifications() {
+    if (webPushSyncTimer) {
+      window.clearTimeout(webPushSyncTimer);
+      webPushSyncTimer = 0;
+    }
+    webPushSyncRequestedWithPermission = false;
+    webPushSyncForceRequested = false;
+    webPushSyncQueuedClientId = "";
+
+    const registration = await getWebPushServiceWorkerRegistration();
+    const subscription = registration && registration.pushManager
+      ? await registration.pushManager.getSubscription().catch(function () { return null; })
+      : null;
+    const endpoint = String(subscription && subscription.endpoint || "");
+    if (endpoint) {
+      await remoteUnsubscribeWebPushByEndpoint(endpoint);
+      try { await subscription.unsubscribe(); } catch {}
+    }
+    webPushSyncedFingerprint = "";
+    webPushSubscriptionVapidKey = "";
+    try { localStorage.removeItem(webPushVapidStorageKey); } catch {}
+  }
+
   function queueWebPushSubscriptionSync(options) {
     const opts = options || {};
     if (!isChatNotificationsEnabled()) return;
@@ -2316,6 +2337,11 @@
 
       let subscription = await registration.pushManager.getSubscription().catch(function () { return null; });
 
+      if (!isChatNotificationsEnabled()) {
+        await unsubscribeWebPushNotifications();
+        return;
+      }
+
       if (permission !== "granted") {
         const staleEndpoint = String(subscription && subscription.endpoint || "");
         if (staleEndpoint) {
@@ -2343,6 +2369,11 @@
           userVisibleOnly: true,
           applicationServerKey: webPushUrlBase64ToUint8Array(publicKey),
         });
+      }
+
+      if (!isChatNotificationsEnabled()) {
+        await unsubscribeWebPushNotifications();
+        return;
       }
 
       const normalizedSubscription = normalizeWebPushSubscriptionForApi(subscription);
@@ -2519,25 +2550,40 @@
   const chatNotificationsStorageKey = "shop_company_chat_notifications_enabled_t" + tenantId;
   function isChatNotificationsEnabled() {
     try {
-      return localStorage.getItem(chatNotificationsStorageKey) !== "0";
+      if (localStorage.getItem(chatNotificationsStorageKey) !== "1") return false;
+      return "Notification" in window && String(Notification.permission || "default") === "granted";
     } catch {
-      return true;
+      return false;
     }
   }
 
-  function setChatNotificationsEnabled(enabled) {
+  async function setChatNotificationsEnabled(enabled) {
     const nextEnabled = enabled === true;
-    try { localStorage.setItem(chatNotificationsStorageKey, nextEnabled ? "1" : "0"); } catch {}
-    if (nextEnabled) {
-      requestMessageAlertNotificationPermission().catch(function () {});
-      queueWebPushSubscriptionSync({
-        clientId: getActiveChatClientId(),
-        requestPermission: true,
-        force: true,
-        immediate: true,
-      });
+    if (!nextEnabled) {
+      try { localStorage.setItem(chatNotificationsStorageKey, "0"); } catch {}
+      await unsubscribeWebPushNotifications();
+      return false;
     }
-    return nextEnabled;
+
+    if (!isWebPushSupported() || !isWebPushSecureContext()) {
+      try { localStorage.setItem(chatNotificationsStorageKey, "0"); } catch {}
+      await unsubscribeWebPushNotifications();
+      return false;
+    }
+
+    const permission = await requestMessageAlertNotificationPermission();
+    const allowed = permission === "granted";
+    try { localStorage.setItem(chatNotificationsStorageKey, allowed ? "1" : "0"); } catch {}
+    if (!allowed) {
+      await unsubscribeWebPushNotifications();
+      return false;
+    }
+    queueWebPushSubscriptionSync({
+      clientId: getActiveChatClientId(),
+      force: true,
+      immediate: true,
+    });
+    return true;
   }
   let pendingPushChatOpenRequest = null;
   let pendingPushMessageFocus = null;
@@ -6991,6 +7037,45 @@
   }
 
   var emojiPickerInitialized = false;
+  var companyChatHistoryBound = false;
+  var companyChatHistoryRestoring = false;
+
+  function isCompanyChatPageMode() {
+    return window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+  }
+
+  function syncCompanyChatPageHeader() {
+    const pageMode = isCompanyChatPageMode();
+    modalHeader.classList.toggle("shop-page-header", pageMode);
+    modalHeader.classList.toggle("shop-company-chat-page-header", pageMode);
+    closeBtn.classList.toggle("shop-page-header-btn", pageMode);
+    closeBtn.setAttribute("aria-label", pageMode ? "Назад" : "Закрыть чат");
+    closeBtn.innerHTML = pageMode
+      ? '<i class="fas fa-arrow-left" aria-hidden="true"></i>'
+      : '<i class="fas fa-times" aria-hidden="true"></i>';
+  }
+
+  function ensureCompanyChatHistoryBinding() {
+    if (companyChatHistoryBound) return;
+    window.addEventListener("popstate", function (event) {
+      if (event.state && event.state.shopCompanyChatPage === true) {
+        if (!overlay.classList.contains("is-open")) {
+          companyChatHistoryRestoring = true;
+          try {
+            openCompanyChat();
+          } finally {
+            companyChatHistoryRestoring = false;
+          }
+        }
+        return;
+      }
+      if (overlay.classList.contains("is-open") && isCompanyChatPageMode()) {
+        closeCompanyChat({ fromHistory: true });
+      }
+    });
+    companyChatHistoryBound = true;
+  }
+
   function closeOpenAppModalBeforeChat() {
     if (!window.AppModal || typeof window.AppModal.isOpen !== "function" || typeof window.AppModal.close !== "function") return;
     if (window.AppModal.isOpen()) {
@@ -7000,6 +7085,16 @@
 
   function openCompanyChat() {
     closeOpenAppModalBeforeChat();
+    syncCompanyChatPageHeader();
+    if (isCompanyChatPageMode()) {
+      ensureCompanyChatHistoryBinding();
+      if (!companyChatHistoryRestoring && window.history.state?.shopCompanyChatPage !== true) {
+        window.history.pushState({
+          ...(window.history.state || {}),
+          shopCompanyChatPage: true,
+        }, "", window.location.href);
+      }
+    }
     suppressIncomingAlertsFor(1800);
     cancelDeferredClosedFeedPersist();
     preloadEmojiAtlas();
@@ -7045,6 +7140,7 @@
     overlay.setAttribute("aria-hidden", "false");
     syncOpenButtonActiveState();
     document.body.classList.add("shop-company-chat-open");
+    document.body.classList.toggle("shop-company-chat-page-active", isCompanyChatPageMode());
     maybeShowNotificationPermissionPrompt();
     if (!shouldLockPageBeforeOpen) {
       lockBackgroundPageScrollForChat();
@@ -7127,7 +7223,16 @@
     });
   }
 
-  function closeCompanyChat() {
+  function closeCompanyChat(options) {
+    const closeOptions = options && typeof options === "object" ? options : {};
+    if (
+      isCompanyChatPageMode()
+      && closeOptions.fromHistory !== true
+      && window.history.state?.shopCompanyChatPage === true
+    ) {
+      window.history.back();
+      return;
+    }
     stopSharedThreadPolling();
     stopLocalTypingSession({ flush: true });
     saveFeedScrollPosition({ persist: true });
@@ -7151,6 +7256,7 @@
       overlay.hidden = true;
     }, 240);
     document.body.classList.remove("shop-company-chat-open");
+    document.body.classList.remove("shop-company-chat-page-active");
     unlockBackgroundPageScrollForChat();
     unbindMobileKeyboardViewportSync();
     persistFeedScrollPositionSnapshot();
@@ -14084,6 +14190,16 @@
   window.shopCompanyChatNotifications = {
     isEnabled: isChatNotificationsEnabled,
     setEnabled: setChatNotificationsEnabled,
+    getStatus: function () {
+      return {
+        supported: isWebPushSupported(),
+        secureContext: isWebPushSecureContext(),
+        permission: "Notification" in window ? String(Notification.permission || "default") : "unsupported",
+      };
+    },
   };
+  if (!isChatNotificationsEnabled()) {
+    unsubscribeWebPushNotifications().catch(function () {});
+  }
 })();
 
