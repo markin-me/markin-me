@@ -16010,6 +16010,12 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
     display: none !important;
   }
 
+  body.shop-categories-page-active .shop-mobile-bottom-container,
+  body.shop-categories-page-active #shopCatChipsWrap,
+  body.shop-categories-page-active .shop-category-subcategory-row{
+    display: none !important;
+  }
+
   body:has(.app-modal-body.shop-cart-sheet-body) .modal-backdrop,
   body:has(.app-modal-body .shop-auth) .modal-backdrop,
   body:has(.app-modal-body.shop-active-order-details-sheet-body) .modal-backdrop,
@@ -16542,12 +16548,17 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
   .shop-category-subcategory-row{
     position: sticky;
     top: calc(var(--header-height) + 48px);
-    z-index: 130;
+    z-index: 10;
     margin: 0 -2px;
     padding: 0 2px 8px;
     background: transparent;
   }
   .shop-category-subcategory-row.is-sticky-past{
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .shop-category-subcategory-row.is-category-jump-past{
+    position: static;
     visibility: hidden;
     pointer-events: none;
   }
@@ -20573,6 +20584,54 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
 
   .shop-favorites-page-content > .shop-favorites-sheet{
     min-height: 0;
+  }
+
+  .shop-categories-page{
+    position: fixed;
+    inset: 0;
+    z-index: 10050;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-height: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    background: var(--color-surface-2);
+  }
+
+  .shop-categories-page.hidden{
+    display: none !important;
+  }
+
+  .shop-categories-page-header{
+    flex: 0 0 auto;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    min-height: 64px;
+  }
+
+  .shop-categories-page-header h1{
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    font-size: 18px;
+    line-height: 1.2;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .shop-categories-page-header-spacer{
+    width: 44px;
+    height: 44px;
+  }
+
+  .shop-categories-page-content{
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 12px;
+    -webkit-overflow-scrolling: touch;
   }
 }
   .shop-pd-ingredient-cards{
@@ -28678,6 +28737,82 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     border-top: none;
     margin-top: -9px;
     box-shadow: none;
+  }
+
+  .shop-mobile-bottom-container .shop-nav,
+  .shop-mobile-bottom-container .shop-mobile-product-actions:not(.hidden) + .shop-mobile-cart-actions.hidden + .shop-mobile-order-details-actions.hidden + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-nav,
+  .shop-mobile-bottom-container .shop-mobile-cart-actions:not(.hidden) + .shop-mobile-order-details-actions.hidden + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-nav,
+  .shop-mobile-bottom-container .shop-mobile-order-details-actions:not(.hidden) + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-nav,
+  .shop-mobile-bottom-container .shop-mobile-address-actions:not(.hidden) + .shop-mobile-address-confirm.hidden + .shop-nav,
+  .shop-mobile-bottom-container .shop-mobile-address-confirm:not(.hidden) + .shop-nav {
+    grid-template-columns: repeat(4, 50px);
+    justify-content: center;
+    align-items: start;
+    gap: 18px;
+    height: calc(68px + env(safe-area-inset-bottom));
+    padding: 0 0 env(safe-area-inset-bottom);
+    margin-top: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  :root {
+    --shop-bottomnav-h: 68px;
+  }
+
+  .shop-mobile-bottom-container .shop-nav-btn {
+    width: 50px;
+    height: 50px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 3px 10px rgba(31, 42, 58, 0.14);
+    opacity: 1;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .shop-mobile-bottom-container .shop-nav-btn.is-active {
+    background: #feebde;
+  }
+
+  .shop-mobile-bottom-container #shopNavMenu {
+    overflow: visible;
+  }
+
+  .shop-mobile-bottom-container #shopNavMenu .shop-nav-logo-icon {
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+    background: transparent;
+  }
+
+  .shop-mobile-bottom-container #shopNavMenu .shop-nav-logo-img {
+    object-fit: cover;
+  }
+
+  .shop-mobile-bottom-container #shopNavProfile .shop-nav-profile-img {
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+  }
+
+  .shop-mobile-bottom-container .shop-nav-btn .shop-nav-label {
+    position: absolute;
+    top: 54px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--color-text-muted);
+    pointer-events: none;
+  }
+
+  .shop-mobile-bottom-container .shop-nav-btn.is-active .shop-nav-label {
+    color: var(--shop-buy);
   }
 
 

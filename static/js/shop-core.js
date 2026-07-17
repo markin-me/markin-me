@@ -12689,7 +12689,7 @@ async function initAddresses() {
     if (scroll) scrollToCategory(id);
   }
 
-  function scrollToCategory(categoryId) {
+  function scrollToCategory(categoryId, { alignFirstCard = false } = {}) {
     const id = Number(categoryId);
     if (!Number.isFinite(id)) return;
     const header = elProductsGrid?.querySelector?.(`.shop-category-header[data-cat-id="${id}"]`);
@@ -12713,10 +12713,20 @@ async function initAddresses() {
         const headerVisibleH = (document.body.classList.contains("shop-header-collapsed") || Number(window.scrollY || 0) > 44) ? 0 : headerH;
         const chipsH = elCatChipsWrap?.getBoundingClientRect ? elCatChipsWrap.getBoundingClientRect().height : 0;
         const subcategoryRow = elProductsGrid?.querySelector?.(`.shop-category-subcategory-row[data-parent-cat-id="${id}"]`);
+        if (alignFirstCard) {
+          const subcategoryRows = Array.from(elProductsGrid.querySelectorAll(".shop-category-subcategory-row"));
+          subcategoryRows.forEach((row) => {
+            const isBeforeSelectedCategory = Boolean(row.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING);
+            row.classList.remove("is-category-jump-past");
+            if (isBeforeSelectedCategory) row.classList.add("is-category-jump-past");
+          });
+        }
         const subcategoryH = subcategoryRow?.getBoundingClientRect ? subcategoryRow.getBoundingClientRect().height : 0;
         const rect = scrollTarget.getBoundingClientRect();
         const visibleTop = headerVisibleH + chipsH + subcategoryH + 12;
-        const targetCenterOffset = Math.max(0, (window.innerHeight / 2) - (rect.height / 2) - 200);
+        const targetCenterOffset = alignFirstCard
+          ? 0
+          : Math.max(0, (window.innerHeight / 2) - (rect.height / 2) - 200);
         const top = window.scrollY + rect.top - visibleTop - targetCenterOffset;
         window.scrollTo({
           top: Math.max(0, top),
@@ -12744,6 +12754,7 @@ async function initAddresses() {
 
     setTimeout(() => {
       isProgrammaticCategoryScroll = false;
+      updateStickySubcategoryRows();
       // После завершения программного скролла ещё раз выравниваем чипы,
       // чтобы правило привязки к левому краю сработало и при выборе через список категорий.
       scrollChipsToCategory(state.activeCategoryId);
@@ -12762,7 +12773,6 @@ async function initAddresses() {
       rows.forEach((row) => row.classList.remove("is-sticky-past"));
       return;
     }
-
     const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
     const stickyTop = (document.body.classList.contains("shop-header-collapsed") ? 0 : headerH) + 48;
     let stuckIndex = -1;
@@ -12853,6 +12863,9 @@ async function initAddresses() {
 
     const nextId = Number(activeHeader?.dataset?.catId);
     if (!Number.isFinite(nextId) || nextId === Number(state.activeCategoryId)) return;
+    elProductsGrid.querySelectorAll(".shop-category-subcategory-row.is-category-jump-past").forEach((row) => {
+      row.classList.remove("is-category-jump-past");
+    });
     const nextTitle = activeHeader?.dataset?.catTitle || "";
     setActiveCategory(nextId, nextTitle, { scroll: false });
     ensureCategoryLoaded(nextId, { limit: 200 });
@@ -12927,7 +12940,7 @@ async function initAddresses() {
       btn.appendChild(text);
 
       btn.addEventListener("click", () => {
-        selectCategory(c.id, c.title);
+        selectCategory(c.id, c.title, { alignFirstCard: true });
         closeShopSheetIfOpen();
       });
 
@@ -12992,7 +13005,7 @@ async function initAddresses() {
       if (Number(state.activeCategoryId) === Number(c.id)) btn.classList.add("is-active");
 
       btn.addEventListener("click", () => {
-        selectCategory(c.id, c.title);
+        selectCategory(c.id, c.title, { alignFirstCard: true });
       });
 
       elCatChips.appendChild(btn);
@@ -17535,7 +17548,7 @@ function updateCartBadge() {
     }
   }
 
-  async function selectCategory(categoryId, title) {
+  async function selectCategory(categoryId, title, { alignFirstCard = false } = {}) {
     const id = Number(categoryId);
     if (Number.isFinite(id) && id > 0 && state.activeSubcategoryByCategory instanceof Map) {
       state.activeSubcategoryByCategory.delete(id);
@@ -17548,7 +17561,7 @@ function updateCartBadge() {
     saveCatalogSnapshotFromState();
     // Don't block click -> scroll; load in background.
     ensureCategoryLoaded(categoryId, { limit: 200 });
-    scrollToCategory(id);
+    scrollToCategory(id, { alignFirstCard });
     await warmupCartProducts();
     renderCart();
   }

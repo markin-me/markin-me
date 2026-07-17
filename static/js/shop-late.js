@@ -10310,6 +10310,8 @@ optionGroups.forEach((group) => {
   }
 
   let categoriesSheetCache = null;
+  let categoriesPageClose = null;
+  let categoriesPagePendingSelection = null;
 
   function buildCategoriesSheetSignature(categories) {
     const safe = Array.isArray(categories) ? categories : [];
@@ -10349,7 +10351,12 @@ optionGroups.forEach((group) => {
       row.appendChild(t);
 
       row.addEventListener("click", () => {
-        selectCategory(c.id, c.title);
+        if (typeof categoriesPageClose === "function") {
+          categoriesPagePendingSelection = { id: c.id, title: c.title };
+          categoriesPageClose();
+          return;
+        }
+        selectCategory(c.id, c.title, { alignFirstCard: true });
         closeShopSheetIfOpen();
       });
 
@@ -10371,17 +10378,93 @@ optionGroups.forEach((group) => {
   }
 
 function openCategoriesSheet() {
-  if (!window.AppModal) return;
   clearProfileModalMenu();
-
-  // на время открытого шита подсвечиваем "Категории"
-  setActiveNav("menu");
 
   const visibleCategories = getVisibleCategories();
   const cache = ensureCategoriesSheetDom(visibleCategories);
   const wrap = cache.wrap;
   const list = cache.list;
   syncCategoriesSheetActiveRow(list);
+
+  if (window.matchMedia("(max-width: 768px)").matches) {
+    categoriesPagePendingSelection = null;
+    const profilePage = document.getElementById("shopProfilePage");
+    const pageParent = profilePage?.parentElement || document.body;
+    let page = document.getElementById("shopCategoriesPage");
+    if (!page) {
+      page = document.createElement("section");
+      page.id = "shopCategoriesPage";
+      page.className = "shop-categories-page hidden";
+      page.innerHTML = `
+        <header class="shop-page-header shop-categories-page-header">
+          <button class="shop-page-header-btn" type="button" data-categories-page-back aria-label="Назад">
+            <i class="fas fa-arrow-left" aria-hidden="true"></i>
+          </button>
+          <h1>Категории</h1>
+          <div class="shop-categories-page-header-spacer" aria-hidden="true"></div>
+        </header>
+        <div class="shop-categories-page-content"></div>
+      `;
+      pageParent.appendChild(page);
+    }
+
+    const pageContent = page.querySelector(".shop-categories-page-content");
+    pageContent.replaceChildren(wrap);
+
+    const closePage = () => {
+      document.body.classList.remove("shop-categories-page-active");
+      page.classList.add("hidden");
+      categoriesPageClose = null;
+      if (page._shopCategoriesPopHandler) {
+        window.removeEventListener("popstate", page._shopCategoriesPopHandler, true);
+        page._shopCategoriesPopHandler = null;
+      }
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
+      const pendingSelection = categoriesPagePendingSelection;
+      categoriesPagePendingSelection = null;
+      if (pendingSelection) {
+        selectCategory(pendingSelection.id, pendingSelection.title, { alignFirstCard: true });
+      }
+    };
+    const requestBack = () => {
+      if (window.history.state?.shopCategoriesPage === true) {
+        window.history.back();
+        return;
+      }
+      closePage();
+    };
+
+    categoriesPageClose = requestBack;
+    page.querySelector("[data-categories-page-back]").onclick = requestBack;
+    sheetNavigationState.type = "categories";
+    sheetNavigationState.screen = "list";
+    sheetNavigationState.data = null;
+    document.body.classList.add("shop-categories-page-active");
+    page.classList.remove("hidden");
+    pageContent.scrollTop = 0;
+    if (window.history.state?.shopCategoriesPage !== true) {
+      window.history.pushState(
+        { ...(window.history.state || {}), shopCategoriesPage: true },
+        "",
+        window.location.href
+      );
+    }
+    page._shopCategoriesPopHandler = (event) => {
+      if (!document.body.classList.contains("shop-categories-page-active")) return;
+      if (event.state?.shopCategoriesPage === true) return;
+      event.stopImmediatePropagation();
+      closePage();
+    };
+    window.addEventListener("popstate", page._shopCategoriesPopHandler, true);
+    return;
+  }
+
+  if (!window.AppModal) return;
+
+  // на время открытого шита подсвечиваем "Категории"
+  setActiveNav("menu");
 
   // Обновляем состояние навигации
   sheetNavigationState.type = 'categories';
@@ -26260,6 +26343,10 @@ function applySheetAddressTitle(backMode = "cart") {
       returnToProfileFromSheet();
       return;
     }
+    if (returnScreen === "header") {
+      closeMobileAddressPage();
+      return;
+    }
     showSheetCart();
   }
 
@@ -27964,16 +28051,21 @@ function renderSheetAddressList() {
     const photoUrl = str(customer?.photo || "").trim();
     const image = document.getElementById("shopHeaderProfileImg");
     const fallback = document.querySelector("#shopProfileBtn .shop-header-profile-fallback");
-    if (!image || !fallback) return;
-    if (photoUrl) {
-      image.src = photoUrl;
-      image.classList.remove("hidden");
-      fallback.classList.add("hidden");
-      return;
-    }
-    image.src = "";
-    image.classList.add("hidden");
-    fallback.classList.remove("hidden");
+    const navImage = document.getElementById("shopNavProfileImg");
+    const navFallback = document.querySelector("#shopNavProfile .shop-nav-profile-fallback");
+    const pairs = [[image, fallback], [navImage, navFallback]];
+    pairs.forEach(([targetImage, targetFallback]) => {
+      if (!targetImage || !targetFallback) return;
+      if (photoUrl) {
+        targetImage.src = photoUrl;
+        targetImage.classList.remove("hidden");
+        targetFallback.classList.add("hidden");
+        return;
+      }
+      targetImage.src = "";
+      targetImage.classList.add("hidden");
+      targetFallback.classList.remove("hidden");
+    });
   }
 
   async function fetchMeSafe(opts = {}) {
@@ -41479,6 +41571,7 @@ function setBottomNavActive(tab) {
         if (
           document.body?.classList.contains("shop-orders-page-active")
           || document.body?.classList.contains("shop-favorites-page-active")
+          || document.body?.classList.contains("shop-categories-page-active")
         ) {
           pullStartY = null;
           pullDistance = 0;
@@ -41512,6 +41605,7 @@ function setBottomNavActive(tab) {
         if (
           !document.body?.classList.contains("shop-orders-page-active")
           && !document.body?.classList.contains("shop-favorites-page-active")
+          && !document.body?.classList.contains("shop-categories-page-active")
           && pullStartY !== null
           && pullDistance >= PULL_THRESHOLD
         ) {

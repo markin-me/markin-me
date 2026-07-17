@@ -125,21 +125,25 @@
         <img id="shopNavLogoImg" class="shop-nav-logo-img hidden" alt="" />
         <span id="shopNavLogoFallback">П</span>
       </span>
+      <span class="shop-nav-label">&#x413;&#x43B;&#x430;&#x432;&#x43D;&#x430;&#x44F;</span>
     </button>
 
     <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">
       <i class="fas fa-shopping-cart"></i>
       <span class="shop-nav-badge hidden" id="shopNavCartBadge">0</span>
+      <span class="shop-nav-label">&#x41A;&#x43E;&#x440;&#x437;&#x438;&#x43D;&#x430;</span>
     </button>
 
     <button class="shop-nav-btn<%= isMobileNavCompanyChatEnabled ? '' : ' hidden' %>" id="shopCompanyChatOpenBtn" type="button" data-tab="chat" aria-label="Чат с компанией" title="Чат с компанией"<% if (!isMobileNavCompanyChatEnabled) { %> aria-hidden="true" tabindex="-1"<% } %>>
       <i class="fas fa-comment-dots"></i>
       <span class="shop-company-chat-unread hidden" id="shopCompanyChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>
+      <span class="shop-nav-label">&#x427;&#x430;&#x442;</span>
     </button>
 
     <button class="shop-nav-btn" id="shopNavProfile" type="button" data-tab="profile" aria-label="Профиль">
       <i class="fas fa-user shop-nav-profile-fallback"></i>
       <img class="shop-nav-profile-img hidden" id="shopNavProfileImg" alt="" />
+      <span class="shop-nav-label">&#x41F;&#x440;&#x43E;&#x444;&#x438;&#x43B;&#x44C;</span>
     </button>
   </nav>
 </div>
