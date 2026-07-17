@@ -34785,6 +34785,9 @@ function renderSheetAddressList() {
           window.AppModal.body.classList.remove("shop-profile-sheet-body");
           window.AppModal.body.classList.remove("shop-profile-return-sheet");
         }
+        if (!ordersOnly && window.matchMedia?.("(min-width: 769px)").matches === true) {
+          showCartView();
+        }
         if (ordersOnly && (returnToProfile || sourceScreen === "profile")) {
           if (typeof showProfileView === "function") showProfileView();
           setActiveNav("profile");
