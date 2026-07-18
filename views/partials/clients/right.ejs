@@ -60,6 +60,21 @@
       <div class="empty-text">Нажмите на карточку настроек слева</div>
     </div>
 
+    <div id="importantMessagesRightWrap" class="promo-messages-right-panel settings-right-panel settings-right-panel-fixed-footer hidden">
+      <section class="promo-messages-editor-shell settings-panel-scroll">
+        <div id="importantMessagesEditor" class="promo-messages-editor-body"></div>
+      </section>
+      <div class="panel-footer hidden" id="importantMessagesFooter">
+        <div class="product-footer-actions promo-messages-editor-actions">
+          <button class="product-footer-btn product-footer-save" type="button" data-important-action="edit" id="importantMessagesFooterEdit">Редактировать</button>
+          <button class="product-footer-btn product-footer-cancel hidden" type="button" data-important-action="cancel" id="importantMessagesFooterCancel" title="Отмена" aria-label="Отмена">
+            <i class="fas fa-times"></i>
+          </button>
+          <button class="product-footer-btn product-footer-save hidden" type="button" data-important-action="save" id="importantMessagesFooterSave">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
     <div id="bonusReferralCardInfoWrap" class="banner-settings-panel hidden bonus-referral-card-settings">
       <div class="bonus-level-preview-wrap" id="bonusReferralCardPreviewWrap">
         <div class="bonus-level-preview-row">
@@ -1880,6 +1895,140 @@
   </div>
 </div>
 <style>
+.promo-messages-right-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  padding: 10px 0;
+}
+
+.promo-messages-editor-shell {
+  background: var(--bg-primary, #ffffff);
+  border-radius: 16px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 18px;
+}
+
+.promo-messages-editor-head {
+  margin-bottom: 14px;
+}
+
+.promo-messages-editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.promo-messages-editor-title {
+  color: var(--text-primary, #111827);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.promo-messages-editor-subtitle {
+  color: var(--text-muted, #6b7280);
+  font-size: 13px;
+  line-height: 1.45;
+  margin-top: 6px;
+}
+
+.promo-messages-editor-empty {
+  align-items: center;
+  border: 1px dashed var(--border-color, #d1d5db);
+  border-radius: 14px;
+  color: var(--text-muted, #6b7280);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+  min-height: 220px;
+  padding: 20px;
+  text-align: center;
+}
+
+.promo-messages-editor-empty .empty-icon {
+  background: #f3f4f6;
+  border-radius: 999px;
+  color: #6b7280;
+  height: 52px;
+  width: 52px;
+}
+
+.promo-messages-editor-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  margin: 0 auto;
+  max-width: 420px;
+  width: 100%;
+}
+
+.promo-messages-editor-form .field-label {
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.promo-messages-editor-icon-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-start;
+}
+
+.promo-messages-editor-pin-btn.is-active {
+  background: rgba(255,107,0,.14);
+  color: var(--color-primary, #ff6b00);
+}
+
+.promo-messages-editor-publish-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.promo-messages-editor-publish-btn {
+  flex: 0 0 auto;
+}
+
+.promo-messages-editor-text-field {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.promo-messages-editor-textarea {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  resize: none;
+}
+
+.promo-messages-editor-actions {
+  width: 100%;
+}
+
+.promo-messages-editor-readonly {
+  height: auto;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.promo-messages-editor-readonly-body {
+  min-height: 260px;
+}
+
 .bonus-tariff-settings-grid {
   display: flex;
   flex-direction: column;

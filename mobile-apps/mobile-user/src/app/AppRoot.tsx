@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef, getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -23,7 +23,7 @@ import { BonusTransactionsPage } from '../pages/bonus-transactions';
 import { BenefitsPage } from '../pages/benefits';
 import { CatalogPage } from '../pages/catalog';
 import { CategoriesPage } from '../pages/categories';
-import { ChatPage } from '../pages/chat';
+import { ChatTabNavigator } from '../pages/chat';
 import { CitySelectPage } from '../pages/city-select';
 import { ComboPage } from '../pages/combo';
 import { ComboReplacePage } from '../pages/combo-replace';
@@ -37,6 +37,7 @@ import { ProfileSettingsPage } from '../pages/profile-settings';
 import { PromocodesPage } from '../pages/promocodes';
 import { TasksPage } from '../pages/tasks';
 import { readCartLines } from '../features/cart';
+import { ChatPushProvider, ChatUnreadProvider, useChatUnread } from '../features/chat';
 import { readFulfillmentSelection } from '../features/checkout';
 import {
   readCachedCustomerPassport,
@@ -46,6 +47,7 @@ import { theme } from '../shared/config/theme';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 function BootPreloadGate({ children }: { children: ReactNode }) {
   const { hydrateFromCache } = useProductStock();
@@ -92,7 +94,14 @@ function BootPreloadGate({ children }: { children: ReactNode }) {
 
 function MainTabs() {
   const insets = useSafeAreaInsets();
+  const { totalUnread } = useChatUnread();
   const bottomInset = Math.max(0, insets.bottom);
+  const baseTabBarStyle = {
+    borderTopColor: theme.colors.border,
+    height: theme.sizes.tabBarHeight + bottomInset,
+    paddingBottom: 8 + bottomInset,
+    paddingTop: 2,
+  };
 
   return (
     <Tab.Navigator
@@ -106,12 +115,7 @@ function MainTabs() {
           fontWeight: '700',
           marginTop: 0,
         },
-        tabBarStyle: {
-          borderTopColor: theme.colors.border,
-          height: theme.sizes.tabBarHeight + bottomInset,
-          paddingBottom: 8 + bottomInset,
-          paddingTop: 2,
-        },
+        tabBarStyle: baseTabBarStyle,
         tabBarItemStyle: {
           paddingTop: 0,
         },
@@ -137,11 +141,29 @@ function MainTabs() {
       />
       <Tab.Screen
         name={routes.chat}
-        component={ChatPage}
-        options={{
-          tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-ellipses-outline" color={color} size={size} />,
-          tabBarLabel: 'Чат',
-          title: 'Чат',
+        component={ChatTabNavigator}
+        options={({ route }) => {
+          const nestedRouteName = getFocusedRouteNameFromRoute(route);
+          const hideTabBar = nestedRouteName === routes.importantMessages
+            || nestedRouteName === routes.importantMessageDetails
+            || nestedRouteName === routes.supportChat;
+          return {
+            tabBarBadge: totalUnread > 0 ? (totalUnread > 99 ? '99+' : totalUnread) : undefined,
+            tabBarBadgeStyle: {
+              backgroundColor: '#22c55e',
+              color: '#ffffff',
+              fontSize: 11,
+              fontWeight: '800',
+            },
+            tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-ellipses-outline" color={color} size={size} />,
+            tabBarLabel: 'Сообщения',
+            tabBarStyle: hideTabBar
+              ? {
+                display: 'none',
+              }
+              : baseTabBarStyle,
+            title: 'Сообщения',
+          };
         }}
       />
       <Tab.Screen
@@ -158,17 +180,59 @@ function MainTabs() {
 }
 
 export function AppRoot() {
+  const pendingPushRouteRef = useRef<'importantMessages' | 'supportChat' | ''>('');
+
   useEffect(() => {
     NativeStatusBar.setTranslucent(false);
     NativeStatusBar.setBackgroundColor(theme.colors.background);
     NativeStatusBar.setBarStyle('dark-content');
   }, []);
 
+  const navigateToPushTarget = useCallback((target: 'importantMessages' | 'supportChat') => {
+    if (!navigationRef.isReady()) {
+      pendingPushRouteRef.current = target;
+      return;
+    }
+    navigationRef.navigate('main', {
+      screen: routes.chat,
+      params: {
+        screen: target === 'importantMessages' ? routes.importantMessages : routes.supportChat,
+      },
+    });
+  }, []);
+
+  const handlePushNotificationPress = useCallback((data: Record<string, unknown>) => {
+    const type = String(data.type || data.kind || data.route || data.target || '').toLowerCase();
+    const url = String(data.url || '').toLowerCase();
+    if (
+      type.includes('important')
+      || type.includes('company')
+      || type.includes('message_center')
+      || url.includes('important')
+      || data.open_important_messages === true
+    ) {
+      navigateToPushTarget('importantMessages');
+      return;
+    }
+    if (type === 'chat_message' || data.open_chat === true || url.includes('chat')) {
+      navigateToPushTarget('supportChat');
+    }
+  }, [navigateToPushTarget]);
+
+  const handleNavigationReady = useCallback(() => {
+    const target = pendingPushRouteRef.current;
+    if (!target) return;
+    pendingPushRouteRef.current = '';
+    navigateToPushTarget(target);
+  }, [navigateToPushTarget]);
+
   return (
     <SafeAreaProvider>
       <StockProvider>
         <BootPreloadGate>
-        <NavigationContainer>
+        <ChatPushProvider onNotificationPress={handlePushNotificationPress}>
+        <ChatUnreadProvider>
+        <NavigationContainer ref={navigationRef} onReady={handleNavigationReady}>
       <Stack.Navigator>
         <Stack.Screen name="main" component={MainTabs} options={{ headerShown: false }} />
         <Stack.Screen name={routes.product} component={ProductPage} options={{ title: 'Товар' }} />
@@ -200,6 +264,8 @@ export function AppRoot() {
       </Stack.Navigator>
       <StatusBar backgroundColor={theme.colors.background} style="dark" translucent={false} />
         </NavigationContainer>
+        </ChatUnreadProvider>
+        </ChatPushProvider>
         </BootPreloadGate>
       </StockProvider>
     </SafeAreaProvider>

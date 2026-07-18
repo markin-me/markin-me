@@ -8317,6 +8317,8 @@
       setRemoteSummaryUnreadCount(key, remainingUnread);
       markThreadMutated(key);
       saveStore();
+      updateClientRowPreview(key);
+      emitUnreadChangedSoon();
       enqueueRemoteMutation(key, () => remoteMarkMessagesRead(key, changedIds));
     }
     return changed;

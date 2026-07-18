@@ -6419,6 +6419,18 @@
 
 
 
+    function normalizeChatClientPushEnabledValue(rawValue) {
+
+
+
+      return normalizeChatWidgetEnabledValue(rawValue);
+
+
+
+    }
+
+
+
 
 
 
@@ -7986,6 +7998,7 @@
 
 
     const settingsChatMessageSettingsSaveBtn = document.getElementById("settingsChatMessageSettingsSaveBtn");
+    const settingsChatClientPushEnabledSwitch = document.getElementById("settingsChatClientPushEnabledSwitch");
 
 
 
@@ -9182,7 +9195,11 @@
 
 
 
-    chat_guest_thread_ttl_days: "7"
+    chat_guest_thread_ttl_days: "7",
+
+
+
+    chat_client_push_enabled: 1
 
 
 
@@ -12382,7 +12399,11 @@
 
 
 
-        chat_guest_thread_ttl_days: String((settingsChatGuestThreadTtlDaysInput && settingsChatGuestThreadTtlDaysInput.value) || "7")
+        chat_guest_thread_ttl_days: String((settingsChatGuestThreadTtlDaysInput && settingsChatGuestThreadTtlDaysInput.value) || "7"),
+
+
+
+        chat_client_push_enabled: settingsChatClientPushEnabledSwitch && settingsChatClientPushEnabledSwitch.checked ? 1 : 0
 
 
 
@@ -12419,6 +12440,18 @@
 
 
         settingsChatGuestThreadTtlDaysInput.value = String(chatMessageOriginal.chat_guest_thread_ttl_days || "7");
+
+
+
+      }
+
+
+
+      if (settingsChatClientPushEnabledSwitch) {
+
+
+
+        settingsChatClientPushEnabledSwitch.checked = Number(chatMessageOriginal.chat_client_push_enabled || 0) === 1;
 
 
 
@@ -12467,6 +12500,18 @@
 
 
         settingsChatGuestThreadTtlDaysInput.readOnly = !chatMessageDraftMode;
+
+
+
+      }
+
+
+
+      if (settingsChatClientPushEnabledSwitch) {
+
+
+
+        settingsChatClientPushEnabledSwitch.disabled = !chatMessageDraftMode;
 
 
 
@@ -12711,6 +12756,26 @@
 
 
 
+
+
+
+      if (settingsChatClientPushEnabledSwitch) {
+
+
+
+        settingsChatClientPushEnabledSwitch.checked = normalizeChatClientPushEnabledValue(
+
+
+
+          tenant ? tenant.chat_client_push_enabled : undefined
+
+
+
+        );
+
+
+
+      }
 
 
 
@@ -72785,6 +72850,18 @@
 
 
 
+        const clientPushEnabledValue = settingsChatClientPushEnabledSwitch
+
+
+
+          ? (settingsChatClientPushEnabledSwitch.checked ? 1 : 0)
+
+
+
+          : 1;
+
+
+
         await saveChatSettingsPayload(
 
 
@@ -72802,6 +72879,10 @@
 
 
             chat_guest_thread_ttl_days: normalizedTtlDays,
+
+
+
+            chat_client_push_enabled: clientPushEnabledValue,
 
 
 
@@ -72830,6 +72911,18 @@
 
 
             settingsChatGuestThreadTtlDaysInput.value = String(normalizedTtlDays);
+
+
+
+            if (settingsChatClientPushEnabledSwitch) {
+
+
+
+              settingsChatClientPushEnabledSwitch.checked = clientPushEnabledValue === 1;
+
+
+
+            }
 
 
 

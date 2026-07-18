@@ -1115,7 +1115,7 @@
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false || !data.url) {
-      throw new Error(data?.error || 'UPLOAD_ERROR');
+      throw new Error(data?.error || `UPLOAD_ERROR_${res.status}`);
     }
     return data;
   }
@@ -2083,6 +2083,7 @@
   const elBonusReferralsBtn = $("#bonusReferralsBtn");
   const elBonusProgramsBtn = $("#bonusProgramsBtn");
   const elBonusSettingsNavBtn = $("#bonusSettingsNavBtn");
+  const elImportantMessagesBtn = $("#importantMessagesBtn");
   const elBonusSettingsEditBtn = $("#bonusSettingsEditBtn");
   const elClientsScroll = elList ? elList.closest(".panel-body") : null;
 
@@ -2109,6 +2110,14 @@
   const elDiscountsEmptyHint = $("#discountsEmptyHint");
   const elBannersList = $("#bannersList");
   const elBannersEmptyHint = $("#bannersEmptyHint");
+  const elImportantMessagesRightWrap = $("#importantMessagesRightWrap");
+  const elImportantMessagesEditor = $("#importantMessagesEditor");
+  const elImportantMessagesFooter = $("#importantMessagesFooter");
+  const elImportantMessagesFooterEdit = $("#importantMessagesFooterEdit");
+  const elImportantMessagesFooterCancel = $("#importantMessagesFooterCancel");
+  const elImportantMessagesFooterSave = $("#importantMessagesFooterSave");
+  const elImportantMessagesList = $("#importantMessagesList");
+  const elImportantMessagesEmptyHint = $("#importantMessagesEmptyHint");
   const elBannersPlacementZone = $("#bannersPlacementZone");
   const elBannersPlacementTrack = $("#bannersPlacementTrack");
   const elBonusLevelsZone = $("#bonusLevelsZone");
@@ -2691,6 +2700,11 @@
     bannersEnabled: false,
     bannersDrafts: [],
     bannerPlacements: createEmptyBannerPlacements(),
+    importantMessages: [],
+    importantMessagesLoaded: false,
+    importantMessagesLoading: false,
+    importantMessagesSelectedId: null,
+    importantMessagesEditingId: null,
     activeBannerType: 'hero',
     activeBannerId: null,
     editingBannerId: null,
@@ -6692,6 +6706,532 @@
     const dt = new Date(d);
     if (Number.isNaN(dt.getTime())) return String(d);
     return dt.toLocaleString("ru-RU", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function getImportantMessageTypeTitle(type) {
+    void type;
+    return 'PROMO';
+  }
+
+  function isImportantMessagePublished(message) {
+    const value = message?.is_published ?? message?.isPublished;
+    if (value === true || value === 1) return true;
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+
+  function isImportantMessageHidden(message) {
+    const value = message?.is_hidden ?? message?.isHidden;
+    if (value === true || value === 1) return true;
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+
+  function isImportantMessagePinned(message) {
+    const value = message?.is_pinned ?? message?.isPinned;
+    if (value === true || value === 1) return true;
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+
+  function getImportantMessageStatus(message) {
+    const publishedAt = String(message?.published_at ?? message?.publishedAt ?? '').trim();
+    if (isImportantMessageHidden(message) || (publishedAt && !isImportantMessagePublished(message))) {
+      return { className: 'is-hidden', text: 'Скрыто' };
+    }
+    if (isImportantMessagePublished(message)) {
+      return { className: 'is-published', text: 'Опубликовано' };
+    }
+    return { className: 'is-unpublished', text: 'Не опубликовано' };
+  }
+
+  function getImportantMessageDraft(id = null) {
+    const numericId = Number(id || 0);
+    if (numericId > 0) {
+      const existing = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+      if (existing) return { ...existing };
+    }
+    return {
+      id: 0,
+      title: '',
+      body: '',
+      image_url: '',
+      promo_code: '',
+      is_published: false,
+      is_hidden: false,
+      is_pinned: false,
+    };
+  }
+
+  let importantMessagesLoadRequestSeq = 0;
+  const importantMessagePhotoUploadingIds = new Set();
+
+  async function loadImportantMessages() {
+    const requestSeq = ++importantMessagesLoadRequestSeq;
+    state.importantMessagesLoading = true;
+    renderImportantMessages();
+    try {
+      const json = await apiJson('/api/admin/important-messages');
+      if (requestSeq !== importantMessagesLoadRequestSeq) return;
+      state.importantMessages = Array.isArray(json.data) ? json.data : [];
+      state.importantMessagesLoaded = true;
+    } catch (err) {
+      if (requestSeq !== importantMessagesLoadRequestSeq) return;
+      console.error('Failed to load important messages:', err);
+      state.importantMessages = [];
+      state.importantMessagesLoaded = true;
+    } finally {
+      if (requestSeq !== importantMessagesLoadRequestSeq) return;
+      state.importantMessagesLoading = false;
+      renderImportantMessages();
+    }
+  }
+
+  function openImportantMessageEditor(id = null) {
+    const numericId = Number(id || 0) || 0;
+    state.importantMessagesSelectedId = numericId > 0 ? numericId : null;
+    state.importantMessagesEditingId = numericId;
+    renderImportantMessages();
+  }
+
+  function openImportantMessagePreview(id) {
+    const numericId = Number(id || 0);
+    if (!numericId) return;
+    state.importantMessagesSelectedId = numericId;
+    state.importantMessagesEditingId = null;
+    renderImportantMessages();
+  }
+
+  function buildImportantMessageModalContent(item) {
+    const imageUrl = String(item?.image_url || item?.imageUrl || '').trim();
+    const promoCode = String(item?.promo_code || item?.promoCode || '').trim();
+    return `
+      <article class="important-message-modal-view">
+        <div class="important-message-modal-media">
+          ${imageUrl
+            ? `<img src="${escapeHtml(imageUrl)}" alt="" />`
+            : '<div class="important-message-modal-media-fallback"><i class="fas fa-image"></i></div>'}
+        </div>
+        <section class="important-message-modal-sheet">
+          <h2 class="important-message-modal-title">${escapeHtml(item?.title || 'Без заголовка')}</h2>
+          ${promoCode ? `
+            <div class="important-message-modal-promo">
+              <span>Промокод</span>
+              <strong>${escapeHtml(promoCode)}</strong>
+            </div>
+          ` : ''}
+          <div class="important-message-modal-body">${escapeHtml(String(item?.body || ''))}</div>
+        </section>
+      </article>
+    `;
+  }
+
+  function openImportantMessageModal(id) {
+    const numericId = Number(id || 0);
+    const item = state.importantMessages.find((entry) => Number(entry?.id || 0) === numericId);
+    if (!item || !window.AppModal || typeof window.AppModal.open !== 'function') return;
+    const modalEl = document.getElementById('appModal');
+    const modalBodyEl = window.AppModal.body;
+    window.AppModal.open({
+      title: 'PROMO сообщение',
+      content: buildImportantMessageModalContent(item),
+      showCancel: false,
+      showSave: false,
+      closeOnBackdrop: true,
+      onClose: () => {
+        modalEl?.classList.remove('important-message-app-modal');
+        modalBodyEl?.classList.remove('important-message-app-modal-body');
+      },
+    });
+    modalEl?.classList.add('important-message-app-modal');
+    modalBodyEl?.classList.add('important-message-app-modal-body');
+  }
+
+  function closeImportantMessageEditor() {
+    state.importantMessagesEditingId = null;
+    renderImportantMessages();
+  }
+
+  function collectImportantMessageForm() {
+    const root = elImportantMessagesEditor;
+    const isPublishedField = root?.querySelector('[data-important-field="is_published"]');
+    const isPinnedField = root?.querySelector('[data-important-field="is_pinned"]');
+    const isPinned = isPinnedField?.type === 'checkbox'
+      ? isPinnedField.checked === true
+      : String(isPinnedField?.value || '').trim() === '1';
+    return {
+      title: root?.querySelector('[data-important-field="title"]')?.value || '',
+      body: root?.querySelector('[data-important-field="body"]')?.value || '',
+      image_url: root?.querySelector('[data-important-field="image_url"]')?.value
+        || getImportantMessageDraft(state.importantMessagesEditingId).image_url
+        || getImportantMessageDraft(state.importantMessagesEditingId).imageUrl
+        || '',
+      promo_code: root?.querySelector('[data-important-field="promo_code"]')?.value || '',
+      is_published: isPublishedField ? String(isPublishedField.value || '').trim() === '1' : false,
+      is_pinned: isPinned,
+      send_push: root?.querySelector('[data-important-field="send_push"]')?.checked === true,
+    };
+  }
+
+  async function saveImportantMessage(options = {}) {
+    const id = Number(state.importantMessagesEditingId || 0);
+    const payload = collectImportantMessageForm();
+    if (!String(payload.title || '').trim() || !String(payload.body || '').trim()) {
+      alert('Заполните заголовок и текст PROMO сообщения');
+      return;
+    }
+    const existingDraft = getImportantMessageDraft(id);
+    const wasPublished = id > 0 && isImportantMessagePublished(existingDraft);
+    payload.is_published = options.publish === true
+      ? true
+      : wasPublished;
+    payload.reset_published_at = options.publish === true && wasPublished;
+    payload.send_push = options.publish === true && payload.send_push === true;
+    try {
+      await apiJson(id > 0 ? `/api/admin/important-messages/${id}` : '/api/admin/important-messages', {
+        method: id > 0 ? 'PUT' : 'POST',
+        body: payload,
+      });
+      state.importantMessagesEditingId = null;
+      if (id > 0) state.importantMessagesSelectedId = id;
+      state.importantMessagesLoaded = false;
+      await loadImportantMessages();
+    } catch (err) {
+      console.error('save important message error:', err);
+      alert('Не удалось сохранить PROMO сообщение');
+    }
+  }
+
+  async function deleteImportantMessage(id) {
+    const numericId = Number(id || 0);
+    if (!numericId) return;
+    if (!confirm('Удалить PROMO сообщение?')) return;
+    try {
+      await apiJson(`/api/admin/important-messages/${numericId}`, { method: 'DELETE' });
+      state.importantMessages = state.importantMessages.filter((item) => Number(item?.id || 0) !== numericId);
+      if (Number(state.importantMessagesSelectedId || 0) === numericId) state.importantMessagesSelectedId = null;
+      if (Number(state.importantMessagesEditingId || 0) === numericId) state.importantMessagesEditingId = null;
+      renderImportantMessages();
+    } catch (err) {
+      console.error('delete important message error:', err);
+      alert('Не удалось удалить PROMO сообщение');
+    }
+  }
+
+  async function updateImportantMessageStateQuick(id, patch = {}) {
+    const numericId = Number(id || 0);
+    if (!numericId) return;
+    const existing = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+    if (!existing) return;
+    const optimistic = { ...existing, ...patch };
+    const payload = {
+      title: existing.title || '',
+      body: existing.body || '',
+      image_url: existing.image_url || existing.imageUrl || '',
+      link_url: existing.link_url || existing.linkUrl || '',
+      promo_code: existing.promo_code || existing.promoCode || '',
+      is_published: isImportantMessagePublished(existing),
+      is_hidden: isImportantMessageHidden(existing),
+      is_pinned: isImportantMessagePinned(existing),
+      send_push: false,
+      ...patch,
+    };
+    try {
+      importantMessagesLoadRequestSeq += 1;
+      state.importantMessagesLoading = false;
+      state.importantMessages = state.importantMessages.map((item) => (
+        Number(item?.id || 0) === numericId ? optimistic : item
+      ));
+      renderImportantMessages();
+      let json;
+      try {
+        json = await apiJson(`/api/admin/important-messages/${numericId}/state`, {
+          method: 'POST',
+          body: {
+            ...(Object.prototype.hasOwnProperty.call(patch, 'is_hidden') ? { is_hidden: patch.is_hidden, isHidden: patch.is_hidden } : {}),
+            ...(Object.prototype.hasOwnProperty.call(patch, 'is_pinned') ? { is_pinned: patch.is_pinned, isPinned: patch.is_pinned } : {}),
+          },
+        });
+      } catch (stateErr) {
+        console.warn('important message state endpoint failed, fallback to full update:', stateErr);
+        json = await apiJson(`/api/admin/important-messages/${numericId}`, {
+          method: 'PUT',
+          body: {
+            ...payload,
+            ...(Object.prototype.hasOwnProperty.call(patch, 'is_hidden') ? { isHidden: patch.is_hidden } : {}),
+            ...(Object.prototype.hasOwnProperty.call(patch, 'is_pinned') ? { isPinned: patch.is_pinned } : {}),
+          },
+        });
+      }
+      if (json?.data) {
+        state.importantMessages = state.importantMessages.map((item) => (
+          Number(item?.id || 0) === numericId ? json.data : item
+        ));
+        renderImportantMessages();
+      }
+      return;
+    } catch (err) {
+      console.error('quick update important message state error:', err);
+      alert('Не удалось обновить PROMO сообщение');
+      renderImportantMessages();
+      return;
+    }
+  }
+
+  async function updateImportantMessageQuick(id, patch = {}) {
+    const numericId = Number(id || 0);
+    if (!numericId) return;
+    const existing = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+    if (!existing) return;
+    const optimistic = { ...existing, ...patch };
+    const payload = {
+      title: existing.title || '',
+      body: existing.body || '',
+      image_url: existing.image_url || existing.imageUrl || '',
+      link_url: existing.link_url || existing.linkUrl || '',
+      promo_code: existing.promo_code || existing.promoCode || '',
+      is_published: isImportantMessagePublished(existing),
+      is_hidden: isImportantMessageHidden(existing),
+      is_pinned: isImportantMessagePinned(existing),
+      send_push: false,
+      ...patch,
+    };
+    try {
+      importantMessagesLoadRequestSeq += 1;
+      state.importantMessagesLoading = false;
+      state.importantMessages = state.importantMessages.map((item) => (
+        Number(item?.id || 0) === numericId ? optimistic : item
+      ));
+      renderImportantMessages();
+      const json = await apiJson(`/api/admin/important-messages/${numericId}`, {
+        method: 'PUT',
+        body: payload,
+      });
+      if (json?.data) {
+        state.importantMessages = state.importantMessages.map((item) => (
+          Number(item?.id || 0) === numericId ? json.data : item
+        ));
+        renderImportantMessages();
+      }
+    } catch (err) {
+      console.error('quick update important message error:', err);
+      alert('Не удалось обновить PROMO сообщение');
+      renderImportantMessages();
+    }
+  }
+
+  function handleImportantMessagePhotoInputChange(photoInput) {
+    if (!photoInput) return;
+    if (photoInput.dataset.importantUploadHandled === '1') return;
+    const row = photoInput.closest?.('[data-important-id]');
+    const id = Number(row?.getAttribute('data-important-id') || photoInput.getAttribute('data-important-id') || 0);
+    const file = photoInput.files && photoInput.files[0] ? photoInput.files[0] : null;
+    photoInput.dataset.importantUploadHandled = '1';
+    photoInput.value = '';
+    if (!id || !file) {
+      delete photoInput.dataset.importantUploadHandled;
+      return;
+    }
+    importantMessagePhotoUploadingIds.add(id);
+    renderImportantMessages();
+    uploadTenantAsset('important_message_image', file)
+      .then((uploaded) => updateImportantMessageQuick(id, { image_url: uploaded.url || '' }))
+      .catch((err) => {
+        console.error('important message image upload error:', err);
+        alert(`Не удалось загрузить фото: ${err?.message || 'UPLOAD_ERROR'}`);
+      })
+      .finally(() => {
+        importantMessagePhotoUploadingIds.delete(id);
+        delete photoInput.dataset.importantUploadHandled;
+        renderImportantMessages();
+      });
+  }
+
+  function renderImportantMessageEditor() {
+    if (!elImportantMessagesEditor) return;
+    const isImportantMessagesView = state.currentView === 'important-messages';
+    const selectedId = Number(state.importantMessagesSelectedId || 0);
+    const selected = selectedId > 0
+      ? state.importantMessages.find((item) => Number(item?.id || 0) === selectedId)
+      : null;
+    const isEditing = state.importantMessagesEditingId !== null;
+    if (elImportantMessagesRightWrap) {
+      elImportantMessagesRightWrap.classList.toggle('hidden', !isImportantMessagesView);
+    }
+    if (elImportantMessagesFooter) {
+      elImportantMessagesFooter.classList.toggle('hidden', !isImportantMessagesView || (!isEditing && !selected));
+    }
+    if (elImportantMessagesFooterEdit) elImportantMessagesFooterEdit.classList.toggle('hidden', !isImportantMessagesView || isEditing || !selected);
+    if (elImportantMessagesFooterCancel) elImportantMessagesFooterCancel.classList.toggle('hidden', !isImportantMessagesView || !isEditing);
+    if (elImportantMessagesFooterSave) elImportantMessagesFooterSave.classList.toggle('hidden', !isImportantMessagesView || !isEditing);
+    if (state.currentView !== 'important-messages') return;
+    if (!isEditing) {
+      if (selected) {
+        const selectedPublished = isImportantMessagePublished(selected);
+        const selectedHidden = isImportantMessageHidden(selected);
+        const selectedPinned = isImportantMessagePinned(selected);
+        elImportantMessagesEditor.innerHTML = `
+          <div class="promo-messages-editor-form">
+            <div class="settings-site-field">
+              <label class="field-label">ЗАГОЛОВОК</label>
+              <div class="control promo-messages-editor-readonly">${escapeHtml(selected.title || 'Без заголовка')}</div>
+            </div>
+            <div class="settings-site-field">
+              <label class="field-label">ТЕКСТ</label>
+              <div class="control promo-messages-editor-readonly promo-messages-editor-readonly-body">${escapeHtml(String(selected.body || ''))}</div>
+            </div>
+            <div class="promo-messages-editor-icon-actions">
+              ${selectedPublished ? `
+                <button class="icon-btn" type="button" data-important-action="hide" data-important-id="${Number(selected.id || 0)}" title="${selectedHidden ? 'Показать' : 'Скрыть'}" aria-label="${selectedHidden ? 'Показать' : 'Скрыть'}">
+                  <i class="fas ${selectedHidden ? 'fa-eye' : 'fa-eye-slash'}"></i>
+                </button>
+              ` : ''}
+              <button class="icon-btn" type="button" data-important-action="delete" data-important-id="${Number(selected.id || 0)}" title="Удалить" aria-label="Удалить">
+                <i class="fas fa-trash"></i>
+              </button>
+              ${selectedPublished ? `
+                <button class="icon-btn promo-messages-editor-pin-btn ${selectedPinned ? 'is-active' : ''}" type="button" data-important-action="pin" data-important-id="${Number(selected.id || 0)}" title="${selectedPinned ? 'Открепить' : 'Закрепить'}" aria-label="${selectedPinned ? 'Открепить' : 'Закрепить'}">
+                  <i class="fas fa-thumbtack"></i>
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `;
+        return;
+      }
+      elImportantMessagesEditor.innerHTML = `
+        <div class="promo-messages-editor-empty">
+          <div class="empty-icon"><i class="fas fa-pen"></i></div>
+          <div class="empty-title">Выберите сообщение слева или нажмите «+»</div>
+          <div class="empty-text">Здесь откроется форма для создания PROMO сообщения.</div>
+        </div>
+      `;
+      return;
+    }
+    const draft = getImportantMessageDraft(state.importantMessagesEditingId);
+    const draftId = Number(draft.id || 0);
+    const draftPublished = isImportantMessagePublished(draft);
+    const draftHidden = isImportantMessageHidden(draft);
+    const draftPinned = isImportantMessagePinned(draft);
+    const draftPromoCode = String(draft.promo_code || draft.promoCode || '').trim();
+    elImportantMessagesEditor.innerHTML = `
+      <div class="promo-messages-editor-form">
+        <div class="settings-site-field">
+          <label class="field-label">ПРОМОКОД</label>
+          <input class="control" data-important-field="promo_code" type="text" value="${escapeHtml(draftPromoCode)}" maxlength="80" />
+        </div>
+        <div class="settings-site-field">
+          <label class="field-label">ЗАГОЛОВОК</label>
+          <input class="control" data-important-field="title" type="text" value="${escapeHtml(draft.title || '')}" maxlength="180" />
+        </div>
+        <div class="settings-site-field promo-messages-editor-text-field">
+          <label class="field-label">ТЕКСТ</label>
+          <textarea class="control promo-messages-editor-textarea" data-important-field="body" rows="12">${escapeHtml(draft.body || '')}</textarea>
+        </div>
+        <div class="promo-messages-editor-icon-actions">
+          ${draftId > 0 ? `
+            ${draftPublished ? `
+              <button class="icon-btn" type="button" data-important-action="hide" data-important-id="${draftId}" title="${draftHidden ? 'Показать' : 'Скрыть'}" aria-label="${draftHidden ? 'Показать' : 'Скрыть'}">
+                <i class="fas ${draftHidden ? 'fa-eye' : 'fa-eye-slash'}"></i>
+              </button>
+            ` : ''}
+            <button class="icon-btn" type="button" data-important-action="delete" data-important-id="${draftId}" title="Удалить" aria-label="Удалить">
+              <i class="fas fa-trash"></i>
+            </button>
+          ` : ''}
+          ${draftPublished ? `
+            <button class="icon-btn promo-messages-editor-pin-btn ${draftPinned ? 'is-active' : ''}" type="button" data-important-action="pin-form" title="${draftPinned ? 'Открепить' : 'Закрепить'}" aria-label="${draftPinned ? 'Открепить' : 'Закрепить'}">
+              <i class="fas fa-thumbtack"></i>
+            </button>
+          ` : ''}
+        </div>
+        <input type="hidden" data-important-field="is_published" value="${isImportantMessagePublished(draft) ? '1' : '0'}" />
+        <input type="hidden" data-important-field="is_pinned" value="${draftPinned ? '1' : '0'}" />
+        <div class="settings-site-field promo-messages-editor-publish-row">
+          <button class="icon-btn promo-messages-editor-publish-btn" type="button" data-important-action="publish" title="${draftPublished ? 'Опубликовать повторно' : 'Опубликовать'}" aria-label="${draftPublished ? 'Опубликовать повторно' : 'Опубликовать'}">
+            <i class="fas ${draftPublished ? 'fa-sync-alt' : 'fa-bullhorn'}"></i>
+          </button>
+          <label class="switch"><input class="switch-input" data-important-field="send_push" type="checkbox" checked /><span class="switch-ui"></span><span class="switch-text">Отправить push</span></label>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderImportantMessages() {
+    renderImportantMessageEditor();
+    if (!elImportantMessagesList) return;
+    if (state.importantMessagesLoading) {
+      elImportantMessagesList.innerHTML = '<div class="empty-hint">Загружаем PROMO сообщения...</div>';
+      if (elImportantMessagesEmptyHint) elImportantMessagesEmptyHint.classList.add('hidden');
+      return;
+    }
+    const list = Array.isArray(state.importantMessages) ? state.importantMessages : [];
+    if (elImportantMessagesEmptyHint) elImportantMessagesEmptyHint.classList.toggle('hidden', list.length > 0);
+    elImportantMessagesList.innerHTML = list.map((item) => {
+      const isPublished = isImportantMessagePublished(item);
+      const isHidden = isImportantMessageHidden(item);
+      const isPinned = isImportantMessagePinned(item);
+      const status = getImportantMessageStatus(item);
+      const itemId = Number(item.id || 0);
+      const imageUrl = String(item.image_url || item.imageUrl || '').trim();
+      const promoCode = String(item.promo_code || item.promoCode || '').trim();
+      const isPhotoUploading = importantMessagePhotoUploadingIds.has(itemId);
+      return `
+      <div class="order-row important-message-preview-row" data-important-id="${itemId}">
+        <div class="important-message-preview-side">
+          <div class="important-message-preview-media ${isPhotoUploading ? 'is-loading' : ''}" ${isPhotoUploading ? '' : 'data-important-action="photo-upload"'} title="${isPhotoUploading ? 'Загружается фото' : 'Загрузить фото'}" aria-label="${isPhotoUploading ? 'Загружается фото' : 'Загрузить фото'}" role="button" tabindex="0">
+            ${isPhotoUploading ? '<div class="important-message-preview-media-loading" aria-hidden="true"><span></span></div>' : (imageUrl ? `<img class="important-message-preview-media-img" src="${escapeHtml(imageUrl)}" alt="" />` : '<div class="important-message-preview-media-fallback"><i class="fas fa-image"></i></div>')}
+            <div class="important-message-preview-media-actions">
+              ${isPhotoUploading ? '' : (imageUrl ? `
+                <button class="important-message-preview-media-action" type="button" data-important-action="photo-upload" title="Заменить изображение" aria-label="Заменить изображение">
+                  <i class="fas fa-download"></i>
+                </button>
+              ` : '<span class="important-message-preview-media-upload" title="Загрузить изображение" aria-label="Загрузить изображение"><i class="fas fa-download"></i></span>')}
+            </div>
+            ${imageUrl && !isPhotoUploading ? `
+              <button class="important-message-preview-media-remove" type="button" data-important-action="photo-remove" title="Удалить изображение" aria-label="Удалить изображение">
+                <i class="fas fa-times"></i>
+              </button>
+            ` : ''}
+          </div>
+          ${promoCode ? `<div class="important-message-preview-promo"><span>Промокод</span><strong>${escapeHtml(promoCode)}</strong></div>` : ''}
+        </div>
+        <input class="hidden" type="file" data-important-list-photo-input accept="image/png,image/jpeg,image/webp,image/*" />
+        <div class="important-message-preview-content">
+          <div class="order-row-title important-message-preview-title">
+            <span class="important-message-preview-title-text">${escapeHtml(item.title || 'Без заголовка')}</span>
+            ${isPublished && isPinned ? '<span class="important-message-preview-pin" title="Закреплено" aria-label="Закреплено"><i class="fas fa-thumbtack"></i></span>' : ''}
+          </div>
+          <div class="order-row-subtitle important-message-preview-body">${escapeHtml(String(item.body || ''))}</div>
+        </div>
+        <div class="important-message-preview-controls">
+          <div class="important-message-preview-status ${status.className}">
+            ${status.text}
+          </div>
+          <div class="important-message-preview-icon-actions">
+            ${isPublished ? `
+              <button class="icon-btn" type="button" data-important-action="hide" title="${isHidden ? 'Показать' : 'Скрыть'}" aria-label="${isHidden ? 'Показать' : 'Скрыть'}">
+                <i class="fas ${isHidden ? 'fa-eye' : 'fa-eye-slash'}"></i>
+              </button>
+            ` : ''}
+            <button class="icon-btn" type="button" data-important-action="delete" title="Удалить" aria-label="Удалить">
+              <i class="fas fa-trash"></i>
+            </button>
+            ${!isPublished ? `
+              <button class="icon-btn" type="button" data-important-action="publish" title="Опубликовать" aria-label="Опубликовать">
+                <i class="fas fa-bullhorn"></i>
+              </button>
+            ` : ''}
+            ${isPublished ? `
+              <button class="icon-btn important-message-preview-pin-btn ${isPinned ? 'is-active' : ''}" type="button" data-important-action="pin" title="${isPinned ? 'Открепить' : 'Закрепить'}" aria-label="${isPinned ? 'Открепить' : 'Закрепить'}">
+                <i class="fas fa-thumbtack"></i>
+              </button>
+            ` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+    }).join('');
   }
 
   function openSheet(options = {}) {
@@ -20916,6 +21456,10 @@
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
     }
 
+    if (viewName === 'important-messages' && elToolbarText) {
+      elToolbarText.textContent = 'PROMO сообщения';
+    }
+
     if (elToolbarTitle) {
       const icon = elToolbarTitle.querySelector('i');
       let img = elToolbarTitle.querySelector('.toolbar-title-logo');
@@ -20948,6 +21492,9 @@
             'bonus-settings': 'fas fa-cog',
           };
           icon.className = icons[viewName] || 'fas fa-users';
+          if (viewName === 'important-messages') {
+            icon.className = 'fas fa-bullhorn';
+          }
         }
       }
     }
@@ -20957,6 +21504,7 @@
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
     if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings');
+    if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.toggle('hidden', viewName !== 'important-messages');
     
     syncBonusToolbarState();
     syncBonusMenuState();
@@ -20978,6 +21526,11 @@
       renderBannerPlacement();
       renderBannerList();
       renderBannerPicker();
+    } else if (viewName === 'important-messages') {
+      renderImportantMessages();
+      if (!state.importantMessagesLoaded && !state.importantMessagesLoading) {
+        loadImportantMessages().catch(console.error);
+      }
     } else if (viewName === 'bonus-cards') {
       renderBonusLevels();
       renderBonusClientsList();
@@ -23451,6 +24004,8 @@
       } else if (state.currentView === 'discounts') {
         // Создать новую скидку
         openDiscountEditor(null);
+      } else if (state.currentView === 'important-messages') {
+        openImportantMessageEditor(null);
       } else {
         // TODO: открыть форму добавления клиента
       }
@@ -23467,6 +24022,12 @@
   if (elBonusCardsBtn) {
     elBonusCardsBtn.addEventListener('click', () => {
       switchView('bonus-cards');
+    });
+  }
+
+  if (elImportantMessagesBtn) {
+    elImportantMessagesBtn.addEventListener('click', () => {
+      switchView('important-messages');
     });
   }
 
@@ -23495,6 +24056,151 @@
       persistBannerStorage();
       if (state.currentView === 'banners') {
         updateRightPanel();
+      }
+    });
+  }
+
+  if (elImportantMessagesRightWrap) {
+    elImportantMessagesRightWrap.addEventListener('click', (event) => {
+      const actionTarget = event.target.closest?.('[data-important-action]');
+      const action = actionTarget?.getAttribute('data-important-action') || '';
+      if (action === 'edit') {
+        const id = Number(actionTarget?.getAttribute('data-important-id') || state.importantMessagesSelectedId || 0);
+        if (id > 0) openImportantMessageEditor(id);
+        return;
+      }
+      if (action === 'cancel') {
+        closeImportantMessageEditor();
+        return;
+      }
+      if (action === 'hide') {
+        const id = Number(actionTarget?.getAttribute('data-important-id') || state.importantMessagesSelectedId || state.importantMessagesEditingId || 0);
+        const existing = state.importantMessages.find((item) => Number(item?.id || 0) === id);
+        updateImportantMessageStateQuick(id, { is_hidden: !isImportantMessageHidden(existing) }).catch(console.error);
+        return;
+      }
+      if (action === 'delete') {
+        const id = Number(actionTarget?.getAttribute('data-important-id') || state.importantMessagesSelectedId || state.importantMessagesEditingId || 0);
+        deleteImportantMessage(id).catch(console.error);
+        return;
+      }
+      if (action === 'pin') {
+        const id = Number(actionTarget?.getAttribute('data-important-id') || state.importantMessagesSelectedId || state.importantMessagesEditingId || 0);
+        const existing = state.importantMessages.find((item) => Number(item?.id || 0) === id);
+        updateImportantMessageStateQuick(id, { is_pinned: !isImportantMessagePinned(existing) }).catch(console.error);
+        return;
+      }
+      if (action === 'pin-form') {
+        const field = elImportantMessagesEditor?.querySelector('[data-important-field="is_pinned"]');
+        const nextPinned = String(field?.value || '').trim() !== '1';
+        if (field) field.value = nextPinned ? '1' : '0';
+        actionTarget.classList.toggle('is-active', nextPinned);
+        actionTarget.setAttribute('title', nextPinned ? 'Открепить' : 'Закрепить');
+        actionTarget.setAttribute('aria-label', nextPinned ? 'Открепить' : 'Закрепить');
+        return;
+      }
+      if (action === 'publish') {
+        saveImportantMessage({ publish: true }).catch(console.error);
+        return;
+      }
+      if (action === 'save') saveImportantMessage({ publish: false }).catch(console.error);
+    });
+  }
+
+  if (elImportantMessagesList) {
+    elImportantMessagesList.addEventListener('click', (event) => {
+      const row = event.target.closest?.('[data-important-id]');
+      const id = Number(row?.getAttribute('data-important-id') || 0);
+      const action = event.target.closest?.('[data-important-action]')?.getAttribute('data-important-action') || '';
+      if (action === 'photo-remove') {
+        event.stopPropagation();
+        updateImportantMessageQuick(id, { image_url: '' }).catch(console.error);
+        return;
+      }
+      if (action === 'photo-upload') {
+        event.stopPropagation();
+        const photoInput = row?.querySelector('[data-important-list-photo-input]');
+        if (photoInput) {
+          photoInput.setAttribute('data-important-id', String(id || 0));
+          photoInput.onchange = () => handleImportantMessagePhotoInputChange(photoInput);
+          photoInput.click();
+        }
+        return;
+      }
+      if (event.target.closest?.('.important-message-preview-controls')) {
+        event.stopPropagation();
+        if (action === 'edit') {
+          openImportantMessageEditor(id);
+          return;
+        }
+        if (action === 'hide') {
+          const existing = state.importantMessages.find((item) => Number(item?.id || 0) === id);
+          updateImportantMessageStateQuick(id, { is_hidden: !isImportantMessageHidden(existing) }).catch(console.error);
+          return;
+        }
+        if (action === 'delete') {
+          deleteImportantMessage(id).catch(console.error);
+          return;
+        }
+        if (action === 'publish') {
+          updateImportantMessageQuick(id, { is_published: true, is_hidden: false }).catch(console.error);
+          return;
+        }
+        if (action === 'pin') {
+          const existing = state.importantMessages.find((item) => Number(item?.id || 0) === id);
+          updateImportantMessageStateQuick(id, { is_pinned: !isImportantMessagePinned(existing) }).catch(console.error);
+        }
+        return;
+      }
+      if (action === 'delete') {
+        event.stopPropagation();
+        deleteImportantMessage(id).catch(console.error);
+        return;
+      }
+      if (id > 0) {
+        openImportantMessagePreview(id);
+        openImportantMessageModal(id);
+      }
+    });
+    elImportantMessagesList.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const media = event.target.closest?.('[data-important-action="photo-upload"]');
+      if (!media) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const row = media.closest?.('[data-important-id]');
+      const photoInput = row?.querySelector('[data-important-list-photo-input]');
+      if (photoInput) {
+        photoInput.setAttribute('data-important-id', String(Number(row?.getAttribute('data-important-id') || 0)));
+        photoInput.onchange = () => handleImportantMessagePhotoInputChange(photoInput);
+        photoInput.click();
+      }
+    });
+    elImportantMessagesList.addEventListener('change', (event) => {
+      const photoInput = event.target.closest?.('[data-important-list-photo-input]');
+      if (photoInput) {
+        event.stopPropagation();
+        handleImportantMessagePhotoInputChange(photoInput);
+        return;
+      }
+      const input = event.target.closest?.('[data-important-toggle]');
+      if (!input) return;
+      event.stopPropagation();
+      const row = input.closest?.('[data-important-id]');
+      const id = Number(row?.getAttribute('data-important-id') || 0);
+      const toggle = input.getAttribute('data-important-toggle') || '';
+      if (!id) return;
+      if (toggle === 'delete') {
+        input.checked = false;
+        deleteImportantMessage(id).catch(console.error);
+        return;
+      }
+      if (toggle === 'hidden') {
+        updateImportantMessageStateQuick(id, { is_hidden: input.checked === true }).catch(console.error);
+        return;
+      }
+      if (toggle === 'pinned') {
+        updateImportantMessageStateQuick(id, { is_pinned: input.checked === true }).catch(console.error);
       }
     });
   }

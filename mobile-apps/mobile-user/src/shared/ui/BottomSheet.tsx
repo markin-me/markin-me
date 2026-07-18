@@ -19,12 +19,13 @@ import { theme } from '../config/theme';
 import { AppText as Text } from './AppText';
 type BottomSheetProps = {
   children: ReactNode;
+  contentPanEnabled?: boolean;
   onClose: () => void;
   title?: string;
   visible: boolean;
 };
 
-export function BottomSheet({ children, onClose, title, visible }: BottomSheetProps) {
+export function BottomSheet({ children, contentPanEnabled = true, onClose, title, visible }: BottomSheetProps) {
   const translateY = useRef(new Animated.Value(420)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   const scrollY = useRef(0);
@@ -152,7 +153,7 @@ export function BottomSheet({ children, onClose, title, visible }: BottomSheetPr
               scrollY.current = event.nativeEvent.contentOffset.y;
             }}
             scrollEventThrottle={64}
-            {...contentPanResponder.panHandlers}
+            {...(contentPanEnabled ? contentPanResponder.panHandlers : {})}
           >
             {children}
           </ScrollView>

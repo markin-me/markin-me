@@ -88,6 +88,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Show customer chat button in storefront'"
     },
     {
+      name: 'chat_client_push_enabled',
+      sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Enable customer chat push notifications'"
+    },
+    {
       name: 'chat_guest_thread_ttl_days',
       sql: "smallint unsigned DEFAULT NULL COMMENT 'Guest chat TTL in days'"
     },
@@ -3033,7 +3037,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   const tenantAssetUpload = multer({
     storage: tenantAssetStorage,
-    limits: { files: 1, fileSize: 5 * 1024 * 1024 },
+    limits: { files: 1, fileSize: 20 * 1024 * 1024 },
     fileFilter(req, file, cb) {
       const ok = /^image\/(jpeg|png|webp|gif)$/.test(file.mimetype);
       cb(ok ? null : new Error('ONLY_IMAGES'), ok);
@@ -3057,7 +3061,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
         'apple_touch_icon_url',
         'android_icon_url',
         'site_menu_item_icon',
-        'bonus_modal_image'
+        'bonus_modal_image',
+        'important_message_image'
       ]);
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
@@ -3070,7 +3075,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const url = `/static/uploads/tenants/${tenantId}/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
 
-      if (field === 'site_menu_item_icon' || field === 'bonus_modal_image') {
+      if (field === 'site_menu_item_icon' || field === 'bonus_modal_image' || field === 'important_message_image') {
         const [rows] = await db.query(
           'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
           [tenantId]
@@ -3677,6 +3682,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const chatWidgetEnabled = req.body.chat_widget_enabled !== undefined
         ? (helpers.toBool(req.body.chat_widget_enabled, true) ? 1 : 0)
         : undefined;
+      const chatClientPushEnabled = req.body.chat_client_push_enabled !== undefined
+        ? (helpers.toBool(req.body.chat_client_push_enabled, true) ? 1 : 0)
+        : undefined;
       let chatGuestThreadTtlDays = undefined;
       if (req.body.chat_guest_thread_ttl_days !== undefined) {
         const ttlRaw = helpers.numOrNull(req.body.chat_guest_thread_ttl_days);
@@ -3892,6 +3900,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const nextChatWidgetEnabled = chatWidgetEnabled !== undefined
         ? chatWidgetEnabled
         : (Number(current.chat_widget_enabled) === 0 ? 0 : 1);
+      const nextChatClientPushEnabled = chatClientPushEnabled !== undefined
+        ? chatClientPushEnabled
+        : (Number(current.chat_client_push_enabled) === 0 ? 0 : 1);
       const nextChatGuestThreadTtlDays = chatGuestThreadTtlDays !== undefined
         ? chatGuestThreadTtlDays
         : (current.chat_guest_thread_ttl_days ?? null);
@@ -3924,8 +3935,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
         : null;
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
       );
 
       if (previousSiteMenuIconUrls && nextSiteMenuIconUrls) {

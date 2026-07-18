@@ -2949,6 +2949,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       || chatWidgetNorm === '0'
       || chatWidgetNorm === 'false'
     );
+    const chatClientPushRaw = row.chat_client_push_enabled;
+    const chatClientPushNorm = str(chatClientPushRaw).trim().toLowerCase();
+    const clientPushEnabled = !(
+      chatClientPushRaw === false
+      || chatClientPushRaw === 0
+      || chatClientPushNorm === '0'
+      || chatClientPushNorm === 'false'
+    );
     const operatorName =
       str(row.chat_operator_name).trim()
       || str(row.site_name).trim()
@@ -2965,6 +2973,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       quick_questions: quickQuestions,
       quick_questions_config: quickQuestionsConfig,
       quick_questions_enabled: quickQuestionsEnabled,
+      client_push_enabled: clientPushEnabled,
       is_enabled: isEnabled,
     };
     if (!publicDiscountText(row?.name).trim()) snapshot.name = 'Товар';
@@ -6962,6 +6971,76 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       });
     } catch (e) {
       console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/important-messages', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS mkt_important_messages (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          tenant_id BIGINT UNSIGNED NOT NULL,
+          store_id BIGINT UNSIGNED NOT NULL DEFAULT 1,
+          type ENUM('news','discount','post') NOT NULL DEFAULT 'news',
+          title VARCHAR(180) NOT NULL,
+          body TEXT NOT NULL,
+          image_url VARCHAR(1024) NOT NULL DEFAULT '',
+          link_url VARCHAR(1024) NOT NULL DEFAULT '',
+          promo_code VARCHAR(80) NOT NULL DEFAULT '',
+          is_published TINYINT(1) NOT NULL DEFAULT 0,
+          is_hidden TINYINT(1) NOT NULL DEFAULT 0,
+          is_pinned TINYINT(1) NOT NULL DEFAULT 0,
+          published_at DATETIME NULL,
+          created_by BIGINT UNSIGNED NULL,
+          created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id),
+          KEY idx_mkt_important_messages_public (tenant_id, store_id, is_published, is_pinned, published_at, id),
+          KEY idx_mkt_important_messages_admin (tenant_id, store_id, updated_at, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      try {
+        await db.query('ALTER TABLE mkt_important_messages ADD COLUMN is_hidden TINYINT(1) NOT NULL DEFAULT 0 AFTER is_published');
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+          throw err;
+        }
+      }
+      try {
+        await db.query('ALTER TABLE mkt_important_messages ADD COLUMN promo_code VARCHAR(80) NOT NULL DEFAULT "" AFTER link_url');
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+          throw err;
+        }
+      }
+      const limitRaw = Number(req.query.limit || 50);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.trunc(limitRaw))) : 50;
+      const [rows] = await db.query(
+        `SELECT id, type, title, body, image_url, link_url, promo_code, is_pinned, published_at, created_at, updated_at
+           FROM mkt_important_messages
+          WHERE tenant_id = ? AND store_id = ? AND is_published = 1 AND COALESCE(is_hidden, 0) = 0
+          ORDER BY is_pinned DESC, COALESCE(published_at, updated_at) DESC, id DESC
+          LIMIT ?`,
+        [tenantId, storeId, limit]
+      );
+      const items = (Array.isArray(rows) ? rows : []).map((row) => ({
+        id: Number(row.id || 0),
+        type: String(row.type || 'news'),
+        title: String(row.title || ''),
+        body: String(row.body || ''),
+        image_url: String(row.image_url || ''),
+        link_url: String(row.link_url || ''),
+        promo_code: String(row.promo_code || ''),
+        is_pinned: Number(row.is_pinned || 0) === 1,
+        published_at: row.published_at || row.created_at || null,
+        updated_at: row.updated_at || null,
+      }));
+      return res.json({ ok: true, data: items });
+    } catch (e) {
+      console.error('GET /api/public/important-messages error:', e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });

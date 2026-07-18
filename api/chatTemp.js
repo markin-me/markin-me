@@ -139,6 +139,7 @@ const CHAT_THREADS_UPDATED_INDEX = "idx_chat_threads_tenant_updated_client";
 const CHAT_MESSAGES_TENANT_CLIENT_ID_INDEX = "idx_chat_messages_tenant_client_id";
 const CHAT_MESSAGES_UNREAD_INDEX = "idx_chat_messages_tenant_client_unread";
 const CHAT_SSE_HEARTBEAT_MS = 20000;
+const EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send";
 const CHAT_TYPING_DB_TTL_CLEANUP_MIN_INTERVAL_MS = parsePositiveInt(
   process.env.CHAT_TYPING_DB_TTL_CLEANUP_MIN_INTERVAL_MS,
   1500,
@@ -457,6 +458,10 @@ function sanitizePushSubscription(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
   const endpoint = String(source.endpoint || "").trim().slice(0, CHAT_PUSH_ENDPOINT_MAX_LENGTH);
   if (!endpoint) return null;
+  const isExpoToken = /^ExponentPushToken\[.+\]$/i.test(endpoint) || /^ExpoPushToken\[.+\]$/i.test(endpoint);
+  if (isExpoToken) {
+    return { endpoint, p256dh: "", auth: "" };
+  }
   const keys = source.keys && typeof source.keys === "object" ? source.keys : {};
   const p256dh = String(keys.p256dh || "").trim().slice(0, 255);
   const auth = String(keys.auth || "").trim().slice(0, 255);
@@ -814,12 +819,12 @@ async function resolveTenantPushCompanyTitle(tenantId) {
 }
 
 async function sendPushToSubscriptions(subscriptions, payload) {
-  if (!webPushEnabled) return;
   const rows = Array.isArray(subscriptions) ? subscriptions : [];
   if (!rows.length) return;
   const body = JSON.stringify(payload || {});
   const invalidIds = [];
   const duplicateIds = [];
+  const expoRows = [];
   const seenEndpointHashes = new Set();
   const uniqueRows = [];
 
@@ -842,10 +847,16 @@ async function sendPushToSubscriptions(subscriptions, payload) {
     const p256dh = String(row && row.p256dh || "");
     const auth = String(row && row.auth || "");
     const id = Number(row && row.id || 0);
+    const isExpoToken = /^ExponentPushToken\[.+\]$/i.test(endpoint) || /^ExpoPushToken\[.+\]$/i.test(endpoint);
+    if (isExpoToken) {
+      expoRows.push({ row, id, endpoint });
+      continue;
+    }
     if (!endpoint || !p256dh || !auth) {
       if (id > 0) invalidIds.push(id);
       continue;
     }
+    if (!webPushEnabled) continue;
     try {
       // eslint-disable-next-line no-await-in-loop
       await webPush.sendNotification(
@@ -863,6 +874,69 @@ async function sendPushToSubscriptions(subscriptions, payload) {
       }
     }
   }
+
+  if (expoRows.length) {
+    const expoMessages = expoRows.map(({ endpoint }) => ({
+      body: String(payload?.body || ""),
+      data: payload || {},
+      channelId: "chat",
+      priority: "high",
+      sound: "default",
+      title: String(payload?.title || ""),
+      to: endpoint,
+    }));
+    for (let index = 0; index < expoMessages.length; index += 100) {
+      const chunk = expoMessages.slice(index, index + 100);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const response = await fetch(EXPO_PUSH_ENDPOINT, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(chunk.length === 1 ? chunk[0] : chunk),
+        });
+        const responseText = await response.text().catch(() => "");
+        if (!response.ok) {
+          console.error("expo push send failed:", response.status, responseText);
+          continue;
+        }
+        let responseJson = null;
+        try {
+          responseJson = responseText ? JSON.parse(responseText) : null;
+        } catch {}
+        const tickets = Array.isArray(responseJson?.data)
+          ? responseJson.data
+          : (responseJson?.data ? [responseJson.data] : []);
+        tickets.forEach((ticket, ticketIndex) => {
+          const status = String(ticket?.status || "").toLowerCase();
+          if (status !== "error") return;
+          const details = ticket?.details && typeof ticket.details === "object" ? ticket.details : {};
+          const errorCode = String(details.error || "");
+          const row = expoRows[index + ticketIndex];
+          const rowId = Number(row?.id || 0);
+          if (errorCode === "DeviceNotRegistered" && rowId > 0) {
+            invalidIds.push(rowId);
+          }
+          console.error("expo push ticket error:", {
+            error: errorCode || "UNKNOWN",
+            message: String(ticket?.message || ""),
+            subscription_id: rowId,
+          });
+        });
+        if (process.env.CHAT_PUSH_DEBUG === "1") {
+          console.log("expo push sent:", {
+            count: chunk.length,
+            ticket_count: tickets.length,
+          });
+        }
+      } catch (err) {
+        console.error("expo push send failed:", err && err.message ? err.message : err);
+      }
+    }
+  }
+
   const idsToDelete = Array.from(new Set([...invalidIds, ...duplicateIds]));
   if (idsToDelete.length) {
     await deletePushSubscriptionsByIds(idsToDelete).catch(() => {});
@@ -870,7 +944,6 @@ async function sendPushToSubscriptions(subscriptions, payload) {
 }
 
 async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, message) {
-  if (!webPushEnabled) return;
   const peerActor = senderActor === "in" ? "out" : "in";
   if (peerActor === "in") {
     const chatEnabled = await isTenantChatWidgetEnabled(tenantId);
@@ -4289,9 +4362,6 @@ function makeChatTempRouter() {
 
   router.post("/push/subscribe", async (req, res) => {
     try {
-      if (!webPushEnabled) {
-        return res.status(503).json({ ok: false, error: "PUSH_DISABLED" });
-      }
       const tenantId = getTenantId(req);
       const actorKey = getRequestReactionActor(req);
       const clientIdRaw = req.body?.client_id ?? req.body?.clientId ?? req.query?.client_id ?? "";
@@ -4302,6 +4372,10 @@ function makeChatTempRouter() {
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
       const subscription = sanitizePushSubscription(req.body?.subscription || req.body || {});
       if (!subscription) return res.status(400).json({ ok: false, error: "SUBSCRIPTION_INVALID" });
+      const isExpoToken = /^ExponentPushToken\[.+\]$/i.test(subscription.endpoint) || /^ExpoPushToken\[.+\]$/i.test(subscription.endpoint);
+      if (!webPushEnabled && !isExpoToken) {
+        return res.status(503).json({ ok: false, error: "PUSH_DISABLED" });
+      }
       await upsertPushSubscription(
         tenantId,
         clientId,
@@ -4314,7 +4388,7 @@ function makeChatTempRouter() {
         data: {
           client_id: Number(clientId),
           actor: actorKey === "in" ? "in" : "out",
-          enabled: webPushEnabled,
+          enabled: true,
         },
       });
     } catch (err) {

@@ -1,6 +1,7 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 
 import type { CatalogCategory } from '../../entities/product';
+import type { ImportantMessage } from '../../features/chat/types';
 
 export const routes = {
   home: 'home',
@@ -29,6 +30,9 @@ export const routes = {
   addresses: 'addresses',
   addressForm: 'addressForm',
   citySelect: 'citySelect',
+  importantMessages: 'importantMessages',
+  importantMessageDetails: 'importantMessageDetails',
+  supportChat: 'supportChat',
 } as const;
 
 export type AppRouteName = keyof typeof routes;
@@ -57,11 +61,20 @@ export type RootStackParamList = {
   addresses: { selectedCity?: string } | undefined;
   addressForm: { addressId?: number; selectedCity?: string } | undefined;
   citySelect: { addressId?: number; returnTo: 'addresses' | 'addressForm'; selectedCity?: string };
+  importantMessages: undefined;
+  supportChat: undefined;
+};
+
+export type ChatTabParamList = {
+  chatHome: undefined;
+  importantMessages: undefined;
+  importantMessageDetails: { item: ImportantMessage };
+  supportChat: undefined;
 };
 
 export type MainTabParamList = {
   home: { selectedCategoryId?: number } | undefined;
   cart: undefined;
-  chat: undefined;
+  chat: NavigatorScreenParams<ChatTabParamList> | undefined;
   profile: undefined;
 };

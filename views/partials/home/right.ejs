@@ -362,9 +362,21 @@
       <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsChatMessageSettingsPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Настройка сообщений</div>
-          <div class="settings-list-subtitle">Параметры автоочистки истории чатов.</div>
+          <div class="settings-list-subtitle">Параметры автоочистки истории и уведомлений чатов.</div>
         </div>
         <div class="settings-site-form settings-panel-scroll no-scrollbar">
+          <div class="settings-site-field">
+            <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field" style="margin:0 0 4px 0;">
+              <div class="settings-system-telegram-switch-copy">
+                <span class="field-label" style="margin:0;">Уведомления клиента в чате</span>
+              </div>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="settingsChatClientPushEnabledSwitch" checked />
+                <span class="switch-ui" aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="field-hint">Если выключить, мобильное приложение не будет подписывать клиента на push-уведомления чата.</div>
+          </div>
           <div class="settings-site-field">
             <label class="field-label">ВРЕМЯ ЖИЗНИ ВСЕХ ЧАТОВ (ДНЕЙ)</label>
             <input class="control" type="number" min="0" max="365" step="1" id="settingsChatThreadTtlDaysInput" data-tenant-input="chat_thread_ttl_days" placeholder="0" />

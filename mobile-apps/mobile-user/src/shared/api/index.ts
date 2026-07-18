@@ -387,6 +387,7 @@ let memoryFullProductPassports: Record<string, FullProductPassport> = {};
 const memoryComboDetails = new Map<number, CatalogComboDetails>();
 let memoryUnitConversions: UnitConversion[] | null = null;
 let memoryCustomerPassport: CustomerPassport | null = null;
+const customerPassportListeners = new Set<() => void>();
 let memoryPublicOrderConfig: PublicOrderConfig | null = null;
 let memoryTenantStores: TenantStore[] | null = null;
 const memoryBonusReferrals = new Map<string, BonusReferrals>();
@@ -940,6 +941,21 @@ export function getMemoryCustomerPassport() {
   return memoryCustomerPassport;
 }
 
+export function subscribeCustomerPassport(listener: () => void) {
+  customerPassportListeners.add(listener);
+  return () => {
+    customerPassportListeners.delete(listener);
+  };
+}
+
+function emitCustomerPassportChanged() {
+  customerPassportListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {}
+  });
+}
+
 export function getMemoryCatalogComboDetails(comboId: number) {
   const id = Number(comboId);
   if (!Number.isFinite(id) || id <= 0) return null;
@@ -1137,12 +1153,14 @@ export async function saveCustomerPassport(passport: CustomerPassport) {
   if (!normalized) return null;
   memoryCustomerPassport = normalized;
   await AsyncStorage.setItem(getCustomerPassportStorageKey(), JSON.stringify(normalized));
+  emitCustomerPassportChanged();
   return normalized;
 }
 
 export async function clearCustomerPassport() {
   memoryCustomerPassport = null;
   await AsyncStorage.removeItem(getCustomerPassportStorageKey());
+  emitCustomerPassportChanged();
 }
 
 export async function readCachedTenantStores() {
