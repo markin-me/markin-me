@@ -16010,6 +16010,19 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
     display: none !important;
   }
 
+  body.shop-orders-details-active .shop-orders-page > .shop-mobile-order-details-actions{
+    --shop-mobile-action-h: 44px;
+    flex: 0 0 auto;
+    gap: 10px;
+    margin: 0;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    border: 0;
+    border-top: 1px solid var(--color-border);
+    border-radius: 0;
+    background: var(--color-surface);
+    box-shadow: 0 -4px 14px rgba(0,0,0,.08);
+  }
+
   body.shop-favorites-page-active .shop-mobile-bottom-container{
     display: none !important;
   }
@@ -16847,7 +16860,7 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 .shop-checkout-sending-overlay{
   position: fixed;
   inset: 0;
-  z-index: 10020;
+  z-index: 10030;
   display: grid;
   place-items: center;
   background: rgba(15, 23, 42, 0.32);

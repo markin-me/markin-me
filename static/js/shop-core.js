@@ -5345,6 +5345,8 @@
       return "sheet";
     }
 
+    if (document.body?.classList.contains("shop-orders-details-active")) return "profile-order-details";
+
     let mode = "";
     try {
       mode = String(cartViewMode || "");
@@ -5409,6 +5411,9 @@
     if (panelName === "address-list") return "address-confirm";
     if (panelName === "product") return "product-actions";
     if (panelName === "profile-order-details") return "order-details-actions";
+    if (panelName === "active-orders-details" && window._shopReturnToCatalogTopAfterOrderDetailsClose === true) {
+      return "order-details-actions";
+    }
     if (
       panelName === "menu" ||
       panelName === "categories" ||
@@ -5695,6 +5700,11 @@
         return handleCartSheetBack();
       } else if (sheetNavigationState.type === 'activeOrders') {
         return handleActiveOrdersSheetBack();
+      } else if (sheetNavigationState.type === 'profile' &&
+                 sheetNavigationState.screen === 'orderDetails' &&
+                 typeof window._showOrdersListCallback === 'function') {
+        window._showOrdersListCallback();
+        return true;
       } else if (sheetNavigationState.type === 'categories' || 
                  sheetNavigationState.type === 'profile' ||
                  sheetNavigationState.type === 'favorites') {
@@ -5945,6 +5955,10 @@
 
   // ????????? ?????? "?????" ??? ???????? ???????
   function handleActiveOrdersSheetBack() {
+    if (window._shopReturnToCatalogTopAfterOrderDetailsClose === true) {
+      closeShopSheetIfOpen();
+      return true;
+    }
     // ???? ?В корзине пусто? - ???????????? ? ??????
     if (sheetNavigationState.screen === 'details') {
       const savedOrders = window._savedActiveOrdersForBack || [];

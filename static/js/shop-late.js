@@ -24149,7 +24149,7 @@ function openCartSheet() {
 
   function showCartPage(wrapEl) {
     if (!useCartPage || !wrapEl) return false;
-    cartPageContent.appendChild(wrapEl);
+    cartPageContent.replaceChildren(wrapEl);
     cartPage.classList.remove("hidden");
     document.body.classList.add("shop-cart-page-active");
     return true;
@@ -24323,9 +24323,21 @@ function openCartSheet() {
     }, 160);
   }
 
+  function refreshExistingCartSheet() {
+    if (!openCartSheetCtx?.listEl || !openCartSheetCtx?.totalEl) return;
+    const renderSignature = buildCartSheetRenderSignature();
+    if (openCartSheetCtx.lastRenderSignature === renderSignature) return;
+    const rendered = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+    appendUpsellToList(openCartSheetCtx.listEl);
+    if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", rendered.items.length === 0);
+    if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = rendered.items.length === 0;
+    openCartSheetCtx.lastRenderSignature = renderSignature;
+  }
+
   if (openCartSheetCtx && openCartSheetCtx.wrapEl) {
     if (typeof setActiveNav === "function") setActiveNav("cart");
     if (showCartPage(openCartSheetCtx.wrapEl)) {
+      refreshExistingCartSheet();
       if (typeof openCartSheetCtx.showSheetCart === "function") openCartSheetCtx.showSheetCart();
       return;
     }
@@ -24374,16 +24386,7 @@ function openCartSheet() {
       window.syncKsoFloatingCartButton();
     }
     setCartSheetScreenMode("cart");
-    if (openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
-      const renderSignature = buildCartSheetRenderSignature();
-      if (openCartSheetCtx.lastRenderSignature !== renderSignature) {
-        const rendered = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
-        appendUpsellToList(openCartSheetCtx.listEl);
-        if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", rendered.items.length === 0);
-        if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = rendered.items.length === 0;
-        openCartSheetCtx.lastRenderSignature = renderSignature;
-      }
-    }
+    refreshExistingCartSheet();
     if (typeof openCartSheetCtx.showSheetCart === "function") openCartSheetCtx.showSheetCart();
     if (typeof window.syncKsoFloatingCartButton === "function") {
       window.syncKsoFloatingCartButton();
@@ -29219,6 +29222,15 @@ function renderSheetAddressList() {
     }
     if (elMobileOrderDetailsActions) {
       elMobileOrderDetailsActions.classList.add("hidden");
+      elMobileOrderDetailsActions.classList.remove("shop-page-footer");
+      const originalParent = elMobileOrderDetailsActions.__shopOriginalParent;
+      const originalNextSibling = elMobileOrderDetailsActions.__shopOriginalNextSibling;
+      if (originalParent && elMobileOrderDetailsActions.parentElement !== originalParent) {
+        originalParent.insertBefore(
+          elMobileOrderDetailsActions,
+          originalNextSibling && originalNextSibling.parentElement === originalParent ? originalNextSibling : null
+        );
+      }
     }
     if (elMobileOrderRepeatBtn) {
       elMobileOrderRepeatBtn.classList.remove("is-expanded");
@@ -29234,18 +29246,34 @@ function renderSheetAddressList() {
     }
   }
 
+  function mountMobileOrderDetailsPageFooter() {
+    if (!elMobileOrderDetailsActions) return;
+    const ordersPage = document.body?.classList.contains("shop-orders-details-active")
+      ? document.getElementById("shopProfileOrdersPage")
+      : null;
+    if (!ordersPage) return;
+    if (!elMobileOrderDetailsActions.__shopOriginalParent) {
+      elMobileOrderDetailsActions.__shopOriginalParent = elMobileOrderDetailsActions.parentElement;
+      elMobileOrderDetailsActions.__shopOriginalNextSibling = elMobileOrderDetailsActions.nextElementSibling;
+    }
+    ordersPage.appendChild(elMobileOrderDetailsActions);
+    elMobileOrderDetailsActions.classList.add("shop-page-footer");
+  }
+
   function showMobileOrderDetailsActions(order) {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (!isMobile || !elMobileOrderDetailsActions) {
       hideMobileOrderDetailsActions();
       return;
     }
+    mountMobileOrderDetailsPageFooter();
     const summary = buildCanonicalOrderSummaryData(order);
     const repeatItems = Array.isArray(order?.items) ? order.items : [];
     if (elMobileOrderTotalValue) {
       elMobileOrderTotalValue.textContent = money(summary.orderTotal || 0);
     }
     if (elMobileOrderRepeatBtn) {
+      elMobileOrderRepeatBtn.classList.remove("hidden");
       elMobileOrderRepeatBtn.classList.remove("is-expanded");
       elMobileOrderRepeatBtn.onclick = async (event) => {
         if (event) {
@@ -29388,6 +29416,27 @@ function renderSheetAddressList() {
     }
     if (window.AppModal?.body && !window.AppModal.body.contains(listEl)) return false;
     return true;
+  }
+
+  function showMobileOrderHomeAction(onHome) {
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (!isMobile || !elMobileOrderDetailsActions || !elMobileOrderTotalBtn) return;
+    mountMobileOrderDetailsPageFooter();
+    if (elMobileOrderRepeatBtn) {
+      elMobileOrderRepeatBtn.classList.add("hidden");
+      elMobileOrderRepeatBtn.onclick = null;
+    }
+    if (elMobileOrderTotalValue) elMobileOrderTotalValue.textContent = "На главную";
+    elMobileOrderTotalBtn.onclick = (event) => {
+      event.preventDefault();
+      if (typeof onHome === "function") onHome();
+    };
+    elMobileOrderDetailsActions.classList.remove("hidden");
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("showMobileOrderHomeAction");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("showMobileOrderHomeAction");
+    }
   }
 
   function waitForUiTick() {
@@ -33301,12 +33350,15 @@ function renderSheetAddressList() {
     // formatOrderItem уже определена в глобальной области выше (строка 555)
     // Не переопределяем её здесь, чтобы избежать конфликтов
 
-    async function showOrderDetails(orderId) {
+    async function showOrderDetails(orderId, { exitToHome = false } = {}) {
       currentOrdersView = "details";
       currentOrderId = orderId;
+      const shouldExitToHome = exitToHome === true;
+      window._isViewingOrderDetails = true;
+      window._showOrdersListCallback = showOrdersList;
       resetOrderDetailsTransientUi();
       const isModalOrderDetails = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
-      if (isModalOrderDetails) {
+      if (isModalOrderDetails || ordersOnly) {
         sheetNavigationState.type = 'profile';
         sheetNavigationState.screen = 'orderDetails';
         sheetNavigationState.data = { orderId };
@@ -33316,8 +33368,33 @@ function renderSheetAddressList() {
           window.queueShopMobileUiStateSync("showProfileOrderDetails");
         }
       }
-      if (!isModalOrderDetails && typeof showProfileView === "function") {
+      if (!isModalOrderDetails && !ordersOnly && typeof showProfileView === "function") {
         showProfileView();
+      }
+
+      const ordersPage = ordersOnly ? document.getElementById("shopProfileOrdersPage") : null;
+      if (ordersPage) {
+        ordersPage._shopOrderDetailsExitToHome = shouldExitToHome;
+        document.body.classList.add("shop-orders-details-active");
+        const pageTitle = ordersPage.querySelector(".shop-orders-page-header h1");
+        if (pageTitle) pageTitle.textContent = "Детали заказа";
+        const pageBack = ordersPage.querySelector("[data-orders-page-back]");
+        if (pageBack) {
+          pageBack.onclick = () => {
+            if (window.history.state?.shopOrderDetails === true) {
+              window.history.back();
+              return;
+            }
+            showOrdersList();
+          };
+        }
+        if (window.history.state?.shopOrderDetails !== true) {
+          window.history.pushState(
+            { ...(window.history.state || {}), shopOrdersPage: true, shopOrderDetails: true },
+            "",
+            window.location.href
+          );
+        }
       }
       
       // Скрываем верхнюю часть профиля и вкладки
@@ -33454,7 +33531,17 @@ function renderSheetAddressList() {
         sortRepeatOrderItemsForDisplay(order.items),
         { onBack: reopenProfileOrderDetails, enableSwipeActions: true }
       );
-      showMobileOrderDetailsActions(order);
+      if (shouldExitToHome) {
+        showMobileOrderHomeAction(() => {
+          if (window.history.state?.shopOrderDetails === true) {
+            window.history.back();
+            return;
+          }
+          ordersPage?._shopOrdersClosePage?.();
+        });
+      } else {
+        showMobileOrderDetailsActions(order);
+      }
       
       // Проверяем, открыто ли модальное окно
       const isModal = isModalOrderDetails;
@@ -33495,11 +33582,6 @@ function renderSheetAddressList() {
         
         // Настраиваем обработчик кнопки "Назад"
         // Используем флаг для переопределения стандартного поведения
-        if (elCartBackBtn) {
-          // Сохраняем контекст для проверки в глобальном обработчике
-          window._isViewingOrderDetails = true;
-          window._showOrdersListCallback = showOrdersList;
-        }
         bindDesktopOrderDetailsFooter(order);
       }
     }
@@ -33512,6 +33594,16 @@ function renderSheetAddressList() {
       // Сбрасываем флаги для кнопки "Назад"
       window._isViewingOrderDetails = false;
       window._showOrdersListCallback = null;
+      document.body.classList.remove("shop-orders-details-active");
+      const ordersPage = ordersOnly ? document.getElementById("shopProfileOrdersPage") : null;
+      if (ordersPage) {
+        ordersPage._shopOrderDetailsExitToHome = false;
+        const pageTitle = ordersPage.querySelector(".shop-orders-page-header h1");
+        if (pageTitle) pageTitle.textContent = "Мои заказы";
+        if (typeof ordersPage._shopOrdersRequestBack === "function") {
+          ordersPage.querySelector("[data-orders-page-back]").onclick = ordersPage._shopOrdersRequestBack;
+        }
+      }
       
       // Показываем верхнюю часть профиля и вкладки обратно
       if (top) top.classList.toggle("hidden", !!ordersOnly);
@@ -33521,8 +33613,10 @@ function renderSheetAddressList() {
       setActiveTab("orders");
       
       // Восстанавливаем ordersPanel с ordersList
+      Array.from(ordersDetailsHost.children).forEach((node) => node.classList.add("hidden"));
       ordersDetailsHost.classList.add("hidden");
       ordersList.classList.remove("hidden");
+      ordersPanel.classList.add("is-active");
       
       // Проверяем, открыто ли модальное окно
       const isModal = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
@@ -33536,7 +33630,7 @@ function renderSheetAddressList() {
           window.queueShopMobileUiStateSync("showProfileOrdersList");
         }
       }
-      if (!isModal && typeof showProfileView === "function") {
+      if (!isModal && !ordersOnly && typeof showProfileView === "function") {
         showProfileView();
       }
       
@@ -34189,7 +34283,7 @@ function renderSheetAddressList() {
     return {
       showEdit: () => setEditingMode(true),
       hideEdit: () => setEditingMode(false),
-      showOrderDetails: (orderId) => showOrderDetails(orderId),
+      showOrderDetails: (orderId, options) => showOrderDetails(orderId, options),
       showOrdersList: () => showOrdersList(),
       setActiveTab: (tab) => setActiveTab(tab),
     };
@@ -34638,7 +34732,18 @@ function renderSheetAddressList() {
 
     const closePage = () => {
       document.body.classList.remove("shop-orders-page-active");
+      document.body.classList.remove("shop-orders-details-active");
+      resetOrderDetailsTransientUi();
+      page._shopOrderDetailsExitToHome = false;
       page.classList.add("hidden");
+      const currentHistoryState = window.history.state;
+      if (currentHistoryState && typeof currentHistoryState === "object") {
+        const nextHistoryState = { ...currentHistoryState };
+        delete nextHistoryState.shopOrdersPage;
+        delete nextHistoryState.shopOrderDetails;
+        delete nextHistoryState.shopOrdersSource;
+        window.history.replaceState(nextHistoryState, "", window.location.href);
+      }
       if (page._shopOrdersPopHandler) {
         window.removeEventListener("popstate", page._shopOrdersPopHandler, true);
         page._shopOrdersPopHandler = null;
@@ -34647,7 +34752,15 @@ function renderSheetAddressList() {
         if (typeof showProfileView === "function") showProfileView();
         if (typeof setActiveNav === "function") setActiveNav("profile");
       } else if (typeof setActiveNav === "function") {
-        setActiveNav(sourceScreen === "home" ? "home" : "menu");
+        setActiveNav("menu");
+      }
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
+      if (typeof queueMobileUiStateSync === "function") {
+        queueMobileUiStateSync("closeProfileOrdersPage");
+      } else if (typeof window.queueShopMobileUiStateSync === "function") {
+        window.queueShopMobileUiStateSync("closeProfileOrdersPage");
       }
     };
     const requestBack = () => {
@@ -34658,6 +34771,8 @@ function renderSheetAddressList() {
       closePage();
     };
 
+    page._shopOrdersClosePage = closePage;
+    page._shopOrdersRequestBack = requestBack;
     page.querySelector("[data-orders-page-back]").onclick = requestBack;
     const content = page.querySelector(".shop-orders-page-content");
     const ctx = buildProfileContent({
@@ -34690,6 +34805,15 @@ function renderSheetAddressList() {
     }
     page._shopOrdersPopHandler = (event) => {
       if (!document.body.classList.contains("shop-orders-page-active")) return;
+      if (document.body.classList.contains("shop-orders-details-active")) {
+        event.stopImmediatePropagation();
+        if (page._shopOrderDetailsExitToHome === true) {
+          closePage();
+        } else {
+          ctx.showOrdersList();
+        }
+        return;
+      }
       if (event.state?.shopOrdersPage === true) return;
       event.stopImmediatePropagation();
       closePage();
@@ -37452,14 +37576,14 @@ function setBottomNavActive(tab) {
     if (hasCustomerToken && me) {
       let benefitsSnapshot = getBenefitsStoreSnapshot(initialBenefitsPreviewRequest);
       checkoutBenefitsPreview = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || null;
-      if (!checkoutBenefitsPreview && !isKsoCheckout) {
+      if ((!checkoutBenefitsPreview || benefitsSnapshot?.needsExactHydration) && !isKsoCheckout) {
         benefitsSnapshot = await ensureBenefitsStoreHydrated({
           previewRequest: initialBenefitsPreviewRequest,
           force: false,
           warmDetails: false,
         });
         checkoutBenefitsPreview = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || null;
-      } else if (benefitsSnapshot?.needsExactHydration || (isKsoCheckout && !checkoutBenefitsPreview)) {
+      } else if (isKsoCheckout && (benefitsSnapshot?.needsExactHydration || !checkoutBenefitsPreview)) {
         Promise.resolve(ensureBenefitsStoreHydrated({
           previewRequest: initialBenefitsPreviewRequest,
           force: false,
@@ -40800,7 +40924,7 @@ function setBottomNavActive(tab) {
       return { ok: false, key: buildCartPricingLiveKey(), snapshot: null };
     }
 
-    function showOrderSuccess(orderId, publicId, totalPrice) {
+    async function showOrderSuccess(orderId, publicId, totalPrice) {
       if (isKsoCheckout) {
         const orderLabel = orderId ? `#${escapeHtml(String(orderId))}` : (publicId ? `#${escapeHtml(String(publicId))}` : "");
         let remaining = 60;
@@ -40855,6 +40979,36 @@ function setBottomNavActive(tab) {
         });
         return;
       }
+
+      const createdOrderId = Number(orderId || 0);
+      if (!(createdOrderId > 0)) {
+        throw new Error("ORDER_DETAILS_UNAVAILABLE");
+      }
+      const currentCustomer = await fetchMeSafe();
+      if (!currentCustomer) throw new Error("ORDER_DETAILS_UNAVAILABLE");
+      if (typeof openCartSheetCtx?.showSheetCart === "function") {
+        openCartSheetCtx.showSheetCart();
+        openCartSheetCtx.lastRenderSignature = "";
+      }
+      const activeCartPage = document.getElementById("shopCartPage");
+      if (document.body.classList.contains("shop-cart-page-active") && activeCartPage) {
+        activeCartPage.classList.add("hidden");
+        document.body.classList.remove(
+          "shop-cart-page-active",
+          "shop-checkout-overlay-open",
+          "shop-address-page-active",
+          "shop-address-form-page-active"
+        );
+        if (typeof setActiveNav === "function") setActiveNav("menu");
+      } else if (typeof closeShopSheetIfOpen === "function") {
+        closeShopSheetIfOpen();
+      }
+      const detailsContext = openProfileOrdersPage(currentCustomer, { sourceScreen: "home" });
+      if (!detailsContext || typeof detailsContext.showOrderDetails !== "function") {
+        throw new Error("ORDER_DETAILS_UNAVAILABLE");
+      }
+      await detailsContext.showOrderDetails(createdOrderId, { exitToHome: true });
+      return;
 
       resultWrap.innerHTML = `
         <div class="shop-order-result-card">
@@ -40957,6 +41111,8 @@ function setBottomNavActive(tab) {
         </div>`;
       resultWrap.classList.remove("hidden");
       wrap.classList.add("hidden");
+      checkoutOverlayFooterHost.classList.add("hidden");
+      setCartSheetFooterMode(openCartSheetCtx, "hidden");
       const btnNew = resultWrap.querySelector("[data-action=\"order-conflict-new\"]");
       const btnCancel = resultWrap.querySelector("[data-action=\"order-conflict-cancel\"]");
       if (btnNew) btnNew.onclick = () => onCreateNew();
@@ -40964,6 +41120,8 @@ function setBottomNavActive(tab) {
         resultWrap.classList.add("hidden");
         resultWrap.innerHTML = "";
         wrap.classList.remove("hidden");
+        checkoutOverlayFooterHost.classList.remove("hidden");
+        setCartSheetFooterMode(openCartSheetCtx, "checkout");
         onCancel();
       };
     }
@@ -41466,7 +41624,7 @@ function setBottomNavActive(tab) {
                 clearCartAll({ restoreGiftRewards: false });
                 saveCheckoutDraft({});
                 setCheckoutSubmitting(false);
-                showOrderSuccess(res2.data.id, res2.data.public_id, orderTotalWithDelivery);
+                await showOrderSuccess(res2.data.id, res2.data.public_id, orderTotalWithDelivery);
               } else {
                 alert("Не удалось создать заказ.");
                 if (btnNewAgain) {
@@ -41497,7 +41655,7 @@ function setBottomNavActive(tab) {
           saveCheckoutDraft({});
           if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }
           setCheckoutSubmitting(false);
-          showOrderSuccess(res.data.id, res.data.public_id, orderTotalWithDelivery);
+          await showOrderSuccess(res.data.id, res.data.public_id, orderTotalWithDelivery);
         } else {
           setCheckoutSubmitting(false);
           setCheckoutSubmitLabel();
@@ -42479,7 +42637,8 @@ function initShopLate() {
         window._savedActiveOrdersForBack = [...activeOrders]; // Сохраняем копию
         const hasMultipleOrders = activeOrders.length > 1;
         const directDetailsSource = window._activeOrdersSourceScreen === "home" || window._activeOrdersSourceScreen === "catalog";
-        const shouldShowBack = hasMultipleOrders && !directDetailsSource;
+        const shouldReturnToMain = window._shopReturnToCatalogTopAfterOrderDetailsClose === true;
+        const shouldShowBack = shouldReturnToMain || (hasMultipleOrders && !directDetailsSource);
       
         // Обновляем состояние навигации
         sheetNavigationState.type = 'activeOrders';
@@ -42535,6 +42694,10 @@ function initShopLate() {
           
             // Обработчик кнопки "Назад"
             backBtn.addEventListener("click", () => {
+              if (window._shopReturnToCatalogTopAfterOrderDetailsClose === true) {
+                closeShopSheetIfOpen();
+                return;
+              }
               // Используем сохраненный список заказов из глобальной переменной
               const savedOrders = window._savedActiveOrdersForBack || [];
             
@@ -42702,6 +42865,11 @@ function initShopLate() {
             sortRepeatOrderItemsForDisplay(order.items),
             { onBack: reopenActiveOrderDetails, enableSwipeActions: true }
           );
+          if (window._shopReturnToCatalogTopAfterOrderDetailsClose === true) {
+            showMobileOrderHomeAction(() => closeShopSheetIfOpen());
+          } else {
+            showMobileOrderDetailsActions(order);
+          }
         
           // Кнопка "Назад" уже настроена в хедере выше
         } catch (e) {
