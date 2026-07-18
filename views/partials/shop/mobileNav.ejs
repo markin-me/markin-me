@@ -9,18 +9,6 @@
   );
 %>
 <div class="shop-mobile-bottom-container">
-  <!-- Кнопки добавления в корзину (показываются только в карточке товара) -->
-  <div class="shop-mobile-product-actions hidden" id="shopMobileProductActions">
-    <div class="qty-pill-wrap" id="shopMobileQtyWrap"></div>
-    <button class="shop-checkout-btn shop-pd-action" id="shopMobileAddToCartBtn" type="button">
-      <span class="shop-pd-action-prices">
-        <span class="shop-pd-action-old hidden" id="shopMobileProductOldPrice"></span>
-        <span class="shop-checkout-total shop-pd-action-price" id="shopMobileProductPrice">0 ₽</span>
-      </span>
-      <span class="shop-pd-action-label" id="shopMobileProductLabel">в корзину</span>
-    </button>
-  </div>
-
   <!-- Кнопки корзины (Оформить/Заказать) - показываются в корзине -->
   <div class="shop-mobile-cart-actions hidden" id="shopMobileCartActions">
     <!-- Полоска прогресса до бесплатной доставки (в корзине) -->
@@ -133,25 +121,25 @@
   <!-- Навигация (всегда видна) -->
   <nav class="shop-nav" aria-label="Навигация">
     <button class="shop-nav-btn is-active" id="shopNavMenu" type="button" data-tab="menu" aria-label="Каталог">
-      <span class="shop-nav-logo-icon" aria-hidden="true">
-        <img id="shopNavLogoImg" class="shop-nav-logo-img hidden" alt="" />
-        <span id="shopNavLogoFallback">П</span>
-      </span>
+      <i class="fas fa-home" aria-hidden="true"></i>
+      <span class="shop-nav-label">&#x413;&#x43B;&#x430;&#x432;&#x43D;&#x430;&#x44F;</span>
     </button>
 
     <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">
       <i class="fas fa-shopping-cart"></i>
       <span class="shop-nav-badge hidden" id="shopNavCartBadge">0</span>
+      <span class="shop-nav-label">&#x41A;&#x43E;&#x440;&#x437;&#x438;&#x43D;&#x430;</span>
     </button>
 
     <button class="shop-nav-btn<%= isMobileNavCompanyChatEnabled ? '' : ' hidden' %>" id="shopCompanyChatOpenBtn" type="button" data-tab="chat" aria-label="Чат с компанией" title="Чат с компанией"<% if (!isMobileNavCompanyChatEnabled) { %> aria-hidden="true" tabindex="-1"<% } %>>
       <i class="fas fa-comment-dots"></i>
       <span class="shop-company-chat-unread hidden" id="shopCompanyChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>
+      <span class="shop-nav-label">&#x427;&#x430;&#x442;</span>
     </button>
 
     <button class="shop-nav-btn" id="shopNavProfile" type="button" data-tab="profile" aria-label="Профиль">
       <i class="fas fa-user shop-nav-profile-fallback"></i>
-      <img class="shop-nav-profile-img hidden" id="shopNavProfileImg" alt="" />
+      <span class="shop-nav-label">&#x41F;&#x440;&#x43E;&#x444;&#x438;&#x43B;&#x44C;</span>
     </button>
   </nav>
 </div>

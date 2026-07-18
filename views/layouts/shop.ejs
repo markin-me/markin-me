@@ -64,8 +64,8 @@
   <% } %>
 
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260714profile-settings-header') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260714profile-settings-header') %>" /></noscript>
+  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260717catalog-mobile-white-background') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260717catalog-mobile-white-background') %>" /></noscript>
   <link rel="preload" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" /></noscript>
 </head>
@@ -145,6 +145,9 @@
     <%- include(profileSettingsPartial) %>
   <% } %>
 
+  <%- include('../partials/shop/detailsPage') %>
+  <%- include('../partials/shop/cartPage') %>
+
   <!-- Универсальная модалка (на мобиле = bottom sheet) -->
   <% const isKsoPage = typeof pageClass === 'string' && pageClass.split(/\s+/).includes('page-kso'); %>
   <% if (!isKsoPage) { %>
@@ -157,9 +160,9 @@
   <% } %>
 
   <script>
-    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260714profile-benefits-return') %>";
+    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260717desktop-profile-close-cart') %>";
     <% if (!isKsoPage) { %>
-      window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js?typing_hotfix=14&v=20260714chat-restore') %>";
+      window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js?typing_hotfix=14&v=20260717notification-permission-feedback') %>";
     <% } else { %>
       window.__shopChatUrl = "";
     <% } %>

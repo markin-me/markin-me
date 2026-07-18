@@ -949,7 +949,7 @@
     return section;
   }
 
-  function buildCartBonusRedeemSection() {
+  function buildCartBonusRedeemSection({ emptyCart = false } = {}) {
     const level = getCartBonusAccountLevel();
     if (!level) return buildCartBonusJoinSection();
     const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
@@ -960,7 +960,7 @@
       state.cartBonusRedeemEnabled = false;
     }
     const section = document.createElement("section");
-    section.className = "shop-cart-bonus-redeem-section";
+    section.className = `shop-cart-bonus-redeem-section${emptyCart ? " shop-cart-bonus-redeem-section--empty-cart" : ""}`;
     const coinName = state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы";
     section.innerHTML = `
       <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card">
@@ -975,15 +975,15 @@
           </div>
         </div>
         <div class="shop-cart-bonus-redeem-actions">
-          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${state.cartBonusRedeemEnabled && canRedeem ? "" : " is-active"}" type="button" data-cart-bonus-accrual-button>
+          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? "" : " is-active"}${emptyCart ? " is-disabled" : ""}" type="button" data-cart-bonus-accrual-button ${emptyCart ? "disabled" : ""}>
             <span class="shop-cart-bonus-action-pill__label">Начислить</span>
-            <span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>+${formatShopBonusMoney(0)}</span>
+            ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>+${formatShopBonusMoney(0)}</span>`}
           </button>
-          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--redeem${state.cartBonusRedeemEnabled && canRedeem ? " is-active" : ""}${canRedeem ? "" : " is-disabled"}" type="button" data-cart-bonus-redeem-button ${canRedeem ? "" : "disabled"}>
+          <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--redeem${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? " is-active" : ""}${canRedeem && !emptyCart ? "" : " is-disabled"}" type="button" data-cart-bonus-redeem-button ${canRedeem && !emptyCart ? "" : "disabled"}>
             <span class="shop-cart-bonus-action-pill__label" data-cart-bonus-redeem-label>${escapeHtml(redeemLabel)}</span>
-            <span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-redeem-button-amount>-${formatShopBonusMoney(0)}</span>
+            ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-redeem-button-amount>-${formatShopBonusMoney(0)}</span>`}
           </button>
-          <input class="shop-cart-bonus-redeem-input" type="checkbox" data-cart-bonus-redeem-toggle ${state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem ? "" : "disabled"} />
+          <input class="shop-cart-bonus-redeem-input" type="checkbox" data-cart-bonus-redeem-toggle ${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem && !emptyCart ? "" : "disabled"} />
         </div>
       </div>
     `;
@@ -1814,6 +1814,18 @@
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet shop-bonus-cards-sheet";
     renderBonusCardsSheetContent(wrap, options);
+    if (isMobileBonusProgramPageAvailable()) {
+      const sourceLevel = options.sourceLevel || bonusProgramPageLevel || getHomeBonusFirstLevel(state.homeBonusConfig);
+      showBonusProgramPage({
+        title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
+        content: wrap,
+        onBack: () => returnToBonusProgramMainPage(sourceLevel),
+        screen: "levels",
+        level: sourceLevel,
+      });
+      void loadHomeBonusConfig().then(() => renderBonusCardsSheetContent(wrap, options));
+      return;
+    }
     sheetNavigationState.type = "bonus-cards";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = {
@@ -2119,6 +2131,28 @@
       });
     };
     render('<div class="shop-bonus-sheet-empty">Загружаем...</div>');
+    if (isMobileBonusProgramPageAvailable()) {
+      showBonusProgramPage({
+        title: "Начисления",
+        content: wrap,
+        onBack: () => returnToBonusProgramMainPage(sourceLevel),
+        screen: "accruals",
+        level: sourceLevel,
+      });
+      if (!getCustomerToken()) {
+        render('<div class="shop-bonus-sheet-empty">Войдите, чтобы увидеть начисления</div>');
+        return;
+      }
+      try {
+        const json = await apiJson("/api/public/bonus/transactions");
+        transactions = Array.isArray(json?.data) ? json.data : [];
+        render();
+      } catch (err) {
+        console.error("load bonus transactions error:", err);
+        render('<div class="shop-bonus-sheet-empty">Не удалось загрузить начисления</div>');
+      }
+      return;
+    }
     sheetNavigationState.type = "bonus-accruals";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = null;
@@ -2649,6 +2683,15 @@
         wrap.innerHTML = buildHomeReferralsSheetHtml(null, false, "Не удалось загрузить рефералов");
         bindHomeReferralsSheetActions(wrap, null);
       });
+    if (isMobileBonusProgramPageAvailable()) {
+      showBonusProgramPage({
+        title: "Рефералы",
+        content: wrap,
+        onBack: closeBonusProgramPageToProfile,
+        screen: "referrals",
+      });
+      return;
+    }
     sheetNavigationState.type = "referrals";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = null;
@@ -2730,7 +2773,9 @@
     if (!host) return;
     const level = getHomeBonusFirstLevel(state.homeBonusConfig);
     const bonusHtml = level
-      ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
+      ? (isHomeBonusJoined()
+        ? buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false })
+        : buildHomeGuestBonusCardHtml(level))
       : "";
     const referralHtml = isHomeBonusJoined() ? buildHomeReferralCardHtml(state.homeBonusConfig) : "";
     host.innerHTML = `<div class="shop-home-cards-scroll no-scrollbar"><div class="shop-home-cards-track">${bonusHtml ? `<div class="shop-home-cards-slide">${bonusHtml}</div>` : ""}${referralHtml ? `<div class="shop-home-cards-slide">${referralHtml}</div>` : ""}</div></div>`;
@@ -2746,10 +2791,25 @@
       cardsScroll.scrollLeft = nextScrollLeft;
     }, { passive: false });
     if (level) {
-      bindBonusLevelPreviewCardActions(host, level, { returnTo: "none", returnToProfile: true });
+      if (isHomeBonusJoined()) {
+        bindBonusLevelPreviewCardActions(host, level, { returnTo: "none", returnToProfile: true });
+      } else {
+        const joinButton = host.querySelector(".shop-home-bonus-card__action");
+        joinButton?.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void joinHomeBonusProgram({
+            onSuccess: () => window.renderProfileBonusCards(host),
+          });
+        });
+      }
       const bonusCard = host.querySelector(".bonus-level-preview-card");
       if (bonusCard && bonusCard.dataset.profileBonusCardBound !== "1") {
-        bonusCard.addEventListener("click", () => openHomeBonusLevelSheet(level, { returnToProfile: true }));
+        bonusCard.addEventListener("click", () => {
+          if (isHomeBonusJoined()) {
+            openHomeBonusLevelSheet(level, { returnToProfile: true });
+          }
+        });
         bonusCard.dataset.profileBonusCardBound = "1";
       }
     }
@@ -3010,9 +3070,19 @@
   }
 
   async function openHomeBonusSiteMenuBenefits(section = "", sourceLevel = null, options = {}) {
+    const bonusPage = document.getElementById("shopBonusProgramPage");
+    const restoreBonusPage = () => {
+      if (!isMobileBonusProgramPageAvailable() || !bonusPage) return;
+      bonusPage.classList.remove("hidden");
+      document.body.classList.add("shop-bonus-program-page-active");
+    };
     try {
       await ensureShopLateLoaded();
       if (typeof window.openShopBenefitsSheet === "function") {
+        if (isMobileBonusProgramPageAvailable() && bonusPage) {
+          bonusPage.classList.add("hidden");
+          document.body.classList.remove("shop-bonus-program-page-active");
+        }
         await window.openShopBenefitsSheet({
           sourceScreen: "bonus-level",
           section: String(section || "").trim(),
@@ -3023,6 +3093,7 @@
         });
       }
     } catch (err) {
+      restoreBonusPage();
       console.error("open shop benefits from bonus menu error:", err);
       showToast("Не удалось открыть выгоды");
     }
@@ -3320,7 +3391,8 @@
           const categoryId = Number(btn.dataset.bonusFavoriteCategoryId || 0);
           btn.classList.toggle("is-selected", picked.has(categoryId));
         });
-        const saveBtn = wrap.querySelector("[data-save-bonus-favorite-categories]");
+        const saveBtn = wrap.querySelector("[data-save-bonus-favorite-categories]")
+          || document.querySelector("#shopBonusProgramPage [data-save-bonus-favorite-categories]");
         if (saveBtn) saveBtn.disabled = picked.size <= selectedIds.size || picked.size > limit;
       };
       wrap.querySelectorAll("[data-bonus-favorite-category-id]").forEach((btn) => {
@@ -3356,7 +3428,8 @@
           };
           state.homeBonusFavoriteCategoriesByLevel.set(getHomeBonusFavoriteCategoriesCacheKey(levelId), nextData);
           writeHomeBonusFavoriteCategoriesStorage(levelId, nextData);
-          returnFromBonusNestedSheet(level, options);
+          if (isMobileBonusProgramPageAvailable()) requestBonusProgramHistoryBack();
+          else returnFromBonusNestedSheet(level, options);
         } catch (err) {
           console.error("save bonus favorite categories error:", err);
         }
@@ -3366,6 +3439,30 @@
     const cachedData = getHomeBonusFavoriteCategoriesCache(levelId);
     if (cachedData) render(cachedData);
     else renderLoading();
+    if (isMobileBonusProgramPageAvailable()) {
+      const syncPageFooter = () => {
+        const saveButton = wrap.querySelector("[data-save-bonus-favorite-categories]");
+        setBonusProgramPageFooter(saveButton || null);
+      };
+      showBonusProgramPage({
+        title: "Выбрать категории",
+        content: wrap,
+        footer: wrap.querySelector("[data-save-bonus-favorite-categories]"),
+        onBack: () => returnToBonusProgramMainPage(level),
+        screen: "categories",
+        level,
+      });
+      try {
+        const data = await loadHomeBonusFavoriteCategories(level);
+        render(data || {});
+        syncPageFooter();
+      } catch (err) {
+        console.error("load bonus favorite categories error:", err);
+        wrap.innerHTML = '<div class="shop-bonus-sheet-empty">Не удалось загрузить категории</div>';
+        setBonusProgramPageFooter(null);
+      }
+      return;
+    }
     sheetNavigationState.type = "bonus-favorite-categories";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = { levelId };
@@ -3502,6 +3599,16 @@
       setTimeout(() => document.addEventListener("click", close), 0);
     });
 
+    if (isMobileBonusProgramPageAvailable()) {
+      showBonusProgramPage({
+        title: "Кешбэк",
+        content: wrap,
+        onBack: () => returnToBonusProgramMainPage(level),
+        screen: "cashback",
+        level,
+      });
+      return;
+    }
     sheetNavigationState.type = "bonus-cashback";
     sheetNavigationState.screen = "main";
     sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
@@ -3570,7 +3677,7 @@
             <span>${escapeHtml(formatShopBonusPercent(level?.cashback_percent, 0))}</span>
           </div>
         </div>
-        ${favoriteCategoriesEnabled ? `<div class="shop-bonus-level-metric-card">
+        ${favoriteCategoriesEnabled ? `<div class="shop-bonus-level-metric-card" data-open-bonus-favorite-categories-card role="button" tabindex="0">
           <div class="shop-bonus-level-metric-label">${escapeHtml(favoriteCategoriesText)}</div>
           <div data-bonus-favorite-categories-slot>
             ${buildHomeBonusFavoriteCategoriesSlotHtml(level)}
@@ -3579,10 +3686,21 @@
       </div>
       ${buildHomeBonusSiteMenuRowHtml()}
     `);
-    sheetNavigationState.type = "bonus-level";
-    sheetNavigationState.screen = "main";
-    sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
-    window.AppModal.open({
+    const useBonusProgramPage = isMobileBonusProgramPageAvailable();
+    if (useBonusProgramPage) {
+      showBonusProgramPage({
+        title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
+        content: wrap,
+        onBack: closeBonusProgramPageToProfile,
+        screen: "main",
+        level,
+      });
+    } else {
+      sheetNavigationState.type = "bonus-level";
+      sheetNavigationState.screen = "main";
+      sheetNavigationState.data = { levelId: Number(level?.id || 0) || null };
+    }
+    if (!useBonusProgramPage) window.AppModal.open({
       title: state.homeBonusConfig?.settings?.bonus_program_name || "Бонусная программа",
       content: wrap,
       showCancel: false,
@@ -3609,15 +3727,15 @@
         }
       },
     });
-    if (window.AppModal?.body) {
+    if (!useBonusProgramPage && window.AppModal?.body) {
       window.AppModal.body.classList.add(
         "shop-cart-sheet-body",
         "shop-cart-sheet-screen-benefits",
         "shop-bonus-cards-sheet-body"
       );
     }
-    setBonusCardsSheetHeader(true);
-    if (returnToProfile) setProfileModalSubpageHeader();
+    if (!useBonusProgramPage) setBonusCardsSheetHeader(true);
+    if (!useBonusProgramPage && returnToProfile) setProfileModalSubpageHeader();
     syncMobileUiState("bonus-level-sheet-open");
     wrap.querySelector("[data-open-bonus-cards-current]")?.addEventListener("click", () => {
       const accountLevelId = Number(state.homeBonusConfig?.account?.level_id || 0);
@@ -3638,6 +3756,17 @@
     void updateHomeBonusSiteMenuBadges(wrap);
     if (favoriteCategoriesEnabled) {
       updateHomeBonusFavoriteCategoriesSlot(wrap, level, { returnToProfile });
+      const favoriteCategoriesCard = wrap.querySelector("[data-open-bonus-favorite-categories-card]");
+      const openFavoriteCategories = (event) => {
+        if (event?.target?.closest?.("[data-open-bonus-favorite-categories]")) return;
+        void openHomeBonusFavoriteCategoriesSheet(level, { returnToProfile });
+      };
+      favoriteCategoriesCard?.addEventListener("click", openFavoriteCategories);
+      favoriteCategoriesCard?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openFavoriteCategories(event);
+      });
       void loadHomeBonusFavoriteCategories(level).then(() => {
         updateHomeBonusFavoriteCategoriesSlot(wrap, level, { returnToProfile });
       }).catch((err) => {
@@ -3651,6 +3780,10 @@
     const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
     const level = levels.find((item) => Number(item?.id || 0) === numericLevelId)
       || getHomeBonusFirstLevel(state.homeBonusConfig);
+    if (isMobileBonusProgramPageAvailable()) {
+      document.getElementById("shopCartPage")?.classList.add("hidden");
+      document.body.classList.remove("shop-cart-page-active", "shop-benefits-page-active");
+    }
     if (level) openHomeBonusLevelSheet(level, { returnToProfile: options.returnToProfile === true });
   };
 
@@ -5212,6 +5345,8 @@
       return "sheet";
     }
 
+    if (document.body?.classList.contains("shop-orders-details-active")) return "profile-order-details";
+
     let mode = "";
     try {
       mode = String(cartViewMode || "");
@@ -5276,6 +5411,9 @@
     if (panelName === "address-list") return "address-confirm";
     if (panelName === "product") return "product-actions";
     if (panelName === "profile-order-details") return "order-details-actions";
+    if (panelName === "active-orders-details" && window._shopReturnToCatalogTopAfterOrderDetailsClose === true) {
+      return "order-details-actions";
+    }
     if (
       panelName === "menu" ||
       panelName === "categories" ||
@@ -5562,6 +5700,11 @@
         return handleCartSheetBack();
       } else if (sheetNavigationState.type === 'activeOrders') {
         return handleActiveOrdersSheetBack();
+      } else if (sheetNavigationState.type === 'profile' &&
+                 sheetNavigationState.screen === 'orderDetails' &&
+                 typeof window._showOrdersListCallback === 'function') {
+        window._showOrdersListCallback();
+        return true;
       } else if (sheetNavigationState.type === 'categories' || 
                  sheetNavigationState.type === 'profile' ||
                  sheetNavigationState.type === 'favorites') {
@@ -5812,6 +5955,10 @@
 
   // ????????? ?????? "?????" ??? ???????? ???????
   function handleActiveOrdersSheetBack() {
+    if (window._shopReturnToCatalogTopAfterOrderDetailsClose === true) {
+      closeShopSheetIfOpen();
+      return true;
+    }
     // ???? ?В корзине пусто? - ???????????? ? ??????
     if (sheetNavigationState.screen === 'details') {
       const savedOrders = window._savedActiveOrdersForBack || [];
@@ -11080,6 +11227,7 @@ function setSheetHeaderMode(
   }
 
   function showCartView() {
+  deactivateBonusProgramPage();
     document.body.classList.remove("shop-profile-page-active");
     document.body.classList.remove("shop-profile-settings-page-active");
     if (elProfileSettingsPage) elProfileSettingsPage.classList.add("hidden");
@@ -11326,6 +11474,7 @@ function showPickupListView(backMode = "checkout") {
 }
 
   function showProfileView() {
+    deactivateBonusProgramPage();
     document.body.classList.add("shop-profile-page-active");
     document.body.classList.remove("shop-profile-settings-page-active");
     if (elProfileSettingsPage) elProfileSettingsPage.classList.add("hidden");
@@ -12554,7 +12703,7 @@ async function initAddresses() {
     if (scroll) scrollToCategory(id);
   }
 
-  function scrollToCategory(categoryId) {
+  function scrollToCategory(categoryId, { alignFirstCard = false } = {}) {
     const id = Number(categoryId);
     if (!Number.isFinite(id)) return;
     const header = elProductsGrid?.querySelector?.(`.shop-category-header[data-cat-id="${id}"]`);
@@ -12578,10 +12727,20 @@ async function initAddresses() {
         const headerVisibleH = (document.body.classList.contains("shop-header-collapsed") || Number(window.scrollY || 0) > 44) ? 0 : headerH;
         const chipsH = elCatChipsWrap?.getBoundingClientRect ? elCatChipsWrap.getBoundingClientRect().height : 0;
         const subcategoryRow = elProductsGrid?.querySelector?.(`.shop-category-subcategory-row[data-parent-cat-id="${id}"]`);
+        if (alignFirstCard) {
+          const subcategoryRows = Array.from(elProductsGrid.querySelectorAll(".shop-category-subcategory-row"));
+          subcategoryRows.forEach((row) => {
+            const isBeforeSelectedCategory = Boolean(row.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING);
+            row.classList.remove("is-category-jump-past");
+            if (isBeforeSelectedCategory) row.classList.add("is-category-jump-past");
+          });
+        }
         const subcategoryH = subcategoryRow?.getBoundingClientRect ? subcategoryRow.getBoundingClientRect().height : 0;
         const rect = scrollTarget.getBoundingClientRect();
         const visibleTop = headerVisibleH + chipsH + subcategoryH + 12;
-        const targetCenterOffset = Math.max(0, (window.innerHeight / 2) - (rect.height / 2) - 200);
+        const targetCenterOffset = alignFirstCard
+          ? 0
+          : Math.max(0, (window.innerHeight / 2) - (rect.height / 2) - 200);
         const top = window.scrollY + rect.top - visibleTop - targetCenterOffset;
         window.scrollTo({
           top: Math.max(0, top),
@@ -12609,6 +12768,7 @@ async function initAddresses() {
 
     setTimeout(() => {
       isProgrammaticCategoryScroll = false;
+      updateStickySubcategoryRows();
       // После завершения программного скролла ещё раз выравниваем чипы,
       // чтобы правило привязки к левому краю сработало и при выборе через список категорий.
       scrollChipsToCategory(state.activeCategoryId);
@@ -12627,7 +12787,6 @@ async function initAddresses() {
       rows.forEach((row) => row.classList.remove("is-sticky-past"));
       return;
     }
-
     const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
     const stickyTop = (document.body.classList.contains("shop-header-collapsed") ? 0 : headerH) + 48;
     let stuckIndex = -1;
@@ -12718,6 +12877,9 @@ async function initAddresses() {
 
     const nextId = Number(activeHeader?.dataset?.catId);
     if (!Number.isFinite(nextId) || nextId === Number(state.activeCategoryId)) return;
+    elProductsGrid.querySelectorAll(".shop-category-subcategory-row.is-category-jump-past").forEach((row) => {
+      row.classList.remove("is-category-jump-past");
+    });
     const nextTitle = activeHeader?.dataset?.catTitle || "";
     setActiveCategory(nextId, nextTitle, { scroll: false });
     ensureCategoryLoaded(nextId, { limit: 200 });
@@ -12792,7 +12954,7 @@ async function initAddresses() {
       btn.appendChild(text);
 
       btn.addEventListener("click", () => {
-        selectCategory(c.id, c.title);
+        selectCategory(c.id, c.title, { alignFirstCard: true });
         closeShopSheetIfOpen();
       });
 
@@ -12857,7 +13019,7 @@ async function initAddresses() {
       if (Number(state.activeCategoryId) === Number(c.id)) btn.classList.add("is-active");
 
       btn.addEventListener("click", () => {
-        selectCategory(c.id, c.title);
+        selectCategory(c.id, c.title, { alignFirstCard: true });
       });
 
       elCatChips.appendChild(btn);
@@ -13465,6 +13627,7 @@ async function initAddresses() {
     });
     return __shopChatPromise;
   }
+  window.ensureShopChatLoaded = ensureShopChatLoaded;
 
   let __shopLatePromise = null;
   function ensureShopLateLoaded() {
@@ -13905,14 +14068,13 @@ async function initAddresses() {
     const hasCachedProducts = state.productsByCategory instanceof Map && state.productsByCategory.has(targetCategoryId);
     const hasCachedCombos = state.combosByCategory instanceof Map && state.combosByCategory.has(targetCategoryId);
     renderProducts();
-    scrollToCategory(categoryId);
     saveCatalogSnapshotFromState();
     if (!hasCachedProducts || !hasCachedCombos) {
       await loadProductsForCategory(targetCategoryId, { limit: 200, lite: true });
       renderProducts();
-      scrollToCategory(categoryId);
       saveCatalogSnapshotFromState();
     }
+    scrollToCategory(categoryId, { alignFirstCard: true });
   }
 
   function scheduleComboDetailsPrefetch(comboIds, opts = {}) {
@@ -14906,11 +15068,15 @@ async function initAddresses() {
       if (emptyPlaceholderEl) emptyPlaceholderEl.classList.add("hidden");
       if (listEl) {
         renderCartEmptyStateIntoList(listEl, cartModeHeader);
+        const bonusRedeemSection = buildCartBonusRedeemSection({ emptyCart: true });
+        if (bonusRedeemSection) listEl.appendChild(bonusRedeemSection);
+        else refreshCartBonusSectionAfterConfigLoad(listEl, totalEl);
       }
       if (totalEl) totalEl.textContent = money(0);
       if (listEl && bindInteractive) {
         bindCartItemsSectionControls(listEl);
         bindCartModeHeaderSticky(listEl);
+        bindCartBonusRedeemSection(listEl);
       }
       return { items: activeItems, total: 0, displayItems: items };
     }
@@ -16779,6 +16945,11 @@ function updateCartBadge() {
         if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
         updateMobileDeliveryProgress();
       }
+      const cartPageFloatingCheckout = document.getElementById("shopCartPageFloatingCheckout");
+      const cartPageFloatingCheckoutButton = document.getElementById("shopCartPageFloatingCheckoutButton");
+      cartPageFloatingCheckout?.classList.add("hidden");
+      cartPageFloatingCheckout?.classList.remove("is-inline-visible");
+      if (cartPageFloatingCheckoutButton) cartPageFloatingCheckoutButton.disabled = true;
       queueMobileUiStateSync("clearCartAll");
       return true;
     } finally {
@@ -17390,7 +17561,7 @@ function updateCartBadge() {
     }
   }
 
-  async function selectCategory(categoryId, title) {
+  async function selectCategory(categoryId, title, { alignFirstCard = false } = {}) {
     const id = Number(categoryId);
     if (Number.isFinite(id) && id > 0 && state.activeSubcategoryByCategory instanceof Map) {
       state.activeSubcategoryByCategory.delete(id);
@@ -17403,7 +17574,7 @@ function updateCartBadge() {
     saveCatalogSnapshotFromState();
     // Don't block click -> scroll; load in background.
     ensureCategoryLoaded(categoryId, { limit: 200 });
-    scrollToCategory(id);
+    scrollToCategory(id, { alignFirstCard });
     await warmupCartProducts();
     renderCart();
   }
@@ -18114,11 +18285,246 @@ function updateCartBadge() {
     if (scrollEl) scrollEl.style.display = hasCards ? "" : "none";
   }
 
+  let bonusProgramPageBackHandler = null;
+  let bonusProgramPageLevel = null;
+  let bonusProgramHistoryBound = false;
+  let bonusProgramHistoryRestoring = false;
+
+  function getBonusProgramLevelById(levelId = null) {
+    const numericLevelId = Number(levelId || 0);
+    const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
+    return levels.find((item) => Number(item?.id || 0) === numericLevelId)
+      || bonusProgramPageLevel
+      || getHomeBonusFirstLevel(state.homeBonusConfig);
+  }
+
+  function requestBonusProgramHistoryBack() {
+    if (window.history.state?.shopBonusProgramPage === true) {
+      window.history.back();
+      return;
+    }
+    if (typeof bonusProgramPageBackHandler === "function") bonusProgramPageBackHandler();
+  }
+
+  function renderBonusProgramHistoryState(historyState) {
+    const screen = String(historyState?.shopBonusProgramScreen || "main");
+    const level = getBonusProgramLevelById(historyState?.shopBonusProgramLevelId);
+    bonusProgramHistoryRestoring = true;
+    try {
+      if (screen === "referrals") openHomeReferralsSheet({ returnToProfile: true });
+      else if (screen === "levels") openHomeBonusCardsSheet({ sourceLevel: level });
+      else if (screen === "accruals") void openHomeBonusAccrualsSheet({ sourceLevel: level, returnToProfile: true });
+      else if (screen === "cashback") openHomeBonusCashbackSheet(level, { returnToProfile: true });
+      else if (screen === "categories") void openHomeBonusFavoriteCategoriesSheet(level, { returnToProfile: true });
+      else openHomeBonusLevelSheet(level, { returnToProfile: true });
+    } finally {
+      bonusProgramHistoryRestoring = false;
+    }
+  }
+
+  function ensureBonusProgramHistoryBinding() {
+    if (bonusProgramHistoryBound) return;
+    window.addEventListener("popstate", (event) => {
+      if (event.state?.shopBenefitsPage === true || event.state?.shopCompanyChatPage === true) return;
+      if (event.state?.shopBonusProgramPage === true) {
+        renderBonusProgramHistoryState(event.state);
+        return;
+      }
+      const page = document.getElementById("shopBonusProgramPage");
+      if (!page || page.classList.contains("hidden")) return;
+      closeBonusProgramPageToProfile();
+    });
+    bonusProgramHistoryBound = true;
+  }
+
+  function isMobileBonusProgramPageAvailable() {
+    return window.matchMedia?.("(max-width: 768px)").matches === true;
+  }
+
+  function ensureBonusProgramPage() {
+    let page = document.getElementById("shopBonusProgramPage");
+    if (page) return page;
+    page = document.createElement("section");
+    page.id = "shopBonusProgramPage";
+    page.className = "shop-bonus-program-page hidden";
+    page.innerHTML = `
+      <header class="shop-page-header shop-bonus-program-page-header">
+        <button class="shop-page-header-btn" type="button" data-bonus-program-page-back aria-label="Назад">
+          <i class="fas fa-arrow-left" aria-hidden="true"></i>
+        </button>
+        <h1 data-bonus-program-page-title></h1>
+        <span aria-hidden="true"></span>
+      </header>
+      <div class="shop-bonus-program-page-content no-scrollbar" data-bonus-program-page-content></div>
+      <footer class="shop-page-footer shop-bonus-program-page-footer hidden" data-bonus-program-page-footer></footer>
+    `;
+    page.querySelector("[data-bonus-program-page-back]")?.addEventListener("click", requestBonusProgramHistoryBack);
+    document.body.appendChild(page);
+    return page;
+  }
+
+  function showBonusProgramPage({ title, content, footer = null, onBack, screen, level = null }) {
+    if (!isMobileBonusProgramPageAvailable()) return false;
+    const page = ensureBonusProgramPage();
+    const contentHost = page.querySelector("[data-bonus-program-page-content]");
+    const footerHost = page.querySelector("[data-bonus-program-page-footer]");
+    page.querySelector("[data-bonus-program-page-title]").textContent = String(title || "");
+    contentHost.replaceChildren(content);
+    contentHost.scrollTop = 0;
+    footerHost.replaceChildren();
+    if (footer) footerHost.appendChild(footer);
+    footerHost.classList.toggle("hidden", !footer);
+    page.dataset.bonusProgramScreen = String(screen || "main");
+    bonusProgramPageBackHandler = typeof onBack === "function" ? onBack : null;
+    if (level) bonusProgramPageLevel = level;
+    ensureBonusProgramHistoryBinding();
+    const levelId = Number((level || bonusProgramPageLevel)?.id || 0) || null;
+    const currentHistoryState = window.history.state || {};
+    if (
+      !bonusProgramHistoryRestoring
+      && (
+        currentHistoryState.shopBonusProgramPage !== true
+        || currentHistoryState.shopBonusProgramScreen !== String(screen || "main")
+        || Number(currentHistoryState.shopBonusProgramLevelId || 0) !== Number(levelId || 0)
+      )
+    ) {
+      window.history.pushState({
+        ...currentHistoryState,
+        shopBonusProgramPage: true,
+        shopBonusProgramScreen: String(screen || "main"),
+        shopBonusProgramLevelId: levelId,
+      }, "", window.location.href);
+    }
+    page.classList.remove("hidden");
+    document.body.classList.add("shop-bonus-program-page-active");
+    document.body.classList.remove("shop-profile-page-active");
+    if (elProfilePage) elProfilePage.classList.add("hidden");
+    if (typeof setActiveNav === "function") setActiveNav("profile");
+    if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
+    if (elMobileBonusCardsActions) elMobileBonusCardsActions.classList.add("hidden");
+    queueMobileUiStateSync(`bonus-program-page-${String(screen || "main")}`);
+    return true;
+  }
+
+  function closeBonusProgramPageToProfile() {
+    const page = document.getElementById("shopBonusProgramPage");
+    page?.classList.add("hidden");
+    document.body.classList.remove("shop-bonus-program-page-active");
+    bonusProgramPageBackHandler = null;
+    bonusProgramPageLevel = null;
+    showProfileView();
+  }
+
+  function deactivateBonusProgramPage() {
+    const page = document.getElementById("shopBonusProgramPage");
+    page?.classList.add("hidden");
+    document.body.classList.remove("shop-bonus-program-page-active");
+    bonusProgramPageBackHandler = null;
+  }
+
+  function setBonusProgramPageFooter(footer = null) {
+    const page = document.getElementById("shopBonusProgramPage");
+    const footerHost = page?.querySelector("[data-bonus-program-page-footer]");
+    if (!footerHost) return;
+    footerHost.replaceChildren();
+    if (footer) footerHost.appendChild(footer);
+    footerHost.classList.toggle("hidden", !footer);
+  }
+
+  function returnToBonusProgramMainPage(level = bonusProgramPageLevel) {
+    const targetLevel = level || getHomeBonusFirstLevel(state.homeBonusConfig);
+    if (targetLevel) openHomeBonusLevelSheet(targetLevel, { returnToProfile: true });
+  }
+
+  function enableCheckoutUpsellAutoScroll(scrollEl) {
+    if (!scrollEl) return;
+    const cards = Array.from(scrollEl.children).filter((node) => node.classList?.contains("cart-upsell-card"));
+    if (!cards.length) return;
+    const gap = 8;
+    const cycleWidth = cards.reduce((width, card) => width + (card.getBoundingClientRect().width || 110), 0) + (cards.length * gap);
+    const viewportWidth = Math.max(scrollEl.clientWidth, Math.min(window.innerWidth || 0, 480));
+    const sideRepeatCount = Math.max(2, Math.ceil(viewportWidth / Math.max(1, cycleWidth)) + 1);
+    const createCloneSet = () => {
+      const fragment = document.createDocumentFragment();
+      cards.forEach((card) => {
+        const clone = card.cloneNode(true);
+        clone.classList.add("cart-upsell-card--marquee-clone");
+        clone.setAttribute("aria-hidden", "true");
+        clone.addEventListener("click", (event) => {
+          event.preventDefault();
+          card.click();
+        });
+        fragment.appendChild(clone);
+      });
+      return fragment;
+    };
+    for (let repeatIndex = 0; repeatIndex < sideRepeatCount; repeatIndex += 1) {
+      scrollEl.insertBefore(createCloneSet(), cards[0]);
+      scrollEl.appendChild(createCloneSet());
+    }
+
+    if (scrollEl._checkoutUpsellAutoScrollController) {
+      scrollEl._checkoutUpsellAutoScrollController.abort();
+    }
+    const controller = new AbortController();
+    scrollEl._checkoutUpsellAutoScrollController = controller;
+    let position = cycleWidth * sideRepeatCount;
+    let interactionPaused = false;
+    let resumeAt = 0;
+    let lastFrame = 0;
+    let internalScroll = false;
+    scrollEl.scrollLeft = position;
+    const normalizePosition = () => {
+      const lowerBound = cycleWidth * Math.max(1, sideRepeatCount - 1);
+      const upperBound = cycleWidth * (sideRepeatCount + 1);
+      while (position < lowerBound) position += cycleWidth;
+      while (position > upperBound) position -= cycleWidth;
+      internalScroll = true;
+      scrollEl.scrollLeft = position;
+      internalScroll = false;
+    };
+    const pause = () => {
+      interactionPaused = true;
+      position = scrollEl.scrollLeft;
+    };
+    const resume = () => {
+      position = scrollEl.scrollLeft;
+      normalizePosition();
+      resumeAt = performance.now() + 3000;
+      interactionPaused = false;
+    };
+    scrollEl.addEventListener("scroll", () => {
+      if (!internalScroll) position = scrollEl.scrollLeft;
+    }, { passive: true, signal: controller.signal });
+    scrollEl.addEventListener("pointerdown", pause, { passive: true, signal: controller.signal });
+    scrollEl.addEventListener("pointerup", resume, { passive: true, signal: controller.signal });
+    scrollEl.addEventListener("pointercancel", resume, { passive: true, signal: controller.signal });
+    const step = (now) => {
+      if (controller.signal.aborted || !scrollEl.isConnected) return;
+      const elapsed = lastFrame ? Math.min(40, now - lastFrame) : 0;
+      lastFrame = now;
+      if (
+        !interactionPaused
+        && now >= resumeAt
+        && document.body?.classList.contains("shop-checkout-overlay-open")
+      ) {
+        position += elapsed * 0.022;
+        normalizePosition();
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   function appendUpsellToList(listEl) {
     if (!listEl) return;
     var allProducts = state.upsellProducts || [];
     if (allProducts.length === 0) {
-      var old = listEl.querySelector(".shop-cart-upsell");
+      var old = listEl.querySelector(".shop-cart-upsell") || (
+        openCartSheetCtx?.listEl === listEl
+          ? openCartSheetCtx?.checkoutUpsellHostEl?.querySelector(".shop-cart-upsell")
+          : null
+      );
       if (old) old.remove();
       return;
     }
@@ -18130,7 +18536,11 @@ function updateCartBadge() {
       allProducts.filter(function(p) { return !cartProductIds.has(Number(p.id)); }).map(function(p) { return Number(p.id); })
     );
 
-    var upsellEl = listEl.querySelector(".shop-cart-upsell");
+    var upsellEl = listEl.querySelector(".shop-cart-upsell") || (
+      openCartSheetCtx?.listEl === listEl
+        ? openCartSheetCtx?.checkoutUpsellHostEl?.querySelector(".shop-cart-upsell")
+        : null
+    );
     var scrollEl;
 
     if (!upsellEl) {
@@ -18150,7 +18560,10 @@ function updateCartBadge() {
       }, { passive: false });
       upsellEl.appendChild(titleEl);
       upsellEl.appendChild(scrollEl);
-      listEl.appendChild(upsellEl);
+      var checkoutUpsellHost = openCartSheetCtx?.listEl === listEl
+        ? openCartSheetCtx?.checkoutUpsellHostEl
+        : null;
+      (checkoutUpsellHost || listEl).appendChild(upsellEl);
     } else {
       scrollEl = upsellEl.querySelector(".shop-cart-upsell-scroll");
       if (!scrollEl) {
@@ -18163,6 +18576,16 @@ function updateCartBadge() {
         listEl.appendChild(upsellEl);
       }
     }
+
+    const marqueeTrack = scrollEl.querySelector(":scope > .shop-cart-upsell-marquee-track");
+    if (marqueeTrack) {
+      marqueeTrack.querySelectorAll(":scope > .cart-upsell-card:not(.cart-upsell-card--marquee-clone)").forEach((card) => {
+        scrollEl.appendChild(card);
+      });
+      marqueeTrack.remove();
+      scrollEl.scrollLeft = 0;
+    }
+    scrollEl.querySelectorAll(":scope > .cart-upsell-card--marquee-clone").forEach((card) => card.remove());
 
     // Синхронизируем карточки: убираем лишние, добавляем недостающие
     var existingCards = scrollEl.querySelectorAll(".cart-upsell-card");
@@ -18188,6 +18611,9 @@ function updateCartBadge() {
     const visibleProducts = allProducts.filter((p) => visibleIds.has(Number(p.id)));
     const productsById = new Map(visibleProducts.map((p) => [Number(p.id), p]));
     ensureUpsellConfigObserver(scrollEl, productsById);
+    if (openCartSheetCtx?.checkoutUpsellHostEl?.contains(upsellEl)) {
+      enableCheckoutUpsellAutoScroll(scrollEl);
+    }
     if (openCartSheetCtx?.listEl === listEl) moveKsoCartUpsellToFooter(openCartSheetCtx);
   }
 
@@ -18603,6 +19029,15 @@ function updateCartBadge() {
     if (window.matchMedia("(max-width: 768px)").matches && elMobileCartActionsCart) {
       elMobileCartActionsCart.classList.toggle("hidden", !hasItemsNow);
     }
+    if (typeof window.syncShopCartPricingSummaryUi === "function") {
+      Promise.resolve(window.syncShopCartPricingSummaryUi({ reason: "upsell.add" }))
+        .then((snapshot) => {
+          if (typeof window.refreshOpenShopCheckoutPricingUi === "function") {
+            window.refreshOpenShopCheckoutPricingUi(snapshot || undefined);
+          }
+        })
+        .catch(() => {});
+    }
   }
 
   async function loadUnitConversions() {
@@ -18983,6 +19418,11 @@ function updateCartBadge() {
     if (!("ontouchstart" in window) && Number(navigator.maxTouchPoints || 0) <= 0) return false;
     if (window.matchMedia && !window.matchMedia("(max-width: 768px)").matches) return false;
     if (document.body?.classList.contains("shop-company-chat-open")) return false;
+    if (document.body?.classList.contains("shop-details-page-active")) return false;
+    if (document.body?.classList.contains("shop-cart-page-active")) return false;
+    if (document.body?.classList.contains("shop-orders-page-active")) return false;
+    if (document.body?.classList.contains("shop-favorites-page-active")) return false;
+    if (document.body?.classList.contains("shop-bonus-program-page-active")) return false;
     if (document.body?.classList.contains("modal-open") || document.body?.classList.contains("sheet-open")) return false;
     if (window.AppModal?.isOpen?.()) return false;
     return true;
@@ -19014,6 +19454,18 @@ function updateCartBadge() {
   }
 
   async function runShopPullRefresh() {
+    if (
+      document.body?.classList.contains("shop-orders-page-active")
+      || document.body?.classList.contains("shop-favorites-page-active")
+    ) {
+      setShopPullRefreshProgress(0, false);
+      if (shopPullRefreshState) {
+        shopPullRefreshState.pulling = false;
+        shopPullRefreshState.refreshing = false;
+        shopPullRefreshState.distance = 0;
+      }
+      return;
+    }
     setShopPullRefreshProgress(SHOP_PULL_REFRESH_THRESHOLD, true);
     window.location.reload();
     setTimeout(() => {
@@ -19347,6 +19799,13 @@ function bindIosBackSwipeGuard() {
   const VERTICAL_TOLERANCE_PX = 14;
 
   document.addEventListener("touchstart", (event) => {
+    if (
+      document.body?.classList.contains("shop-bonus-program-page-active")
+      || document.body?.classList.contains("shop-company-chat-page-active")
+    ) {
+      tracking = false;
+      return;
+    }
     const touch = event.touches && event.touches[0];
     if (!touch) return;
     startX = touch.clientX;
