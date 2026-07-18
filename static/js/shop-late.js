@@ -16733,11 +16733,13 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       const inlineButtonIsFullyVisible = inlineRect.top >= 0 && inlineRect.bottom <= navTop;
       floatingHost.classList.toggle("is-inline-visible", inlineButtonIsFullyVisible);
     };
+    floatingButton._shopCartCheckoutButton = checkoutButton;
+    cartPageContent._shopFloatingCheckoutSync = syncFloatingCheckout;
 
     if (floatingButton.dataset.cartCheckoutBound !== "1") {
       floatingButton.addEventListener("click", () => {
         floatingHost.classList.add("hidden");
-        checkoutButton.click();
+        floatingButton._shopCartCheckoutButton?.click();
       });
       floatingButton.dataset.cartCheckoutBound = "1";
     }
@@ -16747,7 +16749,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         if (frameId) return;
         frameId = requestAnimationFrame(() => {
           frameId = 0;
-          syncFloatingCheckout();
+          cartPageContent._shopFloatingCheckoutSync?.();
         });
       }, { passive: true });
       cartPageContent.dataset.floatingCheckoutBound = "1";
@@ -24509,12 +24511,16 @@ function openCartSheet() {
     }
     showSheetCart();
   });
-  window.addEventListener("popstate", (event) => {
+  if (typeof window.__shopCartCheckoutPopstateHandler === "function") {
+    window.removeEventListener("popstate", window.__shopCartCheckoutPopstateHandler, true);
+  }
+  window.__shopCartCheckoutPopstateHandler = (event) => {
     if (!useCartPage || !document.body?.classList.contains("shop-checkout-overlay-open")) return;
     if (checkoutOverlayPanel.querySelector(".shop-checkout-benefits-overlay-host.is-active")) return;
     event.stopImmediatePropagation();
     showSheetCart();
-  }, true);
+  };
+  window.addEventListener("popstate", window.__shopCartCheckoutPopstateHandler, true);
 
   const pickupSheetListView = document.createElement("div");
   pickupSheetListView.className = "shop-pickup-list-view";
@@ -37577,12 +37583,15 @@ function setBottomNavActive(tab) {
       let benefitsSnapshot = getBenefitsStoreSnapshot(initialBenefitsPreviewRequest);
       checkoutBenefitsPreview = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || null;
       if ((!checkoutBenefitsPreview || benefitsSnapshot?.needsExactHydration) && !isKsoCheckout) {
-        benefitsSnapshot = await ensureBenefitsStoreHydrated({
+        checkoutBenefitsPreview = null;
+        Promise.resolve(ensureBenefitsStoreHydrated({
           previewRequest: initialBenefitsPreviewRequest,
           force: false,
           warmDetails: false,
-        });
-        checkoutBenefitsPreview = benefitsSnapshot?.derivedPreview || benefitsSnapshot?.basePreview || null;
+        })).then(() => {
+          if (!isCheckoutViewCurrent()) return;
+          queueCartPricingAsyncRefresh("checkout-exact-benefits-ready", 0);
+        }).catch(() => {});
       } else if (isKsoCheckout && (benefitsSnapshot?.needsExactHydration || !checkoutBenefitsPreview)) {
         Promise.resolve(ensureBenefitsStoreHydrated({
           previewRequest: initialBenefitsPreviewRequest,
@@ -41111,7 +41120,7 @@ function setBottomNavActive(tab) {
         </div>`;
       resultWrap.classList.remove("hidden");
       wrap.classList.add("hidden");
-      checkoutOverlayFooterHost.classList.add("hidden");
+      openCartSheetCtx?.checkoutUpsellHostEl?.classList.add("hidden");
       setCartSheetFooterMode(openCartSheetCtx, "hidden");
       const btnNew = resultWrap.querySelector("[data-action=\"order-conflict-new\"]");
       const btnCancel = resultWrap.querySelector("[data-action=\"order-conflict-cancel\"]");
@@ -41120,7 +41129,7 @@ function setBottomNavActive(tab) {
         resultWrap.classList.add("hidden");
         resultWrap.innerHTML = "";
         wrap.classList.remove("hidden");
-        checkoutOverlayFooterHost.classList.remove("hidden");
+        openCartSheetCtx?.checkoutUpsellHostEl?.classList.remove("hidden");
         setCartSheetFooterMode(openCartSheetCtx, "checkout");
         onCancel();
       };

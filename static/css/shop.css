@@ -13230,12 +13230,13 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 
   .shop-cart-page-floating-checkout{
     position: absolute;
-    left: 16px;
-    right: 16px;
+    left: 50%;
+    right: auto;
+    width: min(254px, calc(100% - 32px));
     bottom: calc(var(--shop-bottomnav-h) + env(safe-area-inset-bottom) + 8px);
     z-index: 4;
     opacity: 1;
-    transform: translateY(0);
+    transform: translateX(-50%);
     transition: opacity 160ms ease, transform 160ms ease;
     pointer-events: auto;
   }
@@ -13250,7 +13251,7 @@ body.page-shop #shopCartPanel > .panel-body.shop-cart-body > .shop-cart > .shop-
 
   .shop-cart-page-floating-checkout.is-inline-visible{
     opacity: 0;
-    transform: translateY(8px);
+    transform: translate(-50%, 8px);
     pointer-events: none;
   }
 
