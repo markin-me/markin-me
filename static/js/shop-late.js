@@ -7170,6 +7170,8 @@ optionGroups.forEach((group) => {
   let standaloneDetailsBackHandler = null;
   let standaloneDetailsReturnTarget = "catalog";
   let standaloneDetailsStepBackHandler = null;
+  let standaloneComboLoadSeq = 0;
+  let standaloneComboLoadingId = null;
 
   function getFreshStandaloneFavoriteButton() {
     if (!standaloneDetailsFavoriteButton) return null;
@@ -7180,6 +7182,8 @@ optionGroups.forEach((group) => {
   }
 
   function finishStandaloneDetailsClose() {
+    standaloneComboLoadSeq += 1;
+    standaloneComboLoadingId = null;
     const backHandler = standaloneDetailsBackHandler;
     const returnTarget = standaloneDetailsReturnTarget;
     document.body?.classList.remove("shop-details-page-active");
@@ -10053,11 +10057,50 @@ optionGroups.forEach((group) => {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     const isKsoPage = Boolean(document.body && document.body.classList.contains("page-kso"));
     const hasCustomOnBack = typeof onBack === "function";
+    let standaloneFavoriteButton = null;
+    let standaloneLoadSeq = null;
+
+    if (isMobile && !isKsoPage) {
+      if (
+        standaloneComboLoadingId === safeComboId &&
+        document.body?.classList.contains("shop-details-page-active")
+      ) {
+        return;
+      }
+
+      let comboPreview = null;
+      if (state.combosByCategory instanceof Map) {
+        for (const combos of state.combosByCategory.values()) {
+          comboPreview = (Array.isArray(combos) ? combos : []).find(
+            (combo) => Number(combo?.id || 0) === safeComboId
+          ) || null;
+          if (comboPreview) break;
+        }
+      }
+
+      standaloneLoadSeq = ++standaloneComboLoadSeq;
+      standaloneComboLoadingId = safeComboId;
+      standaloneFavoriteButton = prepareStandaloneDetailsPage({
+        title: comboPreview?.title || "Комбо",
+        onBack: hasCustomOnBack ? onBack : null,
+        returnTarget: cartKey ? "cart" : (hasCustomOnBack ? "custom" : "catalog"),
+      });
+      standaloneDetailsContent.innerHTML = '<div class="shop-combo-picker-expand-loading">Загрузка…</div>';
+      if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
+    }
+
     let data = null;
     try {
       data = await resolveComboDetails(safeComboId);
     } catch (e) {
       console.warn("openComboDetails: failed to load combo", comboId, e);
+      if (
+        standaloneLoadSeq === standaloneComboLoadSeq &&
+        document.body?.classList.contains("shop-details-page-active")
+      ) {
+        standaloneComboLoadingId = null;
+        standaloneDetailsContent.innerHTML = '<div class="shop-combo-picker-expand-loading">Не удалось загрузить комбо</div>';
+      }
       if (String(e?.message || "") === "OUT_OF_STOCK") {
         showToast("Комбо больше недоступно");
         if (Number.isFinite(Number(state.activeCategoryId))) {
@@ -10069,14 +10112,31 @@ optionGroups.forEach((group) => {
       }
       return;
     }
-    if (!data) return;
+    if (!data) {
+      if (
+        standaloneLoadSeq === standaloneComboLoadSeq &&
+        document.body?.classList.contains("shop-details-page-active")
+      ) {
+        standaloneComboLoadingId = null;
+        standaloneDetailsContent.innerHTML = '<div class="shop-combo-picker-expand-loading">Не удалось загрузить комбо</div>';
+      }
+      return;
+    }
 
     if (isMobile && !isKsoPage) {
-      openStandaloneComboPage(data, {
+      if (
+        standaloneLoadSeq !== standaloneComboLoadSeq ||
+        !document.body?.classList.contains("shop-details-page-active")
+      ) {
+        return;
+      }
+      standaloneComboLoadingId = null;
+      if (standaloneDetailsTitle) standaloneDetailsTitle.textContent = String(data.title || "Комбо");
+      renderComboDetailsInto(standaloneDetailsContent, data, {
+        onBack: closeStandaloneDetailsPage,
         cartKey,
         prefillItem,
-        onBack: hasCustomOnBack ? onBack : null,
-        returnTarget: cartKey ? "cart" : (hasCustomOnBack ? "custom" : "catalog"),
+        favoriteButton: standaloneFavoriteButton,
       });
       return;
     }
