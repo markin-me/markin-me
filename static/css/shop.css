@@ -20299,12 +20299,12 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
 
   .shop-profile-page{
     position: fixed;
-    inset: 0 0 calc(var(--shop-bottomnav-h) + env(safe-area-inset-bottom)) 0;
+    inset: 0;
     z-index: 20;
     display: block;
     width: 100vw;
     min-height: 0;
-    padding: 0 0 calc(var(--shop-bottomnav-h) + 24px + env(safe-area-inset-bottom));
+    padding: 0;
     background: var(--color-surface-2);
     display: flex;
     flex-direction: column;
@@ -20476,7 +20476,7 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     flex: 1;
     overflow-y: auto;
     min-height: 0;
-    padding: 16px;
+    padding: 16px 16px calc(16px + var(--shop-bottomnav-h) + 24px + env(safe-area-inset-bottom));
   }
 
   .shop-orders-page{
@@ -28805,17 +28805,23 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   .shop-mobile-bottom-container .shop-nav-btn {
     width: 50px;
     height: 50px;
-    border: 1px solid var(--color-border);
+    border: 0;
     border-radius: 14px;
-    background: #fff;
-    box-shadow: 0 3px 10px rgba(31, 42, 58, 0.14);
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    box-shadow: 0 8px 18px rgba(20, 29, 48, 0.16);
     opacity: 1;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
   .shop-mobile-bottom-container .shop-nav-btn.is-active {
-    background: #feebde;
+    background: linear-gradient(135deg, var(--shop-buy), #ffb15a);
+    color: var(--shop-buy-text);
+  }
+  .shop-mobile-bottom-container .shop-nav-btn.is-active i,
+  .shop-mobile-bottom-container .shop-nav-btn.is-active .shop-nav-catalog-icon {
+    color: var(--shop-buy-text);
   }
 
   .shop-mobile-bottom-container #shopNavMenu {
