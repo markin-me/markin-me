@@ -8216,14 +8216,11 @@ optionGroups.forEach((group) => {
 
       const state = selectionStateByBlock[blockIndex] || {};
       const payloadPreview = !useRandomizer ? getComboPreviewFromProductPayload(prod) : null;
-      const hasSavedDetailsForProduct =
-        state.product_id === productId &&
-        (str(state.variant_label || "").trim() !== "" ||
-          (Array.isArray(state.ingredients_display) && state.ingredients_display.length > 0));
       const hasSavedPriceForProduct =
         (state.unit_price_before_discount != null && Number.isFinite(Number(state.unit_price_before_discount))) ||
         (state.unit_price_override != null && Number.isFinite(Number(state.unit_price_override)));
-      if (!useRandomizer && preferSavedState && hasSavedDetailsForProduct && hasSavedPriceForProduct) {
+      const hasSavedStateForProduct = state.product_id === productId && hasSavedPriceForProduct;
+      if (!useRandomizer && preferSavedState && hasSavedStateForProduct) {
         return;
       }
 
@@ -8246,7 +8243,7 @@ optionGroups.forEach((group) => {
         let vIdx;
 
         // Если в состоянии уже сохранён вариант именно для этого товара — используем его.
-        const useSavedStateForProduct = preferSavedState && hasSavedDetailsForProduct;
+        const useSavedStateForProduct = preferSavedState && hasSavedStateForProduct;
 
         if (useSavedStateForProduct && state.variant_value_index != null) {
           vIdx = Number(state.variant_value_index);
@@ -9049,10 +9046,17 @@ optionGroups.forEach((group) => {
         (str(selectedStateForHydrate?.variant_label || "").trim() !== "" ||
           (Array.isArray(selectedStateForHydrate?.ingredients_display) &&
             selectedStateForHydrate.ingredients_display.length > 0));
+      const hasStatePriceForSelected =
+        stateProductIdForHydrate === selectedProductIdForHydrate &&
+        ((selectedStateForHydrate?.unit_price_before_discount != null &&
+          Number.isFinite(Number(selectedStateForHydrate.unit_price_before_discount))) ||
+          (selectedStateForHydrate?.unit_price_override != null &&
+            Number.isFinite(Number(selectedStateForHydrate.unit_price_override))));
       if (
         Number.isFinite(selectedProductIdForHydrate) &&
         selectedProductIdForHydrate > 0 &&
         !hasStateDetailsForSelected &&
+        !hasStatePriceForSelected &&
         !pickerBlockHydrating.has(Number(blockIndex))
       ) {
         pickerBlockHydrating.add(Number(blockIndex));
