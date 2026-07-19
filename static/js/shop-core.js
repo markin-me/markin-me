@@ -12790,7 +12790,9 @@ async function initAddresses() {
     }
     const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
     const telegramSafeTop = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--shop-tg-content-safe-top")) || 0;
-    const stickyTop = telegramSafeTop + (document.body.classList.contains("shop-header-collapsed") ? 0 : headerH) + 48;
+    const categoryToolbarH = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--shop-catalog-sticky-category-h")) || 44;
+    const subcategoryGap = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--shop-catalog-sticky-subcategory-gap")) || 0;
+    const stickyTop = telegramSafeTop + (document.body.classList.contains("shop-header-collapsed") ? 0 : headerH) + categoryToolbarH + subcategoryGap;
     let stuckIndex = -1;
     rows.forEach((row, index) => {
       const top = row.getBoundingClientRect().top;
