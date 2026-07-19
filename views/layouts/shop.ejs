@@ -26,6 +26,7 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="<%= shopPwaTitle %>" id="appAppleMobileWebAppTitle" />
   <meta name="theme-color" content="#ffffff" id="themeColorMeta" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
   <script>
     (function () {
@@ -64,8 +65,8 @@
   <% } %>
 
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260717catalog-mobile-white-background') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260717catalog-mobile-white-background') %>" /></noscript>
+  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260719telegram-safe-area') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260719telegram-safe-area') %>" /></noscript>
   <link rel="preload" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" /></noscript>
 </head>

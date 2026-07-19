@@ -50,6 +50,7 @@
   --radius-md:12px;
 
   --header-height:50px;
+  --shop-tg-content-safe-top:var(--tg-content-safe-area-inset-top, 0px);
 
   /* вњ… РµРґРёРЅС‹Рµ РёРјРµРЅР° (РєР°Рє Сѓ С‚РµР±СЏ РІ layout+js) */
   --sidebar-width:200px;
@@ -16566,7 +16567,7 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
 @media (max-width: 768px){
   .shop-category-subcategory-row{
     position: sticky;
-    top: calc(var(--header-height) + 48px);
+    top: calc(var(--shop-tg-content-safe-top) + var(--header-height) + 48px);
     z-index: 10;
     margin: 0 -2px;
     padding: 0 2px 8px;
@@ -16587,7 +16588,7 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
     pointer-events: none;
   }
   body.page-shop.shop-header-collapsed .shop-category-subcategory-row{
-    top: 48px;
+    top: calc(var(--shop-tg-content-safe-top) + 48px);
   }
   .shop-category-subcategory-row .shop-subcategory-chips{
     margin-top: 0;
@@ -19993,10 +19994,10 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     display: none !important;
   }
   body.page-shop .center-stack > .panel:first-child .toolbar{
-    top: 0;
+    top: var(--shop-tg-content-safe-top);
   }
   body.page-shop .main-container{
-    padding-top: 0;
+    padding-top: var(--shop-tg-content-safe-top);
     min-height: 100dvh;
   }
 
