@@ -41057,12 +41057,9 @@ function setBottomNavActive(tab) {
       if (!(createdOrderId > 0)) {
         throw new Error("ORDER_DETAILS_UNAVAILABLE");
       }
+      if (typeof onBack === "function") onBack();
       const currentCustomer = await fetchMeSafe();
       if (!currentCustomer) throw new Error("ORDER_DETAILS_UNAVAILABLE");
-      if (typeof openCartSheetCtx?.showSheetCart === "function") {
-        openCartSheetCtx.showSheetCart();
-        openCartSheetCtx.lastRenderSignature = "";
-      }
       const activeCartPage = document.getElementById("shopCartPage");
       if (document.body.classList.contains("shop-cart-page-active") && activeCartPage) {
         activeCartPage.classList.add("hidden");
@@ -41076,7 +41073,11 @@ function setBottomNavActive(tab) {
       } else if (typeof closeShopSheetIfOpen === "function") {
         closeShopSheetIfOpen();
       }
-      const detailsContext = openProfileOrdersPage(currentCustomer, { sourceScreen: "home" });
+      const detailsContext = openProfileModal(currentCustomer, {
+        initialTab: "orders",
+        ordersOnly: true,
+        sourceScreen: "home",
+      });
       if (!detailsContext || typeof detailsContext.showOrderDetails !== "function") {
         throw new Error("ORDER_DETAILS_UNAVAILABLE");
       }
