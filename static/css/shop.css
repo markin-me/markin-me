@@ -28172,7 +28172,21 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     --shop-mobile-action-h: 44px;
     pointer-events: none;
   }
+  .shop-mobile-bottom-container::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    width: min(520px, 100vw);
+    height: calc(var(--shop-bottomnav-h) + 22px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    background: linear-gradient(180deg, rgba(249, 250, 251, 0), rgba(249, 250, 251, 0.88) 42%, rgba(249, 250, 251, 0.98));
+    pointer-events: none;
+    z-index: 0;
+  }
   .shop-mobile-bottom-container > * {
+    position: relative;
+    z-index: 1;
     pointer-events: auto;
   }
   
