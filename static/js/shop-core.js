@@ -12724,7 +12724,6 @@ async function initAddresses() {
       const scrollTarget = isMobile ? targetEl : header;
       if (isMobile) {
         const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
-        const telegramSafeTop = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--shop-tg-content-safe-top")) || 0;
         const headerVisibleH = (document.body.classList.contains("shop-header-collapsed") || Number(window.scrollY || 0) > 44) ? 0 : headerH;
         const chipsH = elCatChipsWrap?.getBoundingClientRect ? elCatChipsWrap.getBoundingClientRect().height : 0;
         const subcategoryRow = elProductsGrid?.querySelector?.(`.shop-category-subcategory-row[data-parent-cat-id="${id}"]`);
@@ -12738,7 +12737,7 @@ async function initAddresses() {
         }
         const subcategoryH = subcategoryRow?.getBoundingClientRect ? subcategoryRow.getBoundingClientRect().height : 0;
         const rect = scrollTarget.getBoundingClientRect();
-        const visibleTop = telegramSafeTop + headerVisibleH + chipsH + subcategoryH + 12;
+        const visibleTop = headerVisibleH + chipsH + subcategoryH + 12;
         const targetCenterOffset = alignFirstCard
           ? 0
           : Math.max(0, (window.innerHeight / 2) - (rect.height / 2) - 200);
@@ -12789,10 +12788,9 @@ async function initAddresses() {
       return;
     }
     const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
-    const telegramSafeTop = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--shop-tg-content-safe-top")) || 0;
     const categoryToolbarH = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--shop-catalog-sticky-category-h")) || 44;
     const subcategoryGap = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--shop-catalog-sticky-subcategory-gap")) || 0;
-    const stickyTop = telegramSafeTop + (document.body.classList.contains("shop-header-collapsed") ? 0 : headerH) + categoryToolbarH + subcategoryGap;
+    const stickyTop = (document.body.classList.contains("shop-header-collapsed") ? 0 : headerH) + categoryToolbarH + subcategoryGap;
     let stuckIndex = -1;
     rows.forEach((row, index) => {
       const top = row.getBoundingClientRect().top;
