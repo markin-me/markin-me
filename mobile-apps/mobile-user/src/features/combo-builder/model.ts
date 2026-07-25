@@ -1,5 +1,5 @@
 import type { CatalogComboBlockProduct, CatalogComboDetails, UnitConversion } from '../../entities/product';
-import { resolveAssetUrl } from '../../shared/api';
+import { getCatalogSnapshotProduct, resolveAssetUrl } from '../../shared/api';
 import { calculateVariantUnitPrice } from '../../shared/lib/productStock';
 
 type AnyRecord = Record<string, unknown>;
@@ -221,7 +221,11 @@ export function buildComboConfiguredProduct(
 }
 
 export function getComboProductImage(product: CatalogComboBlockProduct | null, config?: ComboConfiguredProduct | null) {
-  if (config?.product_photo) return resolveAssetUrl(config.product_photo);
+  const productId = Number(config?.product_id || product?.product_id || 0);
+  const catalogProduct = Number.isFinite(productId) && productId > 0
+    ? getCatalogSnapshotProduct(productId)
+    : null;
+  if (catalogProduct?.photos?.[0]) return resolveAssetUrl(catalogProduct.photos[0]);
   const photosRaw = product?.product_photos_json;
   const photos = Array.isArray(photosRaw)
     ? photosRaw
@@ -235,7 +239,7 @@ export function getComboProductImage(product: CatalogComboBlockProduct | null, c
         }
       })()
       : [];
-  return resolveAssetUrl(product?.product_photo || photos[0] || '');
+  return resolveAssetUrl(photos[0] || config?.product_photo || product?.product_photo || '');
 }
 
 export function getComboProductTitle(product: CatalogComboBlockProduct | null, config?: ComboConfiguredProduct | null) {

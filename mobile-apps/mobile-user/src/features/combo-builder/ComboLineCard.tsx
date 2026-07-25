@@ -1,6 +1,8 @@
 import {
   Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { Image,
+  Platform,
   Pressable,
   StyleSheet,
   View,
@@ -60,7 +62,11 @@ export function ComboLineCard({
     >
       <View style={styles.comboLineImageWrap}>
         {image ? (
-          <Image resizeMode="contain" source={{ uri: image }} style={styles.comboLineImage} />
+          Platform.OS === 'web' ? (
+            <Image resizeMode="contain" source={{ uri: image }} style={styles.comboLineImage} />
+          ) : (
+            <ExpoImage cachePolicy="memory-disk" contentFit="contain" source={{ uri: image }} style={styles.comboLineImage} />
+          )
         ) : (
           <View style={styles.placeholder} />
         )}

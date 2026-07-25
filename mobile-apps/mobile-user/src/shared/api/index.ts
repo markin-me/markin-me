@@ -398,6 +398,7 @@ const memoryCustomerDiscounts = new Map<string, CustomerBenefitCard[]>();
 const memoryCustomerOrderDetails = new Map<string, CustomerOrder | null>();
 const memoryCustomerOrders = new Map<string, CustomerOrdersPayload>();
 const passportLoadRequests = new Map<number, Promise<CatalogProductPassport | null>>();
+const refreshedCatalogPassportIds = new Set<number>();
 const fullPassportLoadRequests = new Map<number, Promise<FullProductPassport | null>>();
 const fullPassportBatchLoadRequests = new Map<string, Promise<Record<string, FullProductPassport>>>();
 const comboDetailsLoadRequests = new Map<number, Promise<CatalogComboDetails>>();
@@ -981,6 +982,12 @@ export function getFullProductPassport(productId: number): FullProductPassport |
 export function getCatalogSnapshotProduct(productId: number): CatalogProduct | null {
   const id = Number(productId);
   if (!Number.isFinite(id) || id <= 0) return null;
+  for (const payload of memoryCatalogCategories.values()) {
+    for (const list of payload.productsByCategory.values()) {
+      const product = (Array.isArray(list) ? list : []).find((item) => Number(item?.id || 0) === id);
+      if (product) return product;
+    }
+  }
   const lists = Object.values(memoryCatalogSnapshot?.productsByCategory || {});
   for (const list of lists) {
     const product = (Array.isArray(list) ? list : []).find((item) => Number(item?.id || 0) === id);
@@ -1975,6 +1982,10 @@ async function mergeMobileCatalogPassports(snapshot: MobileCatalogSnapshot, prod
     method: 'POST',
   });
   const data = response.data || {};
+  Object.keys(data).forEach((productId) => {
+    const id = Number(productId);
+    if (Number.isFinite(id) && id > 0) refreshedCatalogPassportIds.add(id);
+  });
   const fullPassports = normalizeFullProductPassportMap(Object.fromEntries(
     Object.entries(data).map(([id, passport]) => [id, fullProductPassportFromCatalogPassport(passport)]),
   ));
@@ -2020,11 +2031,18 @@ export async function ensureMobileCatalogProductPassport(productId: number) {
   if (!baseSnapshot) return null;
 
   const existing = baseSnapshot.productPassports?.[String(id)];
-  if (existing && Array.isArray(existing.ingredients) && Array.isArray(existing.optionGroups)) return existing;
+  if (
+    refreshedCatalogPassportIds.has(id)
+    && existing
+    && Array.isArray(existing.ingredients)
+    && Array.isArray(existing.optionGroups)
+  ) return existing;
 
   try {
     const nextSnapshot = await mergeMobileCatalogPassports(baseSnapshot, [id]);
-    return nextSnapshot.productPassports?.[String(id)] || existing || null;
+    const refreshed = nextSnapshot.productPassports?.[String(id)] || null;
+    if (refreshed) refreshedCatalogPassportIds.add(id);
+    return refreshed || existing || null;
   } catch {
     return existing || null;
   }
@@ -2042,6 +2060,10 @@ export async function fetchMobileCatalogSnapshot() {
   const snapshot = await requestJson<MobileCatalogSnapshot>('/api/public/mobile/catalog-snapshot');
   const normalized = normalizeMobileCatalogSnapshot(snapshot);
   if (!normalized) throw new Error('BAD_MOBILE_SNAPSHOT');
+  Object.keys(normalized.productPassports || {}).forEach((productId) => {
+    const id = Number(productId);
+    if (Number.isFinite(id) && id > 0) refreshedCatalogPassportIds.add(id);
+  });
   await saveMobileCatalogSnapshot(normalized);
   return normalized;
 }

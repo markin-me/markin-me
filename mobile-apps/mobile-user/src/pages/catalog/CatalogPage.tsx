@@ -194,6 +194,7 @@ type CatalogDeliveryMode = FulfillmentMode;
 const CATALOG_DELIVERY_HEADER_HEIGHT = 132;
 const CATALOG_CATEGORIES_HEIGHT = theme.sizes.categoryChipHeight + theme.spacing.sm + theme.spacing.md;
 const CATALOG_SUBCATEGORIES_HEIGHT = theme.sizes.categoryChipHeight + theme.spacing.md;
+const CATALOG_CATEGORY_SCROLL_GAP = theme.spacing.sm;
 const CATALOG_REFRESH_TRIGGER_DISTANCE = 110;
 const CATALOG_REFRESH_PROGRESS_OFFSET = 96;
 const CATALOG_FOCUS_RESUME_DELAY_MS = 280;
@@ -1939,6 +1940,8 @@ export function CatalogPage() {
   const activeCategoryStoreRef = useRef<NumberValueStore>(createNumberValueStore(null));
   const productRuntimeStoreRef = useRef<ProductRuntimeStore>(createProductRuntimeStore());
   const categoryHeaderLayoutsRef = useRef<Array<{ categoryId: number; offset: number }>>([]);
+  const categoryIndexByIdRef = useRef(new Map<number, number>());
+  const categoryContentScrollOffsetByIdRef = useRef(new Map<number, number>());
   const categoryDataCacheRef = useRef<CategoryDataCache>(getEmptyCategoryDataCache());
   const categoryNetworkLoadedRef = useRef(new Set<number>());
   const categoryLoadRequestsRef = useRef(new Map<number, Promise<void>>());
@@ -2130,6 +2133,37 @@ export function CatalogPage() {
     });
     return layouts;
   }, [catalogItemLayouts, catalogItems]);
+  const categoryContentScrollOffsetById = useMemo(() => {
+    const offsets = new Map<number, number>();
+    categoryIndexById.forEach((headerIndex, categoryId) => {
+      let contentIndex = headerIndex + 1;
+      let stickyRowsHeight = CATALOG_CATEGORIES_HEIGHT;
+      if (catalogItems[contentIndex]?.type === 'subcategories') {
+        contentIndex += 1;
+        stickyRowsHeight += CATALOG_SUBCATEGORIES_HEIGHT;
+      }
+      const contentLayout = catalogItemLayouts[contentIndex];
+      if (contentLayout) offsets.set(
+        categoryId,
+        Math.max(0, contentLayout.offset - stickyRowsHeight - CATALOG_CATEGORY_SCROLL_GAP),
+      );
+    });
+    return offsets;
+  }, [catalogItemLayouts, catalogItems, categoryIndexById]);
+  categoryIndexByIdRef.current = categoryIndexById;
+  categoryContentScrollOffsetByIdRef.current = categoryContentScrollOffsetById;
+  useEffect(() => {
+    const categoryId = programmaticCategoryId.current;
+    if (categoryId == null) return;
+    const targetOffset = categoryContentScrollOffsetByIdRef.current.get(categoryId);
+    if (targetOffset == null) return;
+    if (Math.abs(catalogScrollOffsetY.current - targetOffset) <= CATALOG_SCROLL_RETARGET_THRESHOLD) return;
+    const frame = requestAnimationFrame(() => {
+      if (programmaticCategoryId.current !== categoryId) return;
+      listRef.current?.scrollToOffset({ animated: false, offset: targetOffset });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [categoryContentScrollOffsetById]);
   useEffect(() => {
     visibleCatalogRowsKey.current = '';
   }, [catalogItems]);
@@ -3062,28 +3096,21 @@ export function CatalogPage() {
       scrollChips: true,
       warmup: true,
     });
-    const index = categoryIndexById.get(categoryId);
+    const index = categoryIndexByIdRef.current.get(categoryId);
     if (index != null) {
-      const layout = catalogItemLayouts[index];
+      const targetOffset = categoryContentScrollOffsetByIdRef.current.get(categoryId);
       listRef.current?.scrollToOffset({
         animated: !isAndroid,
-        offset: Math.max(0, (layout?.offset || 0) - CATALOG_CATEGORIES_HEIGHT),
+        offset: targetOffset ?? 0,
       });
-      programmaticScrollTimer.current = setTimeout(() => {
-        if (programmaticScrollRequestId.current === scrollRequestId) {
-          programmaticCategoryId.current = null;
-        }
-      }, CATALOG_PROGRAMMATIC_SCROLL_RESET_MS);
     }
     void ensureCategoryLoaded(categoryId).then(() => {
-      setTimeout(() => {
+      requestAnimationFrame(() => {
         if (programmaticScrollRequestId.current !== scrollRequestId) return;
-        if (isCatalogScrollingRef.current) return;
         if (programmaticCategoryId.current !== categoryId) return;
-        const nextIndex = categoryIndexById.get(categoryId);
+        const nextIndex = categoryIndexByIdRef.current.get(categoryId);
         if (nextIndex != null) {
-          const layout = catalogItemLayouts[nextIndex];
-          const nextOffset = Math.max(0, (layout?.offset || 0) - CATALOG_CATEGORIES_HEIGHT);
+          const nextOffset = categoryContentScrollOffsetByIdRef.current.get(categoryId) ?? 0;
           if (Math.abs(catalogScrollOffsetY.current - nextOffset) > CATALOG_SCROLL_RETARGET_THRESHOLD) {
             listRef.current?.scrollToOffset({
               animated: false,
@@ -3091,9 +3118,17 @@ export function CatalogPage() {
             });
           }
         }
-      }, 40);
-    }).catch(() => null);
-  }, [catalogItemLayouts, categoryIndexById, ensureCategoryLoaded, setActiveCategory]);
+      });
+    }).catch(() => null).finally(() => {
+      if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
+      programmaticScrollTimer.current = setTimeout(() => {
+        if (programmaticScrollRequestId.current === scrollRequestId) {
+          programmaticCategoryId.current = null;
+          updatePinnedSubcategoryFromScroll();
+        }
+      }, CATALOG_PROGRAMMATIC_SCROLL_RESET_MS);
+    });
+  }, [ensureCategoryLoaded, setActiveCategory, updatePinnedSubcategoryFromScroll]);
 
   const pressCategoryChip = useCallback((categoryId: number) => {
     isChipInteractingRef.current = false;
@@ -3120,15 +3155,15 @@ export function CatalogPage() {
   }, [navigation, visibleCategories]);
 
   const scrollToFilteredCategory = useCallback((categoryId: number) => {
-    const subcategoryLayout = subcategoryLayoutByCategory.get(categoryId);
-    if (!subcategoryLayout) return;
+    const targetOffset = categoryContentScrollOffsetById.get(categoryId);
+    if (targetOffset == null) return;
     const scrollRequestId = programmaticScrollRequestId.current + 1;
     programmaticScrollRequestId.current = scrollRequestId;
     programmaticCategoryId.current = categoryId;
     setActiveCategory(categoryId, { force: true, scrollChips: true });
     listRef.current?.scrollToOffset({
       animated: !isAndroid,
-      offset: Math.max(0, subcategoryLayout.offset - CATALOG_CATEGORIES_HEIGHT),
+      offset: targetOffset,
     });
     if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
     programmaticScrollTimer.current = setTimeout(() => {
@@ -3136,7 +3171,7 @@ export function CatalogPage() {
       programmaticCategoryId.current = null;
       updatePinnedSubcategoryFromScroll();
     }, CATALOG_PROGRAMMATIC_SCROLL_RESET_MS);
-  }, [setActiveCategory, subcategoryLayoutByCategory, updatePinnedSubcategoryFromScroll]);
+  }, [categoryContentScrollOffsetById, setActiveCategory, updatePinnedSubcategoryFromScroll]);
 
   const selectCatalogSubcategory = useCallback(async (categoryId: number, subcategoryId: number) => {
     const category = visibleCategories.find((item) => Number(item.id) === categoryId);
@@ -3565,6 +3600,9 @@ export function CatalogPage() {
     }
 
     if (item.type === 'subcategories') {
+      if (pinnedSubcategoryCategoryId === item.categoryId) {
+        return <View style={styles.subcategoriesPlaceholder} />;
+      }
       return renderSubcategoryRow(item.categoryId, item.children, 'inline');
     }
 
@@ -3590,6 +3628,7 @@ export function CatalogPage() {
     isCatalogDeliveryMode,
     openCatalogAddresses,
     openCategories,
+    pinnedSubcategoryCategoryId,
     pressCategoryChip,
     renderCatalogCard,
     endChipInteractionSoon,
@@ -3620,7 +3659,7 @@ export function CatalogPage() {
           </Pressable>
         </View>
       ) : (
-        <Animated.FlatList
+        <FlatList
           ref={listRef}
           data={catalogItems}
           style={styles.content}
@@ -4134,8 +4173,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     paddingRight: theme.spacing.lg,
   },
+  subcategoriesPlaceholder: {
+    height: CATALOG_SUBCATEGORIES_HEIGHT,
+  },
   subcategoriesWrap: {
-    backgroundColor: theme.colors.mutedBackground,
+    backgroundColor: 'transparent',
     height: CATALOG_SUBCATEGORIES_HEIGHT,
     justifyContent: 'center',
   },

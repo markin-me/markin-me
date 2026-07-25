@@ -200,36 +200,76 @@ function getIngredientTitle(item: unknown) {
 
 function getIngredientImage(item: unknown) {
   const source = asRecord(item);
+  const ingredientProductId = toPositiveId(source.ingredient_id || source.product_id || source.id);
+  const catalogProduct = ingredientProductId ? getCatalogSnapshotProduct(ingredientProductId) : null;
   const photo = trimText(
+    catalogProduct?.photos?.[0] ||
+    asArray(source.ingredient_photos)[0] ||
     source.photo_thumb ||
     source.photo_lqip ||
     source.photo ||
     source.image_thumb ||
     source.image_url ||
     source.ingredient_photo_thumb ||
-    source.ingredient_photo ||
-    asArray(source.ingredient_photos)[0],
+    source.ingredient_photo,
   );
   return resolveAssetUrl(photo);
 }
 
 function getOptionItemImage(item: unknown) {
   const source = asRecord(item);
+  const targetProductId = toPositiveId(source.target_product_id || source.product_id);
+  const catalogProduct = targetProductId
+    ? getCatalogSnapshotProduct(targetProductId)
+      || getCatalogProductPassport(targetProductId)?.product
+      || getFullProductPassport(targetProductId)?.product
+    : null;
   const targetProduct = asRecord(source.target_product || source.product);
   const photo = trimText(
+    catalogProduct?.photos?.[0] ||
+    asArray(source.product_photos_json)[0] ||
+    asArray(source.photos)[0] ||
     source.photo_thumb ||
     source.photo_lqip ||
     source.photo ||
     source.image_thumb ||
     source.image_url ||
     source.product_photo ||
-    asArray(source.photos)[0] ||
-    asArray(source.product_photos_json)[0] ||
     targetProduct.photo_thumb ||
     targetProduct.photo_lqip ||
     asArray(targetProduct.photos)[0],
   );
   return resolveAssetUrl(photo);
+}
+
+function getOptionItemDefaultVariant(item: unknown) {
+  const source = asRecord(item);
+  const variants = asArray(source.variants);
+  const targetProductId = toPositiveId(source.target_product_id || source.product_id);
+  const catalogProduct = targetProductId
+    ? getCatalogSnapshotProduct(targetProductId)
+      || getCatalogProductPassport(targetProductId)?.product
+      || getFullProductPassport(targetProductId)?.product
+    : null;
+  const productDefault = asRecord(catalogProduct?.default_variant);
+  const defaultGroupId = toPositiveId(productDefault.variant_group_id);
+  const defaultIndex = Number(productDefault.variant_value_index);
+
+  for (const variantRaw of variants) {
+    const variant = asRecord(variantRaw);
+    const values = asArray(variant.values);
+    if (!values.length) continue;
+    const groupId = toPositiveId(variant.variant_group_id || variant.id);
+    if (defaultGroupId === groupId && Number.isFinite(defaultIndex) && defaultIndex >= 0 && defaultIndex < values.length) {
+      return { group: variantRaw, index: defaultIndex };
+    }
+    const groupDefaultIndex = Number(variant.default_value_index ?? 0);
+    if (Number.isFinite(groupDefaultIndex) && groupDefaultIndex >= 0 && groupDefaultIndex < values.length) {
+      return { group: variantRaw, index: groupDefaultIndex };
+    }
+  }
+
+  return null;
 }
 
 function getIngredientUnit(item: unknown) {
@@ -305,6 +345,31 @@ function getOptionItemPrice(item: unknown) {
   return toFiniteNumber(source.price ?? source.product_price, 0);
 }
 
+function getOptionItemOldPrice(item: unknown) {
+  const source = asRecord(item);
+  const oldPrice = toFiniteNumber(
+    source.old_price ?? source.original_price ?? source.product_old_price ?? source.product_original_price,
+    0,
+  );
+  return oldPrice > getOptionItemPrice(source) ? oldPrice : 0;
+}
+
+function getOptionGroupHint(group: unknown, selection: OptionSelection | undefined) {
+  const source = asRecord(group);
+  const items = asArray(source.items);
+  const max = selection?.maxSelect && selection.maxSelect > 0
+    ? selection.maxSelect
+    : selection?.type === 'single'
+      ? 1
+      : items.length;
+  const selected = selection?.type === 'single'
+    ? (selection.selectedId ? 1 : 0)
+    : selection?.type === 'multiple_group'
+      ? selection.selectedIds.length
+      : Object.values(selection?.qtyById || {}).filter((qty) => qty > 0).length;
+  return source.is_required ? `Выбрано ${selected} из ${max} опций` : `Выберите до ${max} опций`;
+}
+
 function getOptionGroupType(group: unknown): OptionGroupType {
   const source = asRecord(group);
   if (String(source.selection_type || 'single') !== 'multiple') return 'single';
@@ -377,17 +442,13 @@ function withDefaultOptionVariant(item: unknown, selection: OptionSelection, uni
   const itemId = toPositiveId(asRecord(item).id);
   if (!itemId || selection.variantByItemId[String(itemId)]) return selection;
 
-  const variantGroup = asArray(asRecord(item).variants)[0];
-  const values = asArray(asRecord(variantGroup).values);
-  if (!variantGroup || !values.length) return selection;
-
-  const rawIndex = Number(asRecord(variantGroup).default_value_index ?? 0);
-  const index = rawIndex >= 0 && rawIndex < values.length ? rawIndex : 0;
+  const defaultVariant = getOptionItemDefaultVariant(item);
+  if (!defaultVariant) return selection;
   return {
     ...selection,
     variantByItemId: {
       ...selection.variantByItemId,
-      [String(itemId)]: getOptionItemVariantState(item, variantGroup, index, unitConversions),
+      [String(itemId)]: getOptionItemVariantState(item, defaultVariant.group, defaultVariant.index, unitConversions),
     },
   };
 }
@@ -483,6 +544,12 @@ function createInitialOptionSelections(optionGroups: unknown[], defaultConfig: A
           selection.qtyById[String(id)] = Math.max(1, itemMin || 1);
           selection = withDefaultOptionVariant(item, selection, unitConversions);
         }
+      });
+    }
+
+    if (group.allow_variants) {
+      items.forEach((item) => {
+        selection = withDefaultOptionVariant(item, selection, unitConversions);
       });
     }
 
@@ -1046,6 +1113,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', quantityInBase: null, selectedIndex: null, stockQuantity: null, unitId: null, value: null });
   const [ingredientState, setIngredientState] = useState<IngredientState>({});
   const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>({});
+  const [expandedOptionGroups, setExpandedOptionGroups] = useState<Record<string, boolean>>({});
   const [isOptionsSheetVisible, setOptionsSheetVisible] = useState(false);
   const [activeOptionGroupId, setActiveOptionGroupId] = useState<number | null>(null);
   const [expandedOptionVariantKey, setExpandedOptionVariantKey] = useState('');
@@ -1516,13 +1584,17 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       let next: OptionSelection = { ...previous, qtyById: { ...previous.qtyById }, selectedIds: [...previous.selectedIds], variantByItemId: { ...previous.variantByItemId } };
 
       if (next.type === 'single') {
-        next.selectedId = itemId;
-        next = withDefaultOptionVariant(item, next, unitConversions);
+        if (next.selectedId === itemId && !group.is_required) {
+          next.selectedId = null;
+        } else {
+          next.selectedId = itemId;
+          next = withDefaultOptionVariant(item, next, unitConversions);
+        }
       } else if (next.type === 'multiple_group') {
         const exists = next.selectedIds.includes(itemId);
-        next.selectedIds = exists
-          ? next.selectedIds.filter((id) => id !== itemId)
-          : [...next.selectedIds, itemId].slice(0, next.maxSelect || undefined);
+        if (exists && next.selectedIds.length <= next.minSelect) return current;
+        if (!exists && next.maxSelect != null && next.selectedIds.length >= next.maxSelect) return current;
+        next.selectedIds = exists ? next.selectedIds.filter((id) => id !== itemId) : [...next.selectedIds, itemId];
         if (!exists) next = withDefaultOptionVariant(item, next, unitConversions);
       } else {
         const max = toFiniteNumber(item.qty_max, 99);
@@ -1556,6 +1628,16 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
           },
         },
       };
+    });
+  };
+
+  const resetOptionItemQuantity = (groupId: number, itemId: number) => {
+    setOptionSelections((current) => {
+      const previous = current[String(groupId)];
+      if (!previous || previous.type !== 'multiple_item' || !previous.qtyById[String(itemId)]) return current;
+      const qtyById = { ...previous.qtyById };
+      delete qtyById[String(itemId)];
+      return { ...current, [String(groupId)]: { ...previous, qtyById } };
     });
   };
 
@@ -1642,8 +1724,8 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
 
             {ingredients.length && isBlockEnabled(product, 'ingredients') ? (
               <View style={styles.sectionBlock}>
-                <Text style={styles.sectionTitle}>{getBlockTitle(product, 'ingredients', 'Состав (можно настроить):')}</Text>
-                <View style={styles.infoCard}>
+                <Text style={styles.ingredientSectionTitle}>Состав товара:</Text>
+                <View style={styles.ingredientGrid}>
                   {ingredients.map((item) => {
                     const source = asRecord(item);
                     const id = toPositiveId(source.ingredient_id);
@@ -1653,27 +1735,46 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                     const ingredientImage = getIngredientImage(source);
                     const limits = getIngredientLimits(source);
                     const value = ingredientState[String(id)]?.quantity ?? limits.defaultQty;
+                    const canDecrease = limits.isVariable && value > limits.min;
+                    const canIncrease = limits.isVariable && value < limits.max;
+                    const valueLabel = `${String(value).replace('.', ',')}${unit ? ` ${unit}` : ''}`;
                     return (
-                      <View key={id} style={styles.ingredientRow}>
-                        <View style={styles.ingredientThumb}>
+                      <View key={id} style={styles.ingredientCard}>
+                        <View style={styles.ingredientCardPhoto}>
                           {ingredientImage ? (
-                            <Image resizeMode="contain" source={{ uri: ingredientImage }} style={styles.ingredientImage} />
+                            Platform.OS === 'web' ? (
+                              <Image resizeMode="cover" source={{ uri: ingredientImage }} style={styles.ingredientImage} />
+                            ) : (
+                              <ExpoImage cachePolicy="memory-disk" contentFit="cover" source={{ uri: ingredientImage }} style={styles.ingredientImage} />
+                            )
                           ) : (
-                            <View style={styles.ingredientImagePlaceholder} />
+                            <View style={styles.ingredientImagePlaceholder}>
+                              <Text style={styles.ingredientImagePlaceholderText}>—</Text>
+                            </View>
                           )}
                         </View>
-                        <View style={styles.ingredientText}>
-                          <Text style={styles.ingredientTitle}>{title}</Text>
+                        <View style={styles.ingredientCardInfo}>
+                          <Text numberOfLines={2} style={styles.ingredientCardTitle}>{title}</Text>
+                          <View style={[styles.ingredientCardControls, !limits.isVariable && styles.ingredientCardControlsFixed]}>
+                            {canDecrease ? (
+                              <Pressable
+                                onPress={() => updateIngredientQuantity(source, value - limits.step)}
+                                style={styles.ingredientCardButton}
+                              >
+                                <Ionicons name="remove" color={theme.colors.primaryText} size={15} />
+                              </Pressable>
+                            ) : limits.isVariable ? <View style={styles.ingredientCardButtonPlaceholder} /> : null}
+                            <Text numberOfLines={1} style={styles.ingredientCardQuantity}>{valueLabel}</Text>
+                            {canIncrease ? (
+                              <Pressable
+                                onPress={() => updateIngredientQuantity(source, value + limits.step)}
+                                style={styles.ingredientCardButton}
+                              >
+                                <Ionicons name="add" color={theme.colors.primaryText} size={15} />
+                              </Pressable>
+                            ) : limits.isVariable ? <View style={styles.ingredientCardButtonPlaceholder} /> : null}
+                          </View>
                         </View>
-                        <Stepper
-                          disabled={!limits.isVariable}
-                          max={limits.max}
-                          min={limits.min}
-                          onChange={(next) => updateIngredientQuantity(source, next)}
-                          step={limits.step}
-                          value={value}
-                          valueLabel={`${String(value).replace('.', ',')}${unit ? ` ${unit}` : ''}`}
-                        />
                       </View>
                     );
                   })}
@@ -1683,43 +1784,123 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
 
             {optionGroups.length && isBlockEnabled(product, 'options') ? (
               <View style={styles.optionGroupsBlock}>
+                <Text style={styles.optionsTitle}>{getBlockTitle(product, 'options', 'Опции товара:')}</Text>
                 {optionGroups.map((groupRaw) => {
                   const group = asRecord(groupRaw);
                   const groupId = toPositiveId(group.id);
                   if (!groupId) return null;
                   const selection = optionSelections[String(groupId)];
-                  const selectedItems = getSelectedOptionItemsForGroup(group, selection);
-                  const firstSelected = selectedItems[0];
-                  const selectedTitle = firstSelected
-                    ? selectedItems.map((item) => trimText(item.title || item.name)).filter(Boolean).join(', ')
-                    : 'Выбрать';
-                  const selectedMeta = firstSelected ? getOptionItemMetaText(firstSelected, selection) : '';
-                  const hasSelectedVariants = selectedItems.some((item) => asArray(item.variants).length > 0);
-                  const selectedImage = firstSelected ? getOptionItemImage(firstSelected) : '';
+                  if (!selection) return null;
+                  const items = asArray(group.items);
+                  const expanded = expandedOptionGroups[String(groupId)] === true;
+                  const visibleItems = expanded ? items : items.slice(0, 3);
 
                   return (
                     <View key={groupId} style={styles.optionGroupSection}>
-                      <Text style={styles.sectionTitle}>{trimText(group.title) || 'Опция'}</Text>
-                      <Pressable style={styles.optionSummaryCard} onPress={() => openOptionsSheet(groupId)}>
-                        <View style={styles.optionThumb}>
-                          {selectedImage ? (
-                            <Image resizeMode="contain" source={{ uri: selectedImage }} style={styles.optionImage} />
-                          ) : (
-                            <View style={styles.optionImagePlaceholder} />
-                          )}
-                        </View>
-                        <View style={styles.optionSummaryText}>
-                          <Text numberOfLines={2} style={styles.optionSummaryValue}>{selectedTitle}</Text>
-                          {selectedMeta ? <Text style={styles.optionSummaryMeta}>{selectedMeta}</Text> : null}
-                        </View>
-                        <View style={hasSelectedVariants ? styles.optionGearButton : styles.optionChangeButton}>
-                          {hasSelectedVariants ? (
-                            <Ionicons name="settings-outline" color={theme.colors.accent} size={19} />
-                          ) : (
-                            <Text style={styles.optionChangeText}>Изменить ›</Text>
-                          )}
-                        </View>
-                      </Pressable>
+                      <Text style={styles.optionGroupTitle}>{trimText(group.title) || 'Опция'}</Text>
+                      <Text style={styles.optionGroupHint}>{getOptionGroupHint(group, selection)}</Text>
+                      <View style={styles.optionProductGrid}>
+                        {visibleItems.map((itemRaw) => {
+                          const item = asRecord(itemRaw);
+                          const itemId = toPositiveId(item.id);
+                          if (!itemId) return null;
+                          const selected = selection.type === 'single'
+                            ? selection.selectedId === itemId
+                            : selection.type === 'multiple_group'
+                              ? selection.selectedIds.includes(itemId)
+                              : (selection.qtyById[String(itemId)] || 0) > 0;
+                          const qty = selection.type === 'multiple_item' ? selection.qtyById[String(itemId)] || 0 : selected ? 1 : 0;
+                          const variantGroup = asArray(item.variants)[0];
+                          const variantValues = asArray(asRecord(variantGroup).values);
+                          const variant = selection.variantByItemId[String(itemId)];
+                          const variantIndex = variant?.variant_value_index ?? 0;
+                          const hasVariants = Boolean(group.allow_variants && variantValues.length);
+                          const image = getOptionItemImage(item);
+                          const price = getOptionItemPrice(item) + (variant?.variant_price_diff || 0);
+                          const oldPrice = getOptionItemOldPrice(item);
+                          const discountPercent = oldPrice > price ? Math.round((1 - price / oldPrice) * 100) : 0;
+                          const overlayValue = selected ? trimText(variant?.variant_label) || String(qty) : '';
+                          const canVariantMinus = hasVariants && variantIndex > 0;
+                          const canVariantPlus = hasVariants && variantIndex < variantValues.length - 1;
+
+                          return (
+                            <Pressable
+                              key={itemId}
+                              onPress={() => updateOptionSelection(group, item, 1)}
+                              style={[styles.optionProductCard, selected && styles.optionProductCardSelected]}
+                            >
+                              <View style={styles.optionProductPhoto}>
+                                {image ? (
+                                  Platform.OS === 'web' ? (
+                                    <Image resizeMode="cover" source={{ uri: image }} style={styles.optionProductImage} />
+                                  ) : (
+                                    <ExpoImage cachePolicy="memory-disk" contentFit="cover" source={{ uri: image }} style={styles.optionProductImage} />
+                                  )
+                                ) : (
+                                  <View style={styles.optionProductPlaceholder}><Text style={styles.optionProductPlaceholderText}>—</Text></View>
+                                )}
+                                {overlayValue ? (
+                                  <View style={styles.optionProductOverlay}>
+                                    <Text adjustsFontSizeToFit minimumFontScale={0.45} numberOfLines={1} style={styles.optionProductOverlayText}>{overlayValue}</Text>
+                                  </View>
+                                ) : null}
+                                {discountPercent > 0 ? (
+                                  <View style={styles.optionProductDiscount}>
+                                    <Text style={styles.optionProductDiscountText}>-{discountPercent}%</Text>
+                                  </View>
+                                ) : null}
+                                {selection.type === 'multiple_item' && selected ? (
+                                  <Pressable
+                                    onPress={(event) => {
+                                      event.stopPropagation();
+                                      resetOptionItemQuantity(groupId, itemId);
+                                    }}
+                                    style={styles.optionProductReset}
+                                  >
+                                    <Ionicons name="close" color={theme.colors.primaryText} size={15} />
+                                  </Pressable>
+                                ) : null}
+                              </View>
+                              <Text numberOfLines={2} style={styles.optionProductName}>{trimText(item.title || item.name)}</Text>
+                              <View style={styles.optionProductControls}>
+                                {canVariantMinus ? (
+                                  <Pressable
+                                    onPress={(event) => {
+                                      event.stopPropagation();
+                                      if (!selected) updateOptionSelection(group, item, 1);
+                                      updateOptionItemVariant(group, item, variantGroup, variantIndex - 1);
+                                    }}
+                                    style={styles.optionProductButton}
+                                  ><Ionicons name="remove" color={theme.colors.primaryText} size={15} /></Pressable>
+                                ) : <View style={styles.optionProductButtonPlaceholder} />}
+                                <View style={styles.optionProductPriceBlock}>
+                                  <Text numberOfLines={1} style={styles.optionProductOldPrice}>{oldPrice > price ? formatPrice(oldPrice * Math.max(qty, 1)) : ' '}</Text>
+                                  <Text numberOfLines={1} adjustsFontSizeToFit style={styles.optionProductPrice}>{formatPrice(price * Math.max(qty, 1))}</Text>
+                                  <Text numberOfLines={1} style={styles.optionProductVariant}>{hasVariants ? variant?.variant_label || '' : ''}</Text>
+                                </View>
+                                {canVariantPlus ? (
+                                  <Pressable
+                                    onPress={(event) => {
+                                      event.stopPropagation();
+                                      if (!selected) updateOptionSelection(group, item, 1);
+                                      updateOptionItemVariant(group, item, variantGroup, variantIndex + 1);
+                                    }}
+                                    style={styles.optionProductButton}
+                                  ><Ionicons name="add" color={theme.colors.primaryText} size={15} /></Pressable>
+                                ) : <View style={styles.optionProductButtonPlaceholder} />}
+                              </View>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                      {items.length > 3 ? (
+                        <Pressable
+                          onPress={() => setExpandedOptionGroups((current) => ({ ...current, [String(groupId)]: !expanded }))}
+                          style={styles.optionProductMore}
+                        >
+                          <Text style={styles.optionProductMoreText}>{expanded ? 'Показать меньше' : 'Показать все'}</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   );
                 })}
@@ -2077,47 +2258,97 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
-  ingredientMeta: {
-    color: theme.colors.muted,
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  ingredientRow: {
-    alignItems: 'center',
+  ingredientCard: {
+    aspectRatio: 2 / 3.35,
+    backgroundColor: theme.colors.card,
     borderColor: theme.colors.border,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
+    elevation: 2,
+    marginBottom: 12,
+    overflow: 'hidden',
+    shadowColor: '#111827',
+    shadowOffset: { height: 6, width: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    width: '30.8%',
+  },
+  ingredientCardButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 8,
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  ingredientCardButtonPlaceholder: {
+    height: 24,
+    width: 24,
+  },
+  ingredientCardControls: {
+    alignItems: 'center',
     flexDirection: 'row',
+    minHeight: 24,
+    width: '100%',
+  },
+  ingredientCardControlsFixed: {
+    justifyContent: 'center',
+  },
+  ingredientCardInfo: {
+    flex: 1,
     justifyContent: 'space-between',
-    marginTop: theme.spacing.sm,
-    padding: theme.spacing.sm,
+    paddingBottom: 7,
+    paddingTop: 5,
+  },
+  ingredientCardPhoto: {
+    aspectRatio: 1,
+    backgroundColor: theme.colors.mutedBackground,
+    overflow: 'hidden',
+    width: '100%',
+  },
+  ingredientCardQuantity: {
+    color: theme.colors.text,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '900',
+    paddingHorizontal: 3,
+    textAlign: 'center',
+  },
+  ingredientCardTitle: {
+    color: theme.colors.text,
+    fontSize: 10,
+    fontWeight: '700',
+    height: 26,
+    lineHeight: 12,
+    paddingHorizontal: 5,
+    textAlign: 'center',
+  },
+  ingredientGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    paddingVertical: theme.spacing.sm,
   },
   ingredientImage: {
     height: '100%',
     width: '100%',
   },
   ingredientImagePlaceholder: {
+    alignItems: 'center',
     backgroundColor: theme.colors.mutedBackground,
-    borderRadius: 8,
     flex: 1,
+    justifyContent: 'center',
   },
-  ingredientText: {
-    flex: 1,
-    paddingRight: theme.spacing.md,
-  },
-  ingredientThumb: {
-    backgroundColor: theme.colors.mutedBackground,
-    borderRadius: 8,
-    height: 42,
-    marginRight: theme.spacing.sm,
-    overflow: 'hidden',
-    width: 42,
-  },
-  ingredientTitle: {
-    color: theme.colors.text,
-    fontSize: 14,
+  ingredientImagePlaceholderText: {
+    color: theme.colors.muted,
+    fontSize: 18,
     fontWeight: '800',
+  },
+  ingredientSectionTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 20,
   },
   nutritionCell: {
     backgroundColor: theme.colors.mutedBackground,
@@ -2292,6 +2523,183 @@ const styles = StyleSheet.create({
   },
   optionGroupSection: {
     marginTop: theme.spacing.md,
+  },
+  optionsTitle: {
+    color: theme.colors.text,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  optionGroupTitle: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 18,
+  },
+  optionGroupHint: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  optionProductGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    paddingVertical: theme.spacing.sm,
+  },
+  optionProductCard: {
+    aspectRatio: 2 / 3.35,
+    backgroundColor: theme.colors.card,
+    borderColor: theme.colors.border,
+    borderRadius: 12,
+    borderWidth: 1,
+    elevation: 2,
+    marginBottom: 12,
+    overflow: 'hidden',
+    shadowColor: '#111827',
+    shadowOffset: { height: 6, width: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    width: '30.8%',
+  },
+  optionProductCardSelected: {
+    borderColor: theme.colors.accent,
+    borderWidth: 2,
+  },
+  optionProductPhoto: {
+    aspectRatio: 1,
+    backgroundColor: theme.colors.mutedBackground,
+    overflow: 'hidden',
+    width: '100%',
+  },
+  optionProductImage: {
+    height: '100%',
+    width: '100%',
+  },
+  optionProductPlaceholder: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+  },
+  optionProductPlaceholderText: {
+    color: theme.colors.muted,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  optionProductOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.34)',
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  optionProductOverlayText: {
+    color: '#FFFFFF',
+    fontSize: 27,
+    fontWeight: '900',
+    textAlign: 'center',
+    width: '100%',
+  },
+  optionProductReset: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 8,
+    height: 22,
+    justifyContent: 'center',
+    left: 7,
+    position: 'absolute',
+    top: 7,
+    width: 22,
+  },
+  optionProductDiscount: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    height: 22,
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    position: 'absolute',
+    right: 7,
+    top: 7,
+  },
+  optionProductDiscountText: {
+    color: theme.colors.primaryText,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  optionProductName: {
+    color: theme.colors.text,
+    fontSize: 10,
+    fontWeight: '800',
+    height: 29,
+    lineHeight: 12,
+    paddingHorizontal: 6,
+    paddingTop: 5,
+    textAlign: 'center',
+  },
+  optionProductControls: {
+    alignItems: 'flex-end',
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: 7,
+  },
+  optionProductButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 8,
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  optionProductButtonPlaceholder: {
+    height: 24,
+    width: 24,
+  },
+  optionProductPriceBlock: {
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  optionProductOldPrice: {
+    color: theme.colors.muted,
+    fontSize: 8,
+    fontWeight: '800',
+    lineHeight: 9,
+    textDecorationLine: 'line-through',
+  },
+  optionProductPrice: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 14,
+    width: '100%',
+    textAlign: 'center',
+  },
+  optionProductVariant: {
+    color: theme.colors.text,
+    fontSize: 8,
+    fontWeight: '800',
+    lineHeight: 9,
+    minHeight: 9,
+  },
+  optionProductMore: {
+    alignSelf: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    minWidth: 148,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  optionProductMoreText: {
+    color: theme.colors.primaryText,
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   optionSummaryIcon: {
     alignItems: 'center',

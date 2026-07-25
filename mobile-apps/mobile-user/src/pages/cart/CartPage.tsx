@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   ActivityIndicator,
   Animated,
   Image,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -54,6 +56,7 @@ import {
   ensureCustomerAddressDeliveryQuote,
   fetchPublicOrderConfig,
   fetchTenantStores,
+  getCatalogSnapshotProduct,
   isSameCachedValue,
   isFreshDeliveryQuoteForAddress,
   readCachedCustomerAddresses,
@@ -342,9 +345,12 @@ function findSelectedStore(stores: TenantStore[], selection: FulfillmentSelectio
 }
 
 function getCartLineCatalogProduct(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
-  if (!snapshot || line.type !== 'product') return null;
+  if (line.type !== 'product') return null;
   const productId = Number(line.sourceId || 0);
   if (!(productId > 0)) return null;
+  const sharedProduct = getCatalogSnapshotProduct(productId);
+  if (sharedProduct) return sharedProduct;
+  if (!snapshot) return null;
   const passportProduct = snapshot.productPassports?.[String(productId)]?.product;
   if (passportProduct) return passportProduct;
   return Object.values(snapshot.productsByCategory || {})
@@ -360,7 +366,19 @@ function getCartLineCatalogPhotoUrl(line: CartLine, snapshot: Awaited<ReturnType
 }
 
 function syncCartLineCatalogPhoto(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
-  if (line.type !== 'product') return line;
+  if (line.type === 'combo') {
+    const photoUrls = (Array.isArray(line.comboSelections) ? line.comboSelections : [])
+      .map((selection, index) => {
+        const productId = Number(selection.productId || 0);
+        const catalogPhoto = productId > 0 ? getCatalogSnapshotProduct(productId)?.photos?.[0] : '';
+        return resolveAssetUrl(catalogPhoto || selection.productPhoto || line.photoUrls?.[index] || '');
+      })
+      .filter(Boolean)
+      .slice(0, 4);
+    return photoUrls.length && photoUrls.some((url, index) => url !== line.photoUrls?.[index])
+      ? { ...line, photoUrls }
+      : line;
+  }
   const photoUrl = getCartLineCatalogPhotoUrl(line, snapshot);
   return photoUrl && photoUrl !== line.photoUrl ? { ...line, photoUrl } : line;
 }
@@ -1818,8 +1836,15 @@ export function CartPage() {
     const plusBlocked = unavailable || stockBlockedLineIds.has(line.id);
     const title = getCartLineTitle(line);
     const detailLines = getCartLineDetails(line);
-    const comboPhotos = line.type === 'combo' && Array.isArray(line.photoUrls)
-      ? line.photoUrls.filter(Boolean).slice(0, 4)
+    const itemPhotoUrl = line.type === 'product'
+      ? getCartLineCatalogPhotoUrl(line, catalogSnapshot) || line.photoUrl || ''
+      : line.photoUrl || '';
+    const comboPhotos = line.type === 'combo' && Array.isArray(line.comboSelections)
+      ? line.comboSelections.map((selection, index) => {
+        const productId = Number(selection.productId || 0);
+        const catalogPhoto = productId > 0 ? getCatalogSnapshotProduct(productId)?.photos?.[0] : '';
+        return resolveAssetUrl(catalogPhoto || selection.productPhoto || line.photoUrls?.[index] || '');
+      }).filter(Boolean).slice(0, 4)
       : [];
     const lineBadges = [
       discountPercent > 0 ? { key: 'discount', text: `-${discountPercent}%`, tone: 'discount' as const } : null,
@@ -1834,15 +1859,23 @@ export function CartPage() {
                 const uri = comboPhotos[index];
                 return (
                   <View key={index} style={styles.comboImageCell}>
-                    {uri ? <Image resizeMode="cover" source={{ uri }} style={styles.comboImage} /> : null}
+                    {uri ? Platform.OS === 'web' ? (
+                      <Image resizeMode="cover" source={{ uri }} style={styles.comboImage} />
+                    ) : (
+                      <ExpoImage cachePolicy="memory-disk" contentFit="cover" source={{ uri }} style={styles.comboImage} />
+                    ) : null}
                   </View>
                 );
               })}
             </View>
           ) : (
             <View style={styles.itemImageWrap}>
-              {line.photoUrl ? (
-                <Image resizeMode="cover" source={{ uri: line.photoUrl }} style={styles.itemImage} />
+              {itemPhotoUrl ? (
+                Platform.OS === 'web' ? (
+                  <Image resizeMode="cover" source={{ uri: itemPhotoUrl }} style={styles.itemImage} />
+                ) : (
+                  <ExpoImage cachePolicy="memory-disk" contentFit="cover" source={{ uri: itemPhotoUrl }} style={styles.itemImage} />
+                )
               ) : (
                 <View style={styles.itemImagePlaceholder}>
                   <Ionicons name={line.type === 'combo' ? 'grid-outline' : 'restaurant-outline'} color={theme.colors.accent} size={26} />
