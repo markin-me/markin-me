@@ -5,8 +5,10 @@ import {
   useMemo,
   useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import {
   Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -138,7 +140,7 @@ function trimText(value: unknown) {
 }
 
 function getImage(product: CatalogProduct | null) {
-  const photo = product?.photos?.[0] || product?.photo_thumb || product?.photo_lqip || '';
+  const photo = product?.photos?.[0] || '';
   return resolveAssetUrl(photo);
 }
 
@@ -1021,6 +1023,7 @@ function Stepper({
 
 export function ProductPage({ navigation, route }: ProductPageProps) {
   const productId = route.params.productId;
+  const initialProductImage = String(route.params.productImage || '').trim();
   const cartLineId = route.params.cartLineId || '';
   const comboContext = Number(route.params.comboId || 0) > 0 &&
     Number.isFinite(Number(route.params.comboBlockIndex)) &&
@@ -1190,7 +1193,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const variants = useMemo(() => asArray(passport?.variants), [passport?.variants]);
   const optionGroups = useMemo(() => asArray(passport?.optionGroups), [passport?.optionGroups]);
   const defaultConfig = useMemo(() => asRecord(passport?.defaultConfig), [passport?.defaultConfig]);
-  const image = useMemo(() => getImage(product), [product]);
+  const image = useMemo(() => initialProductImage || getImage(product), [initialProductImage, product]);
   const comboContextLine = useMemo(() => {
     if (!comboContext || !comboContextDetails) return null;
     const draft = getComboDraft(comboContextDetails);
@@ -1365,7 +1368,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       lines,
       product_id: Number(product.id),
       product_name: product.name,
-      product_photo: product.photos?.[0] || product.photo_thumb || product.photo_lqip || selectedProduct?.product_photo || '',
+      product_photo: product.photos?.[0] || selectedProduct?.product_photo || '',
       unit_id: variantState.unitId,
       unit_price_before_discount: roundPrice(unitBeforeDiscount),
       unit_price_override: roundPrice(comboUnitPrice),
@@ -1577,7 +1580,16 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       <View style={styles.root}>
         <ScrollView style={styles.page} contentContainerStyle={styles.content}>
           <View style={styles.hero}>
-            {image ? <Image resizeMode="contain" source={{ uri: image }} style={styles.image} /> : <View style={styles.placeholder} />}
+            {image && Platform.OS === 'web' ? (
+              <Image resizeMode="contain" source={{ uri: image }} style={styles.image} />
+            ) : image ? (
+              <ExpoImage
+                cachePolicy="memory-disk"
+                contentFit="contain"
+                source={{ uri: image }}
+                style={styles.image}
+              />
+            ) : <View style={styles.placeholder} />}
           </View>
 
           <View style={styles.body}>

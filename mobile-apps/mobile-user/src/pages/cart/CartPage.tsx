@@ -355,7 +355,7 @@ function getCartLineCatalogProduct(line: CartLine, snapshot: Awaited<ReturnType<
 
 function getCartLineCatalogPhotoUrl(line: CartLine, snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null) {
   const product = getCartLineCatalogProduct(line, snapshot);
-  const photo = product?.photo_thumb || product?.photo_lqip || (Array.isArray(product?.photos) ? product.photos[0] : '');
+  const photo = Array.isArray(product?.photos) ? product.photos[0] : '';
   return photo ? resolveAssetUrl(String(photo)) : '';
 }
 

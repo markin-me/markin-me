@@ -13,6 +13,7 @@ import type { TextInput as NativeTextInput } from 'react-native';
 import {
   ActivityIndicator,
   Keyboard,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -484,6 +485,7 @@ export function AddressFormPage() {
   return (
     <Screen>
       <Pressable
+        disabled={Platform.OS === 'web'}
         style={styles.root}
         onPress={() => {
           setLookupFocused(false);

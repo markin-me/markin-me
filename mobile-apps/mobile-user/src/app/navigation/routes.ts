@@ -39,7 +39,7 @@ export type AppRouteName = keyof typeof routes;
 
 export type RootStackParamList = {
   main: NavigatorScreenParams<MainTabParamList> | undefined;
-  product: { cartLineId?: string; productId: number; comboId?: number; comboBlockIndex?: number; comboProductIndex?: number };
+  product: { cartLineId?: string; productId: number; productImage?: string; comboId?: number; comboBlockIndex?: number; comboProductIndex?: number };
   combo: { cartLineId?: string; comboId: number; openNonce?: number };
   comboReplace: { comboId: number; blockIndex: number; blockTitle?: string };
   categories: { categories: CatalogCategory[]; activeCategoryId?: number | null };

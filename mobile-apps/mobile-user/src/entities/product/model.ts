@@ -10,6 +10,8 @@ export type CatalogCategory = {
   code?: string;
   title: string;
   icon?: string | null;
+  children?: CatalogCategory[];
+  parent_id?: number | null;
   sort_order?: number | null;
 };
 

@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Image,
   Keyboard,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -267,7 +268,7 @@ export function ProfileSettingsPage() {
 
   return (
     <Screen>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <TouchableWithoutFeedback disabled={Platform.OS === 'web'} onPress={Keyboard.dismiss}>
         <ScrollView
           keyboardShouldPersistTaps="handled"
           style={styles.root}
