@@ -14,6 +14,8 @@ export {
   getComboProductTitle,
   getComboProductEditorState,
   getComboTotals,
+  isComboProductAvailable,
+  normalizeComboDraftAvailability,
   normalizeComboIngredientQuantity,
   resetComboDraft,
   saveComboDraft,

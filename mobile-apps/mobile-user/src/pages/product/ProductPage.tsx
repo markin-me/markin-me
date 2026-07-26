@@ -5,8 +5,10 @@ import {
   useMemo,
   useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import {
   Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -58,7 +60,7 @@ import {
   resolveAssetUrl,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
-import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
+import { calculateBuyXGetYLineTotals, getBuyXGetYBadgeText } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
 import {
   calculateVariantUnitPrice,
@@ -71,6 +73,7 @@ import {
   type ProductStockLevel,
 } from '../../shared/lib/productStock';
 import { BottomSheet } from '../../shared/ui/BottomSheet';
+import { ProductBadge } from '../../shared/ui/ProductBadge';
 import { Screen } from '../../shared/ui/Screen';
 
 type ProductPageProps = NativeStackScreenProps<RootStackParamList, 'product'>;
@@ -138,7 +141,7 @@ function trimText(value: unknown) {
 }
 
 function getImage(product: CatalogProduct | null) {
-  const photo = product?.photos?.[0] || product?.photo_thumb || product?.photo_lqip || '';
+  const photo = product?.photos?.[0] || '';
   return resolveAssetUrl(photo);
 }
 
@@ -150,6 +153,28 @@ function getProductBasePrice(product: CatalogProduct | null) {
 function getOldPrice(product: CatalogProduct | null) {
   const price = Number(product?.old_price ?? product?.original_price ?? 0);
   return Number.isFinite(price) ? price : 0;
+}
+
+function mergeCachedProductPricing(product: CatalogProduct, catalogProduct: CatalogProduct | null) {
+  if (!catalogProduct) return product;
+  const positiveOrFallback = (value: number | null | undefined, fallback: number | null | undefined) => (
+    Number(value || 0) > 0 ? value : fallback
+  );
+  return {
+    ...product,
+    display_price: positiveOrFallback(product.display_price, catalogProduct.display_price),
+    discounted_price: positiveOrFallback(product.discounted_price, catalogProduct.discounted_price),
+    old_price: positiveOrFallback(product.old_price, catalogProduct.old_price),
+    original_price: positiveOrFallback(product.original_price, catalogProduct.original_price),
+    discount: product.discount || catalogProduct.discount || null,
+    buy_x_get_y_badge: product.buy_x_get_y_badge || catalogProduct.buy_x_get_y_badge || null,
+  };
+}
+
+function mergeCachedPassportPricing(passport: CatalogProductPassport | null, catalogProduct: CatalogProduct | null) {
+  return passport
+    ? { ...passport, product: mergeCachedProductPricing(passport.product, catalogProduct) }
+    : null;
 }
 
 function getAvailabilityRecord(value: unknown) {
@@ -198,36 +223,87 @@ function getIngredientTitle(item: unknown) {
 
 function getIngredientImage(item: unknown) {
   const source = asRecord(item);
+  const ingredientProductId = toPositiveId(source.ingredient_id || source.product_id || source.id);
+  const catalogProduct = ingredientProductId ? getCatalogSnapshotProduct(ingredientProductId) : null;
   const photo = trimText(
+    catalogProduct?.photos?.[0] ||
+    asArray(source.ingredient_photos)[0] ||
     source.photo_thumb ||
     source.photo_lqip ||
     source.photo ||
     source.image_thumb ||
     source.image_url ||
     source.ingredient_photo_thumb ||
-    source.ingredient_photo ||
-    asArray(source.ingredient_photos)[0],
+    source.ingredient_photo,
   );
   return resolveAssetUrl(photo);
 }
 
 function getOptionItemImage(item: unknown) {
   const source = asRecord(item);
+  const targetProductId = toPositiveId(source.target_product_id || source.product_id);
+  const catalogProduct = targetProductId
+    ? getCatalogSnapshotProduct(targetProductId)
+      || getCatalogProductPassport(targetProductId)?.product
+      || getFullProductPassport(targetProductId)?.product
+    : null;
   const targetProduct = asRecord(source.target_product || source.product);
   const photo = trimText(
+    catalogProduct?.photos?.[0] ||
+    asArray(source.product_photos_json)[0] ||
+    asArray(source.photos)[0] ||
     source.photo_thumb ||
     source.photo_lqip ||
     source.photo ||
     source.image_thumb ||
     source.image_url ||
     source.product_photo ||
-    asArray(source.photos)[0] ||
-    asArray(source.product_photos_json)[0] ||
     targetProduct.photo_thumb ||
     targetProduct.photo_lqip ||
     asArray(targetProduct.photos)[0],
   );
   return resolveAssetUrl(photo);
+}
+
+function getOptionItemTargetProduct(item: unknown) {
+  const source = asRecord(item);
+  const targetProductId = toPositiveId(source.target_product_id || source.product_id);
+  return targetProductId
+    ? getCatalogSnapshotProduct(targetProductId)
+      || getCatalogProductPassport(targetProductId)?.product
+      || getFullProductPassport(targetProductId)?.product
+      || null
+    : null;
+}
+
+function getOptionItemDefaultVariant(item: unknown) {
+  const source = asRecord(item);
+  const variants = asArray(source.variants);
+  const targetProductId = toPositiveId(source.target_product_id || source.product_id);
+  const catalogProduct = targetProductId
+    ? getCatalogSnapshotProduct(targetProductId)
+      || getCatalogProductPassport(targetProductId)?.product
+      || getFullProductPassport(targetProductId)?.product
+    : null;
+  const productDefault = asRecord(catalogProduct?.default_variant);
+  const defaultGroupId = toPositiveId(productDefault.variant_group_id);
+  const defaultIndex = Number(productDefault.variant_value_index);
+
+  for (const variantRaw of variants) {
+    const variant = asRecord(variantRaw);
+    const values = asArray(variant.values);
+    if (!values.length) continue;
+    const groupId = toPositiveId(variant.variant_group_id || variant.id);
+    if (defaultGroupId === groupId && Number.isFinite(defaultIndex) && defaultIndex >= 0 && defaultIndex < values.length) {
+      return { group: variantRaw, index: defaultIndex };
+    }
+    const groupDefaultIndex = Number(variant.default_value_index ?? 0);
+    if (Number.isFinite(groupDefaultIndex) && groupDefaultIndex >= 0 && groupDefaultIndex < values.length) {
+      return { group: variantRaw, index: groupDefaultIndex };
+    }
+  }
+
+  return null;
 }
 
 function getIngredientUnit(item: unknown) {
@@ -303,6 +379,110 @@ function getOptionItemPrice(item: unknown) {
   return toFiniteNumber(source.price ?? source.product_price, 0);
 }
 
+function getOptionItemDisplayPricing(item: unknown, variantPriceDiff = 0) {
+  const source = asRecord(item);
+  const fixedPrice = source.price_mode === 'fixed';
+  const product = getOptionItemTargetProduct(source);
+  const productDefaultVariant = asRecord(product?.default_variant);
+  const itemBasePrice = getOptionItemPrice(source);
+  const currentBasePrice = fixedPrice
+    ? itemBasePrice
+    : toFiniteNumber(
+      productDefaultVariant.variant_unit_price
+        ?? product?.display_price
+        ?? product?.discounted_price
+        ?? product?.price
+        ?? itemBasePrice,
+      itemBasePrice,
+    );
+  const selectedRatio = !fixedPrice && itemBasePrice > 0
+    ? Math.max(0, itemBasePrice + variantPriceDiff) / itemBasePrice
+    : 1;
+  const currentPrice = roundPrice(fixedPrice
+    ? currentBasePrice + variantPriceDiff
+    : currentBasePrice * selectedRatio);
+
+  if (fixedPrice) return { currentPrice, originalPrice: currentPrice };
+
+  const originalFromDiscount = toFiniteNumber(product?.original_price ?? source.original_price, 0);
+  const adminOldPrice = toFiniteNumber(product?.old_price ?? source.old_price, 0);
+  const productBasePrice = toFiniteNumber(product?.price, 0);
+  const originalBasePrice = originalFromDiscount > 0
+    ? originalFromDiscount
+    : adminOldPrice > 0 && currentBasePrice > 0 && productBasePrice > 0
+      ? roundPrice(adminOldPrice * (currentBasePrice / productBasePrice))
+      : adminOldPrice;
+  const originalPrice = originalBasePrice > 0
+    ? roundPrice(originalBasePrice * selectedRatio)
+    : currentPrice;
+  return { currentPrice, originalPrice };
+}
+
+function getDiscountBadgeText(currentPrice: number, originalPrice: number, discount: CatalogProduct['discount'] = null) {
+  const discountType = String(discount?.discount_type || '').trim();
+  const discountValue = Number(discount?.discount_value || 0);
+  if (discountType === 'percent' && discountValue > 0) return `-${Math.round(discountValue)}%`;
+  if (originalPrice > currentPrice && currentPrice >= 0) {
+    return `-${Math.round((1 - currentPrice / originalPrice) * 100)}%`;
+  }
+  return '';
+}
+
+function getIngredientSelectedPricing(item: unknown, quantity: number) {
+  const source = asRecord(item);
+  const ingredientId = toPositiveId(source.ingredient_id || source.product_id || source.id);
+  const catalogProduct = ingredientId ? getCatalogSnapshotProduct(ingredientId) : null;
+  const passport = ingredientId
+    ? mergeCachedPassportPricing(getCachedProductPassport(ingredientId), catalogProduct)
+    : null;
+  const product = passport?.product || catalogProduct;
+  const catalogCurrentBase = toFiniteNumber(product?.price ?? source.ingredient_price, 0);
+  const hasOverride = source.price_override !== undefined && source.price_override !== null;
+  const currentBase = hasOverride ? toFiniteNumber(source.price_override, 0) : catalogCurrentBase;
+  const productOriginalBase = toFiniteNumber(product?.original_price, 0);
+  const catalogOriginalBase = productOriginalBase > 0
+    ? productOriginalBase
+    : toFiniteNumber(product?.old_price, 0);
+  const originalBase = hasOverride || !(catalogOriginalBase > currentBase)
+    ? currentBase
+    : catalogOriginalBase;
+  const baseQuantity = Math.max(0.000001, toFiniteNumber(source.ingredient_base_qty, 1) || 1);
+  const selectedQuantity = Math.max(0, toFiniteNumber(quantity, 0));
+  return {
+    currentTotal: roundPrice(currentBase * selectedQuantity / baseQuantity),
+    originalTotal: roundPrice(originalBase * selectedQuantity / baseQuantity),
+  };
+}
+
+function getSelectedOptionPricingTotals(items: Array<AnyRecord & { qty: number; resolvedPrice: number }>) {
+  return items.reduce((totals, item) => {
+    const qty = Math.max(1, Number(item.qty || 1));
+    const selectedVariant = asRecord(item.selectedVariant);
+    const pricing = getOptionItemDisplayPricing(item, toFiniteNumber(selectedVariant.variant_price_diff, 0));
+    const currentUnit = pricing.currentPrice;
+    const originalUnit = pricing.originalPrice;
+    totals.current = roundPrice(totals.current + currentUnit * qty);
+    totals.originalComparable = roundPrice(totals.originalComparable + Math.max(currentUnit, originalUnit) * qty);
+    return totals;
+  }, { current: 0, originalComparable: 0 });
+}
+
+function getOptionGroupHint(group: unknown, selection: OptionSelection | undefined) {
+  const source = asRecord(group);
+  const items = asArray(source.items);
+  const max = selection?.maxSelect && selection.maxSelect > 0
+    ? selection.maxSelect
+    : selection?.type === 'single'
+      ? 1
+      : items.length;
+  const selected = selection?.type === 'single'
+    ? (selection.selectedId ? 1 : 0)
+    : selection?.type === 'multiple_group'
+      ? selection.selectedIds.length
+      : Object.values(selection?.qtyById || {}).filter((qty) => qty > 0).length;
+  return source.is_required ? `Выбрано ${selected} из ${max} опций` : `Выберите до ${max} опций`;
+}
+
 function getOptionGroupType(group: unknown): OptionGroupType {
   const source = asRecord(group);
   if (String(source.selection_type || 'single') !== 'multiple') return 'single';
@@ -375,17 +555,13 @@ function withDefaultOptionVariant(item: unknown, selection: OptionSelection, uni
   const itemId = toPositiveId(asRecord(item).id);
   if (!itemId || selection.variantByItemId[String(itemId)]) return selection;
 
-  const variantGroup = asArray(asRecord(item).variants)[0];
-  const values = asArray(asRecord(variantGroup).values);
-  if (!variantGroup || !values.length) return selection;
-
-  const rawIndex = Number(asRecord(variantGroup).default_value_index ?? 0);
-  const index = rawIndex >= 0 && rawIndex < values.length ? rawIndex : 0;
+  const defaultVariant = getOptionItemDefaultVariant(item);
+  if (!defaultVariant) return selection;
   return {
     ...selection,
     variantByItemId: {
       ...selection.variantByItemId,
-      [String(itemId)]: getOptionItemVariantState(item, variantGroup, index, unitConversions),
+      [String(itemId)]: getOptionItemVariantState(item, defaultVariant.group, defaultVariant.index, unitConversions),
     },
   };
 }
@@ -484,6 +660,12 @@ function createInitialOptionSelections(optionGroups: unknown[], defaultConfig: A
       });
     }
 
+    if (group.allow_variants) {
+      items.forEach((item) => {
+        selection = withDefaultOptionVariant(item, selection, unitConversions);
+      });
+    }
+
     result[String(groupId)] = selection;
   });
 
@@ -504,10 +686,11 @@ function getSelectedOptionItems(optionGroups: unknown[], selections: Record<stri
       const id = Number(source.id);
       const variant = selection.variantByItemId[String(id)] || null;
       const variantDiff = variant?.variant_price_diff || 0;
+      const pricing = getOptionItemDisplayPricing(source, variantDiff);
       selectedItems.push({
         ...source,
         qty,
-        resolvedPrice: roundPrice(getOptionItemPrice(source) + variantDiff),
+        resolvedPrice: pricing.currentPrice,
         selectedVariant: variant,
       });
     };
@@ -1021,6 +1204,7 @@ function Stepper({
 
 export function ProductPage({ navigation, route }: ProductPageProps) {
   const productId = route.params.productId;
+  const initialProductImage = String(route.params.productImage || '').trim();
   const cartLineId = route.params.cartLineId || '';
   const comboContext = Number(route.params.comboId || 0) > 0 &&
     Number.isFinite(Number(route.params.comboBlockIndex)) &&
@@ -1032,25 +1216,32 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     }
     : null;
   const comboContextId = comboContext?.comboId || 0;
-  const [passport, setPassport] = useState<CatalogProductPassport | null>(() => getCachedProductPassport(productId));
-  const [fallbackProduct, setFallbackProduct] = useState<CatalogProduct | null>(() => getCatalogSnapshotProduct(productId));
+  const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
+  const initialCatalogProduct = getCatalogSnapshotProduct(productId);
+  const initialPassport = mergeCachedPassportPricing(getCachedProductPassport(productId), initialCatalogProduct);
+  const initialProduct = initialPassport?.product || initialCatalogProduct;
+  const initialIngredients = asArray(initialPassport?.ingredients);
+  const initialVariants = asArray(initialPassport?.variants);
+  const initialOptionGroups = asArray(initialPassport?.optionGroups);
+  const initialDefaultConfig = asRecord(initialPassport?.defaultConfig);
+  const [passport, setPassport] = useState<CatalogProductPassport | null>(initialPassport);
+  const [fallbackProduct, setFallbackProduct] = useState<CatalogProduct | null>(initialCatalogProduct);
   const [comboContextDetails, setComboContextDetails] = useState<CatalogComboDetails | null>(() =>
     comboContext ? getMemoryCatalogComboDetails(comboContext.comboId) : null,
   );
   const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [errorText, setErrorText] = useState('');
-  const [quantity, setQuantity] = useState(0);
-  const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', quantityInBase: null, selectedIndex: null, stockQuantity: null, unitId: null, value: null });
-  const [ingredientState, setIngredientState] = useState<IngredientState>({});
-  const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>({});
+  const [quantity, setQuantity] = useState(1);
+  const [variantState, setVariantState] = useState<VariantState>(() => createInitialVariantState(initialProduct, initialVariants, initialDefaultConfig, unitConversions));
+  const [ingredientState, setIngredientState] = useState<IngredientState>(() => createInitialIngredientState(initialIngredients));
+  const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>(() => createInitialOptionSelections(initialOptionGroups, initialDefaultConfig, unitConversions));
+  const [expandedOptionGroups, setExpandedOptionGroups] = useState<Record<string, boolean>>({});
   const [isOptionsSheetVisible, setOptionsSheetVisible] = useState(false);
   const [activeOptionGroupId, setActiveOptionGroupId] = useState<number | null>(null);
   const [expandedOptionVariantKey, setExpandedOptionVariantKey] = useState('');
   const [nutritionMode, setNutritionMode] = useState<NutritionMode>('per100');
   const [existingCartQty, setExistingCartQty] = useState(0);
   const [currentCartLines, setCurrentCartLines] = useState<CartLine[]>([]);
-  const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
-
   const applyAvailabilityPatch = useCallback((patch: Pick<CatalogProduct, 'fulfillment_mode' | 'is_available' | 'stock_qty'> | null) => {
     if (!patch) return;
     setPassport((current) => current?.product && Number(current.product.id) === Number(productId)
@@ -1068,8 +1259,9 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     const applyPassport = (nextPassport: CatalogProductPassport | null) => {
       if (!nextPassport) return false;
       if (isMounted) {
-        setPassport(nextPassport);
-        const rows = getPassportStockRows(nextPassport, unitConversions);
+        const mergedPassport = mergeCachedPassportPricing(nextPassport, getCatalogSnapshotProduct(productId));
+        setPassport(mergedPassport);
+        const rows = getPassportStockRows(mergedPassport, unitConversions);
         if (rows.length) mergeStockRows(rows);
       }
       return true;
@@ -1190,7 +1382,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const variants = useMemo(() => asArray(passport?.variants), [passport?.variants]);
   const optionGroups = useMemo(() => asArray(passport?.optionGroups), [passport?.optionGroups]);
   const defaultConfig = useMemo(() => asRecord(passport?.defaultConfig), [passport?.defaultConfig]);
-  const image = useMemo(() => getImage(product), [product]);
+  const image = useMemo(() => initialProductImage || getImage(product), [initialProductImage, product]);
   const comboContextLine = useMemo(() => {
     if (!comboContext || !comboContextDetails) return null;
     const draft = getComboDraft(comboContextDetails);
@@ -1254,7 +1446,9 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     () => buildCartOptions(selectedOptionItems),
     [selectedOptionItems],
   );
-  const optionTotal = selectedOptionItems.reduce((sum, item) => sum + item.resolvedPrice * Math.max(1, item.qty), 0);
+  const optionPricingTotals = getSelectedOptionPricingTotals(selectedOptionItems);
+  const optionTotal = optionPricingTotals.current;
+  const optionOriginalComparableTotal = optionPricingTotals.originalComparable;
   const variantUnitPrice = getVariantUnitPrice(product, variants, variantState, unitConversions);
   const ingredientPriceDiff = getIngredientPriceDiff(ingredients, ingredientState);
   const unitBeforeDiscount = roundPrice(variantUnitPrice + optionTotal + ingredientPriceDiff);
@@ -1265,12 +1459,24 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     ? roundPrice(Math.max(0, comboDiscountPercent >= 100 ? 0 : unitBeforeDiscount * (1 - comboDiscountPercent / 100)))
     : unitPrice;
   const displayQuantity = Math.max(1, quantity);
-  const totalOldByDiscount = discountAmount > 0 ? roundPrice(unitBeforeDiscount * displayQuantity) : 0;
-  const oldBase = getOldPrice(product);
-  const totalOldFromProduct = oldBase > unitPrice ? roundPrice((oldBase + optionTotal + ingredientPriceDiff) * displayQuantity) : 0;
+  const optionOldDelta = Math.max(0, optionOriginalComparableTotal - optionTotal);
+  const productBasePrice = getProductBasePrice(product);
+  const rawOldBase = getOldPrice(product);
+  const oldBase = rawOldBase > 0 && variantUnitPrice > 0 && productBasePrice > 0
+    ? roundPrice(rawOldBase * (variantUnitPrice / productBasePrice))
+    : rawOldBase;
+  const baseOriginalComparable = oldBase > variantUnitPrice
+    ? roundPrice(oldBase + ingredientPriceDiff)
+    : roundPrice(variantUnitPrice + ingredientPriceDiff);
+  const totalOldByDiscount = discountAmount > 0
+    ? roundPrice((unitBeforeDiscount + optionOldDelta) * displayQuantity)
+    : 0;
+  const totalOldFromProduct = roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * displayQuantity);
   const productOldUnitPrice = Math.max(
-    unitBeforeDiscount > unitPrice ? unitBeforeDiscount : 0,
-    oldBase > unitPrice ? oldBase + optionTotal + ingredientPriceDiff : 0,
+    unitBeforeDiscount > unitPrice ? unitBeforeDiscount + optionOldDelta : 0,
+    baseOriginalComparable + optionOriginalComparableTotal > unitPrice
+      ? baseOriginalComparable + optionOriginalComparableTotal
+      : 0,
   );
   const productBuyXGetYTotals = comboContext ? null : calculateBuyXGetYLineTotals({
     badge: product?.buy_x_get_y_badge || null,
@@ -1282,8 +1488,26 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     ? roundPrice(comboUnitPrice * displayQuantity)
     : productBuyXGetYTotals?.total ?? roundPrice(unitPrice * displayQuantity);
   const totalOldPrice = comboContext && unitBeforeDiscount > comboUnitPrice
-    ? roundPrice(unitBeforeDiscount * displayQuantity)
+    ? roundPrice((unitBeforeDiscount + optionOldDelta) * displayQuantity)
     : productBuyXGetYTotals?.oldTotal ?? (totalOldByDiscount || totalOldFromProduct);
+  const compositionPricingTotals = ingredients.reduce<{ current: number; original: number }>((totals, item) => {
+    const source = asRecord(item);
+    const id = toPositiveId(source.ingredient_id);
+    const selectedQuantity = id
+      ? ingredientState[String(id)]?.quantity ?? getIngredientDefaultQuantity(source)
+      : getIngredientDefaultQuantity(source);
+    const pricing = getIngredientSelectedPricing(source, selectedQuantity);
+    totals.current = roundPrice(totals.current + pricing.currentTotal);
+    totals.original = roundPrice(totals.original + pricing.originalTotal);
+    return totals;
+  }, { current: 0, original: 0 });
+  const compositionDiscountText = getDiscountBadgeText(
+    compositionPricingTotals.current,
+    compositionPricingTotals.original,
+  );
+  const heroDiscountText = compositionDiscountText
+    || getDiscountBadgeText(unitPrice, productOldUnitPrice, product?.discount || null);
+  const heroPromoText = getBuyXGetYBadgeText(product?.buy_x_get_y_badge || null);
   const stockQtyForSubmit = existingCartQty + displayQuantity - 1;
   const availabilityState = product ? getProductAvailabilityState(product, stockLevels, stockQtyForSubmit) : null;
   const available = product ? isProductStockAvailable(product, stockLevels) : false;
@@ -1365,7 +1589,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       lines,
       product_id: Number(product.id),
       product_name: product.name,
-      product_photo: product.photos?.[0] || product.photo_thumb || product.photo_lqip || selectedProduct?.product_photo || '',
+      product_photo: product.photos?.[0] || selectedProduct?.product_photo || '',
       unit_id: variantState.unitId,
       unit_price_before_discount: roundPrice(unitBeforeDiscount),
       unit_price_override: roundPrice(comboUnitPrice),
@@ -1513,13 +1737,17 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       let next: OptionSelection = { ...previous, qtyById: { ...previous.qtyById }, selectedIds: [...previous.selectedIds], variantByItemId: { ...previous.variantByItemId } };
 
       if (next.type === 'single') {
-        next.selectedId = itemId;
-        next = withDefaultOptionVariant(item, next, unitConversions);
+        if (next.selectedId === itemId && !group.is_required) {
+          next.selectedId = null;
+        } else {
+          next.selectedId = itemId;
+          next = withDefaultOptionVariant(item, next, unitConversions);
+        }
       } else if (next.type === 'multiple_group') {
         const exists = next.selectedIds.includes(itemId);
-        next.selectedIds = exists
-          ? next.selectedIds.filter((id) => id !== itemId)
-          : [...next.selectedIds, itemId].slice(0, next.maxSelect || undefined);
+        if (exists && next.selectedIds.length <= next.minSelect) return current;
+        if (!exists && next.maxSelect != null && next.selectedIds.length >= next.maxSelect) return current;
+        next.selectedIds = exists ? next.selectedIds.filter((id) => id !== itemId) : [...next.selectedIds, itemId];
         if (!exists) next = withDefaultOptionVariant(item, next, unitConversions);
       } else {
         const max = toFiniteNumber(item.qty_max, 99);
@@ -1556,6 +1784,16 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     });
   };
 
+  const resetOptionItemQuantity = (groupId: number, itemId: number) => {
+    setOptionSelections((current) => {
+      const previous = current[String(groupId)];
+      if (!previous || previous.type !== 'multiple_item' || !previous.qtyById[String(itemId)]) return current;
+      const qtyById = { ...previous.qtyById };
+      delete qtyById[String(itemId)];
+      return { ...current, [String(groupId)]: { ...previous, qtyById } };
+    });
+  };
+
   const selectOptionAndOpenVariants = (groupRaw: unknown, itemRaw: unknown, variantKey: string) => {
     updateOptionSelection(groupRaw, itemRaw, 1);
     setExpandedOptionVariantKey(variantKey);
@@ -1577,7 +1815,18 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       <View style={styles.root}>
         <ScrollView style={styles.page} contentContainerStyle={styles.content}>
           <View style={styles.hero}>
-            {image ? <Image resizeMode="contain" source={{ uri: image }} style={styles.image} /> : <View style={styles.placeholder} />}
+            {image && Platform.OS === 'web' ? (
+              <Image resizeMode="contain" source={{ uri: image }} style={styles.image} />
+            ) : image ? (
+              <ExpoImage
+                cachePolicy="memory-disk"
+                contentFit="contain"
+                source={{ uri: image }}
+                style={styles.image}
+              />
+            ) : <View style={styles.placeholder} />}
+            {heroPromoText ? <ProductBadge style={styles.heroPromoBadge} text={heroPromoText} tone="promo" /> : null}
+            {heroDiscountText ? <ProductBadge style={styles.heroDiscountBadge} text={heroDiscountText} tone="discount" /> : null}
           </View>
 
           <View style={styles.body}>
@@ -1630,8 +1879,8 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
 
             {ingredients.length && isBlockEnabled(product, 'ingredients') ? (
               <View style={styles.sectionBlock}>
-                <Text style={styles.sectionTitle}>{getBlockTitle(product, 'ingredients', 'Состав (можно настроить):')}</Text>
-                <View style={styles.infoCard}>
+                <Text style={styles.ingredientSectionTitle}>Состав товара:</Text>
+                <View style={styles.ingredientGrid}>
                   {ingredients.map((item) => {
                     const source = asRecord(item);
                     const id = toPositiveId(source.ingredient_id);
@@ -1641,27 +1890,54 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                     const ingredientImage = getIngredientImage(source);
                     const limits = getIngredientLimits(source);
                     const value = ingredientState[String(id)]?.quantity ?? limits.defaultQty;
+                    const ingredientPricing = getIngredientSelectedPricing(source, value);
+                    const ingredientDiscountText = getDiscountBadgeText(
+                      ingredientPricing.currentTotal,
+                      ingredientPricing.originalTotal,
+                    );
+                    const canDecrease = limits.isVariable && value > limits.min;
+                    const canIncrease = limits.isVariable && value < limits.max;
+                    const valueLabel = `${String(value).replace('.', ',')}${unit ? ` ${unit}` : ''}`;
                     return (
-                      <View key={id} style={styles.ingredientRow}>
-                        <View style={styles.ingredientThumb}>
+                      <View key={id} style={styles.ingredientCard}>
+                        <View style={styles.ingredientCardPhoto}>
                           {ingredientImage ? (
-                            <Image resizeMode="contain" source={{ uri: ingredientImage }} style={styles.ingredientImage} />
+                            Platform.OS === 'web' ? (
+                              <Image resizeMode="cover" source={{ uri: ingredientImage }} style={styles.ingredientImage} />
+                            ) : (
+                              <ExpoImage cachePolicy="memory-disk" contentFit="cover" source={{ uri: ingredientImage }} style={styles.ingredientImage} />
+                            )
                           ) : (
-                            <View style={styles.ingredientImagePlaceholder} />
+                            <View style={styles.ingredientImagePlaceholder}>
+                              <Text style={styles.ingredientImagePlaceholderText}>—</Text>
+                            </View>
                           )}
+                          {ingredientDiscountText ? (
+                            <ProductBadge style={styles.ingredientDiscountBadge} text={ingredientDiscountText} tone="discount" />
+                          ) : null}
                         </View>
-                        <View style={styles.ingredientText}>
-                          <Text style={styles.ingredientTitle}>{title}</Text>
+                        <View style={styles.ingredientCardInfo}>
+                          <Text numberOfLines={2} style={styles.ingredientCardTitle}>{title}</Text>
+                          <View style={[styles.ingredientCardControls, !limits.isVariable && styles.ingredientCardControlsFixed]}>
+                            {canDecrease ? (
+                              <Pressable
+                                onPress={() => updateIngredientQuantity(source, value - limits.step)}
+                                style={styles.ingredientCardButton}
+                              >
+                                <Ionicons name="remove" color={theme.colors.primaryText} size={15} />
+                              </Pressable>
+                            ) : limits.isVariable ? <View style={styles.ingredientCardButtonPlaceholder} /> : null}
+                            <Text numberOfLines={1} style={styles.ingredientCardQuantity}>{valueLabel}</Text>
+                            {canIncrease ? (
+                              <Pressable
+                                onPress={() => updateIngredientQuantity(source, value + limits.step)}
+                                style={styles.ingredientCardButton}
+                              >
+                                <Ionicons name="add" color={theme.colors.primaryText} size={15} />
+                              </Pressable>
+                            ) : limits.isVariable ? <View style={styles.ingredientCardButtonPlaceholder} /> : null}
+                          </View>
                         </View>
-                        <Stepper
-                          disabled={!limits.isVariable}
-                          max={limits.max}
-                          min={limits.min}
-                          onChange={(next) => updateIngredientQuantity(source, next)}
-                          step={limits.step}
-                          value={value}
-                          valueLabel={`${String(value).replace('.', ',')}${unit ? ` ${unit}` : ''}`}
-                        />
                       </View>
                     );
                   })}
@@ -1671,43 +1947,124 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
 
             {optionGroups.length && isBlockEnabled(product, 'options') ? (
               <View style={styles.optionGroupsBlock}>
+                <Text style={styles.optionsTitle}>{getBlockTitle(product, 'options', 'Опции товара:')}</Text>
                 {optionGroups.map((groupRaw) => {
                   const group = asRecord(groupRaw);
                   const groupId = toPositiveId(group.id);
                   if (!groupId) return null;
                   const selection = optionSelections[String(groupId)];
-                  const selectedItems = getSelectedOptionItemsForGroup(group, selection);
-                  const firstSelected = selectedItems[0];
-                  const selectedTitle = firstSelected
-                    ? selectedItems.map((item) => trimText(item.title || item.name)).filter(Boolean).join(', ')
-                    : 'Выбрать';
-                  const selectedMeta = firstSelected ? getOptionItemMetaText(firstSelected, selection) : '';
-                  const hasSelectedVariants = selectedItems.some((item) => asArray(item.variants).length > 0);
-                  const selectedImage = firstSelected ? getOptionItemImage(firstSelected) : '';
+                  if (!selection) return null;
+                  const items = asArray(group.items);
+                  const expanded = expandedOptionGroups[String(groupId)] === true;
+                  const visibleItems = expanded ? items : items.slice(0, 3);
 
                   return (
                     <View key={groupId} style={styles.optionGroupSection}>
-                      <Text style={styles.sectionTitle}>{trimText(group.title) || 'Опция'}</Text>
-                      <Pressable style={styles.optionSummaryCard} onPress={() => openOptionsSheet(groupId)}>
-                        <View style={styles.optionThumb}>
-                          {selectedImage ? (
-                            <Image resizeMode="contain" source={{ uri: selectedImage }} style={styles.optionImage} />
-                          ) : (
-                            <View style={styles.optionImagePlaceholder} />
-                          )}
-                        </View>
-                        <View style={styles.optionSummaryText}>
-                          <Text numberOfLines={2} style={styles.optionSummaryValue}>{selectedTitle}</Text>
-                          {selectedMeta ? <Text style={styles.optionSummaryMeta}>{selectedMeta}</Text> : null}
-                        </View>
-                        <View style={hasSelectedVariants ? styles.optionGearButton : styles.optionChangeButton}>
-                          {hasSelectedVariants ? (
-                            <Ionicons name="settings-outline" color={theme.colors.accent} size={19} />
-                          ) : (
-                            <Text style={styles.optionChangeText}>Изменить ›</Text>
-                          )}
-                        </View>
-                      </Pressable>
+                      <Text style={styles.optionGroupTitle}>{trimText(group.title) || 'Опция'}</Text>
+                      <Text style={styles.optionGroupHint}>{getOptionGroupHint(group, selection)}</Text>
+                      <View style={styles.optionProductGrid}>
+                        {visibleItems.map((itemRaw) => {
+                          const item = asRecord(itemRaw);
+                          const itemId = toPositiveId(item.id);
+                          if (!itemId) return null;
+                          const selected = selection.type === 'single'
+                            ? selection.selectedId === itemId
+                            : selection.type === 'multiple_group'
+                              ? selection.selectedIds.includes(itemId)
+                              : (selection.qtyById[String(itemId)] || 0) > 0;
+                          const qty = selection.type === 'multiple_item' ? selection.qtyById[String(itemId)] || 0 : selected ? 1 : 0;
+                          const variantGroup = asArray(item.variants)[0];
+                          const variantValues = asArray(asRecord(variantGroup).values);
+                          const variant = selection.variantByItemId[String(itemId)];
+                          const variantIndex = variant?.variant_value_index ?? 0;
+                          const hasVariants = Boolean(group.allow_variants && variantValues.length);
+                          const image = getOptionItemImage(item);
+                          const pricing = getOptionItemDisplayPricing(item, variant?.variant_price_diff || 0);
+                          const price = pricing.currentPrice;
+                          const oldPrice = pricing.originalPrice;
+                          const discountPercent = oldPrice > price ? Math.round((1 - price / oldPrice) * 100) : 0;
+                          const overlayValue = selected ? trimText(variant?.variant_label) || String(qty) : '';
+                          const canVariantMinus = hasVariants && variantIndex > 0;
+                          const canVariantPlus = hasVariants && variantIndex < variantValues.length - 1;
+
+                          return (
+                            <Pressable
+                              key={itemId}
+                              onPress={() => updateOptionSelection(group, item, 1)}
+                              style={[styles.optionProductCard, selected && styles.optionProductCardSelected]}
+                            >
+                              <View style={styles.optionProductPhoto}>
+                                {image ? (
+                                  Platform.OS === 'web' ? (
+                                    <Image resizeMode="cover" source={{ uri: image }} style={styles.optionProductImage} />
+                                  ) : (
+                                    <ExpoImage cachePolicy="memory-disk" contentFit="cover" source={{ uri: image }} style={styles.optionProductImage} />
+                                  )
+                                ) : (
+                                  <View style={styles.optionProductPlaceholder}><Text style={styles.optionProductPlaceholderText}>—</Text></View>
+                                )}
+                                {overlayValue ? (
+                                  <View style={styles.optionProductOverlay}>
+                                    <Text adjustsFontSizeToFit minimumFontScale={0.45} numberOfLines={1} style={styles.optionProductOverlayText}>{overlayValue}</Text>
+                                  </View>
+                                ) : null}
+                                {discountPercent > 0 ? (
+                                  <View style={styles.optionProductDiscount}>
+                                    <Text style={styles.optionProductDiscountText}>-{discountPercent}%</Text>
+                                  </View>
+                                ) : null}
+                                {selection.type === 'multiple_item' && selected ? (
+                                  <Pressable
+                                    onPress={(event) => {
+                                      event.stopPropagation();
+                                      resetOptionItemQuantity(groupId, itemId);
+                                    }}
+                                    style={styles.optionProductReset}
+                                  >
+                                    <Ionicons name="close" color={theme.colors.primaryText} size={15} />
+                                  </Pressable>
+                                ) : null}
+                              </View>
+                              <Text numberOfLines={2} style={styles.optionProductName}>{trimText(item.title || item.name)}</Text>
+                              <View style={styles.optionProductControls}>
+                                {canVariantMinus ? (
+                                  <Pressable
+                                    onPress={(event) => {
+                                      event.stopPropagation();
+                                      if (!selected) updateOptionSelection(group, item, 1);
+                                      updateOptionItemVariant(group, item, variantGroup, variantIndex - 1);
+                                    }}
+                                    style={styles.optionProductButton}
+                                  ><Ionicons name="remove" color={theme.colors.primaryText} size={15} /></Pressable>
+                                ) : <View style={styles.optionProductButtonPlaceholder} />}
+                                <View style={styles.optionProductPriceBlock}>
+                                  <Text numberOfLines={1} style={styles.optionProductOldPrice}>{oldPrice > price ? formatPrice(oldPrice * Math.max(qty, 1)) : ' '}</Text>
+                                  <Text numberOfLines={1} adjustsFontSizeToFit style={styles.optionProductPrice}>{formatPrice(price * Math.max(qty, 1))}</Text>
+                                  <Text numberOfLines={1} style={styles.optionProductVariant}>{hasVariants ? variant?.variant_label || '' : ''}</Text>
+                                </View>
+                                {canVariantPlus ? (
+                                  <Pressable
+                                    onPress={(event) => {
+                                      event.stopPropagation();
+                                      if (!selected) updateOptionSelection(group, item, 1);
+                                      updateOptionItemVariant(group, item, variantGroup, variantIndex + 1);
+                                    }}
+                                    style={styles.optionProductButton}
+                                  ><Ionicons name="add" color={theme.colors.primaryText} size={15} /></Pressable>
+                                ) : <View style={styles.optionProductButtonPlaceholder} />}
+                              </View>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                      {items.length > 3 ? (
+                        <Pressable
+                          onPress={() => setExpandedOptionGroups((current) => ({ ...current, [String(groupId)]: !expanded }))}
+                          style={styles.optionProductMore}
+                        >
+                          <Text style={styles.optionProductMoreText}>{expanded ? 'Показать меньше' : 'Показать все'}</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   );
                 })}
@@ -1788,8 +2145,10 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
             onPress={comboContext ? applyComboProductConfig : addProductToCart}
             style={[styles.actionButton, !canSubmit && styles.actionButtonDisabled]}
           >
-            {canSubmit && totalOldPrice > totalPrice ? <Text style={styles.actionOldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
-            <Text style={styles.actionButtonText}>{canSubmit ? formatPrice(totalPrice) : available ? 'Больше нет' : 'Раскупили'}</Text>
+            <View style={styles.actionPriceRow}>
+              <Text style={styles.actionButtonText}>{canSubmit ? formatPrice(totalPrice) : available ? 'Больше нет' : 'Раскупили'}</Text>
+              {canSubmit && totalOldPrice > totalPrice ? <Text style={styles.actionOldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
+            </View>
             {canSubmit ? <Text style={styles.actionButtonSubText}>{comboContext ? 'выбрать' : cartLineId ? 'Сохранить' : 'в корзину'}</Text> : null}
           </Pressable>
         </View>
@@ -1934,8 +2293,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
     flex: 1,
+    height: 52,
+    justifyContent: 'center',
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: 9,
   },
   actionButtonDisabled: {
     opacity: 0.55,
@@ -1955,8 +2315,14 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryText,
     fontSize: 10,
     fontWeight: '800',
+    marginLeft: theme.spacing.sm,
     opacity: 0.75,
     textDecorationLine: 'line-through',
+  },
+  actionPriceRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   body: {
     padding: theme.spacing.lg,
@@ -2042,6 +2408,16 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     width: '100%',
   },
+  heroDiscountBadge: {
+    position: 'absolute',
+    right: 12,
+    top: 12,
+  },
+  heroPromoBadge: {
+    left: 12,
+    position: 'absolute',
+    top: 12,
+  },
   horizontalPicker: {
     marginTop: theme.spacing.md,
   },
@@ -2065,47 +2441,102 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
-  ingredientMeta: {
-    color: theme.colors.muted,
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  ingredientRow: {
-    alignItems: 'center',
+  ingredientCard: {
+    aspectRatio: 2 / 3.35,
+    backgroundColor: theme.colors.card,
     borderColor: theme.colors.border,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
+    elevation: 2,
+    marginBottom: 12,
+    overflow: 'hidden',
+    shadowColor: '#111827',
+    shadowOffset: { height: 6, width: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    width: '30.8%',
+  },
+  ingredientCardButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 8,
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  ingredientCardButtonPlaceholder: {
+    height: 24,
+    width: 24,
+  },
+  ingredientCardControls: {
+    alignItems: 'center',
     flexDirection: 'row',
+    minHeight: 24,
+    width: '100%',
+  },
+  ingredientCardControlsFixed: {
+    justifyContent: 'center',
+  },
+  ingredientCardInfo: {
+    flex: 1,
     justifyContent: 'space-between',
-    marginTop: theme.spacing.sm,
-    padding: theme.spacing.sm,
+    paddingBottom: 7,
+    paddingTop: 5,
+  },
+  ingredientCardPhoto: {
+    aspectRatio: 1,
+    backgroundColor: theme.colors.mutedBackground,
+    overflow: 'hidden',
+    width: '100%',
+  },
+  ingredientCardQuantity: {
+    color: theme.colors.text,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '900',
+    paddingHorizontal: 3,
+    textAlign: 'center',
+  },
+  ingredientCardTitle: {
+    color: theme.colors.text,
+    fontSize: 10,
+    fontWeight: '700',
+    height: 26,
+    lineHeight: 12,
+    paddingHorizontal: 5,
+    textAlign: 'center',
+  },
+  ingredientGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    paddingVertical: theme.spacing.sm,
   },
   ingredientImage: {
     height: '100%',
     width: '100%',
   },
   ingredientImagePlaceholder: {
+    alignItems: 'center',
     backgroundColor: theme.colors.mutedBackground,
-    borderRadius: 8,
     flex: 1,
+    justifyContent: 'center',
   },
-  ingredientText: {
-    flex: 1,
-    paddingRight: theme.spacing.md,
-  },
-  ingredientThumb: {
-    backgroundColor: theme.colors.mutedBackground,
-    borderRadius: 8,
-    height: 42,
-    marginRight: theme.spacing.sm,
-    overflow: 'hidden',
-    width: 42,
-  },
-  ingredientTitle: {
-    color: theme.colors.text,
-    fontSize: 14,
+  ingredientImagePlaceholderText: {
+    color: theme.colors.muted,
+    fontSize: 18,
     fontWeight: '800',
+  },
+  ingredientDiscountBadge: {
+    position: 'absolute',
+    right: 6,
+    top: 6,
+  },
+  ingredientSectionTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 20,
   },
   nutritionCell: {
     backgroundColor: theme.colors.mutedBackground,
@@ -2280,6 +2711,183 @@ const styles = StyleSheet.create({
   },
   optionGroupSection: {
     marginTop: theme.spacing.md,
+  },
+  optionsTitle: {
+    color: theme.colors.text,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  optionGroupTitle: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 18,
+  },
+  optionGroupHint: {
+    color: theme.colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  optionProductGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    paddingVertical: theme.spacing.sm,
+  },
+  optionProductCard: {
+    aspectRatio: 2 / 3.35,
+    backgroundColor: theme.colors.card,
+    borderColor: theme.colors.border,
+    borderRadius: 12,
+    borderWidth: 1,
+    elevation: 2,
+    marginBottom: 12,
+    overflow: 'hidden',
+    shadowColor: '#111827',
+    shadowOffset: { height: 6, width: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    width: '30.8%',
+  },
+  optionProductCardSelected: {
+    borderColor: theme.colors.accent,
+    borderWidth: 2,
+  },
+  optionProductPhoto: {
+    aspectRatio: 1,
+    backgroundColor: theme.colors.mutedBackground,
+    overflow: 'hidden',
+    width: '100%',
+  },
+  optionProductImage: {
+    height: '100%',
+    width: '100%',
+  },
+  optionProductPlaceholder: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+  },
+  optionProductPlaceholderText: {
+    color: theme.colors.muted,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  optionProductOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.34)',
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  optionProductOverlayText: {
+    color: '#FFFFFF',
+    fontSize: 27,
+    fontWeight: '900',
+    textAlign: 'center',
+    width: '100%',
+  },
+  optionProductReset: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 8,
+    height: 22,
+    justifyContent: 'center',
+    left: 7,
+    position: 'absolute',
+    top: 7,
+    width: 22,
+  },
+  optionProductDiscount: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    height: 22,
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    position: 'absolute',
+    right: 7,
+    top: 7,
+  },
+  optionProductDiscountText: {
+    color: theme.colors.primaryText,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  optionProductName: {
+    color: theme.colors.text,
+    fontSize: 10,
+    fontWeight: '800',
+    height: 29,
+    lineHeight: 12,
+    paddingHorizontal: 6,
+    paddingTop: 5,
+    textAlign: 'center',
+  },
+  optionProductControls: {
+    alignItems: 'flex-end',
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: 7,
+  },
+  optionProductButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 8,
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  optionProductButtonPlaceholder: {
+    height: 24,
+    width: 24,
+  },
+  optionProductPriceBlock: {
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  optionProductOldPrice: {
+    color: theme.colors.muted,
+    fontSize: 8,
+    fontWeight: '800',
+    lineHeight: 9,
+    textDecorationLine: 'line-through',
+  },
+  optionProductPrice: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 14,
+    width: '100%',
+    textAlign: 'center',
+  },
+  optionProductVariant: {
+    color: theme.colors.text,
+    fontSize: 8,
+    fontWeight: '800',
+    lineHeight: 9,
+    minHeight: 9,
+  },
+  optionProductMore: {
+    alignSelf: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    minWidth: 148,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  optionProductMoreText: {
+    color: theme.colors.primaryText,
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   optionSummaryIcon: {
     alignItems: 'center',

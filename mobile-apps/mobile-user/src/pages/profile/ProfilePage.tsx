@@ -11,6 +11,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ActivityIndicator,
   Image,
   Keyboard,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -669,7 +670,7 @@ export function ProfilePage() {
   if (!passport) {
     return (
       <Screen edges={['top']}>
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <TouchableWithoutFeedback disabled={Platform.OS === 'web'} onPress={Keyboard.dismiss}>
           <View style={styles.authRoot}>
           <View style={styles.authHeader}>
             <Text style={styles.authTitle}>Вход</Text>

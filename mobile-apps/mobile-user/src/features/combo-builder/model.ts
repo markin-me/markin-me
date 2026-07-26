@@ -1,6 +1,6 @@
 import type { CatalogComboBlockProduct, CatalogComboDetails, UnitConversion } from '../../entities/product';
-import { resolveAssetUrl } from '../../shared/api';
-import { calculateVariantUnitPrice } from '../../shared/lib/productStock';
+import { getCatalogSnapshotProduct, resolveAssetUrl } from '../../shared/api';
+import { calculateVariantUnitPrice, isAvailableValue, isProductStockAvailable, type ProductStockLevel } from '../../shared/lib/productStock';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -221,7 +221,11 @@ export function buildComboConfiguredProduct(
 }
 
 export function getComboProductImage(product: CatalogComboBlockProduct | null, config?: ComboConfiguredProduct | null) {
-  if (config?.product_photo) return resolveAssetUrl(config.product_photo);
+  const productId = Number(config?.product_id || product?.product_id || 0);
+  const catalogProduct = Number.isFinite(productId) && productId > 0
+    ? getCatalogSnapshotProduct(productId)
+    : null;
+  if (catalogProduct?.photos?.[0]) return resolveAssetUrl(catalogProduct.photos[0]);
   const photosRaw = product?.product_photos_json;
   const photos = Array.isArray(photosRaw)
     ? photosRaw
@@ -235,7 +239,7 @@ export function getComboProductImage(product: CatalogComboBlockProduct | null, c
         }
       })()
       : [];
-  return resolveAssetUrl(product?.product_photo || photos[0] || '');
+  return resolveAssetUrl(photos[0] || config?.product_photo || product?.product_photo || '');
 }
 
 export function getComboProductTitle(product: CatalogComboBlockProduct | null, config?: ComboConfiguredProduct | null) {
@@ -301,18 +305,25 @@ function getComboBlockUniqKey(block: CatalogComboDetails['blocks'][number]) {
     .join(',');
 }
 
-function canUseComboProduct(product: CatalogComboBlockProduct | null) {
+export function isComboProductAvailable(product: CatalogComboBlockProduct | null, stockLevels?: Map<number, ProductStockLevel>) {
   if (!product) return false;
-  if (product.preview?.is_available === false) return false;
-  if ((product as AnyRecord).is_available === false) return false;
+  const productId = Number(product.product_id || 0);
+  if (!Number.isFinite(productId) || productId <= 0) return false;
+  if (!isAvailableValue(product.preview?.is_available)) return false;
+  if (!isAvailableValue(product.is_available)) return false;
+  const catalogProduct = getCatalogSnapshotProduct(productId);
+  if (catalogProduct && stockLevels && !isProductStockAvailable(catalogProduct, stockLevels)) return false;
   return true;
 }
 
 function getDefaultComboSelection(combo: CatalogComboDetails): Record<string, number> {
   return combo.blocks.reduce<Record<string, number>>((result, block, blockIndex) => {
     const products = Array.isArray(block.products) ? block.products : [];
-    const defaultIndex = products.findIndex((product) => product.is_default === true || product.is_default === 1);
-    result[String(blockIndex)] = defaultIndex >= 0 ? defaultIndex : 0;
+    const defaultIndex = products.findIndex((product) => (
+      (product.is_default === true || product.is_default === 1) && isComboProductAvailable(product)
+    ));
+    const firstAvailableIndex = products.findIndex((product) => isComboProductAvailable(product));
+    result[String(blockIndex)] = defaultIndex >= 0 ? defaultIndex : firstAvailableIndex;
     return result;
   }, {});
 }
@@ -338,7 +349,7 @@ function getRandomComboSelection(combo: CatalogComboDetails): Record<string, num
     });
     const preferredSet = new Set(preferred);
     const attempts = preferred.concat(allIndices.filter((index) => !preferredSet.has(index)));
-    const chosenIndex = attempts.find((index) => canUseComboProduct(products[index]));
+    const chosenIndex = attempts.find((index) => isComboProductAvailable(products[index]));
     const nextIndex = chosenIndex != null ? chosenIndex : selectedByBlock[String(blockIndex)] || 0;
     selectedByBlock[String(blockIndex)] = nextIndex;
 
@@ -389,6 +400,25 @@ export function cloneComboDraft(draft: ComboDraft): ComboDraft {
   };
 }
 
+export function normalizeComboDraftAvailability(
+  combo: CatalogComboDetails,
+  draft: ComboDraft,
+  stockLevels: Map<number, ProductStockLevel>,
+) {
+  let changed = false;
+  const next = cloneComboDraft(draft);
+  combo.blocks.forEach((block, blockIndex) => {
+    const products = Array.isArray(block.products) ? block.products : [];
+    const currentIndex = Number(next.selectedByBlock[String(blockIndex)] ?? -1);
+    if (currentIndex >= 0 && isComboProductAvailable(products[currentIndex] || null, stockLevels)) return;
+    const availableIndex = products.findIndex((product) => isComboProductAvailable(product, stockLevels));
+    next.selectedByBlock[String(blockIndex)] = availableIndex;
+    delete next.configuredByBlock[String(blockIndex)];
+    changed = true;
+  });
+  return changed ? next : draft;
+}
+
 export function getComboBlockConfig(draft: ComboDraft | null, blockIndex: number, product: CatalogComboBlockProduct | null) {
   const config = draft?.configuredByBlock?.[String(blockIndex)] || null;
   if (!config || !product || Number(config.product_id) !== Number(product.product_id)) return null;
@@ -400,7 +430,8 @@ function getSelectedComboProducts(combo: CatalogComboDetails | null, draft: Comb
   return combo.blocks.map((block, blockIndex) => {
     const products = Array.isArray(block.products) ? block.products : [];
     const selectedIndex = draft.selectedByBlock[String(blockIndex)] ?? 0;
-    return products[selectedIndex] || products[0] || null;
+    const selected = products[selectedIndex] || null;
+    return isComboProductAvailable(selected) ? selected : null;
   });
 }
 
