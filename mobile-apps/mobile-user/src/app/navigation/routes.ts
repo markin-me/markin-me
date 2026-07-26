@@ -68,7 +68,7 @@ export type RootStackParamList = {
 export type ChatTabParamList = {
   chatHome: undefined;
   importantMessages: undefined;
-  importantMessageDetails: { item: ImportantMessage };
+  importantMessageDetails: { item?: ImportantMessage; itemId?: number };
   supportChat: undefined;
 };
 

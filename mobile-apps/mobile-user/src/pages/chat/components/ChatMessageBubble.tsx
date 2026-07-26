@@ -44,6 +44,7 @@ type ChatMessageBubbleProps = {
   contextHidden?: boolean;
   message: ChatMessage;
   onLongPress: (message: ChatMessage, layout?: ChatMessageBubbleLayout) => void;
+  onDoublePress?: (message: ChatMessage) => void;
   onOpenImage: (uri: string) => void;
   onOpenOrder?: (card: ChatOrderCard) => void;
   onPress?: (message: ChatMessage) => void;
@@ -61,6 +62,7 @@ const CHAT_REACTION_POP_MS = 260;
 const CHAT_REACTION_LEAVE_MS = 150;
 const CHAT_SELECTION_ANIMATION_MS = 90;
 const CHAT_LONG_PRESS_DELAY_MS = 280;
+const CHAT_ATTACHMENT_OPEN_DELAY_MS = 330;
 
 function ChatMessageBubbleComponent({
   actor,
@@ -68,6 +70,7 @@ function ChatMessageBubbleComponent({
   contextHidden,
   message,
   onLongPress,
+  onDoublePress,
   onOpenImage,
   onOpenOrder,
   onPress,
@@ -94,8 +97,15 @@ function ChatMessageBubbleComponent({
   const previousReactionItemsRef = useRef<Array<{ actor: ChatActor; reaction: string }> | null>(null);
   const reactionLeaveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const reactionLeaveSeqRef = useRef(0);
+  const attachmentOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const attachmentLongPressBlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [localReaction, setLocalReaction] = useState<string | null>(null);
   const [visualSelected, setVisualSelected] = useState(!!selected);
+  const clearAttachmentOpenTimer = useCallback(() => {
+    if (attachmentOpenTimerRef.current == null) return;
+    clearTimeout(attachmentOpenTimerRef.current);
+    attachmentOpenTimerRef.current = null;
+  }, []);
   const effectiveReactions = useMemo(() => {
     if (localReaction == null) return message.reactions;
     return {
@@ -155,9 +165,14 @@ function ChatMessageBubbleComponent({
   }, [actor, localReaction, message.reactions]);
 
   useEffect(() => () => {
+    clearAttachmentOpenTimer();
+    if (attachmentLongPressBlockTimerRef.current != null) {
+      clearTimeout(attachmentLongPressBlockTimerRef.current);
+      attachmentLongPressBlockTimerRef.current = null;
+    }
     Object.values(reactionLeaveTimersRef.current).forEach((timer) => clearTimeout(timer));
     reactionLeaveTimersRef.current = {};
-  }, []);
+  }, [clearAttachmentOpenTimer]);
 
   useEffect(() => {
     const nextItems = effectiveReactionItems.map((item) => ({
@@ -317,6 +332,39 @@ function ChatMessageBubbleComponent({
     onPress?.(message);
   }, [message, onPress]);
 
+  const handleAttachmentLongPress = useCallback((event?: GestureResponderEvent) => {
+    event?.stopPropagation();
+    clearAttachmentOpenTimer();
+    handleLongPress(event);
+    if (attachmentLongPressBlockTimerRef.current != null) clearTimeout(attachmentLongPressBlockTimerRef.current);
+    attachmentLongPressBlockTimerRef.current = setTimeout(() => {
+      attachmentLongPressBlockTimerRef.current = null;
+    }, CHAT_ATTACHMENT_OPEN_DELAY_MS);
+  }, [clearAttachmentOpenTimer, handleLongPress]);
+
+  const handleAttachmentPress = useCallback((event?: GestureResponderEvent) => {
+    event?.stopPropagation();
+    if (contextClone) return;
+    if (attachmentLongPressBlockTimerRef.current != null) {
+      clearTimeout(attachmentLongPressBlockTimerRef.current);
+      attachmentLongPressBlockTimerRef.current = null;
+      return;
+    }
+    if (selectionMode) {
+      handleSelectionPress(event);
+      return;
+    }
+    if (attachmentOpenTimerRef.current != null) {
+      clearAttachmentOpenTimer();
+      onDoublePress?.(message);
+      return;
+    }
+    attachmentOpenTimerRef.current = setTimeout(() => {
+      attachmentOpenTimerRef.current = null;
+      if (imageUri) onOpenImage(imageUri);
+    }, CHAT_ATTACHMENT_OPEN_DELAY_MS);
+  }, [clearAttachmentOpenTimer, contextClone, handleSelectionPress, imageUri, message, onDoublePress, onOpenImage, selectionMode]);
+
   const displayedSelected = selectionMode ? visualSelected : !!selected;
 
   return (
@@ -394,7 +442,14 @@ function ChatMessageBubbleComponent({
             ) : null}
 
             {imageUri ? (
-              <Pressable onPress={() => onOpenImage(imageUri)} style={styles.attachment}>
+              <Pressable
+                delayLongPress={CHAT_LONG_PRESS_DELAY_MS}
+                disabled={contextClone}
+                onLongPress={handleAttachmentLongPress}
+                onPress={handleAttachmentPress}
+                onPressIn={measureBubble}
+                style={styles.attachment}
+              >
                 <Image source={{ uri: imageUri }} style={styles.image} />
               </Pressable>
             ) : null}
@@ -471,6 +526,7 @@ function areChatMessageBubblePropsEqual(prev: ChatMessageBubbleProps, next: Chat
     && prev.contextClone === next.contextClone
     && prev.contextHidden === next.contextHidden
     && prev.message === next.message
+    && prev.onDoublePress === next.onDoublePress
     && prev.onLongPress === next.onLongPress
     && prev.onOpenImage === next.onOpenImage
     && prev.onOpenOrder === next.onOpenOrder

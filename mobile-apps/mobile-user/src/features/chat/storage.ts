@@ -2,13 +2,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { apiConfig } from '../../shared/api';
 import { readCachedCustomerPassport } from '../../shared/api';
-import type { ChatActor, ChatMessage, ChatProfile, ChatSettings, ChatThreadMeta, ChatTypingState } from './types';
+import type { ChatActor, ChatMessage, ChatProfile, ChatSettings, ChatThreadMeta, ChatTypingState, ImportantMessage } from './types';
 
 const GUEST_CLIENT_KEY = `mobile_chat_guest_client_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const LAST_CUSTOMER_CLIENT_KEY = `mobile_chat_last_customer_client_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const PUSH_ENABLED_KEY = `mobile_chat_push_enabled_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const PUSH_TOKEN_KEY = `mobile_chat_push_token_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const THREAD_CACHE_KEY_PREFIX = `mobile_chat_thread_cache_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+const IMPORTANT_MESSAGES_READ_KEY = `mobile_important_messages_read_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 
 type ChatThreadCacheSnapshot = {
   actor: ChatActor;
@@ -21,6 +22,8 @@ type ChatThreadCacheSnapshot = {
   typing?: ChatTypingState | null;
   updatedAt: string;
 };
+
+type ImportantMessageReadMap = Record<string, string>;
 
 const THREAD_CACHE_MEMORY = new Map<string, ChatThreadCacheSnapshot>();
 let LAST_CHAT_PROFILE_MEMORY: ChatProfile | null = null;
@@ -127,6 +130,67 @@ export async function clearChatThreadCache(clientId: string) {
   if (!key) return;
   THREAD_CACHE_MEMORY.delete(key);
   await AsyncStorage.removeItem(key);
+}
+
+function getImportantMessageId(item: ImportantMessage | number) {
+  const id = Number(typeof item === 'number' ? item : item?.id || 0);
+  return Number.isFinite(id) && id > 0 ? String(Math.trunc(id)) : '';
+}
+
+function getImportantMessageRevision(item: ImportantMessage | number) {
+  if (typeof item === 'number') return getImportantMessageId(item);
+  return String(item?.published_at || item?.updated_at || item?.id || '').trim();
+}
+
+async function readImportantMessagesReadMap(): Promise<ImportantMessageReadMap> {
+  const raw = String(await AsyncStorage.getItem(IMPORTANT_MESSAGES_READ_KEY).catch(() => '') || '').trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as ImportantMessageReadMap
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveImportantMessagesReadMap(map: ImportantMessageReadMap) {
+  await AsyncStorage.setItem(IMPORTANT_MESSAGES_READ_KEY, JSON.stringify(map || {}));
+}
+
+export async function countUnreadImportantMessages(items: ImportantMessage[]) {
+  const messages = Array.isArray(items) ? items : [];
+  if (!messages.length) return 0;
+  const readMap = await readImportantMessagesReadMap();
+  return messages.reduce((count, item) => {
+    const id = getImportantMessageId(item);
+    if (!id) return count;
+    const revision = getImportantMessageRevision(item);
+    return readMap[id] === revision ? count : count + 1;
+  }, 0);
+}
+
+export async function getUnreadImportantMessageIds(items: ImportantMessage[]) {
+  const messages = Array.isArray(items) ? items : [];
+  if (!messages.length) return [] as string[];
+  const readMap = await readImportantMessagesReadMap();
+  return messages
+    .filter((item) => {
+      const id = getImportantMessageId(item);
+      if (!id) return false;
+      return readMap[id] !== getImportantMessageRevision(item);
+    })
+    .map((item) => getImportantMessageId(item))
+    .filter(Boolean);
+}
+
+export async function markImportantMessageRead(item: ImportantMessage | number) {
+  const id = getImportantMessageId(item);
+  if (!id) return;
+  const readMap = await readImportantMessagesReadMap();
+  readMap[id] = getImportantMessageRevision(item) || id;
+  await saveImportantMessagesReadMap(readMap);
 }
 
 export function readLastChatProfileSync() {

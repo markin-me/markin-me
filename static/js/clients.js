@@ -2705,6 +2705,7 @@
     importantMessagesLoading: false,
     importantMessagesSelectedId: null,
     importantMessagesEditingId: null,
+    importantMessageDraft: null,
     activeBannerType: 'hero',
     activeBannerId: null,
     editingBannerId: null,
@@ -6745,12 +6746,7 @@
     return { className: 'is-unpublished', text: 'Не опубликовано' };
   }
 
-  function getImportantMessageDraft(id = null) {
-    const numericId = Number(id || 0);
-    if (numericId > 0) {
-      const existing = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
-      if (existing) return { ...existing };
-    }
+  function createImportantMessageEmptyDraft() {
     return {
       id: 0,
       title: '',
@@ -6760,7 +6756,63 @@
       is_published: false,
       is_hidden: false,
       is_pinned: false,
+      __draft: true,
     };
+  }
+
+  function ensureImportantMessageDraft(reset = false, source = null) {
+    if (reset || !state.importantMessageDraft) {
+      state.importantMessageDraft = source
+        ? { ...source, __draft: true }
+        : createImportantMessageEmptyDraft();
+    }
+    return state.importantMessageDraft;
+  }
+
+  function clearImportantMessageDraft() {
+    state.importantMessageDraft = null;
+  }
+
+  function getImportantMessageDraft(id = null) {
+    const numericId = Number(id || 0);
+    if (
+      state.importantMessageDraft
+      && state.importantMessagesEditingId !== null
+      && Number(state.importantMessagesEditingId || 0) === numericId
+    ) {
+      return { ...state.importantMessageDraft };
+    }
+    if (numericId > 0) {
+      const existing = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+      if (existing) return { ...existing };
+    }
+    return { ...ensureImportantMessageDraft() };
+  }
+
+  function syncImportantMessageDraftFromForm() {
+    if (state.importantMessagesEditingId === null || !state.importantMessageDraft) return;
+    const root = elImportantMessagesEditor;
+    state.importantMessageDraft = {
+      ...state.importantMessageDraft,
+      title: root?.querySelector('[data-important-field="title"]')?.value || '',
+      body: root?.querySelector('[data-important-field="body"]')?.value || '',
+      promo_code: root?.querySelector('[data-important-field="promo_code"]')?.value || '',
+      is_pinned: String(root?.querySelector('[data-important-field="is_pinned"]')?.value || '').trim() === '1',
+    };
+  }
+
+  function getImportantMessagesRenderList() {
+    const list = Array.isArray(state.importantMessages) ? state.importantMessages : [];
+    if (state.importantMessagesEditingId === null || !state.importantMessageDraft) {
+      return list;
+    }
+    const editingId = Number(state.importantMessagesEditingId || 0);
+    if (editingId === 0) {
+      return [state.importantMessageDraft, ...list];
+    }
+    return list.map((item) => (
+      Number(item?.id || 0) === editingId ? state.importantMessageDraft : item
+    ));
   }
 
   let importantMessagesLoadRequestSeq = 0;
@@ -6789,6 +6841,12 @@
 
   function openImportantMessageEditor(id = null) {
     const numericId = Number(id || 0) || 0;
+    if (numericId === 0) {
+      ensureImportantMessageDraft(true);
+    } else {
+      const existing = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+      ensureImportantMessageDraft(true, existing || null);
+    }
     state.importantMessagesSelectedId = numericId > 0 ? numericId : null;
     state.importantMessagesEditingId = numericId;
     renderImportantMessages();
@@ -6797,6 +6855,7 @@
   function openImportantMessagePreview(id) {
     const numericId = Number(id || 0);
     if (!numericId) return;
+    clearImportantMessageDraft();
     state.importantMessagesSelectedId = numericId;
     state.importantMessagesEditingId = null;
     renderImportantMessages();
@@ -6833,7 +6892,7 @@
     const modalEl = document.getElementById('appModal');
     const modalBodyEl = window.AppModal.body;
     window.AppModal.open({
-      title: 'PROMO сообщение',
+      title: 'Promo рассылка',
       content: buildImportantMessageModalContent(item),
       showCancel: false,
       showSave: false,
@@ -6848,6 +6907,7 @@
   }
 
   function closeImportantMessageEditor() {
+    clearImportantMessageDraft();
     state.importantMessagesEditingId = null;
     renderImportantMessages();
   }
@@ -6877,7 +6937,7 @@
     const id = Number(state.importantMessagesEditingId || 0);
     const payload = collectImportantMessageForm();
     if (!String(payload.title || '').trim() || !String(payload.body || '').trim()) {
-      alert('Заполните заголовок и текст PROMO сообщения');
+      alert('Заполните заголовок и текст Promo рассылки');
       return;
     }
     const existingDraft = getImportantMessageDraft(id);
@@ -6886,26 +6946,31 @@
       ? true
       : wasPublished;
     payload.reset_published_at = options.publish === true && wasPublished;
-    payload.send_push = options.publish === true && payload.send_push === true;
+    const sendPushValue = Object.prototype.hasOwnProperty.call(options, 'sendPush')
+      ? options.sendPush === true
+      : payload.send_push === true;
+    payload.send_push = options.publish === true && sendPushValue;
     try {
-      await apiJson(id > 0 ? `/api/admin/important-messages/${id}` : '/api/admin/important-messages', {
+      const json = await apiJson(id > 0 ? `/api/admin/important-messages/${id}` : '/api/admin/important-messages', {
         method: id > 0 ? 'PUT' : 'POST',
         body: payload,
       });
+      const savedId = Number(json?.data?.id || id || 0);
+      clearImportantMessageDraft();
       state.importantMessagesEditingId = null;
-      if (id > 0) state.importantMessagesSelectedId = id;
+      if (savedId > 0) state.importantMessagesSelectedId = savedId;
       state.importantMessagesLoaded = false;
       await loadImportantMessages();
     } catch (err) {
       console.error('save important message error:', err);
-      alert('Не удалось сохранить PROMO сообщение');
+      alert('Не удалось сохранить Promo рассылку');
     }
   }
 
   async function deleteImportantMessage(id) {
     const numericId = Number(id || 0);
     if (!numericId) return;
-    if (!confirm('Удалить PROMO сообщение?')) return;
+    if (!confirm('Удалить Promo рассылку?')) return;
     try {
       await apiJson(`/api/admin/important-messages/${numericId}`, { method: 'DELETE' });
       state.importantMessages = state.importantMessages.filter((item) => Number(item?.id || 0) !== numericId);
@@ -6914,7 +6979,7 @@
       renderImportantMessages();
     } catch (err) {
       console.error('delete important message error:', err);
-      alert('Не удалось удалить PROMO сообщение');
+      alert('Не удалось удалить Promo рассылку');
     }
   }
 
@@ -6972,7 +7037,7 @@
       return;
     } catch (err) {
       console.error('quick update important message state error:', err);
-      alert('Не удалось обновить PROMO сообщение');
+      alert('Не удалось обновить Promo рассылку');
       renderImportantMessages();
       return;
     }
@@ -7015,9 +7080,30 @@
       }
     } catch (err) {
       console.error('quick update important message error:', err);
-      alert('Не удалось обновить PROMO сообщение');
+      alert('Не удалось обновить Promo рассылку');
       renderImportantMessages();
     }
+  }
+
+  async function publishImportantMessageFromList(id, options = {}) {
+    const numericId = Number(id || 0);
+    const editingId = Number(state.importantMessagesEditingId || 0);
+    const sendPush = options.sendPush === true;
+    if (state.importantMessagesEditingId !== null && editingId === numericId) {
+      await saveImportantMessage({ publish: true, sendPush });
+      return;
+    }
+    const existing = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+    if (!existing) return;
+    const wasPublished = isImportantMessagePublished(existing);
+    await updateImportantMessageQuick(numericId, {
+      is_published: true,
+      ...(wasPublished ? {} : { is_hidden: false }),
+      reset_published_at: wasPublished,
+      send_push: sendPush,
+    });
+    state.importantMessagesLoaded = false;
+    await loadImportantMessages();
   }
 
   function handleImportantMessagePhotoInputChange(photoInput) {
@@ -7025,17 +7111,31 @@
     if (photoInput.dataset.importantUploadHandled === '1') return;
     const row = photoInput.closest?.('[data-important-id]');
     const id = Number(row?.getAttribute('data-important-id') || photoInput.getAttribute('data-important-id') || 0);
+    const isDraftPhoto = state.importantMessagesEditingId !== null
+      && id === Number(state.importantMessagesEditingId || 0)
+      && !!state.importantMessageDraft;
     const file = photoInput.files && photoInput.files[0] ? photoInput.files[0] : null;
     photoInput.dataset.importantUploadHandled = '1';
     photoInput.value = '';
-    if (!id || !file) {
+    if (!file || (!id && !isDraftPhoto)) {
       delete photoInput.dataset.importantUploadHandled;
       return;
     }
+    syncImportantMessageDraftFromForm();
     importantMessagePhotoUploadingIds.add(id);
     renderImportantMessages();
     uploadTenantAsset('important_message_image', file)
-      .then((uploaded) => updateImportantMessageQuick(id, { image_url: uploaded.url || '' }))
+      .then((uploaded) => {
+        if (isDraftPhoto) {
+          state.importantMessageDraft = {
+            ...ensureImportantMessageDraft(),
+            image_url: uploaded.url || '',
+          };
+          renderImportantMessages();
+          return null;
+        }
+        return updateImportantMessageQuick(id, { image_url: uploaded.url || '' });
+      })
       .catch((err) => {
         console.error('important message image upload error:', err);
         alert(`Не удалось загрузить фото: ${err?.message || 'UPLOAD_ERROR'}`);
@@ -7067,9 +7167,6 @@
     if (state.currentView !== 'important-messages') return;
     if (!isEditing) {
       if (selected) {
-        const selectedPublished = isImportantMessagePublished(selected);
-        const selectedHidden = isImportantMessageHidden(selected);
-        const selectedPinned = isImportantMessagePinned(selected);
         elImportantMessagesEditor.innerHTML = `
           <div class="promo-messages-editor-form">
             <div class="settings-site-field">
@@ -7080,38 +7177,19 @@
               <label class="field-label">ТЕКСТ</label>
               <div class="control promo-messages-editor-readonly promo-messages-editor-readonly-body">${escapeHtml(String(selected.body || ''))}</div>
             </div>
-            <div class="promo-messages-editor-icon-actions">
-              ${selectedPublished ? `
-                <button class="icon-btn" type="button" data-important-action="hide" data-important-id="${Number(selected.id || 0)}" title="${selectedHidden ? 'Показать' : 'Скрыть'}" aria-label="${selectedHidden ? 'Показать' : 'Скрыть'}">
-                  <i class="fas ${selectedHidden ? 'fa-eye' : 'fa-eye-slash'}"></i>
-                </button>
-              ` : ''}
-              <button class="icon-btn" type="button" data-important-action="delete" data-important-id="${Number(selected.id || 0)}" title="Удалить" aria-label="Удалить">
-                <i class="fas fa-trash"></i>
-              </button>
-              ${selectedPublished ? `
-                <button class="icon-btn promo-messages-editor-pin-btn ${selectedPinned ? 'is-active' : ''}" type="button" data-important-action="pin" data-important-id="${Number(selected.id || 0)}" title="${selectedPinned ? 'Открепить' : 'Закрепить'}" aria-label="${selectedPinned ? 'Открепить' : 'Закрепить'}">
-                  <i class="fas fa-thumbtack"></i>
-                </button>
-              ` : ''}
-            </div>
           </div>
         `;
         return;
       }
       elImportantMessagesEditor.innerHTML = `
         <div class="promo-messages-editor-empty">
-          <div class="empty-icon"><i class="fas fa-pen"></i></div>
           <div class="empty-title">Выберите сообщение слева или нажмите «+»</div>
-          <div class="empty-text">Здесь откроется форма для создания PROMO сообщения.</div>
+          <div class="empty-text">Здесь откроется форма для создания Promo рассылки.</div>
         </div>
       `;
       return;
     }
     const draft = getImportantMessageDraft(state.importantMessagesEditingId);
-    const draftId = Number(draft.id || 0);
-    const draftPublished = isImportantMessagePublished(draft);
-    const draftHidden = isImportantMessageHidden(draft);
     const draftPinned = isImportantMessagePinned(draft);
     const draftPromoCode = String(draft.promo_code || draft.promoCode || '').trim();
     elImportantMessagesEditor.innerHTML = `
@@ -7128,31 +7206,8 @@
           <label class="field-label">ТЕКСТ</label>
           <textarea class="control promo-messages-editor-textarea" data-important-field="body" rows="12">${escapeHtml(draft.body || '')}</textarea>
         </div>
-        <div class="promo-messages-editor-icon-actions">
-          ${draftId > 0 ? `
-            ${draftPublished ? `
-              <button class="icon-btn" type="button" data-important-action="hide" data-important-id="${draftId}" title="${draftHidden ? 'Показать' : 'Скрыть'}" aria-label="${draftHidden ? 'Показать' : 'Скрыть'}">
-                <i class="fas ${draftHidden ? 'fa-eye' : 'fa-eye-slash'}"></i>
-              </button>
-            ` : ''}
-            <button class="icon-btn" type="button" data-important-action="delete" data-important-id="${draftId}" title="Удалить" aria-label="Удалить">
-              <i class="fas fa-trash"></i>
-            </button>
-          ` : ''}
-          ${draftPublished ? `
-            <button class="icon-btn promo-messages-editor-pin-btn ${draftPinned ? 'is-active' : ''}" type="button" data-important-action="pin-form" title="${draftPinned ? 'Открепить' : 'Закрепить'}" aria-label="${draftPinned ? 'Открепить' : 'Закрепить'}">
-              <i class="fas fa-thumbtack"></i>
-            </button>
-          ` : ''}
-        </div>
         <input type="hidden" data-important-field="is_published" value="${isImportantMessagePublished(draft) ? '1' : '0'}" />
         <input type="hidden" data-important-field="is_pinned" value="${draftPinned ? '1' : '0'}" />
-        <div class="settings-site-field promo-messages-editor-publish-row">
-          <button class="icon-btn promo-messages-editor-publish-btn" type="button" data-important-action="publish" title="${draftPublished ? 'Опубликовать повторно' : 'Опубликовать'}" aria-label="${draftPublished ? 'Опубликовать повторно' : 'Опубликовать'}">
-            <i class="fas ${draftPublished ? 'fa-sync-alt' : 'fa-bullhorn'}"></i>
-          </button>
-          <label class="switch"><input class="switch-input" data-important-field="send_push" type="checkbox" checked /><span class="switch-ui"></span><span class="switch-text">Отправить push</span></label>
-        </div>
       </div>
     `;
   }
@@ -7160,12 +7215,13 @@
   function renderImportantMessages() {
     renderImportantMessageEditor();
     if (!elImportantMessagesList) return;
-    if (state.importantMessagesLoading) {
-      elImportantMessagesList.innerHTML = '<div class="empty-hint">Загружаем PROMO сообщения...</div>';
+    const hasImportantMessageDraft = Number(state.importantMessagesEditingId || 0) === 0 && !!state.importantMessageDraft;
+    if (state.importantMessagesLoading && !hasImportantMessageDraft) {
+      elImportantMessagesList.innerHTML = '<div class="empty-hint">Загружаем Promo рассылки...</div>';
       if (elImportantMessagesEmptyHint) elImportantMessagesEmptyHint.classList.add('hidden');
       return;
     }
-    const list = Array.isArray(state.importantMessages) ? state.importantMessages : [];
+    const list = getImportantMessagesRenderList();
     if (elImportantMessagesEmptyHint) elImportantMessagesEmptyHint.classList.toggle('hidden', list.length > 0);
     elImportantMessagesList.innerHTML = list.map((item) => {
       const isPublished = isImportantMessagePublished(item);
@@ -7173,22 +7229,26 @@
       const isPinned = isImportantMessagePinned(item);
       const status = getImportantMessageStatus(item);
       const itemId = Number(item.id || 0);
+      const isDraftRow = itemId <= 0 && item?.__draft === true;
+      const canEditPhoto = state.importantMessagesEditingId !== null && Number(state.importantMessagesEditingId || 0) === itemId;
       const imageUrl = String(item.image_url || item.imageUrl || '').trim();
       const promoCode = String(item.promo_code || item.promoCode || '').trim();
       const isPhotoUploading = importantMessagePhotoUploadingIds.has(itemId);
+      const publishTitle = isPublished ? 'Опубликовать повторно' : 'Опубликовать';
+      const publishIcon = isPublished ? 'fa-sync-alt' : 'fa-bullhorn';
       return `
       <div class="order-row important-message-preview-row" data-important-id="${itemId}">
         <div class="important-message-preview-side">
-          <div class="important-message-preview-media ${isPhotoUploading ? 'is-loading' : ''}" ${isPhotoUploading ? '' : 'data-important-action="photo-upload"'} title="${isPhotoUploading ? 'Загружается фото' : 'Загрузить фото'}" aria-label="${isPhotoUploading ? 'Загружается фото' : 'Загрузить фото'}" role="button" tabindex="0">
+          <div class="important-message-preview-media ${isPhotoUploading ? 'is-loading' : ''}" title="${isPhotoUploading ? 'Загружается фото' : 'Открыть Promo рассылку'}">
             ${isPhotoUploading ? '<div class="important-message-preview-media-loading" aria-hidden="true"><span></span></div>' : (imageUrl ? `<img class="important-message-preview-media-img" src="${escapeHtml(imageUrl)}" alt="" />` : '<div class="important-message-preview-media-fallback"><i class="fas fa-image"></i></div>')}
-            <div class="important-message-preview-media-actions">
+            ${canEditPhoto ? `<div class="important-message-preview-media-actions" data-important-action="photo-upload" title="${imageUrl ? 'Заменить изображение' : 'Загрузить изображение'}" aria-label="${imageUrl ? 'Заменить изображение' : 'Загрузить изображение'}" role="button" tabindex="0">
               ${isPhotoUploading ? '' : (imageUrl ? `
                 <button class="important-message-preview-media-action" type="button" data-important-action="photo-upload" title="Заменить изображение" aria-label="Заменить изображение">
                   <i class="fas fa-download"></i>
                 </button>
-              ` : '<span class="important-message-preview-media-upload" title="Загрузить изображение" aria-label="Загрузить изображение"><i class="fas fa-download"></i></span>')}
-            </div>
-            ${imageUrl && !isPhotoUploading ? `
+              ` : '<button class="important-message-preview-media-upload" type="button" data-important-action="photo-upload" title="Загрузить изображение" aria-label="Загрузить изображение"><i class="fas fa-download"></i></button>')}
+            </div>` : ''}
+            ${canEditPhoto && imageUrl && !isPhotoUploading ? `
               <button class="important-message-preview-media-remove" type="button" data-important-action="photo-remove" title="Удалить изображение" aria-label="Удалить изображение">
                 <i class="fas fa-times"></i>
               </button>
@@ -7214,20 +7274,28 @@
                 <i class="fas ${isHidden ? 'fa-eye' : 'fa-eye-slash'}"></i>
               </button>
             ` : ''}
-            <button class="icon-btn" type="button" data-important-action="delete" title="Удалить" aria-label="Удалить">
+            ${isDraftRow ? '' : `<button class="icon-btn" type="button" data-important-action="delete" title="Удалить" aria-label="Удалить">
               <i class="fas fa-trash"></i>
+            </button>`}
+            <button class="icon-btn" type="button" data-important-action="publish" title="${publishTitle}" aria-label="${publishTitle}">
+              <i class="fas ${publishIcon}"></i>
             </button>
-            ${!isPublished ? `
-              <button class="icon-btn" type="button" data-important-action="publish" title="Опубликовать" aria-label="Опубликовать">
-                <i class="fas fa-bullhorn"></i>
-              </button>
-            ` : ''}
             ${isPublished ? `
               <button class="icon-btn important-message-preview-pin-btn ${isPinned ? 'is-active' : ''}" type="button" data-important-action="pin" title="${isPinned ? 'Открепить' : 'Закрепить'}" aria-label="${isPinned ? 'Открепить' : 'Закрепить'}">
                 <i class="fas fa-thumbtack"></i>
               </button>
             ` : ''}
+            ${isDraftRow ? '' : `
+              <button class="icon-btn important-message-preview-edit-btn" type="button" data-important-action="edit" title="Редактировать" aria-label="Редактировать">
+                <i class="fas fa-pen"></i>
+              </button>
+            `}
           </div>
+          <label class="switch important-message-preview-push-switch">
+            <input class="switch-input" data-important-push-input type="checkbox" checked />
+            <span class="switch-ui"></span>
+            <span class="switch-text">Отправить push</span>
+          </label>
         </div>
       </div>
     `;
@@ -21457,7 +21525,7 @@
     }
 
     if (viewName === 'important-messages' && elToolbarText) {
-      elToolbarText.textContent = 'PROMO сообщения';
+      elToolbarText.textContent = 'Promo рассылки';
     }
 
     if (elToolbarTitle) {
@@ -24109,16 +24177,38 @@
 
   if (elImportantMessagesList) {
     elImportantMessagesList.addEventListener('click', (event) => {
+      if (event.target.closest?.('[data-important-list-photo-input]')) {
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        return;
+      }
       const row = event.target.closest?.('[data-important-id]');
       const id = Number(row?.getAttribute('data-important-id') || 0);
       const action = event.target.closest?.('[data-important-action]')?.getAttribute('data-important-action') || '';
       if (action === 'photo-remove') {
+        event.preventDefault();
         event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        if (
+          state.importantMessagesEditingId !== null
+          && id === Number(state.importantMessagesEditingId || 0)
+          && state.importantMessageDraft
+        ) {
+          syncImportantMessageDraftFromForm();
+          state.importantMessageDraft = {
+            ...ensureImportantMessageDraft(),
+            image_url: '',
+          };
+          renderImportantMessages();
+          return;
+        }
         updateImportantMessageQuick(id, { image_url: '' }).catch(console.error);
         return;
       }
       if (action === 'photo-upload') {
+        event.preventDefault();
         event.stopPropagation();
+        event.stopImmediatePropagation?.();
         const photoInput = row?.querySelector('[data-important-list-photo-input]');
         if (photoInput) {
           photoInput.setAttribute('data-important-id', String(id || 0));
@@ -24143,7 +24233,8 @@
           return;
         }
         if (action === 'publish') {
-          updateImportantMessageQuick(id, { is_published: true, is_hidden: false }).catch(console.error);
+          const sendPush = row?.querySelector('[data-important-push-input]')?.checked === true;
+          publishImportantMessageFromList(id, { sendPush }).catch(console.error);
           return;
         }
         if (action === 'pin') {

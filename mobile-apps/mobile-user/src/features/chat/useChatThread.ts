@@ -18,17 +18,19 @@ import {
 } from './api';
 import {
   buildOrderCardFromCustomerOrder,
+  buildWhereIsOrderGuestReply,
   buildReplyFromMessageResolved,
   buildWhereIsOrderText,
+  extractPhoneCandidateFromChatText,
   getAssistantName,
   getPeerDirection,
   getQuickQuestionReply,
   getQuickQuestions,
   getWelcomeMessage,
   isChatEnabled,
+  isOrderQuickQuestionEnabled,
   isWelcomeEnabled,
   isOutgoing,
-  looksLikePhone,
   makeChatMessageId,
   mergeMessages,
   normalizeChatText,
@@ -61,12 +63,14 @@ import { fetchCustomerOrders, subscribeCustomerPassport } from '../../shared/api
 type SendOptions = {
   attachment?: ChatAttachment | null;
   orderCards?: ChatMessage['orderCards'];
+  readMessageIds?: string[];
   replyTo?: ChatReply | null;
 };
 
 type LoadThreadOptions = {
   append?: boolean;
   beforeId?: number | null;
+  replace?: boolean;
   silent?: boolean;
 };
 
@@ -80,6 +84,26 @@ type ImageFile = {
   name: string;
   type: string;
 };
+
+const CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS = 1600;
+const CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS = 2400;
+
+function makeAssistantAutoReplyId(orderCards?: ChatMessage['orderCards']) {
+  const seen = new Set<number>();
+  const orderIds = (Array.isArray(orderCards) ? orderCards : [])
+    .map((card) => Number(card?.id || card?.orderId || card?.order_id || 0))
+    .filter((id) => {
+      if (!Number.isFinite(id) || id <= 0) return false;
+      const safeId = Math.trunc(id);
+      if (seen.has(safeId)) return false;
+      seen.add(safeId);
+      return true;
+    })
+    .map((id) => Math.trunc(id))
+    .slice(0, 8);
+  if (!orderIds.length) return makeChatMessageId('assistant-auto');
+  return `assistant-auto-where-order-o${orderIds.join('_')}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
 
 type UseChatThreadOptions = {
   actor: ChatActor;
@@ -116,6 +140,9 @@ export function useChatThread(options: UseChatThreadOptions) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bootstrapComplete, setBootstrapComplete] = useState(false);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const assistantReplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const assistantReplyTokenRef = useRef(0);
+  const orderPhoneLookupPendingRef = useRef(false);
   const localTypingActiveRef = useRef(false);
   const lastTypingSentAtRef = useRef(0);
   const mountedRef = useRef(true);
@@ -147,6 +174,10 @@ export function useChatThread(options: UseChatThreadOptions) {
 
   useEffect(() => {
     clientIdRef.current = clientId;
+  }, [clientId]);
+
+  useEffect(() => {
+    orderPhoneLookupPendingRef.current = false;
   }, [clientId]);
 
   useEffect(() => {
@@ -314,7 +345,11 @@ export function useChatThread(options: UseChatThreadOptions) {
       });
       if (!mountedRef.current || clientIdRef.current !== requestedClientId) return;
       const nextMessages = applyPendingReactionOverrides(Array.isArray(page.messages) ? page.messages : []);
-      setMessages((current) => opts?.append ? mergeMessages(nextMessages, current) : mergeMessages([], nextMessages));
+      setMessages((current) => {
+        if (opts?.append) return mergeMessages(nextMessages, current);
+        if (silent && !opts?.replace && current.length) return mergeMessages(current, nextMessages);
+        return mergeMessages([], nextMessages);
+      });
       const nextUpdatedAt = String(page.updated_at || '');
       updatedAtRef.current = nextUpdatedAt;
       setNextBeforeId(page.page?.next_before_id || null);
@@ -348,7 +383,7 @@ export function useChatThread(options: UseChatThreadOptions) {
 
       const expectedCount = Number(diff.message_count);
       if (Number.isFinite(expectedCount) && expectedCount >= 0 && expectedCount < messagesCountRef.current) {
-        await loadThread({ silent: opts?.silent });
+        await loadThread({ replace: true, silent: opts?.silent });
         return;
       }
 
@@ -402,6 +437,7 @@ export function useChatThread(options: UseChatThreadOptions) {
     return () => {
       mountedRef.current = false;
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      if (assistantReplyTimerRef.current) clearTimeout(assistantReplyTimerRef.current);
     };
   }, []);
 
@@ -448,7 +484,6 @@ export function useChatThread(options: UseChatThreadOptions) {
 
   useEffect(() => {
     if (!bootstrapComplete || !enabled || !isChatEnabled(settings)) return;
-    if (cacheHydratedRef.current) return;
     void loadThread({ silent: cacheHydratedRef.current });
   }, [bootstrapComplete, enabled, loadThread, settings]);
 
@@ -600,13 +635,40 @@ export function useChatThread(options: UseChatThreadOptions) {
     }
   }, [actor, clientId, profile, replyTo, requestParams]);
 
+  const markAssistantAnsweredMessagesRead = useCallback(async (messageIds?: string[]) => {
+    if (!clientId) return;
+    const ids = Array.from(new Set((Array.isArray(messageIds) ? messageIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)));
+    if (!ids.length) return;
+    const readAt = nowIso();
+    setMessages((current) => current.map((message) => ids.includes(message.id)
+      ? {
+        ...message,
+        deliveredAt: message.deliveredAt || readAt,
+        deliveryStatus: 'read',
+        read: true,
+        readAt: message.readAt || readAt,
+      }
+      : message
+    ));
+    for (const id of ids) {
+      await patchMessage(clientId, id, {
+        deliveredAt: readAt,
+        deliveryStatus: 'read',
+        read: true,
+        readAt,
+      }, requestParams).catch((err) => setError(String(err instanceof Error ? err.message : err)));
+    }
+  }, [clientId, requestParams]);
+
   const sendAutoReply = useCallback(async (text: string, sendOptions: SendOptions = {}) => {
     if (!clientId) return null;
     const body = normalizeChatText(text, 5000).trim();
     if (!body && !sendOptions.orderCards?.length) return null;
     const createdAt = nowIso();
     const message: ChatMessage = {
-      id: makeChatMessageId('assistant-auto'),
+      id: makeAssistantAutoReplyId(sendOptions.orderCards),
       direction: getPeerDirection(actor),
       text: body,
       createdAt,
@@ -627,26 +689,76 @@ export function useChatThread(options: UseChatThreadOptions) {
       setMessages((current) => mergeMessages(current.filter((item) => item.id !== message.id), [next]));
       const nextUpdatedAt = String(saved.updated_at || next.createdAt || createdAt);
       updatedAtRef.current = nextUpdatedAt;
+      await markAssistantAnsweredMessagesRead(sendOptions.readMessageIds);
       return next;
     } catch (err) {
       setMessages((current) => current.map((item) => item.id === message.id ? { ...item, localPending: false, localFailed: true } : item));
       setError(String(err instanceof Error ? err.message : err));
       return null;
     }
-  }, [actor, clientId, profile, requestParams]);
+  }, [actor, clientId, markAssistantAnsweredMessagesRead, profile, requestParams]);
 
-  const answerOrdersByPhone = useCallback(async (phoneText: string) => {
-    if (actor !== 'in' || !profile?.isGuest || !looksLikePhone(phoneText)) return false;
-    try {
-      const orders = await fetchOrdersByPhone(phoneText);
-      const cards = (orders || []).map((order) => buildOrderCardFromCustomerOrder(order));
-      await sendAutoReply(buildWhereIsOrderText(cards), { orderCards: cards, replyTo: null });
-      return true;
-    } catch (err) {
-      setError(String(err instanceof Error ? err.message : err));
+  const sendDelayedAutoReply = useCallback(async (callback: () => Promise<unknown>) => {
+    if (assistantReplyTimerRef.current) {
+      clearTimeout(assistantReplyTimerRef.current);
+      assistantReplyTimerRef.current = null;
+    }
+    const delayMs = Math.max(
+      CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS,
+      Math.min(
+        CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS,
+        Math.round(
+          CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS
+          + Math.random() * (CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS - CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS),
+        ),
+      ),
+    );
+    const token = assistantReplyTokenRef.current + 1;
+    assistantReplyTokenRef.current = token;
+    const startedAt = new Date();
+    applyTypingState({
+      active: true,
+      text: `${getAssistantName(settings)} \u043f\u0435\u0447\u0430\u0442\u0430\u0435\u0442`,
+      updated_at: startedAt.toISOString(),
+      expires_at: new Date(startedAt.getTime() + delayMs + 200).toISOString(),
+    });
+    await new Promise<void>((resolve) => {
+      assistantReplyTimerRef.current = setTimeout(resolve, delayMs);
+    });
+    if (assistantReplyTimerRef.current) assistantReplyTimerRef.current = null;
+    if (!mountedRef.current || assistantReplyTokenRef.current !== token) return false;
+    applyTypingState({
+      active: false,
+      text: '',
+      updated_at: nowIso(),
+      expires_at: '',
+    });
+    await callback();
+    return true;
+  }, [applyTypingState, settings]);
+
+  const answerOrdersByPhone = useCallback(async (phoneText: string, options?: { readMessageId?: string }) => {
+    if (actor !== 'in' || !isOrderQuickQuestionEnabled(settings) || !orderPhoneLookupPendingRef.current) return false;
+    const phoneCandidate = extractPhoneCandidateFromChatText(phoneText);
+    if (!phoneCandidate) {
+      orderPhoneLookupPendingRef.current = false;
       return false;
     }
-  }, [actor, profile?.isGuest, sendAutoReply]);
+    orderPhoneLookupPendingRef.current = false;
+    return sendDelayedAutoReply(async () => {
+      try {
+        const orders = await fetchOrdersByPhone(phoneCandidate);
+        const cards = (orders || []).map((order) => buildOrderCardFromCustomerOrder(order));
+        await sendAutoReply(buildWhereIsOrderText(cards, settings), {
+          orderCards: cards,
+          readMessageIds: options?.readMessageId ? [options.readMessageId] : [],
+          replyTo: null,
+        });
+      } catch (err) {
+        setError(String(err instanceof Error ? err.message : err));
+      }
+    });
+  }, [actor, sendAutoReply, sendDelayedAutoReply, settings]);
 
   const saveEdit = useCallback(async (text: string) => {
     if (!clientId || !editing) return;
@@ -778,26 +890,56 @@ export function useChatThread(options: UseChatThreadOptions) {
     void ensureDailyWelcome();
   }, [ensureDailyWelcome]);
 
-  const answerWhereIsOrder = useCallback(async () => {
-    if (!profile?.customerToken) {
-      await sendMessage('Где мой заказ?');
-      const operatorName = getAssistantName(settings);
-      await sendAutoReply(`Напишите номер телефона, и ${operatorName} проверит заказ.`, { replyTo: null });
-      return;
-    }
-    await sendMessage('Где мой заказ?');
-    const payload = await fetchCustomerOrders(profile.customerToken, { limit: 10, offset: 0, statusIsFinal: 0 });
-    const cards = (payload.data || []).map((order) => buildOrderCardFromCustomerOrder(order));
-    await sendAutoReply(buildWhereIsOrderText(cards), { orderCards: cards, replyTo: null });
-  }, [profile?.customerToken, sendAutoReply, sendMessage, settings]);
+  const answerWhereIsOrder = useCallback(async (options?: { readMessageId?: string; sendQuestion?: boolean }) => {
+    if (actor !== 'in' || !isOrderQuickQuestionEnabled(settings)) return false;
+    const sentQuestion = options?.sendQuestion !== false
+      ? await sendMessage('\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?')
+      : null;
+    const readMessageId = String(options?.readMessageId || sentQuestion?.id || '').trim();
+    orderPhoneLookupPendingRef.current = true;
+    await sendDelayedAutoReply(async () => {
+      if (!profile?.customerToken) {
+        await sendAutoReply(buildWhereIsOrderGuestReply(), {
+          readMessageIds: readMessageId ? [readMessageId] : [],
+          replyTo: null,
+        });
+        return;
+      }
+      try {
+        const payload = await fetchCustomerOrders(profile.customerToken, { limit: 200, offset: 0, statusIsFinal: 0 });
+        const cards = (payload.data || []).map((order) => buildOrderCardFromCustomerOrder(order));
+        await sendAutoReply(buildWhereIsOrderText(cards, settings), {
+          orderCards: cards,
+          readMessageIds: readMessageId ? [readMessageId] : [],
+          replyTo: null,
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message === 'UNAUTHORIZED') {
+          await sendAutoReply(buildWhereIsOrderGuestReply(), {
+            readMessageIds: readMessageId ? [readMessageId] : [],
+            replyTo: null,
+          });
+          return;
+        }
+        setError(String(err instanceof Error ? err.message : err));
+      }
+    });
+    return true;
+  }, [actor, profile?.customerToken, sendAutoReply, sendDelayedAutoReply, sendMessage, settings]);
 
-  const answerQuickQuestion = useCallback(async (question: string) => {
+  const answerQuickQuestion = useCallback(async (question: string, options?: { readMessageId?: string }) => {
     if (actor !== 'in') return false;
     const answer = getQuickQuestionReply(settings, question);
     if (!answer) return false;
-    await sendAutoReply(answer, { replyTo: null });
+    orderPhoneLookupPendingRef.current = false;
+    await sendDelayedAutoReply(async () => {
+      await sendAutoReply(answer, {
+        readMessageIds: options?.readMessageId ? [options.readMessageId] : [],
+        replyTo: null,
+      });
+    });
     return true;
-  }, [actor, sendAutoReply, settings]);
+  }, [actor, sendAutoReply, sendDelayedAutoReply, settings]);
 
   const quickQuestions = useMemo(() => getQuickQuestions(settings), [settings]);
 

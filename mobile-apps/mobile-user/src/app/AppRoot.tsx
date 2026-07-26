@@ -3,11 +3,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { NavigationContainer, createNavigationContainerRef, getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
+import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, StyleSheet, StatusBar as NativeStatusBar, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, StatusBar as NativeStatusBar, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { MainTabParamList, RootStackParamList } from './navigation/routes';
+import type { ChatTabParamList, MainTabParamList, RootStackParamList } from './navigation/routes';
 import { routes } from './navigation/routes';
 import { StockProvider, useProductStock } from '../features/stock';
 import { AddressFormPage } from '../pages/address-form';
@@ -48,6 +50,71 @@ import { theme } from '../shared/config/theme';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+type PushTarget =
+  | { screen: 'importantMessages'; importantMessageId?: number }
+  | { screen: 'supportChat' };
+
+function getImportantMessagePushId(data: Record<string, unknown>) {
+  const value = data.important_message_id
+    ?? data.importantMessageId
+    ?? data.promo_message_id
+    ?? data.promoMessageId;
+  const id = Number(value || 0);
+  return Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
+}
+
+function isChatOrPromoNotificationData(data: Record<string, unknown>) {
+  const type = String(data.type || data.kind || data.route || data.target || '').toLowerCase();
+  const url = String(data.url || '').toLowerCase();
+  return type.includes('chat')
+    || type.includes('important')
+    || type.includes('promo')
+    || type.includes('message_center')
+    || url.includes('chat')
+    || url.includes('important')
+    || url.includes('promo')
+    || data.open_chat === true
+    || data.open_important_messages === true
+    || data.open_promo_messages === true;
+}
+
+async function clearUnreadAppIconIndicator() {
+  await Notifications.setBadgeCountAsync(0).catch(() => null);
+  const notifications = await Notifications.getPresentedNotificationsAsync().catch(() => []);
+  await Promise.all(notifications
+    .filter((notification) => {
+      const data = notification.request.content.data;
+      return data && typeof data === 'object' && isChatOrPromoNotificationData(data as Record<string, unknown>);
+    })
+    .map((notification) => Notifications.dismissNotificationAsync(notification.request.identifier).catch(() => null)));
+}
+
+function getChatStackParams(target: PushTarget): MainTabParamList['chat'] {
+  const chatRoutes: Array<{ name: keyof ChatTabParamList; params?: ChatTabParamList[keyof ChatTabParamList] }> = [
+    { name: 'chatHome' },
+  ];
+
+  if (target.screen === 'supportChat') {
+    chatRoutes.push({ name: routes.supportChat });
+  } else {
+    chatRoutes.push({ name: routes.importantMessages });
+    const importantMessageId = Number(target.importantMessageId || 0);
+    if (importantMessageId > 0) {
+      chatRoutes.push({
+        name: routes.importantMessageDetails,
+        params: { itemId: importantMessageId },
+      });
+    }
+  }
+
+  return {
+    state: {
+      index: chatRoutes.length - 1,
+      routes: chatRoutes,
+    },
+  } as MainTabParamList['chat'];
+}
 
 function BootPreloadGate({ children }: { children: ReactNode }) {
   const { hydrateFromCache } = useProductStock();
@@ -92,9 +159,32 @@ function BootPreloadGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function ChatPushUnreadBridge({
+  children,
+  onNotificationPress,
+}: {
+  children: ReactNode;
+  onNotificationPress: (data: Record<string, unknown>) => void;
+}) {
+  const { refreshUnread } = useChatUnread();
+  const handleNotificationReceived = useCallback((data: Record<string, unknown>) => {
+    if (isChatOrPromoNotificationData(data)) refreshUnread();
+  }, [refreshUnread]);
+
+  return (
+    <ChatPushProvider
+      onNotificationPress={onNotificationPress}
+      onNotificationReceived={handleNotificationReceived}
+    >
+      {children}
+    </ChatPushProvider>
+  );
+}
+
 function MainTabs() {
   const insets = useSafeAreaInsets();
   const { totalUnread } = useChatUnread();
+  const previousTotalUnreadRef = useRef(totalUnread);
   const bottomInset = Math.max(0, insets.bottom);
   const baseTabBarStyle = {
     borderTopColor: theme.colors.border,
@@ -102,6 +192,13 @@ function MainTabs() {
     paddingBottom: 8 + bottomInset,
     paddingTop: 2,
   };
+
+  useEffect(() => {
+    const previousTotalUnread = previousTotalUnreadRef.current;
+    previousTotalUnreadRef.current = totalUnread;
+    if (Platform.OS === 'web' || totalUnread > 0 || previousTotalUnread <= 0) return;
+    void clearUnreadAppIconIndicator();
+  }, [totalUnread]);
 
   return (
     <Tab.Navigator
@@ -148,14 +245,12 @@ function MainTabs() {
             || nestedRouteName === routes.importantMessageDetails
             || nestedRouteName === routes.supportChat;
           return {
-            tabBarBadge: totalUnread > 0 ? (totalUnread > 99 ? '99+' : totalUnread) : undefined,
-            tabBarBadgeStyle: {
-              backgroundColor: '#22c55e',
-              color: '#ffffff',
-              fontSize: 11,
-              fontWeight: '800',
-            },
-            tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-ellipses-outline" color={color} size={size} />,
+            tabBarIcon: ({ color, size }) => (
+              <View style={styles.tabIconWrap}>
+                <Ionicons name="chatbubble-ellipses-outline" color={color} size={size} />
+                {totalUnread > 0 ? <View style={styles.tabUnreadDot} /> : null}
+              </View>
+            ),
             tabBarLabel: 'Сообщения',
             tabBarStyle: hideTabBar
               ? {
@@ -180,7 +275,7 @@ function MainTabs() {
 }
 
 export function AppRoot() {
-  const pendingPushRouteRef = useRef<'importantMessages' | 'supportChat' | ''>('');
+  const pendingPushRouteRef = useRef<PushTarget | null>(null);
 
   useEffect(() => {
     NativeStatusBar.setTranslucent(false);
@@ -188,16 +283,14 @@ export function AppRoot() {
     NativeStatusBar.setBarStyle('dark-content');
   }, []);
 
-  const navigateToPushTarget = useCallback((target: 'importantMessages' | 'supportChat') => {
+  const navigateToPushTarget = useCallback((target: PushTarget) => {
     if (!navigationRef.isReady()) {
       pendingPushRouteRef.current = target;
       return;
     }
     navigationRef.navigate('main', {
       screen: routes.chat,
-      params: {
-        screen: target === 'importantMessages' ? routes.importantMessages : routes.supportChat,
-      },
+      params: getChatStackParams(target),
     });
   }, []);
 
@@ -206,32 +299,39 @@ export function AppRoot() {
     const url = String(data.url || '').toLowerCase();
     if (
       type.includes('important')
+      || type.includes('promo')
       || type.includes('company')
       || type.includes('message_center')
       || url.includes('important')
+      || url.includes('promo')
       || data.open_important_messages === true
+      || data.open_promo_messages === true
     ) {
-      navigateToPushTarget('importantMessages');
+      navigateToPushTarget({
+        screen: 'importantMessages',
+        importantMessageId: getImportantMessagePushId(data),
+      });
       return;
     }
     if (type === 'chat_message' || data.open_chat === true || url.includes('chat')) {
-      navigateToPushTarget('supportChat');
+      navigateToPushTarget({ screen: 'supportChat' });
     }
   }, [navigateToPushTarget]);
 
   const handleNavigationReady = useCallback(() => {
     const target = pendingPushRouteRef.current;
     if (!target) return;
-    pendingPushRouteRef.current = '';
+    pendingPushRouteRef.current = null;
     navigateToPushTarget(target);
   }, [navigateToPushTarget]);
 
   return (
     <SafeAreaProvider>
+      <KeyboardProvider>
       <StockProvider>
         <BootPreloadGate>
-        <ChatPushProvider onNotificationPress={handlePushNotificationPress}>
         <ChatUnreadProvider>
+        <ChatPushUnreadBridge onNotificationPress={handlePushNotificationPress}>
         <NavigationContainer ref={navigationRef} onReady={handleNavigationReady}>
       <Stack.Navigator>
         <Stack.Screen name="main" component={MainTabs} options={{ headerShown: false }} />
@@ -264,10 +364,11 @@ export function AppRoot() {
       </Stack.Navigator>
       <StatusBar backgroundColor={theme.colors.background} style="dark" translucent={false} />
         </NavigationContainer>
+        </ChatPushUnreadBridge>
         </ChatUnreadProvider>
-        </ChatPushProvider>
         </BootPreloadGate>
       </StockProvider>
+      </KeyboardProvider>
     </SafeAreaProvider>
   );
 }
@@ -278,5 +379,19 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     flex: 1,
     justifyContent: 'center',
+  },
+  tabIconWrap: {
+    position: 'relative',
+  },
+  tabUnreadDot: {
+    backgroundColor: '#ef4444',
+    borderColor: '#ffffff',
+    borderRadius: 6,
+    borderWidth: 2,
+    height: 12,
+    position: 'absolute',
+    right: -4,
+    top: -3,
+    width: 12,
   },
 });

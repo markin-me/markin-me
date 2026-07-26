@@ -11,7 +11,7 @@ const ChatStack = createNativeStackNavigator<ChatTabParamList>();
 
 export function ChatTabNavigator() {
   return (
-    <ChatStack.Navigator initialRouteName="chatHome" screenOptions={{ headerShown: false }}>
+    <ChatStack.Navigator initialRouteName="chatHome" screenOptions={{ gestureEnabled: true, headerShown: false }}>
       <ChatStack.Screen name="chatHome" component={ChatMessagesPage} />
       <ChatStack.Screen name={routes.importantMessages} component={ImportantMessagesPage} />
       <ChatStack.Screen name={routes.importantMessageDetails} component={ImportantMessageDetailsPage} />

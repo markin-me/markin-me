@@ -24,6 +24,7 @@ type ChatPushRegistration = {
 
 type ChatPushProviderProps = PropsWithChildren<{
   onNotificationPress?: (data: Record<string, unknown>) => void;
+  onNotificationReceived?: (data: Record<string, unknown>) => void;
 }>;
 
 const ChatPushContext = createContext<ChatPushContextValue | null>(null);
@@ -79,7 +80,7 @@ function normalizePushEnabledFlag(value: unknown) {
   return true;
 }
 
-export function ChatPushProvider({ children, onNotificationPress }: ChatPushProviderProps) {
+export function ChatPushProvider({ children, onNotificationPress, onNotificationReceived }: ChatPushProviderProps) {
   const [enabled, setEnabledState] = useState(false);
   const [ready, setReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -94,21 +95,25 @@ export function ChatPushProvider({ children, onNotificationPress }: ChatPushProv
     let mounted = true;
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
-        shouldPlaySound: true,
+        shouldPlaySound: false,
         shouldSetBadge: false,
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldShowAlert: true,
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldShowAlert: false,
       }),
     });
     void syncAndroidChannel();
     const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification.request.content.data;
       if (__DEV__) {
         console.log('[chat-push] notification received', {
           title: notification.request.content.title,
           body: notification.request.content.body,
-          data: notification.request.content.data,
+          data,
         });
+      }
+      if (data && typeof data === 'object') {
+        onNotificationReceived?.(data as Record<string, unknown>);
       }
     });
     const handleNotificationResponse = (response: Notifications.NotificationResponse | null | undefined) => {
@@ -157,7 +162,7 @@ export function ChatPushProvider({ children, onNotificationPress }: ChatPushProv
       receivedSubscription.remove();
       responseSubscription.remove();
     };
-  }, [onNotificationPress]);
+  }, [onNotificationPress, onNotificationReceived]);
 
   const syncRegistration = useCallback(async (nextEnabled: boolean): Promise<boolean> => {
     if (syncingRef.current) return false;

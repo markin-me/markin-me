@@ -3104,6 +3104,7 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   border-radius:999px;
   background:rgba(255,255,255,.92);
   box-shadow:0 8px 20px rgba(15,23,42,.12);
+  cursor:pointer;
 }
 .important-message-preview-media.is-loading .important-message-preview-media-actions{
   display:none;
@@ -3265,9 +3266,28 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   align-items:center;
   gap:10px;
 }
+.important-message-preview-icon-actions .icon-btn{
+  width:40px;
+  min-width:40px;
+  height:40px;
+  padding:0;
+  border-radius:999px;
+  flex:0 0 40px;
+}
 .important-message-preview-pin-btn.is-active{
   background:rgba(255,107,0,.14);
   color:var(--color-primary);
+}
+.important-message-preview-edit-btn{
+  margin-left:32px;
+}
+.important-message-preview-push-switch{
+  width:max-content;
+  max-width:100%;
+}
+.important-message-preview-push-switch .switch-text{
+  font-size:13px;
+  font-weight:700;
 }
 .important-message-preview-pin-switch{
   width:max-content;

@@ -22,6 +22,8 @@ export type ChatAttachment = {
 
 export type ChatOrderCard = Record<string, unknown> & {
   id?: number;
+  orderId?: number;
+  order_id?: number;
   publicId?: string;
   public_id?: string;
   statusTitle?: string;
@@ -31,7 +33,17 @@ export type ChatOrderCard = Record<string, unknown> & {
   createdAt?: string;
   created_at?: string;
   photos?: string[];
+  items?: Array<Record<string, unknown>>;
+  methodTitle?: string;
+  method_title?: string;
+  timeOptionTitle?: string;
+  time_option_title?: string;
+  scheduledAt?: string;
+  scheduled_at?: string;
   address?: string;
+  cutleryQty?: number;
+  cutlery_qty?: number;
+  comment?: string;
 };
 
 export type ChatMessage = {

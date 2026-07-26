@@ -73,7 +73,7 @@ const styles = StyleSheet.create({
   text: {
     color: '#2f3137',
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '700',
     lineHeight: 20,
     textAlign: 'center',
   },

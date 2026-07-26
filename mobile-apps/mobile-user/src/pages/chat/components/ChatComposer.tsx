@@ -11,7 +11,6 @@ const CHAT_COMPOSER_VERTICAL_MARGIN = 10;
 type ChatComposerProps = {
   editing?: ChatMessage | null;
   focusToken?: number;
-  onAttach: () => void;
   onBaseHeight?: (height: number) => void;
   onCancelEdit: () => void;
   onCancelReply: () => void;
@@ -24,7 +23,6 @@ type ChatComposerProps = {
 export function ChatComposer({
   editing,
   focusToken = 0,
-  onAttach,
   onBaseHeight,
   onCancelEdit,
   onCancelReply,
@@ -78,10 +76,6 @@ export function ChatComposer({
         }}
         style={styles.controls}
       >
-        <Pressable accessibilityRole="button" onPress={onAttach} style={styles.iconButton}>
-          <Ionicons color="#6b7280" name="attach" size={24} />
-        </Pressable>
-
         <View style={styles.inputWrap}>
           <TextInput
             allowFontScaling={false}
@@ -117,24 +111,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 4,
   },
-  iconButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.84)',
-    borderColor: 'rgba(255,255,255,0.93)',
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 48,
-    justifyContent: 'center',
-    width: 48,
-  },
   input: {
     color: '#111827',
     fontSize: 16,
     lineHeight: 22,
     maxHeight: 166,
-    minHeight: 46,
+    minHeight: 24,
     paddingHorizontal: 10,
-    paddingVertical: 12,
+    paddingVertical: 10,
+    textAlignVertical: 'center',
   },
   inputWrap: {
     backgroundColor: 'rgba(255,255,255,0.84)',

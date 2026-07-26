@@ -15,6 +15,9 @@ export const CHAT_DEFAULT_QUICK_QUESTIONS = [
 const CHAT_QUICK_ORDER_ID = 'order';
 const CHAT_QUICK_QUESTIONS_MAX = 6;
 const CHAT_QUICK_ORDER_QUESTION = '\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?';
+const HOT_QUESTION_ORDER_STATUS_UNKNOWN = '\u0421\u0442\u0430\u0442\u0443\u0441 \u0443\u0442\u043e\u0447\u043d\u044f\u0435\u0442\u0441\u044f';
+const HOT_QUESTION_ORDER_CARD_PHOTOS_MAX = 4;
+const HOT_QUESTION_PHONE_PATTERN = /(?:\+?\d[\d\s\-()]{8,}\d)/g;
 const DEFAULT_CHAT_ASSISTANT_NAME = '\u041d\u044f\u043c-\u041d\u044f\u043c';
 const DEFAULT_CHAT_WELCOME_MESSAGE =
   '\u041f\u0440\u0438\u0432\u0435\u0442! \u042f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a \u041d\u044f\u043c-\u041d\u044f\u043c!\n' +
@@ -210,6 +213,16 @@ export function isQuickQuestionsEnabled(settings: ChatSettings | null) {
   return normalizeEnabledFlag(value, true);
 }
 
+export function isOrderQuickQuestionEnabled(settings: ChatSettings | null) {
+  if (!isQuickQuestionsEnabled(settings)) return false;
+  return getQuickQuestionConfigList(settings).some((item) => {
+    if (!item || item.enabled === false) return false;
+    const id = String(item.id || '').toLowerCase();
+    const type = String(item.type || '').toLowerCase();
+    return id === CHAT_QUICK_ORDER_ID || type === CHAT_QUICK_ORDER_ID;
+  });
+}
+
 export function getQuickQuestionReply(settings: ChatSettings | null, question: string) {
   if (!isQuickQuestionsEnabled(settings)) return '';
   const normalized = normalizeQuickQuestionKey(question);
@@ -274,6 +287,15 @@ function getDefaultWelcomeMessageByGender(value: unknown) {
   return normalizeAssistantGender(value) === 'f'
     ? DEFAULT_CHAT_WELCOME_MESSAGE_FEMALE
     : DEFAULT_CHAT_WELCOME_MESSAGE;
+}
+
+function getGenderedAssistantText(settings: ChatSettings | null, maleText: string, femaleText: string) {
+  return normalizeAssistantGender(firstSettingValue(settings, [
+    'assistant_gender',
+    'assistantGender',
+    'chat_assistant_gender',
+    'chatAssistantGender',
+  ])) === 'f' ? femaleText : maleText;
 }
 
 function normalizeQuickQuestionText(value: unknown) {
@@ -471,36 +493,95 @@ export function buildReplyFromMessage(message: ChatMessage, actor: ChatActor) {
 
 export function buildOrderCardFromCustomerOrder(order: Record<string, unknown>): ChatOrderCard {
   const id = Number(order.id || order.order_id || 0);
-  const items = Array.isArray(order.items) ? order.items as Record<string, unknown>[] : [];
-  const photos = items
-    .map((item) => String(item.photo || item.image || item.photo_url || '').trim())
-    .filter(Boolean)
-    .slice(0, 6);
+  const items = Array.isArray(order.items)
+    ? order.items as Record<string, unknown>[]
+    : (Array.isArray(order.orderItems) ? order.orderItems as Record<string, unknown>[] : []);
+  const itemPhotos = collectOrderCardPreviewPhotos(items, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX);
+  const directPhotos = Array.isArray(order.photos)
+    ? order.photos
+      .map((photo) => String(photo || '').trim())
+      .filter(Boolean)
+      .slice(0, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX)
+    : [];
   return {
     id,
-    publicId: String(order.public_id || order.publicId || (id ? `#${id}` : '') || ''),
-    statusTitle: String(order.status_title || order.statusTitle || order.status || ''),
+    publicId: String(order.public_id || order.publicId || ''),
+    statusTitle: String(order.status_title || order.statusTitle || HOT_QUESTION_ORDER_STATUS_UNKNOWN).trim() || HOT_QUESTION_ORDER_STATUS_UNKNOWN,
     totalPrice: Number(order.total_price ?? order.totalPrice ?? order.total ?? 0),
     createdAt: String(order.created_at || order.createdAt || ''),
-    photos,
-    address: String(order.address || order.address_line || ''),
+    photos: itemPhotos.length ? itemPhotos : directPhotos,
     items,
+    methodTitle: String(order.method_title || order.methodTitle || ''),
+    timeOptionTitle: String(order.time_option_title || order.timeOptionTitle || ''),
+    scheduledAt: String(order.scheduled_at || order.scheduledAt || ''),
+    address: String(order.address || ''),
+    cutleryQty: Number(order.cutlery_qty ?? order.cutleryQty ?? 0),
+    comment: String(order.comment || ''),
   };
 }
 
-export function buildWhereIsOrderText(cards: ChatOrderCard[]) {
-  if (!cards.length) return 'Активных заказов не нашлось. Напишите номер телефона или детали заказа, и оператор проверит вручную.';
-  if (cards.length === 1) return 'Нашел ваш активный заказ.';
-  return `Нашел активные заказы: ${cards.length}.`;
+export function buildWhereIsOrderGuestReply() {
+  return '\u041d\u0435 \u043c\u043e\u0433\u0443 \u043d\u0430\u0439\u0442\u0438 \u0432\u0430\u0441 \u0432 \u0431\u0430\u0437\u0435. ' +
+    '\u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 ' +
+    '\u0432\u0430\u0448 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430.';
+}
+
+export function buildWhereIsOrderText(cards: ChatOrderCard[], settings: ChatSettings | null = null) {
+  if (!cards.length) {
+    return getGenderedAssistantText(
+      settings,
+      '\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u043b: \u0441\u0435\u0439\u0447\u0430\u0441 \u0443 \u0432\u0430\u0441 \u043d\u0435\u0442 ' +
+        '\u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u0437\u0430\u043a\u0430\u0437\u043e\u0432.',
+      '\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u043b\u0430: \u0441\u0435\u0439\u0447\u0430\u0441 \u0443 \u0432\u0430\u0441 \u043d\u0435\u0442 ' +
+        '\u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u0437\u0430\u043a\u0430\u0437\u043e\u0432.',
+    );
+  }
+  return getGenderedAssistantText(
+    settings,
+    '\u041d\u0430\u0448\u0435\u043b \u0432\u0430\u0448\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u044b.',
+    '\u041d\u0430\u0448\u043b\u0430 \u0432\u0430\u0448\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u044b.',
+  );
+}
+
+export function normalizePhoneForOrderLookup(value: unknown) {
+  const digits = String(value || '').replace(/\D+/g, '');
+  if (!digits) return '';
+  if (digits.length === 11 && (digits[0] === '7' || digits[0] === '8')) {
+    return `7${digits.slice(1)}`;
+  }
+  if (digits.length === 10) {
+    return `7${digits}`;
+  }
+  if (digits.length > 11) {
+    const tail11 = digits.slice(-11);
+    if (/^[78]\d{10}$/.test(tail11)) return `7${tail11.slice(1)}`;
+    const tail10 = digits.slice(-10);
+    if (/^\d{10}$/.test(tail10)) return `7${tail10}`;
+  }
+  return digits.length >= 10 ? digits : '';
+}
+
+export function extractPhoneCandidateFromChatText(value: unknown) {
+  const source = String(value || '');
+  if (!source) return '';
+  const matches = source.match(HOT_QUESTION_PHONE_PATTERN) || [];
+  for (const match of matches) {
+    const normalized = normalizePhoneForOrderLookup(match);
+    if (normalized) return normalized;
+  }
+  return normalizePhoneForOrderLookup(source);
 }
 
 export function looksLikePhone(value: string) {
-  const digits = String(value || '').replace(/\D/g, '');
-  return digits.length >= 10 && digits.length <= 15;
+  return !!extractPhoneCandidateFromChatText(value);
 }
 
 export function getOrderCardTitle(card: ChatOrderCard) {
-  return String(card.publicId || card.public_id || (card.id ? `#${card.id}` : 'Заказ'));
+  const id = Number(card.id || card.orderId || card.order_id || 0);
+  if (Number.isFinite(id) && id > 0) return `#${Math.trunc(id)}`;
+  const publicId = String(card.publicId || card.public_id || '').trim();
+  if (publicId) return publicId.startsWith('#') ? publicId : `#${publicId}`;
+  return '\u0417\u0430\u043a\u0430\u0437';
 }
 
 export function getOrderCardStatus(card: ChatOrderCard) {
@@ -510,7 +591,7 @@ export function getOrderCardStatus(card: ChatOrderCard) {
 export function getOrderCardTotal(card: ChatOrderCard) {
   const value = Number(card.totalPrice ?? card.total_price ?? 0);
   if (!Number.isFinite(value) || value <= 0) return '';
-  return `${Math.round(value).toLocaleString('ru-RU')} ₽`;
+  return `${Math.round(value).toLocaleString('ru-RU')} \u20BD`;
 }
 
 export function getOrderCardMeta(card: ChatOrderCard) {
@@ -530,9 +611,34 @@ export function getOrderCardMeta(card: ChatOrderCard) {
 export function getOrderCardPhotos(card: ChatOrderCard) {
   const direct = Array.isArray(card.photos) ? card.photos : [];
   const items = Array.isArray(card.items) ? card.items as Record<string, unknown>[] : [];
-  const itemPhotos = items.map((item) => String(item.photo || item.image || item.photo_url || item.image_url || '').trim());
+  const itemPhotos = collectOrderCardPreviewPhotos(items, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX);
   const photos = [...direct.map((photo) => String(photo || '').trim()), ...itemPhotos].filter(Boolean);
   return Array.from(new Set(photos)).slice(0, 3);
+}
+
+function collectOrderCardPreviewPhotos(items: Record<string, unknown>[], maxPhotos: number) {
+  const result: string[] = [];
+  const limit = Math.max(1, Math.min(8, Number(maxPhotos || HOT_QUESTION_ORDER_CARD_PHOTOS_MAX)));
+
+  const pushPhoto = (rawPhoto: unknown) => {
+    if (result.length >= limit) return;
+    const src = String(rawPhoto || '').trim();
+    if (!src) return;
+    result.push(src);
+  };
+
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    if (result.length >= limit) return;
+    const source = item && typeof item === 'object' ? item : {};
+    const photos = Array.isArray(source.photos) ? source.photos : [];
+    if (photos.length) {
+      pushPhoto(photos[0]);
+      return;
+    }
+    pushPhoto(source.photo || source.product_photo || '');
+  });
+
+  return result;
 }
 
 function formatOrderCardDate(value: unknown) {

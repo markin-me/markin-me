@@ -1,14 +1,16 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { BlurView } from 'expo-blur';
-import { useNavigation } from '@react-navigation/native';
+import { KeyboardStickyView } from 'react-native-keyboard-controller';
+import { useFocusEffect, useNavigation, type CompositeNavigationProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Easing,
   ImageBackground,
@@ -24,14 +26,18 @@ import {
   View,
 } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
-import { routes, type RootStackParamList } from '../../app/navigation/routes';
+import { routes, type ChatTabParamList, type RootStackParamList } from '../../app/navigation/routes';
 import {
   formatChatDay,
   formatChatTime,
+  getAssistantName,
   getMessagePreview,
   getOperatorName,
+  getWelcomeMessage,
   isOutgoing,
   isWhereIsOrderQuestion,
+  normalizeChatText,
+  nowIso,
   shouldShowDay,
   useChatThread,
   useChatUnread,
@@ -63,25 +69,43 @@ const CHAT_THREAD_EDGE_BLUR_OVERSCAN = Platform.OS === 'android' ? 24 : 16;
 const CHAT_THREAD_EDGE_BLUR_INTENSITY = Platform.OS === 'android' ? 12 : 10;
 const CHAT_THREAD_EDGE_BLUR_REDUCTION = Platform.OS === 'android' ? 2 : 3;
 const CHAT_FOOTER_BOTTOM_LIFT = 10;
+const CHAT_ANDROID_FOOTER_SAFE_AREA_MAX = 32;
+const CHAT_ANDROID_KEYBOARD_FOOTER_SAFE_AREA_MAX = 0;
+const CHAT_ANDROID_KEYBOARD_STICKY_OFFSET = CHAT_FOOTER_BOTTOM_LIFT;
+const CHAT_THREAD_TOP_BASE_INSET = 14;
 
 type ChatPageProps = {
   active?: boolean;
   onBack?: () => void;
 };
 
+type ChatPageNavigationProp = CompositeNavigationProp<
+  NativeStackNavigationProp<ChatTabParamList>,
+  NativeStackNavigationProp<RootStackParamList>
+>;
+
+function isHiddenChatRouteActive(navigation: ChatPageNavigationProp) {
+  const state = navigation.getState();
+  const routeName = state.routes[state.index]?.name;
+  return routeName === routes.supportChat
+    || routeName === routes.importantMessages
+    || routeName === routes.importantMessageDetails;
+}
+
 export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<ChatPageNavigationProp>();
   const insets = useSafeAreaInsets();
   const { refreshUnread } = useChatUnread();
   const chatStageRef = useRef<View | null>(null);
   const chatStageFrameRef = useRef<{ height: number; y: number } | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
   const keyboardTranslateY = useRef(new Animated.Value(0)).current;
-  const androidKeyboardHeightRef = useRef(0);
+  const keyboardVisibleRef = useRef(false);
   const scrollDownProgress = useRef(new Animated.Value(0)).current;
   const lastAutoScrollMessageIdRef = useRef('');
   const lastTapRef = useRef<{ id: string; at: number }>({ id: '', at: 0 });
   const nearBottomRef = useRef(true);
+  const restoreBottomAfterKeyboardRef = useRef(false);
   const contextHideFrameRef = useRef<number | null>(null);
   const chat = useChatThread({ actor: 'in' });
   const chatRef = useRef(chat);
@@ -97,18 +121,41 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   const [composerFocusToken, setComposerFocusToken] = useState(0);
   const [footerBaseHeight, setFooterBaseHeight] = useState(0);
   const [footerOverlayHeight, setFooterOverlayHeight] = useState(0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
+  const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [wallpaperSize, setWallpaperSize] = useState<{ height: number; width: number } | null>(null);
   const [chatStageHeight, setChatStageHeight] = useState(0);
   const [selectionActive, setSelectionActive] = useState(false);
   const [threadRenderReady, setThreadRenderReady] = useState(false);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
 
+  const baseTabBarStyle = useMemo(() => {
+    const bottomInset = Math.max(0, insets.bottom);
+    return {
+      borderTopColor: theme.colors.border,
+      height: theme.sizes.tabBarHeight + bottomInset,
+      paddingBottom: 8 + bottomInset,
+      paddingTop: 2,
+    };
+  }, [insets.bottom]);
+  const hideTabBarStyle = useMemo(() => ({ display: 'none' as const }), []);
   const selectionMode = selectionActive || chat.selectedIds.length > 0;
   const footerBottomInset = CHAT_FOOTER_BOTTOM_LIFT;
-  const footerSafeAreaInset = Platform.OS === 'android' && !keyboardVisible ? Math.max(0, insets.bottom) : 0;
-  const footerBlurBottomOffset = CHAT_FOOTER_BOTTOM_LIFT + Math.min(footerSafeAreaInset, CHAT_THREAD_EDGE_BLUR_OVERSCAN);
+  const androidReportedBottomInset = Math.max(0, insets.bottom);
+  const footerSafeAreaInset = Platform.OS === 'android'
+    ? Math.min(
+      androidReportedBottomInset,
+      keyboardVisible ? CHAT_ANDROID_KEYBOARD_FOOTER_SAFE_AREA_MAX : CHAT_ANDROID_FOOTER_SAFE_AREA_MAX,
+    )
+    : 0;
+  const footerBlurBottomOffset = 0;
   const operatorName = getOperatorName(chat.settings);
+  const assistantName = getAssistantName(chat.settings);
+  const typingLabel = useMemo(
+    () => buildChatTypingLabel(chat.typing?.text, operatorName, assistantName),
+    [assistantName, chat.typing?.text, operatorName],
+  );
   const wallpaperUri = useMemo(
     () => resolveAssetUrl('/static/assets/chat-wallpaper-mobile.webp?v=20260320d'),
     [],
@@ -126,10 +173,17 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   const selectedDeleteConfirmText = selectedMessages.length === 1
     ? 'Вы точно хотите удалить выбранное сообщение?'
     : `Вы точно хотите удалить выбранные сообщения (${selectedMessages.length})?`;
-  const quickQuestionsTimeLabel = useMemo(() => {
-    if (!chat.messages.length) return undefined;
-    const anchorMessage = chat.messages[chat.messages.length - 1];
-    return anchorMessage?.createdAt ? formatChatTime(anchorMessage.createdAt) : undefined;
+  const welcomeMessageText = useMemo(() => normalizeChatText(getWelcomeMessage(chat.settings)).trim(), [chat.settings]);
+  const quickQuestionsAnchorIndex = useMemo(() => {
+    if (!chat.quickQuestions.length) return -1;
+    const welcomeIndex = chat.messages.findIndex((message) =>
+      message.direction !== chat.actor && normalizeChatText(message.text).trim() === welcomeMessageText
+    );
+    return welcomeIndex >= 0 ? welcomeIndex : -2;
+  }, [chat.actor, chat.messages, chat.quickQuestions.length, welcomeMessageText]);
+  const quickQuestionsFallbackTimeLabel = useMemo(() => {
+    const anchorMessage = chat.messages[0];
+    return formatChatTime(anchorMessage?.createdAt || nowIso());
   }, [chat.messages]);
   const lastMessage = chat.messages.length ? chat.messages[chat.messages.length - 1] : null;
   const keyboardLayerStyle = useMemo(
@@ -148,14 +202,21 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     ),
     [footerBaseHeight, footerOverlayHeight, footerSafeAreaInset],
   );
+  const threadTopInset = Platform.OS === 'android' && keyboardVisible
+    ? CHAT_THREAD_TOP_BASE_INSET
+      + CHAT_THREAD_FOOTER_FADE_FALLBACK
+      + Math.max(0, androidKeyboardHeight - CHAT_ANDROID_KEYBOARD_STICKY_OFFSET)
+    : CHAT_THREAD_TOP_BASE_INSET;
   const threadInsetStyle = useMemo(
-    () => ({ paddingBottom: Math.max(14, threadFooterHeight + 8 + footerBottomInset) }),
-    [footerBottomInset, threadFooterHeight],
+    () => ({
+      paddingBottom: Math.max(14, threadFooterHeight + 8 + footerBottomInset),
+      paddingTop: threadTopInset,
+    }),
+    [footerBottomInset, threadFooterHeight, threadTopInset],
   );
-  const footerMaskHeight = useMemo(
-    () => threadFooterHeight,
-    [threadFooterHeight],
-  );
+  const footerMaskHeight = Platform.OS === 'android' && !keyboardVisible && footerSafeAreaInset > 0
+    ? threadFooterHeight + CHAT_THREAD_FOOTER_FADE_EXTRA
+    : CHAT_THREAD_FOOTER_FADE_FALLBACK;
   const scrollDownStyle = useMemo(
     () => (footerOverlayHeight > 0 ? { bottom: footerOverlayHeight + 16 + footerBottomInset } : null),
     [footerBottomInset, footerOverlayHeight],
@@ -183,6 +244,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   }), [scrollDownProgress]);
 
   const scrollToBottom = useCallback((animated = true) => {
+    setHasNewMessagesBelow(false);
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
   }, []);
 
@@ -190,13 +252,20 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     chatRef.current = chat;
   }, [chat]);
 
+  const dismissKeyboardIfOpen = useCallback(() => {
+    if (!keyboardVisibleRef.current) return false;
+    Keyboard.dismiss();
+    return true;
+  }, []);
+
   const handleBack = useCallback(() => {
+    if (dismissKeyboardIfOpen()) return;
     if (onBack) {
       onBack();
       return;
     }
     navigation.goBack();
-  }, [navigation, onBack]);
+  }, [dismissKeyboardIfOpen, navigation, onBack]);
 
   const focusComposer = useCallback(() => {
     setComposerFocusToken((token) => token + 1);
@@ -212,10 +281,20 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     };
   }, []);
 
+  useFocusEffect(useCallback(() => {
+    const parent = navigation.getParent();
+    parent?.setOptions({ tabBarStyle: hideTabBarStyle });
+    return () => {
+      requestAnimationFrame(() => {
+        if (isHiddenChatRouteActive(navigation)) return;
+        parent?.setOptions({ tabBarStyle: baseTabBarStyle });
+      });
+    };
+  }, [baseTabBarStyle, hideTabBarStyle, navigation]));
+
   useEffect(() => {
     if (!active || Platform.OS !== 'android') return;
     setChatStageHeight(0);
-    androidKeyboardHeightRef.current = 0;
     keyboardTranslateY.stopAnimation();
     keyboardTranslateY.setValue(0);
   }, [active, keyboardTranslateY]);
@@ -263,21 +342,6 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     });
   }, [active]);
 
-  const animateAndroidKeyboardOffset = useCallback((duration = 160) => {
-    if (Platform.OS !== 'android') return;
-    const keyboardHeight = androidKeyboardHeightRef.current;
-    const nextOffset = keyboardHeight > 0
-      ? keyboardHeight + CHAT_KEYBOARD_GAP
-      : 0;
-
-    Animated.timing(keyboardTranslateY, {
-      duration,
-      easing: Easing.out(Easing.cubic),
-      toValue: -nextOffset,
-      useNativeDriver: true,
-    }).start();
-  }, [keyboardTranslateY]);
-
   const handleRootLayout = useCallback((event: LayoutChangeEvent) => {
     const height = Math.ceil(event.nativeEvent.layout.height || 0);
     const width = Math.ceil(event.nativeEvent.layout.width || 0);
@@ -294,7 +358,10 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     if (!lastMessageId || lastAutoScrollMessageIdRef.current === lastMessageId) return;
     lastAutoScrollMessageIdRef.current = lastMessageId;
     if (nearBottomRef.current || (lastMessage && isOutgoing(lastMessage, chat.actor)) || lastMessage?.localPending) {
+      setHasNewMessagesBelow(false);
       scrollToBottom(!lastMessage?.localPending);
+    } else {
+      setHasNewMessagesBelow(true);
     }
   }, [chat.actor, lastMessage, scrollToBottom]);
 
@@ -311,10 +378,35 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     if (chat.selectedIds.length > 0) setSelectionActive(true);
   }, [chat.selectedIds.length]);
 
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', (event: KeyboardEvent) => {
+      restoreBottomAfterKeyboardRef.current = nearBottomRef.current;
+      keyboardVisibleRef.current = true;
+      setAndroidKeyboardHeight(Math.max(0, Math.ceil(event.endCoordinates?.height || 0)));
+      setKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      const shouldRestoreBottom = restoreBottomAfterKeyboardRef.current || nearBottomRef.current;
+      restoreBottomAfterKeyboardRef.current = false;
+      keyboardVisibleRef.current = false;
+      setAndroidKeyboardHeight(0);
+      setKeyboardVisible(false);
+      if (shouldRestoreBottom) {
+        requestAnimationFrame(() => scrollToBottom(false));
+      }
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [scrollToBottom]);
+
   const animateKeyboardFromEvent = useCallback((event: KeyboardEvent, fallbackOffset = 0) => {
-    const keyboardTop = event.endCoordinates?.screenY ?? Number.POSITIVE_INFINITY;
+    const keyboardTop = Number(event.endCoordinates?.screenY ?? 0);
+    const hasKeyboardTop = Number.isFinite(keyboardTop) && keyboardTop > 0;
     const frame = chatStageFrameRef.current;
-    const frameOffset = frame
+    const frameOffset = frame && hasKeyboardTop
       ? Math.max(0, frame.y + frame.height - keyboardTop + CHAT_KEYBOARD_GAP)
       : fallbackOffset;
     const nextOffset = frameOffset;
@@ -325,6 +417,11 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     if (Platform.OS === 'ios') {
       Keyboard.scheduleLayoutAnimation(event);
     }
+    if (Platform.OS === 'android') {
+      keyboardTranslateY.stopAnimation();
+      keyboardTranslateY.setValue(-nextOffset);
+      return;
+    }
     Animated.timing(keyboardTranslateY, {
       duration,
       easing: getKeyboardEasing(event.easing),
@@ -334,17 +431,12 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   }, [keyboardTranslateY]);
 
   useEffect(() => {
+    if (Platform.OS === 'android') return;
+
     const showEventName = Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow';
     const hideEventName = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const handleKeyboardShow = (event: KeyboardEvent) => {
-      setKeyboardVisible(true);
-      if (Platform.OS === 'android') {
-        androidKeyboardHeightRef.current = event.endCoordinates?.height || 0;
-        animateAndroidKeyboardOffset(Math.max(120, event.duration ?? 160));
-        return;
-      }
-
       const measureAndAnimate = () => {
         chatStageRef.current?.measureInWindow((_, y, __, height) => {
           chatStageFrameRef.current = { height, y };
@@ -370,18 +462,6 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     };
 
     const handleKeyboardHide = (event: KeyboardEvent) => {
-      setKeyboardVisible(false);
-      if (Platform.OS === 'android') {
-        androidKeyboardHeightRef.current = 0;
-        Animated.timing(keyboardTranslateY, {
-          duration: Math.max(120, event.duration ?? 150),
-          easing: Easing.out(Easing.cubic),
-          toValue: 0,
-          useNativeDriver: true,
-        }).start();
-        return;
-      }
-
       animateKeyboardFromEvent(event, 0);
     };
 
@@ -392,7 +472,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
       showSubscription.remove();
       hideSubscription.remove();
     };
-  }, [animateAndroidKeyboardOffset, animateKeyboardFromEvent, keyboardTranslateY]);
+  }, [animateKeyboardFromEvent]);
 
   useEffect(() => () => {
     if (contextHideFrameRef.current != null) {
@@ -416,6 +496,11 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
       return;
     }
     lastTapRef.current = { id: message.id, at: now };
+  }, [selectionMode]);
+
+  const handleBubbleDoublePress = useCallback((message: ChatMessage) => {
+    if (selectionMode) return;
+    void chatRef.current.reactToMessage(message, '\u2764\uFE0F');
   }, [selectionMode]);
 
   const handleLongPress = useCallback((message: ChatMessage, layout?: ChatMessageBubbleLayout) => {
@@ -450,23 +535,34 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   };
 
   const pickImages = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      allowsMultipleSelection: true,
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.86,
-    });
-    if (result.canceled) return;
+    try {
+      Keyboard.dismiss();
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Нет доступа к фото', 'Разрешите доступ к фото, чтобы прикрепить изображение.');
+        return;
+      }
 
-    const assets = result.assets || [];
-    const images = assets.map((asset, index) => ({
-      name: asset.fileName || `chat-image-${Date.now()}-${index}.jpg`,
-      type: asset.mimeType || 'image/jpeg',
-      uri: asset.uri,
-    }));
+      const result = await ImagePicker.launchImageLibraryAsync({
+        allowsMultipleSelection: true,
+        mediaTypes: ['images'],
+        quality: 0.86,
+      });
+      if (result.canceled) return;
 
-    if (images.length) {
-      setPickedImages(images);
-      setCaption('');
+      const assets = result.assets || [];
+      const images = assets.map((asset, index) => ({
+        name: asset.fileName || `chat-image-${Date.now()}-${index}.jpg`,
+        type: asset.mimeType || 'image/jpeg',
+        uri: asset.uri,
+      }));
+
+      if (images.length) {
+        setPickedImages(images);
+        setCaption('');
+      }
+    } catch (error) {
+      Alert.alert('Не удалось открыть галерею', error instanceof Error ? error.message : 'Попробуйте еще раз.');
     }
   };
 
@@ -479,16 +575,19 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     scrollToBottom();
   };
 
-  const handleQuickQuestion = async (question: string) => {
+  const handleQuickQuestion = useCallback(async (question: string) => {
+    const currentChat = chatRef.current;
     if (isWhereIsOrderQuestion(question)) {
-      await chat.answerWhereIsOrder();
+      await currentChat.answerWhereIsOrder();
     } else {
-      await chat.sendMessage(question);
-      await chat.answerQuickQuestion(question);
+      const sent = await currentChat.sendMessage(question);
+      const readMessageId = String(sent?.id || '').trim();
+      const answeredByPhone = await currentChat.answerOrdersByPhone(question, { readMessageId });
+      if (!answeredByPhone) await currentChat.answerQuickQuestion(question, { readMessageId });
     }
     refreshUnread();
     scrollToBottom();
-  };
+  }, [refreshUnread, scrollToBottom]);
 
   const openOrder = useCallback((card: ChatOrderCard) => {
     const orderId = Number(card.id || card.order_id || 0);
@@ -522,6 +621,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
           actor={chat.actor}
           contextHidden={contextHiddenMessageId === message.id}
           message={message}
+          onDoublePress={handleBubbleDoublePress}
           onLongPress={handleLongPress}
           onOpenImage={setImageViewerUri}
           onOpenOrder={openOrder}
@@ -532,18 +632,32 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
           selectionMode={selectionMode}
           settings={chat.settings}
         />
+        {index === quickQuestionsAnchorIndex ? (
+          <ChatQuickQuestions
+            onPress={handleQuickQuestion}
+            prompt={CHAT_OPTIONS_PROMPT}
+            questions={chat.quickQuestions}
+            timeLabel={formatChatTime(message.createdAt)}
+            visible={!chat.loading && !selectionMode}
+          />
+        ) : null}
       </View>
     );
   }), [
     chat.actor,
+    chat.loading,
     chat.messages,
+    chat.quickQuestions,
     chat.settings,
     contextHiddenMessageId,
     handleBubblePress,
+    handleBubbleDoublePress,
     handleLongPress,
+    handleQuickQuestion,
     handleReact,
     handleSwipeReply,
     openOrder,
+    quickQuestionsAnchorIndex,
     selectedIdSet,
     selectionMode,
   ]);
@@ -568,7 +682,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
         <AppHeader backgroundColor="#ffffff" onBack={handleBack} showBack title={CHAT_HEADER_TITLE} />
 
         <View onLayout={handleChatStageLayout} ref={chatStageRef} style={[styles.chatStage, chatStageStyle]}>
-          <Animated.View style={[styles.keyboardLayer, keyboardLayerStyle]}>
+          <ChatKeyboardLayer keyboardLayerStyle={keyboardLayerStyle}>
           <View onLayout={handleBodyLayout} style={styles.body}>
               <ScrollView
               contentContainerStyle={[styles.thread, threadInsetStyle]}
@@ -579,6 +693,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
                 const isNearBottom = distance <= 160;
                 nearBottomRef.current = isNearBottom;
                 setShowScrollDown(!isNearBottom);
+                if (isNearBottom) setHasNewMessagesBelow(false);
               }}
               ref={scrollRef}
               refreshControl={<RefreshControl onRefresh={chat.refresh} refreshing={false} />}
@@ -590,6 +705,16 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
                 </Pressable>
               ) : null}
 
+              {threadRenderReady && quickQuestionsAnchorIndex === -2 ? (
+                <ChatQuickQuestions
+                  onPress={handleQuickQuestion}
+                  prompt={CHAT_OPTIONS_PROMPT}
+                  questions={chat.quickQuestions}
+                  timeLabel={quickQuestionsFallbackTimeLabel}
+                  visible={!chat.loading && !selectionMode}
+                />
+              ) : null}
+
               {threadRenderReady ? renderedMessages : null}
 
               {chat.loading && !chat.messages.length ? (
@@ -598,15 +723,8 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
                 </View>
               ) : null}
 
-              <ChatQuickQuestions
-                onPress={handleQuickQuestion}
-                prompt={CHAT_OPTIONS_PROMPT}
-                questions={chat.quickQuestions}
-                timeLabel={quickQuestionsTimeLabel}
-                visible={!chat.loading && chat.messages.length <= 1 && !selectionMode}
-              />
               <ChatTypingIndicator
-                label={`${operatorName} печатает`}
+                label={typingLabel}
                 visible={chat.typing?.active === true}
               />
               </ScrollView>
@@ -618,6 +736,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
             >
               <Pressable accessibilityRole="button" onPress={() => scrollToBottom()} style={styles.scrollDownPressable}>
                 <Ionicons color="#6b7280" name="chevron-down" size={22} />
+                {hasNewMessagesBelow ? <View style={styles.scrollDownBadge} /> : null}
               </Pressable>
             </Animated.View>
           </View>
@@ -642,16 +761,20 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
               <ChatComposer
                 editing={chat.editing}
                 focusToken={composerFocusToken}
-                onAttach={pickImages}
                 onBaseHeight={setFooterBaseHeight}
                 onCancelEdit={() => chat.setEditing(null)}
                 onCancelReply={chat.clearReply}
                 onChangeTyping={chat.sendTyping}
                 onSaveEdit={chat.saveEdit}
                 onSend={async (text) => {
-                  await chat.sendMessage(text);
-                  await chat.answerOrdersByPhone(text);
-                  await chat.answerQuickQuestion(text);
+                  const sent = await chat.sendMessage(text);
+                  const readMessageId = String(sent?.id || '').trim();
+                  const answeredByPhone = await chat.answerOrdersByPhone(text, { readMessageId });
+                  if (!answeredByPhone && isWhereIsOrderQuestion(text)) {
+                    await chat.answerWhereIsOrder({ readMessageId, sendQuestion: false });
+                  } else if (!answeredByPhone) {
+                    await chat.answerQuickQuestion(text, { readMessageId });
+                  }
                   refreshUnread();
                   scrollToBottom();
                 }}
@@ -659,7 +782,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
               />
             ) : null}
           </Animated.View>
-          </Animated.View>
+          </ChatKeyboardLayer>
           <ThreadEdgeBlur edge="top" height={footerMaskHeight} />
         </View>
       </View>
@@ -724,6 +847,31 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
 
       <ChatImageViewer onClose={() => setImageViewerUri('')} uri={imageViewerUri} />
     </Screen>
+  );
+}
+
+function ChatKeyboardLayer({
+  children,
+  keyboardLayerStyle,
+}: {
+  children: ReactNode;
+  keyboardLayerStyle: object | null;
+}) {
+  if (Platform.OS === 'android') {
+    return (
+      <KeyboardStickyView
+        offset={{ closed: 0, opened: CHAT_ANDROID_KEYBOARD_STICKY_OFFSET }}
+        style={styles.keyboardLayer}
+      >
+        {children}
+      </KeyboardStickyView>
+    );
+  }
+
+  return (
+    <Animated.View style={[styles.keyboardLayer, keyboardLayerStyle]}>
+      {children}
+    </Animated.View>
   );
 }
 
@@ -804,6 +952,18 @@ function ThreadEdgeBlur({
       </MaskedView>
     </View>
   );
+}
+
+function buildChatTypingLabel(rawText: unknown, operatorName: string, assistantName: string) {
+  const text = normalizeChatText(rawText, 120).trim();
+  const fallbackName = normalizeChatText(operatorName, 80).trim() || '\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440';
+  const knownNames = [operatorName, assistantName]
+    .map((name) => normalizeChatText(name, 80).trim())
+    .filter(Boolean);
+  const lowerText = text.toLocaleLowerCase('ru-RU');
+  const hasName = knownNames.some((name) => lowerText.startsWith(name.toLocaleLowerCase('ru-RU')));
+  if (text && hasName) return text;
+  return `${fallbackName} ${text || '\u043f\u0435\u0447\u0430\u0442\u0430\u0435\u0442'}`;
 }
 
 function getKeyboardEasing(easing?: KeyboardEvent['easing']) {
@@ -920,7 +1080,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     height: '100%',
     justifyContent: 'center',
+    position: 'relative',
     width: '100%',
+  },
+  scrollDownBadge: {
+    backgroundColor: '#ef4444',
+    borderColor: '#ffffff',
+    borderRadius: 6,
+    borderWidth: 2,
+    height: 12,
+    position: 'absolute',
+    right: 7,
+    top: 7,
+    width: 12,
   },
   stateText: {
     color: theme.colors.muted,

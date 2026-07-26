@@ -479,6 +479,7 @@
   let assistantHotReplyTimer = 0;
   let assistantHotReplyToken = 0;
   let assistantTypingEmulationUntilMs = 0;
+  let pendingOrderPhoneLookupClientId = "";
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
   let messageAlertUnlockAttempted = false;
@@ -924,6 +925,27 @@
     return phrase || "\u043f\u0435\u0447\u0430\u0442\u0430\u0435\u0442";
   }
 
+  function buildTypingLabel(name, phrase) {
+    const safeName = String(name || "").trim();
+    const safePhrase = String(phrase || "").trim() || "\u043f\u0435\u0447\u0430\u0442\u0430\u0435\u0442";
+    if (!safeName) return safePhrase;
+    if (safePhrase.toLowerCase().indexOf(safeName.toLowerCase()) === 0) return safePhrase;
+    return safeName + " " + safePhrase;
+  }
+
+  function getAssistantTypingLabel() {
+    return buildTypingLabel(
+      String(chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME),
+      getRandomTypingPhrase()
+    );
+  }
+
+  function getLocalTypingLabel() {
+    const actor = getChatActor();
+    if (actor === "out") return buildTypingLabel(getCompanyAuthorName(), getRandomTypingPhrase());
+    return getRandomTypingPhrase();
+  }
+
   function normalizePeerTypingInfo(raw) {
     const source = raw && typeof raw === "object" ? raw : {};
     const active = source.active === true;
@@ -1206,7 +1228,7 @@
     }
     if (!localTypingActive) {
       localTypingActive = true;
-      localTypingPhrase = getRandomTypingPhrase();
+      localTypingPhrase = getLocalTypingLabel();
       queueLocalTypingStatePush(true, localTypingPhrase);
     }
     localTypingLastText = currentText;
@@ -3680,6 +3702,22 @@
     return String(chatClientProfile && chatClientProfile.id || "");
   }
 
+  function setPendingOrderPhoneLookup(clientId) {
+    pendingOrderPhoneLookupClientId = String(clientId || getActiveChatClientId() || "").trim();
+  }
+
+  function clearPendingOrderPhoneLookup(clientId) {
+    const activeClientId = String(clientId || "").trim();
+    if (!activeClientId || pendingOrderPhoneLookupClientId === activeClientId) {
+      pendingOrderPhoneLookupClientId = "";
+    }
+  }
+
+  function isPendingOrderPhoneLookup(clientId) {
+    const activeClientId = String(clientId || getActiveChatClientId() || "").trim();
+    return !!activeClientId && pendingOrderPhoneLookupClientId === activeClientId;
+  }
+
   function isSameChatClientProfile(left, right) {
     return (
       Number(left && left.id || 0) === Number(right && right.id || 0)
@@ -3780,6 +3818,7 @@
     renderTypingIndicator();
 
     chatClientProfile = nextProfile;
+    clearPendingOrderPhoneLookup();
     if (shouldMergeGuestIntoCustomer || shouldMergeCustomerAliasIntoCustomer) {
       transferPersistedComposerDraft(currentProfile.id, nextProfile.id, currentDraft);
     }
@@ -10820,12 +10859,14 @@
     }
     if (opts.persistRemote !== false && liveEntries.some(function (item) { return String(item.id || "") === String(messageId || ""); })) {
       const messageIdStr = String(messageId || "");
+      const patch = {
+        deliveryStatus: String(entry.deliveryStatus || ""),
+        deliveredAt: String(entry.deliveredAt || ""),
+        readAt: String(entry.readAt || ""),
+      };
+      if (target === "read") patch.read = true;
       enqueueSharedMutation(function () {
-        return remotePatchSharedMessage(messageIdStr, {
-          deliveryStatus: String(entry.deliveryStatus || ""),
-          deliveredAt: String(entry.deliveredAt || ""),
-          readAt: String(entry.readAt || ""),
-        });
+        return remotePatchSharedMessage(messageIdStr, patch);
       });
     }
     return true;
@@ -12038,9 +12079,46 @@
     return resolved;
   }
 
+  function getHotQuestionOrderLookupPhone() {
+    const metaPhone = normalizePhoneForHotQuestion(
+      String(sharedThreadMeta && sharedThreadMeta.phone || "")
+      || String(chatClientProfile && chatClientProfile.phone || "")
+    );
+    if (metaPhone) return metaPhone;
+    for (let idx = liveEntries.length - 1; idx >= 0; idx -= 1) {
+      const entry = liveEntries[idx];
+      const phone = extractPhoneCandidateFromHotQuestionText(entry && entry.text);
+      if (phone) return phone;
+    }
+    return "";
+  }
+
+  async function fetchHotQuestionOrderPreviewByPhone(orderId) {
+    const safeOrderId = toPositiveOrderId(orderId);
+    const phone = getHotQuestionOrderLookupPhone();
+    if (!safeOrderId || !phone) return null;
+    const qs = new URLSearchParams({
+      phone: phone,
+      limit: "200",
+      _ts: String(Date.now()),
+    });
+    const json = await chatApiJson("/api/public/orders/by-phone?" + qs.toString());
+    const rows = Array.isArray(json && json.data) ? json.data : [];
+    const matched = rows.find(function (order) {
+      return toPositiveOrderId(order && (order.id || order.order_id)) === safeOrderId;
+    });
+    return matched ? cacheHotQuestionOrderPreview(matched) : null;
+  }
+
   async function fetchHotQuestionOrderPreviewById(orderId) {
     const safeOrderId = toPositiveOrderId(orderId);
     if (!safeOrderId) return null;
+    if (isAdminClientChatMode) {
+      const byPhone = await fetchHotQuestionOrderPreviewByPhone(safeOrderId).catch(function () {
+        return null;
+      });
+      if (byPhone) return byPhone;
+    }
     const json = await chatApiJson(
       "/api/public/me/orders/" + encodeURIComponent(String(safeOrderId)) + "?_ts=" + Date.now()
     );
@@ -12278,7 +12356,7 @@
     assistantTypingEmulationUntilMs = startedAt.getTime() + replyDelayMs + 220;
     applyPeerTypingState({
       active: true,
-      text: getRandomTypingPhrase(),
+      text: getAssistantTypingLabel(),
       updatedAt: updatedAt,
       expiresAt: expiresAt,
     }, { source: "assistant-emulation" });
@@ -12305,17 +12383,19 @@
     const activeClientId = String(getActiveChatClientId() || "");
     if (!activeClientId) return;
     const userMessageId = String(opts.userMessageId || "").trim();
-    const markQuickQuestionRead = opts.quickQuestion === true && !!userMessageId;
+    const markAssistantAnsweredMessageRead = !!userMessageId;
     const orderQuickQuestionEnabled = isOrderQuickQuestionEnabled();
 
     const phoneCandidate = extractPhoneCandidateFromHotQuestionText(userText);
-    if (phoneCandidate && orderQuickQuestionEnabled) {
+    const waitOrderPhoneLookup = isPendingOrderPhoneLookup(activeClientId);
+    if (phoneCandidate && orderQuickQuestionEnabled && waitOrderPhoneLookup) {
+      clearPendingOrderPhoneLookup(activeClientId);
       emulateAssistantTypingBeforeReply(activeClientId, function () {
-        if (markQuickQuestionRead) {
-          setMessageDeliveryStatus(userMessageId, "read");
-        }
         buildWhereIsOrderAutoReplyPayload({ phone: phoneCandidate })
           .then(function (payload) {
+            if (markAssistantAnsweredMessageRead) {
+              setMessageDeliveryStatus(userMessageId, "read");
+            }
             pushAssistantAutoReply(
               activeClientId,
               String(payload && payload.text || ""),
@@ -12329,15 +12409,17 @@
     }
 
     if (orderQuickQuestionEnabled && isWhereIsOrderHotQuestion(normalized)) {
+      setPendingOrderPhoneLookup(activeClientId);
       emulateAssistantTypingBeforeReply(activeClientId, function () {
-        if (markQuickQuestionRead) {
-          setMessageDeliveryStatus(userMessageId, "read");
-        }
         buildWhereIsOrderAutoReplyPayload()
           .then(function (payload) {
+            const replyText = String(payload && payload.text || "");
+            if (markAssistantAnsweredMessageRead) {
+              setMessageDeliveryStatus(userMessageId, "read");
+            }
             pushAssistantAutoReply(
               activeClientId,
-              String(payload && payload.text || ""),
+              replyText,
               "where-order",
               { orderCards: Array.isArray(payload && payload.orderCards) ? payload.orderCards : [] }
             );
@@ -12345,6 +12427,10 @@
           .catch(function () {});
       });
       return;
+    }
+
+    if (waitOrderPhoneLookup) {
+      clearPendingOrderPhoneLookup(activeClientId);
     }
 
     const quickReply = (
@@ -12355,8 +12441,9 @@
     if (quickReply && quickReply.text) {
       const suffixSource = String(quickReply.id || "custom");
       const suffixSafe = suffixSource.replace(/[^\w-]+/g, "").slice(0, 32) || "custom";
+      clearPendingOrderPhoneLookup(activeClientId);
       emulateAssistantTypingBeforeReply(activeClientId, function () {
-        if (markQuickQuestionRead) {
+        if (markAssistantAnsweredMessageRead) {
           setMessageDeliveryStatus(userMessageId, "read");
         }
         pushAssistantAutoReply(activeClientId, quickReply.text, "quick-" + suffixSafe);

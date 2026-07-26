@@ -1075,14 +1075,14 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       const matchingAddress = resolvedAddresses.find((address) => expectedARecords.includes(address));
       if (matchingAddress) {
         result.dns = true;
-        result.dns_detail = `A-Р·Р°РїРёСЃРё РЅР°СЃС‚СЂРѕРµРЅС‹: ${resolvedAddresses.join(', ')}`;
+        result.dns_detail = `A-записи настроены: ${resolvedAddresses.join(', ')}`;
       } else {
         result.dns_detail = expectedARecords.length
-          ? `РћР¶РёРґР°РµРј IP ${expectedARecords.join(', ')}`
-          : `РќР°Р№РґРµРЅС‹ IP: ${resolvedAddresses.join(', ')}`;
+          ? `Ожидаем IP ${expectedARecords.join(', ')}`
+          : `Найдены IP: ${resolvedAddresses.join(', ')}`;
       }
     } catch (e) {
-      result.dns_detail = e && e.code === 'ENOTFOUND' ? 'A-Р·Р°РїРёСЃСЊ РЅРµ РЅР°Р№РґРµРЅР°' : 'РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕРІРµСЂРёС‚СЊ A-Р·Р°РїРёСЃСЊ';
+      result.dns_detail = e && e.code === 'ENOTFOUND' ? 'A-запись не найдена' : 'Не удалось проверить A-запись';
     }
 
     if (result.dns) {
@@ -1096,13 +1096,13 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
         if (httpResponse.statusCode >= 200 && httpResponse.statusCode < 400) {
           result.http = true;
           result.http_detail = httpResponse.statusCode >= 300
-            ? 'Р•СЃС‚СЊ СЂРµРґРёСЂРµРєС‚ РЅР° СЃР°Р№С‚'
-            : 'РЎР°Р№С‚ РѕС‚РІРµС‡Р°РµС‚';
+            ? 'Есть редирект на сайт'
+            : 'Сайт отвечает';
         } else {
           result.http_detail = `HTTP ${httpResponse.statusCode}`;
         }
       } catch (e) {
-        result.http_detail = e && e.message === 'timeout' ? 'РЎР°Р№С‚ РЅРµ РѕС‚РІРµС‚РёР» РІРѕРІСЂРµРјСЏ' : 'РЎР°Р№С‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ';
+        result.http_detail = e && e.message === 'timeout' ? 'Сайт не ответил вовремя' : 'Сайт недоступен';
       }
 
       try {
@@ -1125,16 +1125,16 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
           && Number(payload.tenant_id) === Number(tenantId)
         ) {
           result.ssl = true;
-          result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ Р°РєС‚РёРІРµРЅ';
+          result.ssl_detail = 'Сертификат активен';
         } else {
-          result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ РµС‰Рµ РЅРµ РіРѕС‚РѕРІ';
+          result.ssl_detail = 'Сертификат еще не готов';
         }
       } catch (e) {
-        result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ РµС‰Рµ РЅРµ РіРѕС‚РѕРІ';
+        result.ssl_detail = 'Сертификат еще не готов';
       }
     } else {
-      result.http_detail = 'РЎРЅР°С‡Р°Р»Р° РЅР°СЃС‚СЂРѕР№С‚Рµ A-Р·Р°РїРёСЃРё';
-      result.ssl_detail = 'РЎРЅР°С‡Р°Р»Р° РЅР°СЃС‚СЂРѕР№С‚Рµ A-Р·Р°РїРёСЃРё';
+      result.http_detail = 'Сначала настройте A-записи';
+      result.ssl_detail = 'Сначала настройте A-записи';
     }
 
     return result;
@@ -3068,12 +3068,17 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
       }
 
-      // РЎРѕР·РґР°С‘Рј WebP-РІР°СЂРёР°РЅС‚ Р»РѕРіРѕС‚РёРїР° / РёРєРѕРЅРєРё (РѕСЂРёРіРёРЅР°Р» РѕСЃС‚Р°РІР»СЏРµРј РєР°Рє fallback)
-      await helpers.ensureWebpVariant(
-        file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), file.filename)
-      );
+      const originalPath = file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), file.filename);
+      const convertedPath = await helpers.ensureWebpVariant(originalPath);
+      if (!convertedPath || !/\.webp$/i.test(String(convertedPath))) {
+        fs.unlink(originalPath, () => {});
+        return res.status(500).json({ ok: false, error: 'WEBP_CONVERSION_FAILED' });
+      }
+      if (convertedPath !== originalPath) {
+        fs.unlink(originalPath, () => {});
+      }
 
-      const url = `/static/uploads/tenants/${tenantId}/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
+      const url = `/static/uploads/tenants/${tenantId}/${path.basename(convertedPath)}`;
 
       if (field === 'site_menu_item_icon' || field === 'bonus_modal_image' || field === 'important_message_image') {
         const [rows] = await db.query(
@@ -6537,7 +6542,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
     }
   });
 
-  // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ РџСЂРѕРІРµСЂРєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ РґРѕРјРµРЅР° в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // Проверка подключения домена
   router.post('/check-domain', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -6556,7 +6561,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const result = { dns: false, http: false, ssl: false, dns_detail: '', http_detail: '', ssl_detail: '' };
 
-      // 1. DNS check вЂ” resolve domain
+      // 1. DNS check - resolve domain
       try {
         const addresses = await dns.resolve4(domain);
         if (addresses && addresses.length) {
@@ -6564,10 +6569,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
           result.dns_detail = addresses.join(', ');
         }
       } catch (e) {
-        result.dns_detail = e.code === 'ENOTFOUND' ? 'Р”РѕРјРµРЅ РЅРµ РЅР°Р№РґРµРЅ' : (e.message || 'РћС€РёР±РєР° DNS');
+        result.dns_detail = e.code === 'ENOTFOUND' ? 'Домен не найден' : (e.message || 'Ошибка DNS');
       }
 
-      // 2. HTTP check вЂ” try to reach the domain
+      // 2. HTTP check - try to reach the domain
       if (result.dns) {
         try {
           await new Promise((resolve, reject) => {
@@ -6578,15 +6583,15 @@ async function fetchStoreWithHours(tenantId, storeId) {
             req2.on('timeout', () => { req2.destroy(); reject(new Error('timeout')); });
           });
           result.http = true;
-          result.http_detail = 'РЎР°Р№С‚ РґРѕСЃС‚СѓРїРµРЅ';
+          result.http_detail = 'Сайт доступен';
         } catch (e) {
-          result.http_detail = 'РЎР°Р№С‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ';
+          result.http_detail = 'Сайт недоступен';
         }
       } else {
-        result.http_detail = 'DNS РЅРµ РЅР°СЃС‚СЂРѕРµРЅ';
+        result.http_detail = 'DNS не настроен';
       }
 
-      // 3. SSL check вЂ” try HTTPS connection
+      // 3. SSL check - try HTTPS connection
       if (result.dns) {
         try {
           await new Promise((resolve, reject) => {
@@ -6597,18 +6602,18 @@ async function fetchStoreWithHours(tenantId, storeId) {
             req2.on('timeout', () => { req2.destroy(); reject(new Error('timeout')); });
           });
           result.ssl = true;
-          result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ РґРµР№СЃС‚РІРёС‚РµР»РµРЅ';
+          result.ssl_detail = 'Сертификат действителен';
         } catch (e) {
           if (e.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || e.code === 'CERT_HAS_EXPIRED' || e.code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
-            result.ssl_detail = 'РЎРµСЂС‚РёС„РёРєР°С‚ РЅРµРґРµР№СЃС‚РІРёС‚РµР»РµРЅ';
+            result.ssl_detail = 'Сертификат недействителен';
           } else if (e.message === 'timeout') {
-            result.ssl_detail = 'РўР°Р№РјР°СѓС‚ СЃРѕРµРґРёРЅРµРЅРёСЏ';
+            result.ssl_detail = 'Таймаут соединения';
           } else {
-            result.ssl_detail = 'SSL РЅРµ РЅР°СЃС‚СЂРѕРµРЅ';
+            result.ssl_detail = 'SSL не настроен';
           }
         }
       } else {
-        result.ssl_detail = 'DNS РЅРµ РЅР°СЃС‚СЂРѕРµРЅ';
+        result.ssl_detail = 'DNS не настроен';
       }
 
       res.json({ ok: true, result });

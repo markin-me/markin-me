@@ -119,7 +119,7 @@ export function fetchImportantMessages() {
 export function fetchOrdersByPhone(phone: string) {
   return requestData<Record<string, unknown>[]>('/api/public/orders/by-phone', {
     actor: 'in',
-    query: { phone, limit: 10 },
+    query: { phone, limit: 200 },
   });
 }
 

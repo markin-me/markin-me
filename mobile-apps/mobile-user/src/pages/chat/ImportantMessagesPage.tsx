@@ -7,7 +7,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { ChatTabParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
+import { useChatUnread } from '../../features/chat';
 import { fetchImportantMessages, resolveChatAssetUrl } from '../../features/chat/api';
+import { getUnreadImportantMessageIds } from '../../features/chat/storage';
 import type { ImportantMessage } from '../../features/chat/types';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
@@ -22,7 +24,9 @@ function isPromoRouteActive(navigation: NativeStackNavigationProp<ChatTabParamLi
 export function ImportantMessagesPage() {
   const navigation = useNavigation<NativeStackNavigationProp<ChatTabParamList>>();
   const insets = useSafeAreaInsets();
+  const { syncPromoUnreadFromItems } = useChatUnread();
   const [items, setItems] = useState<ImportantMessage[]>([]);
+  const [unreadItemIds, setUnreadItemIds] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const baseTabBarStyle = useMemo(() => {
@@ -41,13 +45,17 @@ export function ImportantMessagesPage() {
     setError('');
     try {
       const nextItems = await fetchImportantMessages();
-      setItems(Array.isArray(nextItems) ? nextItems : []);
+      const normalizedItems = Array.isArray(nextItems) ? nextItems : [];
+      const nextUnreadIds = await getUnreadImportantMessageIds(normalizedItems);
+      setItems(normalizedItems);
+      setUnreadItemIds(new Set(nextUnreadIds));
+      void syncPromoUnreadFromItems(normalizedItems);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'LOAD_FAILED');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [syncPromoUnreadFromItems]);
 
   useEffect(() => {
     void load();
@@ -56,13 +64,16 @@ export function ImportantMessagesPage() {
   useFocusEffect(useCallback(() => {
     const parent = navigation.getParent();
     parent?.setOptions({ tabBarStyle: hideTabBarStyle });
+    if (items.length) {
+      void getUnreadImportantMessageIds(items).then((ids) => setUnreadItemIds(new Set(ids)));
+    }
     return () => {
       requestAnimationFrame(() => {
         if (isPromoRouteActive(navigation)) return;
         parent?.setOptions({ tabBarStyle: baseTabBarStyle });
       });
     };
-  }, [baseTabBarStyle, hideTabBarStyle, navigation]));
+  }, [baseTabBarStyle, hideTabBarStyle, items, navigation]));
 
   return (
     <Screen edges={['top']}>
@@ -89,8 +100,10 @@ export function ImportantMessagesPage() {
         {items.map((item) => {
           const imageUrl = resolveChatAssetUrl(item.image_url || '');
           const promoCode = String(item.promo_code || '').trim();
+          const isUnread = unreadItemIds.has(String(item.id));
           return (
             <View key={String(item.id)} style={styles.card}>
+              {isUnread ? <View style={styles.unreadDot} /> : null}
               <Pressable
                 accessibilityRole="button"
                 onPress={() => navigation.navigate(routes.importantMessageDetails, { item })}
@@ -110,11 +123,6 @@ export function ImportantMessagesPage() {
                   </View>
                   <View style={styles.cardBody}>
                     <View style={styles.titleRow}>
-                      {item.is_pinned ? (
-                        <View style={styles.pinPill}>
-                          <Ionicons color={theme.colors.accent} name="pin-outline" size={13} />
-                        </View>
-                      ) : null}
                       <Text numberOfLines={2} style={styles.title}>
                         {item.title}
                       </Text>
@@ -168,6 +176,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     minHeight: 248,
     overflow: 'hidden',
+    position: 'relative',
   },
   previewPressable: {
     flex: 1,
@@ -250,14 +259,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  pinPill: {
-    alignItems: 'center',
-    backgroundColor: '#fff7ed',
-    borderRadius: 999,
-    height: 24,
-    justifyContent: 'center',
-    width: 24,
-  },
   dateText: {
     color: theme.colors.muted,
     fontSize: 12,
@@ -269,6 +270,18 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     lineHeight: 22,
     flex: 1,
+  },
+  unreadDot: {
+    backgroundColor: '#ef4444',
+    borderColor: '#ffffff',
+    borderRadius: 7,
+    borderWidth: 2,
+    height: 14,
+    position: 'absolute',
+    right: 10,
+    top: 10,
+    width: 14,
+    zIndex: 2,
   },
   body: {
     color: theme.colors.text,

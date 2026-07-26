@@ -4642,6 +4642,12 @@
     return !!state.remoteSaveTimers[key] || state.remoteSaveInFlight[key] === true;
   }
 
+  function hasPendingRemoteMutation(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    return !!state.remoteMutationQueues[key];
+  }
+
   function stableSerialize(value) {
     try {
       return JSON.stringify(value || []);
@@ -5293,8 +5299,9 @@
     // Persisted pinned preference is for restore/open, not for auto-scroll on incoming events.
     const preferPinnedBottom = isActiveThread ? wasPinnedToBottom : false;
 
+    if (!same && (hasPendingRemoteSave(key) || hasPendingRemoteMutation(key))) return false;
+
     if (!same && !options.force) {
-      if (hasPendingRemoteSave(key)) return false;
       if (localChangedDuringRequest && !remoteIsNewer) return false;
     }
 
@@ -5483,7 +5490,8 @@
     const key = normalizeClientIdKey(clientId);
     if (!key || typeof mutator !== "function") return Promise.resolve();
     const prev = state.remoteMutationQueues[key] || Promise.resolve();
-    const next = prev
+    let next = null;
+    next = prev
       .catch(() => {})
       .then(async () => {
         const result = await mutator();
@@ -5491,6 +5499,11 @@
       })
       .catch((err) => {
         console.error(err);
+      })
+      .finally(() => {
+        if (state.remoteMutationQueues[key] === next) {
+          delete state.remoteMutationQueues[key];
+        }
       });
     state.remoteMutationQueues[key] = next;
     return next;
@@ -17029,7 +17042,12 @@
     }
     syncActiveThreadReadState({ clientId: id });
     restorePersistedAttachPreviewDraft(id).catch(console.error);
-    pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
+    pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true })
+      .then(() => {
+        if (Number(state.activeClientId) !== id) return;
+        syncActiveThreadReadState({ clientId: id });
+      })
+      .catch(console.error);
   }
 
   function mergeClientsIntoState(rows, { reset = false } = {}) {
@@ -17374,8 +17392,12 @@
     }
 
     suppressMessageAlertUntil = Date.now() + 3000;
-    pullThreadFromRemote(client.id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
-    syncActiveThreadReadState({ clientId: client.id });
+    pullThreadFromRemote(client.id, { skipReadMark: true, ignoreIncomingBadge: true })
+      .then(() => {
+        if (Number(state.activeClientId) !== Number(client.id)) return;
+        syncActiveThreadReadState({ clientId: client.id });
+      })
+      .catch(console.error);
     return true;
   }
 
