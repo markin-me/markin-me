@@ -309,7 +309,8 @@ export function calculateVariantUnitPrice({
 
   let unitPrice = safePrice * (quantityInBase / safeBaseQty);
   const discountPercent = getTierDiscountPercent(discountTiers, index);
-  if (discountPercent !== 0) unitPrice *= 1 - discountPercent / 100;
+  const shouldApplyTier = Math.abs(quantityInBase - safeBaseQty) > 0.000001;
+  if (shouldApplyTier && discountPercent !== 0) unitPrice *= 1 - discountPercent / 100;
 
   return {
     missingConversion: false,

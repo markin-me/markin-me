@@ -832,14 +832,14 @@ function getDiscountedPrice(price: number, discount: CatalogProduct['discount'])
   return roundPrice(Math.max(0, price - value));
 }
 
-function getDiscountText(product: CatalogProduct) {
+function getDiscountText(product: CatalogProduct, currentPrice = getProductPrice(product), originalPrice = getOldPrice(product)) {
   const discount = product.discount;
   const value = Number(discount?.discount_value || 0);
   if (discount?.discount_type === 'percent' && value > 0) return `-${Math.round(value)}%`;
 
-  const price = getProductPrice(product);
-  const old = getOldPrice(product);
-  if (old > price && price >= 0) return `-${Math.round(((old - price) / old) * 100)}%`;
+  if (originalPrice > currentPrice && currentPrice >= 0) {
+    return `-${Math.round(((originalPrice - currentPrice) / originalPrice) * 100)}%`;
+  }
 
   return '';
 }
@@ -977,9 +977,18 @@ function getCatalogLinePricing(product: CatalogProduct, passport: CatalogProduct
       : getDiscountedPrice(beforeDiscount, product.discount);
   const unitPrice = roundPrice(configFinal);
   const oldFromProduct = getOldPrice(product);
+  const baseProductPrice = Number(product.price || 0);
+  const variantUnitPrice = Number.isFinite(configuredPrice) && configuredPrice > 0
+    ? configuredPrice
+    : Math.max(0, beforeDiscount - optionTotal - (Number.isFinite(ingredientDiff) ? ingredientDiff : 0));
+  const scaledOldFromProduct = oldFromProduct > 0 && variantUnitPrice > 0 && baseProductPrice > 0
+    ? roundPrice(oldFromProduct * (variantUnitPrice / baseProductPrice))
+    : oldFromProduct;
   const oldUnitPrice = Math.max(
     beforeDiscount > unitPrice ? beforeDiscount : 0,
-    oldFromProduct > unitPrice ? oldFromProduct + optionTotal : 0,
+    scaledOldFromProduct > variantUnitPrice
+      ? scaledOldFromProduct + optionTotal + (Number.isFinite(ingredientDiff) ? ingredientDiff : 0)
+      : 0,
   );
   return {
     oldUnitPrice: roundPrice(oldUnitPrice),
@@ -1774,19 +1783,25 @@ type CategoryChipsBarProps = {
 };
 
 type CategoryChipProps = {
+  activeCategoryStore: NumberValueStore;
   category: CatalogCategory;
-  isActive: boolean;
   onMeasureCategory: (categoryId: number, offsetX: number) => void;
   onPressCategory: (categoryId: number) => void;
 };
 
 const MemoCategoryChip = memo(function CategoryChip({
+  activeCategoryStore,
   category,
-  isActive,
   onMeasureCategory,
   onPressCategory,
 }: CategoryChipProps) {
   const categoryId = Number(category.id);
+  const activeCategoryId = useSyncExternalStore(
+    activeCategoryStore.subscribe,
+    activeCategoryStore.getSnapshot,
+    activeCategoryStore.getSnapshot,
+  );
+  const isActive = categoryId === activeCategoryId;
   return (
     <Pressable
       hitSlop={{ bottom: 8, left: 4, right: 4, top: 8 }}
@@ -1800,8 +1815,8 @@ const MemoCategoryChip = memo(function CategoryChip({
     </Pressable>
   );
 }, (previous, next) => (
-  previous.category === next.category
-    && previous.isActive === next.isActive
+  previous.activeCategoryStore === next.activeCategoryStore
+    && previous.category === next.category
     && previous.onMeasureCategory === next.onMeasureCategory
     && previous.onPressCategory === next.onPressCategory
 ));
@@ -1818,12 +1833,6 @@ const CategoryChipsBar = memo(forwardRef<CategoryChipsBarHandle, CategoryChipsBa
   const scrollRef = useRef<ScrollView>(null);
   const chipOffsets = useRef(new Map<number, number>());
   const pendingChipScroll = useRef<{ categoryId: number; options: { animated?: boolean; force?: boolean } } | null>(null);
-  const activeCategoryId = useSyncExternalStore(
-    activeCategoryStore.subscribe,
-    activeCategoryStore.getSnapshot,
-    activeCategoryStore.getSnapshot,
-  );
-
   const measureCategory = useCallback((categoryId: number, offsetX: number) => {
     chipOffsets.current.set(categoryId, offsetX);
     const pending = pendingChipScroll.current;
@@ -1831,22 +1840,22 @@ const CategoryChipsBar = memo(forwardRef<CategoryChipsBarHandle, CategoryChipsBa
     if (!pending.options.force && isChipInteractingRef.current) return;
     pendingChipScroll.current = null;
     scrollRef.current?.scrollTo({
-      animated: Boolean(pending.options.animated),
+      animated: pending.options.animated !== false,
       x: Math.max(0, offsetX - theme.spacing.sm),
     });
   }, [isChipInteractingRef]);
 
   const scrollToCategory = useCallback((categoryId: number, options: { animated?: boolean; force?: boolean } = {}) => {
     if (!options.force && isChipInteractingRef.current) return;
-    const offset = chipOffsets.current.get(categoryId);
-    if (offset == null) {
+    const offsetX = chipOffsets.current.get(categoryId);
+    if (offsetX == null) {
       pendingChipScroll.current = { categoryId, options };
       return;
     }
     pendingChipScroll.current = null;
     scrollRef.current?.scrollTo({
-      animated: Boolean(options.animated),
-      x: Math.max(0, offset - theme.spacing.sm),
+      animated: options.animated !== false,
+      x: Math.max(0, offsetX - theme.spacing.sm),
     });
   }, [isChipInteractingRef]);
 
@@ -1880,12 +1889,11 @@ const CategoryChipsBar = memo(forwardRef<CategoryChipsBarHandle, CategoryChipsBa
         contentContainerStyle={styles.chipsScrollerContent}
       >
         {categories.map((category) => {
-          const categoryId = Number(category.id);
           return (
             <MemoCategoryChip
               key={category.id}
+              activeCategoryStore={activeCategoryStore}
               category={category}
-              isActive={categoryId === activeCategoryId}
               onMeasureCategory={measureCategory}
               onPressCategory={onPressCategory}
             />
@@ -1899,6 +1907,7 @@ const CategoryChipsBar = memo(forwardRef<CategoryChipsBarHandle, CategoryChipsBa
 export function CatalogPage() {
   const navigation = useNavigation<CatalogNavigation>();
   const route = useRoute<CatalogRoute>();
+  const handledCategorySelectionNonceRef = useRef<number | null>(null);
   const { width: screenWidth } = useWindowDimensions();
   const listRef = useRef<FlatList<CatalogListItem>>(null);
   const categoryChipsBarRef = useRef<CategoryChipsBarHandle>(null);
@@ -2066,14 +2075,20 @@ export function CatalogPage() {
     [catalog.categories],
   );
   const displayCatalog = useMemo(() => {
-    if (!subcategoryCatalogByCategory.size) return catalog;
-    const productsByCategory = new Map(catalog.productsByCategory);
-    const combosByCategory = new Map(catalog.combosByCategory);
-    subcategoryCatalogByCategory.forEach((view, categoryId) => {
-      productsByCategory.set(categoryId, view.products);
-      combosByCategory.set(categoryId, view.combos);
+    const sourceCatalog = !subcategoryCatalogByCategory.size ? catalog : (() => {
+      const productsByCategory = new Map(catalog.productsByCategory);
+      const combosByCategory = new Map(catalog.combosByCategory);
+      subcategoryCatalogByCategory.forEach((view, categoryId) => {
+        productsByCategory.set(categoryId, view.products);
+        combosByCategory.set(categoryId, view.combos);
+      });
+      return { ...catalog, combosByCategory, productsByCategory };
+    })();
+    const combosByCategory = new Map(sourceCatalog.combosByCategory);
+    combosByCategory.forEach((combos, categoryId) => {
+      combosByCategory.set(categoryId, combos.filter((combo) => isAvailableValue(combo.is_available)));
     });
-    return { ...catalog, combosByCategory, productsByCategory };
+    return { ...sourceCatalog, combosByCategory };
   }, [catalog, subcategoryCatalogByCategory]);
   const catalogStructureKey = useMemo(
     () => visibleCategories.map((category) => {
@@ -2194,8 +2209,11 @@ export function CatalogPage() {
     const currentStockLevels = stockLevelsRef.current;
     const currentUnitConversions = unitConversionsRef.current;
     const currentCartLines = cartLinesRef.current;
-    const price = getProductPrice(currentProduct);
-    const oldPrice = getOldPrice(currentProduct);
+    const pricing = passport
+      ? getCatalogLinePricing(currentProduct, passport)
+      : { oldUnitPrice: getOldPrice(currentProduct), unitPrice: getProductPrice(currentProduct) };
+    const price = pricing.unitPrice;
+    const oldPrice = pricing.oldUnitPrice;
     const availability = getProductAvailabilityState(currentProduct, currentStockLevels, quantity);
     const nextLine = passport ? buildCatalogProductCartLine(currentProduct, passport, currentStockLevels, currentUnitConversions) : null;
     const canIncreaseOverride = nextLine
@@ -2212,7 +2230,7 @@ export function CatalogPage() {
       availability,
       canIncrease,
       defaultLines: getProductDefaultLines(currentProduct),
-      discountText: getDiscountText(currentProduct),
+      discountText: getDiscountText(currentProduct, price, oldPrice),
       hasQuantity: availability.cartQty > 0,
       image: getProductImage(catalogProduct),
       mediaPillText: getProductMediaPillText(currentProduct, canIncrease, availability.cartQty, availability.hasKnownStock),
@@ -2430,9 +2448,6 @@ export function CatalogPage() {
   const ensureCategoryLoaded = useCallback(async (categoryId: number, options: { force?: boolean } = {}) => {
     const id = Number(categoryId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
-    if (!options.force && !categoryNetworkLoadedRef.current.has(id)) {
-      return enqueueCategoryNetworkLoad(id, true);
-    }
     const currentStatus = getCategoryLoadStatus(categoryLoadStateRef.current, id);
     if (!options.force && currentStatus === 'loaded') return;
 
@@ -3258,14 +3273,23 @@ export function CatalogPage() {
     navigation.navigate(routes.addresses);
   }, [fulfillmentSelection, navigation]);
 
-  useEffect(() => {
-    const selectedCategoryId = Number(route.params?.selectedCategoryId || 0);
-    if (!Number.isFinite(selectedCategoryId) || selectedCategoryId <= 0) return;
-    if (!visibleCategories.some((category) => Number(category.id) === selectedCategoryId)) return;
+  useFocusEffect(
+    useCallback(() => {
+      const selectedCategoryId = Number(route.params?.selectedCategoryId || 0);
+      const selectionNonce = Number(route.params?.categorySelectionNonce || 0);
+      if (!Number.isFinite(selectedCategoryId) || selectedCategoryId <= 0) return undefined;
+      if (!Number.isFinite(selectionNonce) || selectionNonce <= 0) return undefined;
+      if (handledCategorySelectionNonceRef.current === selectionNonce) return undefined;
+      if (!visibleCategories.some((category) => Number(category.id) === selectedCategoryId)) return undefined;
 
-    const timer = setTimeout(() => scrollToCategoryId(selectedCategoryId), 80);
-    return () => clearTimeout(timer);
-  }, [route.params?.selectedCategoryId, scrollToCategoryId, visibleCategories]);
+      const frame = requestAnimationFrame(() => {
+        if (handledCategorySelectionNonceRef.current === selectionNonce) return;
+        handledCategorySelectionNonceRef.current = selectionNonce;
+        pressCategoryChip(selectedCategoryId);
+      });
+      return () => cancelAnimationFrame(frame);
+    }, [pressCategoryChip, route.params?.categorySelectionNonce, route.params?.selectedCategoryId, visibleCategories]),
+  );
 
   const markCatalogScrolling = useCallback(() => {
     if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);

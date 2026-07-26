@@ -26,6 +26,8 @@ import {
   getComboBlockConfig,
   getComboDraft,
   getComboTotals,
+  isComboProductAvailable,
+  normalizeComboDraftAvailability,
   resetComboDraft,
   saveComboDraft,
 } from '../../features/combo-builder';
@@ -159,7 +161,8 @@ function buildComboSelections(combo: CatalogComboDetails, draft: NonNullable<Ret
   return combo.blocks
     .map((block, blockIndex): CartComboSelection | null => {
       const selectedIndex = draft.selectedByBlock[String(blockIndex)] ?? 0;
-      const product = block.products[selectedIndex] || block.products[0] || null;
+      const selectedProduct = block.products[selectedIndex] || null;
+      const product = isComboProductAvailable(selectedProduct) ? selectedProduct : null;
       if (!product) return null;
       const config = getComboBlockConfig(draft, blockIndex, product);
       const productName = getComboProductTitle(product, config);
@@ -263,9 +266,20 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
   }, [cartLineId, combo, editingLine]);
 
   const totals = useMemo(() => getComboTotals(combo, draft), [combo, draft]);
+  const comboHasAvailableBlocks = Boolean(combo && combo.blocks.every((block) => (
+    block.products.some((product) => isComboProductAvailable(product, stockLevels))
+  )));
 
   useEffect(() => {
-    if (!combo || !draft) {
+    if (!combo || !draft) return;
+    const normalized = normalizeComboDraftAvailability(combo, draft, stockLevels);
+    if (normalized === draft) return;
+    saveComboDraft(combo.id, normalized);
+    setDraft(normalized);
+  }, [combo, draft, stockLevels]);
+
+  useEffect(() => {
+    if (!combo || !draft || !comboHasAvailableBlocks) {
       setComboCanSubmit(true);
       setComboCanIncrease(true);
       return undefined;
@@ -325,7 +339,7 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [cartLineId, combo, draft, mergeStockRows, refreshMany, stockLevels, unitConversions]);
+  }, [cartLineId, combo, comboHasAvailableBlocks, draft, mergeStockRows, refreshMany, stockLevels, unitConversions]);
 
   const changeQuantity = async (delta: number) => {
     if (!combo || !draft) return;
@@ -377,7 +391,8 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
     const detailLines = combo.blocks
       .map((block, blockIndex) => {
         const selectedIndex = draft.selectedByBlock[String(blockIndex)] ?? 0;
-        const product = block.products[selectedIndex] || block.products[0] || null;
+        const selectedProduct = block.products[selectedIndex] || null;
+        const product = isComboProductAvailable(selectedProduct, stockLevels) ? selectedProduct : null;
         const config = getComboBlockConfig(draft, blockIndex, product);
         const title = getComboProductTitle(product, config);
         const lines = getComboProductLines(product, config);
@@ -460,7 +475,8 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
           <View style={styles.comboBlocks}>
             {combo.blocks.map((block, blockIndex) => {
               const selectedIndex = draft.selectedByBlock[String(blockIndex)] ?? 0;
-              const product = block.products[selectedIndex] || block.products[0] || null;
+              const selectedProduct = block.products[selectedIndex] || null;
+              const product = isComboProductAvailable(selectedProduct, stockLevels) ? selectedProduct : null;
               const config = getComboBlockConfig(draft, blockIndex, product);
               return (
                 <View key={`${block.block_id}-${blockIndex}`} style={styles.comboBlockSection}>

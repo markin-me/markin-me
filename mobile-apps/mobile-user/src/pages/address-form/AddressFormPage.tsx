@@ -13,7 +13,6 @@ import type { TextInput as NativeTextInput } from 'react-native';
 import {
   ActivityIndicator,
   Keyboard,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -484,16 +483,10 @@ export function AddressFormPage() {
 
   return (
     <Screen>
-      <Pressable
-        disabled={Platform.OS === 'web'}
-        style={styles.root}
-        onPress={() => {
-          setLookupFocused(false);
-          Keyboard.dismiss();
-        }}
-      >
+      <View style={styles.root}>
         <ScrollView
           contentContainerStyle={styles.content}
+          keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
@@ -561,44 +554,51 @@ export function AddressFormPage() {
                   ) : null}
                 </View>
               ) : (
-                <View style={styles.rowInputs}>
-                  <TextInput
-                    onChangeText={setStreet}
-                    placeholder="Улица"
-                    placeholderTextColor={theme.colors.muted}
-                    style={[styles.input, styles.rowInputWide]}
-                    value={street}
-                  />
-                  <TextInput
-                    onChangeText={setHouse}
-                    placeholder="Дом"
-                    placeholderTextColor={theme.colors.muted}
-                    style={[styles.input, styles.rowInput]}
-                    value={house}
-                  />
-                </View>
+                <TextInput
+                  onChangeText={setStreet}
+                  placeholder="Улица"
+                  placeholderTextColor={theme.colors.muted}
+                  style={[styles.input, styles.field]}
+                  value={street}
+                />
               )}
 
               <View style={styles.rowInputs}>
+                {!mapModeEnabled ? (
+                  <TextInput
+                    inputMode="text"
+                    onChangeText={setHouse}
+                    placeholder="Дом"
+                    placeholderTextColor={theme.colors.muted}
+                    style={[styles.input, styles.compactRowInput]}
+                    value={house}
+                  />
+                ) : null}
                 <TextInput
+                  inputMode="numeric"
+                  keyboardType="number-pad"
                   onChangeText={setEntrance}
                   placeholder="Подъезд"
                   placeholderTextColor={theme.colors.muted}
-                  style={[styles.input, styles.rowInput]}
+                  style={[styles.input, styles.compactRowInput]}
                   value={entrance}
                 />
                 <TextInput
+                  inputMode="numeric"
+                  keyboardType="number-pad"
                   onChangeText={setFloor}
                   placeholder="Этаж"
                   placeholderTextColor={theme.colors.muted}
-                  style={[styles.input, styles.rowInput]}
+                  style={[styles.input, styles.compactRowInput]}
                   value={floor}
                 />
                 <TextInput
+                  inputMode="numeric"
+                  keyboardType="number-pad"
                   onChangeText={setApartment}
                   placeholder="Квартира"
                   placeholderTextColor={theme.colors.muted}
-                  style={[styles.input, styles.rowInput]}
+                  style={[styles.input, styles.compactRowInput]}
                   value={apartment}
                 />
               </View>
@@ -628,7 +628,7 @@ export function AddressFormPage() {
             <Text style={styles.cancelButtonText}>Отмена</Text>
           </Pressable>
         </View>
-      </Pressable>
+      </View>
     </Screen>
   );
 }
@@ -702,11 +702,11 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     marginBottom: theme.spacing.md,
   },
-  rowInput: {
+  compactRowInput: {
     flex: 1,
-  },
-  rowInputWide: {
-    flex: 2,
+    fontSize: 14,
+    minWidth: 0,
+    paddingHorizontal: theme.spacing.sm,
   },
   suggestions: {
     backgroundColor: theme.colors.surface,

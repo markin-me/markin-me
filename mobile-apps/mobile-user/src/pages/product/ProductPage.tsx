@@ -60,7 +60,7 @@ import {
   resolveAssetUrl,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
-import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
+import { calculateBuyXGetYLineTotals, getBuyXGetYBadgeText } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
 import {
   calculateVariantUnitPrice,
@@ -73,6 +73,7 @@ import {
   type ProductStockLevel,
 } from '../../shared/lib/productStock';
 import { BottomSheet } from '../../shared/ui/BottomSheet';
+import { ProductBadge } from '../../shared/ui/ProductBadge';
 import { Screen } from '../../shared/ui/Screen';
 
 type ProductPageProps = NativeStackScreenProps<RootStackParamList, 'product'>;
@@ -152,6 +153,28 @@ function getProductBasePrice(product: CatalogProduct | null) {
 function getOldPrice(product: CatalogProduct | null) {
   const price = Number(product?.old_price ?? product?.original_price ?? 0);
   return Number.isFinite(price) ? price : 0;
+}
+
+function mergeCachedProductPricing(product: CatalogProduct, catalogProduct: CatalogProduct | null) {
+  if (!catalogProduct) return product;
+  const positiveOrFallback = (value: number | null | undefined, fallback: number | null | undefined) => (
+    Number(value || 0) > 0 ? value : fallback
+  );
+  return {
+    ...product,
+    display_price: positiveOrFallback(product.display_price, catalogProduct.display_price),
+    discounted_price: positiveOrFallback(product.discounted_price, catalogProduct.discounted_price),
+    old_price: positiveOrFallback(product.old_price, catalogProduct.old_price),
+    original_price: positiveOrFallback(product.original_price, catalogProduct.original_price),
+    discount: product.discount || catalogProduct.discount || null,
+    buy_x_get_y_badge: product.buy_x_get_y_badge || catalogProduct.buy_x_get_y_badge || null,
+  };
+}
+
+function mergeCachedPassportPricing(passport: CatalogProductPassport | null, catalogProduct: CatalogProduct | null) {
+  return passport
+    ? { ...passport, product: mergeCachedProductPricing(passport.product, catalogProduct) }
+    : null;
 }
 
 function getAvailabilityRecord(value: unknown) {
@@ -240,6 +263,17 @@ function getOptionItemImage(item: unknown) {
     asArray(targetProduct.photos)[0],
   );
   return resolveAssetUrl(photo);
+}
+
+function getOptionItemTargetProduct(item: unknown) {
+  const source = asRecord(item);
+  const targetProductId = toPositiveId(source.target_product_id || source.product_id);
+  return targetProductId
+    ? getCatalogSnapshotProduct(targetProductId)
+      || getCatalogProductPassport(targetProductId)?.product
+      || getFullProductPassport(targetProductId)?.product
+      || null
+    : null;
 }
 
 function getOptionItemDefaultVariant(item: unknown) {
@@ -345,13 +379,92 @@ function getOptionItemPrice(item: unknown) {
   return toFiniteNumber(source.price ?? source.product_price, 0);
 }
 
-function getOptionItemOldPrice(item: unknown) {
+function getOptionItemDisplayPricing(item: unknown, variantPriceDiff = 0) {
   const source = asRecord(item);
-  const oldPrice = toFiniteNumber(
-    source.old_price ?? source.original_price ?? source.product_old_price ?? source.product_original_price,
-    0,
-  );
-  return oldPrice > getOptionItemPrice(source) ? oldPrice : 0;
+  const fixedPrice = source.price_mode === 'fixed';
+  const product = getOptionItemTargetProduct(source);
+  const productDefaultVariant = asRecord(product?.default_variant);
+  const itemBasePrice = getOptionItemPrice(source);
+  const currentBasePrice = fixedPrice
+    ? itemBasePrice
+    : toFiniteNumber(
+      productDefaultVariant.variant_unit_price
+        ?? product?.display_price
+        ?? product?.discounted_price
+        ?? product?.price
+        ?? itemBasePrice,
+      itemBasePrice,
+    );
+  const selectedRatio = !fixedPrice && itemBasePrice > 0
+    ? Math.max(0, itemBasePrice + variantPriceDiff) / itemBasePrice
+    : 1;
+  const currentPrice = roundPrice(fixedPrice
+    ? currentBasePrice + variantPriceDiff
+    : currentBasePrice * selectedRatio);
+
+  if (fixedPrice) return { currentPrice, originalPrice: currentPrice };
+
+  const originalFromDiscount = toFiniteNumber(product?.original_price ?? source.original_price, 0);
+  const adminOldPrice = toFiniteNumber(product?.old_price ?? source.old_price, 0);
+  const productBasePrice = toFiniteNumber(product?.price, 0);
+  const originalBasePrice = originalFromDiscount > 0
+    ? originalFromDiscount
+    : adminOldPrice > 0 && currentBasePrice > 0 && productBasePrice > 0
+      ? roundPrice(adminOldPrice * (currentBasePrice / productBasePrice))
+      : adminOldPrice;
+  const originalPrice = originalBasePrice > 0
+    ? roundPrice(originalBasePrice * selectedRatio)
+    : currentPrice;
+  return { currentPrice, originalPrice };
+}
+
+function getDiscountBadgeText(currentPrice: number, originalPrice: number, discount: CatalogProduct['discount'] = null) {
+  const discountType = String(discount?.discount_type || '').trim();
+  const discountValue = Number(discount?.discount_value || 0);
+  if (discountType === 'percent' && discountValue > 0) return `-${Math.round(discountValue)}%`;
+  if (originalPrice > currentPrice && currentPrice >= 0) {
+    return `-${Math.round((1 - currentPrice / originalPrice) * 100)}%`;
+  }
+  return '';
+}
+
+function getIngredientSelectedPricing(item: unknown, quantity: number) {
+  const source = asRecord(item);
+  const ingredientId = toPositiveId(source.ingredient_id || source.product_id || source.id);
+  const catalogProduct = ingredientId ? getCatalogSnapshotProduct(ingredientId) : null;
+  const passport = ingredientId
+    ? mergeCachedPassportPricing(getCachedProductPassport(ingredientId), catalogProduct)
+    : null;
+  const product = passport?.product || catalogProduct;
+  const catalogCurrentBase = toFiniteNumber(product?.price ?? source.ingredient_price, 0);
+  const hasOverride = source.price_override !== undefined && source.price_override !== null;
+  const currentBase = hasOverride ? toFiniteNumber(source.price_override, 0) : catalogCurrentBase;
+  const productOriginalBase = toFiniteNumber(product?.original_price, 0);
+  const catalogOriginalBase = productOriginalBase > 0
+    ? productOriginalBase
+    : toFiniteNumber(product?.old_price, 0);
+  const originalBase = hasOverride || !(catalogOriginalBase > currentBase)
+    ? currentBase
+    : catalogOriginalBase;
+  const baseQuantity = Math.max(0.000001, toFiniteNumber(source.ingredient_base_qty, 1) || 1);
+  const selectedQuantity = Math.max(0, toFiniteNumber(quantity, 0));
+  return {
+    currentTotal: roundPrice(currentBase * selectedQuantity / baseQuantity),
+    originalTotal: roundPrice(originalBase * selectedQuantity / baseQuantity),
+  };
+}
+
+function getSelectedOptionPricingTotals(items: Array<AnyRecord & { qty: number; resolvedPrice: number }>) {
+  return items.reduce((totals, item) => {
+    const qty = Math.max(1, Number(item.qty || 1));
+    const selectedVariant = asRecord(item.selectedVariant);
+    const pricing = getOptionItemDisplayPricing(item, toFiniteNumber(selectedVariant.variant_price_diff, 0));
+    const currentUnit = pricing.currentPrice;
+    const originalUnit = pricing.originalPrice;
+    totals.current = roundPrice(totals.current + currentUnit * qty);
+    totals.originalComparable = roundPrice(totals.originalComparable + Math.max(currentUnit, originalUnit) * qty);
+    return totals;
+  }, { current: 0, originalComparable: 0 });
 }
 
 function getOptionGroupHint(group: unknown, selection: OptionSelection | undefined) {
@@ -573,10 +686,11 @@ function getSelectedOptionItems(optionGroups: unknown[], selections: Record<stri
       const id = Number(source.id);
       const variant = selection.variantByItemId[String(id)] || null;
       const variantDiff = variant?.variant_price_diff || 0;
+      const pricing = getOptionItemDisplayPricing(source, variantDiff);
       selectedItems.push({
         ...source,
         qty,
-        resolvedPrice: roundPrice(getOptionItemPrice(source) + variantDiff),
+        resolvedPrice: pricing.currentPrice,
         selectedVariant: variant,
       });
     };
@@ -1102,17 +1216,25 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     }
     : null;
   const comboContextId = comboContext?.comboId || 0;
-  const [passport, setPassport] = useState<CatalogProductPassport | null>(() => getCachedProductPassport(productId));
-  const [fallbackProduct, setFallbackProduct] = useState<CatalogProduct | null>(() => getCatalogSnapshotProduct(productId));
+  const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
+  const initialCatalogProduct = getCatalogSnapshotProduct(productId);
+  const initialPassport = mergeCachedPassportPricing(getCachedProductPassport(productId), initialCatalogProduct);
+  const initialProduct = initialPassport?.product || initialCatalogProduct;
+  const initialIngredients = asArray(initialPassport?.ingredients);
+  const initialVariants = asArray(initialPassport?.variants);
+  const initialOptionGroups = asArray(initialPassport?.optionGroups);
+  const initialDefaultConfig = asRecord(initialPassport?.defaultConfig);
+  const [passport, setPassport] = useState<CatalogProductPassport | null>(initialPassport);
+  const [fallbackProduct, setFallbackProduct] = useState<CatalogProduct | null>(initialCatalogProduct);
   const [comboContextDetails, setComboContextDetails] = useState<CatalogComboDetails | null>(() =>
     comboContext ? getMemoryCatalogComboDetails(comboContext.comboId) : null,
   );
   const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [errorText, setErrorText] = useState('');
-  const [quantity, setQuantity] = useState(0);
-  const [variantState, setVariantState] = useState<VariantState>({ groupId: null, label: '', quantityInBase: null, selectedIndex: null, stockQuantity: null, unitId: null, value: null });
-  const [ingredientState, setIngredientState] = useState<IngredientState>({});
-  const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>({});
+  const [quantity, setQuantity] = useState(1);
+  const [variantState, setVariantState] = useState<VariantState>(() => createInitialVariantState(initialProduct, initialVariants, initialDefaultConfig, unitConversions));
+  const [ingredientState, setIngredientState] = useState<IngredientState>(() => createInitialIngredientState(initialIngredients));
+  const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelection>>(() => createInitialOptionSelections(initialOptionGroups, initialDefaultConfig, unitConversions));
   const [expandedOptionGroups, setExpandedOptionGroups] = useState<Record<string, boolean>>({});
   const [isOptionsSheetVisible, setOptionsSheetVisible] = useState(false);
   const [activeOptionGroupId, setActiveOptionGroupId] = useState<number | null>(null);
@@ -1120,8 +1242,6 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
   const [nutritionMode, setNutritionMode] = useState<NutritionMode>('per100');
   const [existingCartQty, setExistingCartQty] = useState(0);
   const [currentCartLines, setCurrentCartLines] = useState<CartLine[]>([]);
-  const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
-
   const applyAvailabilityPatch = useCallback((patch: Pick<CatalogProduct, 'fulfillment_mode' | 'is_available' | 'stock_qty'> | null) => {
     if (!patch) return;
     setPassport((current) => current?.product && Number(current.product.id) === Number(productId)
@@ -1139,8 +1259,9 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     const applyPassport = (nextPassport: CatalogProductPassport | null) => {
       if (!nextPassport) return false;
       if (isMounted) {
-        setPassport(nextPassport);
-        const rows = getPassportStockRows(nextPassport, unitConversions);
+        const mergedPassport = mergeCachedPassportPricing(nextPassport, getCatalogSnapshotProduct(productId));
+        setPassport(mergedPassport);
+        const rows = getPassportStockRows(mergedPassport, unitConversions);
         if (rows.length) mergeStockRows(rows);
       }
       return true;
@@ -1325,7 +1446,9 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     () => buildCartOptions(selectedOptionItems),
     [selectedOptionItems],
   );
-  const optionTotal = selectedOptionItems.reduce((sum, item) => sum + item.resolvedPrice * Math.max(1, item.qty), 0);
+  const optionPricingTotals = getSelectedOptionPricingTotals(selectedOptionItems);
+  const optionTotal = optionPricingTotals.current;
+  const optionOriginalComparableTotal = optionPricingTotals.originalComparable;
   const variantUnitPrice = getVariantUnitPrice(product, variants, variantState, unitConversions);
   const ingredientPriceDiff = getIngredientPriceDiff(ingredients, ingredientState);
   const unitBeforeDiscount = roundPrice(variantUnitPrice + optionTotal + ingredientPriceDiff);
@@ -1336,12 +1459,24 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     ? roundPrice(Math.max(0, comboDiscountPercent >= 100 ? 0 : unitBeforeDiscount * (1 - comboDiscountPercent / 100)))
     : unitPrice;
   const displayQuantity = Math.max(1, quantity);
-  const totalOldByDiscount = discountAmount > 0 ? roundPrice(unitBeforeDiscount * displayQuantity) : 0;
-  const oldBase = getOldPrice(product);
-  const totalOldFromProduct = oldBase > unitPrice ? roundPrice((oldBase + optionTotal + ingredientPriceDiff) * displayQuantity) : 0;
+  const optionOldDelta = Math.max(0, optionOriginalComparableTotal - optionTotal);
+  const productBasePrice = getProductBasePrice(product);
+  const rawOldBase = getOldPrice(product);
+  const oldBase = rawOldBase > 0 && variantUnitPrice > 0 && productBasePrice > 0
+    ? roundPrice(rawOldBase * (variantUnitPrice / productBasePrice))
+    : rawOldBase;
+  const baseOriginalComparable = oldBase > variantUnitPrice
+    ? roundPrice(oldBase + ingredientPriceDiff)
+    : roundPrice(variantUnitPrice + ingredientPriceDiff);
+  const totalOldByDiscount = discountAmount > 0
+    ? roundPrice((unitBeforeDiscount + optionOldDelta) * displayQuantity)
+    : 0;
+  const totalOldFromProduct = roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * displayQuantity);
   const productOldUnitPrice = Math.max(
-    unitBeforeDiscount > unitPrice ? unitBeforeDiscount : 0,
-    oldBase > unitPrice ? oldBase + optionTotal + ingredientPriceDiff : 0,
+    unitBeforeDiscount > unitPrice ? unitBeforeDiscount + optionOldDelta : 0,
+    baseOriginalComparable + optionOriginalComparableTotal > unitPrice
+      ? baseOriginalComparable + optionOriginalComparableTotal
+      : 0,
   );
   const productBuyXGetYTotals = comboContext ? null : calculateBuyXGetYLineTotals({
     badge: product?.buy_x_get_y_badge || null,
@@ -1353,8 +1488,26 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     ? roundPrice(comboUnitPrice * displayQuantity)
     : productBuyXGetYTotals?.total ?? roundPrice(unitPrice * displayQuantity);
   const totalOldPrice = comboContext && unitBeforeDiscount > comboUnitPrice
-    ? roundPrice(unitBeforeDiscount * displayQuantity)
+    ? roundPrice((unitBeforeDiscount + optionOldDelta) * displayQuantity)
     : productBuyXGetYTotals?.oldTotal ?? (totalOldByDiscount || totalOldFromProduct);
+  const compositionPricingTotals = ingredients.reduce<{ current: number; original: number }>((totals, item) => {
+    const source = asRecord(item);
+    const id = toPositiveId(source.ingredient_id);
+    const selectedQuantity = id
+      ? ingredientState[String(id)]?.quantity ?? getIngredientDefaultQuantity(source)
+      : getIngredientDefaultQuantity(source);
+    const pricing = getIngredientSelectedPricing(source, selectedQuantity);
+    totals.current = roundPrice(totals.current + pricing.currentTotal);
+    totals.original = roundPrice(totals.original + pricing.originalTotal);
+    return totals;
+  }, { current: 0, original: 0 });
+  const compositionDiscountText = getDiscountBadgeText(
+    compositionPricingTotals.current,
+    compositionPricingTotals.original,
+  );
+  const heroDiscountText = compositionDiscountText
+    || getDiscountBadgeText(unitPrice, productOldUnitPrice, product?.discount || null);
+  const heroPromoText = getBuyXGetYBadgeText(product?.buy_x_get_y_badge || null);
   const stockQtyForSubmit = existingCartQty + displayQuantity - 1;
   const availabilityState = product ? getProductAvailabilityState(product, stockLevels, stockQtyForSubmit) : null;
   const available = product ? isProductStockAvailable(product, stockLevels) : false;
@@ -1672,6 +1825,8 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                 style={styles.image}
               />
             ) : <View style={styles.placeholder} />}
+            {heroPromoText ? <ProductBadge style={styles.heroPromoBadge} text={heroPromoText} tone="promo" /> : null}
+            {heroDiscountText ? <ProductBadge style={styles.heroDiscountBadge} text={heroDiscountText} tone="discount" /> : null}
           </View>
 
           <View style={styles.body}>
@@ -1735,6 +1890,11 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                     const ingredientImage = getIngredientImage(source);
                     const limits = getIngredientLimits(source);
                     const value = ingredientState[String(id)]?.quantity ?? limits.defaultQty;
+                    const ingredientPricing = getIngredientSelectedPricing(source, value);
+                    const ingredientDiscountText = getDiscountBadgeText(
+                      ingredientPricing.currentTotal,
+                      ingredientPricing.originalTotal,
+                    );
                     const canDecrease = limits.isVariable && value > limits.min;
                     const canIncrease = limits.isVariable && value < limits.max;
                     const valueLabel = `${String(value).replace('.', ',')}${unit ? ` ${unit}` : ''}`;
@@ -1752,6 +1912,9 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                               <Text style={styles.ingredientImagePlaceholderText}>—</Text>
                             </View>
                           )}
+                          {ingredientDiscountText ? (
+                            <ProductBadge style={styles.ingredientDiscountBadge} text={ingredientDiscountText} tone="discount" />
+                          ) : null}
                         </View>
                         <View style={styles.ingredientCardInfo}>
                           <Text numberOfLines={2} style={styles.ingredientCardTitle}>{title}</Text>
@@ -1816,8 +1979,9 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                           const variantIndex = variant?.variant_value_index ?? 0;
                           const hasVariants = Boolean(group.allow_variants && variantValues.length);
                           const image = getOptionItemImage(item);
-                          const price = getOptionItemPrice(item) + (variant?.variant_price_diff || 0);
-                          const oldPrice = getOptionItemOldPrice(item);
+                          const pricing = getOptionItemDisplayPricing(item, variant?.variant_price_diff || 0);
+                          const price = pricing.currentPrice;
+                          const oldPrice = pricing.originalPrice;
                           const discountPercent = oldPrice > price ? Math.round((1 - price / oldPrice) * 100) : 0;
                           const overlayValue = selected ? trimText(variant?.variant_label) || String(qty) : '';
                           const canVariantMinus = hasVariants && variantIndex > 0;
@@ -1981,8 +2145,10 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
             onPress={comboContext ? applyComboProductConfig : addProductToCart}
             style={[styles.actionButton, !canSubmit && styles.actionButtonDisabled]}
           >
-            {canSubmit && totalOldPrice > totalPrice ? <Text style={styles.actionOldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
-            <Text style={styles.actionButtonText}>{canSubmit ? formatPrice(totalPrice) : available ? 'Больше нет' : 'Раскупили'}</Text>
+            <View style={styles.actionPriceRow}>
+              <Text style={styles.actionButtonText}>{canSubmit ? formatPrice(totalPrice) : available ? 'Больше нет' : 'Раскупили'}</Text>
+              {canSubmit && totalOldPrice > totalPrice ? <Text style={styles.actionOldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
+            </View>
             {canSubmit ? <Text style={styles.actionButtonSubText}>{comboContext ? 'выбрать' : cartLineId ? 'Сохранить' : 'в корзину'}</Text> : null}
           </Pressable>
         </View>
@@ -2127,8 +2293,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
     flex: 1,
+    height: 52,
+    justifyContent: 'center',
     paddingHorizontal: theme.spacing.lg,
-    paddingVertical: 9,
   },
   actionButtonDisabled: {
     opacity: 0.55,
@@ -2148,8 +2315,14 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryText,
     fontSize: 10,
     fontWeight: '800',
+    marginLeft: theme.spacing.sm,
     opacity: 0.75,
     textDecorationLine: 'line-through',
+  },
+  actionPriceRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   body: {
     padding: theme.spacing.lg,
@@ -2234,6 +2407,16 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     overflow: 'hidden',
     width: '100%',
+  },
+  heroDiscountBadge: {
+    position: 'absolute',
+    right: 12,
+    top: 12,
+  },
+  heroPromoBadge: {
+    left: 12,
+    position: 'absolute',
+    top: 12,
   },
   horizontalPicker: {
     marginTop: theme.spacing.md,
@@ -2343,6 +2526,11 @@ const styles = StyleSheet.create({
     color: theme.colors.muted,
     fontSize: 18,
     fontWeight: '800',
+  },
+  ingredientDiscountBadge: {
+    position: 'absolute',
+    right: 6,
+    top: 6,
   },
   ingredientSectionTitle: {
     color: theme.colors.text,

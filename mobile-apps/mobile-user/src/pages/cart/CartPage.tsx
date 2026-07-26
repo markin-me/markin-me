@@ -12,6 +12,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -216,6 +217,7 @@ const CART_HEADER_TOGGLE_HEIGHT = 44;
 const CART_HEADER_META_HEIGHT = 58;
 const CART_HEADER_TOGGLE_SCROLL = 54;
 const CART_HEADER_FULL_HEIGHT = 199;
+const CART_HEADER_WITHOUT_PROGRESS_HEIGHT = CART_HEADER_FULL_HEIGHT - 24 - theme.spacing.md;
 const CART_HEADER_COMPACT_HEIGHT = 77;
 const CART_HEADER_META_SCROLL = CART_HEADER_FULL_HEIGHT - CART_HEADER_COMPACT_HEIGHT;
 const cartQuantityTapSlop = { bottom: 10, left: 10, right: 10, top: 10 };
@@ -1016,7 +1018,11 @@ function BonusAmount({ amount, color, logoUrl, prefix = '', size = 'md', suffix 
 
 export function CartPage() {
   const navigation = useNavigation<CartNavigation>();
+  const { height: windowHeight } = useWindowDimensions();
   const headerScrollY = useRef(new Animated.Value(0)).current;
+  const checkoutButtonRef = useRef<View>(null);
+  const checkoutVisibilityFrameRef = useRef<number | null>(null);
+  const inlineCheckoutVisibleRef = useRef(false);
   const { mergeStockRows, refreshMany, stockLevels } = useProductStock();
   const cartHydratedRef = useRef(false);
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -1049,6 +1055,7 @@ export function CartPage() {
   const [isLoading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
+  const [inlineCheckoutVisible, setInlineCheckoutVisible] = useState(false);
   const [stockBlockedLineIds, setStockBlockedLineIds] = useState<Set<string>>(() => new Set());
   const benefitsPreviewSeqRef = useRef(0);
   const benefitsPreviewRef = useRef<CheckoutBenefitsPreviewData | null>(null);
@@ -1058,6 +1065,24 @@ export function CartPage() {
   const pendingLineQuantitiesRef = useRef<Map<string, number>>(new Map());
   const syncCartFromCacheRef = useRef<(() => Promise<unknown>) | null>(null);
   const deliveryQuoteRequestKeyRef = useRef<string | null>(null);
+
+  const syncInlineCheckoutVisibility = useCallback(() => {
+    if (checkoutVisibilityFrameRef.current != null) return;
+    checkoutVisibilityFrameRef.current = requestAnimationFrame(() => {
+      checkoutVisibilityFrameRef.current = null;
+      checkoutButtonRef.current?.measureInWindow((_x, y, _width, height) => {
+        const navTop = windowHeight - theme.sizes.tabBarHeight;
+        const visible = y >= 0 && y + height <= navTop;
+        if (inlineCheckoutVisibleRef.current === visible) return;
+        inlineCheckoutVisibleRef.current = visible;
+        setInlineCheckoutVisible(visible);
+      });
+    });
+  }, [windowHeight]);
+
+  useEffect(() => () => {
+    if (checkoutVisibilityFrameRef.current != null) cancelAnimationFrame(checkoutVisibilityFrameRef.current);
+  }, []);
 
   const setBenefitsPreviewValue = useCallback((preview: CheckoutBenefitsPreviewData | null) => {
     benefitsPreviewRef.current = preview;
@@ -2042,10 +2067,13 @@ export function CartPage() {
 
             <Animated.ScrollView
               style={styles.scroll}
-              contentContainerStyle={[styles.content, styles.contentWithHeader]}
+              contentContainerStyle={[
+                styles.content,
+                visibleDeliveryProgress ? styles.contentWithHeader : styles.contentWithHeaderWithoutProgress,
+              ]}
               onScroll={Animated.event(
                 [{ nativeEvent: { contentOffset: { y: headerScrollY } } }],
-                { useNativeDriver: false },
+                { listener: syncInlineCheckoutVisibility, useNativeDriver: false },
               )}
               refreshControl={<RefreshControl refreshing={refreshing} tintColor={theme.colors.accent} onRefresh={refreshCart} />}
               scrollEventThrottle={16}
@@ -2283,13 +2311,31 @@ export function CartPage() {
                   <Text style={styles.summaryTotalLabel}>Итого</Text>
                   <Text style={styles.summaryTotalValue}>{formatPrice(cartSummary.total)}</Text>
                 </View>
-                <Pressable disabled={hasProblemLines} onPress={openCheckout} style={[styles.checkoutButton, hasProblemLines && styles.checkoutButtonDisabled]}>
+                <Pressable
+                  ref={checkoutButtonRef}
+                  disabled={hasProblemLines}
+                  onLayout={syncInlineCheckoutVisibility}
+                  onPress={openCheckout}
+                  style={[styles.checkoutButton, hasProblemLines && styles.checkoutButtonDisabled]}
+                >
                   <Text style={styles.checkoutButtonText}>Оформить</Text>
                   <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
                 </Pressable>
               </View>
             ) : null}
             </Animated.ScrollView>
+            {lines.length > 0 && !inlineCheckoutVisible ? (
+              <View pointerEvents="box-none" style={styles.floatingCheckoutWrap}>
+                <Pressable
+                  disabled={hasProblemLines}
+                  onPress={openCheckout}
+                  style={[styles.checkoutButton, styles.floatingCheckoutButton, hasProblemLines && styles.checkoutButtonDisabled]}
+                >
+                  <Text style={styles.checkoutButtonText}>Оформить</Text>
+                  <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </>
         )}
         <BottomSheet
@@ -2694,6 +2740,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
+  floatingCheckoutWrap: {
+    alignItems: 'center',
+    bottom: theme.spacing.sm,
+    left: theme.spacing.lg,
+    position: 'absolute',
+    right: theme.spacing.lg,
+    zIndex: 4,
+  },
+  floatingCheckoutButton: {
+    marginTop: 0,
+    maxWidth: 254,
+    width: '100%',
+  },
   comboImage: {
     height: '100%',
     width: '100%',
@@ -2720,6 +2779,9 @@ const styles = StyleSheet.create({
   },
   contentWithHeader: {
     paddingTop: CART_HEADER_FULL_HEIGHT,
+  },
+  contentWithHeaderWithoutProgress: {
+    paddingTop: CART_HEADER_WITHOUT_PROGRESS_HEIGHT,
   },
   emptyCart: {
     alignItems: 'center',

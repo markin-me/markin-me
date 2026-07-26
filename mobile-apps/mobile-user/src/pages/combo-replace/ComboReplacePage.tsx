@@ -21,6 +21,8 @@ import {
   getComboDraft,
   getComboIngredientEditorMeta,
   getComboProductEditorState,
+  isComboProductAvailable,
+  normalizeComboDraftAvailability,
   normalizeComboIngredientQuantity,
   saveComboDraft,
 } from '../../features/combo-builder';
@@ -38,7 +40,7 @@ type ComboReplacePageProps = NativeStackScreenProps<RootStackParamList, 'comboRe
 
 export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
   const { blockIndex, comboId } = route.params;
-  const { unitConversions } = useProductStock();
+  const { stockLevels, unitConversions } = useProductStock();
   const [combo, setCombo] = useState<CatalogComboDetails | null>(() => getMemoryCatalogComboDetails(comboId));
   const [draft, setDraft] = useState(() => (combo ? cloneComboDraft(getComboDraft(combo)) : null));
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -76,16 +78,24 @@ export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
 
   const block = combo?.blocks[blockIndex] || null;
   const selectedIndex = draft?.selectedByBlock[String(blockIndex)] ?? 0;
+  useEffect(() => {
+    if (!combo || !draft) return;
+    const normalized = normalizeComboDraftAvailability(combo, draft, stockLevels);
+    if (normalized === draft) return;
+    saveComboDraft(combo.id, normalized);
+    setDraft(normalized);
+  }, [combo, draft, stockLevels]);
   const orderedProducts = useMemo(() => {
     const products = Array.isArray(block?.products) ? block.products : [];
     return products
       .map((product, index) => ({ index, product }))
+      .filter(({ product }) => isComboProductAvailable(product, stockLevels))
       .sort((left, right) => {
         if (left.index === selectedIndex) return -1;
         if (right.index === selectedIndex) return 1;
         return left.index - right.index;
       });
-  }, [block?.products, selectedIndex]);
+  }, [block?.products, selectedIndex, stockLevels]);
 
   const selectProduct = (index: number) => {
     if (!combo || !draft) return;

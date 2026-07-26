@@ -33,7 +33,10 @@ export function CategoriesPage({ navigation, route }: CategoriesPageProps) {
               onPress={() => {
                 navigation.navigate('main', {
                   screen: routes.home,
-                  params: { selectedCategoryId: categoryId },
+                  params: {
+                    selectedCategoryId: categoryId,
+                    categorySelectionNonce: Date.now(),
+                  },
                 });
               }}
             >
