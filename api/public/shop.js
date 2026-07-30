@@ -2407,8 +2407,133 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       readPublicTableStamp('prod_combo_set_blocks', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combo_blocks', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combo_block_products', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_units', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_unit_conversions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_unit_links', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('ten_tenants', 'id=?', [tenantId]),
     ]);
     return crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex').slice(0, 20);
+  }
+
+  function buildMobileCatalogRevision(parts) {
+    return crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex').slice(0, 20);
+  }
+
+  async function buildMobileCatalogRevisions(tenantId, storeId) {
+    const [
+      categoriesStamp,
+      productsStamp,
+      productCategoriesStamp,
+      productStocksStamp,
+      productIngredientsStamp,
+      optionAssignmentsStamp,
+      optionGroupsStamp,
+      optionItemsStamp,
+      variantAssignmentsStamp,
+      variantGroupsStamp,
+      variantDiscountTiersStamp,
+      variantValueExclusionsStamp,
+      combosStamp,
+      comboSetBlocksStamp,
+      comboBlocksStamp,
+      comboBlockProductsStamp,
+      discountsStamp,
+      discountProductsStamp,
+      unitsStamp,
+      unitConversionsStamp,
+      productUnitLinksStamp,
+      tenantStamp,
+    ] = await Promise.all([
+      readPublicTableStamp('prod_categories', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_products', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_categories', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_stocks', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
+      readPublicTableStamp('prod_product_ingredients', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_assignments', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_items', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_assignments', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_groups', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_discount_tiers', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_variant_value_exclusions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combos', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_set_blocks', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_blocks', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_combo_block_products', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('mkt_discounts', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
+      readPublicTableStamp('mkt_discount_products', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_units', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_unit_conversions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_unit_links', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('ten_tenants', 'id=?', [tenantId]),
+    ]);
+
+    const legacyParts = [
+      categoriesStamp,
+      productsStamp,
+      productCategoriesStamp,
+      productStocksStamp,
+      productIngredientsStamp,
+      optionAssignmentsStamp,
+      optionGroupsStamp,
+      optionItemsStamp,
+      variantAssignmentsStamp,
+      variantGroupsStamp,
+      variantDiscountTiersStamp,
+      variantValueExclusionsStamp,
+      combosStamp,
+      comboSetBlocksStamp,
+      comboBlocksStamp,
+      comboBlockProductsStamp,
+    ];
+    const contentParts = [
+      categoriesStamp,
+      productsStamp,
+      productCategoriesStamp,
+      productIngredientsStamp,
+      optionAssignmentsStamp,
+      optionGroupsStamp,
+      optionItemsStamp,
+      variantAssignmentsStamp,
+      variantGroupsStamp,
+      variantDiscountTiersStamp,
+      variantValueExclusionsStamp,
+      combosStamp,
+      comboSetBlocksStamp,
+      comboBlocksStamp,
+      comboBlockProductsStamp,
+      discountsStamp,
+      discountProductsStamp,
+      unitsStamp,
+      unitConversionsStamp,
+      productUnitLinksStamp,
+      tenantStamp,
+    ];
+
+    return {
+      version: buildMobileCatalogRevision(legacyParts),
+      contentRevision: buildMobileCatalogRevision(contentParts),
+      availabilityRevision: buildMobileCatalogRevision([
+        productStocksStamp,
+        productsStamp,
+        productIngredientsStamp,
+        optionAssignmentsStamp,
+        optionGroupsStamp,
+        optionItemsStamp,
+      ]),
+    };
+  }
+
+  async function buildMobileCatalogAvailabilityRevision(tenantId, storeId) {
+    const parts = await Promise.all([
+      readPublicTableStamp('prod_product_stocks', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
+      readPublicTableStamp('prod_products', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_ingredients', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_assignments', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_items', 'tenant_id=?', [tenantId]),
+    ]);
+    return buildMobileCatalogRevision(parts);
   }
 
   async function buildPublicProductsListVersion(tenantId, storeId) {
@@ -2417,6 +2542,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       readPublicTableStamp('prod_products', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_product_categories', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_product_stocks', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
+      readPublicTableStamp('prod_product_ingredients', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_assignments', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_items', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('mkt_discounts', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
       readPublicTableStamp('mkt_discount_products', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combos', 'tenant_id=?', [tenantId]),
@@ -2427,6 +2556,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       readPublicTableStamp('prod_variant_groups', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_variant_discount_tiers', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_variant_value_exclusions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_units', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_unit_conversions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_product_unit_links', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('ten_tenants', 'id=?', [tenantId]),
     ]);
     return crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex').slice(0, 20);
   }
@@ -3517,13 +3650,28 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const offsetRaw = Number(req.query.offset || 0);
       const limit = Math.max(1, Math.min(100, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 100));
       const offset = Math.max(0, Number.isFinite(offsetRaw) ? Math.floor(offsetRaw) : 0);
+      const afterIdRaw = Number(req.query.after_id || 0);
+      const beforeIdRaw = Number(req.query.before_id || 0);
+      const afterId = Number.isFinite(afterIdRaw) && afterIdRaw > 0 ? Math.floor(afterIdRaw) : 0;
+      const beforeId = Number.isFinite(beforeIdRaw) && beforeIdRaw > 0 ? Math.floor(beforeIdRaw) : 0;
+      const hasCursor = afterId > 0 || beforeId > 0;
       const params = [tenantId, customerId];
       let whereType = '';
       if (typeFilter) {
         whereType = ' AND t.type = ?';
         params.push(typeFilter);
       }
-      params.push(limit, offset);
+      let whereCursor = '';
+      if (afterId > 0) {
+        whereCursor += ' AND t.id > ?';
+        params.push(afterId);
+      }
+      if (beforeId > 0) {
+        whereCursor += ' AND t.id < ?';
+        params.push(beforeId);
+      }
+      params.push(limit);
+      if (!hasCursor) params.push(offset);
       const [rows] = await db.query(
         `SELECT t.id, t.level_id, t.order_id, t.referral_id, t.reward_id,
                 t.type, t.amount, t.balance_after, t.reason, t.created_at,
@@ -3535,8 +3683,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          WHERE t.tenant_id=? AND t.customer_id=?${whereType}
            AND COALESCE(t.reason, '') <> 'bonus_reserve'
            AND COALESCE(t.reason, '') NOT REGEXP '^order:[0-9]+:bonus_reserve$'
-         ORDER BY t.created_at DESC, t.id DESC
-         LIMIT ? OFFSET ?`,
+           ${whereCursor}
+         ORDER BY ${hasCursor ? 't.id DESC' : 't.created_at DESC, t.id DESC'}
+         LIMIT ?${hasCursor ? '' : ' OFFSET ?'}`,
         params
       );
       return res.json({
@@ -12604,10 +12753,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   // PUBLIC SHOP: categories/products
   // ------------------------------
 
-  async function loadPublicCategoriesPayload(req) {
+  async function loadPublicCategoriesPayload(req, contentRevision = '') {
     const tenantId = helpers.getTenantId(req);
     const storeId = helpers.getStoreId(req);
-    const cacheKey = makePublicCacheKey('categories', { tenantId, storeId });
+    const cacheParts = { tenantId, storeId };
+    if (contentRevision) cacheParts.contentRevision = String(contentRevision);
+    const cacheKey = makePublicCacheKey('categories', cacheParts);
     const cached = getPublicCache(cacheKey);
     if (cached) return { payload: cached, cacheHit: true };
 
@@ -12747,15 +12898,20 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
-      const version = await buildMobileCatalogSnapshotVersion(tenantId, storeId);
-      const cacheKey = makePublicCacheKey('mobile-catalog-index-v1', { tenantId, storeId, version });
+      const { version, contentRevision, availabilityRevision } = await buildMobileCatalogRevisions(tenantId, storeId);
+      const cacheKey = makePublicCacheKey('mobile-catalog-index-v1', {
+        tenantId,
+        storeId,
+        version,
+        contentRevision,
+      });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
         return res.json(cached);
       }
 
-      const categoriesResult = await loadPublicCategoriesPayload(req);
+      const categoriesResult = await loadPublicCategoriesPayload(req, contentRevision);
       const categories = Array.isArray(categoriesResult.payload?.data) ? categoriesResult.payload.data : [];
       const categoryIds = categories.map((category) => Number(category.id)).filter((id) => Number.isFinite(id) && id > 0);
       const categoryCounts = await loadMobileCatalogCategoryCounts(tenantId, categoryIds);
@@ -12763,6 +12919,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ok: true,
         data: {
           version,
+          content_revision: contentRevision,
+          availability_revision: availabilityRevision,
           generated_at: new Date().toISOString(),
           tenant_id: tenantId,
           store_id: storeId,
@@ -12783,15 +12941,20 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
-      const version = await buildMobileCatalogSnapshotVersion(tenantId, storeId);
-      const cacheKey = makePublicCacheKey('mobile-catalog-snapshot-v1', { tenantId, storeId, version });
+      const { version, contentRevision, availabilityRevision } = await buildMobileCatalogRevisions(tenantId, storeId);
+      const cacheKey = makePublicCacheKey('mobile-catalog-snapshot-v1', {
+        tenantId,
+        storeId,
+        version,
+        contentRevision,
+      });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
         return res.json(cached);
       }
 
-      const categoriesResult = await loadPublicCategoriesPayload(req);
+      const categoriesResult = await loadPublicCategoriesPayload(req, contentRevision);
       const categories = Array.isArray(categoriesResult.payload?.data) ? categoriesResult.payload.data : [];
       const categoryIds = categories.map((category) => Number(category.id)).filter((id) => Number.isFinite(id) && id > 0);
       const [allRows] = await db.query(
@@ -12892,6 +13055,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ok: true,
         data: {
           version,
+          content_revision: contentRevision,
+          availability_revision: availabilityRevision,
           generated_at: new Date().toISOString(),
           tenant_id: tenantId,
           store_id: storeId,
@@ -14242,11 +14407,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const storeId = helpers.getStoreId(req);
       const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
       const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
-      if (!ids.length) return res.json({ ok: true, data: {}, stock_levels: [] });
       if (ids.length > 500) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+      const availabilityRevision = await buildMobileCatalogAvailabilityRevision(tenantId, storeId);
+      if (!ids.length) {
+        return res.json({
+          ok: true,
+          data: {},
+          stock_levels: [],
+          availability_revision: availabilityRevision,
+        });
+      }
 
       const sortedIds = [...ids].sort((a, b) => a - b);
-      const cacheKey = makePublicCacheKey('products-batch-availability', { tenantId, storeId, ids: sortedIds });
+      const cacheKey = makePublicCacheKey('products-batch-availability', {
+        tenantId,
+        storeId,
+        ids: sortedIds,
+        availabilityRevision,
+      });
       const cached = getPublicCache(cacheKey);
       if (cached) {
         res.set('x-public-cache', 'HIT');
@@ -14312,7 +14490,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         stockLevels.push(payloadRow);
       });
 
-      const payload = { ok: true, data, stock_levels: stockLevels };
+      const payload = {
+        ok: true,
+        data,
+        stock_levels: stockLevels,
+        availability_revision: availabilityRevision,
+      };
       setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productsBatchAvailability);
       res.set('x-public-cache', 'MISS');
       res.json(payload);

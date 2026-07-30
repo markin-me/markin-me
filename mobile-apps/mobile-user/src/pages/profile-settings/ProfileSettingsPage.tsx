@@ -30,6 +30,7 @@ import {
   type CustomerPassport,
   type CustomerProfile,
 } from '../../shared/api';
+import { clearCheckoutBenefitsCacheForToken, clearCustomerCheckoutCache } from '../../features/checkout';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
@@ -145,12 +146,14 @@ export function ProfileSettingsPage() {
   const handleUnauthorized = useCallback(async (error: unknown) => {
     if (error instanceof Error && error.message === 'UNAUTHORIZED') {
       await clearCustomerPassport();
+      await clearCheckoutBenefitsCacheForToken(passport?.token || '');
+      await clearCustomerCheckoutCache();
       setPassport(null);
       navigation.goBack();
       return true;
     }
     return false;
-  }, [navigation]);
+  }, [navigation, passport?.token]);
 
   const handleSaveName = async () => {
     if (!passport) return;
@@ -249,6 +252,8 @@ export function ProfileSettingsPage() {
       // Local logout still clears stale sessions.
     } finally {
       await clearCustomerPassport();
+      await clearCheckoutBenefitsCacheForToken(token);
+      await clearCustomerCheckoutCache();
       setPassport(null);
       setLogoutLoading(false);
       navigation.goBack();

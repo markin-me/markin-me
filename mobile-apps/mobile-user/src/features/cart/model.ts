@@ -106,6 +106,8 @@ export type CartLine = {
 export type CartLineDraft = Omit<CartLine, 'id'> & { id?: string };
 
 const CART_STORAGE_KEY = 'mobile_cart_v1';
+let memoryCartLines: CartLine[] | null = null;
+let cartLinesReadRequest: Promise<CartLine[]> | null = null;
 
 function normalizeNumber(value: unknown, fallback = 0) {
   const number = Number(value);
@@ -320,17 +322,30 @@ export function makeCartLineId(line: Pick<CartLineDraft, 'comboDraft' | 'comboSe
 }
 
 export async function readCartLines() {
+  if (memoryCartLines) return normalizeCartLines(memoryCartLines);
+  if (cartLinesReadRequest) return normalizeCartLines(await cartLinesReadRequest);
+
+  cartLinesReadRequest = (async () => {
+    try {
+      const raw = await AsyncStorage.getItem(CART_STORAGE_KEY);
+      memoryCartLines = normalizeCartLines(raw ? JSON.parse(raw) : []);
+    } catch {
+      memoryCartLines = [];
+    }
+    return normalizeCartLines(memoryCartLines);
+  })();
+
   try {
-    const raw = await AsyncStorage.getItem(CART_STORAGE_KEY);
-    return normalizeCartLines(raw ? JSON.parse(raw) : []);
-  } catch {
-    return [];
+    return normalizeCartLines(await cartLinesReadRequest);
+  } finally {
+    cartLinesReadRequest = null;
   }
 }
 
 export async function saveCartLines(lines: CartLine[]) {
   const normalized = normalizeCartLines(lines);
   await AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(normalized));
+  memoryCartLines = normalized;
   emitCartLines(normalized);
   return normalized;
 }
@@ -403,6 +418,7 @@ export async function removeCartLine(lineId: string) {
 
 export async function clearCartLines() {
   await AsyncStorage.removeItem(CART_STORAGE_KEY);
+  memoryCartLines = [];
   emitCartLines([]);
   return [];
 }

@@ -62,12 +62,14 @@ import {
   fetchCatalogByCategories,
   fetchCatalogCategories,
   fetchMobileCatalogIndex,
+  fetchMobileCatalogSnapshot,
   fetchCustomerAddresses,
   fetchPublicOrderConfig,
   fetchTenantStores,
   ensureMobileCatalogProductPassport,
   getCatalogProductPassport,
   getMemoryCatalogComboDetails,
+  invalidateMobileCatalogPassportRefreshState,
   isFreshDeliveryQuoteForAddress,
   isSameCachedValue,
   readCachedCatalogComboDetails,
@@ -473,6 +475,19 @@ function getCatalogStateFromSnapshot(snapshot: MobileCatalogSnapshot): CatalogSt
   };
 }
 
+function getCatalogContentRevision(source: {
+  content_revision?: string;
+  version?: string;
+} | null | undefined) {
+  return String(source?.content_revision || source?.version || '').trim();
+}
+
+function getCatalogAvailabilityRevision(source: {
+  availability_revision?: string;
+} | null | undefined) {
+  return String(source?.availability_revision || '').trim();
+}
+
 function getCatalogIndexFromSnapshot(snapshot: MobileCatalogSnapshot): MobileCatalogIndex {
   const categories = Array.isArray(snapshot.categories) ? snapshot.categories : [];
   const categoryCounts: Record<string, CatalogCategoryCount> = {};
@@ -493,8 +508,10 @@ function getCatalogIndexFromSnapshot(snapshot: MobileCatalogSnapshot): MobileCat
   });
 
   return {
+    availability_revision: snapshot.availability_revision,
     categories,
     categoryCounts,
+    content_revision: getCatalogContentRevision(snapshot),
     generated_at: snapshot.generated_at,
     store_id: snapshot.store_id,
     tenant_id: snapshot.tenant_id,
@@ -619,15 +636,17 @@ function mapPassportsToSnapshotRecord(passports: Map<number, CatalogProductPassp
 function getSnapshotFromCatalogState(catalog: CatalogState): MobileCatalogSnapshot {
   const tenantId = Number(apiConfig.tenantId || 0);
   const storeId = Number(apiConfig.storeId || 0);
+  const version = `batch:${Date.now()}`;
   return {
     categories: catalog.categories,
     combosByCategory: mapCategoryMapToSnapshotRecord(catalog.combosByCategory, catalog.categories),
+    content_revision: version,
     generated_at: new Date().toISOString(),
     productPassports: mapPassportsToSnapshotRecord(catalog.productPassports),
     productsByCategory: mapCategoryMapToSnapshotRecord(catalog.productsByCategory, catalog.categories),
     store_id: Number.isFinite(storeId) && storeId > 0 ? storeId : undefined,
     tenant_id: Number.isFinite(tenantId) && tenantId > 0 ? tenantId : undefined,
-    version: `batch:${Date.now()}`,
+    version,
   };
 }
 
@@ -707,18 +726,16 @@ function getCatalogStateProduct(catalog: CatalogState, productId: number) {
   return catalog.productPassports.get(id)?.product || null;
 }
 
-function collectInitialCatalogComboIds(catalog: CatalogState, limit = 2) {
+function collectCatalogComboIds(catalog: CatalogState) {
   const ids: number[] = [];
-  catalog.categories.some((category) => {
+  catalog.categories.forEach((category) => {
     const categoryId = Number(category.id || 0);
-    if (!Number.isFinite(categoryId) || categoryId <= 0) return false;
+    if (!Number.isFinite(categoryId) || categoryId <= 0) return;
     const combos = catalog.combosByCategory.get(categoryId) || [];
-    combos.some((combo) => {
+    combos.forEach((combo) => {
       const comboId = Number(combo.id || 0);
       if (Number.isFinite(comboId) && comboId > 0) ids.push(comboId);
-      return ids.length >= limit;
     });
-    return ids.length >= limit;
   });
   return normalizeCatalogProductIds(ids);
 }
@@ -1986,6 +2003,7 @@ export function CatalogPage() {
   const comboDetailsWarmQueue = useRef<number[]>([]);
   const passportWarmRequestedIds = useRef(new Set<number>());
   const comboDetailsWarmRequestedIds = useRef(new Set<number>());
+  const comboDetailsRefreshIds = useRef(new Set<number>());
   const isPassportWarmRunning = useRef(false);
   const isComboDetailsWarmRunning = useRef(false);
   const isCatalogScrollingRef = useRef(false);
@@ -2022,7 +2040,11 @@ export function CatalogPage() {
   const categoryNetworkQueueRef = useRef<Array<() => void>>([]);
   const categoryLoadStateRef = useRef<CategoryLoadStateMap>({});
   const catalogVersionRef = useRef('');
+  const catalogAvailabilityRevisionRef = useRef('');
   const catalogSnapshotRef = useRef<MobileCatalogSnapshot | null>(null);
+  const catalogSnapshotWarmRequestedRef = useRef(false);
+  const catalogLastNetworkRefreshAtRef = useRef(0);
+  const catalogPageMountedRef = useRef(true);
   const isChipInteractingRef = useRef(false);
   const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
   const catalogRef = useRef<CatalogState>(emptyCatalogState);
@@ -2033,7 +2055,7 @@ export function CatalogPage() {
   const flushPendingAvailabilityRef = useRef<() => void>(() => undefined);
   const scheduleProductPassportWarmRef = useRef<(productIds: number[]) => void>(() => undefined);
   const scheduleCatalogAvailabilityRefreshRef = useRef<(productIds: number[], delay?: number) => void>(() => undefined);
-  const scheduleComboDetailsWarmRef = useRef<(comboIds: number[]) => void>(() => undefined);
+  const scheduleComboDetailsWarmRef = useRef<(comboIds: number[], refreshCached?: boolean) => void>(() => undefined);
   const [catalog, setCatalog] = useState<CatalogState>(emptyCatalogState);
   const [activeSubcategoryByCategory, setActiveSubcategoryByCategory] = useState<Record<string, number>>({});
   const [pinnedSubcategoryCategoryId, setPinnedSubcategoryCategoryId] = useState<number | null>(null);
@@ -2072,7 +2094,7 @@ export function CatalogPage() {
     subcategoryRequestIdByCategoryRef.current.clear();
     subcategoryScrollOffsetByCategoryRef.current.clear();
     subcategoryScrollViewsRef.current.clear();
-  }, [catalogIndex?.version]);
+  }, [catalogIndex?.content_revision || catalogIndex?.version]);
 
   useEffect(() => {
     catalogRef.current = catalog;
@@ -2442,17 +2464,19 @@ export function CatalogPage() {
     }
   }, []);
 
-  const enqueueCategoryNetworkLoad = useCallback((id: number, force: boolean) => {
+  const enqueueCategoryNetworkLoad = useCallback((id: number, force: boolean, preserveContent = false) => {
     const pending = categoryLoadRequestsRef.current.get(id);
     if (pending) return pending;
 
-    applyCategoryLoadStates({ [String(id)]: 'loading' });
+    if (!preserveContent) applyCategoryLoadStates({ [String(id)]: 'loading' });
     const request = new Promise<void>((resolve) => {
       const run = () => {
         categoryNetworkActiveCountRef.current += 1;
         void (async () => {
           try {
             if (!force && getCategoryLoadStatus(categoryLoadStateRef.current, id) === 'loaded') return;
+            const previousProducts = categoryDataCacheRef.current.productsByCategory.get(id);
+            const previousCombos = categoryDataCacheRef.current.combosByCategory.get(id);
             const category = catalogRef.current.categories.find((item) => Number(item.id) === id);
             const childIds = Array.isArray(category?.children)
               ? category.children.map((child) => Number(child.id)).filter((childId) => childId > 0)
@@ -2483,9 +2507,17 @@ export function CatalogPage() {
                 ]]),
               }))).catch(() => null);
             }
-            applyLoadedCategory(id, products, combos);
+            const hasSameContent = previousProducts !== undefined
+              && previousCombos !== undefined
+              && isSameCachedValue(previousProducts, products)
+              && isSameCachedValue(previousCombos, combos);
+            if (hasSameContent && getCategoryLoadStatus(categoryLoadStateRef.current, id) === 'loaded') {
+              cacheCategoryProducts(categoryDataCacheRef.current, id, products, combos);
+            } else {
+              applyLoadedCategory(id, products, combos);
+            }
           } catch {
-            applyCategoryLoadStates({ [String(id)]: 'error' });
+            if (!preserveContent) applyCategoryLoadStates({ [String(id)]: 'error' });
           } finally {
             categoryLoadRequestsRef.current.delete(id);
             categoryNetworkActiveCountRef.current = Math.max(0, categoryNetworkActiveCountRef.current - 1);
@@ -2506,18 +2538,19 @@ export function CatalogPage() {
   const ensureCategoryLoaded = useCallback(async (categoryId: number, options: { force?: boolean } = {}) => {
     const id = Number(categoryId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
-    if (!options.force && !categoryNetworkLoadedRef.current.has(id)) {
-      return enqueueCategoryNetworkLoad(id, true);
-    }
     const currentStatus = getCategoryLoadStatus(categoryLoadStateRef.current, id);
-    if (!options.force && currentStatus === 'loaded') return;
 
     if (!options.force && hasCachedCategoryData(categoryDataCacheRef.current, id)) {
-      applyLoadedCategory(
-        id,
-        categoryDataCacheRef.current.productsByCategory.get(id) || [],
-        categoryDataCacheRef.current.combosByCategory.get(id) || [],
-      );
+      if (currentStatus !== 'loaded') {
+        applyLoadedCategory(
+          id,
+          categoryDataCacheRef.current.productsByCategory.get(id) || [],
+          categoryDataCacheRef.current.combosByCategory.get(id) || [],
+        );
+      }
+      if (!categoryNetworkLoadedRef.current.has(id)) {
+        void enqueueCategoryNetworkLoad(id, true, true);
+      }
       return;
     }
 
@@ -2530,10 +2563,14 @@ export function CatalogPage() {
           cachedCategory.productsByCategory.get(id) || [],
           cachedCategory.combosByCategory.get(id) || [],
         );
+        if (!categoryNetworkLoadedRef.current.has(id)) {
+          void enqueueCategoryNetworkLoad(id, true, true);
+        }
         return;
       }
     }
 
+    if (!options.force && currentStatus === 'loaded') return;
     return enqueueCategoryNetworkLoad(id, Boolean(options.force));
   }, [applyLoadedCategory, enqueueCategoryNetworkLoad]);
 
@@ -2551,6 +2588,8 @@ export function CatalogPage() {
       const result = await refreshMany(ids).catch(() => null);
       const availability = result?.payload || null;
       if (!availability) return;
+      const availabilityRevision = getCatalogAvailabilityRevision(availability);
+      if (availabilityRevision) catalogAvailabilityRevisionRef.current = availabilityRevision;
       const data = availability.data && typeof availability.data === 'object'
         ? availability.data as Record<string, unknown>
         : {};
@@ -2563,7 +2602,11 @@ export function CatalogPage() {
       });
       const cachedSnapshot = catalogSnapshotRef.current;
       if (cachedSnapshot) {
-        const nextSnapshot = applySnapshotAvailability(cachedSnapshot, data);
+        const snapshotWithRevision = availabilityRevision
+          && cachedSnapshot.availability_revision !== availabilityRevision
+          ? { ...cachedSnapshot, availability_revision: availabilityRevision }
+          : cachedSnapshot;
+        const nextSnapshot = applySnapshotAvailability(snapshotWithRevision, data);
         if (nextSnapshot !== cachedSnapshot) {
           catalogSnapshotRef.current = nextSnapshot;
           void saveMobileCatalogSnapshot(nextSnapshot).catch(() => null);
@@ -2618,6 +2661,7 @@ export function CatalogPage() {
     const preserveContent = Boolean(options.preserveContent);
     const shouldSyncAvailability = Boolean(options.syncAvailability);
     const shouldRefreshFromServer = Boolean(options.refreshFromServer);
+    catalogLastNetworkRefreshAtRef.current = Date.now();
     if (!preserveContent) {
       setErrorText('');
       setIsLoading(true);
@@ -2625,12 +2669,13 @@ export function CatalogPage() {
 
     const scheduleCatalogPostPaintWarmup = (nextCatalog: CatalogState) => {
       const initialProductIds = collectInitialCatalogProductIds(nextCatalog);
-      const initialComboIds = collectInitialCatalogComboIds(nextCatalog);
+      const comboIds = collectCatalogComboIds(nextCatalog);
       setTimeout(() => {
+        if (!catalogPageMountedRef.current) return;
         if (shouldSyncAvailability) stockAvailabilitySyncKey.current = '';
         scheduleCatalogAvailabilityRefreshRef.current(initialProductIds, 180);
         scheduleProductPassportWarmRef.current(initialProductIds.slice(0, 8));
-        scheduleComboDetailsWarmRef.current(initialComboIds);
+        scheduleComboDetailsWarmRef.current(comboIds);
       }, 80);
     };
 
@@ -2647,7 +2692,8 @@ export function CatalogPage() {
 
       const cachedIndex = shouldRefreshFromServer ? null : await readCachedMobileCatalogIndex().catch(() => null);
       if (cachedIndex?.categories?.length) {
-        catalogVersionRef.current = cachedIndex.version;
+        catalogVersionRef.current = getCatalogContentRevision(cachedIndex);
+        catalogAvailabilityRevisionRef.current = getCatalogAvailabilityRevision(cachedIndex);
         setCatalogIndex(cachedIndex);
         applyCatalogFromCache(cachedIndex.categories, Number(activeCategoryIdRef.current || cachedIndex.categories[0]?.id || 0));
         hasRenderedCatalog = true;
@@ -2656,13 +2702,16 @@ export function CatalogPage() {
 
       const cachedSnapshot = await readCachedMobileCatalogSnapshot().catch(() => null);
       catalogSnapshotRef.current = cachedSnapshot;
-      const cachedCatalog = isMobileCatalogSnapshotUsable(cachedSnapshot)
+      const snapshotMatchesCachedIndex = !cachedIndex
+        || getCatalogContentRevision(cachedSnapshot) === getCatalogContentRevision(cachedIndex);
+      const cachedCatalog = snapshotMatchesCachedIndex && isMobileCatalogSnapshotUsable(cachedSnapshot)
         ? getCatalogStateFromSnapshot(cachedSnapshot as MobileCatalogSnapshot)
         : null;
       if (cachedCatalog) {
         const snapshotIndex = getCatalogIndexFromSnapshot(cachedSnapshot as MobileCatalogSnapshot);
-        if (!cachedIndex || cachedIndex.version !== snapshotIndex.version) {
-          catalogVersionRef.current = snapshotIndex.version;
+        if (!cachedIndex) {
+          catalogVersionRef.current = getCatalogContentRevision(snapshotIndex);
+          catalogAvailabilityRevisionRef.current = getCatalogAvailabilityRevision(snapshotIndex);
           setCatalogIndex(snapshotIndex);
           void saveMobileCatalogIndex(snapshotIndex).catch(() => null);
         }
@@ -2673,8 +2722,8 @@ export function CatalogPage() {
           categoryLoadStateRef.current = { [String(preferredCategoryId)]: 'loaded' };
           setCategoryLoadStates(categoryLoadStateRef.current);
         }
-        const partialCatalog = applyCatalogFromCache(cachedCatalog.categories, preferredCategoryId);
-        scheduleCatalogPostPaintWarmup(partialCatalog);
+        applyCatalogFromCache(cachedCatalog.categories, preferredCategoryId);
+        scheduleCatalogPostPaintWarmup(cachedCatalog);
         hasRenderedCatalog = true;
         setIsLoading(false);
       }
@@ -2683,37 +2732,73 @@ export function CatalogPage() {
         const freshIndex = await fetchMobileCatalogIndex().catch(async () => {
           if (hasRenderedCatalog) return null;
           const categories = await fetchCatalogCategories();
+          const version = `categories:${Date.now()}`;
           return {
             categories,
             categoryCounts: {},
+            content_revision: version,
             generated_at: new Date().toISOString(),
             store_id: Number(apiConfig.storeId || 0) || undefined,
             tenant_id: Number(apiConfig.tenantId || 0) || undefined,
-            version: `categories:${Date.now()}`,
+            version,
           } as MobileCatalogIndex;
         });
         if (freshIndex && Array.isArray(freshIndex.categories) && freshIndex.categories.length) {
-          catalogVersionRef.current = freshIndex.version;
-          setCatalogIndex(freshIndex);
-          if (shouldRefreshFromServer) {
-            categoryDataCacheRef.current = getEmptyCategoryDataCache();
-            categoryLoadStateRef.current = {};
-            setCategoryLoadStates({});
+          const nextContentRevision = getCatalogContentRevision(freshIndex);
+          const nextAvailabilityRevision = getCatalogAvailabilityRevision(freshIndex);
+          const catalogContentChanged = catalogVersionRef.current !== nextContentRevision;
+          const catalogAvailabilityChanged = Boolean(nextAvailabilityRevision)
+            && catalogAvailabilityRevisionRef.current !== nextAvailabilityRevision;
+          catalogVersionRef.current = nextContentRevision;
+          catalogAvailabilityRevisionRef.current = nextAvailabilityRevision;
+          if (catalogContentChanged) {
+            categoryNetworkLoadedRef.current.clear();
+            passportWarmRequestedIds.current.clear();
+            catalogSnapshotWarmRequestedRef.current = false;
+            invalidateMobileCatalogPassportRefreshState();
           }
-          applyCatalogFromCache(freshIndex.categories, Number(activeCategoryIdRef.current || freshIndex.categories[0]?.id || 0));
-          hasRenderedCatalog = true;
-          setIsLoading(false);
+          if (catalogContentChanged || catalogAvailabilityChanged || !hasRenderedCatalog) {
+            setCatalogIndex(freshIndex);
+          }
+          if (catalogContentChanged || !hasRenderedCatalog) {
+            if (shouldRefreshFromServer) {
+              categoryDataCacheRef.current = getEmptyCategoryDataCache();
+              categoryLoadStateRef.current = {};
+              setCategoryLoadStates({});
+            }
+            applyCatalogFromCache(freshIndex.categories, Number(activeCategoryIdRef.current || freshIndex.categories[0]?.id || 0));
+            hasRenderedCatalog = true;
+            setIsLoading(false);
+          }
 
           const categoryToLoad = Number(activeCategoryIdRef.current || freshIndex.categories[0]?.id || 0);
           if (Number.isFinite(categoryToLoad) && categoryToLoad > 0) {
-            const category = freshIndex.categories.find((item) => Number(item.id) === categoryToLoad);
-            const hasUncachedChild = Array.isArray(category?.children)
-              && category.children.some((child) => {
-                const childId = Number(child.id || 0);
-                return childId > 0 && !hasCachedCategoryData(categoryDataCacheRef.current, childId);
-              });
-            await ensureCategoryLoaded(categoryToLoad, { force: shouldRefreshFromServer || hasUncachedChild });
+            await ensureCategoryLoaded(categoryToLoad, { force: shouldRefreshFromServer });
             scheduleCatalogPostPaintWarmup(catalogRef.current);
+          }
+          if (catalogAvailabilityChanged) {
+            stockAvailabilitySyncKey.current = '';
+            scheduleCatalogAvailabilityRefreshRef.current(collectCatalogProductIds(catalogRef.current), 0);
+          }
+          if (catalogContentChanged || catalogAvailabilityChanged) {
+            scheduleComboDetailsWarmRef.current(collectCatalogComboIds(catalogRef.current), true);
+          }
+          if ((!cachedCatalog || catalogContentChanged) && !catalogSnapshotWarmRequestedRef.current) {
+            catalogSnapshotWarmRequestedRef.current = true;
+            void fetchMobileCatalogSnapshot()
+              .then((snapshot) => {
+                if (!catalogPageMountedRef.current) return;
+                catalogSnapshotRef.current = snapshot;
+                const snapshotCatalog = getCatalogStateFromSnapshot(snapshot);
+                const initialProductIds = collectInitialCatalogProductIds(snapshotCatalog);
+                initialProductIds.forEach((productId) => passportWarmRequestedIds.current.delete(productId));
+                scheduleProductPassportWarmRef.current(initialProductIds);
+                scheduleComboDetailsWarmRef.current(
+                  collectCatalogComboIds(snapshotCatalog),
+                  !cachedCatalog || catalogContentChanged || catalogAvailabilityChanged,
+                );
+              })
+              .catch(() => null);
           }
         } else if (!hasRenderedCatalog && !preserveContent) {
           setCatalog(emptyCatalogState);
@@ -2835,7 +2920,11 @@ export function CatalogPage() {
       if (catalogFocusFulfillmentTimer.current) clearTimeout(catalogFocusFulfillmentTimer.current);
       catalogFocusFulfillmentTimer.current = setTimeout(() => {
         catalogFocusFulfillmentTimer.current = null;
-        if (isActive) void loadCatalogFulfillmentState(false).catch(() => null);
+        if (!isActive) return;
+        void loadCatalogFulfillmentState(false).catch(() => null);
+        if (Date.now() - catalogLastNetworkRefreshAtRef.current >= 15_000) {
+          void loadCatalog({ preserveContent: true, syncAvailability: true }).catch(() => null);
+        }
       }, CATALOG_FOCUS_RESUME_DELAY_MS);
       return () => {
         isActive = false;
@@ -2844,7 +2933,7 @@ export function CatalogPage() {
           catalogFocusFulfillmentTimer.current = null;
         }
       };
-    }, [loadCatalogFulfillmentState]),
+    }, [loadCatalog, loadCatalogFulfillmentState]),
   );
 
   useFocusEffect(
@@ -2911,12 +3000,16 @@ export function CatalogPage() {
     };
   }, [catalogPassport?.token, isCatalogDeliveryMode, selectedCatalogAddress]);
 
-  useEffect(() => () => {
-    if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
-    if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
-    if (passportWarmTimer.current) clearTimeout(passportWarmTimer.current);
-    if (availabilityWarmTimer.current) clearTimeout(availabilityWarmTimer.current);
-    if (comboDetailsWarmTimer.current) clearTimeout(comboDetailsWarmTimer.current);
+  useEffect(() => {
+    catalogPageMountedRef.current = true;
+    return () => {
+      catalogPageMountedRef.current = false;
+      if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
+      if (programmaticScrollTimer.current) clearTimeout(programmaticScrollTimer.current);
+      if (passportWarmTimer.current) clearTimeout(passportWarmTimer.current);
+      if (availabilityWarmTimer.current) clearTimeout(availabilityWarmTimer.current);
+      if (comboDetailsWarmTimer.current) clearTimeout(comboDetailsWarmTimer.current);
+    };
   }, []);
 
   const runPassportWarmQueue = useCallback(async () => {
@@ -2968,8 +3061,18 @@ export function CatalogPage() {
     try {
       const batch = comboDetailsWarmQueue.current.splice(0, 2);
       for (const comboId of batch) {
-        const cached = getMemoryCatalogComboDetails(comboId) || await readCachedCatalogComboDetails(comboId).catch(() => null);
-        if (!cached) await fetchCatalogComboDetails(comboId).catch(() => null);
+        const refreshCached = comboDetailsRefreshIds.current.has(comboId);
+        comboDetailsRefreshIds.current.delete(comboId);
+        try {
+          const cached = getMemoryCatalogComboDetails(comboId) || await readCachedCatalogComboDetails(comboId).catch(() => null);
+          if (!cached || refreshCached) await fetchCatalogComboDetails(comboId).catch(() => null);
+        } finally {
+          comboDetailsWarmRequestedIds.current.delete(comboId);
+          if (comboDetailsRefreshIds.current.has(comboId)) {
+            comboDetailsWarmRequestedIds.current.add(comboId);
+            comboDetailsWarmQueue.current.push(comboId);
+          }
+        }
       }
     } finally {
       isComboDetailsWarmRunning.current = false;
@@ -2982,8 +3085,9 @@ export function CatalogPage() {
     }
   }, []);
 
-  const scheduleComboDetailsWarm = useCallback((comboIds: number[]) => {
-    normalizeCatalogProductIds(comboIds).slice(0, 2).forEach((comboId) => {
+  const scheduleComboDetailsWarm = useCallback((comboIds: number[], refreshCached = false) => {
+    normalizeCatalogProductIds(comboIds).forEach((comboId) => {
+      if (refreshCached) comboDetailsRefreshIds.current.add(comboId);
       if (comboDetailsWarmRequestedIds.current.has(comboId)) return;
       comboDetailsWarmRequestedIds.current.add(comboId);
       comboDetailsWarmQueue.current.push(comboId);

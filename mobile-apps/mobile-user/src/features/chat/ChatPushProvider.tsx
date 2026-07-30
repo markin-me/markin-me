@@ -5,7 +5,13 @@ import { Platform } from 'react-native';
 
 import { subscribeCustomerPassport } from '../../shared/api';
 import { fetchChatSettings, subscribeChatPush, unsubscribeChatPush } from './api';
-import { resolveUserChatProfile, readChatPushToken, saveChatPushEnabled, saveChatPushToken } from './storage';
+import {
+  readCachedChatSettings,
+  resolveUserChatProfile,
+  readChatPushToken,
+  saveChatPushEnabled,
+  saveChatPushToken,
+} from './storage';
 
 type ChatPushContextValue = {
   enabled: boolean;
@@ -139,14 +145,25 @@ export function ChatPushProvider({ children, onNotificationPress, onNotification
       if (__DEV__) {
         console.log('[chat-push] bootstrap start');
       }
+      const cachedSettings = await readCachedChatSettings().catch(() => null);
+      if (cachedSettings && mounted) {
+        const cachedEnabled = normalizePushEnabledFlag(
+          cachedSettings.client_push_enabled ?? cachedSettings.chat_client_push_enabled
+        );
+        serverEnabledRef.current = cachedEnabled;
+        enabledRef.current = cachedEnabled;
+        setEnabledState(cachedEnabled);
+        setReady(true);
+      }
       const settings = await fetchChatSettings().catch(() => null);
       if (__DEV__) {
         console.log('[chat-push] settings loaded', {
           clientPushEnabled: settings?.client_push_enabled ?? settings?.chat_client_push_enabled,
         });
       }
+      const effectiveSettings = settings || cachedSettings;
       serverEnabledRef.current = normalizePushEnabledFlag(
-        settings?.client_push_enabled ?? settings?.chat_client_push_enabled
+        effectiveSettings?.client_push_enabled ?? effectiveSettings?.chat_client_push_enabled
       );
       if (!mounted) return;
       const nextEnabled = serverEnabledRef.current;

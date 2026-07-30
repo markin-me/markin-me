@@ -11,6 +11,7 @@ import { FlatList,
 
 import {
   fetchBonusTransactions,
+  hasCachedBonusTransactions,
   isSameCachedValue,
   readCachedBonusTransactions,
   readCachedCustomerPassport,
@@ -69,6 +70,14 @@ function isVisibleBonusTransaction(item: BonusTransaction) {
   return raw !== 'bonus_reserve' && !/^order:\d+:bonus_reserve$/.test(raw);
 }
 
+function getTransactionCursor(items: BonusTransaction[], mode: 'max' | 'min') {
+  const ids = items
+    .map((item) => Number(item.id || 0))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return 0;
+  return mode === 'max' ? Math.max(...ids) : Math.min(...ids);
+}
+
 function formatNumber(value: unknown) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) : '0';
@@ -94,6 +103,8 @@ export function BonusTransactionsPage() {
     async function loadTransactions() {
       setErrorText('');
       setHasMore(false);
+      setLoading(true);
+      let hasCachedSnapshot = false;
       try {
         const cached = await readCachedCustomerPassport();
         if (!cached?.token) {
@@ -104,20 +115,53 @@ export function BonusTransactionsPage() {
           return;
         }
         const cachedList = await readCachedBonusTransactions(cached.token, activeFilter);
+        const hasCachedList = await hasCachedBonusTransactions(cached.token, activeFilter);
+        hasCachedSnapshot = hasCachedList;
         const cachedVisible = cachedList.filter(isVisibleBonusTransaction);
-        if (isActive && cachedVisible.length) {
+        if (isActive && hasCachedList) {
           setTransactions(cachedVisible);
-          setHasMore(cachedList.length === PAGE_SIZE);
+          setHasMore(cachedList.length >= PAGE_SIZE);
           setLoading(false);
+        } else if (isActive) {
+          setTransactions([]);
         }
-        const list = await fetchBonusTransactions(cached.token, activeFilter, PAGE_SIZE, 0);
-        const visibleList = list.filter(isVisibleBonusTransaction);
+        const newestId = getTransactionCursor(cachedList, 'max');
+        let list: BonusTransaction[] = [];
+        if (newestId > 0) {
+          let beforeId = 0;
+          while (isActive) {
+            const page = await fetchBonusTransactions(
+              cached.token,
+              activeFilter,
+              100,
+              0,
+              {
+                afterId: newestId,
+                beforeId: beforeId || undefined,
+              },
+            );
+            list = page;
+            if (page.length < 100) break;
+            const nextBeforeId = getTransactionCursor(page, 'min');
+            if (!(nextBeforeId > newestId) || nextBeforeId === beforeId) break;
+            beforeId = nextBeforeId;
+          }
+        } else {
+          list = await fetchBonusTransactions(
+            cached.token,
+            activeFilter,
+            PAGE_SIZE,
+            0,
+          );
+        }
+        const nextCachedList = await readCachedBonusTransactions(cached.token, activeFilter);
+        const visibleList = nextCachedList.filter(isVisibleBonusTransaction);
         if (isActive) {
           if (!isSameCachedValue(visibleList, cachedVisible)) setTransactions(visibleList);
-          setHasMore(list.length === PAGE_SIZE);
+          setHasMore(newestId > 0 ? nextCachedList.length >= PAGE_SIZE : list.length === PAGE_SIZE);
         }
       } catch {
-        if (isActive) setErrorText('Не удалось загрузить начисления');
+        if (isActive && !hasCachedSnapshot) setErrorText('Не удалось загрузить начисления');
       } finally {
         if (isActive) setLoading(false);
       }
@@ -136,15 +180,24 @@ export function BonusTransactionsPage() {
     try {
       const cached = await readCachedCustomerPassport();
       if (!cached?.token) return;
-      const list = await fetchBonusTransactions(cached.token, activeFilter, PAGE_SIZE, transactions.length);
-      setTransactions((prev) => prev.concat(list.filter(isVisibleBonusTransaction)));
+      const beforeId = getTransactionCursor(transactions, 'min');
+      const list = await fetchBonusTransactions(
+        cached.token,
+        activeFilter,
+        PAGE_SIZE,
+        0,
+        beforeId > 0 ? { beforeId } : {},
+      );
+      const nextCachedList = await readCachedBonusTransactions(cached.token, activeFilter);
+      const nextVisibleList = nextCachedList.filter(isVisibleBonusTransaction);
+      setTransactions((current) => isSameCachedValue(current, nextVisibleList) ? current : nextVisibleList);
       setHasMore(list.length === PAGE_SIZE);
     } catch {
       setHasMore(false);
     } finally {
       setLoadingMore(false);
     }
-  }, [activeFilter, errorText, hasMore, loading, loadingMore, transactions.length]);
+  }, [activeFilter, errorText, hasMore, loading, loadingMore, transactions]);
 
   const renderTransaction = useCallback(({ item }: { item: BonusTransaction }) => {
     const meta = getTransactionMeta(item.type);

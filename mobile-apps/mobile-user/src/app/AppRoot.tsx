@@ -12,7 +12,6 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import {
-  ActivityIndicator,
   Animated,
   BackHandler,
   Easing,
@@ -29,7 +28,7 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'reac
 
 import type { ChatTabParamList, MainTabParamList, RootStackParamList } from './navigation/routes';
 import { routes } from './navigation/routes';
-import { StockProvider, useProductStock } from '../features/stock';
+import { StockProvider } from '../features/stock';
 import { AddressFormPage } from '../pages/address-form';
 import { AddressesPage } from '../pages/addresses';
 import { CartPage } from '../pages/cart';
@@ -364,44 +363,14 @@ function getChatStackParams(target: PushTarget): MainTabParamList['chat'] {
 }
 
 function BootPreloadGate({ children }: { children: ReactNode }) {
-  const { hydrateFromCache } = useProductStock();
-  const [ready, setReady] = useState(false);
-
   useEffect(() => {
-    let cancelled = false;
-
-    async function preload() {
-      await hydrateFromCache().catch(() => null);
-
-      await Promise.all([
-        readCartLines().catch(() => []),
-        readCachedCustomerPassport().catch(() => null),
-        readFulfillmentSelection().catch(() => null),
-        readCachedMobileCatalogSnapshot().catch(() => null),
-      ]);
-    }
-
-    void preload()
-      .then(() => {
-        if (cancelled) return;
-        setReady(true);
-      })
-      .catch(() => {
-        if (!cancelled) setReady(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [hydrateFromCache]);
-
-  if (!ready) {
-    return (
-      <View style={styles.bootPreload}>
-        <ActivityIndicator color={theme.colors.primary} />
-      </View>
-    );
-  }
+    void Promise.all([
+      readCartLines().catch(() => []),
+      readCachedCustomerPassport().catch(() => null),
+      readFulfillmentSelection().catch(() => null),
+      readCachedMobileCatalogSnapshot().catch(() => null),
+    ]);
+  }, []);
 
   return <>{children}</>;
 }
@@ -841,12 +810,6 @@ export function AppRoot() {
 const styles = StyleSheet.create({
   appRoot: {
     flex: 1,
-  },
-  bootPreload: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.background,
-    flex: 1,
-    justifyContent: 'center',
   },
   cartFlightImage: {
     borderRadius: 999,

@@ -5,8 +5,10 @@ import { fetchImportantMessages, fetchImportantMessagesRevision, fetchUnread, op
 import {
   countUnreadImportantMessages,
   markImportantMessageRead,
+  readChatUnreadCache,
   readImportantMessagesCache,
   resolveUserChatProfile,
+  saveChatUnreadCache,
   saveImportantMessagesCache,
 } from './storage';
 import type { ImportantMessage } from './types';
@@ -46,6 +48,13 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     stoppedRef.current = false;
+    return () => {
+      stoppedRef.current = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     let source: ReturnType<typeof openUnreadStream> | null = null;
     async function loop() {
       const profile = await resolveUserChatProfile().catch(() => null);
@@ -54,33 +63,48 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
         clientId: profile?.clientId || '',
         customerToken: profile?.customerToken || '',
       };
+      const cachedUnread = params.clientId
+        ? await readChatUnreadCache(params.clientId).catch(() => null)
+        : null;
+      if (cancelled) return;
+      if (cachedUnread) {
+        setChatUnread(cachedUnread.total);
+        setRevision(cachedUnread.revision);
+      } else {
+        setChatUnread(0);
+        setRevision(0);
+      }
       const initial = await fetchUnread(params).catch(() => null);
-      if (stoppedRef.current) return;
+      if (cancelled) return;
       if (initial) {
-        setChatUnread(Number(initial.total ?? initial.unread_total ?? 0));
-        setRevision(Number(initial.revision || 0));
+        const nextTotal = Number(initial.total ?? initial.unread_total ?? 0);
+        const nextRevision = Number(initial.revision || 0);
+        setChatUnread(nextTotal);
+        setRevision(nextRevision);
+        saveChatUnreadCache(params.clientId, nextTotal, nextRevision);
       }
 
-      let currentTotal = Number(initial?.total ?? initial?.unread_total ?? 0);
-      let currentRevision = Number(initial?.revision || 0);
+      let currentTotal = Number(initial?.total ?? initial?.unread_total ?? cachedUnread?.total ?? 0);
+      let currentRevision = Number(initial?.revision ?? cachedUnread?.revision ?? 0);
       let fallbackStarted = false;
 
       const runWaitFallback = async () => {
         if (fallbackStarted) return;
         fallbackStarted = true;
-        while (!stoppedRef.current) {
+        while (!cancelled) {
           const next = await waitUnread({
             ...params,
             total: currentTotal,
             revision: currentRevision,
             timeoutMs: 20000,
           }).catch(() => null);
-          if (stoppedRef.current) return;
+          if (cancelled) return;
           if (next) {
             currentTotal = Number(next.total ?? next.unread_total ?? currentTotal);
             currentRevision = Number(next.revision ?? currentRevision);
             setChatUnread(currentTotal);
             setRevision(currentRevision);
+            saveChatUnreadCache(params.clientId, currentTotal, currentRevision);
           } else {
             await new Promise((resolve) => setTimeout(resolve, 2500));
           }
@@ -89,13 +113,14 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
 
       source = openUnreadStream(params);
       source.addEventListener('unread', (event) => {
-        if (stoppedRef.current || !event.data) return;
+        if (cancelled || !event.data) return;
         try {
           const next = JSON.parse(event.data);
           currentTotal = Number(next.total ?? next.unread_total ?? currentTotal);
           currentRevision = Number(next.revision ?? currentRevision);
           setChatUnread(currentTotal);
           setRevision(currentRevision);
+          saveChatUnreadCache(params.clientId, currentTotal, currentRevision);
         } catch {}
       });
       source.addEventListener('error', () => {
@@ -103,14 +128,14 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
         void runWaitFallback();
       });
 
-      while (!stoppedRef.current) {
+      while (!cancelled) {
         await new Promise((resolve) => setTimeout(resolve, 60000));
       }
       source?.close();
     }
     void loop();
     return () => {
-      stoppedRef.current = true;
+      cancelled = true;
       source?.close();
     };
   }, [reloadKey]);

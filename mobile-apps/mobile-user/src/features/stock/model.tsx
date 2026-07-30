@@ -6,6 +6,7 @@ import {
   fetchProductsBatchAvailability,
   getMemoryMobileCatalogSnapshot,
   getMemoryUnitConversions,
+  isSameCachedValue,
   readCachedUnitConversions,
   readCachedFullProductPassports,
   readCachedMobileCatalogSnapshot,
@@ -167,9 +168,11 @@ export function StockProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       const data: Record<string, Record<string, unknown>> = {};
       const stockRows: Array<Record<string, unknown>> = [];
+      let availabilityRevision: string | undefined;
       let nextLevels = stockLevelsRef.current;
       for (const chunk of chunkIds(productIds)) {
         const chunkPayload = await fetchProductsBatchAvailability(chunk);
+        if (chunkPayload.availability_revision) availabilityRevision = chunkPayload.availability_revision;
         const chunkRows = extractStockRowsFromAvailabilityPayload(chunkPayload)
           .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
           .map((row) => ({ ...row, sourcePriority: 5 }));
@@ -185,7 +188,10 @@ export function StockProvider({ children }: { children: ReactNode }) {
         setUpdatedAt(Date.now());
         persistStockLevels(nextLevels);
       }
-      return { payload: { data, stock_levels: stockRows }, stockLevels: stockLevelsRef.current };
+      return {
+        payload: { availability_revision: availabilityRevision, data, stock_levels: stockRows },
+        stockLevels: stockLevelsRef.current,
+      };
     })();
 
     refreshRequestsRef.current.set(requestKey, request);
@@ -243,22 +249,20 @@ export function StockProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        if (!conversions.length) {
-          void fetchUnitConversions()
-            .then((freshConversions) => {
-              if (!freshConversions.length) return;
-              setUnitConversions(freshConversions);
-              const freshSnapshotRows = extractStockRowsFromMobileSnapshot(getMemoryMobileCatalogSnapshot(), freshConversions);
-              if (!freshSnapshotRows.length) return;
-              const freshSnapshotLevels = mergeStockLevels(new Map(stockLevelsRef.current), freshSnapshotRows);
-              if (areStockLevelsEqual(stockLevelsRef.current, freshSnapshotLevels)) return;
-              stockLevelsRef.current = freshSnapshotLevels;
-              setStockLevels(freshSnapshotLevels);
-              setUpdatedAt(Date.now());
-              persistStockLevels(freshSnapshotLevels);
-            })
-            .catch(() => null);
-        }
+        void fetchUnitConversions()
+          .then((freshConversions) => {
+            if (!freshConversions.length || isSameCachedValue(freshConversions, conversions)) return;
+            setUnitConversions(freshConversions);
+            const freshSnapshotRows = extractStockRowsFromMobileSnapshot(getMemoryMobileCatalogSnapshot(), freshConversions);
+            if (!freshSnapshotRows.length) return;
+            const freshSnapshotLevels = mergeStockLevels(new Map(stockLevelsRef.current), freshSnapshotRows);
+            if (areStockLevelsEqual(stockLevelsRef.current, freshSnapshotLevels)) return;
+            stockLevelsRef.current = freshSnapshotLevels;
+            setStockLevels(freshSnapshotLevels);
+            setUpdatedAt(Date.now());
+            persistStockLevels(freshSnapshotLevels);
+          })
+          .catch(() => null);
       } catch {
         // UI must stay usable if cache hydration fails; explicit refreshes still surface API errors.
       } finally {

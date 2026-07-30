@@ -16,6 +16,8 @@ import type {
 } from './types';
 import { saveLastChatSettings } from './storage';
 
+let chatSettingsRequest: Promise<ChatSettings> | null = null;
+
 type ApiEnvelope<T> = {
   ok?: boolean;
   data?: T;
@@ -98,7 +100,8 @@ export function resolveChatAssetUrl(url?: string | null) {
 }
 
 export function fetchChatSettings() {
-  return requestData<ChatSettings & { settings?: ChatSettings }>('/api/public/tenant/chat-settings', { actor: 'in' })
+  if (chatSettingsRequest) return chatSettingsRequest;
+  chatSettingsRequest = requestData<ChatSettings & { settings?: ChatSettings }>('/api/public/tenant/chat-settings', { actor: 'in' })
     .then((payload) => payload && typeof payload.settings === 'object' && payload.settings
       ? payload.settings
       : payload
@@ -106,7 +109,11 @@ export function fetchChatSettings() {
     .then((settings) => {
       saveLastChatSettings(settings || null);
       return settings;
+    })
+    .finally(() => {
+      chatSettingsRequest = null;
     });
+  return chatSettingsRequest;
 }
 
 export function fetchImportantMessages() {

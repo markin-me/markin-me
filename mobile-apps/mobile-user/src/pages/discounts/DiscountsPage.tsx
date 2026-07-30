@@ -8,8 +8,15 @@ import {
   clearCheckoutDiscountSelection,
   ensureCheckoutBenefitsState,
   readCheckoutBenefitsState,
+  type CheckoutBenefitsState,
 } from '../../features/checkout';
-import { readCachedCustomerPassport, type CustomerBenefitCard } from '../../shared/api';
+import {
+  fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
+  readCachedCustomerPassport,
+  type CustomerBenefitCard,
+} from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text, Screen } from '../../shared/ui';
 
@@ -56,6 +63,43 @@ function getDiscountReason(item: CustomerBenefitCard) {
     || asText(item.status_text)
     || asText(item.apply_scope_text)
     || 'Скидка недоступна';
+}
+
+function getCheckoutDiscountItems(state: CheckoutBenefitsState | null) {
+  return Array.isArray(state?.preview?.discounts) ? state.preview.discounts : [];
+}
+
+function mergeDiscountApplicability(
+  baseItems: CustomerBenefitCard[],
+  checkoutItems: CustomerBenefitCard[],
+) {
+  if (!baseItems.length || !checkoutItems.length) return baseItems;
+  const checkoutByKey = new Map<string, CustomerBenefitCard>();
+  checkoutItems.forEach((item) => {
+    const id = getDiscountSelectionId(item);
+    if (id) checkoutByKey.set(`${getDiscountSource(item)}:${id}`, item);
+  });
+  const applicabilityKeys = [
+    'apply_scope_text',
+    'disabled_reason',
+    'disabled_reason_code',
+    'disabled_reason_text',
+    'is_applicable',
+    'is_selected',
+    'status_text',
+  ] as const;
+  return baseItems.map((item) => {
+    const id = getDiscountSelectionId(item);
+    const checkoutItem = id ? checkoutByKey.get(`${getDiscountSource(item)}:${id}`) : null;
+    if (!checkoutItem) return item;
+    const nextItem: CustomerBenefitCard = { ...item };
+    applicabilityKeys.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(checkoutItem, key)) {
+        (nextItem as Record<string, unknown>)[key] = checkoutItem[key];
+      }
+    });
+    return nextItem;
+  });
 }
 
 function DiscountCard({
@@ -117,9 +161,10 @@ export function DiscountsPage() {
   const [applyingDiscountId, setApplyingDiscountId] = useState<number | null>(null);
 
   const syncDiscounts = useCallback(async () => {
+    let hasCachedBenefits = false;
     const passport = await readCachedCustomerPassport();
     if (!passport?.token) {
-      setItems([]);
+      setItems((current) => (isSameCachedValue(current, []) ? current : []));
       setErrorText('Войдите в профиль, чтобы увидеть скидки.');
       setLoading(false);
       return;
@@ -127,30 +172,49 @@ export function DiscountsPage() {
 
     setErrorText('');
     try {
-      const cachedState = await readCheckoutBenefitsState();
-      const cachedItems = Array.isArray(cachedState.preview?.discounts)
-        ? cachedState.preview.discounts
-        : Array.isArray(cachedState.sourceBenefits?.discounts)
-          ? cachedState.sourceBenefits.discounts
-          : [];
-      setItems(cachedItems);
-      setActiveDiscountId(cachedState.currentSelection.discountId);
-      setActiveDiscountSource(cachedState.currentSelection.discountSource);
-      if (cachedItems.length || cachedState.preview || cachedState.sourceBenefits?.discounts?.length) {
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token).catch(() => null);
+      hasCachedBenefits = cachedBenefits !== null;
+      let baseItems = Array.isArray(cachedBenefits?.discounts) ? cachedBenefits.discounts : [];
+      if (hasCachedBenefits) {
+        setItems((current) => (isSameCachedValue(current, baseItems) ? current : baseItems));
         setLoading(false);
       }
 
-      const freshState = await ensureCheckoutBenefitsState();
-      const freshItems = Array.isArray(freshState.preview?.discounts)
-        ? freshState.preview.discounts
-        : Array.isArray(freshState.sourceBenefits?.discounts)
-          ? freshState.sourceBenefits.discounts
-          : [];
-      setItems(freshItems);
-      setActiveDiscountId(freshState.currentSelection.discountId);
-      setActiveDiscountSource(freshState.currentSelection.discountSource);
+      const cachedState = await readCheckoutBenefitsState().catch(() => null);
+      if (cachedState) {
+        const cachedItems = mergeDiscountApplicability(baseItems, getCheckoutDiscountItems(cachedState));
+        setItems((current) => (isSameCachedValue(current, cachedItems) ? current : cachedItems));
+        setActiveDiscountId((current) => (
+          current === cachedState.currentSelection.discountId ? current : cachedState.currentSelection.discountId
+        ));
+        setActiveDiscountSource((current) => (
+          current === cachedState.currentSelection.discountSource ? current : cachedState.currentSelection.discountSource
+        ));
+      }
+
+      const [benefitsResult, checkoutResult] = await Promise.allSettled([
+        fetchCustomerBenefits(passport.token),
+        ensureCheckoutBenefitsState(),
+      ]);
+      if (benefitsResult.status === 'fulfilled') {
+        baseItems = Array.isArray(benefitsResult.value.discounts) ? benefitsResult.value.discounts : [];
+      }
+      const checkoutState = checkoutResult.status === 'fulfilled' ? checkoutResult.value : cachedState;
+      const freshItems = mergeDiscountApplicability(baseItems, getCheckoutDiscountItems(checkoutState));
+      setItems((current) => (isSameCachedValue(current, freshItems) ? current : freshItems));
+      if (checkoutState) {
+        setActiveDiscountId((current) => (
+          current === checkoutState.currentSelection.discountId ? current : checkoutState.currentSelection.discountId
+        ));
+        setActiveDiscountSource((current) => (
+          current === checkoutState.currentSelection.discountSource ? current : checkoutState.currentSelection.discountSource
+        ));
+      }
+      if (benefitsResult.status === 'rejected' && !hasCachedBenefits) throw benefitsResult.reason;
     } catch (error) {
-      setErrorText(getBenefitsPageErrorText(error, 'Не удалось загрузить скидки.'));
+      if (!hasCachedBenefits) {
+        setErrorText(getBenefitsPageErrorText(error, 'Не удалось загрузить скидки.'));
+      }
     } finally {
       setLoading(false);
     }
@@ -176,12 +240,15 @@ export function DiscountsPage() {
         : await applyCheckoutDiscountSelection(item);
       const nextItems = Array.isArray(state.preview?.discounts)
         ? state.preview.discounts
-        : Array.isArray(state.sourceBenefits?.discounts)
-          ? state.sourceBenefits.discounts
-          : items;
-      setItems(nextItems);
-      setActiveDiscountId(state.currentSelection.discountId);
-      setActiveDiscountSource(state.currentSelection.discountSource);
+        : [];
+      const mergedItems = mergeDiscountApplicability(items, nextItems);
+      setItems((current) => (isSameCachedValue(current, mergedItems) ? current : mergedItems));
+      setActiveDiscountId((current) => (
+        current === state.currentSelection.discountId ? current : state.currentSelection.discountId
+      ));
+      setActiveDiscountSource((current) => (
+        current === state.currentSelection.discountSource ? current : state.currentSelection.discountSource
+      ));
     } catch (error) {
       setErrorText(getBenefitsPageErrorText(error, 'Не удалось применить скидку.'));
     } finally {

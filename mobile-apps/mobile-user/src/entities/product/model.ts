@@ -172,6 +172,8 @@ export type CatalogComboDetails = CatalogCombo & {
 
 export type MobileCatalogSnapshot = {
   version: string;
+  content_revision?: string;
+  availability_revision?: string;
   generated_at?: string;
   tenant_id?: number;
   store_id?: number;

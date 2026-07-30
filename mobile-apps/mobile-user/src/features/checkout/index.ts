@@ -1,4 +1,5 @@
 export {
+  clearCustomerCheckoutCache,
   readFulfillmentSelection,
   readCheckoutCartSummary,
   readCheckoutDiscountSelection,
@@ -16,6 +17,7 @@ export {
   applyCheckoutPromoCode,
   buildCheckoutBenefitsPreviewRequestForLines,
   cacheCheckoutBenefitsPreviewForLines,
+  clearCheckoutBenefitsCacheForToken,
   clearCheckoutDiscountSelection,
   clearCheckoutBenefitsSelection,
   clearCheckoutPromoSelection,

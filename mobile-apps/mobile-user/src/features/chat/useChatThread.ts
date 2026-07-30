@@ -39,6 +39,7 @@ import {
 } from './helpers';
 import {
   clearGuestChatClientId,
+  readCachedChatSettings,
   readChatThreadCacheSync,
   readChatThreadCache,
   readLastCustomerChatClientId,
@@ -584,6 +585,8 @@ export function useChatThread(options: UseChatThreadOptions) {
         );
         if (cancelled) return;
         await syncProfile(nextProfile);
+        const cachedSettings = await readCachedChatSettings().catch(() => null);
+        if (!cancelled && cachedSettings) setSettings(cachedSettings);
         void fetchChatSettings()
           .then((nextSettings) => {
             if (!cancelled) setSettings(nextSettings);

@@ -6,7 +6,7 @@ import {
   useState,
 } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   ActivityIndicator,
@@ -27,8 +27,10 @@ import {
   readCachedCustomerOrders,
   readCachedCustomerPassport,
   resolveAssetUrl,
+  subscribeCustomerPassport,
   type CustomerOrder,
   type CustomerOrderItem,
+  type CustomerOrdersPayload,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { routes, type RootStackParamList } from '../../app/navigation/routes';
@@ -109,19 +111,6 @@ function getOrderSignature(order: CustomerOrder) {
   const id = Number(order.id || 0);
   const itemsCount = Array.isArray(order.items) ? order.items.length : 0;
   return `${id}:${order.updated_at || order.created_at || ''}:${order.status_id || ''}:${order.status_title || ''}:${getOrderTotal(order)}:${itemsCount}`;
-}
-
-function mergeOrders(previous: CustomerOrder[], next: CustomerOrder[]) {
-  const map = new Map<number, CustomerOrder>();
-  previous.forEach((order) => {
-    const id = Number(order.id || 0);
-    if (id > 0) map.set(id, order);
-  });
-  next.forEach((order) => {
-    const id = Number(order.id || 0);
-    if (id > 0) map.set(id, order);
-  });
-  return Array.from(map.values());
 }
 
 function OrderCard({
@@ -238,6 +227,7 @@ function OrderCard({
 export function OrdersPage() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [token, setToken] = useState('');
+  const tokenRef = useRef('');
   const [activeOrders, setActiveOrders] = useState<CustomerOrder[]>([]);
   const [completedOrders, setCompletedOrders] = useState<CustomerOrder[]>([]);
   const [activeCount, setActiveCount] = useState(0);
@@ -259,8 +249,33 @@ export function OrdersPage() {
     if (Number.isFinite(nextCompletedCount)) setCompletedCount(Math.max(0, Math.trunc(nextCompletedCount)));
   }, []);
 
+  const applyCachedOrders = useCallback((
+    activePayload: CustomerOrdersPayload | null,
+    completedPayload: CustomerOrdersPayload | null,
+  ) => {
+    const nextActive = activePayload || { data: [], paging: { has_more: false }, summary: {} };
+    const nextCompleted = completedPayload || { data: [], paging: { has_more: false }, summary: {} };
+    setActiveOrders((value) => (
+      isSameCachedValue(value, nextActive.data) ? value : nextActive.data
+    ));
+    setCompletedOrders((value) => (
+      isSameCachedValue(value, nextCompleted.data) ? value : nextCompleted.data
+    ));
+    setActiveOffset(nextActive.data.length);
+    setActiveHasMore(Boolean(nextActive.paging.has_more));
+    setCompletedOffset(nextCompleted.data.length);
+    setCompletedHasMore(Boolean(nextCompleted.paging.has_more));
+
+    const summary = { ...nextActive.summary, ...nextCompleted.summary };
+    updateSummary(summary);
+    const nextActiveCount = Number(summary.active_count ?? summary.activeCount);
+    const nextCompletedCount = Number(summary.completed_count ?? summary.completedCount);
+    if (!Number.isFinite(nextActiveCount)) setActiveCount(nextActive.data.length);
+    if (!Number.isFinite(nextCompletedCount)) setCompletedCount(nextCompleted.data.length);
+  }, [updateSummary]);
+
   const loadOrders = useCallback(async (nextToken: string, options: { reset: boolean }) => {
-    if (!nextToken) return;
+    if (!nextToken || tokenRef.current !== nextToken) return;
     if (options.reset) {
       setErrorText('');
     }
@@ -272,59 +287,76 @@ export function OrdersPage() {
         ])
         : [null, null];
       if (cachedActivePayload || cachedCompletedPayload) {
-        const activePayload = cachedActivePayload || { data: [], paging: { has_more: false }, summary: {} };
-        const completedPayload = cachedCompletedPayload || { data: [], paging: { has_more: false }, summary: {} };
-        setActiveOrders(activePayload.data);
-        setCompletedOrders(completedPayload.data);
-        setActiveOffset(activePayload.data.length);
-        setActiveHasMore(Boolean(activePayload.paging.has_more));
-        setCompletedOffset(completedPayload.data.length);
-        setCompletedHasMore(Boolean(completedPayload.paging.has_more));
-        updateSummary(activePayload.summary);
-        updateSummary(completedPayload.summary);
-        if (!Object.keys(activePayload.summary || {}).length) setActiveCount(activePayload.data.length);
-        if (!Object.keys(completedPayload.summary || {}).length) setCompletedCount(completedPayload.data.length);
+        if (tokenRef.current !== nextToken) return;
+        applyCachedOrders(cachedActivePayload, cachedCompletedPayload);
         setLoading(false);
         setRefreshing(false);
       }
-      const [activePayload, completedPayload] = await Promise.all([
-        fetchCustomerOrders(nextToken, { limit: PAGE_SIZE, offset: 0, statusIsFinal: 0 }),
-        fetchCustomerOrders(nextToken, { limit: PAGE_SIZE, offset: 0, statusIsFinal: 1 }),
+      let networkFailed = false;
+      await Promise.all([
+        fetchCustomerOrders(nextToken, { limit: PAGE_SIZE, offset: 0, statusIsFinal: 0 }).catch(() => {
+          networkFailed = true;
+        }),
+        fetchCustomerOrders(nextToken, { limit: PAGE_SIZE, offset: 0, statusIsFinal: 1 }).catch(() => {
+          networkFailed = true;
+        }),
       ]);
-      if (!isSameCachedValue(activePayload.data, cachedActivePayload?.data || [])) setActiveOrders(activePayload.data);
-      if (!isSameCachedValue(completedPayload.data, cachedCompletedPayload?.data || [])) setCompletedOrders(completedPayload.data);
-      setActiveOffset(activePayload.data.length);
-      setActiveHasMore(Boolean(activePayload.paging.has_more));
-      setCompletedOffset(completedPayload.data.length);
-      setCompletedHasMore(Boolean(completedPayload.paging.has_more));
-      updateSummary(activePayload.summary);
-      updateSummary(completedPayload.summary);
-      if (!Object.keys(activePayload.summary || {}).length) setActiveCount(activePayload.data.length);
-      if (!Object.keys(completedPayload.summary || {}).length) setCompletedCount(completedPayload.data.length);
+      const [nextActivePayload, nextCompletedPayload] = await Promise.all([
+        readCachedCustomerOrders(nextToken, 0),
+        readCachedCustomerOrders(nextToken, 1),
+      ]);
+      if (tokenRef.current !== nextToken) return;
+      applyCachedOrders(nextActivePayload, nextCompletedPayload);
+      if (networkFailed) setErrorText('Не удалось загрузить заказы');
     } catch {
-      setErrorText('Не удалось загрузить заказы');
+      if (tokenRef.current === nextToken) setErrorText('Не удалось загрузить заказы');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (tokenRef.current === nextToken) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [updateSummary]);
+  }, [applyCachedOrders]);
 
   useEffect(() => {
     let isActive = true;
-    void readCachedCustomerPassport().then((passport) => {
+    const syncPassport = () => void readCachedCustomerPassport().then((passport) => {
       if (!isActive) return;
       const nextToken = String(passport?.token || '').trim();
+      tokenRef.current = nextToken;
       setToken(nextToken);
       if (nextToken) {
         void loadOrders(nextToken, { reset: true });
       } else {
+        applyCachedOrders(null, null);
         setLoading(false);
       }
     });
+    syncPassport();
+    const unsubscribe = subscribeCustomerPassport(syncPassport);
+    return () => {
+      isActive = false;
+      tokenRef.current = '';
+      unsubscribe();
+    };
+  }, [applyCachedOrders, loadOrders]);
+
+  useFocusEffect(useCallback(() => {
+    if (!token) return undefined;
+    let isActive = true;
+    void Promise.all([
+      readCachedCustomerOrders(token, 0),
+      readCachedCustomerOrders(token, 1),
+    ]).then(([activePayload, completedPayload]) => {
+      if (isActive && (activePayload || completedPayload)) {
+        applyCachedOrders(activePayload, completedPayload);
+      }
+    });
+    void loadOrders(token, { reset: false });
     return () => {
       isActive = false;
     };
-  }, [loadOrders]);
+  }, [applyCachedOrders, loadOrders, token]));
 
   const refreshOrders = useCallback(() => {
     if (!token) return;
@@ -336,33 +368,37 @@ export function OrdersPage() {
     if (!token || loadingMore || !completedHasMore) return;
     setLoadingMore(true);
     try {
-      const payload = await fetchCustomerOrders(token, { limit: PAGE_SIZE, offset: completedOffset, statusIsFinal: 1 });
-      setCompletedOrders((value) => mergeOrders(value, payload.data));
-      setCompletedOffset((value) => value + payload.data.length);
-      setCompletedHasMore(Boolean(payload.paging.has_more));
-      updateSummary(payload.summary);
+      await fetchCustomerOrders(token, { limit: PAGE_SIZE, offset: completedOffset, statusIsFinal: 1 });
+      const [activePayload, completedPayload] = await Promise.all([
+        readCachedCustomerOrders(token, 0),
+        readCachedCustomerOrders(token, 1),
+      ]);
+      applyCachedOrders(activePayload, completedPayload);
+      setErrorText('');
     } catch {
-      setCompletedHasMore(false);
+      setErrorText('Не удалось загрузить заказы');
     } finally {
       setLoadingMore(false);
     }
-  }, [completedHasMore, completedOffset, loadingMore, token, updateSummary]);
+  }, [applyCachedOrders, completedHasMore, completedOffset, loadingMore, token]);
 
   const loadMoreActive = useCallback(async () => {
     if (!token || loadingMoreActive || !activeHasMore) return;
     setLoadingMoreActive(true);
     try {
-      const payload = await fetchCustomerOrders(token, { limit: PAGE_SIZE, offset: activeOffset, statusIsFinal: 0 });
-      setActiveOrders((value) => mergeOrders(value, payload.data));
-      setActiveOffset((value) => value + payload.data.length);
-      setActiveHasMore(Boolean(payload.paging.has_more));
-      updateSummary(payload.summary);
+      await fetchCustomerOrders(token, { limit: PAGE_SIZE, offset: activeOffset, statusIsFinal: 0 });
+      const [activePayload, completedPayload] = await Promise.all([
+        readCachedCustomerOrders(token, 0),
+        readCachedCustomerOrders(token, 1),
+      ]);
+      applyCachedOrders(activePayload, completedPayload);
+      setErrorText('');
     } catch {
-      setActiveHasMore(false);
+      setErrorText('Не удалось загрузить заказы');
     } finally {
       setLoadingMoreActive(false);
     }
-  }, [activeHasMore, activeOffset, loadingMoreActive, token, updateSummary]);
+  }, [activeHasMore, activeOffset, applyCachedOrders, loadingMoreActive, token]);
 
   const openOrder = useCallback((order: CustomerOrder) => {
     const orderId = Number(order.id || 0);

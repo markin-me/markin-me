@@ -30,6 +30,7 @@ import { useProductStock } from '../../features/stock';
 import {
   fetchCatalogComboDetails,
   getMemoryCatalogComboDetails,
+  isSameCachedValue,
   readCachedCatalogComboDetails,
 } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
@@ -50,22 +51,31 @@ export function ComboReplacePage({ navigation, route }: ComboReplacePageProps) {
 
   useEffect(() => {
     let isMounted = true;
+    let latestCombo = getMemoryCatalogComboDetails(comboId);
+    let hasCachedCombo = Boolean(latestCombo);
+
+    const applyCombo = (nextCombo: CatalogComboDetails) => {
+      const nextDraft = getComboDraft(nextCombo);
+      setCombo((current) => isSameCachedValue(current, nextCombo) ? current : nextCombo);
+      setDraft((current) => isSameCachedValue(current, nextDraft) ? current : cloneComboDraft(nextDraft));
+    };
 
     async function loadCombo() {
+      setErrorText('');
+      if (latestCombo && isMounted) applyCombo(latestCombo);
+
       const cached = await readCachedCatalogComboDetails(comboId);
       if (cached && isMounted) {
-        setCombo(cached);
-        setDraft(cloneComboDraft(getComboDraft(cached)));
+        hasCachedCombo = true;
+        if (!isSameCachedValue(latestCombo, cached)) applyCombo(cached);
+        latestCombo = cached;
       }
 
       try {
         const fresh = await fetchCatalogComboDetails(comboId);
-        if (isMounted) {
-          setCombo(fresh);
-          setDraft(cloneComboDraft(getComboDraft(fresh)));
-        }
+        if (isMounted && !isSameCachedValue(latestCombo, fresh)) applyCombo(fresh);
       } catch (error) {
-        if (!cached && isMounted) setErrorText(error instanceof Error ? error.message : 'Блок комбо не найден');
+        if (!hasCachedCombo && isMounted) setErrorText(error instanceof Error ? error.message : 'Блок комбо не найден');
       }
     }
 

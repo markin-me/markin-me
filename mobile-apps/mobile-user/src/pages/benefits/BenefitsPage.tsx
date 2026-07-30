@@ -13,13 +13,14 @@ import {
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import {
+  fetchCustomerBenefits,
   isSameCachedValue,
+  readCachedCustomerBenefits,
   readCachedCustomerPassport,
   resolveAssetUrl,
   type CustomerBenefitCard,
   type CustomerBenefits,
 } from '../../shared/api';
-import { ensureCheckoutBenefitsState, readCheckoutBenefitsState } from '../../features/checkout';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text, Screen } from '../../shared/ui';
 
@@ -176,31 +177,29 @@ export function BenefitsPage({ route }: BenefitsPageProps) {
   const [copiedCode, setCopiedCode] = useState('');
 
   const loadBenefits = useCallback(async () => {
+    let hasCachedBenefits = false;
     setErrorText('');
     try {
       const passport = await readCachedCustomerPassport();
       if (!passport?.token) {
-        setBenefits(emptyBenefits);
+        setBenefits((current) => (isSameCachedValue(current, emptyBenefits) ? current : emptyBenefits));
         setErrorText('Войдите в профиль, чтобы увидеть выгоды.');
         setLoading(false);
         return;
       }
-      const cachedState = await readCheckoutBenefitsState().catch(() => null);
-      const cachedBenefits = cachedState?.sourceBenefits || emptyBenefits;
-      const hasCachedBenefits = !!(cachedState?.preview || cachedState?.sourceBenefits);
-      if (hasCachedBenefits) {
-        setBenefits(cachedBenefits);
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token).catch(() => null);
+      hasCachedBenefits = cachedBenefits !== null;
+      if (cachedBenefits !== null) {
+        setBenefits((current) => (isSameCachedValue(current, cachedBenefits) ? current : cachedBenefits));
         setLoading(false);
       }
 
-      const freshState = await ensureCheckoutBenefitsState().catch((error) => {
-        if (!hasCachedBenefits) throw error;
-        return null;
-      });
-      const nextBenefits = freshState?.sourceBenefits || cachedBenefits;
-      if (!isSameCachedValue(nextBenefits, cachedBenefits)) setBenefits(nextBenefits);
+      const freshBenefits = await fetchCustomerBenefits(passport.token);
+      setBenefits((current) => (isSameCachedValue(current, freshBenefits) ? current : freshBenefits));
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить выгоды.');
+      if (!hasCachedBenefits) {
+        setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить выгоды.');
+      }
     } finally {
       setLoading(false);
     }

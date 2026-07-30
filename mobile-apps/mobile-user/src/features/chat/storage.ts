@@ -8,6 +8,8 @@ const GUEST_CLIENT_KEY = `mobile_chat_guest_client_v1_t${apiConfig.tenantId}_s${
 const LAST_CUSTOMER_CLIENT_KEY = `mobile_chat_last_customer_client_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const PUSH_ENABLED_KEY = `mobile_chat_push_enabled_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const PUSH_TOKEN_KEY = `mobile_chat_push_token_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+const CHAT_SETTINGS_CACHE_KEY = `mobile_chat_settings_cache_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+const CHAT_UNREAD_CACHE_KEY_PREFIX = `mobile_chat_unread_cache_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const THREAD_CACHE_KEY_PREFIX = `mobile_chat_thread_cache_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const IMPORTANT_MESSAGES_READ_KEY = `mobile_important_messages_read_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const IMPORTANT_MESSAGES_CACHE_KEY_PREFIX = `mobile_important_messages_cache_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
@@ -26,6 +28,11 @@ type ChatThreadCacheSnapshot = {
 };
 
 type ImportantMessageReadMap = Record<string, string>;
+type ChatUnreadCacheSnapshot = {
+  revision: number;
+  savedAt: string;
+  total: number;
+};
 type ImportantMessagesCacheSnapshot = {
   count: number;
   items: ImportantMessage[];
@@ -34,6 +41,7 @@ type ImportantMessagesCacheSnapshot = {
 };
 
 const THREAD_CACHE_MEMORY = new Map<string, ChatThreadCacheSnapshot>();
+const CHAT_UNREAD_CACHE_MEMORY = new Map<string, ChatUnreadCacheSnapshot>();
 let LAST_CHAT_PROFILE_MEMORY: ChatProfile | null = null;
 let LAST_CHAT_SETTINGS_MEMORY: ChatSettings | null = null;
 let LAST_CUSTOMER_CLIENT_MEMORY = '';
@@ -102,6 +110,62 @@ export async function saveChatPushToken(token: string) {
   } else {
     await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
   }
+}
+
+export async function readCachedChatSettings() {
+  if (LAST_CHAT_SETTINGS_MEMORY) return { ...LAST_CHAT_SETTINGS_MEMORY };
+  const raw = String(await AsyncStorage.getItem(CHAT_SETTINGS_CACHE_KEY).catch(() => '') || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    LAST_CHAT_SETTINGS_MEMORY = parsed as ChatSettings;
+    return { ...LAST_CHAT_SETTINGS_MEMORY };
+  } catch {
+    return null;
+  }
+}
+
+function getChatUnreadCacheKey(clientId: string) {
+  return `${CHAT_UNREAD_CACHE_KEY_PREFIX}_${String(clientId || '').trim()}`;
+}
+
+export async function readChatUnreadCache(clientId: string) {
+  const safeClientId = String(clientId || '').trim();
+  if (!safeClientId) return null;
+  const key = getChatUnreadCacheKey(safeClientId);
+  const memory = CHAT_UNREAD_CACHE_MEMORY.get(key);
+  if (memory) return { ...memory };
+  const raw = String(await AsyncStorage.getItem(key).catch(() => '') || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ChatUnreadCacheSnapshot>;
+    const total = Math.max(0, Number(parsed?.total || 0));
+    const revision = Math.max(0, Number(parsed?.revision || 0));
+    if (!Number.isFinite(total) || !Number.isFinite(revision)) return null;
+    const snapshot = {
+      revision,
+      savedAt: String(parsed?.savedAt || ''),
+      total,
+    };
+    CHAT_UNREAD_CACHE_MEMORY.set(key, snapshot);
+    return { ...snapshot };
+  } catch {
+    return null;
+  }
+}
+
+export function saveChatUnreadCache(clientId: string, total: number, revision: number) {
+  const safeClientId = String(clientId || '').trim();
+  if (!safeClientId) return;
+  const key = getChatUnreadCacheKey(safeClientId);
+  const snapshot: ChatUnreadCacheSnapshot = {
+    revision: Math.max(0, Number(revision || 0)),
+    savedAt: new Date().toISOString(),
+    total: Math.max(0, Number(total || 0)),
+  };
+  CHAT_UNREAD_CACHE_MEMORY.set(key, snapshot);
+  void AsyncStorage.setItem(key, JSON.stringify(snapshot)).catch(() => undefined);
 }
 
 function getThreadCacheKey(clientId: string) {
@@ -304,6 +368,11 @@ export function readLastChatSettingsSync() {
 
 export function saveLastChatSettings(settings: ChatSettings | null) {
   LAST_CHAT_SETTINGS_MEMORY = settings ? { ...settings } : null;
+  if (LAST_CHAT_SETTINGS_MEMORY) {
+    void AsyncStorage.setItem(CHAT_SETTINGS_CACHE_KEY, JSON.stringify(LAST_CHAT_SETTINGS_MEMORY)).catch(() => undefined);
+  } else {
+    void AsyncStorage.removeItem(CHAT_SETTINGS_CACHE_KEY).catch(() => undefined);
+  }
 }
 
 export async function resolveUserChatProfile(): Promise<ChatProfile> {

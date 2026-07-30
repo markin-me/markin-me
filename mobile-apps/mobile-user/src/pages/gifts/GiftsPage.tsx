@@ -3,8 +3,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import { ensureCheckoutBenefitsState, readCheckoutBenefitsState, type CheckoutBenefitsState } from '../../features/checkout';
-import { readCachedCustomerPassport, resolveAssetUrl, type CustomerBenefitCard } from '../../shared/api';
+import {
+  fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
+  readCachedCustomerPassport,
+  resolveAssetUrl,
+  type CustomerBenefitCard,
+} from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text, Screen } from '../../shared/ui';
 
@@ -52,19 +58,11 @@ export function GiftsPage() {
   const [isLoading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
 
-  const setStateFromBenefits = useCallback((state: CheckoutBenefitsState) => {
-    const nextItems = Array.isArray(state.preview?.gifts)
-      ? state.preview.gifts
-      : Array.isArray(state.sourceBenefits?.gifts)
-        ? state.sourceBenefits.gifts
-        : [];
-    setItems(nextItems);
-  }, []);
-
   const loadGifts = useCallback(async () => {
+    let hasCachedBenefits = false;
     const passport = await readCachedCustomerPassport();
     if (!passport?.token) {
-      setItems([]);
+      setItems((current) => (isSameCachedValue(current, []) ? current : []));
       setErrorText('Войдите в профиль, чтобы увидеть подарки.');
       setLoading(false);
       return;
@@ -72,23 +70,25 @@ export function GiftsPage() {
 
     setErrorText('');
     try {
-      const cachedState = await readCheckoutBenefitsState();
-      setStateFromBenefits(cachedState);
-      if (
-        (Array.isArray(cachedState.preview?.gifts) && cachedState.preview.gifts.length)
-        || (Array.isArray(cachedState.sourceBenefits?.gifts) && cachedState.sourceBenefits.gifts.length)
-      ) {
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token).catch(() => null);
+      hasCachedBenefits = cachedBenefits !== null;
+      if (cachedBenefits !== null) {
+        const cachedItems = Array.isArray(cachedBenefits.gifts) ? cachedBenefits.gifts : [];
+        setItems((current) => (isSameCachedValue(current, cachedItems) ? current : cachedItems));
         setLoading(false);
       }
 
-      const freshState = await ensureCheckoutBenefitsState();
-      setStateFromBenefits(freshState);
+      const freshBenefits = await fetchCustomerBenefits(passport.token);
+      const freshItems = Array.isArray(freshBenefits.gifts) ? freshBenefits.gifts : [];
+      setItems((current) => (isSameCachedValue(current, freshItems) ? current : freshItems));
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить подарки.');
+      if (!hasCachedBenefits) {
+        setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить подарки.');
+      }
     } finally {
       setLoading(false);
     }
-  }, [setStateFromBenefits]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {

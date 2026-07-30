@@ -37,6 +37,7 @@ import {
   fetchCatalogComboDetails,
   checkOrderStock,
   getMemoryCatalogComboDetails,
+  isSameCachedValue,
   readCachedCatalogComboDetails,
   resolveAssetUrl,
 } from '../../shared/api';
@@ -214,25 +215,31 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
     const shouldResetDraft = !cartLineId && resetForOpen && randomizedOpenKeyRef.current !== openKey;
     const nextDraft = shouldResetDraft ? resetComboDraft(nextCombo) : getComboDraft(nextCombo);
     if (shouldResetDraft) randomizedOpenKeyRef.current = openKey;
-    setCombo(nextCombo);
-    setDraft(cloneComboDraft(nextDraft));
+    setCombo((current) => isSameCachedValue(current, nextCombo) ? current : nextCombo);
+    setDraft((current) => isSameCachedValue(current, nextDraft) ? current : cloneComboDraft(nextDraft));
   }, [cartLineId, openNonce]);
 
   useEffect(() => {
     let isMounted = true;
+    let latestCombo = getMemoryCatalogComboDetails(comboId);
+    let hasCachedCombo = Boolean(latestCombo);
 
     async function loadCombo() {
       setErrorText('');
+      if (latestCombo && isMounted) applyCombo(latestCombo, true);
+
       const cached = await readCachedCatalogComboDetails(comboId);
       if (cached && isMounted) {
-        applyCombo(cached, true);
+        hasCachedCombo = true;
+        if (!isSameCachedValue(latestCombo, cached)) applyCombo(cached, true);
+        latestCombo = cached;
       }
 
       try {
         const fresh = await fetchCatalogComboDetails(comboId);
-        if (isMounted) applyCombo(fresh, true);
+        if (isMounted && !isSameCachedValue(latestCombo, fresh)) applyCombo(fresh, true);
       } catch (error) {
-        if (!cached && isMounted) setErrorText(error instanceof Error ? error.message : 'Комбо не найдено');
+        if (!hasCachedCombo && isMounted) setErrorText(error instanceof Error ? error.message : 'Комбо не найдено');
       }
     }
 
@@ -248,8 +255,8 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
       const memory = getMemoryCatalogComboDetails(comboId);
       if (!memory) return;
       const nextDraft = getComboDraft(memory);
-      setCombo(memory);
-      setDraft(cloneComboDraft(nextDraft));
+      setCombo((current) => isSameCachedValue(current, memory) ? current : memory);
+      setDraft((current) => isSameCachedValue(current, nextDraft) ? current : cloneComboDraft(nextDraft));
     }, [comboId]),
   );
 

@@ -45,6 +45,9 @@ const CHECKOUT_CART_SUMMARY_KEY = 'mobile_checkout_cart_summary_v1';
 const CHECKOUT_PROMO_CODE_KEY = 'mobile_checkout_promo_code_v1';
 const CHECKOUT_DISCOUNT_SELECTION_KEY = 'mobile_checkout_discount_selection_v1';
 const CHECKOUT_BENEFITS_SELECTION_KEY = 'mobile_checkout_benefits_selection_v1';
+let memoryFulfillmentSelection: FulfillmentSelection | null = null;
+let memoryCheckoutCartSummary: CheckoutCartSummary | null | undefined;
+let memoryCheckoutBenefitsSelection: CheckoutBenefitsSelection | null = null;
 
 const defaultFulfillmentSelection: FulfillmentSelection = {
   addressId: null,
@@ -158,37 +161,44 @@ async function writeCheckoutBenefitsSelection(selection: CheckoutBenefitsSelecti
     discountId: normalized.discountId,
     source: normalized.discountSource,
   });
+  memoryCheckoutBenefitsSelection = normalized;
   return normalized;
 }
 
 export async function readFulfillmentSelection() {
+  if (memoryFulfillmentSelection) return memoryFulfillmentSelection;
   try {
     const raw = await AsyncStorage.getItem(FULFILLMENT_SELECTION_KEY);
-    return normalizeFulfillmentSelection(raw ? JSON.parse(raw) : defaultFulfillmentSelection);
+    memoryFulfillmentSelection = normalizeFulfillmentSelection(raw ? JSON.parse(raw) : defaultFulfillmentSelection);
   } catch {
-    return defaultFulfillmentSelection;
+    memoryFulfillmentSelection = defaultFulfillmentSelection;
   }
+  return memoryFulfillmentSelection;
 }
 
 export async function saveFulfillmentSelection(selection: FulfillmentSelection) {
   const normalized = normalizeFulfillmentSelection(selection);
   await AsyncStorage.setItem(FULFILLMENT_SELECTION_KEY, JSON.stringify(normalized));
+  memoryFulfillmentSelection = normalized;
   return normalized;
 }
 
 export async function readCheckoutCartSummary() {
+  if (memoryCheckoutCartSummary !== undefined) return memoryCheckoutCartSummary;
   try {
     const raw = await AsyncStorage.getItem(CHECKOUT_CART_SUMMARY_KEY);
-    return normalizeCheckoutCartSummary(raw ? JSON.parse(raw) : null);
+    memoryCheckoutCartSummary = normalizeCheckoutCartSummary(raw ? JSON.parse(raw) : null);
   } catch {
-    return null;
+    memoryCheckoutCartSummary = null;
   }
+  return memoryCheckoutCartSummary;
 }
 
 export async function saveCheckoutCartSummary(summary: CheckoutCartSummary) {
   const normalized = normalizeCheckoutCartSummary(summary);
   if (!normalized) return null;
   await AsyncStorage.setItem(CHECKOUT_CART_SUMMARY_KEY, JSON.stringify(normalized));
+  memoryCheckoutCartSummary = normalized;
   return normalized;
 }
 
@@ -238,10 +248,12 @@ export async function saveCheckoutDiscountSelection(selection: CheckoutDiscountS
 }
 
 export async function readCheckoutBenefitsSelection() {
+  if (memoryCheckoutBenefitsSelection) return memoryCheckoutBenefitsSelection;
   try {
     const raw = await AsyncStorage.getItem(CHECKOUT_BENEFITS_SELECTION_KEY);
     const fullSelection = normalizeCheckoutBenefitsSelection(raw ? JSON.parse(raw) : null);
     if (fullSelection.discountId || fullSelection.promoCode || fullSelection.promoRewardId) {
+      memoryCheckoutBenefitsSelection = fullSelection;
       return fullSelection;
     }
   } catch {
@@ -252,15 +264,34 @@ export async function readCheckoutBenefitsSelection() {
     readCheckoutPromoCode().catch(() => ''),
     readCheckoutDiscountSelection().catch(() => ({ discountId: null, source: null })),
   ]);
-  return normalizeCheckoutBenefitsSelection({
+  memoryCheckoutBenefitsSelection = normalizeCheckoutBenefitsSelection({
     discountId: discountSelection.discountId,
     discountSource: discountSelection.source,
     promoCode,
     promoRewardId: null,
     promoSource: promoCode ? 'promo_code' : null,
   });
+  return memoryCheckoutBenefitsSelection;
 }
 
 export async function saveCheckoutBenefitsSelection(selection: CheckoutBenefitsSelection) {
   return writeCheckoutBenefitsSelection(selection);
+}
+
+export async function clearCustomerCheckoutCache() {
+  const fulfillmentSelection = await readFulfillmentSelection();
+  if (fulfillmentSelection.addressId != null) {
+    await saveFulfillmentSelection({
+      ...fulfillmentSelection,
+      addressId: null,
+    });
+  }
+  memoryCheckoutCartSummary = null;
+  memoryCheckoutBenefitsSelection = normalizeCheckoutBenefitsSelection(null);
+  await AsyncStorage.multiRemove([
+    CHECKOUT_CART_SUMMARY_KEY,
+    CHECKOUT_PROMO_CODE_KEY,
+    CHECKOUT_DISCOUNT_SELECTION_KEY,
+    CHECKOUT_BENEFITS_SELECTION_KEY,
+  ]);
 }

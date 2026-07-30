@@ -40,7 +40,11 @@ import {
   type CustomerPassport,
   type CustomerProfile,
 } from '../../shared/api';
-import { ensureCheckoutBenefitsState } from '../../features/checkout';
+import {
+  clearCheckoutBenefitsCacheForToken,
+  clearCustomerCheckoutCache,
+  ensureCheckoutBenefitsState,
+} from '../../features/checkout';
 import { theme } from '../../shared/config/theme';
 import { BottomSheet } from '../../shared/ui/BottomSheet';
 import { Screen } from '../../shared/ui/Screen';
@@ -432,6 +436,8 @@ export function ProfilePage() {
         } catch (error) {
           if (error instanceof Error && error.message === 'UNAUTHORIZED') {
             await clearCustomerPassport();
+            await clearCheckoutBenefitsCacheForToken(cached.token);
+            await clearCustomerCheckoutCache();
             if (isMounted) setPassport(null);
           }
         } finally {
@@ -478,12 +484,14 @@ export function ProfilePage() {
     } catch (error) {
       if (error instanceof Error && error.message === 'UNAUTHORIZED') {
         await clearCustomerPassport();
+        await clearCheckoutBenefitsCacheForToken(passport?.token || '');
+        await clearCustomerCheckoutCache();
         setPassport(null);
       }
     } finally {
       setRefreshing(false);
     }
-  }, [refreshing]);
+  }, [passport?.token, refreshing]);
 
   const bonusSummary = useMemo(
     () => getBonusCardSummary(passport?.bonusConfig || null, passport?.bonusFavoriteCategories || null),
@@ -592,7 +600,7 @@ export function ProfilePage() {
       token,
       updatedAt: new Date().toISOString(),
     };
-    await saveCustomerPassport(seedPassport);
+    await saveCustomerPassport(seedPassport, { activate: true });
     setPassport(seedPassport);
     void ensureCheckoutBenefitsState().catch(() => null);
     resetAuthForm();

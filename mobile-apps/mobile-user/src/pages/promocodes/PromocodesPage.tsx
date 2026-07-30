@@ -11,7 +11,13 @@ import {
   type CheckoutBenefitsState,
   type CheckoutBenefitsSelection,
 } from '../../features/checkout';
-import { readCachedCustomerPassport, type CustomerBenefitCard } from '../../shared/api';
+import {
+  fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
+  readCachedCustomerPassport,
+  type CustomerBenefitCard,
+} from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text, Screen } from '../../shared/ui';
 
@@ -78,6 +84,43 @@ function isVisiblePromo(item: CustomerBenefitCard) {
   return usageLimit <= 0 || usageCount < usageLimit;
 }
 
+function getCheckoutPromoItems(state: CheckoutBenefitsState | null) {
+  return Array.isArray(state?.preview?.promo_codes) ? state.preview.promo_codes : [];
+}
+
+function mergePromoApplicability(
+  baseItems: CustomerBenefitCard[],
+  checkoutItems: CustomerBenefitCard[],
+) {
+  if (!baseItems.length || !checkoutItems.length) return baseItems;
+  const checkoutByKey = new Map<string, CustomerBenefitCard>();
+  checkoutItems.forEach((item) => {
+    const key = getPromoKey(item);
+    if (key) checkoutByKey.set(key, item);
+  });
+  const applicabilityKeys = [
+    'apply_scope_text',
+    'disabled_reason',
+    'disabled_reason_code',
+    'disabled_reason_text',
+    'is_applicable',
+    'is_selected',
+    'progress_text',
+    'status_text',
+  ] as const;
+  return baseItems.map((item) => {
+    const checkoutItem = checkoutByKey.get(getPromoKey(item));
+    if (!checkoutItem) return item;
+    const nextItem: CustomerBenefitCard = { ...item };
+    applicabilityKeys.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(checkoutItem, key)) {
+        (nextItem as Record<string, unknown>)[key] = checkoutItem[key];
+      }
+    });
+    return nextItem;
+  });
+}
+
 function PromocodeCard({
   isApplying,
   isSelected,
@@ -138,20 +181,11 @@ export function PromocodesPage() {
   const [activePromoKey, setActivePromoKey] = useState('');
   const [applyingPromoKey, setApplyingPromoKey] = useState('');
 
-  const setStateFromBenefits = useCallback((state: CheckoutBenefitsState) => {
-    const nextItems = Array.isArray(state.preview?.promo_codes)
-      ? state.preview.promo_codes
-      : Array.isArray(state.sourceBenefits?.promo_codes)
-        ? state.sourceBenefits.promo_codes
-        : [];
-    setItems(nextItems);
-    setActivePromoKey(getSelectionPromoKey(state.currentSelection));
-  }, []);
-
   const loadPromocodes = useCallback(async () => {
+    let hasCachedBenefits = false;
     const passport = await readCachedCustomerPassport();
     if (!passport?.token) {
-      setItems([]);
+      setItems((current) => (isSameCachedValue(current, []) ? current : []));
       setErrorText('Войдите в профиль, чтобы увидеть промокоды.');
       setLoading(false);
       return;
@@ -159,23 +193,45 @@ export function PromocodesPage() {
 
     setErrorText('');
     try {
-      const cachedState = await readCheckoutBenefitsState();
-      setStateFromBenefits(cachedState);
-      if (
-        (Array.isArray(cachedState.preview?.promo_codes) && cachedState.preview.promo_codes.length)
-        || (Array.isArray(cachedState.sourceBenefits?.promo_codes) && cachedState.sourceBenefits.promo_codes.length)
-      ) {
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token).catch(() => null);
+      hasCachedBenefits = cachedBenefits !== null;
+      let baseItems = Array.isArray(cachedBenefits?.promo_codes) ? cachedBenefits.promo_codes : [];
+      if (hasCachedBenefits) {
+        setItems((current) => (isSameCachedValue(current, baseItems) ? current : baseItems));
         setLoading(false);
       }
 
-      const freshState = await ensureCheckoutBenefitsState();
-      setStateFromBenefits(freshState);
+      const cachedState = await readCheckoutBenefitsState().catch(() => null);
+      if (cachedState) {
+        const cachedItems = mergePromoApplicability(baseItems, getCheckoutPromoItems(cachedState));
+        setItems((current) => (isSameCachedValue(current, cachedItems) ? current : cachedItems));
+        const cachedPromoKey = getSelectionPromoKey(cachedState.currentSelection);
+        setActivePromoKey((current) => (current === cachedPromoKey ? current : cachedPromoKey));
+      }
+
+      const [benefitsResult, checkoutResult] = await Promise.allSettled([
+        fetchCustomerBenefits(passport.token),
+        ensureCheckoutBenefitsState(),
+      ]);
+      if (benefitsResult.status === 'fulfilled') {
+        baseItems = Array.isArray(benefitsResult.value.promo_codes) ? benefitsResult.value.promo_codes : [];
+      }
+      const checkoutState = checkoutResult.status === 'fulfilled' ? checkoutResult.value : cachedState;
+      const freshItems = mergePromoApplicability(baseItems, getCheckoutPromoItems(checkoutState));
+      setItems((current) => (isSameCachedValue(current, freshItems) ? current : freshItems));
+      if (checkoutState) {
+        const freshPromoKey = getSelectionPromoKey(checkoutState.currentSelection);
+        setActivePromoKey((current) => (current === freshPromoKey ? current : freshPromoKey));
+      }
+      if (benefitsResult.status === 'rejected' && !hasCachedBenefits) throw benefitsResult.reason;
     } catch (error) {
-      setErrorText(getBenefitsPageErrorText(error, 'Не удалось загрузить промокоды.'));
+      if (!hasCachedBenefits) {
+        setErrorText(getBenefitsPageErrorText(error, 'Не удалось загрузить промокоды.'));
+      }
     } finally {
       setLoading(false);
     }
-  }, [setStateFromBenefits]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -193,13 +249,16 @@ export function PromocodesPage() {
       const state = promoKey === activePromoKey
         ? await clearCheckoutPromoSelection()
         : await applyCheckoutPromoCardSelection(item);
-      setStateFromBenefits(state);
+      const nextItems = mergePromoApplicability(items, getCheckoutPromoItems(state));
+      setItems((current) => (isSameCachedValue(current, nextItems) ? current : nextItems));
+      const nextPromoKey = getSelectionPromoKey(state.currentSelection);
+      setActivePromoKey((current) => (current === nextPromoKey ? current : nextPromoKey));
     } catch (error) {
       setErrorText(getBenefitsPageErrorText(error, 'Не удалось применить промокод.'));
     } finally {
       setApplyingPromoKey('');
     }
-  }, [activePromoKey, applyingPromoKey, setStateFromBenefits]);
+  }, [activePromoKey, applyingPromoKey, items]);
 
   const countText = useMemo(() => String(items.length), [items.length]);
 

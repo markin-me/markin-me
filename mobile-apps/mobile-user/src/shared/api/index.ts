@@ -40,6 +40,8 @@ export type CatalogCategoryCount = {
 export type MobileCatalogIndex = {
   categories: CatalogCategory[];
   categoryCounts: Record<string, CatalogCategoryCount>;
+  content_revision?: string;
+  availability_revision?: string;
   generated_at?: string;
   store_id?: number;
   tenant_id?: number;
@@ -287,6 +289,7 @@ export type OrderStockCheckPayload = {
 };
 
 export type ProductsBatchAvailabilityPayload = {
+  availability_revision?: string;
   data?: Record<string, Record<string, unknown>>;
   stock_levels?: Array<Record<string, unknown>>;
 };
@@ -384,9 +387,13 @@ let memoryCatalogSnapshot: MobileCatalogSnapshot | null = null;
 let memoryCatalogIndex: MobileCatalogIndex | null = null;
 const memoryCatalogCategories = new Map<string, CatalogByCategoryPayload>();
 let memoryFullProductPassports: Record<string, FullProductPassport> = {};
+let fullProductPassportsHydrated = false;
+let fullProductPassportsHydrationRequest: Promise<Record<string, FullProductPassport>> | null = null;
 const memoryComboDetails = new Map<number, CatalogComboDetails>();
 let memoryUnitConversions: UnitConversion[] | null = null;
 let memoryCustomerPassport: CustomerPassport | null = null;
+let customerPassportClearInProgress = false;
+const inactiveCustomerTokens = new Set<string>();
 const customerPassportListeners = new Set<() => void>();
 let memoryPublicOrderConfig: PublicOrderConfig | null = null;
 let memoryTenantStores: TenantStore[] | null = null;
@@ -397,11 +404,14 @@ const memoryCustomerBenefits = new Map<string, CustomerBenefits>();
 const memoryCustomerDiscounts = new Map<string, CustomerBenefitCard[]>();
 const memoryCustomerOrderDetails = new Map<string, CustomerOrder | null>();
 const memoryCustomerOrders = new Map<string, CustomerOrdersPayload>();
+const bonusTransactionsCacheUpdateRequests = new Map<string, Promise<void>>();
+const customerOrdersCacheUpdateRequests = new Map<string, Promise<void>>();
 const passportLoadRequests = new Map<number, Promise<CatalogProductPassport | null>>();
 const refreshedCatalogPassportIds = new Set<number>();
 const fullPassportLoadRequests = new Map<number, Promise<FullProductPassport | null>>();
 const fullPassportBatchLoadRequests = new Map<string, Promise<Record<string, FullProductPassport>>>();
 const comboDetailsLoadRequests = new Map<number, Promise<CatalogComboDetails>>();
+const readApiRequests = new Map<string, Promise<ApiResponse<unknown>>>();
 const DELIVERY_QUOTE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function buildUrl(path: string) {
@@ -416,6 +426,26 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function requestApi<T>(path: string, init?: RequestInit): Promise<ApiResponse<T>> {
+  const method = String(init?.method || 'GET').trim().toUpperCase();
+  const requestKey = method === 'GET' || method === 'HEAD'
+    ? stableStringify([method, buildUrl(path), init?.headers || {}])
+    : '';
+  const pending = requestKey ? readApiRequests.get(requestKey) : null;
+  if (pending) return pending as Promise<ApiResponse<T>>;
+
+  const request = executeRequestApi<T>(path, init);
+  const sharedRequest = request as Promise<ApiResponse<unknown>>;
+  if (requestKey) readApiRequests.set(requestKey, sharedRequest);
+  try {
+    return await request;
+  } finally {
+    if (requestKey && readApiRequests.get(requestKey) === sharedRequest) {
+      readApiRequests.delete(requestKey);
+    }
+  }
+}
+
+async function executeRequestApi<T>(path: string, init?: RequestInit): Promise<ApiResponse<T>> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45000);
 
@@ -721,6 +751,21 @@ function getCustomerScopedStorageKey(namespace: string, token: string, suffix = 
   return `mobile_${namespace}_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}_u${hashText(String(token || '').trim())}${suffix}`;
 }
 
+function getCustomerStorageScope(token: string) {
+  return `_t${apiConfig.tenantId}_s${apiConfig.storeId}_u${hashText(String(token || '').trim())}`;
+}
+
+export function isCustomerCacheTokenActive(token: string) {
+  const safeToken = String(token || '').trim();
+  return Boolean(safeToken) && !inactiveCustomerTokens.has(safeToken);
+}
+
+function clearCustomerMemoryScope<T>(cache: Map<string, T>, scope: string) {
+  for (const key of cache.keys()) {
+    if (key.includes(scope)) cache.delete(key);
+  }
+}
+
 async function readCachedJson<T>(key: string, normalize: (value: unknown) => T | null) {
   try {
     const raw = await AsyncStorage.getItem(key);
@@ -740,8 +785,12 @@ function normalizeMobileCatalogSnapshot(value: unknown): MobileCatalogSnapshot |
   if (!source || !source.version) return null;
 
   return {
+    availability_revision: source.availability_revision == null
+      ? undefined
+      : String(source.availability_revision || '').trim() || undefined,
     categories: Array.isArray(source.categories) ? source.categories : [],
     combosByCategory: source.combosByCategory && typeof source.combosByCategory === 'object' ? source.combosByCategory : {},
+    content_revision: String(source.content_revision || source.version),
     generated_at: source.generated_at,
     productPassports: source.productPassports && typeof source.productPassports === 'object' ? source.productPassports : {},
     productsByCategory: source.productsByCategory && typeof source.productsByCategory === 'object' ? source.productsByCategory : {},
@@ -776,8 +825,12 @@ function normalizeMobileCatalogIndex(value: unknown): MobileCatalogIndex | null 
   });
 
   return {
+    availability_revision: source.availability_revision == null
+      ? undefined
+      : String(source.availability_revision || '').trim() || undefined,
     categories: Array.isArray(source.categories) ? source.categories : [],
     categoryCounts,
+    content_revision: String(source.content_revision || source.version),
     generated_at: source.generated_at,
     store_id: source.store_id,
     tenant_id: source.tenant_id,
@@ -902,6 +955,35 @@ function normalizeBonusTransactions(value: unknown): BonusTransaction[] | null {
   return Array.isArray(value) ? value : null;
 }
 
+function mergeBonusTransactionLists(
+  cached: BonusTransaction[],
+  fresh: BonusTransaction[],
+) {
+  const byId = new Map<number, BonusTransaction>();
+  const withoutId: BonusTransaction[] = [];
+  cached.forEach((transaction) => {
+    const id = Number(transaction.id || 0);
+    if (id > 0) {
+      byId.set(id, transaction);
+    } else {
+      withoutId.push(transaction);
+    }
+  });
+  fresh.forEach((transaction) => {
+    const id = Number(transaction.id || 0);
+    if (!(id > 0)) {
+      withoutId.push(transaction);
+      return;
+    }
+    const previous = byId.get(id);
+    byId.set(id, previous ? { ...previous, ...transaction } : transaction);
+  });
+  return [
+    ...Array.from(byId.values()).sort((left, right) => Number(right.id || 0) - Number(left.id || 0)),
+    ...withoutId,
+  ];
+}
+
 function normalizeCustomerBenefitCards(value: unknown): CustomerBenefitCard[] | null {
   return Array.isArray(value) ? value : null;
 }
@@ -932,6 +1014,35 @@ function normalizeCustomerOrdersPayload(value: unknown): CustomerOrdersPayload |
       : { has_more: false },
     summary: source.summary && typeof source.summary === 'object' ? source.summary : {},
   };
+}
+
+function mergeCustomerOrderLists(cached: CustomerOrder[], fresh: CustomerOrder[], freshFirst: boolean) {
+  const latestById = new Map<number, CustomerOrder>();
+  cached.forEach((order) => {
+    const id = Number(order.id || 0);
+    if (id > 0) latestById.set(id, order);
+  });
+  fresh.forEach((order) => {
+    const id = Number(order.id || 0);
+    if (!(id > 0)) return;
+    const previous = latestById.get(id);
+    latestById.set(id, previous ? { ...previous, ...order } : order);
+  });
+
+  const result: CustomerOrder[] = [];
+  const seen = new Set<number>();
+  const ordered = freshFirst ? [...fresh, ...cached] : [...cached, ...fresh];
+  ordered.forEach((order) => {
+    const id = Number(order.id || 0);
+    if (!(id > 0)) {
+      result.push(order);
+      return;
+    }
+    if (seen.has(id)) return;
+    seen.add(id);
+    result.push(latestById.get(id) || order);
+  });
+  return result;
 }
 
 export function getMemoryMobileCatalogSnapshot() {
@@ -997,6 +1108,8 @@ export function getCatalogSnapshotProduct(productId: number): CatalogProduct | n
 }
 
 export async function readCachedMobileCatalogSnapshot() {
+  if (memoryCatalogSnapshot) return memoryCatalogSnapshot;
+
   try {
     const raw = await AsyncStorage.getItem(getMobileSnapshotStorageKey());
     const snapshot = normalizeMobileCatalogSnapshot(raw ? JSON.parse(raw) : null);
@@ -1017,6 +1130,8 @@ export async function readCachedMobileCatalogSnapshot() {
 }
 
 export async function readCachedMobileCatalogIndex() {
+  if (memoryCatalogIndex) return memoryCatalogIndex;
+
   const cached = await readCachedJson(getMobileCatalogIndexStorageKey(), normalizeMobileCatalogIndex);
   if (cached) memoryCatalogIndex = cached;
   return cached;
@@ -1087,19 +1202,36 @@ export async function saveMobileCatalogSnapshot(snapshot: MobileCatalogSnapshot)
 }
 
 export async function readCachedFullProductPassports() {
-  let cached = await readCachedJson(getFullProductPassportsStorageKey(), normalizeFullProductPassportMap);
-  if (cached && memoryCatalogSnapshot) {
-    const merged = mergeFullProductPassportsWithSnapshotProducts(memoryCatalogSnapshot, cached);
-    if (merged.changed) {
-      cached = merged.passports;
-      await saveCachedJson(getFullProductPassportsStorageKey(), cached);
+  if (fullProductPassportsHydrated) return memoryFullProductPassports;
+  if (fullProductPassportsHydrationRequest) return fullProductPassportsHydrationRequest;
+
+  fullProductPassportsHydrationRequest = (async () => {
+    let cached = await readCachedJson(getFullProductPassportsStorageKey(), normalizeFullProductPassportMap);
+    let mergedPassports = {
+      ...(cached || {}),
+      ...memoryFullProductPassports,
+    };
+    if (memoryCatalogSnapshot) {
+      const merged = mergeFullProductPassportsWithSnapshotProducts(memoryCatalogSnapshot, mergedPassports);
+      mergedPassports = merged.passports;
     }
+    memoryFullProductPassports = mergedPassports;
+    fullProductPassportsHydrated = true;
+    if (!isSameCachedValue(cached || {}, mergedPassports)) {
+      await saveCachedJson(getFullProductPassportsStorageKey(), mergedPassports);
+    }
+    return memoryFullProductPassports;
+  })();
+
+  try {
+    return await fullProductPassportsHydrationRequest;
+  } finally {
+    fullProductPassportsHydrationRequest = null;
   }
-  if (cached) memoryFullProductPassports = { ...memoryFullProductPassports, ...cached };
-  return cached || {};
 }
 
 export async function saveFullProductPassports(passports: Record<string, FullProductPassport>) {
+  await readCachedFullProductPassports();
   const normalized = normalizeFullProductPassportMap(passports);
   memoryFullProductPassports = {
     ...memoryFullProductPassports,
@@ -1112,6 +1244,8 @@ export async function saveFullProductPassports(passports: Record<string, FullPro
 export async function readCachedCatalogComboDetails(comboId: number) {
   const id = Number(comboId);
   if (!Number.isFinite(id) || id <= 0) return null;
+  const memory = memoryComboDetails.get(id);
+  if (memory) return memory;
 
   try {
     const raw = await AsyncStorage.getItem(getComboDetailsStorageKey(id));
@@ -1132,6 +1266,8 @@ export async function saveCatalogComboDetails(combo: CatalogComboDetails) {
 }
 
 export async function readCachedUnitConversions() {
+  if (memoryUnitConversions !== null) return memoryUnitConversions;
+
   const cached = await readCachedJson(getUnitConversionsStorageKey(), normalizeUnitConversions);
   if (cached) memoryUnitConversions = cached;
   return cached || [];
@@ -1145,19 +1281,38 @@ async function saveUnitConversions(conversions: UnitConversion[]) {
 }
 
 export async function readCachedCustomerPassport() {
+  if (customerPassportClearInProgress) return null;
+  if (memoryCustomerPassport) {
+    return isCustomerCacheTokenActive(memoryCustomerPassport.token) ? memoryCustomerPassport : null;
+  }
+
   try {
     const raw = await AsyncStorage.getItem(getCustomerPassportStorageKey());
     const passport = normalizeCustomerPassport(raw ? JSON.parse(raw) : null);
-    if (passport) memoryCustomerPassport = passport;
+    if (
+      passport
+      && !customerPassportClearInProgress
+      && isCustomerCacheTokenActive(passport.token)
+    ) {
+      memoryCustomerPassport = passport;
+    }
+    if (customerPassportClearInProgress || (passport && !isCustomerCacheTokenActive(passport.token))) {
+      return null;
+    }
     return passport;
   } catch {
     return null;
   }
 }
 
-export async function saveCustomerPassport(passport: CustomerPassport) {
+export async function saveCustomerPassport(
+  passport: CustomerPassport,
+  options: { activate?: boolean } = {},
+) {
   const normalized = normalizeCustomerPassport(passport);
   if (!normalized) return null;
+  if (options.activate) inactiveCustomerTokens.delete(normalized.token);
+  if (customerPassportClearInProgress || !isCustomerCacheTokenActive(normalized.token)) return null;
   memoryCustomerPassport = normalized;
   await AsyncStorage.setItem(getCustomerPassportStorageKey(), JSON.stringify(normalized));
   emitCustomerPassportChanged();
@@ -1165,9 +1320,37 @@ export async function saveCustomerPassport(passport: CustomerPassport) {
 }
 
 export async function clearCustomerPassport() {
+  const passport = memoryCustomerPassport || await readCachedCustomerPassport();
+  const token = String(passport?.token || '').trim();
+  if (token) inactiveCustomerTokens.add(token);
+  customerPassportClearInProgress = true;
   memoryCustomerPassport = null;
-  await AsyncStorage.removeItem(getCustomerPassportStorageKey());
-  emitCustomerPassportChanged();
+  const passportKey = getCustomerPassportStorageKey();
+
+  try {
+    if (token) {
+      const scope = getCustomerStorageScope(token);
+      clearCustomerMemoryScope(memoryBonusReferrals, scope);
+      clearCustomerMemoryScope(memoryBonusTransactions, scope);
+      clearCustomerMemoryScope(memoryCustomerAddresses, scope);
+      clearCustomerMemoryScope(memoryCustomerBenefits, scope);
+      clearCustomerMemoryScope(memoryCustomerDiscounts, scope);
+      clearCustomerMemoryScope(memoryCustomerOrderDetails, scope);
+      clearCustomerMemoryScope(memoryCustomerOrders, scope);
+      clearCustomerMemoryScope(bonusTransactionsCacheUpdateRequests, scope);
+      clearCustomerMemoryScope(customerOrdersCacheUpdateRequests, scope);
+
+      const keys = await AsyncStorage.getAllKeys().catch(() => []);
+      const customerKeys = keys.filter((key) => key.includes(scope));
+      await AsyncStorage.multiRemove(Array.from(new Set([...customerKeys, passportKey])));
+    } else {
+      await AsyncStorage.removeItem(passportKey);
+    }
+  } finally {
+    memoryCustomerPassport = null;
+    customerPassportClearInProgress = false;
+    emitCustomerPassportChanged();
+  }
 }
 
 export async function readCachedTenantStores() {
@@ -1198,7 +1381,7 @@ export async function savePublicOrderConfig(config: PublicOrderConfig | null) {
 
 export async function readCachedCustomerAddresses(token: string) {
   const safeToken = String(token || '').trim();
-  if (!safeToken) return [];
+  if (!isCustomerCacheTokenActive(safeToken)) return [];
   const key = getCustomerScopedStorageKey('customer_addresses', safeToken);
   const memory = memoryCustomerAddresses.get(key);
   if (memory) return memory;
@@ -1214,7 +1397,7 @@ export async function readCachedCustomerAddresses(token: string) {
 export async function saveCustomerAddresses(token: string, addresses: CustomerAddress[]) {
   const safeToken = String(token || '').trim();
   const normalized = normalizeCustomerAddresses(addresses) || [];
-  if (!safeToken) return normalized;
+  if (!isCustomerCacheTokenActive(safeToken)) return normalized;
   const key = getCustomerScopedStorageKey('customer_addresses', safeToken);
   const previous = memoryCustomerAddresses.get(key)
     || (memoryCustomerPassport?.token === safeToken ? normalizeCustomerAddresses(memoryCustomerPassport.addresses) || [] : []);
@@ -1233,7 +1416,7 @@ export async function saveCustomerAddresses(token: string, addresses: CustomerAd
 
 export async function readCachedCustomerBenefits(token: string) {
   const safeToken = String(token || '').trim();
-  if (!safeToken) return null;
+  if (!isCustomerCacheTokenActive(safeToken)) return null;
   const key = getCustomerScopedStorageKey('customer_benefits', safeToken);
   const memory = memoryCustomerBenefits.get(key);
   if (memory) return memory;
@@ -1245,7 +1428,7 @@ export async function readCachedCustomerBenefits(token: string) {
 export async function saveCustomerBenefits(token: string, benefits: CustomerBenefits) {
   const safeToken = String(token || '').trim();
   const normalized = normalizeCustomerBenefits(benefits);
-  if (!safeToken || !normalized) return normalized;
+  if (!isCustomerCacheTokenActive(safeToken) || !normalized) return normalized;
   const key = getCustomerScopedStorageKey('customer_benefits', safeToken);
   memoryCustomerBenefits.set(key, normalized);
   await saveCachedJson(key, normalized);
@@ -1254,7 +1437,7 @@ export async function saveCustomerBenefits(token: string, benefits: CustomerBene
 
 export async function readCachedCustomerDiscounts(token: string) {
   const safeToken = String(token || '').trim();
-  if (!safeToken) return [];
+  if (!isCustomerCacheTokenActive(safeToken)) return [];
   const key = getCustomerScopedStorageKey('customer_discounts', safeToken);
   const memory = memoryCustomerDiscounts.get(key);
   if (memory) return memory;
@@ -1266,7 +1449,7 @@ export async function readCachedCustomerDiscounts(token: string) {
 export async function saveCustomerDiscounts(token: string, discounts: CustomerBenefitCard[]) {
   const safeToken = String(token || '').trim();
   const normalized = normalizeCustomerBenefitCards(discounts) || [];
-  if (!safeToken) return normalized;
+  if (!isCustomerCacheTokenActive(safeToken)) return normalized;
   const key = getCustomerScopedStorageKey('customer_discounts', safeToken);
   memoryCustomerDiscounts.set(key, normalized);
   await saveCachedJson(key, normalized);
@@ -1275,7 +1458,7 @@ export async function saveCustomerDiscounts(token: string, discounts: CustomerBe
 
 export async function readCachedBonusReferrals(token: string) {
   const safeToken = String(token || '').trim();
-  if (!safeToken) return null;
+  if (!isCustomerCacheTokenActive(safeToken)) return null;
   const key = getCustomerScopedStorageKey('bonus_referrals', safeToken);
   const memory = memoryBonusReferrals.get(key);
   if (memory) return memory;
@@ -1287,7 +1470,7 @@ export async function readCachedBonusReferrals(token: string) {
 export async function saveBonusReferrals(token: string, referrals: BonusReferrals) {
   const safeToken = String(token || '').trim();
   const normalized = normalizeBonusReferrals(referrals);
-  if (!safeToken || !normalized) return normalized;
+  if (!isCustomerCacheTokenActive(safeToken) || !normalized) return normalized;
   const key = getCustomerScopedStorageKey('bonus_referrals', safeToken);
   memoryBonusReferrals.set(key, normalized);
   await saveCachedJson(key, normalized);
@@ -1296,7 +1479,7 @@ export async function saveBonusReferrals(token: string, referrals: BonusReferral
 
 export async function readCachedBonusTransactions(token: string, type?: string) {
   const safeToken = String(token || '').trim();
-  if (!safeToken) return [];
+  if (!isCustomerCacheTokenActive(safeToken)) return [];
   const key = getCustomerScopedStorageKey('bonus_transactions', safeToken, `_f${hashText(String(type || 'all'))}`);
   const memory = memoryBonusTransactions.get(key);
   if (memory) return memory;
@@ -1305,19 +1488,51 @@ export async function readCachedBonusTransactions(token: string, type?: string) 
   return cached || [];
 }
 
+export async function hasCachedBonusTransactions(token: string, type?: string) {
+  const safeToken = String(token || '').trim();
+  if (!isCustomerCacheTokenActive(safeToken)) return false;
+  const key = getCustomerScopedStorageKey('bonus_transactions', safeToken, `_f${hashText(String(type || 'all'))}`);
+  if (memoryBonusTransactions.has(key)) return true;
+  return (await AsyncStorage.getItem(key).catch(() => null)) !== null;
+}
+
 export async function saveBonusTransactions(token: string, transactions: BonusTransaction[], type?: string) {
   const safeToken = String(token || '').trim();
   const normalized = normalizeBonusTransactions(transactions) || [];
-  if (!safeToken) return normalized;
+  if (!isCustomerCacheTokenActive(safeToken)) return normalized;
   const key = getCustomerScopedStorageKey('bonus_transactions', safeToken, `_f${hashText(String(type || 'all'))}`);
   memoryBonusTransactions.set(key, normalized);
   await saveCachedJson(key, normalized);
   return normalized;
 }
 
+async function updateBonusTransactionsCacheSerially(
+  token: string,
+  type: string | undefined,
+  update: () => Promise<void>,
+) {
+  const safeToken = String(token || '').trim();
+  if (!isCustomerCacheTokenActive(safeToken)) return;
+  const key = getCustomerScopedStorageKey(
+    'bonus_transactions_update',
+    safeToken,
+    `_f${hashText(String(type || 'all'))}`,
+  );
+  const previous = bonusTransactionsCacheUpdateRequests.get(key) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(update);
+  bonusTransactionsCacheUpdateRequests.set(key, next);
+  try {
+    await next;
+  } finally {
+    if (bonusTransactionsCacheUpdateRequests.get(key) === next) {
+      bonusTransactionsCacheUpdateRequests.delete(key);
+    }
+  }
+}
+
 export async function readCachedCustomerOrders(token: string, statusIsFinal: 0 | 1) {
   const safeToken = String(token || '').trim();
-  if (!safeToken) return null;
+  if (!isCustomerCacheTokenActive(safeToken)) return null;
   const key = getCustomerScopedStorageKey('customer_orders', safeToken, `_s${statusIsFinal}`);
   const memory = memoryCustomerOrders.get(key);
   if (memory) return memory;
@@ -1329,32 +1544,71 @@ export async function readCachedCustomerOrders(token: string, statusIsFinal: 0 |
 export async function saveCustomerOrders(token: string, statusIsFinal: 0 | 1, payload: CustomerOrdersPayload) {
   const safeToken = String(token || '').trim();
   const normalized = normalizeCustomerOrdersPayload(payload);
-  if (!safeToken || !normalized) return normalized;
+  if (!isCustomerCacheTokenActive(safeToken) || !normalized) return normalized;
   const key = getCustomerScopedStorageKey('customer_orders', safeToken, `_s${statusIsFinal}`);
   memoryCustomerOrders.set(key, normalized);
   await saveCachedJson(key, normalized);
   return normalized;
 }
 
+async function updateCustomerOrdersCacheSerially(token: string, update: () => Promise<void>) {
+  const safeToken = String(token || '').trim();
+  if (!isCustomerCacheTokenActive(safeToken)) return;
+  const key = getCustomerScopedStorageKey('customer_orders_update', safeToken);
+  const previous = customerOrdersCacheUpdateRequests.get(key) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(update);
+  customerOrdersCacheUpdateRequests.set(key, next);
+  try {
+    await next;
+  } finally {
+    if (customerOrdersCacheUpdateRequests.get(key) === next) {
+      customerOrdersCacheUpdateRequests.delete(key);
+    }
+  }
+}
+
 export async function readCachedCustomerOrder(token: string, orderId: number) {
   const safeToken = String(token || '').trim();
   const safeOrderId = Number(orderId || 0);
-  if (!safeToken || !(safeOrderId > 0)) return null;
+  if (!isCustomerCacheTokenActive(safeToken) || !(safeOrderId > 0)) return null;
   const key = getCustomerScopedStorageKey('customer_order', safeToken, `_o${safeOrderId}`);
   if (memoryCustomerOrderDetails.has(key)) return memoryCustomerOrderDetails.get(key) || null;
   const cached = await readCachedJson(key, normalizeCustomerOrder);
-  if (cached) memoryCustomerOrderDetails.set(key, cached);
-  return cached;
+  if (cached) {
+    memoryCustomerOrderDetails.set(key, cached);
+    return cached;
+  }
+  for (const statusIsFinal of [0, 1] as const) {
+    const orders = await readCachedCustomerOrders(safeToken, statusIsFinal);
+    const listOrder = orders?.data.find((order) => Number(order.id || 0) === safeOrderId) || null;
+    if (listOrder) return listOrder;
+  }
+  return null;
 }
 
 export async function saveCustomerOrder(token: string, orderId: number, order: CustomerOrder | null) {
   const safeToken = String(token || '').trim();
   const safeOrderId = Number(orderId || 0);
   const normalized = normalizeCustomerOrder(order);
-  if (!safeToken || !(safeOrderId > 0)) return normalized;
+  if (!isCustomerCacheTokenActive(safeToken) || !(safeOrderId > 0)) return normalized;
   const key = getCustomerScopedStorageKey('customer_order', safeToken, `_o${safeOrderId}`);
   memoryCustomerOrderDetails.set(key, normalized);
   await saveCachedJson(key, normalized);
+  if (normalized) {
+    await updateCustomerOrdersCacheSerially(safeToken, async () => {
+      for (const statusIsFinal of [0, 1] as const) {
+        const cached = await readCachedCustomerOrders(safeToken, statusIsFinal);
+        if (!cached) continue;
+        const orderIndex = cached.data.findIndex((entry) => Number(entry.id || 0) === safeOrderId);
+        if (orderIndex < 0) continue;
+        const patchedOrder = { ...cached.data[orderIndex], ...normalized };
+        if (isSameCachedValue(patchedOrder, cached.data[orderIndex])) continue;
+        const data = cached.data.slice();
+        data[orderIndex] = patchedOrder;
+        await saveCustomerOrders(safeToken, statusIsFinal, { ...cached, data });
+      }
+    });
+  }
   return normalized;
 }
 
@@ -1428,22 +1682,60 @@ export async function fetchCustomerAddresses(token: string) {
 }
 
 export async function fetchCustomerOrders(token: string, params: { limit: number; offset: number; statusIsFinal: 0 | 1 }) {
+  const limit = Math.max(1, Math.floor(Number(params.limit || 10)));
+  const offset = Math.max(0, Math.floor(Number(params.offset || 0)));
   const query = new URLSearchParams({
-    limit: String(Math.max(1, Math.floor(Number(params.limit || 10)))),
-    offset: String(Math.max(0, Math.floor(Number(params.offset || 0)))),
+    limit: String(limit),
+    offset: String(offset),
     status_is_final: String(params.statusIsFinal),
   });
   const response = await requestApi<CustomerOrder[]>(`/api/public/me/orders?${query.toString()}`, {
     headers: { 'x-customer-token': token },
   }) as ApiResponse<CustomerOrder[]> & Partial<CustomerOrdersPayload>;
-  const payload = {
+  const payload: CustomerOrdersPayload = {
     data: Array.isArray(response.data) ? response.data : [],
     paging: response.paging && typeof response.paging === 'object'
       ? { has_more: Boolean(response.paging.has_more) }
-      : { has_more: Array.isArray(response.data) && response.data.length >= Math.max(1, Math.floor(Number(params.limit || 10))) },
+      : { has_more: Array.isArray(response.data) && response.data.length >= limit },
     summary: response.summary && typeof response.summary === 'object' ? response.summary : {},
   };
-  if (Number(params.offset || 0) === 0) await saveCustomerOrders(token, params.statusIsFinal, payload);
+  await updateCustomerOrdersCacheSerially(token, async () => {
+    const oppositeStatus: 0 | 1 = params.statusIsFinal === 0 ? 1 : 0;
+    const [cached, oppositeCached] = await Promise.all([
+      readCachedCustomerOrders(token, params.statusIsFinal),
+      readCachedCustomerOrders(token, oppositeStatus),
+    ]);
+    const current = cached || { data: [], paging: { has_more: false }, summary: {} };
+    const freshFirst = offset === 0;
+    const data = freshFirst && !payload.paging.has_more
+      ? mergeCustomerOrderLists([], payload.data, true)
+      : mergeCustomerOrderLists(current.data, payload.data, freshFirst);
+    await saveCustomerOrders(token, params.statusIsFinal, {
+      data,
+      paging: payload.paging,
+      summary: { ...current.summary, ...payload.summary },
+    });
+
+    if (oppositeCached) {
+      const freshIds = new Set(
+        payload.data
+          .map((order) => Number(order.id || 0))
+          .filter((orderId) => orderId > 0),
+      );
+      const oppositeData = oppositeCached.data.filter((order) => !freshIds.has(Number(order.id || 0)));
+      const oppositeSummary = { ...oppositeCached.summary, ...payload.summary };
+      if (
+        oppositeData.length !== oppositeCached.data.length
+        || !isSameCachedValue(oppositeSummary, oppositeCached.summary)
+      ) {
+        await saveCustomerOrders(token, oppositeStatus, {
+          ...oppositeCached,
+          data: oppositeData,
+          summary: oppositeSummary,
+        });
+      }
+    }
+  });
   return payload;
 }
 
@@ -1645,18 +1937,34 @@ export async function saveBonusFavoriteCategories(token: string, levelId: number
   return response.data && typeof response.data === 'object' ? response.data : null;
 }
 
-export async function fetchBonusTransactions(token: string, type?: string, limit?: number, offset?: number) {
+export async function fetchBonusTransactions(
+  token: string,
+  type?: string,
+  limit?: number,
+  offset?: number,
+  cursor: { afterId?: number; beforeId?: number } = {},
+) {
   const params = new URLSearchParams();
   if (type && type !== 'all') params.set('type', type);
   if (Number(limit || 0) > 0) params.set('limit', String(Math.floor(Number(limit))));
-  if (Number(offset || 0) > 0) params.set('offset', String(Math.floor(Number(offset))));
+  const afterId = Math.max(0, Math.floor(Number(cursor.afterId || 0)));
+  const beforeId = Math.max(0, Math.floor(Number(cursor.beforeId || 0)));
+  if (afterId > 0) params.set('after_id', String(afterId));
+  if (beforeId > 0) params.set('before_id', String(beforeId));
+  if (afterId <= 0 && beforeId <= 0 && Number(offset || 0) > 0) {
+    params.set('offset', String(Math.floor(Number(offset))));
+  }
   const query = params.toString();
   const suffix = query ? `?${query}` : '';
   const data = await requestJson<BonusTransaction[]>(`/api/public/bonus/transactions${suffix}`, {
     headers: { 'x-customer-token': token },
   });
   const list = Array.isArray(data) ? data : [];
-  if (Number(offset || 0) <= 0) await saveBonusTransactions(token, list, type);
+  await updateBonusTransactionsCacheSerially(token, type, async () => {
+    const cached = await readCachedBonusTransactions(token, type);
+    const merged = mergeBonusTransactionLists(cached, list);
+    await saveBonusTransactions(token, merged, type);
+  });
   return list;
 }
 
@@ -1724,6 +2032,9 @@ export async function fetchProductsBatchAvailability(productIds: number[]) {
     method: 'POST',
   }) as ApiResponse<Record<string, Record<string, unknown>>> & ProductsBatchAvailabilityPayload;
   return {
+    availability_revision: response.availability_revision == null
+      ? undefined
+      : String(response.availability_revision || '').trim() || undefined,
     data: response.data || {},
     stock_levels: Array.isArray(response.stock_levels) ? response.stock_levels : [],
   };
@@ -1739,7 +2050,7 @@ export async function joinBonusProgram(token: string) {
 
 export async function refreshCustomerPassport(token: string, seedCustomer?: CustomerProfile | null) {
   const safeToken = String(token || '').trim();
-  if (!safeToken) throw new Error('UNAUTHORIZED');
+  if (!isCustomerCacheTokenActive(safeToken)) throw new Error('UNAUTHORIZED');
 
   const [customer, addresses, bonusConfig, bonusReferrals] = await Promise.all([
     fetchCustomerMe(safeToken),
@@ -1757,6 +2068,7 @@ export async function refreshCustomerPassport(token: string, seedCustomer?: Cust
     token: safeToken,
     updatedAt: new Date().toISOString(),
   };
+  if (!isCustomerCacheTokenActive(safeToken)) throw new Error('UNAUTHORIZED');
   await saveCustomerPassport(passport);
   return passport;
 }
@@ -1932,9 +2244,7 @@ export async function fetchFullProductPassports(productIds: number[]) {
 }
 
 export async function warmFullProductPassports(productIds: number[]) {
-  const cached = Object.keys(memoryFullProductPassports).length
-    ? memoryFullProductPassports
-    : await readCachedFullProductPassports();
+  const cached = await readCachedFullProductPassports();
   const missingIds = [...new Set((Array.isArray(productIds) ? productIds : [])
     .map(Number)
     .filter((id) => Number.isFinite(id) && id > 0 && !cached[String(id)] && !fullPassportLoadRequests.has(id)))];
@@ -2020,6 +2330,10 @@ export async function warmMobileCatalogPassports(snapshot: MobileCatalogSnapshot
     currentSnapshot = await mergeMobileCatalogPassports(currentSnapshot, chunk);
   }
   return currentSnapshot;
+}
+
+export function invalidateMobileCatalogPassportRefreshState() {
+  refreshedCatalogPassportIds.clear();
 }
 
 export async function ensureMobileCatalogProductPassport(productId: number) {

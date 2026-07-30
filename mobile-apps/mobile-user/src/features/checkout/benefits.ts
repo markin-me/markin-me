@@ -6,6 +6,7 @@ import { readFulfillmentSelection, readCheckoutBenefitsSelection, saveCheckoutBe
 import {
   attachCheckoutPromo,
   fetchCheckoutBenefitsPreview,
+  isCustomerCacheTokenActive,
   readCachedCustomerPassport,
   readCachedMobileCatalogSnapshot,
   type CheckoutBenefitsPreviewData,
@@ -1197,9 +1198,22 @@ async function pruneCheckoutBenefitsStorage(token = '', keepKey = '') {
   await AsyncStorage.multiRemove(removable).catch(() => undefined);
 }
 
+export async function clearCheckoutBenefitsCacheForToken(token: string) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) return;
+  const prefix = getCheckoutBenefitsStoragePrefix(safeToken);
+  for (const key of checkoutBenefitsMemory.keys()) {
+    if (key.startsWith(prefix)) checkoutBenefitsMemory.delete(key);
+  }
+  for (const key of checkoutBenefitsRefreshInflight.keys()) {
+    if (key.startsWith(prefix)) checkoutBenefitsRefreshInflight.delete(key);
+  }
+  await pruneCheckoutBenefitsStorage(safeToken);
+}
+
 async function readCachedCheckoutBenefits(token: string, request: CheckoutBenefitsPreviewRequest) {
   const safeToken = String(token || '').trim();
-  if (!safeToken) return null;
+  if (!isCustomerCacheTokenActive(safeToken)) return null;
   const key = getCheckoutBenefitsStorageKey(safeToken, request);
   const memory = checkoutBenefitsMemory.get(key);
   if (memory) return memory;
@@ -1231,6 +1245,7 @@ async function saveCachedCheckoutBenefits(token: string, request: CheckoutBenefi
     preview: value.preview || normalized.basePreview,
     sourceBenefits: value.sourceBenefits || buildCustomerBenefitsFromPreview(value.preview || normalized.basePreview) || null,
   };
+  if (!isCustomerCacheTokenActive(safeToken)) return normalized;
   checkoutBenefitsMemory.set(key, memoryValue);
   await pruneCheckoutBenefitsStorage(safeToken, key).catch(() => undefined);
   try {

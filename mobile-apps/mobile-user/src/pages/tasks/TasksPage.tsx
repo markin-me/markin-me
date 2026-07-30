@@ -3,8 +3,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import { ensureCheckoutBenefitsState, readCheckoutBenefitsState, type CheckoutBenefitsState } from '../../features/checkout';
-import { readCachedCustomerPassport, type CustomerBenefitCard } from '../../shared/api';
+import {
+  fetchCustomerBenefits,
+  isSameCachedValue,
+  readCachedCustomerBenefits,
+  readCachedCustomerPassport,
+  type CustomerBenefitCard,
+} from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text, Screen } from '../../shared/ui';
 
@@ -123,19 +128,11 @@ export function TasksPage() {
   const [isLoading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
 
-  const setStateFromBenefits = useCallback((state: CheckoutBenefitsState) => {
-    const nextItems = Array.isArray(state.preview?.progress)
-      ? state.preview.progress
-      : Array.isArray(state.sourceBenefits?.progress)
-        ? state.sourceBenefits.progress
-        : [];
-    setItems(nextItems);
-  }, []);
-
   const loadTasks = useCallback(async () => {
+    let hasCachedBenefits = false;
     const passport = await readCachedCustomerPassport();
     if (!passport?.token) {
-      setItems([]);
+      setItems((current) => (isSameCachedValue(current, []) ? current : []));
       setErrorText('Войдите в профиль, чтобы увидеть задания.');
       setLoading(false);
       return;
@@ -143,23 +140,25 @@ export function TasksPage() {
 
     setErrorText('');
     try {
-      const cachedState = await readCheckoutBenefitsState();
-      setStateFromBenefits(cachedState);
-      if (
-        (Array.isArray(cachedState.preview?.progress) && cachedState.preview.progress.length)
-        || (Array.isArray(cachedState.sourceBenefits?.progress) && cachedState.sourceBenefits.progress.length)
-      ) {
+      const cachedBenefits = await readCachedCustomerBenefits(passport.token).catch(() => null);
+      hasCachedBenefits = cachedBenefits !== null;
+      if (cachedBenefits !== null) {
+        const cachedItems = Array.isArray(cachedBenefits.progress) ? cachedBenefits.progress : [];
+        setItems((current) => (isSameCachedValue(current, cachedItems) ? current : cachedItems));
         setLoading(false);
       }
 
-      const freshState = await ensureCheckoutBenefitsState();
-      setStateFromBenefits(freshState);
+      const freshBenefits = await fetchCustomerBenefits(passport.token);
+      const freshItems = Array.isArray(freshBenefits.progress) ? freshBenefits.progress : [];
+      setItems((current) => (isSameCachedValue(current, freshItems) ? current : freshItems));
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить задания.');
+      if (!hasCachedBenefits) {
+        setErrorText(error instanceof Error ? error.message : 'Не удалось загрузить задания.');
+      }
     } finally {
       setLoading(false);
     }
-  }, [setStateFromBenefits]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
