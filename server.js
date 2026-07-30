@@ -120,6 +120,7 @@ const runtimePollingState = {
   max_env_enabled: String(process.env.DISABLE_MAX_POLLING || '').trim() !== '1',
 };
 const tenantLookupCache = new Map();
+const tenantLookupInflight = new Map();
 const staticVersionCache = new Map();
 let telegramEnvPollingHandle = null;
 let telegramTenantPollingHandle = null;
@@ -943,70 +944,81 @@ async function findTenantByHost(hostname) {
   const cacheKey = `tenant:host:${host}`;
   const cached = getFreshCachedValue(tenantLookupCache, cacheKey);
   if (cached.hit) return cached.value;
+  const pending = tenantLookupInflight.get(cacheKey);
+  if (pending) return pending;
 
-  let tenant = null;
+  const lookupPromise = (async () => {
+    let tenant = null;
 
-  try {
     try {
-      const [domainRows] = await db.query(
-        `SELECT t.*
-           FROM ten_tenant_domains d
-           JOIN ten_tenants t ON t.id = d.tenant_id
-          WHERE d.domain_ascii=?
-            AND d.is_enabled=1
-          ORDER BY d.id ASC
-          LIMIT 1`,
-        [host]
-      );
-      tenant = domainRows[0] || null;
+      try {
+        const [domainRows] = await db.query(
+          `SELECT t.*
+             FROM ten_tenant_domains d
+             JOIN ten_tenants t ON t.id = d.tenant_id
+            WHERE d.domain_ascii=?
+              AND d.is_enabled=1
+            ORDER BY d.id ASC
+            LIMIT 1`,
+          [host]
+        );
+        tenant = domainRows[0] || null;
+      } catch (err) {
+        if (String(err?.code || '') !== 'ER_BAD_FIELD_ERROR') {
+          throw err;
+        }
+        const [domainRows] = await db.query(
+          `SELECT t.*
+             FROM ten_tenant_domains d
+             JOIN ten_tenants t ON t.id = d.tenant_id
+            WHERE d.domain_ascii=?
+            ORDER BY d.id ASC
+            LIMIT 1`,
+          [host]
+        );
+        tenant = domainRows[0] || null;
+      }
     } catch (err) {
-      if (String(err?.code || '') !== 'ER_BAD_FIELD_ERROR') {
+      if (!isMissingTenantDomainsTableError(err)) {
         throw err;
       }
-      const [domainRows] = await db.query(
-        `SELECT t.*
-           FROM ten_tenant_domains d
-           JOIN ten_tenants t ON t.id = d.tenant_id
-          WHERE d.domain_ascii=?
-          ORDER BY d.id ASC
-          LIMIT 1`,
+    }
+
+    if (!tenant) {
+      // Legacy fallback for tenants that have not been migrated yet.
+      const [asciiRows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE custom_domain_ascii=? LIMIT 1',
         [host]
       );
-      tenant = domainRows[0] || null;
+      tenant = asciiRows[0] || null;
     }
-  } catch (err) {
-    if (!isMissingTenantDomainsTableError(err)) {
-      throw err;
+
+    if (!tenant) {
+      const [legacyRows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE custom_domain=? LIMIT 1',
+        [host]
+      );
+      tenant = legacyRows[0] || null;
     }
-  }
 
-  if (!tenant) {
-    // Legacy fallback for tenants that have not been migrated yet.
-    const [asciiRows] = await db.query(
-      'SELECT * FROM ten_tenants WHERE custom_domain_ascii=? LIMIT 1',
-      [host]
-    );
-    tenant = asciiRows[0] || null;
-  }
-
-  if (!tenant) {
-    const [legacyRows] = await db.query(
-      'SELECT * FROM ten_tenants WHERE custom_domain=? LIMIT 1',
-      [host]
-    );
-    tenant = legacyRows[0] || null;
-  }
-
-  if (!tenant) {
-    const sub = getSubdomain(host);
-    if (sub) {
-      tenant = await findTenantBySubdomain(sub);
+    if (!tenant) {
+      const sub = getSubdomain(host);
+      if (sub) {
+        tenant = await findTenantBySubdomain(sub);
+      }
     }
-  }
 
-  setCachedValue(tenantLookupCache, cacheKey, tenant, TENANT_LOOKUP_CACHE_MS);
-  if (tenant) cacheTenantRecord(tenant);
-  return tenant;
+    setCachedValue(tenantLookupCache, cacheKey, tenant, TENANT_LOOKUP_CACHE_MS);
+    if (tenant) cacheTenantRecord(tenant);
+    return tenant;
+  })();
+
+  tenantLookupInflight.set(cacheKey, lookupPromise);
+  try {
+    return await lookupPromise;
+  } finally {
+    tenantLookupInflight.delete(cacheKey);
+  }
 }
 
 async function isTenantHost(req) {
@@ -1031,6 +1043,8 @@ app.use(async (req, res, next) => {
 
   try {
     const tenantHost = await isTenantHost(req);
+    req._tenantHostChecked = true;
+    req._tenantHostMatched = tenantHost;
     if (tenantHost) return next();
     if (!isTrustedAdminHost(getRequestRoutingHost(req)) || isManagedTenantDomainRequest(req)) {
       if (route.startsWith('/api/')) {
@@ -1128,7 +1142,7 @@ app.use(async (req, res, next) => {
   if (!isAdminRoute) return next();
 
   try {
-    const tenantHost = await isTenantHost(req);
+    const tenantHost = req._tenantHostChecked ? Boolean(req._tenantHostMatched) : await isTenantHost(req);
     if (!tenantHost) {
       if (!isTrustedAdminHost(getRequestRoutingHost(req)) || isManagedTenantDomainRequest(req)) {
         if (route.startsWith('/api/')) {

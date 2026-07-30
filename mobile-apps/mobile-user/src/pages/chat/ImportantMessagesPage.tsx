@@ -6,10 +6,11 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { ChatTabParamList, MainTabParamList } from '../../app/navigation/routes';
+import type { ChatTabParamList, MainTabParamList, RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
 import { useChatUnread } from '../../features/chat';
 import { claimImportantMessagePromo, fetchImportantMessages, fetchImportantMessagesRevision, resolveChatAssetUrl } from '../../features/chat/api';
+import { getImportantMessageActionType } from '../../features/chat/helpers';
 import {
   getUnreadImportantMessageIds,
   readImportantMessagesCache,
@@ -24,6 +25,7 @@ import { Screen } from '../../shared/ui/Screen';
 import { AppHeader } from '../../widgets/app-header';
 
 type MainNavigationProp = BottomTabNavigationProp<MainTabParamList>;
+type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 function isPromoRouteActive(navigation: NativeStackNavigationProp<ChatTabParamList>) {
   const state = navigation.getState();
@@ -45,6 +47,7 @@ export function ImportantMessagesPage() {
   const [cacheChecked, setCacheChecked] = useState(false);
   const [error, setError] = useState('');
   const mainNavigation = navigation.getParent<MainNavigationProp>();
+  const rootNavigation = mainNavigation?.getParent<RootNavigationProp>();
   const baseTabBarStyle = useMemo(() => {
     const bottomInset = Math.max(0, insets.bottom);
     return {
@@ -154,6 +157,11 @@ export function ImportantMessagesPage() {
     }
   }, [mainNavigation, refreshCustomerToken]);
 
+  const openProduct = useCallback((productId: number) => {
+    if (!(productId > 0)) return;
+    rootNavigation?.navigate(routes.product, { productId });
+  }, [rootNavigation]);
+
   useEffect(() => {
     void refreshCustomerToken();
     return subscribeCustomerPassport(() => {
@@ -230,7 +238,10 @@ export function ImportantMessagesPage() {
 
         {items.map((item) => {
           const imageUrl = resolveChatAssetUrl(item.image_url || '');
-          const hasPromo = item.promo_claimable === true || !!String(item.promo_code || '').trim() || item.promo_code_masked === true;
+          const actionType = getImportantMessageActionType(item);
+          const productId = actionType === 'product' ? Number(item.product_id || 0) : 0;
+          const hasPromo = actionType === 'promo_code'
+            && (item.promo_claimable === true || !!String(item.promo_code || '').trim() || item.promo_code_masked === true);
           const promoCode = item.promo_code_masked ? '*****' : String(item.promo_code || '').trim();
           const isClaiming = claimingIds.has(String(item.id));
           const claimText = item.promo_claimed ? 'Забрано' : isClaiming ? '...' : item.promo_claimable === false ? 'Закончились' : 'Забрать';
@@ -271,6 +282,19 @@ export function ImportantMessagesPage() {
                             <Text adjustsFontSizeToFit minimumFontScale={0.76} numberOfLines={1} style={styles.claimText}>{claimText}</Text>
                           </Pressable>
                         </View>
+                      </View>
+                    ) : productId > 0 ? (
+                      <View style={styles.promoSlot}>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={(event) => {
+                            event.stopPropagation?.();
+                            openProduct(productId);
+                          }}
+                          style={({ pressed }) => [styles.claimButton, pressed ? styles.cardPressed : null]}
+                        >
+                          <Text adjustsFontSizeToFit minimumFontScale={0.76} numberOfLines={1} style={styles.claimText}>Заказать</Text>
+                        </Pressable>
                       </View>
                     ) : null}
                   </View>
@@ -393,8 +417,9 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
   },
   promoSlot: {
-    justifyContent: 'flex-start',
+    justifyContent: 'flex-end',
     marginTop: 10,
+    minHeight: 61,
   },
   promoSlotContent: {
     gap: 5,
