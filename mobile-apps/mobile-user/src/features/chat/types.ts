@@ -183,6 +183,12 @@ export type ImportantMessage = {
   image_url?: string;
   link_url?: string;
   promo_code?: string;
+  promo_code_mode?: 'none' | 'shared' | 'unique' | string;
+  promo_code_masked?: boolean;
+  promo_claimable?: boolean;
+  promo_claimed?: boolean;
+  promo_discount_id?: number | null;
+  promo_code_id?: number | null;
   is_pinned?: boolean;
   published_at?: string | null;
   updated_at?: string | null;

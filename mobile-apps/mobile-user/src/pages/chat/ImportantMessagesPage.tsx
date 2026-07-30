@@ -1,19 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { ChatTabParamList } from '../../app/navigation/routes';
+import type { ChatTabParamList, MainTabParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
 import { useChatUnread } from '../../features/chat';
-import { fetchImportantMessages, resolveChatAssetUrl } from '../../features/chat/api';
-import { getUnreadImportantMessageIds } from '../../features/chat/storage';
+import { claimImportantMessagePromo, fetchImportantMessages, fetchImportantMessagesRevision, resolveChatAssetUrl } from '../../features/chat/api';
+import {
+  getUnreadImportantMessageIds,
+  readImportantMessagesCache,
+  saveImportantMessagesCache,
+  updateImportantMessagesCacheItems,
+} from '../../features/chat/storage';
 import type { ImportantMessage } from '../../features/chat/types';
+import { refreshCheckoutBenefitsState } from '../../features/checkout';
+import { getMemoryCustomerPassport, readCachedCustomerPassport, subscribeCustomerPassport } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 import { AppHeader } from '../../widgets/app-header';
+
+type MainNavigationProp = BottomTabNavigationProp<MainTabParamList>;
 
 function isPromoRouteActive(navigation: NativeStackNavigationProp<ChatTabParamList>) {
   const state = navigation.getState();
@@ -24,11 +34,17 @@ function isPromoRouteActive(navigation: NativeStackNavigationProp<ChatTabParamLi
 export function ImportantMessagesPage() {
   const navigation = useNavigation<NativeStackNavigationProp<ChatTabParamList>>();
   const insets = useSafeAreaInsets();
-  const { syncPromoUnreadFromItems } = useChatUnread();
+  const { promoCacheRevision, syncPromoUnreadFromItems } = useChatUnread();
+  const pendingClaimItemRef = useRef<ImportantMessage | null>(null);
+  const claimingItemIdsRef = useRef(new Set<string>());
   const [items, setItems] = useState<ImportantMessage[]>([]);
   const [unreadItemIds, setUnreadItemIds] = useState<Set<string>>(() => new Set());
+  const [claimingIds, setClaimingIds] = useState<Set<string>>(() => new Set());
+  const [customerToken, setCustomerToken] = useState(() => String(getMemoryCustomerPassport()?.token || '').trim());
   const [loading, setLoading] = useState(false);
+  const [cacheChecked, setCacheChecked] = useState(false);
   const [error, setError] = useState('');
+  const mainNavigation = navigation.getParent<MainNavigationProp>();
   const baseTabBarStyle = useMemo(() => {
     const bottomInset = Math.max(0, insets.bottom);
     return {
@@ -40,26 +56,141 @@ export function ImportantMessagesPage() {
   }, [insets.bottom]);
   const hideTabBarStyle = useMemo(() => ({ display: 'none' as const }), []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const applyItems = useCallback(async (nextItems: ImportantMessage[]) => {
+    const normalizedItems = Array.isArray(nextItems) ? nextItems : [];
+    const nextUnreadIds = await getUnreadImportantMessageIds(normalizedItems);
+    setItems(normalizedItems);
+    setUnreadItemIds(new Set(nextUnreadIds));
+    void syncPromoUnreadFromItems(normalizedItems);
+  }, [syncPromoUnreadFromItems]);
+
+  const refreshCustomerToken = useCallback(async () => {
+    const passport = await readCachedCustomerPassport().catch(() => null);
+    const nextToken = String(passport?.token || '').trim();
+    setCustomerToken(nextToken);
+    return nextToken;
+  }, []);
+
+  const load = useCallback(async (options: { force?: boolean } = {}) => {
+    const force = options.force === true;
+    const cached = await readImportantMessagesCache().catch(() => null);
+    if (cached) {
+      await applyItems(cached.items);
+    }
+    setCacheChecked(true);
+    setLoading(force || !cached);
     setError('');
     try {
+      const revision = await fetchImportantMessagesRevision();
+      const nextRevision = String(revision?.revision || '');
+      const nextCount = Math.max(0, Number(revision?.count || 0));
+      if (!force && cached && cached.revision === nextRevision && cached.count === nextCount) {
+        return;
+      }
       const nextItems = await fetchImportantMessages();
       const normalizedItems = Array.isArray(nextItems) ? nextItems : [];
-      const nextUnreadIds = await getUnreadImportantMessageIds(normalizedItems);
-      setItems(normalizedItems);
-      setUnreadItemIds(new Set(nextUnreadIds));
-      void syncPromoUnreadFromItems(normalizedItems);
+      await saveImportantMessagesCache({
+        count: nextCount || normalizedItems.length,
+        items: normalizedItems,
+        revision: nextRevision,
+      });
+      await applyItems(normalizedItems);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'LOAD_FAILED');
+      if (!cached) setError(nextError instanceof Error ? nextError.message : 'LOAD_FAILED');
     } finally {
       setLoading(false);
     }
-  }, [syncPromoUnreadFromItems]);
+  }, [applyItems]);
+
+  const claimPromo = useCallback(async (item: ImportantMessage) => {
+    const itemId = Number(item.id || 0);
+    if (!(itemId > 0) || item.promo_claimable === false) return;
+    const key = String(itemId);
+    if (claimingItemIdsRef.current.has(key)) return;
+    claimingItemIdsRef.current.add(key);
+    setClaimingIds((prev) => new Set(prev).add(key));
+    try {
+      const token = await refreshCustomerToken();
+      if (!token) {
+        pendingClaimItemRef.current = item;
+        mainNavigation?.navigate(routes.profile);
+        return;
+      }
+      const result = await claimImportantMessagePromo(itemId);
+      const nextCode = String(result?.promo_code || '').trim();
+      void refreshCheckoutBenefitsState().catch(() => null);
+      setItems((prev) => {
+        const nextItems = prev.map((entry) => (
+        Number(entry.id || 0) === itemId
+          ? {
+              ...entry,
+              promo_code: nextCode || entry.promo_code,
+              promo_code_id: result?.promo_code_id ?? entry.promo_code_id,
+              promo_code_masked: false,
+              promo_claimed: true,
+            }
+          : entry
+        ));
+        void updateImportantMessagesCacheItems(nextItems).catch(() => null);
+        return nextItems;
+      });
+    } catch (claimError) {
+      if (claimError instanceof Error && claimError.message === 'UNAUTHORIZED') {
+        pendingClaimItemRef.current = item;
+        setCustomerToken('');
+        mainNavigation?.navigate(routes.profile);
+      } else {
+        setItems((prev) => prev.map((entry) => (
+          Number(entry.id || 0) === itemId ? { ...entry, promo_claimable: false } : entry
+        )));
+      }
+    } finally {
+      claimingItemIdsRef.current.delete(key);
+      setClaimingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }, [mainNavigation, refreshCustomerToken]);
+
+  useEffect(() => {
+    void refreshCustomerToken();
+    return subscribeCustomerPassport(() => {
+      void refreshCustomerToken().then((token) => {
+        const pendingItem = pendingClaimItemRef.current;
+        if (!token || !pendingItem) return;
+        pendingClaimItemRef.current = null;
+        void claimPromo(pendingItem);
+      });
+    });
+  }, [claimPromo, refreshCustomerToken]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!promoCacheRevision) return undefined;
+    let cancelled = false;
+    void readImportantMessagesCache()
+      .then((cached) => {
+        if (!cancelled && cached) void applyItems(cached.items);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [applyItems, promoCacheRevision]);
+
+  useFocusEffect(useCallback(() => {
+    void refreshCustomerToken();
+    void load();
+    const timer = setInterval(() => {
+      void load();
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [load, refreshCustomerToken]));
 
   useFocusEffect(useCallback(() => {
     const parent = navigation.getParent();
@@ -80,7 +211,7 @@ export function ImportantMessagesPage() {
       <AppHeader backgroundColor="#ffffff" onBack={() => navigation.goBack()} showBack title="PROMO сообщения" />
       <ScrollView
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={loading} tintColor={theme.colors.accent} onRefresh={load} />}
+        refreshControl={<RefreshControl refreshing={loading} tintColor={theme.colors.accent} onRefresh={() => load({ force: true })} />}
       >
         {error ? (
           <View style={styles.stateCard}>
@@ -89,7 +220,7 @@ export function ImportantMessagesPage() {
           </View>
         ) : null}
 
-        {!error && !loading && !items.length ? (
+        {!error && cacheChecked && !loading && !items.length ? (
           <View style={styles.stateCard}>
             <Ionicons color={theme.colors.muted} name="notifications-outline" size={30} />
             <Text style={styles.stateTitle}>Пока нет PROMO сообщений</Text>
@@ -99,7 +230,10 @@ export function ImportantMessagesPage() {
 
         {items.map((item) => {
           const imageUrl = resolveChatAssetUrl(item.image_url || '');
-          const promoCode = String(item.promo_code || '').trim();
+          const hasPromo = item.promo_claimable === true || !!String(item.promo_code || '').trim() || item.promo_code_masked === true;
+          const promoCode = item.promo_code_masked ? '*****' : String(item.promo_code || '').trim();
+          const isClaiming = claimingIds.has(String(item.id));
+          const claimText = item.promo_claimed ? 'Забрано' : isClaiming ? '...' : item.promo_claimable === false ? 'Закончились' : 'Забрать';
           const isUnread = unreadItemIds.has(String(item.id));
           return (
             <View key={String(item.id)} style={styles.card}>
@@ -114,10 +248,29 @@ export function ImportantMessagesPage() {
                     <View style={styles.mediaFrame}>
                       {imageUrl ? <Image source={{ uri: imageUrl }} style={styles.image} /> : <View style={styles.mediaFallback}><Ionicons color={theme.colors.muted} name="image-outline" size={26} /></View>}
                     </View>
-                    {promoCode ? (
-                      <View style={styles.promoPill}>
-                        <Text style={styles.promoLabel}>Промокод</Text>
-                        <Text numberOfLines={1} style={styles.promoCode}>{promoCode}</Text>
+                    {hasPromo ? (
+                      <View style={styles.promoSlot}>
+                        <View style={styles.promoSlotContent}>
+                          <View style={styles.promoPill}>
+                            <Text style={styles.promoLabel}>Промокод</Text>
+                            <Text numberOfLines={1} style={styles.promoCode}>{promoCode}</Text>
+                          </View>
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={isClaiming || item.promo_claimed === true || item.promo_claimable === false}
+                            onPress={(event) => {
+                              event.stopPropagation?.();
+                              void claimPromo(item);
+                            }}
+                            style={({ pressed }) => [
+                              styles.claimButton,
+                              (pressed && !isClaiming) ? styles.cardPressed : null,
+                              (item.promo_claimed === true || item.promo_claimable === false) ? styles.claimButtonDisabled : null,
+                            ]}
+                          >
+                            <Text adjustsFontSizeToFit minimumFontScale={0.76} numberOfLines={1} style={styles.claimText}>{claimText}</Text>
+                          </Pressable>
+                        </View>
                       </View>
                     ) : null}
                   </View>
@@ -127,7 +280,7 @@ export function ImportantMessagesPage() {
                         {item.title}
                       </Text>
                     </View>
-                    <Text numberOfLines={8} style={styles.body}>
+                    <Text numberOfLines={10} style={styles.body}>
                       {item.body}
                     </Text>
                   </View>
@@ -174,7 +327,7 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    minHeight: 248,
+    height: 278,
     overflow: 'hidden',
     position: 'relative',
   },
@@ -187,15 +340,15 @@ const styles = StyleSheet.create({
   },
   previewRow: {
     alignItems: 'stretch',
+    flex: 1,
     flexDirection: 'row',
     gap: 12,
-    minHeight: 248,
     padding: 12,
   },
   previewSide: {
     flexShrink: 0,
-    gap: 8,
-    width: 112,
+    gap: 0,
+    width: 122,
   },
   mediaFrame: {
     backgroundColor: '#eef2f7',
@@ -203,7 +356,7 @@ const styles = StyleSheet.create({
     aspectRatio: 2 / 3,
     overflow: 'hidden',
     position: 'relative',
-    width: 112,
+    width: 122,
   },
   mediaFallback: {
     alignItems: 'center',
@@ -217,34 +370,62 @@ const styles = StyleSheet.create({
   },
   promoCode: {
     color: theme.colors.text,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
+    lineHeight: 15,
   },
   promoLabel: {
     color: theme.colors.muted,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: '600',
+    lineHeight: 11,
   },
   promoPill: {
     alignItems: 'center',
+    backgroundColor: '#ffffff',
     borderColor: theme.colors.border,
-    borderRadius: 16,
+    borderRadius: 10,
     borderStyle: 'dashed',
     borderWidth: 1,
-    gap: 2,
-    minHeight: 52,
+    gap: 1,
+    height: 29,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  promoSlot: {
+    justifyContent: 'flex-start',
+    marginTop: 10,
+  },
+  promoSlotContent: {
+    gap: 5,
+  },
+  claimButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 10,
+    height: 27,
+    justifyContent: 'center',
     paddingHorizontal: 8,
-    paddingVertical: 7,
+  },
+  claimButtonDisabled: {
+    backgroundColor: 'rgba(229,231,235,0.88)',
+  },
+  claimText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 14,
+    textAlign: 'center',
   },
   cardBody: {
     flex: 1,
     minWidth: 0,
-    paddingVertical: 2,
   },
   titleRow: {
     alignItems: 'flex-start',
     flexDirection: 'row',
     gap: 8,
+    height: 44,
     marginBottom: 10,
   },
   typePill: {
@@ -286,6 +467,7 @@ const styles = StyleSheet.create({
   body: {
     color: theme.colors.text,
     fontSize: 14,
+    height: 200,
     lineHeight: 20,
     marginTop: 0,
   },

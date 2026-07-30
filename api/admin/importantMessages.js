@@ -13,6 +13,17 @@ function normalizeMessageType(value) {
   return 'news';
 }
 
+function normalizePromoCodeMode(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'shared' || normalized === 'unique') return normalized;
+  return 'none';
+}
+
+function normalizePositiveInt(value) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : null;
+}
+
 function normalizeBool(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
   if (value === true || value === 1) return true;
@@ -32,6 +43,9 @@ function normalizeRow(row) {
     image_url: String(row.image_url || ''),
     link_url: String(row.link_url || ''),
     promo_code: String(row.promo_code || ''),
+    promo_code_mode: normalizePromoCodeMode(row.promo_code_mode),
+    promo_discount_id: normalizePositiveInt(row.promo_discount_id),
+    promo_code_id: normalizePositiveInt(row.promo_code_id),
     is_published: Number(row.is_published || 0) === 1,
     is_hidden: Number(row.is_hidden || 0) === 1,
     is_pinned: Number(row.is_pinned || 0) === 1,
@@ -64,6 +78,9 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
         image_url VARCHAR(1024) NOT NULL DEFAULT '',
         link_url VARCHAR(1024) NOT NULL DEFAULT '',
         promo_code VARCHAR(80) NOT NULL DEFAULT '',
+        promo_code_mode ENUM('none','shared','unique') NOT NULL DEFAULT 'none',
+        promo_discount_id BIGINT UNSIGNED NULL,
+        promo_code_id BIGINT UNSIGNED NULL,
         is_published TINYINT(1) NOT NULL DEFAULT 0,
         is_hidden TINYINT(1) NOT NULL DEFAULT 0,
         is_pinned TINYINT(1) NOT NULL DEFAULT 0,
@@ -91,6 +108,44 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
             throw err;
           }
         }
+        try {
+          await db.query("ALTER TABLE mkt_important_messages ADD COLUMN promo_code_mode ENUM('none','shared','unique') NOT NULL DEFAULT 'none' AFTER promo_code");
+        } catch (err) {
+          if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+            throw err;
+          }
+        }
+        try {
+          await db.query('ALTER TABLE mkt_important_messages ADD COLUMN promo_discount_id BIGINT UNSIGNED NULL AFTER promo_code_mode');
+        } catch (err) {
+          if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+            throw err;
+          }
+        }
+        try {
+          await db.query('ALTER TABLE mkt_important_messages ADD COLUMN promo_code_id BIGINT UNSIGNED NULL AFTER promo_discount_id');
+        } catch (err) {
+          if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+            throw err;
+          }
+        }
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS mkt_important_message_promo_claims (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            tenant_id BIGINT UNSIGNED NOT NULL,
+            store_id BIGINT UNSIGNED NOT NULL DEFAULT 1,
+            message_id BIGINT UNSIGNED NOT NULL,
+            customer_id BIGINT UNSIGNED NOT NULL,
+            discount_id BIGINT UNSIGNED NULL,
+            promo_code_id BIGINT UNSIGNED NULL,
+            promo_code VARCHAR(80) NOT NULL DEFAULT '',
+            claimed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_important_message_promo_claim_customer (tenant_id, store_id, message_id, customer_id),
+            KEY idx_important_message_promo_claim_message (tenant_id, store_id, message_id),
+            KEY idx_important_message_promo_claim_promo (tenant_id, promo_code_id)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
         tableReady = true;
         return true;
       })
@@ -183,6 +238,30 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
     }
   });
 
+  router.get('/audience-count', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const [rows] = await db.query(
+        `SELECT COUNT(*) AS count
+           FROM cust_customers
+          WHERE tenant_id = ?
+            AND store_id = ?
+            AND COALESCE(is_active, 1) = 1`,
+        [tenantId, storeId]
+      );
+      return res.json({
+        ok: true,
+        data: {
+          count: Math.max(0, Number(rows?.[0]?.count || 0)),
+        },
+      });
+    } catch (err) {
+      console.error('GET /api/admin/important-messages/audience-count error:', err);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
   router.post('/', async (req, res) => {
     try {
       await ensureTable();
@@ -195,6 +274,9 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
       const imageUrl = normalizeText(req.body?.image_url ?? req.body?.imageUrl, 1024);
       const linkUrl = normalizeText(req.body?.link_url ?? req.body?.linkUrl, 1024);
       const promoCode = normalizeText(req.body?.promo_code ?? req.body?.promoCode, 80).toUpperCase();
+      const promoCodeMode = normalizePromoCodeMode(req.body?.promo_code_mode ?? req.body?.promoCodeMode);
+      const promoDiscountId = normalizePositiveInt(req.body?.promo_discount_id ?? req.body?.promoDiscountId);
+      const promoCodeId = normalizePositiveInt(req.body?.promo_code_id ?? req.body?.promoCodeId);
       const isPublished = normalizeBool(req.body?.is_published ?? req.body?.isPublished, true);
       const isHidden = isPublished ? normalizeBool(req.body?.is_hidden ?? req.body?.isHidden, false) : false;
       const isPinned = normalizeBool(req.body?.is_pinned ?? req.body?.isPinned, false);
@@ -203,9 +285,9 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
 
       const [result] = await db.query(
         `INSERT INTO mkt_important_messages
-          (tenant_id, store_id, type, title, body, image_url, link_url, promo_code, is_published, is_hidden, is_pinned, published_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${publishedAtSql}, ?)`,
-        [tenantId, storeId, type, title, body, imageUrl, linkUrl, promoCode, isPublished ? 1 : 0, isHidden ? 1 : 0, isPinned ? 1 : 0, Number(req.user?.userId || 0) || null]
+          (tenant_id, store_id, type, title, body, image_url, link_url, promo_code, promo_code_mode, promo_discount_id, promo_code_id, is_published, is_hidden, is_pinned, published_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${publishedAtSql}, ?)`,
+        [tenantId, storeId, type, title, body, imageUrl, linkUrl, promoCode, promoCodeMode, promoDiscountId, promoCodeId, isPublished ? 1 : 0, isHidden ? 1 : 0, isPinned ? 1 : 0, Number(req.user?.userId || 0) || null]
       );
       const id = Number(result?.insertId || 0);
       const [rows] = await db.query(
@@ -284,7 +366,7 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
       const resetPublishedAt = normalizeBool(req.body?.reset_published_at ?? req.body?.resetPublishedAt, false);
       await db.query(
         `UPDATE mkt_important_messages
-            SET type = ?, title = ?, body = ?, image_url = ?, link_url = ?, promo_code = ?, is_published = ?, is_hidden = ?, is_pinned = ?,
+            SET type = ?, title = ?, body = ?, image_url = ?, link_url = ?, promo_code = ?, promo_code_mode = ?, promo_discount_id = ?, promo_code_id = ?, is_published = ?, is_hidden = ?, is_pinned = ?,
                 published_at = CASE
                   WHEN ? = 1 AND (? = 1 OR is_published = 0) THEN CURRENT_TIMESTAMP(3)
                   WHEN ? = 0 AND ? = 1 THEN NULL
@@ -298,6 +380,9 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
           normalizeText(req.body?.image_url ?? req.body?.imageUrl, 1024),
           normalizeText(req.body?.link_url ?? req.body?.linkUrl, 1024),
           normalizeText(req.body?.promo_code ?? req.body?.promoCode, 80).toUpperCase(),
+          normalizePromoCodeMode(req.body?.promo_code_mode ?? req.body?.promoCodeMode),
+          normalizePositiveInt(req.body?.promo_discount_id ?? req.body?.promoDiscountId),
+          normalizePositiveInt(req.body?.promo_code_id ?? req.body?.promoCodeId),
           isPublished ? 1 : 0,
           isHidden ? 1 : 0,
           isPinned ? 1 : 0,

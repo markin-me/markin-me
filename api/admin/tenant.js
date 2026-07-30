@@ -2299,6 +2299,16 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     }
   }
 
+  async function removeTenantUploadFile(filePath) {
+    if (!filePath) return;
+    try {
+      await fs.promises.unlink(filePath);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return;
+      throw err;
+    }
+  }
+
   function collectSiteMenuIconUrls(value) {
     let items = [];
     if (Array.isArray(value)) {
@@ -3071,11 +3081,17 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const originalPath = file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), file.filename);
       const convertedPath = await helpers.ensureWebpVariant(originalPath);
       if (!convertedPath || !/\.webp$/i.test(String(convertedPath))) {
-        fs.unlink(originalPath, () => {});
+        await removeTenantUploadFile(originalPath);
         return res.status(500).json({ ok: false, error: 'WEBP_CONVERSION_FAILED' });
       }
-      if (convertedPath !== originalPath) {
-        fs.unlink(originalPath, () => {});
+      if (path.resolve(String(convertedPath)) !== path.resolve(String(originalPath))) {
+        try {
+          await removeTenantUploadFile(originalPath);
+        } catch (err) {
+          console.error('Failed to remove tenant upload original:', err && err.message ? err.message : err);
+          await removeTenantUploadFile(convertedPath);
+          return res.status(500).json({ ok: false, error: 'ORIGINAL_DELETE_FAILED' });
+        }
       }
 
       const url = `/static/uploads/tenants/${tenantId}/${path.basename(convertedPath)}`;

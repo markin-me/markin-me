@@ -2706,6 +2706,10 @@
     importantMessagesSelectedId: null,
     importantMessagesEditingId: null,
     importantMessageDraft: null,
+    importantMessagesAudienceCount: null,
+    importantMessagesAudienceCountLoading: false,
+    importantPromoSourcesLoading: false,
+    importantPromoSourcePickerOpen: false,
     activeBannerType: 'hero',
     activeBannerId: null,
     editingBannerId: null,
@@ -6753,6 +6757,9 @@
       body: '',
       image_url: '',
       promo_code: '',
+      promo_code_mode: 'none',
+      promo_discount_id: null,
+      promo_code_id: null,
       is_published: false,
       is_hidden: false,
       is_pinned: false,
@@ -6797,6 +6804,9 @@
       title: root?.querySelector('[data-important-field="title"]')?.value || '',
       body: root?.querySelector('[data-important-field="body"]')?.value || '',
       promo_code: root?.querySelector('[data-important-field="promo_code"]')?.value || '',
+      promo_code_mode: root?.querySelector('[data-important-field="promo_code_mode"]')?.value || 'none',
+      promo_discount_id: Number(root?.querySelector('[data-important-field="promo_discount_id"]')?.value || 0) || null,
+      promo_code_id: Number(root?.querySelector('[data-important-field="promo_code_id"]')?.value || 0) || null,
       is_pinned: String(root?.querySelector('[data-important-field="is_pinned"]')?.value || '').trim() === '1',
     };
   }
@@ -6839,6 +6849,23 @@
     }
   }
 
+  async function loadImportantMessagesAudienceCount(forceReload = false) {
+    if (!forceReload && state.importantMessagesAudienceCount !== null) return state.importantMessagesAudienceCount;
+    if (state.importantMessagesAudienceCountLoading) return state.importantMessagesAudienceCount;
+    state.importantMessagesAudienceCountLoading = true;
+    try {
+      const json = await apiJson('/api/admin/important-messages/audience-count');
+      const count = Math.max(0, Number(json?.data?.count || 0));
+      state.importantMessagesAudienceCount = count;
+      return count;
+    } catch (err) {
+      console.error('Failed to load important messages audience count:', err);
+      return state.importantMessagesAudienceCount;
+    } finally {
+      state.importantMessagesAudienceCountLoading = false;
+    }
+  }
+
   function openImportantMessageEditor(id = null) {
     const numericId = Number(id || 0) || 0;
     if (numericId === 0) {
@@ -6849,7 +6876,18 @@
     }
     state.importantMessagesSelectedId = numericId > 0 ? numericId : null;
     state.importantMessagesEditingId = numericId;
+    state.importantPromoSourcePickerOpen = false;
     renderImportantMessages();
+    loadImportantMessagesAudienceCount().then(() => {
+      if (state.currentView === 'important-messages' && state.importantMessagesEditingId === numericId) {
+        renderImportantMessages();
+      }
+    }).catch(console.error);
+    loadImportantPromoSources().then(() => {
+      if (state.currentView === 'important-messages' && state.importantMessagesEditingId === numericId) {
+        renderImportantMessages();
+      }
+    }).catch(console.error);
   }
 
   function openImportantMessagePreview(id) {
@@ -6877,6 +6915,7 @@
             <div class="important-message-modal-promo">
               <span>Промокод</span>
               <strong>${escapeHtml(promoCode)}</strong>
+              <button class="important-message-modal-claim-btn" type="button" tabindex="-1" aria-disabled="true">Забрать</button>
             </div>
           ` : ''}
           <div class="important-message-modal-body">${escapeHtml(String(item?.body || ''))}</div>
@@ -6891,6 +6930,7 @@
     if (!item || !window.AppModal || typeof window.AppModal.open !== 'function') return;
     const modalEl = document.getElementById('appModal');
     const modalBodyEl = window.AppModal.body;
+    let detachPromoParallax = null;
     window.AppModal.open({
       title: 'Promo рассылка',
       content: buildImportantMessageModalContent(item),
@@ -6898,12 +6938,32 @@
       showSave: false,
       closeOnBackdrop: true,
       onClose: () => {
+        if (typeof detachPromoParallax === 'function') detachPromoParallax();
         modalEl?.classList.remove('important-message-app-modal');
         modalBodyEl?.classList.remove('important-message-app-modal-body');
       },
     });
     modalEl?.classList.add('important-message-app-modal');
     modalBodyEl?.classList.add('important-message-app-modal-body');
+    const imageEl = modalBodyEl?.querySelector?.('.important-message-modal-media img');
+    if (modalBodyEl && imageEl) {
+      let rafId = 0;
+      const updateParallax = () => {
+        rafId = 0;
+        imageEl.style.transform = `translateY(${Math.max(0, modalBodyEl.scrollTop || 0) * 0.8}px)`;
+      };
+      const onScroll = () => {
+        if (rafId) return;
+        rafId = requestAnimationFrame(updateParallax);
+      };
+      modalBodyEl.addEventListener('scroll', onScroll, { passive: true });
+      updateParallax();
+      detachPromoParallax = () => {
+        modalBodyEl.removeEventListener('scroll', onScroll);
+        if (rafId) cancelAnimationFrame(rafId);
+        imageEl.style.transform = '';
+      };
+    }
   }
 
   function closeImportantMessageEditor() {
@@ -6927,6 +6987,9 @@
         || getImportantMessageDraft(state.importantMessagesEditingId).imageUrl
         || '',
       promo_code: root?.querySelector('[data-important-field="promo_code"]')?.value || '',
+      promo_code_mode: root?.querySelector('[data-important-field="promo_code_mode"]')?.value || 'none',
+      promo_discount_id: Number(root?.querySelector('[data-important-field="promo_discount_id"]')?.value || 0) || null,
+      promo_code_id: Number(root?.querySelector('[data-important-field="promo_code_id"]')?.value || 0) || null,
       is_published: isPublishedField ? String(isPublishedField.value || '').trim() === '1' : false,
       is_pinned: isPinned,
       send_push: root?.querySelector('[data-important-field="send_push"]')?.checked === true,
@@ -6995,6 +7058,9 @@
       image_url: existing.image_url || existing.imageUrl || '',
       link_url: existing.link_url || existing.linkUrl || '',
       promo_code: existing.promo_code || existing.promoCode || '',
+      promo_code_mode: existing.promo_code_mode || existing.promoCodeMode || (existing.promo_code || existing.promoCode ? 'shared' : 'none'),
+      promo_discount_id: existing.promo_discount_id || existing.promoDiscountId || null,
+      promo_code_id: existing.promo_code_id || existing.promoCodeId || null,
       is_published: isImportantMessagePublished(existing),
       is_hidden: isImportantMessageHidden(existing),
       is_pinned: isImportantMessagePinned(existing),
@@ -7055,6 +7121,9 @@
       image_url: existing.image_url || existing.imageUrl || '',
       link_url: existing.link_url || existing.linkUrl || '',
       promo_code: existing.promo_code || existing.promoCode || '',
+      promo_code_mode: existing.promo_code_mode || existing.promoCodeMode || (existing.promo_code || existing.promoCode ? 'shared' : 'none'),
+      promo_discount_id: existing.promo_discount_id || existing.promoDiscountId || null,
+      promo_code_id: existing.promo_code_id || existing.promoCodeId || null,
       is_published: isImportantMessagePublished(existing),
       is_hidden: isImportantMessageHidden(existing),
       is_pinned: isImportantMessagePinned(existing),
@@ -7147,6 +7216,176 @@
       });
   }
 
+  function normalizeImportantPromoMode(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    return ['none', 'shared', 'unique'].includes(raw) ? raw : 'none';
+  }
+
+  async function loadImportantPromoSources(forceReload = false) {
+    state.importantPromoSourcesLoading = true;
+    try {
+      await Promise.all([
+        loadDiscountSharedPromoSources(forceReload),
+        loadDiscountLoyaltyPromoSources(forceReload),
+      ]);
+    } finally {
+      state.importantPromoSourcesLoading = false;
+    }
+  }
+
+  function getImportantPromoSourceKey(source) {
+    const row = cloneDiscountPromoSource(source);
+    if (!row) return '';
+    if (row.source_code_mode === 'unique') {
+      const discountId = Number(row.source_discount_id || 0);
+      return discountId > 0 ? `unique:${discountId}` : '';
+    }
+    const promoCodeId = Number(row.source_promo_code_id || 0);
+    return promoCodeId > 0 ? `shared:${promoCodeId}` : '';
+  }
+
+  function getImportantPromoSourceRows(mode) {
+    if (mode === 'shared') {
+      return Array.isArray(state.discountSharedPromoSources) ? state.discountSharedPromoSources : [];
+    }
+    if (mode === 'unique') {
+      return (Array.isArray(state.discountLoyaltyPromoSources) ? state.discountLoyaltyPromoSources : [])
+        .filter((item) => String(item?.source_code_mode || '').trim() === 'unique');
+    }
+    return [];
+  }
+
+  function getImportantPromoDraftSource(draft) {
+    const mode = normalizeImportantPromoMode(draft?.promo_code_mode || (draft?.promo_code ? 'shared' : 'none'));
+    if (mode === 'shared') {
+      const promoCodeId = Number(draft?.promo_code_id || 0);
+      const code = String(draft?.promo_code || '').trim();
+      return (state.discountSharedPromoSources || []).find((item) => (
+        Number(item?.source_promo_code_id || 0) === promoCodeId
+        || (!!code && String(item?.source_code || '').trim() === code)
+      )) || null;
+    }
+    if (mode === 'unique') {
+      const discountId = Number(draft?.promo_discount_id || 0);
+      return (state.discountLoyaltyPromoSources || []).find((item) => (
+        String(item?.source_code_mode || '').trim() === 'unique'
+        && Number(item?.source_discount_id || 0) === discountId
+      )) || null;
+    }
+    return null;
+  }
+
+  function getImportantPromoSummaryText(draft) {
+    const mode = normalizeImportantPromoMode(draft?.promo_code_mode || (draft?.promo_code ? 'shared' : 'none'));
+    if (mode === 'none') return 'Промокод не прикреплен';
+    const source = getImportantPromoDraftSource(draft);
+    if (mode === 'shared') {
+      const code = String(source?.source_code || draft?.promo_code || '').trim();
+      const title = String(source?.source_discount_title || '').trim();
+      return code ? `${code}${title ? ` • ${title}` : ''}` : 'Выберите общий промокод';
+    }
+    const title = String(source?.source_discount_title || '').trim();
+    const available = Number(source?.available_codes_count || 0);
+    const total = Number(source?.total_codes_count || 0);
+    return title ? `${title} • доступно ${available}/${total}` : 'Выберите пул уникальных кодов';
+  }
+
+  function buildImportantPromoPickerHtml(draft) {
+    const mode = normalizeImportantPromoMode(draft?.promo_code_mode || (draft?.promo_code ? 'shared' : 'none'));
+    if (!state.importantPromoSourcePickerOpen || mode === 'none') return '';
+    const rows = getImportantPromoSourceRows(mode);
+    const selectedKey = getImportantPromoSourceKey(getImportantPromoDraftSource(draft));
+    if (state.importantPromoSourcesLoading) {
+      return '<div class="important-promo-source-list"><div class="discount-audience-empty">Загружаем промокоды...</div></div>';
+    }
+    if (!rows.length) {
+      return `<div class="important-promo-source-list"><div class="discount-audience-empty">${mode === 'unique' ? 'Пулы уникальных кодов не найдены' : 'Общие промокоды не найдены'}</div></div>`;
+    }
+    return `
+      <div class="important-promo-source-list">
+        ${rows.map((item) => {
+          const key = getImportantPromoSourceKey(item);
+          const isActive = key && key === selectedKey;
+          const isUnique = mode === 'unique';
+          const statusBits = [];
+          statusBits.push(item?.is_active ? 'акция активна' : 'акция выключена');
+          statusBits.push(item?.promo_code_is_active ? (isUnique ? 'коды активны' : 'код активен') : (isUnique ? 'нет активных кодов' : 'код выключен'));
+          if (isUnique) {
+            const available = Math.max(0, Number(item?.available_codes_count || 0));
+            const total = Math.max(0, Number(item?.total_codes_count || 0));
+            statusBits.push(`доступно ${available}/${total}`);
+          } else if (Number(item?.usage_limit || 0) > 0) {
+            statusBits.push(`${Number(item?.usage_count || 0)}/${Number(item?.usage_limit || 0)}`);
+          }
+          return `
+            <button type="button" class="important-promo-source-option${isActive ? ' is-active' : ''}" data-important-promo-source-key="${escapeHtml(key)}">
+              <span class="important-promo-source-title">${escapeHtml(item.source_discount_title || `Акция #${item.source_discount_id || 0}`)}</span>
+              <span class="important-promo-source-code">${escapeHtml(isUnique ? '*****' : (item.source_code || ''))}</span>
+              <span class="important-promo-source-meta">${escapeHtml(statusBits.join(' • '))}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function applyImportantPromoMode(modeValue) {
+    syncImportantMessageDraftFromForm();
+    const mode = normalizeImportantPromoMode(modeValue);
+    const draft = ensureImportantMessageDraft();
+    state.importantMessageDraft = {
+      ...draft,
+      promo_code_mode: mode,
+      promo_code: mode === 'shared' ? String(draft.promo_code || '').trim() : '',
+      promo_discount_id: null,
+      promo_code_id: null,
+    };
+    state.importantPromoSourcePickerOpen = mode !== 'none';
+    renderImportantMessages();
+    if (mode !== 'none') {
+      loadImportantPromoSources().then(renderImportantMessages).catch(console.error);
+    }
+  }
+
+  function applyImportantPromoSource(sourceKey) {
+    syncImportantMessageDraftFromForm();
+    const key = String(sourceKey || '').trim();
+    const mode = key.startsWith('unique:') ? 'unique' : key.startsWith('shared:') ? 'shared' : 'none';
+    if (mode === 'none') return;
+    const rows = getImportantPromoSourceRows(mode);
+    const source = rows.find((item) => getImportantPromoSourceKey(item) === key) || null;
+    if (!source) return;
+    state.importantMessageDraft = {
+      ...ensureImportantMessageDraft(),
+      promo_code_mode: mode,
+      promo_code: mode === 'shared' ? String(source.source_code || '').trim() : '',
+      promo_discount_id: Number(source.source_discount_id || 0) || null,
+      promo_code_id: mode === 'shared' ? (Number(source.source_promo_code_id || 0) || null) : null,
+    };
+    state.importantPromoSourcePickerOpen = false;
+    renderImportantMessages();
+  }
+
+  async function generateImportantPromoCodes() {
+    syncImportantMessageDraftFromForm();
+    const draft = ensureImportantMessageDraft();
+    const discountId = Number(draft.promo_discount_id || 0);
+    const countInput = elImportantMessagesEditor?.querySelector('[data-important-field="promo_generate_count"]');
+    const count = Math.max(1, Math.min(500, Number(countInput?.value || 0)));
+    if (!(discountId > 0)) {
+      alert('Выберите индивидуальный промокод');
+      return;
+    }
+    if (!(count > 0)) {
+      alert('Введите количество кодов');
+      return;
+    }
+    await generateDiscountPromoCodes(discountId, count);
+    await loadImportantPromoSources(true);
+    state.importantPromoSourcePickerOpen = false;
+    renderImportantMessages();
+  }
+
   function renderImportantMessageEditor() {
     if (!elImportantMessagesEditor) return;
     const isImportantMessagesView = state.currentView === 'important-messages';
@@ -7191,12 +7430,42 @@
     }
     const draft = getImportantMessageDraft(state.importantMessagesEditingId);
     const draftPinned = isImportantMessagePinned(draft);
+    const draftPromoMode = normalizeImportantPromoMode(draft.promo_code_mode || (draft.promo_code ? 'shared' : 'none'));
     const draftPromoCode = String(draft.promo_code || draft.promoCode || '').trim();
+    const draftPromoSource = getImportantPromoDraftSource(draft);
+    const uniqueAvailableCount = Math.max(0, Number(draftPromoSource?.available_codes_count || 0));
+    const uniqueAudienceCount = Math.max(0, Number(state.importantMessagesAudienceCount || 0));
+    const uniqueGenerateDefault = Math.max(1, Math.min(500, uniqueAudienceCount - uniqueAvailableCount));
     elImportantMessagesEditor.innerHTML = `
       <div class="promo-messages-editor-form">
         <div class="settings-site-field">
           <label class="field-label">ПРОМОКОД</label>
-          <input class="control" data-important-field="promo_code" type="text" value="${escapeHtml(draftPromoCode)}" maxlength="80" />
+          <div class="important-promo-mode-row">
+            ${['none', 'shared', 'unique'].map((mode) => `
+              <button type="button" class="shop-chip-btn important-promo-mode-btn${draftPromoMode === mode ? ' is-active' : ''}" data-important-promo-mode="${mode}">
+                ${mode === 'none' ? 'Без промокода' : mode === 'shared' ? 'Общий' : 'Индивидуальный'}
+              </button>
+            `).join('')}
+          </div>
+          <input data-important-field="promo_code_mode" type="hidden" value="${escapeHtml(draftPromoMode)}" />
+          <input data-important-field="promo_discount_id" type="hidden" value="${escapeHtml(draft.promo_discount_id || '')}" />
+          <input data-important-field="promo_code_id" type="hidden" value="${escapeHtml(draft.promo_code_id || '')}" />
+          <input class="control${draftPromoMode === 'unique' ? ' hidden' : ''}" data-important-field="promo_code" type="text" value="${escapeHtml(draftPromoCode)}" maxlength="80" ${draftPromoMode === 'none' ? 'disabled' : ''} />
+          ${draftPromoMode !== 'none' ? `
+            <div class="important-promo-source-summary">
+              <span>${escapeHtml(getImportantPromoSummaryText(draft))}</span>
+              <button type="button" class="btn btn-sm" data-important-action="promo-picker">${state.importantPromoSourcePickerOpen ? 'Скрыть' : 'Выбрать'}</button>
+              <button type="button" class="btn btn-sm" data-important-action="promo-clear">Очистить</button>
+            </div>
+            ${buildImportantPromoPickerHtml(draft)}
+            ${draftPromoMode === 'unique' ? `
+              <div class="important-promo-generate-row">
+                <span>Клиентов: ${uniqueAudienceCount || '...'} · доступно кодов: ${uniqueAvailableCount}</span>
+                <input class="control" data-important-field="promo_generate_count" type="number" min="1" max="500" step="1" value="${uniqueGenerateDefault}" />
+                <button type="button" class="btn btn-sm" data-important-action="promo-generate">Сгенерировать</button>
+              </div>
+            ` : ''}
+          ` : ''}
         </div>
         <div class="settings-site-field">
           <label class="field-label">ЗАГОЛОВОК</label>
@@ -7233,6 +7502,8 @@
       const canEditPhoto = state.importantMessagesEditingId !== null && Number(state.importantMessagesEditingId || 0) === itemId;
       const imageUrl = String(item.image_url || item.imageUrl || '').trim();
       const promoCode = String(item.promo_code || item.promoCode || '').trim();
+      const promoMode = normalizeImportantPromoMode(item.promo_code_mode || item.promoCodeMode || (promoCode ? 'shared' : 'none'));
+      const promoDisplayCode = promoMode === 'unique' && !promoCode ? '*****' : promoCode;
       const isPhotoUploading = importantMessagePhotoUploadingIds.has(itemId);
       const publishTitle = isPublished ? 'Опубликовать повторно' : 'Опубликовать';
       const publishIcon = isPublished ? 'fa-sync-alt' : 'fa-bullhorn';
@@ -7254,7 +7525,9 @@
               </button>
             ` : ''}
           </div>
-          ${promoCode ? `<div class="important-message-preview-promo"><span>Промокод</span><strong>${escapeHtml(promoCode)}</strong></div>` : ''}
+          <div class="important-message-preview-promo-slot${promoMode === 'none' ? ' is-empty' : ''}">
+            ${promoMode === 'none' ? '' : `<div class="important-message-preview-promo"><span>Промокод</span><strong>${escapeHtml(promoDisplayCode)}</strong></div>`}
+          </div>
         </div>
         <input class="hidden" type="file" data-important-list-photo-input accept="image/png,image/jpeg,image/webp,image/*" />
         <div class="important-message-preview-content">
@@ -24167,11 +24440,45 @@
         actionTarget.setAttribute('aria-label', nextPinned ? 'Открепить' : 'Закрепить');
         return;
       }
+      if (action === 'promo-picker') {
+        syncImportantMessageDraftFromForm();
+        state.importantPromoSourcePickerOpen = !state.importantPromoSourcePickerOpen;
+        renderImportantMessages();
+        if (state.importantPromoSourcePickerOpen) {
+          loadImportantPromoSources().then(renderImportantMessages).catch(console.error);
+        }
+        return;
+      }
+      if (action === 'promo-clear') {
+        applyImportantPromoMode('none');
+        return;
+      }
+      if (action === 'promo-generate') {
+        generateImportantPromoCodes().catch(console.error);
+        return;
+      }
       if (action === 'publish') {
         saveImportantMessage({ publish: true }).catch(console.error);
         return;
       }
       if (action === 'save') saveImportantMessage({ publish: false }).catch(console.error);
+    });
+    elImportantMessagesRightWrap.addEventListener('change', (event) => {
+      const generateInput = event.target.closest?.('[data-important-field="promo_generate_count"]');
+      if (!generateInput) return;
+      const value = Math.max(1, Math.min(500, Number(generateInput.value || 0)));
+      generateInput.value = String(value);
+    });
+    elImportantMessagesRightWrap.addEventListener('click', (event) => {
+      const modeBtn = event.target.closest?.('[data-important-promo-mode]');
+      if (modeBtn) {
+        applyImportantPromoMode(modeBtn.getAttribute('data-important-promo-mode'));
+        return;
+      }
+      const sourceBtn = event.target.closest?.('[data-important-promo-source-key]');
+      if (sourceBtn) {
+        applyImportantPromoSource(sourceBtn.getAttribute('data-important-promo-source-key'));
+      }
     });
   }
 

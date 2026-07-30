@@ -69,7 +69,6 @@ export type ChatTabParamList = {
   chatHome: undefined;
   importantMessages: undefined;
   importantMessageDetails: { item?: ImportantMessage; itemId?: number };
-  supportChat: undefined;
 };
 
 export type MainTabParamList = {

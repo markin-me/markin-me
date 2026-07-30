@@ -2460,11 +2460,6 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
       const sources = rows
         .map((row) => {
-          const mechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
-          const mechanic = normalizeMechanicFromDiscount(row);
-          if (!isPromoSimpleDiscountMechanic(mechanicType, mechanic)) {
-            return null;
-          }
           return {
             source_code_mode: 'shared',
             source_discount_id: Number(row.discount_id || 0),
@@ -2565,11 +2560,6 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
       const sharedSources = sharedRows
         .map((row) => {
-          const mechanicType = normalizeMechanicType(row.mechanic_type, 'simple_discount');
-          const mechanic = normalizeMechanicFromDiscount(row);
-          if (!isPromoSimpleDiscountMechanic(mechanicType, mechanic)) {
-            return null;
-          }
           return {
             source_code_mode: 'shared',
             source_discount_id: Number(row.discount_id || 0),

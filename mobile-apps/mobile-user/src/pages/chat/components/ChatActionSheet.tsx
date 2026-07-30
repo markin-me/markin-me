@@ -77,7 +77,6 @@ export function ChatActionSheet({
   const confirmProgress = useRef(new Animated.Value(0)).current;
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleteForPeer, setDeleteForPeer] = useState(false);
-  const [backdropBlurReady, setBackdropBlurReady] = useState(false);
 
   const onDelete = () => {
     setDeleteForPeer(canDeleteForPeer);
@@ -92,14 +91,11 @@ export function ChatActionSheet({
       confirmProgress.setValue(0);
       setConfirmDeleteOpen(false);
       setDeleteForPeer(false);
-      setBackdropBlurReady(false);
       return;
     }
 
     setConfirmDeleteOpen(!!confirmOnly);
     setDeleteForPeer(!!confirmOnly && canDeleteForPeer);
-    setBackdropBlurReady(false);
-    const blurTimer = setTimeout(() => setBackdropBlurReady(true), 80);
     backdropProgress.setValue(0);
     cloneProgress.setValue(0);
     menuProgress.setValue(0);
@@ -128,7 +124,7 @@ export function ChatActionSheet({
       ]),
     ]).start();
 
-    return () => clearTimeout(blurTimer);
+    return undefined;
   }, [backdropProgress, canDeleteForPeer, cloneProgress, confirmOnly, confirmProgress, menuProgress, message?.id, visible]);
 
   useEffect(() => {
@@ -243,15 +239,13 @@ export function ChatActionSheet({
     <Modal animationType="none" onRequestClose={onClose} transparent visible={visible}>
       <View style={styles.host}>
         <Animated.View pointerEvents="none" style={[styles.backdrop, { opacity: confirmDeleteOpen ? 0 : backdropOpacity }]}>
-          {backdropBlurReady ? (
-            <BlurView
-              blurReductionFactor={2}
-              experimentalBlurMethod="dimezisBlurView"
-              intensity={34}
-              style={styles.backdropBlur}
-              tint="dark"
-            />
-          ) : null}
+          <BlurView
+            blurReductionFactor={2}
+            experimentalBlurMethod="dimezisBlurView"
+            intensity={34}
+            style={styles.backdropBlur}
+            tint="dark"
+          />
           <View style={styles.backdropDim} />
         </Animated.View>
         <Pressable accessibilityRole="button" onPress={onClose} style={styles.backdropPressable} />

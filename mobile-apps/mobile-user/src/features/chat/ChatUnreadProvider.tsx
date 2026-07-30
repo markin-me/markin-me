@@ -1,11 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { PropsWithChildren } from 'react';
 
-import { fetchImportantMessages, fetchUnread, openUnreadStream, waitUnread } from './api';
+import { fetchImportantMessages, fetchImportantMessagesRevision, fetchUnread, openUnreadStream, waitUnread } from './api';
 import {
   countUnreadImportantMessages,
   markImportantMessageRead,
+  readImportantMessagesCache,
   resolveUserChatProfile,
+  saveImportantMessagesCache,
 } from './storage';
 import type { ImportantMessage } from './types';
 import { subscribeCustomerPassport } from '../../shared/api';
@@ -13,7 +15,9 @@ import { subscribeCustomerPassport } from '../../shared/api';
 type ChatUnreadContextValue = {
   chatUnread: number;
   markPromoRead: (item: ImportantMessage | number) => Promise<void>;
+  promoCacheRevision: number;
   promoUnread: number;
+  refreshPromoUnread: () => void;
   refreshUnread: () => void;
   syncPromoUnreadFromItems: (items: ImportantMessage[]) => Promise<void>;
   totalUnread: number;
@@ -22,7 +26,9 @@ type ChatUnreadContextValue = {
 const ChatUnreadContext = createContext<ChatUnreadContextValue>({
   chatUnread: 0,
   markPromoRead: async () => undefined,
+  promoCacheRevision: 0,
   promoUnread: 0,
+  refreshPromoUnread: () => undefined,
   refreshUnread: () => undefined,
   syncPromoUnreadFromItems: async () => undefined,
   totalUnread: 0,
@@ -34,6 +40,7 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
   const [revision, setRevision] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
   const [promoReloadKey, setPromoReloadKey] = useState(0);
+  const [promoCacheRevision, setPromoCacheRevision] = useState(0);
   const stoppedRef = useRef(false);
   const totalUnread = Math.max(0, chatUnread) + Math.max(0, promoUnread);
 
@@ -118,25 +125,45 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
+    if (promoReloadKey <= 0) return undefined;
     let cancelled = false;
-    const refreshPromoUnread = () => {
-      void fetchImportantMessages()
-        .then((items) => countUnreadImportantMessages(Array.isArray(items) ? items : []))
+    const refreshPromoUnread = async () => {
+      const cached = await readImportantMessagesCache().catch(() => null);
+      const revision = await fetchImportantMessagesRevision().catch(() => null);
+      const nextRevision = String(revision?.revision || '');
+      const nextCount = Math.max(0, Number(revision?.count || 0));
+      if (cached && cached.revision === nextRevision && cached.count === nextCount) {
+        return countUnreadImportantMessages(cached.items);
+      }
+      const items = await fetchImportantMessages();
+      const normalizedItems = Array.isArray(items) ? items : [];
+      await saveImportantMessagesCache({
+        count: nextCount || normalizedItems.length,
+        items: normalizedItems,
+        revision: nextRevision,
+      });
+      if (!cancelled && !stoppedRef.current) setPromoCacheRevision((key) => key + 1);
+      return countUnreadImportantMessages(normalizedItems);
+    };
+    const refreshPromoUnreadSafely = () => {
+      void refreshPromoUnread()
         .then((count) => {
           if (!cancelled && !stoppedRef.current) setPromoUnread(count);
         })
         .catch(() => undefined);
     };
-    refreshPromoUnread();
-    const timer = setInterval(refreshPromoUnread, 30000);
+    refreshPromoUnreadSafely();
     return () => {
       cancelled = true;
-      clearInterval(timer);
     };
   }, [promoReloadKey]);
 
   const markPromoRead = useMemo(() => async (item: ImportantMessage | number) => {
     await markImportantMessageRead(item);
+    setPromoReloadKey((key) => key + 1);
+  }, []);
+
+  const refreshPromoUnread = useCallback(() => {
     setPromoReloadKey((key) => key + 1);
   }, []);
 
@@ -148,11 +175,13 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
   const value = useMemo(() => ({
     chatUnread,
     markPromoRead,
+    promoCacheRevision,
     promoUnread,
+    refreshPromoUnread,
     refreshUnread,
     syncPromoUnreadFromItems,
     totalUnread,
-  }), [chatUnread, markPromoRead, promoUnread, refreshUnread, syncPromoUnreadFromItems, totalUnread]);
+  }), [chatUnread, markPromoRead, promoCacheRevision, promoUnread, refreshPromoUnread, refreshUnread, syncPromoUnreadFromItems, totalUnread]);
 
   return <ChatUnreadContext.Provider value={value}>{children}</ChatUnreadContext.Provider>;
 }
