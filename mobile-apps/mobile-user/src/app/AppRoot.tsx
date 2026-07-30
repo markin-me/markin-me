@@ -600,6 +600,7 @@ const styles = StyleSheet.create({
   mainTabsRoot: {
     flex: 1,
     position: 'relative',
+    overflow: 'hidden',
   },
   mainTabsContent: {
     flex: 1,

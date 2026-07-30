@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
@@ -83,7 +84,7 @@ import {
 import { theme } from '../../shared/config/theme';
 import { calculateBuyXGetYLineTotals, getBuyXGetYBadgeText } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
-import { AppText as Text, AppTextInput, BottomSheet, ProductBadge } from '../../shared/ui';
+import { AppText as Text, AppTextInput, BottomSheet, ProductBadge, ProductQuantityButton } from '../../shared/ui';
 import { Screen } from '../../shared/ui/Screen';
 
 type CartNavigation = NativeStackNavigationProp<RootStackParamList>;
@@ -214,9 +215,9 @@ function isBenefitStackable(item: CustomerBenefitCard | null | undefined) {
 }
 
 const CART_HEADER_TOGGLE_HEIGHT = 44;
-const CART_HEADER_META_HEIGHT = 58;
+const CART_HEADER_META_HEIGHT = 76;
 const CART_HEADER_TOGGLE_SCROLL = 54;
-const CART_HEADER_FULL_HEIGHT = 199;
+const CART_HEADER_FULL_HEIGHT = 217;
 const CART_HEADER_WITHOUT_PROGRESS_HEIGHT = CART_HEADER_FULL_HEIGHT - 24 - theme.spacing.md;
 const CART_HEADER_COMPACT_HEIGHT = 77;
 const CART_HEADER_META_SCROLL = CART_HEADER_FULL_HEIGHT - CART_HEADER_COMPACT_HEIGHT;
@@ -983,9 +984,10 @@ function getCartLineDetails(line: CartLine) {
   return structuredLines.length ? structuredLines : line.detailLines || [];
 }
 
-function BonusAmount({ amount, color, logoUrl, prefix = '', size = 'md', suffix }: {
+function BonusAmount({ amount, color, emphasis = false, logoUrl, prefix = '', size = 'md', suffix }: {
   amount: number;
   color?: string;
+  emphasis?: boolean;
   logoUrl?: string;
   prefix?: string;
   size?: 'sm' | 'md' | 'lg';
@@ -998,6 +1000,7 @@ function BonusAmount({ amount, color, logoUrl, prefix = '', size = 'md', suffix 
         styles.bonusAmountText,
         size === 'lg' && styles.bonusAmountTextLarge,
         size === 'sm' && styles.bonusAmountTextSmall,
+        emphasis && styles.bonusAmountTextEmphasis,
         color ? { color } : null,
       ]}>
         {prefix}{Math.floor(Math.max(0, Number(amount || 0))).toLocaleString('ru-RU')}
@@ -1012,6 +1015,29 @@ function BonusAmount({ amount, color, logoUrl, prefix = '', size = 'md', suffix 
           color ? { color } : null,
         ]}>{suffix}</Text>
       ) : null}
+    </View>
+  );
+}
+
+function AccentGradientSurface({ shape = 'pill' }: { shape?: 'pill' | 'rounded' }) {
+  const gradientId = `cartAccentGradient${useId().replace(/:/g, '')}`;
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        styles.accentGradientSurface,
+        shape === 'rounded' && styles.accentGradientSurfaceRounded,
+      ]}
+    >
+      <Svg height="100%" preserveAspectRatio="none" style={StyleSheet.absoluteFillObject} viewBox="0 0 100 64" width="100%">
+        <Defs>
+          <SvgLinearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="100%">
+            <Stop offset="0%" stopColor={theme.colors.accent} />
+            <Stop offset="100%" stopColor="#ffb15a" />
+          </SvgLinearGradient>
+        </Defs>
+        <Rect fill={`url(#${gradientId})`} height="64" width="100" />
+      </Svg>
     </View>
   );
 }
@@ -1152,7 +1178,6 @@ export function CartPage() {
     [activeLines, bonusConfig, bonusFavoriteCategories, catalogSnapshot],
   );
   const redeemActive = bonusRedeemEnabled && bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0;
-  const redeemLabel = bonusState.allowRedeemAndAccrue ? 'Списать и\nначислить' : 'Списать\nбонусы';
   const normalizedPromoCode = normalizePromoCode(promoCode);
   const promoIsCurrent = !!normalizedPromoCode && normalizedPromoCode === appliedPromoCode;
   const promoApplyDisabled = !normalizedPromoCode || promoIsCurrent || isApplyingPromo;
@@ -1942,16 +1967,15 @@ export function CartPage() {
             ) : null}
           </View>
           <View style={styles.quantityStepper}>
-            <Pressable
+            <ProductQuantityButton
               hitSlop={cartQuantityTapSlop}
               onPress={(event) => {
                 event.stopPropagation();
                 return line.quantity <= 1 ? removeLine(line) : changeQuantity(line, -1);
               }}
-              style={styles.qtyButton}
             >
               <Ionicons name={line.quantity <= 1 ? 'trash' : 'remove'} color={theme.colors.primaryText} size={line.quantity <= 1 ? 15 : 14} />
-            </Pressable>
+            </ProductQuantityButton>
             <View style={styles.quantityPriceCenter}>
               <Text
                 numberOfLines={1}
@@ -1962,7 +1986,7 @@ export function CartPage() {
               <Text numberOfLines={1} style={[styles.itemPrice, styles.quantityPrice]}>{formatPrice(total)}</Text>
               <Text numberOfLines={1} style={styles.qtyText}>{line.quantity} шт</Text>
             </View>
-            <Pressable
+            <ProductQuantityButton
               disabled={plusBlocked}
               hitSlop={cartQuantityTapSlop}
               onPress={(event) => {
@@ -1970,10 +1994,9 @@ export function CartPage() {
                 if (plusBlocked) return undefined;
                 return changeQuantity(line, 1);
               }}
-              style={[styles.qtyButton, plusBlocked && styles.qtyButtonDisabled]}
             >
-              <Ionicons name="add" color={plusBlocked ? theme.colors.muted : theme.colors.primaryText} size={16} />
-            </Pressable>
+              <Ionicons name="add" color={theme.colors.primaryText} size={16} />
+            </ProductQuantityButton>
           </View>
         </View>
       </Pressable>
@@ -2005,6 +2028,7 @@ export function CartPage() {
                       onPress={() => changeMode(mode)}
                       style={[styles.toggleButton, active && styles.toggleButtonActive]}
                     >
+                      {active ? <AccentGradientSurface /> : null}
                       <Text style={[styles.toggleText, active && styles.toggleTextActive]}>
                         {mode === 'delivery' ? 'Доставка' : 'Самовывоз'}
                       </Text>
@@ -2016,7 +2040,10 @@ export function CartPage() {
 
               <Animated.View style={{ marginTop: addressMarginTop }}>
               <Pressable onPress={openAddresses} style={styles.addressRow}>
-                <Ionicons name={isDelivery ? 'location' : 'storefront'} color={theme.colors.accent} size={21} />
+                <View style={styles.deliveryMetaIcon}>
+                  <AccentGradientSurface shape="rounded" />
+                  <Ionicons name={isDelivery ? 'location' : 'storefront'} color={theme.colors.primaryText} size={16} />
+                </View>
                 <Text numberOfLines={1} style={styles.addressText}>
                   {isDelivery
                     ? formatAddressLine(selectedAddress) || 'Укажите адрес'
@@ -2034,7 +2061,10 @@ export function CartPage() {
               >
               <View style={styles.metaWrap}>
                 <View style={styles.metaRow}>
-                  <Ionicons name={isDelivery ? 'car' : 'bag-handle'} color={theme.colors.accent} size={16} />
+                  <View style={styles.deliveryMetaIcon}>
+                    <AccentGradientSurface shape="rounded" />
+                    <Ionicons name={isDelivery ? 'car' : 'bag-handle'} color={theme.colors.primaryText} size={16} />
+                  </View>
                   <Text style={styles.metaText}>
                     {isDelivery ? formatEta(deliveryMeta?.etaMinutes ?? null) : 'Самовывоз из выбранной точки'}
                   </Text>
@@ -2045,7 +2075,10 @@ export function CartPage() {
                   ) : null}
                 </View>
                 <View style={styles.metaRow}>
-                  <Ionicons name="time" color={theme.colors.accent} size={16} />
+                  <View style={styles.deliveryMetaIcon}>
+                    <AccentGradientSurface shape="rounded" />
+                    <Ionicons name="time" color={theme.colors.primaryText} size={16} />
+                  </View>
                   <Text style={styles.metaText}>
                     {isDelivery
                       ? deliveryMeta?.hoursText || 'Время доставки уточняется'
@@ -2057,7 +2090,9 @@ export function CartPage() {
 
               {visibleDeliveryProgress ? (
                 <Animated.View style={[styles.progressSurface, { marginTop: progressMarginTop }]}>
-                  <View style={[styles.progressFill, { width: `${visibleDeliveryProgress.value}%` }]} />
+                  <View style={[styles.progressFill, { width: `${visibleDeliveryProgress.value}%` }]}>
+                    <AccentGradientSurface />
+                  </View>
                   <Text style={[styles.progressLabel, visibleDeliveryProgress.free && styles.progressLabelFree]}>
                     {visibleDeliveryProgress.label}
                   </Text>
@@ -2134,9 +2169,7 @@ export function CartPage() {
                             <Text numberOfLines={2} style={styles.benefitIconLabel}>{item.label}</Text>
                           </View>
                           {active ? (
-                            <View style={styles.benefitIconBadge}>
-                              <Text style={styles.benefitIconBadgeText}>{item.count}</Text>
-                            </View>
+                            <ProductBadge style={styles.benefitIconBadge} text={String(item.count)} tone="promo" />
                           ) : null}
                         </View>
                       </Pressable>
@@ -2173,61 +2206,66 @@ export function CartPage() {
                   <View style={styles.bonusActions}>
                     <View style={styles.bonusInfoPanel}>
                       <View style={styles.bonusInfoRow}>
-                        <Text style={styles.bonusInfoLabel}>Баланс бонусов</Text>
-                        <BonusAmount amount={bonusState.balance} logoUrl={bonusState.coinLogoUrl} size="sm" suffix={bonusState.coinName} />
-                      </View>
-                      <View style={styles.bonusInfoRow}>
-                        <Text style={styles.bonusInfoLabel}>Можно списать</Text>
-                        <BonusAmount amount={bonusState.redeemAvailableAmount} logoUrl={bonusState.coinLogoUrl} size="sm" suffix={bonusState.coinName} />
+                        <Text style={styles.bonusInfoLabel}>Баланс</Text>
+                        <View style={styles.bonusBalanceCapsule}>
+                          <BonusAmount amount={bonusState.balance} emphasis logoUrl={bonusState.coinLogoUrl} size="sm" suffix={bonusState.coinName} />
+                        </View>
                       </View>
                     </View>
-                    <Pressable
-                      onPress={selectBonusAccrual}
-                      style={[styles.bonusActionButton, !redeemActive && styles.bonusActionButtonActive]}
-                    >
-                      <Text numberOfLines={2} style={[styles.bonusActionLabel, !redeemActive && styles.bonusActionTextActive]}>Начислить{`\n`}бонусы</Text>
-                      <BonusAmount
-                        amount={bonusState.accrualAmount}
-                        color={!redeemActive ? theme.colors.primaryText : theme.colors.text}
-                        logoUrl={bonusState.coinLogoUrl}
-                        prefix="+"
-                        size="sm"
-                        suffix={bonusState.coinName}
-                      />
-                    </Pressable>
-                    <Pressable
-                      disabled={!(bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0)}
-                      onPress={selectBonusRedeem}
-                      style={[
-                        styles.bonusActionButton,
-                        redeemActive && styles.bonusActionButtonActive,
-                        !(bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0) && styles.bonusActionButtonDisabled,
-                      ]}
-                    >
-                      <Text numberOfLines={2} style={[styles.bonusActionLabel, redeemActive && styles.bonusActionTextActive]}>
-                        {redeemLabel}
-                      </Text>
-                      <View style={styles.bonusActionAmountGroup}>
+                    <View style={styles.bonusActionColumn}>
+                      <Text numberOfLines={1} style={styles.bonusActionLabel}>Начислить</Text>
+                      <Pressable
+                        onPress={selectBonusAccrual}
+                        style={[styles.bonusActionButton, !redeemActive && styles.bonusActionButtonActive]}
+                      >
+                        {!redeemActive ? <AccentGradientSurface /> : null}
                         <BonusAmount
-                          amount={bonusState.redeemAvailableAmount}
-                          color={redeemActive ? theme.colors.primaryText : theme.colors.text}
+                          amount={bonusState.accrualAmount}
+                          color={!redeemActive ? theme.colors.primaryText : theme.colors.text}
+                          emphasis
                           logoUrl={bonusState.coinLogoUrl}
-                          prefix="-"
+                          prefix="+"
                           size="sm"
                           suffix={bonusState.coinName}
                         />
-                        {bonusState.allowRedeemAndAccrue && bonusState.accrualAmount > 0 ? (
+                      </Pressable>
+                    </View>
+                    <View style={styles.bonusActionColumn}>
+                      <Text numberOfLines={1} style={styles.bonusActionLabel}>Списать</Text>
+                      <Pressable
+                        disabled={!(bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0)}
+                        onPress={selectBonusRedeem}
+                        style={[
+                          styles.bonusActionButton,
+                          redeemActive && styles.bonusActionButtonActive,
+                          !(bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0) && styles.bonusActionButtonDisabled,
+                        ]}
+                      >
+                        {redeemActive ? <AccentGradientSurface /> : null}
+                        <View style={styles.bonusActionAmountGroup}>
                           <BonusAmount
-                            amount={bonusState.accrualAmount}
+                            amount={bonusState.redeemAvailableAmount}
                             color={redeemActive ? theme.colors.primaryText : theme.colors.text}
+                            emphasis
                             logoUrl={bonusState.coinLogoUrl}
-                            prefix="+"
+                            prefix="-"
                             size="sm"
                             suffix={bonusState.coinName}
                           />
-                        ) : null}
-                      </View>
-                    </Pressable>
+                          {bonusState.allowRedeemAndAccrue && bonusState.accrualAmount > 0 ? (
+                            <BonusAmount
+                              amount={bonusState.accrualAmount}
+                              color={redeemActive ? theme.colors.primaryText : theme.colors.text}
+                              emphasis
+                              logoUrl={bonusState.coinLogoUrl}
+                              prefix="+"
+                              size="sm"
+                              suffix={bonusState.coinName}
+                            />
+                          ) : null}
+                        </View>
+                      </Pressable>
+                    </View>
                   </View>
                 </View>
               ) : (
@@ -2320,6 +2358,7 @@ export function CartPage() {
                   onPress={openCheckout}
                   style={[styles.checkoutButton, hasProblemLines && styles.checkoutButtonDisabled]}
                 >
+                  <AccentGradientSurface />
                   <Text style={styles.checkoutButtonText}>Оформить</Text>
                   <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
                 </Pressable>
@@ -2333,6 +2372,7 @@ export function CartPage() {
                   onPress={openCheckout}
                   style={[styles.checkoutButton, styles.floatingCheckoutButton, hasProblemLines && styles.checkoutButtonDisabled]}
                 >
+                  <AccentGradientSurface />
                   <Text style={styles.checkoutButtonText}>Оформить</Text>
                   <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
                 </Pressable>
@@ -2427,23 +2467,10 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   benefitIconBadge: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.pill,
-    justifyContent: 'center',
-    minHeight: 24,
-    minWidth: 24,
-    paddingHorizontal: 7,
     position: 'absolute',
     right: 4,
     top: 4,
     zIndex: 2,
-  },
-  benefitIconBadgeText: {
-    color: theme.colors.primaryText,
-    fontSize: 12,
-    fontWeight: '900',
-    lineHeight: 14,
   },
   benefitIconImage: {
     height: '100%',
@@ -2584,20 +2611,25 @@ const styles = StyleSheet.create({
   bonusAmountTextSmall: {
     fontSize: 12,
   },
+  bonusAmountTextEmphasis: {
+    fontSize: 14,
+  },
   bonusActionButton: {
     alignItems: 'center',
-    aspectRatio: 1,
-    backgroundColor: theme.colors.mutedBackground,
+    backgroundColor: theme.colors.card,
     borderColor: theme.colors.border,
-    borderRadius: 16,
+    borderRadius: theme.radius.pill,
     borderWidth: 1,
-    flex: 0,
-    gap: 4,
+    elevation: 3,
+    flex: 1,
     justifyContent: 'center',
+    height: 36,
     minWidth: 0,
-    paddingHorizontal: 3,
-    paddingVertical: 4,
-    width: 66,
+    paddingHorizontal: 6,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 6, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
   },
   bonusActionButtonActive: {
     backgroundColor: theme.colors.accent,
@@ -2608,25 +2640,35 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 2,
   },
+  accentGradientSurface: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: theme.radius.pill,
+    overflow: 'hidden',
+  },
+  accentGradientSurfaceRounded: {
+    borderRadius: 12,
+  },
   bonusActionButtonDisabled: {
     opacity: 0.55,
+  },
+  bonusActionColumn: {
+    alignItems: 'stretch',
+    flex: 1,
+    gap: 4,
+    minWidth: 0,
   },
   bonusActionLabel: {
     color: theme.colors.text,
     fontSize: 11,
     fontWeight: '900',
-    height: 26,
-    lineHeight: 13,
+    lineHeight: 14,
     textAlign: 'center',
     width: '100%',
   },
   bonusActions: {
     alignItems: 'stretch',
     flexDirection: 'row',
-    gap: 6,
-  },
-  bonusActionTextActive: {
-    color: theme.colors.primaryText,
+    gap: theme.spacing.sm,
   },
   bonusAvailable: {
     alignItems: 'flex-end',
@@ -2661,22 +2703,35 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
   },
-  bonusInfoPanel: {
-    backgroundColor: theme.colors.mutedBackground,
+  bonusBalanceCapsule: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: theme.colors.card,
     borderColor: theme.colors.border,
-    borderRadius: 16,
+    borderRadius: theme.radius.pill,
     borderWidth: 1,
+    elevation: 3,
+    height: 36,
+    justifyContent: 'center',
+    minWidth: 72,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 6, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    width: '82%',
+  },
+  bonusInfoPanel: {
+    alignItems: 'center',
     flex: 1,
     justifyContent: 'space-evenly',
     minWidth: 0,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
   },
   bonusInfoRow: {
     alignItems: 'center',
-    flexDirection: 'row',
+    flex: 1,
     gap: 4,
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
+    minWidth: 0,
   },
   bonusJoinButton: {
     alignItems: 'center',
@@ -2770,11 +2825,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
+    elevation: 5,
     flexDirection: 'row',
     gap: 5,
     justifyContent: 'center',
     minHeight: 50,
     marginTop: theme.spacing.md,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
   },
   checkoutButtonDisabled: {
     opacity: 0.45,
@@ -2953,6 +3013,19 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 3,
   },
+  deliveryMetaIcon: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 12,
+    elevation: 3,
+    height: 28,
+    justifyContent: 'center',
+    shadowColor: '#141d30',
+    shadowOffset: { height: 4, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 6,
+    width: 28,
+  },
   metaRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -3073,7 +3146,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.sm,
   },
   progressLabelFree: {
-    color: theme.colors.accent,
+    color: theme.colors.primaryText,
   },
   progressSurface: {
     alignItems: 'center',
@@ -3084,18 +3157,6 @@ const styles = StyleSheet.create({
     height: 24,
     justifyContent: 'center',
     overflow: 'hidden',
-  },
-  qtyButton: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.sm,
-    flexShrink: 0,
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
-  },
-  qtyButtonDisabled: {
-    backgroundColor: theme.colors.surface,
   },
   quantityPriceCenter: {
     alignItems: 'center',

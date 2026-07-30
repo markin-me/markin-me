@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useId,
   memo,
   useMemo,
   useRef,
@@ -28,6 +29,7 @@ import type { GestureResponderEvent, NativeScrollEvent, NativeSyntheticEvent } f
 import type { RouteProp } from '@react-navigation/native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { MainTabParamList, RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
@@ -98,7 +100,7 @@ import {
   type CatalogListItem,
 } from './catalogLayout';
 
-import { AppText as Text, ProductBadge } from '../../shared/ui';
+import { AppText as Text, ProductBadge, ProductQuantityButton } from '../../shared/ui';
 type CatalogNavigation = NativeStackNavigationProp<RootStackParamList>;
 type CatalogRoute = RouteProp<MainTabParamList, 'home'>;
 
@@ -1269,23 +1271,23 @@ function ProductCard({
               <View style={styles.unitPriceWrap}>
                 <Text style={styles.unitPriceText}>{formatPrice(price)}</Text>
               </View>
-              <Pressable hitSlop={catalogCardTapSlop} style={styles.qtyPillButton} onPress={handleDecrease}>
+              <ProductQuantityButton hitSlop={catalogCardTapSlop} onPress={handleDecrease}>
                 <Ionicons name={availability.cartQty > 1 ? 'remove' : 'trash'} color={theme.colors.primaryText} size={14} />
-              </Pressable>
+              </ProductQuantityButton>
               <View style={[styles.qtyPillCenter, totalOldPrice > totalPrice ? styles.qtyPillCenterWithOld : null]}>
                 {totalOldPrice > totalPrice ? <Text style={styles.oldPrice}>{formatPrice(totalOldPrice)}</Text> : null}
                 <Text numberOfLines={1} style={[styles.price, styles.qtyPrice]}>
                   {formatPrice(totalPrice)}
                 </Text>
               </View>
-              <Pressable
-                disabled={!canIncrease}
-                hitSlop={catalogCardTapSlop}
-                style={[styles.qtyPillButton, !canIncrease && styles.qtyPillButtonDisabled]}
-                onPress={handleIncrease}
-              >
-                <Ionicons name="add" color={canIncrease ? theme.colors.primaryText : theme.colors.muted} size={16} />
-              </Pressable>
+              {canIncrease ? (
+                <ProductQuantityButton
+                  hitSlop={catalogCardTapSlop}
+                  onPress={handleIncrease}
+                >
+                  <Ionicons name="add" color={theme.colors.primaryText} size={16} />
+                </ProductQuantityButton>
+              ) : null}
             </View>
           ) : (
             <View key="idle" style={styles.idleFooter}>
@@ -1293,14 +1295,14 @@ function ProductCard({
                 {oldPrice > price ? <Text style={styles.oldPrice}>{formatPrice(oldPrice)}</Text> : null}
                 <Text numberOfLines={1} style={styles.price}>{formatPrice(price)}</Text>
               </View>
-              <Pressable
-                disabled={!canIncrease}
-                hitSlop={catalogCardTapSlop}
-                style={[styles.plusButton, !canIncrease && styles.plusButtonDisabled]}
-                onPress={handleIncrease}
-              >
-                <Ionicons name="add" color={canIncrease ? theme.colors.primaryText : theme.colors.muted} size={18} />
-              </Pressable>
+              {canIncrease ? (
+                <ProductQuantityButton
+                  hitSlop={catalogCardTapSlop}
+                  onPress={handleIncrease}
+                >
+                  <Ionicons name="add" color={theme.colors.primaryText} size={18} />
+                </ProductQuantityButton>
+              ) : null}
             </View>
           )}
         </View>
@@ -1726,7 +1728,7 @@ function ComboCard({
             ))}
           </View>
         )}
-        {discountPercent > 0 ? <Text style={styles.discountBadge}>-{Math.round(discountPercent)}%</Text> : null}
+        {discountPercent > 0 ? <ProductBadge style={styles.discountBadge} text={`-${Math.round(discountPercent)}%`} tone="discount" /> : null}
         <Text style={styles.mediaPill}>Собрать комбо ›</Text>
       </View>
       <View style={styles.cardBody}>
@@ -1742,9 +1744,9 @@ function ComboCard({
         </View>
         <View style={styles.cardFooter}>
           <Text numberOfLines={1} style={styles.price}>от {formatPrice(minPrice)}</Text>
-          <View style={styles.plusButton}>
+          <ProductQuantityButton>
             <Ionicons name="chevron-forward" color={theme.colors.primaryText} size={16} />
-          </View>
+          </ProductQuantityButton>
         </View>
       </View>
     </Pressable>
@@ -1789,6 +1791,29 @@ type CategoryChipProps = {
   onPressCategory: (categoryId: number) => void;
 };
 
+function CatalogAccentGradientSurface({ shape = 'pill' }: { shape?: 'pill' | 'rounded' }) {
+  const gradientId = `catalogAccentGradient${useId().replace(/:/g, '')}`;
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        styles.catalogAccentGradientSurface,
+        shape === 'rounded' && styles.catalogAccentGradientSurfaceRounded,
+      ]}
+    >
+      <Svg height="100%" preserveAspectRatio="none" style={StyleSheet.absoluteFillObject} viewBox="0 0 100 40" width="100%">
+        <Defs>
+          <SvgLinearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="100%">
+            <Stop offset="0%" stopColor={theme.colors.accent} />
+            <Stop offset="100%" stopColor="#ffb15a" />
+          </SvgLinearGradient>
+        </Defs>
+        <Rect fill={`url(#${gradientId})`} height="40" width="100" />
+      </Svg>
+    </View>
+  );
+}
+
 const MemoCategoryChip = memo(function CategoryChip({
   activeCategoryStore,
   category,
@@ -1811,6 +1836,7 @@ const MemoCategoryChip = memo(function CategoryChip({
         onMeasureCategory(categoryId, event.nativeEvent.layout.x);
       }}
     >
+      {isActive ? <CatalogAccentGradientSurface /> : null}
       <Text style={[styles.chipText, isActive && styles.chipTextActive]}>{category.title}</Text>
     </Pressable>
   );
@@ -1874,7 +1900,8 @@ const CategoryChipsBar = memo(forwardRef<CategoryChipsBarHandle, CategoryChipsBa
         style={styles.categoriesButton}
         onPress={onOpenCategories}
       >
-        <Ionicons name="list-outline" color={theme.colors.text} size={20} />
+        <CatalogAccentGradientSurface />
+        <Ionicons name="list-outline" color={theme.colors.primaryText} size={20} />
       </Pressable>
       <ScrollView
         ref={scrollRef}
@@ -3512,6 +3539,7 @@ export function CatalogPage() {
             onPress={() => void selectCatalogSubcategory(categoryId, 0)}
             style={[styles.subcategoryChip, activeSubcategoryId === 0 && styles.subcategoryChipActive]}
           >
+            {activeSubcategoryId === 0 ? <CatalogAccentGradientSurface /> : null}
             <Text style={[styles.subcategoryChipText, activeSubcategoryId === 0 && styles.subcategoryChipTextActive]}>Все</Text>
           </Pressable>
           {children.map((subcategory) => {
@@ -3523,6 +3551,7 @@ export function CatalogPage() {
                 onPress={() => void selectCatalogSubcategory(categoryId, subcategoryId)}
                 style={[styles.subcategoryChip, isActive && styles.subcategoryChipActive]}
               >
+                {isActive ? <CatalogAccentGradientSurface /> : null}
                 <Text style={[styles.subcategoryChipText, isActive && styles.subcategoryChipTextActive]}>{subcategory.title}</Text>
               </Pressable>
             );
@@ -3552,8 +3581,9 @@ export function CatalogPage() {
                 onPress={() => void changeCatalogMode('delivery')}
                 style={[styles.deliveryModeButton, styles.deliveryModeButtonLeft, isCatalogDeliveryMode && styles.deliveryModeButtonActive]}
               >
-                <View style={[styles.deliveryModeIcon, isCatalogDeliveryMode && styles.deliveryModeIconActive]}>
-                  <FontAwesome5 name="truck" color={isCatalogDeliveryMode ? theme.colors.primaryText : theme.colors.accent} size={16} />
+                <View style={[styles.deliveryModeIcon, styles.deliveryModeIconActive]}>
+                  <CatalogAccentGradientSurface shape="rounded" />
+                  <FontAwesome5 name="truck" color={theme.colors.primaryText} size={16} />
                 </View>
                 <View style={styles.deliveryModeTextWrap}>
                   <Text style={[styles.deliveryModeTitle, isCatalogDeliveryMode && styles.deliveryModeTitleActive]}>Доставка</Text>
@@ -3569,8 +3599,9 @@ export function CatalogPage() {
                 onPress={() => void changeCatalogMode('pickup')}
                 style={[styles.deliveryModeButton, !isCatalogDeliveryMode && styles.deliveryModeButtonActive]}
               >
-                <View style={[styles.deliveryModeIcon, !isCatalogDeliveryMode && styles.deliveryModeIconActive]}>
-                  <Ionicons name="storefront" color={!isCatalogDeliveryMode ? theme.colors.primaryText : theme.colors.accent} size={18} />
+                <View style={[styles.deliveryModeIcon, styles.deliveryModeIconActive]}>
+                  <CatalogAccentGradientSurface shape="rounded" />
+                  <Ionicons name="storefront" color={theme.colors.primaryText} size={18} />
                 </View>
                 <View style={styles.deliveryModeTextWrap}>
                   <Text style={[styles.deliveryModeTitle, !isCatalogDeliveryMode && styles.deliveryModeTitleActive]}>Самовывоз</Text>
@@ -3584,7 +3615,10 @@ export function CatalogPage() {
               </Pressable>
             </View>
             <Pressable onPress={() => void openCatalogAddresses()} style={styles.deliveryAddressRow}>
-              <Ionicons name={isCatalogDeliveryMode ? 'location' : 'storefront'} color={theme.colors.accent} size={20} />
+              <View style={styles.deliveryAddressIcon}>
+                <CatalogAccentGradientSurface shape="rounded" />
+                <Ionicons name={isCatalogDeliveryMode ? 'location' : 'storefront'} color={theme.colors.primaryText} size={16} />
+              </View>
               <Text numberOfLines={1} style={styles.deliveryAddressText}>{catalogAddressLabel}</Text>
               <Ionicons name="chevron-forward" color={theme.colors.text} size={20} />
             </Pressable>
@@ -3792,15 +3826,28 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     height: 36,
   },
+  catalogAccentGradientSurface: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: theme.radius.pill,
+    overflow: 'hidden',
+  },
+  catalogAccentGradientSurfaceRounded: {
+    borderRadius: 12,
+  },
   categoriesButton: {
     alignItems: 'center',
-    backgroundColor: theme.colors.mutedBackground,
-    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.accent,
+    borderColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
     borderWidth: 1,
+    elevation: 4,
     height: theme.sizes.categoryChipHeight,
     justifyContent: 'center',
     marginRight: theme.spacing.sm,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 5, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 7,
     width: theme.sizes.categoryChipHeight,
   },
   centerState: {
@@ -3823,6 +3870,11 @@ const styles = StyleSheet.create({
   chipActive: {
     backgroundColor: theme.colors.accent,
     borderColor: theme.colors.accent,
+    elevation: 4,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 5, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 7,
   },
   chipText: {
     color: theme.colors.text,
@@ -3863,6 +3915,19 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     marginTop: theme.spacing.sm,
   },
+  deliveryAddressIcon: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 12,
+    elevation: 3,
+    height: 28,
+    justifyContent: 'center',
+    shadowColor: '#141d30',
+    shadowOffset: { height: 4, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 6,
+    width: 28,
+  },
   deliveryAddressText: {
     color: theme.colors.text,
     flex: 1,
@@ -3899,6 +3964,11 @@ const styles = StyleSheet.create({
   },
   deliveryModeIconActive: {
     backgroundColor: theme.colors.accent,
+    elevation: 3,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 4, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 6,
   },
   deliveryModeSubtitle: {
     color: theme.colors.muted,
@@ -3978,14 +4048,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   discountBadge: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.pill,
-    color: theme.colors.primaryText,
-    fontSize: 11,
-    fontWeight: '800',
-    overflow: 'hidden',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
     position: 'absolute',
     right: 7,
     top: 7,
@@ -4089,27 +4151,7 @@ const styles = StyleSheet.create({
     minHeight: 12,
     textDecorationLine: 'line-through',
   },
-  plusButton: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.sm,
-    flexShrink: 0,
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
-  },
-  plusButtonDisabled: {
-    backgroundColor: theme.colors.muted,
-  },
   promoBadge: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.pill,
-    color: theme.colors.primaryText,
-    fontSize: 11,
-    fontWeight: '900',
-    overflow: 'hidden',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
     position: 'absolute',
     right: 7,
     top: 7,
@@ -4134,17 +4176,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     position: 'relative',
     width: '100%',
-  },
-  qtyPillButton: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.sm,
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
-  },
-  qtyPillButtonDisabled: {
-    backgroundColor: theme.colors.surface,
   },
   qtyPillCenter: {
     alignItems: 'center',
@@ -4227,6 +4258,11 @@ const styles = StyleSheet.create({
   subcategoryChipActive: {
     backgroundColor: theme.colors.accent,
     borderColor: theme.colors.accent,
+    elevation: 4,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 5, width: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 7,
   },
   subcategoryChipText: {
     color: theme.colors.text,

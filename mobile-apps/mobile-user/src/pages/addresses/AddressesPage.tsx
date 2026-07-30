@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +16,7 @@ import { ActivityIndicator,
   StyleSheet,
   View,
 } from 'react-native';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
@@ -110,6 +112,23 @@ function getInitialSelection(selection: FulfillmentSelection, addresses: Custome
     pickupCity: selection.pickupCity,
     pickupStoreId,
   };
+}
+
+function AccentGradientSurface() {
+  const gradientId = `addressesAccentGradient${useId().replace(/:/g, '')}`;
+  return (
+    <View pointerEvents="none" style={styles.accentGradientSurface}>
+      <Svg height="100%" preserveAspectRatio="none" style={StyleSheet.absoluteFillObject} viewBox="0 0 100 52" width="100%">
+        <Defs>
+          <SvgLinearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="100%">
+            <Stop offset="0%" stopColor={theme.colors.accent} />
+            <Stop offset="100%" stopColor="#ffb15a" />
+          </SvgLinearGradient>
+        </Defs>
+        <Rect fill={`url(#${gradientId})`} height="52" width="100" />
+      </Svg>
+    </View>
+  );
 }
 
 export function AddressesPage() {
@@ -316,6 +335,7 @@ export function AddressesPage() {
           style={styles.row}
         >
           <View style={[styles.radio, selected && styles.radioActive]}>
+            {selected ? <AccentGradientSurface /> : null}
             {selected ? <View style={styles.radioDot} /> : null}
           </View>
           <View style={styles.rowBody}>
@@ -365,6 +385,7 @@ export function AddressesPage() {
           style={styles.row}
         >
           <View style={[styles.radio, selected && styles.radioActive]}>
+            {selected ? <AccentGradientSurface /> : null}
             {selected ? <View style={styles.radioDot} /> : null}
           </View>
           <View style={styles.rowBody}>
@@ -404,6 +425,7 @@ export function AddressesPage() {
                   onPress={() => setSelection((current) => ({ ...current, mode }))}
                   style={[styles.toggleButton, active && styles.toggleButtonActive]}
                 >
+                  {active ? <AccentGradientSurface /> : null}
                   <Text style={[styles.toggleText, active && styles.toggleTextActive]}>
                     {mode === 'delivery' ? 'Доставка' : 'Самовывоз'}
                   </Text>
@@ -450,6 +472,7 @@ export function AddressesPage() {
             onPress={confirmSelection}
             style={[styles.confirmButton, (isSaving || isLoading) && styles.confirmButtonDisabled]}
           >
+            <AccentGradientSurface />
             <Text style={styles.confirmButtonText}>
               {isSaving ? 'Сохраняем...' : selection.mode === 'delivery' ? 'Доставить сюда' : 'Заказать здесь'}
             </Text>
@@ -461,6 +484,11 @@ export function AddressesPage() {
 }
 
 const styles = StyleSheet.create({
+  accentGradientSurface: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: theme.radius.pill,
+    overflow: 'hidden',
+  },
   root: {
     backgroundColor: theme.colors.mutedBackground,
     flex: 1,
@@ -554,10 +582,11 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.accent,
   },
   radioDot: {
-    backgroundColor: theme.colors.accent,
+    backgroundColor: theme.colors.primaryText,
     borderRadius: 999,
-    height: 12,
-    width: 12,
+    height: 8,
+    width: 8,
+    zIndex: 1,
   },
   rowBody: {
     flex: 1,
