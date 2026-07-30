@@ -1,22 +1,76 @@
-import { useCallback } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useCallback, useRef } from 'react';
+import { InteractionManager, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, type CompositeNavigationProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
-import { routes, type ChatTabParamList } from '../../app/navigation/routes';
-import { useChatUnread } from '../../features/chat';
+import { routes, type ChatTabParamList, type RootStackParamList } from '../../app/navigation/routes';
+import { preloadUserChatThread, useChatUnread } from '../../features/chat';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text } from '../../shared/ui';
 import { Screen } from '../../shared/ui/Screen';
 
-export function ChatMessagesPage() {
-  const navigation = useNavigation<NativeStackNavigationProp<ChatTabParamList>>();
-  const { chatUnread, promoUnread } = useChatUnread();
+type ChatMessagesNavigationProp = CompositeNavigationProp<
+  NativeStackNavigationProp<ChatTabParamList>,
+  NativeStackNavigationProp<RootStackParamList>
+>;
+
+type ChatMessagesPageProps = {
+  onOpenSupportChat?: () => void;
+};
+
+export function ChatMessagesPage({ onOpenSupportChat }: ChatMessagesPageProps = {}) {
+  const navigation = useNavigation<ChatMessagesNavigationProp>();
+  const { chatUnread, promoUnread, refreshPromoUnread } = useChatUnread();
+  const preloadingChatRef = useRef(false);
+  const preloadTaskRef = useRef<ReturnType<typeof InteractionManager.runAfterInteractions> | null>(null);
+  const preloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelPendingChatPreload = useCallback(() => {
+    if (preloadTimerRef.current != null) {
+      clearTimeout(preloadTimerRef.current);
+      preloadTimerRef.current = null;
+    }
+    preloadTaskRef.current?.cancel();
+    preloadTaskRef.current = null;
+  }, []);
 
   const openSupportChat = useCallback(() => {
+    cancelPendingChatPreload();
+    if (onOpenSupportChat) {
+      onOpenSupportChat();
+      return;
+    }
     navigation.navigate(routes.supportChat);
-  }, [navigation]);
+  }, [cancelPendingChatPreload, navigation, onOpenSupportChat]);
+
+  const compareMessagesState = useCallback(() => {
+    refreshPromoUnread();
+    cancelPendingChatPreload();
+    preloadTimerRef.current = setTimeout(() => {
+      preloadTimerRef.current = null;
+      if (preloadingChatRef.current) return;
+      preloadingChatRef.current = true;
+      preloadTaskRef.current = InteractionManager.runAfterInteractions(() => {
+        preloadTaskRef.current = null;
+        void preloadUserChatThread()
+          .catch(() => undefined)
+          .finally(() => {
+            preloadingChatRef.current = false;
+          });
+      });
+    }, 1800);
+    return cancelPendingChatPreload;
+  }, [cancelPendingChatPreload, refreshPromoUnread]);
+
+  useFocusEffect(useCallback(() => {
+    const cancelPreload = compareMessagesState();
+    const timer = setInterval(refreshPromoUnread, 15000);
+    return () => {
+      cancelPreload();
+      clearInterval(timer);
+    };
+  }, [compareMessagesState, refreshPromoUnread]));
 
   return (
     <View style={styles.container}>

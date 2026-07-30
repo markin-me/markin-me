@@ -6975,10 +6975,59 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  router.get('/important-messages/revision', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const customerId = Number(customer?.id || 0) || 0;
+      const [[messageRow]] = await db.query(
+        `SELECT COALESCE(SUM(CASE WHEN is_published = 1 AND COALESCE(is_hidden, 0) = 0 THEN 1 ELSE 0 END), 0) AS message_count,
+                COALESCE(MAX(CASE WHEN is_published = 1 AND COALESCE(is_hidden, 0) = 0 THEN id ELSE 0 END), 0) AS last_visible_message_id,
+                COALESCE(MAX(CAST(UNIX_TIMESTAMP(COALESCE(updated_at, published_at, created_at)) * 1000 AS UNSIGNED)), 0) AS last_any_message_ts
+           FROM mkt_important_messages
+          WHERE tenant_id = ? AND store_id = ?`,
+        [tenantId, storeId]
+      );
+      let lastClaimTs = 0;
+      if (customerId > 0) {
+        try {
+          const [[claimRow]] = await db.query(
+            `SELECT COALESCE(MAX(UNIX_TIMESTAMP(claimed_at)), 0) AS last_claim_ts
+               FROM mkt_important_message_promo_claims
+              WHERE tenant_id = ? AND store_id = ? AND customer_id = ?`,
+            [tenantId, storeId, customerId]
+          );
+          lastClaimTs = Number(claimRow?.last_claim_ts || 0);
+        } catch (claimError) {
+          if (String(claimError?.code || '') !== 'ER_NO_SUCH_TABLE') throw claimError;
+        }
+      }
+      const count = Math.max(0, Number(messageRow?.message_count || 0));
+      const revision = [
+        count,
+        Number(messageRow?.last_visible_message_id || 0),
+        Number(messageRow?.last_any_message_ts || 0),
+        lastClaimTs,
+      ].join(':');
+      return res.json({ ok: true, data: { count, revision } });
+    } catch (e) {
+      if (String(e?.code || '') === 'ER_NO_SUCH_TABLE') {
+        return res.json({ ok: true, data: { count: 0, revision: '0:0:0:0' } });
+      }
+      console.error('GET /api/public/important-messages/revision error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/important-messages', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const customerId = Number(customer?.id || 0) || 0;
       await db.query(`
         CREATE TABLE IF NOT EXISTS mkt_important_messages (
           id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -6990,6 +7039,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           image_url VARCHAR(1024) NOT NULL DEFAULT '',
           link_url VARCHAR(1024) NOT NULL DEFAULT '',
           promo_code VARCHAR(80) NOT NULL DEFAULT '',
+          promo_code_mode ENUM('none','shared','unique') NOT NULL DEFAULT 'none',
+          promo_discount_id BIGINT UNSIGNED NULL,
+          promo_code_id BIGINT UNSIGNED NULL,
           is_published TINYINT(1) NOT NULL DEFAULT 0,
           is_hidden TINYINT(1) NOT NULL DEFAULT 0,
           is_pinned TINYINT(1) NOT NULL DEFAULT 0,
@@ -7016,32 +7068,372 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           throw err;
         }
       }
+      try {
+        await db.query("ALTER TABLE mkt_important_messages ADD COLUMN promo_code_mode ENUM('none','shared','unique') NOT NULL DEFAULT 'none' AFTER promo_code");
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+          throw err;
+        }
+      }
+      try {
+        await db.query('ALTER TABLE mkt_important_messages ADD COLUMN promo_discount_id BIGINT UNSIGNED NULL AFTER promo_code_mode');
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+          throw err;
+        }
+      }
+      try {
+        await db.query('ALTER TABLE mkt_important_messages ADD COLUMN promo_code_id BIGINT UNSIGNED NULL AFTER promo_discount_id');
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+          throw err;
+        }
+      }
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS mkt_important_message_promo_claims (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          tenant_id BIGINT UNSIGNED NOT NULL,
+          store_id BIGINT UNSIGNED NOT NULL DEFAULT 1,
+          message_id BIGINT UNSIGNED NOT NULL,
+          customer_id BIGINT UNSIGNED NOT NULL,
+          discount_id BIGINT UNSIGNED NULL,
+          promo_code_id BIGINT UNSIGNED NULL,
+          promo_code VARCHAR(80) NOT NULL DEFAULT '',
+          claimed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_important_message_promo_claim_customer (tenant_id, store_id, message_id, customer_id),
+          KEY idx_important_message_promo_claim_message (tenant_id, store_id, message_id),
+          KEY idx_important_message_promo_claim_promo (tenant_id, promo_code_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
       const limitRaw = Number(req.query.limit || 50);
       const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.trunc(limitRaw))) : 50;
       const [rows] = await db.query(
-        `SELECT id, type, title, body, image_url, link_url, promo_code, is_pinned, published_at, created_at, updated_at
+        `SELECT id, type, title, body, image_url, link_url, promo_code, promo_code_mode, promo_discount_id, promo_code_id, is_pinned, published_at, created_at, updated_at
            FROM mkt_important_messages
           WHERE tenant_id = ? AND store_id = ? AND is_published = 1 AND COALESCE(is_hidden, 0) = 0
           ORDER BY is_pinned DESC, COALESCE(published_at, updated_at) DESC, id DESC
           LIMIT ?`,
         [tenantId, storeId, limit]
       );
+      const messageIds = (Array.isArray(rows) ? rows : [])
+        .map((row) => Number(row?.id || 0))
+        .filter((id) => id > 0);
+      const claimByMessageId = new Map();
+      if (customerId > 0 && messageIds.length) {
+        const [claimRows] = await db.query(
+          `SELECT message_id, discount_id, promo_code, promo_code_id, claimed_at
+             FROM mkt_important_message_promo_claims
+            WHERE tenant_id = ? AND store_id = ? AND customer_id = ? AND message_id IN (?)`,
+          [tenantId, storeId, customerId, messageIds]
+        );
+        const normalizedClaimRows = Array.isArray(claimRows) ? claimRows : [];
+        for (const row of normalizedClaimRows) {
+          claimByMessageId.set(Number(row.message_id || 0), row);
+          if (Number(row?.promo_code_id || 0) > 0 && Number(row?.discount_id || 0) > 0) {
+            await saveCustomerBenefitPromoVisibility(db, {
+              tenantId,
+              storeId,
+              customerId,
+              promoCodeId: Number(row.promo_code_id || 0),
+              discountId: Number(row.discount_id || 0),
+            });
+          }
+        }
+      }
       const items = (Array.isArray(rows) ? rows : []).map((row) => ({
-        id: Number(row.id || 0),
-        type: String(row.type || 'news'),
-        title: String(row.title || ''),
-        body: String(row.body || ''),
-        image_url: String(row.image_url || ''),
-        link_url: String(row.link_url || ''),
-        promo_code: String(row.promo_code || ''),
-        is_pinned: Number(row.is_pinned || 0) === 1,
-        published_at: row.published_at || row.created_at || null,
-        updated_at: row.updated_at || null,
+        ...(() => {
+          const messageId = Number(row.id || 0);
+          const mode = ['shared', 'unique'].includes(String(row.promo_code_mode || '').toLowerCase())
+            ? String(row.promo_code_mode || '').toLowerCase()
+            : (String(row.promo_code || '').trim() ? 'shared' : 'none');
+          const claim = claimByMessageId.get(messageId) || null;
+          const claimedCode = String(claim?.promo_code || '').trim();
+          const sharedCode = String(row.promo_code || '').trim();
+          return {
+            id: messageId,
+            type: String(row.type || 'news'),
+            title: String(row.title || ''),
+            body: String(row.body || ''),
+            image_url: String(row.image_url || ''),
+            link_url: String(row.link_url || ''),
+            promo_code: mode === 'unique' ? claimedCode : sharedCode,
+            promo_code_masked: mode === 'unique' && !claimedCode,
+            promo_code_mode: mode,
+            promo_discount_id: Number(row.promo_discount_id || 0) || null,
+            promo_code_id: mode === 'unique'
+              ? (Number(claim?.promo_code_id || 0) || null)
+              : (Number(row.promo_code_id || 0) || null),
+            promo_claimed: !!claimedCode,
+            promo_claimable: mode === 'shared' ? !!sharedCode : mode === 'unique',
+            is_pinned: Number(row.is_pinned || 0) === 1,
+            published_at: row.published_at || row.created_at || null,
+            updated_at: row.updated_at || null,
+          };
+        })(),
       }));
       return res.json({ ok: true, data: items });
     } catch (e) {
       console.error('GET /api/public/important-messages error:', e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/important-messages/:id/claim-promo', async (req, res) => {
+    let conn = null;
+    let uniquePromoLockName = '';
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const customerId = Number(customer.id || 0);
+      const messageId = Number(req.params.id || 0);
+      if (!(messageId > 0) || !(customerId > 0)) {
+        return res.status(400).json({ ok: false, error: 'INVALID_ID' });
+      }
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS mkt_important_message_promo_claims (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          tenant_id BIGINT UNSIGNED NOT NULL,
+          store_id BIGINT UNSIGNED NOT NULL DEFAULT 1,
+          message_id BIGINT UNSIGNED NOT NULL,
+          customer_id BIGINT UNSIGNED NOT NULL,
+          discount_id BIGINT UNSIGNED NULL,
+          promo_code_id BIGINT UNSIGNED NULL,
+          promo_code VARCHAR(80) NOT NULL DEFAULT '',
+          claimed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_important_message_promo_claim_customer (tenant_id, store_id, message_id, customer_id),
+          KEY idx_important_message_promo_claim_message (tenant_id, store_id, message_id),
+          KEY idx_important_message_promo_claim_promo (tenant_id, promo_code_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const [messageRows] = await conn.query(
+        `SELECT id, promo_code, promo_code_mode, promo_discount_id, promo_code_id
+           FROM mkt_important_messages
+          WHERE tenant_id = ? AND store_id = ? AND id = ? AND is_published = 1 AND COALESCE(is_hidden, 0) = 0
+          LIMIT 1
+          FOR UPDATE`,
+        [tenantId, storeId, messageId]
+      );
+      const message = Array.isArray(messageRows) && messageRows.length ? messageRows[0] : null;
+      if (!message) {
+        await conn.rollback();
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const [existingClaims] = await conn.query(
+        `SELECT discount_id, promo_code_id, promo_code
+           FROM mkt_important_message_promo_claims
+          WHERE tenant_id = ? AND store_id = ? AND message_id = ? AND customer_id = ?
+          LIMIT 1`,
+        [tenantId, storeId, messageId, customerId]
+      );
+      const existingClaim = Array.isArray(existingClaims) && existingClaims.length ? existingClaims[0] : null;
+      if (existingClaim && String(existingClaim.promo_code || '').trim()) {
+        if (Number(existingClaim.promo_code_id || 0) > 0 && Number(existingClaim.discount_id || 0) > 0) {
+          await saveCustomerBenefitPromoVisibility(conn, {
+            tenantId,
+            storeId,
+            customerId,
+            promoCodeId: Number(existingClaim.promo_code_id || 0),
+            discountId: Number(existingClaim.discount_id || 0),
+          });
+        }
+        await conn.commit();
+        return res.json({
+          ok: true,
+          data: {
+            promo_code: String(existingClaim.promo_code || ''),
+            promo_code_id: Number(existingClaim.promo_code_id || 0) || null,
+            promo_claimed: true,
+          },
+        });
+      }
+
+      const mode = ['shared', 'unique'].includes(String(message.promo_code_mode || '').toLowerCase())
+        ? String(message.promo_code_mode || '').toLowerCase()
+        : (String(message.promo_code || '').trim() ? 'shared' : 'none');
+
+      let promoCodeId = Number(message.promo_code_id || 0) || null;
+      let discountId = Number(message.promo_discount_id || 0) || null;
+      let promoCode = String(message.promo_code || '').trim();
+
+      if (mode === 'shared') {
+        if (!promoCode) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+        if (!(promoCodeId > 0) || !(discountId > 0)) {
+          const [promoRows] = await conn.query(
+            `SELECT pc.id, pc.discount_id, pc.code
+               FROM mkt_discount_promo_codes pc
+               INNER JOIN mkt_discounts d
+                 ON d.id = pc.discount_id
+                AND d.tenant_id = pc.tenant_id
+              WHERE pc.tenant_id = ?
+                AND (pc.store_id = ? OR pc.store_id = 0 OR pc.store_id IS NULL)
+                AND pc.code_mode = 'shared'
+                AND pc.code = ?
+                AND pc.is_active = 1
+                AND d.is_active = 1
+                AND d.is_deleted = 0
+              ORDER BY pc.store_id DESC, pc.id ASC
+              LIMIT 1
+              FOR UPDATE`,
+            [tenantId, storeId, promoCode]
+          );
+          const promoRow = Array.isArray(promoRows) && promoRows.length ? promoRows[0] : null;
+          promoCodeId = Number(promoRow?.id || promoCodeId || 0) || null;
+          discountId = Number(promoRow?.discount_id || discountId || 0) || null;
+          promoCode = String(promoRow?.code || promoCode || '').trim();
+        }
+      } else if (mode === 'unique') {
+        if (!(discountId > 0)) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+        }
+        uniquePromoLockName = `impromo:${crypto
+          .createHash('sha1')
+          .update(`${tenantId}:${storeId}:${discountId}:${customerId}`)
+          .digest('hex')}`;
+        const [[lockRow]] = await conn.query('SELECT GET_LOCK(?, 5) AS lock_acquired', [uniquePromoLockName]);
+        if (Number(lockRow?.lock_acquired || 0) !== 1) {
+          await conn.rollback();
+          return res.status(409).json({ ok: false, error: 'PROMO_CLAIM_BUSY' });
+        }
+        const [lockedClaims] = await conn.query(
+          `SELECT discount_id, promo_code_id, promo_code
+             FROM mkt_important_message_promo_claims
+            WHERE tenant_id = ? AND store_id = ? AND message_id = ? AND customer_id = ?
+            LIMIT 1
+            FOR UPDATE`,
+          [tenantId, storeId, messageId, customerId]
+        );
+        const lockedClaim = Array.isArray(lockedClaims) && lockedClaims.length ? lockedClaims[0] : null;
+        if (lockedClaim && String(lockedClaim.promo_code || '').trim()) {
+          if (Number(lockedClaim.promo_code_id || 0) > 0 && Number(lockedClaim.discount_id || 0) > 0) {
+            await saveCustomerBenefitPromoVisibility(conn, {
+              tenantId,
+              storeId,
+              customerId,
+              promoCodeId: Number(lockedClaim.promo_code_id || 0),
+              discountId: Number(lockedClaim.discount_id || 0),
+            });
+          }
+          await conn.commit();
+          return res.json({
+            ok: true,
+            data: {
+              promo_code: String(lockedClaim.promo_code || ''),
+              promo_code_id: Number(lockedClaim.promo_code_id || 0) || null,
+              promo_claimed: true,
+            },
+          });
+        }
+        const [ownRows] = await conn.query(
+          `SELECT id, code, discount_id
+             FROM mkt_discount_promo_codes
+            WHERE tenant_id = ?
+              AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+              AND discount_id = ?
+              AND code_mode = 'unique'
+              AND assigned_customer_id = ?
+            ORDER BY id ASC
+            LIMIT 1
+            FOR UPDATE`,
+          [tenantId, storeId, discountId, customerId]
+        );
+        let promoRow = Array.isArray(ownRows) && ownRows.length ? ownRows[0] : null;
+        if (!promoRow) {
+          const [freeRows] = await conn.query(
+            `SELECT id, code, discount_id
+               FROM mkt_discount_promo_codes
+              WHERE tenant_id = ?
+                AND (store_id = ? OR store_id = 0 OR store_id IS NULL)
+                AND discount_id = ?
+                AND code_mode = 'unique'
+                AND is_active = 1
+                AND (assigned_customer_id IS NULL OR assigned_customer_id = 0)
+                AND (usage_limit IS NULL OR usage_limit = 0 OR usage_count < usage_limit)
+              ORDER BY id ASC
+              LIMIT 1
+              FOR UPDATE`,
+            [tenantId, storeId, discountId]
+          );
+          promoRow = Array.isArray(freeRows) && freeRows.length ? freeRows[0] : null;
+          if (!promoRow) {
+            await conn.rollback();
+            return res.status(409).json({ ok: false, error: 'PROMO_CLAIM_UNAVAILABLE' });
+          }
+          const [updateResult] = await conn.query(
+            `UPDATE mkt_discount_promo_codes
+                SET assigned_customer_id = ?, updated_at = NOW()
+              WHERE tenant_id = ? AND id = ? AND (assigned_customer_id IS NULL OR assigned_customer_id = 0)`,
+            [customerId, tenantId, Number(promoRow.id || 0)]
+          );
+          if (!(Number(updateResult?.affectedRows || 0) > 0)) {
+            await conn.rollback();
+            return res.status(409).json({ ok: false, error: 'PROMO_CLAIM_UNAVAILABLE' });
+          }
+        }
+        promoCodeId = Number(promoRow.id || 0);
+        discountId = Number(promoRow.discount_id || discountId || 0) || null;
+        promoCode = String(promoRow.code || '').trim();
+      } else {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
+      }
+
+      await conn.query(
+        `INSERT INTO mkt_important_message_promo_claims
+          (tenant_id, store_id, message_id, customer_id, discount_id, promo_code_id, promo_code)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           discount_id = VALUES(discount_id),
+           promo_code_id = VALUES(promo_code_id),
+           promo_code = VALUES(promo_code)`,
+        [tenantId, storeId, messageId, customerId, discountId, promoCodeId, promoCode]
+      );
+
+      if (promoCodeId && discountId) {
+        await saveCustomerBenefitPromoVisibility(conn, {
+          tenantId,
+          storeId,
+          customerId,
+          promoCodeId,
+          discountId,
+        });
+      }
+
+      await conn.commit();
+      return res.json({
+        ok: true,
+        data: {
+          promo_code: promoCode,
+          promo_code_id: promoCodeId,
+          promo_claimed: true,
+        },
+      });
+    } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+      }
+      console.error('POST /api/public/important-messages/:id/claim-promo error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      if (conn) {
+        if (uniquePromoLockName) {
+          try { await conn.query('SELECT RELEASE_LOCK(?)', [uniquePromoLockName]); } catch {}
+        }
+        try { conn.release(); } catch {}
+      }
     }
   });
 

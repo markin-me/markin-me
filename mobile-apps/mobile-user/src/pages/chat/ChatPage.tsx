@@ -4,7 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { BlurView } from 'expo-blur';
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
-import { useFocusEffect, useNavigation, type CompositeNavigationProp } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,20 +13,21 @@ import {
   Alert,
   Animated,
   Easing,
+  FlatList,
   ImageBackground,
-  InteractionManager,
   Keyboard,
   Platform,
   Pressable,
-  RefreshControl,
+  type ListRenderItemInfo,
   type LayoutChangeEvent,
-  ScrollView,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   StyleSheet,
   type KeyboardEvent,
   View,
 } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
-import { routes, type ChatTabParamList, type RootStackParamList } from '../../app/navigation/routes';
+import { routes, type RootStackParamList } from '../../app/navigation/routes';
 import {
   formatChatDay,
   formatChatTime,
@@ -73,24 +74,24 @@ const CHAT_ANDROID_FOOTER_SAFE_AREA_MAX = 32;
 const CHAT_ANDROID_KEYBOARD_FOOTER_SAFE_AREA_MAX = 0;
 const CHAT_ANDROID_KEYBOARD_STICKY_OFFSET = CHAT_FOOTER_BOTTOM_LIFT;
 const CHAT_THREAD_TOP_BASE_INSET = 14;
+const CHAT_SCROLL_OFFSET_MEMORY = new Map<string, number>();
+const CHAT_INITIAL_RENDER_MESSAGE_LIMIT = 18;
+const CHAT_RENDER_BATCH_SIZE = 32;
+const CHAT_CACHED_RENDER_BATCH_SIZE = 40;
+const CHAT_THREAD_WINDOW_SIZE = 17;
+const CHAT_CACHED_THREAD_WINDOW_SIZE = 25;
+const CHAT_OLD_MESSAGES_PREFETCH_THRESHOLD = 1.4;
+const CHAT_NEAR_BOTTOM_OFFSET = 160;
+const CHAT_SCROLL_DOWN_SHOW_OFFSET = 64;
+const CHAT_SCROLL_DOWN_HIDE_OFFSET = 24;
+const CHAT_SCROLL_DOWN_PROGRAMMATIC_HIDE_OFFSET = 220;
 
 type ChatPageProps = {
   active?: boolean;
   onBack?: () => void;
 };
 
-type ChatPageNavigationProp = CompositeNavigationProp<
-  NativeStackNavigationProp<ChatTabParamList>,
-  NativeStackNavigationProp<RootStackParamList>
->;
-
-function isHiddenChatRouteActive(navigation: ChatPageNavigationProp) {
-  const state = navigation.getState();
-  const routeName = state.routes[state.index]?.name;
-  return routeName === routes.supportChat
-    || routeName === routes.importantMessages
-    || routeName === routes.importantMessageDetails;
-}
+type ChatPageNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   const navigation = useNavigation<ChatPageNavigationProp>();
@@ -98,16 +99,22 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   const { refreshUnread } = useChatUnread();
   const chatStageRef = useRef<View | null>(null);
   const chatStageFrameRef = useRef<{ height: number; y: number } | null>(null);
-  const scrollRef = useRef<ScrollView | null>(null);
+  const scrollRef = useRef<FlatList<ChatMessage> | null>(null);
   const keyboardTranslateY = useRef(new Animated.Value(0)).current;
   const keyboardVisibleRef = useRef(false);
+  const userScrolledThreadRef = useRef(false);
   const scrollDownProgress = useRef(new Animated.Value(0)).current;
   const lastAutoScrollMessageIdRef = useRef('');
+  const scrollRestoreDoneRef = useRef(false);
+  const threadScrollMetricsRef = useRef({ contentHeight: 0, offsetY: 0, viewportHeight: 0 });
+  const threadScrollDirectionRef = useRef<'newer' | 'older' | null>(null);
+  const scrollDownSuppressUntilBottomRef = useRef(false);
+  const scrollDownKeepVisibleUntilBottomRef = useRef(false);
   const lastTapRef = useRef<{ id: string; at: number }>({ id: '', at: 0 });
   const nearBottomRef = useRef(true);
   const restoreBottomAfterKeyboardRef = useRef(false);
   const contextHideFrameRef = useRef<number | null>(null);
-  const chat = useChatThread({ actor: 'in' });
+  const chat = useChatThread({ actor: 'in', enabled: active });
   const chatRef = useRef(chat);
   const [actionMessage, setActionMessage] = useState<ChatMessage | null>(null);
   const [actionMessageLayout, setActionMessageLayout] = useState<ChatMessageBubbleLayout | null>(null);
@@ -125,21 +132,17 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [showScrollDown, setShowScrollDown] = useState(false);
+  const hasNewMessagesBelowRef = useRef(false);
+  const showScrollDownRef = useRef(false);
   const [wallpaperSize, setWallpaperSize] = useState<{ height: number; width: number } | null>(null);
   const [chatStageHeight, setChatStageHeight] = useState(0);
   const [selectionActive, setSelectionActive] = useState(false);
-  const [threadRenderReady, setThreadRenderReady] = useState(false);
+  const [threadRenderReady, setThreadRenderReady] = useState(() => chat.messages.length > 0);
+  const [waitingForScrollRestore, setWaitingForScrollRestore] = useState(() => (
+    !!chat.clientId
+    && (CHAT_SCROLL_OFFSET_MEMORY.get(chat.clientId) || 0) > CHAT_SCROLL_DOWN_HIDE_OFFSET
+  ));
 
-  const baseTabBarStyle = useMemo(() => {
-    const bottomInset = Math.max(0, insets.bottom);
-    return {
-      borderTopColor: theme.colors.border,
-      height: theme.sizes.tabBarHeight + bottomInset,
-      paddingBottom: 8 + bottomInset,
-      paddingTop: 2,
-    };
-  }, [insets.bottom]);
-  const hideTabBarStyle = useMemo(() => ({ display: 'none' as const }), []);
   const selectionMode = selectionActive || chat.selectedIds.length > 0;
   const footerBottomInset = CHAT_FOOTER_BOTTOM_LIFT;
   const androidReportedBottomInset = Math.max(0, insets.bottom);
@@ -209,14 +212,17 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     : CHAT_THREAD_TOP_BASE_INSET;
   const threadInsetStyle = useMemo(
     () => ({
-      paddingBottom: Math.max(14, threadFooterHeight + 8 + footerBottomInset),
-      paddingTop: threadTopInset,
+      paddingBottom: threadTopInset,
+      paddingTop: Math.max(14, threadFooterHeight + 8 + footerBottomInset),
     }),
     [footerBottomInset, threadFooterHeight, threadTopInset],
   );
   const footerMaskHeight = Platform.OS === 'android' && !keyboardVisible && footerSafeAreaInset > 0
     ? threadFooterHeight + CHAT_THREAD_FOOTER_FADE_EXTRA
     : CHAT_THREAD_FOOTER_FADE_FALLBACK;
+  const threadRenderBatchSize = chat.hasMore ? CHAT_RENDER_BATCH_SIZE : CHAT_CACHED_RENDER_BATCH_SIZE;
+  const threadWindowSize = chat.hasMore ? CHAT_THREAD_WINDOW_SIZE : CHAT_CACHED_THREAD_WINDOW_SIZE;
+  const threadUpdateCellsBatchingPeriod = chat.hasMore ? 8 : 0;
   const scrollDownStyle = useMemo(
     () => (footerOverlayHeight > 0 ? { bottom: footerOverlayHeight + 16 + footerBottomInset } : null),
     [footerBottomInset, footerOverlayHeight],
@@ -243,10 +249,151 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     ],
   }), [scrollDownProgress]);
 
-  const scrollToBottom = useCallback((animated = true) => {
-    setHasNewMessagesBelow(false);
-    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated }));
+  const setHasNewMessagesBelowStable = useCallback((nextValue: boolean) => {
+    if (hasNewMessagesBelowRef.current === nextValue) return;
+    hasNewMessagesBelowRef.current = nextValue;
+    setHasNewMessagesBelow(nextValue);
   }, []);
+
+  const setShowScrollDownStable = useCallback((nextValue: boolean) => {
+    if (showScrollDownRef.current === nextValue) return;
+    showScrollDownRef.current = nextValue;
+    setShowScrollDown(nextValue);
+  }, []);
+
+  const hideScrollDownImmediately = useCallback(() => {
+    scrollDownProgress.stopAnimation();
+    scrollDownProgress.setValue(0);
+    setShowScrollDownStable(false);
+  }, [scrollDownProgress, setShowScrollDownStable]);
+
+  const scrollToBottom = useCallback((animated = true, options?: { keepScrollDownVisible?: boolean }) => {
+    nearBottomRef.current = true;
+    scrollDownSuppressUntilBottomRef.current = true;
+    scrollDownKeepVisibleUntilBottomRef.current = !!options?.keepScrollDownVisible;
+    if (options?.keepScrollDownVisible) {
+      scrollDownProgress.stopAnimation();
+      scrollDownProgress.setValue(1);
+      setShowScrollDownStable(true);
+    } else {
+      scrollDownProgress.stopAnimation();
+      scrollDownProgress.setValue(0);
+      setShowScrollDownStable(false);
+    }
+    setHasNewMessagesBelowStable(false);
+    scrollRef.current?.scrollToOffset({ animated, offset: 0 });
+  }, [scrollDownProgress, setHasNewMessagesBelowStable, setShowScrollDownStable]);
+
+  const handleScrollDownPress = useCallback(() => {
+    scrollToBottom(true, { keepScrollDownVisible: true });
+  }, [scrollToBottom]);
+
+  const restoreScrollOffset = useCallback(() => {
+    if (!chat.clientId || !chat.messages.length) return;
+    if (scrollRestoreDoneRef.current) return;
+    scrollRestoreDoneRef.current = true;
+    const hasSavedOffset = CHAT_SCROLL_OFFSET_MEMORY.has(chat.clientId);
+    const offset = Math.max(0, CHAT_SCROLL_OFFSET_MEMORY.get(chat.clientId) || 0);
+    if (!hasSavedOffset || offset <= CHAT_SCROLL_DOWN_HIDE_OFFSET) {
+      nearBottomRef.current = true;
+      setWaitingForScrollRestore(false);
+      return;
+    }
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollToOffset({ animated: false, offset });
+      setWaitingForScrollRestore(false);
+    });
+  }, [chat.clientId, chat.messages.length]);
+
+  const handleThreadContentSizeChange = useCallback((_contentWidth: number, contentHeight: number) => {
+    const nextContentHeight = Math.max(0, Math.ceil(contentHeight || 0));
+    const currentMetrics = threadScrollMetricsRef.current;
+    threadScrollMetricsRef.current = {
+      ...currentMetrics,
+      contentHeight: nextContentHeight,
+    };
+
+    restoreScrollOffset();
+  }, [restoreScrollOffset]);
+
+  const handleThreadScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const offsetY = Math.max(0, contentOffset.y || 0);
+    const contentHeight = Math.max(0, contentSize.height || threadScrollMetricsRef.current.contentHeight || 0);
+    const viewportHeight = Math.max(0, layoutMeasurement.height || 0);
+    const previousOffsetY = threadScrollMetricsRef.current.offsetY;
+    threadScrollMetricsRef.current = { contentHeight, offsetY, viewportHeight };
+    if (offsetY > previousOffsetY + 2) {
+      threadScrollDirectionRef.current = 'older';
+    } else if (offsetY < previousOffsetY - 2) {
+      threadScrollDirectionRef.current = 'newer';
+    }
+
+    if (chat.clientId && scrollRestoreDoneRef.current && userScrolledThreadRef.current) {
+      CHAT_SCROLL_OFFSET_MEMORY.set(chat.clientId, offsetY);
+    }
+
+    const isNearBottom = offsetY <= CHAT_NEAR_BOTTOM_OFFSET;
+    if (scrollDownSuppressUntilBottomRef.current) {
+      if (offsetY <= CHAT_SCROLL_DOWN_HIDE_OFFSET) {
+        scrollDownSuppressUntilBottomRef.current = false;
+        scrollDownKeepVisibleUntilBottomRef.current = false;
+        hideScrollDownImmediately();
+      } else if (
+        scrollDownKeepVisibleUntilBottomRef.current
+        && offsetY > CHAT_SCROLL_DOWN_PROGRAMMATIC_HIDE_OFFSET
+      ) {
+        setShowScrollDownStable(true);
+      } else {
+        hideScrollDownImmediately();
+      }
+      nearBottomRef.current = isNearBottom;
+      if (isNearBottom) setHasNewMessagesBelowStable(false);
+      return;
+    }
+
+    const shouldShowScrollDown = showScrollDownRef.current
+      ? offsetY > CHAT_SCROLL_DOWN_HIDE_OFFSET
+      : offsetY > CHAT_SCROLL_DOWN_SHOW_OFFSET;
+    nearBottomRef.current = isNearBottom;
+    setShowScrollDownStable(shouldShowScrollDown);
+    if (isNearBottom) setHasNewMessagesBelowStable(false);
+  }, [
+    chat.clientId,
+    hideScrollDownImmediately,
+    setHasNewMessagesBelowStable,
+    setShowScrollDownStable,
+  ]);
+
+  const handleThreadScrollBeginDrag = useCallback(() => {
+    scrollDownSuppressUntilBottomRef.current = false;
+    scrollDownKeepVisibleUntilBottomRef.current = false;
+    userScrolledThreadRef.current = true;
+    threadScrollDirectionRef.current = null;
+  }, []);
+
+  const handleThreadEndReached = useCallback(() => {
+    if (threadScrollDirectionRef.current !== 'older') return;
+    if (!userScrolledThreadRef.current || chat.loadingMore || !chat.hasMore) return;
+    void chat.loadMore();
+  }, [chat.hasMore, chat.loadMore, chat.loadingMore]);
+
+  useEffect(() => {
+    scrollRestoreDoneRef.current = false;
+    userScrolledThreadRef.current = false;
+    threadScrollDirectionRef.current = null;
+    threadScrollMetricsRef.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
+    setWaitingForScrollRestore(false);
+  }, [chat.clientId]);
+
+  useEffect(() => {
+    if (scrollRestoreDoneRef.current || !chat.clientId || !chat.messages.length) {
+      if (!chat.messages.length) setWaitingForScrollRestore(false);
+      return;
+    }
+    const offset = Math.max(0, CHAT_SCROLL_OFFSET_MEMORY.get(chat.clientId) || 0);
+    setWaitingForScrollRestore(offset > CHAT_SCROLL_DOWN_HIDE_OFFSET);
+  }, [chat.clientId, chat.messages.length]);
 
   useEffect(() => {
     chatRef.current = chat;
@@ -259,11 +406,12 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   }, []);
 
   const handleBack = useCallback(() => {
-    if (dismissKeyboardIfOpen()) return;
     if (onBack) {
       onBack();
+      if (keyboardVisibleRef.current) requestAnimationFrame(() => Keyboard.dismiss());
       return;
     }
+    if (dismissKeyboardIfOpen()) return;
     navigation.goBack();
   }, [dismissKeyboardIfOpen, navigation, onBack]);
 
@@ -272,25 +420,16 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   }, []);
 
   useEffect(() => {
-    setThreadRenderReady(false);
-    const task = InteractionManager.runAfterInteractions(() => {
+    if (chat.messages.length > 0) {
       setThreadRenderReady(true);
-    });
+      return undefined;
+    }
+    setThreadRenderReady(false);
+    const frame = requestAnimationFrame(() => setThreadRenderReady(true));
     return () => {
-      task.cancel();
+      cancelAnimationFrame(frame);
     };
-  }, []);
-
-  useFocusEffect(useCallback(() => {
-    const parent = navigation.getParent();
-    parent?.setOptions({ tabBarStyle: hideTabBarStyle });
-    return () => {
-      requestAnimationFrame(() => {
-        if (isHiddenChatRouteActive(navigation)) return;
-        parent?.setOptions({ tabBarStyle: baseTabBarStyle });
-      });
-    };
-  }, [baseTabBarStyle, hideTabBarStyle, navigation]));
+  }, [chat.messages.length]);
 
   useEffect(() => {
     if (!active || Platform.OS !== 'android') return;
@@ -356,14 +495,18 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   useEffect(() => {
     const lastMessageId = lastMessage?.id || '';
     if (!lastMessageId || lastAutoScrollMessageIdRef.current === lastMessageId) return;
+    if (!lastAutoScrollMessageIdRef.current && chat.messages.length > 1) {
+      lastAutoScrollMessageIdRef.current = lastMessageId;
+      return;
+    }
     lastAutoScrollMessageIdRef.current = lastMessageId;
     if (nearBottomRef.current || (lastMessage && isOutgoing(lastMessage, chat.actor)) || lastMessage?.localPending) {
-      setHasNewMessagesBelow(false);
+      setHasNewMessagesBelowStable(false);
       scrollToBottom(!lastMessage?.localPending);
     } else {
-      setHasNewMessagesBelow(true);
+      setHasNewMessagesBelowStable(true);
     }
-  }, [chat.actor, lastMessage, scrollToBottom]);
+  }, [chat.actor, lastMessage, scrollToBottom, setHasNewMessagesBelowStable]);
 
   useEffect(() => {
     Animated.timing(scrollDownProgress, {
@@ -607,8 +750,12 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     focusComposer();
   }, [focusComposer, selectionMode]);
 
-  const renderedMessages = useMemo(() => chat.messages.map((message, index) => {
-    const previous = index > 0 ? chat.messages[index - 1] : null;
+  const threadMessages = useMemo(() => (threadRenderReady ? chat.messages.slice().reverse() : [] as ChatMessage[]), [chat.messages, threadRenderReady]);
+  const quickQuestionsThreadIndex = quickQuestionsAnchorIndex >= 0
+    ? chat.messages.length - 1 - quickQuestionsAnchorIndex
+    : quickQuestionsAnchorIndex;
+  const renderThreadMessage = useCallback(({ item: message, index }: ListRenderItemInfo<ChatMessage>) => {
+    const previous = index < threadMessages.length - 1 ? threadMessages[index + 1] : null;
     return (
       <View key={message.id}>
         {shouldShowDay(previous, message) ? (
@@ -632,7 +779,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
           selectionMode={selectionMode}
           settings={chat.settings}
         />
-        {index === quickQuestionsAnchorIndex ? (
+        {index === quickQuestionsThreadIndex ? (
           <ChatQuickQuestions
             onPress={handleQuickQuestion}
             prompt={CHAT_OPTIONS_PROMPT}
@@ -643,7 +790,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
         ) : null}
       </View>
     );
-  }), [
+  }, [
     chat.actor,
     chat.loading,
     chat.messages,
@@ -657,9 +804,45 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     handleReact,
     handleSwipeReply,
     openOrder,
-    quickQuestionsAnchorIndex,
+    quickQuestionsThreadIndex,
     selectedIdSet,
     selectionMode,
+    threadMessages,
+  ]);
+  const keyThreadMessage = useCallback((message: ChatMessage) => message.id, []);
+  const threadHeaderComponent = useMemo(() => (
+    <>
+      {chat.loading && !chat.messages.length ? (
+        <View style={styles.centerState}>
+          <ActivityIndicator color={theme.colors.accent} />
+        </View>
+      ) : null}
+
+      <ChatTypingIndicator
+        label={typingLabel}
+        visible={chat.typing?.active === true}
+      />
+    </>
+  ), [chat.loading, chat.messages.length, chat.typing?.active, typingLabel]);
+  const threadFooterComponent = useMemo(() => {
+    if (!(threadRenderReady && quickQuestionsAnchorIndex === -2)) return null;
+    return (
+      <ChatQuickQuestions
+        onPress={handleQuickQuestion}
+        prompt={CHAT_OPTIONS_PROMPT}
+        questions={chat.quickQuestions}
+        timeLabel={quickQuestionsFallbackTimeLabel}
+        visible={!chat.loading && !selectionMode}
+      />
+    );
+  }, [
+    chat.loading,
+    chat.quickQuestions,
+    handleQuickQuestion,
+    quickQuestionsAnchorIndex,
+    quickQuestionsFallbackTimeLabel,
+    selectionMode,
+    threadRenderReady,
   ]);
 
   if (!chat.chatEnabled) {
@@ -684,57 +867,38 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
         <View onLayout={handleChatStageLayout} ref={chatStageRef} style={[styles.chatStage, chatStageStyle]}>
           <ChatKeyboardLayer keyboardLayerStyle={keyboardLayerStyle}>
           <View onLayout={handleBodyLayout} style={styles.body}>
-              <ScrollView
+              <FlatList
               contentContainerStyle={[styles.thread, threadInsetStyle]}
+              data={threadMessages}
+              initialNumToRender={CHAT_INITIAL_RENDER_MESSAGE_LIMIT}
+              inverted
+              keyExtractor={keyThreadMessage}
               keyboardShouldPersistTaps="handled"
-              onScroll={(event) => {
-                const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-                const distance = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-                const isNearBottom = distance <= 160;
-                nearBottomRef.current = isNearBottom;
-                setShowScrollDown(!isNearBottom);
-                if (isNearBottom) setHasNewMessagesBelow(false);
-              }}
+              ListFooterComponent={threadFooterComponent}
+              ListHeaderComponent={threadHeaderComponent}
+              maxToRenderPerBatch={threadRenderBatchSize}
+              onContentSizeChange={handleThreadContentSizeChange}
+              onEndReached={handleThreadEndReached}
+              onEndReachedThreshold={CHAT_OLD_MESSAGES_PREFETCH_THRESHOLD}
+              onMomentumScrollEnd={handleThreadScroll}
+              onScrollBeginDrag={handleThreadScrollBeginDrag}
+              onScrollEndDrag={handleThreadScroll}
+              onScroll={handleThreadScroll}
               ref={scrollRef}
-              refreshControl={<RefreshControl onRefresh={chat.refresh} refreshing={false} />}
-              scrollEventThrottle={64}
-            >
-              {chat.hasMore ? (
-                <Pressable disabled={chat.loadingMore} onPress={chat.loadMore} style={styles.loadMore}>
-                  {chat.loadingMore ? <ActivityIndicator color={theme.colors.accent} /> : <Text style={styles.loadMoreText}>Загрузить старые сообщения</Text>}
-                </Pressable>
-              ) : null}
-
-              {threadRenderReady && quickQuestionsAnchorIndex === -2 ? (
-                <ChatQuickQuestions
-                  onPress={handleQuickQuestion}
-                  prompt={CHAT_OPTIONS_PROMPT}
-                  questions={chat.quickQuestions}
-                  timeLabel={quickQuestionsFallbackTimeLabel}
-                  visible={!chat.loading && !selectionMode}
-                />
-              ) : null}
-
-              {threadRenderReady ? renderedMessages : null}
-
-              {chat.loading && !chat.messages.length ? (
-                <View style={styles.centerState}>
-                  <ActivityIndicator color={theme.colors.accent} />
-                </View>
-              ) : null}
-
-              <ChatTypingIndicator
-                label={typingLabel}
-                visible={chat.typing?.active === true}
-              />
-              </ScrollView>
-            <ThreadEdgeBlur edge="bottom" height={footerMaskHeight} bottomOffset={footerBlurBottomOffset} />
+              removeClippedSubviews={false}
+              renderItem={renderThreadMessage}
+              scrollEventThrottle={16}
+              style={[styles.threadList, waitingForScrollRestore ? styles.threadRestoring : null]}
+              updateCellsBatchingPeriod={threadUpdateCellsBatchingPeriod}
+              windowSize={threadWindowSize}
+            />
+            {threadRenderReady ? <ThreadEdgeBlur edge="bottom" height={footerMaskHeight} bottomOffset={footerBlurBottomOffset} /> : null}
 
             <Animated.View
               pointerEvents={showScrollDown ? 'auto' : 'none'}
               style={[styles.scrollDown, scrollDownStyle, scrollDownAnimatedStyle]}
             >
-              <Pressable accessibilityRole="button" onPress={() => scrollToBottom()} style={styles.scrollDownPressable}>
+              <Pressable accessibilityRole="button" onPressIn={handleScrollDownPress} style={styles.scrollDownPressable}>
                 <Ionicons color="#6b7280" name="chevron-down" size={22} />
                 {hasNewMessagesBelow ? <View style={styles.scrollDownBadge} /> : null}
               </Pressable>
@@ -783,7 +947,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
             ) : null}
           </Animated.View>
           </ChatKeyboardLayer>
-          <ThreadEdgeBlur edge="top" height={footerMaskHeight} />
+          {threadRenderReady ? <ThreadEdgeBlur edge="top" height={footerMaskHeight} /> : null}
         </View>
       </View>
 
@@ -905,36 +1069,64 @@ function ThreadEdgeBlur({
   if (height <= 0) return null;
   const overscan = CHAT_THREAD_EDGE_BLUR_OVERSCAN;
   const gradientId = `chatThread${edge === 'top' ? 'Top' : 'Bottom'}Blur`;
+  const maskStops = edge === 'top'
+    ? [
+      <Stop key="top-0" offset="0" stopColor="#ffffff" stopOpacity="0" />,
+      <Stop key="top-1" offset="0.12" stopColor="#ffffff" stopOpacity="0.15" />,
+      <Stop key="top-2" offset="0.34" stopColor="#ffffff" stopOpacity="0.48" />,
+      <Stop key="top-3" offset="1" stopColor="#ffffff" stopOpacity="1" />,
+    ]
+    : [
+      <Stop key="bottom-0" offset="0" stopColor="#ffffff" stopOpacity="1" />,
+      <Stop key="bottom-1" offset="0.66" stopColor="#ffffff" stopOpacity="0.48" />,
+      <Stop key="bottom-2" offset="0.88" stopColor="#ffffff" stopOpacity="0.15" />,
+      <Stop key="bottom-3" offset="1" stopColor="#ffffff" stopOpacity="0" />,
+    ];
+  const androidFadeStops = edge === 'top'
+    ? [
+      <Stop key="android-top-0" offset="0" stopColor="#f0f3eb" stopOpacity="0" />,
+      <Stop key="android-top-1" offset="0.56" stopColor="#f0f3eb" stopOpacity="0.72" />,
+      <Stop key="android-top-2" offset="1" stopColor="#f0f3eb" stopOpacity="0.92" />,
+    ]
+    : [
+      <Stop key="android-bottom-0" offset="0" stopColor="#f0f3eb" stopOpacity="0.92" />,
+      <Stop key="android-bottom-1" offset="0.44" stopColor="#f0f3eb" stopOpacity="0.72" />,
+      <Stop key="android-bottom-2" offset="1" stopColor="#f0f3eb" stopOpacity="0" />,
+    ];
+  const frameStyle = [
+    styles.threadEdgeBlur,
+    edge === 'top' ? styles.threadEdgeBlurTop : styles.threadEdgeBlurBottom,
+    edge === 'top'
+    ? { height: height + overscan, top: -overscan }
+    : { height: height + overscan, bottom: bottomOffset - overscan },
+  ];
+
+  if (Platform.OS === 'android') {
+    return (
+      <View pointerEvents="none" style={frameStyle}>
+        <Svg pointerEvents="none" preserveAspectRatio="none" style={styles.threadEdgeBlurFill}>
+          <Defs>
+            <LinearGradient id={gradientId} x1="0" x2="0" y1="1" y2="0">
+              {androidFadeStops}
+            </LinearGradient>
+          </Defs>
+          <Rect fill={`url(#${gradientId})`} height="100%" width="100%" x="0" y="0" />
+        </Svg>
+      </View>
+    );
+  }
 
   return (
     <View
       pointerEvents="none"
-      style={[
-        styles.threadEdgeBlur,
-        edge === 'top' ? styles.threadEdgeBlurTop : styles.threadEdgeBlurBottom,
-        edge === 'top'
-        ? { height: height + overscan, top: -overscan }
-        : { height: height + overscan, bottom: bottomOffset - overscan },
-      ]}
+      style={frameStyle}
     >
       <MaskedView
         maskElement={(
           <Svg pointerEvents="none" preserveAspectRatio="none" style={styles.threadEdgeBlurFill}>
             <Defs>
               <LinearGradient id={gradientId} x1="0" x2="0" y1="1" y2="0">
-                {(edge === 'top'
-                  ? [
-                    <Stop key="top-0" offset="0" stopColor="#ffffff" stopOpacity="0" />,
-                    <Stop key="top-1" offset="0.12" stopColor="#ffffff" stopOpacity="0.15" />,
-                    <Stop key="top-2" offset="0.34" stopColor="#ffffff" stopOpacity="0.48" />,
-                    <Stop key="top-3" offset="1" stopColor="#ffffff" stopOpacity="1" />,
-                  ]
-                  : [
-                    <Stop key="bottom-0" offset="0" stopColor="#ffffff" stopOpacity="1" />,
-                    <Stop key="bottom-1" offset="0.66" stopColor="#ffffff" stopOpacity="0.48" />,
-                    <Stop key="bottom-2" offset="0.88" stopColor="#ffffff" stopOpacity="0.15" />,
-                    <Stop key="bottom-3" offset="1" stopColor="#ffffff" stopOpacity="0" />,
-                  ])}
+                {maskStops}
               </LinearGradient>
             </Defs>
             <Rect fill={`url(#${gradientId})`} height="100%" width="100%" x="0" y="0" />
@@ -1037,22 +1229,6 @@ const styles = StyleSheet.create({
   feedMask: {
     flex: 1,
   },
-  loadMore: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    borderColor: 'rgba(15,23,42,0.08)',
-    borderRadius: 999,
-    borderWidth: 1,
-    justifyContent: 'center',
-    marginBottom: 8,
-    minHeight: 34,
-    paddingHorizontal: 14,
-  },
-  loadMoreText: {
-    color: '#4b5563',
-    fontSize: 13,
-    fontWeight: '800',
-  },
   keyboardLayer: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
@@ -1108,10 +1284,16 @@ const styles = StyleSheet.create({
   },
   thread: {
     flexGrow: 1,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     paddingBottom: 14,
     paddingHorizontal: 10,
     paddingTop: 14,
+  },
+  threadList: {
+    flex: 1,
+  },
+  threadRestoring: {
+    opacity: 0,
   },
   threadEdgeBlur: {
     left: 0,

@@ -10,6 +10,7 @@ const PUSH_ENABLED_KEY = `mobile_chat_push_enabled_v1_t${apiConfig.tenantId}_s${
 const PUSH_TOKEN_KEY = `mobile_chat_push_token_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const THREAD_CACHE_KEY_PREFIX = `mobile_chat_thread_cache_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const IMPORTANT_MESSAGES_READ_KEY = `mobile_important_messages_read_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+const IMPORTANT_MESSAGES_CACHE_KEY_PREFIX = `mobile_important_messages_cache_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 
 type ChatThreadCacheSnapshot = {
   actor: ChatActor;
@@ -21,13 +22,22 @@ type ChatThreadCacheSnapshot = {
   savedAt: string;
   typing?: ChatTypingState | null;
   updatedAt: string;
+  visibleMessageCount?: number;
 };
 
 type ImportantMessageReadMap = Record<string, string>;
+type ImportantMessagesCacheSnapshot = {
+  count: number;
+  items: ImportantMessage[];
+  revision: string;
+  savedAt: string;
+};
 
 const THREAD_CACHE_MEMORY = new Map<string, ChatThreadCacheSnapshot>();
 let LAST_CHAT_PROFILE_MEMORY: ChatProfile | null = null;
 let LAST_CHAT_SETTINGS_MEMORY: ChatSettings | null = null;
+let LAST_CUSTOMER_CLIENT_MEMORY = '';
+const IMPORTANT_MESSAGES_CACHE_MEMORY = new Map<string, ImportantMessagesCacheSnapshot>();
 
 function makeGuestId() {
   const base = Date.now().toString().slice(-9);
@@ -55,12 +65,21 @@ export async function clearGuestChatClientId(clientId?: string) {
 }
 
 export async function readLastCustomerChatClientId() {
-  return String(await AsyncStorage.getItem(LAST_CUSTOMER_CLIENT_KEY).catch(() => '') || '').trim();
+  const clientId = String(await AsyncStorage.getItem(LAST_CUSTOMER_CLIENT_KEY).catch(() => '') || '').trim();
+  if (clientId) LAST_CUSTOMER_CLIENT_MEMORY = clientId;
+  return clientId;
 }
 
 export async function saveLastCustomerChatClientId(clientId: string) {
   const safe = String(clientId || '').trim();
-  if (safe) await AsyncStorage.setItem(LAST_CUSTOMER_CLIENT_KEY, safe);
+  if (safe) {
+    LAST_CUSTOMER_CLIENT_MEMORY = safe;
+    await AsyncStorage.setItem(LAST_CUSTOMER_CLIENT_KEY, safe);
+  }
+}
+
+export function readLastCustomerChatClientIdSync() {
+  return LAST_CUSTOMER_CLIENT_MEMORY;
 }
 
 export async function readChatPushEnabled() {
@@ -116,9 +135,35 @@ export async function saveChatThreadCache(snapshot: Omit<ChatThreadCacheSnapshot
   const clientId = String(snapshot.clientId || '').trim();
   if (!clientId) return;
   const key = getThreadCacheKey(clientId);
+  const current = THREAD_CACHE_MEMORY.get(key);
   const nextSnapshot: ChatThreadCacheSnapshot = {
     ...snapshot,
     clientId,
+    savedAt: new Date().toISOString(),
+    visibleMessageCount: snapshot.visibleMessageCount ?? current?.visibleMessageCount,
+  };
+  THREAD_CACHE_MEMORY.set(key, nextSnapshot);
+  await AsyncStorage.setItem(key, JSON.stringify(nextSnapshot));
+}
+
+export function readChatThreadVisibleMessageCountSync(clientId: string) {
+  const key = getThreadCacheKey(clientId);
+  if (!key) return 0;
+  const count = Number(THREAD_CACHE_MEMORY.get(key)?.visibleMessageCount || 0);
+  return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+}
+
+export async function saveChatThreadVisibleMessageCount(clientId: string, count: number) {
+  const safeClientId = String(clientId || '').trim();
+  const safeCount = Math.max(0, Math.trunc(Number(count) || 0));
+  if (!safeClientId || !safeCount) return;
+  const key = getThreadCacheKey(safeClientId);
+  const current = await readChatThreadCache(safeClientId).catch(() => null);
+  if (!current) return;
+  const currentCount = Number(current.visibleMessageCount || 0);
+  const nextSnapshot: ChatThreadCacheSnapshot = {
+    ...current,
+    visibleMessageCount: Math.max(safeCount, Number.isFinite(currentCount) ? Math.trunc(currentCount) : 0),
     savedAt: new Date().toISOString(),
   };
   THREAD_CACHE_MEMORY.set(key, nextSnapshot);
@@ -130,6 +175,58 @@ export async function clearChatThreadCache(clientId: string) {
   if (!key) return;
   THREAD_CACHE_MEMORY.delete(key);
   await AsyncStorage.removeItem(key);
+}
+
+async function getImportantMessagesCacheKey() {
+  const passport = await readCachedCustomerPassport().catch(() => null);
+  const customerId = Number(passport?.customer?.id || 0);
+  if (customerId > 0) return `${IMPORTANT_MESSAGES_CACHE_KEY_PREFIX}_customer_${customerId}`;
+  const token = String(passport?.token || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32);
+  return `${IMPORTANT_MESSAGES_CACHE_KEY_PREFIX}_${token || 'guest'}`;
+}
+
+export async function readImportantMessagesCache(): Promise<ImportantMessagesCacheSnapshot | null> {
+  const key = await getImportantMessagesCacheKey();
+  const memory = IMPORTANT_MESSAGES_CACHE_MEMORY.get(key);
+  if (memory) return memory;
+  const raw = String(await AsyncStorage.getItem(key).catch(() => '') || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as ImportantMessagesCacheSnapshot;
+    if (!parsed || !Array.isArray(parsed.items)) return null;
+    const snapshot: ImportantMessagesCacheSnapshot = {
+      count: Math.max(0, Number(parsed.count || parsed.items.length || 0)),
+      items: parsed.items,
+      revision: String(parsed.revision || ''),
+      savedAt: String(parsed.savedAt || ''),
+    };
+    IMPORTANT_MESSAGES_CACHE_MEMORY.set(key, snapshot);
+    return snapshot;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveImportantMessagesCache(snapshot: Omit<ImportantMessagesCacheSnapshot, 'savedAt'>) {
+  const key = await getImportantMessagesCacheKey();
+  const items = Array.isArray(snapshot.items) ? snapshot.items : [];
+  const nextSnapshot: ImportantMessagesCacheSnapshot = {
+    count: Math.max(0, Number(snapshot.count || items.length || 0)),
+    items,
+    revision: String(snapshot.revision || ''),
+    savedAt: new Date().toISOString(),
+  };
+  IMPORTANT_MESSAGES_CACHE_MEMORY.set(key, nextSnapshot);
+  await AsyncStorage.setItem(key, JSON.stringify(nextSnapshot));
+}
+
+export async function updateImportantMessagesCacheItems(items: ImportantMessage[]) {
+  const cached = await readImportantMessagesCache().catch(() => null);
+  await saveImportantMessagesCache({
+    count: cached?.count ?? (Array.isArray(items) ? items.length : 0),
+    items: Array.isArray(items) ? items : [],
+    revision: cached?.revision || '',
+  });
 }
 
 function getImportantMessageId(item: ImportantMessage | number) {

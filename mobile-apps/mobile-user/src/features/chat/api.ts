@@ -1,6 +1,6 @@
 import EventSource from 'react-native-sse';
 
-import { apiConfig } from '../../shared/api';
+import { apiConfig, readCachedCustomerPassport } from '../../shared/api';
 import type {
   ChatActor,
   ChatAttachment,
@@ -110,10 +110,34 @@ export function fetchChatSettings() {
 }
 
 export function fetchImportantMessages() {
-  return requestData<ImportantMessage[]>('/api/public/important-messages', {
+  return readCachedCustomerPassport().catch(() => null).then((passport) => requestData<ImportantMessage[]>('/api/public/important-messages', {
     actor: 'in',
+    customerToken: String(passport?.token || ''),
     query: { limit: 100 },
-  });
+  }));
+}
+
+export function fetchImportantMessagesRevision() {
+  return readCachedCustomerPassport().catch(() => null).then((passport) => requestData<{
+    count?: number;
+    revision?: string;
+  }>('/api/public/important-messages/revision', {
+    actor: 'in',
+    customerToken: String(passport?.token || ''),
+  }));
+}
+
+export function claimImportantMessagePromo(messageId: number) {
+  return readCachedCustomerPassport().catch(() => null).then((passport) => requestData<{
+    promo_code?: string;
+    promo_code_id?: number | null;
+    promo_claimed?: boolean;
+  }>(`/api/public/important-messages/${encodeURIComponent(String(messageId))}/claim-promo`, {
+    actor: 'in',
+    customerToken: String(passport?.token || ''),
+    method: 'POST',
+    body: JSON.stringify({}),
+  }));
 }
 
 export function fetchOrdersByPhone(phone: string) {

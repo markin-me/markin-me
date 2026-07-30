@@ -2,20 +2,24 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { ChatTabParamList } from '../../app/navigation/routes';
+import type { ChatTabParamList, MainTabParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
 import { useChatUnread } from '../../features/chat';
-import { fetchImportantMessages, resolveChatAssetUrl } from '../../features/chat/api';
+import { claimImportantMessagePromo, fetchImportantMessages, resolveChatAssetUrl } from '../../features/chat/api';
 import type { ImportantMessage } from '../../features/chat/types';
+import { refreshCheckoutBenefitsState } from '../../features/checkout';
+import { getMemoryCustomerPassport, readCachedCustomerPassport, subscribeCustomerPassport } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 import { AppHeader } from '../../widgets/app-header';
 
 type DetailsRoute = RouteProp<ChatTabParamList, typeof routes.importantMessageDetails>;
+type MainNavigationProp = BottomTabNavigationProp<MainTabParamList>;
 
 function isPromoRouteActive(navigation: NativeStackNavigationProp<ChatTabParamList>) {
   const state = navigation.getState();
@@ -28,14 +32,20 @@ export function ImportantMessageDetailsPage() {
   const route = useRoute<DetailsRoute>();
   const insets = useSafeAreaInsets();
   const { markPromoRead } = useChatUnread();
+  const pendingClaimRef = useRef(false);
+  const claimingRef = useRef(false);
   const routeItem = route.params?.item || null;
   const routeItemId = Number(route.params?.itemId || routeItem?.id || 0);
   const [loadedItem, setLoadedItem] = useState<ImportantMessage | null>(routeItem);
   const [loading, setLoading] = useState(!routeItem && routeItemId > 0);
   const [error, setError] = useState('');
+  const [claiming, setClaiming] = useState(false);
+  const [customerToken, setCustomerToken] = useState(() => String(getMemoryCustomerPassport()?.token || '').trim());
   const item = loadedItem;
   const imageUrl = item ? resolveChatAssetUrl(item.image_url || '') : '';
-  const promoCode = item ? String(item.promo_code || '').trim() : '';
+  const hasPromo = item ? (item.promo_claimable === true || !!String(item.promo_code || '').trim() || item.promo_code_masked === true) : false;
+  const promoCode = item ? (item.promo_code_masked ? '*****' : String(item.promo_code || '').trim()) : '';
+  const claimText = item?.promo_claimed ? 'Забрано' : claiming ? '...' : item?.promo_claimable === false ? 'Закончились' : 'Забрать';
   const linkUrl = item ? String(item.link_url || '').trim() : '';
   const scrollY = useRef(new Animated.Value(0)).current;
   const imageTranslateY = useMemo(() => Animated.multiply(scrollY, 4 / 5), [scrollY]);
@@ -49,6 +59,14 @@ export function ImportantMessageDetailsPage() {
     };
   }, [insets.bottom]);
   const hideTabBarStyle = useMemo(() => ({ display: 'none' as const }), []);
+  const mainNavigation = navigation.getParent<MainNavigationProp>();
+
+  const refreshCustomerToken = useCallback(async () => {
+    const passport = await readCachedCustomerPassport().catch(() => null);
+    const nextToken = String(passport?.token || '').trim();
+    setCustomerToken(nextToken);
+    return nextToken;
+  }, []);
 
   useEffect(() => {
     if (item) void markPromoRead(item);
@@ -100,7 +118,55 @@ export function ImportantMessageDetailsPage() {
     void Linking.openURL(linkUrl).catch(() => null);
   }, [linkUrl]);
 
+  const claimPromo = useCallback(async () => {
+    const itemId = Number(item?.id || 0);
+    if (!(itemId > 0) || item?.promo_claimable === false || item?.promo_claimed === true || claimingRef.current) return;
+    claimingRef.current = true;
+    setClaiming(true);
+    try {
+      const token = await refreshCustomerToken();
+      if (!token) {
+        pendingClaimRef.current = true;
+        mainNavigation?.navigate(routes.profile);
+        return;
+      }
+      const result = await claimImportantMessagePromo(itemId);
+      const nextCode = String(result?.promo_code || '').trim();
+      void refreshCheckoutBenefitsState().catch(() => null);
+      setLoadedItem((current) => current ? {
+        ...current,
+        promo_code: nextCode || current.promo_code,
+        promo_code_id: result?.promo_code_id ?? current.promo_code_id,
+        promo_code_masked: false,
+        promo_claimed: true,
+      } : current);
+    } catch (claimError) {
+      if (claimError instanceof Error && claimError.message === 'UNAUTHORIZED') {
+        pendingClaimRef.current = true;
+        setCustomerToken('');
+        mainNavigation?.navigate(routes.profile);
+      } else {
+        setLoadedItem((current) => current ? { ...current, promo_claimable: false } : current);
+      }
+    } finally {
+      claimingRef.current = false;
+      setClaiming(false);
+    }
+  }, [item, mainNavigation, refreshCustomerToken]);
+
+  useEffect(() => {
+    void refreshCustomerToken();
+    return subscribeCustomerPassport(() => {
+      void refreshCustomerToken().then((token) => {
+        if (!token || !pendingClaimRef.current) return;
+        pendingClaimRef.current = false;
+        void claimPromo();
+      });
+    });
+  }, [claimPromo, refreshCustomerToken]);
+
   useFocusEffect(useCallback(() => {
+    void refreshCustomerToken();
     const parent = navigation.getParent();
     parent?.setOptions({ tabBarStyle: hideTabBarStyle });
     return () => {
@@ -109,7 +175,7 @@ export function ImportantMessageDetailsPage() {
         parent?.setOptions({ tabBarStyle: baseTabBarStyle });
       });
     };
-  }, [baseTabBarStyle, hideTabBarStyle, navigation]));
+  }, [baseTabBarStyle, hideTabBarStyle, navigation, refreshCustomerToken]));
 
   if (!item) {
     return (
@@ -154,10 +220,24 @@ export function ImportantMessageDetailsPage() {
         <View style={styles.sheet}>
           <Text style={styles.title}>{item.title}</Text>
 
-          {promoCode ? (
-            <View style={styles.promoPill}>
-              <Text style={styles.promoLabel}>Промокод</Text>
-              <Text style={styles.promoCode}>{promoCode}</Text>
+          {hasPromo ? (
+            <View style={styles.promoBlock}>
+              <View style={styles.promoPill}>
+                <Text style={styles.promoLabel}>Промокод</Text>
+                <Text style={styles.promoCode}>{promoCode}</Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                disabled={claiming || item.promo_claimed === true || item.promo_claimable === false}
+                onPress={claimPromo}
+                style={({ pressed }) => [
+                  styles.claimButton,
+                  pressed && !claiming ? styles.claimButtonPressed : null,
+                  (item.promo_claimed === true || item.promo_claimable === false) ? styles.claimButtonDisabled : null,
+                ]}
+              >
+                <Text style={styles.claimText}>{claimText}</Text>
+              </Pressable>
             </View>
           ) : null}
 
@@ -222,9 +302,11 @@ const styles = StyleSheet.create({
   },
   promoCode: {
     color: '#3f3f46',
+    flex: 1,
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 0.3,
+    minWidth: 0,
   },
   promoLabel: {
     color: '#71717a',
@@ -232,17 +314,44 @@ const styles = StyleSheet.create({
   },
   promoPill: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
     borderColor: '#e5e7eb',
     borderRadius: 24,
     borderStyle: 'dashed',
     borderWidth: 1.5,
+    flex: 1,
     flexDirection: 'row',
     gap: 10,
-    marginTop: 18,
     minHeight: 58,
+    minWidth: 0,
     paddingHorizontal: 22,
     paddingVertical: 12,
+  },
+  promoBlock: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 20,
+  },
+  claimButton: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 999,
+    flexShrink: 0,
+    minHeight: 42,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 11,
+  },
+  claimButtonDisabled: {
+    backgroundColor: '#e5e7eb',
+  },
+  claimButtonPressed: {
+    opacity: 0.82,
+  },
+  claimText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
   },
   sheet: {
     backgroundColor: '#ffffff',

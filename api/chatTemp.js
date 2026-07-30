@@ -176,6 +176,29 @@ async function ensurePushSubscriptionsIndexes() {
   }
 }
 
+async function ensurePushSubscriptionsColumns() {
+  const [columnRows] = await db.query("SHOW COLUMNS FROM chat_push_subscriptions");
+  const columns = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || "")));
+  const alterParts = [];
+  if (!columns.has("client_id")) alterParts.push("ADD COLUMN client_id BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER tenant_id");
+  if (!columns.has("actor")) alterParts.push("ADD COLUMN actor ENUM('in','out') NOT NULL DEFAULT 'in' AFTER client_id");
+  if (!columns.has("endpoint_hash")) alterParts.push("ADD COLUMN endpoint_hash CHAR(64) NOT NULL DEFAULT '' AFTER actor");
+  if (!columns.has("endpoint")) alterParts.push("ADD COLUMN endpoint VARCHAR(1024) NOT NULL DEFAULT '' AFTER endpoint_hash");
+  if (!columns.has("p256dh")) alterParts.push("ADD COLUMN p256dh VARCHAR(255) NOT NULL DEFAULT '' AFTER endpoint");
+  if (!columns.has("auth")) alterParts.push("ADD COLUMN auth VARCHAR(255) NOT NULL DEFAULT '' AFTER p256dh");
+  if (!columns.has("user_agent")) alterParts.push("ADD COLUMN user_agent VARCHAR(255) NOT NULL DEFAULT '' AFTER auth");
+  if (!columns.has("created_at")) alterParts.push("ADD COLUMN created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)");
+  if (!columns.has("updated_at")) alterParts.push("ADD COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)");
+  if (alterParts.length) {
+    await db.query(`ALTER TABLE chat_push_subscriptions ${alterParts.join(", ")}`);
+  }
+  await db.query(`
+    UPDATE chat_push_subscriptions
+       SET endpoint_hash = SHA2(endpoint, 256)
+     WHERE endpoint_hash = '' AND endpoint <> ''
+  `);
+}
+
 function ensurePushSubscriptionsTable() {
   if (ensurePushSubscriptionsTablePromise) return ensurePushSubscriptionsTablePromise;
   ensurePushSubscriptionsTablePromise = db.query(`
@@ -196,6 +219,7 @@ function ensurePushSubscriptionsTable() {
       KEY idx_chat_push_subscriptions_thread (tenant_id, client_id, actor)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `)
+    .then(() => ensurePushSubscriptionsColumns())
     .then(() => ensurePushSubscriptionsIndexes())
     .then(() => true)
     .catch((err) => {
