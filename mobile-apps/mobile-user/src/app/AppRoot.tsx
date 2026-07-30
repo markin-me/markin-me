@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import {
   NavigationContainer,
   createNavigationContainerRef,
@@ -19,6 +20,7 @@ import {
   Platform,
   StyleSheet,
   StatusBar as NativeStatusBar,
+  Text,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -54,7 +56,12 @@ import { ProfilePage } from '../pages/profile';
 import { ProfileSettingsPage } from '../pages/profile-settings';
 import { PromocodesPage } from '../pages/promocodes';
 import { TasksPage } from '../pages/tasks';
-import { readCartLines } from '../features/cart';
+import {
+  readCartLines,
+  subscribeCartAddAnimation,
+  subscribeCartLines,
+  type CartAddAnimation,
+} from '../features/cart';
 import { ChatPushProvider, ChatUnreadProvider, useChatUnread } from '../features/chat';
 import { readFulfillmentSelection } from '../features/checkout';
 import {
@@ -66,19 +73,56 @@ import { theme } from '../shared/config/theme';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
+const AnimatedExpoImage = Animated.createAnimatedComponent(ExpoImage);
 
 function MainTabIcon({
+  badgeCount = 0,
+  bounceToken = 0,
   focused,
   name,
   unread = false,
 }: {
+  badgeCount?: number;
+  bounceToken?: number;
   focused: boolean;
   name: keyof typeof Ionicons.glyphMap;
   unread?: boolean;
 }) {
   const gradientId = `mainTabGradient${useId().replace(/:/g, '')}`;
+  const translateY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!bounceToken) return;
+    translateY.stopAnimation();
+    translateY.setValue(0);
+    Animated.sequence([
+      Animated.timing(translateY, {
+        duration: 100,
+        easing: Easing.out(Easing.cubic),
+        toValue: -9,
+        useNativeDriver: true,
+      }),
+      Animated.delay(270),
+      Animated.spring(translateY, {
+        damping: 8,
+        mass: 0.55,
+        stiffness: 210,
+        toValue: 0,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [bounceToken, translateY]);
+
   return (
-    <View style={[styles.mainTabIcon, focused && styles.mainTabIconActive]}>
+    <Animated.View
+      style={[
+        styles.mainTabIcon,
+        focused && styles.mainTabIconActive,
+        {
+          transform: [{ translateY }],
+        },
+      ]}
+    >
       {focused ? (
         <View pointerEvents="none" style={styles.mainTabIconGradient}>
           <Svg height="100%" preserveAspectRatio="none" style={StyleSheet.absoluteFillObject} viewBox="0 0 50 50" width="100%">
@@ -97,8 +141,13 @@ function MainTabIcon({
         name={name}
         size={22}
       />
+      {badgeCount > 0 ? (
+        <View style={styles.tabCountBadge}>
+          <Text style={styles.tabCountBadgeText}>{badgeCount > 99 ? '99+' : badgeCount}</Text>
+        </View>
+      ) : null}
       {unread ? <View style={styles.tabUnreadDot} /> : null}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -117,6 +166,99 @@ function MainTabBarBackground() {
         </Defs>
         <Rect fill="url(#mainTabBarFade)" height="100" width="100" />
       </Svg>
+    </View>
+  );
+}
+
+function CartFlightLayer() {
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const progress = useRef(new Animated.Value(0)).current;
+  const animationRef = useRef<Animated.CompositeAnimation | null>(null);
+  const [flight, setFlight] = useState<CartAddAnimation | null>(null);
+
+  useEffect(() => subscribeCartAddAnimation((animation) => {
+    const frame = animation.sourceFrame;
+    if (!animation.imageUri || !frame || frame.height <= 0 || frame.width <= 0) return;
+
+    animationRef.current?.stop();
+    progress.setValue(0);
+    setFlight(animation);
+
+    const nextAnimation = Animated.timing(progress, {
+      duration: 470,
+      easing: Easing.inOut(Easing.cubic),
+      toValue: 1,
+      useNativeDriver: true,
+    });
+    animationRef.current = nextAnimation;
+    nextAnimation.start(({ finished }) => {
+      if (animationRef.current === nextAnimation) animationRef.current = null;
+      if (finished) setFlight(null);
+    });
+  }), [progress]);
+
+  useEffect(() => () => {
+    animationRef.current?.stop();
+  }, []);
+
+  if (!flight?.sourceFrame) return null;
+
+  const frame = flight.sourceFrame;
+  const startSize = Math.max(44, Math.min(96, frame.height, frame.width));
+  const startX = frame.x + (frame.width - startSize) / 2;
+  const startY = frame.y + (frame.height - startSize) / 2;
+  const targetSize = 20;
+  const tabItemWidth = Math.max(0, windowWidth - 96) / 4;
+  const targetX = 48 + tabItemWidth * 1.5 - targetSize / 2;
+  const targetY = windowHeight
+    - theme.sizes.tabBarHeight
+    - Math.max(0, insets.bottom)
+    + 10
+    + (50 - targetSize) / 2;
+  const deltaX = targetX - startX;
+  const deltaY = targetY - startY;
+
+  return (
+    <View pointerEvents="none" style={styles.cartFlightLayer}>
+      <AnimatedExpoImage
+        cachePolicy="memory-disk"
+        contentFit="contain"
+        source={{ uri: flight.imageUri }}
+        style={[
+          styles.cartFlightImage,
+          {
+            height: startSize,
+            left: startX,
+            opacity: progress.interpolate({
+              inputRange: [0, 0.82, 1],
+              outputRange: [1, 1, 0],
+            }),
+            top: startY,
+            transform: [
+              {
+                translateX: progress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, deltaX],
+                }),
+              },
+              {
+                translateY: progress.interpolate({
+                  inputRange: [0, 0.58, 1],
+                  outputRange: [0, deltaY * 0.58 - 18, deltaY],
+                }),
+              },
+              {
+                scale: progress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, targetSize / startSize],
+                }),
+              },
+            ],
+            width: startSize,
+          },
+        ]}
+      />
     </View>
   );
 }
@@ -286,6 +428,10 @@ function ChatPushUnreadBridge({
   );
 }
 
+function getCartItemCount(lines: Awaited<ReturnType<typeof readCartLines>>) {
+  return lines.reduce((total, line) => total + Math.max(0, Number(line.quantity) || 0), 0);
+}
+
 function MainTabs() {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
@@ -297,6 +443,8 @@ function MainTabs() {
   const supportChatDeactivateFrameRef = useRef<number | null>(null);
   const supportChatAnimationRunRef = useRef(0);
   const supportChatOpenRef = useRef(false);
+  const [cartBounceToken, setCartBounceToken] = useState(0);
+  const [cartItemCount, setCartItemCount] = useState(0);
   const [supportChatVisible, setSupportChatVisible] = useState(false);
   const [supportChatActive, setSupportChatActive] = useState(false);
   const [supportChatInteractive, setSupportChatInteractive] = useState(false);
@@ -315,6 +463,24 @@ function MainTabs() {
     right: 0,
     shadowOpacity: 0,
   };
+
+  useEffect(() => {
+    let active = true;
+    void readCartLines().then((lines) => {
+      if (active) setCartItemCount(getCartItemCount(lines));
+    });
+    const unsubscribeLines = subscribeCartLines((lines) => {
+      setCartItemCount(getCartItemCount(lines));
+    });
+    const unsubscribeAddAnimation = subscribeCartAddAnimation(() => {
+      setCartBounceToken((value) => value + 1);
+    });
+    return () => {
+      active = false;
+      unsubscribeLines();
+      unsubscribeAddAnimation();
+    };
+  }, []);
 
   useEffect(() => {
     const previousTotalUnread = previousTotalUnreadRef.current;
@@ -501,7 +667,14 @@ function MainTabs() {
           name={routes.cart}
           component={CartPage}
           options={{
-            tabBarIcon: ({ focused }) => <MainTabIcon focused={focused} name="cart" />,
+            tabBarIcon: ({ focused }) => (
+              <MainTabIcon
+                badgeCount={cartItemCount}
+                bounceToken={cartBounceToken}
+                focused={focused}
+                name="cart"
+              />
+            ),
             tabBarLabel: 'Корзина',
             title: 'Корзина',
           }}
@@ -620,6 +793,7 @@ export function AppRoot() {
         <BootPreloadGate>
         <ChatUnreadProvider>
         <ChatPushUnreadBridge onNotificationPress={handlePushNotificationPress}>
+        <View style={styles.appRoot}>
         <NavigationContainer ref={navigationRef} onReady={handleNavigationReady}>
       <Stack.Navigator>
         <Stack.Screen name="main" component={MainTabs} options={{ headerShown: false }} />
@@ -653,6 +827,8 @@ export function AppRoot() {
       </Stack.Navigator>
       <StatusBar backgroundColor={theme.colors.background} style="dark" translucent={false} />
         </NavigationContainer>
+        <CartFlightLayer />
+        </View>
         </ChatPushUnreadBridge>
         </ChatUnreadProvider>
         </BootPreloadGate>
@@ -663,11 +839,31 @@ export function AppRoot() {
 }
 
 const styles = StyleSheet.create({
+  appRoot: {
+    flex: 1,
+  },
   bootPreload: {
     alignItems: 'center',
     backgroundColor: theme.colors.background,
     flex: 1,
     justifyContent: 'center',
+  },
+  cartFlightImage: {
+    borderRadius: 999,
+    elevation: 16,
+    position: 'absolute',
+    shadowColor: '#141d30',
+    shadowOffset: {
+      height: 8,
+      width: 0,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+  },
+  cartFlightLayer: {
+    ...StyleSheet.absoluteFillObject,
+    elevation: 100,
+    zIndex: 1000,
   },
   mainTabsRoot: {
     flex: 1,
@@ -726,5 +922,25 @@ const styles = StyleSheet.create({
     right: 5,
     top: 5,
     width: 12,
+  },
+  tabCountBadge: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.accent,
+    borderColor: '#ffffff',
+    borderRadius: 10,
+    borderWidth: 2,
+    justifyContent: 'center',
+    minHeight: 20,
+    minWidth: 20,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -6,
+    top: -6,
+  },
+  tabCountBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+    lineHeight: 12,
   },
 });

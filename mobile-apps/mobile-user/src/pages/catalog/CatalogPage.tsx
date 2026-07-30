@@ -34,7 +34,19 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'reac
 import type { MainTabParamList, RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
 import type { CatalogCategory, CatalogCombo, CatalogProduct, CatalogProductPassport, MobileCatalogSnapshot, UnitConversion } from '../../entities/product';
-import { addCartLine, makeCartLineId, readCartLines, updateCartLineQuantity, type CartIngredient, type CartLine, type CartLineDraft, type CartOptionItem, type CartVariant } from '../../features/cart';
+import {
+  addCartLine,
+  makeCartLineId,
+  notifyCartItemAdded,
+  readCartLines,
+  updateCartLineQuantity,
+  type CartAddAnimation,
+  type CartIngredient,
+  type CartLine,
+  type CartLineDraft,
+  type CartOptionItem,
+  type CartVariant,
+} from '../../features/cart';
 import {
   readFulfillmentSelection,
   saveFulfillmentSelection,
@@ -1190,12 +1202,13 @@ function ProductCard({
 }: {
   buildViewModel: (product: CatalogProduct) => ProductCardViewModel | null;
   onDecreaseProduct: (productId: number) => void;
-  onIncreaseProduct: (product: CatalogProduct) => void;
+  onIncreaseProduct: (product: CatalogProduct, animation: CartAddAnimation) => void;
   onPressProduct: (productId: number, image: string) => void;
   product: CatalogProduct;
   runtimeStore: ProductRuntimeStore;
 }) {
   const productId = Number(product.id || 0);
+  const mediaRef = useRef<View>(null);
   useSyncExternalStore(
     (listener) => runtimeStore.subscribe(productId, listener),
     () => runtimeStore.getSnapshot(productId),
@@ -1227,12 +1240,30 @@ function ProductCard({
 
   const handleIncrease = (event: GestureResponderEvent) => {
     event.stopPropagation();
-    if (canIncrease) onIncreaseProduct(product);
+    if (!canIncrease) return;
+    if (!image || !mediaRef.current) {
+      onIncreaseProduct(product, {
+        imageUri: image,
+        sourceFrame: null,
+      });
+      return;
+    }
+    mediaRef.current.measureInWindow((x, y, width, height) => {
+      onIncreaseProduct(product, {
+        imageUri: image,
+        sourceFrame: {
+          height,
+          width,
+          x,
+          y,
+        },
+      });
+    });
   };
 
   return (
     <Pressable style={[styles.card, !canIncrease && !hasQuantity && availability.hasKnownStock && styles.cardDisabled]} onPress={() => onPressProduct(productId, image)}>
-      <View style={styles.media}>
+      <View ref={mediaRef} style={styles.media}>
         {image && Platform.OS === 'web' ? (
           <Image resizeMode="contain" source={{ uri: image }} style={styles.image} />
         ) : image ? (
@@ -3392,7 +3423,10 @@ export function CatalogPage() {
     markCatalogScrolling();
   }, [markCatalogScrolling]);
 
-  const increaseProductQuantity = useCallback(async (product: CatalogProduct) => {
+  const increaseProductQuantity = useCallback(async (
+    product: CatalogProduct,
+    animation: CartAddAnimation,
+  ) => {
     const productId = Number(product.id);
     if (!Number.isFinite(productId) || productId <= 0) return;
     const currentProduct = getCatalogStateProduct(catalogRef.current, productId) || product;
@@ -3418,6 +3452,7 @@ export function CatalogPage() {
     const nextLines = await addCartLine(nextLine);
     setCartLines(nextLines);
     setProductQuantities(buildProductQuantitiesFromCart(nextLines));
+    notifyCartItemAdded(animation);
     void refreshMany(affectedProductIds).then((result) => {
       const availability = result?.payload || null;
       const data = availability?.data && typeof availability.data === 'object'
@@ -3451,8 +3486,8 @@ export function CatalogPage() {
     void decreaseProductQuantity(productId);
   }, [decreaseProductQuantity]);
 
-  const handleIncreaseProduct = useCallback((product: CatalogProduct) => {
-    void increaseProductQuantity(product);
+  const handleIncreaseProduct = useCallback((product: CatalogProduct, animation: CartAddAnimation) => {
+    void increaseProductQuantity(product, animation);
   }, [increaseProductQuantity]);
 
   const renderCatalogCard = useCallback((card: CatalogCardItem) => {

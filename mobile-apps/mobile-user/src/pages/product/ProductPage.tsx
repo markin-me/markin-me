@@ -4,6 +4,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -32,8 +33,10 @@ import {
   addCartLine,
   cartLinesToStockCheckItems,
   makeCartLineId,
+  notifyCartItemAdded,
   readCartLines,
   saveCartLine,
+  type CartAddAnimation,
   type CartIngredient,
   type CartLine,
   type CartLineDraft,
@@ -1242,6 +1245,7 @@ function Stepper({
 }
 
 export function ProductPage({ navigation, route }: ProductPageProps) {
+  const heroRef = useRef<View>(null);
   const productId = route.params.productId;
   const initialProductImage = String(route.params.productImage || '').trim();
   const cartLineId = route.params.cartLineId || '';
@@ -1706,9 +1710,30 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       navigation.goBack();
       return;
     }
+    const animation = await new Promise<CartAddAnimation>((resolve) => {
+      if (!image || !heroRef.current) {
+        resolve({
+          imageUri: image,
+          sourceFrame: null,
+        });
+        return;
+      }
+      heroRef.current.measureInWindow((x, y, width, height) => {
+        resolve({
+          imageUri: image,
+          sourceFrame: {
+            height,
+            width,
+            x,
+            y,
+          },
+        });
+      });
+    });
     await addCartLine(nextLine);
+    notifyCartItemAdded(animation);
     syncSavedLineStock();
-    navigation.navigate('main', { screen: 'cart' });
+    navigation.goBack();
   }, [
     applyAvailabilityPatch,
     canSubmit,
@@ -1717,6 +1742,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     currentCartOptions,
     displayQuantity,
     existingCartQty,
+    image,
     ingredientState,
     ingredients,
     navigation,
@@ -1853,7 +1879,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     <Screen>
       <View style={styles.root}>
         <ScrollView style={styles.page} contentContainerStyle={styles.content}>
-          <View style={styles.hero}>
+          <View ref={heroRef} style={styles.hero}>
             {image && Platform.OS === 'web' ? (
               <Image resizeMode="contain" source={{ uri: image }} style={styles.image} />
             ) : image ? (

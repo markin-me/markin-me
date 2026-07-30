@@ -3,6 +3,46 @@ import type { CatalogBuyXGetYBadge } from '../../entities/product';
 
 export type CartLineType = 'product' | 'combo';
 
+export type CartAnimationFrame = {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+};
+
+export type CartAddAnimation = {
+  imageUri: string;
+  sourceFrame: CartAnimationFrame | null;
+};
+
+type CartLinesListener = (lines: CartLine[]) => void;
+type CartAddAnimationListener = (animation: CartAddAnimation) => void;
+
+const cartLinesListeners = new Set<CartLinesListener>();
+const cartAddAnimationListeners = new Set<CartAddAnimationListener>();
+
+function emitCartLines(lines: CartLine[]) {
+  cartLinesListeners.forEach((listener) => listener(lines));
+}
+
+export function subscribeCartLines(listener: CartLinesListener) {
+  cartLinesListeners.add(listener);
+  return () => {
+    cartLinesListeners.delete(listener);
+  };
+}
+
+export function notifyCartItemAdded(animation: CartAddAnimation) {
+  cartAddAnimationListeners.forEach((listener) => listener(animation));
+}
+
+export function subscribeCartAddAnimation(listener: CartAddAnimationListener) {
+  cartAddAnimationListeners.add(listener);
+  return () => {
+    cartAddAnimationListeners.delete(listener);
+  };
+}
+
 export type CartVariant = {
   groupId?: number | null;
   groupTitle?: string;
@@ -291,6 +331,7 @@ export async function readCartLines() {
 export async function saveCartLines(lines: CartLine[]) {
   const normalized = normalizeCartLines(lines);
   await AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(normalized));
+  emitCartLines(normalized);
   return normalized;
 }
 
@@ -362,6 +403,7 @@ export async function removeCartLine(lineId: string) {
 
 export async function clearCartLines() {
   await AsyncStorage.removeItem(CART_STORAGE_KEY);
+  emitCartLines([]);
   return [];
 }
 

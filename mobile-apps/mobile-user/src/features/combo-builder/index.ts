@@ -8,6 +8,7 @@ export {
   getComboBlockConfig,
   getComboDraft,
   getComboIngredientEditorMeta,
+  getComboProductImage,
   getComboProductLines,
   getComboProductOldPrice,
   getComboProductPrice,
