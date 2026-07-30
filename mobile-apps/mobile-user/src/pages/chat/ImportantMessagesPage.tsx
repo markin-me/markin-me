@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { ChatTabParamList, MainTabParamList, RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
@@ -27,15 +26,8 @@ import { AppHeader } from '../../widgets/app-header';
 type MainNavigationProp = BottomTabNavigationProp<MainTabParamList>;
 type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-function isPromoRouteActive(navigation: NativeStackNavigationProp<ChatTabParamList>) {
-  const state = navigation.getState();
-  const routeName = state.routes[state.index]?.name;
-  return routeName === routes.importantMessages || routeName === routes.importantMessageDetails;
-}
-
 export function ImportantMessagesPage() {
   const navigation = useNavigation<NativeStackNavigationProp<ChatTabParamList>>();
-  const insets = useSafeAreaInsets();
   const { promoCacheRevision, syncPromoUnreadFromItems } = useChatUnread();
   const pendingClaimItemRef = useRef<ImportantMessage | null>(null);
   const claimingItemIdsRef = useRef(new Set<string>());
@@ -48,16 +40,6 @@ export function ImportantMessagesPage() {
   const [error, setError] = useState('');
   const mainNavigation = navigation.getParent<MainNavigationProp>();
   const rootNavigation = mainNavigation?.getParent<RootNavigationProp>();
-  const baseTabBarStyle = useMemo(() => {
-    const bottomInset = Math.max(0, insets.bottom);
-    return {
-      borderTopColor: theme.colors.border,
-      height: theme.sizes.tabBarHeight + bottomInset,
-      paddingBottom: 8 + bottomInset,
-      paddingTop: 2,
-    };
-  }, [insets.bottom]);
-  const hideTabBarStyle = useMemo(() => ({ display: 'none' as const }), []);
 
   const applyItems = useCallback(async (nextItems: ImportantMessage[]) => {
     const normalizedItems = Array.isArray(nextItems) ? nextItems : [];
@@ -201,18 +183,10 @@ export function ImportantMessagesPage() {
   }, [load, refreshCustomerToken]));
 
   useFocusEffect(useCallback(() => {
-    const parent = navigation.getParent();
-    parent?.setOptions({ tabBarStyle: hideTabBarStyle });
     if (items.length) {
       void getUnreadImportantMessageIds(items).then((ids) => setUnreadItemIds(new Set(ids)));
     }
-    return () => {
-      requestAnimationFrame(() => {
-        if (isPromoRouteActive(navigation)) return;
-        parent?.setOptions({ tabBarStyle: baseTabBarStyle });
-      });
-    };
-  }, [baseTabBarStyle, hideTabBarStyle, items, navigation]));
+  }, [items]));
 
   return (
     <Screen edges={['top']}>

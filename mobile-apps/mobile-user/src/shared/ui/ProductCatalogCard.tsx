@@ -4,8 +4,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../config/theme';
 import { formatPrice } from '../lib/formatPrice';
 import { ProductBadge } from './ProductBadge';
+import { ProductQuantityButton } from './ProductQuantityButton';
 
 type ProductCatalogCardProps = {
+  canPressAction?: boolean;
   descriptionLines?: string[];
   discountBadgeText?: string;
   imageUrl?: string;
@@ -19,6 +21,7 @@ type ProductCatalogCardProps = {
 };
 
 export function ProductCatalogCard({
+  canPressAction = true,
   descriptionLines = [],
   discountBadgeText = '',
   imageUrl = '',
@@ -67,17 +70,17 @@ export function ProductCatalogCard({
             {hasOldPrice ? <Text style={styles.oldPrice}>{formatPrice(normalizedOldPrice)}</Text> : null}
             <Text numberOfLines={1} style={styles.price}>{formatPrice(normalizedPrice)}</Text>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            onPress={(event) => {
-              event.stopPropagation();
-              if (onPressAction) onPressAction();
-              else if (onPress) onPress();
-            }}
-            style={({ pressed }) => [styles.plusButton, pressed ? styles.cardPressed : null]}
-          >
-            <Ionicons name="add" color={theme.colors.primaryText} size={18} />
-          </Pressable>
+          {canPressAction ? (
+            <ProductQuantityButton
+              onPress={(event) => {
+                event.stopPropagation();
+                if (onPressAction) onPressAction();
+                else if (onPress) onPress();
+              }}
+            >
+              <Ionicons name="add" color={theme.colors.primaryText} size={18} />
+            </ProductQuantityButton>
+          ) : null}
         </View>
       </View>
     </Pressable>
@@ -182,15 +185,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     minHeight: 12,
     textDecorationLine: 'line-through',
-  },
-  plusButton: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.sm,
-    flexShrink: 0,
-    height: 32,
-    justifyContent: 'center',
-    width: 32,
   },
   price: {
     color: theme.colors.text,
