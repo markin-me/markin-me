@@ -6,19 +6,120 @@ import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 
-import type { ChatTabParamList, MainTabParamList } from '../../app/navigation/routes';
+import type { ChatTabParamList, MainTabParamList, RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
 import { useChatUnread } from '../../features/chat';
 import { claimImportantMessagePromo, fetchImportantMessages, resolveChatAssetUrl } from '../../features/chat/api';
+import { getImportantMessageActionType } from '../../features/chat/helpers';
 import type { ImportantMessage } from '../../features/chat/types';
 import { refreshCheckoutBenefitsState } from '../../features/checkout';
-import { getMemoryCustomerPassport, readCachedCustomerPassport, subscribeCustomerPassport } from '../../shared/api';
+import type { CatalogProduct } from '../../entities/product';
+import {
+  getCatalogSnapshotProduct,
+  getMemoryCustomerPassport,
+  readCachedCustomerPassport,
+  readCachedMobileCatalogSnapshot,
+  resolveAssetUrl,
+  subscribeCustomerPassport,
+} from '../../shared/api';
 import { theme } from '../../shared/config/theme';
+import { getBuyXGetYBadgeText as getBuyXGetYBadgeTextFromRule } from '../../shared/lib/buyXGetY';
 import { Screen } from '../../shared/ui/Screen';
+import { ProductCatalogCard } from '../../shared/ui';
 import { AppHeader } from '../../widgets/app-header';
 
 type DetailsRoute = RouteProp<ChatTabParamList, typeof routes.importantMessageDetails>;
 type MainNavigationProp = BottomTabNavigationProp<MainTabParamList>;
+type RootNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type PromoProductCard = CatalogProduct | NonNullable<ImportantMessage['products']>[number];
+
+function getPromoProductIds(item: ImportantMessage | null) {
+  return Array.from(new Set((Array.isArray(item?.product_ids) ? item.product_ids : [])
+    .map((value) => Number(value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0)));
+}
+
+function findSnapshotProduct(snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null, productId: number) {
+  if (!(productId > 0)) return null;
+  const lists = Object.values(snapshot?.productsByCategory || {});
+  for (const list of lists) {
+    const product = (Array.isArray(list) ? list : []).find((entry) => Number(entry?.id || 0) === productId);
+    if (product) return product;
+  }
+  return null;
+}
+
+function getProductPrice(product: PromoProductCard) {
+  const source = product as PromoProductCard & { display_price?: number | null; discounted_price?: number | null };
+  const value = Number(source.display_price ?? source.discounted_price ?? source.price ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function getProductImage(product: PromoProductCard) {
+  const source = product as PromoProductCard & { photos?: string[]; photo_thumb?: string | null };
+  return resolveAssetUrl(source.photos?.[0] || source.photo_thumb || '');
+}
+
+function getProductTitle(product: PromoProductCard, productId: number) {
+  const source = product as PromoProductCard & { name?: string; title?: string };
+  return String(source.name || source.title || `Товар #${productId}`);
+}
+
+function getProductOldPrice(product: PromoProductCard) {
+  const source = product as PromoProductCard & { old_price?: number | null; original_price?: number | null };
+  const value = Number(source.old_price ?? source.original_price ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function getProductDiscountText(product: PromoProductCard, price = getProductPrice(product), oldPrice = getProductOldPrice(product)) {
+  const source = product as PromoProductCard & {
+    discount?: { discount_type?: string; discount_value?: number | string | null } | null;
+  };
+  const discountValue = Number(source.discount?.discount_value || 0);
+  if (source.discount?.discount_type === 'percent' && discountValue > 0) return `-${Math.round(discountValue)}%`;
+  if (oldPrice > price && price >= 0) return `-${Math.round(((oldPrice - price) / oldPrice) * 100)}%`;
+  return '';
+}
+
+function getProductDefaultLines(product: PromoProductCard) {
+  const source = product as PromoProductCard & {
+    catalog_default_lines?: string[];
+    description_short?: string | null;
+    description?: string | null;
+  };
+  const lines = Array.isArray(source.catalog_default_lines)
+    ? source.catalog_default_lines.map((line) => String(line || '').trim()).filter(Boolean)
+    : [];
+  if (lines.length) return lines.slice(0, 2);
+  return String(source.description_short || source.description || '').trim()
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 2);
+}
+
+function getProductPromoBadgeText(product: PromoProductCard) {
+  const source = product as PromoProductCard & { buy_x_get_y_badge?: CatalogProduct['buy_x_get_y_badge'] };
+  return getBuyXGetYBadgeTextFromRule(source.buy_x_get_y_badge);
+}
+
+function isPromoProductConfigurable(product: PromoProductCard) {
+  const source = product as CatalogProduct & {
+    hasConfigurable?: boolean;
+    preview?: { hasConfigurable?: boolean } | null;
+  };
+  const blocksConfig = source.blocks_config && typeof source.blocks_config === 'object' ? source.blocks_config : null;
+  return Boolean(
+    source.hasConfigurable ||
+      source.preview?.hasConfigurable ||
+      blocksConfig?.variants ||
+      blocksConfig?.options ||
+      blocksConfig?.ingredients ||
+      (Array.isArray(source.variants) && source.variants.length > 0) ||
+      (Array.isArray(source.options) && source.options.length > 0) ||
+      (Array.isArray(source.ingredients) && source.ingredients.length > 0),
+  );
+}
 
 export function ImportantMessageDetailsPage() {
   const navigation = useNavigation<NativeStackNavigationProp<ChatTabParamList>>();
@@ -35,13 +136,20 @@ export function ImportantMessageDetailsPage() {
   const [customerToken, setCustomerToken] = useState(() => String(getMemoryCustomerPassport()?.token || '').trim());
   const item = loadedItem;
   const imageUrl = item ? resolveChatAssetUrl(item.image_url || '') : '';
-  const hasPromo = item ? (item.promo_claimable === true || !!String(item.promo_code || '').trim() || item.promo_code_masked === true) : false;
+  const actionType = getImportantMessageActionType(item);
+  const productId = actionType === 'product' ? Number(item?.product_id || 0) : 0;
+  const collectionProductIds = actionType === 'product_collection' ? getPromoProductIds(item) : [];
+  const [collectionProducts, setCollectionProducts] = useState<PromoProductCard[]>([]);
+  const hasPromo = actionType === 'promo_code' && item
+    ? (item.promo_claimable === true || !!String(item.promo_code || '').trim() || item.promo_code_masked === true)
+    : false;
   const promoCode = item ? (item.promo_code_masked ? '*****' : String(item.promo_code || '').trim()) : '';
   const claimText = item?.promo_claimed ? 'Забрано' : claiming ? '...' : item?.promo_claimable === false ? 'Закончились' : 'Забрать';
   const linkUrl = item ? String(item.link_url || '').trim() : '';
   const scrollY = useRef(new Animated.Value(0)).current;
   const imageTranslateY = useMemo(() => Animated.multiply(scrollY, 4 / 5), [scrollY]);
   const mainNavigation = navigation.getParent<MainNavigationProp>();
+  const rootNavigation = mainNavigation?.getParent<RootNavigationProp>();
 
   const refreshCustomerToken = useCallback(async () => {
     const passport = await readCachedCustomerPassport().catch(() => null);
@@ -99,6 +207,43 @@ export function ImportantMessageDetailsPage() {
     if (!linkUrl) return;
     void Linking.openURL(linkUrl).catch(() => null);
   }, [linkUrl]);
+
+  const openProduct = useCallback(() => {
+    if (!(productId > 0)) return;
+    rootNavigation?.navigate(routes.product, { productId });
+  }, [productId, rootNavigation]);
+
+  const openCollectionProduct = useCallback((nextProductId: number) => {
+    if (!(nextProductId > 0)) return;
+    rootNavigation?.navigate(routes.product, { productId: nextProductId });
+  }, [rootNavigation]);
+
+  useEffect(() => {
+    if (!collectionProductIds.length) {
+      setCollectionProducts([]);
+      return;
+    }
+    let cancelled = false;
+    const applyProducts = (snapshot: Awaited<ReturnType<typeof readCachedMobileCatalogSnapshot>> | null = null) => {
+      const products = collectionProductIds
+        .map((nextProductId) => {
+          const cachedProduct = getCatalogSnapshotProduct(nextProductId) || findSnapshotProduct(snapshot, nextProductId);
+          if (cachedProduct) return cachedProduct;
+          return item?.products?.find((product) => Number(product?.id || 0) === nextProductId) || null;
+        })
+        .filter((product): product is PromoProductCard => Boolean(product));
+      if (!cancelled) setCollectionProducts(products);
+    };
+    applyProducts();
+    void readCachedMobileCatalogSnapshot()
+      .then((snapshot) => applyProducts(snapshot))
+      .catch(() => {
+        if (!cancelled) applyProducts();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [collectionProductIds.join(',')]);
 
   const claimPromo = useCallback(async () => {
     const itemId = Number(item?.id || 0);
@@ -215,7 +360,47 @@ export function ImportantMessageDetailsPage() {
             </View>
           ) : null}
 
+          {productId > 0 ? (
+            <View style={styles.promoBlock}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={openProduct}
+                style={({ pressed }) => [
+                  styles.claimButton,
+                  pressed ? styles.claimButtonPressed : null,
+                ]}
+              >
+                <Text style={styles.claimText}>Заказать</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <Text style={styles.body}>{item.body}</Text>
+
+          {collectionProducts.length ? (
+            <View style={styles.productGrid}>
+              {collectionProducts.map((product) => {
+                const nextProductId = Number(product.id || 0);
+                const price = getProductPrice(product);
+                const oldPrice = getProductOldPrice(product);
+                return (
+                  <ProductCatalogCard
+                    key={String(nextProductId)}
+                    descriptionLines={getProductDefaultLines(product)}
+                    discountBadgeText={getProductDiscountText(product, price, oldPrice)}
+                    imageUrl={getProductImage(product)}
+                    mediaPillText={isPromoProductConfigurable(product) ? 'Настроить ›' : ''}
+                    oldPrice={oldPrice}
+                    onPress={() => openCollectionProduct(nextProductId)}
+                    onPressAction={() => openCollectionProduct(nextProductId)}
+                    price={price}
+                    promoBadgeText={getProductPromoBadgeText(product)}
+                    title={getProductTitle(product, nextProductId)}
+                  />
+                );
+              })}
+            </View>
+          ) : null}
 
           {linkUrl ? (
             <Pressable accessibilityRole="button" onPress={openLink} style={styles.linkButton}>
@@ -305,6 +490,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 20,
+  },
+  productGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginTop: 22,
   },
   claimButton: {
     alignItems: 'center',

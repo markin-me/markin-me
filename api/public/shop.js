@@ -7187,6 +7187,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           body TEXT NOT NULL,
           image_url VARCHAR(1024) NOT NULL DEFAULT '',
           link_url VARCHAR(1024) NOT NULL DEFAULT '',
+          action_type ENUM('none','promo_code','product','product_collection') NOT NULL DEFAULT 'none',
+          product_id BIGINT UNSIGNED NULL,
           promo_code VARCHAR(80) NOT NULL DEFAULT '',
           promo_code_mode ENUM('none','shared','unique') NOT NULL DEFAULT 'none',
           promo_discount_id BIGINT UNSIGNED NULL,
@@ -7238,6 +7240,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           throw err;
         }
       }
+      try {
+        await db.query("ALTER TABLE mkt_important_messages ADD COLUMN action_type ENUM('none','promo_code','product','product_collection') NOT NULL DEFAULT 'none' AFTER link_url");
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+          throw err;
+        }
+      }
+      await db.query("ALTER TABLE mkt_important_messages MODIFY COLUMN action_type ENUM('none','promo_code','product','product_collection') NOT NULL DEFAULT 'none'");
+      try {
+        await db.query('ALTER TABLE mkt_important_messages ADD COLUMN product_id BIGINT UNSIGNED NULL AFTER action_type');
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_FIELDNAME' && !String(err?.message || '').includes('Duplicate column name')) {
+          throw err;
+        }
+      }
       await db.query(`
         CREATE TABLE IF NOT EXISTS mkt_important_message_promo_claims (
           id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -7255,10 +7272,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           KEY idx_important_message_promo_claim_promo (tenant_id, promo_code_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
       `);
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS mkt_important_message_products (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          tenant_id BIGINT UNSIGNED NOT NULL,
+          store_id BIGINT UNSIGNED NOT NULL DEFAULT 1,
+          message_id BIGINT UNSIGNED NOT NULL,
+          product_id BIGINT UNSIGNED NOT NULL,
+          sort_order INT NOT NULL DEFAULT 0,
+          created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_important_message_product (tenant_id, store_id, message_id, product_id),
+          KEY idx_important_message_products_message (tenant_id, store_id, message_id, sort_order, id),
+          KEY idx_important_message_products_product (tenant_id, product_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
       const limitRaw = Number(req.query.limit || 50);
       const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.trunc(limitRaw))) : 50;
       const [rows] = await db.query(
-        `SELECT id, type, title, body, image_url, link_url, promo_code, promo_code_mode, promo_discount_id, promo_code_id, is_pinned, published_at, created_at, updated_at
+        `SELECT id, type, title, body, image_url, link_url, action_type, product_id, promo_code, promo_code_mode, promo_discount_id, promo_code_id, is_pinned, published_at, created_at, updated_at
            FROM mkt_important_messages
           WHERE tenant_id = ? AND store_id = ? AND is_published = 1 AND COALESCE(is_hidden, 0) = 0
           ORDER BY is_pinned DESC, COALESCE(published_at, updated_at) DESC, id DESC
@@ -7268,6 +7300,35 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const messageIds = (Array.isArray(rows) ? rows : [])
         .map((row) => Number(row?.id || 0))
         .filter((id) => id > 0);
+      const productsByMessageId = new Map();
+      if (messageIds.length) {
+        const [productRows] = await db.query(
+          `SELECT mp.message_id,
+                  mp.product_id,
+                  p.name AS title,
+                  p.price,
+                  p.is_active
+             FROM mkt_important_message_products mp
+             JOIN prod_products p
+               ON p.tenant_id = mp.tenant_id AND p.id = mp.product_id
+            WHERE mp.tenant_id = ? AND mp.store_id = ? AND mp.message_id IN (?)
+            ORDER BY mp.message_id ASC, mp.sort_order ASC, mp.id ASC`,
+          [tenantId, storeId, messageIds]
+        );
+        (Array.isArray(productRows) ? productRows : []).forEach((productRow) => {
+          const messageId = Number(productRow?.message_id || 0);
+          const productId = Number(productRow?.product_id || 0);
+          if (!(messageId > 0) || !(productId > 0)) return;
+          const list = productsByMessageId.get(messageId) || [];
+          list.push({
+            id: productId,
+            title: String(productRow?.title || ''),
+            price: productRow?.price == null ? null : Number(productRow.price),
+            is_active: Number(productRow?.is_active || 0) === 1,
+          });
+          productsByMessageId.set(messageId, list);
+        });
+      }
       const claimByMessageId = new Map();
       if (customerId > 0 && messageIds.length) {
         const [claimRows] = await db.query(
@@ -7293,9 +7354,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const items = (Array.isArray(rows) ? rows : []).map((row) => ({
         ...(() => {
           const messageId = Number(row.id || 0);
+          const productId = Number(row.product_id || 0) || null;
+          const products = productsByMessageId.get(messageId) || [];
+          const productIds = products.map((product) => Number(product?.id || 0)).filter((id) => id > 0);
           const mode = ['shared', 'unique'].includes(String(row.promo_code_mode || '').toLowerCase())
             ? String(row.promo_code_mode || '').toLowerCase()
             : (String(row.promo_code || '').trim() ? 'shared' : 'none');
+          let actionType = ['promo_code', 'product', 'product_collection'].includes(String(row.action_type || '').toLowerCase())
+            ? String(row.action_type || '').toLowerCase()
+            : 'none';
+          if (actionType === 'none' && productId) actionType = 'product';
+          if (actionType === 'none' && productIds.length) actionType = 'product_collection';
+          if (actionType === 'none' && mode !== 'none') actionType = 'promo_code';
           const claim = claimByMessageId.get(messageId) || null;
           const claimedCode = String(claim?.promo_code || '').trim();
           const sharedCode = String(row.promo_code || '').trim();
@@ -7306,6 +7376,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             body: String(row.body || ''),
             image_url: String(row.image_url || ''),
             link_url: String(row.link_url || ''),
+            action_type: actionType,
+            product_id: actionType === 'product' ? productId : null,
+            product_ids: actionType === 'product_collection' ? productIds : [],
+            products: actionType === 'product_collection' ? products : [],
             promo_code: mode === 'unique' ? claimedCode : sharedCode,
             promo_code_masked: mode === 'unique' && !claimedCode,
             promo_code_mode: mode,

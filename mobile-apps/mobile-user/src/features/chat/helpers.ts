@@ -1,4 +1,4 @@
-import type { ChatActor, ChatMessage, ChatOrderCard, ChatSettings } from './types';
+import type { ChatActor, ChatMessage, ChatOrderCard, ChatSettings, ImportantMessage } from './types';
 
 export const CHAT_ACTOR_IN: ChatActor = 'in';
 export const CHAT_ACTOR_OUT: ChatActor = 'out';
@@ -118,6 +118,18 @@ export function getMessagePreview(message?: ChatMessage | null) {
   if (message.attachment?.kind === 'image') return 'Фото';
   if (Array.isArray(message.orderCards) && message.orderCards.length) return 'Заказ';
   return '';
+}
+
+export function getImportantMessageActionType(message?: ImportantMessage | null) {
+  const raw = String(message?.action_type || '').trim().toLowerCase();
+  if (raw === 'none' || raw === 'product' || raw === 'product_collection' || raw === 'promo_code') return raw;
+  if (Array.isArray(message?.product_ids) && message.product_ids.length) return 'product_collection';
+  if (Number(message?.product_id || 0) > 0) return 'product';
+  const promoMode = String(message?.promo_code_mode || '').trim().toLowerCase();
+  if (promoMode === 'shared' || promoMode === 'unique' || String(message?.promo_code || '').trim()) {
+    return 'promo_code';
+  }
+  return 'none';
 }
 
 export function formatChatTime(value?: string) {

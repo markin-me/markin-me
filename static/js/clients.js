@@ -2710,6 +2710,8 @@
     importantMessagesAudienceCountLoading: false,
     importantPromoSourcesLoading: false,
     importantPromoSourcePickerOpen: false,
+    importantProductPickerTotal: 0,
+    importantProductPickerLoading: false,
     activeBannerType: 'hero',
     activeBannerId: null,
     editingBannerId: null,
@@ -2878,6 +2880,8 @@
   let orderRequestToken = 0;
   let discountCustomerSearchToken = 0;
   let discountCustomerSearchDebounce = null;
+  let importantProductSearchDebounce = null;
+  let importantProductPickerRequestSeq = 0;
   const clientOrderMetricsRequests = new Map();
   let customFilterCountsRequestToken = 0;
   let filterDraftCountPreview = null;
@@ -6750,12 +6754,32 @@
     return { className: 'is-unpublished', text: 'Не опубликовано' };
   }
 
+  function normalizeImportantActionType(message) {
+    const raw = String(message?.action_type || message?.actionType || '').trim().toLowerCase();
+    if (raw === 'none' || raw === 'product' || raw === 'product_collection' || raw === 'promo_code') return raw;
+    if (Array.isArray(message?.product_ids) && message.product_ids.length) return 'product_collection';
+    if (Array.isArray(message?.products) && message.products.length) return 'product_collection';
+    if (Number(message?.product_id || message?.productId || 0) > 0) return 'product';
+    const promoMode = normalizeImportantPromoMode(
+      message?.promo_code_mode || message?.promoCodeMode || (message?.promo_code || message?.promoCode ? 'shared' : 'none')
+    );
+    return promoMode !== 'none' ? 'promo_code' : 'none';
+  }
+
   function createImportantMessageEmptyDraft() {
     return {
       id: 0,
       title: '',
       body: '',
       image_url: '',
+      action_type: 'none',
+      product_id: null,
+      product_ids: [],
+      products: [],
+      product_title: '',
+      product_sku: '',
+      product_price: null,
+      product_is_active: null,
       promo_code: '',
       promo_code_mode: 'none',
       promo_discount_id: null,
@@ -6799,11 +6823,19 @@
   function syncImportantMessageDraftFromForm() {
     if (state.importantMessagesEditingId === null || !state.importantMessageDraft) return;
     const root = elImportantMessagesEditor;
+    const promoCodeField = root?.querySelector('[data-important-field="promo_code"]');
     state.importantMessageDraft = {
       ...state.importantMessageDraft,
       title: root?.querySelector('[data-important-field="title"]')?.value || '',
       body: root?.querySelector('[data-important-field="body"]')?.value || '',
-      promo_code: root?.querySelector('[data-important-field="promo_code"]')?.value || '',
+      action_type: root?.querySelector('[data-important-field="action_type"]')?.value
+        || normalizeImportantActionType(state.importantMessageDraft),
+      product_id: Number(root?.querySelector('[data-important-field="product_id"]')?.value || 0)
+        || Number(state.importantMessageDraft.product_id || 0)
+        || null,
+      product_ids: Array.isArray(state.importantMessageDraft.product_ids) ? state.importantMessageDraft.product_ids : [],
+      products: Array.isArray(state.importantMessageDraft.products) ? state.importantMessageDraft.products : [],
+      promo_code: promoCodeField ? promoCodeField.value : (state.importantMessageDraft.promo_code || ''),
       promo_code_mode: root?.querySelector('[data-important-field="promo_code_mode"]')?.value || 'none',
       promo_discount_id: Number(root?.querySelector('[data-important-field="promo_discount_id"]')?.value || 0) || null,
       promo_code_id: Number(root?.querySelector('[data-important-field="promo_code_id"]')?.value || 0) || null,
@@ -6902,6 +6934,14 @@
   function buildImportantMessageModalContent(item) {
     const imageUrl = String(item?.image_url || item?.imageUrl || '').trim();
     const promoCode = String(item?.promo_code || item?.promoCode || '').trim();
+    const actionType = normalizeImportantActionType(item);
+    const promoMode = actionType === 'promo_code'
+      ? normalizeImportantPromoMode(item?.promo_code_mode || item?.promoCodeMode || (promoCode ? 'shared' : 'none'))
+      : 'none';
+    const promoDisplayCode = promoMode === 'unique' ? '*****' : promoCode;
+    const productTitle = getImportantProductSummaryText(item);
+    const collectionItems = getImportantProductCollectionItems(item);
+    const collectionCardsHtml = collectionItems.map((product) => buildImportantProductCollectionCardHtml(product)).join('');
     return `
       <article class="important-message-modal-view">
         <div class="important-message-modal-media">
@@ -6911,14 +6951,34 @@
         </div>
         <section class="important-message-modal-sheet">
           <h2 class="important-message-modal-title">${escapeHtml(item?.title || 'Без заголовка')}</h2>
-          ${promoCode ? `
+          ${promoDisplayCode ? `
             <div class="important-message-modal-promo">
+              <div class="important-message-modal-promo-pill">
               <span>Промокод</span>
-              <strong>${escapeHtml(promoCode)}</strong>
+              <strong>${escapeHtml(promoDisplayCode)}</strong>
+              </div>
               <button class="important-message-modal-claim-btn" type="button" tabindex="-1" aria-disabled="true">Забрать</button>
             </div>
           ` : ''}
+          ${actionType === 'product' ? `
+            <div class="important-message-modal-promo">
+              <span>Товар</span>
+              <strong>${escapeHtml(productTitle)}</strong>
+              <button class="important-message-modal-claim-btn" type="button" tabindex="-1" aria-disabled="true">Заказать</button>
+            </div>
+          ` : ''}
+          ${false && actionType === 'product_collection' ? `
+            <div class="important-message-modal-promo">
+              <span>Подборка</span>
+              <strong>${escapeHtml(getImportantProductCollectionSummaryText(item))}</strong>
+              <button class="important-message-modal-claim-btn" type="button" tabindex="-1" aria-disabled="true">Заказать</button>
+            </div>
+            ${collectionItems.length ? `<div class="important-message-modal-products">${collectionItems.map((product) => `
+              <span>${escapeHtml(String(product?.title || `Товар #${Number(product?.id || 0)}`).trim())}</span>
+            `).join('')}</div>` : ''}
+          ` : ''}
           <div class="important-message-modal-body">${escapeHtml(String(item?.body || ''))}</div>
+          ${actionType === 'product_collection' && collectionCardsHtml ? `<div class="important-message-modal-product-grid">${collectionCardsHtml}</div>` : ''}
         </section>
       </article>
     `;
@@ -6974,6 +7034,7 @@
 
   function collectImportantMessageForm() {
     const root = elImportantMessagesEditor;
+    const draft = getImportantMessageDraft(state.importantMessagesEditingId);
     const isPublishedField = root?.querySelector('[data-important-field="is_published"]');
     const isPinnedField = root?.querySelector('[data-important-field="is_pinned"]');
     const isPinned = isPinnedField?.type === 'checkbox'
@@ -6983,10 +7044,14 @@
       title: root?.querySelector('[data-important-field="title"]')?.value || '',
       body: root?.querySelector('[data-important-field="body"]')?.value || '',
       image_url: root?.querySelector('[data-important-field="image_url"]')?.value
-        || getImportantMessageDraft(state.importantMessagesEditingId).image_url
-        || getImportantMessageDraft(state.importantMessagesEditingId).imageUrl
+        || draft.image_url
+        || draft.imageUrl
         || '',
-      promo_code: root?.querySelector('[data-important-field="promo_code"]')?.value || '',
+      action_type: root?.querySelector('[data-important-field="action_type"]')?.value
+        || normalizeImportantActionType(draft),
+      product_id: Number(root?.querySelector('[data-important-field="product_id"]')?.value || 0) || null,
+      product_ids: Array.isArray(draft.product_ids) ? draft.product_ids : [],
+      promo_code: String(draft.promo_code || draft.promoCode || ''),
       promo_code_mode: root?.querySelector('[data-important-field="promo_code_mode"]')?.value || 'none',
       promo_discount_id: Number(root?.querySelector('[data-important-field="promo_discount_id"]')?.value || 0) || null,
       promo_code_id: Number(root?.querySelector('[data-important-field="promo_code_id"]')?.value || 0) || null,
@@ -6999,6 +7064,25 @@
   async function saveImportantMessage(options = {}) {
     const id = Number(state.importantMessagesEditingId || 0);
     const payload = collectImportantMessageForm();
+    if (payload.action_type === 'product' && !(Number(payload.product_id || 0) > 0)) {
+      alert('Выберите товар для Promo рассылки');
+      return;
+    }
+    if (payload.action_type === 'product_collection' && !(Array.isArray(payload.product_ids) && payload.product_ids.length)) {
+      alert('Выберите товары для Promo рассылки');
+      return;
+    }
+    if (
+      payload.action_type === 'promo_code'
+      && (
+        payload.promo_code_mode === 'none'
+        || (payload.promo_code_mode === 'shared' && !String(payload.promo_code || '').trim())
+        || (payload.promo_code_mode === 'unique' && !(Number(payload.promo_discount_id || 0) > 0))
+      )
+    ) {
+      alert('Выберите промокод для Promo рассылки');
+      return;
+    }
     if (!String(payload.title || '').trim() || !String(payload.body || '').trim()) {
       alert('Заполните заголовок и текст Promo рассылки');
       return;
@@ -7057,6 +7141,9 @@
       body: existing.body || '',
       image_url: existing.image_url || existing.imageUrl || '',
       link_url: existing.link_url || existing.linkUrl || '',
+      action_type: normalizeImportantActionType(existing),
+      product_id: existing.product_id || existing.productId || null,
+      product_ids: Array.isArray(existing.product_ids) ? existing.product_ids : [],
       promo_code: existing.promo_code || existing.promoCode || '',
       promo_code_mode: existing.promo_code_mode || existing.promoCodeMode || (existing.promo_code || existing.promoCode ? 'shared' : 'none'),
       promo_discount_id: existing.promo_discount_id || existing.promoDiscountId || null,
@@ -7120,6 +7207,9 @@
       body: existing.body || '',
       image_url: existing.image_url || existing.imageUrl || '',
       link_url: existing.link_url || existing.linkUrl || '',
+      action_type: normalizeImportantActionType(existing),
+      product_id: existing.product_id || existing.productId || null,
+      product_ids: Array.isArray(existing.product_ids) ? existing.product_ids : [],
       promo_code: existing.promo_code || existing.promoCode || '',
       promo_code_mode: existing.promo_code_mode || existing.promoCodeMode || (existing.promo_code || existing.promoCode ? 'shared' : 'none'),
       promo_discount_id: existing.promo_discount_id || existing.promoDiscountId || null,
@@ -7219,6 +7309,146 @@
   function normalizeImportantPromoMode(value) {
     const raw = String(value || '').trim().toLowerCase();
     return ['none', 'shared', 'unique'].includes(raw) ? raw : 'none';
+  }
+
+  function applyImportantActionType(value) {
+    syncImportantMessageDraftFromForm();
+    const actionType = ['promo_code', 'product', 'product_collection'].includes(String(value || '').trim().toLowerCase())
+      ? String(value || '').trim().toLowerCase()
+      : 'none';
+    const draft = ensureImportantMessageDraft();
+    state.importantMessageDraft = {
+      ...draft,
+      action_type: actionType,
+      promo_code_mode: actionType === 'promo_code'
+        ? (normalizeImportantPromoMode(draft.promo_code_mode) === 'none' ? 'shared' : normalizeImportantPromoMode(draft.promo_code_mode))
+        : 'none',
+      promo_code: actionType === 'promo_code' ? String(draft.promo_code || '') : '',
+      promo_discount_id: actionType === 'promo_code' ? (Number(draft.promo_discount_id || 0) || null) : null,
+      promo_code_id: actionType === 'promo_code' ? (Number(draft.promo_code_id || 0) || null) : null,
+      product_id: actionType === 'product' ? (Number(draft.product_id || 0) || null) : null,
+      product_ids: actionType === 'product_collection' ? (Array.isArray(draft.product_ids) ? draft.product_ids : []) : [],
+      products: actionType === 'product_collection' ? (Array.isArray(draft.products) ? draft.products : []) : [],
+      product_title: actionType === 'product' ? String(draft.product_title || '') : '',
+      product_sku: actionType === 'product' ? String(draft.product_sku || '') : '',
+      product_price: actionType === 'product' ? (draft.product_price ?? null) : null,
+      product_is_active: actionType === 'product' ? (draft.product_is_active ?? null) : null,
+    };
+    state.importantPromoSourcePickerOpen = false;
+    renderImportantMessages();
+    if (actionType === 'promo_code') {
+      loadImportantPromoSources().then(renderImportantMessages).catch(console.error);
+    }
+  }
+
+  function clearImportantPromoSource() {
+    syncImportantMessageDraftFromForm();
+    state.importantMessageDraft = {
+      ...ensureImportantMessageDraft(),
+      promo_code: '',
+      promo_discount_id: null,
+      promo_code_id: null,
+    };
+    state.importantPromoSourcePickerOpen = false;
+    renderImportantMessages();
+  }
+
+  function clearImportantProduct() {
+    syncImportantMessageDraftFromForm();
+    state.importantMessageDraft = {
+      ...ensureImportantMessageDraft(),
+      product_id: null,
+      product_ids: [],
+      products: [],
+      product_title: '',
+      product_sku: '',
+      product_price: null,
+      product_is_active: null,
+    };
+    renderImportantMessages();
+  }
+
+  function getImportantProductSummaryText(draft) {
+    const productId = Number(draft?.product_id || draft?.productId || 0);
+    if (!(productId > 0)) return 'Товар не выбран';
+    return String(draft?.product_title || draft?.productTitle || '').trim() || `Товар #${productId}`;
+  }
+
+  function getImportantProductMetaText(draft) {
+    const bits = [];
+    const sku = String(draft?.product_sku || draft?.productSku || '').trim();
+    const price = draft?.product_price ?? draft?.productPrice;
+    if (sku) bits.push(`Арт. ${sku}`);
+    if (price != null && Number.isFinite(Number(price))) bits.push(money(Number(price)));
+    if (draft?.product_is_active === false || draft?.productIsActive === false) bits.push('Неактивен');
+    return bits.join(' • ');
+  }
+
+  function getImportantProductCollectionItems(draft) {
+    return Array.isArray(draft?.products) ? draft.products : [];
+  }
+
+  function getImportantProductCollectionSummaryText(draft) {
+    const products = getImportantProductCollectionItems(draft);
+    const count = products.length || (Array.isArray(draft?.product_ids) ? draft.product_ids.length : 0);
+    if (!(count > 0)) return 'Товары не выбраны';
+    return `Выбрано товаров: ${count}`;
+  }
+
+  function buildImportantProductCollectionCardHtml(product, compact = false) {
+    const productId = Number(product?.id || 0);
+    const title = String(product?.title || product?.name || `Товар #${productId}`).trim() || `Товар #${productId}`;
+    const defaultLines = (Array.isArray(product?.catalog_default_lines) ? product.catalog_default_lines : [])
+      .map((line) => String(line || '').trim())
+      .filter(Boolean)
+      .slice(0, 2);
+    const fallbackLines = String(product?.description_short || product?.description || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 2);
+    const descriptionLines = defaultLines.length ? defaultLines : fallbackLines;
+    const photos = Array.isArray(product?.photos)
+      ? product.photos.filter(Boolean)
+      : (Array.isArray(product?.photos_json) ? product.photos_json.filter(Boolean) : []);
+    const photo = String(product?.photo || product?.image_url || photos[0] || '').trim();
+    const price = Number(product?.price || 0);
+    const oldPrice = Number(product?.old_price || product?.oldPrice || 0);
+    const discountText = oldPrice > price && price >= 0
+      ? `-${Math.round(((oldPrice - price) / oldPrice) * 100)}%`
+      : '';
+    const blocksConfig = product?.blocks_config && typeof product.blocks_config === 'object' ? product.blocks_config : null;
+    const isConfigurable = Boolean(
+      product?.hasConfigurable ||
+        product?.preview?.hasConfigurable ||
+        blocksConfig?.variants ||
+        blocksConfig?.options ||
+        blocksConfig?.ingredients ||
+        (Array.isArray(product?.variants) && product.variants.length > 0) ||
+        (Array.isArray(product?.options) && product.options.length > 0) ||
+        (Array.isArray(product?.ingredients) && product.ingredients.length > 0)
+    );
+    return `
+      <div class="important-product-collection-card${compact ? ' is-compact' : ''}">
+        <div class="important-product-collection-media">
+          ${photo
+            ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(title)}" />`
+            : '<div class="important-product-collection-placeholder"><i class="fas fa-image"></i></div>'}
+          ${discountText ? `<span class="important-product-collection-badge">${escapeHtml(discountText)}</span>` : ''}
+          ${isConfigurable ? '<span class="important-product-collection-media-pill">Настроить ›</span>' : ''}
+        </div>
+        <div class="important-product-collection-body">
+          <strong>${escapeHtml(title)}</strong>
+          <div class="important-product-collection-description">
+            ${descriptionLines.map((line) => `<span>• ${escapeHtml(line)}</span>`).join('')}
+          </div>
+          <div class="important-product-collection-foot">
+            <span class="important-product-collection-price">${oldPrice > price ? `<em>${escapeHtml(money(oldPrice))}</em>` : ''}${price > 0 ? escapeHtml(money(price)) : ''}</span>
+            <button type="button" tabindex="-1" aria-disabled="true"><i class="fas fa-plus"></i></button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   async function loadImportantPromoSources(forceReload = false) {
@@ -7335,6 +7565,7 @@
     const draft = ensureImportantMessageDraft();
     state.importantMessageDraft = {
       ...draft,
+      action_type: mode === 'none' ? normalizeImportantActionType(draft) : 'promo_code',
       promo_code_mode: mode,
       promo_code: mode === 'shared' ? String(draft.promo_code || '').trim() : '',
       promo_discount_id: null,
@@ -7357,6 +7588,7 @@
     if (!source) return;
     state.importantMessageDraft = {
       ...ensureImportantMessageDraft(),
+      action_type: 'promo_code',
       promo_code_mode: mode,
       promo_code: mode === 'shared' ? String(source.source_code || '').trim() : '',
       promo_discount_id: Number(source.source_discount_id || 0) || null,
@@ -7394,11 +7626,13 @@
       ? state.importantMessages.find((item) => Number(item?.id || 0) === selectedId)
       : null;
     const isEditing = state.importantMessagesEditingId !== null;
+    const importantProductPickerOpen = state.discountPickerLevel === 'products'
+      && (state.discountPickerTarget === 'important_message_product' || state.discountPickerTarget === 'important_message_products');
     if (elImportantMessagesRightWrap) {
-      elImportantMessagesRightWrap.classList.toggle('hidden', !isImportantMessagesView);
+      elImportantMessagesRightWrap.classList.toggle('hidden', !isImportantMessagesView || importantProductPickerOpen);
     }
     if (elImportantMessagesFooter) {
-      elImportantMessagesFooter.classList.toggle('hidden', !isImportantMessagesView || (!isEditing && !selected));
+      elImportantMessagesFooter.classList.toggle('hidden', !isImportantMessagesView || importantProductPickerOpen || (!isEditing && !selected));
     }
     if (elImportantMessagesFooterEdit) elImportantMessagesFooterEdit.classList.toggle('hidden', !isImportantMessagesView || isEditing || !selected);
     if (elImportantMessagesFooterCancel) elImportantMessagesFooterCancel.classList.toggle('hidden', !isImportantMessagesView || !isEditing);
@@ -7430,8 +7664,11 @@
     }
     const draft = getImportantMessageDraft(state.importantMessagesEditingId);
     const draftPinned = isImportantMessagePinned(draft);
-    const draftPromoMode = normalizeImportantPromoMode(draft.promo_code_mode || (draft.promo_code ? 'shared' : 'none'));
-    const draftPromoCode = String(draft.promo_code || draft.promoCode || '').trim();
+    const draftActionType = normalizeImportantActionType(draft);
+    const normalizedDraftPromoMode = normalizeImportantPromoMode(draft.promo_code_mode || (draft.promo_code ? 'shared' : 'none'));
+    const draftPromoMode = draftActionType === 'promo_code' && normalizedDraftPromoMode === 'none'
+      ? 'shared'
+      : normalizedDraftPromoMode;
     const draftPromoSource = getImportantPromoDraftSource(draft);
     const uniqueAvailableCount = Math.max(0, Number(draftPromoSource?.available_codes_count || 0));
     const uniqueAudienceCount = Math.max(0, Number(state.importantMessagesAudienceCount || 0));
@@ -7439,19 +7676,30 @@
     elImportantMessagesEditor.innerHTML = `
       <div class="promo-messages-editor-form">
         <div class="settings-site-field">
-          <label class="field-label">ПРОМОКОД</label>
-          <div class="important-promo-mode-row">
-            ${['none', 'shared', 'unique'].map((mode) => `
-              <button type="button" class="shop-chip-btn important-promo-mode-btn${draftPromoMode === mode ? ' is-active' : ''}" data-important-promo-mode="${mode}">
-                ${mode === 'none' ? 'Без промокода' : mode === 'shared' ? 'Общий' : 'Индивидуальный'}
+          <label class="field-label">ТИП ПУБЛИКАЦИИ</label>
+          <div class="important-action-type-row">
+            ${['none', 'promo_code', 'product', 'product_collection'].map((actionType) => `
+              <button type="button" class="shop-chip-btn important-action-type-btn${draftActionType === actionType ? ' is-active' : ''}" data-important-action-type="${actionType}" aria-pressed="${draftActionType === actionType ? 'true' : 'false'}">
+                ${actionType === 'none' ? 'Информация' : actionType === 'promo_code' ? 'Промокод' : actionType === 'product' ? 'Товар' : 'Подборка'}
               </button>
             `).join('')}
           </div>
+          <input data-important-field="action_type" type="hidden" value="${escapeHtml(draftActionType)}" />
+          <input data-important-field="product_id" type="hidden" value="${escapeHtml(draft.product_id || '')}" />
           <input data-important-field="promo_code_mode" type="hidden" value="${escapeHtml(draftPromoMode)}" />
           <input data-important-field="promo_discount_id" type="hidden" value="${escapeHtml(draft.promo_discount_id || '')}" />
           <input data-important-field="promo_code_id" type="hidden" value="${escapeHtml(draft.promo_code_id || '')}" />
-          <input class="control${draftPromoMode === 'unique' ? ' hidden' : ''}" data-important-field="promo_code" type="text" value="${escapeHtml(draftPromoCode)}" maxlength="80" ${draftPromoMode === 'none' ? 'disabled' : ''} />
-          ${draftPromoMode !== 'none' ? `
+        </div>
+        ${draftActionType === 'promo_code' ? `
+          <div class="settings-site-field">
+            <label class="field-label">ПРОМОКОД</label>
+            <div class="important-promo-mode-row">
+              ${['shared', 'unique'].map((mode) => `
+                <button type="button" class="shop-chip-btn important-promo-mode-btn${draftPromoMode === mode ? ' is-active' : ''}" data-important-promo-mode="${mode}">
+                  ${mode === 'shared' ? 'Общий' : 'Индивидуальный'}
+                </button>
+              `).join('')}
+            </div>
             <div class="important-promo-source-summary">
               <span>${escapeHtml(getImportantPromoSummaryText(draft))}</span>
               <button type="button" class="btn btn-sm" data-important-action="promo-picker">${state.importantPromoSourcePickerOpen ? 'Скрыть' : 'Выбрать'}</button>
@@ -7465,8 +7713,34 @@
                 <button type="button" class="btn btn-sm" data-important-action="promo-generate">Сгенерировать</button>
               </div>
             ` : ''}
-          ` : ''}
-        </div>
+          </div>
+        ` : ''}
+        ${draftActionType === 'product' ? `
+          <div class="settings-site-field">
+            <label class="field-label">ТОВАР</label>
+            <div class="important-product-summary${Number(draft.product_id || 0) > 0 ? ' has-product' : ''}">
+              <span class="important-product-summary-main">
+                <strong>${escapeHtml(getImportantProductSummaryText(draft))}</strong>
+                ${getImportantProductMetaText(draft) ? `<small>${escapeHtml(getImportantProductMetaText(draft))}</small>` : ''}
+              </span>
+              <button type="button" class="btn btn-sm" data-important-action="product-picker">${Number(draft.product_id || 0) > 0 ? 'Изменить' : 'Выбрать'}</button>
+              ${Number(draft.product_id || 0) > 0 ? '<button type="button" class="btn btn-sm" data-important-action="product-clear">Очистить</button>' : ''}
+            </div>
+          </div>
+        ` : ''}
+        ${draftActionType === 'product_collection' ? `
+          <div class="settings-site-field">
+            <label class="field-label">ПОДБОРКА ТОВАРОВ</label>
+            <div class="important-product-summary${(Array.isArray(draft.products) && draft.products.length) || (Array.isArray(draft.product_ids) && draft.product_ids.length) ? ' has-product' : ''}">
+              <span class="important-product-summary-main">
+                <strong>${escapeHtml(getImportantProductCollectionSummaryText(draft))}</strong>
+                ${getImportantProductCollectionItems(draft).length ? `<small>${escapeHtml(getImportantProductCollectionItems(draft).map((item) => String(item?.title || `Товар #${Number(item?.id || 0)}`).trim()).filter(Boolean).slice(0, 4).join(' • '))}</small>` : ''}
+              </span>
+              <button type="button" class="btn btn-sm" data-important-action="product-collection-picker">${(Array.isArray(draft.products) && draft.products.length) || (Array.isArray(draft.product_ids) && draft.product_ids.length) ? 'Изменить' : 'Выбрать'}</button>
+              ${(Array.isArray(draft.products) && draft.products.length) || (Array.isArray(draft.product_ids) && draft.product_ids.length) ? '<button type="button" class="btn btn-sm" data-important-action="product-clear">Очистить</button>' : ''}
+            </div>
+          </div>
+        ` : ''}
         <div class="settings-site-field">
           <label class="field-label">ЗАГОЛОВОК</label>
           <input class="control" data-important-field="title" type="text" value="${escapeHtml(draft.title || '')}" maxlength="180" />
@@ -7501,8 +7775,13 @@
       const isDraftRow = itemId <= 0 && item?.__draft === true;
       const canEditPhoto = state.importantMessagesEditingId !== null && Number(state.importantMessagesEditingId || 0) === itemId;
       const imageUrl = String(item.image_url || item.imageUrl || '').trim();
+      const actionType = normalizeImportantActionType(item);
+      const productTitle = getImportantProductSummaryText(item);
+      const collectionTitle = getImportantProductCollectionSummaryText(item);
       const promoCode = String(item.promo_code || item.promoCode || '').trim();
-      const promoMode = normalizeImportantPromoMode(item.promo_code_mode || item.promoCodeMode || (promoCode ? 'shared' : 'none'));
+      const promoMode = actionType === 'promo_code'
+        ? normalizeImportantPromoMode(item.promo_code_mode || item.promoCodeMode || (promoCode ? 'shared' : 'none'))
+        : 'none';
       const promoDisplayCode = promoMode === 'unique' && !promoCode ? '*****' : promoCode;
       const isPhotoUploading = importantMessagePhotoUploadingIds.has(itemId);
       const publishTitle = isPublished ? 'Опубликовать повторно' : 'Опубликовать';
@@ -7525,8 +7804,14 @@
               </button>
             ` : ''}
           </div>
-          <div class="important-message-preview-promo-slot${promoMode === 'none' ? ' is-empty' : ''}">
-            ${promoMode === 'none' ? '' : `<div class="important-message-preview-promo"><span>Промокод</span><strong>${escapeHtml(promoDisplayCode)}</strong></div>`}
+          <div class="important-message-preview-promo-slot${actionType === 'none' ? ' is-empty' : ''}${actionType === 'product_collection' ? ' is-collection' : ''}">
+            ${actionType === 'promo_code'
+              ? `<div class="important-message-preview-promo"><span>Промокод</span><strong>${escapeHtml(promoDisplayCode)}</strong></div>`
+              : actionType === 'product'
+                ? `<div class="important-message-preview-product" title="${escapeHtml(productTitle)}"><span>${escapeHtml(productTitle)}</span><button type="button" tabindex="-1" aria-disabled="true">Заказать</button></div>`
+                : actionType === 'product_collection'
+                  ? `<div class="important-message-preview-product" title="${escapeHtml(collectionTitle)}"><span>${escapeHtml(collectionTitle)}</span><button type="button" tabindex="-1" aria-disabled="true">Заказать</button></div>`
+                  : ''}
           </div>
         </div>
         <input class="hidden" type="file" data-important-list-photo-input accept="image/png,image/jpeg,image/webp,image/*" />
@@ -19988,6 +20273,69 @@
     return state.catalogProducts;
   }
 
+  async function loadImportantMessageProductPickerProducts(options = {}) {
+    const append = options.append === true;
+    const requestSeq = ++importantProductPickerRequestSeq;
+    const offset = append ? state.catalogProducts.length : 0;
+    const params = new URLSearchParams({
+      limit: '50',
+      offset: String(offset),
+      list: '1',
+    });
+    if (state.discountPickerCategoryId) {
+      params.set('category_id', String(state.discountPickerCategoryId));
+    }
+    const query = String(state.discountPickerQuery || '').trim();
+    if (query) params.set('q', query);
+
+    state.importantProductPickerLoading = true;
+    if (!append) {
+      state.catalogProducts = [];
+      state.importantProductPickerTotal = 0;
+    }
+    renderDiscountPickerList();
+    try {
+      const json = await apiJson(`/api/prod_products?${params.toString()}`);
+      if (
+        requestSeq !== importantProductPickerRequestSeq
+        || (state.discountPickerTarget !== 'important_message_product' && state.discountPickerTarget !== 'important_message_products')
+      ) return state.catalogProducts;
+      const rows = (Array.isArray(json?.data) ? json.data : []).map((item) => {
+        const photos = Array.isArray(item?.photos)
+          ? item.photos.filter(Boolean)
+          : (Array.isArray(item?.photos_json) ? item.photos_json.filter(Boolean) : []);
+        const normalized = {
+          ...item,
+          photos,
+          photos_json: photos,
+          is_active: Number(item?.is_active || 0) === 1,
+        };
+        const productId = Number(normalized?.id || 0);
+        if (productId > 0) state.discountPickerProductMap.set(productId, normalized);
+        return normalized;
+      });
+      if (append) {
+        const byId = new Map(state.catalogProducts.map((item) => [Number(item?.id || 0), item]));
+        rows.forEach((item) => byId.set(Number(item?.id || 0), item));
+        state.catalogProducts = Array.from(byId.values());
+      } else {
+        state.catalogProducts = rows;
+      }
+      state.importantProductPickerTotal = Math.max(state.catalogProducts.length, Number(json?.total || 0));
+    } catch (error) {
+      if (requestSeq === importantProductPickerRequestSeq) {
+        console.error('loadImportantMessageProductPickerProducts error:', error);
+        if (!append) state.catalogProducts = [];
+      }
+    } finally {
+      if (requestSeq === importantProductPickerRequestSeq) {
+        state.importantProductPickerLoading = false;
+        renderDiscountPickerList();
+      }
+    }
+    return state.catalogProducts;
+  }
+
   async function loadFilterRuleCatalogProducts() {
     if (state.filterRuleCatalogProducts.length > 0) return state.filterRuleCatalogProducts;
     try {
@@ -20511,7 +20859,10 @@
 
   function syncDiscountPickerConfigModeUi() {
     if (!elDiscountPickerConfigMode) return;
-    const isProductPicker = state.discountPickerLevel === 'products' && String(state.discountPickerEntityType || 'product') === 'product';
+    const isProductPicker = state.discountPickerLevel === 'products'
+      && String(state.discountPickerEntityType || 'product') === 'product'
+      && state.discountPickerTarget !== 'important_message_product'
+      && state.discountPickerTarget !== 'important_message_products';
     elDiscountPickerConfigMode.classList.toggle('hidden', !isProductPicker);
     elDiscountPickerConfigMode.hidden = !isProductPicker;
     if (!isProductPicker) return;
@@ -20818,6 +21169,39 @@
 
   // Открыть picker для товаров
   function getDiscountProductSelectionForTarget(target) {
+    if (target === 'important_message_product') {
+      const draft = ensureImportantMessageDraft();
+      const productId = Number(draft?.product_id || draft?.productId || 0);
+      if (!(productId > 0)) return [];
+      return [{
+        type: 'product',
+        id: productId,
+        title: getImportantProductSummaryText(draft),
+        sku: String(draft?.product_sku || draft?.productSku || '').trim(),
+        price: draft?.product_price ?? draft?.productPrice ?? null,
+        is_active: draft?.product_is_active ?? draft?.productIsActive ?? null,
+      }];
+    }
+    if (target === 'important_message_products') {
+      const draft = ensureImportantMessageDraft();
+      const products = Array.isArray(draft?.products) ? draft.products : [];
+      const productIds = Array.isArray(draft?.product_ids) ? draft.product_ids : [];
+      if (products.length) {
+        return products.map((product) => ({
+          type: 'product',
+          id: Number(product?.id || 0),
+          title: String(product?.title || '').trim(),
+          sku: String(product?.sku || '').trim(),
+          price: product?.price ?? null,
+          is_active: product?.is_active ?? null,
+        })).filter((product) => Number(product.id || 0) > 0);
+      }
+      return productIds.map((productId) => ({
+        type: 'product',
+        id: Number(productId || 0),
+        title: `Товар #${Number(productId || 0)}`,
+      })).filter((product) => Number(product.id || 0) > 0);
+    }
     if (target === 'buy_condition') return state.discountBuyConditionProducts;
     if (target === 'buy_reward') return state.discountBuyRewardProducts;
     if (target === 'progress_scope') return state.discountProgressQualifyingItems;
@@ -20833,6 +21217,8 @@
 
   function isDiscountPickerSingleSelectionMode() {
     if (state.discountPickerLevel !== 'products') return false;
+    if (state.discountPickerTarget === 'important_message_product') return true;
+    if (state.discountPickerTarget === 'important_message_products') return false;
     if (state.discountPickerTarget === 'buy_condition') {
       return getDiscountBuyConditionUiMode() === 'product';
     }
@@ -20865,6 +21251,54 @@
   }
 
   function setDiscountProductSelectionForTarget(target, items) {
+    if (target === 'important_message_product') {
+      const product = (Array.isArray(items) ? items : [])
+        .find((item) => String(item?.type || '').trim() === 'product') || null;
+      state.importantMessageDraft = {
+        ...ensureImportantMessageDraft(),
+        action_type: 'product',
+        product_id: Number(product?.id || 0) || null,
+        product_title: String(product?.title || '').trim(),
+        product_sku: String(product?.sku || '').trim(),
+        product_price: product?.price ?? null,
+        product_is_active: product?.is_active ?? null,
+        promo_code: '',
+        promo_code_mode: 'none',
+        promo_discount_id: null,
+        promo_code_id: null,
+      };
+      renderImportantMessages();
+      return;
+    }
+    if (target === 'important_message_products') {
+      const products = (Array.isArray(items) ? items : [])
+        .filter((item) => String(item?.type || '').trim() === 'product')
+        .map((product) => ({
+          id: Number(product?.id || 0) || null,
+          title: String(product?.title || '').trim(),
+          sku: String(product?.sku || '').trim(),
+          price: product?.price ?? null,
+          is_active: product?.is_active ?? null,
+        }))
+        .filter((product) => Number(product.id || 0) > 0);
+      state.importantMessageDraft = {
+        ...ensureImportantMessageDraft(),
+        action_type: 'product_collection',
+        product_id: null,
+        product_ids: products.map((product) => Number(product.id || 0)),
+        products,
+        product_title: '',
+        product_sku: '',
+        product_price: null,
+        product_is_active: null,
+        promo_code: '',
+        promo_code_mode: 'none',
+        promo_discount_id: null,
+        promo_code_id: null,
+      };
+      renderImportantMessages();
+      return;
+    }
     let normalized = cloneDiscountEntities(items);
     if (target === 'buy_condition') {
       const mode = getDiscountBuyConditionUiMode();
@@ -20941,6 +21375,8 @@
   async function openDiscountProductPicker(target = 'discount_products', entityType = 'product') {
     closeDiscountThresholdRewardPicker();
     closeDiscountSlotPicker();
+    const isImportantMessageProductPicker = target === 'important_message_product' || target === 'important_message_products';
+    if (isImportantMessageProductPicker) syncImportantMessageDraftFromForm();
     state.discountPickerLevel = 'products';
     state.discountPickerTarget = target;
     state.discountPickerEntityType = entityType || 'product';
@@ -20956,21 +21392,43 @@
     state.discountPickerIngredientRequests = new Map();
     state.discountPickerLoadingIngredientProductIds = new Set();
     state.discountPickerIngredientSelections = new Map();
-    seedDiscountPickerConfigSelections(target);
+    state.importantProductPickerTotal = 0;
+    state.importantProductPickerLoading = false;
+    if (!isImportantMessageProductPicker) seedDiscountPickerConfigSelections(target);
 
     // Копируем текущий выбор в Set
+    const currentPickerSelection = getDiscountProductSelectionForTarget(target);
+    currentPickerSelection.forEach((item) => {
+      if (String(item?.type || '').trim() !== 'product') return;
+      const productId = Number(item?.id || 0);
+      if (productId > 0) state.discountPickerProductMap.set(productId, item);
+    });
     state.discountPickerSelection = new Set(
-      getDiscountProductSelectionForTarget(target).map((p) => `${p.type}:${p.id}`)
+      currentPickerSelection.map((p) => `${p.type}:${p.id}`)
     );
 
     // Загружаем категории
     await loadCatalogCategories();
 
     // Показываем picker, скрываем форму
-    if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
-    if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
+    if (isImportantMessageProductPicker) {
+      if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.add('hidden');
+      if (elImportantMessagesFooter) elImportantMessagesFooter.classList.add('hidden');
+    } else {
+      if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
+      if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
+    }
     if (elDiscountProductPicker) elDiscountProductPicker.classList.remove('hidden');
     if (elDiscountPickerFooter) elDiscountPickerFooter.classList.remove('hidden');
+    if (elDiscountPickerSearch) {
+      elDiscountPickerSearch.value = '';
+      elDiscountPickerSearch.placeholder = isImportantMessageProductPicker
+        ? 'Поиск по названию или артикулу'
+        : 'Поиск по названию';
+    }
+    if (elDiscountPickerApplyBtn) {
+      elDiscountPickerApplyBtn.textContent = isImportantMessageProductPicker ? 'Прикрепить' : 'Применить';
+    }
     syncDiscountPickerSelectAllVisibility();
     syncDiscountPickerConfigModeUi();
 
@@ -21021,6 +21479,13 @@
 
   // Закрыть picker без сохранения
   function closeDiscountPicker() {
+    const wasImportantMessageProductPicker = state.discountPickerLevel === 'products'
+      && (state.discountPickerTarget === 'important_message_product' || state.discountPickerTarget === 'important_message_products');
+    importantProductPickerRequestSeq += 1;
+    if (importantProductSearchDebounce) {
+      clearTimeout(importantProductSearchDebounce);
+      importantProductSearchDebounce = null;
+    }
     state.discountPickerLevel = null;
     state.discountPickerSelection.clear();
     state.discountPickerExpandedProductId = null;
@@ -21042,10 +21507,22 @@
       elDiscountPickerConfigMode.classList.add('hidden');
       elDiscountPickerConfigMode.hidden = true;
     }
+    if (elDiscountPickerApplyBtn) {
+      elDiscountPickerApplyBtn.disabled = false;
+      elDiscountPickerApplyBtn.textContent = 'Применить';
+    }
+    if (elDiscountPickerSearch) {
+      elDiscountPickerSearch.value = '';
+      elDiscountPickerSearch.placeholder = 'Поиск по названию';
+    }
 
     // Показываем форму
-    if (elDiscountEditorWrap) elDiscountEditorWrap.classList.remove('hidden');
-    if (elDiscountEditorFooter) elDiscountEditorFooter.classList.remove('hidden');
+    if (wasImportantMessageProductPicker) {
+      renderImportantMessages();
+    } else {
+      if (elDiscountEditorWrap) elDiscountEditorWrap.classList.remove('hidden');
+      if (elDiscountEditorFooter) elDiscountEditorFooter.classList.remove('hidden');
+    }
   }
 
   // Применить выбор
@@ -21053,7 +21530,11 @@
     if (state.discountPickerLevel === 'products') {
       // Конвертируем Set обратно в массив объектов
       const newSelection = [];
-      const currentMode = getDiscountProductConfigModeForTarget(state.discountPickerTarget);
+      const isImportantMessageProductPicker = state.discountPickerTarget === 'important_message_product' || state.discountPickerTarget === 'important_message_products';
+      const currentMode = isImportantMessageProductPicker
+        ? 'any'
+        : getDiscountProductConfigModeForTarget(state.discountPickerTarget);
+      const currentSelection = getDiscountProductSelectionForTarget(state.discountPickerTarget);
       state.discountPickerSelection.forEach(key => {
         const [type, idStr] = key.split(':');
         const id = parseInt(idStr, 10);
@@ -21066,19 +21547,37 @@
           const icon = String(cat?.icon || '').trim();
           photo = isDiscountEntityImageUrl(icon) ? icon : '';
         } else {
-          const prod = state.discountPickerProductMap.get(id) || state.catalogProducts.find(p => Number(p?.id || 0) === id);
+          const currentItem = currentSelection.find((item) => Number(item?.id || 0) === id);
+          const prod = state.discountPickerProductMap.get(id)
+            || state.catalogProducts.find(p => Number(p?.id || 0) === id)
+            || currentItem;
           title = prod?.name || prod?.title || `Товар #${id}`;
           const photos = Array.isArray(prod?.photos) ? prod.photos.filter(Boolean) : [];
           photo = photos[0] || '';
         }
-        const nextItem = { type, id, title, photo };
-        if (type === 'product') {
+        const product = type === 'product'
+          ? (state.discountPickerProductMap.get(id)
+            || state.catalogProducts.find((item) => Number(item?.id || 0) === id)
+            || currentSelection.find((item) => Number(item?.id || 0) === id))
+          : null;
+        const nextItem = {
+          type,
+          id,
+          title,
+          photo,
+          sku: String(product?.sku || '').trim(),
+          price: product?.price ?? null,
+          is_active: product?.is_active ?? null,
+        };
+        if (type === 'product' && !isImportantMessageProductPicker) {
           nextItem.product_config = buildDiscountPickerProductConfigSnapshot(id, id);
         }
         newSelection.push(nextItem);
       });
       setDiscountProductSelectionForTarget(state.discountPickerTarget, newSelection);
-      setDiscountProductConfigModeForTarget(state.discountPickerTarget, currentMode);
+      if (!isImportantMessageProductPicker) {
+        setDiscountProductConfigModeForTarget(state.discountPickerTarget, currentMode);
+      }
     } else if (state.discountPickerLevel === 'customers') {
       const newSelection = [];
       const audienceMode = getDiscountAudienceMode();
@@ -21143,6 +21642,10 @@
   async function refreshDiscountPickerProducts() {
     if ((state.discountPickerEntityType || 'product') === 'category') {
       renderDiscountPickerList();
+      return;
+    }
+    if (state.discountPickerTarget === 'important_message_product' || state.discountPickerTarget === 'important_message_products') {
+      await loadImportantMessageProductPickerProducts();
       return;
     }
     await loadCatalogProducts(state.discountPickerCategoryId);
@@ -21316,6 +21819,30 @@
     `;
   }
 
+  function renderImportantMessageProductPickerCard(product) {
+    const productId = Number(product?.id || 0);
+    const key = `product:${productId}`;
+    const isChecked = state.discountPickerSelection.has(key);
+    const name = String(product?.name || product?.title || `Товар #${productId}`).trim() || `Товар #${productId}`;
+    const sku = String(product?.sku || '').trim();
+    const meta = [sku ? `Арт. ${sku}` : '', money(Number(product?.price || 0))]
+      .filter(Boolean)
+      .join(' • ');
+    const isActive = product?.is_active === true || Number(product?.is_active || 0) === 1;
+    return `
+      <div class="option-picker-product-card important-product-picker-card${isChecked ? ' is-selected' : ''}" data-key="${key}" data-product-id="${productId}">
+        <div class="option-picker-product-header" data-action="discount-picker-toggle" data-key="${key}">
+          <input class="option-picker-product-checkbox" type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
+          <span class="important-product-picker-main">
+            <span class="important-product-picker-title">${escapeHtml(name)}</span>
+            <span class="important-product-picker-meta">${escapeHtml(meta)}</span>
+          </span>
+          <span class="important-product-picker-status${isActive ? '' : ' is-inactive'}">${isActive ? 'Активен' : 'Неактивен'}</span>
+        </div>
+      </div>
+    `;
+  }
+
   function renderDiscountPickerList() {
     if (!elDiscountPickerList) return;
     const entityType = state.discountPickerEntityType || 'product';
@@ -21342,6 +21869,30 @@
           </label>
         `;
       }).join('');
+      updatePickerSelectAll();
+      return;
+    }
+
+    if (state.discountPickerTarget === 'important_message_product' || state.discountPickerTarget === 'important_message_products') {
+      const items = state.catalogProducts;
+      if (!items.length && state.importantProductPickerLoading) {
+        elDiscountPickerList.innerHTML = '<div class="option-picker-empty">Загрузка товаров...</div>';
+      } else if (!items.length) {
+        elDiscountPickerList.innerHTML = '<div class="option-picker-empty">Товары не найдены</div>';
+      } else {
+        const hasMore = items.length < Number(state.importantProductPickerTotal || 0);
+        elDiscountPickerList.innerHTML = `
+          ${items.map(renderImportantMessageProductPickerCard).join('')}
+          ${hasMore ? `
+            <button type="button" class="btn important-product-picker-more" data-action="important-product-picker-more" ${state.importantProductPickerLoading ? 'disabled' : ''}>
+              ${state.importantProductPickerLoading ? 'Загрузка...' : 'Показать ещё'}
+            </button>
+          ` : ''}
+        `;
+      }
+      if (elDiscountPickerApplyBtn) {
+        elDiscountPickerApplyBtn.disabled = state.discountPickerSelection.size === 0;
+      }
       updatePickerSelectAll();
       return;
     }
@@ -24450,7 +25001,21 @@
         return;
       }
       if (action === 'promo-clear') {
-        applyImportantPromoMode('none');
+        clearImportantPromoSource();
+        return;
+      }
+      if (action === 'product-picker') {
+        syncImportantMessageDraftFromForm();
+        openDiscountProductPicker('important_message_product', 'product').catch(console.error);
+        return;
+      }
+      if (action === 'product-collection-picker') {
+        syncImportantMessageDraftFromForm();
+        openDiscountProductPicker('important_message_products', 'product').catch(console.error);
+        return;
+      }
+      if (action === 'product-clear') {
+        clearImportantProduct();
         return;
       }
       if (action === 'promo-generate') {
@@ -24470,6 +25035,11 @@
       generateInput.value = String(value);
     });
     elImportantMessagesRightWrap.addEventListener('click', (event) => {
+      const actionTypeBtn = event.target.closest?.('[data-important-action-type]');
+      if (actionTypeBtn) {
+        applyImportantActionType(actionTypeBtn.getAttribute('data-important-action-type'));
+        return;
+      }
       const modeBtn = event.target.closest?.('[data-important-promo-mode]');
       if (modeBtn) {
         applyImportantPromoMode(modeBtn.getAttribute('data-important-promo-mode'));
@@ -26479,6 +27049,14 @@
   if (elDiscountPickerSearch) {
     elDiscountPickerSearch.addEventListener('input', (e) => {
       state.discountPickerQuery = e.target.value;
+      if (state.discountPickerTarget === 'important_message_product' || state.discountPickerTarget === 'important_message_products') {
+        if (importantProductSearchDebounce) clearTimeout(importantProductSearchDebounce);
+        importantProductSearchDebounce = setTimeout(() => {
+          importantProductSearchDebounce = null;
+          loadImportantMessageProductPickerProducts().catch(console.error);
+        }, 280);
+        return;
+      }
       renderDiscountPickerList();
     });
   }
@@ -26558,6 +27136,14 @@
   // Делегирование событий для чекбоксов в picker товаров
   if (elDiscountPickerList) {
     elDiscountPickerList.addEventListener('click', async (e) => {
+      const loadMoreBtn = e.target.closest('[data-action="important-product-picker-more"]');
+      if (loadMoreBtn) {
+        e.preventDefault();
+        if (!state.importantProductPickerLoading) {
+          await loadImportantMessageProductPickerProducts({ append: true });
+        }
+        return;
+      }
       const variantToggleBtn = e.target.closest('[data-action="discount-picker-variants-toggle"]');
       if (variantToggleBtn) {
         e.preventDefault();

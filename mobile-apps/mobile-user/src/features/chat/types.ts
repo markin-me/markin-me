@@ -182,6 +182,16 @@ export type ImportantMessage = {
   body: string;
   image_url?: string;
   link_url?: string;
+  action_type?: 'none' | 'promo_code' | 'product' | 'product_collection' | string;
+  product_id?: number | null;
+  product_ids?: number[];
+  products?: Array<{
+    id?: number | null;
+    title?: string;
+    name?: string;
+    price?: number | null;
+    is_active?: boolean;
+  }>;
   promo_code?: string;
   promo_code_mode?: 'none' | 'shared' | 'unique' | string;
   promo_code_masked?: boolean;

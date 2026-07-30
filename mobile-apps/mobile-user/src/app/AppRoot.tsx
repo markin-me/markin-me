@@ -75,17 +75,15 @@ const navigationRef = createNavigationContainerRef<RootStackParamList>();
 const AnimatedExpoImage = Animated.createAnimatedComponent(ExpoImage);
 
 function MainTabIcon({
-  badgeCount = 0,
+  badged = false,
   bounceToken = 0,
   focused,
   name,
-  unread = false,
 }: {
-  badgeCount?: number;
+  badged?: boolean;
   bounceToken?: number;
   focused: boolean;
   name: keyof typeof Ionicons.glyphMap;
-  unread?: boolean;
 }) {
   const gradientId = `mainTabGradient${useId().replace(/:/g, '')}`;
   const translateY = useRef(new Animated.Value(0)).current;
@@ -140,12 +138,7 @@ function MainTabIcon({
         name={name}
         size={22}
       />
-      {badgeCount > 0 ? (
-        <View style={styles.tabCountBadge}>
-          <Text style={styles.tabCountBadgeText}>{badgeCount > 99 ? '99+' : badgeCount}</Text>
-        </View>
-      ) : null}
-      {unread ? <View style={styles.tabUnreadDot} /> : null}
+      {badged ? <View style={styles.tabBadgeDot} /> : null}
     </Animated.View>
   );
 }
@@ -638,7 +631,7 @@ function MainTabs() {
           options={{
             tabBarIcon: ({ focused }) => (
               <MainTabIcon
-                badgeCount={cartItemCount}
+                badged={cartItemCount > 0}
                 bounceToken={cartBounceToken}
                 focused={focused}
                 name="cart"
@@ -656,7 +649,7 @@ function MainTabs() {
               || nestedRouteName === routes.importantMessageDetails;
             return {
               tabBarIcon: ({ focused }) => (
-                <MainTabIcon focused={focused} name="chatbubble-ellipses" unread={totalUnread > 0} />
+                <MainTabIcon badged={totalUnread > 0} focused={focused} name="chatbubble-ellipses" />
               ),
               tabBarLabel: 'Сообщения',
               ...(hideTabBar
@@ -875,35 +868,15 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: 'hidden',
   },
-  tabUnreadDot: {
+  tabBadgeDot: {
     backgroundColor: '#ef4444',
     borderColor: '#ffffff',
-    borderRadius: 6,
+    borderRadius: 7,
     borderWidth: 2,
-    height: 12,
+    height: 14,
     position: 'absolute',
-    right: 5,
-    top: 5,
-    width: 12,
-  },
-  tabCountBadge: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderColor: '#ffffff',
-    borderRadius: 10,
-    borderWidth: 2,
-    justifyContent: 'center',
-    minHeight: 20,
-    minWidth: 20,
-    paddingHorizontal: 4,
-    position: 'absolute',
-    right: -6,
-    top: -6,
-  },
-  tabCountBadgeText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '900',
-    lineHeight: 12,
+    right: -4,
+    top: -4,
+    width: 14,
   },
 });
