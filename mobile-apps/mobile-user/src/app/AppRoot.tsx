@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import {
   NavigationContainer,
@@ -23,6 +23,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { ChatTabParamList, MainTabParamList, RootStackParamList } from './navigation/routes';
 import { routes } from './navigation/routes';
@@ -65,6 +66,60 @@ import { theme } from '../shared/config/theme';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+function MainTabIcon({
+  focused,
+  name,
+  unread = false,
+}: {
+  focused: boolean;
+  name: keyof typeof Ionicons.glyphMap;
+  unread?: boolean;
+}) {
+  const gradientId = `mainTabGradient${useId().replace(/:/g, '')}`;
+  return (
+    <View style={[styles.mainTabIcon, focused && styles.mainTabIconActive]}>
+      {focused ? (
+        <View pointerEvents="none" style={styles.mainTabIconGradient}>
+          <Svg height="100%" preserveAspectRatio="none" style={StyleSheet.absoluteFillObject} viewBox="0 0 50 50" width="100%">
+            <Defs>
+              <SvgLinearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="100%">
+                <Stop offset="0%" stopColor={theme.colors.accent} />
+                <Stop offset="100%" stopColor="#ffb15a" />
+              </SvgLinearGradient>
+            </Defs>
+            <Rect fill={`url(#${gradientId})`} height="50" rx="14" ry="14" width="50" />
+          </Svg>
+        </View>
+      ) : null}
+      <Ionicons
+        color={focused ? '#ffffff' : theme.colors.muted}
+        name={name}
+        size={22}
+      />
+      {unread ? <View style={styles.tabUnreadDot} /> : null}
+    </View>
+  );
+}
+
+function MainTabBarBackground() {
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+      <Svg height="100%" preserveAspectRatio="none" viewBox="0 0 100 100" width="100%">
+        <Defs>
+          <SvgLinearGradient id="mainTabBarFade" x1="0%" x2="0%" y1="0%" y2="100%">
+            <Stop offset="0%" stopColor="#ffffff" stopOpacity={0} />
+            <Stop offset="24%" stopColor="#ffffff" stopOpacity={0.12} />
+            <Stop offset="48%" stopColor="#ffffff" stopOpacity={0.42} />
+            <Stop offset="74%" stopColor="#ffffff" stopOpacity={0.8} />
+            <Stop offset="100%" stopColor="#ffffff" stopOpacity={1} />
+          </SvgLinearGradient>
+        </Defs>
+        <Rect fill="url(#mainTabBarFade)" height="100" width="100" />
+      </Svg>
+    </View>
+  );
+}
 
 function getAndroidApiVersion() {
   const version = Number(Platform.Version);
@@ -247,10 +302,18 @@ function MainTabs() {
   const [supportChatInteractive, setSupportChatInteractive] = useState(false);
   const bottomInset = Math.max(0, insets.bottom);
   const baseTabBarStyle = {
-    borderTopColor: theme.colors.border,
+    backgroundColor: 'transparent',
+    borderTopWidth: 0,
+    bottom: 0,
+    elevation: 0,
     height: theme.sizes.tabBarHeight + bottomInset,
-    paddingBottom: 8 + bottomInset,
-    paddingTop: 2,
+    left: 0,
+    paddingBottom: 2 + bottomInset,
+    paddingHorizontal: 48,
+    paddingTop: 10,
+    position: 'absolute' as const,
+    right: 0,
+    shadowOpacity: 0,
   };
 
   useEffect(() => {
@@ -401,17 +464,27 @@ function MainTabs() {
       <Tab.Navigator
         screenOptions={{
           headerShown: false,
+          sceneStyle: {
+            backgroundColor: theme.colors.mutedBackground,
+          },
           tabBarActiveTintColor: theme.colors.accent,
           tabBarInactiveTintColor: theme.colors.muted,
           tabBarLabelPosition: 'below-icon',
+          tabBarShowLabel: true,
           tabBarLabelStyle: {
-            fontSize: 12,
+            fontSize: 10,
             fontWeight: '700',
-            marginTop: 0,
+            lineHeight: 12,
+            marginTop: 2,
           },
+          tabBarBackground: () => <MainTabBarBackground />,
           tabBarStyle: baseTabBarStyle,
           tabBarItemStyle: {
+            height: 78,
             paddingTop: 0,
+          },
+          tabBarIconStyle: {
+            height: 50,
           },
         }}
       >
@@ -419,7 +492,7 @@ function MainTabs() {
           name={routes.home}
           component={CatalogPage}
           options={{
-            tabBarIcon: ({ color, size }) => <Ionicons name="grid-outline" color={color} size={size} />,
+            tabBarIcon: ({ focused }) => <MainTabIcon focused={focused} name="home" />,
             tabBarLabel: 'Каталог',
             title: 'Каталог',
           }}
@@ -428,7 +501,7 @@ function MainTabs() {
           name={routes.cart}
           component={CartPage}
           options={{
-            tabBarIcon: ({ color, size }) => <Ionicons name="cart-outline" color={color} size={size} />,
+            tabBarIcon: ({ focused }) => <MainTabIcon focused={focused} name="cart" />,
             tabBarLabel: 'Корзина',
             title: 'Корзина',
           }}
@@ -440,18 +513,17 @@ function MainTabs() {
             const hideTabBar = nestedRouteName === routes.importantMessages
               || nestedRouteName === routes.importantMessageDetails;
             return {
-              tabBarIcon: ({ color, size }) => (
-                <View style={styles.tabIconWrap}>
-                  <Ionicons name="chatbubble-ellipses-outline" color={color} size={size} />
-                  {totalUnread > 0 ? <View style={styles.tabUnreadDot} /> : null}
-                </View>
+              tabBarIcon: ({ focused }) => (
+                <MainTabIcon focused={focused} name="chatbubble-ellipses" unread={totalUnread > 0} />
               ),
               tabBarLabel: 'Сообщения',
-              tabBarStyle: hideTabBar
+              ...(hideTabBar
                 ? {
-                  display: 'none',
+                  tabBarStyle: {
+                    display: 'none',
+                  },
                 }
-                : baseTabBarStyle,
+                : {}),
               title: 'Сообщения',
             };
           }}
@@ -462,7 +534,7 @@ function MainTabs() {
           name={routes.profile}
           component={ProfilePage}
           options={{
-            tabBarIcon: ({ color, size }) => <Ionicons name="person-outline" color={color} size={size} />,
+            tabBarIcon: ({ focused }) => <MainTabIcon focused={focused} name="person" />,
             tabBarLabel: 'Профиль',
             title: 'Профиль',
           }}
@@ -619,8 +691,30 @@ const styles = StyleSheet.create({
   supportChatOverlayVisible: {
     zIndex: 50,
   },
-  tabIconWrap: {
+  mainTabIcon: {
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    borderRadius: 14,
+    elevation: 5,
+    height: 50,
+    justifyContent: 'center',
     position: 'relative',
+    shadowColor: '#141d30',
+    shadowOffset: {
+      height: 8,
+      width: 0,
+    },
+    shadowOpacity: 0.16,
+    shadowRadius: 9,
+    width: 50,
+  },
+  mainTabIconActive: {
+    backgroundColor: theme.colors.accent,
+  },
+  mainTabIconGradient: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 14,
+    overflow: 'hidden',
   },
   tabUnreadDot: {
     backgroundColor: '#ef4444',
@@ -629,8 +723,8 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     height: 12,
     position: 'absolute',
-    right: -4,
-    top: -3,
+    right: 5,
+    top: 5,
     width: 12,
   },
 });

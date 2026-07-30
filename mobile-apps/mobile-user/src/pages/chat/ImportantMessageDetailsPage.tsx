@@ -5,7 +5,6 @@ import type { RouteProp } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { ChatTabParamList, MainTabParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
@@ -21,16 +20,9 @@ import { AppHeader } from '../../widgets/app-header';
 type DetailsRoute = RouteProp<ChatTabParamList, typeof routes.importantMessageDetails>;
 type MainNavigationProp = BottomTabNavigationProp<MainTabParamList>;
 
-function isPromoRouteActive(navigation: NativeStackNavigationProp<ChatTabParamList>) {
-  const state = navigation.getState();
-  const routeName = state.routes[state.index]?.name;
-  return routeName === routes.importantMessages || routeName === routes.importantMessageDetails;
-}
-
 export function ImportantMessageDetailsPage() {
   const navigation = useNavigation<NativeStackNavigationProp<ChatTabParamList>>();
   const route = useRoute<DetailsRoute>();
-  const insets = useSafeAreaInsets();
   const { markPromoRead } = useChatUnread();
   const pendingClaimRef = useRef(false);
   const claimingRef = useRef(false);
@@ -49,16 +41,6 @@ export function ImportantMessageDetailsPage() {
   const linkUrl = item ? String(item.link_url || '').trim() : '';
   const scrollY = useRef(new Animated.Value(0)).current;
   const imageTranslateY = useMemo(() => Animated.multiply(scrollY, 4 / 5), [scrollY]);
-  const baseTabBarStyle = useMemo(() => {
-    const bottomInset = Math.max(0, insets.bottom);
-    return {
-      borderTopColor: theme.colors.border,
-      height: theme.sizes.tabBarHeight + bottomInset,
-      paddingBottom: 8 + bottomInset,
-      paddingTop: 2,
-    };
-  }, [insets.bottom]);
-  const hideTabBarStyle = useMemo(() => ({ display: 'none' as const }), []);
   const mainNavigation = navigation.getParent<MainNavigationProp>();
 
   const refreshCustomerToken = useCallback(async () => {
@@ -167,15 +149,7 @@ export function ImportantMessageDetailsPage() {
 
   useFocusEffect(useCallback(() => {
     void refreshCustomerToken();
-    const parent = navigation.getParent();
-    parent?.setOptions({ tabBarStyle: hideTabBarStyle });
-    return () => {
-      requestAnimationFrame(() => {
-        if (isPromoRouteActive(navigation)) return;
-        parent?.setOptions({ tabBarStyle: baseTabBarStyle });
-      });
-    };
-  }, [baseTabBarStyle, hideTabBarStyle, navigation, refreshCustomerToken]));
+  }, [refreshCustomerToken]));
 
   if (!item) {
     return (

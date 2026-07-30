@@ -20,7 +20,7 @@ export const theme = {
   },
   sizes: {
     categoryChipHeight: 40,
-    tabBarHeight: 66,
+    tabBarHeight: 92,
   },
   spacing: {
     xs: 4,

@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
@@ -1044,6 +1045,7 @@ function AccentGradientSurface({ shape = 'pill' }: { shape?: 'pill' | 'rounded' 
 
 export function CartPage() {
   const navigation = useNavigation<CartNavigation>();
+  const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const headerScrollY = useRef(new Animated.Value(0)).current;
   const checkoutButtonRef = useRef<View>(null);
@@ -1097,14 +1099,14 @@ export function CartPage() {
     checkoutVisibilityFrameRef.current = requestAnimationFrame(() => {
       checkoutVisibilityFrameRef.current = null;
       checkoutButtonRef.current?.measureInWindow((_x, y, _width, height) => {
-        const navTop = windowHeight - theme.sizes.tabBarHeight;
+        const navTop = windowHeight - theme.sizes.tabBarHeight - Math.max(0, insets.bottom);
         const visible = y >= 0 && y + height <= navTop;
         if (inlineCheckoutVisibleRef.current === visible) return;
         inlineCheckoutVisibleRef.current = visible;
         setInlineCheckoutVisible(visible);
       });
     });
-  }, [windowHeight]);
+  }, [insets.bottom, windowHeight]);
 
   useEffect(() => () => {
     if (checkoutVisibilityFrameRef.current != null) cancelAnimationFrame(checkoutVisibilityFrameRef.current);
@@ -2366,7 +2368,15 @@ export function CartPage() {
             ) : null}
             </Animated.ScrollView>
             {lines.length > 0 && !inlineCheckoutVisible ? (
-              <View pointerEvents="box-none" style={styles.floatingCheckoutWrap}>
+              <View
+                pointerEvents="box-none"
+                style={[
+                  styles.floatingCheckoutWrap,
+                  {
+                    bottom: theme.sizes.tabBarHeight + Math.max(0, insets.bottom) + theme.spacing.sm,
+                  },
+                ]}
+              >
                 <Pressable
                   disabled={hasProblemLines}
                   onPress={openCheckout}
@@ -2846,7 +2856,6 @@ const styles = StyleSheet.create({
   },
   floatingCheckoutWrap: {
     alignItems: 'center',
-    bottom: theme.spacing.sm,
     left: theme.spacing.lg,
     position: 'absolute',
     right: theme.spacing.lg,
