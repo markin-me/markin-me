@@ -1152,7 +1152,7 @@ export function CartPage() {
     [activeLines, bonusConfig, bonusFavoriteCategories, catalogSnapshot],
   );
   const redeemActive = bonusRedeemEnabled && bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0;
-  const redeemLabel = bonusState.allowRedeemAndAccrue ? 'Списать и начислить' : 'Списать';
+  const redeemLabel = bonusState.allowRedeemAndAccrue ? 'Списать и\nначислить' : 'Списать\nбонусы';
   const normalizedPromoCode = normalizePromoCode(promoCode);
   const promoIsCurrent = !!normalizedPromoCode && normalizedPromoCode === appliedPromoCode;
   const promoApplyDisabled = !normalizedPromoCode || promoIsCurrent || isApplyingPromo;
@@ -2104,7 +2104,7 @@ export function CartPage() {
               )}
             </View>
 
-            {hasActiveLines ? (
+            {hasActiveLines && customerPassport?.token ? (
               <View style={styles.benefitsCard}>
                 <View style={styles.benefitIconRow}>
                   {benefitIconItems.map((item) => {
@@ -2130,13 +2130,15 @@ export function CartPage() {
                               size={24}
                             />
                           )}
+                          <View pointerEvents="none" style={styles.benefitIconLabelOverlay}>
+                            <Text numberOfLines={2} style={styles.benefitIconLabel}>{item.label}</Text>
+                          </View>
                           {active ? (
                             <View style={styles.benefitIconBadge}>
                               <Text style={styles.benefitIconBadgeText}>{item.count}</Text>
                             </View>
                           ) : null}
                         </View>
-                        <Text numberOfLines={1} style={styles.benefitIconLabel}>{item.label}</Text>
                       </Pressable>
                     );
                   })}
@@ -2168,22 +2170,22 @@ export function CartPage() {
             {hasActiveLines && bonusState.isProgramEnabled ? (
               bonusState.isJoined ? (
                 <View style={styles.bonusCard}>
-                  <View style={styles.bonusHead}>
-                    <View>
-                      <Text style={styles.bonusLabel}>{bonusState.coinName}</Text>
-                      <BonusAmount amount={bonusState.balance} logoUrl={bonusState.coinLogoUrl} size="lg" suffix={bonusState.coinName} />
-                    </View>
-                    <View style={styles.bonusAvailable}>
-                      <Text style={styles.bonusAvailableLabel}>Можно списать</Text>
-                      <BonusAmount amount={bonusState.redeemAvailableAmount} logoUrl={bonusState.coinLogoUrl} suffix={bonusState.coinName} />
-                    </View>
-                  </View>
                   <View style={styles.bonusActions}>
+                    <View style={styles.bonusInfoPanel}>
+                      <View style={styles.bonusInfoRow}>
+                        <Text style={styles.bonusInfoLabel}>Баланс бонусов</Text>
+                        <BonusAmount amount={bonusState.balance} logoUrl={bonusState.coinLogoUrl} size="sm" suffix={bonusState.coinName} />
+                      </View>
+                      <View style={styles.bonusInfoRow}>
+                        <Text style={styles.bonusInfoLabel}>Можно списать</Text>
+                        <BonusAmount amount={bonusState.redeemAvailableAmount} logoUrl={bonusState.coinLogoUrl} size="sm" suffix={bonusState.coinName} />
+                      </View>
+                    </View>
                     <Pressable
                       onPress={selectBonusAccrual}
                       style={[styles.bonusActionButton, !redeemActive && styles.bonusActionButtonActive]}
                     >
-                      <Text style={[styles.bonusActionLabel, !redeemActive && styles.bonusActionTextActive]}>Начислить</Text>
+                      <Text numberOfLines={2} style={[styles.bonusActionLabel, !redeemActive && styles.bonusActionTextActive]}>Начислить{`\n`}бонусы</Text>
                       <BonusAmount
                         amount={bonusState.accrualAmount}
                         color={!redeemActive ? theme.colors.primaryText : theme.colors.text}
@@ -2202,7 +2204,7 @@ export function CartPage() {
                         !(bonusState.balance > 0 && bonusState.redeemAvailableAmount > 0) && styles.bonusActionButtonDisabled,
                       ]}
                     >
-                      <Text style={[styles.bonusActionLabel, redeemActive && styles.bonusActionTextActive]}>
+                      <Text numberOfLines={2} style={[styles.bonusActionLabel, redeemActive && styles.bonusActionTextActive]}>
                         {redeemLabel}
                       </Text>
                       <View style={styles.bonusActionAmountGroup}>
@@ -2484,13 +2486,29 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   benefitIconLabel: {
-    color: theme.colors.muted,
+    color: theme.colors.text,
     fontSize: 10,
     fontWeight: '800',
     lineHeight: 12,
-    marginTop: 5,
     textAlign: 'center',
     width: '100%',
+  },
+  benefitIconLabelOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    minHeight: 22,
+    paddingHorizontal: 3,
+    paddingVertical: 1,
+    position: 'absolute',
+    right: 0,
+    shadowColor: '#ffffff',
+    shadowOffset: { height: -4, width: 0 },
+    shadowOpacity: 0.72,
+    shadowRadius: 5,
+    zIndex: 2,
   },
   benefitLabel: {
     color: theme.colors.text,
@@ -2531,8 +2549,7 @@ const styles = StyleSheet.create({
   bonusActionAmountGroup: {
     alignItems: 'center',
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
+    gap: 2,
     justifyContent: 'center',
   },
   bonusAmount: {
@@ -2569,16 +2586,18 @@ const styles = StyleSheet.create({
   },
   bonusActionButton: {
     alignItems: 'center',
+    aspectRatio: 1,
     backgroundColor: theme.colors.mutedBackground,
     borderColor: theme.colors.border,
-    borderRadius: theme.radius.pill,
+    borderRadius: 16,
     borderWidth: 1,
-    flex: 1,
-    gap: 3,
+    flex: 0,
+    gap: 4,
     justifyContent: 'center',
-    minHeight: 46,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 8,
+    minWidth: 0,
+    paddingHorizontal: 3,
+    paddingVertical: 4,
+    width: 66,
   },
   bonusActionButtonActive: {
     backgroundColor: theme.colors.accent,
@@ -2596,11 +2615,15 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 11,
     fontWeight: '900',
+    height: 26,
+    lineHeight: 13,
     textAlign: 'center',
+    width: '100%',
   },
   bonusActions: {
+    alignItems: 'stretch',
     flexDirection: 'row',
-    gap: theme.spacing.sm,
+    gap: 6,
   },
   bonusActionTextActive: {
     color: theme.colors.primaryText,
@@ -2618,10 +2641,8 @@ const styles = StyleSheet.create({
   bonusCard: {
     backgroundColor: theme.colors.card,
     borderRadius: 24,
-    gap: 10,
     marginTop: theme.spacing.lg,
-    minHeight: 104,
-    padding: theme.spacing.lg,
+    padding: 10,
     shadowColor: theme.colors.text,
     shadowOffset: { height: 12, width: 0 },
     shadowOpacity: 0.08,
@@ -2633,6 +2654,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: theme.spacing.md,
+  },
+  bonusInfoLabel: {
+    color: theme.colors.muted,
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  bonusInfoPanel: {
+    backgroundColor: theme.colors.mutedBackground,
+    borderColor: theme.colors.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'space-evenly',
+    minWidth: 0,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  bonusInfoRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    justifyContent: 'space-between',
   },
   bonusJoinButton: {
     alignItems: 'center',

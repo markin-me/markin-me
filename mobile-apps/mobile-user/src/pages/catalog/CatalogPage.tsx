@@ -1941,7 +1941,6 @@ export function CatalogPage() {
   const pendingVisibleComboIds = useRef<number[]>([]);
   const isStockAvailabilitySyncRunning = useRef(false);
   const stockAvailabilitySyncKey = useRef('');
-  const availabilityBootstrapStartedRef = useRef(false);
   const programmaticCategoryId = useRef<number | null>(null);
   const programmaticScrollRequestId = useRef(0);
   const activeCategoryIdRef = useRef<number | null>(null);
@@ -1955,7 +1954,6 @@ export function CatalogPage() {
   const categoryNetworkLoadedRef = useRef(new Set<number>());
   const categoryLoadRequestsRef = useRef(new Map<number, Promise<void>>());
   const catalogImagePrefetchUrlsRef = useRef(new Set<string>());
-  const fullCatalogWarmVersionRef = useRef('');
   const subcategoryRequestIdByCategoryRef = useRef(new Map<number, number>());
   const subcategoryScrollOffsetByCategoryRef = useRef(new Map<number, number>());
   const subcategoryScrollViewsRef = useRef(new Map<number, {
@@ -1990,6 +1988,7 @@ export function CatalogPage() {
   const [categoryLoadStates, setCategoryLoadStates] = useState<CategoryLoadStateMap>({});
   const [cartLines, setCartLines] = useState<CartLine[]>([]);
   const [productQuantities, setProductQuantities] = useState<Record<number, number>>({});
+  const [catalogLayoutWidth, setCatalogLayoutWidth] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState('');
@@ -2134,10 +2133,10 @@ export function CatalogPage() {
       categoriesHeight: CATALOG_CATEGORIES_HEIGHT,
       deliveryHeight: CATALOG_DELIVERY_HEADER_HEIGHT,
       items: catalogItems,
-      screenWidth,
+      screenWidth: catalogLayoutWidth || screenWidth,
       subcategoriesHeight: CATALOG_SUBCATEGORIES_HEIGHT,
     }),
-    [catalogItems, screenWidth],
+    [catalogItems, catalogLayoutWidth, screenWidth],
   );
   const subcategoryLayoutByCategory = useMemo(() => {
     const layouts = new Map<number, CatalogItemLayout>();
@@ -2285,6 +2284,7 @@ export function CatalogPage() {
     const productIds = (catalogRef.current.productsByCategory.get(categoryId) || [])
       .slice(0, 12)
       .map((product) => Number(product.id || 0));
+    scheduleCatalogAvailabilityRefreshRef.current(productIds, 220);
     scheduleProductPassportWarmRef.current(productIds.slice(0, 8));
   }, []);
 
@@ -2448,6 +2448,9 @@ export function CatalogPage() {
   const ensureCategoryLoaded = useCallback(async (categoryId: number, options: { force?: boolean } = {}) => {
     const id = Number(categoryId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
+    if (!options.force && !categoryNetworkLoadedRef.current.has(id)) {
+      return enqueueCategoryNetworkLoad(id, true);
+    }
     const currentStatus = getCategoryLoadStatus(categoryLoadStateRef.current, id);
     if (!options.force && currentStatus === 'loaded') return;
 
@@ -2475,16 +2478,6 @@ export function CatalogPage() {
 
     return enqueueCategoryNetworkLoad(id, Boolean(options.force));
   }, [applyLoadedCategory, enqueueCategoryNetworkLoad]);
-
-  const warmFullCatalog = useCallback((index: MobileCatalogIndex) => {
-    const version = String(index.version || '').trim();
-    if (!version || fullCatalogWarmVersionRef.current === version) return;
-    fullCatalogWarmVersionRef.current = version;
-    const categoryIds = index.categories
-      .map((category) => Number(category.id || 0))
-      .filter((categoryId) => Number.isFinite(categoryId) && categoryId > 0);
-    void Promise.all(categoryIds.map((categoryId) => ensureCategoryLoaded(categoryId, { force: true })));
-  }, [ensureCategoryLoaded]);
 
   const syncCatalogAvailabilityIds = useCallback(async (productIds: number[], force = false) => {
     const ids = normalizeCatalogProductIds(productIds);
@@ -2567,7 +2560,6 @@ export function CatalogPage() {
     const preserveContent = Boolean(options.preserveContent);
     const shouldSyncAvailability = Boolean(options.syncAvailability);
     const shouldRefreshFromServer = Boolean(options.refreshFromServer);
-    let availabilityScheduledForLoad = false;
     if (!preserveContent) {
       setErrorText('');
       setIsLoading(true);
@@ -2575,18 +2567,10 @@ export function CatalogPage() {
 
     const scheduleCatalogPostPaintWarmup = (nextCatalog: CatalogState) => {
       const initialProductIds = collectInitialCatalogProductIds(nextCatalog);
-      const loadedCatalogProductIds = collectCatalogProductIds(nextCatalog);
       const initialComboIds = collectInitialCatalogComboIds(nextCatalog);
       setTimeout(() => {
-        if (
-          !availabilityScheduledForLoad
-          && (!availabilityBootstrapStartedRef.current || shouldSyncAvailability)
-        ) {
-          availabilityScheduledForLoad = true;
-          availabilityBootstrapStartedRef.current = true;
-          if (shouldSyncAvailability) stockAvailabilitySyncKey.current = '';
-          scheduleCatalogAvailabilityRefreshRef.current(loadedCatalogProductIds, 180);
-        }
+        if (shouldSyncAvailability) stockAvailabilitySyncKey.current = '';
+        scheduleCatalogAvailabilityRefreshRef.current(initialProductIds, 180);
         scheduleProductPassportWarmRef.current(initialProductIds.slice(0, 8));
         scheduleComboDetailsWarmRef.current(initialComboIds);
       }, 80);
@@ -2599,7 +2583,6 @@ export function CatalogPage() {
         categoryDataCacheRef.current = getEmptyCategoryDataCache();
         categoryNetworkLoadedRef.current.clear();
         catalogImagePrefetchUrlsRef.current.clear();
-        fullCatalogWarmVersionRef.current = '';
         categoryLoadStateRef.current = {};
         setCategoryLoadStates({});
       }
@@ -2674,7 +2657,6 @@ export function CatalogPage() {
             await ensureCategoryLoaded(categoryToLoad, { force: shouldRefreshFromServer || hasUncachedChild });
             scheduleCatalogPostPaintWarmup(catalogRef.current);
           }
-          warmFullCatalog(freshIndex);
         } else if (!hasRenderedCatalog && !preserveContent) {
           setCatalog(emptyCatalogState);
         }
@@ -2687,7 +2669,7 @@ export function CatalogPage() {
     } finally {
       if (!preserveContent) setIsLoading(false);
     }
-  }, [applyCatalogFromCache, ensureCategoryLoaded, warmFullCatalog]);
+  }, [applyCatalogFromCache, ensureCategoryLoaded]);
 
   useEffect(() => {
     void loadCatalog();
@@ -2757,6 +2739,10 @@ export function CatalogPage() {
         readCartLines().then((nextLines) => {
           setCartLines(nextLines);
           setProductQuantities(buildProductQuantitiesFromCart(nextLines));
+          scheduleCatalogAvailabilityRefreshRef.current(
+            collectCartAvailabilityProductIds(nextLines, stockLevelsRef.current),
+            120,
+          );
         }).catch(() => {
           setCartLines([]);
           setProductQuantities({});
@@ -2813,6 +2799,10 @@ export function CatalogPage() {
           if (isActive) {
             setCartLines(cartLines);
             setProductQuantities(buildProductQuantitiesFromCart(cartLines));
+            scheduleCatalogAvailabilityRefreshRef.current(
+              collectCartAvailabilityProductIds(cartLines, stockLevelsRef.current),
+              120,
+            );
           }
         }).catch(() => {
           if (isActive) {
@@ -2964,6 +2954,7 @@ export function CatalogPage() {
     pendingVisibleProductIds.current = [];
     pendingVisibleComboIds.current = [];
     scheduleProductPassportWarmRef.current(productIds);
+    scheduleCatalogAvailabilityRefreshRef.current(productIds, 260);
     scheduleComboDetailsWarmRef.current(comboIds);
   }, []);
 
@@ -3391,12 +3382,26 @@ export function CatalogPage() {
     const nextLine = buildCatalogProductCartLine(currentProduct, passport || null, stockLevelsWithPassport, currentUnitConversions);
     const currentLines = await readCartLines();
     const draftLines = [...currentLines, nextLine];
+    const affectedProductIds = Array.from(new Set([
+      productId,
+      ...getStockProductIdsForLines(draftLines, stockLevelsWithPassport),
+    ]));
     const localStockLimit = calculateCartStockLimit(draftLines, stockLevelsWithPassport, nextLine.id);
     if (!localStockLimit.canAdd) return;
     const nextLines = await addCartLine(nextLine);
     setCartLines(nextLines);
     setProductQuantities(buildProductQuantitiesFromCart(nextLines));
-  }, [mergeStockRows]);
+    void refreshMany(affectedProductIds).then((result) => {
+      const availability = result?.payload || null;
+      const data = availability?.data && typeof availability.data === 'object'
+        ? availability.data as Record<string, unknown>
+        : {};
+      if (Object.keys(data).length) {
+        setCatalog((current) => applyCatalogAvailability(current, data));
+        productRuntimeStoreRef.current.emit(affectedProductIds);
+      }
+    }).catch(() => null);
+  }, [mergeStockRows, refreshMany]);
 
   const decreaseProductQuantity = useCallback(async (productId: number) => {
     const lines = await readCartLines();
@@ -3694,7 +3699,10 @@ export function CatalogPage() {
           keyboardShouldPersistTaps="handled"
           maxToRenderPerBatch={6}
           onLayout={(event) => {
-            const height = event.nativeEvent.layout.height;
+            const { height, width } = event.nativeEvent.layout;
+            if (width > 0) {
+              setCatalogLayoutWidth((current) => Math.abs(current - width) > 1 ? width : current);
+            }
             if (height > 0) {
               catalogViewportHeight.current = height;
               updateVisibleCatalogRows(catalogScrollOffsetY.current, height);

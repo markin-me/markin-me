@@ -1719,11 +1719,14 @@ export async function fetchProductsBatchAvailability(productIds: number[]) {
       .filter((id) => Number.isFinite(id) && id > 0),
   ));
   if (!ids.length) return { data: {}, stock_levels: [] };
-  const response = await requestApi<ProductsBatchAvailabilityPayload>('/api/public/products/batch/availability', {
+  const response = await requestApi<Record<string, Record<string, unknown>>>('/api/public/products/batch/availability', {
     body: JSON.stringify({ ids }),
     method: 'POST',
-  });
-  return response.data || { data: {}, stock_levels: [] };
+  }) as ApiResponse<Record<string, Record<string, unknown>>> & ProductsBatchAvailabilityPayload;
+  return {
+    data: response.data || {},
+    stock_levels: Array.isArray(response.stock_levels) ? response.stock_levels : [],
+  };
 }
 
 export async function joinBonusProgram(token: string) {

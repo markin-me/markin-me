@@ -132,6 +132,7 @@ export function calculateCartStockLimit(
   let maxQty: number | null = null;
   const limitingProductIds: number[] = [];
   totals.forEach((requiredQty, productId) => {
+    if (targetLineId && !targetTotals.has(productId)) return;
     const stock = stockLevels.get(productId);
     if (!stock) return;
     if (stock.isAvailable === false || stock.canFulfill === false) {
