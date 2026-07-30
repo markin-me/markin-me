@@ -2,7 +2,9 @@ import { AppText as Text } from '../../shared/ui';
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
+  useRef,
   useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -16,6 +18,7 @@ import {
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ReactNode } from 'react';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import type {
@@ -30,8 +33,10 @@ import {
   addCartLine,
   cartLinesToStockCheckItems,
   makeCartLineId,
+  notifyCartItemAdded,
   readCartLines,
   saveCartLine,
+  type CartAddAnimation,
   type CartIngredient,
   type CartLine,
   type CartLineDraft,
@@ -74,6 +79,7 @@ import {
 } from '../../shared/lib/productStock';
 import { BottomSheet } from '../../shared/ui/BottomSheet';
 import { ProductBadge } from '../../shared/ui/ProductBadge';
+import { ProductQuantityButton } from '../../shared/ui/ProductQuantityButton';
 import { Screen } from '../../shared/ui/Screen';
 
 type ProductPageProps = NativeStackScreenProps<RootStackParamList, 'product'>;
@@ -1161,6 +1167,42 @@ function ProductInfoCard({ title, children }: { title: string; children: ReactNo
   );
 }
 
+function VariantChoice({
+  label,
+  onPress,
+  selected,
+}: {
+  label: string;
+  onPress: () => void;
+  selected: boolean;
+}) {
+  const gradientId = `productVariantGradient${useId().replace(/:/g, '')}`;
+  return (
+    <Pressable onPress={onPress} style={styles.choiceChip}>
+      <View pointerEvents="none" style={styles.choiceChipSurface}>
+        {selected ? (
+          <Svg
+            height="100%"
+            preserveAspectRatio="none"
+            style={StyleSheet.absoluteFillObject}
+            viewBox="0 0 100 36"
+            width="100%"
+          >
+            <Defs>
+              <SvgLinearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="100%">
+                <Stop offset="0%" stopColor={theme.colors.accent} />
+                <Stop offset="100%" stopColor="#ffb15a" />
+              </SvgLinearGradient>
+            </Defs>
+            <Rect fill={`url(#${gradientId})`} height="36" width="100" />
+          </Svg>
+        ) : null}
+      </View>
+      <Text style={[styles.choiceChipText, selected && styles.choiceChipTextActive]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function Stepper({
   disabled,
   max,
@@ -1203,6 +1245,7 @@ function Stepper({
 }
 
 export function ProductPage({ navigation, route }: ProductPageProps) {
+  const heroRef = useRef<View>(null);
   const productId = route.params.productId;
   const initialProductImage = String(route.params.productImage || '').trim();
   const cartLineId = route.params.cartLineId || '';
@@ -1667,9 +1710,30 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
       navigation.goBack();
       return;
     }
+    const animation = await new Promise<CartAddAnimation>((resolve) => {
+      if (!image || !heroRef.current) {
+        resolve({
+          imageUri: image,
+          sourceFrame: null,
+        });
+        return;
+      }
+      heroRef.current.measureInWindow((x, y, width, height) => {
+        resolve({
+          imageUri: image,
+          sourceFrame: {
+            height,
+            width,
+            x,
+            y,
+          },
+        });
+      });
+    });
     await addCartLine(nextLine);
+    notifyCartItemAdded(animation);
     syncSavedLineStock();
-    navigation.navigate('main', { screen: 'cart' });
+    navigation.goBack();
   }, [
     applyAvailabilityPatch,
     canSubmit,
@@ -1678,6 +1742,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     currentCartOptions,
     displayQuantity,
     existingCartQty,
+    image,
     ingredientState,
     ingredients,
     navigation,
@@ -1814,7 +1879,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
     <Screen>
       <View style={styles.root}>
         <ScrollView style={styles.page} contentContainerStyle={styles.content}>
-          <View style={styles.hero}>
+          <View ref={heroRef} style={styles.hero}>
             {image && Platform.OS === 'web' ? (
               <Image resizeMode="contain" source={{ uri: image }} style={styles.image} />
             ) : image ? (
@@ -1836,15 +1901,16 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
             {variants.length ? (
               <View style={styles.sectionBlock}>
                 <Text style={styles.sectionTitle}>{trimText(asRecord(variants[0]).title) || 'Варианты'}</Text>
-                <View style={styles.infoCard}>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={styles.variantChoices}>
+                  <ScrollView contentContainerStyle={styles.variantChoicesContent} horizontal showsHorizontalScrollIndicator={false}>
                     {asArray(asRecord(variants[0]).values).map((value, index) => {
                       const variantGroup = asRecord(variants[0]);
                       const selected = variantState.selectedIndex === index;
                       const label = formatVariantValue(value, variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title);
                       return (
-                        <Pressable
+                        <VariantChoice
                           key={`${label}-${index}`}
+                          label={label}
                           onPress={() => {
                             const calculated = calculateVariantUnitPrice({
                               basePrice: getProductBasePrice(product),
@@ -1866,10 +1932,8 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                               value,
                             });
                           }}
-                          style={[styles.choiceChip, selected && styles.choiceChipActive]}
-                        >
-                          <Text style={[styles.choiceChipText, selected && styles.choiceChipTextActive]}>{label}</Text>
-                        </Pressable>
+                          selected={selected}
+                        />
                       );
                     })}
                   </ScrollView>
@@ -1920,21 +1984,21 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                           <Text numberOfLines={2} style={styles.ingredientCardTitle}>{title}</Text>
                           <View style={[styles.ingredientCardControls, !limits.isVariable && styles.ingredientCardControlsFixed]}>
                             {canDecrease ? (
-                              <Pressable
+                              <ProductQuantityButton
                                 onPress={() => updateIngredientQuantity(source, value - limits.step)}
-                                style={styles.ingredientCardButton}
+                                size="compact"
                               >
                                 <Ionicons name="remove" color={theme.colors.primaryText} size={15} />
-                              </Pressable>
+                              </ProductQuantityButton>
                             ) : limits.isVariable ? <View style={styles.ingredientCardButtonPlaceholder} /> : null}
                             <Text numberOfLines={1} style={styles.ingredientCardQuantity}>{valueLabel}</Text>
                             {canIncrease ? (
-                              <Pressable
+                              <ProductQuantityButton
                                 onPress={() => updateIngredientQuantity(source, value + limits.step)}
-                                style={styles.ingredientCardButton}
+                                size="compact"
                               >
                                 <Ionicons name="add" color={theme.colors.primaryText} size={15} />
-                              </Pressable>
+                              </ProductQuantityButton>
                             ) : limits.isVariable ? <View style={styles.ingredientCardButtonPlaceholder} /> : null}
                           </View>
                         </View>
@@ -2009,9 +2073,7 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                                   </View>
                                 ) : null}
                                 {discountPercent > 0 ? (
-                                  <View style={styles.optionProductDiscount}>
-                                    <Text style={styles.optionProductDiscountText}>-{discountPercent}%</Text>
-                                  </View>
+                                  <ProductBadge style={styles.optionProductDiscount} text={`-${discountPercent}%`} tone="discount" />
                                 ) : null}
                                 {selection.type === 'multiple_item' && selected ? (
                                   <Pressable
@@ -2028,14 +2090,14 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                               <Text numberOfLines={2} style={styles.optionProductName}>{trimText(item.title || item.name)}</Text>
                               <View style={styles.optionProductControls}>
                                 {canVariantMinus ? (
-                                  <Pressable
+                                  <ProductQuantityButton
                                     onPress={(event) => {
                                       event.stopPropagation();
                                       if (!selected) updateOptionSelection(group, item, 1);
                                       updateOptionItemVariant(group, item, variantGroup, variantIndex - 1);
                                     }}
-                                    style={styles.optionProductButton}
-                                  ><Ionicons name="remove" color={theme.colors.primaryText} size={15} /></Pressable>
+                                    size="compact"
+                                  ><Ionicons name="remove" color={theme.colors.primaryText} size={15} /></ProductQuantityButton>
                                 ) : <View style={styles.optionProductButtonPlaceholder} />}
                                 <View style={styles.optionProductPriceBlock}>
                                   <Text numberOfLines={1} style={styles.optionProductOldPrice}>{oldPrice > price ? formatPrice(oldPrice * Math.max(qty, 1)) : ' '}</Text>
@@ -2043,14 +2105,14 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                                   <Text numberOfLines={1} style={styles.optionProductVariant}>{hasVariants ? variant?.variant_label || '' : ''}</Text>
                                 </View>
                                 {canVariantPlus ? (
-                                  <Pressable
+                                  <ProductQuantityButton
                                     onPress={(event) => {
                                       event.stopPropagation();
                                       if (!selected) updateOptionSelection(group, item, 1);
                                       updateOptionItemVariant(group, item, variantGroup, variantIndex + 1);
                                     }}
-                                    style={styles.optionProductButton}
-                                  ><Ionicons name="add" color={theme.colors.primaryText} size={15} /></Pressable>
+                                    size="compact"
+                                  ><Ionicons name="add" color={theme.colors.primaryText} size={15} /></ProductQuantityButton>
                                 ) : <View style={styles.optionProductButtonPlaceholder} />}
                               </View>
                             </Pressable>
@@ -2266,13 +2328,12 @@ export function ProductPage({ navigation, route }: ProductPageProps) {
                               const selectedVariant = itemVariant?.variant_value_index === index;
                               const label = formatVariantValue(value, asRecord(variantsForItem[0]).unit_short_title || asRecord(variantsForItem[0]).unit_code || asRecord(variantsForItem[0]).unit_title);
                               return (
-                                <Pressable
+                                <VariantChoice
                                   key={`${label}-${index}`}
+                                  label={label}
                                   onPress={() => updateOptionItemVariant(group, item, variantsForItem[0], index)}
-                                  style={[styles.optionVariantChip, selectedVariant && styles.choiceChipActive]}
-                                >
-                                  <Text style={[styles.choiceChipText, selectedVariant && styles.choiceChipTextActive]}>{label}</Text>
-                                </Pressable>
+                                  selected={selectedVariant}
+                                />
                               );
                             })}
                           </ScrollView>
@@ -2334,14 +2395,23 @@ const styles = StyleSheet.create({
     padding: theme.spacing.xl,
   },
   choiceChip: {
-    backgroundColor: theme.colors.mutedBackground,
+    alignItems: 'center',
+    backgroundColor: theme.colors.card,
     borderRadius: theme.radius.pill,
+    elevation: 5,
+    justifyContent: 'center',
     marginRight: theme.spacing.sm,
     paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.sm,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 6, width: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
   },
-  choiceChipActive: {
-    backgroundColor: theme.colors.accent,
+  choiceChipSurface: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: theme.radius.pill,
+    overflow: 'hidden',
   },
   choiceChipText: {
     color: theme.colors.text,
@@ -2449,20 +2519,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     elevation: 2,
     marginBottom: 12,
-    overflow: 'hidden',
     shadowColor: '#111827',
     shadowOffset: { height: 6, width: 0 },
     shadowOpacity: 0.1,
     shadowRadius: 14,
     width: '30.8%',
-  },
-  ingredientCardButton: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: 8,
-    height: 24,
-    justifyContent: 'center',
-    width: 24,
   },
   ingredientCardButtonPlaceholder: {
     height: 24,
@@ -2486,6 +2547,8 @@ const styles = StyleSheet.create({
   ingredientCardPhoto: {
     aspectRatio: 1,
     backgroundColor: theme.colors.mutedBackground,
+    borderTopLeftRadius: 11,
+    borderTopRightRadius: 11,
     overflow: 'hidden',
     width: '100%',
   },
@@ -2743,7 +2806,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     elevation: 2,
     marginBottom: 12,
-    overflow: 'hidden',
     shadowColor: '#111827',
     shadowOffset: { height: 6, width: 0 },
     shadowOpacity: 0.1,
@@ -2757,6 +2819,8 @@ const styles = StyleSheet.create({
   optionProductPhoto: {
     aspectRatio: 1,
     backgroundColor: theme.colors.mutedBackground,
+    borderTopLeftRadius: 11,
+    borderTopRightRadius: 11,
     overflow: 'hidden',
     width: '100%',
   },
@@ -2804,20 +2868,9 @@ const styles = StyleSheet.create({
     width: 22,
   },
   optionProductDiscount: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.pill,
-    height: 22,
-    justifyContent: 'center',
-    paddingHorizontal: 6,
     position: 'absolute',
     right: 7,
     top: 7,
-  },
-  optionProductDiscountText: {
-    color: theme.colors.primaryText,
-    fontSize: 10,
-    fontWeight: '900',
   },
   optionProductName: {
     color: theme.colors.text,
@@ -2835,14 +2888,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingBottom: 7,
-  },
-  optionProductButton: {
-    alignItems: 'center',
-    backgroundColor: theme.colors.accent,
-    borderRadius: 8,
-    height: 24,
-    justifyContent: 'center',
-    width: 24,
   },
   optionProductButtonPlaceholder: {
     height: 24,
@@ -2922,13 +2967,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     width: 42,
   },
-  optionVariantChip: {
-    backgroundColor: theme.colors.mutedBackground,
-    borderRadius: theme.radius.pill,
-    marginRight: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-  },
   optionVariantPicker: {
     borderTopColor: theme.colors.border,
     borderTopWidth: 1,
@@ -2963,6 +3001,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
     marginBottom: theme.spacing.sm,
+  },
+  variantChoices: {
+    marginHorizontal: -theme.spacing.lg,
+  },
+  variantChoicesContent: {
+    paddingBottom: 10,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: 2,
   },
   stackedInfoCard: {
     marginTop: theme.spacing.md,

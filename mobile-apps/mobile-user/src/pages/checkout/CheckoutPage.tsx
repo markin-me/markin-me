@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -6,6 +6,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import { cartLinesToStockCheckItems, getCartLineStockProductIds, readCartLines, type CartLine } from '../../features/cart';
 import {
@@ -177,6 +178,23 @@ function getCashPresets(total: number) {
   const base = [2000, 5000].filter((value) => value > total);
   if (base.length) return base;
   return [Math.ceil((total + 1) / 1000) * 1000];
+}
+
+function CheckoutAccentGradientSurface() {
+  const gradientId = `checkoutAccentGradient${useId().replace(/:/g, '')}`;
+  return (
+    <View pointerEvents="none" style={styles.checkoutAccentGradientSurface}>
+      <Svg height="100%" preserveAspectRatio="none" style={StyleSheet.absoluteFillObject} viewBox="0 0 100 52" width="100%">
+        <Defs>
+          <SvgLinearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="100%">
+            <Stop offset="0%" stopColor={theme.colors.accent} />
+            <Stop offset="100%" stopColor="#ffb15a" />
+          </SvgLinearGradient>
+        </Defs>
+        <Rect fill={`url(#${gradientId})`} height="52" width="100" />
+      </Svg>
+    </View>
+  );
 }
 
 export function CheckoutPage() {
@@ -447,14 +465,15 @@ export function CheckoutPage() {
                 {paymentOptions.map((option) => {
                   const active = option.code === selectedPaymentCode;
                   const meta = option.code === 'cash' && cashChangeText ? cashChangeMeta : getPaymentMeta(option);
-                  const title = option.code === 'cash' && cashChangeText ? cashChangeText : option.title;
+                  const cashValue = option.code === 'cash' && cashChangeText ? cashChangeText : '';
                   return (
                     <Pressable
                       key={option.code}
                       onPress={() => choosePaymentOption(option)}
                       style={[styles.optionCard, active && styles.optionCardActive]}
                     >
-                      <Text style={[styles.optionTitle, active && styles.optionTextActive]}>{title}</Text>
+                      <Text style={[styles.optionTitle, active && styles.optionTextActive]}>{option.title}</Text>
+                      {cashValue ? <Text style={[styles.optionValue, active && styles.optionTextActive]}>{cashValue}</Text> : null}
                       {meta ? <Text style={[styles.optionMeta, active && styles.optionTextActive]}>{meta}</Text> : null}
                     </Pressable>
                   );
@@ -482,6 +501,7 @@ export function CheckoutPage() {
         {!isLoading ? (
           <View style={styles.footer}>
             <Pressable disabled={!lines.length || !!stockErrorText} onPress={submitOrder} style={[styles.orderButton, (!lines.length || !!stockErrorText) && styles.orderButtonDisabled]}>
+              <CheckoutAccentGradientSurface />
               <Text style={styles.orderButtonText}>Заказать</Text>
               <Text style={styles.orderButtonText}>· {formatPrice(total)}</Text>
             </Pressable>
@@ -595,6 +615,11 @@ export function CheckoutPage() {
 }
 
 const styles = StyleSheet.create({
+  checkoutAccentGradientSurface: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: theme.radius.pill,
+    overflow: 'hidden',
+  },
   centerState: {
     alignItems: 'center',
     flex: 1,
@@ -735,10 +760,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.pill,
+    elevation: 5,
     flexDirection: 'row',
     gap: 5,
     justifyContent: 'center',
     minHeight: 52,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
   },
   orderButtonDisabled: {
     opacity: 0.45,

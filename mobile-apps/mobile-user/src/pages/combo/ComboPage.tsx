@@ -15,7 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import type { CatalogComboDetails, UnitConversion } from '../../entities/product';
-import { addCartLine, cartLinesToStockCheckItems, getCartLineStockProductIds, makeCartLineId, readCartLines, saveCartLine, type CartComboSelection, type CartIngredient, type CartLine, type CartLineDraft, type CartVariant } from '../../features/cart';
+import { addCartLine, cartLinesToStockCheckItems, getCartLineStockProductIds, makeCartLineId, notifyCartItemAdded, readCartLines, saveCartLine, type CartAddAnimation, type CartComboSelection, type CartIngredient, type CartLine, type CartLineDraft, type CartVariant } from '../../features/cart';
 import {
   cloneComboDraft,
   ComboLineCard,
@@ -25,6 +25,7 @@ import {
   getComboProductTitle,
   getComboBlockConfig,
   getComboDraft,
+  getComboProductImage,
   getComboTotals,
   isComboProductAvailable,
   normalizeComboDraftAvailability,
@@ -187,12 +188,26 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
   const { mergeStockRows, refreshMany, stockLevels, unitConversions } = useProductStock();
   const randomizedOpenKeyRef = useRef('');
   const restoredCartLineIdRef = useRef('');
+  const comboImageRef = useRef<View>(null);
   const [combo, setCombo] = useState<CatalogComboDetails | null>(() => getMemoryCatalogComboDetails(comboId));
   const [draft, setDraft] = useState(() => (combo ? cloneComboDraft(getComboDraft(combo)) : null));
   const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [errorText, setErrorText] = useState('');
   const [comboCanSubmit, setComboCanSubmit] = useState(true);
   const [comboCanIncrease, setComboCanIncrease] = useState(true);
+  const comboAnimationSource = useMemo(() => {
+    if (!combo || !draft) return { blockIndex: -1, imageUri: '' };
+    for (let blockIndex = 0; blockIndex < combo.blocks.length; blockIndex += 1) {
+      const block = combo.blocks[blockIndex];
+      const selectedIndex = draft.selectedByBlock[String(blockIndex)] ?? 0;
+      const selectedProduct = block.products[selectedIndex] || null;
+      const product = isComboProductAvailable(selectedProduct, stockLevels) ? selectedProduct : null;
+      const config = getComboBlockConfig(draft, blockIndex, product);
+      const imageUri = getComboProductImage(product, config);
+      if (imageUri) return { blockIndex, imageUri };
+    }
+    return { blockIndex: -1, imageUri: '' };
+  }, [combo, draft, stockLevels]);
 
   const applyCombo = useCallback((nextCombo: CatalogComboDetails, resetForOpen = false) => {
     const openKey = `${Number(nextCombo.id || 0)}:${openNonce}`;
@@ -445,9 +460,30 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
       navigation.goBack();
       return;
     }
+    const animation = await new Promise<CartAddAnimation>((resolve) => {
+      if (!comboAnimationSource.imageUri || !comboImageRef.current) {
+        resolve({
+          imageUri: comboAnimationSource.imageUri,
+          sourceFrame: null,
+        });
+        return;
+      }
+      comboImageRef.current.measureInWindow((x, y, width, height) => {
+        resolve({
+          imageUri: comboAnimationSource.imageUri,
+          sourceFrame: {
+            height,
+            width,
+            x,
+            y,
+          },
+        });
+      });
+    });
     await addCartLine(nextLine);
-    navigation.navigate('main', { screen: 'cart' });
-  }, [cartLineId, combo, comboCanSubmit, draft, mergeStockRows, navigation, refreshMany, stockLevels, totals.oldPrice, totals.price, totals.quantity, unitConversions]);
+    notifyCartItemAdded(animation);
+    navigation.goBack();
+  }, [cartLineId, combo, comboAnimationSource.imageUri, comboCanSubmit, draft, mergeStockRows, navigation, refreshMany, stockLevels, totals.oldPrice, totals.price, totals.quantity, unitConversions]);
 
   if (!combo || !draft) {
     return (
@@ -482,6 +518,7 @@ export function ComboPage({ navigation, route }: ComboPageProps) {
                 <View key={`${block.block_id}-${blockIndex}`} style={styles.comboBlockSection}>
                   <ComboLineCard
                     config={config}
+                    mediaRef={blockIndex === comboAnimationSource.blockIndex ? comboImageRef : undefined}
                     product={product}
                     showGear={false}
                     onPress={() => navigation.navigate('comboReplace', { blockIndex, blockTitle: block.block_title, comboId })}

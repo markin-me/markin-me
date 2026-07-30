@@ -2,12 +2,14 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import * as Brightness from 'expo-brightness';
 import { useFocusEffect,
   useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { TextInput as NativeTextInput } from 'react-native';
 import { ActivityIndicator,
   Image,
   Keyboard,
@@ -386,6 +388,9 @@ function getDefaultAddressLine(passport: CustomerPassport) {
 
 export function ProfilePage() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const nameInputRef = useRef<NativeTextInput | null>(null);
+  const birthdayInputRef = useRef<NativeTextInput | null>(null);
+  const loginRequestRef = useRef(false);
   const [passport, setPassport] = useState<CustomerPassport | null>(null);
   const [step, setStep] = useState<AuthStep>('phone');
   const [phone, setPhone] = useState('+7');
@@ -400,6 +405,15 @@ export function ProfilePage() {
   const [levelPopoverVisible, setLevelPopoverVisible] = useState(false);
   const [isReferralQrSheetVisible, setReferralQrSheetVisible] = useState(false);
   const [previousBrightness, setPreviousBrightness] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (step !== 'birthday' || loading) return undefined;
+    const frame = requestAnimationFrame(() => {
+      if (needsNameInput) nameInputRef.current?.focus();
+      else birthdayInputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [loading, needsNameInput, step]);
 
   useEffect(() => {
     let isMounted = true;
@@ -628,13 +642,15 @@ export function ProfilePage() {
     }
   };
 
-  const handleLogin = async () => {
+  const handleLogin = async (birthdayOverride?: string) => {
+    if (loginRequestRef.current) return;
     const authName = needsNameInput ? name.trim() : '';
     if (needsNameInput && !authName) {
       setErrorText('Введите имя.');
       return;
     }
-    if (step === 'birthday' && !isValidBirthday(birthday)) {
+    const loginBirthday = typeof birthdayOverride === 'string' ? birthdayOverride : birthday;
+    if (step === 'birthday' && !isValidBirthday(loginBirthday)) {
       setErrorText('Введите дату рождения в формате дд.мм.гггг.');
       return;
     }
@@ -643,18 +659,36 @@ export function ProfilePage() {
       return;
     }
 
+    loginRequestRef.current = true;
     setLoading(true);
     setErrorText('');
     try {
       const result = step === 'code'
         ? await authMessengerCodeVerify({ code: String(code).replace(/\D/g, '').slice(0, 4), name: authName || null, phone })
-        : await authLogin({ birthday, name: authName || null, phone });
+        : await authLogin({ birthday: loginBirthday, name: authName || null, phone });
       await completeAuth(result.token, result.customer);
     } catch (error) {
       setErrorText(getAuthErrorText(error));
     } finally {
+      loginRequestRef.current = false;
       setLoading(false);
     }
+  };
+
+  const handleBirthdayChange = (value: string) => {
+    const nextBirthday = formatBirthdayInput(value);
+    setBirthday(nextBirthday);
+    setErrorText('');
+    if (nextBirthday.length !== 10 || loading || loginRequestRef.current) return;
+    if (!isValidBirthday(nextBirthday)) {
+      setErrorText('Введите корректную дату рождения.');
+      return;
+    }
+    if (needsNameInput && !name.trim()) {
+      setErrorText('Введите имя.');
+      return;
+    }
+    setTimeout(() => void handleLogin(nextBirthday), 0);
   };
 
   if (!passport && !passportChecked) {
@@ -697,8 +731,11 @@ export function ProfilePage() {
               <TextInput
                 editable={!loading}
                 onChangeText={setName}
+                onSubmitEditing={() => birthdayInputRef.current?.focus()}
                 placeholder="Введите имя"
                 placeholderTextColor={theme.colors.muted}
+                ref={nameInputRef}
+                returnKeyType="next"
                 style={styles.input}
                 value={name}
               />
@@ -707,11 +744,13 @@ export function ProfilePage() {
             {step === 'birthday' ? (
               <TextInput
                 editable={!loading}
+                inputMode="numeric"
                 keyboardType="number-pad"
                 maxLength={10}
-                onChangeText={(value) => setBirthday(formatBirthdayInput(value))}
+                onChangeText={handleBirthdayChange}
                 placeholder="дд.мм.гггг"
                 placeholderTextColor={theme.colors.muted}
+                ref={birthdayInputRef}
                 style={styles.input}
                 value={birthday}
               />
@@ -734,7 +773,7 @@ export function ProfilePage() {
 
             <Pressable
               disabled={loading}
-              onPress={step === 'phone' ? () => handleContinue() : handleLogin}
+              onPress={step === 'phone' ? () => handleContinue() : () => handleLogin()}
               style={[styles.primaryButton, loading && styles.primaryButtonDisabled]}
             >
               {loading ? (

@@ -1,6 +1,7 @@
 import {
   Ionicons } from '@expo/vector-icons';
-import { Pressable,
+import { Image,
+  Pressable,
   ScrollView,
   StyleSheet,
   View,
@@ -9,6 +10,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
 import { routes } from '../../app/navigation/routes';
+import { resolveAssetUrl } from '../../shared/api';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
@@ -25,6 +27,7 @@ export function CategoriesPage({ navigation, route }: CategoriesPageProps) {
         {categories.map((category) => {
           const categoryId = Number(category.id);
           const isActive = categoryId === activeCategoryId;
+          const categoryImage = resolveAssetUrl(String(category.icon || '').trim());
 
           return (
             <Pressable
@@ -41,7 +44,11 @@ export function CategoriesPage({ navigation, route }: CategoriesPageProps) {
               }}
             >
               <View style={[styles.icon, isActive && styles.iconActive]}>
-                <Ionicons name="pricetag-outline" size={18} color={isActive ? theme.colors.primaryText : theme.colors.muted} />
+                {categoryImage ? (
+                  <Image resizeMode="cover" source={{ uri: categoryImage }} style={styles.categoryImage} />
+                ) : (
+                  <Ionicons name="pricetag-outline" size={18} color={isActive ? theme.colors.primaryText : theme.colors.muted} />
+                )}
               </View>
               <Text style={[styles.title, isActive && styles.titleActive]}>{category.title}</Text>
               {isActive ? <Ionicons name="checkmark" size={20} color={theme.colors.accent} /> : null}
@@ -64,6 +71,7 @@ const styles = StyleSheet.create({
     height: 36,
     justifyContent: 'center',
     marginRight: theme.spacing.md,
+    overflow: 'hidden',
     width: 36,
   },
   iconActive: {
@@ -73,11 +81,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: theme.colors.surface,
     borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.pill,
     borderWidth: 1,
+    elevation: 2,
     flexDirection: 'row',
     marginBottom: theme.spacing.sm,
-    padding: theme.spacing.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 5, width: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
   },
   rowActive: {
     borderColor: theme.colors.accent,
@@ -90,5 +104,9 @@ const styles = StyleSheet.create({
   },
   titleActive: {
     color: theme.colors.accent,
+  },
+  categoryImage: {
+    height: '100%',
+    width: '100%',
   },
 });

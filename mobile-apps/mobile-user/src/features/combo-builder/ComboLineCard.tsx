@@ -1,4 +1,7 @@
 import {
+  type RefObject,
+} from 'react';
+import {
   Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { Image,
@@ -23,6 +26,7 @@ import {
 import { AppText as Text } from '../../shared/ui';
 export function ComboLineCard({
   config,
+  mediaRef,
   onGearPress,
   product,
   selected,
@@ -32,6 +36,7 @@ export function ComboLineCard({
   onPress,
 }: {
   config?: ComboConfiguredProduct | null;
+  mediaRef?: RefObject<View | null>;
   onGearPress?: () => void;
   product: CatalogComboBlockProduct | null;
   selected?: boolean;
@@ -60,7 +65,7 @@ export function ComboLineCard({
       onPress={onPress}
       style={[styles.comboLineCard, selected && styles.comboLineCardSelected]}
     >
-      <View style={styles.comboLineImageWrap}>
+      <View ref={mediaRef} style={styles.comboLineImageWrap}>
         {image ? (
           Platform.OS === 'web' ? (
             <Image resizeMode="contain" source={{ uri: image }} style={styles.comboLineImage} />
