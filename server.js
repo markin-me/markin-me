@@ -60,6 +60,7 @@ const {
 const makeAuthRouter = require('./api/auth');
 const makeAdminClientsRouter = require('./api/admin/clients');
 const makeAdminBonusRouter = require('./api/admin/bonus');
+const makeAdminSubscriptionsRouter = require('./api/admin/subscriptions');
 const makeAdminDiscountsRouter = require('./api/admin/discounts');
 const makeAdminImportantMessagesRouter = require('./api/admin/importantMessages');
 const makeAdminOrdersRouter = require('./api/admin/orders');
@@ -1841,6 +1842,7 @@ app.use('/api/chat-temp', makeChatTempRouter());
 // ------------------------------
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
 app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers }));
+app.use('/api/admin/subscriptions', authMiddleware, makeAdminSubscriptionsRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
 app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessagesRouter({ db, helpers }));
 app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents }));

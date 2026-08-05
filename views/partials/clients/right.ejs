@@ -60,6 +60,141 @@
       <div class="empty-text">Нажмите на карточку настроек слева</div>
     </div>
 
+    <div id="subscriptionHistoryEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-calendar-check"></i></div>
+      <div class="empty-title">Выберите подписчика</div>
+      <div class="empty-text">Нажмите на подписку в истории, чтобы посмотреть прогресс и доставки</div>
+    </div>
+
+    <div id="subscriptionPlanEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-list-check"></i></div>
+      <div class="empty-title">Выберите условие</div>
+      <div class="empty-text">Нажмите на условие слева или создайте новое через «+»</div>
+    </div>
+
+    <div id="subscriptionHistoryInfoWrap" class="banner-settings-panel hidden subscription-right-panel">
+      <div class="subscription-right-content" id="subscriptionHistoryInfoContent"></div>
+      <div class="panel-footer hidden" id="subscriptionHistoryInfoFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel is-fullwidth" type="button" id="subscriptionHistoryCloseBtn">Закрыть</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="subscriptionPlanEditorWrap" class="banner-settings-panel settings-right-panel-fixed-footer hidden subscription-plan-editor">
+      <form id="subscriptionPlanForm" class="subscription-plan-form settings-panel-scroll">
+        <div class="bonus-tariff-settings-grid">
+          <div class="bonus-tariff-settings-card">
+            <div class="bonus-tariff-settings-body">
+              <label class="subscription-inline-reward-field">
+                <span>Название</span>
+                <span class="discount-inline-value-control subscription-inline-value-control">
+                  <input class="control discount-inline-value-input" id="subscriptionPlanTitleInput" type="text" autocomplete="off" />
+                </span>
+              </label>
+              <label class="subscription-inline-reward-field">
+                <span>Описание</span>
+                <span class="discount-inline-value-control subscription-inline-value-control subscription-description-control">
+                  <textarea class="control discount-inline-value-input" id="subscriptionPlanDescriptionInput" rows="3"></textarea>
+                </span>
+              </label>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="subscriptionPlanActiveSwitch" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Активна</span>
+              </label>
+              <div class="subscription-mode-tabs" id="subscriptionPlanModeTabs" role="group" aria-label="Режим подписки">
+                <button class="subscription-mode-tab is-active" type="button" data-subscription-mode="ready">Готовая подписка</button>
+                <button class="subscription-mode-tab" type="button" data-subscription-mode="custom">Клиент выбирает сам</button>
+              </div>
+              <label class="switch hidden" id="subscriptionDayCountModeField">
+                <input class="switch-input" type="checkbox" id="subscriptionPlanCustomerSelectDaysSwitch" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Клиент сам выбирает кол-во дней</span>
+              </label>
+              <div class="bonus-coin-rate-row" id="subscriptionPlanLimitsRow">
+                <label class="subscription-inline-reward-field" id="subscriptionPlanDeliveryCountField">
+                  <span id="subscriptionPlanDeliveryCountLabel">Заказов</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control subscription-number-stepper">
+                    <input class="control bonus-coin-rate-input subscription-number-input" id="subscriptionPlanDeliveryCountInput" type="number" min="1" step="1" />
+                    <span class="subscription-number-stepper-buttons" aria-hidden="true">
+                      <button type="button" class="subscription-number-stepper-btn" data-subscription-step-target="subscriptionPlanDeliveryCountInput" data-subscription-step="1" tabindex="-1"><i class="fas fa-caret-up"></i></button>
+                      <button type="button" class="subscription-number-stepper-btn" data-subscription-step-target="subscriptionPlanDeliveryCountInput" data-subscription-step="-1" tabindex="-1"><i class="fas fa-caret-down"></i></button>
+                    </span>
+                  </span>
+                </label>
+                <label class="subscription-inline-reward-field">
+                  <span>Товаров в заказ</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control subscription-number-stepper">
+                    <input class="control bonus-coin-rate-input subscription-number-input" id="subscriptionPlanItemsPerOrderInput" type="number" min="1" max="9" step="1" />
+                    <span class="subscription-number-stepper-buttons" aria-hidden="true">
+                      <button type="button" class="subscription-number-stepper-btn" data-subscription-step-target="subscriptionPlanItemsPerOrderInput" data-subscription-step="1" tabindex="-1"><i class="fas fa-caret-up"></i></button>
+                      <button type="button" class="subscription-number-stepper-btn" data-subscription-step-target="subscriptionPlanItemsPerOrderInput" data-subscription-step="-1" tabindex="-1"><i class="fas fa-caret-down"></i></button>
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="subscriptionPlanExactItemsSwitch" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Обязательно выбрать все товары</span>
+              </label>
+              <div class="subscription-inline-rewards-row">
+                <label class="subscription-inline-reward-field">
+                  <span>Скидка</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanDiscountRewardValueInput" type="number" min="0" step="0.01" inputmode="decimal" />
+                    <span class="discount-inline-value-toggle" data-subscription-inline-type-group="discount">
+                      <button class="discount-inline-value-type" type="button" data-subscription-inline-type="percent" aria-pressed="false" title="Процент">
+                        <span class="discount-inline-value-type-symbol">%</span>
+                      </button>
+                      <button class="discount-inline-value-type" type="button" data-subscription-inline-type="fixed" aria-pressed="false" title="Сумма">
+                        <span class="discount-inline-value-type-symbol">₽</span>
+                      </button>
+                    </span>
+                  </span>
+                </label>
+                <label class="subscription-inline-reward-field">
+                  <span>Бонус</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanBonusRewardValueInput" type="number" min="0" step="0.01" inputmode="decimal" />
+                    <span class="discount-inline-value-toggle" data-subscription-inline-type-group="bonus">
+                      <button class="discount-inline-value-type" type="button" data-subscription-inline-type="percent" aria-pressed="false" title="Процент">
+                        <span class="discount-inline-value-type-symbol">%</span>
+                      </button>
+                      <button class="discount-inline-value-type" type="button" data-subscription-inline-type="fixed" aria-pressed="false" title="Бонусы">
+                        <span class="discount-inline-value-type-symbol">Б</span>
+                      </button>
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <label class="subscription-inline-reward-field subscription-price-field" id="subscriptionPlanPriceRow">
+                <span>Цена</span>
+                <span class="discount-inline-value-control subscription-inline-value-control">
+                  <input class="control discount-inline-value-input" id="subscriptionPlanPriceTotalInput" type="number" min="0" step="0.01" inputmode="decimal" />
+                </span>
+              </label>
+              <section class="subscription-plan-section" id="subscriptionItemsSection">
+                <div class="subscription-plan-section-title">Товары подписки</div>
+                <div class="subscription-ready-items-empty" id="subscriptionItemsHint">Товары будут выбраны администратором из каталога.</div>
+                <div class="subscription-items-grid" id="subscriptionItemsGrid"></div>
+                <button class="subscription-items-total" type="button" id="subscriptionItemsTotalBtn">Сумма товаров: 0 ₽</button>
+              </section>
+            </div>
+          </div>
+        </div>
+      </form>
+      <div class="panel-footer hidden" id="subscriptionPlanEditorFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel subscription-footer-close" type="button" id="subscriptionPlanCancelBtn" aria-label="Отмена" title="Отмена">
+            <i class="fas fa-times"></i>
+          </button>
+          <button class="product-footer-btn product-footer-save" type="button" id="subscriptionPlanSaveBtn">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
     <div id="importantMessagesRightWrap" class="promo-messages-right-panel settings-right-panel settings-right-panel-fixed-footer hidden">
       <section class="promo-messages-editor-shell settings-panel-scroll">
         <div id="importantMessagesEditor" class="promo-messages-editor-body"></div>

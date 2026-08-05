@@ -2063,6 +2063,7 @@
   const elToolbarBackBtn = $("#clientsToolbarBackBtn");
   const elSortToggle = $("#clientsSortToggle");
   const elSortDropdown = $("#clientsSortDropdown");
+  const clientsSortDropdownInitialHtml = elSortDropdown ? elSortDropdown.innerHTML : '';
   const elSortWrap = $("#clientsSortWrap");
   const elBannersSwitchWrap = $("#clientsBannersSwitchWrap");
   const elBannersEnabledSwitch = $("#clientsBannersEnabledSwitch");
@@ -2083,6 +2084,8 @@
   const elBonusReferralsBtn = $("#bonusReferralsBtn");
   const elBonusProgramsBtn = $("#bonusProgramsBtn");
   const elBonusSettingsNavBtn = $("#bonusSettingsNavBtn");
+  const elSubscriptionHistoryBtn = $("#subscriptionHistoryBtn");
+  const elSubscriptionSettingsBtn = $("#subscriptionSettingsBtn");
   const elImportantMessagesBtn = $("#importantMessagesBtn");
   const elBonusSettingsEditBtn = $("#bonusSettingsEditBtn");
   const elClientsScroll = elList ? elList.closest(".panel-body") : null;
@@ -2128,6 +2131,10 @@
   const elBonusClientsList = $("#bonusClientsList");
   const elBonusClientsEmptyHint = $("#bonusClientsEmptyHint");
   const elBonusHistoryPagination = $("#bonusHistoryPagination");
+  const elSubscriptionHistoryList = $("#subscriptionHistoryList");
+  const elSubscriptionHistoryEmptyHint = $("#subscriptionHistoryEmptyHint");
+  const elSubscriptionPlansList = $("#subscriptionPlansList");
+  const elSubscriptionPlansEmptyHint = $("#subscriptionPlansEmptyHint");
   const elBonusReferralLevelsTrack = $("#bonusReferralLevelsTrack");
   const elBonusReferralsList = $("#bonusReferralsList");
   const elBonusReferralsEmptyHint = $("#bonusReferralsEmptyHint");
@@ -2370,6 +2377,37 @@
   const bonusLevelEmpty = right$("#bonusLevelEmpty");
   const bonusReferralsEmpty = right$("#bonusReferralsEmpty");
   const bonusSettingsEmpty = right$("#bonusSettingsEmpty");
+  const subscriptionHistoryEmpty = right$("#subscriptionHistoryEmpty");
+  const subscriptionPlanEmpty = right$("#subscriptionPlanEmpty");
+  const subscriptionHistoryInfoWrap = right$("#subscriptionHistoryInfoWrap");
+  const subscriptionHistoryInfoContent = right$("#subscriptionHistoryInfoContent");
+  const subscriptionHistoryInfoFooter = right$("#subscriptionHistoryInfoFooter");
+  const subscriptionHistoryCloseBtn = right$("#subscriptionHistoryCloseBtn");
+  const subscriptionPlanEditorWrap = right$("#subscriptionPlanEditorWrap");
+  const subscriptionPlanEditorFooter = right$("#subscriptionPlanEditorFooter");
+  const subscriptionPlanForm = right$("#subscriptionPlanForm");
+  const subscriptionPlanTitleInput = right$("#subscriptionPlanTitleInput");
+  const subscriptionPlanDescriptionInput = right$("#subscriptionPlanDescriptionInput");
+  const subscriptionPlanActiveSwitch = right$("#subscriptionPlanActiveSwitch");
+  const subscriptionPlanDeliveryCountField = right$("#subscriptionPlanDeliveryCountField");
+  const subscriptionPlanDeliveryCountInput = right$("#subscriptionPlanDeliveryCountInput");
+  const subscriptionPlanItemsPerOrderInput = right$("#subscriptionPlanItemsPerOrderInput");
+  const subscriptionPlanExactItemsSwitch = right$("#subscriptionPlanExactItemsSwitch");
+  const subscriptionPlanExactItemsField = subscriptionPlanExactItemsSwitch?.closest('.switch') || null;
+  const subscriptionPlanPriceTotalInput = right$("#subscriptionPlanPriceTotalInput");
+  const subscriptionPlanBonusRewardValueInput = right$("#subscriptionPlanBonusRewardValueInput");
+  const subscriptionPlanCancelBtn = right$("#subscriptionPlanCancelBtn");
+  const subscriptionPlanSaveBtn = right$("#subscriptionPlanSaveBtn");
+  const subscriptionPlanModeTabs = right$("#subscriptionPlanModeTabs");
+  const subscriptionItemsSection = right$("#subscriptionItemsSection");
+  const subscriptionItemsHint = right$("#subscriptionItemsHint");
+  const subscriptionItemsGrid = right$("#subscriptionItemsGrid");
+  const subscriptionItemsTotalBtn = right$("#subscriptionItemsTotalBtn");
+  const subscriptionDayCountModeField = right$("#subscriptionDayCountModeField");
+  const subscriptionPlanCustomerSelectDaysSwitch = right$("#subscriptionPlanCustomerSelectDaysSwitch");
+  const subscriptionPlanDeliveryCountLabel = right$("#subscriptionPlanDeliveryCountLabel");
+  const subscriptionPlanPriceRow = right$("#subscriptionPlanPriceRow");
+  const subscriptionPlanDiscountRewardValueInput = right$("#subscriptionPlanDiscountRewardValueInput");
   const bonusSettingsBrandWrap = right$("#bonusSettingsBrandWrap");
   
   const bonusSettingsLogoPreviewBase = right$("#bonusSettingsLogoPreviewBase");
@@ -2779,6 +2817,18 @@
     bonusReferralLevelsDraft: createDefaultBonusReferralLevels(),
     bonusReferralEvents: [],
     bonusHistoryPage: 1,
+    subscriptionHistory: [],
+    subscriptionHistoryLoaded: false,
+    subscriptionHistoryLoading: false,
+    subscriptionPlans: [],
+    subscriptionPlansLoaded: false,
+    subscriptionPlansLoading: false,
+    activeSubscriptionId: null,
+    activeSubscription: null,
+    activeSubscriptionPlanId: null,
+    subscriptionPlanDraft: null,
+    subscriptionSearchQuery: '',
+    subscriptionSort: 'created_desc',
     bonusFlippedLevelIds: new Set(),
     bonusAnimatingLevelIds: new Set(),
     bonusFlipAnimationTimer: null,
@@ -3859,11 +3909,17 @@
     const hasTabs = tabsState.tabs.length > 0;
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     const isBonusSettingsView = state.currentView === 'bonus-settings';
+    const isSubscriptionHistoryView = state.currentView === 'subscription-history';
+    const isSubscriptionSettingsView = state.currentView === 'subscription-settings';
     const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
     const visibleTabs = isBonusReferralsView
       ? tabsState.tabs.filter((tab) => tab.type === 'bonus-referral-card')
       : isBonusSettingsView
         ? tabsState.tabs.filter((tab) => tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories' || tab.type === 'bonus-settings-modals')
+        : isSubscriptionHistoryView
+          ? tabsState.tabs.filter((tab) => tab.type === 'subscription-history')
+        : isSubscriptionSettingsView
+          ? tabsState.tabs.filter((tab) => tab.type === 'subscription-plan')
         : tabsState.tabs;
     const hasVisibleTabs = visibleTabs.length > 0;
     clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isHomeBtnView);
@@ -3930,6 +3986,10 @@
             ? 'bonus-referrals'
           : tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories' || tab.type === 'bonus-settings-modals'
             ? 'bonus-settings'
+          : tab.type === 'subscription-history'
+            ? 'subscription-history'
+          : tab.type === 'subscription-plan'
+            ? 'subscription-settings'
           : 'clients';
     if (state.currentView !== targetView) {
       switchView(targetView);
@@ -4029,6 +4089,16 @@
       }
     } else if (closedTab.type === 'bonus-referral-card') {
       closeBonusReferralCardInlinePopovers();
+    } else if (closedTab.type === 'subscription-history') {
+      if (Number(state.activeSubscriptionId || 0) === Number(closedTab.id || 0)) {
+        state.activeSubscriptionId = null;
+        state.activeSubscription = null;
+      }
+    } else if (closedTab.type === 'subscription-plan') {
+      if (String(state.activeSubscriptionPlanId || '') === String(closedTab.id || '')) {
+        state.activeSubscriptionPlanId = null;
+        state.subscriptionPlanDraft = null;
+      }
     } else if (closedTab.type === 'order') {
       if (state.activeOrderId === closedTab.id) {
         state.activeOrderId = null;
@@ -4052,6 +4122,10 @@
           renderBonusLevels();
         } else if (state.currentView === 'bonus-referrals') {
           renderBonusReferralLevels();
+        } else if (state.currentView === 'subscription-history') {
+          renderSubscriptionHistory();
+        } else if (state.currentView === 'subscription-settings') {
+          renderSubscriptionPlans();
         }
         syncDiscountToolbarState();
         updateRightPanel();
@@ -8771,6 +8845,15 @@
     if (elBonusProgramsBtn) {
       elBonusProgramsBtn.classList.remove('is-active');
     }
+    if (elBonusSettingsNavBtn) {
+      elBonusSettingsNavBtn.classList.toggle('is-active', state.currentView === 'bonus-settings');
+    }
+    if (elSubscriptionHistoryBtn) {
+      elSubscriptionHistoryBtn.classList.toggle('is-active', state.currentView === 'subscription-history');
+    }
+    if (elSubscriptionSettingsBtn) {
+      elSubscriptionSettingsBtn.classList.toggle('is-active', state.currentView === 'subscription-settings');
+    }
   }
 
   function getCurrentBonusLevels() {
@@ -8913,6 +8996,8 @@
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     const isBonusSettingsView = state.currentView === 'bonus-settings';
+    const isSubscriptionHistoryView = state.currentView === 'subscription-history';
+    const isSubscriptionSettingsView = state.currentView === 'subscription-settings';
     const isEditableBonusView = isBonusCardsView || isBonusReferralsView || isBonusSettingsView;
     if (elBonusPointRateWrap) elBonusPointRateWrap.classList.add('hidden');
     if (elBonusProgramSwitchWrap) elBonusProgramSwitchWrap.classList.toggle('hidden', !isBonusCardsView);
@@ -22327,6 +22412,488 @@
   }
 
 
+  const SUBSCRIPTION_SORT_OPTIONS = [
+    { value: 'created_desc', label: 'Сначала новые' },
+    { value: 'name_asc', label: 'По имени' },
+    { value: 'progress_desc', label: 'По прогрессу' },
+    { value: 'status_asc', label: 'По статусу' },
+  ];
+
+  function subscriptionStatusText(status) {
+    const value = String(status || '').toLowerCase();
+    if (value === 'active') return 'Активна';
+    if (value === 'paused') return 'Пауза';
+    if (value === 'completed') return 'Завершена';
+    if (value === 'cancelled' || value === 'canceled') return 'Отменена';
+    return status || 'Статус';
+  }
+
+  function subscriptionPaymentText(status) {
+    const value = String(status || '').toLowerCase();
+    if (value === 'paid') return 'Оплачено';
+    if (value === 'partial_refund') return 'Частичный возврат';
+    if (value === 'refunded') return 'Возврат';
+    if (value === 'pending') return 'Ожидает оплаты';
+    return status || 'Оплата не указана';
+  }
+
+  function subscriptionSelectionModeText(plan) {
+    const count = Math.min(9, Math.max(1, Number(plan?.items_per_order || 4)));
+    return String(plan?.item_selection_mode || '') === 'exact'
+      ? `ровно ${count} товара`
+      : `до ${count} товаров`;
+  }
+
+  function subscriptionModeText(plan) {
+    return String(plan?.settings?.subscription_mode || 'custom') === 'ready'
+      ? 'Готовая подписка'
+      : 'Клиент выбирает сам';
+  }
+
+  function subscriptionDiscountText(plan) {
+    const type = String(plan?.settings?.discount_reward_type || 'none');
+    const value = Number(plan?.settings?.discount_reward_value || 0);
+    if (type === 'percent' && value > 0) return `скидка ${value}%`;
+    if (type === 'fixed' && value > 0) return `скидка ${money(value)}`;
+    return 'без скидки';
+  }
+
+  function subscriptionBonusText(plan) {
+    const type = String(plan?.bonus_reward_type || 'none');
+    const value = Number(plan?.bonus_reward_value || 0);
+    if (type === 'percent' && value > 0) return `${value}% бонусами`;
+    if (type === 'fixed' && value > 0) return `${value} Б`;
+    return 'без бонуса';
+  }
+
+  function subscriptionProgressText(item) {
+    const completed = Math.max(0, Number(item?.delivery_completed || 0));
+    const total = Math.max(0, Number(item?.delivery_total || 0));
+    return `${completed} из ${total} доставок`;
+  }
+
+  async function loadSubscriptionHistory(force = false) {
+    if (state.subscriptionHistoryLoading) return;
+    if (state.subscriptionHistoryLoaded && !force) return;
+    state.subscriptionHistoryLoading = true;
+    try {
+      const json = await apiJson('/api/admin/subscriptions/history');
+      state.subscriptionHistory = Array.isArray(json.data) ? json.data : [];
+      state.subscriptionHistoryLoaded = true;
+    } catch (error) {
+      console.error('Failed to load subscription history:', error);
+      state.subscriptionHistory = [];
+      state.subscriptionHistoryLoaded = true;
+    } finally {
+      state.subscriptionHistoryLoading = false;
+      renderSubscriptionHistory();
+    }
+  }
+
+  async function loadSubscriptionPlans(force = false) {
+    if (state.subscriptionPlansLoading) return;
+    if (state.subscriptionPlansLoaded && !force) return;
+    state.subscriptionPlansLoading = true;
+    try {
+      const json = await apiJson('/api/admin/subscriptions/plans');
+      state.subscriptionPlans = Array.isArray(json.data) ? json.data : [];
+      state.subscriptionPlansLoaded = true;
+    } catch (error) {
+      console.error('Failed to load subscription plans:', error);
+      state.subscriptionPlans = [];
+      state.subscriptionPlansLoaded = true;
+    } finally {
+      state.subscriptionPlansLoading = false;
+      renderSubscriptionPlans();
+    }
+  }
+
+  function filteredSubscriptionHistory() {
+    const query = String(state.subscriptionSearchQuery || '').trim().toLowerCase();
+    const rows = state.subscriptionHistory.filter((item) => {
+      if (!query) return true;
+      return [
+        item.id,
+        item.status,
+        item.customer_name,
+        item.customer_phone,
+        item.plan_title,
+        subscriptionProgressText(item),
+      ].some((value) => String(value || '').toLowerCase().includes(query));
+    });
+    return rows.sort((a, b) => {
+      if (state.subscriptionSort === 'name_asc') return String(a.customer_name || '').localeCompare(String(b.customer_name || ''), 'ru');
+      if (state.subscriptionSort === 'progress_desc') {
+        const pa = Number(a.delivery_total || 0) ? Number(a.delivery_completed || 0) / Number(a.delivery_total || 1) : 0;
+        const pb = Number(b.delivery_total || 0) ? Number(b.delivery_completed || 0) / Number(b.delivery_total || 1) : 0;
+        return pb - pa;
+      }
+      if (state.subscriptionSort === 'status_asc') return String(a.status || '').localeCompare(String(b.status || ''), 'ru');
+      return Number(b.id || 0) - Number(a.id || 0);
+    });
+  }
+
+  function renderSubscriptionHistory() {
+    if (!elSubscriptionHistoryList) return;
+    const rows = filteredSubscriptionHistory();
+    elSubscriptionHistoryList.innerHTML = '';
+    if (!rows.length) {
+      if (elSubscriptionHistoryEmptyHint) elSubscriptionHistoryEmptyHint.classList.remove('hidden');
+      return;
+    }
+    if (elSubscriptionHistoryEmptyHint) elSubscriptionHistoryEmptyHint.classList.add('hidden');
+    rows.forEach((item) => {
+      const row = document.createElement('div');
+      const tabKey = buildTabKey('subscription-history', item.id);
+      row.className = `order-row ${tabsState.activeKey === tabKey ? 'is-active' : ''}`;
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.innerHTML = `
+        <div class="order-left">
+          <div>${escapeHtml(String(item.id || ''))}</div>
+          <span>${escapeHtml(subscriptionStatusText(item.status))}</span>
+        </div>
+        <div class="order-mid">
+          <strong>${escapeHtml(item.customer_name || 'Клиент')}</strong>
+          <div><i class="fas fa-phone"></i> ${escapeHtml(item.customer_phone || '')}</div>
+          <div>${escapeHtml(item.plan_title || 'Подписка')}</div>
+          <div>${escapeHtml(subscriptionProgressText(item))}</div>
+        </div>
+        <div class="order-actions">
+          <span class="pill">${escapeHtml(subscriptionStatusText(item.status))}</span>
+        </div>
+      `;
+      row.addEventListener('click', () => openSubscriptionHistoryTab(item.id));
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openSubscriptionHistoryTab(item.id);
+        }
+      });
+      elSubscriptionHistoryList.appendChild(row);
+    });
+  }
+
+  function renderSubscriptionPlans() {
+    if (!elSubscriptionPlansList) return;
+    elSubscriptionPlansList.innerHTML = '';
+    if (!state.subscriptionPlans.length) {
+      if (elSubscriptionPlansEmptyHint) elSubscriptionPlansEmptyHint.classList.remove('hidden');
+      return;
+    }
+    if (elSubscriptionPlansEmptyHint) elSubscriptionPlansEmptyHint.classList.add('hidden');
+    state.subscriptionPlans.forEach((plan) => {
+      const row = document.createElement('div');
+      const tabKey = buildTabKey('subscription-plan', plan.id);
+      row.className = `order-row ${tabsState.activeKey === tabKey ? 'is-active' : ''}`;
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.innerHTML = `
+        <div class="order-icon"><i class="fas fa-calendar-check"></i></div>
+        <div class="order-mid">
+          <strong>${escapeHtml(plan.title || 'Подписка')}</strong>
+          <div>${escapeHtml(subscriptionModeText(plan))}</div>
+          <div>${escapeHtml(String(plan.delivery_count || 0))} заказа по ${escapeHtml(subscriptionSelectionModeText(plan))}</div>
+          <div>${escapeHtml(money(plan.price_total || 0))}</div>
+          <div>${escapeHtml(subscriptionDiscountText(plan))}</div>
+          <div>${escapeHtml(subscriptionBonusText(plan))}</div>
+        </div>
+        <div class="order-actions">
+          <span class="pill">${plan.is_active ? 'Активна' : 'Отключена'}</span>
+        </div>
+      `;
+      row.addEventListener('click', () => openSubscriptionPlanTab(plan.id));
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openSubscriptionPlanTab(plan.id);
+        }
+      });
+      elSubscriptionPlansList.appendChild(row);
+    });
+  }
+
+  function createSubscriptionPlanDraft(plan = null) {
+    return {
+      id: plan?.id || null,
+      title: plan?.title || '',
+      description: plan?.description || '',
+      delivery_count: Math.max(1, Number(plan?.delivery_count || 1)),
+      items_per_order: Math.min(9, Math.max(1, Number(plan?.items_per_order || 4))),
+      item_selection_mode: ['exact', 'up_to'].includes(String(plan?.item_selection_mode || '')) ? plan.item_selection_mode : 'up_to',
+      delivery_interval_days: Math.max(1, Number(plan?.delivery_interval_days || 1)),
+      price_total: Number(plan?.price_total || 0),
+      bonus_reward_type: ['none', 'percent', 'fixed'].includes(String(plan?.bonus_reward_type || '')) ? plan.bonus_reward_type : 'none',
+      bonus_reward_value: Number(plan?.bonus_reward_value || 0),
+      subscription_mode: ['ready', 'custom'].includes(String(plan?.settings?.subscription_mode || '')) ? plan.settings.subscription_mode : 'custom',
+      day_count_mode: ['fixed', 'customer_select'].includes(String(plan?.settings?.day_count_mode || '')) ? plan.settings.day_count_mode : 'fixed',
+      discount_reward_type: ['none', 'percent', 'fixed'].includes(String(plan?.settings?.discount_reward_type || '')) ? plan.settings.discount_reward_type : 'none',
+      discount_reward_value: Number(plan?.settings?.discount_reward_value || 0),
+      sort_order: Number(plan?.sort_order || 0),
+      is_active: plan ? plan.is_active !== false : true,
+      items: Array.isArray(plan?.items) ? plan.items : [],
+    };
+  }
+
+  async function openSubscriptionHistoryTab(id) {
+    const row = state.subscriptionHistory.find((item) => Number(item.id) === Number(id));
+    ensureTab({
+      type: 'subscription-history',
+      id,
+      title: `${row?.customer_name || 'Клиент'} / Подписка`,
+      onActivate: () => activateSubscriptionHistoryTab(id),
+    });
+  }
+
+  async function activateSubscriptionHistoryTab(id) {
+    state.activeSubscriptionId = Number(id || 0);
+    try {
+      const json = await apiJson(`/api/admin/subscriptions/history/${state.activeSubscriptionId}`);
+      state.activeSubscription = json.data || null;
+    } catch (error) {
+      console.error('Failed to load subscription detail:', error);
+      state.activeSubscription = null;
+    }
+    renderSubscriptionHistoryInfo();
+    renderSubscriptionHistory();
+  }
+
+  function renderSubscriptionHistoryInfo() {
+    if (!subscriptionHistoryInfoContent) return;
+    const detail = state.activeSubscription || {};
+    const item = detail.subscription || null;
+    const deliveries = Array.isArray(detail.deliveries) ? detail.deliveries : [];
+    if (!item) {
+      subscriptionHistoryInfoContent.innerHTML = '<div class="empty-hint">Подписка не найдена</div>';
+      return;
+    }
+    const items = Array.isArray(item.plan_items) ? item.plan_items : [];
+    subscriptionHistoryInfoContent.innerHTML = `
+      <div class="bonus-tariff-settings-grid">
+        <div class="bonus-tariff-settings-card">
+          <div class="bonus-tariff-settings-head">
+            <div class="bonus-tariff-settings-icon"><i class="fas fa-user"></i></div>
+            <div class="bonus-tariff-settings-info">
+              <div class="bonus-tariff-settings-title">${escapeHtml(item.customer_name || 'Клиент')}</div>
+              <div class="bonus-tariff-settings-subtitle">${escapeHtml(item.customer_phone || '')}</div>
+            </div>
+          </div>
+          <div class="bonus-tariff-settings-body subscription-detail-grid">
+            <div><b>Подписка</b><span>${escapeHtml(item.plan_title || 'Подписка')}</span></div>
+            <div><b>Период</b><span>${escapeHtml(item.starts_at || item.started_at || '')} - ${escapeHtml(item.ends_at || '')}</span></div>
+            <div><b>Прогресс</b><span>${escapeHtml(subscriptionProgressText(item))}</span></div>
+            <div><b>Оплата</b><span>${escapeHtml(subscriptionPaymentText(item.payment_status))}: ${escapeHtml(money(item.paid_amount || 0))}</span></div>
+            <div><b>Возврат</b><span>${escapeHtml(money(item.refunded_amount || 0))}</span></div>
+            <div><b>Заказ оплаты</b><span>${item.payment_order_id ? `#${escapeHtml(String(item.payment_order_id))}` : 'Не указан'}</span></div>
+          </div>
+        </div>
+        <div class="bonus-tariff-settings-card">
+          <div class="bonus-tariff-settings-head">
+            <div class="bonus-tariff-settings-icon"><i class="fas fa-box"></i></div>
+            <div class="bonus-tariff-settings-info">
+              <div class="bonus-tariff-settings-title">Что заказал</div>
+              <div class="bonus-tariff-settings-subtitle">${items.length ? `${items.length} позиций` : 'Состав пока пустой'}</div>
+            </div>
+          </div>
+          <pre class="subscription-json-preview">${escapeHtml(JSON.stringify(items, null, 2))}</pre>
+        </div>
+        <div class="bonus-tariff-settings-card">
+          <div class="bonus-tariff-settings-head">
+            <div class="bonus-tariff-settings-icon"><i class="fas fa-truck"></i></div>
+            <div class="bonus-tariff-settings-info">
+              <div class="bonus-tariff-settings-title">Доставки</div>
+              <div class="bonus-tariff-settings-subtitle">${deliveries.length ? `${deliveries.length} записей` : 'Доставок нет'}</div>
+            </div>
+          </div>
+          <div class="subscription-delivery-list">
+            ${deliveries.map((delivery) => `
+              <div class="subscription-delivery-row">
+                <span>${escapeHtml(String(delivery.sequence_no || delivery.id || ''))}</span>
+                <b>${escapeHtml(subscriptionStatusText(delivery.status))}</b>
+                <small>${escapeHtml(delivery.scheduled_at || '')}</small>
+                <small>${delivery.order_id ? `Заказ #${escapeHtml(String(delivery.order_id))}` : 'Заказ не связан'}</small>
+              </div>
+            `).join('') || '<div class="empty-hint">Связанных доставок нет</div>'}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function openSubscriptionPlanTab(id = null) {
+    const isNew = id === null || id === 'new';
+    const plan = isNew ? null : state.subscriptionPlans.find((item) => Number(item.id) === Number(id));
+    const tabId = isNew ? 'new' : plan?.id;
+    ensureTab({
+      type: 'subscription-plan',
+      id: tabId,
+      title: isNew ? 'Новая подписка' : (plan?.title || 'Подписка'),
+      onActivate: () => activateSubscriptionPlanTab(tabId),
+    });
+  }
+
+  function activateSubscriptionPlanTab(id) {
+    const isNew = id === 'new';
+    const plan = isNew ? null : state.subscriptionPlans.find((item) => Number(item.id) === Number(id));
+    state.activeSubscriptionPlanId = isNew ? 'new' : Number(id || 0);
+    state.subscriptionPlanDraft = createSubscriptionPlanDraft(plan);
+    renderSubscriptionPlanEditor();
+    renderSubscriptionPlans();
+  }
+
+  function renderSubscriptionPlanEditor() {
+    const draft = state.subscriptionPlanDraft || createSubscriptionPlanDraft();
+    if (subscriptionPlanTitleInput) subscriptionPlanTitleInput.value = draft.title || '';
+    if (subscriptionPlanDescriptionInput) subscriptionPlanDescriptionInput.value = draft.description || '';
+    if (subscriptionPlanActiveSwitch) subscriptionPlanActiveSwitch.checked = draft.is_active !== false;
+    if (subscriptionPlanDeliveryCountInput) subscriptionPlanDeliveryCountInput.value = String(draft.delivery_count || 1);
+    if (subscriptionPlanItemsPerOrderInput) subscriptionPlanItemsPerOrderInput.value = String(draft.items_per_order || 4);
+    if (subscriptionPlanExactItemsSwitch) subscriptionPlanExactItemsSwitch.checked = draft.item_selection_mode === 'exact';
+    if (subscriptionPlanPriceTotalInput) subscriptionPlanPriceTotalInput.value = String(draft.price_total || 0);
+    if (subscriptionPlanBonusRewardValueInput) subscriptionPlanBonusRewardValueInput.value = String(draft.bonus_reward_value || 0);
+    if (subscriptionPlanCustomerSelectDaysSwitch) subscriptionPlanCustomerSelectDaysSwitch.checked = draft.day_count_mode === 'customer_select';
+    if (subscriptionPlanDiscountRewardValueInput) subscriptionPlanDiscountRewardValueInput.value = String(draft.discount_reward_value || 0);
+    syncSubscriptionInlineRewardType('discount', draft.discount_reward_type || 'percent');
+    syncSubscriptionInlineRewardType('bonus', draft.bonus_reward_type || 'percent');
+    syncSubscriptionPlanModeUi();
+    renderSubscriptionItemsGrid();
+  }
+
+  function setSubscriptionPlanMode(mode) {
+    if (!state.subscriptionPlanDraft) state.subscriptionPlanDraft = createSubscriptionPlanDraft();
+    state.subscriptionPlanDraft.subscription_mode = mode === 'ready' ? 'ready' : 'custom';
+    syncSubscriptionPlanModeUi();
+  }
+
+  function syncSubscriptionPlanModeUi() {
+    const mode = state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'ready' : 'custom';
+    $$('[data-subscription-mode]', subscriptionPlanModeTabs || document).forEach((button) => {
+      button.classList.toggle('is-active', button.dataset.subscriptionMode === mode);
+    });
+    if (subscriptionItemsSection) subscriptionItemsSection.classList.remove('hidden');
+    if (subscriptionItemsHint) {
+      subscriptionItemsHint.textContent = mode === 'ready'
+        ? 'Товары будут выбраны администратором из каталога.'
+        : 'Эти места клиент заполнит товарами при оформлении на сайте.';
+    }
+    if (subscriptionDayCountModeField) subscriptionDayCountModeField.classList.toggle('hidden', mode !== 'custom');
+    if (subscriptionPlanExactItemsField) subscriptionPlanExactItemsField.classList.toggle('hidden', mode !== 'custom');
+    if (subscriptionPlanDeliveryCountField) {
+      const hideDaysInput = mode === 'custom' && subscriptionPlanCustomerSelectDaysSwitch?.checked === true;
+      subscriptionPlanDeliveryCountField.classList.toggle('hidden', hideDaysInput);
+    }
+    if (subscriptionPlanPriceRow) subscriptionPlanPriceRow.classList.toggle('hidden', mode !== 'ready');
+    if (subscriptionPlanDeliveryCountLabel) {
+      subscriptionPlanDeliveryCountLabel.textContent = mode === 'custom' ? 'Дней' : 'Заказов';
+    }
+    renderSubscriptionItemsGrid();
+  }
+
+  function getSubscriptionItemsPerOrderValue() {
+    const raw = Number(subscriptionPlanItemsPerOrderInput?.value || state.subscriptionPlanDraft?.items_per_order || 4);
+    if (!Number.isFinite(raw)) return 4;
+    return Math.min(9, Math.max(1, Math.floor(raw)));
+  }
+
+  function renderSubscriptionItemsGrid() {
+    if (!subscriptionItemsGrid) return;
+    const count = getSubscriptionItemsPerOrderValue();
+    const days = Math.max(1, Math.floor(Number(subscriptionPlanDeliveryCountInput?.value || state.subscriptionPlanDraft?.delivery_count || 1)) || 1);
+    const mode = state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'ready' : 'custom';
+    subscriptionItemsGrid.innerHTML = '';
+    const renderSlots = (root, dayIndex = null) => {
+      for (let index = 0; index < count; index += 1) {
+        const slot = document.createElement('button');
+        slot.className = 'subscription-item-slot';
+        slot.type = 'button';
+        slot.setAttribute('aria-label', dayIndex ? `День ${dayIndex}, товар ${index + 1}` : `Товар ${index + 1}`);
+        slot.innerHTML = '<i class="fas fa-plus"></i>';
+        root.appendChild(slot);
+      }
+    };
+    if (mode === 'ready') {
+      for (let day = 1; day <= days; day += 1) {
+        const group = document.createElement('div');
+        group.className = 'subscription-items-day';
+        group.innerHTML = `<div class="subscription-items-day-title">День ${day}</div><div class="subscription-items-day-grid"></div><button class="subscription-items-total" type="button">Сумма товаров: 0 ₽</button>`;
+        renderSlots(group.querySelector('.subscription-items-day-grid'), day);
+        subscriptionItemsGrid.appendChild(group);
+      }
+    } else {
+      renderSlots(subscriptionItemsGrid);
+    }
+    if (subscriptionItemsTotalBtn) {
+      subscriptionItemsTotalBtn.classList.toggle('hidden', mode === 'ready');
+      subscriptionItemsTotalBtn.textContent = 'Сумма товаров: 0 ₽';
+    }
+  }
+
+  function syncSubscriptionInlineRewardType(group, value) {
+    const safeGroup = group === 'bonus' ? 'bonus' : 'discount';
+    const safeValue = ['percent', 'fixed'].includes(String(value || '')) ? value : 'percent';
+    if (!state.subscriptionPlanDraft) state.subscriptionPlanDraft = createSubscriptionPlanDraft();
+    if (safeGroup === 'bonus') state.subscriptionPlanDraft.bonus_reward_type = safeValue;
+    else state.subscriptionPlanDraft.discount_reward_type = safeValue;
+    $$(`[data-subscription-inline-type-group="${safeGroup}"] [data-subscription-inline-type]`, subscriptionPlanForm || document).forEach((button) => {
+      const active = button.dataset.subscriptionInlineType === safeValue;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
+  function getSubscriptionRewardPayloadType(group, value) {
+    const numeric = Number(String(value || '').replace(',', '.'));
+    if (!Number.isFinite(numeric) || numeric <= 0) return 'none';
+    const draftKey = group === 'bonus' ? 'bonus_reward_type' : 'discount_reward_type';
+    const type = String(state.subscriptionPlanDraft?.[draftKey] || 'percent');
+    return ['percent', 'fixed'].includes(type) ? type : 'percent';
+  }
+
+  async function saveSubscriptionPlan() {
+    const draftItems = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    const id = state.activeSubscriptionPlanId;
+    const body = {
+      title: subscriptionPlanTitleInput?.value || '',
+      description: subscriptionPlanDescriptionInput?.value || '',
+      delivery_count: subscriptionPlanDeliveryCountInput?.value || 1,
+      items_per_order: subscriptionPlanItemsPerOrderInput?.value || 4,
+      item_selection_mode: state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'exact' : (subscriptionPlanExactItemsSwitch?.checked === true ? 'exact' : 'up_to'),
+      delivery_interval_days: state.subscriptionPlanDraft?.delivery_interval_days || 1,
+      price_total: state.subscriptionPlanDraft?.subscription_mode === 'ready' ? (subscriptionPlanPriceTotalInput?.value || 0) : 0,
+      bonus_reward_type: getSubscriptionRewardPayloadType('bonus', subscriptionPlanBonusRewardValueInput?.value),
+      bonus_reward_value: subscriptionPlanBonusRewardValueInput?.value || 0,
+      settings: {
+        subscription_mode: state.subscriptionPlanDraft?.subscription_mode || 'custom',
+        day_count_mode: subscriptionPlanCustomerSelectDaysSwitch?.checked === true ? 'customer_select' : 'fixed',
+        discount_reward_type: getSubscriptionRewardPayloadType('discount', subscriptionPlanDiscountRewardValueInput?.value),
+        discount_reward_value: subscriptionPlanDiscountRewardValueInput?.value || 0,
+      },
+      sort_order: state.subscriptionPlanDraft?.sort_order || 0,
+      is_active: subscriptionPlanActiveSwitch?.checked === true,
+      items: draftItems,
+    };
+    const isNew = id === 'new' || !Number(id || 0);
+    try {
+      const json = await apiJson(isNew ? '/api/admin/subscriptions/plans' : `/api/admin/subscriptions/plans/${id}`, {
+        method: isNew ? 'POST' : 'PUT',
+        body,
+      });
+      await loadSubscriptionPlans(true);
+      const saved = json.data;
+      if (isNew) {
+        await closeTab(buildTabKey('subscription-plan', 'new'));
+      }
+      if (saved?.id) openSubscriptionPlanTab(saved.id);
+    } catch (error) {
+      console.error('Failed to save subscription plan:', error);
+      alert('Не удалось сохранить подписку');
+    }
+  }
+
+  function closeSubscriptionActiveTab() {
+    if (tabsState.activeKey) closeTab(tabsState.activeKey).catch(console.error);
+  }
+
 
   function switchView(viewName) {
     state.currentView = viewName;
@@ -22344,6 +22911,8 @@
         'bonus-cards': state.bonusProgramNameBase || 'Бонусная программа',
         'bonus-referrals': 'Рефералы',
         'bonus-settings': 'Настройки',
+        'subscription-history': 'История подписок',
+        'subscription-settings': 'Настройка подписки',
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
     }
@@ -22382,6 +22951,8 @@
             'bonus-cards': 'fas fa-gift',
             'bonus-referrals': 'fas fa-user-friends',
             'bonus-settings': 'fas fa-cog',
+            'subscription-history': 'fas fa-calendar-check',
+            'subscription-settings': 'fas fa-list-check',
           };
           icon.className = icons[viewName] || 'fas fa-users';
           if (viewName === 'important-messages') {
@@ -22391,11 +22962,26 @@
       }
     }
 
-    if (elSearchWrap) elSearchWrap.style.display = viewName === 'clients' ? '' : 'none';
-    if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
+    const isSubscriptionHistoryView = viewName === 'subscription-history';
+    if (elSearchWrap) elSearchWrap.style.display = (viewName === 'clients' || isSubscriptionHistoryView) ? '' : 'none';
+    if (elSearch) {
+      elSearch.placeholder = isSubscriptionHistoryView ? 'Поиск по подпискам' : 'Поиск клиентов';
+      elSearch.value = isSubscriptionHistoryView ? state.subscriptionSearchQuery : state.q;
+    }
+    if (elSortWrap) elSortWrap.style.display = (viewName === 'clients' || isSubscriptionHistoryView) ? '' : 'none';
+    if (elSortDropdown && isSubscriptionHistoryView) {
+      elSortDropdown.innerHTML = SUBSCRIPTION_SORT_OPTIONS.map((option) => (
+        `<button type="button" class="cl-sort-option ${state.subscriptionSort === option.value ? 'is-active' : ''}" data-sort-val="${option.value}">${escapeHtml(option.label)}</button>`
+      )).join('');
+    } else if (elSortDropdown && viewName === 'clients' && clientsSortDropdownInitialHtml) {
+      elSortDropdown.innerHTML = clientsSortDropdownInitialHtml;
+      $$("[data-sort-val]", elSortDropdown).forEach((button) => {
+        button.classList.toggle("is-active", button.dataset.sortVal === state.sort);
+      });
+    }
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
-    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings');
+    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings' || viewName === 'subscription-history');
     if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.toggle('hidden', viewName !== 'important-messages');
     
     syncBonusToolbarState();
@@ -22431,6 +23017,16 @@
       renderBonusReferralsList();
     } else if (viewName === 'bonus-settings') {
       renderBonusSettings();
+    } else if (viewName === 'subscription-history') {
+      renderSubscriptionHistory();
+      if (!state.subscriptionHistoryLoaded && !state.subscriptionHistoryLoading) {
+        loadSubscriptionHistory().catch(console.error);
+      }
+    } else if (viewName === 'subscription-settings') {
+      renderSubscriptionPlans();
+      if (!state.subscriptionPlansLoaded && !state.subscriptionPlansLoading) {
+        loadSubscriptionPlans().catch(console.error);
+      }
     } else if (viewName === 'clients') {
       maybeLoadMoreClientsOnScroll();
       ensureClientsScrollable().catch(console.error);
@@ -22445,6 +23041,8 @@
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     const isBonusSettingsView = state.currentView === 'bonus-settings';
+    const isSubscriptionHistoryView = state.currentView === 'subscription-history';
+    const isSubscriptionSettingsView = state.currentView === 'subscription-settings';
     const hasBonusReferralCardTab = tabsState.tabs.some((tab) => tab.type === 'bonus-referral-card');
     const hasBonusSettingsBrandTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-brand');
     const hasBonusSettingsCoinTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-coin');
@@ -22486,6 +23084,12 @@
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', state.currentView !== 'bonus-cards');
       if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals');
       if (bonusSettingsEmpty) bonusSettingsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-settings');
+      if (subscriptionHistoryEmpty) subscriptionHistoryEmpty.classList.toggle('hidden', state.currentView !== 'subscription-history');
+      if (subscriptionPlanEmpty) subscriptionPlanEmpty.classList.toggle('hidden', state.currentView !== 'subscription-settings');
+      if (subscriptionHistoryInfoWrap) subscriptionHistoryInfoWrap.classList.add('hidden');
+      if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.add('hidden');
+      if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.add('hidden');
+      if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.add('hidden');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
@@ -22511,6 +23115,8 @@
     const isBonusSettingsCoinTab = activeTab?.type === 'bonus-settings-coin';
     const isBonusSettingsFavoriteCategoriesTab = activeTab?.type === 'bonus-settings-favorite-categories';
     const isBonusSettingsModalsTab = activeTab?.type === 'bonus-settings-modals';
+    const isSubscriptionHistoryTab = activeTab?.type === 'subscription-history';
+    const isSubscriptionPlanTab = activeTab?.type === 'subscription-plan';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -22523,7 +23129,7 @@
       && hasClientId
       && state.currentView === 'clients';
 
-    if (isBonusCardsView || isBonusReferralsView || isBonusSettingsView) {
+    if (isBonusCardsView || isBonusReferralsView || isBonusSettingsView || isSubscriptionHistoryView || isSubscriptionSettingsView) {
       if (clientEmpty) clientEmpty.classList.add('hidden');
       if (clientInfoWrap) clientInfoWrap.classList.add('hidden');
       if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add('hidden');
@@ -22546,6 +23152,8 @@
       if (bonusSettingsEmpty) {
         bonusSettingsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-settings' || !!activeTab);
       }
+      if (subscriptionHistoryEmpty) subscriptionHistoryEmpty.classList.toggle('hidden', state.currentView !== 'subscription-history' || isSubscriptionHistoryTab);
+      if (subscriptionPlanEmpty) subscriptionPlanEmpty.classList.toggle('hidden', state.currentView !== 'subscription-settings' || isSubscriptionPlanTab);
       if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.toggle('hidden', !isBonusReferralCardTab || state.currentView !== 'bonus-referrals');
       if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.toggle('hidden', !isBonusSettingsBrandTab || state.currentView !== 'bonus-settings');
       if (bonusSettingsCoinWrap) bonusSettingsCoinWrap.classList.toggle('hidden', !isBonusSettingsCoinTab || state.currentView !== 'bonus-settings');
@@ -22554,12 +23162,22 @@
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
+      if (subscriptionHistoryInfoWrap) subscriptionHistoryInfoWrap.classList.toggle('hidden', !isSubscriptionHistoryTab || state.currentView !== 'subscription-history');
+      if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.toggle('hidden', !isSubscriptionHistoryTab || state.currentView !== 'subscription-history');
+      if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.toggle('hidden', !isSubscriptionPlanTab || state.currentView !== 'subscription-settings');
+      if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.toggle('hidden', !isSubscriptionPlanTab || state.currentView !== 'subscription-settings');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
 
     if (clientEmpty) clientEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'clients');
     if (bonusReferralsEmpty) bonusReferralsEmpty.classList.add('hidden');
+    if (subscriptionHistoryEmpty) subscriptionHistoryEmpty.classList.add('hidden');
+    if (subscriptionPlanEmpty) subscriptionPlanEmpty.classList.add('hidden');
+    if (subscriptionHistoryInfoWrap) subscriptionHistoryInfoWrap.classList.add('hidden');
+    if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.add('hidden');
+    if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.add('hidden');
+    if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.add('hidden');
     if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.add('hidden');
     if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !(isClientTab || forceClientPanelWithoutTabs));
     if (clientOrderInfoWrap) clientOrderInfoWrap.classList.toggle('hidden', !isOrderTab);
@@ -24763,6 +25381,11 @@
   }
 
   const onSearch = debounce(() => {
+    if (state.currentView === 'subscription-history') {
+      state.subscriptionSearchQuery = elSearch ? elSearch.value.trim() : "";
+      renderSubscriptionHistory();
+      return;
+    }
     state.q = elSearch ? elSearch.value.trim() : "";
     loadClients().catch(console.error);
   }, 250);
@@ -24823,6 +25446,13 @@
   function closeSearch() {
     if (elSearchWrap) elSearchWrap.classList.remove("is-open");
     if (elSearch) elSearch.value = "";
+    if (state.currentView === 'subscription-history') {
+      if (state.subscriptionSearchQuery) {
+        state.subscriptionSearchQuery = "";
+        renderSubscriptionHistory();
+      }
+      return;
+    }
     if (state.q) {
       state.q = "";
       loadClients().catch(console.error);
@@ -24868,6 +25498,15 @@
       const btn = e.target.closest("[data-sort-val]");
       if (!btn) return;
       e.stopPropagation();
+      if (state.currentView === 'subscription-history') {
+        state.subscriptionSort = btn.dataset.sortVal || "created_desc";
+        $$("[data-sort-val]", elSortDropdown).forEach((b) => {
+          b.classList.toggle("is-active", b.dataset.sortVal === state.subscriptionSort);
+        });
+        closeSortDropdown();
+        renderSubscriptionHistory();
+        return;
+      }
       state.sort = btn.dataset.sortVal || "last_desc";
       // update active state
       $$("[data-sort-val]", elSortDropdown).forEach((b) => {
@@ -24898,6 +25537,8 @@
         openDiscountEditor(null);
       } else if (state.currentView === 'important-messages') {
         openImportantMessageEditor(null);
+      } else if (state.currentView === 'subscription-settings') {
+        openSubscriptionPlanTab('new');
       } else {
         // TODO: открыть форму добавления клиента
       }
@@ -24935,6 +25576,18 @@
     });
   }
 
+  if (elSubscriptionHistoryBtn) {
+    elSubscriptionHistoryBtn.addEventListener('click', () => {
+      switchView('subscription-history');
+    });
+  }
+
+  if (elSubscriptionSettingsBtn) {
+    elSubscriptionSettingsBtn.addEventListener('click', () => {
+      switchView('subscription-settings');
+    });
+  }
+
   // Кнопка "Скидки" — переключить на view скидок
   if (elAddDiscountBtn) {
     elAddDiscountBtn.addEventListener('click', () => {
@@ -24949,6 +25602,77 @@
       if (state.currentView === 'banners') {
         updateRightPanel();
       }
+    });
+  }
+
+  if (subscriptionHistoryCloseBtn) {
+    subscriptionHistoryCloseBtn.addEventListener('click', closeSubscriptionActiveTab);
+  }
+  if (subscriptionPlanCancelBtn) {
+    subscriptionPlanCancelBtn.addEventListener('click', closeSubscriptionActiveTab);
+  }
+  if (subscriptionPlanSaveBtn) {
+    subscriptionPlanSaveBtn.addEventListener('click', () => saveSubscriptionPlan().catch(console.error));
+  }
+  if (subscriptionPlanModeTabs) {
+    subscriptionPlanModeTabs.addEventListener('click', (event) => {
+      const button = event.target.closest?.('[data-subscription-mode]');
+      if (!button) return;
+      setSubscriptionPlanMode(button.dataset.subscriptionMode);
+    });
+  }
+  if (subscriptionPlanItemsPerOrderInput) {
+    subscriptionPlanItemsPerOrderInput.addEventListener('input', renderSubscriptionItemsGrid);
+    subscriptionPlanItemsPerOrderInput.addEventListener('change', () => {
+      const normalized = getSubscriptionItemsPerOrderValue();
+      subscriptionPlanItemsPerOrderInput.value = String(normalized);
+      renderSubscriptionItemsGrid();
+    });
+  }
+  if (subscriptionPlanDeliveryCountInput) {
+    subscriptionPlanDeliveryCountInput.addEventListener('input', renderSubscriptionItemsGrid);
+    subscriptionPlanDeliveryCountInput.addEventListener('change', () => {
+      const raw = Number(subscriptionPlanDeliveryCountInput.value || 1);
+      subscriptionPlanDeliveryCountInput.value = String(Math.max(1, Math.floor(Number.isFinite(raw) ? raw : 1)));
+      renderSubscriptionItemsGrid();
+    });
+  }
+  if (subscriptionPlanCustomerSelectDaysSwitch) {
+    subscriptionPlanCustomerSelectDaysSwitch.addEventListener('change', syncSubscriptionPlanModeUi);
+  }
+  if (subscriptionPlanExactItemsSwitch) {
+    subscriptionPlanExactItemsSwitch.addEventListener('change', () => {
+      if (!state.subscriptionPlanDraft) state.subscriptionPlanDraft = createSubscriptionPlanDraft();
+      state.subscriptionPlanDraft.item_selection_mode = subscriptionPlanExactItemsSwitch.checked ? 'exact' : 'up_to';
+    });
+  }
+  if (subscriptionPlanForm) {
+    subscriptionPlanForm.addEventListener('click', (event) => {
+      const button = event.target.closest?.('[data-subscription-inline-type]');
+      if (!button) return;
+      const group = button.closest?.('[data-subscription-inline-type-group]')?.dataset?.subscriptionInlineTypeGroup;
+      syncSubscriptionInlineRewardType(group, button.dataset.subscriptionInlineType);
+    });
+  }
+  $$('.subscription-number-stepper-btn', clientRightRoot).forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = right$(`#${button.dataset.subscriptionStepTarget || ''}`);
+      if (!target) return;
+      const step = Number(button.dataset.subscriptionStep || 0);
+      const min = Number(target.getAttribute('min') || 0);
+      const maxAttr = target.getAttribute('max');
+      const max = maxAttr === null || maxAttr === '' ? Infinity : Number(maxAttr);
+      const current = Number(target.value || min || 0);
+      const next = Math.min(max, Math.max(min, Math.floor((Number.isFinite(current) ? current : min) + step)));
+      target.value = String(next);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+  if (subscriptionPlanForm) {
+    subscriptionPlanForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      saveSubscriptionPlan().catch(console.error);
     });
   }
 

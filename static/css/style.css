@@ -31883,3 +31883,53 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
 .bonus-level-favorite-categories-pill.is-empty:hover{border-color:var(--color-primary);background:var(--primary-10);}
 .bonus-level-favorite-categories-plus i{color:var(--color-text-muted);font-size:14px;}
 .bonus-level-favorite-categories-pill.is-empty:hover .bonus-level-favorite-categories-plus i{color:var(--color-primary);}
+
+.subscription-detail-grid{display:grid;gap:10px;}
+.subscription-detail-grid>div{display:flex;justify-content:space-between;gap:12px;}
+.subscription-detail-grid b,.subscription-detail-grid span{font-size:13px;}
+.subscription-json-preview{max-height:180px;overflow:auto;margin:0;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface-muted);font-size:12px;white-space:pre-wrap;}
+.subscription-delivery-list{display:grid;gap:8px;}
+.subscription-delivery-row{display:grid;grid-template-columns:32px 1fr;gap:4px 10px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;}
+.subscription-delivery-row small{color:var(--muted);}
+.subscription-items-json{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.client-info-panel #clientInfoBody:has(#subscriptionPlanEditorWrap:not(.hidden)){padding:0;}
+.subscription-plan-editor{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;height:100%;padding:0;}
+.subscription-plan-editor.hidden{display:none;}
+.subscription-plan-editor .subscription-plan-form{flex:1 1 auto;min-height:0;overflow:auto;padding:28px 22px 96px;}
+.subscription-plan-editor>.panel-footer{margin-top:auto;flex:0 0 auto;padding:14px 22px 18px;border-top:none;background:var(--color-surface);}
+.subscription-footer-close{width:54px;min-width:54px;height:54px;padding:0;border-radius:50%;}
+.subscription-footer-close i{font-size:18px;}
+.subscription-mode-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0 10px;}
+.subscription-mode-tab{height:42px;border:1px solid var(--color-border);border-radius:999px;background:var(--color-surface-2);color:var(--color-text);font-weight:800;cursor:pointer;}
+.subscription-mode-tab.is-active{border-color:var(--color-primary);background:var(--primary-10);color:var(--color-primary);}
+.subscription-plan-section{border:1px dashed var(--color-border);border-radius:10px;padding:12px;margin:4px 0 10px;background:var(--color-surface-2);}
+.subscription-plan-section-title{font-weight:800;margin-bottom:6px;}
+.subscription-ready-items-empty{font-size:13px;color:var(--color-text-muted);}
+.subscription-items-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px;}
+.subscription-items-grid:has(.subscription-items-day){display:grid;grid-template-columns:1fr;gap:12px;}
+.subscription-items-day{display:grid;gap:10px;}
+.subscription-items-day-title{font-weight:800;}
+.subscription-items-day-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+.subscription-item-slot{aspect-ratio:1/1;border:1px dashed var(--color-border);border-radius:10px;background:var(--color-surface);color:var(--color-primary);font-size:22px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+.subscription-item-slot:hover{border-color:var(--color-primary);background:var(--primary-10);}
+.subscription-items-total{width:100%;height:42px;margin-top:12px;border:1px solid var(--color-border);border-radius:999px;background:var(--color-surface);color:var(--color-text);font-weight:800;cursor:pointer;}
+.subscription-number-stepper{position:relative;display:inline-flex;align-items:center;}
+.subscription-number-stepper .subscription-number-input{padding-right:32px;}
+.subscription-number-input::-webkit-outer-spin-button,.subscription-number-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.subscription-number-input{appearance:textfield;-moz-appearance:textfield;}
+.subscription-number-stepper-buttons{position:absolute;right:8px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;opacity:.42;transition:opacity var(--dur-fast) var(--ease-smooth);}
+.subscription-number-stepper:hover .subscription-number-stepper-buttons,.subscription-number-stepper:focus-within .subscription-number-stepper-buttons{opacity:1;}
+.subscription-number-stepper-btn{width:18px;height:13px;border:0;background:transparent;color:var(--color-text-muted);display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer;line-height:1;}
+.subscription-number-stepper-btn:hover{color:var(--color-primary);}
+.subscription-number-stepper-btn i{font-size:12px;}
+.subscription-inline-rewards-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end;}
+.subscription-inline-reward-field{display:grid;gap:6px;font-size:14px;color:var(--color-text);}
+.subscription-inline-reward-field>span:first-child{font-weight:700;}
+.subscription-inline-value-control{min-height:44px;padding-left:12px;}
+.subscription-inline-value-control .discount-inline-value-type{width:30px;height:30px;min-width:30px;}
+.subscription-price-field{margin-top:10px;}
+.subscription-description-control{align-items:flex-start;border-radius:18px;padding-top:8px;padding-bottom:8px;}
+.subscription-description-control textarea{min-height:72px;resize:vertical;line-height:1.35;}
+#subscriptionPlanLimitsRow{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end;}
+.subscription-number-stepper{width:100%;}
+.subscription-number-stepper .subscription-number-input{width:100%;height:36px;border:none;background:transparent;box-shadow:none;padding-left:0;}
