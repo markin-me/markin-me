@@ -2827,6 +2827,7 @@
     activeSubscription: null,
     activeSubscriptionPlanId: null,
     subscriptionPlanDraft: null,
+    subscriptionItemPicker: null,
     subscriptionSearchQuery: '',
     subscriptionSort: 'created_desc',
     bonusFlippedLevelIds: new Set(),
@@ -22795,6 +22796,57 @@
     return Math.min(9, Math.max(1, Math.floor(raw)));
   }
 
+  function getSubscriptionDraftItem(dayIndex, slotIndex) {
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    const day = Math.max(1, Number(dayIndex || 1));
+    const slot = Math.max(1, Number(slotIndex || 1));
+    return items.find((item) => (
+      Number(item?.day_index || item?.day || 1) === day
+      && Number(item?.slot_index || item?.slot || 1) === slot
+    )) || null;
+  }
+
+  function setSubscriptionDraftItem(dayIndex, slotIndex, product) {
+    if (!state.subscriptionPlanDraft) state.subscriptionPlanDraft = createSubscriptionPlanDraft();
+    const day = Math.max(1, Number(dayIndex || 1));
+    const slot = Math.max(1, Number(slotIndex || 1));
+    const items = Array.isArray(state.subscriptionPlanDraft.items) ? state.subscriptionPlanDraft.items.slice() : [];
+    const productId = Number(product?.id || product?.product_id || 0);
+    if (!(productId > 0)) return;
+    const photos = Array.isArray(product?.photos) ? product.photos.filter(Boolean) : [];
+    const nextItem = {
+      type: 'product',
+      product_id: productId,
+      id: productId,
+      day_index: day,
+      slot_index: slot,
+      title: String(product?.name || product?.title || `Товар #${productId}`).trim(),
+      photo: photos[0] || '',
+      price: Number(product?.price || 0),
+      sku: String(product?.sku || '').trim(),
+    };
+    const index = items.findIndex((item) => (
+      Number(item?.day_index || item?.day || 1) === day
+      && Number(item?.slot_index || item?.slot || 1) === slot
+    ));
+    if (index >= 0) items[index] = nextItem;
+    else items.push(nextItem);
+    state.subscriptionPlanDraft.items = items;
+  }
+
+  function subscriptionDayTotal(dayIndex) {
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    const day = Math.max(1, Number(dayIndex || 1));
+    return items
+      .filter((item) => Number(item?.day_index || item?.day || 1) === day)
+      .reduce((sum, item) => sum + Math.max(0, Number(item?.price || 0)), 0);
+  }
+
+  function subscriptionItemsTotal() {
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    return items.reduce((sum, item) => sum + Math.max(0, Number(item?.price || 0)), 0);
+  }
+
   function renderSubscriptionItemsGrid() {
     if (!subscriptionItemsGrid) return;
     const count = getSubscriptionItemsPerOrderValue();
@@ -22803,11 +22855,26 @@
     subscriptionItemsGrid.innerHTML = '';
     const renderSlots = (root, dayIndex = null) => {
       for (let index = 0; index < count; index += 1) {
+        const slotIndex = index + 1;
+        const item = getSubscriptionDraftItem(dayIndex || 1, slotIndex);
         const slot = document.createElement('button');
-        slot.className = 'subscription-item-slot';
+        slot.className = `subscription-item-slot${item ? ' is-filled' : ''}`;
         slot.type = 'button';
-        slot.setAttribute('aria-label', dayIndex ? `День ${dayIndex}, товар ${index + 1}` : `Товар ${index + 1}`);
-        slot.innerHTML = '<i class="fas fa-plus"></i>';
+        slot.dataset.subscriptionItemSlot = '1';
+        slot.dataset.dayIndex = String(dayIndex || 1);
+        slot.dataset.slotIndex = String(slotIndex);
+        slot.setAttribute('aria-label', dayIndex ? `День ${dayIndex}, товар ${slotIndex}` : `Товар ${slotIndex}`);
+        if (item) {
+          const title = String(item.title || item.name || `Товар #${item.product_id || item.id || ''}`).trim();
+          const photo = String(item.photo || '').trim();
+          slot.innerHTML = `
+            ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(title)}" />` : '<span><i class="fas fa-utensils"></i></span>'}
+            <b>${escapeHtml(title)}</b>
+            <small>${escapeHtml(money(item.price || 0))}</small>
+          `;
+        } else {
+          slot.innerHTML = '<i class="fas fa-plus"></i>';
+        }
         root.appendChild(slot);
       }
     };
@@ -22815,7 +22882,7 @@
       for (let day = 1; day <= days; day += 1) {
         const group = document.createElement('div');
         group.className = 'subscription-items-day';
-        group.innerHTML = `<div class="subscription-items-day-title">День ${day}</div><div class="subscription-items-day-grid"></div><button class="subscription-items-total" type="button">Сумма товаров: 0 ₽</button>`;
+        group.innerHTML = `<div class="subscription-items-day-title">День ${day}</div><div class="subscription-items-day-grid"></div><button class="subscription-items-total" type="button">Сумма товаров: ${escapeHtml(money(subscriptionDayTotal(day)))}</button>`;
         renderSlots(group.querySelector('.subscription-items-day-grid'), day);
         subscriptionItemsGrid.appendChild(group);
       }
@@ -22824,8 +22891,172 @@
     }
     if (subscriptionItemsTotalBtn) {
       subscriptionItemsTotalBtn.classList.toggle('hidden', mode === 'ready');
-      subscriptionItemsTotalBtn.textContent = 'Сумма товаров: 0 ₽';
+      subscriptionItemsTotalBtn.textContent = `Сумма товаров: ${money(subscriptionItemsTotal())}`;
     }
+  }
+
+  function closeSubscriptionItemPicker() {
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
+    if (backdrop) backdrop.classList.remove('subscription-item-picker-overlay');
+    state.subscriptionItemPicker = null;
+    window.AdminBenefitsModal?.hide();
+  }
+
+  function getStorefrontCatalogCategories() {
+    return (Array.isArray(state.catalogCategories) ? state.catalogCategories : [])
+      .filter((category) => {
+        if (String(category?.code || '').trim() === 'all') return false;
+        if (Number(category?.is_active ?? 1) !== 1) return false;
+        if (Object.prototype.hasOwnProperty.call(category || {}, 'parent_id') && Number(category.parent_id || 0) > 0) return false;
+        if (Object.prototype.hasOwnProperty.call(category || {}, 'site_visibility') && Number(category.site_visibility) !== 1) return false;
+        return Number(category?.id || 0) > 0;
+      });
+  }
+
+  function getStorefrontCatalogProducts() {
+    return (Array.isArray(state.catalogProducts) ? state.catalogProducts : [])
+      .filter((product) => {
+        if (Number(product?.is_active ?? 1) !== 1) return false;
+        if (Object.prototype.hasOwnProperty.call(product || {}, 'site_visibility') && Number(product.site_visibility) !== 1) return false;
+        return Number(product?.id || 0) > 0;
+      });
+  }
+
+  function renderSubscriptionItemPickerCategories(shell) {
+    if (!shell) return;
+    const { title } = getClientBenefitsOverlayElements();
+    if (title) title.textContent = 'Категории';
+    const categories = getStorefrontCatalogCategories();
+    shell.innerHTML = `
+      <div class="subscription-picker-category-list">
+        ${categories.length ? categories.map((category) => {
+          const categoryId = Number(category?.id || 0);
+          const title = String(category?.title || `Категория #${categoryId}`).trim();
+          const icon = String(category?.icon || '').trim();
+          const media = icon
+            ? (isDiscountEntityImageUrl(icon) ? `<img src="${escapeHtml(icon)}" alt="${escapeHtml(title)}">` : `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`)
+            : '<i class="fas fa-layer-group" aria-hidden="true"></i>';
+          return `
+            <button type="button" class="subscription-picker-category-card" data-subscription-picker-category="${categoryId}">
+              <span>${media}</span>
+              <b>${escapeHtml(title)}</b>
+            </button>
+          `;
+        }).join('') : '<div class="option-picker-empty">Категории для витрины не найдены</div>'}
+      </div>
+    `;
+  }
+
+  function renderSubscriptionItemPickerProducts(shell, category) {
+    if (!shell) return;
+    const products = getStorefrontCatalogProducts();
+    const selectedId = Number(state.subscriptionItemPicker?.selectedProduct?.id || state.subscriptionItemPicker?.selectedProduct?.product_id || 0);
+    const categoryTitle = String(category?.title || 'Товары').trim();
+    const { title } = getClientBenefitsOverlayElements();
+    if (title) title.textContent = categoryTitle;
+    shell.innerHTML = `
+      <div class="subscription-picker-products-head">
+        <button type="button" class="subscription-picker-back" data-subscription-picker-back aria-label="Назад">
+          <i class="fas fa-arrow-left"></i>
+        </button>
+      </div>
+      <div class="subscription-picker-product-list">
+        ${products.length ? products.map((product) => {
+          const productId = Number(product?.id || 0);
+          const name = String(product?.name || product?.title || `Товар #${productId}`).trim();
+          const photos = Array.isArray(product?.photos) ? product.photos.filter(Boolean) : [];
+          const photo = photos[0] || '';
+          const description = String(product?.description_short || product?.description || product?.composition || '').trim();
+          const hasConfig = Number(product?.has_variants || 0) === 1 || Number(product?.has_changeable_composition || 0) === 1;
+          const isSelected = productId === selectedId;
+          return `
+            <button type="button" class="subscription-picker-product-card${isSelected ? ' is-selected' : ''}" data-subscription-picker-product="${productId}">
+              <span class="subscription-picker-product-photo">
+                ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(name)}" />` : '<i class="fas fa-image"></i>'}
+              </span>
+              <span class="subscription-picker-product-main">
+                <b>${escapeHtml(name)}</b>
+                ${description ? `<small>${escapeHtml(description)}</small>` : ''}
+                <strong>${escapeHtml(money(product?.price || 0))}</strong>
+              </span>
+              <span class="subscription-picker-product-actions">
+                <span class="subscription-picker-gear${hasConfig ? '' : ' is-disabled'}"><i class="fas fa-cog"></i></span>
+                <span class="subscription-picker-check"><i class="fas fa-check"></i></span>
+              </span>
+            </button>
+          `;
+        }).join('') : '<div class="option-picker-empty">Товары в этой категории не найдены</div>'}
+      </div>
+    `;
+  }
+
+  async function openSubscriptionItemPicker(dayIndex, slotIndex) {
+    const mode = state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'ready' : 'custom';
+    state.subscriptionItemPicker = {
+      dayIndex: Math.max(1, Number(dayIndex || 1)),
+      slotIndex: Math.max(1, Number(slotIndex || 1)),
+      mode,
+      categoryId: null,
+      selectedProduct: null,
+    };
+    await loadCatalogCategories();
+
+    window.AdminBenefitsModal?.show({
+      title: 'Категории',
+      showBack: false,
+      showModeToggle: false,
+      onClose: closeSubscriptionItemPicker,
+    });
+
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) backdrop.classList.add('bonus-range-editor-overlay');
+    if (backdrop) backdrop.classList.add('subscription-item-picker-overlay');
+    body.innerHTML = '';
+
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: false });
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement('div');
+    shell.className = 'bonus-range-editor-modal subscription-item-picker-modal';
+    frame.scrollEl.appendChild(shell);
+    renderSubscriptionItemPickerCategories(shell);
+
+    shell.addEventListener('click', async (event) => {
+      const backBtn = event.target.closest?.('[data-subscription-picker-back]');
+      if (backBtn) {
+        state.subscriptionItemPicker.categoryId = null;
+        state.subscriptionItemPicker.selectedProduct = null;
+        renderSubscriptionItemPickerCategories(shell);
+        return;
+      }
+      const categoryBtn = event.target.closest?.('[data-subscription-picker-category]');
+      if (categoryBtn) {
+        const categoryId = Number(categoryBtn.dataset.subscriptionPickerCategory || 0);
+        const category = getStorefrontCatalogCategories().find((item) => Number(item.id) === categoryId) || null;
+        state.subscriptionItemPicker.categoryId = categoryId;
+        state.subscriptionItemPicker.selectedProduct = null;
+        shell.innerHTML = '<div class="option-picker-empty">Загрузка товаров...</div>';
+        await loadCatalogProducts(categoryId);
+        renderSubscriptionItemPickerProducts(shell, category);
+        return;
+      }
+      const productBtn = event.target.closest?.('[data-subscription-picker-product]');
+      if (productBtn) {
+        const productId = Number(productBtn.dataset.subscriptionPickerProduct || 0);
+        const product = getStorefrontCatalogProducts().find((item) => Number(item.id) === productId) || null;
+        if (!product) return;
+        state.subscriptionItemPicker.selectedProduct = product;
+        const picker = state.subscriptionItemPicker || {};
+        if (picker.mode === 'ready') {
+          setSubscriptionDraftItem(picker.dayIndex, picker.slotIndex, product);
+          renderSubscriptionItemsGrid();
+        }
+        closeSubscriptionItemPicker();
+      }
+    });
   }
 
   function syncSubscriptionInlineRewardType(group, value) {
@@ -25648,6 +25879,12 @@
   }
   if (subscriptionPlanForm) {
     subscriptionPlanForm.addEventListener('click', (event) => {
+      const slot = event.target.closest?.('[data-subscription-item-slot]');
+      if (slot) {
+        event.preventDefault();
+        openSubscriptionItemPicker(slot.dataset.dayIndex, slot.dataset.slotIndex).catch(console.error);
+        return;
+      }
       const button = event.target.closest?.('[data-subscription-inline-type]');
       if (!button) return;
       const group = button.closest?.('[data-subscription-inline-type-group]')?.dataset?.subscriptionInlineTypeGroup;
