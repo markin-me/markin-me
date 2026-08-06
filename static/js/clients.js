@@ -22595,6 +22595,25 @@
     return ((red * 299 + green * 587 + blue * 114) / 1000) > 160 ? '#172033' : '#ffffff';
   }
 
+  function subscriptionPlanBadgeNumber(value) {
+    const number = Math.max(0, Number(value || 0));
+    return number.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+  }
+
+  function subscriptionPlanDiscountBadge(plan) {
+    const type = String(plan?.settings?.discount_reward_type || 'none');
+    const value = Math.max(0, Number(plan?.settings?.discount_reward_value || 0));
+    if (!(value > 0) || !['percent', 'fixed'].includes(type)) return '';
+    return type === 'fixed' ? `-${subscriptionPlanBadgeNumber(value)} ₽` : `-${subscriptionPlanBadgeNumber(value)}%`;
+  }
+
+  function subscriptionPlanBonusBadge(plan) {
+    const type = String(plan?.bonus_reward_type || 'none');
+    const value = Math.max(0, Number(plan?.bonus_reward_value || 0));
+    if (!(value > 0) || !['percent', 'fixed'].includes(type)) return '';
+    return type === 'fixed' ? `+${subscriptionPlanBadgeNumber(value)} Б` : `+${subscriptionPlanBadgeNumber(value)}% Б`;
+  }
+
   function renderSubscriptionPlans() {
     if (!elSubscriptionPlansList) return;
     elSubscriptionPlansList.innerHTML = '';
@@ -22609,14 +22628,22 @@
       const color = /^#[0-9a-f]{6}$/i.test(String(plan?.theme_color || '')) ? String(plan.theme_color) : '#ff6b00';
       const textColor = subscriptionThemeTextColor(color);
       const iconUrl = String(plan?.icon_url || '').trim();
+      const discountBadge = subscriptionPlanDiscountBadge(plan);
+      const bonusBadge = subscriptionPlanBonusBadge(plan);
       row.className = `order-row subscription-plan-list-row ${tabsState.activeKey === tabKey ? 'is-active' : ''}`;
       row.setAttribute('role', 'button');
       row.setAttribute('tabindex', '0');
       row.innerHTML = `
-        <button class="subscription-plan-client-pill" type="button" style="--subscription-color:${escapeHtml(color)};--subscription-text:${escapeHtml(textColor)}">
-          ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="" />` : '<i class="fas fa-calendar-check"></i>'}
-          <strong>${escapeHtml(plan.title || 'Подписка')}</strong>
-        </button>
+        <span class="subscription-plan-client-preview">
+          <button class="subscription-plan-client-pill" type="button" style="--subscription-color:${escapeHtml(color)};--subscription-text:${escapeHtml(textColor)}">
+            ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="" />` : '<i class="fas fa-calendar-check"></i>'}
+            <strong>${escapeHtml(plan.title || 'Подписка')}</strong>
+          </button>
+          ${(discountBadge || bonusBadge) ? `<span class="subscription-plan-client-badges">
+            ${discountBadge ? `<span class="subscription-picker-product-badge subscription-plan-client-badge">${escapeHtml(discountBadge)}</span>` : ''}
+            ${bonusBadge ? `<span class="subscription-picker-product-badge subscription-plan-client-badge">${escapeHtml(bonusBadge)}</span>` : ''}
+          </span>` : ''}
+        </span>
         <span class="subscription-plan-list-type">${escapeHtml(subscriptionModeText(plan))}</span>
         <label class="switch subscription-plan-list-status" title="${plan.is_active ? 'Активна' : 'Неактивна'}">
           <input class="switch-input" type="checkbox" data-subscription-plan-status="${Number(plan.id || 0)}" ${plan.is_active ? 'checked' : ''} />
