@@ -9,6 +9,11 @@ function strOrNull(value) {
   return text || null;
 }
 
+function themeColor(value) {
+  const color = String(value || '').trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(color) ? color : '#ff6b00';
+}
+
 function boolFlag(value, fallback = true) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -116,9 +121,12 @@ function normalizePlanPayload(body = {}) {
   settings.day_count_mode = enumValue(settings.day_count_mode, ['fixed', 'customer_select'], 'fixed');
   settings.discount_reward_type = enumValue(settings.discount_reward_type, ['none', 'percent', 'fixed'], 'none');
   settings.discount_reward_value = nonNegativeNumber(settings.discount_reward_value, 0);
+  settings.old_price_total = nonNegativeNumber(settings.old_price_total, 0);
   return {
     title: title.slice(0, 150),
     description: strOrNull(body.description),
+    icon_url: strOrNull(body.icon_url),
+    theme_color: themeColor(body.theme_color),
     delivery_count: positiveInt(body.delivery_count, 1),
     items_per_order: boundedInt(body.items_per_order, 1, 9, 4),
     item_selection_mode: enumValue(body.item_selection_mode, ['exact', 'up_to'], 'up_to'),
@@ -138,7 +146,7 @@ module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
 
   async function fetchPlan(tenantId, storeId, id) {
     const [[row]] = await db.query(
-      `SELECT id, tenant_id, store_id, title, description, delivery_count,
+      `SELECT id, tenant_id, store_id, title, description, icon_url, theme_color, delivery_count,
               items_per_order, item_selection_mode, delivery_interval_days,
               price_total, bonus_reward_type, bonus_reward_value,
               items_json, settings_json, is_active, sort_order, created_at, updated_at
@@ -155,7 +163,7 @@ module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const [rows] = await db.query(
-        `SELECT id, tenant_id, store_id, title, description, delivery_count,
+        `SELECT id, tenant_id, store_id, title, description, icon_url, theme_color, delivery_count,
                 items_per_order, item_selection_mode, delivery_interval_days,
                 price_total, bonus_reward_type, bonus_reward_value,
                 items_json, settings_json, is_active, sort_order, created_at, updated_at
@@ -178,14 +186,16 @@ module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
       const payload = normalizePlanPayload(req.body);
       const [result] = await db.query(
         `INSERT INTO mkt_subscription_plans
-          (tenant_id, store_id, title, description, delivery_count, items_per_order, item_selection_mode,
+          (tenant_id, store_id, title, description, icon_url, theme_color, delivery_count, items_per_order, item_selection_mode,
            delivery_interval_days, price_total, bonus_reward_type, bonus_reward_value, items_json, settings_json, is_active, sort_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           tenantId,
           storeId,
           payload.title,
           payload.description,
+          payload.icon_url,
+          payload.theme_color,
           payload.delivery_count,
           payload.items_per_order,
           payload.item_selection_mode,
@@ -216,7 +226,7 @@ module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
       const payload = normalizePlanPayload(req.body);
       const [result] = await db.query(
         `UPDATE mkt_subscription_plans
-            SET title = ?, description = ?, delivery_count = ?, items_per_order = ?,
+             SET title = ?, description = ?, icon_url = ?, theme_color = ?, delivery_count = ?, items_per_order = ?,
                 item_selection_mode = ?, delivery_interval_days = ?, price_total = ?,
                 bonus_reward_type = ?, bonus_reward_value = ?, items_json = ?,
                 settings_json = ?, is_active = ?, sort_order = ?, updated_at = NOW()
@@ -224,6 +234,8 @@ module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
         [
           payload.title,
           payload.description,
+          payload.icon_url,
+          payload.theme_color,
           payload.delivery_count,
           payload.items_per_order,
           payload.item_selection_mode,
@@ -246,6 +258,27 @@ module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
     } catch (err) {
       console.error('PUT /api/admin/subscriptions/plans/:id failed:', err);
       res.status(err.statusCode || 500).json({ ok: false, error: err.message || 'SUBSCRIPTION_PLAN_UPDATE_ERROR' });
+    }
+  });
+
+  router.patch('/plans/:id/status', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id || 0);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok: false, error: 'INVALID_PLAN_ID' });
+      const isActive = boolFlag(req.body?.is_active, false) ? 1 : 0;
+      const [result] = await db.query(
+        `UPDATE mkt_subscription_plans
+            SET is_active = ?, updated_at = NOW()
+          WHERE tenant_id = ? AND store_id = ? AND id = ?`,
+        [isActive, tenantId, storeId, id]
+      );
+      if (!result.affectedRows) return res.status(404).json({ ok: false, error: 'PLAN_NOT_FOUND' });
+      res.json({ ok: true, data: await fetchPlan(tenantId, storeId, id) });
+    } catch (err) {
+      console.error('PATCH /api/admin/subscriptions/plans/:id/status failed:', err);
+      res.status(err.statusCode || 500).json({ ok: false, error: err.message || 'SUBSCRIPTION_PLAN_STATUS_ERROR' });
     }
   });
 

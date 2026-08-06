@@ -88,8 +88,23 @@
             <div class="bonus-tariff-settings-body">
               <label class="subscription-inline-reward-field">
                 <span>Название</span>
-                <span class="discount-inline-value-control subscription-inline-value-control">
-                  <input class="control discount-inline-value-input" id="subscriptionPlanTitleInput" type="text" autocomplete="off" />
+                <span class="subscription-plan-appearance-row">
+                  <button class="subscription-plan-icon-upload" id="subscriptionPlanIconButton" type="button" aria-label="Загрузить иконку подписки">
+                    <img class="hidden" id="subscriptionPlanIconPreview" alt="" />
+                    <i class="fas fa-calendar-check" id="subscriptionPlanIconPlaceholder"></i>
+                  </button>
+                  <span class="settings-icon-popover hidden" id="subscriptionPlanIconPopover">
+                    <button type="button" data-subscription-icon-action="upload"><i class="fas fa-upload"></i> Загрузить</button>
+                    <button type="button" data-subscription-icon-action="delete"><i class="fas fa-trash"></i> Удалить</button>
+                  </span>
+                  <input class="hidden" id="subscriptionPlanIconInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+                  <span class="discount-inline-value-control subscription-inline-value-control subscription-plan-title-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanTitleInput" type="text" autocomplete="off" />
+                  </span>
+                  <span class="subscription-plan-color-control" aria-label="Цвет подписки">
+                    <input id="subscriptionPlanThemeColorInput" type="color" value="#ff6b00" />
+                    <span id="subscriptionPlanThemeColorValue">#ff6b00</span>
+                  </span>
                 </span>
               </label>
               <label class="subscription-inline-reward-field">
@@ -169,12 +184,20 @@
                   </span>
                 </label>
               </div>
-              <label class="subscription-inline-reward-field subscription-price-field" id="subscriptionPlanPriceRow">
-                <span>Цена</span>
-                <span class="discount-inline-value-control subscription-inline-value-control">
-                  <input class="control discount-inline-value-input" id="subscriptionPlanPriceTotalInput" type="number" min="0" step="0.01" inputmode="decimal" />
-                </span>
-              </label>
+              <div class="subscription-price-fields" id="subscriptionPlanPriceRow">
+                <label class="subscription-inline-reward-field subscription-price-field">
+                  <span>Цена</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanPriceTotalInput" type="number" min="0" step="0.01" inputmode="decimal" />
+                  </span>
+                </label>
+                <label class="subscription-inline-reward-field subscription-price-field">
+                  <span>Старая цена</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanOldPriceTotalInput" type="number" min="0" step="0.01" inputmode="decimal" readonly />
+                  </span>
+                </label>
+              </div>
               <section class="subscription-plan-section" id="subscriptionItemsSection">
                 <div class="subscription-plan-section-title">Товары подписки</div>
                 <div class="subscription-ready-items-empty" id="subscriptionItemsHint">Товары будут выбраны администратором из каталога.</div>
