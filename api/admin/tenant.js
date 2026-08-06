@@ -3072,14 +3072,32 @@ async function fetchStoreWithHours(tenantId, storeId) {
         'android_icon_url',
         'site_menu_item_icon',
         'bonus_modal_image',
-        'important_message_image'
+        'important_message_image',
+        'subscription_storefront_image',
+        'subscription_storefront_button_icon'
       ]);
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
       }
 
       const originalPath = file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), file.filename);
-      const convertedPath = await helpers.ensureWebpVariant(originalPath);
+      let conversionOptions;
+      if (field === 'subscription_storefront_image' || field === 'subscription_storefront_button_icon') {
+        const [[imageSettings]] = await db.query(
+          'SELECT img_webp_quality, img_thumb_width, img_main_width, img_webp_aggressive FROM ten_tenants WHERE id=? LIMIT 1',
+          [tenantId]
+        );
+        conversionOptions = {
+          quality: imageSettings?.img_webp_quality ?? 82,
+          width: field === 'subscription_storefront_button_icon'
+            ? (imageSettings?.img_thumb_width ?? 480)
+            : (imageSettings?.img_main_width ?? 1200),
+          aggressive: Number(imageSettings?.img_webp_aggressive || 0) === 1,
+          recompress: true,
+          forceUnique: true,
+        };
+      }
+      const convertedPath = await helpers.ensureWebpVariant(originalPath, conversionOptions);
       if (!convertedPath || !/\.webp$/i.test(String(convertedPath))) {
         await removeTenantUploadFile(originalPath);
         return res.status(500).json({ ok: false, error: 'WEBP_CONVERSION_FAILED' });
@@ -3096,7 +3114,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const url = `/static/uploads/tenants/${tenantId}/${path.basename(convertedPath)}`;
 
-      if (field === 'site_menu_item_icon' || field === 'bonus_modal_image' || field === 'important_message_image') {
+      if (field === 'site_menu_item_icon' || field === 'bonus_modal_image' || field === 'important_message_image' || field === 'subscription_storefront_image' || field === 'subscription_storefront_button_icon') {
         const [rows] = await db.query(
           'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
           [tenantId]

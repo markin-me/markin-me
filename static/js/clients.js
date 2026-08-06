@@ -2078,6 +2078,7 @@
   const elBonusEditSaveBtn = $("#clientsBonusEditSaveBtn");
   const elBonusEditCancelBtn = $("#clientsBonusEditCancelBtn");
   const elAddBtn = $("#clientsAddBtn");
+  const elSubscriptionGlobalSettingsBtn = $("#subscriptionGlobalSettingsBtn");
   const elOpenFilterCategoriesBtn = $("#openFilterCategoriesBtn");
   const elBonusCardsBtn = $("#bonusCardsBtn");
   const elBonusPaidTariffBtn = $("#bonusPaidTariffBtn");
@@ -2385,6 +2386,36 @@
   const subscriptionHistoryCloseBtn = right$("#subscriptionHistoryCloseBtn");
   const subscriptionPlanEditorWrap = right$("#subscriptionPlanEditorWrap");
   const subscriptionPlanEditorFooter = right$("#subscriptionPlanEditorFooter");
+  const subscriptionGlobalSettingsWrap = right$("#subscriptionGlobalSettingsWrap");
+  const subscriptionGlobalSettingsFooter = right$("#subscriptionGlobalSettingsFooter");
+  const subscriptionGlobalSettingsCancelBtn = right$("#subscriptionGlobalSettingsCancelBtn");
+  const subscriptionGlobalSettingsSaveBtn = right$("#subscriptionGlobalSettingsSaveBtn");
+  const subscriptionGlobalSettingsForm = right$("#subscriptionGlobalSettingsForm");
+  const subscriptionStorefrontPreview = right$("#subscriptionStorefrontPreview");
+  const subscriptionStorefrontPreviewTitle = right$("#subscriptionStorefrontPreviewTitle");
+  const subscriptionStorefrontPreviewDescription = right$("#subscriptionStorefrontPreviewDescription");
+  const subscriptionStorefrontPreviewButton = right$("#subscriptionStorefrontPreviewButton");
+  const subscriptionStorefrontPreviewButtonText = right$("#subscriptionStorefrontPreviewButtonText");
+  const subscriptionStorefrontPreviewButtonIcon = right$("#subscriptionStorefrontPreviewButtonIcon");
+  const subscriptionStorefrontPreviewChevron = right$("#subscriptionStorefrontPreviewChevron");
+  const subscriptionStorefrontPreviewImage = right$("#subscriptionStorefrontPreviewImage");
+  const subscriptionStorefrontActiveSwitch = right$("#subscriptionStorefrontActiveSwitch");
+  const subscriptionStorefrontBackgroundColorInput = right$("#subscriptionStorefrontBackgroundColorInput");
+  const subscriptionStorefrontBackgroundColorValue = right$("#subscriptionStorefrontBackgroundColorValue");
+  const subscriptionStorefrontTitleInput = right$("#subscriptionStorefrontTitleInput");
+  const subscriptionStorefrontTitleSizeInput = right$("#subscriptionStorefrontTitleSizeInput");
+  const subscriptionStorefrontTitleColorInput = right$("#subscriptionStorefrontTitleColorInput");
+  const subscriptionStorefrontTitleColorValue = right$("#subscriptionStorefrontTitleColorValue");
+  const subscriptionStorefrontDescriptionInput = right$("#subscriptionStorefrontDescriptionInput");
+  const subscriptionStorefrontImageButton = right$("#subscriptionStorefrontImageButton");
+  const subscriptionStorefrontImageDeleteBtn = right$("#subscriptionStorefrontImageDeleteBtn");
+  const subscriptionStorefrontImageInput = right$("#subscriptionStorefrontImageInput");
+  const subscriptionStorefrontButtonTextInput = right$("#subscriptionStorefrontButtonTextInput");
+  const subscriptionStorefrontButtonColorInput = right$("#subscriptionStorefrontButtonColorInput");
+  const subscriptionStorefrontButtonColorValue = right$("#subscriptionStorefrontButtonColorValue");
+  const subscriptionStorefrontButtonIconButton = right$("#subscriptionStorefrontButtonIconButton");
+  const subscriptionStorefrontButtonIconDeleteBtn = right$("#subscriptionStorefrontButtonIconDeleteBtn");
+  const subscriptionStorefrontButtonIconInput = right$("#subscriptionStorefrontButtonIconInput");
   const subscriptionPlanForm = right$("#subscriptionPlanForm");
   const subscriptionPlanTitleInput = right$("#subscriptionPlanTitleInput");
   const subscriptionPlanIconButton = right$("#subscriptionPlanIconButton");
@@ -2832,6 +2863,9 @@
     subscriptionPlans: [],
     subscriptionPlansLoaded: false,
     subscriptionPlansLoading: false,
+    subscriptionStorefrontSettings: null,
+    subscriptionStorefrontSettingsDraft: null,
+    subscriptionStorefrontSettingsLoading: false,
     activeSubscriptionId: null,
     activeSubscription: null,
     activeSubscriptionPlanId: null,
@@ -3931,7 +3965,7 @@
         : isSubscriptionHistoryView
           ? tabsState.tabs.filter((tab) => tab.type === 'subscription-history')
         : isSubscriptionSettingsView
-          ? tabsState.tabs.filter((tab) => tab.type === 'subscription-plan')
+          ? tabsState.tabs.filter((tab) => tab.type === 'subscription-plan' || tab.type === 'subscription-global-settings')
         : tabsState.tabs;
     const hasVisibleTabs = visibleTabs.length > 0;
     clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isHomeBtnView);
@@ -4000,7 +4034,7 @@
             ? 'bonus-settings'
           : tab.type === 'subscription-history'
             ? 'subscription-history'
-          : tab.type === 'subscription-plan'
+          : tab.type === 'subscription-plan' || tab.type === 'subscription-global-settings'
             ? 'subscription-settings'
           : 'clients';
     if (state.currentView !== targetView) {
@@ -22810,6 +22844,122 @@
     });
   }
 
+  function createSubscriptionStorefrontSettings(source = {}) {
+    const hasDescription = Object.prototype.hasOwnProperty.call(source || {}, 'description');
+    return {
+      is_active: source?.is_active === true,
+      aspect_ratio: '11:5',
+      background_color: /^#[0-9a-f]{6}$/i.test(String(source?.background_color || '')) ? String(source.background_color).toLowerCase() : '#f1e8ff',
+      title: String(source?.title ?? 'Получайте больше выгоды').slice(0, 150),
+      title_font_size: Math.min(48, Math.max(12, Number(source?.title_font_size || 18))),
+      title_color: /^#[0-9a-f]{6}$/i.test(String(source?.title_color || '')) ? String(source.title_color).toLowerCase() : '#7651c9',
+      description: String(hasDescription ? (source?.description || '') : 'Бесплатная доставка\nДополнительные бонусы\nЭксклюзивные акции').replace(/\r\n?/g, '\n').split('\n').slice(0, 3).join('\n').slice(0, 500),
+      image_url: String(source?.image_url || '').trim(),
+      button_text: String(source?.button_text ?? 'Смотреть подписки').slice(0, 80),
+      button_color: /^#[0-9a-f]{6}$/i.test(String(source?.button_color || '')) ? String(source.button_color).toLowerCase() : '#ffffff',
+      button_icon_url: String(source?.button_icon_url || '').trim(),
+    };
+  }
+
+  function subscriptionStorefrontContrastColor(hex) {
+    const value = String(hex || '').replace('#', '');
+    if (!/^[0-9a-f]{6}$/i.test(value)) return '#1f2937';
+    const r = parseInt(value.slice(0, 2), 16);
+    const g = parseInt(value.slice(2, 4), 16);
+    const b = parseInt(value.slice(4, 6), 16);
+    return ((r * 299 + g * 587 + b * 114) / 1000) >= 150 ? '#1f2937' : '#ffffff';
+  }
+
+  function renderSubscriptionStorefrontSettings() {
+    const draft = state.subscriptionStorefrontSettingsDraft || createSubscriptionStorefrontSettings();
+    if (subscriptionStorefrontActiveSwitch) subscriptionStorefrontActiveSwitch.checked = draft.is_active;
+    if (subscriptionStorefrontBackgroundColorInput) subscriptionStorefrontBackgroundColorInput.value = draft.background_color;
+    if (subscriptionStorefrontBackgroundColorValue) subscriptionStorefrontBackgroundColorValue.textContent = draft.background_color;
+    if (subscriptionStorefrontTitleInput) subscriptionStorefrontTitleInput.value = draft.title;
+    if (subscriptionStorefrontTitleSizeInput) subscriptionStorefrontTitleSizeInput.value = String(draft.title_font_size);
+    if (subscriptionStorefrontTitleColorInput) subscriptionStorefrontTitleColorInput.value = draft.title_color;
+    if (subscriptionStorefrontTitleColorValue) subscriptionStorefrontTitleColorValue.textContent = draft.title_color;
+    if (subscriptionStorefrontDescriptionInput) subscriptionStorefrontDescriptionInput.value = draft.description;
+    if (subscriptionStorefrontButtonTextInput) subscriptionStorefrontButtonTextInput.value = draft.button_text;
+    if (subscriptionStorefrontButtonColorInput) subscriptionStorefrontButtonColorInput.value = draft.button_color;
+    if (subscriptionStorefrontButtonColorValue) subscriptionStorefrontButtonColorValue.textContent = draft.button_color;
+    if (subscriptionStorefrontPreview) subscriptionStorefrontPreview.style.backgroundColor = draft.background_color;
+    if (subscriptionStorefrontPreviewTitle) {
+      subscriptionStorefrontPreviewTitle.textContent = draft.title;
+      subscriptionStorefrontPreviewTitle.style.fontSize = `${draft.title_font_size}px`;
+      subscriptionStorefrontPreviewTitle.style.color = draft.title_color;
+    }
+    if (subscriptionStorefrontPreviewDescription) {
+      subscriptionStorefrontPreviewDescription.textContent = draft.description;
+      subscriptionStorefrontPreviewDescription.style.color = draft.title_color;
+    }
+    if (subscriptionStorefrontPreviewButton) {
+      subscriptionStorefrontPreviewButton.style.backgroundColor = draft.button_color;
+      subscriptionStorefrontPreviewButton.style.color = subscriptionStorefrontContrastColor(draft.button_color);
+    }
+    if (subscriptionStorefrontPreviewButtonText) subscriptionStorefrontPreviewButtonText.textContent = draft.button_text;
+    if (subscriptionStorefrontPreviewImage) {
+      subscriptionStorefrontPreviewImage.src = draft.image_url;
+      subscriptionStorefrontPreviewImage.classList.toggle('hidden', !draft.image_url);
+    }
+    if (subscriptionStorefrontPreviewButtonIcon) {
+      subscriptionStorefrontPreviewButtonIcon.src = draft.button_icon_url;
+      subscriptionStorefrontPreviewButtonIcon.classList.toggle('hidden', !draft.button_icon_url);
+    }
+    if (subscriptionStorefrontPreviewChevron) subscriptionStorefrontPreviewChevron.classList.toggle('hidden', Boolean(draft.button_icon_url));
+    if (subscriptionStorefrontImageButton) subscriptionStorefrontImageButton.textContent = draft.image_url ? 'Заменить' : 'Загрузить';
+    if (subscriptionStorefrontImageDeleteBtn) subscriptionStorefrontImageDeleteBtn.classList.toggle('hidden', !draft.image_url);
+    if (subscriptionStorefrontButtonIconButton) subscriptionStorefrontButtonIconButton.textContent = draft.button_icon_url ? 'Заменить' : 'Загрузить';
+    if (subscriptionStorefrontButtonIconDeleteBtn) subscriptionStorefrontButtonIconDeleteBtn.classList.toggle('hidden', !draft.button_icon_url);
+  }
+
+  async function loadSubscriptionStorefrontSettings() {
+    if (state.subscriptionStorefrontSettingsLoading) return;
+    state.subscriptionStorefrontSettingsLoading = true;
+    try {
+      const json = await apiJson('/api/admin/subscriptions/storefront-settings');
+      state.subscriptionStorefrontSettings = createSubscriptionStorefrontSettings(json.data || {});
+      state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings);
+      renderSubscriptionStorefrontSettings();
+    } catch (error) {
+      console.error('Failed to load subscription storefront settings:', error);
+      alert('Не удалось загрузить настройки блока подписок');
+    } finally {
+      state.subscriptionStorefrontSettingsLoading = false;
+    }
+  }
+
+  async function activateSubscriptionGlobalSettingsTab() {
+    updateRightPanel();
+    await loadSubscriptionStorefrontSettings();
+  }
+
+  async function saveSubscriptionStorefrontSettings() {
+    const draft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettingsDraft || {});
+    const json = await apiJson('/api/admin/subscriptions/storefront-settings', { method: 'PUT', body: draft });
+    state.subscriptionStorefrontSettings = createSubscriptionStorefrontSettings(json.data || draft);
+    state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings);
+    renderSubscriptionStorefrontSettings();
+    closeSubscriptionActiveTab();
+  }
+
+  async function uploadSubscriptionStorefrontAsset(field, file, draftKey) {
+    if (!file) return;
+    const uploaded = await uploadTenantAsset(field, file);
+    if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
+    state.subscriptionStorefrontSettingsDraft[draftKey] = String(uploaded.url || '');
+    renderSubscriptionStorefrontSettings();
+  }
+
+  function openSubscriptionGlobalSettingsTab() {
+    ensureTab({
+      type: 'subscription-global-settings',
+      id: 'settings',
+      title: 'Настройки',
+      onActivate: activateSubscriptionGlobalSettingsTab,
+    });
+  }
+
   function activateSubscriptionPlanTab(id) {
     const isNew = id === 'new';
     const plan = isNew ? null : state.subscriptionPlans.find((item) => Number(item.id) === Number(id));
@@ -24217,6 +24367,7 @@
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
     if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings' || viewName === 'subscription-history');
+    if (elSubscriptionGlobalSettingsBtn) elSubscriptionGlobalSettingsBtn.classList.toggle('hidden', viewName !== 'subscription-settings');
     if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.toggle('hidden', viewName !== 'important-messages');
     
     syncBonusToolbarState();
@@ -24329,6 +24480,8 @@
       if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.add('hidden');
       if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.add('hidden');
       if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.add('hidden');
+      if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.add('hidden');
+      if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.add('hidden');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
@@ -24356,6 +24509,7 @@
     const isBonusSettingsModalsTab = activeTab?.type === 'bonus-settings-modals';
     const isSubscriptionHistoryTab = activeTab?.type === 'subscription-history';
     const isSubscriptionPlanTab = activeTab?.type === 'subscription-plan';
+    const isSubscriptionGlobalSettingsTab = activeTab?.type === 'subscription-global-settings';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -24392,7 +24546,7 @@
         bonusSettingsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-settings' || !!activeTab);
       }
       if (subscriptionHistoryEmpty) subscriptionHistoryEmpty.classList.toggle('hidden', state.currentView !== 'subscription-history' || isSubscriptionHistoryTab);
-      if (subscriptionPlanEmpty) subscriptionPlanEmpty.classList.toggle('hidden', state.currentView !== 'subscription-settings' || isSubscriptionPlanTab);
+      if (subscriptionPlanEmpty) subscriptionPlanEmpty.classList.toggle('hidden', state.currentView !== 'subscription-settings' || isSubscriptionPlanTab || isSubscriptionGlobalSettingsTab);
       if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.toggle('hidden', !isBonusReferralCardTab || state.currentView !== 'bonus-referrals');
       if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.toggle('hidden', !isBonusSettingsBrandTab || state.currentView !== 'bonus-settings');
       if (bonusSettingsCoinWrap) bonusSettingsCoinWrap.classList.toggle('hidden', !isBonusSettingsCoinTab || state.currentView !== 'bonus-settings');
@@ -24405,6 +24559,8 @@
       if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.toggle('hidden', !isSubscriptionHistoryTab || state.currentView !== 'subscription-history');
       if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.toggle('hidden', !isSubscriptionPlanTab || state.currentView !== 'subscription-settings');
       if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.toggle('hidden', !isSubscriptionPlanTab || state.currentView !== 'subscription-settings');
+      if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.toggle('hidden', !isSubscriptionGlobalSettingsTab || state.currentView !== 'subscription-settings');
+      if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.toggle('hidden', !isSubscriptionGlobalSettingsTab || state.currentView !== 'subscription-settings');
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -24417,6 +24573,8 @@
     if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.add('hidden');
     if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.add('hidden');
     if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.add('hidden');
+    if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.add('hidden');
+    if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.add('hidden');
     if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.add('hidden');
     if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !(isClientTab || forceClientPanelWithoutTabs));
     if (clientOrderInfoWrap) clientOrderInfoWrap.classList.toggle('hidden', !isOrderTab);
@@ -26815,6 +26973,10 @@
     });
   }
 
+  if (elSubscriptionGlobalSettingsBtn) {
+    elSubscriptionGlobalSettingsBtn.addEventListener('click', openSubscriptionGlobalSettingsTab);
+  }
+
   if (elSubscriptionHistoryBtn) {
     elSubscriptionHistoryBtn.addEventListener('click', () => {
       switchView('subscription-history');
@@ -26852,6 +27014,76 @@
   }
   if (subscriptionPlanSaveBtn) {
     subscriptionPlanSaveBtn.addEventListener('click', () => saveSubscriptionPlan().catch(console.error));
+  }
+  if (subscriptionGlobalSettingsCancelBtn) {
+    subscriptionGlobalSettingsCancelBtn.addEventListener('click', () => {
+      state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings || {});
+      closeSubscriptionActiveTab();
+    });
+  }
+  if (subscriptionGlobalSettingsSaveBtn) {
+    subscriptionGlobalSettingsSaveBtn.addEventListener('click', () => {
+      saveSubscriptionStorefrontSettings().catch((error) => {
+        console.error('Failed to save subscription storefront settings:', error);
+        alert('Не удалось сохранить настройки блока подписок');
+      });
+    });
+  }
+  if (subscriptionGlobalSettingsForm) {
+    subscriptionGlobalSettingsForm.addEventListener('input', (event) => {
+      if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
+      const draft = state.subscriptionStorefrontSettingsDraft;
+      const target = event.target;
+      if (target === subscriptionStorefrontActiveSwitch) draft.is_active = target.checked;
+      else if (target === subscriptionStorefrontBackgroundColorInput) draft.background_color = target.value;
+      else if (target === subscriptionStorefrontTitleInput) draft.title = target.value.slice(0, 150);
+      else if (target === subscriptionStorefrontTitleSizeInput) draft.title_font_size = Math.min(48, Math.max(12, Number(target.value || 18)));
+      else if (target === subscriptionStorefrontTitleColorInput) draft.title_color = target.value;
+      else if (target === subscriptionStorefrontDescriptionInput) {
+        const limited = target.value.replace(/\r\n?/g, '\n').split('\n').slice(0, 3).join('\n').slice(0, 500);
+        if (target.value !== limited) target.value = limited;
+        draft.description = limited;
+      } else if (target === subscriptionStorefrontButtonTextInput) draft.button_text = target.value.slice(0, 80);
+      else if (target === subscriptionStorefrontButtonColorInput) draft.button_color = target.value;
+      else return;
+      renderSubscriptionStorefrontSettings();
+    });
+  }
+  if (subscriptionStorefrontImageButton && subscriptionStorefrontImageInput) {
+    subscriptionStorefrontImageButton.addEventListener('click', () => subscriptionStorefrontImageInput.click());
+    subscriptionStorefrontImageInput.addEventListener('change', () => {
+      const file = subscriptionStorefrontImageInput.files?.[0];
+      subscriptionStorefrontImageInput.value = '';
+      uploadSubscriptionStorefrontAsset('subscription_storefront_image', file, 'image_url').catch((error) => {
+        console.error('Subscription storefront image upload failed:', error);
+        alert('Не удалось загрузить изображение блока');
+      });
+    });
+  }
+  if (subscriptionStorefrontImageDeleteBtn) {
+    subscriptionStorefrontImageDeleteBtn.addEventListener('click', () => {
+      if (!state.subscriptionStorefrontSettingsDraft) return;
+      state.subscriptionStorefrontSettingsDraft.image_url = '';
+      renderSubscriptionStorefrontSettings();
+    });
+  }
+  if (subscriptionStorefrontButtonIconButton && subscriptionStorefrontButtonIconInput) {
+    subscriptionStorefrontButtonIconButton.addEventListener('click', () => subscriptionStorefrontButtonIconInput.click());
+    subscriptionStorefrontButtonIconInput.addEventListener('change', () => {
+      const file = subscriptionStorefrontButtonIconInput.files?.[0];
+      subscriptionStorefrontButtonIconInput.value = '';
+      uploadSubscriptionStorefrontAsset('subscription_storefront_button_icon', file, 'button_icon_url').catch((error) => {
+        console.error('Subscription storefront button icon upload failed:', error);
+        alert('Не удалось загрузить иконку кнопки');
+      });
+    });
+  }
+  if (subscriptionStorefrontButtonIconDeleteBtn) {
+    subscriptionStorefrontButtonIconDeleteBtn.addEventListener('click', () => {
+      if (!state.subscriptionStorefrontSettingsDraft) return;
+      state.subscriptionStorefrontSettingsDraft.button_icon_url = '';
+      renderSubscriptionStorefrontSettings();
+    });
   }
   if (subscriptionPlanModeTabs) {
     subscriptionPlanModeTabs.addEventListener('click', (event) => {

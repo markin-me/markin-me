@@ -14,6 +14,68 @@ function themeColor(value) {
   return /^#[0-9a-f]{6}$/.test(color) ? color : '#ff6b00';
 }
 
+const STOREFRONT_SETTINGS_DEFAULTS = Object.freeze({
+  is_active: false,
+  aspect_ratio: '11:5',
+  background_color: '#f1e8ff',
+  title: 'Получайте больше выгоды',
+  title_font_size: 18,
+  title_color: '#7651c9',
+  description: 'Бесплатная доставка\nДополнительные бонусы\nЭксклюзивные акции',
+  image_url: null,
+  button_text: 'Смотреть подписки',
+  button_color: '#ffffff',
+  button_icon_url: null,
+});
+
+function storefrontColor(value, fallback) {
+  const color = String(value || '').trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(color)) return color;
+  const err = new Error('INVALID_COLOR');
+  err.statusCode = 400;
+  if (value === undefined || value === null || value === '') return fallback;
+  throw err;
+}
+
+function normalizeStorefrontSettingsPayload(body = {}) {
+  const title = toText(body.title).slice(0, 150);
+  const description = String(body.description || '').replace(/\r\n?/g, '\n').trim();
+  if (description.split('\n').length > 3) {
+    const err = new Error('DESCRIPTION_MAX_THREE_LINES');
+    err.statusCode = 400;
+    throw err;
+  }
+  const titleFontSize = Math.floor(Number(body.title_font_size));
+  if (!Number.isFinite(titleFontSize) || titleFontSize < 12 || titleFontSize > 48) {
+    const err = new Error('INVALID_TITLE_FONT_SIZE');
+    err.statusCode = 400;
+    throw err;
+  }
+  return {
+    is_active: boolFlag(body.is_active, false) ? 1 : 0,
+    aspect_ratio: '11:5',
+    background_color: storefrontColor(body.background_color, STOREFRONT_SETTINGS_DEFAULTS.background_color),
+    title,
+    title_font_size: titleFontSize,
+    title_color: storefrontColor(body.title_color, STOREFRONT_SETTINGS_DEFAULTS.title_color),
+    description: description.slice(0, 500) || null,
+    image_url: strOrNull(body.image_url)?.slice(0, 500) || null,
+    button_text: toText(body.button_text).slice(0, 80),
+    button_color: storefrontColor(body.button_color, STOREFRONT_SETTINGS_DEFAULTS.button_color),
+    button_icon_url: strOrNull(body.button_icon_url)?.slice(0, 500) || null,
+  };
+}
+
+function mapStorefrontSettings(row) {
+  if (!row) return { ...STOREFRONT_SETTINGS_DEFAULTS };
+  return {
+    ...row,
+    id: Number(row.id || 0),
+    is_active: Number(row.is_active || 0) === 1,
+    title_font_size: Number(row.title_font_size || STOREFRONT_SETTINGS_DEFAULTS.title_font_size),
+  };
+}
+
 function boolFlag(value, fallback = true) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -143,6 +205,62 @@ function normalizePlanPayload(body = {}) {
 
 module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
   const router = express.Router();
+
+  async function fetchStorefrontSettings(tenantId, storeId) {
+    const [[row]] = await db.query(
+      `SELECT id, tenant_id, store_id, is_active, aspect_ratio, background_color,
+              title, title_font_size, title_color, description, image_url,
+              button_text, button_color, button_icon_url, created_at, updated_at
+         FROM mkt_subscription_storefront_settings
+        WHERE tenant_id = ? AND store_id = ?
+        LIMIT 1`,
+      [tenantId, storeId]
+    );
+    return mapStorefrontSettings(row);
+  }
+
+  router.get('/storefront-settings', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      res.json({ ok: true, data: await fetchStorefrontSettings(tenantId, storeId) });
+    } catch (err) {
+      console.error('GET /api/admin/subscriptions/storefront-settings failed:', err);
+      res.status(500).json({ ok: false, error: 'SUBSCRIPTION_STOREFRONT_SETTINGS_ERROR' });
+    }
+  });
+
+  router.put('/storefront-settings', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const payload = normalizeStorefrontSettingsPayload(req.body);
+      await db.query(
+        `INSERT INTO mkt_subscription_storefront_settings
+          (tenant_id, store_id, is_active, aspect_ratio, background_color, title,
+           title_font_size, title_color, description, image_url, button_text,
+           button_color, button_icon_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           is_active = VALUES(is_active), aspect_ratio = VALUES(aspect_ratio),
+           background_color = VALUES(background_color), title = VALUES(title),
+           title_font_size = VALUES(title_font_size), title_color = VALUES(title_color),
+           description = VALUES(description), image_url = VALUES(image_url),
+           button_text = VALUES(button_text), button_color = VALUES(button_color),
+           button_icon_url = VALUES(button_icon_url), updated_at = NOW()`,
+        [
+          tenantId, storeId, payload.is_active, payload.aspect_ratio,
+          payload.background_color, payload.title, payload.title_font_size,
+          payload.title_color, payload.description, payload.image_url,
+          payload.button_text, payload.button_color, payload.button_icon_url,
+        ]
+      );
+      res.json({ ok: true, data: await fetchStorefrontSettings(tenantId, storeId) });
+    } catch (err) {
+      console.error('PUT /api/admin/subscriptions/storefront-settings failed:', err);
+      res.status(err.statusCode || 500).json({ ok: false, error: err.message || 'SUBSCRIPTION_STOREFRONT_SETTINGS_SAVE_ERROR' });
+    }
+  });
 
   async function fetchPlan(tenantId, storeId, id) {
     const [[row]] = await db.query(
