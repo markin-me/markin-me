@@ -1,9 +1,10 @@
-import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 
 import { theme } from '../config/theme';
 import { formatPrice } from '../lib/formatPrice';
+import { AppText as Text } from './AppText';
 import { ProductBadge } from './ProductBadge';
 import { ProductQuantityButton } from './ProductQuantityButton';
 
