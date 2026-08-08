@@ -1,5 +1,6 @@
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 
 import { theme } from '../config/theme';
 import { formatPrice } from '../lib/formatPrice';
@@ -42,15 +43,20 @@ export function ProductCatalogCard({
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => [styles.card, pressed ? styles.cardPressed : null]}
+      style={styles.card}
     >
       <View style={styles.media}>
-        {imageUrl ? (
+        {imageUrl && Platform.OS === 'web' ? (
           <Image resizeMode="contain" source={{ uri: imageUrl }} style={styles.image} />
+        ) : imageUrl ? (
+          <ExpoImage
+            cachePolicy="memory-disk"
+            contentFit="contain"
+            source={{ uri: imageUrl }}
+            style={styles.image}
+          />
         ) : (
-          <View style={styles.imagePlaceholder}>
-            <Ionicons color={theme.colors.muted} name="image-outline" size={24} />
-          </View>
+          <View style={styles.imagePlaceholder} />
         )}
         {promoBadgeText ? <ProductBadge style={styles.promoBadge} text={promoBadgeText} tone="promo" /> : null}
         {discountBadgeText ? <ProductBadge style={[styles.discountBadge, promoBadgeText ? styles.discountBadgeWithPromo : null]} text={discountBadgeText} tone="discount" /> : null}
@@ -107,9 +113,6 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     width: '48%',
   },
-  cardPressed: {
-    opacity: 0.82,
-  },
   description: {
     height: 31,
     marginTop: theme.spacing.xs,
@@ -120,14 +123,6 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
   discountBadge: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.pill,
-    color: theme.colors.primaryText,
-    fontSize: 11,
-    fontWeight: '800',
-    overflow: 'hidden',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
     position: 'absolute',
     right: 7,
     top: 7,
@@ -148,10 +143,8 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   imagePlaceholder: {
-    alignItems: 'center',
     backgroundColor: theme.colors.mutedBackground,
     height: '100%',
-    justifyContent: 'center',
     width: '100%',
   },
   media: {
@@ -197,14 +190,6 @@ const styles = StyleSheet.create({
     paddingRight: theme.spacing.sm,
   },
   promoBadge: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.pill,
-    color: theme.colors.primaryText,
-    fontSize: 11,
-    fontWeight: '900',
-    overflow: 'hidden',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
     position: 'absolute',
     right: 7,
     top: 7,
