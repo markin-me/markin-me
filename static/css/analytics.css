@@ -1,0 +1,142 @@
+body.page-analytics .page-col-center { min-width: 0; }
+body.page-analytics .modal-backdrop, body.page-cash .modal-backdrop { z-index: 1201; }
+body.page-analytics .app-modal, body.page-cash .app-modal { z-index: 1202; }
+body.page-analytics .page-col-center .center-stack { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: .5rem; }
+body.page-analytics .analytics-center-panel { flex: 1; min-height: 0; }
+.analytics-nav-list { display: grid; gap: 6px; }
+.analytics-nav-item { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; color: var(--color-text-muted); }
+.analytics-nav-item.is-active { background: var(--color-surface-2); color: var(--color-text); font-weight: 700; }
+.analytics-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.analytics-summary-card { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
+.analytics-summary-card span { color: var(--color-text-muted); font-size: .82rem; }
+.analytics-summary-card strong { font-size: 1.25rem; }
+.analytics-empty-state { display: grid; justify-items: center; max-width: 440px; margin: 64px auto 24px; text-align: center; }
+.analytics-documents-list { display: grid; gap: 8px; margin-top: 20px; }
+.analytics-document-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--color-border); border-radius: 12px; }
+.analytics-document-row div { display: grid; gap: 3px; min-width: 0; }
+.analytics-document-row small { color: var(--color-text-muted); }
+.analytics-document-row > strong { white-space: nowrap; }
+.cash-expense-document-date { flex: 0 0 118px; color: var(--color-text-muted); font-size: .92rem; text-align: left; white-space: pre-line; }
+body.page-cash .cash-expense-document-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+body.page-cash .cash-expense-document-delete { color: var(--color-danger, #dc2626); }
+body.page-cash .cash-expense-document-delete span { display: none; }
+body.page-cash #cashJournalList [data-expense-document-id] .cash-journal-entry-main { min-width: 0; overflow: hidden; }
+body.page-cash #cashJournalList [data-expense-document-id] .cash-journal-entry-top { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
+body.page-cash #cashJournalList [data-expense-document-id] .cash-journal-entry-top strong { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (min-width: 769px) { body.page-cash .page-col-center { margin-left: 8px; } }
+body.page-cash #appModalCloseBtn { width: 42px; height: 42px; border: 0; border-radius: 50%; background: var(--color-surface-2); color: var(--color-text-muted); }
+body.page-cash #appModalCloseBtn:hover { color: var(--color-text); }
+body.page-cash .app-modal.app-modal-footer-hidden .app-modal-footer { display: none; }
+body.page-cash #cashJournalList [data-expense-document-id] { grid-template-columns: 40px 154px minmax(0, 1fr) auto; }
+@media (max-width: 768px) { body.page-cash #cashJournalList [data-expense-document-id] { grid-template-columns: 40px minmax(0, 1fr) auto; } body.page-cash .cash-expense-document-date { grid-column: 2; grid-row: 2; } body.page-cash #cashJournalList [data-expense-document-id] .cash-journal-entry-amount { grid-column: 3; grid-row: 1 / span 2; align-self: center; } }
+body.page-cash .cash-expense-receipt { max-width: 360px; margin: 0 auto; padding: 16px 14px; background: #fff; color: #111827; box-shadow: 0 6px 18px rgba(15,23,42,.10); }
+body.page-cash .cash-expense-receipt .cash-balance-card { border: 0; border-radius: 0; box-shadow: none; padding: 0 0 14px; margin: 0 0 14px; border-bottom: 1px dashed #9ca3af; }
+body.page-cash .cash-expense-receipt .cash-balance-card-title { text-align: center; font-weight: 800; }
+body.page-cash .cash-expense-receipt .cash-balance-metric { grid-template-columns: 1fr; gap: 2px; padding: 4px 0; }
+body.page-cash .cash-expense-receipt .cash-balance-metric strong { text-align: left; overflow-wrap: anywhere; }
+.cash-fiscal-receipt { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; color: #111; }
+.cash-fiscal-receipt > header { height: auto; min-height: 0; display: grid; justify-items: center; gap: 4px; padding: 0 0 12px; background: transparent; border: 0; border-bottom: 1px dashed #6b7280; border-radius: 0; box-shadow: none; text-align: center; }
+.cash-fiscal-receipt header strong { font-size: 14px; }
+.cash-fiscal-receipt header b { margin-top: 5px; font-size: 13px; }
+.cash-fiscal-receipt__meta { display: grid; gap: 4px; padding: 12px 0; border-bottom: 1px dashed #6b7280; }
+.cash-fiscal-receipt__items { display: grid; gap: 11px; padding: 12px 0; border-bottom: 1px dashed #6b7280; }
+.cash-fiscal-receipt__items div { display: grid; gap: 3px; }
+.cash-fiscal-receipt__items span { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.cash-fiscal-receipt__items b { grid-column: 2; }
+.cash-fiscal-receipt__total { display: flex; justify-content: space-between; font-size: 15px; font-weight: 800; padding: 14px 0; border-bottom: 1px dashed #6b7280; }
+.cash-expense-receipt-qr { display: grid; place-items: center; padding: 2px 0 10px; }
+.cash-expense-receipt-qr img { display: block; width: 132px; height: 132px; }
+.analytics-empty-state h2 { margin: 14px 0 6px; font-size: 1.15rem; }
+.analytics-empty-state p { margin: 0 0 18px; color: var(--color-text-muted); line-height: 1.45; }
+.analytics-empty-icon { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: var(--color-surface-2); color: var(--color-primary); font-size: 22px; }
+.analytics-help-list { display: grid; gap: 12px; margin: 0; padding-left: 21px; color: var(--color-text-muted); line-height: 1.4; }
+.analytics-camera { display: grid; gap: 12px; }
+.analytics-qr-label { color: var(--color-text); font-weight: 700; }
+.analytics-camera video { width: 100%; max-height: 58vh; border-radius: 12px; background: #111; object-fit: cover; }
+.analytics-camera-status { margin: 0; color: var(--color-text-muted); line-height: 1.4; }
+.analytics-camera-status.is-success { color: #16803c; font-weight: 700; word-break: break-all; }
+body.page-cash .app-modal-footer { flex-wrap: wrap; }
+body.page-cash .app-modal-footer-notice { flex-basis: 100%; order: 2; margin: 0; color: #b91c1c; font-weight: 700; text-align: center; }
+body.page-cash .app-modal.has-header-notice .app-modal-header { position: relative; min-height: 66px; align-items: flex-end; padding-bottom: 6px; }
+body.page-cash .app-modal-header-notice { position: absolute; inset: 6px 56px auto; margin: 0; color: #b91c1c; font-size: .82rem; font-weight: 700; text-align: center; }
+.analytics-receipt-result { display: grid; gap: 10px; }
+.analytics-receipt-result > div { display: grid; gap: 3px; }
+.analytics-receipt-result span { color: var(--color-text-muted); font-size: .82rem; }
+.analytics-receipt-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin-top: 16px; }
+.analytics-receipt-details div { display: grid; gap: 2px; min-width: 0; }
+.analytics-receipt-details span { color: var(--color-text-muted); font-size: .76rem; }
+.analytics-receipt-details strong { overflow-wrap: anywhere; }
+.analytics-receipt-title { margin: 18px 0 8px; font-size: 1rem; }
+.analytics-receipt-items { display: grid; gap: 8px; }
+.analytics-receipt-items div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--color-border); }
+.analytics-receipt-items span { min-width: 0; }
+.analytics-receipt-items b, .analytics-receipt-items small { display: block; }
+.analytics-receipt-items small { margin-top: 3px; color: var(--color-text-muted); }
+.analytics-receipt-items strong { white-space: nowrap; }
+.analytics-document-options { display: grid; gap: 10px; }
+.app-modal.analytics-document-picker { height: auto; }
+.app-modal.analytics-document-picker .app-modal-body { flex: 0 1 auto; }
+.analytics-document-option { display: grid; grid-template-columns: 38px 1fr; gap: 10px; align-items: center; width: 100%; padding: 13px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); color: var(--color-text); text-align: left; cursor: pointer; }
+.analytics-document-option:hover { background: var(--color-surface-2); }
+.analytics-document-option i { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--color-surface-2); color: var(--color-primary); }
+.analytics-document-option small { display: block; margin-top: 3px; color: var(--color-text-muted); }
+@media (max-width: 768px) { body.page-analytics .analytics-summary-grid { grid-template-columns: 1fr; } body.page-analytics .analytics-empty-state { margin-top: 38px; } .analytics-receipt-details { grid-template-columns: 1fr; } }
+@media (max-width: 768px) {
+  body.page-cash .cash-expense-document-row { display: block; position: relative; overflow: hidden; border-radius: 16px; }
+  body.page-cash .cash-expense-document-row .cash-journal-entry { position: relative; z-index: 1; transition: transform var(--dur-med) var(--ease-smooth); }
+  body.page-cash .cash-expense-document-delete { position: absolute; z-index: 0; top: 50%; right: 0; bottom: auto; width: 40px; height: 40px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); color: #dc2626; transform: translateY(-50%); }
+  body.page-cash .cash-expense-document-delete i { display: inline; }
+  body.page-cash .cash-expense-document-delete span { display: none; }
+  body.page-cash .cash-expense-document-row.is-delete-revealed .cash-journal-entry { transform: translateX(-48px); }
+  body.page-cash #cashJournalList [data-expense-document-id] { grid-template-columns: 40px minmax(0, 1fr); row-gap: 6px; }
+  body.page-cash #cashJournalList [data-expense-document-id] .cash-journal-entry-icon { grid-column: 1; grid-row: 1; }
+  body.page-cash #cashJournalList [data-expense-document-id] .cash-journal-entry-main { grid-column: 2; grid-row: 1; }
+  body.page-cash #cashJournalList [data-expense-document-id] .cash-expense-document-date { grid-column: 1 / 3; grid-row: 2; align-self: center; padding-right: 84px; white-space: nowrap; }
+  body.page-cash #cashJournalList [data-expense-document-id] .cash-journal-entry-amount { grid-column: 2; grid-row: 2; justify-self: end; align-self: center; }
+}
+@media (max-width: 768px) {
+  body.page-cash .app-modal.analytics-receipt-scanner-modal {
+    left: 50%;
+    right: auto;
+    top: 50%;
+    bottom: auto;
+    width: calc(100% - 32px);
+    max-width: 520px;
+    height: min(600px, calc(100dvh - 80px));
+    max-height: calc(100dvh - 80px);
+    border-radius: var(--radius-lg);
+    transform: translate(-50%, 110%);
+  }
+  body.page-cash .app-modal.analytics-receipt-scanner-modal.is-open { transform: translate(-50%, -50%); }
+  body.page-cash .analytics-receipt-scanner-modal .analytics-camera video { max-height: none; height: 100%; }
+  body.page-cash .app-modal.cash-mobile-expense-receipt-modal {
+    left: 50%;
+    right: auto;
+    top: 52%;
+    bottom: auto;
+    width: calc(100% - 32px);
+    max-width: 400px;
+    height: min(620px, calc(100dvh - 140px));
+    max-height: calc(100dvh - 140px);
+    border-radius: var(--radius-lg);
+    transform: translate(-50%, 110%);
+  }
+  body.page-cash .app-modal.cash-mobile-expense-receipt-modal.is-open { transform: translate(-50%, -50%); }
+  body.page-cash .app-modal,
+  body.page-cash .app-modal.analytics-receipt-scanner-modal,
+  body.page-cash .app-modal.cash-mobile-expense-receipt-modal {
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    height: calc(100dvh - var(--header-height));
+    max-height: calc(100dvh - var(--header-height));
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    transform: translateY(110%);
+  }
+  body.page-cash .app-modal.is-open,
+  body.page-cash .app-modal.analytics-receipt-scanner-modal.is-open,
+  body.page-cash .app-modal.cash-mobile-expense-receipt-modal.is-open { transform: translateY(0); }
+}

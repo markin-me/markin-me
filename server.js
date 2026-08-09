@@ -603,6 +603,8 @@ app.use('/static', express.static(path.join(__dirname, 'static'), {
   }
 }));
 
+app.use('/static/vendor/jsqr', express.static(path.join(__dirname, 'node_modules', 'jsqr', 'dist')));
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
   setHeaders(res) {
     if (!res.getHeader('Cache-Control')) {
@@ -1302,7 +1304,9 @@ const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/js/shared-order-payment.js'),
   app.locals.assetUrl('/static/js/new-order.js'),
   app.locals.assetUrl('/static/js/courier-screen.js'),
-  app.locals.assetUrl('/static/js/orders.js')
+  app.locals.assetUrl('/static/js/orders.js'),
+  app.locals.assetUrl('/static/js/analytics.js'),
+  app.locals.assetUrl('/static/css/analytics.css')
 ];
 const serviceWorkerWarmPages = [
   '/dashboard/cash',
@@ -1495,7 +1499,10 @@ self.addEventListener('fetch', function (event) {
   }
 
   if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
-    if (url.pathname === '/dashboard/chat' || url.pathname === '/dashboard/courier-screen') {
+    if (
+      url.pathname === '/dashboard/chat'
+      || url.pathname === '/dashboard/courier-screen'
+    ) {
       event.respondWith(networkFirstPage(request));
       return;
     }
@@ -1847,8 +1854,184 @@ app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers
 app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));
 app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents }));
 
+app.post('/api/admin/analytics/receipts/recognize', authMiddleware, async (req, res) => {
+  const rawQr = String(req.body?.qrraw || '').trim();
+  const qrMatch = rawQr.match(/t=\d{8}T\d{4,6}&s=\d+(?:\.\d+)?&fn=\d+&i=\d+&fp=\d+&n=\d+/i);
+  const qrraw = qrMatch ? qrMatch[0] : rawQr;
+  const providerToken = String(process.env.PROVERKACHECKA_API_TOKEN || '').trim();
+  if (!providerToken) {
+    return res.status(503).json({ ok: false, error: 'PROVERKACHECKA_TOKEN_NOT_CONFIGURED' });
+  }
+  if (!qrMatch || qrraw.length > 512) {
+    return res.status(400).json({
+      ok: false,
+      error: 'INVALID_QR_RAW',
+      diagnostics: { length: rawQr.length, hasFiscalPattern: Boolean(qrMatch) }
+    });
+  }
+
+  const requestBody = new URLSearchParams({ token: providerToken, qrraw });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch('https://proverkacheka.com/api/v1/check/get', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: requestBody.toString(),
+      signal: controller.signal
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload || typeof payload !== 'object') {
+      return res.status(502).json({ ok: false, error: 'PROVERKACHECKA_UNAVAILABLE' });
+    }
+    return res.json({ ok: true, receipt: payload });
+  } catch (error) {
+    const errorCode = error?.name === 'AbortError' ? 'PROVERKACHECKA_TIMEOUT' : 'PROVERKACHECKA_REQUEST_FAILED';
+    console.error('Receipt recognition request failed:', error);
+    return res.status(502).json({ ok: false, error: errorCode });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
 // товары/категории/сортировка/загрузка — оставляем старые пути /api/prod_* и /api/sort/*
 // Применяем middleware ко всем роутам products роутера
+app.get('/api/admin/analytics/expense-documents', authMiddleware, async (req, res) => {
+  try {
+    const tenantId = Number(req.user?.tenantId || 0);
+    const startDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query?.start_date || '')) ? String(req.query.start_date) : null;
+    const endDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query?.end_date || '')) ? String(req.query.end_date) : null;
+    const dateFilter = [
+      startDate ? 'DATE(receipt_datetime) >= ?' : '',
+      endDate ? 'DATE(receipt_datetime) <= ?' : ''
+    ].filter(Boolean);
+    const whereClause = ['tenant_id=?'].concat(dateFilter).join(' AND ');
+    const queryParams = [tenantId].concat(startDate ? [startDate] : [], endDate ? [endDate] : []);
+    const [rows] = await db.query(
+      `SELECT id, source_type, supplier_name, supplier_inn, retail_place, receipt_datetime, total_sum_kopecks, accepted_at
+       FROM fin_expense_documents
+       WHERE ${whereClause}
+       ORDER BY receipt_datetime DESC, id DESC
+       LIMIT 50`,
+      queryParams
+    );
+    const [summaryRows] = await db.query(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(total_sum_kopecks), 0) AS total_sum_kopecks
+       FROM fin_expense_documents
+       WHERE ${whereClause}`,
+      queryParams
+    );
+    return res.json({ ok: true, documents: rows, summary: summaryRows[0] || { count: 0, total_sum_kopecks: 0 } });
+  } catch (error) {
+    console.error('Expense documents list failed:', error);
+    return res.status(500).json({ ok: false, error: 'EXPENSE_DOCUMENTS_LIST_FAILED' });
+  }
+});
+
+app.post('/api/admin/analytics/expense-documents/receipts', authMiddleware, async (req, res) => {
+  const tenantId = Number(req.user?.tenantId || 0);
+  const rawQr = String(req.body?.qrraw || '').trim();
+  const qrMatch = rawQr.match(/t=\d{8}T\d{4,6}&s=\d+(?:\.\d+)?&fn=\d+&i=\d+&fp=\d+&n=\d+/i);
+  const qrraw = qrMatch ? qrMatch[0] : '';
+  const receipt = req.body?.receipt;
+  const data = receipt?.data?.json && typeof receipt.data.json === 'object' ? receipt.data.json : null;
+  if (!tenantId || Number(receipt?.code) !== 1 || !data || !qrraw) {
+    return res.status(400).json({ ok: false, error: 'INVALID_RECOGNIZED_RECEIPT' });
+  }
+
+  const qrParams = new URLSearchParams(qrraw);
+  const fiscalDriveNumber = String(data.fiscalDriveNumber || '');
+  const fiscalDocumentNumber = String(data.fiscalDocumentNumber || '');
+  const fiscalSign = String(data.fiscalSign || '');
+  if (fiscalDriveNumber !== String(qrParams.get('fn') || '') || fiscalDocumentNumber !== String(qrParams.get('i') || '') || fiscalSign !== String(qrParams.get('fp') || '')) {
+    return res.status(400).json({ ok: false, error: 'RECEIPT_FISCAL_DATA_MISMATCH' });
+  }
+
+  const toKopecks = (value) => Number.isFinite(Number(value)) && Number(value) >= 0 ? Math.round(Number(value)) : null;
+  const items = Array.isArray(data.items) ? data.items : [];
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [result] = await connection.query(
+      `INSERT INTO fin_expense_documents
+        (tenant_id, source_type, provider, status, raw_qr, fiscal_drive_number, fiscal_document_number, fiscal_sign,
+         receipt_datetime, operation_type, supplier_name, supplier_inn, retail_place, retail_place_address,
+         total_sum_kopecks, cash_sum_kopecks, ecash_sum_kopecks, provider_payload_json, accepted_by)
+       VALUES (?, 'fiscal_receipt', 'proverkacheka', 'accepted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [tenantId, qrraw, fiscalDriveNumber, fiscalDocumentNumber, fiscalSign, data.dateTime || null, Number(data.operationType) || null,
+        data.user || null, data.userInn || null, data.retailPlace || null, data.retailPlaceAddress || null,
+        toKopecks(data.totalSum), toKopecks(data.cashTotalSum), toKopecks(data.ecashTotalSum), JSON.stringify(receipt), req.user?.userId || null]
+    );
+    const documentId = Number(result?.insertId || 0);
+    const rows = items.map((item, index) => [tenantId, documentId, index + 1, String(item?.name || 'Без названия').slice(0, 1024),
+      Number.isFinite(Number(item?.quantity)) ? Number(item.quantity) : null, toKopecks(item?.price), toKopecks(item?.sum)]);
+    if (rows.length) {
+      await connection.query(
+        `INSERT INTO fin_expense_document_items
+          (tenant_id, document_id, line_number, item_name, quantity, price_kopecks, sum_kopecks)
+         VALUES ?`,
+        [rows]
+      );
+    }
+    await connection.commit();
+    return res.status(201).json({ ok: true, documentId });
+  } catch (error) {
+    await connection.rollback();
+    if (error?.code === 'ER_DUP_ENTRY') return res.status(409).json({ ok: false, error: 'DUPLICATE_FISCAL_RECEIPT' });
+    console.error('Expense receipt save failed:', error);
+    return res.status(500).json({ ok: false, error: 'EXPENSE_RECEIPT_SAVE_FAILED' });
+  } finally {
+    connection.release();
+  }
+});
+
+app.get('/api/admin/analytics/expense-documents/:id', authMiddleware, async (req, res) => {
+  const documentId = Number(req.params.id || 0);
+  const tenantId = Number(req.user?.tenantId || 0);
+  if (!(documentId > 0)) return res.status(400).json({ ok: false, error: 'INVALID_DOCUMENT_ID' });
+  try {
+    const [rows] = await db.query(
+      `SELECT * FROM fin_expense_documents WHERE id=? AND tenant_id=? LIMIT 1`,
+      [documentId, tenantId]
+    );
+    const document = rows[0] || null;
+    if (!document) return res.status(404).json({ ok: false, error: 'DOCUMENT_NOT_FOUND' });
+    const [items] = await db.query(
+      `SELECT item_name, quantity, price_kopecks, sum_kopecks
+       FROM fin_expense_document_items WHERE document_id=? AND tenant_id=? ORDER BY line_number`,
+      [documentId, tenantId]
+    );
+    let receiptData = null;
+    let receiptHtml = '';
+    try {
+      const payload = JSON.parse(String(document.provider_payload_json || ''));
+      receiptData = payload?.data?.json && typeof payload.data.json === 'object' ? payload.data.json : null;
+      receiptHtml = typeof payload?.data?.html === 'string' ? payload.data.html : '';
+    } catch (_) {}
+    return res.json({ ok: true, document, items, receiptData, receiptHtml });
+  } catch (error) {
+    console.error('Expense document load failed:', error);
+    return res.status(500).json({ ok: false, error: 'EXPENSE_DOCUMENT_LOAD_FAILED' });
+  }
+});
+
+app.delete('/api/admin/analytics/expense-documents/:id', authMiddleware, async (req, res) => {
+  const documentId = Number(req.params.id || 0);
+  const tenantId = Number(req.user?.tenantId || 0);
+  if (!(documentId > 0)) return res.status(400).json({ ok: false, error: 'INVALID_DOCUMENT_ID' });
+  try {
+    const [result] = await db.query(
+      'DELETE FROM fin_expense_documents WHERE id=? AND tenant_id=?',
+      [documentId, tenantId]
+    );
+    if (!result?.affectedRows) return res.status(404).json({ ok: false, error: 'DOCUMENT_NOT_FOUND' });
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Expense document delete failed:', error);
+    return res.status(500).json({ ok: false, error: 'EXPENSE_DOCUMENT_DELETE_FAILED' });
+  }
+});
+
 const adminProductsRouter = makeAdminProductsRouter({ db, helpers });
 app.use('/api', authMiddleware, adminProductsRouter);
 

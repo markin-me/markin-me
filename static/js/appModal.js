@@ -4,16 +4,20 @@
   const backdrop = $("#appModalBackdrop");
   const modal = $("#appModal");
   const titleEl = $("#appModalTitle");
+  const headerNotice = $("#appModalHeaderNotice");
   const bodyEl = $("#appModalBody");
   const btnClose = $("#appModalCloseBtn");
   const btnCancel = $("#appModalCancelBtn");
+  const btnSecondarySave = $("#appModalSecondarySaveBtn");
   const btnSave = $("#appModalSaveBtn");
+  const footerNotice = $("#appModalFooterNotice");
 
-  if (!backdrop || !modal || !titleEl || !bodyEl || !btnClose || !btnCancel || !btnSave) {
+  if (!backdrop || !modal || !titleEl || !headerNotice || !bodyEl || !btnClose || !btnCancel || !btnSecondarySave || !btnSave || !footerNotice) {
     return;
   }
 
   let currentOnSave = null;
+  let currentOnSecondarySave = null;
   let currentOnClose = null;
   let closeSeq = 0;
 
@@ -23,10 +27,12 @@
     closeOnBackdrop: true,
     closeOnEsc: true,
     saveOnCtrlEnter: true,
+    enterAction: "",
   };
 
   const defaultBtnText = {
     cancel: btnCancel.textContent || "Отменить",
+    secondarySave: btnSecondarySave.textContent || "Принять +",
     save: btnSave.textContent || "Сохранить",
   };
 
@@ -40,6 +46,17 @@
 
   function clearBody() {
     bodyEl.innerHTML = "";
+  }
+
+  function setFooterNotice(text) {
+    footerNotice.textContent = text || "";
+    footerNotice.classList.toggle("hidden", !text);
+  }
+
+  function setHeaderNotice(text) {
+    headerNotice.textContent = text || "";
+    headerNotice.classList.toggle("hidden", !text);
+    modal.classList.toggle("has-header-notice", !!text);
   }
 
   function setContent(content) {
@@ -85,12 +102,18 @@
     if (typeof o.saveText === "string") btnSave.textContent = o.saveText;
     else btnSave.textContent = defaultBtnText.save;
 
+    if (typeof o.secondarySaveText === "string") btnSecondarySave.textContent = o.secondarySaveText;
+    else btnSecondarySave.textContent = defaultBtnText.secondarySave;
+
     // show/hide
     if (o.showCancel === false) btnCancel.classList.add("hidden");
     else btnCancel.classList.remove("hidden");
 
     if (o.showSave === false) btnSave.classList.add("hidden");
     else btnSave.classList.remove("hidden");
+
+    if (typeof o.onSecondarySave === "function") btnSecondarySave.classList.remove("hidden");
+    else btnSecondarySave.classList.add("hidden");
   }
 
   function setBusy(isBusy) {
@@ -98,6 +121,7 @@
     modal.classList.toggle("is-busy", busy);
     btnClose.disabled = busy;
     btnCancel.disabled = busy;
+    btnSecondarySave.disabled = busy;
     btnSave.disabled = busy;
   }
 
@@ -109,14 +133,19 @@
 
     setTitle(options.title || "");
     setContent(options.content || "");
+    setHeaderNotice(options.headerNotice || "");
+    setFooterNotice("");
+    modal.classList.toggle("app-modal-footer-hidden", options.hideFooter === true);
 
     currentOnSave = typeof options.onSave === "function" ? options.onSave : null;
+    currentOnSecondarySave = typeof options.onSecondarySave === "function" ? options.onSecondarySave : null;
     currentOnClose = typeof options.onClose === "function" ? options.onClose : null;
 
     currentOptions = {
       closeOnBackdrop: options.closeOnBackdrop !== false,
       closeOnEsc: options.closeOnEsc !== false,
       saveOnCtrlEnter: options.saveOnCtrlEnter !== false,
+      enterAction: options.enterAction === "secondary" ? "secondary" : "",
     };
 
     setButtons(options);
@@ -155,6 +184,10 @@
 
     const cb = currentOnClose;
     currentOnSave = null;
+    currentOnSecondarySave = null;
+    setHeaderNotice("");
+    setFooterNotice("");
+    modal.classList.remove("app-modal-footer-hidden");
     currentOnClose = null;
 
     // вернуть фокус туда, откуда открыли
@@ -193,8 +226,26 @@
     }
   }
 
+  async function handleSecondarySave() {
+    if (!currentOnSecondarySave) return;
+    try {
+      setBusy(true);
+      const res = currentOnSecondarySave({ modal, body: bodyEl, setBusy });
+      const ok = res && typeof res.then === "function" ? await res : res;
+      if (ok === false) {
+        setBusy(false);
+        return;
+      }
+      close("secondary-save");
+    } catch (e) {
+      console.error(e);
+      setBusy(false);
+    }
+  }
+
   btnClose.addEventListener("click", () => close("close"));
   btnCancel.addEventListener("click", () => close("cancel"));
+  btnSecondarySave.addEventListener("click", handleSecondarySave);
 
   backdrop.addEventListener("click", () => {
     if (!currentOptions.closeOnBackdrop) return;
@@ -216,6 +267,11 @@
       e.preventDefault();
       handleSave();
     }
+
+    if (currentOptions.enterAction === "secondary" && !e.ctrlKey && !e.metaKey && e.key === "Enter") {
+      e.preventDefault();
+      handleSecondarySave();
+    }
   });
 
   window.AppModal = {
@@ -223,6 +279,8 @@
     close,
     setTitle,
     setContent,
+    setHeaderNotice,
+    setFooterNotice,
     setButtons,
     setBusy,
     isOpen,
