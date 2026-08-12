@@ -394,7 +394,7 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
       const [subscriptionRows] = await db.query(
         `SELECT id, endpoint
            FROM chat_push_subscriptions
-          WHERE tenant_id = ? AND actor = 'in'`,
+          WHERE tenant_id = ? AND actor = 'in' AND push_important_enabled = 1`,
         [Number(tenantId)]
       );
       rows = Array.isArray(subscriptionRows) ? subscriptionRows : [];

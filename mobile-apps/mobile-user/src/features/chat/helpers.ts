@@ -1,4 +1,5 @@
 import type { ChatActor, ChatMessage, ChatOrderCard, ChatSettings, ImportantMessage } from './types';
+import { getCustomerOrderStatusTitle, getCustomerOrderStatusTitleFromValues, type CustomerOrder } from '../../shared/api';
 
 export const CHAT_ACTOR_IN: ChatActor = 'in';
 export const CHAT_ACTOR_OUT: ChatActor = 'out';
@@ -518,7 +519,8 @@ export function buildOrderCardFromCustomerOrder(order: Record<string, unknown>):
   return {
     id,
     publicId: String(order.public_id || order.publicId || ''),
-    statusTitle: String(order.status_title || order.statusTitle || HOT_QUESTION_ORDER_STATUS_UNKNOWN).trim() || HOT_QUESTION_ORDER_STATUS_UNKNOWN,
+    statusCode: String(order.status_code || order.statusCode || ''),
+    statusTitle: getCustomerOrderStatusTitle(order as CustomerOrder) || HOT_QUESTION_ORDER_STATUS_UNKNOWN,
     totalPrice: Number(order.total_price ?? order.totalPrice ?? order.total ?? 0),
     createdAt: String(order.created_at || order.createdAt || ''),
     photos: itemPhotos.length ? itemPhotos : directPhotos,
@@ -597,7 +599,9 @@ export function getOrderCardTitle(card: ChatOrderCard) {
 }
 
 export function getOrderCardStatus(card: ChatOrderCard) {
-  return String(card.statusTitle || card.status_title || card.status || card.statusText || card.status_text || '');
+  const statusCode = String(card.statusCode || card.status_code || '').trim().toLowerCase();
+  const title = String(card.statusTitle || card.status_title || card.status || card.statusText || card.status_text || '');
+  return getCustomerOrderStatusTitleFromValues(title, statusCode);
 }
 
 export function getOrderCardTotal(card: ChatOrderCard) {

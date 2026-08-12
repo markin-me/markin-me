@@ -8,8 +8,11 @@ import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import {
   ActivityIndicator,
+  Alert,
+  Animated,
   Image,
   Keyboard,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -21,6 +24,7 @@ import {
 import {
   clearCustomerPassport,
   deleteCustomerPhoto,
+  getCustomerOrderStatusTitleFromValues,
   logoutCustomer,
   readCachedCustomerPassport,
   resolveAssetUrl,
@@ -31,10 +35,47 @@ import {
   type CustomerProfile,
 } from '../../shared/api';
 import { clearCheckoutBenefitsCacheForToken, clearCustomerCheckoutCache } from '../../features/checkout';
+import {
+  fetchCustomerPushPreferences,
+  saveCustomerPushPreferences,
+  useChatPushNotifications,
+  type CustomerPushOrderStatus,
+  type CustomerPushPreferences,
+} from '../../features/chat';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
 
 import { AppText as Text, AppTextInput as TextInput } from '../../shared/ui';
+
+function AppleSwitch({ disabled = false, onValueChange, value }: {
+  disabled?: boolean;
+  onValueChange: (value: boolean) => void;
+  value: boolean;
+}) {
+  const progress = useMemo(() => new Animated.Value(value ? 1 : 0), []);
+
+  useEffect(() => {
+    Animated.timing(progress, {
+      duration: 180,
+      toValue: value ? 1 : 0,
+      useNativeDriver: true,
+    }).start();
+  }, [progress, value]);
+
+  const translateX = progress.interpolate({ inputRange: [0, 1], outputRange: [0, 20] });
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value, disabled }}
+      disabled={disabled}
+      onPress={() => onValueChange(!value)}
+      style={[styles.appleSwitch, value && styles.appleSwitchActive]}
+    >
+      <Animated.View style={[styles.appleSwitchThumb, { transform: [{ translateX }] }]} />
+    </Pressable>
+  );
+}
+
 function normalizePhoneDigits(value: string) {
   let digits = String(value || '').replace(/\D/g, '');
   if (digits.startsWith('8')) digits = `7${digits.slice(1)}`;
@@ -109,6 +150,7 @@ function buildNextPassport(passport: CustomerPassport, customer: CustomerProfile
 
 export function ProfileSettingsPage() {
   const navigation = useNavigation();
+  const { ensurePermission, setEnabled: setPushRegistrationEnabled } = useChatPushNotifications();
   const [passport, setPassport] = useState<CustomerPassport | null>(null);
   const [name, setName] = useState('');
   const [birthday, setBirthday] = useState('');
@@ -119,6 +161,9 @@ export function ProfileSettingsPage() {
   const [photoLoading, setPhotoLoading] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const [pushPreferences, setPushPreferences] = useState<CustomerPushPreferences>({ chat: true, important: true, orders: true, orderStatusIds: [] });
+  const [orderStatuses, setOrderStatuses] = useState<CustomerPushOrderStatus[]>([]);
+  const [pushPreferencesLoading, setPushPreferencesLoading] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -127,6 +172,18 @@ export function ProfileSettingsPage() {
       setPassport(cached);
       setName(cached?.customer?.name || '');
       setBirthday(formatBirthdayDisplay(cached?.customer?.birthday));
+      if (!cached?.customer?.id) return;
+      setPushPreferencesLoading(true);
+      void fetchCustomerPushPreferences(String(cached.customer.id), { customerToken: cached.token })
+        .then((payload) => {
+          if (!isMounted) return;
+          setPushPreferences(payload.preferences);
+          setOrderStatuses(payload.statuses);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (isMounted) setPushPreferencesLoading(false);
+        });
     });
     return () => {
       isMounted = false;
@@ -260,6 +317,52 @@ export function ProfileSettingsPage() {
     }
   };
 
+  const ensurePushPermission = useCallback(async () => {
+    if (await ensurePermission()) return true;
+    Alert.alert(
+      'Включите уведомления',
+      'Разрешите уведомления для приложения в настройках телефона, чтобы получать пуши.',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Открыть настройки', onPress: () => { void Linking.openSettings(); } },
+      ],
+    );
+    return false;
+  }, [ensurePermission]);
+
+  const updatePushPreferences = useCallback(async (next: CustomerPushPreferences) => {
+    if (!passport?.customer?.id) return;
+    setPushPreferences(next);
+    setPushPreferencesLoading(true);
+    try {
+      const hasEnabledPushes = next.chat || next.important || next.orders;
+      if (hasEnabledPushes) await setPushRegistrationEnabled(true);
+      const response = await saveCustomerPushPreferences(String(passport.customer.id), next, { customerToken: passport.token });
+      setPushPreferences(response.preferences);
+    } catch (error) {
+      setErrorText(getSettingsErrorText(error));
+    } finally {
+      setPushPreferencesLoading(false);
+    }
+  }, [passport?.customer?.id, passport?.token, setPushRegistrationEnabled]);
+
+  const handlePushToggle = useCallback(async (key: 'chat' | 'important' | 'orders', nextValue: boolean) => {
+    if (nextValue && !await ensurePushPermission()) return;
+    const next = { ...pushPreferences, [key]: nextValue };
+    if (key === 'orders' && nextValue && !next.orderStatusIds.length) {
+      next.orderStatusIds = orderStatuses.map((status) => status.id);
+    }
+    await updatePushPreferences(next);
+  }, [ensurePushPermission, orderStatuses, pushPreferences, updatePushPreferences]);
+
+  const handleOrderStatusToggle = useCallback(async (statusId: number) => {
+    if (!await ensurePushPermission()) return;
+    const selected = new Set(pushPreferences.orderStatusIds);
+    if (selected.has(statusId)) selected.delete(statusId);
+    else selected.add(statusId);
+    await updatePushPreferences({ ...pushPreferences, orders: true, orderStatusIds: Array.from(selected) });
+  }, [ensurePushPermission, pushPreferences, updatePushPreferences]);
+
   if (!passport) {
     return (
       <Screen>
@@ -357,6 +460,33 @@ export function ProfileSettingsPage() {
                 <Ionicons name="pencil" color={theme.colors.muted} size={18} />
               </Pressable>
             )}
+
+            <View style={styles.divider} />
+
+            <Text style={styles.sectionTitle}>Уведомления</Text>
+            <Text style={styles.sectionHint}>Пуш-уведомления от приложения</Text>
+            <View style={styles.notificationRow}>
+              <Text style={styles.notificationText}>О моих заказах</Text>
+              <AppleSwitch
+                disabled={pushPreferencesLoading}
+                onValueChange={(value) => { void handlePushToggle('orders', value); }}
+                value={pushPreferences.orders}
+              />
+            </View>
+            {pushPreferences.orders ? orderStatuses.map((status) => (
+              <Pressable key={status.id} disabled={pushPreferencesLoading} onPress={() => { void handleOrderStatusToggle(status.id); }} style={styles.statusRow}>
+                <Ionicons color={pushPreferences.orderStatusIds.includes(status.id) ? theme.colors.accent : theme.colors.muted} name={pushPreferences.orderStatusIds.includes(status.id) ? 'checkbox' : 'square-outline'} size={22} />
+                <Text style={styles.statusText}>{getCustomerOrderStatusTitleFromValues(status.title, status.code)}</Text>
+              </Pressable>
+            )) : null}
+            <View style={styles.notificationRow}>
+              <Text style={styles.notificationText}>От чата поддержки</Text>
+              <AppleSwitch disabled={pushPreferencesLoading} onValueChange={(value) => { void handlePushToggle('chat', value); }} value={pushPreferences.chat} />
+            </View>
+            <View style={styles.notificationRow}>
+              <Text style={styles.notificationText}>О важных сообщениях компании</Text>
+              <AppleSwitch disabled={pushPreferencesLoading} onValueChange={(value) => { void handlePushToggle('important', value); }} value={pushPreferences.important} />
+            </View>
           </View>
 
           <Pressable disabled={logoutLoading} onPress={handleLogout} style={styles.logoutButton}>
@@ -373,6 +503,28 @@ export function ProfileSettingsPage() {
 }
 
 const styles = StyleSheet.create({
+  appleSwitch: {
+    backgroundColor: '#e5e5ea',
+    borderRadius: 16,
+    height: 31,
+    justifyContent: 'center',
+    padding: 2,
+    width: 51,
+  },
+  appleSwitchActive: {
+    backgroundColor: theme.colors.accent,
+  },
+  appleSwitchThumb: {
+    backgroundColor: '#ffffff',
+    borderRadius: 13.5,
+    elevation: 1,
+    height: 27,
+    shadowColor: '#000000',
+    shadowOffset: { height: 1, width: 0 },
+    shadowOpacity: 0.18,
+    shadowRadius: 1.5,
+    width: 27,
+  },
   card: {
     backgroundColor: theme.colors.card,
     borderRadius: 18,
@@ -498,6 +650,40 @@ const styles = StyleSheet.create({
   root: {
     backgroundColor: theme.colors.mutedBackground,
     flex: 1,
+  },
+  notificationRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: theme.spacing.md,
+  },
+  notificationText: {
+    color: theme.colors.text,
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  sectionHint: {
+    color: theme.colors.muted,
+    fontSize: 13,
+    marginTop: theme.spacing.xs,
+  },
+  sectionTitle: {
+    color: theme.colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  statusRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    marginLeft: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
+  },
+  statusText: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: '700',
   },
   secondaryButton: {
     alignItems: 'center',

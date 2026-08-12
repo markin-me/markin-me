@@ -19,6 +19,7 @@ type ChatPushContextValue = {
   syncing: boolean;
   error: string;
   setEnabled: (next: boolean) => Promise<boolean>;
+  ensurePermission: () => Promise<boolean>;
   refresh: () => Promise<void>;
 };
 
@@ -313,14 +314,21 @@ export function ChatPushProvider({ children, onNotificationPress, onNotification
     return syncRegistration(next);
   }, [syncRegistration]);
 
+  const ensurePermission = useCallback(async () => {
+    if (Platform.OS === 'web') return true;
+    const current = await Notifications.getPermissionsAsync();
+    return current.status === 'granted';
+  }, []);
+
   const value = useMemo<ChatPushContextValue>(() => ({
     enabled,
     error,
     ready,
     refresh,
     setEnabled,
+    ensurePermission,
     syncing,
-  }), [enabled, error, ready, refresh, setEnabled, syncing]);
+  }), [enabled, ensurePermission, error, ready, refresh, setEnabled, syncing]);
 
   return <ChatPushContext.Provider value={value}>{children}</ChatPushContext.Provider>;
 }

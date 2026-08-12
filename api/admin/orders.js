@@ -28,6 +28,7 @@ const {
   getOrderBenefitsAccrualProvider,
 } = require("../../services/order-benefits-accrual-provider");
 const makePrintApiRouter = require("../print");
+const chatTempRuntime = require("../chatTemp");
 
 module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
@@ -3097,6 +3098,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             tenantId: Number(tenantId),
             storeId: Number(storeId),
             error: String(err?.message || err || "unknown_error"),
+          });
+        }
+        if (typeof chatTempRuntime.sendOrderStatusPush === "function") {
+          chatTempRuntime.sendOrderStatusPush(tenantId, storeId, payload).catch((err) => {
+            console.error("Order status push failed:", err && err.message ? err.message : err);
           });
         }
       }

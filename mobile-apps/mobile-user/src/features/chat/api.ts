@@ -402,6 +402,36 @@ export function unsubscribeChatPush(clientId: string, subscription: ChatPushSubs
   });
 }
 
+export type CustomerPushPreferences = {
+  chat: boolean;
+  important: boolean;
+  orders: boolean;
+  orderStatusIds: number[];
+};
+
+export type CustomerPushOrderStatus = {
+  code?: string;
+  id: number;
+  title: string;
+};
+
+export function fetchCustomerPushPreferences(clientId: string, params: { customerToken?: string }) {
+  return requestData<{ preferences: CustomerPushPreferences; statuses: CustomerPushOrderStatus[] }>('/api/chat-temp/push/preferences', {
+    actor: 'in',
+    customerToken: params.customerToken,
+    query: { client_id: clientId },
+  });
+}
+
+export function saveCustomerPushPreferences(clientId: string, preferences: CustomerPushPreferences, params: { customerToken?: string }) {
+  return requestData<{ preferences: CustomerPushPreferences }>('/api/chat-temp/push/preferences', {
+    actor: 'in',
+    body: JSON.stringify({ client_id: clientId, preferences }),
+    customerToken: params.customerToken,
+    method: 'PUT',
+  });
+}
+
 export function fetchChatClients(params: {
   actor: ChatActor;
   limit?: number;

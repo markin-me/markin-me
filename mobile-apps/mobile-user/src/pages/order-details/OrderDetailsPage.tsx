@@ -21,6 +21,7 @@ import {
 
 import {
   fetchCustomerOrder,
+  getCustomerOrderStatusTitle,
   isSameCachedValue,
   readCachedCustomerOrder,
   readCachedCustomerPassport,
@@ -337,7 +338,7 @@ export function OrderDetailsPage() {
 
           <View style={styles.orderHeader}>
             <Text style={styles.orderTitle}>Заказ #{order.id}</Text>
-            {order.status_title ? <Text style={styles.statusText}>{order.status_title}</Text> : null}
+            {getCustomerOrderStatusTitle(order) ? <Text style={styles.statusText}>{getCustomerOrderStatusTitle(order)}</Text> : null}
           </View>
 
           <View style={styles.infoBlock}>
