@@ -39,10 +39,11 @@ import { ChatMessageBubble } from './components/ChatMessageBubble';
 
 type ChatPageProps = {
   onLogout: () => void;
+  onOpenExpenseDocuments: () => void;
   session: AdminSession;
 };
 
-export function ChatPage({ onLogout, session }: ChatPageProps) {
+export function ChatPage({ onLogout, onOpenExpenseDocuments, session }: ChatPageProps) {
   const chat = useAdminChat(session.token);
   const scrollRef = useRef<ScrollView | null>(null);
   const [query, setQuery] = useState('');
@@ -77,7 +78,7 @@ export function ChatPage({ onLogout, session }: ChatPageProps) {
     if (!chat.activeClientId) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       allowsMultipleSelection: true,
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.86,
     });
     if (result.canceled) return;
@@ -230,6 +231,9 @@ export function ChatPage({ onLogout, session }: ChatPageProps) {
           <Text style={styles.appTitle}>Чаты</Text>
           <Text numberOfLines={1} style={styles.appSubtitle}>{String(session.tenant?.name || session.user?.email || '')}</Text>
         </View>
+        <Pressable onPress={onOpenExpenseDocuments} style={styles.logout}>
+          <Ionicons color="#6b7280" name="receipt-outline" size={22} />
+        </Pressable>
         <Pressable onPress={onLogout} style={styles.logout}>
           <Ionicons color="#6b7280" name="log-out-outline" size={22} />
         </Pressable>

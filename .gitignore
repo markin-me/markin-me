@@ -18,6 +18,7 @@ db-edit.js
 migrations/001-add-multitenancy.sql
 .gitignore
 !mobile-apps/mobile-user/.gitignore
+!mobile-apps/mobile-admin/.gitignore
 migrations/002-add-tenant-password.sql
 db-test.js
 server.log
