@@ -1,7 +1,4 @@
 const express = require('express');
-const crypto = require('crypto');
-
-const EXPO_PUSH_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
 
 function normalizeText(value, maxLength) {
   return String(value || '').trim().slice(0, maxLength);
@@ -89,11 +86,12 @@ function normalizeRow(row) {
   };
 }
 
-function hashPushEndpoint(endpoint) {
-  return crypto.createHash('sha256').update(String(endpoint || '')).digest('hex');
-}
-
-module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
+module.exports = function makeAdminImportantMessagesRouter({
+  db,
+  helpers,
+  ensurePushSubscriptionsTable,
+  sendPushToSubscriptions,
+}) {
   const router = express.Router();
   let tableReady = false;
   let tablePromise = null;
@@ -389,63 +387,43 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
   async function sendImportantPush(tenantId, storeId, message) {
     const title = normalizeText(message.title, 180) || 'PROMO сообщение';
     const body = normalizeText(message.body, 180) || title;
+    if (typeof ensurePushSubscriptionsTable !== 'function' || typeof sendPushToSubscriptions !== 'function') {
+      throw new Error('IMPORTANT_PUSH_RUNTIME_UNAVAILABLE');
+    }
+    await ensurePushSubscriptionsTable();
     let rows = [];
     try {
       const [subscriptionRows] = await db.query(
-        `SELECT id, endpoint
+        `SELECT id, endpoint, p256dh, auth
            FROM chat_push_subscriptions
-          WHERE tenant_id = ? AND actor = 'in' AND push_important_enabled = 1`,
-        [Number(tenantId)]
+          WHERE tenant_id = ? AND store_id = ? AND actor = 'in' AND push_important_enabled = 1
+          ORDER BY updated_at DESC, id DESC`,
+        [Number(tenantId), Number(storeId)]
       );
-      rows = Array.isArray(subscriptionRows) ? subscriptionRows : [];
+      const seenEndpoints = new Set();
+      rows = (Array.isArray(subscriptionRows) ? subscriptionRows : []).filter((row) => {
+        const endpoint = String(row?.endpoint || '').trim();
+        if (!endpoint || seenEndpoints.has(endpoint)) return false;
+        seenEndpoints.add(endpoint);
+        return true;
+      });
     } catch (err) {
       console.error('important messages push subscriptions error:', err && err.message ? err.message : err);
       return;
     }
 
-    const seen = new Set();
-    const expoMessages = [];
-    rows.forEach((row) => {
-      const endpoint = String(row?.endpoint || '').trim();
-      if (!/^ExponentPushToken\[.+\]$/i.test(endpoint) && !/^ExpoPushToken\[.+\]$/i.test(endpoint)) return;
-      const endpointHash = hashPushEndpoint(endpoint);
-      if (seen.has(endpointHash)) return;
-      seen.add(endpointHash);
-      expoMessages.push({
-        to: endpoint,
-        title,
-        body,
-        data: {
-          type: 'important_message',
-          important_message_id: Number(message.id || 0),
-          tenant_id: Number(tenantId),
-          store_id: Number(storeId),
-          open_important_messages: true,
-        },
-        channelId: 'chat',
-        priority: 'high',
-        sound: 'default',
-      });
-    });
-
-    for (let index = 0; index < expoMessages.length; index += 100) {
-      const chunk = expoMessages.slice(index, index + 100);
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const response = await fetch(EXPO_PUSH_ENDPOINT, {
-          method: 'POST',
-          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify(chunk.length === 1 ? chunk[0] : chunk),
-        });
-        // eslint-disable-next-line no-await-in-loop
-        const text = await response.text().catch(() => '');
-        if (!response.ok) {
-          console.error('important messages expo push failed:', response.status, text);
-        }
-      } catch (err) {
-        console.error('important messages expo push failed:', err && err.message ? err.message : err);
-      }
-    }
+    const pushPayload = {
+      type: 'important_message',
+      important_message_id: Number(message.id || 0),
+      tenant_id: Number(tenantId),
+      store_id: Number(storeId),
+      open_important_messages: true,
+      title,
+      body,
+      tag: `important-message-${Number(message.id || 0)}`,
+      url: '/shop',
+    };
+    await sendPushToSubscriptions(rows, pushPayload);
   }
 
   router.get('/', async (req, res) => {
@@ -541,7 +519,7 @@ module.exports = function makeAdminImportantMessagesRouter({ db, helpers }) {
         await replaceMessageProducts(tenantId, storeId, id, actionFields.productIds);
       }
       const message = await getMessageById(tenantId, storeId, id);
-      if (message?.is_published && sendPush) {
+      if (message?.is_published && !message?.is_hidden && sendPush) {
         sendImportantPush(tenantId, storeId, message).catch((err) => {
           console.error('important messages push error:', err && err.message ? err.message : err);
         });

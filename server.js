@@ -1527,7 +1527,8 @@ self.addEventListener('push', function (event) {
   var tag = String((payload && payload.tag) || 'chat-message');
   var url = String((payload && payload.url) || '/shop');
   event.waitUntil(
-    self.registration.showNotification(title, {
+    Promise.all([
+      self.registration.showNotification(title, {
       body: body,
       tag: tag,
       renotify: true,
@@ -1536,9 +1537,14 @@ self.addEventListener('push', function (event) {
         type: String((payload && payload.type) || ''),
         client_id: normalizeNotificationClientId(payload && payload.client_id),
         message_id: String((payload && payload.message_id) || '').trim().slice(0, 120),
-        open_chat: payload && payload.open_chat === true
+        open_chat: payload && payload.open_chat === true,
+        important_message_id: normalizeImportantMessageId(payload && payload.important_message_id),
+        store_id: normalizeImportantMessageId(payload && payload.store_id),
+        open_important_messages: payload && payload.open_important_messages === true
       }
-    })
+      }),
+      notifyImportantMessageClients(payload)
+    ])
   );
 });
 self.addEventListener('notificationclick', function (event) {
@@ -1573,6 +1579,34 @@ function normalizeNotificationClientId(value) {
   return String(Math.trunc(n));
 }
 
+function normalizeImportantMessageId(value) {
+  var n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return String(Math.trunc(n));
+}
+
+function notifyImportantMessageClients(payload) {
+  var importantMessageId = normalizeImportantMessageId(payload && payload.important_message_id);
+  var isImportantMessage = !!(payload && payload.open_important_messages === true)
+    || String((payload && payload.type) || '').trim().toLowerCase() === 'important_message'
+    || !!importantMessageId;
+  if (!isImportantMessage) return Promise.resolve();
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
+    var data = {
+      type: 'important-message-notification-received',
+      payload: {
+        important_message_id: importantMessageId,
+        store_id: normalizeImportantMessageId(payload && payload.store_id)
+      }
+    };
+    clientList.forEach(function (client) {
+      try {
+        if (client && typeof client.postMessage === 'function') client.postMessage(data);
+      } catch {}
+    });
+  });
+}
+
 function parseSameOriginNotificationUrl(urlValue) {
   try {
     var parsed = new URL(String(urlValue || ''), self.location.origin);
@@ -1589,6 +1623,11 @@ function buildNotificationTargetUrl(data) {
   if (!parsed) return baseUrl;
   var type = String((data && data.type) || '').trim().toLowerCase();
   var shouldOpenChat = !!(data && data.open_chat === true && type === 'chat_message');
+  var importantMessageId = normalizeImportantMessageId(data && data.important_message_id);
+  var importantStoreId = normalizeImportantMessageId(data && data.store_id);
+  var shouldOpenImportant = !!(data && data.open_important_messages === true)
+    || type === 'important_message'
+    || !!importantMessageId;
   if (shouldOpenChat) {
     parsed.searchParams.set('open_chat', '1');
     parsed.searchParams.set('chat_source', 'push');
@@ -1596,6 +1635,11 @@ function buildNotificationTargetUrl(data) {
     if (clientId) parsed.searchParams.set('chat_client_id', clientId);
     var messageId = String((data && data.message_id) || '').trim();
     if (messageId) parsed.searchParams.set('chat_message_id', messageId.slice(0, 120));
+  }
+  if (shouldOpenImportant) {
+    parsed.searchParams.set('open_important_messages', '1');
+    if (importantMessageId) parsed.searchParams.set('important_message_id', importantMessageId);
+    if (importantStoreId) parsed.searchParams.set('important_store_id', importantStoreId);
   }
   return parsed.pathname + parsed.search + parsed.hash;
 }
@@ -1617,14 +1661,21 @@ function findNotificationClientByPath(clientList, targetUrl) {
 }
 
 function buildNotificationPostMessageData(data) {
+  var importantMessageId = normalizeImportantMessageId(data && data.important_message_id);
+  var isImportantMessage = !!(data && data.open_important_messages === true)
+    || String((data && data.type) || '').trim().toLowerCase() === 'important_message'
+    || !!importantMessageId;
   return {
-    type: 'chat-notification-click',
+    type: isImportantMessage ? 'important-message-notification-click' : 'chat-notification-click',
     payload: {
       type: String((data && data.type) || ''),
       open_chat: data && data.open_chat === true,
       chat_source: 'push',
       chat_client_id: normalizeNotificationClientId(data && data.client_id),
       chat_message_id: String((data && data.message_id) || '').trim().slice(0, 120),
+      open_important_messages: isImportantMessage,
+      important_message_id: importantMessageId,
+      store_id: normalizeImportantMessageId(data && data.store_id),
       url: String((data && data.url) || '')
     }
   };
@@ -1849,7 +1900,12 @@ app.use('/api/chat-temp', makeChatTempRouter());
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
 app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
-app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessagesRouter({ db, helpers }));
+app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessagesRouter({
+  db,
+  helpers,
+  ensurePushSubscriptionsTable: makeChatTempRouter.ensurePushSubscriptionsTable,
+  sendPushToSubscriptions: makeChatTempRouter.sendPushToSubscriptions,
+}));
 app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents }));
 app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));
 app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents }));

@@ -4880,28 +4880,19 @@
       document.getElementById("shopCompanyChatOpenBtn"),
       document.getElementById("shopHeaderCompanyChatOpenBtn"),
     ].filter(Boolean);
-    const unreadBadges = [
-      document.getElementById("shopCompanyChatUnreadBadge"),
-      document.getElementById("shopHeaderCompanyChatUnreadBadge"),
-    ].filter(Boolean);
     if (!buttons.length) return;
+    const hasChatShell = window.__shopChatUrl !== "";
     buttons.forEach((button) => {
-      button.classList.toggle("hidden", enabled === false);
-      if (enabled === false) {
+      button.classList.toggle("hidden", !hasChatShell);
+      if (!hasChatShell) {
         button.setAttribute("aria-hidden", "true");
         button.setAttribute("tabindex", "-1");
-        button.removeAttribute("data-unread-count");
         return;
       }
       button.removeAttribute("aria-hidden");
       button.removeAttribute("tabindex");
+      button.dataset.supportChatEnabled = enabled === false ? "0" : "1";
     });
-    if (enabled === false) {
-      unreadBadges.forEach((unreadBadge) => {
-        unreadBadge.textContent = "";
-        unreadBadge.classList.add("hidden");
-      });
-    }
   }
 
   function broadcastStorefrontChatWidgetChanged(enabled) {
@@ -4937,18 +4928,15 @@
   async function syncStorefrontChatWidgetStateOnBoot() {
     const cachedEnabled = isStorefrontChatWidgetEnabled();
     syncStorefrontChatButtonVisibility(cachedEnabled);
-    if (cachedEnabled) {
-      ensureShopChatLoaded().catch(function () {});
-    }
+    if (window.__shopChatUrl === "") return;
+    ensureShopChatLoaded().catch(function () {});
 
     const resolved = await resolveStorefrontChatWidgetEnabledFromApi(cachedEnabled);
     if (resolved === cachedEnabled) return;
 
     persistStorefrontChatWidgetEnabled(resolved);
     syncStorefrontChatButtonVisibility(resolved);
-    if (resolved) {
-      ensureShopChatLoaded().catch(function () {});
-    }
+    ensureShopChatLoaded().catch(function () {});
     broadcastStorefrontChatWidgetChanged(resolved);
   }
 
@@ -4967,9 +4955,8 @@
     if (seq !== chatWidgetChangeApplySeq) return;
     persistStorefrontChatWidgetEnabled(enabled);
     syncStorefrontChatButtonVisibility(enabled);
-    if (enabled) {
-      ensureShopChatLoaded().catch(function () {});
-    }
+    if (window.__shopChatUrl === "") return;
+    ensureShopChatLoaded().catch(function () {});
     broadcastStorefrontChatWidgetChanged(enabled);
   }
 
@@ -13649,7 +13636,11 @@ async function initAddresses() {
           }
           resolve();
         });
-        existing.addEventListener('error', () => { resolve(); });
+        existing.addEventListener('error', () => {
+          try { existing.remove(); } catch {}
+          __shopLatePromise = null;
+          resolve();
+        });
         return;
       }
       const s = document.createElement('script');
@@ -13664,7 +13655,11 @@ async function initAddresses() {
         }
         resolve();
       };
-      s.onerror = () => { resolve(); };
+      s.onerror = () => {
+        try { s.remove(); } catch {}
+        __shopLatePromise = null;
+        resolve();
+      };
       document.head.appendChild(s);
     });
     return __shopLatePromise;
@@ -13678,6 +13673,7 @@ async function initAddresses() {
       if (typeof window.openProductDetails === "function" && window.openProductDetails !== openProductDetails) {
         return window.openProductDetails(productId, opts);
       }
+      throw new Error('SHOP_PRODUCT_DETAILS_UNAVAILABLE');
     });
   }
 

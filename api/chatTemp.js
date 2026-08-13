@@ -180,6 +180,7 @@ async function ensurePushSubscriptionsColumns() {
   const [columnRows] = await db.query("SHOW COLUMNS FROM chat_push_subscriptions");
   const columns = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || "")));
   const alterParts = [];
+  if (!columns.has("store_id")) alterParts.push("ADD COLUMN store_id BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER tenant_id");
   if (!columns.has("client_id")) alterParts.push("ADD COLUMN client_id BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER tenant_id");
   if (!columns.has("actor")) alterParts.push("ADD COLUMN actor ENUM('in','out') NOT NULL DEFAULT 'in' AFTER client_id");
   if (!columns.has("endpoint_hash")) alterParts.push("ADD COLUMN endpoint_hash CHAR(64) NOT NULL DEFAULT '' AFTER actor");
@@ -209,6 +210,7 @@ function ensurePushSubscriptionsTable() {
     CREATE TABLE IF NOT EXISTS chat_push_subscriptions (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       tenant_id BIGINT UNSIGNED NOT NULL,
+      store_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
       client_id BIGINT UNSIGNED NOT NULL,
       actor ENUM('in','out') NOT NULL DEFAULT 'in',
       endpoint_hash CHAR(64) NOT NULL,
@@ -499,7 +501,7 @@ function sanitizePushSubscription(raw) {
   return { endpoint, p256dh, auth };
 }
 
-async function upsertPushSubscription(tenantId, clientId, actorKey, subscription, userAgent) {
+async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, subscription, userAgent) {
   await ensurePushSubscriptionsTable();
   const actor = actorKey === "in" ? "in" : "out";
   const endpoint = String(subscription.endpoint || "");
@@ -516,12 +518,21 @@ async function upsertPushSubscription(tenantId, clientId, actorKey, subscription
       [Number(tenantId), Number(clientId), normalizedUserAgent, endpointHash]
     );
   }
+  if (actor === "in") {
+    await db.query(
+      `DELETE FROM chat_push_subscriptions
+        WHERE tenant_id = ? AND actor = 'in'
+          AND endpoint_hash = ? AND client_id <> ?`,
+      [Number(tenantId), endpointHash, Number(clientId)]
+    );
+  }
 
   await db.query(
     `INSERT INTO chat_push_subscriptions
-      (tenant_id, client_id, actor, endpoint_hash, endpoint, p256dh, auth, user_agent)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (tenant_id, store_id, client_id, actor, endpoint_hash, endpoint, p256dh, auth, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
+      store_id = VALUES(store_id),
       client_id = VALUES(client_id),
       actor = VALUES(actor),
       endpoint = VALUES(endpoint),
@@ -531,6 +542,7 @@ async function upsertPushSubscription(tenantId, clientId, actorKey, subscription
       updated_at = CURRENT_TIMESTAMP(3)`,
     [
       Number(tenantId),
+      Number(storeId),
       Number(clientId),
       actor,
       endpointHash,
@@ -626,11 +638,11 @@ async function deletePushSubscriptionsForThreads(tenantId, clientIds) {
   );
 }
 
-async function deletePushSubscriptionsForTenant(tenantId) {
+async function deleteAdminPushSubscriptionsForTenant(tenantId) {
   await ensurePushSubscriptionsTable();
   await db.query(
     `DELETE FROM chat_push_subscriptions
-      WHERE tenant_id = ?`,
+      WHERE tenant_id = ? AND actor = 'out'`,
     [Number(tenantId)]
   );
 }
@@ -1283,7 +1295,7 @@ async function handleTenantChatWidgetStateChange(tenantId, enabled) {
   setTenantChatWidgetEnabledCache(tenantId, enabled);
   if (enabled !== false) return;
   disconnectTenantChatRuntime(tenantId);
-  await deletePushSubscriptionsForTenant(tenantId).catch((err) => {
+  await deleteAdminPushSubscriptionsForTenant(tenantId).catch((err) => {
     console.error("chat-temp tenant push cleanup error:", err);
   });
 }
@@ -4148,7 +4160,8 @@ function makeChatTempRouter() {
     try {
       const tenantId = getTenantId(req);
       const chatEnabled = await isTenantChatWidgetEnabled(tenantId);
-      if (!chatEnabled) {
+      const isPushRequest = String(req.path || "").startsWith("/push/");
+      if (!chatEnabled && !isPushRequest) {
         return res.status(403).json({ ok: false, error: "CHAT_DISABLED" });
       }
       scheduleExpiredGuestThreadsCleanup(tenantId);
@@ -4447,6 +4460,7 @@ function makeChatTempRouter() {
   router.post("/push/subscribe", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const storeId = Math.max(1, Math.trunc(Number(req.headers["x-store-id"] || req.query.store_id || 1)) || 1);
       const actorKey = getRequestReactionActor(req);
       const clientIdRaw = req.body?.client_id ?? req.body?.clientId ?? req.query?.client_id ?? "";
       const clientId = normalizePushClientId(
@@ -4462,6 +4476,7 @@ function makeChatTempRouter() {
       }
       await upsertPushSubscription(
         tenantId,
+        storeId,
         clientId,
         actorKey,
         subscription,
@@ -5482,5 +5497,7 @@ makeChatTempRouter.disconnectTenantChatRuntime = disconnectTenantChatRuntime;
 makeChatTempRouter.setTenantChatWidgetEnabledCache = setTenantChatWidgetEnabledCache;
 makeChatTempRouter.mergeThreadIntoClientAndNotify = mergeThreadIntoClientAndNotify;
 makeChatTempRouter.sendOrderStatusPush = sendOrderStatusPush;
+makeChatTempRouter.sendPushToSubscriptions = sendPushToSubscriptions;
+makeChatTempRouter.ensurePushSubscriptionsTable = ensurePushSubscriptionsTable;
 
 module.exports = makeChatTempRouter;
