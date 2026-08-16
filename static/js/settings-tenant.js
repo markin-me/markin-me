@@ -41158,6 +41158,91 @@
 
     };
 
+    /*
+    function renderCustomerOrderProgress() {
+      const listEl = document.getElementById("settingsCustomerOrderProgressList");
+      if (!listEl) return;
+      const statuses = Array.isArray(settingsListsState["order-statuses"]?.items)
+        ? settingsListsState["order-statuses"].items.filter((item) => Number(item.is_active) === 1)
+        : [];
+      listEl.replaceChildren();
+      customerOrderProgressItems.forEach((item, index) => {
+        const row = document.createElement("div");
+        row.className = "settings-row settings-row--no-icon";
+        const title = document.createElement("input");
+        title.className = "control";
+        title.type = "text";
+        title.maxLength = 120;
+        title.value = String(item.title || "");
+        title.addEventListener("change", () => {
+          customerOrderProgressItems[index].title = title.value.trim();
+          void saveCustomerOrderProgress();
+        });
+        const controls = document.createElement("div");
+        controls.className = "settings-row-switches";
+        const status = document.createElement("select");
+        status.className = "control";
+        statuses.forEach((entry) => {
+          const option = document.createElement("option");
+          option.value = String(entry.id);
+          option.textContent = String(entry.title || "");
+          option.selected = Number(entry.id) === Number(item.status_id);
+          status.appendChild(option);
+        });
+        status.addEventListener("change", () => {
+          customerOrderProgressItems[index].status_id = Number(status.value || 0);
+          void saveCustomerOrderProgress();
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "btn btn-icon btn-sm";
+        remove.setAttribute("aria-label", "Удалить этап");
+        remove.innerHTML = '<i class="fas fa-trash-can" aria-hidden="true"></i>';
+        remove.addEventListener("click", () => {
+          customerOrderProgressItems.splice(index, 1);
+          renderCustomerOrderProgress();
+          void saveCustomerOrderProgress();
+        });
+        controls.append(status, remove);
+        row.append(title, controls);
+        listEl.appendChild(row);
+      });
+    }
+
+    async function saveCustomerOrderProgress() {
+      const res = await authFetch("/api/admin/tenant/order-customer-progress", {
+        method: "PUT",
+        body: JSON.stringify({ items: customerOrderProgressItems }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!data?.ok) {
+        alert("Не удалось сохранить этапы для клиента.");
+        return;
+      }
+      customerOrderProgressItems = Array.isArray(data.items) ? data.items : [];
+      renderCustomerOrderProgress();
+    }
+
+    async function loadCustomerOrderProgress() {
+      if (customerOrderProgressLoaded) return;
+      const res = await authFetch("/api/admin/tenant/order-customer-progress");
+      const data = await res.json().catch(() => null);
+      if (!data?.ok) return;
+      customerOrderProgressItems = Array.isArray(data.items) ? data.items : [];
+      customerOrderProgressLoaded = true;
+      renderCustomerOrderProgress();
+    }
+
+    document.getElementById("settingsCustomerOrderProgressAddBtn")?.addEventListener("click", () => {
+      const statuses = Array.isArray(settingsListsState["order-statuses"]?.items) ? settingsListsState["order-statuses"].items : [];
+      const status = statuses.find((item) => Number(item.is_active) === 1);
+      if (!status) return;
+      customerOrderProgressItems.push({ title: String(status.title || "Этап"), status_id: Number(status.id) });
+      renderCustomerOrderProgress();
+      void saveCustomerOrderProgress();
+    });
+    */
+
 
 
 
@@ -47223,6 +47308,8 @@
 
       row.className = "order-row settings-row";
 
+      if (type === "order-statuses") row.classList.add("settings-row--customer-progress");
+
 
 
       row.setAttribute("draggable", "true");
@@ -47352,6 +47439,28 @@
 
 
       titleWrap.appendChild(titleInput);
+
+      let customerTitleInput = null;
+
+      if (type === "order-statuses") {
+        customerTitleInput = document.createElement("input");
+        customerTitleInput.className = "control settings-customer-progress-input";
+        customerTitleInput.type = "text";
+        customerTitleInput.maxLength = 120;
+        customerTitleInput.value = item.customer_progress_title || "";
+        customerTitleInput.dataset.value = item.customer_progress_title || "";
+        customerTitleInput.addEventListener("blur", async () => {
+          const next = customerTitleInput.value.trim();
+          const previous = customerTitleInput.dataset.value || "";
+          if (next === previous) return;
+          const data = await updateSettingsItem(type, item.id, { customer_progress_title: next || null });
+          if (!data || !data.ok) {
+            customerTitleInput.value = previous;
+            return;
+          }
+          customerTitleInput.dataset.value = next;
+        });
+      }
 
 
 
@@ -47972,6 +48081,8 @@
 
 
       row.appendChild(titleWrap);
+
+      if (customerTitleInput) row.appendChild(customerTitleInput);
 
 
 

@@ -341,6 +341,17 @@ export function OrderDetailsPage() {
             {getCustomerOrderStatusTitle(order) ? <Text style={styles.statusText}>{getCustomerOrderStatusTitle(order)}</Text> : null}
           </View>
 
+          {Array.isArray(order.customer_progress) && order.customer_progress.length ? (
+            <View style={styles.progressBlock}>
+              {order.customer_progress.map((step, index) => (
+                <View key={`${step.status_id || index}-${index}`} style={styles.progressRow}>
+                  <View style={[styles.progressMarker, step.completed && styles.progressMarkerCompleted]} />
+                  <Text style={[styles.progressText, step.completed && styles.progressTextCompleted]}>{String(step.title || '')}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
           <View style={styles.infoBlock}>
             <InfoRow label="Дата и время" value={formatDateTime(order.created_at)} />
             {order.method_title ? <InfoRow label="Способ доставки" value={String(order.method_title)} /> : null}
@@ -636,6 +647,34 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 18,
     fontWeight: '900',
+  },
+  progressBlock: {
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.md,
+  },
+  progressMarker: {
+    borderColor: theme.colors.muted,
+    borderRadius: 5,
+    borderWidth: 2,
+    height: 10,
+    width: 10,
+  },
+  progressMarkerCompleted: {
+    backgroundColor: theme.colors.accent,
+    borderColor: theme.colors.accent,
+  },
+  progressRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  progressText: {
+    color: theme.colors.muted,
+    fontSize: 14,
+  },
+  progressTextCompleted: {
+    color: theme.colors.accent,
+    fontWeight: '800',
   },
   overlayBackdrop: {
     backgroundColor: 'rgba(15, 23, 42, 0.08)',

@@ -4094,6 +4094,22 @@ body.page-clients .shop-chip-btn.important-action-type-btn.is-active{
 .settings-row--no-icon{
   grid-template-columns:minmax(160px,1fr) minmax(140px,220px);
 }
+.settings-row--customer-progress{
+  grid-template-columns:38px minmax(92px,1fr) minmax(92px,1fr) 104px;
+  gap:8px;
+}
+.settings-customer-progress-columns{
+  display:grid;
+  grid-template-columns:38px minmax(92px,1fr) minmax(92px,1fr) 104px;
+  gap:8px;
+  padding:0 12px;
+  color:var(--color-text-muted);
+  font-size:11px;
+  font-weight:600;
+}
+.settings-customer-progress-columns span:nth-child(2),
+.settings-customer-progress-columns span:nth-child(3){text-align:center}
+.settings-customer-progress-columns + .settings-list{margin-top:0}
 .settings-row.is-default::before{
   content:"";
   position:absolute;
@@ -4166,6 +4182,11 @@ body.page-clients .shop-chip-btn.important-action-type-btn.is-active{
   background:var(--color-surface-2);
 }
 .settings-row-title .control{width:100%}
+.settings-row--customer-progress > .settings-customer-progress-input{min-width:0}
+.settings-row--customer-progress .settings-icon-btn{width:36px;height:36px;border-radius:10px}
+.settings-row--customer-progress .settings-row-switches{flex-wrap:nowrap;gap:0;justify-content:space-between}
+.settings-row--customer-progress .settings-row-switches .switch{width:48px;gap:4px}
+.settings-row--customer-progress .settings-row-switches .switch-text{font-size:10px;white-space:nowrap}
 .settings-row-switches{
   display:flex;
   flex-wrap:wrap;
@@ -16708,6 +16729,32 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 .option-picker-panel{
   overflow-x:hidden;
 }
+#discountProductPicker:not(.hidden){
+  display:flex;
+  flex:1 1 auto;
+  min-height:0;
+  overflow:hidden;
+  overflow-x:hidden;
+}
+#discountProductPicker:not(.hidden) .option-picker-panel{
+  display:flex;
+  flex-direction:column;
+  flex:1 1 auto;
+  min-height:0;
+}
+#discountProductPicker:not(.hidden) .option-picker-tabs,
+#discountProductPicker:not(.hidden) .option-picker-controls{
+  flex:0 0 auto;
+}
+#discountProductPicker:not(.hidden) .option-picker-list{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+#discountProductPicker:not(.hidden) .option-picker-list::-webkit-scrollbar{width:0;height:0;display:none}
 .inline-modal-footer{
   display:flex;
   justify-content:flex-end;

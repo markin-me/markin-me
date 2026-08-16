@@ -1024,9 +1024,9 @@ async function sendOrderStatusPush(tenantId, storeId, order) {
   if (!customerId || !statusId) return;
   const [rows] = await db.query(
     `SELECT id, endpoint, p256dh, auth FROM chat_push_subscriptions
-      WHERE tenant_id=? AND client_id=? AND actor='in' AND push_orders_enabled=1
+      WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in' AND push_orders_enabled=1
         AND (push_order_status_ids_json IS NULL OR JSON_CONTAINS(push_order_status_ids_json, CAST(? AS JSON)))`,
-    [Number(tenantId), customerId, String(statusId)]
+    [Number(tenantId), Number(storeId), customerId, String(statusId)]
   );
   await sendPushToSubscriptions(rows, {
     type: "order_status",
@@ -4506,8 +4506,8 @@ function makeChatTempRouter() {
       const statuses = await listOrderStatuses(tenantId, storeId);
       const [rows] = await db.query(
         `SELECT push_chat_enabled, push_important_enabled, push_orders_enabled, push_order_status_ids_json
-           FROM chat_push_subscriptions WHERE tenant_id=? AND client_id=? AND actor='in' ORDER BY updated_at DESC LIMIT 1`,
-        [Number(tenantId), Number(clientId)]
+           FROM chat_push_subscriptions WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in' ORDER BY updated_at DESC LIMIT 1`,
+        [Number(tenantId), Number(storeId), Number(clientId)]
       );
       const row = rows?.[0] || {};
       let ids = [];
@@ -4529,8 +4529,8 @@ function makeChatTempRouter() {
       const preferences = normalizePushPreferences(req.body?.preferences, statuses);
       await ensurePushSubscriptionsTable();
       await db.query(
-        `UPDATE chat_push_subscriptions SET push_chat_enabled=?, push_important_enabled=?, push_orders_enabled=?, push_order_status_ids_json=? WHERE tenant_id=? AND client_id=? AND actor='in'`,
-        [preferences.chat ? 1 : 0, preferences.important ? 1 : 0, preferences.orders ? 1 : 0, JSON.stringify(preferences.orderStatusIds), Number(tenantId), Number(clientId)]
+        `UPDATE chat_push_subscriptions SET push_chat_enabled=?, push_important_enabled=?, push_orders_enabled=?, push_order_status_ids_json=? WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in'`,
+        [preferences.chat ? 1 : 0, preferences.important ? 1 : 0, preferences.orders ? 1 : 0, JSON.stringify(preferences.orderStatusIds), Number(tenantId), Number(storeId), Number(clientId)]
       );
       return res.json({ ok: true, data: { preferences } });
     } catch (err) {

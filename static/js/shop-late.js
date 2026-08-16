@@ -32312,71 +32312,87 @@ function renderSheetAddressList() {
     themeRow.appendChild(themeSwitch);
     settingsWrap.appendChild(themeRow);
 
-    const chatNotificationsRow = document.createElement("div");
-    chatNotificationsRow.className = "shop-profile-settings-row";
-    const chatNotificationsTitle = document.createElement("div");
-    chatNotificationsTitle.className = "shop-profile-settings-title";
-    chatNotificationsTitle.textContent = "Уведомления о новых сообщениях";
-    const chatNotificationsSwitch = document.createElement("label");
-    chatNotificationsSwitch.className = "switch";
-    const chatNotificationsInput = document.createElement("input");
-    chatNotificationsInput.type = "checkbox";
-    chatNotificationsInput.className = "switch-input";
-    chatNotificationsInput.checked = window.shopCompanyChatNotifications?.isEnabled?.() === true;
-    chatNotificationsInput.disabled = !window.shopCompanyChatNotifications;
-    chatNotificationsInput.addEventListener("change", async () => {
-      const notificationsApi = window.shopCompanyChatNotifications;
-      if (!notificationsApi?.setEnabled) {
-        chatNotificationsInput.checked = false;
-        return;
-      }
-      const shouldEnable = chatNotificationsInput.checked;
-      chatNotificationsInput.disabled = true;
-      try {
-        const enabled = await notificationsApi.setEnabled(shouldEnable);
-        chatNotificationsInput.checked = enabled;
-        if (shouldEnable && !enabled) {
-          const status = notificationsApi.getStatus?.() || {};
-          let message = "Разрешение на уведомления не предоставлено. Нажмите на свитч ещё раз и подтвердите системный запрос браузера.";
-          if (status.supported === false) {
-            message = "Этот браузер не поддерживает push-уведомления.";
-          } else if (status.secureContext === false) {
-            message = "Уведомления доступны только при защищённом HTTPS-подключении.";
-          } else if (status.permission === "denied") {
-            message = "Уведомления заблокированы в настройках браузера. Разрешите уведомления для этого сайта и повторите попытку.";
-          }
-          const permissionText = document.createElement("div");
-          permissionText.className = "shop-profile-notification-permission";
-          permissionText.textContent = message;
-          window.AppModal.open({
-            title: "Уведомления",
-            content: permissionText,
-            cancelText: "Закрыть",
-            showSave: false,
-            showCancel: true,
-            onClose: () => {
-              window.AppModal?.body?.classList.remove("shop-notification-permission-modal-body");
-            },
-          });
-          window.AppModal.body?.classList.add("shop-notification-permission-modal-body");
-        }
-      } finally {
-        chatNotificationsInput.disabled = false;
-      }
-    });
-    if (!window.shopCompanyChatNotifications && typeof window.ensureShopChatLoaded === "function") {
-      void window.ensureShopChatLoaded().then(() => {
-        chatNotificationsInput.checked = window.shopCompanyChatNotifications?.isEnabled?.() === true;
-        chatNotificationsInput.disabled = !window.shopCompanyChatNotifications;
-      });
+    const notificationInputs = [];
+    const pushNotificationRows = [];
+    let pushPreferences = { chat: true, important: true, orders: true, orderStatusIds: [] };
+    let pushPreferencesSaving = false;
+
+    function setPushInputsDisabled(disabled) {
+      notificationInputs.forEach((input) => { input.disabled = disabled; });
     }
-    const chatNotificationsUi = document.createElement("span");
-    chatNotificationsUi.className = "switch-ui";
-    chatNotificationsSwitch.appendChild(chatNotificationsInput);
-    chatNotificationsSwitch.appendChild(chatNotificationsUi);
-    chatNotificationsRow.appendChild(chatNotificationsTitle);
-    chatNotificationsRow.appendChild(chatNotificationsSwitch);
-    settingsWrap.appendChild(chatNotificationsRow);
+
+    async function savePushPreferences(nextPreferences) {
+      const notificationsApi = window.shopCompanyChatNotifications;
+      if (!notificationsApi?.savePreferences || pushPreferencesSaving) return;
+      pushPreferencesSaving = true;
+      setPushInputsDisabled(true);
+      try {
+        if (nextPreferences.chat || nextPreferences.important || nextPreferences.orders) {
+          const enabled = await notificationsApi.setEnabled(true);
+          if (!enabled) {
+            return;
+          }
+        }
+        pushPreferences = await notificationsApi.savePreferences(nextPreferences);
+      } catch {
+        // Keep the last confirmed server state in the controls.
+      } finally {
+        pushPreferencesSaving = false;
+        notificationInputs.forEach((input) => {
+          input.checked = pushPreferences[input.dataset.pushPreference] === true;
+        });
+        setPushInputsDisabled(false);
+      }
+    }
+
+    function addPushPreferenceRow(titleText, key) {
+      const row = document.createElement("div");
+      row.className = "shop-profile-settings-row";
+      const title = document.createElement("div");
+      title.className = "shop-profile-settings-title";
+      title.textContent = titleText;
+      const label = document.createElement("label");
+      label.className = "switch";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.className = "switch-input";
+      input.dataset.pushPreference = key;
+      input.disabled = true;
+      input.addEventListener("change", function () {
+        const next = { ...pushPreferences, [key]: input.checked };
+        void savePushPreferences(next);
+      });
+      const ui = document.createElement("span");
+      ui.className = "switch-ui";
+      label.append(input, ui);
+      row.append(title, label);
+      notificationInputs.push(input);
+      pushNotificationRows.push(row);
+      settingsWrap.appendChild(row);
+    }
+
+    addPushPreferenceRow("Уведомления о новых сообщениях", "chat");
+    addPushPreferenceRow("Уведомления о заказах", "orders");
+    addPushPreferenceRow("Уведомления о важных сообщениях", "important");
+
+    async function loadPushPreferences() {
+      const notificationsApi = window.shopCompanyChatNotifications;
+      if (!notificationsApi?.getPreferences) return;
+      try {
+        const payload = await notificationsApi.getPreferences();
+        pushPreferences = payload.preferences;
+        notificationInputs.forEach((input) => {
+          input.checked = pushPreferences[input.dataset.pushPreference] === true;
+        });
+        setPushInputsDisabled(false);
+      } catch {
+        // The settings remain disabled until a signed-in push profile is available.
+      }
+    }
+    if (window.shopCompanyChatNotifications) void loadPushPreferences();
+    else if (typeof window.ensureShopChatLoaded === "function") {
+      void window.ensureShopChatLoaded().then(loadPushPreferences).catch(() => {});
+    }
 
     const updateRow = document.createElement("div");
     updateRow.className = "shop-profile-settings-row";
@@ -32857,7 +32873,7 @@ function renderSheetAddressList() {
     }
     if (settingsPage) {
       Array.from(settingsWrap.children).forEach((row) => {
-        if (row !== chatNotificationsRow) row.remove();
+        if (!pushNotificationRows.includes(row)) row.remove();
       });
       settingsPanel.classList.add("is-active");
       wrap.appendChild(settingsPanel);
@@ -33504,6 +33520,18 @@ function renderSheetAddressList() {
         html += `<div class="shop-order-details-status">${escapeHtml(order.status_title)}</div>`;
       }
       html += `</div>`;
+
+      const customerProgress = Array.isArray(order.customer_progress) ? order.customer_progress : [];
+      if (customerProgress.length) {
+        html += `<div class="shop-order-customer-progress">`;
+        customerProgress.forEach((step) => {
+          html += `<div class="shop-order-customer-progress__step${step.completed ? " is-completed" : ""}">`;
+          html += `<span class="shop-order-customer-progress__marker"></span>`;
+          html += `<span>${escapeHtml(step.title || "")}</span>`;
+          html += `</div>`;
+        });
+        html += `</div>`;
+      }
       
       // Информация о заказе
       html += `<div class="shop-order-details-info">`;
@@ -34600,6 +34628,9 @@ function renderSheetAddressList() {
     }
     if (!me || !elProfileSettingsPageContent) return;
     showProfileSettingsView();
+    if (elProfileSettingsBackBtn) {
+      elProfileSettingsBackBtn.onclick = () => void openProfilePanel(me, { forceOpen: true });
+    }
     buildProfileContent({
       host: elProfileSettingsPageContent,
       me,
@@ -34612,9 +34643,6 @@ function renderSheetAddressList() {
     });
     const tabs = elProfileSettingsPageContent.querySelector(".shop-profile-tabs");
     if (tabs) tabs.classList.add("hidden");
-    if (elProfileSettingsBackBtn) {
-      elProfileSettingsBackBtn.onclick = () => void openProfilePanel(me, { forceOpen: true });
-    }
     if (elProfileSettingsLogoutBtn) {
       elProfileSettingsLogoutBtn.onclick = async () => {
         const loggedOut = await handleProfileLogout();

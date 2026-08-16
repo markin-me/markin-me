@@ -342,6 +342,11 @@ export type CustomerOrder = Record<string, unknown> & {
   status_id?: number | string | null;
   status_code?: string | null;
   status_title?: string | null;
+  customer_progress?: Array<{
+    title?: string | null;
+    status_id?: number | string | null;
+    completed?: boolean;
+  }>;
   time_option_title?: string | null;
   total?: number | string | null;
   total_amount?: number | string | null;

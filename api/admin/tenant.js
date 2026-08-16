@@ -2237,7 +2237,11 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   const listConfigs = {
     'order-statuses': {
       table: 'order_statuses',
-      hasFinal: true
+      hasFinal: true,
+      detailFields: ['customer_progress_title'],
+      patchFields: {
+        customer_progress_title: (value) => helpers.strOrNull(value),
+      }
     },
     'order-payments': {
       table: 'order_payments',
@@ -2275,6 +2279,15 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       }
     }
   };
+
+  let orderStatusCustomerProgressColumnPromise = null;
+  function ensureOrderStatusCustomerProgressColumn() {
+    if (orderStatusCustomerProgressColumnPromise) return orderStatusCustomerProgressColumnPromise;
+    orderStatusCustomerProgressColumnPromise = db.query('SHOW COLUMNS FROM order_statuses LIKE \'customer_progress_title\'')
+      .then(([rows]) => rows.length || db.query('ALTER TABLE order_statuses ADD COLUMN customer_progress_title VARCHAR(120) NULL AFTER title'))
+      .catch((err) => { orderStatusCustomerProgressColumnPromise = null; throw err; });
+    return orderStatusCustomerProgressColumnPromise;
+  }
 
   function getListConfig(type) {
     return listConfigs[type] || null;
@@ -4513,8 +4526,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
 
+      await ensureOrderStatusCustomerProgressColumn();
       const [rows] = await db.query(
-        `SELECT id, code, title, icon, sort, is_active, is_final
+        `SELECT id, code, title, customer_progress_title, icon, sort, is_active, is_final
          FROM order_statuses
          WHERE tenant_id=? AND store_id=1
          ORDER BY sort ASC, id ASC`,
@@ -4596,6 +4610,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!cfg) return res.status(400).json({ ok: false, error: 'TYPE_INVALID' });
       if (type === 'order-delivery') {
         await ensureOrderDeliveryTypeColumns();
+      }
+      if (type === 'order-statuses') {
+        await ensureOrderStatusCustomerProgressColumn();
       }
 
       const title = req.body.title !== undefined ? helpers.strOrNull(req.body.title) : undefined;

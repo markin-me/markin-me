@@ -513,7 +513,8 @@
   let webPushSyncForceRequested = false;
   let webPushSyncQueuedClientId = "";
   let notificationPermissionPromptShownInSession = false;
-  let notificationPermissionPromptEl = null;
+  let notificationPermissionPromptScheduled = false;
+  let webPushPreferencesCache = null;
   const selectedMessageIds = new Set();
   const hotQuestionOrderCardsCache = new Map();
   const hotQuestionOrderCardsFetchInFlight = new Map();
@@ -1923,81 +1924,49 @@
 
   function shouldOfferNotificationPermissionPrompt() {
     if (notificationPermissionPromptShownInSession) return false;
-    if (!isSupportChatOpen()) return false;
     if (!isWebPushSupported()) return false;
     if (!isWebPushSecureContext()) return false;
     if (!("Notification" in window)) return false;
     try {
-      if (localStorage.getItem(chatNotificationsStorageKey) !== null) return false;
+      if (localStorage.getItem(webPushPermissionPromptStorageKey) === "1") return false;
     } catch {}
-    return String(Notification.permission || "default") !== "denied";
-  }
-
-  function ensureNotificationPermissionPrompt() {
-    if (notificationPermissionPromptEl && notificationPermissionPromptEl.isConnected) {
-      return notificationPermissionPromptEl;
-    }
-    if (!modalBody || !modalBody.isConnected) return null;
-    const promptHost = modalBody;
-    const node = document.createElement("div");
-    node.className = "shop-company-chat-permission-prompt hidden";
-    node.setAttribute("aria-live", "polite");
-    node.innerHTML =
-      '<div class="shop-company-chat-permission-prompt__card">' +
-        '<button type="button" class="shop-company-chat-permission-prompt__close" aria-label="\u0417\u0430\u043a\u0440\u044b\u0442\u044c">' +
-          '<i class="fas fa-times"></i>' +
-        "</button>" +
-        '<div class="shop-company-chat-permission-prompt__text">\u041f\u043e\u043b\u0443\u0447\u0430\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f\u0445 \u0432 \u0447\u0430\u0442\u0435?</div>' +
-        '<button type="button" class="shop-company-chat-permission-prompt__allow">\u0414\u0430</button>' +
-      "</div>";
-    promptHost.appendChild(node);
-    notificationPermissionPromptEl = node;
-
-    const closeBtn = node.querySelector(".shop-company-chat-permission-prompt__close");
-    if (closeBtn) {
-      closeBtn.addEventListener("click", function (event) {
-        event.preventDefault();
-        void setChatNotificationsEnabled(false);
-        hideNotificationPermissionPrompt();
-      });
-    }
-
-    const allowBtn = node.querySelector(".shop-company-chat-permission-prompt__allow");
-    if (allowBtn) {
-      allowBtn.addEventListener("click", function (event) {
-        event.preventDefault();
-        setChatNotificationsEnabled(true)
-          .finally(function () {
-            hideNotificationPermissionPrompt();
-          });
-      });
-    }
-
-    return node;
-  }
-
-  function hideNotificationPermissionPrompt() {
-    const prompt = (
-      notificationPermissionPromptEl
-      && notificationPermissionPromptEl.isConnected
-    )
-      ? notificationPermissionPromptEl
-      : null;
-    if (!prompt) return;
-    prompt.classList.remove("is-visible");
-    prompt.classList.add("hidden");
+    return String(Notification.permission || "default") === "default";
   }
 
   function maybeShowNotificationPermissionPrompt() {
-    const prompt = ensureNotificationPermissionPrompt();
-    if (!prompt) return;
-    if (!prompt.classList.contains("hidden")) return;
     if (!shouldOfferNotificationPermissionPrompt()) return;
+    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    if (typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen()) return;
     notificationPermissionPromptShownInSession = true;
-    prompt.classList.remove("hidden");
-    requestAnimationFrame(function () {
-      prompt.classList.add("is-visible");
+    try { localStorage.setItem(webPushPermissionPromptStorageKey, "1"); } catch {}
+    const content = document.createElement("div");
+    content.className = "shop-profile-notification-permission";
+    content.textContent = "Разрешите уведомления, чтобы получать новости компании, изменения статуса заказов и ответы поддержки.";
+    window.AppModal.open({
+      title: "Получать уведомления?",
+      content: content,
+      cancelText: "Не сейчас",
+      saveText: "Разрешить",
+      showCancel: true,
+      showSave: true,
+      onSave: function () {
+        return setChatNotificationsEnabled(true).then(function () { return true; });
+      },
+      onClose: function () {
+        window.AppModal?.body?.classList.remove("shop-notification-permission-modal-body");
+      },
     });
+    window.AppModal.body?.classList.add("shop-notification-permission-modal-body");
+  }
+
+  function scheduleNotificationPermissionPrompt() {
+    if (notificationPermissionPromptScheduled) return;
+    notificationPermissionPromptScheduled = true;
+    const show = function () {
+      window.setTimeout(maybeShowNotificationPermissionPrompt, 350);
+    };
+    if (document.readyState === "complete") show();
+    else window.addEventListener("load", show, { once: true });
   }
 
   function suppressIncomingAlertsFor(ms) {
@@ -2059,7 +2028,7 @@
   }
 
   function playMessageAlertSound() {
-    if (!isChatNotificationsEnabled()) return;
+    if (!isChatNotificationAlertsEnabled()) return;
     const soundUrl = getTenantMessageSoundUrl();
     if (soundUrl) {
       try {
@@ -2135,7 +2104,7 @@
   }
 
   function showIncomingMessageBrowserNotification(title, body) {
-    if (!isChatNotificationsEnabled()) return;
+    if (!isChatNotificationAlertsEnabled()) return;
     if (!("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
     try {
@@ -2151,7 +2120,7 @@
   }
 
   function shouldSuppressLocalBrowserNotification() {
-    if (!isChatNotificationsEnabled()) return true;
+    if (!isChatNotificationAlertsEnabled()) return true;
     if (!isWebPushSupported() || !isWebPushSecureContext()) return false;
     if (Notification.permission !== "granted") return false;
     if (String(webPushSyncedFingerprint || "").trim()) return true;
@@ -2639,6 +2608,7 @@
   const customerChatClientIdByIdentityPrefix = "shop_company_chat_customer_id_for_identity_t" + tenantId + "_";
   const webPushVapidStorageKey = "shop_company_chat_push_vapid_t" + tenantId;
   const chatNotificationsStorageKey = "shop_company_chat_notifications_enabled_t" + tenantId;
+  const webPushPermissionPromptStorageKey = "shop_push_permission_prompted_t" + tenantId;
   function isChatNotificationsEnabled() {
     try {
       if (localStorage.getItem(chatNotificationsStorageKey) !== "1") return false;
@@ -3305,6 +3275,11 @@
     unreadServerTotal = 0;
     unreadStatePrimed = true;
     renderUnreadBadge(liveEntries);
+  }
+
+  function isChatNotificationAlertsEnabled() {
+    return isChatNotificationsEnabled()
+      && (!webPushPreferencesCache || webPushPreferencesCache.chat !== false);
   }
 
   function handleChatFeatureDisabledByServer() {
@@ -7331,6 +7306,43 @@
     return true;
   }
 
+  function normalizeWebPushPreferences(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    return {
+      chat: source.chat !== false,
+      important: source.important !== false,
+      orders: source.orders !== false,
+      orderStatusIds: Array.isArray(source.orderStatusIds)
+        ? source.orderStatusIds.map(Number).filter(function (id) { return id > 0; })
+        : [],
+    };
+  }
+
+  async function getWebPushPreferences() {
+    const [json, orderConfigJson] = await Promise.all([
+      chatApiJson(CHAT_TEMP_API_BASE + "/push/preferences"),
+      chatApiJson("/api/public/order-config"),
+    ]);
+    const data = json && json.data ? json.data : {};
+    const orderConfig = orderConfigJson && orderConfigJson.data ? orderConfigJson.data : {};
+    const preferences = normalizeWebPushPreferences(data.preferences);
+    webPushPreferencesCache = preferences;
+    return {
+      preferences: preferences,
+      statuses: Array.isArray(orderConfig.statuses) ? orderConfig.statuses : [],
+    };
+  }
+
+  async function saveWebPushPreferences(preferences) {
+    const json = await chatApiJson(CHAT_TEMP_API_BASE + "/push/preferences", {
+      method: "PUT",
+      body: { preferences: normalizeWebPushPreferences(preferences) },
+    });
+    const saved = normalizeWebPushPreferences(json && json.data ? json.data.preferences : preferences);
+    webPushPreferencesCache = saved;
+    return saved;
+  }
+
   function normalizeImportantMessagesOpenRequest(rawRequest) {
     const source = rawRequest && typeof rawRequest === "object" ? rawRequest : {};
     const openRaw = source.open_important_messages ?? source.openImportantMessages ?? source.open_promo_messages;
@@ -8137,8 +8149,18 @@
     if (opts.preserveHistory !== true) pushMessageCenterHistoryState("important-details", safeId);
     setMessageCenterView("important-details");
     const item = getImportantMessageById(safeId);
-    if (!item || opts.forceRefresh === true) {
-      renderImportantMessageDetailsState("Загружаем сообщение", "far fa-hourglass");
+    if (item) {
+      markImportantMessageRead(item);
+      renderImportantMessageDetails(safeId);
+      const cachedProductIds = getImportantMessageActionType(item) === "product_collection" && Array.isArray(item.product_ids)
+        ? item.product_ids
+        : [];
+      ensureImportantMessagesProductDetails(cachedProductIds).then(function () {
+        if (messageCenterScreen === "important-details" && activeImportantMessageId === safeId) renderImportantMessageDetails(safeId);
+      });
+    }
+    if (!item || opts.forceRefresh !== false) {
+      if (!item) renderImportantMessageDetailsState("Загружаем сообщение", "far fa-hourglass");
       const requestScopeKey = getImportantMessagesCacheKey();
       importantMessagesApiJson(IMPORTANT_MESSAGES_API_BASE + "?limit=100&_ts=" + Date.now())
         .then(function (json) {
@@ -8163,7 +8185,7 @@
         })
         .catch(function () {
           if (getImportantMessagesCacheKey() !== requestScopeKey) return;
-          if (messageCenterScreen === "important-details" && activeImportantMessageId === safeId) {
+          if (!item && messageCenterScreen === "important-details" && activeImportantMessageId === safeId) {
             renderImportantMessageDetailsState("Не удалось загрузить сообщение", "far fa-circle-exclamation");
           }
         });
@@ -8188,7 +8210,6 @@
     syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
     closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
     closeMessageImageViewer();
-    hideNotificationPermissionPrompt();
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
@@ -8444,7 +8465,6 @@
     saveFeedScrollPosition({ persist: true });
     syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
     closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
-    hideNotificationPermissionPrompt();
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
@@ -10302,14 +10322,12 @@
 
       renderHotQuestionOrderCard(card, resolved.preview, orderId);
 
-      if (!resolved.preview) {
-        ensureHotQuestionOrderCardPreview(orderId)
-          .then(function (preview) {
-            if (!card.isConnected || !preview) return;
-            renderHotQuestionOrderCard(card, preview, orderId);
-          })
-          .catch(function () {});
-      }
+      ensureHotQuestionOrderCardPreview(orderId, true)
+        .then(function (preview) {
+          if (!card.isConnected || !preview) return;
+          renderHotQuestionOrderCard(card, preview, orderId);
+        })
+        .catch(function () {});
 
       strip.appendChild(card);
     });
@@ -13295,10 +13313,10 @@
     return cacheHotQuestionOrderPreview(order);
   }
 
-  async function ensureHotQuestionOrderCardPreview(orderId) {
+  async function ensureHotQuestionOrderCardPreview(orderId, refresh) {
     const safeOrderId = toPositiveOrderId(orderId);
     if (!safeOrderId) return null;
-    if (hotQuestionOrderCardsCache.has(safeOrderId)) {
+    if (!refresh && hotQuestionOrderCardsCache.has(safeOrderId)) {
       return hotQuestionOrderCardsCache.get(safeOrderId) || null;
     }
     if (hotQuestionOrderCardsFetchInFlight.has(safeOrderId)) {
@@ -15626,6 +15644,8 @@
   window.shopCompanyChatNotifications = {
     isEnabled: isChatNotificationsEnabled,
     setEnabled: setChatNotificationsEnabled,
+    getPreferences: getWebPushPreferences,
+    savePreferences: saveWebPushPreferences,
     getStatus: function () {
       return {
         supported: isWebPushSupported(),
@@ -15637,5 +15657,6 @@
   if (!isChatNotificationsEnabled()) {
     unsubscribeWebPushNotifications().catch(function () {});
   }
+  scheduleNotificationPermissionPrompt();
 })();
 

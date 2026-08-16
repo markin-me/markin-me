@@ -1926,6 +1926,11 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   background:var(--color-surface-2);
 }
 .settings-row-title .control{width:100%}
+.shop-order-customer-progress{display:grid;gap:8px;margin:14px 0}
+.shop-order-customer-progress__step{display:flex;align-items:center;gap:8px;color:var(--color-text-muted);font-size:14px}
+.shop-order-customer-progress__marker{width:10px;height:10px;border:2px solid currentColor;border-radius:50%;box-sizing:border-box}
+.shop-order-customer-progress__step.is-completed{color:var(--color-primary)}
+.shop-order-customer-progress__step.is-completed .shop-order-customer-progress__marker{background:currentColor}
 .settings-row-switches{
   display:flex;
   flex-wrap:wrap;
@@ -25826,6 +25831,20 @@ body.page-shop .app-modal-footer{
 body.page-shop .app-modal-body.shop-notification-permission-modal-body + .app-modal-footer{
   display:flex;
 }
+@media (max-width:768px){
+  body:has(.app-modal-body.shop-notification-permission-modal-body) .app-modal{
+    top:50%;
+    bottom:auto;
+    width:min(360px, calc(100vw - 32px));
+    height:auto;
+    max-height:calc(100dvh - 48px);
+    border-radius:20px;
+    transform:translate(-50%, calc(-50% + 24px));
+  }
+  body:has(.app-modal-body.shop-notification-permission-modal-body) .app-modal.is-open{
+    transform:translate(-50%, -50%);
+  }
+}
 body.page-shop .app-modal-body::after{
   height:0;
 }
@@ -31075,15 +31094,21 @@ body.page-kso .shop-products-panel{
   }
 
   .shop-company-chat-overlay.is-messages-home .shop-company-chat-modal__header{
-    position: absolute;
-    inset: 0 0 auto;
-    z-index: 21;
-    background: transparent;
-    pointer-events: none;
+    display:flex;
   }
 
-  .shop-company-chat-overlay.is-messages-home .shop-company-chat-modal__close{
-    pointer-events: auto;
+  .shop-company-chat-overlay.is-messages-home .shop-company-chat-modal__title{
+    position:static;
+    width:auto;
+    height:auto;
+    overflow:visible;
+    clip:auto;
+    clip-path:none;
+    white-space:nowrap;
+  }
+
+  .shop-company-chat-overlay.is-messages-home .shop-company-messages-home__title{
+    display:none;
   }
 }
 
