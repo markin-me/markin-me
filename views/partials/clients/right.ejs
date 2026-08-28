@@ -239,26 +239,28 @@
             <span class="switch-ui" aria-hidden="true"></span>
             <span class="switch-text">Показывать блок подписок</span>
           </label>
-          <label class="subscription-inline-reward-field">
-            <span>Размер блока</span>
-            <span class="discount-inline-value-control subscription-inline-value-control">
-              <input class="control discount-inline-value-input" id="subscriptionStorefrontAspectRatioInput" type="text" value="11:5" readonly />
-            </span>
-          </label>
-          <label class="subscription-inline-reward-field">
-            <span>Цвет блока</span>
-            <span class="subscription-storefront-color-field">
-              <input id="subscriptionStorefrontBackgroundColorInput" type="color" value="#f1e8ff" />
-              <span id="subscriptionStorefrontBackgroundColorValue">#f1e8ff</span>
-            </span>
-          </label>
-          <label class="subscription-inline-reward-field">
-            <span>Заголовок</span>
-            <span class="discount-inline-value-control subscription-inline-value-control">
-              <input class="control discount-inline-value-input" id="subscriptionStorefrontTitleInput" type="text" maxlength="150" />
-            </span>
-          </label>
           <div class="subscription-storefront-two-columns">
+            <label class="subscription-inline-reward-field">
+              <span>Размер блока</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontAspectRatioInput" type="text" value="11:5" readonly />
+              </span>
+            </label>
+            <label class="subscription-inline-reward-field">
+              <span>Цвет блока</span>
+              <span class="subscription-storefront-color-field">
+                <input id="subscriptionStorefrontBackgroundColorInput" type="color" value="#f1e8ff" />
+                <span id="subscriptionStorefrontBackgroundColorValue">#f1e8ff</span>
+              </span>
+            </label>
+          </div>
+          <div class="subscription-storefront-three-columns">
+            <label class="subscription-inline-reward-field">
+              <span>Заголовок</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontTitleInput" type="text" maxlength="150" />
+              </span>
+            </label>
             <label class="subscription-inline-reward-field">
               <span>Размер заголовка</span>
               <span class="discount-inline-value-control subscription-inline-value-control">
@@ -279,30 +281,49 @@
               <textarea class="control discount-inline-value-input" id="subscriptionStorefrontDescriptionInput" rows="3" maxlength="500"></textarea>
             </span>
           </label>
+          <div class="subscription-storefront-two-columns">
+            <label class="subscription-inline-reward-field">
+              <span>Размер описания</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontDescriptionSizeInput" type="number" min="10" max="24" step="1" />
+              </span>
+            </label>
+            <label class="subscription-inline-reward-field">
+              <span>Цвет описания</span>
+              <span class="subscription-storefront-color-field">
+                <input id="subscriptionStorefrontDescriptionColorInput" type="color" value="#7651c9" />
+                <span id="subscriptionStorefrontDescriptionColorValue">#7651c9</span>
+              </span>
+            </label>
+          </div>
           <div class="subscription-storefront-upload-row">
             <span>Изображение блока</span>
             <button class="product-footer-btn product-footer-cancel" type="button" id="subscriptionStorefrontImageButton">Загрузить</button>
             <button class="product-footer-btn product-footer-cancel hidden" type="button" id="subscriptionStorefrontImageDeleteBtn">Удалить</button>
             <input class="hidden" id="subscriptionStorefrontImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
           </div>
-          <label class="subscription-inline-reward-field">
-            <span>Текст кнопки</span>
-            <span class="discount-inline-value-control subscription-inline-value-control">
-              <input class="control discount-inline-value-input" id="subscriptionStorefrontButtonTextInput" type="text" maxlength="80" />
-            </span>
-          </label>
-          <label class="subscription-inline-reward-field">
-            <span>Цвет кнопки</span>
-            <span class="subscription-storefront-color-field">
-              <input id="subscriptionStorefrontButtonColorInput" type="color" value="#ffffff" />
-              <span id="subscriptionStorefrontButtonColorValue">#ffffff</span>
-            </span>
-          </label>
-          <div class="subscription-storefront-upload-row">
-            <span>Иконка кнопки</span>
-            <button class="product-footer-btn product-footer-cancel" type="button" id="subscriptionStorefrontButtonIconButton">Загрузить</button>
-            <button class="product-footer-btn product-footer-cancel hidden" type="button" id="subscriptionStorefrontButtonIconDeleteBtn">Вернуть шеврон</button>
-            <input class="hidden" id="subscriptionStorefrontButtonIconInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+          <div class="subscription-storefront-three-columns">
+            <label class="subscription-inline-reward-field">
+              <span>Текст кнопки</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontButtonTextInput" type="text" maxlength="80" />
+              </span>
+            </label>
+            <label class="subscription-inline-reward-field">
+              <span>Цвет кнопки</span>
+              <span class="subscription-storefront-color-field">
+                <input id="subscriptionStorefrontButtonColorInput" type="color" value="#ffffff" />
+                <span id="subscriptionStorefrontButtonColorValue">#ffffff</span>
+              </span>
+            </label>
+            <div class="subscription-inline-reward-field">
+              <span>Иконка кнопки</span>
+              <span class="subscription-storefront-upload-control">
+                <button class="product-footer-btn product-footer-cancel" type="button" id="subscriptionStorefrontButtonIconButton">Загрузить</button>
+                <button class="product-footer-btn product-footer-cancel hidden" type="button" id="subscriptionStorefrontButtonIconDeleteBtn">Вернуть шеврон</button>
+                <input class="hidden" id="subscriptionStorefrontButtonIconInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+              </span>
+            </div>
           </div>
         </div>
       </form>
@@ -312,6 +333,45 @@
             <i class="fas fa-times"></i>
           </button>
           <button class="product-footer-btn product-footer-save" type="button" id="subscriptionGlobalSettingsSaveBtn">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="subscriptionInfoEmptyWrap" class="banner-settings-panel hidden subscription-right-panel">
+      <div class="empty-hint" id="subscriptionInfoEmptyText"></div>
+    </div>
+
+    <div id="subscriptionInfoSlidesWrap" class="banner-settings-panel settings-right-panel-fixed-footer hidden subscription-plan-editor">
+      <div class="settings-panel-scroll subscription-info-slides-editor">
+        <div class="subscription-info-slides-toolbar">
+          <div id="subscriptionInfoSlidesList"></div>
+          <button class="product-footer-btn product-footer-cancel subscription-info-slide-add" type="button" id="subscriptionInfoSlideAddBtn" aria-label="Добавить слайд" title="Добавить слайд">+</button>
+        </div>
+        <div id="subscriptionInfoSlideEditor" class="hidden"></div>
+      </div>
+      <div class="panel-footer hidden" id="subscriptionInfoSlidesFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel subscription-footer-close" type="button" id="subscriptionInfoSlidesCancelBtn"><i class="fas fa-times"></i></button>
+          <button class="product-footer-btn product-footer-save" type="button" id="subscriptionInfoSlidesSaveBtn">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="subscriptionFaqWrap" class="banner-settings-panel settings-right-panel-fixed-footer hidden subscription-plan-editor">
+      <div class="settings-panel-scroll subscription-faq-editor">
+        <label class="subscription-inline-reward-field">
+          <span>Заголовок</span>
+          <span class="discount-inline-value-control subscription-inline-value-control">
+            <input class="control discount-inline-value-input" id="subscriptionFaqTitleInput" type="text" maxlength="150" />
+          </span>
+        </label>
+        <div id="subscriptionFaqItems"></div>
+        <button class="product-footer-btn product-footer-cancel" type="button" id="subscriptionFaqAddBtn">+</button>
+      </div>
+      <div class="panel-footer hidden" id="subscriptionFaqFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel subscription-footer-close" type="button" id="subscriptionFaqCancelBtn" aria-label="Отмена" title="Отмена"><i class="fas fa-times"></i></button>
+          <button class="product-footer-btn product-footer-save" type="button" id="subscriptionFaqSaveBtn">Сохранить</button>
         </div>
       </div>
     </div>

@@ -2301,12 +2301,32 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
 
   async function removeTenantUploadFile(filePath) {
     if (!filePath) return;
-    try {
-      await fs.promises.unlink(filePath);
-    } catch (err) {
-      if (err && err.code === 'ENOENT') return;
-      throw err;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        await fs.promises.unlink(filePath);
+        return;
+      } catch (err) {
+        if (err && err.code === 'ENOENT') return;
+        const canRetry = err && (err.code === 'EBUSY' || err.code === 'EPERM');
+        if (!canRetry || attempt === 3) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+      }
     }
+  }
+
+  function removeTenantUploadFileLater(filePath, attemptsLeft = 12) {
+    const timer = setTimeout(async () => {
+      try {
+        await removeTenantUploadFile(filePath);
+      } catch (err) {
+        if (attemptsLeft > 1 && err && (err.code === 'EBUSY' || err.code === 'EPERM')) {
+          removeTenantUploadFileLater(filePath, attemptsLeft - 1);
+          return;
+        }
+        console.error('Failed to remove tenant upload original:', err && err.message ? err.message : err);
+      }
+    }, 1000);
+    if (typeof timer.unref === 'function') timer.unref();
   }
 
   function collectSiteMenuIconUrls(value) {
@@ -3074,7 +3094,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
         'bonus_modal_image',
         'important_message_image',
         'subscription_storefront_image',
-        'subscription_storefront_button_icon'
+        'subscription_storefront_button_icon',
+        'subscription_info_slide_image'
       ]);
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
@@ -3082,7 +3103,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const originalPath = file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), file.filename);
       let conversionOptions;
-      if (field === 'subscription_storefront_image' || field === 'subscription_storefront_button_icon') {
+      if (field === 'subscription_storefront_image' || field === 'subscription_storefront_button_icon' || field === 'subscription_info_slide_image') {
         const [[imageSettings]] = await db.query(
           'SELECT img_webp_quality, img_thumb_width, img_main_width, img_webp_aggressive FROM ten_tenants WHERE id=? LIMIT 1',
           [tenantId]
@@ -3106,15 +3127,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
         try {
           await removeTenantUploadFile(originalPath);
         } catch (err) {
-          console.error('Failed to remove tenant upload original:', err && err.message ? err.message : err);
-          await removeTenantUploadFile(convertedPath);
-          return res.status(500).json({ ok: false, error: 'ORIGINAL_DELETE_FAILED' });
+          if (!err || (err.code !== 'EBUSY' && err.code !== 'EPERM')) throw err;
+          removeTenantUploadFileLater(originalPath);
         }
       }
 
       const url = `/static/uploads/tenants/${tenantId}/${path.basename(convertedPath)}`;
 
-      if (field === 'site_menu_item_icon' || field === 'bonus_modal_image' || field === 'important_message_image' || field === 'subscription_storefront_image' || field === 'subscription_storefront_button_icon') {
+      if (field === 'site_menu_item_icon' || field === 'bonus_modal_image' || field === 'important_message_image' || field === 'subscription_storefront_image' || field === 'subscription_storefront_button_icon' || field === 'subscription_info_slide_image') {
         const [rows] = await db.query(
           'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
           [tenantId]

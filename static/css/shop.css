@@ -17083,6 +17083,17 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   width: 100%;
 }
 
+.shop-profile-subscription-storefront{position:relative;isolation:isolate;z-index:2;width:100%;aspect-ratio:var(--subscription-ratio,11/5);margin-top:16px;border-radius:18px;overflow:hidden;background:var(--subscription-bg,#f1e8ff);box-shadow:0 3px 10px 2px rgba(15,23,42,.12),0 10px 24px 2px rgba(15,23,42,.16);}
+.shop-profile-subscription-storefront-canvas{position:absolute;left:0;top:0;width:440px;height:200px;transform:scale(var(--subscription-scale,1));transform-origin:top left;}
+.shop-profile-subscription-storefront-copy{position:absolute;z-index:2;left:20px;top:16px;bottom:16px;width:238px;display:flex;flex-direction:column;align-items:flex-start;gap:10px;}
+.shop-profile-subscription-storefront-copy>strong{max-width:100%;font-size:var(--subscription-title-size,18px);line-height:1.12;color:var(--subscription-title-color,#7651c9);overflow-wrap:anywhere;}
+.shop-profile-subscription-storefront-copy>div{max-width:100%;font-size:var(--subscription-description-size,12px);line-height:1.3;color:var(--subscription-description-color,#7651c9);white-space:normal;overflow-wrap:anywhere;}
+.shop-profile-subscription-storefront-button{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-height:34px;margin-top:auto;padding:8px 12px;border:0;border-radius:999px;background:var(--subscription-button-color,#fff);color:var(--subscription-button-text-color,#1f2937);font-size:12px;font-weight:900;box-shadow:0 5px 14px rgba(15,23,42,.1);}
+.shop-profile-subscription-storefront-button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.shop-profile-subscription-storefront-button img{width:14px;height:14px;object-fit:contain;}
+.shop-profile-subscription-storefront-button b{font-size:20px;line-height:14px;}
+.shop-profile-subscription-storefront-image{position:absolute;z-index:1;right:0;top:0;width:52%;height:100%;object-fit:contain;object-position:center;pointer-events:none;}
+
 .shop-home-cards-scroll{
   width: 100%;
   overflow-x: auto;
@@ -20277,12 +20288,18 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   }
 
   .shop-profile-page-content .shop-profile-bonus-cards{
-    overflow: hidden;
-    width: 100%;
+    max-width: none;
+    min-width: 0;
+    overflow: visible;
+    width: auto;
   }
 
   .shop-profile-page-content .shop-profile-bonus-cards .shop-home-cards-scroll{
+    margin-block: 0;
+    padding-block: 14px;
+    position: relative;
     width: 100%;
+    z-index: 2;
   }
 
   .shop-profile-page-content .shop-profile-site-menu .shop-bonus-site-menu-scroll{
@@ -20475,7 +20492,16 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     flex: 1;
     overflow-y: auto;
     min-height: 0;
-    padding: 16px 16px calc(16px + var(--shop-bottomnav-h) + 24px + env(safe-area-inset-bottom));
+    padding: 16px 0 calc(16px + var(--shop-bottomnav-h) + 24px + env(safe-area-inset-bottom));
+  }
+
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-top,
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-bonus-progress,
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-bonus-cards,
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-site-menu,
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-tabs,
+  .shop-profile-page-content .shop-profile--main-page > .shop-profile-logout-btn{
+    margin-inline: 16px;
   }
 
   .shop-orders-page{

@@ -82,9 +82,6 @@
         <button id="clientsAddBtn" class="icon-btn" type="button" aria-label="Добавить" title="Добавить">
           <i class="fas fa-plus"></i>
         </button>
-        <button id="subscriptionGlobalSettingsBtn" class="icon-btn hidden" type="button" aria-label="Настройки подписки" title="Настройки подписки">
-          <i class="fas fa-cog"></i>
-        </button>
       </div>
     </div>
   </div>
@@ -206,6 +203,20 @@
       <div class="content-view hidden" data-view-content="subscription-settings">
         <div class="orders-list" id="subscriptionPlansList"></div>
         <div class="empty-hint hidden" id="subscriptionPlansEmptyHint">Пока нет условий подписки. Нажмите «+», чтобы создать первое.</div>
+      </div>
+
+      <div class="content-view hidden" data-view-content="subscription-info">
+        <div class="orders-list subscription-info-list">
+          <button class="order-row subscription-info-list-item" type="button" id="subscriptionPreviewInfoBtn">
+            <strong>Настройка превью</strong>
+          </button>
+          <button class="order-row subscription-info-list-item" type="button" id="subscriptionAboutInfoBtn">
+            <strong>Что такое подписка</strong>
+          </button>
+          <button class="order-row subscription-info-list-item" type="button" id="subscriptionFaqInfoBtn">
+            <strong>Часто задаваемые вопросы</strong>
+          </button>
+        </div>
       </div>
     </div>
   </div>

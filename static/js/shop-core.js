@@ -2771,6 +2771,11 @@
 
   window.renderProfileBonusCards = function renderProfileBonusCards(host) {
     if (!host) return;
+    if (!state.homeBonusConfig && typeof loadHomeBonusConfig === "function") {
+      host.innerHTML = "";
+      void loadHomeBonusConfig().then(() => window.renderProfileBonusCards(host));
+      return;
+    }
     const level = getHomeBonusFirstLevel(state.homeBonusConfig);
     const bonusHtml = level
       ? (isHomeBonusJoined()
@@ -2778,7 +2783,41 @@
         : buildHomeGuestBonusCardHtml(level))
       : "";
     const referralHtml = isHomeBonusJoined() ? buildHomeReferralCardHtml(state.homeBonusConfig) : "";
-    host.innerHTML = `<div class="shop-home-cards-scroll no-scrollbar"><div class="shop-home-cards-track">${bonusHtml ? `<div class="shop-home-cards-slide">${bonusHtml}</div>` : ""}${referralHtml ? `<div class="shop-home-cards-slide">${referralHtml}</div>` : ""}</div></div>`;
+    const storefront = state.homeBonusConfig?.subscription_storefront;
+    const storefrontRatioParts = String(storefront?.aspect_ratio || "11:5").split(":").map(Number);
+    const storefrontRatio = storefrontRatioParts.length === 2 && storefrontRatioParts.every((value) => value > 0)
+      ? `${storefrontRatioParts[0]} / ${storefrontRatioParts[1]}`
+      : "11 / 5";
+    const storefrontButtonColor = normalizeShopHexColor(storefront?.button_color, "#ffffff");
+    const storefrontButtonRgb = storefrontButtonColor.slice(1).match(/.{2}/g)?.map((part) => parseInt(part, 16)) || [255, 255, 255];
+    const storefrontButtonTextColor = ((storefrontButtonRgb[0] * 299 + storefrontButtonRgb[1] * 587 + storefrontButtonRgb[2] * 114) / 1000) >= 150
+      ? "#1f2937"
+      : "#ffffff";
+    const storefrontHtml = storefront?.is_active === true ? `
+      <div class="shop-profile-subscription-storefront" style="--subscription-ratio:${escapeHtml(storefrontRatio)};--subscription-bg:${escapeHtml(String(storefront.background_color || "#f1e8ff"))};--subscription-title-size:${escapeHtml(String(Number(storefront.title_font_size || 18)))}px;--subscription-title-color:${escapeHtml(String(storefront.title_color || "#7651c9"))};--subscription-description-size:${escapeHtml(String(Number(storefront.description_font_size || 12)))}px;--subscription-description-color:${escapeHtml(String(storefront.description_color || "#7651c9"))};--subscription-button-color:${escapeHtml(storefrontButtonColor)};--subscription-button-text-color:${escapeHtml(storefrontButtonTextColor)};">
+        <div class="shop-profile-subscription-storefront-canvas">
+          <div class="shop-profile-subscription-storefront-copy">
+            <strong>${escapeHtml(String(storefront.title || ""))}</strong>
+            <div>${escapeHtml(String(storefront.description || "")).replace(/\n/g, "<br>")}</div>
+            <button type="button" class="shop-profile-subscription-storefront-button">
+              <span>${escapeHtml(String(storefront.button_text || ""))}</span>
+              ${storefront.button_icon_url ? `<img src="${escapeHtml(String(storefront.button_icon_url))}" alt="">` : '<b aria-hidden="true">›</b>'}
+            </button>
+          </div>
+          ${storefront.image_url ? `<img class="shop-profile-subscription-storefront-image" src="${escapeHtml(String(storefront.image_url))}" alt="">` : ""}
+        </div>
+      </div>` : "";
+    host.innerHTML = `<div class="shop-home-cards-scroll no-scrollbar"><div class="shop-home-cards-track">${bonusHtml ? `<div class="shop-home-cards-slide">${bonusHtml}</div>` : ""}${referralHtml ? `<div class="shop-home-cards-slide">${referralHtml}</div>` : ""}</div></div>${storefrontHtml}`;
+    const subscriptionStorefront = host.querySelector(".shop-profile-subscription-storefront");
+    const syncSubscriptionStorefrontScale = () => {
+      if (!subscriptionStorefront) return;
+      subscriptionStorefront.style.setProperty("--subscription-scale", String(subscriptionStorefront.clientWidth / 440));
+    };
+    syncSubscriptionStorefrontScale();
+    if (subscriptionStorefront && typeof ResizeObserver === "function") {
+      const observer = new ResizeObserver(syncSubscriptionStorefrontScale);
+      observer.observe(subscriptionStorefront);
+    }
     const cardsScroll = host.querySelector(".shop-home-cards-scroll");
     cardsScroll?.addEventListener("wheel", (event) => {
       const maxScrollLeft = Math.max(0, cardsScroll.scrollWidth - cardsScroll.clientWidth);
@@ -10171,7 +10210,6 @@
 
   async function loadHomeBonusConfig(options = {}) {
     const loadOptions = options && typeof options === "object" ? options : {};
-    if (!elHomeBonusCard) return null;
     const token = getCustomerToken();
     if (loadOptions.force) {
       state.homeBonusConfig = null;

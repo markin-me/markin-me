@@ -182,6 +182,7 @@ export type BonusConfig = Record<string, unknown> & {
   levels?: Array<Record<string, unknown>>;
   referral_levels?: Array<Record<string, unknown>>;
   settings?: Record<string, unknown>;
+  subscription_storefront?: Record<string, unknown> | null;
 };
 
 export type BonusReferrals = Record<string, unknown> & {

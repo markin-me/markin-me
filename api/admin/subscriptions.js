@@ -22,10 +22,15 @@ const STOREFRONT_SETTINGS_DEFAULTS = Object.freeze({
   title_font_size: 18,
   title_color: '#7651c9',
   description: 'Бесплатная доставка\nДополнительные бонусы\nЭксклюзивные акции',
+  description_font_size: 12,
+  description_color: '#7651c9',
   image_url: null,
   button_text: 'Смотреть подписки',
   button_color: '#ffffff',
   button_icon_url: null,
+  faq_title: 'Часто задаваемые вопросы',
+  faq_items: [],
+  info_slides: [],
 });
 
 function storefrontColor(value, fallback) {
@@ -51,6 +56,29 @@ function normalizeStorefrontSettingsPayload(body = {}) {
     err.statusCode = 400;
     throw err;
   }
+  const descriptionFontSize = Math.floor(Number(body.description_font_size));
+  if (!Number.isFinite(descriptionFontSize) || descriptionFontSize < 10 || descriptionFontSize > 24) {
+    const err = new Error('INVALID_DESCRIPTION_FONT_SIZE');
+    err.statusCode = 400;
+    throw err;
+  }
+  const faqItems = Array.isArray(body.faq_items) ? body.faq_items.slice(0, 100).map((item) => ({
+    id: toText(item?.id).slice(0, 80),
+    question: toText(item?.question).slice(0, 300),
+    answer: toText(item?.answer).slice(0, 2000),
+  })).filter((item) => item.question || item.answer) : [];
+  const infoSlides = Array.isArray(body.info_slides) ? body.info_slides.slice(0, 100).map((item) => ({
+    id: toText(item?.id).slice(0, 80),
+    image_url: strOrNull(item?.image_url)?.slice(0, 500) || null,
+    description: toText(item?.description).slice(0, 1000),
+    button_text: toText(item?.button_text).slice(0, 120),
+    button_color: storefrontColor(item?.button_color, '#ff6b00'),
+    button_text_color: storefrontColor(item?.button_text_color, '#ffffff'),
+    show_description: item?.show_description !== false,
+    show_button: item?.show_button !== false,
+    show_shadow: item?.show_shadow !== false,
+    duration_seconds: Math.min(60, Math.max(1, Math.floor(Number(item?.duration_seconds || 5)))),
+  })) : [];
   return {
     is_active: boolFlag(body.is_active, false) ? 1 : 0,
     aspect_ratio: '11:5',
@@ -59,20 +87,33 @@ function normalizeStorefrontSettingsPayload(body = {}) {
     title_font_size: titleFontSize,
     title_color: storefrontColor(body.title_color, STOREFRONT_SETTINGS_DEFAULTS.title_color),
     description: description.slice(0, 500) || null,
+    description_font_size: descriptionFontSize,
+    description_color: storefrontColor(body.description_color, STOREFRONT_SETTINGS_DEFAULTS.description_color),
     image_url: strOrNull(body.image_url)?.slice(0, 500) || null,
     button_text: toText(body.button_text).slice(0, 80),
     button_color: storefrontColor(body.button_color, STOREFRONT_SETTINGS_DEFAULTS.button_color),
     button_icon_url: strOrNull(body.button_icon_url)?.slice(0, 500) || null,
+    faq_title: toText(body.faq_title).slice(0, 150) || STOREFRONT_SETTINGS_DEFAULTS.faq_title,
+    faq_items_json: JSON.stringify(faqItems),
+    info_slides_json: JSON.stringify(infoSlides),
   };
 }
 
 function mapStorefrontSettings(row) {
   if (!row) return { ...STOREFRONT_SETTINGS_DEFAULTS };
+  let faqItems = [];
+  let infoSlides = [];
+  try { faqItems = row.faq_items_json ? JSON.parse(row.faq_items_json) : []; } catch (error) { faqItems = []; }
+  try { infoSlides = row.info_slides_json ? JSON.parse(row.info_slides_json) : []; } catch (error) { infoSlides = []; }
   return {
     ...row,
     id: Number(row.id || 0),
     is_active: Number(row.is_active || 0) === 1,
     title_font_size: Number(row.title_font_size || STOREFRONT_SETTINGS_DEFAULTS.title_font_size),
+    description_font_size: Number(row.description_font_size || STOREFRONT_SETTINGS_DEFAULTS.description_font_size),
+    faq_title: String(row.faq_title || STOREFRONT_SETTINGS_DEFAULTS.faq_title),
+    faq_items: Array.isArray(faqItems) ? faqItems : [],
+    info_slides: Array.isArray(infoSlides) ? infoSlides : [],
   };
 }
 
@@ -209,8 +250,9 @@ module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
   async function fetchStorefrontSettings(tenantId, storeId) {
     const [[row]] = await db.query(
       `SELECT id, tenant_id, store_id, is_active, aspect_ratio, background_color,
-              title, title_font_size, title_color, description, image_url,
-              button_text, button_color, button_icon_url, created_at, updated_at
+              title, title_font_size, title_color, description, description_font_size,
+              description_color, image_url,
+              button_text, button_color, button_icon_url, faq_title, faq_items_json, info_slides_json, created_at, updated_at
          FROM mkt_subscription_storefront_settings
         WHERE tenant_id = ? AND store_id = ?
         LIMIT 1`,
@@ -238,21 +280,25 @@ module.exports = function makeAdminSubscriptionsRouter({ db, helpers }) {
       await db.query(
         `INSERT INTO mkt_subscription_storefront_settings
           (tenant_id, store_id, is_active, aspect_ratio, background_color, title,
-           title_font_size, title_color, description, image_url, button_text,
-           button_color, button_icon_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           title_font_size, title_color, description, description_font_size,
+           description_color, image_url, button_text, button_color, button_icon_url, faq_title, faq_items_json, info_slides_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            is_active = VALUES(is_active), aspect_ratio = VALUES(aspect_ratio),
            background_color = VALUES(background_color), title = VALUES(title),
            title_font_size = VALUES(title_font_size), title_color = VALUES(title_color),
-           description = VALUES(description), image_url = VALUES(image_url),
+           description = VALUES(description), description_font_size = VALUES(description_font_size),
+           description_color = VALUES(description_color), image_url = VALUES(image_url),
            button_text = VALUES(button_text), button_color = VALUES(button_color),
-           button_icon_url = VALUES(button_icon_url), updated_at = NOW()`,
+           button_icon_url = VALUES(button_icon_url), faq_title = VALUES(faq_title),
+           faq_items_json = VALUES(faq_items_json), info_slides_json = VALUES(info_slides_json), updated_at = NOW()`,
         [
           tenantId, storeId, payload.is_active, payload.aspect_ratio,
           payload.background_color, payload.title, payload.title_font_size,
-          payload.title_color, payload.description, payload.image_url,
+          payload.title_color, payload.description, payload.description_font_size,
+          payload.description_color, payload.image_url,
           payload.button_text, payload.button_color, payload.button_icon_url,
+          payload.faq_title, payload.faq_items_json, payload.info_slides_json,
         ]
       );
       res.json({ ok: true, data: await fetchStorefrontSettings(tenantId, storeId) });

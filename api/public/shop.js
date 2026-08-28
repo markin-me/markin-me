@@ -3195,6 +3195,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   router.get('/bonus/config', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const [[settingsRow]] = await db.query(
@@ -3213,6 +3214,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          WHERE tenant_id=?
          LIMIT 1`,
         [tenantId]
+      );
+      const [[subscriptionStorefrontRow]] = await db.query(
+        `SELECT is_active, aspect_ratio, background_color, title, title_font_size,
+                title_color, description, description_font_size, description_color,
+                image_url, button_text, button_color, button_icon_url
+          FROM mkt_subscription_storefront_settings
+          WHERE tenant_id=? AND store_id=?
+          LIMIT 1`,
+        [tenantId, storeId]
       );
       const [levelRows] = await db.query(
         `SELECT id, code, sort_order, title, access_type, reward_bonus_amount,
@@ -3332,6 +3342,21 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             referral_card_title_background_color: settingsRow?.referral_card_title_background_color || '#ffffff',
             referral_card_title_background_opacity: Number(settingsRow?.referral_card_title_background_opacity || 90),
           },
+          subscription_storefront: subscriptionStorefrontRow ? {
+            is_active: Number(subscriptionStorefrontRow.is_active || 0) === 1,
+            aspect_ratio: subscriptionStorefrontRow.aspect_ratio || '11:5',
+            background_color: subscriptionStorefrontRow.background_color || '#f1e8ff',
+            title: subscriptionStorefrontRow.title || '',
+            title_font_size: Number(subscriptionStorefrontRow.title_font_size || 18),
+            title_color: subscriptionStorefrontRow.title_color || '#7651c9',
+            description: subscriptionStorefrontRow.description || '',
+            description_font_size: Number(subscriptionStorefrontRow.description_font_size || 12),
+            description_color: subscriptionStorefrontRow.description_color || '#7651c9',
+            image_url: subscriptionStorefrontRow.image_url || null,
+            button_text: subscriptionStorefrontRow.button_text || '',
+            button_color: subscriptionStorefrontRow.button_color || '#ffffff',
+            button_icon_url: subscriptionStorefrontRow.button_icon_url || null,
+          } : null,
           account,
           levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel, activeFavoriteGroup })),
           referral_levels: (Array.isArray(referralRows) ? referralRows : []).map((row) => ({

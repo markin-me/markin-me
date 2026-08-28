@@ -2078,7 +2078,6 @@
   const elBonusEditSaveBtn = $("#clientsBonusEditSaveBtn");
   const elBonusEditCancelBtn = $("#clientsBonusEditCancelBtn");
   const elAddBtn = $("#clientsAddBtn");
-  const elSubscriptionGlobalSettingsBtn = $("#subscriptionGlobalSettingsBtn");
   const elOpenFilterCategoriesBtn = $("#openFilterCategoriesBtn");
   const elBonusCardsBtn = $("#bonusCardsBtn");
   const elBonusPaidTariffBtn = $("#bonusPaidTariffBtn");
@@ -2087,6 +2086,7 @@
   const elBonusSettingsNavBtn = $("#bonusSettingsNavBtn");
   const elSubscriptionHistoryBtn = $("#subscriptionHistoryBtn");
   const elSubscriptionSettingsBtn = $("#subscriptionSettingsBtn");
+  const elSubscriptionInfoBtn = $("#subscriptionInfoBtn");
   const elImportantMessagesBtn = $("#importantMessagesBtn");
   const elBonusSettingsEditBtn = $("#bonusSettingsEditBtn");
   const elClientsScroll = elList ? elList.closest(".panel-body") : null;
@@ -2369,6 +2369,25 @@
   // Always scope right-panel selectors to the actual visible right column.
   const clientRightRoot = document.querySelector(".page-col-right .client-info-panel") || document;
   const right$ = (sel) => $(sel, clientRightRoot);
+  const subscriptionPreviewInfoBtn = $("#subscriptionPreviewInfoBtn");
+  const subscriptionAboutInfoBtn = $("#subscriptionAboutInfoBtn");
+  const subscriptionFaqInfoBtn = $("#subscriptionFaqInfoBtn");
+  const subscriptionInfoEmptyWrap = right$("#subscriptionInfoEmptyWrap");
+  const subscriptionInfoEmptyText = right$("#subscriptionInfoEmptyText");
+  const subscriptionFaqWrap = right$("#subscriptionFaqWrap");
+  const subscriptionFaqFooter = right$("#subscriptionFaqFooter");
+  const subscriptionFaqTitleInput = right$("#subscriptionFaqTitleInput");
+  const subscriptionFaqItems = right$("#subscriptionFaqItems");
+  const subscriptionFaqAddBtn = right$("#subscriptionFaqAddBtn");
+  const subscriptionFaqCancelBtn = right$("#subscriptionFaqCancelBtn");
+  const subscriptionFaqSaveBtn = right$("#subscriptionFaqSaveBtn");
+  const subscriptionInfoSlidesWrap = right$("#subscriptionInfoSlidesWrap");
+  const subscriptionInfoSlidesFooter = right$("#subscriptionInfoSlidesFooter");
+  const subscriptionInfoSlideAddBtn = right$("#subscriptionInfoSlideAddBtn");
+  const subscriptionInfoSlidesList = right$("#subscriptionInfoSlidesList");
+  const subscriptionInfoSlideEditor = right$("#subscriptionInfoSlideEditor");
+  const subscriptionInfoSlidesSaveBtn = right$("#subscriptionInfoSlidesSaveBtn");
+  const subscriptionInfoSlidesCancelBtn = right$("#subscriptionInfoSlidesCancelBtn");
 
   const clientTabsHeader = right$("#clientTabsHeader");
   const clientTabsHomeBtn = right$("#clientTabsHomeBtn");
@@ -2407,6 +2426,9 @@
   const subscriptionStorefrontTitleColorInput = right$("#subscriptionStorefrontTitleColorInput");
   const subscriptionStorefrontTitleColorValue = right$("#subscriptionStorefrontTitleColorValue");
   const subscriptionStorefrontDescriptionInput = right$("#subscriptionStorefrontDescriptionInput");
+  const subscriptionStorefrontDescriptionSizeInput = right$("#subscriptionStorefrontDescriptionSizeInput");
+  const subscriptionStorefrontDescriptionColorInput = right$("#subscriptionStorefrontDescriptionColorInput");
+  const subscriptionStorefrontDescriptionColorValue = right$("#subscriptionStorefrontDescriptionColorValue");
   const subscriptionStorefrontImageButton = right$("#subscriptionStorefrontImageButton");
   const subscriptionStorefrontImageDeleteBtn = right$("#subscriptionStorefrontImageDeleteBtn");
   const subscriptionStorefrontImageInput = right$("#subscriptionStorefrontImageInput");
@@ -3957,15 +3979,14 @@
     const isBonusSettingsView = state.currentView === 'bonus-settings';
     const isSubscriptionHistoryView = state.currentView === 'subscription-history';
     const isSubscriptionSettingsView = state.currentView === 'subscription-settings';
+    const isSubscriptionInfoView = state.currentView === 'subscription-info';
     const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
     const visibleTabs = isBonusReferralsView
       ? tabsState.tabs.filter((tab) => tab.type === 'bonus-referral-card')
       : isBonusSettingsView
         ? tabsState.tabs.filter((tab) => tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories' || tab.type === 'bonus-settings-modals')
-        : isSubscriptionHistoryView
-          ? tabsState.tabs.filter((tab) => tab.type === 'subscription-history')
-        : isSubscriptionSettingsView
-          ? tabsState.tabs.filter((tab) => tab.type === 'subscription-plan' || tab.type === 'subscription-global-settings')
+        : isSubscriptionHistoryView || isSubscriptionSettingsView || isSubscriptionInfoView
+          ? tabsState.tabs.filter((tab) => ['subscription-history', 'subscription-plan', 'subscription-global-settings', 'subscription-info'].includes(tab.type))
         : tabsState.tabs;
     const hasVisibleTabs = visibleTabs.length > 0;
     clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isHomeBtnView);
@@ -4034,8 +4055,12 @@
             ? 'bonus-settings'
           : tab.type === 'subscription-history'
             ? 'subscription-history'
-          : tab.type === 'subscription-plan' || tab.type === 'subscription-global-settings'
+          : tab.type === 'subscription-plan'
             ? 'subscription-settings'
+          : tab.type === 'subscription-global-settings'
+            ? 'subscription-info'
+          : tab.type === 'subscription-info'
+            ? 'subscription-info'
           : 'clients';
     if (state.currentView !== targetView) {
       switchView(targetView);
@@ -8899,6 +8924,9 @@
     }
     if (elSubscriptionSettingsBtn) {
       elSubscriptionSettingsBtn.classList.toggle('is-active', state.currentView === 'subscription-settings');
+    }
+    if (elSubscriptionInfoBtn) {
+      elSubscriptionInfoBtn.classList.toggle('is-active', state.currentView === 'subscription-info');
     }
   }
 
@@ -22854,11 +22882,77 @@
       title_font_size: Math.min(48, Math.max(12, Number(source?.title_font_size || 18))),
       title_color: /^#[0-9a-f]{6}$/i.test(String(source?.title_color || '')) ? String(source.title_color).toLowerCase() : '#7651c9',
       description: String(hasDescription ? (source?.description || '') : 'Бесплатная доставка\nДополнительные бонусы\nЭксклюзивные акции').replace(/\r\n?/g, '\n').split('\n').slice(0, 3).join('\n').slice(0, 500),
+      description_font_size: Math.min(24, Math.max(10, Number(source?.description_font_size || 12))),
+      description_color: /^#[0-9a-f]{6}$/i.test(String(source?.description_color || '')) ? String(source.description_color).toLowerCase() : '#7651c9',
       image_url: String(source?.image_url || '').trim(),
       button_text: String(source?.button_text ?? 'Смотреть подписки').slice(0, 80),
       button_color: /^#[0-9a-f]{6}$/i.test(String(source?.button_color || '')) ? String(source.button_color).toLowerCase() : '#ffffff',
       button_icon_url: String(source?.button_icon_url || '').trim(),
+      faq_title: String(source?.faq_title || 'Часто задаваемые вопросы').slice(0, 150),
+      faq_items: Array.isArray(source?.faq_items) ? source.faq_items.map((item) => ({ id: String(item?.id || `faq-${Date.now()}-${Math.random().toString(36).slice(2)}`), question: String(item?.question || ''), answer: String(item?.answer || '') })) : [],
+      info_slides: Array.isArray(source?.info_slides) ? source.info_slides.map((item) => ({ id: String(item?.id || `slide-${Date.now()}-${Math.random().toString(36).slice(2)}`), image_url: String(item?.image_url || ''), description: String(item?.description || ''), button_text: String(item?.button_text || ''), button_color: String(item?.button_color || '#ff6b00'), button_text_color: String(item?.button_text_color || '#ffffff'), show_description: item?.show_description !== false, show_button: item?.show_button !== false, show_shadow: item?.show_shadow !== false, duration_seconds: Math.min(60, Math.max(1, Math.floor(Number(item?.duration_seconds || 5)))) })) : [],
     };
+  }
+
+  function renderSubscriptionFaq() {
+    const draft = state.subscriptionStorefrontSettingsDraft || createSubscriptionStorefrontSettings();
+    if (subscriptionFaqTitleInput) subscriptionFaqTitleInput.value = draft.faq_title;
+    if (!subscriptionFaqItems) return;
+    subscriptionFaqItems.innerHTML = draft.faq_items.map((item) => `
+      <div class="subscription-faq-item" draggable="true" data-faq-id="${escapeHtml(item.id)}">
+        <span class="subscription-faq-drag" draggable="true" title="Перетащить">⠿</span>
+        <input class="control" data-faq-question value="${escapeHtml(item.question)}" placeholder="Вопрос" />
+        <button class="subscription-faq-delete" type="button" data-faq-delete aria-label="Удалить">×</button>
+        <textarea class="control subscription-faq-answer" data-faq-answer rows="3" placeholder="Ответ">${escapeHtml(item.answer)}</textarea>
+      </div>`).join('');
+    subscriptionFaqItems.querySelectorAll('[data-faq-answer]').forEach((textarea) => {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    });
+  }
+
+  let activeSubscriptionInfoSlideId = null;
+  let expandedSubscriptionInfoSlideId = null;
+  let subscriptionInfoSlideImageUploading = false;
+  function resizeSubscriptionInfoSlideDescription(textarea) {
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+    textarea.closest('.subscription-description-control')?.classList.toggle('is-single-line', textarea.scrollHeight <= 30);
+  }
+  function refreshSubscriptionInfoSlidePreview(slide) {
+    const row = Array.from(subscriptionInfoSlidesList?.querySelectorAll('[data-info-slide-id]') || []).find((item) => item.dataset.infoSlideId === slide?.id);
+    if (!row || !slide) return;
+    const content = `${slide.show_description && slide.description ? `<span class="subscription-info-slide-preview-description">${escapeHtml(slide.description)}</span>` : ''}${slide.show_button && slide.button_text ? `<span class="subscription-info-slide-preview-button" style="background-color:${escapeHtml(slide.button_color)};color:${escapeHtml(slide.button_text_color)}">${escapeHtml(slide.button_text)}</span>` : ''}`;
+    row.innerHTML = `<span class="subscription-info-slide-preview-content ${slide.show_shadow && content ? 'has-shadow' : ''} ${expandedSubscriptionInfoSlideId === slide.id ? 'is-expanded' : ''}">${content}</span>`;
+  }
+  function renderSubscriptionInfoSlides() {
+    const draft = state.subscriptionStorefrontSettingsDraft || createSubscriptionStorefrontSettings();
+    if (!subscriptionInfoSlidesList || !subscriptionInfoSlideEditor) return;
+    if (!draft.info_slides.length) {
+      activeSubscriptionInfoSlideId = null;
+      subscriptionInfoSlidesList.innerHTML = '<div class="empty-hint">Добавьте первый слайд</div>';
+      subscriptionInfoSlideEditor.classList.add('hidden');
+      return;
+    }
+    if (!draft.info_slides.some((item) => item.id === activeSubscriptionInfoSlideId)) activeSubscriptionInfoSlideId = draft.info_slides[0].id;
+    subscriptionInfoSlidesList.innerHTML = draft.info_slides.map((item) => {
+      const isActive = item.id === activeSubscriptionInfoSlideId;
+      const content = `${item.show_description && item.description ? `<span class="subscription-info-slide-preview-description">${escapeHtml(item.description)}</span>` : ''}${item.show_button && item.button_text ? `<span class="subscription-info-slide-preview-button" style="background-color:${escapeHtml(item.button_color)};color:${escapeHtml(item.button_text_color)}">${escapeHtml(item.button_text)}</span>` : ''}`;
+      const hasContent = Boolean(content);
+      return `<div class="subscription-info-slide-item ${isActive ? 'is-active' : ''}"><button type="button" class="subscription-info-slide-row ${isActive ? 'is-active' : ''}" data-info-slide-id="${escapeHtml(item.id)}" aria-label="Выбрать слайд" style="background-image:url('${escapeHtml(item.image_url)}')"><span class="subscription-info-slide-preview-content ${item.show_shadow && hasContent ? 'has-shadow' : ''} ${expandedSubscriptionInfoSlideId === item.id ? 'is-expanded' : ''}">${content}</span></button>${isActive ? `<button type="button" class="subscription-info-slide-delete" data-info-slide-delete="${escapeHtml(item.id)}" aria-label="Удалить слайд" title="Удалить слайд"><i class="fas fa-trash"></i></button>` : ''}</div>`;
+    }).join('');
+    const slide = draft.info_slides.find((item) => item.id === activeSubscriptionInfoSlideId);
+    subscriptionInfoSlideEditor.classList.remove('hidden');
+    subscriptionInfoSlideEditor.innerHTML = `
+      <div class="subscription-storefront-upload-row"><span>Фото</span>${subscriptionInfoSlideImageUploading ? '<span class="subscription-info-slide-upload-spinner" role="status" aria-label="Загрузка"></span>' : '<label class="product-footer-btn product-footer-cancel" for="subscriptionInfoSlideImageInput">Загрузить</label><input class="hidden" id="subscriptionInfoSlideImageInput" type="file" accept="image/*" data-info-slide-image />'}</div>
+      <label class="subscription-info-slide-duration"><span>Время показа, секунд</span><input class="control" type="number" min="1" max="60" step="1" data-info-slide-duration value="${slide.duration_seconds}" /></label>
+      <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-description ${slide.show_description ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать описание</span></label>
+      <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-button ${slide.show_button ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать кнопку</span></label>
+      <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-shadow ${slide.show_shadow ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать тень</span></label>
+      <label class="subscription-inline-reward-field ${slide.show_description ? '' : 'hidden'}"><span>Описание</span><span class="discount-inline-value-control subscription-inline-value-control subscription-description-control"><textarea class="control discount-inline-value-input" rows="1" data-info-slide-description placeholder="Описание">${escapeHtml(slide.description)}</textarea></span></label>
+      <div class="subscription-storefront-three-columns ${slide.show_button ? '' : 'hidden'}"><label class="subscription-inline-reward-field"><span>Текст кнопки</span><span class="discount-inline-value-control subscription-inline-value-control"><input class="control discount-inline-value-input" data-info-slide-button-text value="${escapeHtml(slide.button_text)}" placeholder="Текст кнопки" /></span></label><label class="subscription-inline-reward-field"><span>Цвет кнопки</span><span class="subscription-storefront-color-field"><input type="color" data-info-slide-button-color value="${escapeHtml(slide.button_color)}" /><span>${escapeHtml(slide.button_color)}</span></span></label><label class="subscription-inline-reward-field"><span>Цвет текста кнопки</span><span class="subscription-storefront-color-field"><input type="color" data-info-slide-button-text-color value="${escapeHtml(slide.button_text_color)}" /><span>${escapeHtml(slide.button_text_color)}</span></span></label></div>`;
+    resizeSubscriptionInfoSlideDescription(subscriptionInfoSlideEditor.querySelector('[data-info-slide-description]'));
   }
 
   function subscriptionStorefrontContrastColor(hex) {
@@ -22880,6 +22974,9 @@
     if (subscriptionStorefrontTitleColorInput) subscriptionStorefrontTitleColorInput.value = draft.title_color;
     if (subscriptionStorefrontTitleColorValue) subscriptionStorefrontTitleColorValue.textContent = draft.title_color;
     if (subscriptionStorefrontDescriptionInput) subscriptionStorefrontDescriptionInput.value = draft.description;
+    if (subscriptionStorefrontDescriptionSizeInput) subscriptionStorefrontDescriptionSizeInput.value = String(draft.description_font_size);
+    if (subscriptionStorefrontDescriptionColorInput) subscriptionStorefrontDescriptionColorInput.value = draft.description_color;
+    if (subscriptionStorefrontDescriptionColorValue) subscriptionStorefrontDescriptionColorValue.textContent = draft.description_color;
     if (subscriptionStorefrontButtonTextInput) subscriptionStorefrontButtonTextInput.value = draft.button_text;
     if (subscriptionStorefrontButtonColorInput) subscriptionStorefrontButtonColorInput.value = draft.button_color;
     if (subscriptionStorefrontButtonColorValue) subscriptionStorefrontButtonColorValue.textContent = draft.button_color;
@@ -22891,7 +22988,8 @@
     }
     if (subscriptionStorefrontPreviewDescription) {
       subscriptionStorefrontPreviewDescription.textContent = draft.description;
-      subscriptionStorefrontPreviewDescription.style.color = draft.title_color;
+      subscriptionStorefrontPreviewDescription.style.fontSize = `${draft.description_font_size}px`;
+      subscriptionStorefrontPreviewDescription.style.color = draft.description_color;
     }
     if (subscriptionStorefrontPreviewButton) {
       subscriptionStorefrontPreviewButton.style.backgroundColor = draft.button_color;
@@ -22911,6 +23009,8 @@
     if (subscriptionStorefrontImageDeleteBtn) subscriptionStorefrontImageDeleteBtn.classList.toggle('hidden', !draft.image_url);
     if (subscriptionStorefrontButtonIconButton) subscriptionStorefrontButtonIconButton.textContent = draft.button_icon_url ? 'Заменить' : 'Загрузить';
     if (subscriptionStorefrontButtonIconDeleteBtn) subscriptionStorefrontButtonIconDeleteBtn.classList.toggle('hidden', !draft.button_icon_url);
+    renderSubscriptionFaq();
+    renderSubscriptionInfoSlides();
   }
 
   async function loadSubscriptionStorefrontSettings() {
@@ -22935,12 +23035,19 @@
   }
 
   async function saveSubscriptionStorefrontSettings() {
+    if (state.subscriptionStorefrontSettingsDraft && subscriptionFaqItems) {
+      state.subscriptionStorefrontSettingsDraft.faq_title = subscriptionFaqTitleInput?.value || '';
+      state.subscriptionStorefrontSettingsDraft.faq_items = Array.from(subscriptionFaqItems.querySelectorAll('[data-faq-id]')).map((card) => {
+        const id = card.dataset.faqId;
+        const previous = state.subscriptionStorefrontSettingsDraft.faq_items.find((item) => item.id === id) || { id, question: '', answer: '' };
+        return { id, question: card.querySelector('[data-faq-question]')?.value ?? previous.question, answer: card.querySelector('[data-faq-answer]')?.value ?? previous.answer };
+      });
+    }
     const draft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettingsDraft || {});
     const json = await apiJson('/api/admin/subscriptions/storefront-settings', { method: 'PUT', body: draft });
     state.subscriptionStorefrontSettings = createSubscriptionStorefrontSettings(json.data || draft);
     state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings);
     renderSubscriptionStorefrontSettings();
-    closeSubscriptionActiveTab();
   }
 
   async function uploadSubscriptionStorefrontAsset(field, file, draftKey) {
@@ -22955,9 +23062,29 @@
     ensureTab({
       type: 'subscription-global-settings',
       id: 'settings',
-      title: 'Настройки',
+      title: 'Настройка превью',
       onActivate: activateSubscriptionGlobalSettingsTab,
     });
+  }
+
+  function openSubscriptionInfoTab(id, title, placeholder) {
+    const tab = ensureTab({
+      type: 'subscription-info',
+      id,
+      title,
+      onActivate: async () => {
+        if (subscriptionInfoEmptyText) subscriptionInfoEmptyText.textContent = placeholder;
+        if (id === 'faq') {
+          await loadSubscriptionStorefrontSettings();
+          renderSubscriptionFaq();
+        }
+        if (id === 'about') {
+          await loadSubscriptionStorefrontSettings();
+          renderSubscriptionInfoSlides();
+        }
+      },
+    });
+    tab.placeholder = placeholder;
   }
 
   function activateSubscriptionPlanTab(id) {
@@ -24298,6 +24425,7 @@
         'bonus-settings': 'Настройки',
         'subscription-history': 'История подписок',
         'subscription-settings': 'Настройка подписки',
+        'subscription-info': 'Информация',
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
     }
@@ -24367,7 +24495,6 @@
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
     if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings' || viewName === 'subscription-history');
-    if (elSubscriptionGlobalSettingsBtn) elSubscriptionGlobalSettingsBtn.classList.toggle('hidden', viewName !== 'subscription-settings');
     if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.toggle('hidden', viewName !== 'important-messages');
     
     syncBonusToolbarState();
@@ -24417,6 +24544,8 @@
       if (!state.subscriptionPlansLoaded && !state.subscriptionPlansLoading) {
         loadSubscriptionPlans().catch(console.error);
       }
+    } else if (viewName === 'subscription-info') {
+      renderTabs();
     } else if (viewName === 'clients') {
       maybeLoadMoreClientsOnScroll();
       ensureClientsScrollable().catch(console.error);
@@ -24433,6 +24562,7 @@
     const isBonusSettingsView = state.currentView === 'bonus-settings';
     const isSubscriptionHistoryView = state.currentView === 'subscription-history';
     const isSubscriptionSettingsView = state.currentView === 'subscription-settings';
+    const isSubscriptionInfoView = state.currentView === 'subscription-info';
     const hasBonusReferralCardTab = tabsState.tabs.some((tab) => tab.type === 'bonus-referral-card');
     const hasBonusSettingsBrandTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-brand');
     const hasBonusSettingsCoinTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-coin');
@@ -24482,6 +24612,7 @@
       if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.add('hidden');
       if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.add('hidden');
       if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.add('hidden');
+      if (subscriptionInfoEmptyWrap) subscriptionInfoEmptyWrap.classList.add('hidden');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
@@ -24510,6 +24641,9 @@
     const isSubscriptionHistoryTab = activeTab?.type === 'subscription-history';
     const isSubscriptionPlanTab = activeTab?.type === 'subscription-plan';
     const isSubscriptionGlobalSettingsTab = activeTab?.type === 'subscription-global-settings';
+    const isSubscriptionInfoTab = activeTab?.type === 'subscription-info';
+    const isSubscriptionFaqTab = isSubscriptionInfoTab && activeTab?.id === 'faq';
+    const isSubscriptionAboutTab = isSubscriptionInfoTab && activeTab?.id === 'about';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -24522,7 +24656,7 @@
       && hasClientId
       && state.currentView === 'clients';
 
-    if (isBonusCardsView || isBonusReferralsView || isBonusSettingsView || isSubscriptionHistoryView || isSubscriptionSettingsView) {
+    if (isBonusCardsView || isBonusReferralsView || isBonusSettingsView || isSubscriptionHistoryView || isSubscriptionSettingsView || isSubscriptionInfoView) {
       if (clientEmpty) clientEmpty.classList.add('hidden');
       if (clientInfoWrap) clientInfoWrap.classList.add('hidden');
       if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add('hidden');
@@ -24555,12 +24689,19 @@
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
-      if (subscriptionHistoryInfoWrap) subscriptionHistoryInfoWrap.classList.toggle('hidden', !isSubscriptionHistoryTab || state.currentView !== 'subscription-history');
-      if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.toggle('hidden', !isSubscriptionHistoryTab || state.currentView !== 'subscription-history');
-      if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.toggle('hidden', !isSubscriptionPlanTab || state.currentView !== 'subscription-settings');
-      if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.toggle('hidden', !isSubscriptionPlanTab || state.currentView !== 'subscription-settings');
-      if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.toggle('hidden', !isSubscriptionGlobalSettingsTab || state.currentView !== 'subscription-settings');
-      if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.toggle('hidden', !isSubscriptionGlobalSettingsTab || state.currentView !== 'subscription-settings');
+      const isSubscriptionView = isSubscriptionHistoryView || isSubscriptionSettingsView || isSubscriptionInfoView;
+      if (subscriptionHistoryInfoWrap) subscriptionHistoryInfoWrap.classList.toggle('hidden', !isSubscriptionHistoryTab || !isSubscriptionView);
+      if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.toggle('hidden', !isSubscriptionHistoryTab || !isSubscriptionView);
+      if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.toggle('hidden', !isSubscriptionPlanTab || !isSubscriptionView);
+      if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.toggle('hidden', !isSubscriptionPlanTab || !isSubscriptionView);
+      if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.toggle('hidden', !isSubscriptionGlobalSettingsTab || !isSubscriptionView);
+      if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.toggle('hidden', !isSubscriptionGlobalSettingsTab || !isSubscriptionView);
+      if (subscriptionInfoEmptyWrap) subscriptionInfoEmptyWrap.classList.toggle('hidden', !isSubscriptionInfoTab || isSubscriptionFaqTab || isSubscriptionAboutTab || state.currentView !== 'subscription-info');
+      if (subscriptionFaqWrap) subscriptionFaqWrap.classList.toggle('hidden', !isSubscriptionFaqTab || state.currentView !== 'subscription-info');
+      if (subscriptionFaqFooter) subscriptionFaqFooter.classList.toggle('hidden', !isSubscriptionFaqTab || state.currentView !== 'subscription-info');
+      if (subscriptionInfoSlidesWrap) subscriptionInfoSlidesWrap.classList.toggle('hidden', !isSubscriptionAboutTab || state.currentView !== 'subscription-info');
+      if (subscriptionInfoSlidesFooter) subscriptionInfoSlidesFooter.classList.toggle('hidden', !isSubscriptionAboutTab || state.currentView !== 'subscription-info');
+      if (subscriptionInfoEmptyText && isSubscriptionInfoTab) subscriptionInfoEmptyText.textContent = activeTab?.placeholder || '';
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
@@ -24575,6 +24716,11 @@
     if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.add('hidden');
     if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.add('hidden');
     if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.add('hidden');
+      if (subscriptionInfoEmptyWrap) subscriptionInfoEmptyWrap.classList.add('hidden');
+      if (subscriptionFaqWrap) subscriptionFaqWrap.classList.add('hidden');
+      if (subscriptionFaqFooter) subscriptionFaqFooter.classList.add('hidden');
+      if (subscriptionInfoSlidesWrap) subscriptionInfoSlidesWrap.classList.add('hidden');
+      if (subscriptionInfoSlidesFooter) subscriptionInfoSlidesFooter.classList.add('hidden');
     if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.add('hidden');
     if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !(isClientTab || forceClientPanelWithoutTabs));
     if (clientOrderInfoWrap) clientOrderInfoWrap.classList.toggle('hidden', !isOrderTab);
@@ -26973,10 +27119,6 @@
     });
   }
 
-  if (elSubscriptionGlobalSettingsBtn) {
-    elSubscriptionGlobalSettingsBtn.addEventListener('click', openSubscriptionGlobalSettingsTab);
-  }
-
   if (elSubscriptionHistoryBtn) {
     elSubscriptionHistoryBtn.addEventListener('click', () => {
       switchView('subscription-history');
@@ -26988,6 +27130,182 @@
       switchView('subscription-settings');
     });
   }
+
+  if (elSubscriptionInfoBtn) {
+    elSubscriptionInfoBtn.addEventListener('click', () => {
+      switchView('subscription-info');
+    });
+  }
+  if (subscriptionPreviewInfoBtn) {
+    subscriptionPreviewInfoBtn.addEventListener('click', openSubscriptionGlobalSettingsTab);
+  }
+  if (subscriptionAboutInfoBtn) {
+    subscriptionAboutInfoBtn.addEventListener('click', () => {
+      openSubscriptionInfoTab('about', 'Что такое подписка', '');
+    });
+  }
+  if (subscriptionFaqInfoBtn) {
+    subscriptionFaqInfoBtn.addEventListener('click', () => {
+      openSubscriptionInfoTab('faq', 'Часто задаваемые вопросы', '');
+      if (state.subscriptionStorefrontSettingsDraft) renderSubscriptionFaq();
+    });
+  }
+  if (subscriptionFaqAddBtn) {
+    subscriptionFaqAddBtn.addEventListener('click', () => {
+      if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
+      state.subscriptionStorefrontSettingsDraft.faq_items.push({ id: `faq-${Date.now()}-${Math.random().toString(36).slice(2)}`, question: '', answer: '' });
+      renderSubscriptionFaq();
+    });
+  }
+  if (subscriptionFaqItems) {
+    subscriptionFaqItems.addEventListener('input', (event) => {
+      const item = event.target.closest('[data-faq-id]');
+      if (!item || !state.subscriptionStorefrontSettingsDraft) return;
+      const faq = state.subscriptionStorefrontSettingsDraft.faq_items.find((entry) => entry.id === item.dataset.faqId);
+      if (!faq) return;
+      if (event.target.matches('[data-faq-question]')) faq.question = event.target.value;
+      if (event.target.matches('[data-faq-answer]')) faq.answer = event.target.value;
+    });
+    subscriptionFaqItems.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-faq-delete]');
+      if (!button || !state.subscriptionStorefrontSettingsDraft) return;
+      const item = button.closest('[data-faq-id]');
+      state.subscriptionStorefrontSettingsDraft.faq_items = state.subscriptionStorefrontSettingsDraft.faq_items.filter((entry) => entry.id !== item.dataset.faqId);
+      renderSubscriptionFaq();
+    });
+    subscriptionFaqItems.addEventListener('input', (event) => {
+      if (!event.target.matches('[data-faq-answer]')) return;
+      event.target.style.height = 'auto';
+      event.target.style.height = `${event.target.scrollHeight}px`;
+    });
+    let draggedFaqIndex = null;
+    let draggedFaqPosition = 'before';
+    subscriptionFaqItems.addEventListener('dragstart', (event) => {
+      const handle = event.target.closest('.subscription-faq-drag');
+      if (!handle) { event.preventDefault(); return; }
+      const card = handle.closest('[data-faq-id]');
+      draggedFaqIndex = card?.dataset.faqId || null;
+      card?.classList.add('is-dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedFaqIndex);
+    });
+    subscriptionFaqItems.addEventListener('dragover', (event) => {
+      if (draggedFaqIndex === null) return;
+      event.preventDefault();
+      const target = event.target.closest('[data-faq-id]');
+      subscriptionFaqItems.querySelectorAll('.is-drag-over-before,.is-drag-over-after').forEach((item) => item.classList.remove('is-drag-over-before', 'is-drag-over-after'));
+      if (!target || target.dataset.faqId === draggedFaqIndex) return;
+      const rect = target.getBoundingClientRect();
+      draggedFaqPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+      target.classList.add(draggedFaqPosition === 'before' ? 'is-drag-over-before' : 'is-drag-over-after');
+    });
+    subscriptionFaqItems.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const target = event.target.closest('[data-faq-id]');
+      const targetId = target?.dataset.faqId;
+      if (!draggedFaqIndex || !targetId || targetId === draggedFaqIndex) return;
+      const items = state.subscriptionStorefrontSettingsDraft.faq_items;
+      const sourceIndex = items.findIndex((item) => item.id === draggedFaqIndex);
+      const targetIndex = items.findIndex((item) => item.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return;
+      const [moved] = items.splice(sourceIndex, 1);
+      const nextTargetIndex = items.findIndex((item) => item.id === targetId);
+      items.splice(nextTargetIndex + (draggedFaqPosition === 'after' ? 1 : 0), 0, moved);
+      renderSubscriptionFaq();
+    });
+    subscriptionFaqItems.addEventListener('dragend', () => {
+      draggedFaqIndex = null;
+      draggedFaqPosition = 'before';
+      subscriptionFaqItems.querySelectorAll('.is-dragging,.is-drag-over-before,.is-drag-over-after').forEach((item) => item.classList.remove('is-dragging', 'is-drag-over-before', 'is-drag-over-after'));
+    });
+  }
+  if (subscriptionFaqTitleInput) subscriptionFaqTitleInput.addEventListener('input', () => {
+    if (state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft.faq_title = subscriptionFaqTitleInput.value;
+  });
+  if (subscriptionFaqCancelBtn) subscriptionFaqCancelBtn.addEventListener('click', () => {
+    state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings || {});
+    closeSubscriptionActiveTab();
+  });
+  if (subscriptionFaqSaveBtn) subscriptionFaqSaveBtn.addEventListener('click', () => saveSubscriptionStorefrontSettings().catch(console.error));
+  if (subscriptionInfoSlideAddBtn) subscriptionInfoSlideAddBtn.addEventListener('click', () => {
+    if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
+    const previousSlide = state.subscriptionStorefrontSettingsDraft.info_slides.at(-1);
+    const slide = { id: `slide-${Date.now()}-${Math.random().toString(36).slice(2)}`, image_url: '', description: '', button_text: '', button_color: '#ff6b00', button_text_color: '#ffffff', show_description: true, show_button: true, show_shadow: true, duration_seconds: previousSlide?.duration_seconds || 5 };
+    state.subscriptionStorefrontSettingsDraft.info_slides.push(slide);
+    activeSubscriptionInfoSlideId = slide.id;
+    renderSubscriptionInfoSlides();
+  });
+  if (subscriptionInfoSlidesList) subscriptionInfoSlidesList.addEventListener('click', (event) => {
+    const deleteButton = event.target.closest('[data-info-slide-delete]');
+    if (deleteButton) {
+      const slides = state.subscriptionStorefrontSettingsDraft?.info_slides || [];
+      const index = slides.findIndex((item) => item.id === deleteButton.dataset.infoSlideDelete);
+      if (index < 0) return;
+      slides.splice(index, 1);
+      activeSubscriptionInfoSlideId = slides[Math.min(index, slides.length - 1)]?.id || null;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    const row = event.target.closest('[data-info-slide-id]');
+    if (!row) return;
+    if (activeSubscriptionInfoSlideId === row.dataset.infoSlideId) {
+      if (expandedSubscriptionInfoSlideId === activeSubscriptionInfoSlideId && event.target.closest('.subscription-info-slide-preview-content')) return;
+      expandedSubscriptionInfoSlideId = expandedSubscriptionInfoSlideId === activeSubscriptionInfoSlideId ? null : activeSubscriptionInfoSlideId;
+    } else {
+      activeSubscriptionInfoSlideId = row.dataset.infoSlideId;
+      expandedSubscriptionInfoSlideId = null;
+    }
+    renderSubscriptionInfoSlides();
+  });
+  if (subscriptionInfoSlideEditor) subscriptionInfoSlideEditor.addEventListener('input', (event) => {
+    const slide = state.subscriptionStorefrontSettingsDraft?.info_slides.find((item) => item.id === activeSubscriptionInfoSlideId);
+    if (!slide) return;
+    if (event.target.matches('[data-info-slide-description]')) {
+      slide.description = event.target.value;
+      resizeSubscriptionInfoSlideDescription(event.target);
+    }
+    if (event.target.matches('[data-info-slide-button-text]')) slide.button_text = event.target.value;
+    if (event.target.matches('[data-info-slide-button-color]')) slide.button_color = event.target.value;
+    if (event.target.matches('[data-info-slide-button-text-color]')) slide.button_text_color = event.target.value;
+    if (event.target.matches('[data-info-slide-duration]')) slide.duration_seconds = Math.min(60, Math.max(1, Math.floor(Number(event.target.value || 5))));
+    const colorValue = event.target.closest('.subscription-storefront-color-field')?.querySelector('span');
+    if (colorValue && event.target.matches('input[type="color"]')) colorValue.textContent = event.target.value;
+    if (event.target.matches('[data-info-slide-description],[data-info-slide-button-text],[data-info-slide-button-color],[data-info-slide-button-text-color]')) refreshSubscriptionInfoSlidePreview(slide);
+  });
+  if (subscriptionInfoSlideEditor) subscriptionInfoSlideEditor.addEventListener('change', (event) => {
+    const slide = state.subscriptionStorefrontSettingsDraft?.info_slides.find((item) => item.id === activeSubscriptionInfoSlideId);
+    if (!slide) return;
+    if (event.target.matches('[data-info-slide-show-description]')) {
+      slide.show_description = event.target.checked;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-show-button]')) {
+      slide.show_button = event.target.checked;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-show-shadow]')) {
+      slide.show_shadow = event.target.checked;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (!event.target.matches('[data-info-slide-image]') || !event.target.files?.[0]) return;
+    subscriptionInfoSlideImageUploading = true;
+    renderSubscriptionInfoSlides();
+    uploadTenantAsset('subscription_info_slide_image', event.target.files[0]).then((uploaded) => {
+      const currentSlide = state.subscriptionStorefrontSettingsDraft?.info_slides.find((item) => item.id === activeSubscriptionInfoSlideId);
+      if (currentSlide) { currentSlide.image_url = String(uploaded.url || ''); renderSubscriptionInfoSlides(); }
+    }).catch(console.error).finally(() => {
+      subscriptionInfoSlideImageUploading = false;
+      renderSubscriptionInfoSlides();
+    });
+  });
+  if (subscriptionInfoSlidesSaveBtn) subscriptionInfoSlidesSaveBtn.addEventListener('click', () => saveSubscriptionStorefrontSettings().catch(console.error));
+  if (subscriptionInfoSlidesCancelBtn) subscriptionInfoSlidesCancelBtn.addEventListener('click', () => {
+    state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings || {});
+    closeSubscriptionActiveTab();
+  });
 
   // Кнопка "Скидки" — переключить на view скидок
   if (elAddDiscountBtn) {
@@ -27043,7 +27361,9 @@
         const limited = target.value.replace(/\r\n?/g, '\n').split('\n').slice(0, 3).join('\n').slice(0, 500);
         if (target.value !== limited) target.value = limited;
         draft.description = limited;
-      } else if (target === subscriptionStorefrontButtonTextInput) draft.button_text = target.value.slice(0, 80);
+      } else if (target === subscriptionStorefrontDescriptionSizeInput) draft.description_font_size = Math.min(24, Math.max(10, Number(target.value || 12)));
+      else if (target === subscriptionStorefrontDescriptionColorInput) draft.description_color = target.value;
+      else if (target === subscriptionStorefrontButtonTextInput) draft.button_text = target.value.slice(0, 80);
       else if (target === subscriptionStorefrontButtonColorInput) draft.button_color = target.value;
       else return;
       renderSubscriptionStorefrontSettings();

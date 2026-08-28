@@ -152,6 +152,29 @@ function getBonusSummary(config: BonusConfig | null) {
   return { balance, coinName, levelTitle };
 }
 
+function getSubscriptionStorefront(config: BonusConfig | null) {
+  const source = config?.subscription_storefront;
+  if (!source || source.is_active !== true) return null;
+  const aspectParts = String(source.aspect_ratio || '11:5').split(':').map(Number);
+  const aspectWidth = Number(aspectParts[0]) > 0 ? Number(aspectParts[0]) : 11;
+  const aspectHeight = Number(aspectParts[1]) > 0 ? Number(aspectParts[1]) : 5;
+  return {
+    ...source,
+    aspectRatio: aspectWidth / aspectHeight,
+    backgroundColor: String(source.background_color || '#f1e8ff'),
+    title: String(source.title || ''),
+    titleFontSize: Number(source.title_font_size || 18),
+    titleColor: String(source.title_color || '#7651c9'),
+    description: String(source.description || ''),
+    descriptionFontSize: Number(source.description_font_size || 12),
+    descriptionColor: String(source.description_color || '#7651c9'),
+    imageUrl: resolveAssetUrl(String(source.image_url || '')),
+    buttonText: String(source.button_text || ''),
+    buttonColor: String(source.button_color || '#ffffff'),
+    buttonIconUrl: resolveAssetUrl(String(source.button_icon_url || '')),
+  };
+}
+
 function getOrderedBonusLevels(levels: Array<Record<string, unknown>>) {
   return levels
     .filter((level) => level && level.is_active !== false)
@@ -507,6 +530,10 @@ export function ProfilePage() {
   const referralSummary = useMemo(
     () => getReferralSummary(passport?.bonusReferrals || null, passport?.bonusConfig || null),
     [passport?.bonusConfig, passport?.bonusReferrals],
+  );
+  const subscriptionStorefront = useMemo(
+    () => getSubscriptionStorefront(passport?.bonusConfig || null),
+    [passport?.bonusConfig],
   );
   const profileMenuItems = useMemo(
     () => getProfileMenuItems(passport?.bonusConfig || null),
@@ -1032,6 +1059,20 @@ export function ProfilePage() {
               </View>
             ) : null}
           </ScrollView>
+        ) : null}
+
+        {subscriptionStorefront ? (
+          <View style={[styles.subscriptionStorefront, { aspectRatio: subscriptionStorefront.aspectRatio, backgroundColor: subscriptionStorefront.backgroundColor }]}>
+            <View style={styles.subscriptionStorefrontCopy}>
+              <Text style={[styles.subscriptionStorefrontTitle, { color: subscriptionStorefront.titleColor, fontSize: subscriptionStorefront.titleFontSize }]}>{subscriptionStorefront.title}</Text>
+              <Text style={[styles.subscriptionStorefrontDescription, { color: subscriptionStorefront.descriptionColor, fontSize: subscriptionStorefront.descriptionFontSize }]}>{subscriptionStorefront.description}</Text>
+              <View style={[styles.subscriptionStorefrontButton, { backgroundColor: subscriptionStorefront.buttonColor }]}>
+                <Text style={styles.subscriptionStorefrontButtonText}>{subscriptionStorefront.buttonText}</Text>
+                {subscriptionStorefront.buttonIconUrl ? <Image source={{ uri: subscriptionStorefront.buttonIconUrl }} style={styles.subscriptionStorefrontButtonIcon} /> : <Text style={styles.subscriptionStorefrontChevron}>›</Text>}
+              </View>
+            </View>
+            {subscriptionStorefront.imageUrl ? <Image source={{ uri: subscriptionStorefront.imageUrl }} style={styles.subscriptionStorefrontImage} resizeMode="contain" /> : null}
+          </View>
         ) : null}
 
         <View style={styles.profileMenuGrid}>
@@ -1803,6 +1844,62 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 24,
     fontWeight: '900',
+  },
+  subscriptionStorefront: {
+    borderRadius: 18,
+    marginTop: theme.spacing.lg,
+    overflow: 'hidden',
+    position: 'relative',
+    width: '100%',
+  },
+  subscriptionStorefrontCopy: {
+    alignItems: 'flex-start',
+    gap: 10,
+    left: 20,
+    position: 'absolute',
+    right: '42%',
+    top: 16,
+    zIndex: 2,
+  },
+  subscriptionStorefrontTitle: {
+    fontWeight: '900',
+    lineHeight: undefined,
+  },
+  subscriptionStorefrontDescription: {
+    lineHeight: undefined,
+    whiteSpace: 'pre-line',
+  },
+  subscriptionStorefrontButton: {
+    alignItems: 'center',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 34,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  subscriptionStorefrontButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  subscriptionStorefrontButtonIcon: {
+    height: 14,
+    width: 14,
+  },
+  subscriptionStorefrontChevron: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '900',
+    lineHeight: 18,
+  },
+  subscriptionStorefrontImage: {
+    height: '100%',
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: '52%',
+    zIndex: 1,
   },
   settingsButton: {
     alignItems: 'center',
