@@ -341,7 +341,13 @@ export type CustomerOrder = Record<string, unknown> & {
   promo_code?: string | null;
   scheduled_at?: string | null;
   status_id?: number | string | null;
+  status_code?: string | null;
   status_title?: string | null;
+  customer_progress?: Array<{
+    title?: string | null;
+    status_id?: number | string | null;
+    completed?: boolean;
+  }>;
   time_option_title?: string | null;
   total?: number | string | null;
   total_amount?: number | string | null;
@@ -2019,6 +2025,38 @@ export async function checkOrderStock(items: Array<Record<string, unknown>>) {
     method: 'POST',
   });
   return response.data || { available: true, shortages: [], stock_levels: [] };
+}
+
+export type CreatedCustomerOrder = {
+  id: number;
+  public_id?: string | null;
+};
+
+export function getCustomerOrderStatusTitleFromValues(statusTitle: unknown, statusCode?: unknown) {
+  const code = String(statusCode || '').trim().toLowerCase();
+  const title = String(statusTitle || '').trim();
+  if (code === 'new') return 'Принят';
+  const normalizedTitle = title.toLowerCase();
+  if (normalizedTitle === 'новые') return 'Принят';
+  if (normalizedTitle === 'готовятся') return 'Готовится';
+  if (normalizedTitle === 'собран') return 'Собран';
+  if (normalizedTitle === 'переданы курьеру' || normalizedTitle === 'в пути') return 'В пути';
+  if (normalizedTitle === 'доставлены') return 'Доставлен';
+  if (normalizedTitle === 'отменены') return 'Отменён';
+  return title;
+}
+
+export function getCustomerOrderStatusTitle(order: CustomerOrder) {
+  return getCustomerOrderStatusTitleFromValues(order.status_title, order.status_code);
+}
+
+export async function createCustomerOrder(token: string, body: Record<string, unknown>) {
+  const response = await requestApi<CreatedCustomerOrder>('/api/public/orders', {
+    body: JSON.stringify(body),
+    headers: { 'x-customer-token': token },
+    method: 'POST',
+  });
+  return response.data || null;
 }
 
 export async function fetchProductsBatchAvailability(productIds: number[]) {

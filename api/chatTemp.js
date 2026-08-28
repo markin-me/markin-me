@@ -180,6 +180,7 @@ async function ensurePushSubscriptionsColumns() {
   const [columnRows] = await db.query("SHOW COLUMNS FROM chat_push_subscriptions");
   const columns = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || "")));
   const alterParts = [];
+  if (!columns.has("store_id")) alterParts.push("ADD COLUMN store_id BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER tenant_id");
   if (!columns.has("client_id")) alterParts.push("ADD COLUMN client_id BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER tenant_id");
   if (!columns.has("actor")) alterParts.push("ADD COLUMN actor ENUM('in','out') NOT NULL DEFAULT 'in' AFTER client_id");
   if (!columns.has("endpoint_hash")) alterParts.push("ADD COLUMN endpoint_hash CHAR(64) NOT NULL DEFAULT '' AFTER actor");
@@ -189,6 +190,10 @@ async function ensurePushSubscriptionsColumns() {
   if (!columns.has("user_agent")) alterParts.push("ADD COLUMN user_agent VARCHAR(255) NOT NULL DEFAULT '' AFTER auth");
   if (!columns.has("created_at")) alterParts.push("ADD COLUMN created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)");
   if (!columns.has("updated_at")) alterParts.push("ADD COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)");
+  if (!columns.has("push_chat_enabled")) alterParts.push("ADD COLUMN push_chat_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER user_agent");
+  if (!columns.has("push_important_enabled")) alterParts.push("ADD COLUMN push_important_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER push_chat_enabled");
+  if (!columns.has("push_orders_enabled")) alterParts.push("ADD COLUMN push_orders_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER push_important_enabled");
+  if (!columns.has("push_order_status_ids_json")) alterParts.push("ADD COLUMN push_order_status_ids_json TEXT NULL AFTER push_orders_enabled");
   if (alterParts.length) {
     await db.query(`ALTER TABLE chat_push_subscriptions ${alterParts.join(", ")}`);
   }
@@ -205,6 +210,7 @@ function ensurePushSubscriptionsTable() {
     CREATE TABLE IF NOT EXISTS chat_push_subscriptions (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       tenant_id BIGINT UNSIGNED NOT NULL,
+      store_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
       client_id BIGINT UNSIGNED NOT NULL,
       actor ENUM('in','out') NOT NULL DEFAULT 'in',
       endpoint_hash CHAR(64) NOT NULL,
@@ -495,7 +501,7 @@ function sanitizePushSubscription(raw) {
   return { endpoint, p256dh, auth };
 }
 
-async function upsertPushSubscription(tenantId, clientId, actorKey, subscription, userAgent) {
+async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, subscription, userAgent) {
   await ensurePushSubscriptionsTable();
   const actor = actorKey === "in" ? "in" : "out";
   const endpoint = String(subscription.endpoint || "");
@@ -512,12 +518,21 @@ async function upsertPushSubscription(tenantId, clientId, actorKey, subscription
       [Number(tenantId), Number(clientId), normalizedUserAgent, endpointHash]
     );
   }
+  if (actor === "in") {
+    await db.query(
+      `DELETE FROM chat_push_subscriptions
+        WHERE tenant_id = ? AND actor = 'in'
+          AND endpoint_hash = ? AND client_id <> ?`,
+      [Number(tenantId), endpointHash, Number(clientId)]
+    );
+  }
 
   await db.query(
     `INSERT INTO chat_push_subscriptions
-      (tenant_id, client_id, actor, endpoint_hash, endpoint, p256dh, auth, user_agent)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (tenant_id, store_id, client_id, actor, endpoint_hash, endpoint, p256dh, auth, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
+      store_id = VALUES(store_id),
       client_id = VALUES(client_id),
       actor = VALUES(actor),
       endpoint = VALUES(endpoint),
@@ -527,6 +542,7 @@ async function upsertPushSubscription(tenantId, clientId, actorKey, subscription
       updated_at = CURRENT_TIMESTAMP(3)`,
     [
       Number(tenantId),
+      Number(storeId),
       Number(clientId),
       actor,
       endpointHash,
@@ -622,11 +638,11 @@ async function deletePushSubscriptionsForThreads(tenantId, clientIds) {
   );
 }
 
-async function deletePushSubscriptionsForTenant(tenantId) {
+async function deleteAdminPushSubscriptionsForTenant(tenantId) {
   await ensurePushSubscriptionsTable();
   await db.query(
     `DELETE FROM chat_push_subscriptions
-      WHERE tenant_id = ?`,
+      WHERE tenant_id = ? AND actor = 'out'`,
     [Number(tenantId)]
   );
 }
@@ -647,7 +663,7 @@ async function listPushSubscriptionsForThread(tenantId, clientId, actorKey) {
     const [inRows] = await db.query(
       `SELECT id, endpoint, p256dh, auth
          FROM chat_push_subscriptions
-        WHERE tenant_id = ? AND client_id = ? AND actor = 'in'`,
+        WHERE tenant_id = ? AND client_id = ? AND actor = 'in' AND push_chat_enabled = 1`,
       [Number(tenantId), Number(clientId)]
     );
     rows = inRows;
@@ -967,6 +983,61 @@ async function sendPushToSubscriptions(subscriptions, payload) {
   }
 }
 
+function normalizePushPreferences(raw, statuses) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const availableIds = (Array.isArray(statuses) ? statuses : []).map((row) => Number(row?.id || 0)).filter((id) => id > 0);
+  const selectedIds = Array.from(new Set((Array.isArray(source.orderStatusIds) ? source.orderStatusIds : [])
+    .map((id) => Number(id)).filter((id) => availableIds.includes(id))));
+  return {
+    chat: source.chat !== false,
+    important: source.important !== false,
+    orders: source.orders !== false,
+    orderStatusIds: selectedIds.length ? selectedIds : availableIds,
+  };
+}
+
+function getCustomerOrderStatusTitle(statusTitle, statusCode) {
+  const code = String(statusCode || "").trim().toLowerCase();
+  const title = String(statusTitle || "").trim();
+  const normalizedTitle = title.toLowerCase();
+  if (code === "new" || normalizedTitle === "новые") return "Принят";
+  if (normalizedTitle === "готовятся") return "Готовится";
+  if (normalizedTitle === "собран") return "Собран";
+  if (normalizedTitle === "переданы курьеру" || normalizedTitle === "в пути") return "В пути";
+  if (normalizedTitle === "доставлены") return "Доставлен";
+  if (normalizedTitle === "отменены") return "Отменён";
+  return title;
+}
+
+async function listOrderStatuses(tenantId, storeId) {
+  const [rows] = await db.query(
+    `SELECT id, code, title FROM order_statuses WHERE tenant_id=? AND store_id=? AND is_active=1 ORDER BY sort ASC, id ASC`,
+    [Number(tenantId), Number(storeId)]
+  );
+  return Array.isArray(rows) ? rows.map((row) => ({ id: Number(row.id), code: String(row.code || ""), title: getCustomerOrderStatusTitle(row.title, row.code) })).filter((row) => row.id > 0 && row.title) : [];
+}
+
+async function sendOrderStatusPush(tenantId, storeId, order) {
+  await ensurePushSubscriptionsTable();
+  const customerId = Number(order?.customer_id || 0);
+  const statusId = Number(order?.status_id || 0);
+  if (!customerId || !statusId) return;
+  const [rows] = await db.query(
+    `SELECT id, endpoint, p256dh, auth FROM chat_push_subscriptions
+      WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in' AND push_orders_enabled=1
+        AND (push_order_status_ids_json IS NULL OR JSON_CONTAINS(push_order_status_ids_json, CAST(? AS JSON)))`,
+    [Number(tenantId), Number(storeId), customerId, String(statusId)]
+  );
+  await sendPushToSubscriptions(rows, {
+    type: "order_status",
+    tenant_id: Number(tenantId),
+    store_id: Number(storeId),
+    order_id: Number(order?.id || 0),
+    title: "Статус заказа обновлён",
+    body: `Заказ №${String(order?.public_id || order?.id || "").trim()}: ${getCustomerOrderStatusTitle(order?.status_title, order?.status_code)}`,
+  });
+}
+
 async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, message) {
   const peerActor = senderActor === "in" ? "out" : "in";
   if (peerActor === "in") {
@@ -1224,7 +1295,7 @@ async function handleTenantChatWidgetStateChange(tenantId, enabled) {
   setTenantChatWidgetEnabledCache(tenantId, enabled);
   if (enabled !== false) return;
   disconnectTenantChatRuntime(tenantId);
-  await deletePushSubscriptionsForTenant(tenantId).catch((err) => {
+  await deleteAdminPushSubscriptionsForTenant(tenantId).catch((err) => {
     console.error("chat-temp tenant push cleanup error:", err);
   });
 }
@@ -1715,6 +1786,7 @@ function sanitizeOrderCards(rawCards) {
       id: safeId,
       publicId: String(card.publicId || card.public_id || "").slice(0, 120),
       statusTitle: String(card.statusTitle || card.status_title || "").slice(0, 160),
+      statusCode: String(card.statusCode || card.status_code || "").slice(0, 80),
       totalPrice: Number.isFinite(totalPriceRaw) ? totalPriceRaw : 0,
       createdAt: toIsoOrEmpty(card.createdAt || card.created_at || ""),
       photos,
@@ -4088,7 +4160,8 @@ function makeChatTempRouter() {
     try {
       const tenantId = getTenantId(req);
       const chatEnabled = await isTenantChatWidgetEnabled(tenantId);
-      if (!chatEnabled) {
+      const isPushRequest = String(req.path || "").startsWith("/push/");
+      if (!chatEnabled && !isPushRequest) {
         return res.status(403).json({ ok: false, error: "CHAT_DISABLED" });
       }
       scheduleExpiredGuestThreadsCleanup(tenantId);
@@ -4387,6 +4460,7 @@ function makeChatTempRouter() {
   router.post("/push/subscribe", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const storeId = Math.max(1, Math.trunc(Number(req.headers["x-store-id"] || req.query.store_id || 1)) || 1);
       const actorKey = getRequestReactionActor(req);
       const clientIdRaw = req.body?.client_id ?? req.body?.clientId ?? req.query?.client_id ?? "";
       const clientId = normalizePushClientId(
@@ -4402,6 +4476,7 @@ function makeChatTempRouter() {
       }
       await upsertPushSubscription(
         tenantId,
+        storeId,
         clientId,
         actorKey,
         subscription,
@@ -4417,6 +4492,49 @@ function makeChatTempRouter() {
       });
     } catch (err) {
       console.error("chat-temp POST /push/subscribe error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.get("/push/preferences", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const storeId = Number(req.headers["x-store-id"] || req.query.store_id || 0);
+      const clientId = await resolveIncomingActorClientId(req, tenantId);
+      if (!clientId || !storeId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+      await ensurePushSubscriptionsTable();
+      const statuses = await listOrderStatuses(tenantId, storeId);
+      const [rows] = await db.query(
+        `SELECT push_chat_enabled, push_important_enabled, push_orders_enabled, push_order_status_ids_json
+           FROM chat_push_subscriptions WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in' ORDER BY updated_at DESC LIMIT 1`,
+        [Number(tenantId), Number(storeId), Number(clientId)]
+      );
+      const row = rows?.[0] || {};
+      let ids = [];
+      try { ids = JSON.parse(row.push_order_status_ids_json || "[]"); } catch {}
+      return res.json({ ok: true, data: { statuses, preferences: normalizePushPreferences({ chat: Number(row.push_chat_enabled) !== 0, important: Number(row.push_important_enabled) !== 0, orders: Number(row.push_orders_enabled) !== 0, orderStatusIds: ids }, statuses) } });
+    } catch (err) {
+      console.error("chat-temp GET /push/preferences error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.put("/push/preferences", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const storeId = Number(req.headers["x-store-id"] || req.query.store_id || 0);
+      const clientId = await resolveIncomingActorClientId(req, tenantId);
+      if (!clientId || !storeId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+      const statuses = await listOrderStatuses(tenantId, storeId);
+      const preferences = normalizePushPreferences(req.body?.preferences, statuses);
+      await ensurePushSubscriptionsTable();
+      await db.query(
+        `UPDATE chat_push_subscriptions SET push_chat_enabled=?, push_important_enabled=?, push_orders_enabled=?, push_order_status_ids_json=? WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in'`,
+        [preferences.chat ? 1 : 0, preferences.important ? 1 : 0, preferences.orders ? 1 : 0, JSON.stringify(preferences.orderStatusIds), Number(tenantId), Number(storeId), Number(clientId)]
+      );
+      return res.json({ ok: true, data: { preferences } });
+    } catch (err) {
+      console.error("chat-temp PUT /push/preferences error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });
@@ -5378,5 +5496,8 @@ makeChatTempRouter.handleTenantChatWidgetStateChange = handleTenantChatWidgetSta
 makeChatTempRouter.disconnectTenantChatRuntime = disconnectTenantChatRuntime;
 makeChatTempRouter.setTenantChatWidgetEnabledCache = setTenantChatWidgetEnabledCache;
 makeChatTempRouter.mergeThreadIntoClientAndNotify = mergeThreadIntoClientAndNotify;
+makeChatTempRouter.sendOrderStatusPush = sendOrderStatusPush;
+makeChatTempRouter.sendPushToSubscriptions = sendPushToSubscriptions;
+makeChatTempRouter.ensurePushSubscriptionsTable = ensurePushSubscriptionsTable;
 
 module.exports = makeChatTempRouter;

@@ -25348,8 +25348,8 @@
   let companyChatRuntimePromise = null;
   let companyChatRuntimePreloadStarted = false;
   let companyChatWarmupScheduled = false;
-  const COMPANY_CHAT_STYLESHEET_URL = "/static/css/shop.css?v=20260323g";
-  const COMPANY_CHAT_RUNTIME_URL = "/static/js/shop-company-chat.js?admin_mode=2&typing_hotfix=14&v=20260412a";
+  const COMPANY_CHAT_STYLESHEET_URL = "/static/css/shop.css?v=20260812-important-messages";
+  const COMPANY_CHAT_RUNTIME_URL = "/static/js/shop-company-chat.js?admin_mode=2&typing_hotfix=14&v=20260813-order-card-public-status";
   function ensureCompanyChatStylesheetLoaded() {
     if (companyChatStylesheetPromise) return companyChatStylesheetPromise;
     companyChatStylesheetPromise = new Promise((resolve) => {

@@ -11,6 +11,7 @@ const CHAT_COMPOSER_VERTICAL_MARGIN = 10;
 type ChatComposerProps = {
   editing?: ChatMessage | null;
   focusToken?: number;
+  inputRef?: { current: TextInput | null } | null;
   onBaseHeight?: (height: number) => void;
   onCancelEdit: () => void;
   onCancelReply: () => void;
@@ -23,6 +24,7 @@ type ChatComposerProps = {
 export function ChatComposer({
   editing,
   focusToken = 0,
+  inputRef,
   onBaseHeight,
   onCancelEdit,
   onCancelReply,
@@ -31,7 +33,7 @@ export function ChatComposer({
   onSend,
   replyTo,
 }: ChatComposerProps) {
-  const inputRef = useRef<TextInput | null>(null);
+  const localInputRef = useRef<TextInput | null>(null);
   const [text, setText] = useState('');
 
   useEffect(() => {
@@ -40,7 +42,7 @@ export function ChatComposer({
 
   useEffect(() => {
     if (!focusToken) return;
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    const frame = requestAnimationFrame(() => (inputRef || localInputRef).current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [focusToken]);
 
@@ -79,7 +81,7 @@ export function ChatComposer({
         <View style={styles.inputWrap}>
           <TextInput
             allowFontScaling={false}
-            ref={inputRef}
+            ref={inputRef || localInputRef}
             multiline
             onChangeText={(next) => {
               setText(next);

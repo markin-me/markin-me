@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { BlurView } from 'expo-blur';
-import { KeyboardStickyView } from 'react-native-keyboard-controller';
+import { KeyboardController, KeyboardStickyView } from 'react-native-keyboard-controller';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import MaskedView from '@react-native-masked-view/masked-view';
@@ -18,6 +18,7 @@ import {
   Keyboard,
   Platform,
   Pressable,
+  TextInput,
   type ListRenderItemInfo,
   type LayoutChangeEvent,
   type NativeScrollEvent,
@@ -71,8 +72,8 @@ const CHAT_THREAD_EDGE_BLUR_INTENSITY = Platform.OS === 'android' ? 12 : 10;
 const CHAT_THREAD_EDGE_BLUR_REDUCTION = Platform.OS === 'android' ? 2 : 3;
 const CHAT_FOOTER_BOTTOM_LIFT = 10;
 const CHAT_ANDROID_FOOTER_SAFE_AREA_MAX = 32;
-const CHAT_ANDROID_KEYBOARD_FOOTER_SAFE_AREA_MAX = 0;
 const CHAT_ANDROID_KEYBOARD_STICKY_OFFSET = CHAT_FOOTER_BOTTOM_LIFT;
+const CHAT_COMPOSER_REPLY_PREVIEW_LIFT = 52;
 const CHAT_THREAD_TOP_BASE_INSET = 14;
 const CHAT_SCROLL_OFFSET_MEMORY = new Map<string, number>();
 const CHAT_INITIAL_RENDER_MESSAGE_LIMIT = 18;
@@ -100,6 +101,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   const chatStageRef = useRef<View | null>(null);
   const chatStageFrameRef = useRef<{ height: number; y: number } | null>(null);
   const scrollRef = useRef<FlatList<ChatMessage> | null>(null);
+  const composerInputRef = useRef<TextInput | null>(null);
   const keyboardTranslateY = useRef(new Animated.Value(0)).current;
   const keyboardVisibleRef = useRef(false);
   const userScrolledThreadRef = useRef(false);
@@ -147,10 +149,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   const footerBottomInset = CHAT_FOOTER_BOTTOM_LIFT;
   const androidReportedBottomInset = Math.max(0, insets.bottom);
   const footerSafeAreaInset = Platform.OS === 'android'
-    ? Math.min(
-      androidReportedBottomInset,
-      keyboardVisible ? CHAT_ANDROID_KEYBOARD_FOOTER_SAFE_AREA_MAX : CHAT_ANDROID_FOOTER_SAFE_AREA_MAX,
-    )
+    ? Math.min(androidReportedBottomInset, CHAT_ANDROID_FOOTER_SAFE_AREA_MAX)
     : 0;
   const footerBlurBottomOffset = 0;
   const operatorName = getOperatorName(chat.settings);
@@ -197,13 +196,13 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     () => (active && Platform.OS === 'android' && chatStageHeight > 0 ? { flex: 0, height: chatStageHeight } : null),
     [active, chatStageHeight],
   );
+  const composerReplyPreviewLift = chat.replyTo || chat.editing ? CHAT_COMPOSER_REPLY_PREVIEW_LIFT : 0;
   const threadFooterHeight = useMemo(
     () => Math.max(
       CHAT_THREAD_FOOTER_FADE_FALLBACK,
-      footerBaseHeight + footerSafeAreaInset,
-      footerOverlayHeight,
+      footerBaseHeight + footerSafeAreaInset + composerReplyPreviewLift,
     ),
-    [footerBaseHeight, footerOverlayHeight, footerSafeAreaInset],
+    [composerReplyPreviewLift, footerBaseHeight, footerSafeAreaInset],
   );
   const threadTopInset = Platform.OS === 'android' && keyboardVisible
     ? CHAT_THREAD_TOP_BASE_INSET
@@ -217,8 +216,8 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     }),
     [footerBottomInset, threadFooterHeight, threadTopInset],
   );
-  const footerMaskHeight = Platform.OS === 'android' && !keyboardVisible && footerSafeAreaInset > 0
-    ? threadFooterHeight + CHAT_THREAD_FOOTER_FADE_EXTRA
+  const footerMaskHeight = Platform.OS === 'android' && footerSafeAreaInset > 0
+    ? Math.max(CHAT_THREAD_FOOTER_FADE_FALLBACK, footerBaseHeight + footerSafeAreaInset + CHAT_THREAD_FOOTER_FADE_EXTRA)
     : CHAT_THREAD_FOOTER_FADE_FALLBACK;
   const threadRenderBatchSize = chat.hasMore ? CHAT_RENDER_BATCH_SIZE : CHAT_CACHED_RENDER_BATCH_SIZE;
   const threadWindowSize = chat.hasMore ? CHAT_THREAD_WINDOW_SIZE : CHAT_CACHED_THREAD_WINDOW_SIZE;
@@ -406,9 +405,10 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   }, []);
 
   const handleBack = useCallback(() => {
+    composerInputRef.current?.blur();
+    void KeyboardController.dismiss({ keepFocus: false });
     if (onBack) {
       onBack();
-      if (keyboardVisibleRef.current) requestAnimationFrame(() => Keyboard.dismiss());
       return;
     }
     if (dismissKeyboardIfOpen()) return;
@@ -651,18 +651,10 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
       cancelAnimationFrame(contextHideFrameRef.current);
       contextHideFrameRef.current = null;
     }
-    setContextHiddenMessageId('');
+    setContextHiddenMessageId(layout ? message.id : '');
     setActionMessage(message);
     setActionMessageLayout(layout || null);
     setReactionsExpanded(false);
-    if (layout) {
-      contextHideFrameRef.current = requestAnimationFrame(() => {
-        contextHideFrameRef.current = requestAnimationFrame(() => {
-          contextHideFrameRef.current = null;
-          setContextHiddenMessageId(message.id);
-        });
-      });
-    }
     requestAnimationFrame(() => Keyboard.dismiss());
   }, []);
 
@@ -925,6 +917,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
               <ChatComposer
                 editing={chat.editing}
                 focusToken={composerFocusToken}
+                inputRef={composerInputRef}
                 onBaseHeight={setFooterBaseHeight}
                 onCancelEdit={() => chat.setEditing(null)}
                 onCancelReply={chat.clearReply}

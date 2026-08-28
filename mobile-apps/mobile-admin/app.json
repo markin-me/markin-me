@@ -16,6 +16,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.aleksandrushkov.mobileadmin",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -23,8 +24,19 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
+    "plugins": [
+      "expo-dev-client",
+      "onnxruntime-react-native",
+      "./plugins/with-onnxruntime-package",
+      "expo-font"
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "af6d1be6-43a7-420f-9b04-97c48e36639e"
+      }
     }
   }
 }

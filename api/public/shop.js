@@ -5132,7 +5132,36 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return storeTimezone || '+0';
   }
 
+  let orderStatusCustomerProgressColumnPromise = null;
+  function ensureOrderStatusCustomerProgressColumn() {
+    if (orderStatusCustomerProgressColumnPromise) return orderStatusCustomerProgressColumnPromise;
+    orderStatusCustomerProgressColumnPromise = db.query('SHOW COLUMNS FROM order_statuses LIKE \'customer_progress_title\'')
+      .then(([rows]) => rows.length || db.query('ALTER TABLE order_statuses ADD COLUMN customer_progress_title VARCHAR(120) NULL AFTER title'))
+      .catch((err) => { orderStatusCustomerProgressColumnPromise = null; throw err; });
+    return orderStatusCustomerProgressColumnPromise;
+  }
+
+  async function getCustomerOrderProgress(tenantId, storeId, currentStatusId) {
+    await ensureOrderStatusCustomerProgressColumn();
+    const [rows] = await db.query(
+      `SELECT mapped.customer_progress_title AS title, mapped.id AS status_id, mapped.sort AS status_sort, current_status.sort AS current_status_sort
+         FROM order_statuses mapped
+         LEFT JOIN order_statuses current_status
+           ON current_status.tenant_id=mapped.tenant_id AND current_status.store_id=mapped.store_id AND current_status.id=?
+        WHERE mapped.tenant_id=? AND mapped.store_id=? AND mapped.is_active=1
+          AND COALESCE(mapped.customer_progress_title, '') <> ''
+        ORDER BY mapped.sort ASC, mapped.id ASC`,
+      [Number(currentStatusId || 0), tenantId, storeId]
+    );
+    return (Array.isArray(rows) ? rows : []).map((row) => ({
+      title: row.title,
+      status_id: Number(row.status_id),
+      completed: Number(row.current_status_sort || -1) >= Number(row.status_sort || 0),
+    }));
+  }
+
   async function fetchOrderPayload(tenantId, storeId, id, opts = {}) {
+    await ensureOrderStatusCustomerProgressColumn();
     const storeTimezone = opts.storeTimezone ?? await getStoreTimezone(tenantId, storeId);
     const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
     const [rows] = await db.query(
@@ -5164,7 +5193,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         o.status_id,
 
         s.code AS statusCode,
-        s.title AS statusTitle,
+        COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS statusTitle,
 
         p.code AS paymentCode,
         p.title AS paymentTitle,
@@ -5224,6 +5253,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       deliveryCost = stored && stored > 0 ? stored : computed;
     }
 
+    const customerProgress = await getCustomerOrderProgress(tenantId, storeId, r.status_id);
     const snapshot = {
       id: r.id,
       public_id: r.public_id || null,
@@ -5262,6 +5292,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       time_option_code: r.timeOptionCode ?? null,
       time_option_title: r.timeOptionTitle ?? null,
+      customer_progress: customerProgress,
     };
     return snapshot;
   }
@@ -8425,6 +8456,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      await ensureOrderStatusCustomerProgressColumn();
       const phone = str(req.query.phone || req.query.q);
       const phoneCandidates = normalizePhoneLookupCandidates(phone);
       if (!phoneCandidates.length) {
@@ -8444,7 +8476,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
-           s.title AS status_title, s.code AS status_code, s.is_final AS status_is_final,
+           COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code, s.is_final AS status_is_final,
            p.title AS payment_title, p.code AS payment_code,
            ca.street AS deliveryAddressStreet,
            ca.house AS deliveryAddressHouse,
@@ -8515,6 +8547,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      await ensureOrderStatusCustomerProgressColumn();
       const token = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
@@ -8565,7 +8598,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
-           s.title AS status_title, s.code AS status_code, s.is_final AS status_is_final,
+           COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code, s.is_final AS status_is_final,
            p.title AS payment_title, p.code AS payment_code,
            ca.street AS deliveryAddressStreet,
            ca.house AS deliveryAddressHouse,
@@ -18049,9 +18082,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const storeId = helpers.getStoreId(req);
     const isKsoConfig = String(req.query?.kso || '').trim() === '1';
     await ensureOrderDeliveryTypeColumns();
+    await ensureOrderStatusCustomerProgressColumn();
 
       const [statuses] = await db.query(
-        `SELECT id, code, title, subtitle, icon, color, sort
+        `SELECT id, code, COALESCE(NULLIF(TRIM(customer_progress_title), ''), title) AS title, subtitle, icon, color, sort
          FROM order_statuses
          WHERE tenant_id=? AND store_id=? AND is_active=1
          ORDER BY sort ASC, id ASC`,

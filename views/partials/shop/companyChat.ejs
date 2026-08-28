@@ -1,6 +1,9 @@
 <div class="shop-company-chat-overlay" id="shopCompanyChatOverlay" aria-hidden="true" hidden>
   <section class="shop-company-chat-modal" role="dialog" aria-modal="true" aria-labelledby="shopCompanyChatTitle">
     <header class="shop-company-chat-modal__header">
+      <button class="shop-company-chat-modal__back hidden" id="shopCompanyChatBackBtn" type="button" aria-label="Назад">
+        <i class="fas fa-arrow-left" aria-hidden="true"></i>
+      </button>
       <h2 class="shop-company-chat-modal__title" id="shopCompanyChatTitle">Добро пожаловать в чат!</h2>
       <button class="shop-company-chat-modal__close" id="shopCompanyChatCloseBtn" type="button" aria-label="Закрыть чат">
         <i class="fas fa-times"></i>
@@ -8,6 +11,43 @@
     </header>
 
     <div class="shop-company-chat-modal__body">
+      <div class="shop-company-messages-view shop-company-messages-home hidden" id="shopCompanyMessagesHome">
+        <h3 class="shop-company-messages-home__title">Сообщения</h3>
+
+        <button class="shop-company-messages-branch" id="shopImportantMessagesOpenBtn" type="button">
+          <span class="shop-company-messages-branch__icon">
+            <i class="far fa-bell" aria-hidden="true"></i>
+            <span class="shop-company-messages-branch__dot hidden" id="shopImportantMessagesUnreadDot" aria-hidden="true"></span>
+          </span>
+          <span class="shop-company-messages-branch__title">Важные сообщения от компании</span>
+          <i class="fas fa-chevron-right shop-company-messages-branch__chevron" aria-hidden="true"></i>
+        </button>
+
+        <button class="shop-company-messages-branch" id="shopSupportChatOpenBtn" type="button">
+          <span class="shop-company-messages-branch__icon">
+            <i class="far fa-comment-dots" aria-hidden="true"></i>
+            <span class="shop-company-messages-branch__dot hidden" id="shopSupportChatUnreadDot" aria-hidden="true"></span>
+          </span>
+          <span class="shop-company-messages-branch__title">Чат поддержки</span>
+          <i class="fas fa-chevron-right shop-company-messages-branch__chevron" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div class="shop-company-messages-view shop-important-messages-view hidden" id="shopImportantMessagesView">
+        <div class="shop-important-messages-list" id="shopImportantMessagesList"></div>
+      </div>
+
+      <div class="shop-company-messages-view shop-important-message-details-view hidden" id="shopImportantMessageDetailsView">
+        <div class="shop-important-message-details" id="shopImportantMessageDetails"></div>
+      </div>
+
+      <div class="shop-company-messages-view shop-company-chat-unavailable hidden" id="shopCompanyChatUnavailable">
+        <div class="shop-company-messages-state">
+          <h3>Чат сейчас недоступен</h3>
+          <p>Настройки магазина временно отключили виджет чата.</p>
+        </div>
+      </div>
+
       <div class="shop-company-chat-feed" id="shopCompanyChatFeed" aria-live="polite">
         <div class="shop-company-chat-thread" id="shopCompanyChatThread"></div>
       </div>

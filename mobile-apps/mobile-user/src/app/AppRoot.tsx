@@ -8,7 +8,7 @@ import {
 } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { KeyboardProvider } from 'react-native-keyboard-controller';
+import { KeyboardController, KeyboardProvider } from 'react-native-keyboard-controller';
 import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -542,10 +542,10 @@ function MainTabs() {
     if (!supportChatOpenRef.current && !supportChatVisible) return;
     supportChatOpenRef.current = false;
     supportChatAnimationRunRef.current += 1;
-    const runId = supportChatAnimationRunRef.current;
     setSupportChatInteractive(false);
     setSupportChatVisible(false);
-    requestAnimationFrame(() => Keyboard.dismiss());
+    setSupportChatActive(false);
+    void KeyboardController.dismiss({ keepFocus: false });
     stopSupportChatAnimation();
     const animation = Animated.timing(supportChatTranslateProgress, {
       duration: SUPPORT_CHAT_TRANSITION_MS,
@@ -556,14 +556,6 @@ function MainTabs() {
     supportChatAnimationRef.current = animation;
     animation.start(() => {
       if (supportChatAnimationRef.current === animation) supportChatAnimationRef.current = null;
-      if (supportChatAnimationRunRef.current === runId && !supportChatOpenRef.current) {
-        supportChatDeactivateFrameRef.current = requestAnimationFrame(() => {
-          supportChatDeactivateFrameRef.current = null;
-          if (supportChatAnimationRunRef.current === runId && !supportChatOpenRef.current) {
-            setSupportChatActive(false);
-          }
-        });
-      }
     });
   }, [
     stopSupportChatAnimation,

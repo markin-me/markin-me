@@ -19,6 +19,7 @@
     var appModalEl = document.getElementById('appModal');
     var appModalBodyEl = document.getElementById('appModalBody');
     var sectionTitleEl = document.getElementById('cashSectionTitle');
+    var cashAddBtnEl = document.getElementById('cashAddBtn');
     var orderFilterWrapEl = document.getElementById('cashOrderFilterWrap');
     var orderFilterBtnEl = document.getElementById('cashOrderFilterBtn');
     var orderFilterLabelEl = document.getElementById('cashOrderFilterLabel');
@@ -63,12 +64,17 @@
     ];
     var clickTimer = null;
     var waitAbortController = null;
+    var expenseDocumentSwipeStart = null;
     var state = {
       statuses: [],
       orders: [],
       paymentMethods: [],
       paymentMethodsPromise: null,
       currentSection: 'orders',
+      expenseDocuments: [],
+      expenseSummary: { count: 0, total_sum_kopecks: 0 },
+      expenseDocumentsLoadPromise: null,
+      activeExpenseDocument: null,
       orderFilter: 'all',
       orderFilterMenuOpen: false,
       dayGroupsCollapsed: {},
@@ -146,6 +152,49 @@
 
     function normalizeText(value) {
       return String(value == null ? '' : value).trim().toLowerCase();
+    }
+
+    var expenseSupplierFormShortcuts = [
+      [/^Общество с ограниченной ответственностью(?=\s|$)/i, 'ООО'],
+      [/^Общество с дополнительной ответственностью(?=\s|$)/i, 'ОДО'],
+      [/^Публичное акционерное общество(?=\s|$)/i, 'ПАО'],
+      [/^Непубличное акционерное общество(?=\s|$)/i, 'НАО'],
+      [/^Открытое акционерное общество(?=\s|$)/i, 'ОАО'],
+      [/^Закрытое акционерное общество(?=\s|$)/i, 'ЗАО'],
+      [/^Акционерное общество(?=\s|$)/i, 'АО'],
+      [/^Индивидуальный предприниматель(?=\s|$)/i, 'ИП'],
+      [/^Крестьянское \(фермерское\) хозяйство(?=\s|$)/i, 'КФХ'],
+      [/^Федеральное государственное унитарное предприятие(?=\s|$)/i, 'ФГУП'],
+      [/^Государственное унитарное предприятие(?=\s|$)/i, 'ГУП'],
+      [/^Муниципальное унитарное предприятие(?=\s|$)/i, 'МУП'],
+      [/^Государственное бюджетное учреждение(?=\s|$)/i, 'ГБУ'],
+      [/^Муниципальное бюджетное учреждение(?=\s|$)/i, 'МБУ'],
+      [/^Государственное автономное учреждение(?=\s|$)/i, 'ГАУ'],
+      [/^Муниципальное автономное учреждение(?=\s|$)/i, 'МАУ'],
+      [/^Автономная некоммерческая организация(?=\s|$)/i, 'АНО'],
+      [/^Некоммерческое партнёрство(?=\s|$)/i, 'НП'],
+      [/^Некоммерческое партнерство(?=\s|$)/i, 'НП'],
+      [/^Сельскохозяйственный производственный кооператив(?=\s|$)/i, 'СПК'],
+      [/^Жилищно-строительный кооператив(?=\s|$)/i, 'ЖСК'],
+      [/^Гаражно-строительный кооператив(?=\s|$)/i, 'ГСК'],
+      [/^Потребительский кооператив(?=\s|$)/i, 'ПК'],
+      [/^Производственный кооператив(?=\s|$)/i, 'ПК'],
+      [/^Товарищество собственников жилья(?=\s|$)/i, 'ТСЖ'],
+      [/^Товарищество собственников недвижимости(?=\s|$)/i, 'ТСН'],
+      [/^Садоводческое некоммерческое товарищество(?=\s|$)/i, 'СНТ'],
+      [/^Полное товарищество(?=\s|$)/i, 'ПТ'],
+      [/^Коммандитное товарищество(?=\s|$)/i, 'КТ'],
+      [/^Товарищество с ограниченной ответственностью(?=\s|$)/i, 'ТОО']
+    ];
+
+    function formatExpenseSupplierName(value) {
+      var name = String(value || 'Фискальный чек').replace(/\s*КПП\s*\d+/i, '').trim();
+      expenseSupplierFormShortcuts.some(function (shortcut) {
+        if (!shortcut[0].test(name)) return false;
+        name = name.replace(shortcut[0], shortcut[1]);
+        return true;
+      });
+      return name;
     }
 
     function parseLocalDateParts(ts) {
@@ -1712,7 +1761,7 @@
         });
       }
       if (sectionTitleEl) {
-        sectionTitleEl.textContent = state.currentSection === 'money' ? 'Движение денег' : 'Журнал заказов';
+        sectionTitleEl.textContent = state.currentSection === 'money' ? 'Движение денег' : state.currentSection === 'expenses' ? 'Документы расходов' : 'Журнал заказов';
       }
       if (orderFilterLabelEl) orderFilterLabelEl.textContent = getOrderFilterLabel();
       if (orderFilterWrapEl) {
@@ -1727,6 +1776,10 @@
           btn.classList.toggle('is-selected', String(btn.getAttribute('data-cash-order-filter') || '') === String(state.orderFilter || 'all'));
         });
       }
+      if (cashAddBtnEl) {
+        if (state.currentSection === 'expenses') cashAddBtnEl.setAttribute('data-analytics-action', 'add-document');
+        else cashAddBtnEl.removeAttribute('data-analytics-action');
+      }
     }
 
     function closeOrderFilterMenu() {
@@ -1737,6 +1790,10 @@
 
     function renderSummaryCards() {
       if (!summaryCardsEl) return;
+      if (state.currentSection === 'expenses') {
+        summaryCardsEl.innerHTML = '<div class="cash-summary-card"><span>Учтено расходов</span><strong>' + escapeHtml(money(Number(state.expenseSummary.total_sum_kopecks || 0) / 100)) + '</strong></div><div class="cash-summary-card"><span>Документы</span><strong>' + escapeHtml(formatCount(state.expenseSummary.count || 0)) + '</strong></div>';
+        return;
+      }
       if (state.currentSection === 'money') {
         var moneySummary = getMoneySummary();
         summaryCardsEl.innerHTML =
@@ -2192,6 +2249,29 @@
     }
 
     function renderRightPane() {
+      if (state.currentSection === 'expenses' && state.activeExpenseDocument) {
+        var expense = state.activeExpenseDocument;
+        var items = Array.isArray(expense.items) ? expense.items : [];
+        var receiptData = expense.receiptData || {};
+        var operationType = ({ 1: 'Приход', 2: 'Возврат прихода', 3: 'Расход', 4: 'Возврат расхода' })[Number(receiptData.operationType)] || '—';
+        var taxationType = ({ 1: 'ОСН', 2: 'УСН', 4: 'УСН доходы − расходы', 8: 'ЕНВД', 16: 'ЕСХН', 32: 'ПСН' })[Number(receiptData.appliedTaxationType)] || '—';
+        if (cashOrderTabsHeaderEl) cashOrderTabsHeaderEl.classList.add('hidden');
+        if (cashOrderInfoRootEl) cashOrderInfoRootEl.classList.add('hidden');
+        if (sidebarSummaryEl) {
+          sidebarSummaryEl.classList.remove('hidden');
+          sidebarSummaryEl.innerHTML = '<div class="cash-balance-card"><div class="cash-balance-card-title">Документ расхода</div><div class="cash-balance-metrics"><div class="cash-balance-metric"><span>Продавец</span><strong>' + escapeHtml(expense.document.supplier_name || '—') + '</strong></div><div class="cash-balance-metric"><span>ИНН</span><strong>' + escapeHtml(expense.document.supplier_inn || '—') + '</strong></div><div class="cash-balance-metric"><span>Место расчёта</span><strong>' + escapeHtml(receiptData.retailPlace || expense.document.retail_place || '—') + '</strong></div><div class="cash-balance-metric"><span>Адрес</span><strong>' + escapeHtml(receiptData.retailPlaceAddress || expense.document.retail_place_address || '—') + '</strong></div><div class="cash-balance-metric"><span>Дата и время</span><strong>' + escapeHtml(expense.document.receipt_datetime || '—') + '</strong></div><div class="cash-balance-metric"><span>Тип операции</span><strong>' + escapeHtml(operationType) + '</strong></div><div class="cash-balance-metric"><span>Чек № / смена</span><strong>' + escapeHtml(String(receiptData.requestNumber || '—') + ' / ' + String(receiptData.shiftNumber || '—')) + '</strong></div><div class="cash-balance-metric"><span>Кассир</span><strong>' + escapeHtml(receiptData.operator || '—') + '</strong></div><div class="cash-balance-metric"><span>Наличные / карта</span><strong>' + escapeHtml(money(Number(receiptData.cashTotalSum || 0) / 100) + ' / ' + money(Number(receiptData.ecashTotalSum || 0) / 100)) + '</strong></div><div class="cash-balance-metric"><span>Налогообложение</span><strong>' + escapeHtml(taxationType) + '</strong></div><div class="cash-balance-metric"><span>Рег. № / заводской № ККТ</span><strong>' + escapeHtml(String(receiptData.kktRegId || '—') + ' / ' + String(receiptData.numberKkt || '—')) + '</strong></div><div class="cash-balance-metric"><span>ФН / ФД / ФП</span><strong>' + escapeHtml([expense.document.fiscal_drive_number, expense.document.fiscal_document_number, expense.document.fiscal_sign].join(' / ')) + '</strong></div><div class="cash-balance-metric"><span>Итого</span><strong>' + escapeHtml(money(Number(expense.document.total_sum_kopecks || 0) / 100)) + '</strong></div></div></div><div class="cash-balance-card"><div class="cash-balance-card-title">Позиции</div><div class="cash-balance-metrics">' + items.map(function (item) { return '<div class="cash-balance-metric"><span>' + escapeHtml(item.item_name) + '</span><strong>' + escapeHtml(String(item.quantity || '—') + ' × ' + money(Number(item.price_kopecks || 0) / 100) + ' · ' + money(Number(item.sum_kopecks || 0) / 100)) + '</strong></div>'; }).join('') + '</div></div>';
+        }
+        sidebarSummaryEl.innerHTML = '<article class="cash-fiscal-receipt"><header><strong>' + escapeHtml(expense.document.supplier_name || '—') + '</strong><span>ИНН ' + escapeHtml(expense.document.supplier_inn || '—') + '</span><b>КАССОВЫЙ ЧЕК</b><span>Место расчёта: ' + escapeHtml(receiptData.retailPlace || expense.document.retail_place || '—') + '</span><span>' + escapeHtml(receiptData.retailPlaceAddress || expense.document.retail_place_address || '—') + '</span><span>' + escapeHtml(expense.document.receipt_datetime || '—') + '</span></header><div class="cash-fiscal-receipt__meta"><span>Чек № ' + escapeHtml(receiptData.requestNumber || '—') + ' · смена ' + escapeHtml(receiptData.shiftNumber || '—') + '</span><span>Кассир: ' + escapeHtml(receiptData.operator || '—') + '</span></div><div class="cash-fiscal-receipt__items">' + items.map(function (item) { return '<div><strong>' + escapeHtml(item.item_name) + '</strong><span>' + escapeHtml(String(item.quantity || '—')) + ' × ' + escapeHtml(money(Number(item.price_kopecks || 0) / 100)) + '<b>' + escapeHtml(money(Number(item.sum_kopecks || 0) / 100)) + '</b></span></div>'; }).join('') + '</div><div class="cash-fiscal-receipt__total"><span>ИТОГ</span><strong>' + escapeHtml(money(Number(expense.document.total_sum_kopecks || 0) / 100)) + '</strong></div><div class="cash-fiscal-receipt__meta"><span>Наличные: ' + escapeHtml(money(Number(receiptData.cashTotalSum || 0) / 100)) + '</span><span>Безналичные: ' + escapeHtml(money(Number(receiptData.ecashTotalSum || 0) / 100)) + '</span><span>' + escapeHtml(operationType) + ' · ' + escapeHtml(taxationType) + '</span><span>ККТ: ' + escapeHtml(receiptData.kktRegId || '—') + '</span><span>ФН ' + escapeHtml(expense.document.fiscal_drive_number) + ' · ФД ' + escapeHtml(expense.document.fiscal_document_number) + '</span><span>ФП ' + escapeHtml(expense.document.fiscal_sign) + '</span></div></article>';
+        sidebarSummaryEl.classList.add('cash-expense-receipt');
+        var qrMount = document.createElement('div');
+        qrMount.className = 'cash-expense-receipt-qr';
+        sidebarSummaryEl.appendChild(qrMount);
+        if (window.QRCode && expense.document.raw_qr) {
+          new window.QRCode(qrMount, { text: String(expense.document.raw_qr), width: 132, height: 132, correctLevel: window.QRCode.CorrectLevel && window.QRCode.CorrectLevel.M });
+        }
+        return;
+      }
+      if (sidebarSummaryEl) sidebarSummaryEl.classList.remove('cash-expense-receipt');
       var activeTab = getActiveTab();
       var activeClientTab = getActiveClientTab();
       var activeOrder = activeClientTab ? null : getActiveOrder();
@@ -2317,6 +2397,20 @@
 
     function renderJournal() {
       renderFilterState();
+      if (state.currentSection === 'expenses') {
+        journalListEl.classList.remove('cash-journal-list--orders');
+        journalListEl.innerHTML = state.expenseDocuments.map(function (document) {
+          var documentDateTime = document.receipt_datetime || document.accepted_at;
+          var expenseDateTime = window.matchMedia('(max-width: 768px)').matches
+            ? formatDateTime(documentDateTime).split(',')[0]
+            : formatDateTime(documentDateTime).replace(', ', '\nВремя: ');
+          var supplierName = formatExpenseSupplierName(document.supplier_name);
+          var expenseDetails = [supplierName, document.retail_place || 'Место расчёта не указано', document.supplier_inn ? 'ИНН ' + document.supplier_inn : 'ИНН не указан'].join(' · ');
+          return '<div class="cash-expense-document-row"><button class="cash-journal-entry" type="button" data-expense-document-id="' + String(document.id) + '"><div class="cash-journal-entry-icon"><i class="fas fa-receipt"></i></div><time class="cash-expense-document-date">' + escapeHtml(expenseDateTime) + '</time><div class="cash-journal-entry-main"><div class="cash-journal-entry-top"><strong>' + escapeHtml(expenseDetails) + '</strong></div></div><div class="cash-journal-entry-amount is-negative">-' + escapeHtml(money(Number(document.total_sum_kopecks || 0) / 100)) + '</div></button><button class="btn btn-icon cash-expense-document-delete" type="button" data-expense-document-delete-id="' + String(document.id) + '" aria-label="Удалить документ"><i class="fas fa-trash"></i><span>Удалить</span></button></div>';
+        }).join('');
+        if (journalEmptyEl) { journalEmptyEl.textContent = 'Документов расходов пока нет'; journalEmptyEl.classList.toggle('hidden', state.expenseDocuments.length > 0); }
+        return;
+      }
       var orders = state.currentSection === 'money' ? getMoneyJournalEntries() : getOrderJournalOrders();
       journalListEl.classList.toggle('cash-journal-list--orders', state.currentSection === 'orders');
       journalListEl.innerHTML = isMultiDayRange()
@@ -2526,7 +2620,9 @@
     function applyDateFilter(closePopoverAfter) {
       state.dayGroupsCollapsed = {};
       updateDateLabel();
-      Promise.all([loadStatuses(), loadOrders()]).then(function () { renderAll(); }).catch(console.error);
+      var loads = [loadStatuses(), loadOrders()];
+      if (state.currentSection === 'expenses') loads.push(loadExpenseDocuments());
+      Promise.all(loads).then(function () { renderAll(); }).catch(console.error);
       if (closePopoverAfter) closeDatePopover();
     }
 
@@ -2607,6 +2703,23 @@
         renderAll();
       });
       return state.loadPromise;
+    }
+
+    function loadExpenseDocuments() {
+      if (state.expenseDocumentsLoadPromise) return state.expenseDocumentsLoadPromise;
+      var qs = buildDateQuery(new URLSearchParams());
+      var previousFingerprint = JSON.stringify([state.expenseDocuments, state.expenseSummary]);
+      state.expenseDocumentsLoadPromise = apiJson('/api/admin/analytics/expense-documents?' + qs.toString()).then(function (payload) {
+        var documents = Array.isArray(payload.documents) ? payload.documents : [];
+        var summary = payload.summary || state.expenseSummary;
+        var changed = previousFingerprint !== JSON.stringify([documents, summary]);
+        state.expenseDocuments = documents;
+        state.expenseSummary = summary;
+        return changed;
+      }).finally(function () {
+        state.expenseDocumentsLoadPromise = null;
+      });
+      return state.expenseDocumentsLoadPromise;
     }
 
     function buildFallbackReceiptHtml(order) {
@@ -3107,9 +3220,19 @@
         if (!btn) return;
         state.currentSection = String(btn.getAttribute('data-cash-section') || 'orders');
         state.orderFilterMenuOpen = false;
+        if (state.currentSection === 'expenses') {
+          loadExpenseDocuments().then(renderAll).catch(function (error) { console.error('expense documents load error:', error); });
+        }
         renderAll();
       });
     }
+
+    document.addEventListener('expense-documents-changed', function () {
+      loadExpenseDocuments().then(function () {
+        if (state.currentSection === 'expenses') renderAll();
+      }).catch(function (error) { console.error('expense documents refresh error:', error); });
+    });
+
 
     if (orderFilterWrapEl) {
       orderFilterWrapEl.addEventListener('click', function (event) {
@@ -3132,7 +3255,78 @@
       });
     }
 
+    journalListEl.addEventListener('touchstart', function (event) {
+      var row = event.target && event.target.closest('.cash-expense-document-row');
+      var touch = event.touches && event.touches[0];
+      if (!row || !touch) return;
+      expenseDocumentSwipeStart = { row: row, x: touch.clientX, y: touch.clientY };
+    }, { passive: true });
+
+    journalListEl.addEventListener('touchend', function (event) {
+      if (!expenseDocumentSwipeStart) return;
+      var touch = event.changedTouches && event.changedTouches[0];
+      var swipe = expenseDocumentSwipeStart;
+      expenseDocumentSwipeStart = null;
+      if (!touch || !swipe.row.isConnected) return;
+      var horizontalDistance = touch.clientX - swipe.x;
+      var verticalDistance = touch.clientY - swipe.y;
+      if (Math.abs(horizontalDistance) < 40 || Math.abs(horizontalDistance) <= Math.abs(verticalDistance)) return;
+      Array.prototype.forEach.call(journalListEl.querySelectorAll('.cash-expense-document-row.is-delete-revealed'), function (row) {
+        if (row !== swipe.row) row.classList.remove('is-delete-revealed');
+      });
+      swipe.row.classList.toggle('is-delete-revealed', horizontalDistance < 0);
+    }, { passive: true });
+
     journalListEl.addEventListener('click', function (event) {
+      var expenseDocumentDeleteBtn = event.target && event.target.closest('[data-expense-document-delete-id]');
+      if (expenseDocumentDeleteBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        var expenseDocumentDeleteId = Number(expenseDocumentDeleteBtn.getAttribute('data-expense-document-delete-id') || 0);
+        if (!(expenseDocumentDeleteId > 0)) return;
+        if (!window.confirm('Удалить документ расхода?')) {
+          expenseDocumentDeleteBtn.closest('.cash-expense-document-row')?.classList.remove('is-delete-revealed');
+          return;
+        }
+        apiJson('/api/admin/analytics/expense-documents/' + String(expenseDocumentDeleteId), { method: 'DELETE' }).then(function () {
+          if (state.activeExpenseDocument && Number(state.activeExpenseDocument.document?.id) === expenseDocumentDeleteId) state.activeExpenseDocument = null;
+          document.dispatchEvent(new Event('expense-documents-changed'));
+        }).catch(function (error) { console.error('expense document delete error:', error); });
+        return;
+      }
+      var expenseDocumentBtn = event.target && event.target.closest('[data-expense-document-id]');
+      if (expenseDocumentBtn) {
+        var expenseDocumentRow = expenseDocumentBtn.closest('.cash-expense-document-row');
+        if (expenseDocumentRow && expenseDocumentRow.classList.contains('is-delete-revealed')) {
+          expenseDocumentRow.classList.remove('is-delete-revealed');
+          return;
+        }
+        var expenseDocumentId = Number(expenseDocumentBtn.getAttribute('data-expense-document-id') || 0);
+        if (expenseDocumentId > 0) apiJson('/api/admin/analytics/expense-documents/' + String(expenseDocumentId)).then(function (payload) {
+          state.activeExpenseDocument = payload;
+          renderRightPane();
+          if (window.matchMedia('(max-width: 768px)').matches && window.AppModal && sidebarSummaryEl) {
+            window.AppModal.open({
+              title: 'Фискальный чек',
+              content: '<div class="cash-expense-receipt">' + sidebarSummaryEl.innerHTML + '</div>',
+              showSave: false,
+              showCancel: false,
+              hideFooter: true,
+              cancelText: 'Закрыть',
+              onClose: function () {
+                document.getElementById('appModal')?.classList.remove('cash-mobile-expense-receipt-modal');
+              }
+            });
+            document.getElementById('appModal')?.classList.add('cash-mobile-expense-receipt-modal');
+            var modalQrMount = window.AppModal.body && window.AppModal.body.querySelector('.cash-expense-receipt-qr');
+            if (modalQrMount && window.QRCode && payload.document && payload.document.raw_qr) {
+              modalQrMount.innerHTML = '';
+              new window.QRCode(modalQrMount, { text: String(payload.document.raw_qr), width: 132, height: 132, correctLevel: window.QRCode.CorrectLevel && window.QRCode.CorrectLevel.M });
+            }
+          }
+        }).catch(console.error);
+        return;
+      }
       var dayToggle = event.target && event.target.closest('[data-cash-day-toggle]');
       if (dayToggle) {
         event.preventDefault();
@@ -3191,6 +3385,11 @@
 
     document.addEventListener('click', function (event) {
       var target = event.target;
+      if (window.matchMedia('(max-width: 768px)').matches && (!target || !target.closest('.cash-expense-document-row'))) {
+        Array.prototype.forEach.call(journalListEl.querySelectorAll('.cash-expense-document-row.is-delete-revealed'), function (expenseRow) {
+          expenseRow.classList.remove('is-delete-revealed');
+        });
+      }
       if (orderFilterWrapEl && state.orderFilterMenuOpen && (!target || !orderFilterWrapEl.contains(target))) {
         closeOrderFilterMenu();
       }
@@ -3374,6 +3573,13 @@
       loadOrders();
       startWaitLoop();
     });
+
+    window.setInterval(function () {
+      if (document.visibilityState !== 'visible' || state.currentSection !== 'expenses') return;
+      loadExpenseDocuments().then(function (changed) {
+        if (changed) renderAll();
+      }).catch(function (error) { console.error('expense documents background refresh error:', error); });
+    }, 3000);
 
     window.addEventListener('pagehide', function () {
       stopWaitLoop();

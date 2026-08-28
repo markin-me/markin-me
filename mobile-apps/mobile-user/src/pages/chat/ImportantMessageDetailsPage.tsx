@@ -495,6 +495,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
+    marginHorizontal: -4,
     marginTop: 22,
   },
   claimButton: {

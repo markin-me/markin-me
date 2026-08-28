@@ -28,6 +28,8 @@ export type ChatOrderCard = Record<string, unknown> & {
   public_id?: string;
   statusTitle?: string;
   status_title?: string;
+  statusCode?: string;
+  status_code?: string;
   totalPrice?: number;
   total_price?: number;
   createdAt?: string;

@@ -23,6 +23,7 @@ import {
 
 import {
   fetchCustomerOrders,
+  getCustomerOrderStatusTitle,
   isSameCachedValue,
   readCachedCustomerOrders,
   readCachedCustomerPassport,
@@ -212,7 +213,7 @@ function OrderCard({
 
           <View style={styles.orderActions}>
             <View style={[styles.orderPill, styles.statusPill]}>
-              <Text numberOfLines={1} style={styles.statusText}>{order.status_title || '—'}</Text>
+              <Text numberOfLines={1} style={styles.statusText}>{getCustomerOrderStatusTitle(order) || '—'}</Text>
             </View>
             <View style={[styles.orderPill, styles.pricePill]}>
               <Text numberOfLines={1} style={styles.priceText}>{formatMoney(getOrderTotal(order))}</Text>

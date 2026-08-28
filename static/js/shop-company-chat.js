@@ -44,9 +44,21 @@
   const scrollDownBadge = document.getElementById("shopCompanyChatScrollDownBadge");
   let typingIndicator = document.getElementById("shopCompanyChatTypingIndicator");
   const reactionBar = document.getElementById("shopCompanyChatReactionBar");
+  const messagesBackBtn = document.getElementById("shopCompanyChatBackBtn");
+  const messagesHome = document.getElementById("shopCompanyMessagesHome");
+  const importantMessagesOpenBtn = document.getElementById("shopImportantMessagesOpenBtn");
+  const importantMessagesUnreadDot = document.getElementById("shopImportantMessagesUnreadDot");
+  const supportChatOpenBtn = document.getElementById("shopSupportChatOpenBtn");
+  const supportChatUnreadDot = document.getElementById("shopSupportChatUnreadDot");
+  const importantMessagesView = document.getElementById("shopImportantMessagesView");
+  const importantMessagesList = document.getElementById("shopImportantMessagesList");
+  const importantMessageDetailsView = document.getElementById("shopImportantMessageDetailsView");
+  const importantMessageDetails = document.getElementById("shopImportantMessageDetails");
+  const companyChatUnavailable = document.getElementById("shopCompanyChatUnavailable");
 
   if (!openBtn || !overlay || !modal || !modalHeader || !modalBody || !modalTitle || !closeBtn) return;
   if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !imageViewerCard || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
+  if (!messagesBackBtn || !messagesHome || !importantMessagesOpenBtn || !importantMessagesUnreadDot || !supportChatOpenBtn || !supportChatUnreadDot || !importantMessagesView || !importantMessagesList || !importantMessageDetailsView || !importantMessageDetails || !companyChatUnavailable) return;
 
   function getChatOpenButtons() {
     return [mobileOpenBtn, headerOpenBtn].filter(function (btn, index, list) {
@@ -147,6 +159,8 @@
     return map;
   })();
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
+  const IMPORTANT_MESSAGES_API_BASE = "/api/public/important-messages";
+  const IMPORTANT_MESSAGES_POLL_MS = 15000;
   const CHAT_THREAD_WAIT_TIMEOUT_MS = 20000;
   const CHAT_THREAD_WAIT_RETRY_MS = 1200;
   const CHAT_THREAD_SSE_PULL_DEBOUNCE_MS = 100;
@@ -209,7 +223,7 @@
     return initialModalTitleText;
   }
   function syncModalTitleWithActiveProfile() {
-    if (!modalTitle || chatOrderDetailsActive) return;
+    if (!modalTitle || chatOrderDetailsActive || (!isAdminClientChatMode && messageCenterScreen !== "support")) return;
     if (!isAdminClientChatMode) {
       modalTitle.textContent = initialModalTitleText;
       return;
@@ -294,6 +308,10 @@
   const CHAT_AUTO_OPEN_SOURCE_PARAM = "chat_source";
   const CHAT_AUTO_OPEN_CLIENT_ID_PARAM = "chat_client_id";
   const CHAT_AUTO_OPEN_MESSAGE_ID_PARAM = "chat_message_id";
+  const IMPORTANT_MESSAGES_AUTO_OPEN_QUERY_PARAM = "open_important_messages";
+  const IMPORTANT_MESSAGES_AUTO_OPEN_FALLBACK_PARAM = "open_promo_messages";
+  const IMPORTANT_MESSAGES_AUTO_OPEN_ID_PARAM = "important_message_id";
+  const IMPORTANT_MESSAGES_AUTO_OPEN_STORE_ID_PARAM = "important_store_id";
   const CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX = 14;
   const CHAT_ASSISTANT_GENDER_MALE = "m";
   const CHAT_ASSISTANT_GENDER_FEMALE = "f";
@@ -495,7 +513,8 @@
   let webPushSyncForceRequested = false;
   let webPushSyncQueuedClientId = "";
   let notificationPermissionPromptShownInSession = false;
-  let notificationPermissionPromptEl = null;
+  let notificationPermissionPromptScheduled = false;
+  let webPushPreferencesCache = null;
   const selectedMessageIds = new Set();
   const hotQuestionOrderCardsCache = new Map();
   const hotQuestionOrderCardsFetchInFlight = new Map();
@@ -507,6 +526,44 @@
   let chatBootstrapLoaderEl = null;
   let chatOrderUiSnapshot = null;
   let chatOrderFooterOutsideHandler = null;
+  let messageCenterScreen = "closed";
+  let importantMessagesItems = [];
+  let importantMessagesRevision = "";
+  let importantMessagesCount = 0;
+  let importantMessagesCacheChecked = false;
+  let importantMessagesLoading = false;
+  let importantMessagesError = "";
+  let importantMessagesLoadPromise = null;
+  let importantMessagesPollTimer = 0;
+  let importantMessagesRequestSeq = 0;
+  let importantMessagesCacheScopeKey = "";
+  let importantMessagesListRenderKey = null;
+  let importantMessagesUnreadIds = new Set();
+  let importantMessagesUnreadCount = 0;
+  let activeImportantMessageId = 0;
+  let importantMessageProducts = new Map();
+  let pendingImportantPromoClaimId = 0;
+  let pendingImportantPromoClaimStoreId = 0;
+  let importantMessagesStoreId = getActiveStoreId();
+  let importantMessagesClaimingIds = new Set();
+  let suspendedMessageCenterScreen = "";
+  let suspendedImportantMessageId = 0;
+  let previousMobileNavButton = null;
+  let messageCenterChatPreloadTimer = 0;
+  let importantMessageParallaxLayoutFrame = 0;
+  let importantMessageParallaxPaintFrame = 0;
+  let importantMessageParallaxInertiaFrame = 0;
+  let importantMessageParallaxTouch = null;
+  let importantMessageParallaxScrollOffset = 0;
+  let importantMessageParallaxMaxScroll = 0;
+  let importantMessageHeroImage = null;
+  let supportChatOpenGeneration = 0;
+  const supportsNativeImportantMessageParallax = Boolean(
+    window.CSS
+    && typeof window.CSS.supports === "function"
+    && window.CSS.supports("scroll-timeline: --shop-important-message-details-scroll block")
+    && window.CSS.supports("animation-timeline: --shop-important-message-details-scroll")
+  );
 
   const LONG_PRESS_MS = 430;
   const LONG_PRESS_MOVE_CANCEL_PX = 14;
@@ -583,7 +640,7 @@
       feed
       && thread
       && overlay
-      && overlay.classList.contains("is-open")
+      && isSupportChatOpen()
       && isMobileChatViewport()
       && hasFeedMessagesForEdgeSpring()
     );
@@ -1005,7 +1062,7 @@
     if (!node) return;
     const info = normalizePeerTypingInfo(peerTypingState);
     const activeNow = isPeerTypingInfoActiveNow(info);
-    const canShow = overlay.classList.contains("is-open") && activeNow;
+    const canShow = isSupportChatOpen() && activeNow;
     const textNode = node.querySelector(".shop-company-chat-typing-indicator");
     if (!canShow) {
       if (textNode) textNode.textContent = "";
@@ -1106,7 +1163,7 @@
     localTypingWatchTimer = window.setTimeout(function () {
       localTypingWatchTimer = 0;
       if (!localTypingActive) return;
-      if (!overlay.classList.contains("is-open")) {
+      if (!isSupportChatOpen()) {
         stopLocalTypingSession({ flush: true });
         return;
       }
@@ -1162,7 +1219,7 @@
     if (localTypingHeartbeatTimer) window.clearTimeout(localTypingHeartbeatTimer);
     localTypingHeartbeatTimer = window.setTimeout(function () {
       if (!localTypingActive) return;
-      if (!overlay.classList.contains("is-open")) {
+      if (!isSupportChatOpen()) {
         stopLocalTypingSession({ flush: true });
         return;
       }
@@ -1219,7 +1276,7 @@
 
   function handleComposerTypingActivity(options) {
     const opts = options || {};
-    if (!overlay.classList.contains("is-open")) return;
+    if (!isSupportChatOpen()) return;
     const currentText = normalizeComposerText(input.value);
     const hasText = !!currentText;
     if (!hasText && opts.allowEmpty !== true) {
@@ -1388,7 +1445,7 @@
   }
 
   function scheduleMessageAttachmentBottomPin(messageId, options) {
-    if (!feed || !thread || !overlay.classList.contains("is-open")) return false;
+    if (!feed || !thread || !isSupportChatOpen()) return false;
     const id = String(messageId || "").trim();
     if (!id) return false;
     const opts = options || {};
@@ -1401,7 +1458,7 @@
       '.shop-company-chat-row[data-message-id="' + cssEscape(id) + '"]'
     );
     const applyPinnedBottom = function () {
-      if (!overlay.classList.contains("is-open")) return;
+      if (!isSupportChatOpen()) return;
       applyFeedBottomDistanceSnapshot(targetBottomDistance);
       saveFeedScrollPosition({ force: true });
     };
@@ -1526,7 +1583,7 @@
 
     if (!isMobileChatViewport()) {
       window.setTimeout(function () {
-        if (!overlay.classList.contains("is-open")) return;
+        if (!isSupportChatOpen()) return;
         applyFeedViewportStateSnapshot(stableSnapshot);
       }, 120);
     }
@@ -1543,7 +1600,7 @@
     const finish = function () {
       if (done) return;
       done = true;
-      if (!overlay.classList.contains("is-open")) return;
+      if (!isSupportChatOpen()) return;
       applyFeedViewportStateSnapshot(stableSnapshot);
     };
     const timer = window.setTimeout(finish, 1000);
@@ -1586,7 +1643,7 @@
   }
 
   function tryApplyPendingFeedRestoreState() {
-    if (!overlay.classList.contains("is-open")) return false;
+    if (!isSupportChatOpen()) return false;
     if (!pendingFeedRestoreState || typeof pendingFeedRestoreState !== "object") return false;
     if (pendingFeedRestoreMutationVersion !== sharedThreadMutationVersion) {
       pendingFeedRestoreState = null;
@@ -1664,7 +1721,7 @@
 
   function saveFeedScrollPosition(options) {
     const opts = options || {};
-    const isOpen = overlay.classList.contains("is-open");
+    const isOpen = isSupportChatOpen();
     if (!isOpen && opts.force !== true) return;
     if (!feed) return;
     const nextTop = normalizePersistedFeedTop(Number(feed.scrollTop || 0));
@@ -1743,22 +1800,23 @@
     if (!badge) return;
 
     const localUnreadCount = getUnreadAgentCount(entries);
-    const isOpen = overlay.classList.contains("is-open");
-    if (isOpen) {
+    const isSupportOpen = isSupportChatOpen();
+    if (isSupportOpen) {
       unreadServerTotal = localUnreadCount;
       unreadStatePrimed = true;
     }
     const serverUnreadCount = Math.max(0, Number(unreadServerTotal || 0));
-    const unreadCount = unreadStatePrimed ? serverUnreadCount : localUnreadCount;
-    const displayCount = isOpen
-      ? getFeedScrollDownBadgeCount(entries)
-      : unreadCount;
+    const supportUnreadCount = unreadStatePrimed ? serverUnreadCount : localUnreadCount;
+    const displayCount = Math.max(0, supportUnreadCount) + Math.max(0, importantMessagesUnreadCount);
     const badges = getChatUnreadBadges();
     const buttons = getChatOpenButtons();
+    importantMessagesUnreadDot.classList.toggle("hidden", importantMessagesUnreadCount <= 0);
+    supportChatUnreadDot.classList.toggle("hidden", supportUnreadCount <= 0);
 
     if (displayCount <= 0) {
       badges.forEach(function (item) {
         item.textContent = "";
+        item.removeAttribute("aria-label");
         item.classList.add("hidden");
       });
       buttons.forEach(function (button) {
@@ -1769,7 +1827,8 @@
 
     const value = displayCount > 99 ? "99+" : String(displayCount);
     badges.forEach(function (item) {
-      item.textContent = value;
+      item.textContent = !isAdminClientChatMode && item.id === "shopCompanyChatUnreadBadge" ? "" : value;
+      item.setAttribute("aria-label", "Непрочитанных сообщений: " + value);
       item.classList.remove("hidden");
     });
     buttons.forEach(function (button) {
@@ -1783,6 +1842,28 @@
       button.classList.toggle("is-active", isOpen);
       button.setAttribute("aria-expanded", isOpen ? "true" : "false");
     });
+    const mobileNav = mobileOpenBtn ? mobileOpenBtn.closest(".shop-nav") : null;
+    if (!mobileNav) return;
+    if (isOpen) {
+      if (!previousMobileNavButton || !previousMobileNavButton.isConnected) {
+        previousMobileNavButton = mobileNav.querySelector(".shop-nav-btn.is-active:not(#shopCompanyChatOpenBtn)");
+      }
+      mobileNav.querySelectorAll(".shop-nav-btn").forEach(function (button) {
+        const active = button === mobileOpenBtn;
+        button.classList.toggle("is-active", active);
+        if (active) button.setAttribute("aria-current", "page");
+        else button.removeAttribute("aria-current");
+      });
+      return;
+    }
+    mobileOpenBtn.classList.remove("is-active");
+    mobileOpenBtn.removeAttribute("aria-current");
+    const activeOther = mobileNav.querySelector(".shop-nav-btn.is-active:not(#shopCompanyChatOpenBtn)");
+    if (!activeOther && previousMobileNavButton && previousMobileNavButton.isConnected) {
+      previousMobileNavButton.classList.add("is-active");
+      previousMobileNavButton.setAttribute("aria-current", "page");
+    }
+    previousMobileNavButton = null;
   }
 
   function isChatTabActiveForRead() {
@@ -1843,81 +1924,49 @@
 
   function shouldOfferNotificationPermissionPrompt() {
     if (notificationPermissionPromptShownInSession) return false;
-    if (!overlay.classList.contains("is-open")) return false;
     if (!isWebPushSupported()) return false;
     if (!isWebPushSecureContext()) return false;
     if (!("Notification" in window)) return false;
     try {
-      if (localStorage.getItem(chatNotificationsStorageKey) !== null) return false;
+      if (localStorage.getItem(webPushPermissionPromptStorageKey) === "1") return false;
     } catch {}
-    return String(Notification.permission || "default") !== "denied";
-  }
-
-  function ensureNotificationPermissionPrompt() {
-    if (notificationPermissionPromptEl && notificationPermissionPromptEl.isConnected) {
-      return notificationPermissionPromptEl;
-    }
-    if (!modalBody || !modalBody.isConnected) return null;
-    const promptHost = modalBody;
-    const node = document.createElement("div");
-    node.className = "shop-company-chat-permission-prompt hidden";
-    node.setAttribute("aria-live", "polite");
-    node.innerHTML =
-      '<div class="shop-company-chat-permission-prompt__card">' +
-        '<button type="button" class="shop-company-chat-permission-prompt__close" aria-label="\u0417\u0430\u043a\u0440\u044b\u0442\u044c">' +
-          '<i class="fas fa-times"></i>' +
-        "</button>" +
-        '<div class="shop-company-chat-permission-prompt__text">\u041f\u043e\u043b\u0443\u0447\u0430\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f\u0445 \u0432 \u0447\u0430\u0442\u0435?</div>' +
-        '<button type="button" class="shop-company-chat-permission-prompt__allow">\u0414\u0430</button>' +
-      "</div>";
-    promptHost.appendChild(node);
-    notificationPermissionPromptEl = node;
-
-    const closeBtn = node.querySelector(".shop-company-chat-permission-prompt__close");
-    if (closeBtn) {
-      closeBtn.addEventListener("click", function (event) {
-        event.preventDefault();
-        void setChatNotificationsEnabled(false);
-        hideNotificationPermissionPrompt();
-      });
-    }
-
-    const allowBtn = node.querySelector(".shop-company-chat-permission-prompt__allow");
-    if (allowBtn) {
-      allowBtn.addEventListener("click", function (event) {
-        event.preventDefault();
-        setChatNotificationsEnabled(true)
-          .finally(function () {
-            hideNotificationPermissionPrompt();
-          });
-      });
-    }
-
-    return node;
-  }
-
-  function hideNotificationPermissionPrompt() {
-    const prompt = (
-      notificationPermissionPromptEl
-      && notificationPermissionPromptEl.isConnected
-    )
-      ? notificationPermissionPromptEl
-      : null;
-    if (!prompt) return;
-    prompt.classList.remove("is-visible");
-    prompt.classList.add("hidden");
+    return String(Notification.permission || "default") === "default";
   }
 
   function maybeShowNotificationPermissionPrompt() {
-    const prompt = ensureNotificationPermissionPrompt();
-    if (!prompt) return;
-    if (!prompt.classList.contains("hidden")) return;
     if (!shouldOfferNotificationPermissionPrompt()) return;
+    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
+    if (typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen()) return;
     notificationPermissionPromptShownInSession = true;
-    prompt.classList.remove("hidden");
-    requestAnimationFrame(function () {
-      prompt.classList.add("is-visible");
+    try { localStorage.setItem(webPushPermissionPromptStorageKey, "1"); } catch {}
+    const content = document.createElement("div");
+    content.className = "shop-profile-notification-permission";
+    content.textContent = "Разрешите уведомления, чтобы получать новости компании, изменения статуса заказов и ответы поддержки.";
+    window.AppModal.open({
+      title: "Получать уведомления?",
+      content: content,
+      cancelText: "Не сейчас",
+      saveText: "Разрешить",
+      showCancel: true,
+      showSave: true,
+      onSave: function () {
+        return setChatNotificationsEnabled(true).then(function () { return true; });
+      },
+      onClose: function () {
+        window.AppModal?.body?.classList.remove("shop-notification-permission-modal-body");
+      },
     });
+    window.AppModal.body?.classList.add("shop-notification-permission-modal-body");
+  }
+
+  function scheduleNotificationPermissionPrompt() {
+    if (notificationPermissionPromptScheduled) return;
+    notificationPermissionPromptScheduled = true;
+    const show = function () {
+      window.setTimeout(maybeShowNotificationPermissionPrompt, 350);
+    };
+    if (document.readyState === "complete") show();
+    else window.addEventListener("load", show, { once: true });
   }
 
   function suppressIncomingAlertsFor(ms) {
@@ -1979,7 +2028,7 @@
   }
 
   function playMessageAlertSound() {
-    if (!isChatNotificationsEnabled()) return;
+    if (!isChatNotificationAlertsEnabled()) return;
     const soundUrl = getTenantMessageSoundUrl();
     if (soundUrl) {
       try {
@@ -2055,7 +2104,7 @@
   }
 
   function showIncomingMessageBrowserNotification(title, body) {
-    if (!isChatNotificationsEnabled()) return;
+    if (!isChatNotificationAlertsEnabled()) return;
     if (!("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
     try {
@@ -2071,7 +2120,7 @@
   }
 
   function shouldSuppressLocalBrowserNotification() {
-    if (!isChatNotificationsEnabled()) return true;
+    if (!isChatNotificationAlertsEnabled()) return true;
     if (!isWebPushSupported() || !isWebPushSecureContext()) return false;
     if (Notification.permission !== "granted") return false;
     if (String(webPushSyncedFingerprint || "").trim()) return true;
@@ -2081,7 +2130,7 @@
 
   function maybeNotifyIncomingAgentMessage(entry) {
     if (shouldSuppressIncomingAlertsNow()) return;
-    const isOpen = overlay.classList.contains("is-open");
+    const isOpen = isSupportChatOpen();
     const tabVisible = isChatTabActiveForRead();
     const tabFocused = typeof document.hasFocus !== "function" || document.hasFocus();
     const tabActive = tabVisible && tabFocused;
@@ -2192,7 +2241,7 @@
     const p256dh = String(keys.p256dh || "");
     const auth = String(keys.auth || "");
     const safeClientId = String(clientId || "").trim();
-    return [safeClientId, endpoint, p256dh, auth].join("|");
+    return [safeClientId, String(getActiveStoreId()), endpoint, p256dh, auth].join("|");
   }
 
   async function getWebPushServiceWorkerRegistration() {
@@ -2284,16 +2333,6 @@
   function queueWebPushSubscriptionSync(options) {
     const opts = options || {};
     if (!isChatNotificationsEnabled()) return;
-    if (chatRuntimeSettings.isEnabled === false) {
-      if (webPushSyncTimer) {
-        window.clearTimeout(webPushSyncTimer);
-        webPushSyncTimer = 0;
-      }
-      webPushSyncRequestedWithPermission = false;
-      webPushSyncForceRequested = false;
-      webPushSyncQueuedClientId = "";
-      return;
-    }
     if (opts.requestPermission === true) webPushSyncRequestedWithPermission = true;
     if (opts.force === true) webPushSyncForceRequested = true;
     const nextClientId = String(opts.clientId || "");
@@ -2321,7 +2360,6 @@
   async function syncWebPushSubscription(options) {
     const opts = options || {};
     if (!isChatNotificationsEnabled()) return;
-    if (chatRuntimeSettings.isEnabled === false) return;
     const requestClientId = String(opts.clientId || getActiveChatClientId() || "").trim();
     if (!requestClientId) {
       webPushSyncedFingerprint = "";
@@ -2428,7 +2466,7 @@
   function shouldMarkAgentMessagesRead(options) {
     const opts = options || {};
     if (opts.force === true) return true;
-    return overlay.classList.contains("is-open") && isChatTabActiveForRead();
+    return isSupportChatOpen() && isChatTabActiveForRead();
   }
 
   function isAgentEntryRead(entry) {
@@ -2570,6 +2608,7 @@
   const customerChatClientIdByIdentityPrefix = "shop_company_chat_customer_id_for_identity_t" + tenantId + "_";
   const webPushVapidStorageKey = "shop_company_chat_push_vapid_t" + tenantId;
   const chatNotificationsStorageKey = "shop_company_chat_notifications_enabled_t" + tenantId;
+  const webPushPermissionPromptStorageKey = "shop_push_permission_prompted_t" + tenantId;
   function isChatNotificationsEnabled() {
     try {
       if (localStorage.getItem(chatNotificationsStorageKey) !== "1") return false;
@@ -2802,6 +2841,7 @@
     const restoreToken = ++attachPreviewDraftRestoreToken;
     const record = await readAttachmentDraftRecord(key);
     if (!record || restoreToken !== attachPreviewDraftRestoreToken) return false;
+    if (!isSupportChatOpen()) return false;
     if (buildAttachPreviewDraftKey(clientId) !== key) return false;
 
     const files = (Array.isArray(record.files) ? record.files : [])
@@ -2813,6 +2853,7 @@
       await deleteAttachmentDraftRecord(key).catch(function () {});
       return false;
     }
+    if (!isSupportChatOpen() || restoreToken !== attachPreviewDraftRestoreToken) return false;
 
     return openAttachPreviewFromFiles(files, {
       caption: String(record.caption || ""),
@@ -3186,43 +3227,59 @@
   function applyChatWidgetEnabledState(isEnabled) {
     const enabled = isEnabled !== false;
     const buttons = getChatOpenButtons();
+    if (isAdminClientChatMode) {
+      buttons.forEach(function (button) {
+        button.classList.toggle("hidden", !enabled);
+        if (enabled) {
+          button.removeAttribute("aria-hidden");
+          button.removeAttribute("tabindex");
+        } else {
+          button.setAttribute("aria-hidden", "true");
+          button.setAttribute("tabindex", "-1");
+          button.removeAttribute("data-unread-count");
+        }
+      });
+      if (enabled) {
+        syncOpenButtonActiveState();
+        if (!isSupportChatOpen()) startUnreadPolling();
+      } else {
+        getChatUnreadBadges().forEach(function (badge) {
+          badge.textContent = "";
+          badge.classList.add("hidden");
+        });
+        if (overlay.classList.contains("is-open")) closeCompanyChat();
+        stopSharedThreadPolling();
+        stopUnreadPolling();
+      }
+      return;
+    }
     buttons.forEach(function (button) {
-      button.classList.toggle("hidden", !enabled);
+      button.classList.remove("hidden");
+      button.removeAttribute("aria-hidden");
+      button.removeAttribute("tabindex");
+      button.dataset.supportChatEnabled = enabled ? "1" : "0";
     });
     if (enabled) {
-      buttons.forEach(function (button) {
-        button.removeAttribute("aria-hidden");
-        button.removeAttribute("tabindex");
-      });
       syncOpenButtonActiveState();
-      if (!overlay.classList.contains("is-open")) {
+      if (!isSupportChatOpen()) {
         startUnreadPolling();
       }
       return;
     }
-    if (webPushSyncTimer) {
-      window.clearTimeout(webPushSyncTimer);
-      webPushSyncTimer = 0;
-    }
-    webPushSyncRequestedWithPermission = false;
-    webPushSyncForceRequested = false;
-    webPushSyncQueuedClientId = "";
-    buttons.forEach(function (button) {
-      button.setAttribute("aria-hidden", "true");
-      button.setAttribute("tabindex", "-1");
-      button.classList.remove("is-active");
-      button.setAttribute("aria-expanded", "false");
-      button.removeAttribute("data-unread-count");
-    });
-    getChatUnreadBadges().forEach(function (badge) {
-      badge.textContent = "";
-      badge.classList.add("hidden");
-    });
-    if (overlay.classList.contains("is-open")) {
-      closeCompanyChat();
+    if (isSupportChatOpen()) {
+      leaveSupportChatForMessages();
+      setMessageCenterView("support-unavailable");
     }
     stopSharedThreadPolling();
     stopUnreadPolling();
+    unreadServerTotal = 0;
+    unreadStatePrimed = true;
+    renderUnreadBadge(liveEntries);
+  }
+
+  function isChatNotificationAlertsEnabled() {
+    return isChatNotificationsEnabled()
+      && (!webPushPreferencesCache || webPushPreferencesCache.chat !== false);
   }
 
   function handleChatFeatureDisabledByServer() {
@@ -3702,6 +3759,10 @@
     return String(chatClientProfile && chatClientProfile.id || "");
   }
 
+  function isSupportChatOpen() {
+    return overlay.classList.contains("is-open") && messageCenterScreen === "support";
+  }
+
   function setPendingOrderPhoneLookup(clientId) {
     pendingOrderPhoneLookupClientId = String(clientId || getActiveChatClientId() || "").trim();
   }
@@ -3874,7 +3935,7 @@
     renderThread();
     updateScrollDownButton();
     renderUnreadBadge(liveEntries);
-    if (overlay.classList.contains("is-open")) {
+    if (isSupportChatOpen()) {
       startSharedThreadPolling();
     } else {
       startUnreadPolling();
@@ -4030,7 +4091,7 @@
       queuePendingPushMessageFocus(request.messageId, request.clientId || getActiveChatClientId());
     }
     suppressIncomingAlertsFor(1800);
-    if (overlay.classList.contains("is-open")) {
+    if (isSupportChatOpen()) {
       pullSharedThreadFromServer({ force: true }).catch(function () {});
       return true;
     }
@@ -4175,7 +4236,8 @@
     };
     const requestUrl = withChatActorQuery(url, getChatActor());
     const isChatSettingsRequest = requestUrl.indexOf(CHAT_SETTINGS_API_URL) === 0;
-    if (!isChatSettingsRequest && chatRuntimeSettings.isEnabled === false) {
+    const isPushSettingsRequest = requestUrl.indexOf(CHAT_TEMP_API_BASE + "/push/") === 0;
+    if (!isChatSettingsRequest && !isPushSettingsRequest && chatRuntimeSettings.isEnabled === false) {
       throw createChatDisabledAbortError();
     }
     const customerToken = getCustomerToken();
@@ -4201,6 +4263,22 @@
       throw new Error(errorCode);
     }
     return json;
+  }
+
+  async function importantMessagesApiJson(url, opts) {
+    const options = opts || {};
+    if (typeof apiJson !== "function") throw new Error("STOREFRONT_API_UNAVAILABLE");
+    const parsedUrl = new URL(String(url || ""), window.location.origin);
+    parsedUrl.searchParams.set("tenant_id", String(tenantId));
+    parsedUrl.searchParams.set("store_id", String(getActiveStoreId()));
+    parsedUrl.searchParams.set("chat_actor", "in");
+    return apiJson(parsedUrl.pathname + parsedUrl.search + parsedUrl.hash, {
+      ...options,
+      headers: {
+        "x-chat-actor": "in",
+        ...(options.headers || {}),
+      },
+    });
   }
 
   function formatDayLabelFromIso(isoValue) {
@@ -4484,6 +4562,7 @@
 
   function startSharedThreadSseConnection() {
     if (!CHAT_SSE_ENABLED) return false;
+    if (!isSupportChatOpen()) return false;
     const activeClientId = getActiveChatClientId();
     if (!activeClientId) return false;
     if (
@@ -4546,6 +4625,7 @@
 
   function startUnreadSseConnection() {
     if (!CHAT_SSE_ENABLED) return false;
+    if (isSupportChatOpen()) return false;
     const activeClientId = getActiveChatClientId();
     if (!activeClientId) return false;
     if (
@@ -4795,7 +4875,7 @@
     if (!token) return;
     getStableCustomerChatClientId(token, normalizedClientId, getCustomerCache());
     if (String(getActiveChatClientId() || "") === normalizedClientId && chatClientProfile.isGuest !== true) return;
-    refreshChatClientProfileIfNeeded({ pull: overlay.classList.contains("is-open") });
+    refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
   }
 
   async function fetchUnreadSnapshot(options) {
@@ -4813,7 +4893,7 @@
 
   function refreshUnreadSnapshot(options) {
     if (!chatRuntimeSettings.isEnabled) return Promise.resolve(null);
-    if (overlay.classList.contains("is-open")) return Promise.resolve(null);
+    if (isSupportChatOpen()) return Promise.resolve(null);
     if (unreadSnapshotRefreshPromise) return unreadSnapshotRefreshPromise;
     const opts = options || {};
     unreadSnapshotRefreshPromise = fetchUnreadSnapshot({ signal: opts.signal })
@@ -4855,7 +4935,7 @@
     if (!unreadStatePrimed) return;
     if (next <= prev) return;
     if (shouldSuppressIncomingAlertsNow()) return;
-    if (overlay.classList.contains("is-open")) return;
+    if (isSupportChatOpen()) return;
 
     const now = Date.now();
     if (now - messageAlertLastAt < CHAT_MESSAGE_ALERT_COOLDOWN_MS) return;
@@ -5063,7 +5143,7 @@
       : null;
 
     const prevTop = feed.scrollTop;
-    const isChatOpen = overlay.classList.contains("is-open");
+    const isChatOpen = isSupportChatOpen();
     const wasPinnedToBottom = isChatOpen ? shouldKeepFeedPinnedToBottom() : false;
     const pendingPushFocusBeforeRender = pendingPushMessageFocus
       && typeof pendingPushMessageFocus === "object"
@@ -5332,6 +5412,7 @@
   }
 
   function startSharedThreadPolling() {
+    if (!isSupportChatOpen()) return;
     if (CHAT_SSE_ENABLED) {
       stopUnreadSseConnection();
       startSharedThreadSseConnection();
@@ -5344,7 +5425,7 @@
 
     (async function runSharedThreadWaitLoop() {
       while (sharedThreadWaitLoopStarted && loopToken === sharedThreadWaitLoopToken) {
-        if (!overlay.classList.contains("is-open")) {
+        if (!isSupportChatOpen()) {
           await sleepMs(CHAT_THREAD_WAIT_RETRY_MS);
           continue;
         }
@@ -5425,7 +5506,7 @@
   function startUnreadPolling(options) {
     const opts = options || {};
     if (!chatRuntimeSettings.isEnabled) return;
-    if (overlay.classList.contains("is-open")) return;
+    if (isSupportChatOpen()) return;
     if (opts.forceRefresh === true || !unreadStatePrimed) {
       refreshUnreadSnapshot({ notify: false }).catch(function () {});
     }
@@ -5448,7 +5529,7 @@
       }
 
       while (unreadWaitLoopStarted && loopToken === unreadWaitLoopToken) {
-        if (overlay.classList.contains("is-open")) {
+        if (isSupportChatOpen()) {
           await sleepMs(CHAT_UNREAD_WAIT_RETRY_MS);
           continue;
         }
@@ -5477,7 +5558,7 @@
   function syncVisibleChatReadState(options) {
     const opts = options || {};
     const forceRead = opts.force === true;
-    if (!forceRead && !overlay.classList.contains("is-open")) return false;
+    if (!forceRead && !isSupportChatOpen()) return false;
     if (!forceRead && !isChatTabActiveForRead()) return false;
     if (!forceRead && pendingFeedRestoreState && typeof pendingFeedRestoreState === "object") return false;
     const keepBottom = opts.preserveViewport === true ? false : shouldKeepFeedPinnedToBottom();
@@ -6568,7 +6649,7 @@
     feed.dataset.imageDropBound = "1";
 
     feed.addEventListener("dragenter", function (event) {
-      if (!overlay.classList.contains("is-open")) return;
+      if (!isSupportChatOpen()) return;
       if (!dataTransferHasFiles(event.dataTransfer)) return;
       event.preventDefault();
       feedDropDragDepth = Math.max(0, Number(feedDropDragDepth || 0)) + 1;
@@ -6576,7 +6657,7 @@
     });
 
     feed.addEventListener("dragover", function (event) {
-      if (!overlay.classList.contains("is-open")) return;
+      if (!isSupportChatOpen()) return;
       if (!dataTransferHasFiles(event.dataTransfer)) return;
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
@@ -6641,7 +6722,7 @@
       });
 
       feed.addEventListener("paste", function (event) {
-        if (!overlay.classList.contains("is-open")) return;
+        if (!isSupportChatOpen()) return;
         const files = extractImageFilesFromDataTransfer(event.clipboardData);
         if (!files.length) return;
         event.preventDefault();
@@ -6653,7 +6734,7 @@
     if (input.dataset.imagePasteBound !== "1") {
       input.dataset.imagePasteBound = "1";
       input.addEventListener("paste", function (event) {
-        if (!overlay.classList.contains("is-open")) return;
+        if (!isSupportChatOpen()) return;
         const files = extractImageFilesFromDataTransfer(event.clipboardData);
         if (!files.length) return;
         event.preventDefault();
@@ -7098,13 +7179,29 @@
     if (companyChatHistoryBound) return;
     window.addEventListener("popstate", function (event) {
       if (event.state && event.state.shopCompanyChatPage === true) {
-        if (!overlay.classList.contains("is-open")) {
-          companyChatHistoryRestoring = true;
-          try {
-            openCompanyChat();
-          } finally {
-            companyChatHistoryRestoring = false;
+        const targetScreen = isAdminClientChatMode
+          ? "support"
+          : String(event.state.shopCompanyMessagesScreen || "home");
+        const targetMessageId = Math.trunc(Number(event.state.shopImportantMessageId || 0));
+        companyChatHistoryRestoring = true;
+        try {
+          if (targetScreen === "support") {
+            if (!isSupportChatOpen()) openCompanyChat();
+          } else {
+            suspendedMessageCenterScreen = "";
+            suspendedImportantMessageId = 0;
+            if (isSupportChatOpen()) leaveSupportChatForMessages();
+            if (!overlay.classList.contains("is-open")) {
+              showMessageCenterOverlay(targetScreen, { preserveHistory: true });
+            }
+            if (targetScreen === "important-details" && targetMessageId > 0) {
+              showImportantMessageDetails(targetMessageId, { preserveHistory: true });
+            } else {
+              setMessageCenterView(targetScreen);
+            }
           }
+        } finally {
+          companyChatHistoryRestoring = false;
         }
         return;
       }
@@ -7122,7 +7219,1071 @@
     }
   }
 
+  function escapeImportantMessageHtml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function resolveImportantMessageAssetUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (/^(?:https?:|data:image\/|blob:)/i.test(raw)) return raw;
+    return raw.charAt(0) === "/" ? raw : "/" + raw;
+  }
+
+  function resolveImportantMessageLinkUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      return ["http:", "https:", "mailto:", "tel:"].includes(parsed.protocol) ? parsed.href : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function getImportantMessageActionType(item) {
+    const raw = String(item && item.action_type || "").trim().toLowerCase();
+    if (["none", "product", "product_collection", "promo_code"].includes(raw)) return raw;
+    if (Array.isArray(item && item.product_ids) && item.product_ids.length) return "product_collection";
+    if (Number(item && item.product_id || 0) > 0) return "product";
+    const promoMode = String(item && item.promo_code_mode || "").trim().toLowerCase();
+    if (promoMode === "shared" || promoMode === "unique" || String(item && item.promo_code || "").trim()) return "promo_code";
+    return "none";
+  }
+
+  function getImportantMessageRevisionValue(item) {
+    return String(item && (item.published_at || item.updated_at || item.id) || "").trim();
+  }
+
+  function getImportantMessagesCustomerIdentity() {
+    const token = String(getCustomerToken() || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
+    if (!token) return "guest";
+    const customer = getCustomerCache();
+    const customerId = Number(customer && customer.id || 0);
+    if (customerId > 0) return "customer_" + Math.trunc(customerId);
+    return token;
+  }
+
+  function getImportantMessagesCacheKey() {
+    return "mobile_important_messages_cache_v1_t" + tenantId + "_s" + getActiveStoreId() + "_" + getImportantMessagesCustomerIdentity();
+  }
+
+  function getImportantMessagesReadKey() {
+    return "mobile_important_messages_read_v1_t" + tenantId + "_s" + getActiveStoreId();
+  }
+
+  function getImportantMessagesPendingClaimKey(storeId) {
+    const safeStoreId = Math.max(1, Math.trunc(Number(storeId || getActiveStoreId() || 1)));
+    return "shop_important_messages_pending_claim_v1_t" + tenantId + "_s" + safeStoreId;
+  }
+
+  function syncImportantMessagesCacheScope() {
+    const nextScopeKey = getImportantMessagesCacheKey();
+    if (!importantMessagesCacheScopeKey) {
+      importantMessagesCacheScopeKey = nextScopeKey;
+      return false;
+    }
+    if (importantMessagesCacheScopeKey === nextScopeKey) return false;
+    importantMessagesCacheScopeKey = nextScopeKey;
+    importantMessagesRequestSeq += 1;
+    importantMessagesLoadPromise = null;
+    importantMessagesItems = [];
+    importantMessagesRevision = "";
+    importantMessagesCount = 0;
+    importantMessagesCacheChecked = false;
+    importantMessagesLoading = false;
+    importantMessagesError = "";
+    importantMessagesUnreadIds = new Set();
+    importantMessagesUnreadCount = 0;
+    importantMessagesListRenderKey = null;
+    importantMessageProducts.clear();
+    renderUnreadBadge(liveEntries);
+    return true;
+  }
+
+  function normalizeWebPushPreferences(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    return {
+      chat: source.chat !== false,
+      important: source.important !== false,
+      orders: source.orders !== false,
+      orderStatusIds: Array.isArray(source.orderStatusIds)
+        ? source.orderStatusIds.map(Number).filter(function (id) { return id > 0; })
+        : [],
+    };
+  }
+
+  async function getWebPushPreferences() {
+    const [json, orderConfigJson] = await Promise.all([
+      chatApiJson(CHAT_TEMP_API_BASE + "/push/preferences"),
+      chatApiJson("/api/public/order-config"),
+    ]);
+    const data = json && json.data ? json.data : {};
+    const orderConfig = orderConfigJson && orderConfigJson.data ? orderConfigJson.data : {};
+    const preferences = normalizeWebPushPreferences(data.preferences);
+    webPushPreferencesCache = preferences;
+    return {
+      preferences: preferences,
+      statuses: Array.isArray(orderConfig.statuses) ? orderConfig.statuses : [],
+    };
+  }
+
+  async function saveWebPushPreferences(preferences) {
+    const json = await chatApiJson(CHAT_TEMP_API_BASE + "/push/preferences", {
+      method: "PUT",
+      body: { preferences: normalizeWebPushPreferences(preferences) },
+    });
+    const saved = normalizeWebPushPreferences(json && json.data ? json.data.preferences : preferences);
+    webPushPreferencesCache = saved;
+    return saved;
+  }
+
+  function normalizeImportantMessagesOpenRequest(rawRequest) {
+    const source = rawRequest && typeof rawRequest === "object" ? rawRequest : {};
+    const openRaw = source.open_important_messages ?? source.openImportantMessages ?? source.open_promo_messages;
+    const messageIdRaw = Number(
+      source.important_message_id
+      ?? source.importantMessageId
+      ?? source.messageId
+      ?? source.promo_message_id
+      ?? source.promoMessageId
+      ?? 0
+    );
+    const messageId = Number.isFinite(messageIdRaw) && messageIdRaw > 0 ? Math.trunc(messageIdRaw) : 0;
+    const storeIdRaw = Number(source.store_id ?? source.storeId ?? source.important_store_id ?? 0);
+    const storeId = Number.isFinite(storeIdRaw) && storeIdRaw > 0 ? Math.trunc(storeIdRaw) : 0;
+    const shouldOpen = messageId > 0
+      || openRaw === true
+      || openRaw === 1
+      || ["1", "true"].includes(String(openRaw || "").trim().toLowerCase());
+    return shouldOpen ? { messageId: messageId, storeId: storeId } : null;
+  }
+
+  function readImportantMessagesOpenRequestFromLocation() {
+    try {
+      const currentUrl = new URL(window.location.href);
+      return normalizeImportantMessagesOpenRequest({
+        open_important_messages: currentUrl.searchParams.get(IMPORTANT_MESSAGES_AUTO_OPEN_QUERY_PARAM),
+        open_promo_messages: currentUrl.searchParams.get(IMPORTANT_MESSAGES_AUTO_OPEN_FALLBACK_PARAM),
+        important_message_id: currentUrl.searchParams.get(IMPORTANT_MESSAGES_AUTO_OPEN_ID_PARAM),
+        important_store_id: currentUrl.searchParams.get(IMPORTANT_MESSAGES_AUTO_OPEN_STORE_ID_PARAM),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  function clearImportantMessagesOpenRequestFromLocation() {
+    try {
+      const currentUrl = new URL(window.location.href);
+      let changed = false;
+      [
+        IMPORTANT_MESSAGES_AUTO_OPEN_QUERY_PARAM,
+        IMPORTANT_MESSAGES_AUTO_OPEN_FALLBACK_PARAM,
+        IMPORTANT_MESSAGES_AUTO_OPEN_ID_PARAM,
+        IMPORTANT_MESSAGES_AUTO_OPEN_STORE_ID_PARAM,
+      ].forEach(function (key) {
+        if (!currentUrl.searchParams.has(key)) return;
+        currentUrl.searchParams.delete(key);
+        changed = true;
+      });
+      if (!changed) return;
+      window.history.replaceState(window.history.state, "", currentUrl.pathname + currentUrl.search + currentUrl.hash);
+    } catch {}
+  }
+
+  function openImportantMessagesFromRequest(rawRequest, options) {
+    if (isAdminClientChatMode) return false;
+    const request = normalizeImportantMessagesOpenRequest(rawRequest);
+    if (!request) return false;
+    const opts = options || {};
+    if (opts.clearLocation === true) clearImportantMessagesOpenRequestFromLocation();
+    suspendedMessageCenterScreen = "";
+    suspendedImportantMessageId = 0;
+    if (isSupportChatOpen()) leaveSupportChatForMessages();
+    openMessagesHome();
+    showImportantMessagesList();
+    if (request.messageId > 0) showImportantMessageDetails(request.messageId, { forceRefresh: true });
+    return true;
+  }
+
+  function leaveImportantMessageDetailsAfterScopeChange() {
+    if (messageCenterScreen !== "important-details") return;
+    activeImportantMessageId = 0;
+    setMessageCenterView("important-list");
+    if (!isCompanyChatPageMode() || window.history.state?.shopCompanyChatPage !== true) return;
+    const nextHistoryState = { ...window.history.state, shopCompanyMessagesScreen: "important-list" };
+    delete nextHistoryState.shopImportantMessageId;
+    window.history.replaceState(nextHistoryState, "", window.location.href);
+  }
+
+  function readImportantMessagesCache() {
+    try {
+      const parsed = JSON.parse(String(localStorage.getItem(getImportantMessagesCacheKey()) || ""));
+      if (!parsed || !Array.isArray(parsed.items)) return null;
+      return {
+        count: Math.max(0, Number(parsed.count || parsed.items.length || 0)),
+        items: parsed.items,
+        revision: String(parsed.revision || ""),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function saveImportantMessagesCache() {
+    try {
+      localStorage.setItem(getImportantMessagesCacheKey(), JSON.stringify({
+        count: Math.max(0, Number(importantMessagesCount || importantMessagesItems.length || 0)),
+        items: importantMessagesItems,
+        revision: String(importantMessagesRevision || ""),
+        savedAt: new Date().toISOString(),
+      }));
+    } catch {}
+  }
+
+  function readImportantMessagesReadMap() {
+    try {
+      const parsed = JSON.parse(String(localStorage.getItem(getImportantMessagesReadKey()) || ""));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function syncImportantMessagesUnread() {
+    const readMap = readImportantMessagesReadMap();
+    importantMessagesUnreadIds = new Set(
+      importantMessagesItems.map(function (item) {
+        const id = Number(item && item.id || 0);
+        if (!(id > 0)) return "";
+        const key = String(Math.trunc(id));
+        return readMap[key] === getImportantMessageRevisionValue(item) ? "" : key;
+      }).filter(Boolean)
+    );
+    importantMessagesUnreadCount = importantMessagesUnreadIds.size;
+    renderUnreadBadge(liveEntries);
+  }
+
+  function markImportantMessageRead(item) {
+    const id = Number(item && item.id || 0);
+    if (!(id > 0)) return;
+    const readMap = readImportantMessagesReadMap();
+    const key = String(Math.trunc(id));
+    readMap[key] = getImportantMessageRevisionValue(item) || key;
+    try { localStorage.setItem(getImportantMessagesReadKey(), JSON.stringify(readMap)); } catch {}
+    syncImportantMessagesUnread();
+  }
+
+  function applyImportantMessagesItems(items, meta) {
+    const source = Array.isArray(items) ? items : [];
+    importantMessagesItems = source.filter(function (item) {
+      return Number(item && item.id || 0) > 0;
+    });
+    if (meta && Object.prototype.hasOwnProperty.call(meta, "revision")) {
+      importantMessagesRevision = String(meta.revision || "");
+    }
+    if (meta && Object.prototype.hasOwnProperty.call(meta, "count")) {
+      importantMessagesCount = Math.max(0, Number(meta.count || 0));
+    } else {
+      importantMessagesCount = importantMessagesItems.length;
+    }
+    syncImportantMessagesUnread();
+  }
+
+  function renderImportantMessagesState(iconClass, title, text) {
+    importantMessagesList.innerHTML =
+      '<div class="shop-important-messages-state-card">' +
+        '<i class="' + escapeImportantMessageHtml(iconClass) + '" aria-hidden="true"></i>' +
+        '<h3 class="shop-important-messages-state-card__title">' + escapeImportantMessageHtml(title) + '</h3>' +
+        (text ? '<p class="shop-important-messages-state-card__text">' + escapeImportantMessageHtml(text) + '</p>' : '') +
+      '</div>';
+  }
+
+  function buildImportantMessagePromoHtml(item, itemId) {
+    const actionType = getImportantMessageActionType(item);
+    if (actionType === "promo_code") {
+      const hasPromo = item.promo_claimable === true || !!String(item.promo_code || "").trim() || item.promo_code_masked === true;
+      if (!hasPromo) return "";
+      const code = item.promo_code_masked ? "*****" : String(item.promo_code || "").trim();
+      const disabled = item.promo_claimed === true || item.promo_claimable === false;
+      const label = item.promo_claimed ? "Забрано" : item.promo_claimable === false ? "Закончились" : "Забрать";
+      return '<div class="shop-important-message-card__action-slot">' +
+        '<div class="shop-important-message-card__promo-pill"><span class="shop-important-message-card__promo-label">Промокод</span><strong class="shop-important-message-card__promo-code">' + escapeImportantMessageHtml(code) + '</strong></div>' +
+        '<button class="shop-important-message-card__action-btn' + (disabled ? ' is-disabled' : '') + '" type="button" data-important-claim-id="' + itemId + '"' + (disabled ? ' disabled' : '') + '>' + escapeImportantMessageHtml(label) + '</button>' +
+      '</div>';
+    }
+    const productId = actionType === "product" ? Number(item.product_id || 0) : 0;
+    if (!(productId > 0)) return "";
+    return '<div class="shop-important-message-card__action-slot"><button class="shop-important-message-card__action-btn" type="button" data-important-product-id="' + Math.trunc(productId) + '">Заказать</button></div>';
+  }
+
+  function renderImportantMessagesList() {
+    const nextRenderKey = importantMessagesError && !importantMessagesItems.length
+      ? "error"
+      : !importantMessagesCacheChecked || (importantMessagesLoading && !importantMessagesItems.length)
+        ? "loading"
+        : !importantMessagesItems.length
+          ? "empty"
+          : "items:" + JSON.stringify(importantMessagesItems) +
+            "|unread:" + Array.from(importantMessagesUnreadIds).sort().join(",") +
+            "|claiming:" + Array.from(importantMessagesClaimingIds).sort(function (a, b) { return a - b; }).join(",");
+    if (nextRenderKey === importantMessagesListRenderKey) return;
+    importantMessagesListRenderKey = nextRenderKey;
+    if (importantMessagesError && !importantMessagesItems.length) {
+      renderImportantMessagesState("fas fa-cloud-arrow-down", "Не удалось загрузить сообщения", "");
+      return;
+    }
+    if (!importantMessagesCacheChecked || (importantMessagesLoading && !importantMessagesItems.length)) {
+      importantMessagesList.innerHTML = '<div class="shop-important-messages-loading" role="status" aria-label="Загрузка"><i class="fas fa-spinner fa-spin" aria-hidden="true"></i></div>';
+      return;
+    }
+    if (!importantMessagesItems.length) {
+      renderImportantMessagesState("far fa-bell", "Пока нет PROMO сообщений", "Новости, скидки и посты от компании появятся здесь в формате для телефона.");
+      return;
+    }
+    importantMessagesList.innerHTML = importantMessagesItems.map(function (item) {
+      const itemId = Math.trunc(Number(item.id || 0));
+      const imageUrl = resolveImportantMessageAssetUrl(item.image_url);
+      return '<article class="shop-important-message-card">' +
+        (importantMessagesUnreadIds.has(String(itemId)) ? '<span class="shop-important-message-card__unread" aria-label="Непрочитано"></span>' : '') +
+        '<button class="shop-important-message-card__preview" type="button" data-important-message-id="' + itemId + '" aria-label="Открыть сообщение ' + escapeImportantMessageHtml(item.title) + '"></button>' +
+          '<div class="shop-important-message-card__row">' +
+            '<div class="shop-important-message-card__side">' +
+              '<div class="shop-important-message-card__media">' +
+                (imageUrl ? '<img class="shop-important-message-card__image" src="' + escapeImportantMessageHtml(imageUrl) + '" alt="" loading="lazy">' : '<span class="shop-important-message-card__media-fallback"><i class="far fa-image" aria-hidden="true"></i></span>') +
+              '</div>' +
+              buildImportantMessagePromoHtml(item, itemId) +
+            '</div>' +
+            '<div class="shop-important-message-card__content"><strong class="shop-important-message-card__title">' + escapeImportantMessageHtml(item.title) + '</strong><span class="shop-important-message-card__body">' + escapeImportantMessageHtml(item.body) + '</span></div>' +
+          '</div>' +
+      '</article>';
+    }).join("");
+  }
+
+  function loadImportantMessages(options) {
+    const opts = options || {};
+    const force = opts.force === true;
+    syncImportantMessagesCacheScope();
+    if (importantMessagesLoadPromise && !force) return importantMessagesLoadPromise;
+    const requestSeq = ++importantMessagesRequestSeq;
+    const cached = readImportantMessagesCache();
+    if (cached) {
+      applyImportantMessagesItems(cached.items, cached);
+    }
+    importantMessagesCacheChecked = true;
+    importantMessagesLoading = force || !cached;
+    importantMessagesError = "";
+    if (messageCenterScreen === "important-list") renderImportantMessagesList();
+    const request = importantMessagesApiJson(IMPORTANT_MESSAGES_API_BASE + "/revision?_ts=" + Date.now())
+      .then(function (json) {
+        if (requestSeq !== importantMessagesRequestSeq) return null;
+        const data = json && json.data && typeof json.data === "object" ? json.data : {};
+        const nextRevision = String(data.revision || "");
+        const nextCount = Math.max(0, Number(data.count || 0));
+        if (!force && cached && cached.revision === nextRevision && cached.count === nextCount) return null;
+        return importantMessagesApiJson(IMPORTANT_MESSAGES_API_BASE + "?limit=100&_ts=" + Date.now())
+          .then(function (listJson) {
+            if (requestSeq !== importantMessagesRequestSeq) return null;
+            const items = listJson && Array.isArray(listJson.data) ? listJson.data : [];
+            applyImportantMessagesItems(items, { revision: nextRevision, count: nextCount || items.length });
+            saveImportantMessagesCache();
+            return items;
+          });
+      })
+      .catch(function (err) {
+        if (requestSeq !== importantMessagesRequestSeq) return null;
+        if (!cached) importantMessagesError = String(err && err.message || "LOAD_FAILED");
+        return null;
+      })
+      .finally(function () {
+        if (requestSeq === importantMessagesRequestSeq) {
+          importantMessagesLoading = false;
+          importantMessagesLoadPromise = null;
+          if (messageCenterScreen === "important-list") renderImportantMessagesList();
+        }
+      });
+    importantMessagesLoadPromise = request;
+    return request;
+  }
+
+  function startImportantMessagesPolling() {
+    if (isAdminClientChatMode) return;
+    stopImportantMessagesPolling();
+    loadImportantMessages().catch(function () {});
+    importantMessagesPollTimer = window.setInterval(function () {
+      loadImportantMessages().catch(function () {});
+    }, IMPORTANT_MESSAGES_POLL_MS);
+  }
+
+  function stopImportantMessagesPolling() {
+    if (!importantMessagesPollTimer) return;
+    window.clearInterval(importantMessagesPollTimer);
+    importantMessagesPollTimer = 0;
+  }
+
+  function scheduleMessageCenterChatPreload() {
+    if (messageCenterChatPreloadTimer) window.clearTimeout(messageCenterChatPreloadTimer);
+    messageCenterChatPreloadTimer = window.setTimeout(function () {
+      messageCenterChatPreloadTimer = 0;
+      if (messageCenterScreen !== "home" || !chatRuntimeSettings.isEnabled) return;
+      refreshChatClientProfileIfNeeded({ pull: false });
+      pullSharedThreadFromServer({ force: true, skipIncomingNotify: true }).catch(function () {});
+    }, 1800);
+  }
+
+  function cancelMessageCenterChatPreload() {
+    if (!messageCenterChatPreloadTimer) return;
+    window.clearTimeout(messageCenterChatPreloadTimer);
+    messageCenterChatPreloadTimer = 0;
+  }
+
+  function ensureImportantMessagesProductDetails(productIds) {
+    const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : []).map(Number).filter(function (id) {
+      return Number.isFinite(id) && id > 0;
+    })));
+    if (!ids.length) return Promise.resolve();
+    const requestScopeKey = getImportantMessagesCacheKey();
+    return importantMessagesApiJson("/api/public/products/batch/by-ids", {
+      method: "POST",
+      body: { ids: ids },
+    }).then(function (json) {
+      if (getImportantMessagesCacheKey() !== requestScopeKey) return;
+      const data = json && json.data && typeof json.data === "object" ? json.data : {};
+      ids.forEach(function (id) {
+        const product = data[id] || data[String(id)];
+        if (product && typeof product === "object") importantMessageProducts.set(id, product);
+      });
+    }).catch(function () {});
+  }
+
+  function preloadImportantMessageCollectionProducts() {
+    if (messageCenterScreen !== "home") return Promise.resolve();
+    const ids = Array.from(new Set(importantMessagesItems.flatMap(function (item) {
+      return getImportantMessageActionType(item) === "product_collection" && Array.isArray(item.product_ids)
+        ? item.product_ids
+        : [];
+    }).map(Number).filter(function (id) {
+      return Number.isFinite(id) && id > 0 && !importantMessageProducts.has(id);
+    })));
+    return ensureImportantMessagesProductDetails(ids);
+  }
+
+  function getImportantMessageImage(product) {
+    const photos = Array.isArray(product && product.photos) ? product.photos : [];
+    const first = photos[0];
+    return resolveImportantMessageAssetUrl(
+      typeof first === "string" ? first : first && (first.url || first.path) || product && (product.photo_thumb || product.image_url || product.photo_url)
+    );
+  }
+
+  function formatImportantMessagePrice(value) {
+    const amount = Number(value || 0);
+    if (!Number.isFinite(amount)) return "";
+    return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(amount) + " ₽";
+  }
+
+  function getImportantMessageProductPrice(product) {
+    const value = Number(product ? (product.display_price ?? product.discounted_price ?? product.price ?? 0) : 0);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function getImportantMessageProductOldPrice(product) {
+    const value = Number(product ? (product.old_price ?? product.original_price ?? 0) : 0);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function getImportantMessageProductDiscountText(product, price, oldPrice) {
+    const discount = product && product.discount && typeof product.discount === "object" ? product.discount : null;
+    const discountValue = Number(discount && discount.discount_value || 0);
+    if (String(discount && discount.discount_type || "").toLowerCase() === "percent" && discountValue > 0) {
+      return "-" + Math.round(discountValue) + "%";
+    }
+    if (oldPrice > price && price >= 0) {
+      return "-" + Math.round(((oldPrice - price) / oldPrice) * 100) + "%";
+    }
+    return "";
+  }
+
+  function getImportantMessageProductDefaultLines(product) {
+    const configured = Array.isArray(product && product.catalog_default_lines)
+      ? product.catalog_default_lines.map(function (line) { return String(line || "").trim(); }).filter(Boolean)
+      : [];
+    if (configured.length) return configured.slice(0, 2);
+    return String(product && (product.description_short || product.description) || "")
+      .split("\n")
+      .map(function (line) { return line.trim(); })
+      .filter(Boolean)
+      .slice(0, 2);
+  }
+
+  function getImportantMessageProductPromoBadgeText(product) {
+    const source = product && product.buy_x_get_y_badge;
+    if (!source || typeof source !== "object") return "";
+    const badgeText = String(source.badge_text || "").trim();
+    const plusMatch = badgeText.match(/^(\d+)\s*\+\s*(\d+)$/);
+    const equalsMatch = badgeText.match(/^(\d+)\s*=\s*(\d+)$/);
+    if (source.buy_qty == null && source.reward_qty == null && !plusMatch && !equalsMatch) return "";
+    const buyQty = Math.max(1, Math.floor(Number(source.buy_qty ?? (plusMatch && plusMatch[1]) ?? (equalsMatch && equalsMatch[2]) ?? 0)) || 1);
+    const equalsRewardQty = equalsMatch ? Math.max(1, Number(equalsMatch[1] || 0) - Number(equalsMatch[2] || 0)) : 0;
+    const rewardQty = Math.max(1, Math.floor(Number(source.reward_qty ?? (plusMatch && plusMatch[2]) ?? equalsRewardQty ?? 0)) || 1);
+    return String(buyQty + rewardQty) + "=" + String(buyQty);
+  }
+
+  function isImportantMessageProductConfigurable(product) {
+    const blocksConfig = product && product.blocks_config && typeof product.blocks_config === "object"
+      ? product.blocks_config
+      : null;
+    return Boolean(
+      product && product.hasConfigurable
+      || product && product.preview && product.preview.hasConfigurable
+      || blocksConfig && (blocksConfig.variants || blocksConfig.options || blocksConfig.ingredients)
+      || Array.isArray(product && product.variants) && product.variants.length
+      || Array.isArray(product && product.options) && product.options.length
+      || Array.isArray(product && product.ingredients) && product.ingredients.length
+    );
+  }
+
+  function buildImportantMessageDetailsActionHtml(item) {
+    const itemId = Math.trunc(Number(item && item.id || 0));
+    const actionType = getImportantMessageActionType(item);
+    if (actionType === "promo_code") {
+      const hasPromo = item.promo_claimable === true || !!String(item.promo_code || "").trim() || item.promo_code_masked === true;
+      if (!hasPromo) return "";
+      const code = item.promo_code_masked ? "*****" : String(item.promo_code || "").trim();
+      const disabled = item.promo_claimed === true || item.promo_claimable === false;
+      const label = item.promo_claimed ? "Забрано" : item.promo_claimable === false ? "Закончились" : "Забрать";
+      return '<div class="shop-important-message-details__promo-block"><div class="shop-important-message-card__promo-pill"><span class="shop-important-message-card__promo-label">Промокод</span><strong class="shop-important-message-card__promo-code">' + escapeImportantMessageHtml(code) + '</strong></div><button class="shop-important-message-card__action-btn' + (disabled ? ' is-disabled' : '') + '" type="button" data-important-claim-id="' + itemId + '"' + (disabled ? ' disabled' : '') + '>' + escapeImportantMessageHtml(label) + '</button></div>';
+    }
+    const productId = actionType === "product" ? Number(item.product_id || 0) : 0;
+    if (productId > 0) {
+      return '<div class="shop-important-message-details__promo-block"><button class="shop-important-message-card__action-btn" type="button" data-important-product-id="' + Math.trunc(productId) + '">Заказать</button></div>';
+    }
+    return "";
+  }
+
+  function buildImportantMessageProductsHtml(item) {
+    if (getImportantMessageActionType(item) !== "product_collection") return "";
+    const embedded = new Map((Array.isArray(item.products) ? item.products : []).map(function (product) {
+      return [Number(product && product.id || 0), product];
+    }));
+    const ids = (Array.isArray(item.product_ids) ? item.product_ids : []).map(Number).filter(function (id) { return id > 0; });
+    const cards = ids.map(function (id) {
+      const product = importantMessageProducts.get(id) || embedded.get(id);
+      if (!product) return "";
+      const imageUrl = getImportantMessageImage(product);
+      const title = String(product.name || product.title || ("Товар #" + Math.trunc(id)));
+      const price = getImportantMessageProductPrice(product);
+      const oldPrice = getImportantMessageProductOldPrice(product);
+      const hasOldPrice = oldPrice > price && price >= 0;
+      const discountText = getImportantMessageProductDiscountText(product, price, oldPrice);
+      const promoBadgeText = getImportantMessageProductPromoBadgeText(product);
+      const descriptionLines = getImportantMessageProductDefaultLines(product);
+      return '<button class="shop-important-message-details__product-card" type="button" data-important-product-id="' + Math.trunc(id) + '">' +
+        '<span class="shop-important-message-details__product-media">' +
+          (imageUrl ? '<img class="shop-important-message-details__product-image" src="' + escapeImportantMessageHtml(imageUrl) + '" alt="" loading="lazy">' : '<span class="shop-important-message-details__product-fallback"></span>') +
+          (promoBadgeText ? '<span class="shop-important-message-details__product-badge is-promo">' + escapeImportantMessageHtml(promoBadgeText) + '</span>' : '') +
+          (discountText ? '<span class="shop-important-message-details__product-badge is-discount' + (promoBadgeText ? ' has-promo' : '') + '">' + escapeImportantMessageHtml(discountText) + '</span>' : '') +
+          (isImportantMessageProductConfigurable(product) ? '<span class="shop-important-message-details__product-configure">Настроить ›</span>' : '') +
+        '</span>' +
+        '<span class="shop-important-message-details__product-info">' +
+          '<span class="shop-important-message-details__product-title">' + escapeImportantMessageHtml(title) + '</span>' +
+          '<span class="shop-important-message-details__product-description">' + descriptionLines.map(function (line) {
+            return '<span>• ' + escapeImportantMessageHtml(line) + '</span>';
+          }).join("") + '</span>' +
+          '<span class="shop-important-message-details__product-footer">' +
+            '<span class="shop-important-message-details__product-price-stack">' +
+              (hasOldPrice ? '<span class="shop-important-message-details__product-old-price">' + escapeImportantMessageHtml(formatImportantMessagePrice(oldPrice)) + '</span>' : '') +
+              '<strong class="shop-important-message-details__product-price">' + escapeImportantMessageHtml(formatImportantMessagePrice(price)) + '</strong>' +
+            '</span>' +
+            '<span class="shop-important-message-details__product-action" aria-hidden="true"><i class="fas fa-plus"></i></span>' +
+          '</span>' +
+        '</span>' +
+      '</button>';
+    }).filter(Boolean).join("");
+    return cards ? '<div class="shop-important-message-details__product-grid">' + cards + '</div>' : "";
+  }
+
+  function renderImportantMessageDetails(itemId) {
+    const safeId = Math.trunc(Number(itemId || 0));
+    const item = importantMessagesItems.find(function (entry) {
+      return Number(entry && entry.id || 0) === safeId;
+    });
+    if (!item) {
+      importantMessageDetails.innerHTML = '<div class="shop-important-messages-state-card"><i class="far fa-circle-xmark" aria-hidden="true"></i><h3 class="shop-important-messages-state-card__title">Сообщение не найдено</h3></div>';
+      return;
+    }
+    const imageUrl = resolveImportantMessageAssetUrl(item.image_url);
+    const linkUrl = resolveImportantMessageLinkUrl(item.link_url);
+    importantMessageDetails.innerHTML =
+      '<div class="shop-important-message-details__hero">' +
+        (imageUrl ? '<img class="shop-important-message-details__hero-image" src="' + escapeImportantMessageHtml(imageUrl) + '" alt="">' : '<div class="shop-important-message-details__hero-fallback"><i class="far fa-image" aria-hidden="true"></i></div>') +
+      '</div>' +
+      '<div class="shop-important-message-details__sheet">' +
+        '<h3 class="shop-important-message-details__title">' + escapeImportantMessageHtml(item.title) + '</h3>' +
+        buildImportantMessageDetailsActionHtml(item) +
+        '<p class="shop-important-message-details__body">' + escapeImportantMessageHtml(item.body) + '</p>' +
+        buildImportantMessageProductsHtml(item) +
+        (linkUrl ? '<button class="shop-important-message-details__link-btn" type="button" data-important-link-url="' + escapeImportantMessageHtml(linkUrl) + '"><span>Открыть</span><i class="fas fa-arrow-right" aria-hidden="true"></i></button>' : '') +
+      '</div>';
+    importantMessageHeroImage = importantMessageDetails.querySelector(".shop-important-message-details__hero-image");
+    syncImportantMessageHeroParallax();
+    scheduleImportantMessageHeroParallaxLayout();
+  }
+
+  function syncImportantMessageHeroParallax() {
+    const maxScroll = getImportantMessageDetailsMaxScrollTop();
+    importantMessageParallaxMaxScroll = maxScroll;
+    importantMessageDetailsView.style.setProperty("--shop-important-message-parallax-distance", String(maxScroll * 0.8) + "px");
+    if (usesImportantMessageParallaxCompositorScroll()) setImportantMessageParallaxScrollOffset(importantMessageParallaxScrollOffset);
+  }
+
+  function usesImportantMessageParallaxCompositorScroll() {
+    return isCompanyChatPageMode() && !supportsNativeImportantMessageParallax;
+  }
+
+  function setImportantMessageParallaxScrollOffset(value) {
+    const nextOffset = Math.max(0, Math.min(importantMessageParallaxMaxScroll, Number(value || 0)));
+    importantMessageParallaxScrollOffset = nextOffset;
+    scheduleImportantMessageParallaxPaint();
+  }
+
+  function scheduleImportantMessageParallaxPaint() {
+    if (importantMessageParallaxPaintFrame) return;
+    importantMessageParallaxPaintFrame = window.requestAnimationFrame(function () {
+      importantMessageParallaxPaintFrame = 0;
+      const pixelRatio = Math.max(1, Number(window.devicePixelRatio || 1));
+      const renderedOffset = Math.round(importantMessageParallaxScrollOffset * pixelRatio) / pixelRatio;
+      importantMessageDetails.style.transform = "translate3d(0,-" + String(renderedOffset) + "px,0)";
+      if (importantMessageHeroImage) importantMessageHeroImage.style.transform = "translate3d(0," + String(renderedOffset * 0.8) + "px,0)";
+    });
+  }
+
+  function resetImportantMessageParallaxCompositorScroll() {
+    stopImportantMessageParallaxInertia();
+    if (importantMessageParallaxPaintFrame) window.cancelAnimationFrame(importantMessageParallaxPaintFrame);
+    importantMessageParallaxPaintFrame = 0;
+    importantMessageParallaxTouch = null;
+    importantMessageParallaxScrollOffset = 0;
+    importantMessageParallaxMaxScroll = 0;
+    importantMessageDetails.style.transform = "";
+    if (importantMessageHeroImage) importantMessageHeroImage.style.transform = "";
+    importantMessageHeroImage = null;
+  }
+
+  function stopImportantMessageParallaxInertia() {
+    if (importantMessageParallaxInertiaFrame) window.cancelAnimationFrame(importantMessageParallaxInertiaFrame);
+    importantMessageParallaxInertiaFrame = 0;
+  }
+
+  function startImportantMessageParallaxInertia(initialVelocity) {
+    stopImportantMessageParallaxInertia();
+    let velocity = Number(initialVelocity || 0);
+    let previousTime = performance.now();
+    const step = function (time) {
+      const elapsed = Math.min(32, Math.max(1, Number(time || 0) - previousTime));
+      previousTime = Number(time || 0);
+      velocity *= Math.pow(0.92, elapsed / 16);
+      if (Math.abs(velocity) < 0.02 || messageCenterScreen !== "important-details") {
+        importantMessageParallaxInertiaFrame = 0;
+        return;
+      }
+      const before = importantMessageParallaxScrollOffset;
+      setImportantMessageParallaxScrollOffset(before + velocity * elapsed);
+      if (Math.abs(importantMessageParallaxScrollOffset - before) < 0.01) {
+        importantMessageParallaxInertiaFrame = 0;
+        return;
+      }
+      importantMessageParallaxInertiaFrame = window.requestAnimationFrame(step);
+    };
+    importantMessageParallaxInertiaFrame = window.requestAnimationFrame(step);
+  }
+
+  function scheduleImportantMessageHeroParallaxLayout() {
+    if (importantMessageParallaxLayoutFrame) return;
+    importantMessageParallaxLayoutFrame = window.requestAnimationFrame(function () {
+      importantMessageParallaxLayoutFrame = 0;
+      if (messageCenterScreen !== "important-details") return;
+      syncImportantMessageHeroParallax();
+    });
+  }
+
+  function getImportantMessageDetailsMaxScrollTop() {
+    return Math.max(0, Number(importantMessageDetailsView.scrollHeight || 0) - Number(importantMessageDetailsView.clientHeight || 0));
+  }
+
+  function renderImportantMessageDetailsState(title, iconClass) {
+    importantMessageDetails.innerHTML =
+      '<div class="shop-important-messages-state-card">' +
+        '<i class="' + escapeImportantMessageHtml(iconClass || "far fa-circle-xmark") + '" aria-hidden="true"></i>' +
+        '<h3 class="shop-important-messages-state-card__title">' + escapeImportantMessageHtml(title) + '</h3>' +
+      '</div>';
+  }
+
+  function getImportantMessageById(itemId) {
+    const safeId = Number(itemId || 0);
+    return importantMessagesItems.find(function (item) { return Number(item && item.id || 0) === safeId; }) || null;
+  }
+
+  function setImportantMessageClaiming(itemId, active) {
+    overlay.querySelectorAll('[data-important-claim-id="' + Math.trunc(Number(itemId || 0)) + '"]').forEach(function (button) {
+      button.disabled = active === true;
+      button.classList.toggle("is-loading", active === true);
+      if (active === true) button.textContent = "...";
+    });
+  }
+
+  function persistPendingImportantPromoClaim(itemId) {
+    const nextId = Math.trunc(Number(itemId || 0));
+    const storageStoreId = pendingImportantPromoClaimStoreId || getActiveStoreId();
+    try {
+      if (nextId > 0) localStorage.setItem(getImportantMessagesPendingClaimKey(getActiveStoreId()), String(nextId));
+      else localStorage.removeItem(getImportantMessagesPendingClaimKey(storageStoreId));
+    } catch {}
+    pendingImportantPromoClaimId = nextId;
+    pendingImportantPromoClaimStoreId = nextId > 0 ? getActiveStoreId() : 0;
+  }
+
+  function requestImportantPromoLogin(itemId) {
+    persistPendingImportantPromoClaim(itemId);
+    suspendMessageCenterForExternalView();
+    const retry = function () {
+      if (!getCustomerToken()) return;
+      claimImportantMessagePromo(itemId);
+    };
+    if (typeof openProfileSheet === "function") {
+      openProfileSheet({ onLoginSuccess: retry });
+      return;
+    }
+    const profileButton = document.getElementById(isCompanyChatPageMode() ? "shopNavProfile" : "shopProfileBtn");
+    if (profileButton) profileButton.click();
+  }
+
+  function claimImportantMessagePromo(itemId) {
+    const safeId = Math.trunc(Number(itemId || 0));
+    const item = getImportantMessageById(safeId);
+    if (!(safeId > 0) || importantMessagesClaimingIds.has(safeId)) return Promise.resolve();
+    if (item && (item.promo_claimable === false || item.promo_claimed === true)) {
+      persistPendingImportantPromoClaim(0);
+      return Promise.resolve();
+    }
+    if (!getCustomerToken()) {
+      requestImportantPromoLogin(safeId);
+      return Promise.resolve();
+    }
+    persistPendingImportantPromoClaim(0);
+    const claimScopeKey = getImportantMessagesCacheKey();
+    importantMessagesClaimingIds.add(safeId);
+    setImportantMessageClaiming(safeId, true);
+    return importantMessagesApiJson(IMPORTANT_MESSAGES_API_BASE + "/" + encodeURIComponent(String(safeId)) + "/claim-promo", {
+      method: "POST",
+      body: {},
+    }).then(function (json) {
+      if (getImportantMessagesCacheKey() !== claimScopeKey) return;
+      const data = json && json.data && typeof json.data === "object" ? json.data : {};
+      if (item) {
+        item.promo_code = String(data.promo_code || item.promo_code || "");
+        item.promo_code_id = data.promo_code_id == null ? item.promo_code_id : data.promo_code_id;
+        item.promo_code_masked = false;
+        item.promo_claimed = true;
+        saveImportantMessagesCache();
+      } else {
+        loadImportantMessages({ force: true }).catch(function () {});
+      }
+      if (typeof window.invalidateCheckoutBenefitsClientCache === "function") {
+        window.invalidateCheckoutBenefitsClientCache({ preview: true, progressProducts: false });
+      }
+      if (typeof window.invalidateBenefitsStore === "function") {
+        window.invalidateBenefitsStore({ orderChanged: true, detailsChanged: true });
+      }
+      if (typeof window.refreshBenefitsStore === "function") {
+        Promise.resolve(window.refreshBenefitsStore({ force: true })).catch(function () {});
+      }
+    }).catch(function (err) {
+      if (getImportantMessagesCacheKey() !== claimScopeKey) return;
+      if (String(err && err.message || "") === "UNAUTHORIZED") {
+        requestImportantPromoLogin(safeId);
+        return;
+      }
+      if (item) {
+        item.promo_claimable = false;
+      }
+    }).finally(function () {
+      importantMessagesClaimingIds.delete(safeId);
+      setImportantMessageClaiming(safeId, false);
+      if (messageCenterScreen === "important-list") renderImportantMessagesList();
+      if (messageCenterScreen === "important-details" && activeImportantMessageId === safeId) renderImportantMessageDetails(safeId);
+    });
+  }
+
+  function setMessageCenterView(screen) {
+    const nextScreen = String(screen || "home");
+    messageCenterScreen = nextScreen;
+    const isHome = nextScreen === "home";
+    const isList = nextScreen === "important-list";
+    const isDetails = nextScreen === "important-details";
+    const isUnavailable = nextScreen === "support-unavailable";
+    const isSupport = nextScreen === "support";
+    const useCompositorScroll = isDetails && usesImportantMessageParallaxCompositorScroll();
+    importantMessageDetailsView.classList.toggle("is-compositor-scroll", useCompositorScroll);
+    if (!useCompositorScroll) resetImportantMessageParallaxCompositorScroll();
+    if (isList) activeImportantMessageId = 0;
+    messagesHome.classList.toggle("hidden", !isHome);
+    importantMessagesView.classList.toggle("hidden", !isList);
+    importantMessageDetailsView.classList.toggle("hidden", !isDetails);
+    companyChatUnavailable.classList.toggle("hidden", !isUnavailable);
+    modalBody.classList.toggle("is-message-center-mode", !isSupport);
+    modalBody.classList.toggle("is-support-chat-mode", isSupport);
+    overlay.classList.toggle("is-messages-home", isHome);
+    overlay.classList.toggle("is-important-message-details", isDetails);
+    messagesBackBtn.classList.toggle("hidden", isHome || (isAdminClientChatMode && isSupport && !chatOrderDetailsActive));
+    modalTitle.textContent = isHome ? "Сообщения" : isList ? "PROMO сообщения" : isDetails ? "Важное сообщение" : initialModalTitleText;
+    document.body.classList.toggle("shop-company-chat-page-active", isCompanyChatPageMode() && !isHome);
+    if (isList) renderImportantMessagesList();
+    if (isDetails) renderImportantMessageDetails(activeImportantMessageId);
+    if (isHome || isList) startImportantMessagesPolling();
+    else stopImportantMessagesPolling();
+    if (isHome) scheduleMessageCenterChatPreload();
+    else cancelMessageCenterChatPreload();
+    if (!isSupport) startUnreadPolling();
+    renderUnreadBadge(liveEntries);
+  }
+
+  function pushMessageCenterHistoryState(screen, itemId) {
+    if (!isCompanyChatPageMode() || companyChatHistoryRestoring) return;
+    const nextScreen = String(screen || "home");
+    const currentState = window.history.state && typeof window.history.state === "object"
+      ? window.history.state
+      : {};
+    const currentScreen = String(currentState.shopCompanyMessagesScreen || "");
+    const currentItemId = Math.trunc(Number(currentState.shopImportantMessageId || 0));
+    const nextItemId = nextScreen === "important-details" ? Math.trunc(Number(itemId || 0)) : 0;
+    if (currentState.shopCompanyChatPage === true && currentScreen === nextScreen && currentItemId === nextItemId) return;
+    window.history.pushState({
+      ...currentState,
+      shopCompanyChatPage: true,
+      shopCompanyMessagesScreen: nextScreen,
+      shopImportantMessageId: nextItemId || undefined,
+    }, "", window.location.href);
+  }
+
+  function replaceMessageCenterHistoryState(screen, itemId) {
+    if (!isCompanyChatPageMode() || window.history.state?.shopCompanyChatPage !== true) return;
+    const nextScreen = String(screen || "home");
+    const nextItemId = nextScreen === "important-details" ? Math.trunc(Number(itemId || 0)) : 0;
+    window.history.replaceState({
+      ...window.history.state,
+      shopCompanyMessagesScreen: nextScreen,
+      shopImportantMessageId: nextItemId || undefined,
+    }, "", window.location.href);
+  }
+
+  function showMessageCenterOverlay(screen, options) {
+    const opts = options || {};
+    closeOpenAppModalBeforeChat();
+    syncCompanyChatPageHeader();
+    if (isCompanyChatPageMode()) {
+      ensureCompanyChatHistoryBinding();
+      if (!companyChatHistoryRestoring && opts.preserveHistory !== true) {
+        pushMessageCenterHistoryState(screen || "home", activeImportantMessageId);
+      }
+    }
+    overlay.hidden = false;
+    void overlay.offsetWidth;
+    overlay.classList.add("is-open");
+    overlay.setAttribute("aria-hidden", "false");
+    document.body.classList.add("shop-company-chat-open");
+    lockBackgroundPageScrollForChat();
+    setMessageCenterView(screen || "home");
+    syncOpenButtonActiveState();
+  }
+
+  function openMessagesHome() {
+    if (isAdminClientChatMode) {
+      openCompanyChat();
+      return;
+    }
+    if (isCompanyChatPageMode() && document.body.classList.contains("shop-cart-page-active")) {
+      document.getElementById("shopCartPage")?.classList.add("hidden");
+      document.body.classList.remove("shop-cart-page-active");
+    }
+    if (isSupportChatOpen()) leaveSupportChatForMessages();
+    if (suspendedMessageCenterScreen) {
+      const targetScreen = suspendedMessageCenterScreen;
+      const targetMessageId = suspendedImportantMessageId;
+      suspendedMessageCenterScreen = "";
+      suspendedImportantMessageId = 0;
+      showMessageCenterOverlay(targetScreen);
+      if (targetScreen === "important-details" && targetMessageId > 0) {
+        showImportantMessageDetails(targetMessageId, { preserveHistory: true });
+      }
+      return;
+    }
+    showMessageCenterOverlay("home");
+    loadImportantMessages().then(function () {
+      return preloadImportantMessageCollectionProducts();
+    }).catch(function () {});
+  }
+
+  function showImportantMessagesList(options) {
+    const opts = options || {};
+    if (opts.preserveHistory !== true) pushMessageCenterHistoryState("important-list", 0);
+    setMessageCenterView("important-list");
+    if (!isAdminClientChatMode) loadImportantMessages().catch(function () {});
+  }
+
+  function showImportantMessageDetails(itemId, options) {
+    const opts = options || {};
+    const safeId = Math.trunc(Number(itemId || 0));
+    if (!(safeId > 0)) return;
+    if (activeImportantMessageId !== safeId) {
+      importantMessageDetailsView.scrollTop = 0;
+      importantMessageParallaxScrollOffset = 0;
+    }
+    activeImportantMessageId = safeId;
+    if (opts.preserveHistory !== true) pushMessageCenterHistoryState("important-details", safeId);
+    setMessageCenterView("important-details");
+    const item = getImportantMessageById(safeId);
+    if (item) {
+      markImportantMessageRead(item);
+      renderImportantMessageDetails(safeId);
+      const cachedProductIds = getImportantMessageActionType(item) === "product_collection" && Array.isArray(item.product_ids)
+        ? item.product_ids
+        : [];
+      ensureImportantMessagesProductDetails(cachedProductIds).then(function () {
+        if (messageCenterScreen === "important-details" && activeImportantMessageId === safeId) renderImportantMessageDetails(safeId);
+      });
+    }
+    if (!item || opts.forceRefresh !== false) {
+      if (!item) renderImportantMessageDetailsState("Загружаем сообщение", "far fa-hourglass");
+      const requestScopeKey = getImportantMessagesCacheKey();
+      importantMessagesApiJson(IMPORTANT_MESSAGES_API_BASE + "?limit=100&_ts=" + Date.now())
+        .then(function (json) {
+          if (getImportantMessagesCacheKey() !== requestScopeKey) return;
+          const items = json && Array.isArray(json.data) ? json.data : [];
+          applyImportantMessagesItems(items, { count: items.length });
+          saveImportantMessagesCache();
+          if (messageCenterScreen !== "important-details" || activeImportantMessageId !== safeId) return;
+          const loadedItem = getImportantMessageById(safeId);
+          if (!loadedItem) {
+            renderImportantMessageDetailsState("Сообщение не найдено", "far fa-circle-xmark");
+            return;
+          }
+          markImportantMessageRead(loadedItem);
+          renderImportantMessageDetails(safeId);
+          const loadedProductIds = getImportantMessageActionType(loadedItem) === "product_collection" && Array.isArray(loadedItem.product_ids)
+            ? loadedItem.product_ids
+            : [];
+          ensureImportantMessagesProductDetails(loadedProductIds).then(function () {
+            if (messageCenterScreen === "important-details" && activeImportantMessageId === safeId) renderImportantMessageDetails(safeId);
+          });
+        })
+        .catch(function () {
+          if (getImportantMessagesCacheKey() !== requestScopeKey) return;
+          if (!item && messageCenterScreen === "important-details" && activeImportantMessageId === safeId) {
+            renderImportantMessageDetailsState("Не удалось загрузить сообщение", "far fa-circle-exclamation");
+          }
+        });
+      return;
+    }
+    markImportantMessageRead(item);
+    const productIds = item && getImportantMessageActionType(item) === "product_collection" && Array.isArray(item.product_ids)
+      ? item.product_ids
+      : [];
+    ensureImportantMessagesProductDetails(productIds).then(function () {
+      if (messageCenterScreen === "important-details" && activeImportantMessageId === safeId) renderImportantMessageDetails(safeId);
+    });
+  }
+
+  function leaveSupportChatForMessages() {
+    if (!isSupportChatOpen()) return;
+    supportChatOpenGeneration += 1;
+    attachPreviewDraftRestoreToken += 1;
+    stopSharedThreadPolling();
+    stopLocalTypingSession({ flush: true });
+    saveFeedScrollPosition({ persist: true });
+    syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
+    closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
+    closeMessageImageViewer();
+    hideContextMenu();
+    hideReactionBar();
+    hideEmojiPopover();
+    hideChatOrderDetailsView();
+    if (selectedMessageIds.size > 0) clearSelectionMode();
+    if (pendingDeleteConfirm) closeDeleteConfirm();
+    cancelEditingMessage();
+    resetFeedImageDrop();
+    releaseFeedEdgeSpring({ immediate: true });
+    unbindMobileKeyboardViewportSync();
+    persistFeedScrollPositionSnapshot();
+    pendingFeedRestoreState = null;
+    setChatBootstrapLoading(false);
+    startUnreadPolling({ forceRefresh: true });
+  }
+
+  function navigateMessageCenterBack() {
+    if (chatOrderDetailsActive) {
+      hideChatOrderDetailsView();
+      return;
+    }
+    if (messageCenterScreen === "important-details") {
+      replaceMessageCenterHistoryState("important-list", 0);
+      showImportantMessagesList({ preserveHistory: true });
+      return;
+    }
+    if (messageCenterScreen === "important-list" || messageCenterScreen === "support-unavailable" || messageCenterScreen === "support") {
+      if (messageCenterScreen === "support") leaveSupportChatForMessages();
+      replaceMessageCenterHistoryState("home", 0);
+      setMessageCenterView("home");
+    }
+  }
+
+  function suspendMessageCenterForExternalView() {
+    suspendedMessageCenterScreen = messageCenterScreen;
+    suspendedImportantMessageId = activeImportantMessageId;
+    overlay.classList.remove("is-open");
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.hidden = true;
+    document.body.classList.remove("shop-company-chat-open", "shop-company-chat-page-active");
+    unlockBackgroundPageScrollForChat();
+    stopImportantMessagesPolling();
+    syncOpenButtonActiveState();
+  }
+
+  function openImportantMessageProduct(productId) {
+    const safeId = Math.trunc(Number(productId || 0));
+    if (!(safeId > 0) || typeof openProductDetails !== "function") return;
+    const returnScreen = messageCenterScreen === "important-list" ? "important-list" : "important-details";
+    const returnMessageId = activeImportantMessageId;
+    const returnScopeKey = getImportantMessagesCacheKey();
+    const restoreMessageCenter = function () {
+      const scopeMatches = getImportantMessagesCacheKey() === returnScopeKey;
+      const nextScreen = returnScreen === "important-details" && !scopeMatches ? "important-list" : returnScreen;
+      suspendedMessageCenterScreen = "";
+      suspendedImportantMessageId = 0;
+      showMessageCenterOverlay(nextScreen, { preserveHistory: true });
+      if (nextScreen === "important-details" && returnMessageId > 0) {
+        showImportantMessageDetails(returnMessageId, { preserveHistory: true });
+      }
+    };
+    suspendMessageCenterForExternalView();
+    Promise.resolve(openProductDetails(safeId, {
+      onBack: restoreMessageCenter,
+    })).catch(restoreMessageCenter);
+  }
+
   function openCompanyChat() {
+    if (!chatRuntimeSettings.isEnabled && !isAdminClientChatMode) {
+      showMessageCenterOverlay("support-unavailable");
+      return;
+    }
+    showMessageCenterOverlay("support");
+    const openGeneration = ++supportChatOpenGeneration;
     closeOpenAppModalBeforeChat();
     syncCompanyChatPageHeader();
     if (isCompanyChatPageMode()) {
@@ -7209,6 +8370,11 @@
       initialPullPromise
         .catch(function () { return false; })
         .finally(function () {
+          if (openGeneration !== supportChatOpenGeneration) return;
+          if (!isSupportChatOpen()) {
+            setChatBootstrapLoading(false);
+            return;
+          }
           const welcomeMessage = ensureDailyWelcomeMessage();
           if (welcomeMessage) {
             renderThread();
@@ -7272,12 +8438,33 @@
       window.history.back();
       return;
     }
+    if (!isSupportChatOpen()) {
+      supportChatOpenGeneration += 1;
+      stopImportantMessagesPolling();
+      cancelMessageCenterChatPreload();
+      overlay.classList.remove("is-open", "is-messages-home", "is-important-message-details");
+      overlay.setAttribute("aria-hidden", "true");
+      window.setTimeout(function () {
+        if (overlay.classList.contains("is-open")) return;
+        overlay.hidden = true;
+      }, 240);
+      document.body.classList.remove("shop-company-chat-open", "shop-company-chat-page-active");
+      unlockBackgroundPageScrollForChat();
+      messageCenterScreen = "closed";
+      suspendedMessageCenterScreen = "";
+      suspendedImportantMessageId = 0;
+      modalBody.classList.remove("is-message-center-mode", "is-support-chat-mode");
+      syncOpenButtonActiveState();
+      renderUnreadBadge(liveEntries);
+      startUnreadPolling();
+      return;
+    }
+    supportChatOpenGeneration += 1;
     stopSharedThreadPolling();
     stopLocalTypingSession({ flush: true });
     saveFeedScrollPosition({ persist: true });
     syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
     closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
-    hideNotificationPermissionPrompt();
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
@@ -7296,6 +8483,13 @@
     }, 240);
     document.body.classList.remove("shop-company-chat-open");
     document.body.classList.remove("shop-company-chat-page-active");
+    overlay.classList.remove("is-messages-home", "is-important-message-details");
+    messageCenterScreen = "closed";
+    suspendedMessageCenterScreen = "";
+    suspendedImportantMessageId = 0;
+    modalBody.classList.remove("is-message-center-mode", "is-support-chat-mode");
+    stopImportantMessagesPolling();
+    cancelMessageCenterChatPreload();
     unlockBackgroundPageScrollForChat();
     unbindMobileKeyboardViewportSync();
     persistFeedScrollPositionSnapshot();
@@ -8694,11 +9888,6 @@
     btn.className = "shop-company-chat-modal__back hidden";
     btn.setAttribute("aria-label", "\u041d\u0430\u0437\u0430\u0434");
     btn.innerHTML = '<i class="fas fa-arrow-left"></i>';
-    btn.addEventListener("click", function (event) {
-      event.preventDefault();
-      hideChatOrderDetailsView();
-    });
-
     modalHeader.insertBefore(btn, modalTitle);
     chatOrderBackBtn = btn;
     return chatOrderBackBtn;
@@ -9050,7 +10239,7 @@
     detachChatOrderFooterOutsideHandler();
     setChatOrderDetailsMode(false);
     if (chatOrderBackBtn && chatOrderBackBtn.isConnected) {
-      chatOrderBackBtn.classList.add("hidden");
+      chatOrderBackBtn.classList.toggle("hidden", isAdminClientChatMode || messageCenterScreen !== "support");
     }
     modalTitle.textContent = chatOrderDetailsPrevTitle || initialModalTitleText;
     syncModalTitleWithActiveProfile();
@@ -9133,14 +10322,12 @@
 
       renderHotQuestionOrderCard(card, resolved.preview, orderId);
 
-      if (!resolved.preview) {
-        ensureHotQuestionOrderCardPreview(orderId)
-          .then(function (preview) {
-            if (!card.isConnected || !preview) return;
-            renderHotQuestionOrderCard(card, preview, orderId);
-          })
-          .catch(function () {});
-      }
+      ensureHotQuestionOrderCardPreview(orderId, true)
+        .then(function (preview) {
+          if (!card.isConnected || !preview) return;
+          renderHotQuestionOrderCard(card, preview, orderId);
+        })
+        .catch(function () {});
 
       strip.appendChild(card);
     });
@@ -12126,10 +13313,10 @@
     return cacheHotQuestionOrderPreview(order);
   }
 
-  async function ensureHotQuestionOrderCardPreview(orderId) {
+  async function ensureHotQuestionOrderCardPreview(orderId, refresh) {
     const safeOrderId = toPositiveOrderId(orderId);
     if (!safeOrderId) return null;
-    if (hotQuestionOrderCardsCache.has(safeOrderId)) {
+    if (!refresh && hotQuestionOrderCardsCache.has(safeOrderId)) {
       return hotQuestionOrderCardsCache.get(safeOrderId) || null;
     }
     if (hotQuestionOrderCardsFetchInFlight.has(safeOrderId)) {
@@ -12985,7 +14172,22 @@
   // probeEmojiAssetsAvailability intentionally deferred until first chat open
     ensureChatBootstrapLoader();
     refreshChatClientProfileIfNeeded({ pull: false });
+    if (!isAdminClientChatMode) {
+      syncImportantMessagesCacheScope();
+      const cachedImportantMessages = readImportantMessagesCache();
+      if (cachedImportantMessages) applyImportantMessagesItems(cachedImportantMessages.items, cachedImportantMessages);
+      importantMessagesCacheChecked = true;
+      loadImportantMessages().catch(function () {});
+    }
     renderUnreadBadge(liveEntries);
+    const importantMessagesOpenRequest = readImportantMessagesOpenRequestFromLocation();
+    if (importantMessagesOpenRequest) {
+      clearImportantMessagesOpenRequestFromLocation();
+      openImportantMessagesFromRequest(importantMessagesOpenRequest);
+    }
+    if (!isAdminClientChatMode || chatRuntimeSettings.isEnabled) {
+      queueWebPushSubscriptionSync({ clientId: getActiveChatClientId(), immediate: true });
+    }
     if (!chatRuntimeSettings.isEnabled) {
       stopSharedThreadPolling();
       stopUnreadPolling();
@@ -13020,6 +14222,14 @@
         ? (event.data.payload && typeof event.data.payload === "object" ? event.data.payload : event.data)
         : null;
       const eventType = String(event && event.data && event.data.type || "").trim().toLowerCase();
+      if (eventType === "important-message-notification-received") {
+        if (!isAdminClientChatMode) loadImportantMessages({ force: true }).catch(function () {});
+        return;
+      }
+      if (eventType === "important-message-notification-click") {
+        openImportantMessagesFromRequest(payload, { clearLocation: false });
+        return;
+      }
       if (eventType !== "chat-notification-click") return;
       queuePushChatOpenRequest(payload, { clearLocation: false });
     });
@@ -13028,8 +14238,7 @@
   if ("serviceWorker" in navigator && navigator.serviceWorker.ready) {
     navigator.serviceWorker.ready
       .then(function () {
-        if (!chatRuntimeSettings.isEnabled) return;
-        if (!overlay.classList.contains("is-open")) return;
+        if (isAdminClientChatMode && !chatRuntimeSettings.isEnabled) return;
         queueWebPushSubscriptionSync({
           clientId: getActiveChatClientId(),
           immediate: true,
@@ -13040,17 +14249,103 @@
 
   getChatOpenButtons().forEach(function (button) {
     button.addEventListener("click", function (event) {
-      if (!chatRuntimeSettings.isEnabled) {
-        event.preventDefault();
-        event.stopPropagation();
-        applyChatWidgetEnabledState(false);
-        return;
-      }
       event.preventDefault();
       event.stopPropagation();
       initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true }).catch(function () {});
-      openCompanyChat();
+      openMessagesHome();
     });
+  });
+
+  messagesBackBtn.addEventListener("click", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    navigateMessageCenterBack();
+  });
+
+  importantMessagesOpenBtn.addEventListener("click", function () {
+    showImportantMessagesList();
+  });
+
+  supportChatOpenBtn.addEventListener("click", function () {
+    openCompanyChat();
+  });
+
+  function handleImportantMessagesAction(event) {
+    const claimButton = event.target.closest("[data-important-claim-id]");
+    if (claimButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      claimImportantMessagePromo(claimButton.dataset.importantClaimId);
+      return;
+    }
+    const productButton = event.target.closest("[data-important-product-id]");
+    if (productButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      openImportantMessageProduct(productButton.dataset.importantProductId);
+      return;
+    }
+    const linkButton = event.target.closest("[data-important-link-url]");
+    if (linkButton) {
+      event.preventDefault();
+      const url = String(linkButton.dataset.importantLinkUrl || "").trim();
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    const messageButton = event.target.closest("[data-important-message-id]");
+    if (messageButton) showImportantMessageDetails(messageButton.dataset.importantMessageId);
+  }
+
+  importantMessagesView.addEventListener("click", handleImportantMessagesAction);
+  importantMessageDetailsView.addEventListener("click", handleImportantMessagesAction);
+  importantMessageDetailsView.addEventListener("touchstart", function (event) {
+    if (!usesImportantMessageParallaxCompositorScroll() || messageCenterScreen !== "important-details" || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    stopImportantMessageParallaxInertia();
+    importantMessageParallaxTouch = {
+      startY: touch.clientY,
+      startOffset: importantMessageParallaxScrollOffset,
+      lastY: touch.clientY,
+      lastTime: performance.now(),
+      velocity: 0,
+    };
+  }, { passive: true });
+  importantMessageDetailsView.addEventListener("touchmove", function (event) {
+    const state = importantMessageParallaxTouch;
+    if (!state || !usesImportantMessageParallaxCompositorScroll() || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const time = performance.now();
+    const elapsed = Math.max(1, time - state.lastTime);
+    const nextOffset = state.startOffset + (state.startY - touch.clientY);
+    state.velocity = (state.lastY - touch.clientY) / elapsed;
+    state.lastY = touch.clientY;
+    state.lastTime = time;
+    setImportantMessageParallaxScrollOffset(nextOffset);
+    event.preventDefault();
+  }, { passive: false });
+  importantMessageDetailsView.addEventListener("touchend", function () {
+    const state = importantMessageParallaxTouch;
+    importantMessageParallaxTouch = null;
+    if (!state || !usesImportantMessageParallaxCompositorScroll()) return;
+    startImportantMessageParallaxInertia(state.velocity);
+  }, { passive: true });
+  importantMessageDetailsView.addEventListener("touchcancel", function () {
+    importantMessageParallaxTouch = null;
+  }, { passive: true });
+  if (typeof ResizeObserver === "function") {
+    const importantMessageDetailsLayoutObserver = new ResizeObserver(function () {
+      if (messageCenterScreen === "important-details") scheduleImportantMessageHeroParallaxLayout();
+    });
+    importantMessageDetailsLayoutObserver.observe(importantMessageDetailsView);
+    importantMessageDetailsLayoutObserver.observe(importantMessageDetails);
+  }
+  ["shopNavMenu", "shopNavCart", "shopNavProfile"].forEach(function (buttonId) {
+    const button = document.getElementById(buttonId);
+    if (!button) return;
+    button.addEventListener("click", function (event) {
+      if (messageCenterScreen !== "home" || !overlay.classList.contains("is-open")) return;
+      closeCompanyChat({ fromHistory: true });
+    }, { capture: true });
   });
 
   closeBtn.addEventListener("click", function (event) {
@@ -13094,7 +14389,7 @@
   });
 
   function syncReadOnForeground() {
-    if (!overlay.classList.contains("is-open")) return;
+    if (!isSupportChatOpen()) return;
     if (!isChatTabActiveForRead()) return;
     stopUnreadPolling();
     startSharedThreadPolling();
@@ -13110,7 +14405,7 @@
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState !== "visible") {
-      if (overlay.classList.contains("is-open")) {
+      if (isSupportChatOpen()) {
         saveFeedScrollPosition({ force: true, persist: true });
       } else {
         persistFeedScrollPositionSnapshot();
@@ -13119,20 +14414,21 @@
         stopSharedThreadPolling();
       }
       stopLocalTypingSession({ flush: true, keepalive: true });
-      if (!overlay.classList.contains("is-open")) {
+      if (!isSupportChatOpen()) {
         startUnreadPolling();
       }
       return;
     }
-    if (overlay.classList.contains("is-open")) {
+    if (isSupportChatOpen()) {
       syncReadOnForeground();
       return;
     }
+    if (!isAdminClientChatMode) loadImportantMessages().catch(function () {});
     startUnreadPolling({ forceRefresh: true });
   });
 
   window.addEventListener("focus", function () {
-    if (overlay.classList.contains("is-open")) {
+    if (isSupportChatOpen()) {
       refreshChatClientProfileIfNeeded({ pull: false });
       queueWebPushSubscriptionSync({
         clientId: getActiveChatClientId(),
@@ -13142,16 +14438,18 @@
       return;
     }
     refreshChatClientProfileIfNeeded({ pull: false });
+    if (!isAdminClientChatMode) loadImportantMessages().catch(function () {});
     unreadStatePrimed = false;
     startUnreadPolling({ forceRefresh: true });
   });
 
   window.addEventListener("pageshow", function () {
-    if (overlay.classList.contains("is-open")) {
+    if (isSupportChatOpen()) {
       syncReadOnForeground();
       return;
     }
     refreshChatClientProfileIfNeeded({ pull: false });
+    if (!isAdminClientChatMode) loadImportantMessages().catch(function () {});
     unreadStatePrimed = false;
     startUnreadPolling({ forceRefresh: true });
   });
@@ -13160,12 +14458,12 @@
     stopSharedThreadPolling();
     stopUnreadPolling();
     stopLocalTypingSession({ flush: true, keepalive: true });
-    if (overlay.classList.contains("is-open")) {
+    if (isSupportChatOpen()) {
       saveFeedScrollPosition({ persist: true });
     } else {
       persistFeedScrollPositionSnapshot();
     }
-    if (!overlay.classList.contains("is-open")) return;
+    if (!isSupportChatOpen()) return;
     syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
   });
 
@@ -13173,7 +14471,7 @@
     stopSharedThreadPolling();
     stopUnreadPolling();
     stopLocalTypingSession({ flush: true, keepalive: true });
-    if (overlay.classList.contains("is-open")) {
+    if (isSupportChatOpen()) {
       saveFeedScrollPosition({ persist: true });
     } else {
       persistFeedScrollPositionSnapshot();
@@ -13184,27 +14482,96 @@
     const key = String(event && event.key || "");
     if (key === "tenant") {
       initChatRuntimeSettings({ fetchRemote: false, refreshUi: true }).catch(function () {});
-      if (!overlay.classList.contains("is-open")) {
+      if (!isSupportChatOpen()) {
         startUnreadPolling({ forceRefresh: true });
       }
       return;
     }
+    if (key === "activeStoreId") {
+      importantMessagesStoreId = getActiveStoreId();
+      syncImportantMessagesCacheScope();
+      leaveImportantMessageDetailsAfterScopeChange();
+      const cachedImportantMessages = readImportantMessagesCache();
+      if (cachedImportantMessages) applyImportantMessagesItems(cachedImportantMessages.items, cachedImportantMessages);
+      else syncImportantMessagesUnread();
+      importantMessagesCacheChecked = true;
+      if (messageCenterScreen === "important-list") renderImportantMessagesList();
+      loadImportantMessages({ force: true }).catch(function () {});
+      queueWebPushSubscriptionSync({ clientId: getActiveChatClientId(), force: true, immediate: true });
+      return;
+    }
     if (key && key !== customerTokenKey && key !== customerCacheKey && key !== guestChatClientKey) return;
-    refreshChatClientProfileIfNeeded({ pull: overlay.classList.contains("is-open") });
-    if (!overlay.classList.contains("is-open")) {
+    refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
+    if (!isAdminClientChatMode && (!key || key === customerTokenKey || key === customerCacheKey)) {
+      const scopeChanged = syncImportantMessagesCacheScope();
+      if (scopeChanged) leaveImportantMessageDetailsAfterScopeChange();
+      const cachedImportantMessages = readImportantMessagesCache();
+      if (cachedImportantMessages) applyImportantMessagesItems(cachedImportantMessages.items, cachedImportantMessages);
+      else syncImportantMessagesUnread();
+      importantMessagesCacheChecked = true;
+      loadImportantMessages({ force: true }).catch(function () {});
+    }
+    if (!isAdminClientChatMode) {
+      queueWebPushSubscriptionSync({ clientId: getActiveChatClientId(), force: true, immediate: true });
+    }
+    if (!isSupportChatOpen()) {
       unreadStatePrimed = false;
       startUnreadPolling({ forceRefresh: true });
     }
   });
 
+  document.addEventListener("tenantStoreChanged", function () {
+    if (isAdminClientChatMode) return;
+    try { localStorage.removeItem(getImportantMessagesPendingClaimKey(importantMessagesStoreId)); } catch {}
+    pendingImportantPromoClaimId = 0;
+    pendingImportantPromoClaimStoreId = 0;
+    importantMessagesStoreId = getActiveStoreId();
+    syncImportantMessagesCacheScope();
+    leaveImportantMessageDetailsAfterScopeChange();
+    activeImportantMessageId = 0;
+    const cachedImportantMessages = readImportantMessagesCache();
+    if (cachedImportantMessages) applyImportantMessagesItems(cachedImportantMessages.items, cachedImportantMessages);
+    else syncImportantMessagesUnread();
+    importantMessagesCacheChecked = true;
+    if (messageCenterScreen === "important-list") renderImportantMessagesList();
+    loadImportantMessages({ force: true }).catch(function () {});
+    queueWebPushSubscriptionSync({ clientId: getActiveChatClientId(), force: true, immediate: true });
+  });
+
   // Same-tab customer auth/profile updates do not fire window.storage.
   window.addEventListener("shop:customer-profile-changed", function () {
-    refreshChatClientProfileIfNeeded({ pull: overlay.classList.contains("is-open") });
-    if (overlay.classList.contains("is-open")) {
-      queueWebPushSubscriptionSync({
-        clientId: getActiveChatClientId(),
-        immediate: true,
+    refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
+    if (isAdminClientChatMode) {
+      if (isSupportChatOpen()) {
+        queueWebPushSubscriptionSync({ clientId: getActiveChatClientId(), immediate: true });
+      } else {
+        unreadStatePrimed = false;
+        startUnreadPolling({ forceRefresh: true });
+      }
+      return;
+    }
+    const scopeChanged = syncImportantMessagesCacheScope();
+    if (scopeChanged) leaveImportantMessageDetailsAfterScopeChange();
+    const cachedImportantMessages = readImportantMessagesCache();
+    if (cachedImportantMessages) applyImportantMessagesItems(cachedImportantMessages.items, cachedImportantMessages);
+    const importantRefreshPromise = loadImportantMessages({ force: true }).catch(function () {});
+    let pendingClaimId = pendingImportantPromoClaimId;
+    if (!(pendingClaimId > 0)) {
+      try { pendingClaimId = Math.trunc(Number(localStorage.getItem(getImportantMessagesPendingClaimKey()) || 0)); } catch {}
+    }
+    if (pendingClaimId > 0 && getCustomerToken()) {
+      pendingImportantPromoClaimId = pendingClaimId;
+      pendingImportantPromoClaimStoreId = getActiveStoreId();
+      Promise.resolve(importantRefreshPromise).finally(function () {
+        claimImportantMessagePromo(pendingClaimId);
       });
+    }
+    queueWebPushSubscriptionSync({
+      clientId: getActiveChatClientId(),
+      force: true,
+      immediate: true,
+    });
+    if (isSupportChatOpen()) {
       return;
     }
     unreadStatePrimed = false;
@@ -14277,6 +15644,8 @@
   window.shopCompanyChatNotifications = {
     isEnabled: isChatNotificationsEnabled,
     setEnabled: setChatNotificationsEnabled,
+    getPreferences: getWebPushPreferences,
+    savePreferences: saveWebPushPreferences,
     getStatus: function () {
       return {
         supported: isWebPushSupported(),
@@ -14288,5 +15657,6 @@
   if (!isChatNotificationsEnabled()) {
     unsubscribeWebPushNotifications().catch(function () {});
   }
+  scheduleNotificationPermissionPrompt();
 })();
 

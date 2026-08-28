@@ -4,12 +4,14 @@ import { ActivityIndicator, StatusBar as NativeStatusBar, StyleSheet, View } fro
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ChatPage } from '../pages/chat';
+import { ExpenseDocumentsPage } from '../pages/expense-documents/ExpenseDocumentsPage';
 import { LoginPage } from '../pages/login';
 import { clearAdminSession, readAdminSession, type AdminSession } from '../shared/api';
 import { theme } from '../shared/config/theme';
 
 export function AppRoot() {
   const [session, setSession] = useState<AdminSession | null>(null);
+  const [page, setPage] = useState<'chat' | 'expense-documents'>('chat');
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -24,13 +26,18 @@ export function AppRoot() {
   const logout = async () => {
     await clearAdminSession();
     setSession(null);
+    setPage('chat');
   };
 
   return (
     <SafeAreaProvider>
       {ready ? (
         session?.token ? (
-          <ChatPage onLogout={logout} session={session} />
+          page === 'expense-documents' ? (
+            <ExpenseDocumentsPage onClose={() => setPage('chat')} />
+          ) : (
+            <ChatPage onLogout={logout} onOpenExpenseDocuments={() => setPage('expense-documents')} session={session} />
+          )
         ) : (
           <LoginPage onLogin={setSession} />
         )

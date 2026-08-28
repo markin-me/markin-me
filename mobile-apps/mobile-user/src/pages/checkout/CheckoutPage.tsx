@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,9 +11,11 @@ import {
 } from 'react-native';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
-import { cartLinesToStockCheckItems, getCartLineStockProductIds, readCartLines, type CartLine } from '../../features/cart';
+import { cartLinesToStockCheckItems, clearCartLines, getCartLineStockProductIds, readCartLines, type CartLine } from '../../features/cart';
 import {
+  clearCustomerCheckoutCache,
   readCheckoutCartSummary,
+  readCheckoutBenefitsSelection,
   readFulfillmentSelection,
   type CheckoutCartSummary,
   type FulfillmentSelection,
@@ -19,6 +24,7 @@ import { useProductStock } from '../../features/stock';
 import {
   fetchPublicOrderConfig,
   checkOrderStock,
+  createCustomerOrder,
   fetchTenantStores,
   readCachedCustomerAddresses,
   readCachedCustomerPassport,
@@ -27,6 +33,7 @@ import {
   type CustomerAddress,
   type PublicOrderConfig,
 } from '../../shared/api';
+import { routes, type RootStackParamList } from '../../app/navigation/routes';
 import { theme } from '../../shared/config/theme';
 import { calculateBuyXGetYLineTotals } from '../../shared/lib/buyXGetY';
 import { formatPrice } from '../../shared/lib/formatPrice';
@@ -180,6 +187,40 @@ function getCashPresets(total: number) {
   return [Math.ceil((total + 1) / 1000) * 1000];
 }
 
+function buildOrderItems(lines: CartLine[]) {
+  return lines.map((line) => line.type === 'combo' ? {
+    combo_id: line.sourceId,
+    combo_title: line.title,
+    line_total: getLineTotal(line),
+    qty: Math.max(1, Number(line.quantity || 1)),
+    selections: (line.comboSelections || []).map((selection) => ({
+      ingredients_display: (selection.ingredients || []).map((ingredient) => ({
+        ingredient_id: ingredient.id || undefined,
+        quantity: ingredient.quantity,
+        unit_id: ingredient.unitId || undefined,
+      })),
+      product_id: selection.productId,
+      product_name: selection.productName,
+      product_photo: selection.productPhoto,
+      unit_price_override: selection.unitPrice,
+      variant_group_id: selection.variant?.groupId || undefined,
+      variant_label: selection.variant?.label || undefined,
+      variant_value_index: selection.variant?.valueIndex || undefined,
+    })),
+    type: 'combo',
+  } : {
+    ingredients: (line.ingredients || []).map((ingredient) => ({ ingredient_id: ingredient.id || undefined, quantity: ingredient.quantity, unit_id: ingredient.unitId || undefined })),
+    line_total: getLineTotal(line),
+    option_item_ids: (line.options || []).map((option) => option.id).filter((id): id is number => Number(id) > 0),
+    option_items: (line.options || []).map((option) => ({ id: option.id, qty: option.quantity })),
+    product_id: line.sourceId,
+    qty: Math.max(1, Number(line.quantity || 1)),
+    variant_group_id: line.variant?.groupId || undefined,
+    variant_label: line.variant?.label || undefined,
+    variant_value_index: line.variant?.valueIndex || undefined,
+  });
+}
+
 function CheckoutAccentGradientSurface() {
   const gradientId = `checkoutAccentGradient${useId().replace(/:/g, '')}`;
   return (
@@ -198,6 +239,7 @@ function CheckoutAccentGradientSurface() {
 }
 
 export function CheckoutPage() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const initialDates = useMemo(buildSelectableDates, []);
   const { mergeStockRows, refreshMany } = useProductStock();
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -208,7 +250,7 @@ export function CheckoutPage() {
     pickupCity: null,
     pickupStoreId: null,
   });
-  const [, setAddresses] = useState<CustomerAddress[]>([]);
+  const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [orderConfig, setOrderConfig] = useState<PublicOrderConfig | null>(null);
   const [selectedTimeCode, setSelectedTimeCode] = useState(checkoutDraft.selectedTimeCode || 'asap');
   const [selectedPaymentCode, setSelectedPaymentCode] = useState(checkoutDraft.selectedPaymentCode);
@@ -225,6 +267,7 @@ export function CheckoutPage() {
   const [commentInputHeight, setCommentInputHeight] = useState(48);
   const [activeSheet, setActiveSheet] = useState<CheckoutSheet>(null);
   const [isLoading, setLoading] = useState(true);
+  const [isSubmitting, setSubmitting] = useState(false);
 
   const loadCheckout = useCallback(async () => {
     setLoading(true);
@@ -417,7 +460,27 @@ export function CheckoutPage() {
 
   const closeSheet = () => setActiveSheet(null);
   const submitOrder = useCallback(async () => {
-    if (!lines.length) return;
+    if (!lines.length || isSubmitting) return;
+    if (!selectedPaymentCode) {
+      Alert.alert('Выберите способ оплаты');
+      return;
+    }
+    const passport = await readCachedCustomerPassport();
+    if (!passport?.token) {
+      Alert.alert('Войдите в профиль, чтобы оформить заказ');
+      return;
+    }
+    const deliveryAddress = selection.mode === 'delivery'
+      ? addresses.find((address) => Number(address.id || 0) === Number(selection.addressId || 0)) || null
+      : null;
+    if (selection.mode === 'delivery' && !deliveryAddress) {
+      Alert.alert('Выберите адрес доставки');
+      return;
+    }
+    if (selection.mode === 'pickup' && !selection.pickupStoreId) {
+      Alert.alert('Выберите точку самовывоза');
+      return;
+    }
     const affectedProductIds = Array.from(new Set(lines.flatMap((line) => getCartLineStockProductIds(line))));
     if (affectedProductIds.length) await refreshMany(affectedProductIds).catch(() => null);
     const stockCheck = await checkOrderStock(cartLinesToStockCheckItems(lines)).catch(() => null);
@@ -427,7 +490,52 @@ export function CheckoutPage() {
       return;
     }
     setStockErrorText('');
-  }, [lines, mergeStockRows, refreshMany]);
+    setSubmitting(true);
+    try {
+      const benefits = await readCheckoutBenefitsSelection();
+      const scheduledAt = selectedTimeCode === 'on_date'
+        ? `${getDateKey(selectedDate)} ${selectedDateTime}:00`
+        : selectedTimeCode === 'at_time' ? `${getDateKey(new Date())} ${selectedAtTime}:00` : null;
+      const created = await createCustomerOrder(passport.token, {
+        change_from: selectedPaymentCode === 'cash' ? cashChangeAmount : null,
+        comment: comment.trim() || null,
+        delivery_address: deliveryAddress ? [deliveryAddress.city, deliveryAddress.street, deliveryAddress.house, deliveryAddress.apartment].filter(Boolean).join(', ') : null,
+        delivery_address_id: deliveryAddress?.id || null,
+        delivery_address_city: deliveryAddress?.city || null,
+        delivery_address_street: deliveryAddress?.street || null,
+        delivery_address_house: deliveryAddress?.house || null,
+        delivery_address_entrance: deliveryAddress?.entrance || null,
+        delivery_address_floor: deliveryAddress?.floor || null,
+        delivery_address_apartment: deliveryAddress?.apartment || null,
+        delivery_address_ref: deliveryAddress?.address_ref || null,
+        delivery_address_lat: deliveryAddress?.lat || null,
+        delivery_address_lng: deliveryAddress?.lng || null,
+        delivery_store_id: deliveryAddress?.delivery_store_id || null,
+        delivery_zone_id: deliveryAddress?.delivery_zone_id || null,
+        items: buildOrderItems(lines),
+        method_code: selection.mode === 'delivery' ? 'delivery' : 'pickup',
+        payment_code: selectedPaymentCode,
+        pickup_store_id: selection.mode === 'pickup' ? selection.pickupStoreId : null,
+        promo_code: benefits.promoCode || null,
+        scheduled_at: scheduledAt,
+        selected_discount_id: benefits.discountId,
+        selected_discount_source: benefits.discountSource,
+        selected_promo_reward_id: benefits.promoRewardId,
+        selected_promo_source: benefits.promoSource,
+        time_option_code: selectedTimeCode,
+      });
+      if (!created?.id) throw new Error('ORDER_CREATE_FAILED');
+      await Promise.all([clearCartLines(), clearCustomerCheckoutCache()]);
+      Alert.alert('Заказ принят', created.public_id ? `Заказ №${created.public_id} успешно оформлен.` : 'Заказ успешно оформлен.', [
+        { text: 'Мои заказы', onPress: () => navigation.navigate(routes.orders) },
+      ]);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : '';
+      Alert.alert('Ошибка оформления', code === 'OUT_OF_STOCK' ? 'Некоторых товаров больше нет в наличии.' : 'Не удалось оформить заказ. Попробуйте ещё раз.');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [addresses, cashChangeAmount, comment, isSubmitting, lines, mergeStockRows, navigation, refreshMany, selectedAtTime, selectedDate, selectedDateTime, selectedPaymentCode, selectedTimeCode, selection]);
 
   return (
     <Screen edges={['top', 'bottom']}>
@@ -500,10 +608,9 @@ export function CheckoutPage() {
         )}
         {!isLoading ? (
           <View style={styles.footer}>
-            <Pressable disabled={!lines.length || !!stockErrorText} onPress={submitOrder} style={[styles.orderButton, (!lines.length || !!stockErrorText) && styles.orderButtonDisabled]}>
+            <Pressable disabled={!lines.length || !!stockErrorText || isSubmitting} onPress={submitOrder} style={[styles.orderButton, (!lines.length || !!stockErrorText || isSubmitting) && styles.orderButtonDisabled]}>
               <CheckoutAccentGradientSurface />
-              <Text style={styles.orderButtonText}>Заказать</Text>
-              <Text style={styles.orderButtonText}>· {formatPrice(total)}</Text>
+              {isSubmitting ? <ActivityIndicator color={theme.colors.primaryText} /> : <><Text style={styles.orderButtonText}>Заказать</Text><Text style={styles.orderButtonText}>· {formatPrice(total)}</Text></>}
             </Pressable>
           </View>
         ) : null}

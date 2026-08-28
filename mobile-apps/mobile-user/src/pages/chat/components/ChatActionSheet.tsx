@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Animated, Easing, Modal, Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,14 +38,15 @@ const CONTEXT_BOTTOM_GAP = 20;
 const CONTEXT_MENU_GAP = 12;
 const CONTEXT_MENU_WIDTH = 246;
 const CONTEXT_BACKDROP_MS = 260;
-const CONTEXT_CLONE_MS = 340;
-const CONTEXT_MENU_DELAY_MS = 0;
+const CONTEXT_CLONE_MS = 680;
+const CONTEXT_MENU_DELAY_MS = 90;
 const CONTEXT_MENU_MS = 240;
 const CONTEXT_REACTIONS_EXPANDED_EXTRA_HEIGHT = 28;
 const CONTEXT_MENU_HEIGHT = {
   canEdit: 307,
   default: 261,
 };
+const BACKDROP_BLUR_ENABLED = Platform.OS !== 'android';
 
 export function ChatActionSheet({
   actor,
@@ -100,19 +101,19 @@ export function ChatActionSheet({
     cloneProgress.setValue(0);
     menuProgress.setValue(0);
     confirmProgress.setValue(0);
-    Animated.parallel([
-      Animated.timing(backdropProgress, {
-        duration: CONTEXT_BACKDROP_MS,
-        easing: Easing.out(Easing.cubic),
-        toValue: 1,
-        useNativeDriver: true,
-      }),
-      Animated.timing(cloneProgress, {
-        duration: CONTEXT_CLONE_MS,
-        easing: Easing.out(Easing.cubic),
-        toValue: 1,
-        useNativeDriver: true,
-      }),
+    Animated.timing(backdropProgress, {
+      duration: CONTEXT_BACKDROP_MS,
+      easing: Easing.out(Easing.cubic),
+      toValue: 1,
+      useNativeDriver: true,
+    }).start();
+    Animated.timing(cloneProgress, {
+      duration: CONTEXT_CLONE_MS,
+      easing: Easing.bezier(0.22, 1, 0.36, 1),
+      toValue: 1,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
       Animated.sequence([
         Animated.delay(CONTEXT_MENU_DELAY_MS),
         Animated.timing(menuProgress, {
@@ -121,8 +122,8 @@ export function ChatActionSheet({
           toValue: 1,
           useNativeDriver: true,
         }),
-      ]),
-    ]).start();
+      ]).start();
+    });
 
     return undefined;
   }, [backdropProgress, canDeleteForPeer, cloneProgress, confirmOnly, confirmProgress, menuProgress, message?.id, visible]);
@@ -226,6 +227,10 @@ export function ChatActionSheet({
     inputRange: [0, 1],
     outputRange: [12, 0],
   });
+  const menuOpacity = menuProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+  });
   const menuScale = menuProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [0.96, 1],
@@ -239,19 +244,22 @@ export function ChatActionSheet({
     <Modal animationType="none" onRequestClose={onClose} transparent visible={visible}>
       <View style={styles.host}>
         <Animated.View pointerEvents="none" style={[styles.backdrop, { opacity: confirmDeleteOpen ? 0 : backdropOpacity }]}>
-          <BlurView
-            blurReductionFactor={2}
-            experimentalBlurMethod="dimezisBlurView"
-            intensity={34}
-            style={styles.backdropBlur}
-            tint="dark"
-          />
+          {BACKDROP_BLUR_ENABLED ? (
+            <BlurView
+              blurReductionFactor={2}
+              experimentalBlurMethod="dimezisBlurView"
+              intensity={34}
+              style={styles.backdropBlur}
+              tint="dark"
+            />
+          ) : null}
           <View style={styles.backdropDim} />
         </Animated.View>
         <Pressable accessibilityRole="button" onPress={onClose} style={styles.backdropPressable} />
 
         {message && targetLayout && !confirmDeleteOpen ? (
           <Animated.View
+            renderToHardwareTextureAndroid
             pointerEvents="none"
             style={[
               styles.cloneHost,
@@ -277,10 +285,12 @@ export function ChatActionSheet({
 
         {!confirmDeleteOpen ? (
         <Animated.View
+          renderToHardwareTextureAndroid
           style={[
             styles.menu,
             {
               left: layout.menuLeft,
+              opacity: menuOpacity,
               top: layout.menuTop,
               transform: [{ translateY: menuTranslateY }, { scale: menuScale }],
               width: layout.menuWidth,
@@ -397,7 +407,7 @@ const styles = StyleSheet.create({
   },
   backdropDim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15,23,42,0.28)',
+    backgroundColor: 'rgba(15,23,42,0.84)',
   },
   backdropPressable: {
     ...StyleSheet.absoluteFillObject,
