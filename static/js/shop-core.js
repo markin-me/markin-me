@@ -18346,6 +18346,7 @@ function updateCartBadge() {
     let pointerActive = false;
     let gestureDirection = "";
     let suppressClick = false;
+    let descriptionExpanded = false;
     content.innerHTML = '<header class="shop-subscription-story-header"><button type="button" class="shop-subscription-story-back" aria-label="Назад"><i class="fas fa-arrow-left" aria-hidden="true"></i></button><strong>Что такое подписка</strong></header><div class="shop-subscription-story-progress"></div><div class="shop-subscription-story-canvas"><img class="shop-subscription-story-image" alt=""><div class="shop-subscription-story-overlay"><div class="shop-subscription-story-description"></div><button type="button" class="shop-subscription-story-button"></button></div><div class="shop-subscription-story-hit shop-subscription-story-hit-left"></div><div class="shop-subscription-story-hit shop-subscription-story-hit-right"></div></div>';
     const progress = content.querySelector(".shop-subscription-story-progress");
     const image = content.querySelector(".shop-subscription-story-image");
@@ -18358,6 +18359,7 @@ function updateCartBadge() {
       image.src = String(slide.image_url);
       description.textContent = String(slide.description || "");
       description.classList.toggle("hidden", slide.show_description === false || !String(slide.description || "").trim());
+      description.classList.toggle("is-expanded", descriptionExpanded);
       button.textContent = String(slide.button_text || "");
       button.classList.toggle("hidden", slide.show_button === false || !String(slide.button_text || "").trim());
       button.style.backgroundColor = String(slide.button_color || "#ff6b00");
@@ -18377,12 +18379,32 @@ function updateCartBadge() {
         document.querySelector(".shop-subscription-story-back")?.click();
         return;
       }
-      document.getElementById("shopBonusProgramPage")?.classList.remove("shop-subscription-story-page-active");
-      if (window.history.state?.shopBonusProgramPage === true) window.history.back();
-      else openSubscriptionPage();
+      const page = document.getElementById("shopBonusProgramPage");
+      const contentHost = page?.querySelector("[data-bonus-program-page-content]");
+      const storyShell = contentHost?.querySelector(".shop-subscription-story-shell");
+      const subscriptionBackground = storyShell?.firstElementChild;
+      if (contentHost && storyShell) {
+        if (subscriptionBackground) contentHost.replaceChildren(subscriptionBackground);
+        else storyShell.remove();
+      }
+      page?.classList.remove("shop-subscription-story-page-active");
+      const currentHistoryState = window.history.state;
+      if (currentHistoryState?.shopBonusProgramPage === true) {
+        window.history.replaceState({
+          ...currentHistoryState,
+          shopBonusProgramScreen: "subscription",
+        }, "", window.location.href);
+      }
+      if (page) {
+        page.dataset.bonusProgramScreen = "subscription";
+        bonusProgramPageBackHandler = closeBonusProgramPageToProfile;
+        page.querySelector("[data-bonus-program-page-title]").textContent = "Подписка";
+        queueMobileUiStateSync("bonus-program-page-subscription");
+      }
     };
     content.querySelector(".shop-subscription-story-back").onclick = close;
     const move = (direction) => {
+      descriptionExpanded = false;
       if (direction > 0 && index < slides.length - 1) { index += 1; render(); }
       else if (direction < 0 && index > 0) { index -= 1; render(); }
       else if (direction > 0) close();
@@ -18392,13 +18414,33 @@ function updateCartBadge() {
     content.querySelector(".shop-subscription-story-hit-left").onclick = (event) => {
       if (suppressClick) { suppressClick = false; return; }
       event.preventDefault();
+      if (descriptionExpanded) {
+        descriptionExpanded = false;
+        description.classList.remove("is-expanded");
+        resume();
+        return;
+      }
       move(-1);
     };
     content.querySelector(".shop-subscription-story-hit-right").onclick = (event) => {
       if (suppressClick) { suppressClick = false; return; }
       event.preventDefault();
+      if (descriptionExpanded) {
+        descriptionExpanded = false;
+        description.classList.remove("is-expanded");
+        resume();
+        return;
+      }
       move(1);
     };
+    description.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      descriptionExpanded = !descriptionExpanded;
+      description.classList.toggle("is-expanded", descriptionExpanded);
+      if (descriptionExpanded) pause();
+      else resume();
+    });
     content.addEventListener("pointerdown", (event) => {
       if (event.pointerType === "mouse" && event.button !== 0) return;
       if (event.target.closest("button")) return;
@@ -18571,7 +18613,8 @@ function updateCartBadge() {
 
   function requestBonusProgramHistoryBack() {
     const page = document.getElementById("shopBonusProgramPage");
-    if (page?.dataset.bonusProgramScreen === "subscription") {
+    const screen = page?.dataset.bonusProgramScreen;
+    if (screen === "subscription" || screen === "main" || screen === "referrals") {
       const currentHistoryState = window.history.state;
       if (currentHistoryState?.shopBonusProgramPage === true) {
         const { shopBonusProgramPage, shopBonusProgramScreen, shopBonusProgramLevelId, ...restHistoryState } = currentHistoryState;
