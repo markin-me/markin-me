@@ -3218,7 +3218,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const [[subscriptionStorefrontRow]] = await db.query(
         `SELECT is_active, aspect_ratio, background_color, title, title_font_size,
                 title_color, description, description_font_size, description_color,
-                image_url, button_text, button_color, button_icon_url
+                image_url, button_text, button_color, button_icon_url,
+                faq_title, faq_items_json, info_slides_json
           FROM mkt_subscription_storefront_settings
           WHERE tenant_id=? AND store_id=?
           LIMIT 1`,
@@ -3356,6 +3357,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             button_text: subscriptionStorefrontRow.button_text || '',
             button_color: subscriptionStorefrontRow.button_color || '#ffffff',
             button_icon_url: subscriptionStorefrontRow.button_icon_url || null,
+            faq_title: subscriptionStorefrontRow.faq_title || 'Часто задаваемые вопросы',
+            faq_items: safeJsonArray(subscriptionStorefrontRow.faq_items_json),
+            info_slides: safeJsonArray(subscriptionStorefrontRow.info_slides_json),
           } : null,
           account,
           levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel, activeFavoriteGroup })),

@@ -2809,6 +2809,11 @@
       </div>` : "";
     host.innerHTML = `<div class="shop-home-cards-scroll no-scrollbar"><div class="shop-home-cards-track">${bonusHtml ? `<div class="shop-home-cards-slide">${bonusHtml}</div>` : ""}${referralHtml ? `<div class="shop-home-cards-slide">${referralHtml}</div>` : ""}</div></div>${storefrontHtml}`;
     const subscriptionStorefront = host.querySelector(".shop-profile-subscription-storefront");
+    subscriptionStorefront?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openSubscriptionPage();
+    });
     const syncSubscriptionStorefrontScale = () => {
       if (!subscriptionStorefront) return;
       subscriptionStorefront.style.setProperty("--subscription-scale", String(subscriptionStorefront.clientWidth / 440));
@@ -18326,6 +18331,236 @@ function updateCartBadge() {
   let bonusProgramHistoryBound = false;
   let bonusProgramHistoryRestoring = false;
 
+  function openSubscriptionStory() {
+    const slides = (state.homeBonusConfig?.subscription_storefront?.info_slides || [])
+      .filter((item) => item && item.image_url);
+    if (!slides.length) return;
+    const content = document.createElement("div");
+    content.className = "shop-subscription-story-viewer";
+    let index = 0;
+    let startedAt = 0;
+    let timer = null;
+    let paused = false;
+    let pointerStartX = 0;
+    let pointerStartY = 0;
+    let pointerActive = false;
+    let gestureDirection = "";
+    let suppressClick = false;
+    content.innerHTML = '<header class="shop-subscription-story-header"><button type="button" class="shop-subscription-story-back" aria-label="Назад"><i class="fas fa-arrow-left" aria-hidden="true"></i></button><strong>Что такое подписка</strong></header><div class="shop-subscription-story-progress"></div><div class="shop-subscription-story-canvas"><img class="shop-subscription-story-image" alt=""><div class="shop-subscription-story-overlay"><div class="shop-subscription-story-description"></div><button type="button" class="shop-subscription-story-button"></button></div><div class="shop-subscription-story-hit shop-subscription-story-hit-left"></div><div class="shop-subscription-story-hit shop-subscription-story-hit-right"></div></div>';
+    const progress = content.querySelector(".shop-subscription-story-progress");
+    const image = content.querySelector(".shop-subscription-story-image");
+    const overlay = content.querySelector(".shop-subscription-story-overlay");
+    const description = content.querySelector(".shop-subscription-story-description");
+    const button = content.querySelector(".shop-subscription-story-button");
+    const render = () => {
+      const slide = slides[index];
+      const duration = Math.max(1, Number(slide.duration_seconds || 5)) * 1000;
+      image.src = String(slide.image_url);
+      description.textContent = String(slide.description || "");
+      description.classList.toggle("hidden", slide.show_description === false || !String(slide.description || "").trim());
+      button.textContent = String(slide.button_text || "");
+      button.classList.toggle("hidden", slide.show_button === false || !String(slide.button_text || "").trim());
+      button.style.backgroundColor = String(slide.button_color || "#ff6b00");
+      button.style.color = String(slide.button_text_color || "#ffffff");
+      overlay.classList.toggle("has-shadow", slide.show_shadow !== false);
+      progress.innerHTML = slides.map((item, itemIndex) => `<i class="${itemIndex < index ? "is-complete" : itemIndex > index ? "is-pending" : "is-active"}"><b></b></i>`).join("");
+      progress.querySelectorAll("i").forEach((bar, barIndex) => {
+        if (barIndex === index) bar.querySelector("b").style.animationDuration = `${duration}ms`;
+      });
+      clearTimeout(timer);
+      startedAt = Date.now();
+      timer = setTimeout(() => { if (index < slides.length - 1) { index += 1; render(); } else close(); }, duration);
+    };
+    const close = () => {
+      clearTimeout(timer);
+      if (window.matchMedia?.("(min-width: 769px)").matches === true) {
+        document.querySelector(".shop-subscription-story-back")?.click();
+        return;
+      }
+      document.getElementById("shopBonusProgramPage")?.classList.remove("shop-subscription-story-page-active");
+      if (window.history.state?.shopBonusProgramPage === true) window.history.back();
+      else openSubscriptionPage();
+    };
+    content.querySelector(".shop-subscription-story-back").onclick = close;
+    const move = (direction) => {
+      if (direction > 0 && index < slides.length - 1) { index += 1; render(); }
+      else if (direction < 0 && index > 0) { index -= 1; render(); }
+      else if (direction > 0) close();
+    };
+    const pause = () => { if (paused) return; paused = true; clearTimeout(timer); const bar = progress.querySelector("i:nth-child(" + (index + 1) + ") b"); if (bar) bar.style.animationPlayState = "paused"; };
+    const resume = () => { if (!paused) return; paused = false; const elapsed = Date.now() - startedAt; const duration = Math.max(1, Number(slides[index].duration_seconds || 5)) * 1000; timer = setTimeout(() => move(1), Math.max(0, duration - elapsed)); const bar = progress.querySelector("i:nth-child(" + (index + 1) + ") b"); if (bar) bar.style.animationPlayState = "running"; };
+    content.querySelector(".shop-subscription-story-hit-left").onclick = (event) => {
+      if (suppressClick) { suppressClick = false; return; }
+      event.preventDefault();
+      move(-1);
+    };
+    content.querySelector(".shop-subscription-story-hit-right").onclick = (event) => {
+      if (suppressClick) { suppressClick = false; return; }
+      event.preventDefault();
+      move(1);
+    };
+    content.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (event.target.closest("button")) return;
+      pointerStartX = event.clientX;
+      pointerStartY = event.clientY;
+      pointerActive = true;
+      gestureDirection = "";
+      content.setPointerCapture?.(event.pointerId);
+      pause();
+    });
+    content.addEventListener("pointermove", (event) => {
+      if (!pointerActive) return;
+      const deltaX = event.clientX - pointerStartX;
+      const deltaY = event.clientY - pointerStartY;
+      if (!gestureDirection && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 8) {
+        gestureDirection = Math.abs(deltaY) > Math.abs(deltaX) ? "vertical" : "horizontal";
+      }
+      if (gestureDirection !== "vertical") return;
+      const offset = Math.max(0, deltaY);
+      content.style.setProperty("--shop-subscription-story-drag-y", `${offset}px`);
+      content.classList.toggle("is-dragging", offset > 0);
+      event.preventDefault();
+    }, { passive: false });
+    const finishPointer = (event) => {
+      if (!pointerActive) return;
+      const deltaX = event.clientX - pointerStartX;
+      const deltaY = event.clientY - pointerStartY;
+      pointerActive = false;
+      content.releasePointerCapture?.(event.pointerId);
+      if (gestureDirection === "vertical") {
+        suppressClick = true;
+        const shouldClose = deltaY >= Math.max(96, content.clientHeight * 0.18);
+        if (shouldClose) {
+          content.classList.add("is-closing");
+          clearTimeout(timer);
+          window.setTimeout(close, 180);
+        } else {
+          content.classList.remove("is-dragging");
+          content.style.removeProperty("--shop-subscription-story-drag-y");
+          resume();
+        }
+      } else {
+        content.classList.remove("is-dragging");
+        content.style.removeProperty("--shop-subscription-story-drag-y");
+        resume();
+      }
+      gestureDirection = "";
+      if (event.cancelable) event.preventDefault();
+    };
+    content.addEventListener("pointerup", finishPointer, { passive: false });
+    content.addEventListener("pointercancel", (event) => {
+      if (!pointerActive) return;
+      pointerActive = false;
+      content.classList.remove("is-dragging");
+      content.style.removeProperty("--shop-subscription-story-drag-y");
+      gestureDirection = "";
+      resume();
+      content.releasePointerCapture?.(event.pointerId);
+    });
+    content.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+    });
+    if (window.matchMedia?.("(min-width: 769px)").matches === true && window.AppModal?.isOpen?.() && window.AppModal?.body) {
+      const subscriptionPage = window.AppModal.body.firstElementChild;
+      const title = document.querySelector(".app-modal-title");
+      const actions = document.querySelector(".app-modal-actions");
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "btn btn-icon shop-subscription-story-back";
+      back.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      back.onclick = () => { window.AppModal.body.replaceChildren(subscriptionPage); title?.replaceChildren(document.createTextNode("Подписка")); document.querySelector(".app-modal-header")?.classList.remove("hidden"); back.remove(); };
+      if (actions && title) actions.closest(".app-modal-header")?.insertBefore(back, title);
+      window.AppModal.body.replaceChildren(content);
+      document.querySelector(".app-modal-header")?.classList.add("hidden");
+      title?.replaceChildren(document.createTextNode("Что такое подписка"));
+      render();
+      return;
+    }
+    const subscriptionPage = document.getElementById("shopBonusProgramPage");
+    const subscriptionContent = subscriptionPage?.querySelector("[data-bonus-program-page-content]");
+    const subscriptionBackground = subscriptionContent?.firstElementChild;
+    const storyShell = document.createElement("div");
+    storyShell.className = "shop-subscription-story-shell";
+    if (subscriptionBackground) storyShell.appendChild(subscriptionBackground);
+    storyShell.appendChild(content);
+    showBonusProgramPage({ title: "Подписка", content: storyShell, onBack: close, screen: "subscription-story" });
+    subscriptionPage?.classList.add("shop-subscription-story-page-active");
+    render();
+  }
+
+  function openSubscriptionPage() {
+    const storefront = state.homeBonusConfig?.subscription_storefront || {};
+    const faqItems = Array.isArray(storefront.faq_items)
+      ? storefront.faq_items.filter((item) => item && (item.question || item.answer))
+      : [];
+    const buildFaqContent = () => {
+      const content = document.createElement("div");
+      content.className = "shop-subscription-page-empty";
+      const firstSlide = Array.isArray(storefront.info_slides)
+        ? storefront.info_slides.find((item) => item && item.image_url)
+        : null;
+      if (firstSlide) {
+        const storySlideCount = storefront.info_slides.filter((item) => item && item.image_url).length;
+        content.innerHTML = `<div class="shop-subscription-story-preview" aria-label="Что такое подписка"><div class="shop-subscription-story-ring" style="--story-count:${storySlideCount}"><img src="${escapeHtml(String(firstSlide.image_url))}" alt=""></div><strong>Что такое подписка</strong></div>`;
+      }
+      if (faqItems.length) {
+        content.innerHTML += `<section class="shop-subscription-faq"><h2>${escapeHtml(String(storefront.faq_title || "Часто задаваемые вопросы"))}</h2>${faqItems.map((item) => `<details class="shop-subscription-faq-item"><summary>${escapeHtml(String(item.question || ""))}</summary><div>${escapeHtml(String(item.answer || "")).replace(/\n/g, "<br>")}</div></details>`).join("")}</section>`;
+      }
+      const storyPreview = content.querySelector(".shop-subscription-story-preview");
+      const openStoryFromPreview = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openSubscriptionStory();
+      };
+      storyPreview?.addEventListener("click", openStoryFromPreview);
+      storyPreview?.querySelector(".shop-subscription-story-ring")?.addEventListener("click", openStoryFromPreview);
+      return content;
+    };
+    const isDesktopModal = window.matchMedia?.("(min-width: 769px)").matches === true
+      && window.AppModal?.isOpen?.()
+      && !!window.AppModal?.body;
+    if (isDesktopModal) {
+      const profilePage = document.getElementById("shopProfilePage");
+      if (!profilePage) return;
+      const page = document.createElement("section");
+      page.className = "shop-profile-content shop-subscription-page";
+      page.innerHTML = '<div class="shop-profile-page-content"></div>';
+      const modalHeader = document.querySelector(".app-modal-header");
+      const modalTitle = document.querySelector(".app-modal-title");
+      const modalActions = document.querySelector(".app-modal-actions");
+      const settingsButton = modalActions?.querySelector("#shopProfileModalSettingsBtn");
+      const closeButton = modalActions?.querySelector(".app-modal-close, [data-modal-close], #appModalCloseBtn");
+      const backButton = document.createElement("button");
+      backButton.type = "button";
+      backButton.className = "btn btn-icon shop-subscription-page-back";
+      backButton.setAttribute("aria-label", "Назад");
+      backButton.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      const restoreProfile = () => {
+        settingsButton?.classList.remove("hidden");
+        closeButton?.classList.remove("hidden");
+        window.AppModal.body.replaceChildren(profilePage);
+        modalTitle?.replaceChildren(document.createTextNode("Профиль"));
+        backButton.remove();
+        page.remove();
+      };
+      backButton.addEventListener("click", restoreProfile, { once: true });
+      if (modalHeader && modalTitle && modalActions) modalHeader.insertBefore(backButton, modalTitle);
+      settingsButton?.classList.add("hidden");
+      closeButton?.classList.add("hidden");
+      window.AppModal.body.replaceChildren(page);
+      page.querySelector(".shop-profile-page-content")?.replaceChildren(buildFaqContent());
+      modalTitle?.replaceChildren(document.createTextNode("Подписка"));
+      return;
+    }
+    showBonusProgramPage({
+      title: "Подписка",
+      content: buildFaqContent(),
+      onBack: closeBonusProgramPageToProfile,
+      screen: "subscription",
+    });
+  }
+
   function getBonusProgramLevelById(levelId = null) {
     const numericLevelId = Number(levelId || 0);
     const levels = Array.isArray(state.homeBonusConfig?.levels) ? state.homeBonusConfig.levels : [];
@@ -18335,6 +18570,16 @@ function updateCartBadge() {
   }
 
   function requestBonusProgramHistoryBack() {
+    const page = document.getElementById("shopBonusProgramPage");
+    if (page?.dataset.bonusProgramScreen === "subscription") {
+      const currentHistoryState = window.history.state;
+      if (currentHistoryState?.shopBonusProgramPage === true) {
+        const { shopBonusProgramPage, shopBonusProgramScreen, shopBonusProgramLevelId, ...restHistoryState } = currentHistoryState;
+        window.history.replaceState(restHistoryState, "", window.location.href);
+      }
+      closeBonusProgramPageToProfile();
+      return;
+    }
     if (window.history.state?.shopBonusProgramPage === true) {
       window.history.back();
       return;
@@ -18347,7 +18592,8 @@ function updateCartBadge() {
     const level = getBonusProgramLevelById(historyState?.shopBonusProgramLevelId);
     bonusProgramHistoryRestoring = true;
     try {
-      if (screen === "referrals") openHomeReferralsSheet({ returnToProfile: true });
+      if (screen === "subscription") openSubscriptionPage();
+      else if (screen === "referrals") openHomeReferralsSheet({ returnToProfile: true });
       else if (screen === "levels") openHomeBonusCardsSheet({ sourceLevel: level });
       else if (screen === "accruals") void openHomeBonusAccrualsSheet({ sourceLevel: level, returnToProfile: true });
       else if (screen === "cashback") openHomeBonusCashbackSheet(level, { returnToProfile: true });
