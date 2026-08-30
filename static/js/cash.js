@@ -2253,10 +2253,19 @@
         var expense = state.activeExpenseDocument;
         var items = Array.isArray(expense.items) ? expense.items : [];
         var receiptData = expense.receiptData || {};
+        var manualData = expense.manualData || {};
         var operationType = ({ 1: 'Приход', 2: 'Возврат прихода', 3: 'Расход', 4: 'Возврат расхода' })[Number(receiptData.operationType)] || '—';
         var taxationType = ({ 1: 'ОСН', 2: 'УСН', 4: 'УСН доходы − расходы', 8: 'ЕНВД', 16: 'ЕСХН', 32: 'ПСН' })[Number(receiptData.appliedTaxationType)] || '—';
         if (cashOrderTabsHeaderEl) cashOrderTabsHeaderEl.classList.add('hidden');
         if (cashOrderInfoRootEl) cashOrderInfoRootEl.classList.add('hidden');
+        if (String(expense.document.source_type || '') === 'manual') {
+          if (sidebarSummaryEl) {
+            sidebarSummaryEl.classList.remove('cash-expense-receipt');
+            sidebarSummaryEl.classList.remove('hidden');
+            sidebarSummaryEl.innerHTML = '<div class="cash-balance-card"><div class="cash-balance-card-title">Ручной документ расхода</div><div class="cash-balance-metrics"><div class="cash-balance-metric"><span>Тип документа</span><strong>' + escapeHtml(manualData.documentType || '—') + '</strong></div><div class="cash-balance-metric"><span>Номер документа</span><strong>' + escapeHtml(manualData.documentNumber || '—') + '</strong></div><div class="cash-balance-metric"><span>Поставщик</span><strong>' + escapeHtml(expense.document.supplier_name || '—') + '</strong></div><div class="cash-balance-metric"><span>ИНН</span><strong>' + escapeHtml(expense.document.supplier_inn || '—') + '</strong></div><div class="cash-balance-metric"><span>Дата документа</span><strong>' + escapeHtml(expense.document.receipt_datetime || '—') + '</strong></div><div class="cash-balance-metric"><span>Итого</span><strong>' + escapeHtml(money(Number(expense.document.total_sum_kopecks || 0) / 100)) + '</strong></div></div></div><div class="cash-balance-card"><div class="cash-balance-card-title">Позиции</div><div class="cash-balance-metrics">' + (items.length ? items.map(function (item) { return '<div class="cash-balance-metric"><span>' + escapeHtml(item.item_name) + '</span><strong>' + escapeHtml(String(item.quantity || '—') + ' × ' + money(Number(item.price_kopecks || 0) / 100) + ' · ' + money(Number(item.sum_kopecks || 0) / 100)) + '</strong></div>'; }).join('') : '<div class="cash-balance-metric"><span>Не указаны</span></div>') + '</div></div>';
+          }
+          return;
+        }
         if (sidebarSummaryEl) {
           sidebarSummaryEl.classList.remove('hidden');
           sidebarSummaryEl.innerHTML = '<div class="cash-balance-card"><div class="cash-balance-card-title">Документ расхода</div><div class="cash-balance-metrics"><div class="cash-balance-metric"><span>Продавец</span><strong>' + escapeHtml(expense.document.supplier_name || '—') + '</strong></div><div class="cash-balance-metric"><span>ИНН</span><strong>' + escapeHtml(expense.document.supplier_inn || '—') + '</strong></div><div class="cash-balance-metric"><span>Место расчёта</span><strong>' + escapeHtml(receiptData.retailPlace || expense.document.retail_place || '—') + '</strong></div><div class="cash-balance-metric"><span>Адрес</span><strong>' + escapeHtml(receiptData.retailPlaceAddress || expense.document.retail_place_address || '—') + '</strong></div><div class="cash-balance-metric"><span>Дата и время</span><strong>' + escapeHtml(expense.document.receipt_datetime || '—') + '</strong></div><div class="cash-balance-metric"><span>Тип операции</span><strong>' + escapeHtml(operationType) + '</strong></div><div class="cash-balance-metric"><span>Чек № / смена</span><strong>' + escapeHtml(String(receiptData.requestNumber || '—') + ' / ' + String(receiptData.shiftNumber || '—')) + '</strong></div><div class="cash-balance-metric"><span>Кассир</span><strong>' + escapeHtml(receiptData.operator || '—') + '</strong></div><div class="cash-balance-metric"><span>Наличные / карта</span><strong>' + escapeHtml(money(Number(receiptData.cashTotalSum || 0) / 100) + ' / ' + money(Number(receiptData.ecashTotalSum || 0) / 100)) + '</strong></div><div class="cash-balance-metric"><span>Налогообложение</span><strong>' + escapeHtml(taxationType) + '</strong></div><div class="cash-balance-metric"><span>Рег. № / заводской № ККТ</span><strong>' + escapeHtml(String(receiptData.kktRegId || '—') + ' / ' + String(receiptData.numberKkt || '—')) + '</strong></div><div class="cash-balance-metric"><span>ФН / ФД / ФП</span><strong>' + escapeHtml([expense.document.fiscal_drive_number, expense.document.fiscal_document_number, expense.document.fiscal_sign].join(' / ')) + '</strong></div><div class="cash-balance-metric"><span>Итого</span><strong>' + escapeHtml(money(Number(expense.document.total_sum_kopecks || 0) / 100)) + '</strong></div></div></div><div class="cash-balance-card"><div class="cash-balance-card-title">Позиции</div><div class="cash-balance-metrics">' + items.map(function (item) { return '<div class="cash-balance-metric"><span>' + escapeHtml(item.item_name) + '</span><strong>' + escapeHtml(String(item.quantity || '—') + ' × ' + money(Number(item.price_kopecks || 0) / 100) + ' · ' + money(Number(item.sum_kopecks || 0) / 100)) + '</strong></div>'; }).join('') + '</div></div>';
@@ -2404,8 +2413,10 @@
           var expenseDateTime = window.matchMedia('(max-width: 768px)').matches
             ? formatDateTime(documentDateTime).split(',')[0]
             : formatDateTime(documentDateTime).replace(', ', '\nВремя: ');
-          var supplierName = formatExpenseSupplierName(document.supplier_name);
-          var expenseDetails = [supplierName, document.retail_place || 'Место расчёта не указано', document.supplier_inn ? 'ИНН ' + document.supplier_inn : 'ИНН не указан'].join(' · ');
+          var supplierName = formatExpenseSupplierName(document.supplier_name || (document.source_type === 'manual' ? 'Ручной документ' : ''));
+          var expenseDetails = document.source_type === 'manual'
+            ? [supplierName, document.supplier_inn ? 'ИНН ' + document.supplier_inn : 'ИНН не указан'].join(' · ')
+            : [supplierName, document.retail_place || 'Место расчёта не указано', document.supplier_inn ? 'ИНН ' + document.supplier_inn : 'ИНН не указан'].join(' · ');
           return '<div class="cash-expense-document-row"><button class="cash-journal-entry" type="button" data-expense-document-id="' + String(document.id) + '"><div class="cash-journal-entry-icon"><i class="fas fa-receipt"></i></div><time class="cash-expense-document-date">' + escapeHtml(expenseDateTime) + '</time><div class="cash-journal-entry-main"><div class="cash-journal-entry-top"><strong>' + escapeHtml(expenseDetails) + '</strong></div></div><div class="cash-journal-entry-amount is-negative">-' + escapeHtml(money(Number(document.total_sum_kopecks || 0) / 100)) + '</div></button><button class="btn btn-icon cash-expense-document-delete" type="button" data-expense-document-delete-id="' + String(document.id) + '" aria-label="Удалить документ"><i class="fas fa-trash"></i><span>Удалить</span></button></div>';
         }).join('');
         if (journalEmptyEl) { journalEmptyEl.textContent = 'Документов расходов пока нет'; journalEmptyEl.classList.toggle('hidden', state.expenseDocuments.length > 0); }
@@ -3307,7 +3318,7 @@
           renderRightPane();
           if (window.matchMedia('(max-width: 768px)').matches && window.AppModal && sidebarSummaryEl) {
             window.AppModal.open({
-              title: 'Фискальный чек',
+              title: payload.document?.source_type === 'manual' ? 'Документ расхода' : 'Фискальный чек',
               content: '<div class="cash-expense-receipt">' + sidebarSummaryEl.innerHTML + '</div>',
               showSave: false,
               showCancel: false,

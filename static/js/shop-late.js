@@ -42981,6 +42981,17 @@ function initShopLate() {
       }
 
       window.openShopActiveOrderDetails = showActiveOrderDetails;
+      try {
+        const pushUrl = new URL(window.location.href);
+        const pushOrderId = Number(pushUrl.searchParams.get("order_id") || 0);
+        const openFromPush = pushUrl.searchParams.get("open_order") === "1";
+        if (openFromPush && pushOrderId > 0) {
+          pushUrl.searchParams.delete("open_order");
+          pushUrl.searchParams.delete("order_id");
+          window.history.replaceState(window.history.state, "", pushUrl.pathname + pushUrl.search + pushUrl.hash);
+          window.setTimeout(() => { void showActiveOrderDetails(pushOrderId); }, 0);
+        }
+      } catch {}
 
       // Обработчик клика на десктоп бейдж
       if (elActiveOrdersBadge) {

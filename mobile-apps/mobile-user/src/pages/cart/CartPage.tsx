@@ -1774,12 +1774,21 @@ export function CartPage() {
       if (stockState.lines.some((line) => line.isUnavailable === true)) return;
     }
     if (stockCheck && stockCheck.available === false) return;
+    const checkoutSelection = {
+      ...selection,
+      addressId: selection.mode === 'delivery'
+        ? selection.addressId || toPositiveId(selectedAddress?.id)
+        : null,
+      pickupStoreId: selection.mode === 'pickup'
+        ? selection.pickupStoreId || toPositiveId(selectedStore?.id)
+        : null,
+    };
     await Promise.all([
-      saveFulfillmentSelection(selection),
+      saveFulfillmentSelection(checkoutSelection),
       saveCheckoutCartSummary(cartSummary),
     ]);
     navigation.navigate(routes.checkout);
-  }, [cartSummary, hasActiveLines, hasProblemLines, lines, mergeStockRows, navigation, refreshMany, selection, stockLevels]);
+  }, [cartSummary, hasActiveLines, hasProblemLines, lines, mergeStockRows, navigation, refreshMany, selectedAddress?.id, selectedStore?.id, selection, stockLevels]);
 
   const openBenefitPage = useCallback((page: keyof CartBenefitsCounts) => {
     if (page === 'discounts') {

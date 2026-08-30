@@ -9339,6 +9339,26 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   padding-right: 120px;
 }
 
+.shop-company-chat-mobile-context-scene__clone.is-agent .shop-company-chat-text,
+.shop-company-chat-mobile-context-scene__clone.is-agent .shop-company-chat-reply-snippet{
+  padding-right: 46px;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-user .shop-company-chat-text,
+.shop-company-chat-mobile-context-scene__clone.is-user .shop-company-chat-reply-snippet{
+  padding-right: 88px;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-agent.is-edited .shop-company-chat-text,
+.shop-company-chat-mobile-context-scene__clone.is-agent.is-edited .shop-company-chat-reply-snippet{
+  padding-right: 78px;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-user.is-edited .shop-company-chat-text,
+.shop-company-chat-mobile-context-scene__clone.is-user.is-edited .shop-company-chat-reply-snippet{
+  padding-right: 120px;
+}
+
 .shop-company-chat-reply-snippet[data-reply-jump-id]{
   cursor: pointer;
 }
@@ -10041,7 +10061,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   -webkit-backdrop-filter: blur(14px) saturate(118%);
   opacity: 0;
   pointer-events: auto;
-  transition: opacity .34s cubic-bezier(.22,.61,.36,1);
+  transition: opacity .26s cubic-bezier(.215,.61,.355,1);
 }
 
 .shop-company-chat-mobile-context-scene.is-open .shop-company-chat-mobile-context-scene__backdrop{
@@ -10062,7 +10082,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
   transform-style: preserve-3d;
-  contain: layout paint style;
+  contain: layout style;
 }
 
 .shop-company-chat-mobile-context-scene__clone > .shop-company-chat-bubble{

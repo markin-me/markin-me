@@ -567,9 +567,10 @@
 
   const LONG_PRESS_MS = 430;
   const LONG_PRESS_MOVE_CANCEL_PX = 14;
-  const MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS = 140;
+  const MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS = 90;
+  const MOBILE_CONTEXT_MENU_OPEN_DELAY_MS = 670;
   const MOBILE_CONTEXT_RELAYOUT_LOCK_MS = 260;
-  const MOBILE_CONTEXT_CLONE_OPEN_TRANSITION = "transform .46s cubic-bezier(.22,.61,.36,1)";
+  const MOBILE_CONTEXT_CLONE_OPEN_TRANSITION = "transform .6s cubic-bezier(.22,1,.36,1)";
   const MOBILE_CONTEXT_CLONE_RELAYOUT_TRANSITION = "transform .26s cubic-bezier(.22,.61,.36,1)";
   const SWIPE_REPLY_TRIGGER = 56;
   const HEART_DOUBLE_TAP_MS = 280;
@@ -9121,7 +9122,7 @@
       ui.root.classList.remove("is-open");
       ui.root.classList.add("hidden");
       if (ui.cloneHost) {
-        ui.cloneHost.classList.remove("is-user", "is-agent");
+        ui.cloneHost.classList.remove("is-user", "is-agent", "is-edited");
         if (typeof ui.cloneHost.replaceChildren === "function") {
           ui.cloneHost.replaceChildren();
         } else {
@@ -9158,6 +9159,7 @@
       contextMenuEl.classList.remove("hidden");
       contextMenuEl.style.visibility = "hidden";
       contextMenuEl.style.opacity = "0";
+      contextMenuEl.style.transform = "translate3d(0, 12px, 0) scale(.96)";
     }
     const menuRect = contextMenuEl.getBoundingClientRect();
     const menuWidth = Math.max(0, Number(menuRect.width || 0));
@@ -9200,7 +9202,12 @@
       )
     );
     const originTranslateX = Number(bubbleRect.left) - Number(targetBubbleLeft);
-    const originTranslateY = Number(bubbleRect.top) - Number(targetBubbleTop);
+    const measuredOriginTranslateY = Number(bubbleRect.top) - Number(targetBubbleTop);
+    // When the menu already fits below the bubble, the target equals the
+    // source position. Keep a small visible lift instead of a static clone.
+    const originTranslateY = Math.abs(measuredOriginTranslateY) < 0.5
+      ? 12
+      : measuredOriginTranslateY;
     const startScale = 1;
     const opts = options && typeof options === "object" ? options : {};
     const relayoutLocked = Number(scene.relayoutUnlockAt || 0) > Date.now();
@@ -9237,8 +9244,9 @@
       if (mobileContextSceneState !== scene) return;
       if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
       contextMenuEl.style.visibility = "";
-      contextMenuEl.style.transition = "opacity .18s ease";
+      contextMenuEl.style.transition = "opacity .24s cubic-bezier(.215,.61,.355,1), transform .24s cubic-bezier(.215,.61,.355,1)";
       contextMenuEl.style.opacity = "1";
+      contextMenuEl.style.transform = "translate3d(0, 0, 0) scale(1)";
     };
 
     if (shouldAnimateRelayout && hasPrevCloneRect) {
@@ -9290,7 +9298,7 @@
       contextMenuEl.__mobileSceneMenuFadeTimer = window.setTimeout(function () {
         contextMenuEl.__mobileSceneMenuFadeTimer = 0;
         revealContextMenu();
-      }, MOBILE_CONTEXT_MENU_APPEAR_DELAY_MS);
+      }, MOBILE_CONTEXT_MENU_OPEN_DELAY_MS);
       scene.relayoutUnlockAt = Date.now() + MOBILE_CONTEXT_RELAYOUT_LOCK_MS;
       scene.isOpen = true;
     });
@@ -9314,12 +9322,20 @@
     const ui = ensureMobileContextSceneUi();
     if (!ui || !ui.cloneHost) return false;
 
+    // On iOS a backdrop-filter in the chat overlay can be composited above a
+    // fixed menu mounted directly under body. Keep the same menu in the
+    // overlay's stacking context, above the mobile scene.
+    if (contextMenuEl.parentElement !== overlay) {
+      overlay.appendChild(contextMenuEl);
+    }
+
     const bubbleClone = source.bubble.cloneNode(true);
     bubbleClone.classList.add("shop-company-chat-bubble--mobile-context-clone");
     bubbleClone.setAttribute("aria-hidden", "true");
     const isOutgoing = source.row.classList.contains("is-user");
     ui.cloneHost.classList.toggle("is-user", isOutgoing);
     ui.cloneHost.classList.toggle("is-agent", !isOutgoing);
+    ui.cloneHost.classList.toggle("is-edited", source.row.classList.contains("is-edited"));
     if (typeof ui.cloneHost.replaceChildren === "function") {
       ui.cloneHost.replaceChildren(bubbleClone);
     } else {
@@ -9362,6 +9378,7 @@
     contextMenuEl.style.visibility = "";
     contextMenuEl.style.opacity = "";
     contextMenuEl.style.transition = "";
+    contextMenuEl.style.transform = "";
     contextMenuEl.style.left = "";
     contextMenuEl.style.top = "";
     contextMenuMessageId = "";
@@ -11687,6 +11704,7 @@
   function setContextMenuReactionsExpanded(expanded) {
     if (!contextMenuEl) return;
     const isExpanded = !!expanded;
+    const wasExpanded = contextMenuEl.classList.contains("is-reactions-expanded");
     const scheduleContextSceneRelayout = function (doubleFrame) {
       requestAnimationFrame(function () {
         const run = function () {
@@ -11711,7 +11729,9 @@
       }).catch(function () {});
     }
     contextMenuEl.classList.toggle("is-reactions-expanded", isExpanded);
-    scheduleContextSceneRelayout(true);
+    if (wasExpanded !== isExpanded) {
+      scheduleContextSceneRelayout(true);
+    }
     const toggleBtn = contextMenuEl.querySelector('[data-chat-msg-reaction="__toggle_more__"]');
     if (!toggleBtn) return;
     toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
@@ -14230,6 +14250,18 @@
         openImportantMessagesFromRequest(payload, { clearLocation: false });
         return;
       }
+      if (eventType === "order-status-notification-click") {
+        const orderId = Number(payload && (payload.order_id || payload.orderId) || 0);
+        if (!(orderId > 0)) return;
+        const openOrderDetails = function () {
+          if (typeof window.openShopActiveOrderDetails === "function") {
+            window.openShopActiveOrderDetails(orderId);
+          }
+        };
+        if (typeof window.openShopActiveOrderDetails === "function") openOrderDetails();
+        else if (typeof window.ensureShopLateLoaded === "function") window.ensureShopLateLoaded().then(openOrderDetails).catch(function () {});
+        return;
+      }
       if (eventType !== "chat-notification-click") return;
       queuePushChatOpenRequest(payload, { clearLocation: false });
     });
@@ -15480,7 +15512,12 @@
     saveFeedScrollPosition();
     syncPendingFeedCountByViewport();
     scheduleVisibleChatReadSync();
-    hideContextMenu();
+    // iOS can emit a scroll event from the tiny finger movement that starts a
+    // long press. The mobile context scene owns that gesture, so do not close
+    // it immediately after it has opened.
+    if (!mobileContextSceneState) {
+      hideContextMenu();
+    }
     if (!reactionBar.classList.contains("hidden")) {
       hideReactionBar();
     }

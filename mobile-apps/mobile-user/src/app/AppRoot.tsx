@@ -294,6 +294,7 @@ const supportChatTransitionEasing = Platform.OS === 'android'
 
 type PushTarget =
   | { screen: 'importantMessages'; importantMessageId?: number }
+  | { screen: 'orderDetails'; orderId: number }
   | { screen: 'supportChat' };
 
 function getImportantMessagePushId(data: Record<string, unknown>) {
@@ -301,6 +302,12 @@ function getImportantMessagePushId(data: Record<string, unknown>) {
     ?? data.importantMessageId
     ?? data.promo_message_id
     ?? data.promoMessageId;
+  const id = Number(value || 0);
+  return Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
+}
+
+function getOrderPushId(data: Record<string, unknown>) {
+  const value = data.order_id ?? data.orderId;
   const id = Number(value || 0);
   return Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
 }
@@ -703,6 +710,10 @@ export function AppRoot() {
       navigationRef.navigate(routes.supportChat);
       return;
     }
+    if (target.screen === 'orderDetails') {
+      navigationRef.navigate(routes.orderDetails, { orderId: target.orderId });
+      return;
+    }
     navigationRef.navigate('main', {
       screen: routes.chat,
       params: getChatStackParams(target),
@@ -712,6 +723,11 @@ export function AppRoot() {
   const handlePushNotificationPress = useCallback((data: Record<string, unknown>) => {
     const type = String(data.type || data.kind || data.route || data.target || '').toLowerCase();
     const url = String(data.url || '').toLowerCase();
+    const orderId = getOrderPushId(data);
+    if (type === 'order_status' || type.includes('order_status') || (orderId > 0 && url.includes('order'))) {
+      if (orderId > 0) navigateToPushTarget({ screen: 'orderDetails', orderId });
+      return;
+    }
     if (
       type.includes('important')
       || type.includes('promo')
