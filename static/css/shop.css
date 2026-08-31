@@ -20479,7 +20479,7 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
     display: none !important;
   }
 
-  body.shop-company-chat-page-active .shop-mobile-bottom-container,
+  body.shop-company-chat-page-active:not(.shop-company-messages-root-active) .shop-mobile-bottom-container,
   body.shop-company-chat-page-active #shopCatChipsWrap,
   body.shop-company-chat-page-active .shop-category-subcategory-row{
     display: none !important;
@@ -20488,6 +20488,15 @@ body.page-shop.shop-catalog-tab-active #shopCatalogPromoBlock{
   body.shop-company-chat-page-active .shop-company-chat-overlay{
     z-index: 10100;
     background: var(--color-surface-2);
+    transition: none;
+  }
+
+  body.shop-company-chat-page-active.shop-company-messages-root-active .shop-company-chat-overlay{
+    z-index: 139;
+  }
+
+  body.shop-company-chat-page-active.shop-company-messages-root-active .shop-mobile-bottom-container{
+    z-index: 141;
   }
 
   body.shop-company-chat-page-active .shop-company-chat-modal{

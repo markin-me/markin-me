@@ -42030,24 +42030,69 @@ function initShopLate() {
         && window.matchMedia?.("(max-width: 768px)").matches === true;
       let shopRootHistoryRestoring = false;
       let shopExitPromptOpen = false;
+      const shopRootTransientHistoryKeys = [
+        "sheet",
+        "shopBack",
+        "shopCompanyChatPage",
+        "shopCompanyMessagesScreen",
+        "shopImportantMessageId",
+        "shopAddressPage",
+        "shopAddressFormPage",
+        "shopAddressSource",
+        "shopCartCheckout",
+        "shopCheckoutSelection",
+        "shopCheckoutAuthPage",
+        "shopBenefitsPage",
+        "shopBenefitsSource",
+        "shopCategoriesPage",
+        "shopFavoritesPage",
+        "shopFavoritesSource",
+        "shopOrdersPage",
+        "shopOrderDetails",
+        "shopOrdersSource",
+      ];
+      const buildShopRootHistoryState = (screen, extraState = {}) => {
+        const nextState = window.history.state && typeof window.history.state === "object"
+          ? { ...window.history.state }
+          : {};
+        shopRootTransientHistoryKeys.forEach((key) => delete nextState[key]);
+        return {
+          ...nextState,
+          shopRootPage: true,
+          shopRootScreen: String(screen || "home"),
+          shopRootGuard: false,
+          ...extraState,
+        };
+      };
+      window.buildShopRootHistoryState = buildShopRootHistoryState;
       const getShopRootScreen = () => String(window.history.state?.shopRootScreen || "home");
       const pushShopRootScreen = (screen) => {
         if (!shopRootHistoryEnabled || shopRootHistoryRestoring) return;
         const nextScreen = String(screen || "home");
         const currentState = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
-        if (currentState.shopRootPage === true && String(currentState.shopRootScreen || "home") === nextScreen) return;
-        window.history.pushState({
-          ...currentState,
-          shopRootPage: true,
-          shopRootScreen: nextScreen,
-          shopRootGuard: false,
-        }, "", window.location.href);
+        const nextState = buildShopRootHistoryState(nextScreen);
+        if (currentState.shopRootPage === true && String(currentState.shopRootScreen || "home") !== "home") {
+          window.history.replaceState(nextState, "", window.location.href);
+          return;
+        }
+        if (currentState.shopRootPage === true && String(currentState.shopRootScreen || "home") === nextScreen) {
+          window.history.replaceState(nextState, "", window.location.href);
+          return;
+        }
+        window.history.pushState(nextState, "", window.location.href);
       };
       window.pushShopRootScreen = pushShopRootScreen;
 
       const showShopRootHome = () => {
         document.getElementById("shopCartPage")?.classList.add("hidden");
         document.body?.classList.remove("shop-cart-page-active");
+        if (!document.getElementById("shopCompanyChatOverlay")?.classList.contains("is-open")) {
+          document.body?.classList.remove(
+            "shop-company-chat-open",
+            "shop-company-chat-page-active",
+            "shop-company-messages-root-active"
+          );
+        }
         if (document.body?.classList.contains("shop-profile-page-active")) showCartView();
         setActiveNav("menu");
         queueMobileUiStateSync("shop-root-history-home");
@@ -42103,7 +42148,6 @@ function initShopLate() {
       if (shopRootHistoryEnabled) {
         elNavCart?.addEventListener("click", () => pushShopRootScreen("cart"), { capture: true });
         elNavProfile?.addEventListener("click", () => pushShopRootScreen("profile"), { capture: true });
-        document.getElementById("shopCompanyChatOpenBtn")?.addEventListener("click", () => pushShopRootScreen("chat"), { capture: true });
         elNavMenu?.addEventListener("click", (event) => {
           if (getShopRootScreen() === "home") return;
           event.preventDefault();

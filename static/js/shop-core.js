@@ -18360,6 +18360,95 @@ function updateCartBadge() {
   let bonusProgramPageLevel = null;
   let bonusProgramHistoryBound = false;
   let bonusProgramHistoryRestoring = false;
+  let subscriptionStoryCloseFromHistory = null;
+  let subscriptionInterestCacheKey = "";
+  let subscriptionInterestCacheData = null;
+  let subscriptionInterestLoading = null;
+  let subscriptionInterestStorageKey = "";
+
+  function getSubscriptionInterestCacheKey() {
+    return `${Number(getActiveStoreId() || 0)}:${String(getCustomerToken() || "")}`;
+  }
+
+  function getSubscriptionInterestStorageKey() {
+    const customerId = Number(getCustomerCache()?.id || 0);
+    if (!(customerId > 0)) return "";
+    return `shop_subscription_interest_cache_v1_t${tenantId}_s${Number(getActiveStoreId() || 0)}_c${customerId}`;
+  }
+
+  function readStoredSubscriptionInterestCache() {
+    const storageKey = getSubscriptionInterestStorageKey();
+    subscriptionInterestStorageKey = storageKey;
+    if (!storageKey) return null;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(storageKey) || "null");
+      if (!parsed || !parsed.data) {
+        localStorage.removeItem(storageKey);
+        return null;
+      }
+      return parsed.data;
+    } catch {
+      try { localStorage.removeItem(storageKey); } catch {}
+      return null;
+    }
+  }
+
+  function setSubscriptionInterestCache(data, options = {}) {
+    const normalized = data && typeof data === "object"
+      ? {
+          ...data,
+          interested: data.interested === true,
+          notifications_enabled: data.notifications_enabled === true,
+        }
+      : { interested: false, notifications_enabled: false };
+    subscriptionInterestCacheKey = getSubscriptionInterestCacheKey();
+    subscriptionInterestCacheData = normalized;
+    const storageKey = getSubscriptionInterestStorageKey();
+    subscriptionInterestStorageKey = storageKey;
+    if (storageKey && options.persist !== false) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify({
+          data: normalized,
+        }));
+      } catch {}
+    }
+    return normalized;
+  }
+
+  async function loadSubscriptionInterestState(options = {}) {
+    const cacheKey = getSubscriptionInterestCacheKey();
+    const force = options?.force === true;
+    if (subscriptionInterestCacheKey !== cacheKey) {
+      subscriptionInterestCacheKey = cacheKey;
+      subscriptionInterestCacheData = null;
+      subscriptionInterestLoading = null;
+    }
+    if (!force && subscriptionInterestCacheData) return subscriptionInterestCacheData;
+    if (!force) {
+      const stored = readStoredSubscriptionInterestCache();
+      if (stored) return setSubscriptionInterestCache(stored);
+    }
+    if (!force && subscriptionInterestLoading) return subscriptionInterestLoading;
+    const loading = apiJson("/api/public/bonus/subscription-interest")
+      .then((payload) => setSubscriptionInterestCache(payload?.data));
+    subscriptionInterestLoading = loading;
+    try {
+      return await loading;
+    } finally {
+      if (subscriptionInterestLoading === loading) subscriptionInterestLoading = null;
+    }
+  }
+
+  window.invalidateShopSubscriptionInterestCache = () => {
+    const storageKeys = [subscriptionInterestStorageKey, getSubscriptionInterestStorageKey()].filter(Boolean);
+    storageKeys.forEach((storageKey) => {
+      try { localStorage.removeItem(storageKey); } catch {}
+    });
+    subscriptionInterestCacheKey = "";
+    subscriptionInterestCacheData = null;
+    subscriptionInterestLoading = null;
+    subscriptionInterestStorageKey = "";
+  };
 
   async function openSubscriptionInterestPrompt(slide, trackEvent, options = {}) {
     const onCancel = typeof options.onCancel === "function" ? options.onCancel : () => {};
@@ -18433,7 +18522,7 @@ function updateCartBadge() {
   function openSubscriptionStory() {
     const slides = (state.homeBonusConfig?.subscription_storefront?.info_slides || [])
       .filter((item) => item && item.image_url);
-    if (!slides.length) return;
+    if (!slides.length || document.querySelector(".shop-subscription-story-viewer")) return;
     const content = document.createElement("div");
     content.className = "shop-subscription-story-viewer";
     let index = 0;
@@ -18446,6 +18535,7 @@ function updateCartBadge() {
     let gestureDirection = "";
     let suppressClick = false;
     let descriptionExpanded = false;
+    let storyClosed = false;
     content.innerHTML = '<header class="shop-subscription-story-header"><button type="button" class="shop-subscription-story-back" aria-label="Назад"><i class="fas fa-arrow-left" aria-hidden="true"></i></button><strong>Что такое подписка</strong></header><div class="shop-subscription-story-progress"></div><div class="shop-subscription-story-canvas"><img class="shop-subscription-story-image" alt=""><div class="shop-subscription-story-overlay"><div class="shop-subscription-story-description"></div><button type="button" class="shop-subscription-story-button"></button></div><div class="shop-subscription-story-hit shop-subscription-story-hit-left"></div><div class="shop-subscription-story-hit shop-subscription-story-hit-right"></div></div>';
     const progress = content.querySelector(".shop-subscription-story-progress");
     const image = content.querySelector(".shop-subscription-story-image");
@@ -18481,34 +18571,26 @@ function updateCartBadge() {
       startedAt = Date.now();
       timer = setTimeout(() => { if (index < slides.length - 1) { index += 1; render(); } else close(); }, duration);
     };
+    const closeMobileOverlay = () => {
+      if (storyClosed) return;
+      storyClosed = true;
+      clearTimeout(timer);
+      subscriptionStoryCloseFromHistory = null;
+      content.remove();
+      document.getElementById("shopBonusProgramPage")?.classList.remove("shop-subscription-story-page-active");
+      queueMobileUiStateSync("bonus-program-page-subscription-story-close");
+    };
     const close = () => {
       clearTimeout(timer);
       if (window.matchMedia?.("(min-width: 769px)").matches === true) {
         document.querySelector(".shop-subscription-story-back")?.click();
         return;
       }
-      const page = document.getElementById("shopBonusProgramPage");
-      const contentHost = page?.querySelector("[data-bonus-program-page-content]");
-      const storyShell = contentHost?.querySelector(".shop-subscription-story-shell");
-      const subscriptionBackground = storyShell?.firstElementChild;
-      if (contentHost && storyShell) {
-        if (subscriptionBackground) contentHost.replaceChildren(subscriptionBackground);
-        else storyShell.remove();
+      if (window.history.state?.shopSubscriptionStory === true) {
+        window.history.back();
+        return;
       }
-      page?.classList.remove("shop-subscription-story-page-active");
-      const currentHistoryState = window.history.state;
-      if (currentHistoryState?.shopBonusProgramPage === true) {
-        window.history.replaceState({
-          ...currentHistoryState,
-          shopBonusProgramScreen: "subscription",
-        }, "", window.location.href);
-      }
-      if (page) {
-        page.dataset.bonusProgramScreen = "subscription";
-        bonusProgramPageBackHandler = closeBonusProgramPageToProfile;
-        page.querySelector("[data-bonus-program-page-title]").textContent = "Подписка";
-        queueMobileUiStateSync("bonus-program-page-subscription");
-      }
+      closeMobileOverlay();
     };
     content.querySelector(".shop-subscription-story-back").onclick = close;
     const move = (direction) => {
@@ -18642,14 +18724,16 @@ function updateCartBadge() {
       return;
     }
     const subscriptionPage = document.getElementById("shopBonusProgramPage");
-    const subscriptionContent = subscriptionPage?.querySelector("[data-bonus-program-page-content]");
-    const subscriptionBackground = subscriptionContent?.firstElementChild;
-    const storyShell = document.createElement("div");
-    storyShell.className = "shop-subscription-story-shell";
-    if (subscriptionBackground) storyShell.appendChild(subscriptionBackground);
-    storyShell.appendChild(content);
-    showBonusProgramPage({ title: "Подписка", content: storyShell, onBack: close, screen: "subscription-story" });
-    subscriptionPage?.classList.add("shop-subscription-story-page-active");
+    if (!subscriptionPage || subscriptionPage.classList.contains("hidden")) return;
+    subscriptionPage.appendChild(content);
+    subscriptionPage.classList.add("shop-subscription-story-page-active");
+    subscriptionStoryCloseFromHistory = closeMobileOverlay;
+    window.history.pushState({
+      ...(window.history.state || {}),
+      shopBonusProgramPage: true,
+      shopBonusProgramScreen: "subscription",
+      shopSubscriptionStory: true,
+    }, "", window.location.href);
     render();
   }
 
@@ -18705,16 +18789,17 @@ function updateCartBadge() {
             : "";
           if (action) action.textContent = interested ? "Больше не интересно" : "Мне интересно";
         };
-        const loadInterestState = async () => {
-          const payload = await apiJson("/api/public/bonus/subscription-interest");
-          interestState = payload?.data || { interested: false, notifications_enabled: false };
+        const loadInterestState = async (options = {}) => {
+          interestState = await loadSubscriptionInterestState(options);
           if (interestState.interested === true && interestState.notifications_enabled === true
             && "Notification" in window && String(Notification.permission || "default") !== "granted") {
             const synced = await apiJson("/api/public/bonus/subscription-interest", {
               method: "PUT",
               body: { notifications_enabled: false },
             });
-            interestState = synced?.data || { ...interestState, notifications_enabled: false };
+            interestState = setSubscriptionInterestCache(
+              synced?.data || { ...interestState, notifications_enabled: false }
+            );
           }
           renderInterestState();
         };
@@ -18731,11 +18816,13 @@ function updateCartBadge() {
                 method: "PUT",
                 body: { interested: false },
               });
-              interestState = payload?.data || { interested: false, notifications_enabled: false };
+              interestState = setSubscriptionInterestCache(
+                payload?.data || { interested: false, notifications_enabled: false }
+              );
               renderInterestState();
             } else {
               await openSubscriptionInterestPrompt(notificationSlide, trackInterestEvent, {
-                onSuccess: () => { void loadInterestState().catch(() => {}); },
+                onSuccess: () => { void loadInterestState({ force: true }).catch(() => {}); },
               });
             }
           } catch {
@@ -18842,6 +18929,10 @@ function updateCartBadge() {
     if (bonusProgramHistoryBound) return;
     window.addEventListener("popstate", (event) => {
       if (event.state?.shopBenefitsPage === true || event.state?.shopCompanyChatPage === true) return;
+      if (subscriptionStoryCloseFromHistory && event.state?.shopSubscriptionStory !== true) {
+        subscriptionStoryCloseFromHistory();
+        return;
+      }
       if (event.state?.shopBonusProgramPage === true) {
         renderBonusProgramHistoryState(event.state);
         return;

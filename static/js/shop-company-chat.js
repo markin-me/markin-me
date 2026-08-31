@@ -2623,6 +2623,7 @@
     if (!nextEnabled) {
       try { localStorage.setItem(chatNotificationsStorageKey, "0"); } catch {}
       await unsubscribeWebPushNotifications();
+      window.invalidateShopSubscriptionInterestCache?.();
       return false;
     }
 
@@ -7340,6 +7341,7 @@
     });
     const saved = normalizeWebPushPreferences(json && json.data ? json.data.preferences : preferences);
     webPushPreferencesCache = saved;
+    window.invalidateShopSubscriptionInterestCache?.();
     return saved;
   }
 
@@ -8043,7 +8045,9 @@
     overlay.classList.toggle("is-important-message-details", isDetails);
     messagesBackBtn.classList.toggle("hidden", isHome || (isAdminClientChatMode && isSupport && !chatOrderDetailsActive));
     modalTitle.textContent = isHome ? "Сообщения" : isList ? "PROMO сообщения" : isDetails ? "Важное сообщение" : initialModalTitleText;
-    document.body.classList.toggle("shop-company-chat-page-active", isCompanyChatPageMode() && !isHome);
+    const isMobilePage = isCompanyChatPageMode();
+    document.body.classList.toggle("shop-company-chat-page-active", isMobilePage);
+    document.body.classList.toggle("shop-company-messages-root-active", isMobilePage && isHome);
     if (isList) renderImportantMessagesList();
     if (isDetails) renderImportantMessageDetails(activeImportantMessageId);
     if (isHome || isList) startImportantMessagesPolling();
@@ -8064,16 +8068,25 @@
     const currentItemId = Math.trunc(Number(currentState.shopImportantMessageId || 0));
     const nextItemId = nextScreen === "important-details" ? Math.trunc(Number(itemId || 0)) : 0;
     if (currentState.shopCompanyChatPage === true && currentScreen === nextScreen && currentItemId === nextItemId) return;
+    const rootState = typeof window.buildShopRootHistoryState === "function"
+      ? window.buildShopRootHistoryState("chat")
+      : {
+          ...currentState,
+          shopRootPage: true,
+          shopRootScreen: "chat",
+          shopRootGuard: false,
+        };
     const nextState = {
-      ...currentState,
-      shopRootPage: true,
-      shopRootScreen: "chat",
-      shopRootGuard: false,
+      ...rootState,
       shopCompanyChatPage: true,
       shopCompanyMessagesScreen: nextScreen,
       shopImportantMessageId: nextItemId || undefined,
     };
-    if (currentState.shopRootPage === true && currentState.shopRootScreen === "chat" && currentState.shopCompanyChatPage !== true) {
+    if (
+      currentState.shopRootPage === true
+      && String(currentState.shopRootScreen || "home") !== "home"
+      && currentState.shopCompanyChatPage !== true
+    ) {
       window.history.replaceState(nextState, "", window.location.href);
     } else {
       window.history.pushState(nextState, "", window.location.href);
@@ -8101,13 +8114,13 @@
         pushMessageCenterHistoryState(screen || "home", activeImportantMessageId);
       }
     }
+    setMessageCenterView(screen || "home");
     overlay.hidden = false;
     void overlay.offsetWidth;
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("shop-company-chat-open");
     lockBackgroundPageScrollForChat();
-    setMessageCenterView(screen || "home");
     syncOpenButtonActiveState();
   }
 
@@ -8239,6 +8252,14 @@
       hideChatOrderDetailsView();
       return;
     }
+    if (
+      isCompanyChatPageMode()
+      && messageCenterScreen !== "home"
+      && window.history.state?.shopCompanyChatPage === true
+    ) {
+      window.history.back();
+      return;
+    }
     if (messageCenterScreen === "important-details") {
       replaceMessageCenterHistoryState("important-list", 0);
       showImportantMessagesList({ preserveHistory: true });
@@ -8257,7 +8278,7 @@
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
     overlay.hidden = true;
-    document.body.classList.remove("shop-company-chat-open", "shop-company-chat-page-active");
+    document.body.classList.remove("shop-company-chat-open", "shop-company-chat-page-active", "shop-company-messages-root-active");
     unlockBackgroundPageScrollForChat();
     stopImportantMessagesPolling();
     syncOpenButtonActiveState();
@@ -8297,8 +8318,14 @@
     if (isCompanyChatPageMode()) {
       ensureCompanyChatHistoryBinding();
       if (!companyChatHistoryRestoring && window.history.state?.shopCompanyChatPage !== true) {
+        const rootState = typeof window.buildShopRootHistoryState === "function"
+          ? window.buildShopRootHistoryState("chat")
+          : { ...(window.history.state || {}) };
         window.history.pushState({
-          ...(window.history.state || {}),
+          ...rootState,
+          shopRootPage: true,
+          shopRootScreen: "chat",
+          shopRootGuard: false,
           shopCompanyChatPage: true,
         }, "", window.location.href);
       }
@@ -8446,17 +8473,23 @@
       window.history.back();
       return;
     }
+    const closeAsMobilePage = isCompanyChatPageMode()
+      && document.body.classList.contains("shop-company-chat-page-active");
     if (!isSupportChatOpen()) {
       supportChatOpenGeneration += 1;
       stopImportantMessagesPolling();
       cancelMessageCenterChatPreload();
       overlay.classList.remove("is-open", "is-messages-home", "is-important-message-details");
       overlay.setAttribute("aria-hidden", "true");
-      window.setTimeout(function () {
-        if (overlay.classList.contains("is-open")) return;
+      if (closeAsMobilePage) {
         overlay.hidden = true;
-      }, 240);
-      document.body.classList.remove("shop-company-chat-open", "shop-company-chat-page-active");
+      } else {
+        window.setTimeout(function () {
+          if (overlay.classList.contains("is-open")) return;
+          overlay.hidden = true;
+        }, 240);
+      }
+      document.body.classList.remove("shop-company-chat-open", "shop-company-chat-page-active", "shop-company-messages-root-active");
       unlockBackgroundPageScrollForChat();
       messageCenterScreen = "closed";
       suspendedMessageCenterScreen = "";
@@ -8485,12 +8518,17 @@
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
     syncOpenButtonActiveState();
-    window.setTimeout(function () {
-      if (overlay.classList.contains("is-open")) return;
+    if (closeAsMobilePage) {
       overlay.hidden = true;
-    }, 240);
+    } else {
+      window.setTimeout(function () {
+        if (overlay.classList.contains("is-open")) return;
+        overlay.hidden = true;
+      }, 240);
+    }
     document.body.classList.remove("shop-company-chat-open");
     document.body.classList.remove("shop-company-chat-page-active");
+    document.body.classList.remove("shop-company-messages-root-active");
     overlay.classList.remove("is-messages-home", "is-important-message-details");
     messageCenterScreen = "closed";
     suspendedMessageCenterScreen = "";
