@@ -77,6 +77,9 @@ function normalizeStorefrontSettingsPayload(body = {}) {
     show_description: item?.show_description !== false,
     show_button: item?.show_button !== false,
     show_shadow: item?.show_shadow !== false,
+    event_enabled: item?.event_enabled === true,
+    event_type: ['none', 'notification', 'link'].includes(String(item?.event_type || '')) ? String(item.event_type) : 'none',
+    event_url: strOrNull(item?.event_url)?.slice(0, 1000) || null,
     duration_seconds: Math.min(60, Math.max(1, Math.floor(Number(item?.duration_seconds || 5)))),
   })) : [];
   return {

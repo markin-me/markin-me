@@ -710,7 +710,7 @@
 
   function openShopBonusProgramModal(options = {}) {
     const modalKey = String(options.modalKey || "join");
-    const setting = getShopBonusModalSetting(modalKey);
+    const setting = options.useSetting === false ? null : getShopBonusModalSetting(modalKey);
     if (setting && setting.is_enabled === false) {
       if (typeof options.onConfirm === "function") void options.onConfirm();
       return;
@@ -723,6 +723,9 @@
           : "\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043a \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435"
     );
     const description = String(setting?.description || options.description || "").trim();
+    const customContentHtml = String(options.customContentHtml || "");
+    const confirmText = String(options.confirmText || "").trim() || "Подтвердить";
+    const cancelText = String(options.cancelText || "").trim();
     const fromTitle = String(options.fromLevel?.title || options.fromLevelTitle || "").trim();
     const toTitle = String(options.toLevel?.title || level?.title || options.toLevelTitle || "").trim();
     const transitionHtml = (modalKey === "level-up" || modalKey === "level-down") && (fromTitle || toTitle)
@@ -736,16 +739,21 @@
     overlay.className = "shop-bonus-program-modal-overlay";
     overlay.innerHTML = `
       <div class="shop-bonus-program-modal" role="dialog" aria-modal="true">
-        <div class="shop-bonus-program-modal-image">${buildShopBonusProgramModalImageHtml(setting, modalKey)}</div>
+        ${options.showImage === false ? "" : `<div class="shop-bonus-program-modal-image">${buildShopBonusProgramModalImageHtml(setting, modalKey)}</div>`}
         <div class="shop-bonus-program-modal-title">${escapeHtml(title)}</div>
         ${description ? `<div class="shop-bonus-program-modal-description">${escapeHtml(description)}</div>` : ""}
+        ${customContentHtml}
         ${transitionHtml}
-        ${buildShopBonusProgramModalStatsHtml(level, options)}
-        ${buildShopBonusProgramModalDetailsHtml(options.levelSteps)}
-        <button class="shop-bonus-program-modal-confirm" type="button">${"\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c"}</button>
+        ${options.showStats === false ? "" : buildShopBonusProgramModalStatsHtml(level, options)}
+        ${options.showDetails === false ? "" : buildShopBonusProgramModalDetailsHtml(options.levelSteps)}
+        <div class="shop-bonus-program-modal-actions">
+          ${cancelText ? `<button class="shop-bonus-program-modal-cancel" type="button">${escapeHtml(cancelText)}</button>` : ""}
+          <button class="shop-bonus-program-modal-confirm" type="button">${escapeHtml(confirmText)}</button>
+        </div>
       </div>
     `;
     const confirmBtn = overlay.querySelector(".shop-bonus-program-modal-confirm");
+    const cancelBtn = overlay.querySelector(".shop-bonus-program-modal-cancel");
     const detailsToggle = overlay.querySelector("[data-bonus-modal-details-toggle]");
     const detailsList = overlay.querySelector("[data-bonus-modal-details-list]");
     detailsToggle?.addEventListener("click", () => {
@@ -758,15 +766,37 @@
       confirmBtn.disabled = true;
       try {
         if (typeof options.onConfirm === "function") {
-          await options.onConfirm();
+          const shouldClose = await options.onConfirm(overlay);
+          if (shouldClose === false) return;
         }
         overlay.remove();
       } finally {
         if (document.body.contains(overlay)) confirmBtn.disabled = false;
       }
     });
+    cancelBtn?.addEventListener("click", () => {
+      overlay.remove();
+      if (typeof options.onCancel === "function") options.onCancel();
+    });
     document.body.appendChild(overlay);
+    return overlay;
   }
+
+  window.openShopExitConfirmation = function openShopExitConfirmation(options = {}) {
+    return openShopBonusProgramModal({
+      modalKey: "shop-exit",
+      useSetting: false,
+      showImage: false,
+      showStats: false,
+      showDetails: false,
+      title: "Выйти из приложения?",
+      description: "Вы действительно хотите покинуть «По щам»?",
+      cancelText: "Остаться",
+      confirmText: "Выйти",
+      onCancel: options.onStay,
+      onConfirm: options.onExit,
+    });
+  };
 
   function maybeShowPendingBonusModalEvent() {
     const event = state.homeBonusConfig?.pending_modal_event;
@@ -18331,6 +18361,75 @@ function updateCartBadge() {
   let bonusProgramHistoryBound = false;
   let bonusProgramHistoryRestoring = false;
 
+  async function openSubscriptionInterestPrompt(slide, trackEvent, options = {}) {
+    const onCancel = typeof options.onCancel === "function" ? options.onCancel : () => {};
+    const onSuccess = typeof options.onSuccess === "function" ? options.onSuccess : () => {};
+    if (!window.shopCompanyChatNotifications && typeof window.ensureShopChatLoaded === "function") {
+      await window.ensureShopChatLoaded().catch(() => null);
+    }
+    const notificationsApi = window.shopCompanyChatNotifications;
+    const status = notificationsApi?.getStatus?.() || {};
+    const preferencesPayload = notificationsApi?.getPreferences
+      ? await notificationsApi.getPreferences().catch(() => null)
+      : null;
+    const initiallyEnabled = notificationsApi?.isEnabled?.() === true
+      && preferencesPayload?.preferences?.important === true;
+    const modal = openShopBonusProgramModal({
+      modalKey: "subscription-interest",
+      useSetting: false,
+      showImage: false,
+      showStats: false,
+      showDetails: false,
+      title: "Хотите узнать о подписке первыми?",
+      description: "Мы сообщим, когда подписка станет доступна. Никакого спама — только важная информация о запуске.",
+      customContentHtml: `<label class="shop-subscription-interest-notifications"><span>Уведомления о важных сообщениях</span><span class="switch"><input class="switch-input" type="checkbox" data-subscription-interest-notifications ${initiallyEnabled ? "checked" : ""}><span class="switch-ui"></span></span></label><div class="shop-subscription-interest-status" data-subscription-interest-status>${status.supported === false ? "Уведомления не поддерживаются этим браузером" : ""}</div>`,
+      cancelText: "Отмена",
+      confirmText: "Уведомить меня",
+      onCancel,
+      onConfirm: async (overlay) => {
+        const toggle = overlay.querySelector("[data-subscription-interest-notifications]");
+        const statusEl = overlay.querySelector("[data-subscription-interest-status]");
+        if (!toggle?.checked) {
+          if (statusEl) statusEl.textContent = "Включите уведомления, чтобы продолжить";
+          return false;
+        }
+        if (!notificationsApi?.setEnabled || !notificationsApi?.savePreferences || !notificationsApi?.getPreferences) {
+          if (statusEl) statusEl.textContent = "Не удалось загрузить настройки уведомлений";
+          return false;
+        }
+        try {
+          const enabled = await notificationsApi.setEnabled(true);
+          if (!enabled) {
+            toggle.checked = false;
+            if (statusEl) statusEl.textContent = "Разрешите уведомления в настройках браузера";
+            return false;
+          }
+          const current = await notificationsApi.getPreferences();
+          await notificationsApi.savePreferences({ ...current.preferences, important: true });
+          await trackEvent(slide, "consent");
+        } catch (error) {
+          if (statusEl) statusEl.textContent = "Не удалось сохранить согласие. Попробуйте ещё раз";
+          return false;
+        }
+        if (statusEl) {
+          statusEl.style.color = "#15803d";
+          statusEl.textContent = "Готово! Мы уведомим вас, когда подписка будет доступна";
+        }
+        window.setTimeout(() => {
+          overlay.remove();
+          onSuccess();
+        }, 900);
+        return false;
+      },
+    });
+    const toggle = modal?.querySelector("[data-subscription-interest-notifications]");
+    toggle?.addEventListener("change", () => {
+      const statusEl = modal.querySelector("[data-subscription-interest-status]");
+      if (statusEl) statusEl.textContent = toggle.checked ? "" : "Включите уведомления, чтобы продолжить";
+    });
+    return modal;
+  }
+
   function openSubscriptionStory() {
     const slides = (state.homeBonusConfig?.subscription_storefront?.info_slides || [])
       .filter((item) => item && item.image_url);
@@ -18353,6 +18452,14 @@ function updateCartBadge() {
     const overlay = content.querySelector(".shop-subscription-story-overlay");
     const description = content.querySelector(".shop-subscription-story-description");
     const button = content.querySelector(".shop-subscription-story-button");
+    const trackInfoEvent = async (slide, eventType) => {
+      const slideId = String(slide?.id || "").trim();
+      if (!slideId) return null;
+      return apiJson("/api/public/bonus/subscription-info-events", {
+        method: "POST",
+        body: { slide_id: slideId, event_type: eventType },
+      });
+    };
     const render = () => {
       const slide = slides[index];
       const duration = Math.max(1, Number(slide.duration_seconds || 5)) * 1000;
@@ -18369,6 +18476,7 @@ function updateCartBadge() {
       progress.querySelectorAll("i").forEach((bar, barIndex) => {
         if (barIndex === index) bar.querySelector("b").style.animationDuration = `${duration}ms`;
       });
+      void trackInfoEvent(slide, "view").catch(() => {});
       clearTimeout(timer);
       startedAt = Date.now();
       timer = setTimeout(() => { if (index < slides.length - 1) { index += 1; render(); } else close(); }, duration);
@@ -18440,6 +18548,20 @@ function updateCartBadge() {
       description.classList.toggle("is-expanded", descriptionExpanded);
       if (descriptionExpanded) pause();
       else resume();
+    });
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const slide = slides[index] || {};
+      if (slide.event_enabled !== true || !["notification", "link"].includes(String(slide.event_type || ""))) return;
+      void trackInfoEvent(slide, "click").catch(() => {});
+      if (slide.event_type === "link") {
+        const url = String(slide.event_url || "").trim();
+        if (/^https?:\/\//i.test(url)) window.location.assign(url);
+        return;
+      }
+      pause();
+      await openSubscriptionInterestPrompt(slide, trackInfoEvent, { onCancel: resume, onSuccess: resume });
     });
     content.addEventListener("pointerdown", (event) => {
       if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -18542,9 +18664,15 @@ function updateCartBadge() {
       const firstSlide = Array.isArray(storefront.info_slides)
         ? storefront.info_slides.find((item) => item && item.image_url)
         : null;
+      const notificationSlide = Array.isArray(storefront.info_slides)
+        ? storefront.info_slides.find((item) => item && item.image_url && item.show_button !== false && item.event_enabled === true && item.event_type === "notification" && String(item.button_text || "").trim())
+        : null;
       if (firstSlide) {
         const storySlideCount = storefront.info_slides.filter((item) => item && item.image_url).length;
         content.innerHTML = `<div class="shop-subscription-story-preview" aria-label="Что такое подписка"><div class="shop-subscription-story-ring" style="--story-count:${storySlideCount}"><img src="${escapeHtml(String(firstSlide.image_url))}" alt=""></div><strong>Что такое подписка</strong></div>`;
+      }
+      if (notificationSlide) {
+        content.innerHTML += `<section class="shop-subscription-interest-card" data-subscription-interest-card><h2>Хотите узнать о подписке первыми?</h2><p data-subscription-interest-copy>Сообщим, когда подписка станет доступна. Никакого спама — только важная информация о запуске.</p><div class="shop-subscription-interest-card-status" data-subscription-interest-card-status></div><button type="button" data-subscription-interest-action>Мне интересно</button></section>`;
       }
       if (faqItems.length) {
         content.innerHTML += `<section class="shop-subscription-faq"><h2>${escapeHtml(String(storefront.faq_title || "Часто задаваемые вопросы"))}</h2>${faqItems.map((item) => `<details class="shop-subscription-faq-item"><summary>${escapeHtml(String(item.question || ""))}</summary><div>${escapeHtml(String(item.answer || "")).replace(/\n/g, "<br>")}</div></details>`).join("")}</section>`;
@@ -18557,6 +18685,69 @@ function updateCartBadge() {
       };
       storyPreview?.addEventListener("click", openStoryFromPreview);
       storyPreview?.querySelector(".shop-subscription-story-ring")?.addEventListener("click", openStoryFromPreview);
+      const interestCard = content.querySelector("[data-subscription-interest-card]");
+      if (interestCard && notificationSlide) {
+        const copy = interestCard.querySelector("[data-subscription-interest-copy]");
+        const statusEl = interestCard.querySelector("[data-subscription-interest-card-status]");
+        const action = interestCard.querySelector("[data-subscription-interest-action]");
+        let interestState = { interested: false, notifications_enabled: false };
+        const renderInterestState = () => {
+          const interested = interestState.interested === true;
+          const notificationsEnabled = interestState.notifications_enabled === true;
+          interestCard.classList.toggle("is-active", interested);
+          if (copy) copy.textContent = interested
+            ? (notificationsEnabled
+              ? "Мы сообщим, когда подписка станет доступна."
+              : "Вам интересна подписка, но уведомления сейчас отключены.")
+            : "Сообщим, когда подписка станет доступна. Никакого спама — только важная информация о запуске.";
+          if (statusEl) statusEl.innerHTML = interested
+            ? `<span class="is-success">✓ Вам интересна подписка</span><span class="${notificationsEnabled ? "is-success" : "is-warning"}">${notificationsEnabled ? "✓ Важные уведомления включены" : "! Важные уведомления отключены"}</span>`
+            : "";
+          if (action) action.textContent = interested ? "Больше не интересно" : "Мне интересно";
+        };
+        const loadInterestState = async () => {
+          const payload = await apiJson("/api/public/bonus/subscription-interest");
+          interestState = payload?.data || { interested: false, notifications_enabled: false };
+          if (interestState.interested === true && interestState.notifications_enabled === true
+            && "Notification" in window && String(Notification.permission || "default") !== "granted") {
+            const synced = await apiJson("/api/public/bonus/subscription-interest", {
+              method: "PUT",
+              body: { notifications_enabled: false },
+            });
+            interestState = synced?.data || { ...interestState, notifications_enabled: false };
+          }
+          renderInterestState();
+        };
+        const trackInterestEvent = (slide, eventType) => apiJson("/api/public/bonus/subscription-info-events", {
+          method: "POST",
+          body: { slide_id: String(slide?.id || ""), event_type: eventType },
+        });
+        action?.addEventListener("click", async () => {
+          if (action.disabled) return;
+          action.disabled = true;
+          try {
+            if (interestState.interested === true) {
+              const payload = await apiJson("/api/public/bonus/subscription-interest", {
+                method: "PUT",
+                body: { interested: false },
+              });
+              interestState = payload?.data || { interested: false, notifications_enabled: false };
+              renderInterestState();
+            } else {
+              await openSubscriptionInterestPrompt(notificationSlide, trackInterestEvent, {
+                onSuccess: () => { void loadInterestState().catch(() => {}); },
+              });
+            }
+          } catch {
+            if (statusEl) statusEl.textContent = "Не удалось обновить настройку. Попробуйте ещё раз";
+          } finally {
+            action.disabled = false;
+          }
+        });
+        void loadInterestState().catch(() => {
+          if (statusEl) statusEl.textContent = "Не удалось загрузить настройку";
+        });
+      }
       return content;
     };
     const isDesktopModal = window.matchMedia?.("(min-width: 769px)").matches === true

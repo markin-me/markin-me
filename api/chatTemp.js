@@ -4532,6 +4532,14 @@ function makeChatTempRouter() {
         `UPDATE chat_push_subscriptions SET push_chat_enabled=?, push_important_enabled=?, push_orders_enabled=?, push_order_status_ids_json=? WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in'`,
         [preferences.chat ? 1 : 0, preferences.important ? 1 : 0, preferences.orders ? 1 : 0, JSON.stringify(preferences.orderStatusIds), Number(tenantId), Number(storeId), Number(clientId)]
       );
+      if (!preferences.important) {
+        await db.query(
+          `UPDATE mkt_customer_notification_consents
+           SET notifications_enabled=0, revoked_at=NOW(3)
+           WHERE tenant_id=? AND store_id=? AND customer_id=? AND source_key='subscription'`,
+          [Number(tenantId), Number(storeId), Number(clientId)]
+        );
+      }
       return res.json({ ok: true, data: { preferences } });
     } catch (err) {
       console.error("chat-temp PUT /push/preferences error:", err);

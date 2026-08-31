@@ -22338,6 +22338,9 @@
     favorite_category: { value: 'favorite_category', label: 'Любимая категория', kind: 'entity', entity: 'category' },
   };
 
+  filterFieldDefinitions.subscription_event = { value: 'subscription_event', label: 'Событие кнопки подписки', kind: 'event' };
+  filterFieldDefinitions.notification_consent = { value: 'notification_consent', label: 'Разрешили уведомления', kind: 'event' };
+
   const filterOperatorOptionsNumeric = [
     { value: '>=', label: '>=' },
     { value: '<=', label: '<=' },
@@ -22377,7 +22380,7 @@
 
   function getFilterOperatorOptions(field) {
     const definition = getFilterFieldDefinition(field);
-    if (definition.kind === 'entity' || definition.kind === 'enum') {
+    if (definition.kind === 'entity' || definition.kind === 'enum' || definition.kind === 'event') {
       return filterOperatorOptionsEquality;
     }
     return filterOperatorOptionsNumeric;
@@ -22421,6 +22424,35 @@
     return options;
   }
 
+  function getSubscriptionEventOptions(currentValue = '') {
+    const slides = Array.isArray(state.subscriptionStorefrontSettings?.info_slides)
+      ? state.subscriptionStorefrontSettings.info_slides
+      : [];
+    const labels = new Set();
+    const options = [{ value: '', label: 'Выберите кнопку' }];
+    slides.forEach((slide) => {
+      const label = String(slide?.button_text || '').trim();
+      if (!label || labels.has(label) || slide?.show_button === false || slide?.event_enabled !== true || slide?.event_type !== 'notification') return;
+      labels.add(label);
+      options.push({ value: label, label });
+    });
+    if (currentValue && !labels.has(String(currentValue))) {
+      options.push({ value: String(currentValue), label: `${String(currentValue)} (недоступно)` });
+    }
+    return options;
+  }
+
+  function getNotificationConsentOptions(currentValue = '') {
+    const options = [
+      { value: '', label: 'Выберите источник' },
+      { value: 'subscription', label: 'Подписка' },
+    ];
+    if (currentValue && !options.some((option) => option.value === String(currentValue))) {
+      options.push({ value: String(currentValue), label: `${String(currentValue)} (недоступно)` });
+    }
+    return options;
+  }
+
   function getFilterNumberInputStep(field) {
     return field === 'total_spent' ? '0.01' : '1';
   }
@@ -22429,12 +22461,16 @@
     const list = Array.isArray(fields) && fields.length ? fields : [];
     const needsCategoryCatalog = list.some((field) => getFilterFieldDefinition(field).entity === 'category');
     const needsProductCatalog = list.some((field) => getFilterFieldDefinition(field).entity === 'product');
+    const needsSubscriptionEvents = list.includes('subscription_event');
     const tasks = [];
     if (needsCategoryCatalog && state.catalogCategories.length === 0) {
       tasks.push(loadCatalogCategories());
     }
     if (needsProductCatalog && state.filterRuleCatalogProducts.length === 0) {
       tasks.push(loadFilterRuleCatalogProducts());
+    }
+    if (needsSubscriptionEvents && !state.subscriptionStorefrontSettings) {
+      tasks.push(loadSubscriptionStorefrontSettings());
     }
     if (!tasks.length) return;
     await Promise.all(tasks);
@@ -22455,6 +22491,15 @@
     }
     if (definition.kind === 'enum') {
       return createCustomSelect(filterGenderOptions, String(rule.value ?? ''), 'rule-value-select');
+    }
+    if (definition.kind === 'event') {
+      return createCustomSelect(
+        rule.field === 'notification_consent'
+          ? getNotificationConsentOptions(String(rule.value ?? ''))
+          : getSubscriptionEventOptions(String(rule.value ?? '')),
+        String(rule.value ?? ''),
+        'rule-value-select'
+      );
     }
     if (definition.kind === 'entity') {
       return createCustomSelect(
@@ -22890,7 +22935,7 @@
       button_icon_url: String(source?.button_icon_url || '').trim(),
       faq_title: String(source?.faq_title || 'Часто задаваемые вопросы').slice(0, 150),
       faq_items: Array.isArray(source?.faq_items) ? source.faq_items.map((item) => ({ id: String(item?.id || `faq-${Date.now()}-${Math.random().toString(36).slice(2)}`), question: String(item?.question || ''), answer: String(item?.answer || '') })) : [],
-      info_slides: Array.isArray(source?.info_slides) ? source.info_slides.map((item) => ({ id: String(item?.id || `slide-${Date.now()}-${Math.random().toString(36).slice(2)}`), image_url: String(item?.image_url || ''), description: String(item?.description || ''), button_text: String(item?.button_text || ''), button_color: String(item?.button_color || '#ff6b00'), button_text_color: String(item?.button_text_color || '#ffffff'), show_description: item?.show_description !== false, show_button: item?.show_button !== false, show_shadow: item?.show_shadow !== false, duration_seconds: Math.min(60, Math.max(1, Math.floor(Number(item?.duration_seconds || 5)))) })) : [],
+      info_slides: Array.isArray(source?.info_slides) ? source.info_slides.map((item) => ({ id: String(item?.id || `slide-${Date.now()}-${Math.random().toString(36).slice(2)}`), image_url: String(item?.image_url || ''), description: String(item?.description || ''), button_text: String(item?.button_text || ''), button_color: String(item?.button_color || '#ff6b00'), button_text_color: String(item?.button_text_color || '#ffffff'), show_description: item?.show_description !== false, show_button: item?.show_button !== false, show_shadow: item?.show_shadow !== false, event_enabled: item?.event_enabled === true, event_type: ['none', 'notification', 'link'].includes(String(item?.event_type || '')) ? String(item.event_type) : 'none', event_url: String(item?.event_url || ''), duration_seconds: Math.min(60, Math.max(1, Math.floor(Number(item?.duration_seconds || 5)))) })) : [],
     };
   }
 
@@ -22950,6 +22995,9 @@
       <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-description ${slide.show_description ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать описание</span></label>
       <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-button ${slide.show_button ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать кнопку</span></label>
       <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-shadow ${slide.show_shadow ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать тень</span></label>
+      <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-event-enabled ${slide.event_enabled ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Включить событие</span></label>
+      <label class="subscription-inline-reward-field"><span>Событие кнопки</span><span class="discount-inline-value-control subscription-inline-value-control"><select class="control discount-inline-value-input" data-info-slide-event-type ${slide.event_enabled ? '' : 'disabled'}><option value="none" ${slide.event_type === 'none' ? 'selected' : ''}>Не выбрано</option><option value="notification" ${slide.event_type === 'notification' ? 'selected' : ''}>Уведомление</option><option value="link" ${slide.event_type === 'link' ? 'selected' : ''}>Ссылка</option></select></span></label>
+      <label class="subscription-inline-reward-field ${slide.event_enabled && slide.event_type === 'link' ? '' : 'hidden'}"><span>Ссылка</span><span class="discount-inline-value-control subscription-inline-value-control"><input class="control discount-inline-value-input" type="url" maxlength="1000" data-info-slide-event-url value="${escapeHtml(slide.event_url)}" placeholder="https://example.com" /></span></label>
       <label class="subscription-inline-reward-field ${slide.show_description ? '' : 'hidden'}"><span>Описание</span><span class="discount-inline-value-control subscription-inline-value-control subscription-description-control"><textarea class="control discount-inline-value-input" rows="1" data-info-slide-description placeholder="Описание">${escapeHtml(slide.description)}</textarea></span></label>
       <div class="subscription-storefront-three-columns ${slide.show_button ? '' : 'hidden'}"><label class="subscription-inline-reward-field"><span>Текст кнопки</span><span class="discount-inline-value-control subscription-inline-value-control"><input class="control discount-inline-value-input" data-info-slide-button-text value="${escapeHtml(slide.button_text)}" placeholder="Текст кнопки" /></span></label><label class="subscription-inline-reward-field"><span>Цвет кнопки</span><span class="subscription-storefront-color-field"><input type="color" data-info-slide-button-color value="${escapeHtml(slide.button_color)}" /><span>${escapeHtml(slide.button_color)}</span></span></label><label class="subscription-inline-reward-field"><span>Цвет текста кнопки</span><span class="subscription-storefront-color-field"><input type="color" data-info-slide-button-text-color value="${escapeHtml(slide.button_text_color)}" /><span>${escapeHtml(slide.button_text_color)}</span></span></label></div>`;
     resizeSubscriptionInfoSlideDescription(subscriptionInfoSlideEditor.querySelector('[data-info-slide-description]'));
@@ -25128,7 +25176,7 @@
           if (normalizedDays !== '') {
             value = `-${normalizedDays}d`;
           }
-        } else if (definition.kind === 'enum' || definition.kind === 'entity') {
+        } else if (definition.kind === 'enum' || definition.kind === 'entity' || definition.kind === 'event') {
           value = String(row.querySelector('.rule-value-select')?.dataset?.value || '');
         } else {
           value = String(row.querySelector('.rule-value')?.value || '').trim();
@@ -27230,7 +27278,7 @@
   if (subscriptionInfoSlideAddBtn) subscriptionInfoSlideAddBtn.addEventListener('click', () => {
     if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
     const previousSlide = state.subscriptionStorefrontSettingsDraft.info_slides.at(-1);
-    const slide = { id: `slide-${Date.now()}-${Math.random().toString(36).slice(2)}`, image_url: '', description: '', button_text: '', button_color: '#ff6b00', button_text_color: '#ffffff', show_description: true, show_button: true, show_shadow: true, duration_seconds: previousSlide?.duration_seconds || 5 };
+    const slide = { id: `slide-${Date.now()}-${Math.random().toString(36).slice(2)}`, image_url: '', description: '', button_text: '', button_color: '#ff6b00', button_text_color: '#ffffff', show_description: true, show_button: true, show_shadow: true, event_enabled: false, event_type: 'none', event_url: '', duration_seconds: previousSlide?.duration_seconds || 5 };
     state.subscriptionStorefrontSettingsDraft.info_slides.push(slide);
     activeSubscriptionInfoSlideId = slide.id;
     renderSubscriptionInfoSlides();
@@ -27288,6 +27336,20 @@
     if (event.target.matches('[data-info-slide-show-shadow]')) {
       slide.show_shadow = event.target.checked;
       renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-event-enabled]')) {
+      slide.event_enabled = event.target.checked;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-event-type]')) {
+      slide.event_type = ['none', 'notification', 'link'].includes(event.target.value) ? event.target.value : 'none';
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-event-url]')) {
+      slide.event_url = event.target.value.slice(0, 1000);
       return;
     }
     if (!event.target.matches('[data-info-slide-image]') || !event.target.files?.[0]) return;

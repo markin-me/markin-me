@@ -8064,12 +8064,20 @@
     const currentItemId = Math.trunc(Number(currentState.shopImportantMessageId || 0));
     const nextItemId = nextScreen === "important-details" ? Math.trunc(Number(itemId || 0)) : 0;
     if (currentState.shopCompanyChatPage === true && currentScreen === nextScreen && currentItemId === nextItemId) return;
-    window.history.pushState({
+    const nextState = {
       ...currentState,
+      shopRootPage: true,
+      shopRootScreen: "chat",
+      shopRootGuard: false,
       shopCompanyChatPage: true,
       shopCompanyMessagesScreen: nextScreen,
       shopImportantMessageId: nextItemId || undefined,
-    }, "", window.location.href);
+    };
+    if (currentState.shopRootPage === true && currentState.shopRootScreen === "chat" && currentState.shopCompanyChatPage !== true) {
+      window.history.replaceState(nextState, "", window.location.href);
+    } else {
+      window.history.pushState(nextState, "", window.location.href);
+    }
   }
 
   function replaceMessageCenterHistoryState(screen, itemId) {

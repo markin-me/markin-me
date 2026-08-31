@@ -605,6 +605,8 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     ['gender', 'enum'],
     ['favorite_product', 'entity'],
     ['favorite_category', 'entity'],
+    ['subscription_event', 'text'],
+    ['notification_consent', 'text'],
   ]);
 
   function toPositiveInt(value) {
@@ -722,6 +724,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       if (!['=', '!='].includes(operator)) return null;
       value = toPositiveInt(value);
       if (!value) return null;
+    } else if (kind === 'text') {
+      if (!['=', '!='].includes(operator)) return null;
+      value = String(value || '').trim().slice(0, 255);
+      if (!value) return null;
     }
 
     return { field, operator, value };
@@ -744,7 +750,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   }
 
   function isAdvancedFilterRule(rule) {
-    return rule?.field === 'favorite_product' || rule?.field === 'favorite_category';
+    return rule?.field === 'favorite_product' || rule?.field === 'favorite_category' || rule?.field === 'subscription_event' || rule?.field === 'notification_consent';
   }
 
   function evaluateCustomFilterRule(client, rule, options = {}) {
@@ -788,6 +794,16 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       const right = toPositiveInt(rule.value);
       if (!left || !right) return false;
       return compareValues(left, rule.operator, right);
+    }
+
+    if (kind === 'text' && rule.field === 'subscription_event') {
+      const matched = client?.subscription_events instanceof Set && client.subscription_events.has(String(rule.value || ''));
+      return rule.operator === '!=' ? !matched : matched;
+    }
+
+    if (kind === 'text' && rule.field === 'notification_consent') {
+      const matched = client?.notification_consents instanceof Set && client.notification_consents.has(String(rule.value || ''));
+      return rule.operator === '!=' ? !matched : matched;
     }
 
     return null;
@@ -1108,6 +1124,36 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       await attachFavoritePurchaseStats(tenantId, clients);
     }
 
+    if ((options.needSubscriptionEvents || options.needNotificationConsents) && clients.length) {
+      const customerIds = clients.map((client) => Number(client.id || 0)).filter((id) => id > 0);
+      const [consentRows] = await db.query(
+        `SELECT customer_id, source_key, button_text, interested, notifications_enabled
+         FROM mkt_customer_notification_consents
+         WHERE tenant_id=? AND store_id=? AND customer_id IN (?)`,
+        [tenantId, Number(options.storeId || 0), customerIds]
+      );
+      const eventsByCustomer = new Map();
+      const consentsByCustomer = new Map();
+      consentRows.forEach((row) => {
+        const customerId = Number(row.customer_id || 0);
+        const buttonText = String(row.button_text || '').trim();
+        const sourceKey = String(row.source_key || '').trim();
+        if (!customerId) return;
+        if (Number(row.interested) === 1 && buttonText) {
+          if (!eventsByCustomer.has(customerId)) eventsByCustomer.set(customerId, new Set());
+          eventsByCustomer.get(customerId).add(buttonText);
+        }
+        if (Number(row.notifications_enabled) === 1 && sourceKey) {
+          if (!consentsByCustomer.has(customerId)) consentsByCustomer.set(customerId, new Set());
+          consentsByCustomer.get(customerId).add(sourceKey);
+        }
+      });
+      clients.forEach((client) => {
+        client.subscription_events = eventsByCustomer.get(Number(client.id || 0)) || new Set();
+        client.notification_consents = consentsByCustomer.get(Number(client.id || 0)) || new Set();
+      });
+    }
+
     return clients;
   }
 
@@ -1137,7 +1183,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       [tenantId],
       {
         filterSupport,
-        needFavorites: true,
+        storeId: options.storeId,
+        needFavorites: advancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
+        needSubscriptionEvents: advancedRules.some((rule) => rule.field === 'subscription_event'),
+        needNotificationConsents: advancedRules.some((rule) => rule.field === 'notification_consent'),
         postWhereClause: canNarrowBySimpleRules ? whereClause : '',
         postWhereParams: canNarrowBySimpleRules ? params : [],
       }
@@ -1231,7 +1280,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
           params,
           {
             filterSupport,
-            needFavorites: true,
+            storeId,
+            needFavorites: customFilterAdvancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
+            needSubscriptionEvents: customFilterAdvancedRules.some((rule) => rule.field === 'subscription_event'),
+            needNotificationConsents: customFilterAdvancedRules.some((rule) => rule.field === 'notification_consent'),
             postWhereClause: canNarrowBySimpleRules ? customFilterClause : '',
             postWhereParams: canNarrowBySimpleRules ? customFilterParams : [],
           }
@@ -1837,13 +1889,17 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       let filtersWithCounts = [];
       if (hasAdvancedFilters) {
+        const advancedRules = normalizedFilters.flatMap(({ conditions }) => conditions.rules.filter((rule) => isAdvancedFilterRule(rule)));
         const clients = await loadClientsForFilterEvaluation(
           tenantId,
           'c.tenant_id=?',
           [tenantId],
           {
             filterSupport,
-            needFavorites: true,
+            storeId,
+            needFavorites: advancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
+            needSubscriptionEvents: advancedRules.some((rule) => rule.field === 'subscription_event'),
+            needNotificationConsents: advancedRules.some((rule) => rule.field === 'notification_consent'),
           }
         );
         filtersWithCounts = normalizedFilters.map(({ filter, conditions }) => ({
@@ -1853,7 +1909,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         }));
       } else {
         filtersWithCounts = await Promise.all(rows.map(async (filter) => {
-          const result = await getCustomFilterCount(tenantId, filter.conditions, { filterSupport });
+          const result = await getCustomFilterCount(tenantId, filter.conditions, { filterSupport, storeId });
           return {
             ...filter,
             conditions: result.conditions,
@@ -1880,8 +1936,9 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   router.post('/filters/preview-count', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const filterSupport = { gender: await hasCustomerGenderColumn() };
-      const result = await getCustomFilterCount(tenantId, req.body?.conditions, { filterSupport });
+      const result = await getCustomFilterCount(tenantId, req.body?.conditions, { filterSupport, storeId });
       res.json({
         ok: true,
         data: {

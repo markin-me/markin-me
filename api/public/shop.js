@@ -3406,6 +3406,131 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  router.post('/bonus/subscription-info-events', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const slideId = str(req.body?.slide_id || req.body?.slideId).trim();
+      const eventType = str(req.body?.event_type || req.body?.eventType).trim().toLowerCase();
+      if (!slideId || !['view', 'click', 'consent'].includes(eventType)) {
+        return res.status(400).json({ ok: false, error: 'INVALID_EVENT' });
+      }
+      const [settingsRows] = await db.query(
+        `SELECT info_slides_json FROM mkt_subscription_storefront_settings
+         WHERE tenant_id=? AND store_id=? LIMIT 1`,
+        [tenantId, storeId]
+      );
+      const slides = safeJsonArray(settingsRows?.[0]?.info_slides_json);
+      const slide = slides.find((item) => String(item?.id || '') === slideId);
+      if (!slide) return res.status(404).json({ ok: false, error: 'SLIDE_NOT_FOUND' });
+      const buttonText = String(slide.button_text || '').trim().slice(0, 255) || null;
+      const actionType = ['notification', 'link'].includes(String(slide.event_type || ''))
+        ? String(slide.event_type)
+        : 'none';
+      if (eventType === 'consent' && (
+        slide.event_enabled !== true
+        || slide.show_button === false
+        || actionType !== 'notification'
+        || !buttonText
+      )) {
+        return res.status(400).json({ ok: false, error: 'CONSENT_NOT_AVAILABLE' });
+      }
+      await db.query(
+        `INSERT INTO mkt_subscription_info_events
+          (tenant_id, store_id, customer_id, slide_id, slide_title, button_text, event_type, action_type, event_data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE id=id`,
+        [tenantId, storeId, Number(customer.id), slideId, String(slide.title || '').slice(0, 255) || null,
+          buttonText, eventType, actionType, JSON.stringify({})]
+      );
+      if (eventType === 'consent') {
+        await db.query(
+          `INSERT INTO mkt_customer_notification_consents
+            (tenant_id, store_id, customer_id, source_key, button_text, interested, notifications_enabled, enabled_at, revoked_at)
+           VALUES (?, ?, ?, 'subscription', ?, 1, 1, NOW(3), NULL)
+           ON DUPLICATE KEY UPDATE
+             button_text=VALUES(button_text), interested=1, notifications_enabled=1,
+             enabled_at=NOW(3), revoked_at=NULL`,
+          [tenantId, storeId, Number(customer.id), buttonText]
+        );
+      }
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error('POST /api/public/bonus/subscription-info-events error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/bonus/subscription-interest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const [rows] = await db.query(
+        `SELECT interested, notifications_enabled, button_text, enabled_at, revoked_at
+         FROM mkt_customer_notification_consents
+         WHERE tenant_id=? AND store_id=? AND customer_id=? AND source_key='subscription'
+         LIMIT 1`,
+        [tenantId, storeId, Number(customer.id)]
+      );
+      const row = rows?.[0] || {};
+      return res.json({
+        ok: true,
+        data: {
+          interested: Number(row.interested) === 1,
+          notifications_enabled: Number(row.notifications_enabled) === 1,
+          button_text: String(row.button_text || ''),
+          enabled_at: row.enabled_at || null,
+          revoked_at: row.revoked_at || null,
+        },
+      });
+    } catch (e) {
+      console.error('GET /api/public/bonus/subscription-interest error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/bonus/subscription-interest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const interested = req.body?.interested === true;
+      const revokeInterest = req.body?.interested === false;
+      const revokeNotifications = req.body?.notifications_enabled === false;
+      if (!revokeInterest && !revokeNotifications) {
+        return res.status(400).json({ ok: false, error: 'CONSENT_REQUIRED' });
+      }
+      if (revokeNotifications && !revokeInterest) {
+        await db.query(
+          `UPDATE mkt_customer_notification_consents
+           SET notifications_enabled=0, revoked_at=NOW(3)
+           WHERE tenant_id=? AND store_id=? AND customer_id=? AND source_key='subscription'`,
+          [tenantId, storeId, Number(customer.id)]
+        );
+        return res.json({ ok: true, data: { interested: true, notifications_enabled: false } });
+      }
+      await db.query(
+        `INSERT INTO mkt_customer_notification_consents
+          (tenant_id, store_id, customer_id, source_key, interested, notifications_enabled, revoked_at)
+         VALUES (?, ?, ?, 'subscription', 0, 0, NOW(3))
+         ON DUPLICATE KEY UPDATE interested=0, notifications_enabled=0, revoked_at=NOW(3)`,
+        [tenantId, storeId, Number(customer.id)]
+      );
+      return res.json({ ok: true, data: { interested: false, notifications_enabled: false } });
+    } catch (e) {
+      console.error('PUT /api/public/bonus/subscription-interest error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/bonus/referrals', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
