@@ -2066,6 +2066,8 @@
   const elSortWrap = $("#clientsSortWrap");
   const elBannersSwitchWrap = $("#clientsBannersSwitchWrap");
   const elBannersEnabledSwitch = $("#clientsBannersEnabledSwitch");
+  const elImportantMessagesSwitchWrap = $("#clientsImportantMessagesSwitchWrap");
+  const elImportantMessagesEnabledSwitch = $("#clientsImportantMessagesEnabledSwitch");
   const elBonusPointRateWrap = $("#clientsBonusPointRateWrap");
   const elBonusPointAmountInput = $("#clientsBonusPointAmountInput");
   const elBonusRubleAmountInput = $("#clientsBonusRubleAmountInput");
@@ -2703,6 +2705,9 @@
     importantMessages: [],
     importantMessagesLoaded: false,
     importantMessagesLoading: false,
+    importantMessagesEnabled: true,
+    importantMessagesSettingsLoaded: false,
+    importantMessagesSettingsLoading: false,
     importantMessagesSelectedId: null,
     importantMessagesEditingId: null,
     importantMessageDraft: null,
@@ -7858,6 +7863,32 @@
       </div>
     `;
     }).join('');
+  }
+
+  function normalizeImportantMessagesEnabled(value) {
+    if (value === false || value === 0) return false;
+    const normalized = String(value == null ? '' : value).trim().toLowerCase();
+    return normalized !== '0' && normalized !== 'false';
+  }
+
+  async function loadImportantMessagesSettings(force = false) {
+    if (!force && state.importantMessagesSettingsLoaded) return state.importantMessagesEnabled;
+    if (state.importantMessagesSettingsLoading) return state.importantMessagesEnabled;
+    state.importantMessagesSettingsLoading = true;
+    try {
+      const json = await apiJson('/api/admin/tenant');
+      const tenant = json?.tenant && typeof json.tenant === 'object' ? json.tenant : null;
+      if (tenant) {
+        state.importantMessagesEnabled = normalizeImportantMessagesEnabled(tenant.important_messages_enabled);
+        if (elImportantMessagesEnabledSwitch) {
+          elImportantMessagesEnabledSwitch.checked = state.importantMessagesEnabled;
+        }
+      }
+      state.importantMessagesSettingsLoaded = true;
+      return state.importantMessagesEnabled;
+    } finally {
+      state.importantMessagesSettingsLoading = false;
+    }
   }
 
   function openSheet(options = {}) {
@@ -22395,6 +22426,8 @@
     if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
+    if (elImportantMessagesSwitchWrap) elImportantMessagesSwitchWrap.classList.toggle('hidden', viewName !== 'important-messages');
+    if (elImportantMessagesEnabledSwitch) elImportantMessagesEnabledSwitch.checked = state.importantMessagesEnabled === true;
     if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings');
     if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.toggle('hidden', viewName !== 'important-messages');
     
@@ -22419,6 +22452,7 @@
       renderBannerList();
       renderBannerPicker();
     } else if (viewName === 'important-messages') {
+      loadImportantMessagesSettings().catch((err) => console.error('Failed to load important messages settings:', err));
       renderImportantMessages();
       if (!state.importantMessagesLoaded && !state.importantMessagesLoading) {
         loadImportantMessages().catch(console.error);
@@ -24948,6 +24982,31 @@
       persistBannerStorage();
       if (state.currentView === 'banners') {
         updateRightPanel();
+      }
+    });
+  }
+
+  if (elImportantMessagesEnabledSwitch) {
+    elImportantMessagesEnabledSwitch.addEventListener('change', async () => {
+      const nextEnabled = elImportantMessagesEnabledSwitch.checked === true;
+      const previousEnabled = state.importantMessagesEnabled === true;
+      elImportantMessagesEnabledSwitch.disabled = true;
+      try {
+        const json = await apiJson('/api/admin/tenant', {
+          method: 'PUT',
+          body: { important_messages_enabled: nextEnabled ? 1 : 0 },
+        });
+        if (!json?.tenant) throw new Error('TENANT_UPDATE_FAILED');
+        state.importantMessagesEnabled = normalizeImportantMessagesEnabled(json.tenant.important_messages_enabled);
+        state.importantMessagesSettingsLoaded = true;
+        elImportantMessagesEnabledSwitch.checked = state.importantMessagesEnabled;
+      } catch (err) {
+        state.importantMessagesEnabled = previousEnabled;
+        elImportantMessagesEnabledSwitch.checked = previousEnabled;
+        console.error('Failed to update important messages visibility:', err);
+        alert('Не удалось сохранить видимость Promo рассылок.');
+      } finally {
+        elImportantMessagesEnabledSwitch.disabled = false;
       }
     });
   }

@@ -186,8 +186,8 @@
       key: 'chat',
       href: adminChatHref,
       icon: 'fa-comments',
-      label: 'Чаты',
-      ariaLabel: 'Чаты',
+      label: 'Чат поддержки',
+      ariaLabel: 'Чат поддержки',
       hidden: !isAppChatNavEnabled,
       desktopId: 'sidebarChatNavLink',
       desktopLinkClasses: 'nav-item--chat',
@@ -253,7 +253,7 @@
   <script src="<%= assetUrl('/static/js/current-time.js') %>"></script>
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
-  <script src="<%= assetUrl('/static/js/admin-mobile-nav.js?v=20260410c') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-mobile-nav.js?v=20260831-chat-support-label') %>"></script>
   <% if (appActivePage !== 'chat' && appActivePage !== 'settings') { %>
     <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js?v=20260410a') %>"></script>
   <% } else if (appActivePage === 'settings') { %>

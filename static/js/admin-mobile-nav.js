@@ -27,7 +27,7 @@
     {
       key: "chat",
       href: chatHref,
-      label: "Чаты",
+      label: "Чат поддержки",
       icon: "fa-comments",
       id: "mobileChatNavLink",
       badgeId: "mobileChatUnreadBadge",

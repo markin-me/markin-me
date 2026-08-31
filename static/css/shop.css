@@ -24101,6 +24101,70 @@ body.page-kso .shop-checkout-customer-phone{
   display: none;
 }
 
+.shop-profile-push-status-row{
+  justify-content: flex-start;
+  gap: 10px;
+  padding-left: 14px;
+}
+
+.shop-profile-push-statuses{
+  display: grid;
+  gap: 8px;
+}
+
+.shop-profile-push-checkbox{
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  cursor: pointer;
+}
+
+.shop-profile-push-checkbox-ui{
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-text-muted);
+  border-radius: 5px;
+  color: var(--color-white);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth);
+}
+
+.shop-profile-push-checkbox-ui::after{
+  content: "";
+  width: 5px;
+  height: 10px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-1px) rotate(45deg) scale(0);
+  transition: transform var(--dur-fast) var(--ease-smooth);
+}
+
+.shop-profile-push-checkbox .switch-input:checked + .shop-profile-push-checkbox-ui{
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.shop-profile-push-checkbox .switch-input:checked + .shop-profile-push-checkbox-ui::after{
+  transform: translateY(-1px) rotate(45deg) scale(1);
+}
+
+.shop-profile-push-checkbox .switch-input:focus-visible + .shop-profile-push-checkbox-ui{
+  box-shadow: 0 0 0 3px var(--primary-12);
+}
+
+.shop-profile-push-checkbox .switch-input:disabled + .shop-profile-push-checkbox-ui{
+  opacity: .55;
+  cursor: not-allowed;
+}
+
 .shop-profile-logout-btn{
   width: 100%;
   color: var(--color-primary);

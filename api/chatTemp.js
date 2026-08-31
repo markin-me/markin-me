@@ -965,12 +965,6 @@ async function sendPushToSubscriptions(subscriptions, payload) {
             subscription_id: rowId,
           });
         });
-        if (process.env.CHAT_PUSH_DEBUG === "1") {
-          console.log("expo push sent:", {
-            count: chunk.length,
-            ticket_count: tickets.length,
-          });
-        }
       } catch (err) {
         console.error("expo push send failed:", err && err.message ? err.message : err);
       }

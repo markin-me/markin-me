@@ -371,6 +371,7 @@
     }),
     quickQuestionsEnabled: true,
     operatorName: "",
+    importantMessagesEnabled: true,
     isEnabled: !openBtn.classList.contains("hidden"),
   };
   const hotQuestionAliases = {
@@ -3118,6 +3119,14 @@
       || normalizedEnabled === "0"
       || normalizedEnabled === "false"
     );
+    const rawImportantMessagesEnabled = source.important_messages_enabled ?? source.importantMessagesEnabled;
+    const normalizedImportantMessagesEnabled = String(rawImportantMessagesEnabled == null ? "" : rawImportantMessagesEnabled).trim().toLowerCase();
+    const importantMessagesEnabled = !(
+      rawImportantMessagesEnabled === false
+      || rawImportantMessagesEnabled === 0
+      || normalizedImportantMessagesEnabled === "0"
+      || normalizedImportantMessagesEnabled === "false"
+    );
     const assistantName = String(
       source.assistant_name ?? source.chat_assistant_name ?? ""
     ).trim() || DEFAULT_CHAT_ASSISTANT_NAME;
@@ -3171,6 +3180,7 @@
       quickQuestionsConfig: quickQuestionsConfig,
       quickQuestionsEnabled: quickQuestionsEnabled,
       operatorName: operatorName,
+      importantMessagesEnabled: importantMessagesEnabled,
       isEnabled: isEnabled,
     };
   }
@@ -3223,6 +3233,29 @@
     localSettings.chat_widget_enabled = normalizedEnabled ? 1 : 0;
     localSettings.is_enabled = normalizedEnabled;
     applyChatRuntimeSettings(localSettings, { refreshUi: true });
+  }
+
+  function applyMessageCenterBranchVisibility() {
+    if (isAdminClientChatMode) return;
+    [
+      {
+        element: importantMessagesOpenBtn,
+        enabled: chatRuntimeSettings.importantMessagesEnabled !== false,
+      },
+      {
+        element: supportChatOpenBtn,
+        enabled: chatRuntimeSettings.isEnabled !== false,
+      },
+    ].forEach(function (entry) {
+      entry.element.classList.toggle("hidden", !entry.enabled);
+      if (entry.enabled) {
+        entry.element.removeAttribute("aria-hidden");
+        entry.element.removeAttribute("tabindex");
+      } else {
+        entry.element.setAttribute("aria-hidden", "true");
+        entry.element.setAttribute("tabindex", "-1");
+      }
+    });
   }
 
   function applyChatWidgetEnabledState(isEnabled) {
@@ -3300,6 +3333,7 @@
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
       JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
       String(chatRuntimeSettings.quickQuestionsEnabled !== false ? "1" : "0"),
+      String(chatRuntimeSettings.importantMessagesEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
 
@@ -3318,9 +3352,11 @@
       : cloneDefaultChatQuickQuestionItems();
     chatRuntimeSettings.quickQuestionsEnabled = next.quickQuestionsEnabled !== false;
     chatRuntimeSettings.operatorName = next.operatorName;
+    chatRuntimeSettings.importantMessagesEnabled = next.importantMessagesEnabled !== false;
     chatRuntimeSettings.isEnabled = next.isEnabled !== false;
     rebuildHotQuestionAliases();
     applyChatWidgetEnabledState(chatRuntimeSettings.isEnabled);
+    applyMessageCenterBranchVisibility();
 
     const nextStateKey = [
       String(chatRuntimeSettings.assistantName || ""),
@@ -3332,6 +3368,7 @@
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
       JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
       String(chatRuntimeSettings.quickQuestionsEnabled !== false ? "1" : "0"),
+      String(chatRuntimeSettings.importantMessagesEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
     if (opts.refreshUi === true && prevStateKey !== nextStateKey) {
@@ -3353,6 +3390,7 @@
       chat_quick_questions_enabled: tenant.chat_quick_questions_enabled,
       quick_questions_config: tenant.quick_questions_config,
       chat_widget_enabled: tenant.chat_widget_enabled,
+      important_messages_enabled: tenant.important_messages_enabled,
       site_name: tenant.site_name,
       name: tenant.name,
     };
@@ -7320,17 +7358,22 @@
   }
 
   async function getWebPushPreferences() {
-    const [json, orderConfigJson] = await Promise.all([
-      chatApiJson(CHAT_TEMP_API_BASE + "/push/preferences"),
-      chatApiJson("/api/public/order-config"),
-    ]);
+    const json = await chatApiJson(CHAT_TEMP_API_BASE + "/push/preferences");
     const data = json && json.data ? json.data : {};
-    const orderConfig = orderConfigJson && orderConfigJson.data ? orderConfigJson.data : {};
+    let statuses = Array.isArray(data.statuses) ? data.statuses : [];
+    if (!statuses.length) {
+      try {
+        const orderConfigJson = await chatApiJson("/api/public/order-config");
+        const orderConfig = orderConfigJson && orderConfigJson.data ? orderConfigJson.data : {};
+        statuses = Array.isArray(orderConfig.statuses) ? orderConfig.statuses : [];
+      } catch {}
+    }
     const preferences = normalizeWebPushPreferences(data.preferences);
     webPushPreferencesCache = preferences;
     return {
       preferences: preferences,
-      statuses: Array.isArray(orderConfig.statuses) ? orderConfig.statuses : [],
+      // Используем тот же список этапов, который получает мобильный клиент.
+      statuses,
     };
   }
 
@@ -7342,6 +7385,12 @@
     const saved = normalizeWebPushPreferences(json && json.data ? json.data.preferences : preferences);
     webPushPreferencesCache = saved;
     return saved;
+  }
+
+  async function getWebPushOrderStatuses() {
+    const json = await importantMessagesApiJson("/api/public/order-config");
+    const data = json && json.data ? json.data : {};
+    return Array.isArray(data.statuses) ? data.statuses : [];
   }
 
   function normalizeImportantMessagesOpenRequest(rawRequest) {
@@ -7545,7 +7594,7 @@
       return;
     }
     if (!importantMessagesItems.length) {
-      renderImportantMessagesState("far fa-bell", "Пока нет PROMO сообщений", "Новости, скидки и посты от компании появятся здесь в формате для телефона.");
+      renderImportantMessagesState("far fa-bell", "Пока нет PROMO сообщений", "Новости, скидки и посты от компании скоро появятся здесь");
       return;
     }
     importantMessagesList.innerHTML = importantMessagesItems.map(function (item) {
@@ -14254,11 +14303,11 @@
         const orderId = Number(payload && (payload.order_id || payload.orderId) || 0);
         if (!(orderId > 0)) return;
         const openOrderDetails = function () {
-          if (typeof window.openShopActiveOrderDetails === "function") {
-            window.openShopActiveOrderDetails(orderId);
+          if (typeof window.openShopOrderDetailsFromPush === "function") {
+            window.openShopOrderDetailsFromPush(orderId);
           }
         };
-        if (typeof window.openShopActiveOrderDetails === "function") openOrderDetails();
+        if (typeof window.openShopOrderDetailsFromPush === "function") openOrderDetails();
         else if (typeof window.ensureShopLateLoaded === "function") window.ensureShopLateLoaded().then(openOrderDetails).catch(function () {});
         return;
       }
@@ -15682,6 +15731,7 @@
     isEnabled: isChatNotificationsEnabled,
     setEnabled: setChatNotificationsEnabled,
     getPreferences: getWebPushPreferences,
+    getOrderStatuses: getWebPushOrderStatuses,
     savePreferences: saveWebPushPreferences,
     getStatus: function () {
       return {

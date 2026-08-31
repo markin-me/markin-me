@@ -6896,7 +6896,7 @@
             : section === "site"
               ? "\u0421\u0430\u0439\u0442"
               : section === "chats"
-                ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0430\u0442\u0430"
+                ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0430\u0442\u0430 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0438"
                 : section === "api"
                   ? "API"
                   : section === "print-templates"
@@ -7081,7 +7081,7 @@
 
 
 
-        if (settingsCenterTitle) settingsCenterTitle.textContent = "Чат";
+        if (settingsCenterTitle) settingsCenterTitle.textContent = "Чат поддержки";
 
 
 

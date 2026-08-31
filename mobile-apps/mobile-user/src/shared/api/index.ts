@@ -2026,6 +2026,19 @@ export async function checkOrderStock(items: Array<Record<string, unknown>>) {
   return response.data || { available: true, shortages: [], stock_levels: [] };
 }
 
+export async function waitForPublicChanges(params: { since?: number; timeoutMs?: number } = {}) {
+  const query = new URLSearchParams({
+    bootstrap_cursor: params.since ? '0' : '1',
+    since: String(Math.max(0, Math.floor(Number(params.since || 0)))),
+    timeout_ms: String(Math.max(1000, Math.min(25000, Math.floor(Number(params.timeoutMs || 20000))))),
+  });
+  const response = await requestApi<{ changed?: boolean; cursor?: number }>(`/api/public/changes/wait?${query.toString()}`);
+  return {
+    changed: response.data?.changed === true,
+    cursor: Math.max(0, Math.floor(Number(response.data?.cursor || 0))),
+  };
+}
+
 export type CreatedCustomerOrder = {
   id: number;
   public_id?: string | null;
