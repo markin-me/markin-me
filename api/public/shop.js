@@ -24830,6 +24830,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (ordersEvents && typeof ordersEvents.publish === 'function') {
               ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
             }
+            if (typeof makeChatTempRouter.sendOrderStatusPush === 'function') {
+              makeChatTempRouter.sendOrderStatusPush(tenantId, orderStoreId, payload).catch((err) => {
+                console.error('Order creation push failed:', err && err.message ? err.message : err);
+              });
+            }
             const botToken = getEffectiveTelegramBotConfig().telegram_bot_token;
             if (botToken) {
               sendNewOrderNotification(tenantId, orderStoreId, payload, { db, botToken }).catch((err) =>
