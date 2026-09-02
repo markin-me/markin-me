@@ -2391,7 +2391,7 @@
 
   const clientTabsHeader = right$("#clientTabsHeader");
   const clientTabsHomeBtn = right$("#clientTabsHomeBtn");
-  const clientTabs = right$("#clientTabs");
+  const clientTabs = $("#clientTabs");
   const clientEmpty = right$("#clientEmpty");
   const bannerEmpty = right$("#bannerEmpty");
   const bonusLevelEmpty = right$("#bonusLevelEmpty");
@@ -3989,13 +3989,13 @@
           ? tabsState.tabs.filter((tab) => ['subscription-history', 'subscription-plan', 'subscription-global-settings', 'subscription-info'].includes(tab.type))
         : tabsState.tabs;
     const hasVisibleTabs = visibleTabs.length > 0;
-    clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isHomeBtnView);
+    clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs);
     if (clientTabsHomeBtn) {
       clientTabsHomeBtn.classList.toggle('hidden', !isHomeBtnView);
       clientTabsHomeBtn.classList.toggle('is-active', isHomeBtnView && !hasVisibleTabs);
     }
-    clientTabs.classList.toggle('hidden', isHomeBtnView && !hasVisibleTabs);
-    if (isHomeBtnView && !hasVisibleTabs) {
+    clientTabs.classList.toggle('hidden', !hasVisibleTabs);
+    if (!hasVisibleTabs) {
       clientTabs.innerHTML = "";
       showEmptyState();
       return;
@@ -4111,6 +4111,9 @@
     if (activate) {
       tabsState.activationToken += 1;
       setActiveTabKey(key);
+      if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+        window.__adminMobilePages.openRight(title || 'Маркетинг');
+      }
     } else {
       renderTabs();
     }
@@ -4541,11 +4544,35 @@
     setClientBenefitsModeToggleState("customer");
   }
 
+  function isClientBenefitsMobilePage() {
+    return window.matchMedia("(max-width: 768px)").matches
+      && document.body.classList.contains("admin-mobile-pages")
+      && !!window.__adminMobilePages;
+  }
+
+  function openClientBenefitsMobilePage(title) {
+    if (!isClientBenefitsMobilePage()) return false;
+    ensureClientBenefitsOverlay();
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.add("admin-benefits-page");
+    document.body.classList.add("admin-benefits-page-open");
+    window.__adminMobilePages.openSubview(String(title || "Выгоды"), closeClientBenefitsOverlay);
+    return true;
+  }
+
+  function closeClientBenefitsMobilePage() {
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.remove("admin-benefits-page");
+    document.body.classList.remove("admin-benefits-page-open");
+    window.__adminMobilePages?.closeSubview?.();
+  }
+
   function closeClientBenefitsOverlay() {
     if (String(state.clientBenefitsModal.screen || "main") === "main") {
       captureClientBenefitsMainViewScroll();
     }
     window.AdminBenefitsModal?.hide({ clearBody: false });
+    closeClientBenefitsMobilePage();
     state.clientBenefitsModal.customerId = null;
     state.clientBenefitsModal.context = "benefits";
     state.clientBenefitsModal.mode = "customer";
@@ -6423,6 +6450,7 @@
     state.clientBenefitsModal.payload = null;
     state.clientBenefitsModal.error = "";
     state.clientBenefitsModal.busyActionKey = "";
+    openClientBenefitsMobilePage("Выгоды");
     if (restoreClientBenefitsMainView()) {
       return;
     }
@@ -6491,6 +6519,7 @@
     state.clientBenefitsModal.bonusCardError = "";
     state.clientBenefitsModal.bonusCardScreen = "main";
     state.clientBenefitsModal.bonusTransactionFilter = "all";
+    openClientBenefitsMobilePage("Бонусная программа");
     renderClientBenefitsOverlay();
     await loadClientBonusCard();
   }
@@ -8007,6 +8036,10 @@
 
   function openSheet(options = {}) {
     const persistState = options.persistState !== false;
+    if (document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight();
+      return;
+    }
     if (isChatRightSheetMode()) {
       try {
         if (window.__adminChatMobileApi && typeof window.__adminChatMobileApi.closeClientsPanel === "function") {
@@ -8111,9 +8144,7 @@
     btnAll.addEventListener("click", () => {
       state.activeFilter = "all";
       state.activeCustomFilterId = null;
-      if (state.currentView !== 'clients') {
-        switchView('clients');
-      }
+      openMarketingCenter('clients', 'Все клиенты');
       renderFilters();
       loadClients().catch(console.error);
     });
@@ -8134,9 +8165,7 @@
       btn.addEventListener("click", () => {
         state.activeFilter = "custom";
         state.activeCustomFilterId = filter.id;
-        if (state.currentView !== 'clients') {
-          switchView('clients');
-        }
+        openMarketingCenter('clients', filter.title || 'Клиенты');
         renderFilters();
         loadClients().catch(console.error);
       });
@@ -8783,8 +8812,11 @@
       state.discountOrders = [];
       tabsState.activeKey = null;
       if (state.currentView !== 'discounts') {
-        switchView('discounts');
+        openMarketingCenter('discounts', 'Все скидки');
       } else {
+        if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+          window.__adminMobilePages.openCenter('Все скидки');
+        }
         renderDiscountsList();
         updateRightPanel();
       }
@@ -8891,8 +8923,11 @@
         state.editingBannerId = null;
         closeBannerPicker();
         if (state.currentView !== 'banners') {
-          switchView('banners');
+          openMarketingCenter('banners', meta.title);
         } else {
+          if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+            window.__adminMobilePages.openCenter(meta.title);
+          }
           renderBannerFilters();
           renderBannerPlacement();
           renderBannerList();
@@ -19868,8 +19903,11 @@
         state.discountCenterMode = 'list';
         syncDiscountToolbarState();
         if (state.currentView !== 'discounts') {
-          switchView('discounts');
+          openMarketingCenter('discounts', filter.title);
         } else {
+          if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+            window.__adminMobilePages.openCenter(filter.title);
+          }
           renderDiscountsList();
           updateRightPanel();
         }
@@ -20352,6 +20390,9 @@
     renderTabs();
     renderDiscountInfo(targetDiscount);
     updateRightPanel();
+    if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(targetDiscount.title || 'Скидка');
+    }
     openDiscountHistory(targetDiscount, { reload: true });
 
     try {
@@ -24603,6 +24644,13 @@
     updateRightPanel();
   }
 
+  function openMarketingCenter(viewName, title) {
+    switchView(viewName);
+    if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+      window.__adminMobilePages.openCenter(title || 'Маркетинг');
+    }
+  }
+
   function updateRightPanel() {
     syncDiscountToolbarState();
     const isBonusCardsView = state.currentView === 'bonus-cards';
@@ -24619,7 +24667,7 @@
     const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
     const hasVisibleHomeBtnTab = isBonusReferralsView ? hasBonusReferralCardTab : isBonusSettingsView ? (hasBonusSettingsBrandTab || hasBonusSettingsCoinTab || hasBonusSettingsFavoriteCategoriesTab || hasBonusSettingsModalsTab) : false;
     if (clientTabsHeader) {
-      clientTabsHeader.classList.toggle('hidden', isHomeBtnView ? false : tabsState.tabs.length === 0);
+      clientTabsHeader.classList.toggle('hidden', isHomeBtnView ? !hasVisibleHomeBtnTab : tabsState.tabs.length === 0);
     }
     if (clientTabsHomeBtn) {
       clientTabsHomeBtn.classList.toggle('hidden', !isHomeBtnView);
@@ -26463,6 +26511,29 @@
     await selectActiveClientOrderStatus(nextStatusId);
   }
 
+  let clientMobilePaymentModalOrigin = null;
+
+  function mountClientMobilePaymentPage() {
+    const modal = document.getElementById("appModal");
+    if (!modal || clientMobilePaymentModalOrigin) return;
+    const activeColumn = document.body.classList.contains("admin-mobile-view-right")
+      ? document.querySelector(".page-col-right")
+      : document.querySelector(".page-col-center");
+    if (!activeColumn || !modal.parentNode) return;
+    clientMobilePaymentModalOrigin = document.createComment("client-mobile-payment-modal-origin");
+    modal.parentNode.insertBefore(clientMobilePaymentModalOrigin, modal);
+    activeColumn.appendChild(modal);
+  }
+
+  function restoreClientMobilePaymentModal() {
+    const modal = document.getElementById("appModal");
+    if (modal && clientMobilePaymentModalOrigin?.parentNode) {
+      clientMobilePaymentModalOrigin.parentNode.insertBefore(modal, clientMobilePaymentModalOrigin);
+      clientMobilePaymentModalOrigin.remove();
+    }
+    clientMobilePaymentModalOrigin = null;
+  }
+
   async function openClientOrderPaymentDialog(order) {
     const targetOrder = order || getActiveClientOrder();
     const orderId = Number(targetOrder?.id || 0);
@@ -26489,6 +26560,27 @@
       return;
     }
 
+    const useMobilePaymentPage = isMobile()
+      && document.body.classList.contains("admin-mobile-pages")
+      && !!window.__adminMobilePages;
+    const paymentPageOptions = useMobilePaymentPage
+      ? {
+          onOpen() {
+            document.body.classList.add("admin-payment-page-open");
+            mountClientMobilePaymentPage();
+            window.__adminMobilePages.openSubview(
+              `Принять оплату №${String(Number(targetOrder?.id || 0) || "—")}`,
+              () => window.AppModal?.close?.("back")
+            );
+          },
+          onClose() {
+            window.__adminMobilePages?.closeSubview?.();
+            restoreClientMobilePaymentModal();
+            document.body.classList.remove("admin-payment-page-open");
+          },
+        }
+      : {};
+
     await sharedOrderPayment.open({
       order: targetOrder,
       apiJson,
@@ -26508,6 +26600,7 @@
       onError(err) {
         console.error("clients payment modal error:", err);
       },
+      ...paymentPageOptions,
     });
   }
 
@@ -26833,7 +26926,13 @@
     if (opts.forceRefresh === true) {
       activateOrderById(id).catch(console.error);
     }
-    if (isMobile() && opts.skipMobileSheet !== true) openSheet();
+    if (isMobile() && opts.skipMobileSheet !== true) {
+      if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+        window.__adminMobilePages.openRight(title || 'Клиент');
+      } else {
+        openSheet();
+      }
+    }
   }
 
   async function findClientIdByPhone(phoneValue) {
@@ -27139,49 +27238,62 @@
   // Кнопка "Категории" внутри аккордеона
   if (elOpenFilterCategoriesBtn) {
     elOpenFilterCategoriesBtn.addEventListener('click', () => {
-      switchView('filter-categories');
+      openMarketingCenter('filter-categories', 'Выборки');
     });
   }
 
   if (elBonusCardsBtn) {
     elBonusCardsBtn.addEventListener('click', () => {
-      switchView('bonus-cards');
+      openMarketingCenter('bonus-cards', 'Базовый тариф');
+    });
+  }
+
+  if (elBonusPaidTariffBtn) {
+    elBonusPaidTariffBtn.addEventListener('click', () => {
+      openMarketingCenter('bonus-settings', 'Платный тариф');
+      openBonusSettingsBrandTab();
     });
   }
 
   if (elImportantMessagesBtn) {
     elImportantMessagesBtn.addEventListener('click', () => {
-      switchView('important-messages');
+      openMarketingCenter('important-messages', 'Promo рассылки');
     });
   }
 
   if (elBonusReferralsBtn) {
     elBonusReferralsBtn.addEventListener('click', () => {
-      switchView('bonus-referrals');
+      openMarketingCenter('bonus-referrals', 'Рефералы');
+    });
+  }
+
+  if (elBonusProgramsBtn) {
+    elBonusProgramsBtn.addEventListener('click', () => {
+      openMarketingCenter('bonus-cards', 'Бонусы');
     });
   }
 
   if (elBonusSettingsNavBtn) {
     elBonusSettingsNavBtn.addEventListener('click', () => {
-      switchView('bonus-settings');
+      openMarketingCenter('bonus-settings', 'Настройки');
     });
   }
 
   if (elSubscriptionHistoryBtn) {
     elSubscriptionHistoryBtn.addEventListener('click', () => {
-      switchView('subscription-history');
+      openMarketingCenter('subscription-history', 'История подписок');
     });
   }
 
   if (elSubscriptionSettingsBtn) {
     elSubscriptionSettingsBtn.addEventListener('click', () => {
-      switchView('subscription-settings');
+      openMarketingCenter('subscription-settings', 'Настройка подписки');
     });
   }
 
   if (elSubscriptionInfoBtn) {
     elSubscriptionInfoBtn.addEventListener('click', () => {
-      switchView('subscription-info');
+      openMarketingCenter('subscription-info', 'Информация');
     });
   }
   if (subscriptionPreviewInfoBtn) {
@@ -30576,6 +30688,9 @@
     },
     openBenefitsByClientId(id) {
       return openClientBenefitsOverlay(id);
+    },
+    openBonusesByClientId(id) {
+      return openClientBonusesOverlay(id);
     },
     ensureOrderStatusesLoaded(force = false) {
       return ensureOrderStatusesLoaded(force);

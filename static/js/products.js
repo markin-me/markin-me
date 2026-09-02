@@ -4350,7 +4350,9 @@ function buildAutoAddGroupDetails(groupId) {
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && sheetHost && autoAddGroupInfo) {
+    if (isMobile && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(productTitle && productTitle.textContent);
+    } else if (isMobile && sheetHost && autoAddGroupInfo) {
       sheetHost.innerHTML = "";
       sheetHost.appendChild(autoAddGroupInfo);
       openSheet();
@@ -7265,7 +7267,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     showProductFooterView();
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && sheetHost && productInfo) {
+    if (isMobile && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(productTitle && productTitle.textContent);
+    } else if (isMobile && sheetHost && productInfo) {
       sheetHost.innerHTML = "";
       sheetHost.appendChild(productInfo);
       openSheet();
@@ -7489,7 +7493,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       setHeaderMode("product");
       showProductFooterView();
       const isMobileView = window.matchMedia("(max-width: 768px)").matches;
-      if (isMobileView && sheetHost && productInfo) {
+      if (isMobileView && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+        window.__adminMobilePages.openRight(productTitle && productTitle.textContent);
+      } else if (isMobileView && sheetHost && productInfo) {
         sheetHost.innerHTML = "";
         sheetHost.appendChild(productInfo);
         openSheet();
@@ -7515,7 +7521,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     setHeaderMode("product");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && sheetHost && categoryInfo) {
+    if (isMobile && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(productTitle && productTitle.textContent);
+    } else if (isMobile && sheetHost && categoryInfo) {
       sheetHost.innerHTML = "";
       sheetHost.appendChild(categoryInfo);
       openSheet();
@@ -9022,7 +9030,9 @@ function updateOptionGroupSelectionUi() {
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && sheetHost && optionGroupInfo) {
+    if (isMobile && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(productTitle && productTitle.textContent);
+    } else if (isMobile && sheetHost && optionGroupInfo) {
       sheetHost.innerHTML = "";
       sheetHost.appendChild(optionGroupInfo);
       openSheet();
@@ -9076,7 +9086,9 @@ function updateOptionGroupSelectionUi() {
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && sheetHost && variantGroupInfo) {
+    if (isMobile && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(productTitle && productTitle.textContent);
+    } else if (isMobile && sheetHost && variantGroupInfo) {
       sheetHost.innerHTML = "";
       sheetHost.appendChild(variantGroupInfo);
       openSheet();
@@ -9135,7 +9147,9 @@ function updateOptionGroupSelectionUi() {
     else showProductFooterEdit();
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && sheetHost && comboInfo) {
+    if (isMobile && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(productTitle && productTitle.textContent);
+    } else if (isMobile && sheetHost && comboInfo) {
       sheetHost.innerHTML = "";
       sheetHost.appendChild(comboInfo);
       openSheet();
@@ -12864,6 +12878,9 @@ const isViewMode = state.comboPanel.mode === "view";
         tabsState.activeKey = null;
         renderTabs();
         showDetailsEmpty();
+        if (window.matchMedia("(max-width: 768px)").matches && document.body.classList.contains("admin-mobile-view-right")) {
+          window.__adminMobilePages?.back?.();
+        }
       }
       return;
     }
@@ -21141,6 +21158,10 @@ const isViewMode = state.comboPanel.mode === "view";
 
         enterProductsMode(id);
         renderCategoriesNav();
+        const category = state.categories.find((item) => Number(item.id) === id);
+        if (window.matchMedia("(max-width: 768px)").matches && document.body.classList.contains("admin-mobile-pages")) {
+          window.__adminMobilePages?.openCenter?.(category?.title || "Товары");
+        }
         await refreshProductsOnly();
       });
     }
@@ -21469,6 +21490,9 @@ const isViewMode = state.comboPanel.mode === "view";
       addCategoryBtn.addEventListener("click", () => {
         enterCategoriesMode();
         renderCategoriesMainList();
+        if (window.matchMedia("(max-width: 768px)").matches && document.body.classList.contains("admin-mobile-pages")) {
+          window.__adminMobilePages?.openCenter?.("Категории");
+        }
       });
     }
 

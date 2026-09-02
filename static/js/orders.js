@@ -298,6 +298,14 @@
   const desktopClientDom = createClientDomRefs(document);
   const sheetClientDom = isCourierScreenPage && sheet ? createClientDomRefs(sheet) : null;
   const clientSurfaces = [desktopClientDom, sheetClientDom].filter((dom) => dom && dom.infoWrap);
+  const shouldUseMobileSheet = () => Boolean(
+    isMobile()
+    && !document.body.classList.contains("admin-mobile-pages")
+  );
+  const shouldUseClientSheet = () => Boolean(
+    shouldUseMobileSheet()
+    && sheetClientDom
+  );
   const {
     infoWrap: clientInfoWrap,
     photo: clientPhoto,
@@ -321,12 +329,13 @@
   } = desktopClientDom;
   const ordersClientBenefitsFooter = $("#ordersClientBenefitsFooter");
   const ordersClientBenefitsOpenBtn = $("#ordersClientBenefitsOpenBtn");
+  const ordersClientBonusesOpenBtn = $("#ordersClientBonusesOpenBtn");
   const sheetOrderInfoFooter = sheet ? $('[data-role="order-info-footer"]', sheet) : null;
   const sheetOrderInfoPaymentBtn = sheet ? $('[data-role="order-info-payment-btn"]', sheet) : null;
   const sharedOrderPanel = window.SharedOrderPanel || null;
   const sharedOrderPayment = window.SharedOrderPayment || null;
   const sharedOrderInfoRenderer = sharedOrderPanel && ordersRightPane
-    ? sharedOrderPanel.createInfoRenderer({
+    ? sharedOrderPanel.createDetailsPage({
         root: ordersRightPane,
         footerEl: orderInfoFooter,
         clientInfoWrap,
@@ -359,7 +368,7 @@
       })
     : null;
   const sheetOrderInfoRenderer = sharedOrderPanel && sheet
-    ? sharedOrderPanel.createInfoRenderer({
+    ? sharedOrderPanel.createDetailsPage({
         root: sheet,
         footerEl: sheetOrderInfoFooter,
         clientInfoWrap: null,
@@ -1649,7 +1658,7 @@
       syncActiveOrderRowState();
       applyTabModeLayout(tab)
         .then(() => {
-          if (openMobile && isMobile()) openSheet();
+          if (openMobile && shouldUseMobileSheet()) openSheet();
         })
         .catch(console.error)
         .finally(() => {
@@ -1672,7 +1681,13 @@
     syncActiveOrderRowState();
     setInfo(orderFromState || tab.order || null);
 
-    if (!orderFromState && tab.orderId) {
+    const hasFullOrder = Boolean(
+      orderFromState
+      && Array.isArray(orderFromState.items)
+      && orderFromState.items.length > 0
+      && Number(orderFromState.store_id || orderFromState.storeId || 0) > 0
+    );
+    if (!hasFullOrder && tab.orderId) {
       ensureFullOrderById(tab.orderId)
         .then((fullOrder) => {
           if (!fullOrder) return;
@@ -1687,7 +1702,7 @@
         .catch(console.error);
     }
 
-    if (openMobile && isMobile()) openSheet();
+    if (openMobile && shouldUseMobileSheet()) openSheet();
     schedulePersistOrdersCache();
   }
 
@@ -1738,7 +1753,7 @@
     return tab;
   }
 
-  async function ensureFullOrderById(orderId) {
+  async function ensureFullOrderById(orderId, { strict = false } = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
     const fromState = state.orders.find((order) => Number(order?.id) === id) || null;
@@ -1757,8 +1772,30 @@
       return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || nextOrder;
     } catch (err) {
       console.error(err);
-      return fromState;
+      return strict ? null : fromState;
     }
+  }
+
+  const orderDetailsOpener = sharedOrderPanel && typeof sharedOrderPanel.createDetailsOpener === "function"
+    ? sharedOrderPanel.createDetailsOpener({
+        loadOrder(orderId) {
+          return ensureFullOrderById(orderId, { strict: true });
+        },
+        openTab(order, orderId, context = {}) {
+          return ensureOrderTab(order, {
+            activate: true,
+            openMobile: context.openMobile !== false,
+          });
+        },
+        onError(error) {
+          console.error("order details open error:", error);
+        },
+      })
+    : null;
+
+  function openOrderDetailsById(orderId, options = {}) {
+    if (!orderDetailsOpener) return Promise.resolve(null);
+    return orderDetailsOpener.open(orderId, options);
   }
 
   async function openEditOrderTab(orderId) {
@@ -2632,7 +2669,14 @@
   function persistOrdersCacheNow() {
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     if (activeTab) captureCheckoutSessionForTab(activeTab);
-    const cachedDate = null;
+    const cachedDate = state.date.start && state.date.end
+      ? {
+          start: toDateKey(state.date.start),
+          end: toDateKey(state.date.end),
+          viewYear: Number(state.date.viewYear),
+          viewMonth: Number(state.date.viewMonth),
+        }
+      : null;
 
     const payload = {
       ts: Date.now(),
@@ -2690,6 +2734,19 @@
     state.activeOrderId = null;
     state.lastEventId = null;
     state.clientsCache = new Map();
+
+    const cachedStart = parseDateKey(cache?.date?.start);
+    const cachedEnd = parseDateKey(cache?.date?.end);
+    if (cachedStart && cachedEnd) {
+      state.date.start = cachedStart;
+      state.date.end = cachedEnd;
+      state.date.viewYear = isValidCalendarViewYear(cache?.date?.viewYear)
+        ? Number(cache.date.viewYear)
+        : cachedStart.getFullYear();
+      state.date.viewMonth = isValidCalendarViewMonth(cache?.date?.viewMonth)
+        ? Number(cache.date.viewMonth)
+        : cachedStart.getMonth();
+    }
 
     const baseDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
     state.date.viewYear = baseDate.getFullYear();
@@ -3794,6 +3851,29 @@
     return state.orders.find((row) => Number(row?.id || 0) === Number(order.id || 0)) || order;
   }
 
+  let mobilePaymentModalOrigin = null;
+
+  function mountMobilePaymentPage() {
+    const modal = document.getElementById("appModal");
+    if (!modal || mobilePaymentModalOrigin) return;
+    const activeColumn = document.body.classList.contains("admin-mobile-view-right")
+      ? document.querySelector(".page-col-right")
+      : document.querySelector(".page-col-center");
+    if (!activeColumn || !modal.parentNode) return;
+    mobilePaymentModalOrigin = document.createComment("mobile-payment-modal-origin");
+    modal.parentNode.insertBefore(mobilePaymentModalOrigin, modal);
+    activeColumn.appendChild(modal);
+  }
+
+  function restoreMobilePaymentModal() {
+    const modal = document.getElementById("appModal");
+    if (modal && mobilePaymentModalOrigin?.parentNode) {
+      mobilePaymentModalOrigin.parentNode.insertBefore(modal, mobilePaymentModalOrigin);
+      mobilePaymentModalOrigin.remove();
+    }
+    mobilePaymentModalOrigin = null;
+  }
+
   async function openOrderPaymentDialog(order) {
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
@@ -3818,6 +3898,25 @@
 
     const offlineCapable = isCourierWorkspace && !isPaidOrder(order);
     const useOfflineCollection = offlineCapable && !courierOfflineState.online;
+    const useMobilePaymentPage = isMobile() && document.body.classList.contains("admin-mobile-pages");
+    const paymentPageOptions = useMobilePaymentPage
+      ? {
+          onOpen() {
+            const paymentOrderNumber = String(getOrderNumber(order) || orderId).trim();
+            document.body.classList.add("admin-payment-page-open");
+            mountMobilePaymentPage();
+            window.__adminMobilePages?.openSubview?.(
+              `Принять оплату №${paymentOrderNumber}`,
+              () => window.AppModal?.close?.("back")
+            );
+          },
+          onClose() {
+            window.__adminMobilePages?.closeSubview?.();
+            restoreMobilePaymentModal();
+            document.body.classList.remove("admin-payment-page-open");
+          },
+        }
+      : {};
 
     if (!offlineCapable) {
       return sharedOrderPayment.open({
@@ -3834,6 +3933,7 @@
         onError(err) {
           console.error("orders payment modal error:", err);
         },
+        ...paymentPageOptions,
       });
     }
 
@@ -3904,6 +4004,7 @@
         }
         console.error("orders payment modal error:", err);
       },
+      ...paymentPageOptions,
     });
 
     let paymentPayload = null;
@@ -4343,6 +4444,16 @@
     });
   }
 
+  if (ordersClientBonusesOpenBtn) {
+    ordersClientBonusesOpenBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const activeClientTab = getActiveClientTab();
+      const clientId = Number(activeClientTab?.clientId || 0);
+      if (!(clientId > 0)) return;
+      void window.__clientsDashboardApi?.openBonusesByClientId?.(clientId);
+    });
+  }
+
   function renderClientAddressesHtml(addresses) {
     const list = Array.isArray(addresses) ? addresses : [];
     if (!list.length) return '<div class="muted" style="padding:4px 0;">\u0410\u0434\u0440\u0435\u0441\u043e\u0432 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.</div>';
@@ -4485,7 +4596,7 @@
 
     tab.loading = true;
     tab.error = null;
-    const activeSurface = tabsState.activeKey === tab.key && isMobile() && sheetClientDom ? "sheet" : "desktop";
+    const activeSurface = tabsState.activeKey === tab.key && shouldUseClientSheet() ? "sheet" : "desktop";
     const activeClientDom = activeSurface === "sheet" ? sheetClientDom : desktopClientDom;
     if (tabsState.activeKey === tab.key) {
       showClientInfo(activeSurface);
@@ -4546,7 +4657,7 @@
 
   async function activateClientTab(tab, { openMobile = false, forceReload = false } = {}) {
     if (!tab || tab.type !== "client") return;
-    const activeSurface = openMobile && isMobile() && sheetClientDom ? "sheet" : "desktop";
+    const activeSurface = openMobile && shouldUseClientSheet() ? "sheet" : "desktop";
     const activeClientDom = activeSurface === "sheet" ? sheetClientDom : desktopClientDom;
 
     const cached = state.clientsCache.get(Number(tab.clientId));
@@ -4571,7 +4682,7 @@
     }, activeClientDom);
     await loadClientTabData(tab, { forceReload });
 
-    if (openMobile && isMobile()) openSheet();
+    if (activeSurface === "sheet") openSheet();
   }
 
   function setInfo(order) {
@@ -4818,6 +4929,10 @@
   }
 
   function openSheet() {
+    if (document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight();
+      return;
+    }
     if (!sheet || !backdrop) return;
     const activeEl = document.activeElement;
     sheetReturnFocusEl = activeEl && !sheet.contains(activeEl) ? activeEl : null;
@@ -5677,6 +5792,7 @@
 
   function applyDateFilter(closePopover = true) {
     updateDateLabel();
+    schedulePersistOrdersCache(0);
     loadStatuses()
       .then(renderStages)
       .then(() => loadAndRenderOrders(false))
@@ -6362,10 +6478,7 @@
       stopOrdersPolling();
       return;
     }
-    void resetWorkspaceDateFilterToTodayIfNeeded({
-      keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
-    })
-      .catch(console.error)
+    Promise.resolve()
       .finally(() => {
         if (isCourierWorkspace) {
           setCourierOnlineState(navigator.onLine !== false);
@@ -6544,18 +6657,7 @@
       const orderId = Number(openOrderFromClientBtn.getAttribute("data-order-id") || 0);
       if (!Number.isFinite(orderId) || orderId <= 0) return;
 
-      let order = state.orders.find((x) => Number(x.id) === orderId) || null;
-      if (!order) {
-        try {
-          const json = await apiJson(`/api/admin/orders/${orderId}`);
-          order = json?.data || null;
-        } catch (err) {
-          console.error(err);
-        }
-      }
-      if (!order) return;
-
-      ensureOrderTab(order, { activate: true, openMobile: true });
+      await openOrderDetailsById(orderId, { openMobile: true });
       return;
     }
 
@@ -6651,8 +6753,14 @@
     }
 
     // РќРµ РІС‹Р±РёСЂР°С‚СЊ Р·Р°РєР°Р· РїСЂРё РєР»РёРєРµ РЅР° РєРЅРѕРїРєСѓ РѕРїР»Р°С‚С‹
-    if (e.target.closest(".order-payment-btn")) {
+    const rowPaymentBtn = e.target.closest(".order-payment-btn");
+    if (rowPaymentBtn) {
+      e.preventDefault();
       e.stopPropagation();
+      const row = rowPaymentBtn.closest(".js-order");
+      const orderId = Number(row?.getAttribute("data-order-id") || 0);
+      const order = state.orders.find((item) => Number(item?.id || 0) === orderId) || null;
+      if (order && isMobile()) await openOrderPaymentDialog(order);
       return;
     }
 
@@ -6672,9 +6780,7 @@
     if (!row) return;
     const orderId = Number(row.getAttribute("data-order-id")) || null;
     if (!orderId) return;
-    const order = state.orders.find((o) => Number(o.id) === Number(orderId));
-    if (!order) return;
-    ensureOrderTab(order, { activate: true, openMobile: true });
+    await openOrderDetailsById(orderId, { openMobile: true });
   });
 
   document.addEventListener("neworder:right-tabs-empty", () => {
@@ -6833,15 +6939,7 @@
 
   window.__ordersDashboardApi = {
     async openOrderById(orderId, options = {}) {
-      const id = Number(orderId || 0);
-      if (!Number.isFinite(id) || id <= 0) return null;
-      const order = await ensureFullOrderById(id);
-      if (!order) return null;
-      const tab = ensureOrderTab(order, {
-        activate: true,
-        openMobile: options && options.openMobile !== false,
-      });
-      return tab || null;
+      return openOrderDetailsById(orderId, options);
     },
     async cycleActiveOrderStatus() {
       await cycleActiveOrderStatus();
@@ -7562,11 +7660,8 @@
       await loadStoreTimezone();
       hydrateOrdersFromCache(cachedBootstrap);
       ensureDateStateInitialized();
-      const didResetDateFilter = await resetWorkspaceDateFilterToTodayIfNeeded({ reloadData: false });
-      if (!didResetDateFilter) {
-        renderCalendar();
-        updateDateLabel();
-      }
+      renderCalendar();
+      updateDateLabel();
       bindOrderTabsWheelScroll();
 
       try {
@@ -7690,7 +7785,6 @@
     closeSheet();
     loadStoreTimezone()
       .then(() => {
-        resetDateStateToToday();
         ensureDateStateInitialized();
         renderCalendar();
         updateDateLabel();

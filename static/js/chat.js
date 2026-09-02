@@ -246,6 +246,9 @@
       orderKind: $("#chatOrderKind"),
       orderId: $("#chatOrderId"),
       mobileOrderId: $("#chatMobileOrderId"),
+      mobileOrderStatus: $("#chatMobileOrderStatus"),
+      mobileOrderTotal: $("#chatMobileOrderTotal"),
+      mobileOrderPayment: $("#chatMobileOrderPayment"),
       orderTime: $("#chatOrderTime"),
       mobileOrderTime: $("#chatMobileOrderTime"),
       orderTimeIcon: $("#chatOrderTimeIcon"),
@@ -3748,7 +3751,9 @@
     wrap.innerHTML = tabs.map((t) => {
       const key = buildChatRightTabKey(t.kind, t.id);
       const selected = key && key === String(state.activeRightTabKey || "");
-      const title = t.kind === "order" ? `#${t.id}` : (String(t.title || "").trim() || "Клиент");
+      const title = t.kind === "order"
+        ? `${isChatMobileViewport() ? "№" : "#"}${t.id}`
+        : (String(t.title || "").trim() || "Клиент");
       const safeTitle = escapeHtml(title);
       return `
         <div class="product-tab ${selected ? "is-active" : ""}" role="tab"
@@ -3796,6 +3801,7 @@
     }
     state.rightTabActivationToken += 1;
     clearChatRightPane();
+    if (isChatMobileViewport()) syncMobileChatView("center");
   }
 
   async function activateChatRightTab(key) {
@@ -9791,6 +9797,34 @@
     });
   }
 
+  function renderMobileFloatingOrder(order) {
+    const source = order && typeof order === "object" ? order : null;
+    const orderId = Number(source?.id || 0);
+    const canOpen = Number.isFinite(orderId) && orderId > 0;
+    const node = dom.center.mobileHeaderOrderBtn;
+    if (!node) return;
+
+    if (canOpen) node.setAttribute("data-order-id", String(orderId));
+    else node.removeAttribute("data-order-id");
+    node.classList.toggle("is-order-openable", canOpen);
+    node.setAttribute("aria-disabled", canOpen ? "false" : "true");
+    node.disabled = !canOpen;
+
+    if (dom.center.mobileOrderId) dom.center.mobileOrderId.textContent = canOpen ? `№${orderId}` : "—";
+    if (dom.center.mobileOrderTime) dom.center.mobileOrderTime.textContent = canOpen
+      ? (fmtTime(source.created_at || source.scheduled_at) || "—")
+      : "—";
+    if (dom.center.mobileOrderStatus) dom.center.mobileOrderStatus.textContent = canOpen
+      ? (String(source.status_title || "Без статуса").trim() || "Без статуса")
+      : "—";
+    if (dom.center.mobileOrderTotal) dom.center.mobileOrderTotal.textContent = canOpen
+      ? fmtOrderAmount(source.total_price ?? source.total)
+      : "—";
+    if (dom.center.mobileOrderPayment) dom.center.mobileOrderPayment.textContent = !canOpen
+      ? "—"
+      : (isHeaderOrderFullyRefunded(source) ? "Возвращено" : (isHeaderOrderPaid(source) ? "Оплачено" : "Не оплачено"));
+  }
+
   function setHeaderClientLinkState(canOpen) {
     const enabled = canOpen === true;
     [dom.center.headerClientBtn, dom.center.mobileHeaderClientBtn].forEach((node) => {
@@ -13853,6 +13887,13 @@
       if (dom.center.mobileOrderId) dom.center.mobileOrderId.textContent = mobileOrderLabel;
       if (dom.center.orderTime) dom.center.orderTime.textContent = safeTime;
       if (dom.center.mobileOrderTime) dom.center.mobileOrderTime.textContent = safeTime;
+      if (dom.center.mobileOrderStatus) dom.center.mobileOrderStatus.textContent = String(statusText || "—").trim() || "—";
+      if (dom.center.mobileOrderTotal) dom.center.mobileOrderTotal.textContent = String(total || "—").trim() || "—";
+      if (dom.center.mobileOrderPayment) {
+        dom.center.mobileOrderPayment.textContent = !order
+          ? "—"
+          : (isHeaderOrderFullyRefunded(order) ? "Возвращено" : (isHeaderOrderPaid(order) ? "Оплачено" : "Не оплачено"));
+      }
       if (dom.center.orderAddress) dom.center.orderAddress.textContent = safeAddress || "—";
       if (dom.center.orderComment) dom.center.orderComment.textContent = safeComment || "—";
       if (dom.center.headerName) dom.center.headerName.textContent = safeClientName;
@@ -13954,6 +13995,8 @@
         orderId,
       });
     }
+
+    renderMobileFloatingOrder(currentOrder);
 
     syncComposerMode();
     setComposerEnabled(true);
@@ -17646,6 +17689,9 @@
   function init() {
     pendingNotificationChatOpenRequest = pendingNotificationChatOpenRequest || readChatNotificationOpenRequestFromLocation();
     state.chatWidgetEnabled = getTenantChatWidgetEnabledFromStorage();
+    if (isChatMobileViewport()) {
+      syncMobileChatView("clients", { persistState: true });
+    }
     setSidebarChatNavVisibility(state.chatWidgetEnabled !== false);
     setChatBootstrapLoading(state.chatWidgetEnabled !== false);
     ensureDesktopChatHeaderMarkup();

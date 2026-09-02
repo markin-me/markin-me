@@ -6297,6 +6297,8 @@
 
     const settingsDeliveryMapSearchWrap = document.getElementById("settingsDeliveryMapSearchWrap");
 
+    const settingsDeliveryMapSearchToggle = document.getElementById("settingsDeliveryMapSearchToggle");
+
 
 
     const settingsDeliveryMapSearchPopover = document.getElementById("settingsDeliveryMapSearchPopover");
@@ -6308,6 +6310,8 @@
 
 
     const settingsDeliveryMapBlock = document.getElementById("settingsDeliveryMapBlock");
+
+    const settingsDeliveryMobileListBtn = document.getElementById("settingsDeliveryMobileListBtn");
 
 
 
@@ -6668,6 +6672,8 @@
 
 
         settingsDeliveryMapSearchToolbar.classList.toggle("hidden", !isDelivery);
+
+        if (!isDelivery) settingsDeliveryMapSearchToolbar.classList.remove("is-open");
 
 
 
@@ -7491,12 +7497,6 @@
 
           setActiveRightTab("");
 
-          if (isPrintApiTabId(tabId)) {
-            clearPrintApiTabState(tabId);
-          }
-
-
-
           if (rightHeader) rightHeader.classList.add("hidden");
 
 
@@ -8026,7 +8026,7 @@
 
 
 
-    const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
+    const rightHeader = document.querySelector(".settings-right-header");
 
 
 
@@ -20904,6 +20904,10 @@
 
       setActiveRightTab(tabId);
 
+      if (window.matchMedia("(max-width: 768px)").matches && window.__adminMobilePages) {
+        window.__adminMobilePages.openRight(titleText || "Настройки");
+      }
+
 
 
       if (tabId === "logo" && logoCard) logoCard.classList.add("is-active");
@@ -22150,6 +22154,7 @@
         tenantPwaDesignerColorPickerDrag = null;
       });
       window.addEventListener("touchmove", (event) => {
+        if (!tenantPwaDesignerColorPickerDrag) return;
         const touch = event.touches && event.touches[0];
         if (!touch) return;
         event.preventDefault();
@@ -41120,7 +41125,7 @@
 
 
 
-    if (initialSectionBtn) {
+    if (initialSectionBtn && !window.matchMedia("(max-width: 768px)").matches) {
 
 
 
@@ -51619,6 +51624,50 @@
 
 
 
+    if (settingsDeliveryMapSearchToggle) {
+
+
+
+      settingsDeliveryMapSearchToggle.addEventListener("click", (event) => {
+
+
+
+        event.preventDefault();
+
+
+
+        event.stopPropagation();
+
+
+
+        if (!window.matchMedia("(max-width: 768px)").matches || !settingsDeliveryMapSearchToolbar) return;
+
+
+
+        const willOpen = !settingsDeliveryMapSearchToolbar.classList.contains("is-open");
+
+
+
+        settingsDeliveryMapSearchToolbar.classList.toggle("is-open", willOpen);
+
+
+
+        if (willOpen) settingsDeliveryMapSearchInput?.focus();
+
+
+
+        else closeDeliveryMapSearchPopover();
+
+
+
+      });
+
+
+
+    }
+
+
+
     if (settingsDeliveryMapSearchInput) {
 
 
@@ -51648,6 +51697,30 @@
 
 
       settingsDeliveryMapSearchInput.addEventListener("keydown", (event) => {
+
+
+
+        if (event.key === "Escape" && settingsDeliveryMapSearchToolbar?.classList.contains("is-open")) {
+
+
+
+          event.preventDefault();
+
+
+
+          settingsDeliveryMapSearchToolbar.classList.remove("is-open");
+
+
+
+          closeDeliveryMapSearchPopover();
+
+
+
+          return;
+
+
+
+        }
 
 
 
@@ -51816,6 +51889,46 @@
 
 
         openDeliveryMapConfigTab();
+
+
+
+      });
+
+
+
+    }
+
+
+
+    if (settingsDeliveryMobileListBtn) {
+
+
+
+      settingsDeliveryMobileListBtn.addEventListener("click", (event) => {
+
+
+
+        event.preventDefault();
+
+
+
+        event.stopPropagation();
+
+
+
+        if (!window.matchMedia("(max-width: 768px)").matches || !window.__adminMobilePages) return;
+
+
+
+        goToDeliveryHome();
+
+
+
+        renderDeliveryWorkspace();
+
+
+
+        window.__adminMobilePages.openRight("Доставка");
 
 
 
@@ -52871,11 +52984,11 @@
 
 
 
-        ? `От ${minOrder} в‚Ѕ -> ${deliveryCost} в‚Ѕ`
+        ? `От ${minOrder} ₽ -> ${deliveryCost} ₽`
 
 
 
-        : `${deliveryCost} в‚Ѕ доставка`;
+        : `${deliveryCost} ₽ доставка`;
 
 
 
@@ -53863,7 +53976,7 @@
 
 
 
-        closeBtn.textContent = "Г—";
+        closeBtn.innerHTML = '<i class="fas fa-times"></i>';
 
 
 
@@ -54767,11 +54880,11 @@
 
 
 
-        ? `От ${minOrder} в‚Ѕ в†’ ${deliveryCost} в‚Ѕ`
+        ? `От ${minOrder} ₽ → ${deliveryCost} ₽`
 
 
 
-        : `${deliveryCost} в‚Ѕ доставка`;
+        : `${deliveryCost} ₽ доставка`;
 
 
 
@@ -57764,6 +57877,10 @@
 
 
       renderDeliveryWorkspace();
+
+      if (window.matchMedia("(max-width: 768px)").matches && window.__adminMobilePages) {
+        window.__adminMobilePages.openRight(getDeliveryTabTitle(nextTab));
+      }
 
 
 

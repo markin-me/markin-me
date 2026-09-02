@@ -10,12 +10,15 @@
     var journalEmptyEl = document.getElementById('cashJournalEmpty');
     var summaryCardsEl = document.getElementById('cashSummaryCards');
     var sidebarSummaryEl = document.getElementById('cashSidebarSummary');
-    var cashRightPaneEl = document.getElementById('cashOrdersRightPane');
-    var cashOrderInfoRootEl = document.getElementById('cashOrderInfoRoot');
-    var cashOrderTabsHeaderEl = document.getElementById('cashOrderTabsHeader');
-    var cashOrderTabsEl = document.getElementById('cashOrderTabs');
-    var cashOrderInfoFooterEl = document.getElementById('cashOrderInfoFooter');
-    var cashOrderPaymentBtnEl = document.getElementById('cashOrderPaymentBtn');
+    var cashRightPaneEl = document.getElementById('ordersRightPane');
+    var cashOrderInfoRootEl = document.getElementById('orderInfoRoot');
+    var cashOrderTabsHeaderEl = document.getElementById('orderTabsHeader');
+    var cashOrderTabsEl = document.getElementById('orderTabs');
+    var cashOrderInfoFooterEl = document.getElementById('orderInfoFooter');
+    var cashOrderPaymentBtnEl = document.getElementById('orderInfoPaymentBtn');
+    var ordersClientBenefitsFooterEl = document.getElementById('ordersClientBenefitsFooter');
+    var ordersClientBenefitsOpenBtnEl = document.getElementById('ordersClientBenefitsOpenBtn');
+    var ordersClientBonusesOpenBtnEl = document.getElementById('ordersClientBonusesOpenBtn');
     var appModalEl = document.getElementById('appModal');
     var appModalBodyEl = document.getElementById('appModalBody');
     var sectionTitleEl = document.getElementById('cashSectionTitle');
@@ -88,6 +91,7 @@
       date: { start: null, end: null, viewYear: null, viewMonth: null },
     };
     var tabsState = { tabs: [], activeKey: null };
+    var fullOrdersById = new Map();
 
     function apiJson(url, opts) {
       opts = opts || {};
@@ -139,6 +143,12 @@
     function money(value) {
       var numeric = Number(value || 0);
       return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(Number.isFinite(numeric) ? numeric : 0) + ' ₽';
+    }
+
+    function roundMoney(value) {
+      var numeric = Number(value || 0);
+      if (!Number.isFinite(numeric)) return 0;
+      return Math.round(numeric * 100) / 100;
     }
 
     function formatCount(value) {
@@ -1488,6 +1498,10 @@
       return (Array.isArray(list) ? list : []).reduce(function (summary, order) {
         summary.totalOrders += 1;
         if (isNewOrder(order)) summary.newOrders += 1;
+        if (isDeliveredStatusMeta(getStatusMetaById(order && order.status_id))) {
+          summary.deliveredOrders += 1;
+          summary.deliveredTotal += getOrderDisplayTotal(order);
+        }
         if (isPaidOrder(order)) {
           summary.paidOrders += 1;
           var total = getOrderDisplayTotal(order);
@@ -1499,7 +1513,7 @@
           summary.unpaidOrders += 1;
         }
         return summary;
-      }, { totalOrders: 0, newOrders: 0, unpaidOrders: 0, paidOrders: 0, cashPaidTotal: 0, cardPaidTotal: 0, onlinePaidTotal: 0 });
+      }, { totalOrders: 0, newOrders: 0, deliveredOrders: 0, deliveredTotal: 0, unpaidOrders: 0, paidOrders: 0, cashPaidTotal: 0, cardPaidTotal: 0, onlinePaidTotal: 0 });
     }
 
     function getMoneySummary(list) {
@@ -1728,14 +1742,38 @@
       return getTabByKey(tabsState.activeKey);
     }
 
+    function mergeOrderTabSnapshot(tab, fresh) {
+      var previous = tab && tab.order || {};
+      var incoming = fresh || {};
+      var merged = Object.assign({}, previous, incoming);
+      if (!tab || !tab.fullOrderLoaded) return merged;
+
+      if (Array.isArray(previous.items) && previous.items.length > 0 && (!Array.isArray(incoming.items) || incoming.items.length === 0)) {
+        merged.items = previous.items;
+      }
+      ['address', 'address_comment', 'comment', 'discounts_json', 'benefits_meta'].forEach(function (key) {
+        var incomingValue = incoming[key];
+        var isMissing = incomingValue == null || incomingValue === '' || (Array.isArray(incomingValue) && incomingValue.length === 0);
+        if (isMissing && previous[key] != null && previous[key] !== '') merged[key] = previous[key];
+      });
+      return merged;
+    }
+
     function getActiveOrder() {
       var activeTab = getActiveTab();
       if (activeTab && Number(activeTab.orderId || 0) > 0) {
+        var fullOrder = fullOrdersById.get(Number(activeTab.orderId || 0)) || null;
         var fresh = state.orders.find(function (order) {
           return getOrderId(order) === Number(activeTab.orderId || 0);
         }) || null;
+        if (fullOrder) {
+          activeTab.order = fullOrder;
+          activeTab.fullOrderLoaded = true;
+          activeTab.title = buildOrderTabTitle(fullOrder);
+          return fullOrder;
+        }
         if (fresh) {
-          activeTab.order = Object.assign({}, activeTab.order, fresh);
+          activeTab.order = mergeOrderTabSnapshot(activeTab, fresh);
           activeTab.title = buildOrderTabTitle(activeTab.order);
           return activeTab.order;
         }
@@ -1777,6 +1815,7 @@
         });
       }
       if (cashAddBtnEl) {
+        cashAddBtnEl.classList.toggle('hidden', state.currentSection !== 'expenses');
         if (state.currentSection === 'expenses') cashAddBtnEl.setAttribute('data-analytics-action', 'add-document');
         else cashAddBtnEl.removeAttribute('data-analytics-action');
       }
@@ -1790,6 +1829,7 @@
 
     function renderSummaryCards() {
       if (!summaryCardsEl) return;
+      summaryCardsEl.classList.toggle('cash-summary-grid--orders', state.currentSection === 'orders');
       if (state.currentSection === 'expenses') {
         summaryCardsEl.innerHTML = '<div class="cash-summary-card"><span>Учтено расходов</span><strong>' + escapeHtml(money(Number(state.expenseSummary.total_sum_kopecks || 0) / 100)) + '</strong></div><div class="cash-summary-card"><span>Документы</span><strong>' + escapeHtml(formatCount(state.expenseSummary.count || 0)) + '</strong></div>';
         return;
@@ -1805,12 +1845,13 @@
       }
       var summary = buildOrdersSummary(getOrderJournalOrders());
       summaryCardsEl.innerHTML =
-        '<div class="cash-summary-card"><span>Новые</span><strong>' + escapeHtml(formatCount(summary.newOrders)) + '</strong></div>' +
-        '<div class="cash-summary-card"><span>Не оплачены</span><strong>' + escapeHtml(formatCount(summary.unpaidOrders)) + '</strong></div>' +
-        '<div class="cash-summary-card"><span>Оплачены</span><strong>' + escapeHtml(formatCount(summary.paidOrders)) + '</strong></div>' +
-        '<div class="cash-summary-card"><span>Наличные</span><strong>' + escapeHtml(money(summary.cashPaidTotal)) + '</strong></div>' +
-        '<div class="cash-summary-card"><span>Картой / QR</span><strong>' + escapeHtml(money(summary.cardPaidTotal)) + '</strong></div>' +
-        '<div class="cash-summary-card"><span>Онлайн</span><strong>' + escapeHtml(money(summary.onlinePaidTotal)) + '</strong></div>';
+        '<div class="cash-summary-card cash-summary-card--half"><span>Доставлены</span><strong>' + escapeHtml(formatCount(summary.deliveredOrders)) + '</strong></div>' +
+        '<div class="cash-summary-card cash-summary-card--half"><span>Сумма доставленных</span><strong>' + escapeHtml(money(summary.deliveredTotal)) + '</strong></div>' +
+        '<div class="cash-summary-card cash-summary-card--half"><span>Оплачены</span><strong>' + escapeHtml(formatCount(summary.paidOrders)) + '</strong></div>' +
+        '<div class="cash-summary-card cash-summary-card--half"><span>Не оплачены</span><strong>' + escapeHtml(formatCount(summary.unpaidOrders)) + '</strong></div>' +
+        '<div class="cash-summary-card cash-summary-card--third"><span>Наличные</span><strong>' + escapeHtml(money(summary.cashPaidTotal)) + '</strong></div>' +
+        '<div class="cash-summary-card cash-summary-card--third"><span>Картой / QR</span><strong>' + escapeHtml(money(summary.cardPaidTotal)) + '</strong></div>' +
+        '<div class="cash-summary-card cash-summary-card--third"><span>Онлайн</span><strong>' + escapeHtml(money(summary.onlinePaidTotal)) + '</strong></div>';
     }
 
     function renderSidebarSummary() {
@@ -1887,7 +1928,7 @@
       }
     }
 
-    var cashInfoRenderer = sharedOrderPanel && cashRightPaneEl ? sharedOrderPanel.createInfoRenderer({
+    var cashInfoRenderer = sharedOrderPanel && cashRightPaneEl ? sharedOrderPanel.createDetailsPage({
       root: cashRightPaneEl,
       footerEl: cashOrderInfoFooterEl,
       clientInfoWrap: clientInfoWrap,
@@ -1904,6 +1945,24 @@
         paymentIcon: paymentIcon,
         getDisplayOrder: getDisplayOrder,
         itemsToHtml: itemsToHtml,
+        orderItemsToHtml: function (items, order) {
+          if (window.SharedOrderItems && typeof window.SharedOrderItems.renderReadonlyOrderItems === 'function') {
+            try {
+              return String(window.SharedOrderItems.renderReadonlyOrderItems(items, {
+                money: money,
+                order: order,
+                sortAutoAdd: true,
+                placeholderImage: '/static/img/placeholder.png',
+                preserveStoredLineTotals: true,
+                surface: 'admin',
+                showQuickLabelPrint: true
+              }) || '');
+            } catch (error) {
+              console.warn('Failed to render readonly order items in cash:', error);
+            }
+          }
+          return itemsToHtml(items);
+        }
       },
       renderInlineStatusMenus: renderInlineStatusMenus,
       afterRender: function (order) { syncCashPaymentFooter(order); },
@@ -1926,6 +1985,7 @@
       }
       if (clientInfoWrap) clientInfoWrap.classList.remove('hidden');
       if (cashOrderInfoFooterEl) cashOrderInfoFooterEl.classList.add('hidden');
+      if (ordersClientBenefitsFooterEl) ordersClientBenefitsFooterEl.classList.remove('hidden');
     }
 
     function setClientContentTab(tabName) {
@@ -1955,6 +2015,36 @@
         event.preventDefault();
         event.stopPropagation();
         setClientContentTab(btn.getAttribute('data-ctab'));
+      });
+    }
+
+    function openActiveClientBenefits(mode) {
+      var activeClientTab = getActiveClientTab();
+      var clientId = Number(activeClientTab && activeClientTab.clientId || 0);
+      if (!(clientId > 0)) return;
+      var clientsApi = window.__clientsDashboardApi;
+      if (!clientsApi) {
+        console.error('clients dashboard api is not available');
+        return;
+      }
+      if (mode === 'bonuses' && typeof clientsApi.openBonusesByClientId === 'function') {
+        clientsApi.openBonusesByClientId(clientId);
+        return;
+      }
+      if (typeof clientsApi.openBenefitsByClientId === 'function') clientsApi.openBenefitsByClientId(clientId);
+    }
+
+    if (ordersClientBenefitsOpenBtnEl) {
+      ordersClientBenefitsOpenBtnEl.addEventListener('click', function (event) {
+        event.preventDefault();
+        openActiveClientBenefits('benefits');
+      });
+    }
+
+    if (ordersClientBonusesOpenBtnEl) {
+      ordersClientBonusesOpenBtnEl.addEventListener('click', function (event) {
+        event.preventDefault();
+        openActiveClientBenefits('bonuses');
       });
     }
 
@@ -2250,6 +2340,7 @@
 
     function renderRightPane() {
       if (state.currentSection === 'expenses' && state.activeExpenseDocument) {
+        if (ordersClientBenefitsFooterEl) ordersClientBenefitsFooterEl.classList.add('hidden');
         var expense = state.activeExpenseDocument;
         var items = Array.isArray(expense.items) ? expense.items : [];
         var receiptData = expense.receiptData || {};
@@ -2276,6 +2367,7 @@
       var activeClientTab = getActiveClientTab();
       var activeOrder = activeClientTab ? null : getActiveOrder();
       var showHome = !activeTab || (!activeOrder && !activeClientTab);
+      if (ordersClientBenefitsFooterEl) ordersClientBenefitsFooterEl.classList.toggle('hidden', !activeClientTab);
       if (cashOrderTabsHeaderEl) cashOrderTabsHeaderEl.classList.remove('hidden');
       if (sidebarSummaryEl) sidebarSummaryEl.classList.toggle('hidden', !showHome);
       if (cashOrderInfoRootEl) cashOrderInfoRootEl.classList.toggle('hidden', showHome);
@@ -2383,7 +2475,8 @@
             addressText: shortAddressDisplay,
             addressCommentText: addressCommentDisplay,
             stageHtml: stageHtml,
-            paymentHtml: paymentHtml
+            paymentHtml: paymentHtml,
+            useMobileControls: window.matchMedia('(max-width: 768px)').matches
           }) +
         '</div>';
       }
@@ -2425,11 +2518,16 @@
     function syncTabsWithLatestOrders() {
       tabsState.tabs.forEach(function (tab) {
         if (String(tab && tab.type || 'order') === 'client') return;
+        if (tab && tab.fullOrderLoaded && fullOrdersById.has(Number(tab.orderId || 0))) {
+          tab.order = fullOrdersById.get(Number(tab.orderId || 0));
+          tab.title = buildOrderTabTitle(tab.order);
+          return;
+        }
         var fresh = state.orders.find(function (order) {
           return getOrderId(order) === Number(tab && tab.orderId || 0);
         }) || null;
         if (fresh) {
-          tab.order = Object.assign({}, tab.order, fresh);
+          tab.order = mergeOrderTabSnapshot(tab, fresh);
           tab.title = buildOrderTabTitle(tab.order);
         }
       });
@@ -2457,9 +2555,38 @@
       state.activeOrderId = String(tab && tab.type || 'order') === 'client' ? 0 : Number(tab && tab.orderId || 0);
       closeInlineStatusMenus();
       renderAll();
+      if (String(tab && tab.type || 'order') === 'order') loadFullOrderForTab(tab);
+      if (window.__adminMobilePages) {
+        window.setTimeout(function () {
+          window.__adminMobilePages.openRight(tab.title);
+        }, 60);
+      }
     }
 
-    function ensureOrderTab(order) {
+    function loadFullOrderForTab(tab) {
+      var orderId = Number(tab && tab.orderId || 0);
+      if (!(orderId > 0) || tab.fullOrderLoaded || tab.fullOrderPromise) return tab && tab.fullOrderPromise || Promise.resolve(tab && tab.order || null);
+      tab.fullOrderPromise = apiJson('/api/admin/orders/' + String(orderId)).then(function (json) {
+        var fullOrder = json && json.data || null;
+        if (!fullOrder || getOrderId(fullOrder) !== orderId) return tab.order || null;
+        fullOrdersById.set(orderId, Object.assign({}, fullOrder));
+        tab.order = Object.assign({}, tab.order, fullOrder);
+        tab.title = buildOrderTabTitle(tab.order);
+        tab.fullOrderLoaded = true;
+        updateOrderInState(tab.order);
+        renderAll();
+        return tab.order;
+      }).catch(function (error) {
+        console.error('cash full order load error:', error);
+        return tab.order || null;
+      }).finally(function () {
+        tab.fullOrderPromise = null;
+      });
+      return tab.fullOrderPromise;
+    }
+
+    function ensureOrderTab(order, options) {
+      options = options || {};
       if (!(getOrderId(order) > 0)) return null;
       var key = buildOrderTabKey(order.id);
       var tab = getTabByKey(key);
@@ -2471,8 +2598,41 @@
         tab.order = Object.assign({}, tab.order, order);
         tab.title = buildOrderTabTitle(tab.order);
       }
-      setActiveOrderTab(key);
+      if (options.fullOrderLoaded === true) tab.fullOrderLoaded = true;
+      if (options.activate !== false) setActiveOrderTab(key);
+      else renderTabs();
       return tab;
+    }
+
+    var cashOrderDetailsOpener = sharedOrderPanel && typeof sharedOrderPanel.createDetailsOpener === 'function'
+      ? sharedOrderPanel.createDetailsOpener({
+          loadOrder: function (id) {
+            return apiJson('/api/admin/orders/' + String(id)).then(function (json) {
+              var fullOrder = json && json.data || null;
+              if (!fullOrder || getOrderId(fullOrder) !== id) return null;
+              var listOrder = state.orders.find(function (order) { return getOrderId(order) === id; }) || {};
+              var detailsOrder = mergeOrderTabSnapshot({ order: listOrder, fullOrderLoaded: true }, fullOrder);
+              fullOrdersById.set(id, Object.assign({}, detailsOrder));
+              updateOrderInState(detailsOrder);
+              return detailsOrder;
+            });
+          },
+          openTab: function (order) {
+            return ensureOrderTab(order, { activate: true, fullOrderLoaded: true });
+          },
+          afterOpen: function (order, tab) {
+            if (!tab || String(tabsState.activeKey || '') !== String(tab.key || '')) return;
+            if (cashInfoRenderer) cashInfoRenderer.setOrder(order);
+          },
+          onError: function (error) {
+            console.error('cash order details open error:', error);
+          }
+        })
+      : null;
+
+    function openOrderById(orderId) {
+      if (!cashOrderDetailsOpener) return Promise.resolve(null);
+      return cashOrderDetailsOpener.open(orderId);
     }
 
     function closeOrderTab(key) {
@@ -3368,19 +3528,16 @@
           clientPhone: clientPhone,
           clientName: clientName,
           activate: true
+        }).then(function (tab) {
+          if (tab && window.__adminMobilePages) window.__adminMobilePages.openRight(tab.title);
         }).catch(console.error);
-        return;
-      }
-      if (event.target && event.target.closest('.order-payment-btn')) {
-        event.stopPropagation();
         return;
       }
       var row = event.target && event.target.closest('.js-order');
       if (!row) return;
       var orderId = Number(row.getAttribute('data-order-id') || 0);
-      var order = state.orders.find(function (item) { return getOrderId(item) === orderId; }) || null;
-      if (!order) return;
-      ensureOrderTab(order);
+      if (!(orderId > 0)) return;
+      openOrderById(orderId);
     });
 
     document.addEventListener('click', function (event) {
@@ -3394,14 +3551,14 @@
         closeOrderFilterMenu();
       }
       var tabCloseBtn = target && target.closest('[data-order-tab-close]');
-      if (tabCloseBtn && cashRightPaneEl && cashRightPaneEl.contains(tabCloseBtn)) {
+      if (tabCloseBtn && cashOrderTabsEl && cashOrderTabsEl.contains(tabCloseBtn)) {
         event.preventDefault();
         event.stopPropagation();
         closeOrderTab(tabCloseBtn.getAttribute('data-order-tab-close'));
         return;
       }
       var tabBtn = target && target.closest('[data-order-tab-key]');
-      if (tabBtn && cashRightPaneEl && cashRightPaneEl.contains(tabBtn)) {
+      if (tabBtn && cashOrderTabsEl && cashOrderTabsEl.contains(tabBtn)) {
         event.preventDefault();
         setActiveOrderTab(tabBtn.getAttribute('data-order-tab-key'));
         return;
@@ -3412,15 +3569,7 @@
         event.stopPropagation();
         var clientOrderId = Number(openOrderFromClientBtn.getAttribute('data-order-id') || 0);
         if (!(clientOrderId > 0)) return;
-        var clientOrder = state.orders.find(function (item) { return getOrderId(item) === clientOrderId; }) || null;
-        if (!clientOrder) {
-          apiJson('/api/admin/orders/' + String(clientOrderId)).then(function (json) {
-            var loadedOrder = json && json.data || null;
-            if (loadedOrder) ensureOrderTab(loadedOrder);
-          }).catch(console.error);
-          return;
-        }
-        ensureOrderTab(clientOrder);
+        openOrderById(clientOrderId);
         return;
       }
       var openClientBtn = target && target.closest('[data-action="open-client"]');
@@ -3596,6 +3745,7 @@
       state.paymentMethods = [];
       state.paymentMethodsPromise = null;
       state.clientsCache.clear();
+      fullOrdersById.clear();
       state.activeOrderId = 0;
       state.eventsCursor = 0;
       tabsState.tabs = [];

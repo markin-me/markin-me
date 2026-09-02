@@ -1831,11 +1831,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     if (!rows.length) return null;
     const r = rows[0];
 
-    let items = [];
-    try {
-      const parsed = r.items ? JSON.parse(r.items) : [];
-      if (Array.isArray(parsed)) items = parsed;
-    } catch {}
+    const items = parseOrderItemsJson(r.items);
 
     const itemProductIds = [...new Set(items
       .map((item) => Number(item?.product_id || 0))
@@ -2153,11 +2149,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       );
 
       const baseData = rows.map((r) => {
-        let items = [];
-        try {
-          const parsed = r.items ? JSON.parse(r.items) : [];
-          if (Array.isArray(parsed)) items = parsed;
-        } catch {}
+        const items = parseOrderItemsJson(r.items);
         const discountsJson = parseOrderDiscountsJson(r.discounts_json);
         const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
         const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
