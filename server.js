@@ -1302,12 +1302,7 @@ const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/js/chat-sidebar-badge.js'),
   app.locals.assetUrl('/static/js/appModal.js'),
   app.locals.assetUrl('/static/js/shared-order-panel.js'),
-  app.locals.assetUrl('/static/js/shared-order-payment.js'),
-  app.locals.assetUrl('/static/js/new-order.js'),
-  app.locals.assetUrl('/static/js/courier-screen.js'),
-  app.locals.assetUrl('/static/js/orders.js'),
-  app.locals.assetUrl('/static/js/analytics.js'),
-  app.locals.assetUrl('/static/css/analytics.css')
+  app.locals.assetUrl('/static/js/shared-order-payment.js')
 ];
 const serviceWorkerWarmPages = [
   '/dashboard/cash',

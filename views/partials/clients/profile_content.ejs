@@ -80,6 +80,12 @@
 
   <!-- Tab: Orders -->
   <div class="shop-profile-tab-panel" data-ctab="orders" id="clientTabOrders">
+    <div class="shop-profile-card hidden" id="clientActiveOrderCard"></div>
+    <details id="clientCompletedOrdersAccordion">
+      <summary>Завершённые заказы</summary>
+      <div class="shop-profile-list" id="clientCompletedOrdersList"></div>
+      <button type="button" class="shop-chip-btn hidden" id="clientCompletedOrdersMore">Показать ещё</button>
+    </details>
     <!-- Orders list view -->
     <div id="clientOrdersListView">
       <div class="shop-profile-list" id="clientOrdersList">

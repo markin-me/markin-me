@@ -7,6 +7,7 @@
   try {
     var filtersEl = document.getElementById('cashJournalFilters');
     var journalListEl = document.getElementById('cashJournalList');
+    var loadMoreBtnEl = document.getElementById('cashLoadMoreBtn');
     var journalEmptyEl = document.getElementById('cashJournalEmpty');
     var summaryCardsEl = document.getElementById('cashSummaryCards');
     var sidebarSummaryEl = document.getElementById('cashSidebarSummary');
@@ -87,6 +88,8 @@
       waitLoopToken: 0,
       loading: false,
       loadPromise: null,
+      ordersHasMore: false,
+      ordersNextOffset: 0,
       clientsCache: new Map(),
       date: { start: null, end: null, viewYear: null, viewMonth: null },
     };
@@ -2502,6 +2505,7 @@
           return '<div class="cash-expense-document-row"><button class="cash-journal-entry" type="button" data-expense-document-id="' + String(document.id) + '"><div class="cash-journal-entry-icon"><i class="fas fa-receipt"></i></div><time class="cash-expense-document-date">' + escapeHtml(expenseDateTime) + '</time><div class="cash-journal-entry-main"><div class="cash-journal-entry-top"><strong>' + escapeHtml(expenseDetails) + '</strong></div></div><div class="cash-journal-entry-amount is-negative">-' + escapeHtml(money(Number(document.total_sum_kopecks || 0) / 100)) + '</div></button><button class="btn btn-icon cash-expense-document-delete" type="button" data-expense-document-delete-id="' + String(document.id) + '" aria-label="Удалить документ"><i class="fas fa-trash"></i><span>Удалить</span></button></div>';
         }).join('');
         if (journalEmptyEl) { journalEmptyEl.textContent = 'Документов расходов пока нет'; journalEmptyEl.classList.toggle('hidden', state.expenseDocuments.length > 0); }
+        if (loadMoreBtnEl) loadMoreBtnEl.classList.add('hidden');
         return;
       }
       var orders = state.currentSection === 'money' ? getMoneyJournalEntries() : getOrderJournalOrders();
@@ -2512,6 +2516,10 @@
       if (journalEmptyEl) {
         journalEmptyEl.textContent = state.currentSection === 'money' ? 'Движений денег пока нет' : 'Заказов пока нет';
         journalEmptyEl.classList.toggle('hidden', orders.length > 0);
+      }
+      if (loadMoreBtnEl) {
+        loadMoreBtnEl.classList.toggle('hidden', !state.ordersHasMore || state.loading);
+        loadMoreBtnEl.disabled = state.loading;
       }
     }
 
@@ -2779,6 +2787,8 @@
 
     function applyDateFilter(closePopoverAfter) {
       state.dayGroupsCollapsed = {};
+      state.ordersHasMore = false;
+      state.ordersNextOffset = 0;
       updateDateLabel();
       var loads = [loadStatuses(), loadOrders()];
       if (state.currentSection === 'expenses') loads.push(loadExpenseDocuments());
@@ -2846,14 +2856,21 @@
       });
     }
 
-    function loadOrders() {
+    function loadOrders(options) {
+      options = options || {};
       if (state.loadPromise) return state.loadPromise;
       state.loading = true;
       var qs = buildDateQuery(new URLSearchParams());
-      qs.set('limit', '500');
-      qs.set('offset', '0');
+      qs.set('view', 'list');
+      qs.set('limit', '50');
+      var append = options.append === true;
+      var offset = append ? Number(state.ordersNextOffset || 0) : 0;
+      qs.set('offset', String(offset));
       state.loadPromise = apiJson('/api/admin/orders?' + qs.toString()).then(function (json) {
-        state.orders = Array.isArray(json && json.data) ? json.data.slice() : [];
+        var page = Array.isArray(json && json.data) ? json.data.slice() : [];
+        state.orders = append ? state.orders.concat(page) : page;
+        state.ordersHasMore = json && json.has_more === true;
+        state.ordersNextOffset = Number(json && json.next_offset || (offset + page.length));
         syncTabsWithLatestOrders();
       }).catch(function (err) {
         console.error('cash orders load error:', err);
@@ -3540,6 +3557,13 @@
       openOrderById(orderId);
     });
 
+    if (loadMoreBtnEl) {
+      loadMoreBtnEl.addEventListener('click', function () {
+        if (state.loading || !state.ordersHasMore) return;
+        loadOrders({ append: true }).catch(console.error);
+      });
+    }
+
     document.addEventListener('click', function (event) {
       var target = event.target;
       if (window.matchMedia('(max-width: 768px)').matches && (!target || !target.closest('.cash-expense-document-row'))) {
@@ -3741,6 +3765,8 @@
     document.addEventListener('tenantStoreChanged', function () {
       stopWaitLoop();
       state.orders = [];
+      state.ordersHasMore = false;
+      state.ordersNextOffset = 0;
       state.statuses = [];
       state.paymentMethods = [];
       state.paymentMethodsPromise = null;

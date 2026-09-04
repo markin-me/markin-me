@@ -1,4 +1,34 @@
 ﻿(function () {
+  var sharedMojibakeDecoder = typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
+  var sharedMojibakeExtras = {
+    0x0402: 0x80, 0x0403: 0x81, 0x201A: 0x82, 0x0453: 0x83, 0x201E: 0x84, 0x2026: 0x85,
+    0x2020: 0x86, 0x2021: 0x87, 0x20AC: 0x88, 0x2030: 0x89, 0x0409: 0x8A, 0x2039: 0x8B,
+    0x040A: 0x8C, 0x040C: 0x8D, 0x040B: 0x8E, 0x040F: 0x8F, 0x0452: 0x90, 0x2018: 0x91,
+    0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+    0x2122: 0x99, 0x0459: 0x9A, 0x203A: 0x9B, 0x045A: 0x9C, 0x045C: 0x9D, 0x045B: 0x9E,
+    0x045F: 0x9F, 0x0401: 0xA8, 0x0404: 0xAA, 0x0407: 0xAF, 0x0406: 0xB2, 0x0456: 0xB3,
+    0x0491: 0xB4, 0x0451: 0xB8, 0x2116: 0xB9, 0x0454: 0xBA, 0x0458: 0xBC,
+  };
+  function repairSharedMojibake(value) {
+    var source = String(value == null ? "" : value);
+    if (!sharedMojibakeDecoder || !/(?:Р.|С.|в[А-яЁё]|Г[А-яЁё]|[ÐÑ].)/u.test(source)) return source;
+    var bytes = [];
+    for (var i = 0; i < source.length; i += 1) {
+      var code = source.charCodeAt(i);
+      if (code <= 0x7f) bytes.push(code);
+      else if (code >= 0x410 && code <= 0x44f) bytes.push(code - 0x350);
+      else if (code >= 0x80 && code <= 0xff) bytes.push(code);
+      else if (Object.prototype.hasOwnProperty.call(sharedMojibakeExtras, code)) bytes.push(sharedMojibakeExtras[code]);
+      else return source;
+    }
+    try {
+      var repaired = sharedMojibakeDecoder.decode(new Uint8Array(bytes));
+      return repaired && repaired !== source ? repaired : source;
+    } catch (err) {
+      return source;
+    }
+  }
+
   function toArray(value) {
     return Array.isArray(value) ? value.filter(Boolean) : [];
   }
@@ -523,7 +553,7 @@
 
   function setTextAll(list, value) {
     toArray(list).forEach(function (el) {
-      el.textContent = value;
+      el.textContent = repairSharedMojibake(value);
     });
   }
 

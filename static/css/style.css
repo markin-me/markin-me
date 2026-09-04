@@ -19580,6 +19580,20 @@ body.page-clients.admin-mobile-pages .center-stack > .clients-panel > .panel-bod
   overflow:hidden;
 }
 
+.client-info-panel #clientTabOrders #clientActiveOrderCard{
+  flex:0 0 auto;
+  min-height:74px;
+}
+
+.client-info-panel #clientTabOrders #clientCompletedOrdersAccordion{
+  flex:0 0 auto;
+}
+
+.client-info-panel #clientTabOrders #clientCompletedOrdersAccordion:not([open]) #clientCompletedOrdersList,
+.client-info-panel #clientTabOrders #clientCompletedOrdersAccordion:not([open]) #clientCompletedOrdersMore{
+  display:none;
+}
+
 .client-info-panel #clientOrdersListView{
   display:flex;
   flex-direction:column;

@@ -1225,6 +1225,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       const filterId = req.query.filter_id ? Number(req.query.filter_id) : null;
       const sortRaw = helpers.strOrNull(req.query.sort) || 'last_desc';
+      const lightweight = String(req.query.mode || '').trim().toLowerCase() === 'lightweight';
 
       let limit = Number(req.query.limit ?? 50);
       let offset = Number(req.query.offset ?? 0);
@@ -1316,8 +1317,13 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
          WHERE 1=1${customFilterClause}
          ORDER BY ${orderBy}
          LIMIT ? OFFSET ?`,
-        [...clientsDatasetParams, ...customFilterParams, limit, offset]
+        [...clientsDatasetParams, ...customFilterParams, lightweight ? limit + 1 : limit, offset]
       );
+
+      if (lightweight) {
+        const data = rows.slice(0, limit);
+        return res.json({ ok: true, data, has_more: rows.length > limit, next_offset: offset + data.length, limit, offset });
+      }
 
       const [cntRows] = await db.query(
         `SELECT COUNT(*) AS c
@@ -1767,6 +1773,18 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      const view = String(req.query.view || '').trim().toLowerCase();
+      const isCompleted = view === 'completed' || view === 'history';
+      const isActive = view === 'active';
+      const hasPagedView = isCompleted || isActive;
+      const requestedLimit = Number.parseInt(req.query.limit, 10);
+      const limit = hasPagedView ? Math.min(50, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 10)) : 50;
+      const requestedOffset = Number.parseInt(req.query.offset, 10);
+      const offset = hasPagedView ? Math.max(0, Number.isFinite(requestedOffset) ? requestedOffset : 0) : 0;
+      const statusClause = isCompleted
+        ? "AND COALESCE(s.is_final, 0)=1 AND LOWER(COALESCE(s.code, '')) NOT IN ('canceled', 'cancelled') AND LOWER(COALESCE(s.title, '')) NOT LIKE 'отмен%%' AND LOWER(COALESCE(s.title, '')) NOT LIKE 'cancel%%'"
+        : isActive ? "AND COALESCE(s.is_final, 0)=0" : '';
+      const sqlLimit = hasPagedView ? limit + 1 : limit;
       const [rows] = await db.query(
         `SELECT
            o.id, o.public_id,
@@ -1777,12 +1795,14 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+           ${statusClause}
          ORDER BY o.created_at DESC, o.id DESC
-         LIMIT 50`,
-        [tenantId, storeId, customerId]
+         LIMIT ? OFFSET ?`,
+        [tenantId, storeId, customerId, sqlLimit, offset]
       );
-
-      res.json({ ok: true, data: rows });
+      if (!hasPagedView) return res.json({ ok: true, data: rows });
+      const data = rows.slice(0, limit);
+      return res.json({ ok: true, data, has_more: rows.length > limit, next_offset: offset + data.length });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

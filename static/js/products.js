@@ -13,6 +13,13 @@
     } catch {}
     return 1;
   })();
+  const PRODUCT_CACHE_SCOPE = {
+    tenantId: TENANT_ID,
+    storeId: (() => {
+      const value = Number(localStorage.getItem("activeStoreId") || localStorage.getItem("store_id") || 0);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    })(),
+  };
   const PRODUCT_BLOCK_DEFINITIONS = Object.freeze([
     { key: "nutrition", label: "КБЖУ" },
     { key: "description", label: "Описание" },
@@ -810,7 +817,26 @@
   let productsToolbarSearchTimer = null;
 
   function schedulePersistProductsCache(delay = 180) {
-    return;
+    if (!window.AdminPersistentCache) return;
+    if (schedulePersistProductsCache.timer) clearTimeout(schedulePersistProductsCache.timer);
+    schedulePersistProductsCache.timer = setTimeout(() => {
+      const categories = Array.isArray(state.categories) ? state.categories : [];
+      const byCategory = {};
+      if (state.productsByCategoryCache instanceof Map) {
+        state.productsByCategoryCache.forEach((value, key) => { byCategory[String(key)] = value; });
+      }
+      window.AdminPersistentCache.writeProductCatalog(PRODUCT_CACHE_SCOPE, { categories, byCategory });
+    }, Math.max(0, Number(delay || 0)));
+  }
+
+  async function hydrateProductsPersistentCache() {
+    if (!window.AdminPersistentCache) return;
+    const cached = await window.AdminPersistentCache.readProductCatalog(PRODUCT_CACHE_SCOPE).catch(() => null);
+    if (!cached || typeof cached !== "object") return;
+    if (Array.isArray(cached.categories) && !state.categories.length) state.categories = cached.categories;
+    if (cached.byCategory && typeof cached.byCategory === "object") {
+      Object.keys(cached.byCategory).forEach((key) => state.productsByCategoryCache.set(key, cached.byCategory[key]));
+    }
   }
 
   function normalizeCategoryCacheKey(categoryId) {
@@ -1117,7 +1143,22 @@
     if (!res.ok || !data || data.ok === false) {
       throw new Error((data && data.error) || `HTTP_${res.status}`);
     }
+    if (window.AdminPersistentCache && isProductCatalogMutation(url, opts)) {
+      await window.AdminPersistentCache.invalidateProductCatalog(PRODUCT_CACHE_SCOPE);
+      try {
+        Object.keys(localStorage).filter((key) => key.startsWith("new_order_bootstrap_"))
+          .forEach((key) => localStorage.removeItem(key));
+      } catch {}
+    }
     return data;
+  }
+
+  function isProductCatalogMutation(url, opts) {
+    const method = String(opts?.method || "GET").toUpperCase();
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(method)) return false;
+    const path = String(url || "").split("?", 1)[0];
+    return /^\/api\/(prod_products|prod_categories|admin\/(products|options|variants|combos|combo-blocks|auto-add|units|unit-conversions))\b/.test(path)
+      || path === "/api/admin/catalog/categories";
   }
 
   async function apiUploadImages(files) {
@@ -2200,6 +2241,11 @@
   // ---------------- Load ----------------
 
   async function loadCategories() {
+    await hydrateProductsPersistentCache();
+    if (state.categories.length) {
+      state.allCategoryId = (state.categories.find((c) => c.code === "all") || {}).id || null;
+      if (!state.currentCategoryId) state.currentCategoryId = state.allCategoryId || (state.categories[0] && state.categories[0].id) || null;
+    }
     const res = await api(`/api/prod_categories?tenant_id=${TENANT_ID}`);
     state.categories = Array.isArray(res.data) ? res.data : [];
     state.allCategoryId = (state.categories.find((c) => c.code === "all") || {}).id || null;
@@ -2253,7 +2299,12 @@
     const prevOffset = state.productsOffset;
     try {
       const qs = buildProductsListQuery(cid, state.productsOffset, PRODUCTS_PAGE_LIMIT);
-      const res = await api(`/api/prod_products?${qs.toString()}`);
+      const loadCatalogPage = () => api(`/api/prod_products?${qs.toString()}`);
+      const res = window.AdminPersistentCache
+        ? await window.AdminPersistentCache.loadProductCatalog(PRODUCT_CACHE_SCOPE, loadCatalogPage, {
+          segment: `products:${cid}:${state.productsOffset}:${normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || "")}`,
+        })
+        : await loadCatalogPage();
       if (token !== productsRequestToken) return;
 
       const chunkRaw = Array.isArray(res.data) ? res.data : [];

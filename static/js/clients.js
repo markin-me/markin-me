@@ -2702,6 +2702,10 @@
   const clientTabDiscounts = right$("#clientTabDiscounts");
   const clientAddressesList = right$("#clientAddresses");
   const clientOrdersList = right$("#clientOrdersList");
+  const clientActiveOrderCard = right$("#clientActiveOrderCard");
+  const clientCompletedOrdersAccordion = right$("#clientCompletedOrdersAccordion");
+  const clientCompletedOrdersList = right$("#clientCompletedOrdersList");
+  const clientCompletedOrdersMore = right$("#clientCompletedOrdersMore");
   const clientOrdersListView = right$("#clientOrdersListView");
   const clientDiscountsList = right$("#clientDiscountsList");
   const clientDiscountsEmpty = right$("#clientDiscountsEmpty");
@@ -2762,6 +2766,11 @@
     orderStatusesLoading: false,
     addresses: [],
     clientOrders: [],
+    clientActiveOrder: null,
+    clientCompletedOrders: [],
+    clientCompletedNextOffset: 0,
+    clientCompletedHasMore: false,
+    clientCompletedLoading: false,
     clientDiscounts: [],      // Скидки клиента
     totals: { all: 0 },
     activeContentTab: "addresses",
@@ -2989,7 +2998,9 @@
       gender: false,
     },
   };
-  const CLIENTS_PAGE_LIMIT = 80;
+  const CLIENTS_PAGE_LIMIT = 50;
+  const CLIENTS_LIST_CACHE_PREFIX = `admin:clients:list:v1:${tenantId}:`;
+  const CLIENTS_LIST_CACHE_MAX_QUERIES = 20;
   const CLIENTS_SCROLL_THRESHOLD_PX = 220;
   let clientsRequestToken = 0;
   let clientProfileRequestToken = 0;
@@ -3436,6 +3447,10 @@
           addresses: sanitizeCachedAddresses(item.addresses),
           orders: sanitizeCachedOrders(item.orders),
           discounts: sanitizeCachedDiscounts(item.discounts),
+          activeOrder: item.activeOrder || null,
+          completedOrders: sanitizeCachedOrders(item.completedOrders),
+          completedNextOffset: Number(item.completedNextOffset || 0),
+          completedHasMore: item.completedHasMore === true,
         });
       });
       return out;
@@ -3457,6 +3472,10 @@
           addresses: sanitizeCachedAddresses(item?.addresses),
           orders: sanitizeCachedOrders(item?.orders),
           discounts: sanitizeCachedDiscounts(item?.discounts),
+          activeOrder: item?.activeOrder || null,
+          completedOrders: sanitizeCachedOrders(item?.completedOrders),
+          completedNextOffset: Number(item?.completedNextOffset || 0),
+          completedHasMore: item?.completedHasMore === true,
         };
       });
       localStorage.setItem(CLIENT_DETAILS_CACHE_KEY, JSON.stringify(payload));
@@ -3478,6 +3497,10 @@
       addresses: sanitizeCachedAddresses(entry.addresses),
       orders: sanitizeCachedOrders(entry.orders),
       discounts: sanitizeCachedDiscounts(entry.discounts),
+      activeOrder: entry.activeOrder || null,
+      completedOrders: sanitizeCachedOrders(entry.completedOrders),
+      completedNextOffset: Number(entry.completedNextOffset || 0),
+      completedHasMore: entry.completedHasMore === true,
       updatedAt,
     };
   }
@@ -3490,6 +3513,10 @@
       addresses: [],
       orders: [],
       discounts: [],
+      activeOrder: null,
+      completedOrders: [],
+      completedNextOffset: 0,
+      completedHasMore: false,
       updatedAt: 0,
     };
     const nextClient = Object.prototype.hasOwnProperty.call(patch, "client")
@@ -3504,6 +3531,8 @@
     const nextDiscounts = Object.prototype.hasOwnProperty.call(patch, "discounts")
       ? sanitizeCachedDiscounts(patch.discounts)
       : prev.discounts;
+    const nextActiveOrder = Object.prototype.hasOwnProperty.call(patch, "activeOrder") ? patch.activeOrder : prev.activeOrder;
+    const nextCompletedOrders = Object.prototype.hasOwnProperty.call(patch, "completedOrders") ? sanitizeCachedOrders(patch.completedOrders) : prev.completedOrders;
     if (!nextClient) return;
     state.clientDetailsCache.set(key, {
       updatedAt: Date.now(),
@@ -3511,11 +3540,38 @@
       addresses: nextAddresses,
       orders: nextOrders,
       discounts: nextDiscounts,
+      activeOrder: nextActiveOrder || null,
+      completedOrders: nextCompletedOrders,
+      completedNextOffset: Object.prototype.hasOwnProperty.call(patch, "completedNextOffset") ? Number(patch.completedNextOffset || 0) : prev.completedNextOffset,
+      completedHasMore: Object.prototype.hasOwnProperty.call(patch, "completedHasMore") ? patch.completedHasMore === true : prev.completedHasMore,
     });
     saveClientDetailsCache();
+    persistClientCache(key, state.clientDetailsCache.get(key));
   }
 
   state.clientDetailsCache = loadClientDetailsCache();
+
+  function clientCacheKey(clientId) {
+    const storeId = localStorage.getItem('activeStoreId') || '1';
+    return `admin:client-card:v1:${tenantId}:${storeId}:${Number(clientId || 0)}`;
+  }
+
+  async function hydrateClientCache(clientId) {
+    if (!window.AdminPersistentCache) return null;
+    try {
+      const data = await window.AdminPersistentCache.read(clientCacheKey(clientId));
+      if (data && typeof data === 'object') {
+        setCachedClientDetails(clientId, data);
+        return getCachedClientDetails(clientId);
+      }
+    } catch (err) { console.warn('Client cache read failed:', err); }
+    return null;
+  }
+
+  function persistClientCache(clientId, data) {
+    if (!window.AdminPersistentCache) return;
+    void window.AdminPersistentCache.write(clientCacheKey(clientId), data).catch((err) => console.warn('Client cache write failed:', err));
+  }
 
   function normalizeDiscountProductConfigMode(value) {
     return String(value || '').trim().toLowerCase() === 'exact' ? 'exact' : 'any';
@@ -4297,7 +4353,7 @@
     if (!clientOrderInfoWrap) return;
 
     const statusOptionBtn = e.target.closest('[data-action="order-status-menu-select"]');
-    if (statusOptionBtn && clientOrderInfoWrap.contains(statusOptionBtn)) {
+    if (statusOptionBtn && clientOrderInfoWrap?.contains(statusOptionBtn)) {
       e.preventDefault();
       e.stopPropagation();
       const nextStatusId = Number(statusOptionBtn.getAttribute('data-status-id') || 0);
@@ -4308,7 +4364,7 @@
     }
 
     const statusToggleBtn = e.target.closest('[data-action="order-status-menu-toggle"]');
-    if (statusToggleBtn && clientOrderInfoWrap.contains(statusToggleBtn)) {
+    if (statusToggleBtn && clientOrderInfoWrap?.contains(statusToggleBtn)) {
       e.preventDefault();
       e.stopPropagation();
       const wrap = statusToggleBtn.closest('[data-role="order-inline-status"]');
@@ -4324,7 +4380,7 @@
     }
 
     const discountInfoBtn = e.target.closest('[data-info="discount-info-btn"]');
-    if (discountInfoBtn && clientOrderInfoWrap.contains(discountInfoBtn)) {
+    if (discountInfoBtn && clientOrderInfoWrap?.contains(discountInfoBtn)) {
       e.preventDefault();
       e.stopPropagation();
       const summaryCard = discountInfoBtn.closest('.order-summary');
@@ -4339,7 +4395,7 @@
     }
 
     const markPaidBtn = e.target.closest('[data-action="order-mark-paid"]');
-    if (markPaidBtn && clientOrderInfoWrap.contains(markPaidBtn)) {
+    if (markPaidBtn && clientOrderInfoWrap?.contains(markPaidBtn)) {
       e.preventDefault();
       e.stopPropagation();
       openClientOrderPaymentDialog().catch(console.error);
@@ -4347,7 +4403,7 @@
     }
 
     const statusNextBtn = e.target.closest('[data-action="order-status-next"]');
-    if (statusNextBtn && clientOrderInfoWrap.contains(statusNextBtn)) {
+    if (statusNextBtn && clientOrderInfoWrap?.contains(statusNextBtn)) {
       e.preventDefault();
       e.stopPropagation();
       cycleActiveClientOrderStatus().catch(console.error);
@@ -4355,7 +4411,7 @@
     }
 
     const editOrderBtn = e.target.closest('[data-action="order-edit"]');
-    if (editOrderBtn && clientOrderInfoWrap.contains(editOrderBtn)) {
+    if (editOrderBtn && clientOrderInfoWrap?.contains(editOrderBtn)) {
       e.preventDefault();
       e.stopPropagation();
       openActiveClientOrderInOrders();
@@ -4363,7 +4419,7 @@
     }
 
     const printOrderBtn = e.target.closest('[data-action="order-print"]');
-    if (printOrderBtn && clientOrderInfoWrap.contains(printOrderBtn)) {
+    if (printOrderBtn && clientOrderInfoWrap?.contains(printOrderBtn)) {
       e.preventDefault();
       e.stopPropagation();
       printActiveClientOrder().catch(console.error);
@@ -26511,6 +26567,67 @@
     await selectActiveClientOrderStatus(nextStatusId);
   }
 
+  function renderClientActiveOrder() {
+    if (!clientActiveOrderCard) return;
+    const order = state.clientActiveOrder;
+    clientActiveOrderCard.classList.toggle('hidden', !order);
+    if (!order) return;
+    clientActiveOrderCard.innerHTML = `<strong>Текущий заказ #${escapeHtml(order.id)}</strong><div class="muted">${escapeHtml(order.status_title || 'В работе')} · ${escapeHtml(fmtDateTime(order.created_at))}</div><div>${money(order.total_price || 0)}</div>`;
+    clientActiveOrderCard.onclick = () => openOrderTab(order.id);
+  }
+
+  async function loadClientActiveOrder(clientId, options = {}) {
+    const cached = getCachedClientDetails(clientId);
+    if (options.preferCache !== false && cached?.activeOrder) {
+      state.clientActiveOrder = cached.activeOrder;
+      renderClientActiveOrder();
+    }
+    if (options.refresh === false) return;
+    try {
+      const json = await apiJson(`/api/admin/clients/${clientId}/orders/header-candidate`);
+      state.clientActiveOrder = json?.data || null;
+      setCachedClientDetails(clientId, { activeOrder: state.clientActiveOrder });
+      renderClientActiveOrder();
+    } catch (err) { console.error(err); }
+  }
+
+  function renderClientCompletedOrders() {
+    if (!clientCompletedOrdersList) return;
+    clientCompletedOrdersList.innerHTML = '';
+    state.clientCompletedOrders.forEach((o) => {
+      const card = document.createElement('div');
+      card.className = 'shop-profile-card order-client-history-card';
+      card.innerHTML = `<div><strong>Заказ #${escapeHtml(o.id)}</strong> <span class="muted">• ${escapeHtml(o.status_title || '—')}</span></div><div class="muted">${escapeHtml(fmtDateTime(o.created_at))}</div><div><strong>${money(o.total_price || 0)}</strong></div>`;
+      card.onclick = () => openOrderTab(o.id);
+      clientCompletedOrdersList.appendChild(card);
+    });
+    if (clientCompletedOrdersMore) clientCompletedOrdersMore.classList.toggle('hidden', !state.clientCompletedHasMore);
+  }
+
+  async function loadMoreClientCompletedOrders() {
+    if (!state.activeClientId || state.clientCompletedLoading || !state.clientCompletedHasMore && state.clientCompletedNextOffset) return;
+    state.clientCompletedLoading = true;
+    try {
+      const offset = state.clientCompletedNextOffset;
+      const json = await apiJson(`/api/admin/clients/${state.activeClientId}/orders?view=completed&limit=10&offset=${offset}`);
+      const rows = Array.isArray(json.data) ? json.data : [];
+      state.clientCompletedOrders.push(...rows);
+      state.clientCompletedNextOffset = Number(json.next_offset ?? offset + rows.length);
+      state.clientCompletedHasMore = json.has_more === true;
+      renderClientCompletedOrders();
+      const cached = getCachedClientDetails(state.activeClientId) || {};
+      setCachedClientDetails(state.activeClientId, { completedOrders: state.clientCompletedOrders, completedNextOffset: state.clientCompletedNextOffset, completedHasMore: state.clientCompletedHasMore });
+    } catch (err) {
+      console.error(err);
+      if (!state.clientCompletedOrders.length && clientCompletedOrdersList) clientCompletedOrdersList.innerHTML = '<div class="muted">Ошибка загрузки истории</div>';
+    } finally { state.clientCompletedLoading = false; }
+  }
+
+  if (clientCompletedOrdersAccordion) clientCompletedOrdersAccordion.addEventListener('toggle', () => {
+    if (clientCompletedOrdersAccordion.open && !state.clientCompletedOrders.length) void loadMoreClientCompletedOrders();
+  });
+  if (clientCompletedOrdersMore) clientCompletedOrdersMore.addEventListener('click', () => void loadMoreClientCompletedOrders());
+
   let clientMobilePaymentModalOrigin = null;
 
   function mountClientMobilePaymentPage() {
@@ -26734,7 +26851,7 @@
     state.activeOrder = null;
     forceShowClientProfilePanel();
     const activeId = Number(state.activeClientId || 0);
-    const cached = getCachedClientDetails(activeId);
+    const cached = getCachedClientDetails(activeId) || await hydrateClientCache(activeId);
     const hasCachedAddresses = !!(cached && Array.isArray(cached.addresses) && cached.addresses.length);
     const hasCachedOrders = !!(cached && Array.isArray(cached.orders) && cached.orders.length);
     const useCacheOnlyForPreload = isChatBridgeMode && !!cached;
@@ -26752,6 +26869,12 @@
       renderAddresses();
       renderClientOrders();
       renderClientDiscounts();
+      state.clientActiveOrder = cached.activeOrder || null;
+      state.clientCompletedOrders = Array.isArray(cached.completedOrders) ? cached.completedOrders.slice() : [];
+      state.clientCompletedNextOffset = Number(cached.completedNextOffset || 0);
+      state.clientCompletedHasMore = cached.completedHasMore === true;
+      renderClientActiveOrder();
+      renderClientCompletedOrders();
     }
 
     let loadedClient = null;
@@ -26787,25 +26910,25 @@
     showOrdersList();
     setContentTab("addresses");
 
+    if (!cached) {
+      state.clientCompletedOrders = [];
+      state.clientCompletedNextOffset = 0;
+      state.clientCompletedHasMore = false;
+    }
+    if (!cached) {
+      if (clientCompletedOrdersList) clientCompletedOrdersList.innerHTML = '';
+      if (clientCompletedOrdersMore) clientCompletedOrdersMore.classList.add('hidden');
+    } else {
+      renderClientCompletedOrders();
+    }
+
     const preloadTasks = [
       loadAddresses({
         preferCache: true,
         refresh: useCacheOnlyForPreload ? !hasCachedAddresses : true,
       }),
-      loadClientDiscounts({
-        preferCache: true,
-        refresh: true,
-      }),
-      loadClientOrders({
-        preferCache: true,
-        refresh: useCacheOnlyForPreload ? !hasCachedOrders : true,
-      }),
+      loadClientActiveOrder(activeId, { preferCache: true, refresh: !useCacheOnlyForPreload || !cached?.activeOrder }),
     ];
-    preloadTasks.push(
-      prefetchClientBenefitsForCustomer(activeId, {
-        modes: ["customer", "all"],
-      })
-    );
     await Promise.allSettled(preloadTasks);
     if (requestToken !== clientProfileRequestToken) return;
     if (!isExpectedClientTabActive()) return;
@@ -26988,11 +27111,33 @@
     qs.set("limit", String(limit));
     qs.set("offset", String(offset));
     qs.set("sort", state.sort || "last_desc");
+    qs.set("mode", "lightweight");
     if (state.q) qs.set("q", state.q);
     if (state.activeFilter === "custom" && state.activeCustomFilterId) {
       qs.set("filter_id", String(state.activeCustomFilterId));
     }
     return qs;
+  }
+
+  function clientsListCacheKey() {
+    const storeId = localStorage.getItem('activeStoreId') || '1';
+    const qs = buildClientsListQuery(0, CLIENTS_PAGE_LIMIT);
+    qs.delete('offset');
+    return `${CLIENTS_LIST_CACHE_PREFIX}${storeId}:${qs.toString()}`;
+  }
+
+  async function readClientsListCache() {
+    if (!window.AdminPersistentCache) return null;
+    try { return await window.AdminPersistentCache.read(clientsListCacheKey()); }
+    catch (err) { console.warn('Clients list cache read failed:', err); return null; }
+  }
+
+  function writeClientsListCache() {
+    if (!window.AdminPersistentCache) return;
+    const data = { query: clientsListCacheKey(), rows: state.clients, offset: state.clientsOffset, total: state.clientsTotal, hasMore: state.clientsHasMore };
+    void window.AdminPersistentCache.write(clientsListCacheKey(), data)
+      .then(() => window.AdminPersistentCache.prunePrefix(CLIENTS_LIST_CACHE_PREFIX, CLIENTS_LIST_CACHE_MAX_QUERIES))
+      .catch((err) => console.warn('Clients list cache write failed:', err));
   }
 
   async function loadMoreClients() {
@@ -27013,9 +27158,10 @@
       state.clients = (state.clients || []).concat(append);
       state.clientsOffset += chunk.length;
       state.clientsTotal = Number(json.total || 0);
-      state.clientsHasMore = chunk.length > 0 && state.clients.length < state.clientsTotal;
+      state.clientsHasMore = json.has_more === true || (json.has_more === undefined && chunk.length > 0 && state.clients.length < state.clientsTotal);
 
       appendClients(append);
+      writeClientsListCache();
       refreshCustomFilterCountsFromClientList();
     } finally {
       if (token === clientsRequestToken) {
@@ -27045,17 +27191,27 @@
   async function loadClients() {
     clientsRequestToken += 1;
     state.clientsLoading = false;
-    state.clients = [];
-    state.clientsOffset = 0;
-    state.clientsTotal = 0;
-    state.clientsHasMore = true;
+    const cached = await readClientsListCache();
+    const cachedRows = Array.isArray(cached?.rows) ? cached.rows : [];
+    state.clients = cachedRows;
+    state.clientsOffset = Number(cached?.offset || cachedRows.length || 0);
+    state.clientsTotal = Number(cached?.total || 0);
+    state.clientsHasMore = cached?.hasMore !== false;
+    rememberCustomers(cachedRows);
     renderClients();
     refreshCustomFilterCountsFromClientList();
 
-    await loadTotals();
     renderFilters();
-
+    const cachedOffset = state.clientsOffset;
+    if (cachedRows.length) {
+      state.clientsOffset = 0;
+      state.clientsHasMore = true;
+    }
     await loadMoreClients();
+    if (cachedRows.length) {
+      state.clientsOffset = Math.max(cachedOffset, state.clientsOffset);
+      writeClientsListCache();
+    }
     await ensureClientsScrollable();
   }
 
@@ -27732,7 +27888,7 @@
     });
   }
   document.addEventListener('click', (event) => {
-    if (!subscriptionPlanIconPopover?.classList.contains('hidden')
+    if (subscriptionPlanIconPopover && !subscriptionPlanIconPopover.classList.contains('hidden')
       && !subscriptionPlanIconPopover.contains(event.target)
       && !subscriptionPlanIconButton?.contains(event.target)) closeSubscriptionPlanIconPopover();
     if (event.target.closest?.('[data-subscription-item-info], [data-subscription-item-info-popover]')) return;
