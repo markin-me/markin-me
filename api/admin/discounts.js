@@ -1,4 +1,5 @@
 const express = require('express');
+const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const { buildAdminLoyaltyProgressCustomersPage } = require('../helpers/admin-loyalty-progress');
 
 const DISCOUNT_COLUMNS = `
@@ -2187,6 +2188,31 @@ async function generateUniquePromoCodes(conn, { tenantId, storeId, discountId, c
 
 module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
   const router = express.Router();
+
+  router.use((req, res, next) => {
+    res.once('finish', () => {
+      const requestPath = String(req.path || '');
+      if (res.statusCode < 200 || res.statusCode >= 300 || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase())) return;
+      if (!/^\/(?:\d+(?:\/(?:restore|toggle))?)?\/?$/.test(requestPath)) return;
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      setImmediate(async () => {
+        try {
+          const [rows] = await db.query(
+            `SELECT id AS product_id FROM prod_products
+             WHERE tenant_id=? AND is_active=1 AND site_visibility=1`,
+            [tenantId]
+          );
+          await productPassportSnapshots.markProductsDirty({
+            db, tenantId, storeId, productIds: rows.map((row) => row.product_id),
+          });
+        } catch (error) {
+          console.error('discount passport invalidation failed:', error);
+        }
+      });
+    });
+    next();
+  });
   let discountProductConfigColumnReady = false;
   let ensureDiscountProductConfigColumnPromise = null;
   let discountHideInBenefitsColumnReady = false;

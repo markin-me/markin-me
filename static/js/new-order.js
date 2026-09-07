@@ -7518,6 +7518,10 @@
     return `new_order_bootstrap_${newOrderCacheScopeKey()}`;
   }
 
+  function sharedProductCacheScope() {
+    return { tenantId: getTenantIdFromStorage(), storeId: getStoreIdFromStorage() };
+  }
+
   function readJsonCache(key) {
     try {
       const raw = localStorage.getItem(String(key || ""));
@@ -7640,6 +7644,15 @@
       },
     };
     writeJsonCache(newOrderBootstrapCacheKey(), snapshot);
+    if (window.AdminPersistentCache) {
+      void window.AdminPersistentCache.writeProductCatalog(sharedProductCacheScope(), { newOrderBootstrap: snapshot.data });
+    }
+  }
+
+  async function readSharedProductBootstrap() {
+    if (!window.AdminPersistentCache) return null;
+    const cached = await window.AdminPersistentCache.readProductCatalog(sharedProductCacheScope()).catch(() => null);
+    return cached?.newOrderBootstrap && typeof cached.newOrderBootstrap === "object" ? cached.newOrderBootstrap : null;
   }
 
   function schedulePersistBootstrapSnapshot(delay = 200) {
@@ -21748,7 +21761,7 @@
       const cachedManifest = readNewOrderManifestCache();
       if (cachedManifest) state.cacheManifest = cachedManifest;
 
-      const bootstrapSnapshot = readBootstrapSnapshot();
+      const bootstrapSnapshot = await readSharedProductBootstrap() || readBootstrapSnapshot();
       const hydrated = hydrateStateFromBootstrapSnapshot(bootstrapSnapshot);
       if (!state.activeCategoryId) state.activeCategoryId = CHECKOUT_SCREEN_ID;
       const bootstrapped = !hydrated ? await loadNewOrderBootstrapFromApi() : false;

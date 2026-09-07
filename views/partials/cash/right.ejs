@@ -1,22 +1,20 @@
-<div id="cashOrdersRightPane">
-  <div class="panel orders-info cash-info">
-    <div class="panel-header product-tabs-header" id="cashOrderTabsHeader">
+<div id="ordersRightPane">
+  <div class="panel orders-info">
+    <div class="panel-header product-tabs-header" id="orderTabsHeader">
       <div class="product-tabs-header-inner">
         <button class="product-tabs-home" type="button" data-action="order-tabs-home" aria-label="Сводка кассы">
           <i class="fas fa-home"></i>
         </button>
-        <div class="product-tabs" id="cashOrderTabs"></div>
+        <div class="product-tabs" id="orderTabs"></div>
       </div>
     </div>
     <div class="panel-body no-scrollbar">
       <div class="cash-balance-summary" id="cashSidebarSummary"></div>
-      <div class="hidden" id="cashOrderInfoRoot">
-        <%- include('../orders/info_content') %>
-      </div>
+      <%- include('../order-details/page') %>
     </div>
-    <div class="panel-footer order-info-footer hidden" id="cashOrderInfoFooter">
+    <div class="panel-footer order-info-footer hidden" id="orderInfoFooter">
       <div class="order-footer-actions">
-        <button class="order-footer-status-pill order-payment-pill" type="button" data-cash-action="mark-paid" id="cashOrderPaymentBtn" aria-label="Оплата заказа">
+        <button class="order-footer-status-pill order-payment-pill" type="button" data-cash-action="mark-paid" id="orderInfoPaymentBtn" aria-label="Оплата заказа">
           <i class="fas fa-wallet order-footer-mobile-icon" aria-hidden="true"></i>
           <span>Принять оплату</span>
         </button>
@@ -30,6 +28,20 @@
           </button>
           <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-print" aria-label="Печать">
             <i class="fas fa-print"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="panel-footer new-order-right-footer hidden" id="ordersClientBenefitsFooter">
+      <div class="shop-cart-footer">
+        <div class="shop-cart-footer-actions">
+          <button class="new-order-right-footer-benefits-btn" type="button" id="ordersClientBenefitsOpenBtn" aria-label="Выгоды" title="Выгоды">
+            <i class="fas fa-tags" aria-hidden="true"></i>
+            <span>Выгоды</span>
+          </button>
+          <button class="new-order-right-footer-benefits-btn" type="button" id="ordersClientBonusesOpenBtn" aria-label="Бонусы" title="Бонусы">
+            <strong aria-hidden="true">Б</strong>
+            <span>Бонусы</span>
           </button>
         </div>
       </div>

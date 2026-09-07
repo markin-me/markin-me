@@ -605,6 +605,8 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     ['gender', 'enum'],
     ['favorite_product', 'entity'],
     ['favorite_category', 'entity'],
+    ['subscription_event', 'text'],
+    ['notification_consent', 'text'],
   ]);
 
   function toPositiveInt(value) {
@@ -722,6 +724,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       if (!['=', '!='].includes(operator)) return null;
       value = toPositiveInt(value);
       if (!value) return null;
+    } else if (kind === 'text') {
+      if (!['=', '!='].includes(operator)) return null;
+      value = String(value || '').trim().slice(0, 255);
+      if (!value) return null;
     }
 
     return { field, operator, value };
@@ -744,7 +750,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   }
 
   function isAdvancedFilterRule(rule) {
-    return rule?.field === 'favorite_product' || rule?.field === 'favorite_category';
+    return rule?.field === 'favorite_product' || rule?.field === 'favorite_category' || rule?.field === 'subscription_event' || rule?.field === 'notification_consent';
   }
 
   function evaluateCustomFilterRule(client, rule, options = {}) {
@@ -788,6 +794,16 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       const right = toPositiveInt(rule.value);
       if (!left || !right) return false;
       return compareValues(left, rule.operator, right);
+    }
+
+    if (kind === 'text' && rule.field === 'subscription_event') {
+      const matched = client?.subscription_events instanceof Set && client.subscription_events.has(String(rule.value || ''));
+      return rule.operator === '!=' ? !matched : matched;
+    }
+
+    if (kind === 'text' && rule.field === 'notification_consent') {
+      const matched = client?.notification_consents instanceof Set && client.notification_consents.has(String(rule.value || ''));
+      return rule.operator === '!=' ? !matched : matched;
     }
 
     return null;
@@ -1108,6 +1124,36 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       await attachFavoritePurchaseStats(tenantId, clients);
     }
 
+    if ((options.needSubscriptionEvents || options.needNotificationConsents) && clients.length) {
+      const customerIds = clients.map((client) => Number(client.id || 0)).filter((id) => id > 0);
+      const [consentRows] = await db.query(
+        `SELECT customer_id, source_key, button_text, interested, notifications_enabled
+         FROM mkt_customer_notification_consents
+         WHERE tenant_id=? AND store_id=? AND customer_id IN (?)`,
+        [tenantId, Number(options.storeId || 0), customerIds]
+      );
+      const eventsByCustomer = new Map();
+      const consentsByCustomer = new Map();
+      consentRows.forEach((row) => {
+        const customerId = Number(row.customer_id || 0);
+        const buttonText = String(row.button_text || '').trim();
+        const sourceKey = String(row.source_key || '').trim();
+        if (!customerId) return;
+        if (Number(row.interested) === 1 && buttonText) {
+          if (!eventsByCustomer.has(customerId)) eventsByCustomer.set(customerId, new Set());
+          eventsByCustomer.get(customerId).add(buttonText);
+        }
+        if (Number(row.notifications_enabled) === 1 && sourceKey) {
+          if (!consentsByCustomer.has(customerId)) consentsByCustomer.set(customerId, new Set());
+          consentsByCustomer.get(customerId).add(sourceKey);
+        }
+      });
+      clients.forEach((client) => {
+        client.subscription_events = eventsByCustomer.get(Number(client.id || 0)) || new Set();
+        client.notification_consents = consentsByCustomer.get(Number(client.id || 0)) || new Set();
+      });
+    }
+
     return clients;
   }
 
@@ -1137,7 +1183,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       [tenantId],
       {
         filterSupport,
-        needFavorites: true,
+        storeId: options.storeId,
+        needFavorites: advancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
+        needSubscriptionEvents: advancedRules.some((rule) => rule.field === 'subscription_event'),
+        needNotificationConsents: advancedRules.some((rule) => rule.field === 'notification_consent'),
         postWhereClause: canNarrowBySimpleRules ? whereClause : '',
         postWhereParams: canNarrowBySimpleRules ? params : [],
       }
@@ -1176,6 +1225,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       const filterId = req.query.filter_id ? Number(req.query.filter_id) : null;
       const sortRaw = helpers.strOrNull(req.query.sort) || 'last_desc';
+      const lightweight = String(req.query.mode || '').trim().toLowerCase() === 'lightweight';
 
       let limit = Number(req.query.limit ?? 50);
       let offset = Number(req.query.offset ?? 0);
@@ -1231,7 +1281,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
           params,
           {
             filterSupport,
-            needFavorites: true,
+            storeId,
+            needFavorites: customFilterAdvancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
+            needSubscriptionEvents: customFilterAdvancedRules.some((rule) => rule.field === 'subscription_event'),
+            needNotificationConsents: customFilterAdvancedRules.some((rule) => rule.field === 'notification_consent'),
             postWhereClause: canNarrowBySimpleRules ? customFilterClause : '',
             postWhereParams: canNarrowBySimpleRules ? customFilterParams : [],
           }
@@ -1264,8 +1317,13 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
          WHERE 1=1${customFilterClause}
          ORDER BY ${orderBy}
          LIMIT ? OFFSET ?`,
-        [...clientsDatasetParams, ...customFilterParams, limit, offset]
+        [...clientsDatasetParams, ...customFilterParams, lightweight ? limit + 1 : limit, offset]
       );
+
+      if (lightweight) {
+        const data = rows.slice(0, limit);
+        return res.json({ ok: true, data, has_more: rows.length > limit, next_offset: offset + data.length, limit, offset });
+      }
 
       const [cntRows] = await db.query(
         `SELECT COUNT(*) AS c
@@ -1715,6 +1773,18 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      const view = String(req.query.view || '').trim().toLowerCase();
+      const isCompleted = view === 'completed' || view === 'history';
+      const isActive = view === 'active';
+      const hasPagedView = isCompleted || isActive;
+      const requestedLimit = Number.parseInt(req.query.limit, 10);
+      const limit = hasPagedView ? Math.min(50, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 10)) : 50;
+      const requestedOffset = Number.parseInt(req.query.offset, 10);
+      const offset = hasPagedView ? Math.max(0, Number.isFinite(requestedOffset) ? requestedOffset : 0) : 0;
+      const statusClause = isCompleted
+        ? "AND COALESCE(s.is_final, 0)=1 AND LOWER(COALESCE(s.code, '')) NOT IN ('canceled', 'cancelled') AND LOWER(COALESCE(s.title, '')) NOT LIKE 'отмен%%' AND LOWER(COALESCE(s.title, '')) NOT LIKE 'cancel%%'"
+        : isActive ? "AND COALESCE(s.is_final, 0)=0" : '';
+      const sqlLimit = hasPagedView ? limit + 1 : limit;
       const [rows] = await db.query(
         `SELECT
            o.id, o.public_id,
@@ -1725,12 +1795,14 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+           ${statusClause}
          ORDER BY o.created_at DESC, o.id DESC
-         LIMIT 50`,
-        [tenantId, storeId, customerId]
+         LIMIT ? OFFSET ?`,
+        [tenantId, storeId, customerId, sqlLimit, offset]
       );
-
-      res.json({ ok: true, data: rows });
+      if (!hasPagedView) return res.json({ ok: true, data: rows });
+      const data = rows.slice(0, limit);
+      return res.json({ ok: true, data, has_more: rows.length > limit, next_offset: offset + data.length });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -1837,13 +1909,17 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       let filtersWithCounts = [];
       if (hasAdvancedFilters) {
+        const advancedRules = normalizedFilters.flatMap(({ conditions }) => conditions.rules.filter((rule) => isAdvancedFilterRule(rule)));
         const clients = await loadClientsForFilterEvaluation(
           tenantId,
           'c.tenant_id=?',
           [tenantId],
           {
             filterSupport,
-            needFavorites: true,
+            storeId,
+            needFavorites: advancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
+            needSubscriptionEvents: advancedRules.some((rule) => rule.field === 'subscription_event'),
+            needNotificationConsents: advancedRules.some((rule) => rule.field === 'notification_consent'),
           }
         );
         filtersWithCounts = normalizedFilters.map(({ filter, conditions }) => ({
@@ -1853,7 +1929,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         }));
       } else {
         filtersWithCounts = await Promise.all(rows.map(async (filter) => {
-          const result = await getCustomFilterCount(tenantId, filter.conditions, { filterSupport });
+          const result = await getCustomFilterCount(tenantId, filter.conditions, { filterSupport, storeId });
           return {
             ...filter,
             conditions: result.conditions,
@@ -1880,8 +1956,9 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   router.post('/filters/preview-count', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const filterSupport = { gender: await hasCustomerGenderColumn() };
-      const result = await getCustomFilterCount(tenantId, req.body?.conditions, { filterSupport });
+      const result = await getCustomFilterCount(tenantId, req.body?.conditions, { filterSupport, storeId });
       res.json({
         ok: true,
         data: {

@@ -6,6 +6,56 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const ordersMojibakeDecoder = typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
+  const ordersMojibakeExtras = new Map([
+    [0x0402, 0x80], [0x0403, 0x81], [0x201A, 0x82], [0x0453, 0x83], [0x201E, 0x84], [0x2026, 0x85], [0x2020, 0x86], [0x2021, 0x87],
+    [0x20AC, 0x88], [0x2030, 0x89], [0x0409, 0x8A], [0x2039, 0x8B], [0x040A, 0x8C], [0x040C, 0x8D], [0x040B, 0x8E], [0x040F, 0x8F],
+    [0x0452, 0x90], [0x2018, 0x91], [0x2019, 0x92], [0x201C, 0x93], [0x201D, 0x94], [0x2022, 0x95], [0x2013, 0x96], [0x2014, 0x97],
+    [0x2122, 0x99], [0x0459, 0x9A], [0x203A, 0x9B], [0x045A, 0x9C], [0x045C, 0x9D], [0x045B, 0x9E], [0x045F, 0x9F],
+    [0x0401, 0xA8], [0x0404, 0xAA], [0x0407, 0xAF], [0x0406, 0xB2], [0x0456, 0xB3], [0x0491, 0xB4], [0x0451, 0xB8], [0x2116, 0xB9],
+    [0x0452, 0x90], [0x0459, 0x9A], [0x045A, 0x9C], [0x045B, 0x9E], [0x045C, 0x9D], [0x045E, 0xA2], [0x045F, 0x9F], [0x0458, 0xBC], [0x040F, 0x8F],
+  ]);
+  function repairOrdersMojibake(value) {
+    const source = String(value || "");
+    if (!ordersMojibakeDecoder || !/(?:Р.|С.|в[А-яЁё]|Г[А-яЁё]|[ÐÑ].)/u.test(source)) return source;
+    const bytes = [];
+    for (const char of source) {
+      const code = char.codePointAt(0);
+      if (code <= 0x7f) bytes.push(code);
+      else if (code >= 0x410 && code <= 0x44f) bytes.push(code - 0x350);
+      else if (code >= 0x80 && code <= 0xff) bytes.push(code);
+      else if (ordersMojibakeExtras.has(code)) bytes.push(ordersMojibakeExtras.get(code));
+      else return source;
+    }
+    try {
+      const repaired = ordersMojibakeDecoder.decode(new Uint8Array(bytes));
+      return repaired && repaired !== source ? repaired : source;
+    } catch {
+      return source;
+    }
+  }
+  function repairOrdersDom(root = document) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) nodes.push(node);
+    nodes.forEach((textNode) => {
+      const repaired = repairOrdersMojibake(textNode.nodeValue);
+      if (repaired !== textNode.nodeValue) textNode.nodeValue = repaired;
+    });
+  }
+  const ordersMojibakeObserver = new MutationObserver((records) => {
+    records.forEach((record) => {
+      record.addedNodes.forEach((node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const repaired = repairOrdersMojibake(node.nodeValue);
+          if (repaired !== node.nodeValue) node.nodeValue = repaired;
+        } else if (node.nodeType === Node.ELEMENT_NODE) repairOrdersDom(node);
+      });
+    });
+  });
+  ordersMojibakeObserver.observe(document.body, { childList: true, subtree: true });
+  repairOrdersDom();
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
   let wasMobileViewport = isMobile();
   function getTenantId() {
@@ -25,8 +75,6 @@
     return 1;
   }
   const tenantId = getTenantId();
-  const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}`;
-  const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
   const appVersion = String(window.__APP_VERSION__ || document.body?.dataset?.appVersion || "")
     .trim()
     .replace(/[^a-z0-9._-]+/gi, "_") || "dev";
@@ -116,6 +164,24 @@
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
   const ORDER_BROWSER_ALERTS_ENABLED = false;
   const ORDER_UPDATED_EVENT = "dashboard:order-updated";
+  const lazyFeatureScriptUrls = { newOrder: "/static/js/new-order.js?v=20260506a", clients: "/static/js/clients.js?v=20260831-mobile-client-benefits-pages" };
+  const lazyFeatureScriptPromises = new Map();
+  function loadOrdersFeatureScript(name) {
+    const src = lazyFeatureScriptUrls[name];
+    if (!src) return Promise.reject(new Error(`Unknown Orders feature: ${name}`));
+    const existing = lazyFeatureScriptPromises.get(name);
+    if (existing) return existing;
+    const promise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = () => resolve(script);
+      script.onerror = () => { script.remove(); reject(new Error(`Failed to load ${name}`)); };
+      document.head.appendChild(script);
+    }).catch((error) => { lazyFeatureScriptPromises.delete(name); throw error; });
+    lazyFeatureScriptPromises.set(name, promise);
+    return promise;
+  }
 
   function emitOrderUpdated(order, meta = {}) {
     if (!order || typeof order !== "object") return;
@@ -177,35 +243,71 @@
     return json;
   }
 
-  function readSharedOrderDetailsCache() {
+  const ORDER_DETAILS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const ORDER_DETAILS_CACHE_MAX = 400;
+  const orderDetailsRevalidation = new Map();
+  const orderDetailsCacheKey = (id) => `orders:detail:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${id}`;
+  const isFullOrder = (order) => Boolean(order && Array.isArray(order.items) && Number(order.store_id || order.storeId || 0) > 0);
+
+  async function readCachedFullOrder(id, row) {
+    if (!window.AdminPersistentCache) return null;
     try {
-      const raw = localStorage.getItem(SHARED_ORDER_DETAILS_CACHE_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
+      const cached = await window.AdminPersistentCache.read(orderDetailsCacheKey(id));
+      if (!cached || Date.now() - Number(cached.cachedAt || 0) > ORDER_DETAILS_CACHE_MAX_AGE_MS) return null;
+      return isFullOrder(cached.order) ? cached.order : null;
+    } catch (err) {
+      console.error("Order detail IndexedDB read failed:", err);
+      return null;
     }
   }
 
-  function setSharedOrderDetails(order) {
-    const id = Number(order?.id || 0);
-    if (!Number.isFinite(id) || id <= 0) return;
-    const cache = readSharedOrderDetailsCache();
-    cache[String(id)] = {
-      updatedAt: Date.now(),
-      order: order && typeof order === "object" ? { ...order } : null,
-    };
-    const compacted = Object.entries(cache)
-      .sort((a, b) => Number(b?.[1]?.updatedAt || 0) - Number(a?.[1]?.updatedAt || 0))
-      .slice(0, SHARED_ORDER_DETAILS_CACHE_MAX)
-      .reduce((acc, [key, value]) => {
-        acc[key] = value;
-        return acc;
-      }, {});
-    try {
-      localStorage.setItem(SHARED_ORDER_DETAILS_CACHE_KEY, JSON.stringify(compacted));
-    } catch {}
+  function revalidateCachedFullOrder(id) {
+    if (orderDetailsRevalidation.has(id)) return;
+    const promise = apiJson(`/api/admin/orders/${id}`)
+      .then((json) => {
+        const fullOrder = json?.data || null;
+        if (!isFullOrder(fullOrder)) return;
+        const nextOrder = overlayCourierShadowOrder(fullOrder);
+        writeCachedFullOrder(nextOrder);
+        const idx = state.orders.findIndex((order) => Number(order?.id) === id);
+        if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+        else state.orders.unshift(nextOrder);
+        const tab = tabsState.tabs.find((item) => Number(item?.orderId) === id);
+        if (tab) tab.order = { ...tab.order, ...nextOrder };
+        if (Number(state.activeOrderId) === id) setInfo(nextOrder);
+        rebuildOrdersStageIndex();
+        renderOrders();
+      })
+      .catch((err) => console.error("Order detail background revalidation failed:", err))
+      .finally(() => orderDetailsRevalidation.delete(id));
+    orderDetailsRevalidation.set(id, promise);
+  }
+
+  function writeCachedFullOrder(order) {
+    if (!window.AdminPersistentCache || !isFullOrder(order)) return;
+    window.AdminPersistentCache.write(orderDetailsCacheKey(Number(order.id)), {
+      cachedAt: Date.now(), order: { ...order },
+    }).catch((err) => console.error("Order detail IndexedDB write failed:", err));
+    window.AdminPersistentCache.prunePrefix?.(
+      `orders:detail:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:`,
+      ORDER_DETAILS_CACHE_MAX
+    ).catch((err) => console.error("Order detail IndexedDB cleanup failed:", err));
+  }
+
+  function invalidateCachedFullOrder(id) {
+    const normalizedId = Number(id);
+    if (!(normalizedId > 0)) return;
+    const stateOrder = state.orders.find((order) => Number(order?.id) === normalizedId);
+    if (stateOrder && Array.isArray(stateOrder.items)) delete stateOrder.items;
+    tabsState.tabs.forEach((tab) => {
+      if (Number(tab?.orderId) === normalizedId && tab.order && Array.isArray(tab.order.items)) {
+        delete tab.order.items;
+      }
+    });
+    if (!window.AdminPersistentCache) return;
+    window.AdminPersistentCache.remove(orderDetailsCacheKey(normalizedId)).catch((err) => {
+      console.error("Order detail IndexedDB delete failed:", err);
+    });
   }
 
   function isAbortError(err) {
@@ -222,6 +324,7 @@
   const elStagesList = $("#ordersStagesList");
   const elOrdersList = $("#ordersList");
   const elEmptyHint = $("#ordersEmptyHint");
+  const elOrdersLoadMore = $("#ordersLoadMore");
   const ordersAddBtn = $("#ordersAddBtn");
   const orderTabsHeader = $("#orderTabsHeader");
   const orderTabsHeaderCheckout = $("#orderTabsHeaderCheckout");
@@ -298,6 +401,14 @@
   const desktopClientDom = createClientDomRefs(document);
   const sheetClientDom = isCourierScreenPage && sheet ? createClientDomRefs(sheet) : null;
   const clientSurfaces = [desktopClientDom, sheetClientDom].filter((dom) => dom && dom.infoWrap);
+  const shouldUseMobileSheet = () => Boolean(
+    isMobile()
+    && !document.body.classList.contains("admin-mobile-pages")
+  );
+  const shouldUseClientSheet = () => Boolean(
+    shouldUseMobileSheet()
+    && sheetClientDom
+  );
   const {
     infoWrap: clientInfoWrap,
     photo: clientPhoto,
@@ -321,12 +432,13 @@
   } = desktopClientDom;
   const ordersClientBenefitsFooter = $("#ordersClientBenefitsFooter");
   const ordersClientBenefitsOpenBtn = $("#ordersClientBenefitsOpenBtn");
+  const ordersClientBonusesOpenBtn = $("#ordersClientBonusesOpenBtn");
   const sheetOrderInfoFooter = sheet ? $('[data-role="order-info-footer"]', sheet) : null;
   const sheetOrderInfoPaymentBtn = sheet ? $('[data-role="order-info-payment-btn"]', sheet) : null;
   const sharedOrderPanel = window.SharedOrderPanel || null;
   const sharedOrderPayment = window.SharedOrderPayment || null;
   const sharedOrderInfoRenderer = sharedOrderPanel && ordersRightPane
-    ? sharedOrderPanel.createInfoRenderer({
+    ? sharedOrderPanel.createDetailsPage({
         root: ordersRightPane,
         footerEl: orderInfoFooter,
         clientInfoWrap,
@@ -359,7 +471,7 @@
       })
     : null;
   const sheetOrderInfoRenderer = sharedOrderPanel && sheet
-    ? sharedOrderPanel.createInfoRenderer({
+    ? sharedOrderPanel.createDetailsPage({
         root: sheet,
         footerEl: sheetOrderInfoFooter,
         clientInfoWrap: null,
@@ -422,6 +534,7 @@
     statuses: [],
     activeStatusId: isCourierWorkspace ? courierDefaultBucketId : "all",
     orders: [],
+    ordersPagination: { hasMore: false, nextOffset: 0, loading: false },
     ordersStageIndex: { all: [], byStatus: Object.create(null) },
     activeOrderId: null,
     draggingOrderId: null,
@@ -448,6 +561,8 @@
 
   const ORDERS_CACHE_VERSION = 4;
   const ORDERS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const ORDERS_PERSISTENT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  let ordersPersistentCacheRestored = false;
   const COURIER_OFFLINE_QUEUE_VERSION = 1;
   let ordersCachePersistTimer = null;
   const courierOfflineState = {
@@ -1467,7 +1582,8 @@
   }
 
   async function getReadyNewOrderBridge() {
-    const bridge = getNewOrderBridge();
+    let bridge = getNewOrderBridge();
+    if (!bridge) { await loadOrdersFeatureScript("newOrder"); bridge = getNewOrderBridge(); }
     if (!bridge) return null;
     if (typeof bridge.ready === "function") {
       try {
@@ -1649,7 +1765,7 @@
       syncActiveOrderRowState();
       applyTabModeLayout(tab)
         .then(() => {
-          if (openMobile && isMobile()) openSheet();
+          if (openMobile && shouldUseMobileSheet()) openSheet();
         })
         .catch(console.error)
         .finally(() => {
@@ -1672,7 +1788,13 @@
     syncActiveOrderRowState();
     setInfo(orderFromState || tab.order || null);
 
-    if (!orderFromState && tab.orderId) {
+    const hasFullOrder = Boolean(
+      orderFromState
+      && Array.isArray(orderFromState.items)
+      && orderFromState.items.length > 0
+      && Number(orderFromState.store_id || orderFromState.storeId || 0) > 0
+    );
+    if (!hasFullOrder && tab.orderId) {
       ensureFullOrderById(tab.orderId)
         .then((fullOrder) => {
           if (!fullOrder) return;
@@ -1687,7 +1809,7 @@
         .catch(console.error);
     }
 
-    if (openMobile && isMobile()) openSheet();
+    if (openMobile && shouldUseMobileSheet()) openSheet();
     schedulePersistOrdersCache();
   }
 
@@ -1738,17 +1860,26 @@
     return tab;
   }
 
-  async function ensureFullOrderById(orderId) {
+  async function ensureFullOrderById(orderId, { strict = false } = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
     const fromState = state.orders.find((order) => Number(order?.id) === id) || null;
-    const knownStoreId = Number(fromState?.store_id || fromState?.storeId || 0);
-    if (fromState && Array.isArray(fromState.items) && fromState.items.length && knownStoreId > 0) return fromState;
+    if (isFullOrder(fromState)) return fromState;
+    const cachedOrder = await readCachedFullOrder(id, fromState);
+    if (cachedOrder) {
+      const nextOrder = overlayCourierShadowOrder(cachedOrder);
+      const idx = state.orders.findIndex((order) => Number(order?.id) === id);
+      if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+      else state.orders.unshift(nextOrder);
+      revalidateCachedFullOrder(id);
+      return nextOrder;
+    }
     try {
       const json = await apiJson(`/api/admin/orders/${id}`);
       const fullOrder = json?.data || null;
       if (!fullOrder || !Number.isFinite(Number(fullOrder.id))) return fromState;
       const nextOrder = overlayCourierShadowOrder(fullOrder);
+      writeCachedFullOrder(nextOrder);
       const idx = state.orders.findIndex((order) => Number(order?.id) === Number(fullOrder.id));
       if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
       else state.orders.unshift(nextOrder);
@@ -1757,8 +1888,30 @@
       return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || nextOrder;
     } catch (err) {
       console.error(err);
-      return fromState;
+      return strict ? null : fromState;
     }
+  }
+
+  const orderDetailsOpener = sharedOrderPanel && typeof sharedOrderPanel.createDetailsOpener === "function"
+    ? sharedOrderPanel.createDetailsOpener({
+        loadOrder(orderId) {
+          return ensureFullOrderById(orderId, { strict: true });
+        },
+        openTab(order, orderId, context = {}) {
+          return ensureOrderTab(order, {
+            activate: true,
+            openMobile: context.openMobile !== false,
+          });
+        },
+        onError(error) {
+          console.error("order details open error:", error);
+        },
+      })
+    : null;
+
+  function openOrderDetailsById(orderId, options = {}) {
+    if (!orderDetailsOpener) return Promise.resolve(null);
+    return orderDetailsOpener.open(orderId, options);
   }
 
   async function openEditOrderTab(orderId) {
@@ -2632,7 +2785,14 @@
   function persistOrdersCacheNow() {
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     if (activeTab) captureCheckoutSessionForTab(activeTab);
-    const cachedDate = null;
+    const cachedDate = state.date.start && state.date.end
+      ? {
+          start: toDateKey(state.date.start),
+          end: toDateKey(state.date.end),
+          viewYear: Number(state.date.viewYear),
+          viewMonth: Number(state.date.viewMonth),
+        }
+      : null;
 
     const payload = {
       ts: Date.now(),
@@ -2690,6 +2850,19 @@
     state.activeOrderId = null;
     state.lastEventId = null;
     state.clientsCache = new Map();
+
+    const cachedStart = parseDateKey(cache?.date?.start);
+    const cachedEnd = parseDateKey(cache?.date?.end);
+    if (cachedStart && cachedEnd) {
+      state.date.start = cachedStart;
+      state.date.end = cachedEnd;
+      state.date.viewYear = isValidCalendarViewYear(cache?.date?.viewYear)
+        ? Number(cache.date.viewYear)
+        : cachedStart.getFullYear();
+      state.date.viewMonth = isValidCalendarViewMonth(cache?.date?.viewMonth)
+        ? Number(cache.date.viewMonth)
+        : cachedStart.getMonth();
+    }
 
     const baseDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
     state.date.viewYear = baseDate.getFullYear();
@@ -3664,7 +3837,7 @@
 
   function getActiveStageMeta() {
     if (state.activeStatusId === "all") {
-      return { id: "all", title: "Р’СЃРµ Р·Р°РєР°Р·С‹" };
+      return { id: "all", title: "Все заказы" };
     }
     if (isCourierWorkspace) {
       return courierBucketDefs.find((bucket) => String(bucket.id) === String(state.activeStatusId)) || null;
@@ -3674,7 +3847,7 @@
   }
 
   function getActiveStageTitle() {
-    return String(getActiveStageMeta()?.title || (isCourierWorkspace ? "Р—Р°РєР°Р·С‹" : "Р’СЃРµ Р·Р°РєР°Р·С‹")).trim() || "Р—Р°РєР°Р·С‹";
+    return String(getActiveStageMeta()?.title || (isCourierWorkspace ? "Заказы" : "Все заказы")).trim() || "Заказы";
   }
 
   function updateOrdersToolbarTitle() {
@@ -3794,6 +3967,59 @@
     return state.orders.find((row) => Number(row?.id || 0) === Number(order.id || 0)) || order;
   }
 
+  let mobilePaymentModalOrigin = null;
+
+  function mountMobilePaymentPage() {
+    const modal = document.getElementById("appModal");
+    if (!modal || mobilePaymentModalOrigin) return;
+    const activeColumn = document.body.classList.contains("admin-mobile-view-right")
+      ? document.querySelector(".page-col-right")
+      : document.querySelector(".page-col-center");
+    if (!activeColumn || !modal.parentNode) return;
+    mobilePaymentModalOrigin = document.createComment("mobile-payment-modal-origin");
+    modal.parentNode.insertBefore(mobilePaymentModalOrigin, modal);
+    activeColumn.appendChild(modal);
+  }
+
+  function ordersPersistentCacheKey() {
+    const dateKey = state.date.start && state.date.end
+      ? `${toDateKey(state.date.start)}_${toDateKey(state.date.end)}` : "default";
+    return `orders:list:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${dateKey}`;
+  }
+
+  async function readPersistentOrdersCache() {
+    try {
+      const data = await window.AdminPersistentCache?.read(ordersPersistentCacheKey());
+      if (!data || Date.now() - Number(data.ts || 0) > ORDERS_PERSISTENT_CACHE_MAX_AGE_MS) return null;
+      return data;
+    } catch (err) {
+      console.error("Orders IndexedDB read failed:", err);
+      return null;
+    }
+  }
+
+  function persistOrdersListCache() {
+    if (!window.AdminPersistentCache || !state.orders.length) return;
+    const data = {
+      ts: Date.now(),
+      orders: state.orders.map((order) => ({ ...order })),
+      pagination: { hasMore: state.ordersPagination.hasMore, nextOffset: state.ordersPagination.nextOffset },
+      syncCursor: Number(state.lastEventId || 0),
+    };
+    window.AdminPersistentCache.write(ordersPersistentCacheKey(), data).catch((err) => {
+      console.error("Orders IndexedDB write failed:", err);
+    });
+  }
+
+  function restoreMobilePaymentModal() {
+    const modal = document.getElementById("appModal");
+    if (modal && mobilePaymentModalOrigin?.parentNode) {
+      mobilePaymentModalOrigin.parentNode.insertBefore(modal, mobilePaymentModalOrigin);
+      mobilePaymentModalOrigin.remove();
+    }
+    mobilePaymentModalOrigin = null;
+  }
+
   async function openOrderPaymentDialog(order) {
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
@@ -3818,6 +4044,25 @@
 
     const offlineCapable = isCourierWorkspace && !isPaidOrder(order);
     const useOfflineCollection = offlineCapable && !courierOfflineState.online;
+    const useMobilePaymentPage = isMobile() && document.body.classList.contains("admin-mobile-pages");
+    const paymentPageOptions = useMobilePaymentPage
+      ? {
+          onOpen() {
+            const paymentOrderNumber = String(getOrderNumber(order) || orderId).trim();
+            document.body.classList.add("admin-payment-page-open");
+            mountMobilePaymentPage();
+            window.__adminMobilePages?.openSubview?.(
+              `Принять оплату №${paymentOrderNumber}`,
+              () => window.AppModal?.close?.("back")
+            );
+          },
+          onClose() {
+            window.__adminMobilePages?.closeSubview?.();
+            restoreMobilePaymentModal();
+            document.body.classList.remove("admin-payment-page-open");
+          },
+        }
+      : {};
 
     if (!offlineCapable) {
       return sharedOrderPayment.open({
@@ -3834,6 +4079,7 @@
         onError(err) {
           console.error("orders payment modal error:", err);
         },
+        ...paymentPageOptions,
       });
     }
 
@@ -3904,6 +4150,7 @@
         }
         console.error("orders payment modal error:", err);
       },
+      ...paymentPageOptions,
     });
 
     let paymentPayload = null;
@@ -4343,6 +4590,16 @@
     });
   }
 
+  if (ordersClientBonusesOpenBtn) {
+    ordersClientBonusesOpenBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const activeClientTab = getActiveClientTab();
+      const clientId = Number(activeClientTab?.clientId || 0);
+      if (!(clientId > 0)) return;
+      void window.__clientsDashboardApi?.openBonusesByClientId?.(clientId);
+    });
+  }
+
   function renderClientAddressesHtml(addresses) {
     const list = Array.isArray(addresses) ? addresses : [];
     if (!list.length) return '<div class="muted" style="padding:4px 0;">\u0410\u0434\u0440\u0435\u0441\u043e\u0432 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.</div>';
@@ -4485,7 +4742,7 @@
 
     tab.loading = true;
     tab.error = null;
-    const activeSurface = tabsState.activeKey === tab.key && isMobile() && sheetClientDom ? "sheet" : "desktop";
+    const activeSurface = tabsState.activeKey === tab.key && shouldUseClientSheet() ? "sheet" : "desktop";
     const activeClientDom = activeSurface === "sheet" ? sheetClientDom : desktopClientDom;
     if (tabsState.activeKey === tab.key) {
       showClientInfo(activeSurface);
@@ -4546,7 +4803,7 @@
 
   async function activateClientTab(tab, { openMobile = false, forceReload = false } = {}) {
     if (!tab || tab.type !== "client") return;
-    const activeSurface = openMobile && isMobile() && sheetClientDom ? "sheet" : "desktop";
+    const activeSurface = openMobile && shouldUseClientSheet() ? "sheet" : "desktop";
     const activeClientDom = activeSurface === "sheet" ? sheetClientDom : desktopClientDom;
 
     const cached = state.clientsCache.get(Number(tab.clientId));
@@ -4571,7 +4828,7 @@
     }, activeClientDom);
     await loadClientTabData(tab, { forceReload });
 
-    if (openMobile && isMobile()) openSheet();
+    if (activeSurface === "sheet") openSheet();
   }
 
   function setInfo(order) {
@@ -4627,7 +4884,7 @@
       return;
     }
 
-    setSharedOrderDetails(order);
+    writeCachedFullOrder(order);
     showOrderInfo();
 
     setTextAll(infoEls.title, `Р—РђРљРђР— #${order.id}`);
@@ -4818,6 +5075,10 @@
   }
 
   function openSheet() {
+    if (document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight();
+      return;
+    }
     if (!sheet || !backdrop) return;
     const activeEl = document.activeElement;
     sheetReturnFocusEl = activeEl && !sheet.contains(activeEl) ? activeEl : null;
@@ -4852,10 +5113,11 @@
     btn.type = "button";
     btn.setAttribute("data-status-id", String(id));
 
+    const displayTitle = repairOrdersMojibake(title);
     btn.innerHTML = `
       <span class="stage-icon"><i class="fas ${escapeHtml(icon)}"></i></span>
       <span class="stage-text">
-        <strong>${escapeHtml(title)}</strong>
+        <strong>${escapeHtml(displayTitle)}</strong>
       </span>
       <span class="stage-count">${escapeHtml(count)}</span>
     `;
@@ -5064,7 +5326,7 @@
 
     elStagesList.appendChild(stageButton({
       id: "all",
-      title: "Р’СЃРµ Р·Р°РєР°Р·С‹",
+      title: "Все заказы",
       icon: "fa-layer-group",
       count: allCount,
     }));
@@ -5273,12 +5535,12 @@
       ? sharedOrderPanel.renderOrderTimeIcon(order)
       : renderOrderTimeIcon(order);
     const stageCycleBtnHtml = renderOrderStatusHoverCycleButton(order);
-    const addressCommentDisplay = order.address_comment || order.comment || "РќРµС‚ РєРѕРјРјРµРЅС‚Р°СЂРёСЏ";
-    const rawAddress = order.address ||
+    const addressCommentDisplay = repairOrdersMojibake(order.address_comment || order.comment || "Нет комментария");
+    const rawAddress = repairOrdersMojibake(order.address ||
       (order.pickup_store_address
         ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
         : "?"
-      );
+      ));
     const shortAddressDisplay = sharedOrderPanel && typeof sharedOrderPanel.shortAddressForList === "function"
       ? sharedOrderPanel.shortAddressForList(rawAddress)
       : shortAddressForList(rawAddress);
@@ -5318,13 +5580,13 @@
         `
       );
 
-    const payment = String(order.payment_title || "").trim();
+    const payment = repairOrdersMojibake(String(order.payment_title || "").trim());
     const totalText = money(getOrderDisplayTotal(order));
     const paymentCode = (order.payment_code || "").toLowerCase();
     const isCash = paymentCode.includes("cash");
     const isFullyRefunded = isOrderFullyRefunded(order);
     const paymentIconHtml = renderOrderPaymentIcon(order);
-    const paymentStatusText = isFullyRefunded ? "Р’РѕР·РІСЂР°С‚" : (isPaidOrder(order) ? "РћРїР»Р°С‡РµРЅРѕ" : "РќРµ РѕРїР»Р°С‡РµРЅРѕ");
+    const paymentStatusText = isFullyRefunded ? "Возврат" : (isPaidOrder(order) ? "Оплачено" : "Не оплачено");
     const paymentStateClass = isFullyRefunded
       ? "order-payment-refund"
       : (isPaidOrder(order) ? "order-payment-paid" : "order-payment-unpaid");
@@ -5609,23 +5871,81 @@
     state.statuses = Array.isArray(json.data) ? json.data : [];
   }
 
-  async function loadOrders() {
+  let ordersQueryGeneration = 0;
+
+  async function loadOrders({ resetPagination = true, append = false } = {}) {
+    const queryGeneration = resetPagination ? ++ordersQueryGeneration : ordersQueryGeneration;
+    const keepRestoredPagination = resetPagination && ordersPersistentCacheRestored && state.orders.length > 0;
+    if (resetPagination && !keepRestoredPagination) {
+      state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
+    }
     const qs = new URLSearchParams();
     if (state.date.start && state.date.end) {
       qs.set("start_date", toDateKey(state.date.start));
       qs.set("end_date", toDateKey(state.date.end));
     }
-    qs.set("limit", "500");
-    qs.set("offset", "0");
+    qs.set("view", "list");
+    qs.set("limit", "50");
+    qs.set("offset", String(resetPagination || !append ? 0 : state.ordersPagination.nextOffset));
 
     const json = await apiJson(`/api/admin/orders?${qs.toString()}`);
+    if (queryGeneration !== ordersQueryGeneration) return;
     const rows = Array.isArray(json.data) ? json.data : [];
-    state.orders = rows.filter(shouldKeepOrderInState);
+    if (resetPagination && (!ordersPersistentCacheRestored || !state.orders.length)) {
+      state.orders = rows.filter(shouldKeepOrderInState);
+    } else {
+      const existingIds = new Set(state.orders.map((order) => Number(order?.id || 0)));
+      rows.filter(shouldKeepOrderInState).forEach((order) => {
+        const id = Number(order?.id || 0);
+        if (!id) return;
+        const existingIndex = state.orders.findIndex((current) => Number(current?.id || 0) === id);
+        if (existingIndex >= 0) state.orders[existingIndex] = { ...state.orders[existingIndex], ...order };
+        else if (!existingIds.has(id)) state.orders.push(order);
+      });
+    }
+    ordersPersistentCacheRestored = false;
+    state.ordersPagination.hasMore = json.has_more === true || (keepRestoredPagination && state.ordersPagination.hasMore);
+    if (resetPagination || append) {
+      const serverNextOffset = Number.isFinite(Number(json.next_offset))
+        ? Number(json.next_offset)
+        : (resetPagination ? rows.length : state.ordersPagination.nextOffset + rows.length);
+      state.ordersPagination.nextOffset = keepRestoredPagination
+        ? Math.max(state.ordersPagination.nextOffset, serverNextOffset)
+        : serverNextOffset;
+    }
     applyCourierShadowOrdersToState();
     rebuildOrdersStageIndex();
-    if (!isCourierWorkspace) {
-      syncStageCountsFromOrders();
+    if (elOrdersLoadMore) {
+      elOrdersLoadMore.classList.toggle("hidden", !state.ordersPagination.hasMore);
+      elOrdersLoadMore.disabled = false;
     }
+    persistOrdersListCache();
+  }
+
+  async function loadMoreOrders() {
+    if (state.ordersPagination.loading || !state.ordersPagination.hasMore) return;
+    state.ordersPagination.loading = true;
+    if (elOrdersLoadMore) {
+      elOrdersLoadMore.disabled = true;
+      elOrdersLoadMore.textContent = "Загрузка…";
+    }
+    try {
+      await loadOrders({ resetPagination: false, append: true });
+      renderStages();
+      renderOrders();
+    } catch (err) {
+      console.error(err);
+      if (elOrdersLoadMore) elOrdersLoadMore.disabled = false;
+    } finally {
+      state.ordersPagination.loading = false;
+      if (elOrdersLoadMore) elOrdersLoadMore.textContent = "Показать ещё";
+    }
+  }
+
+  if (elOrdersLoadMore) {
+    elOrdersLoadMore.addEventListener("click", () => {
+      void loadMoreOrders();
+    });
   }
 
   async function loadAndRenderOrders(keepSelection = false) {
@@ -5677,6 +5997,7 @@
 
   function applyDateFilter(closePopover = true) {
     updateDateLabel();
+    schedulePersistOrdersCache(0);
     loadStatuses()
       .then(renderStages)
       .then(() => loadAndRenderOrders(false))
@@ -5949,23 +6270,9 @@
     return changed;
   }
 
-  function syncStageCountsFromOrders() {
-    if (!Array.isArray(state.statuses) || !state.statuses.length) return;
-    state.statuses.forEach((status) => {
-      status.count = 0;
-    });
-    (Array.isArray(state.orders) ? state.orders : []).forEach((order) => {
-      const statusId = extractOrderStatusId(order);
-      if (!statusId) return;
-      const status = state.statuses.find((item) => Number(item?.id) === statusId);
-      if (status) {
-        status.count = Math.max(0, Number(status.count || 0)) + 1;
-      }
-    });
-  }
-
   function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false } = {}) {
     if (!order || !order.id) return;
+    invalidateCachedFullOrder(order.id);
 
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
     const wasExisting = idx >= 0;
@@ -6024,7 +6331,11 @@
 
     nextOrder = localOnly ? { ...order } : overlayCourierShadowOrder(order);
     if (wasExisting) {
-      state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+      state.orders[idx] = {
+        ...state.orders[idx],
+        ...nextOrder,
+        ...(isFullOrder(nextOrder) ? { items: nextOrder.items } : {}),
+      };
       nextOrder = state.orders[idx];
     } else {
       state.orders.unshift(nextOrder);
@@ -6068,124 +6379,17 @@
 
   // Р¤РѕРЅРѕРІС‹Р№ РѕРїСЂРѕСЃ СЃРїРёСЃРєР° Р·Р°РєР°Р·РѕРІ (СЂРµР·РµСЂРІ, РєРѕРіРґР° SSE РѕР±СЂС‹РІР°РµС‚СЃСЏ РЅР° С…РѕСЃС‚РёРЅРіРµ)
   // Р’Р°Р¶РЅРѕ: Chrome С‚СЂРѕС‚С‚Р»РёС‚ setInterval РІ С„РѕРЅРѕРІС‹С… РІРєР»Р°РґРєР°С… РґРѕ 1 СЂР°Р·Р° РІ РјРёРЅСѓС‚Сѓ Рё Р±РѕР»РµРµ.
-  // РџСЂРё РІРѕР·РІСЂР°С‚Рµ РЅР° РІРєР»Р°РґРєСѓ РІС‹Р·С‹РІР°РµРј pollOrdersList СЃСЂР°Р·Сѓ (visibilitychange).
-  const ORDERS_POLL_INTERVAL_MS = 15000; // 15 СЃРµРє
-  let ordersPollTimer = null;
-  let ordersChangesPollTimer = null;
-
-  async function pollOrdersList() {
-    try {
-      const prevIds = new Set(state.orders.map((o) => Number(o.id)));
-      await loadOrders();
-      const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
-      if (isCourierWorkspace) {
-        ensureActiveStatusSelection();
-        renderStages();
-        if (newOrders.length) {
-          notifyNewOrders(newOrders);
-        }
-      } else if (newOrders.length) {
-        renderStages();
-        notifyNewOrders(newOrders);
-      } else {
-        renderStages();
-      }
-      renderOrders();
-      if (tabsState.tabs.length) {
-        syncTabsWithLatestOrders();
-      } else if (state.activeOrderId) {
-        const order = state.orders.find((o) => Number(o.id) === Number(state.activeOrderId));
-        if (order) setInfo(order);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  function startOrdersPolling() {
-    if (ordersPollTimer) return;
-    ordersPollTimer = true; // РјР°СЂРєРµСЂ С‡С‚Рѕ polling Р°РєС‚РёРІРµРЅ
-    scheduleNextPoll();
-  }
-
-  function stopOrdersPolling() {
-    if (ordersPollTimer != null && typeof ordersPollTimer === "number") {
-      clearTimeout(ordersPollTimer);
-    }
-    ordersPollTimer = null;
-  }
-
-  // Long-poll mode.
-  function startOrdersPolling() {
-    if (!ordersChangesPollTimer) {
-      const tickChanges = async () => {
-        if (!ordersChangesPollTimer) return;
-        try {
-          if (!state.lastEventId) {
-            await fetchChanges();
-          }
-
-          const waited = await waitOrdersChanges(state.lastEventId || 0, 20000);
-          if (!ordersChangesPollTimer) return;
-
-          if (waited.changed) {
-            await fetchChanges();
-          } else if (Number.isFinite(waited.cursor) && waited.cursor > 0 && !state.lastEventId) {
-            state.lastEventId = waited.cursor;
-          }
-        } catch (e) {
-          console.error(e);
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        } finally {
-          if (!ordersChangesPollTimer) return;
-          setTimeout(tickChanges, 0);
-        }
-      };
-      ordersChangesPollTimer = true;
-      void tickChanges();
-    }
-
-  }
-
-  async function waitOrdersChanges(since, timeoutMs = 20000) {
-    const qs = new URLSearchParams({
-      since: String(Number(since || 0)),
-      timeout_ms: String(Math.max(1000, Number(timeoutMs || 20000))),
-      _ts: String(Date.now()),
-    });
-    const json = await apiJson(`/api/admin/orders/changes/wait?${qs.toString()}`);
-    const data = json?.data || {};
-    return {
-      changed: data.changed === true,
-      timeout: data.timeout === true,
-      cursor: Number(data.cursor || 0),
-    };
-  }
-
-  function stopOrdersPolling() {
-    if (ordersPollTimer != null && typeof ordersPollTimer === "number") {
-      clearTimeout(ordersPollTimer);
-    }
-    ordersPollTimer = null;
-
-    if (ordersChangesPollTimer != null && typeof ordersChangesPollTimer === "number") {
-      clearTimeout(ordersChangesPollTimer);
-    }
-    ordersChangesPollTimer = null;
-  }
-
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && ordersPollTimer) {
-      pollOrdersList().catch(console.error);
-    }
-  });
-
   function applyOrdersChangesEvents(changes, { notifyCreated = true } = {}) {
     const rows = Array.isArray(changes) ? changes : [];
     const createdOrders = [];
     rows.forEach((evt) => {
+      const eventOrderId = Number(evt?.data?.id || 0);
+      const hadOrder = eventOrderId > 0 && state.orders.some((row) => Number(row?.id || 0) === eventOrderId);
       state.lastEventId = evt?.id || state.lastEventId;
-      handleOrderEvent(evt?.data);
+      const nextOrder = handleOrderEvent(evt?.data);
+      if (!hadOrder && nextOrder && state.ordersPagination.nextOffset > 0) {
+        state.ordersPagination.nextOffset += 1;
+      }
       if (notifyCreated && String(evt?.event || "").toLowerCase() === "order.created" && evt?.data) {
         createdOrders.push(evt.data);
       }
@@ -6193,6 +6397,7 @@
     if (notifyCreated && createdOrders.length) {
       notifyNewOrders(createdOrders);
     }
+    if (rows.length) persistOrdersListCache();
   }
 
   async function fetchOrdersChanges(since = 0) {
@@ -6223,7 +6428,18 @@
     return payload;
   }
 
-  async function bootstrapOrdersData({ keepSelection = false } = {}) {
+  async function bootstrapOrdersData({ keepSelection = false, preserveExisting = false } = {}) {
+    if (ordersPersistentCacheRestored && state.orders.length && Number(state.lastEventId || 0) > 0) {
+      await loadStatuses();
+      ensureActiveStatusSelection();
+      const synced = await synchronizeOrdersChanges({ notifyCreated: false });
+      if (!synced.resetRequired) {
+        renderStages();
+        renderOrders();
+        return synced;
+      }
+      ordersPersistentCacheRestored = false;
+    }
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const bootstrap = await fetchOrdersChanges(0);
       const snapshotCursor = Number(bootstrap.cursor || 0);
@@ -6236,6 +6452,9 @@
       const catchup = await fetchOrdersChanges(snapshotCursor);
       if (catchup.resetRequired) {
         state.lastEventId = null;
+        if (preserveExisting && state.orders.length) {
+          ordersPersistentCacheRestored = true;
+        }
         continue;
       }
 
@@ -6296,7 +6515,7 @@
           if (!ordersLongPollActive || token !== ordersLongPollToken) return;
 
           if (waited.resetRequired) {
-            await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+            await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
             continue;
           }
 
@@ -6307,7 +6526,7 @@
           if (waited.changed) {
             const synced = await synchronizeOrdersChanges({ notifyCreated: true });
             if (synced.resetRequired) {
-              await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+              await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
             }
           }
         } catch (e) {
@@ -6326,14 +6545,6 @@
       try { ordersWaitAbortController.abort(); } catch {}
       ordersWaitAbortController = null;
     }
-    if (ordersPollTimer != null && typeof ordersPollTimer === "number") {
-      clearTimeout(ordersPollTimer);
-    }
-    ordersPollTimer = null;
-    if (ordersChangesPollTimer != null && typeof ordersChangesPollTimer === "number") {
-      clearTimeout(ordersChangesPollTimer);
-    }
-    ordersChangesPollTimer = null;
     ordersLongPollActive = false;
     ordersLongPollToken += 1;
   }
@@ -6346,7 +6557,7 @@
       } else {
         const synced = await synchronizeOrdersChanges({ notifyCreated: false });
         if (synced?.resetRequired) {
-          await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+          await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
         }
       }
     } catch (err) {
@@ -6362,10 +6573,7 @@
       stopOrdersPolling();
       return;
     }
-    void resetWorkspaceDateFilterToTodayIfNeeded({
-      keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
-    })
-      .catch(console.error)
+    Promise.resolve()
       .finally(() => {
         if (isCourierWorkspace) {
           setCourierOnlineState(navigator.onLine !== false);
@@ -6544,18 +6752,7 @@
       const orderId = Number(openOrderFromClientBtn.getAttribute("data-order-id") || 0);
       if (!Number.isFinite(orderId) || orderId <= 0) return;
 
-      let order = state.orders.find((x) => Number(x.id) === orderId) || null;
-      if (!order) {
-        try {
-          const json = await apiJson(`/api/admin/orders/${orderId}`);
-          order = json?.data || null;
-        } catch (err) {
-          console.error(err);
-        }
-      }
-      if (!order) return;
-
-      ensureOrderTab(order, { activate: true, openMobile: true });
+      await openOrderDetailsById(orderId, { openMobile: true });
       return;
     }
 
@@ -6586,6 +6783,11 @@
     if (openClientBtn) {
       e.preventDefault();
       e.stopPropagation();
+      try { await loadOrdersFeatureScript("clients"); } catch (err) {
+        console.error(err);
+        alert("Не удалось открыть карточку клиента. Повторите попытку.");
+        return;
+      }
 
       let clientId = Number(openClientBtn.getAttribute("data-client-id") || 0);
       let clientPhone = String(openClientBtn.getAttribute("data-client-phone") || "").trim();
@@ -6651,8 +6853,14 @@
     }
 
     // РќРµ РІС‹Р±РёСЂР°С‚СЊ Р·Р°РєР°Р· РїСЂРё РєР»РёРєРµ РЅР° РєРЅРѕРїРєСѓ РѕРїР»Р°С‚С‹
-    if (e.target.closest(".order-payment-btn")) {
+    const rowPaymentBtn = e.target.closest(".order-payment-btn");
+    if (rowPaymentBtn) {
+      e.preventDefault();
       e.stopPropagation();
+      const row = rowPaymentBtn.closest(".js-order");
+      const orderId = Number(row?.getAttribute("data-order-id") || 0);
+      const order = state.orders.find((item) => Number(item?.id || 0) === orderId) || null;
+      if (order && isMobile()) await openOrderPaymentDialog(order);
       return;
     }
 
@@ -6672,9 +6880,7 @@
     if (!row) return;
     const orderId = Number(row.getAttribute("data-order-id")) || null;
     if (!orderId) return;
-    const order = state.orders.find((o) => Number(o.id) === Number(orderId));
-    if (!order) return;
-    ensureOrderTab(order, { activate: true, openMobile: true });
+    await openOrderDetailsById(orderId, { openMobile: true });
   });
 
   document.addEventListener("neworder:right-tabs-empty", () => {
@@ -6833,15 +7039,7 @@
 
   window.__ordersDashboardApi = {
     async openOrderById(orderId, options = {}) {
-      const id = Number(orderId || 0);
-      if (!Number.isFinite(id) || id <= 0) return null;
-      const order = await ensureFullOrderById(id);
-      if (!order) return null;
-      const tab = ensureOrderTab(order, {
-        activate: true,
-        openMobile: options && options.openMobile !== false,
-      });
-      return tab || null;
+      return openOrderDetailsById(orderId, options);
     },
     async cycleActiveOrderStatus() {
       await cycleActiveOrderStatus();
@@ -7560,12 +7758,29 @@
       hydrateCourierOfflineStateFromStorage();
 
       await loadStoreTimezone();
-      hydrateOrdersFromCache(cachedBootstrap);
       ensureDateStateInitialized();
-      const didResetDateFilter = await resetWorkspaceDateFilterToTodayIfNeeded({ reloadData: false });
-      if (!didResetDateFilter) {
-        renderCalendar();
-        updateDateLabel();
+      const persistentOrders = await readPersistentOrdersCache();
+      if (persistentOrders?.orders?.length) {
+        state.orders = persistentOrders.orders.filter(shouldKeepOrderInState);
+        state.ordersPagination = {
+          hasMore: persistentOrders.pagination?.hasMore === true,
+          nextOffset: Number(persistentOrders.pagination?.nextOffset || state.orders.length),
+          loading: false,
+        };
+        state.lastEventId = Number(persistentOrders.syncCursor || 0) || null;
+        ordersPersistentCacheRestored = true;
+      }
+      hydrateOrdersFromCache(cachedBootstrap);
+      if (persistentOrders?.orders?.length) {
+        state.orders = persistentOrders.orders.filter(shouldKeepOrderInState);
+        ordersPersistentCacheRestored = true;
+      }
+      renderCalendar();
+      updateDateLabel();
+      if (state.orders.length) {
+        rebuildOrdersStageIndex();
+        renderStages();
+        renderOrders();
       }
       bindOrderTabsWheelScroll();
 
@@ -7677,6 +7892,7 @@
     state.ordersStageIndex = createOrdersStageIndex();
     state.selectedOrderIds = new Set();
     state.lastEventId = null;
+    ordersQueryGeneration += 1;
     tabsState.tabs = [];
     tabsState.activeKey = null;
     state.activeOrderId = null;
@@ -7690,7 +7906,6 @@
     closeSheet();
     loadStoreTimezone()
       .then(() => {
-        resetDateStateToToday();
         ensureDateStateInitialized();
         renderCalendar();
         updateDateLabel();

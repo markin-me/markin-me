@@ -1,16 +1,19 @@
 const express = require('express');
+const productPassportSnapshots = require('../../services/product-passport-snapshots');
 
 module.exports = function makeAdminStockRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
 
   function publishStockChanged(tenantId, storeId, payload = {}) {
     try {
-      if (!ordersEvents || typeof ordersEvents.publish !== 'function') return;
-      ordersEvents.publish(tenantId, storeId, 'stock.changed', {
-        tenant_id: Number(tenantId),
-        store_id: Number(storeId),
-        ...payload,
-      });
+      productPassportSnapshots.markRelatedProductsDirty({
+        db, tenantId, storeId, productIds: payload?.product_ids || [],
+      }).catch((error) => console.error('stock passport invalidation failed:', error));
+      if (ordersEvents && typeof ordersEvents.publish === 'function') {
+        ordersEvents.publish(tenantId, storeId, 'stock.changed', {
+          tenant_id: Number(tenantId), store_id: Number(storeId), ...payload,
+        });
+      }
     } catch (err) {
       console.error('publishStockChanged error:', err);
     }

@@ -1,4 +1,34 @@
 ﻿(function () {
+  var sharedMojibakeDecoder = typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
+  var sharedMojibakeExtras = {
+    0x0402: 0x80, 0x0403: 0x81, 0x201A: 0x82, 0x0453: 0x83, 0x201E: 0x84, 0x2026: 0x85,
+    0x2020: 0x86, 0x2021: 0x87, 0x20AC: 0x88, 0x2030: 0x89, 0x0409: 0x8A, 0x2039: 0x8B,
+    0x040A: 0x8C, 0x040C: 0x8D, 0x040B: 0x8E, 0x040F: 0x8F, 0x0452: 0x90, 0x2018: 0x91,
+    0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+    0x2122: 0x99, 0x0459: 0x9A, 0x203A: 0x9B, 0x045A: 0x9C, 0x045C: 0x9D, 0x045B: 0x9E,
+    0x045F: 0x9F, 0x0401: 0xA8, 0x0404: 0xAA, 0x0407: 0xAF, 0x0406: 0xB2, 0x0456: 0xB3,
+    0x0491: 0xB4, 0x0451: 0xB8, 0x2116: 0xB9, 0x0454: 0xBA, 0x0458: 0xBC,
+  };
+  function repairSharedMojibake(value) {
+    var source = String(value == null ? "" : value);
+    if (!sharedMojibakeDecoder || !/(?:Р.|С.|в[А-яЁё]|Г[А-яЁё]|[ÐÑ].)/u.test(source)) return source;
+    var bytes = [];
+    for (var i = 0; i < source.length; i += 1) {
+      var code = source.charCodeAt(i);
+      if (code <= 0x7f) bytes.push(code);
+      else if (code >= 0x410 && code <= 0x44f) bytes.push(code - 0x350);
+      else if (code >= 0x80 && code <= 0xff) bytes.push(code);
+      else if (Object.prototype.hasOwnProperty.call(sharedMojibakeExtras, code)) bytes.push(sharedMojibakeExtras[code]);
+      else return source;
+    }
+    try {
+      var repaired = sharedMojibakeDecoder.decode(new Uint8Array(bytes));
+      return repaired && repaired !== source ? repaired : source;
+    } catch (err) {
+      return source;
+    }
+  }
+
   function toArray(value) {
     return Array.isArray(value) ? value.filter(Boolean) : [];
   }
@@ -370,6 +400,7 @@
     var addressCommentHtml = String(config.addressCommentHtml || "").trim();
     var stageHtml = String(config.stageHtml || "").trim();
     var paymentHtml = String(config.paymentHtml || "").trim();
+    var useMobileControls = !!config.useMobileControls;
     var orderIdHitTag = showMultiSelect ? "label" : "div";
     var orderIdHitAttrs = showMultiSelect
       ? ' data-action="order-multi-select" data-order-id="' + escapeHtml(orderId) + '" title="Выбрать заказ"'
@@ -397,8 +428,9 @@
         (addressLineHtml || ('<div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ' + escapeHtml(addressText) + '</div>')) +
         (addressCommentHtml || ('<div class="order-address-comment muted"><i class="far fa-comment"></i> ' + escapeHtml(addressCommentText) + '</div>')) +
       '</div>' +
-      '<div class="order-col order-stage">' + stageHtml + '</div>' +
-      '<div class="order-col order-total">' + paymentHtml + '</div>';
+      (useMobileControls
+        ? '<div class="order-col order-orders-mobile-controls"><div class="order-orders-mobile-status-row"><div class="order-col order-stage">' + stageHtml + '</div><div class="order-col order-total">' + paymentHtml + '</div></div></div>'
+        : '<div class="order-col order-stage">' + stageHtml + '</div><div class="order-col order-total">' + paymentHtml + '</div>');
   }
 
   function getRefundState(order) {
@@ -521,7 +553,7 @@
 
   function setTextAll(list, value) {
     toArray(list).forEach(function (el) {
-      el.textContent = value;
+      el.textContent = repairSharedMojibake(value);
     });
   }
 
@@ -957,7 +989,17 @@
       var urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent");
       setHiddenAll(infoEls.deliveryUrgent, !urgent);
 
-      var address = order.address;
+      var address = String(order.address || order.delivery_address_normalized_display || "").trim();
+      if (!address) {
+        var streetAndHouse = [order.delivery_address_street, order.delivery_address_house]
+          .map(function (part) { return String(part || "").trim(); })
+          .filter(Boolean)
+          .join(", ");
+        address = [order.delivery_address_city, streetAndHouse]
+          .map(function (part) { return String(part || "").trim(); })
+          .filter(Boolean)
+          .join(", ");
+      }
       if (!address && order.pickup_store_address) {
         address = order.pickup_store_name
           ? order.pickup_store_name + ", " + order.pickup_store_address
@@ -1036,6 +1078,44 @@
     };
   }
 
+  function createDetailsOpener(options) {
+    options = options || {};
+    var pendingById = new Map();
+
+    function open(orderId, context) {
+      var id = Number(orderId || 0);
+      if (!(id > 0)) return Promise.resolve(null);
+      if (pendingById.has(id)) return pendingById.get(id);
+
+      var pending = Promise.resolve()
+        .then(function () {
+          if (typeof options.loadOrder !== "function") throw new Error("ORDER_DETAILS_LOADER_MISSING");
+          return options.loadOrder(id, context || {});
+        })
+        .then(function (order) {
+          if (!order || Number(order.id || 0) !== id) throw new Error("ORDER_DETAILS_NOT_FOUND");
+          if (typeof options.openTab !== "function") throw new Error("ORDER_DETAILS_TAB_OPENER_MISSING");
+          return Promise.resolve(options.openTab(order, id, context || {})).then(function (tab) {
+            if (typeof options.afterOpen === "function") options.afterOpen(order, tab || null);
+            return tab || null;
+          });
+        })
+        .catch(function (error) {
+          if (typeof options.onError === "function") options.onError(error, id);
+          else console.error(error);
+          return null;
+        })
+        .finally(function () {
+          pendingById.delete(id);
+        });
+
+      pendingById.set(id, pending);
+      return pending;
+    }
+
+    return { open: open };
+  }
+
   window.SharedOrderPanel = {
     bindTabsWheelScroll: bindTabsWheelScroll,
     buildOrderClientPhoneHtml: buildOrderClientPhoneHtml,
@@ -1045,7 +1125,9 @@
     renderTabs: renderTabs,
     renderOrderTimeIcon: renderOrderTimeIcon,
     shortAddressForList: shortAddressForList,
-    createInfoRenderer: createInfoRenderer
+    createInfoRenderer: createInfoRenderer,
+    createDetailsPage: createInfoRenderer,
+    createDetailsOpener: createDetailsOpener
   };
 })();
 

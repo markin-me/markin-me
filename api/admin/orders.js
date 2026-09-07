@@ -1,5 +1,6 @@
 
 const express = require("express");
+const productPassportSnapshots = require("../../services/product-passport-snapshots");
 const { sendOrderToPrintBot, enqueueSingleLabelPrintJob } = require("../printPush");
 const {
   applyStockDeductionForOrderItems,
@@ -1641,12 +1642,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
   function publishStockChanged(tenantId, storeId, payload = {}) {
     try {
-      if (!ordersEvents || typeof ordersEvents.publish !== "function") return;
-      ordersEvents.publish(tenantId, storeId, "stock.changed", {
-        tenant_id: Number(tenantId),
-        store_id: Number(storeId),
-        ...payload,
-      });
+      productPassportSnapshots.markRelatedProductsDirty({
+        db, tenantId, storeId, productIds: payload?.product_ids || [],
+      }).catch((error) => console.error("stock passport invalidation failed:", error));
+      if (ordersEvents && typeof ordersEvents.publish === "function") {
+        ordersEvents.publish(tenantId, storeId, "stock.changed", {
+          tenant_id: Number(tenantId), store_id: Number(storeId), ...payload,
+        });
+      }
     } catch (err) {
       console.error("publishStockChanged error:", err);
     }
@@ -1829,11 +1832,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     if (!rows.length) return null;
     const r = rows[0];
 
-    let items = [];
-    try {
-      const parsed = r.items ? JSON.parse(r.items) : [];
-      if (Array.isArray(parsed)) items = parsed;
-    } catch {}
+    const items = parseOrderItemsJson(r.items);
 
     const itemProductIds = [...new Set(items
       .map((item) => Number(item?.product_id || 0))
@@ -2058,13 +2057,96 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const orderBy = (Number.isFinite(statusId) && statusId > 0)
         ? `o.status_sort DESC, o.created_at DESC, o.id DESC`
         : `o.created_at DESC, o.id DESC`;
+
+      if (String(req.query.view || "").trim().toLowerCase() === "list") {
+        const listLimit = Math.min(100, Math.max(1, Number(req.query.limit || 50)));
+        const [listRows] = await db.query(
+          `
+          SELECT
+            o.id,
+            o.store_id,
+            o.public_id,
+            o.created_at AS updated_at,
+            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+            o.customer_id,
+            o.customer_name,
+            o.customer_phone,
+            o.address,
+            o.comment,
+            o.address_comment,
+            o.total_price,
+            DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
+            o.delivery_type_id,
+            o.payment_id,
+            o.is_paid,
+            o.time_option_id,
+            o.status_id,
+            o.delivery_address_id,
+            s.code AS status_code,
+            s.title AS status_title,
+            s.color AS status_color,
+            p.code AS payment_code,
+            p.title AS payment_title,
+            p.icon AS payment_icon,
+            m.code AS method_code,
+            m.title AS method_title,
+            t.code AS time_option_code,
+            t.title AS time_option_title,
+            t.icon AS time_option_icon,
+            o.pickup_store_id,
+            ps.name AS pickup_store_name,
+            ps.address AS pickup_store_address,
+            dz.name AS delivery_zone_name
+          FROM order_orders o
+          LEFT JOIN order_statuses s
+            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+          LEFT JOIN order_payments p
+            ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+          LEFT JOIN order_delivery_types m
+            ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
+          LEFT JOIN order_time_options t
+            ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+          LEFT JOIN ten_stores ps
+            ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
+          LEFT JOIN cust_customer_addresses ca
+            ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
+          LEFT JOIN ten_delivery_zones dz
+            ON dz.tenant_id=o.tenant_id AND dz.id=ca.delivery_zone_id
+          WHERE ${where}
+          ORDER BY ${orderBy}
+          LIMIT ? OFFSET ?
+          `,
+          [...params, listLimit + 1, offset]
+        );
+
+        const hasMore = listRows.length > listLimit;
+        const data = listRows.slice(0, listLimit).map((row) => ({
+          ...row,
+          created_at: helpers.utcToStoreDateTime(row.created_at, storeTimezone),
+          total_price: Number(row.total_price || 0),
+          is_paid: Number(row.is_paid || 0) === 1 ? 1 : 0,
+          delivery_address_id: row.delivery_address_id ?? null,
+          pickup_store_id: row.pickup_store_id ?? null,
+          delivery_zone_name: helpers.strOrNull(row.delivery_zone_name),
+        }));
+
+        return res.json({
+          ok: true,
+          data,
+          has_more: hasMore,
+          next_offset: hasMore ? offset + listLimit : null,
+        });
+      }
+
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [rows] = await db.query(
         `
         SELECT
           o.id,
+          o.store_id,
           o.public_id,
+          o.created_at AS updated_at,
           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
           o.customer_id,
           o.customer_name,
@@ -2152,11 +2234,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       );
 
       const baseData = rows.map((r) => {
-        let items = [];
-        try {
-          const parsed = r.items ? JSON.parse(r.items) : [];
-          if (Array.isArray(parsed)) items = parsed;
-        } catch {}
+        const items = parseOrderItemsJson(r.items);
         const discountsJson = parseOrderDiscountsJson(r.discounts_json);
         const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
         const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);

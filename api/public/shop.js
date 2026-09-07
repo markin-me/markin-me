@@ -59,6 +59,7 @@ const {
 const {
   registerOrderBenefitsAccrualProvider,
 } = require('../../services/order-benefits-accrual-provider');
+const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
@@ -2335,12 +2336,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   function publishStockChanged(tenantId, storeId, payload = {}) {
     try {
-      if (!ordersEvents || typeof ordersEvents.publish !== 'function') return;
-      ordersEvents.publish(tenantId, storeId, 'stock.changed', {
-        tenant_id: Number(tenantId),
-        store_id: Number(storeId),
-        ...payload,
-      });
+      productPassportSnapshots.markRelatedProductsDirty({
+        db, tenantId, storeId, productIds: payload?.product_ids || [],
+      }).catch((error) => console.error('stock passport invalidation failed:', error));
+      if (ordersEvents && typeof ordersEvents.publish === 'function') {
+        ordersEvents.publish(tenantId, storeId, 'stock.changed', {
+          tenant_id: Number(tenantId), store_id: Number(storeId), ...payload,
+        });
+      }
     } catch (err) {
       console.error('publishStockChanged error:', err);
     }
@@ -3204,6 +3207,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   router.get('/bonus/config', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const [[settingsRow]] = await db.query(
@@ -3222,6 +3226,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          WHERE tenant_id=?
          LIMIT 1`,
         [tenantId]
+      );
+      const [[subscriptionStorefrontRow]] = await db.query(
+        `SELECT is_active, aspect_ratio, background_color, title, title_font_size,
+                title_color, description, description_font_size, description_color,
+                image_url, button_text, button_color, button_icon_url,
+                faq_title, faq_items_json, info_slides_json
+          FROM mkt_subscription_storefront_settings
+          WHERE tenant_id=? AND store_id=?
+          LIMIT 1`,
+        [tenantId, storeId]
       );
       const [levelRows] = await db.query(
         `SELECT id, code, sort_order, title, access_type, reward_bonus_amount,
@@ -3341,6 +3355,24 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             referral_card_title_background_color: settingsRow?.referral_card_title_background_color || '#ffffff',
             referral_card_title_background_opacity: Number(settingsRow?.referral_card_title_background_opacity || 90),
           },
+          subscription_storefront: subscriptionStorefrontRow ? {
+            is_active: Number(subscriptionStorefrontRow.is_active || 0) === 1,
+            aspect_ratio: subscriptionStorefrontRow.aspect_ratio || '11:5',
+            background_color: subscriptionStorefrontRow.background_color || '#f1e8ff',
+            title: subscriptionStorefrontRow.title || '',
+            title_font_size: Number(subscriptionStorefrontRow.title_font_size || 18),
+            title_color: subscriptionStorefrontRow.title_color || '#7651c9',
+            description: subscriptionStorefrontRow.description || '',
+            description_font_size: Number(subscriptionStorefrontRow.description_font_size || 12),
+            description_color: subscriptionStorefrontRow.description_color || '#7651c9',
+            image_url: subscriptionStorefrontRow.image_url || null,
+            button_text: subscriptionStorefrontRow.button_text || '',
+            button_color: subscriptionStorefrontRow.button_color || '#ffffff',
+            button_icon_url: subscriptionStorefrontRow.button_icon_url || null,
+            faq_title: subscriptionStorefrontRow.faq_title || 'Часто задаваемые вопросы',
+            faq_items: safeJsonArray(subscriptionStorefrontRow.faq_items_json),
+            info_slides: safeJsonArray(subscriptionStorefrontRow.info_slides_json),
+          } : null,
           account,
           levels: (Array.isArray(levelRows) ? levelRows : []).map((row) => mapPublicBonusLevelRow(row, { rangesByLevel, progressByLevel, activeFavoriteGroup })),
           referral_levels: (Array.isArray(referralRows) ? referralRows : []).map((row) => ({
@@ -3382,6 +3414,131 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       return res.json({ ok: true, data: { confirmed: Number(result?.affectedRows || 0) > 0 } });
     } catch (e) {
       console.error('POST /api/public/bonus/modal-events/confirm error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/bonus/subscription-info-events', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const slideId = str(req.body?.slide_id || req.body?.slideId).trim();
+      const eventType = str(req.body?.event_type || req.body?.eventType).trim().toLowerCase();
+      if (!slideId || !['view', 'click', 'consent'].includes(eventType)) {
+        return res.status(400).json({ ok: false, error: 'INVALID_EVENT' });
+      }
+      const [settingsRows] = await db.query(
+        `SELECT info_slides_json FROM mkt_subscription_storefront_settings
+         WHERE tenant_id=? AND store_id=? LIMIT 1`,
+        [tenantId, storeId]
+      );
+      const slides = safeJsonArray(settingsRows?.[0]?.info_slides_json);
+      const slide = slides.find((item) => String(item?.id || '') === slideId);
+      if (!slide) return res.status(404).json({ ok: false, error: 'SLIDE_NOT_FOUND' });
+      const buttonText = String(slide.button_text || '').trim().slice(0, 255) || null;
+      const actionType = ['notification', 'link'].includes(String(slide.event_type || ''))
+        ? String(slide.event_type)
+        : 'none';
+      if (eventType === 'consent' && (
+        slide.event_enabled !== true
+        || slide.show_button === false
+        || actionType !== 'notification'
+        || !buttonText
+      )) {
+        return res.status(400).json({ ok: false, error: 'CONSENT_NOT_AVAILABLE' });
+      }
+      await db.query(
+        `INSERT INTO mkt_subscription_info_events
+          (tenant_id, store_id, customer_id, slide_id, slide_title, button_text, event_type, action_type, event_data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE id=id`,
+        [tenantId, storeId, Number(customer.id), slideId, String(slide.title || '').slice(0, 255) || null,
+          buttonText, eventType, actionType, JSON.stringify({})]
+      );
+      if (eventType === 'consent') {
+        await db.query(
+          `INSERT INTO mkt_customer_notification_consents
+            (tenant_id, store_id, customer_id, source_key, button_text, interested, notifications_enabled, enabled_at, revoked_at)
+           VALUES (?, ?, ?, 'subscription', ?, 1, 1, NOW(3), NULL)
+           ON DUPLICATE KEY UPDATE
+             button_text=VALUES(button_text), interested=1, notifications_enabled=1,
+             enabled_at=NOW(3), revoked_at=NULL`,
+          [tenantId, storeId, Number(customer.id), buttonText]
+        );
+      }
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error('POST /api/public/bonus/subscription-info-events error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/bonus/subscription-interest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const [rows] = await db.query(
+        `SELECT interested, notifications_enabled, button_text, enabled_at, revoked_at
+         FROM mkt_customer_notification_consents
+         WHERE tenant_id=? AND store_id=? AND customer_id=? AND source_key='subscription'
+         LIMIT 1`,
+        [tenantId, storeId, Number(customer.id)]
+      );
+      const row = rows?.[0] || {};
+      return res.json({
+        ok: true,
+        data: {
+          interested: Number(row.interested) === 1,
+          notifications_enabled: Number(row.notifications_enabled) === 1,
+          button_text: String(row.button_text || ''),
+          enabled_at: row.enabled_at || null,
+          revoked_at: row.revoked_at || null,
+        },
+      });
+    } catch (e) {
+      console.error('GET /api/public/bonus/subscription-interest error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/bonus/subscription-interest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const interested = req.body?.interested === true;
+      const revokeInterest = req.body?.interested === false;
+      const revokeNotifications = req.body?.notifications_enabled === false;
+      if (!revokeInterest && !revokeNotifications) {
+        return res.status(400).json({ ok: false, error: 'CONSENT_REQUIRED' });
+      }
+      if (revokeNotifications && !revokeInterest) {
+        await db.query(
+          `UPDATE mkt_customer_notification_consents
+           SET notifications_enabled=0, revoked_at=NOW(3)
+           WHERE tenant_id=? AND store_id=? AND customer_id=? AND source_key='subscription'`,
+          [tenantId, storeId, Number(customer.id)]
+        );
+        return res.json({ ok: true, data: { interested: true, notifications_enabled: false } });
+      }
+      await db.query(
+        `INSERT INTO mkt_customer_notification_consents
+          (tenant_id, store_id, customer_id, source_key, interested, notifications_enabled, revoked_at)
+         VALUES (?, ?, ?, 'subscription', 0, 0, NOW(3))
+         ON DUPLICATE KEY UPDATE interested=0, notifications_enabled=0, revoked_at=NOW(3)`,
+        [tenantId, storeId, Number(customer.id)]
+      );
+      return res.json({ ok: true, data: { interested: false, notifications_enabled: false } });
+    } catch (e) {
+      console.error('PUT /api/public/bonus/subscription-interest error:', e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4717,11 +4874,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const requiredSingle = selectionType === 'single' && (Number(groupMeta.is_required || 0) === 1 || minSelect > 0);
         if (!requiredSingle) continue;
         const defaultItem = items[0];
-        displayPrice += await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice);
+        const defaultOptionPrice = await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice);
+        displayPrice += defaultOptionPrice;
         const line = formatCatalogDefaultOptionLine(defaultItem, 1);
         if (line) catalogDefaultLines.push(line);
       }
       row.display_price = roundPrice(displayPrice);
+      const promoDiscountPercent = Math.max(0, Math.min(99.99, Number(row.promo_discount_percent || 0)));
+      const defaultVariantOriginalPrice = promoDiscountPercent > 0
+        ? roundPrice(row.display_price / (1 - promoDiscountPercent / 100))
+        : row.display_price;
       row.catalog_default_lines = catalogDefaultLines.slice(0, 12);
       if (variant && Array.isArray(variant.values)) {
         const idx = Number(variant.default_value_index);
@@ -4735,6 +4897,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             variant_value_index: idx,
             variant_label: variantLabel,
             variant_unit_price: row.display_price,
+            variant_original_price: roundPrice(defaultVariantOriginalPrice),
           };
         }
       }
@@ -14113,14 +14276,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
       const lite = helpers.toBool(req.query.lite, false);
       const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 0)) || 0;
+      const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
       const catalogVersion = await buildPublicProductsListVersion(tenantId, storeId);
       const cacheKey = makePublicCacheKey('products', {
         catalogVersion,
+        liteSchema: lite ? 3 : 0,
         tenantId,
         storeId,
         categoryId,
         lite: lite ? 1 : 0,
         limit,
+        offset,
       });
       const cached = getPublicCache(cacheKey);
       if (cached) {
@@ -14141,11 +14307,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         );
         const allCategoryId = all.length ? Number(all[0].id) : null;
 
-        const limSql = limit > 0 ? `LIMIT ${Number(limit)}` : '';
+        const fetchLimit = limit > 0 ? limit + 1 : 0;
+        const limSql = fetchLimit > 0 ? `LIMIT ${Number(fetchLimit)} OFFSET ${Number(offset)}` : '';
 
         if (allCategoryId && categoryId === allCategoryId) {
-          const [rows] = await db.query(
-            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
+          const [loadedRows] = await db.query(
+            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.promo_discount_percent, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
               p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
               p.client_composition, p.tech_process,
               p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
@@ -14161,6 +14328,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              ${limSql}`,
             [storeId, categoryId, tenantId]
           );
+          const hasMore = limit > 0 && loadedRows.length > limit;
+          const rows = limit > 0 ? loadedRows.slice(0, limit) : loadedRows;
           for (const r of rows) {
             r.photos = safeJsonArray(r.photos_json);
             r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
@@ -14172,14 +14341,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
           await enrichProductsWithDiscounts(rows, tenantId, storeId);
           await attachPublicProductCategoryIds(rows, tenantId);
-          const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
+          const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true, offset, limit, has_more: hasMore };
           setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
           res.set('x-public-cache', 'MISS');
           return res.json(payload);
         }
 
-        const [rows] = await db.query(
-          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
+        const [loadedRows] = await db.query(
+          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.promo_discount_percent, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
             p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
             p.client_composition, p.tech_process,
             p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
@@ -14196,6 +14365,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            ${limSql}`,
           [storeId, tenantId, categoryId]
         );
+        const hasMore = limit > 0 && loadedRows.length > limit;
+        const rows = limit > 0 ? loadedRows.slice(0, limit) : loadedRows;
         for (const r of rows) {
           r.photos = safeJsonArray(r.photos_json);
           r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
@@ -14207,7 +14378,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         await attachPublicProductCategoryIds(rows, tenantId);
-        const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
+        const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true, offset, limit, has_more: hasMore };
         setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
         res.set('x-public-cache', 'MISS');
         return res.json(payload);
@@ -15865,6 +16036,103 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  async function buildProductPassportSnapshotPayloads(tenantId, storeId, productIds) {
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : [])
+      .map(Number)
+      .filter((id) => Number.isFinite(id) && id > 0))];
+    if (!ids.length) return {};
+    const sortedIds = [...ids].sort((a, b) => a - b);
+    const placeholders = ids.map(() => '?').join(',');
+    const [rows] = await db.query(
+      `SELECT p.*,
+          s.qty AS stock_qty,
+          CASE
+            WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+              SELECT 1
+              FROM prod_product_ingredients i
+              JOIN prod_product_stocks si
+                ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+              WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id
+                AND si.qty IS NOT NULL AND si.qty <= 0
+            ) AND NOT EXISTS (
+              SELECT 1
+              FROM prod_option_assignments oa
+              JOIN prod_option_groups og
+                ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+              WHERE oa.tenant_id=p.tenant_id
+                AND oa.assign_type='product' AND oa.assign_id=p.id
+                AND oa.is_active=1
+                AND og.is_active=1
+                AND COALESCE(og.out_of_stock_action, 1)=0
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM prod_option_items oi
+                  JOIN prod_products op
+                    ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
+                  LEFT JOIN prod_product_stocks ops
+                    ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                  WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
+                    AND oi.target_type='product'
+                    AND oi.is_active=1
+                    AND op.is_active=1
+                    AND op.site_visibility=1
+                    AND (ops.qty IS NULL OR ops.qty > 0)
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM prod_product_ingredients ip
+                      JOIN prod_product_stocks ips
+                        ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                      WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
+                        AND ips.qty IS NOT NULL AND ips.qty <= 0
+                    )
+                )
+            )
+            THEN 1 ELSE 0
+          END AS is_available
+       FROM prod_products p
+       LEFT JOIN prod_product_stocks s
+         ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+       WHERE p.tenant_id=? AND p.id IN (${placeholders}) AND p.is_active=1 AND p.site_visibility=1`,
+      [storeId, storeId, storeId, storeId, tenantId, ...ids]
+    );
+
+    for (const product of rows) {
+      product.photos = safeJsonArray(product.photos_json);
+      attachProductThumbs(product);
+      product.is_available = Number(product.is_available || 0) === 1;
+    }
+    await applyPublicProductAvailability(rows, tenantId, storeId);
+    await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+    await applyPublicProductNutrition(rows, tenantId);
+    await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
+    await enrichProductsWithDiscounts(rows, tenantId, storeId);
+    await attachPublicProductCategoryIds(rows, tenantId);
+    const details = await buildPublicProductPassportDetails(tenantId, storeId, sortedIds);
+
+    const data = {};
+    rows.forEach((product) => {
+      const id = Number(product?.id || 0);
+      if (!(id > 0)) return;
+      data[String(id)] = {
+        product,
+        ingredients: Array.isArray(details.ingredients?.[id]) ? details.ingredients[id] : [],
+        variants: Array.isArray(details.variants?.[id]) ? details.variants[id] : [],
+        optionAssignments: Array.isArray(details.assignments?.[id]) ? details.assignments[id] : [],
+        optionGroups: Array.isArray(details.optionGroupsByProduct?.[id]) ? details.optionGroupsByProduct[id] : [],
+        defaultConfig: details.defaultConfigs?.[id] && typeof details.defaultConfigs[id] === 'object'
+          ? details.defaultConfigs[id]
+          : {
+              option_item_ids: [], option_items: [], ingredients: [], ingredient_price_diff: 0,
+              variant_group_id: null, variant_value_index: null, variant_label: '', variant_unit_price: 0,
+            },
+        updated_at: product.updated_at || product.updatedAt || null,
+      };
+    });
+    return data;
+  }
+
+  productPassportSnapshots.configure({ db, builder: buildProductPassportSnapshotPayloads });
+
   router.post('/products/batch/passports', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -15874,113 +16142,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!ids.length) return res.json({ ok: true, data: {}, versions: {} });
       if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
 
-      const sortedIds = [...ids].sort((a, b) => a - b);
-      const productsVersion = await buildPublicProductsListVersion(tenantId, storeId);
-      const cacheKey = makePublicCacheKey('products-batch-passports-v2', { tenantId, storeId, ids: sortedIds, productsVersion });
-      const cached = getPublicCache(cacheKey);
-      if (cached) {
-        res.set('x-public-cache', 'HIT');
-        return res.json(cached);
-      }
-
-      const placeholders = ids.map(() => '?').join(',');
-      const [rows] = await db.query(
-        `SELECT p.*,
-            s.qty AS stock_qty,
-            CASE
-              WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
-                SELECT 1
-                FROM prod_product_ingredients i
-                JOIN prod_product_stocks si
-                  ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
-                WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id
-                  AND si.qty IS NOT NULL AND si.qty <= 0
-              ) AND NOT EXISTS (
-                SELECT 1
-                FROM prod_option_assignments oa
-                JOIN prod_option_groups og
-                  ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
-                WHERE oa.tenant_id=p.tenant_id
-                  AND oa.assign_type='product' AND oa.assign_id=p.id
-                  AND oa.is_active=1
-                  AND og.is_active=1
-                  AND COALESCE(og.out_of_stock_action, 1)=0
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM prod_option_items oi
-                    JOIN prod_products op
-                      ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
-                    LEFT JOIN prod_product_stocks ops
-                      ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
-                    WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
-                      AND oi.target_type='product'
-                      AND oi.is_active=1
-                      AND op.is_active=1
-                      AND op.site_visibility=1
-                      AND (ops.qty IS NULL OR ops.qty > 0)
-                      AND NOT EXISTS (
-                        SELECT 1
-                        FROM prod_product_ingredients ip
-                        JOIN prod_product_stocks ips
-                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
-                        WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
-                          AND ips.qty IS NOT NULL AND ips.qty <= 0
-                      )
-                  )
-              )
-              THEN 1 ELSE 0
-            END AS is_available
-         FROM prod_products p
-         LEFT JOIN prod_product_stocks s
-           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
-         WHERE p.tenant_id=? AND p.id IN (${placeholders}) AND p.is_active=1 AND p.site_visibility=1`,
-        [storeId, storeId, storeId, storeId, tenantId, ...ids]
-      );
-
-      for (const p of rows) {
-        p.photos = safeJsonArray(p.photos_json);
-        attachProductThumbs(p);
-        p.is_available = Number(p.is_available || 0) === 1;
-      }
-      await applyPublicProductAvailability(rows, tenantId, storeId);
-      await applyPublicProductBlocksToRows(rows, tenantId, storeId);
-      await applyPublicProductNutrition(rows, tenantId);
-      await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
-      await enrichProductsWithDiscounts(rows, tenantId, storeId);
-      await attachPublicProductCategoryIds(rows, tenantId);
-      const details = await buildPublicProductPassportDetails(tenantId, storeId, sortedIds);
-
-      const data = {};
+      const data = await productPassportSnapshots.readPassports({ db, tenantId, storeId, productIds: ids });
       const versions = {};
-      rows.forEach((product) => {
-        const id = Number(product?.id || 0);
-        if (!(id > 0)) return;
-        data[String(id)] = {
-          product,
-          ingredients: Array.isArray(details.ingredients?.[id]) ? details.ingredients[id] : [],
-          variants: Array.isArray(details.variants?.[id]) ? details.variants[id] : [],
-          optionAssignments: Array.isArray(details.assignments?.[id]) ? details.assignments[id] : [],
-          optionGroups: Array.isArray(details.optionGroupsByProduct?.[id]) ? details.optionGroupsByProduct[id] : [],
-          defaultConfig: details.defaultConfigs?.[id] && typeof details.defaultConfigs[id] === 'object'
-            ? details.defaultConfigs[id]
-            : {
-                option_item_ids: [],
-                option_items: [],
-                ingredients: [],
-                ingredient_price_diff: 0,
-                variant_group_id: null,
-                variant_value_index: null,
-                variant_label: '',
-                variant_unit_price: 0,
-              },
-          updated_at: product.updated_at || product.updatedAt || null,
-        };
-        versions[String(id)] = product.updated_at || product.updatedAt || null;
+      Object.entries(data).forEach(([id, passport]) => {
+        versions[id] = passport?.updated_at || passport?.product?.updated_at || null;
       });
-
       const payload = { ok: true, data, versions };
-      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productsBatchPassports);
-      res.set('x-public-cache', 'MISS');
+      res.set('x-public-cache', Object.keys(data).length === ids.length ? 'SNAPSHOT' : 'PARTIAL');
       res.json(payload);
     } catch (e) {
       console.error(e);

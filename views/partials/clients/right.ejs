@@ -1,10 +1,6 @@
 <div class="panel client-info-panel">
   <div class="panel-header product-tabs-header hidden" id="clientTabsHeader">
     <div class="product-tabs-header-inner">
-      <button class="product-tabs-home hidden" type="button" id="clientTabsHomeBtn" aria-label="Главная"
-        title="Главная">
-        <i class="fas fa-home"></i>
-      </button>
       <div class="product-tabs" id="clientTabs"></div>
     </div>
     <button type="button" class="icon-btn client-mobile-sheet-close" id="clientMobileSheetCloseBtn" aria-label="Закрыть"
@@ -58,6 +54,322 @@
       <div class="empty-icon"><i class="fas fa-cog"></i></div>
       <div class="empty-title">Выберите настройки</div>
       <div class="empty-text">Нажмите на карточку настроек слева</div>
+    </div>
+
+    <div id="subscriptionHistoryEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-calendar-check"></i></div>
+      <div class="empty-title">Выберите подписчика</div>
+      <div class="empty-text">Нажмите на подписку в истории, чтобы посмотреть прогресс и доставки</div>
+    </div>
+
+    <div id="subscriptionPlanEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-list-check"></i></div>
+      <div class="empty-title">Выберите условие</div>
+      <div class="empty-text">Нажмите на условие слева или создайте новое через «+»</div>
+    </div>
+
+    <div id="subscriptionHistoryInfoWrap" class="banner-settings-panel hidden subscription-right-panel">
+      <div class="subscription-right-content" id="subscriptionHistoryInfoContent"></div>
+      <div class="panel-footer hidden" id="subscriptionHistoryInfoFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel is-fullwidth" type="button" id="subscriptionHistoryCloseBtn">Закрыть</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="subscriptionPlanEditorWrap" class="banner-settings-panel settings-right-panel-fixed-footer hidden subscription-plan-editor">
+      <form id="subscriptionPlanForm" class="subscription-plan-form settings-panel-scroll">
+        <div class="bonus-tariff-settings-grid">
+          <div class="bonus-tariff-settings-card">
+            <div class="bonus-tariff-settings-body">
+              <label class="subscription-inline-reward-field">
+                <span>Название</span>
+                <span class="subscription-plan-appearance-row">
+                  <button class="subscription-plan-icon-upload" id="subscriptionPlanIconButton" type="button" aria-label="Загрузить иконку подписки">
+                    <img class="hidden" id="subscriptionPlanIconPreview" alt="" />
+                    <i class="fas fa-calendar-check" id="subscriptionPlanIconPlaceholder"></i>
+                  </button>
+                  <span class="settings-icon-popover hidden" id="subscriptionPlanIconPopover">
+                    <button type="button" data-subscription-icon-action="upload"><i class="fas fa-upload"></i> Загрузить</button>
+                    <button type="button" data-subscription-icon-action="delete"><i class="fas fa-trash"></i> Удалить</button>
+                  </span>
+                  <input class="hidden" id="subscriptionPlanIconInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+                  <span class="discount-inline-value-control subscription-inline-value-control subscription-plan-title-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanTitleInput" type="text" autocomplete="off" />
+                  </span>
+                  <span class="subscription-plan-color-control" aria-label="Цвет подписки">
+                    <input id="subscriptionPlanThemeColorInput" type="color" value="#ff6b00" />
+                    <span id="subscriptionPlanThemeColorValue">#ff6b00</span>
+                  </span>
+                </span>
+              </label>
+              <label class="subscription-inline-reward-field">
+                <span>Описание</span>
+                <span class="discount-inline-value-control subscription-inline-value-control subscription-description-control">
+                  <textarea class="control discount-inline-value-input" id="subscriptionPlanDescriptionInput" rows="3"></textarea>
+                </span>
+              </label>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="subscriptionPlanActiveSwitch" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Активна</span>
+              </label>
+              <div class="subscription-mode-tabs" id="subscriptionPlanModeTabs" role="group" aria-label="Режим подписки">
+                <button class="subscription-mode-tab is-active" type="button" data-subscription-mode="ready">Готовая подписка</button>
+                <button class="subscription-mode-tab" type="button" data-subscription-mode="custom">Клиент выбирает сам</button>
+              </div>
+              <label class="switch hidden" id="subscriptionDayCountModeField">
+                <input class="switch-input" type="checkbox" id="subscriptionPlanCustomerSelectDaysSwitch" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Клиент сам выбирает кол-во дней</span>
+              </label>
+              <div class="bonus-coin-rate-row" id="subscriptionPlanLimitsRow">
+                <label class="subscription-inline-reward-field" id="subscriptionPlanDeliveryCountField">
+                  <span id="subscriptionPlanDeliveryCountLabel">Заказов</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control subscription-number-stepper">
+                    <input class="control bonus-coin-rate-input subscription-number-input" id="subscriptionPlanDeliveryCountInput" type="number" min="1" step="1" />
+                    <span class="subscription-number-stepper-buttons" aria-hidden="true">
+                      <button type="button" class="subscription-number-stepper-btn" data-subscription-step-target="subscriptionPlanDeliveryCountInput" data-subscription-step="1" tabindex="-1"><i class="fas fa-caret-up"></i></button>
+                      <button type="button" class="subscription-number-stepper-btn" data-subscription-step-target="subscriptionPlanDeliveryCountInput" data-subscription-step="-1" tabindex="-1"><i class="fas fa-caret-down"></i></button>
+                    </span>
+                  </span>
+                </label>
+                <label class="subscription-inline-reward-field">
+                  <span>Товаров в заказ</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control subscription-number-stepper">
+                    <input class="control bonus-coin-rate-input subscription-number-input" id="subscriptionPlanItemsPerOrderInput" type="number" min="1" max="9" step="1" />
+                    <span class="subscription-number-stepper-buttons" aria-hidden="true">
+                      <button type="button" class="subscription-number-stepper-btn" data-subscription-step-target="subscriptionPlanItemsPerOrderInput" data-subscription-step="1" tabindex="-1"><i class="fas fa-caret-up"></i></button>
+                      <button type="button" class="subscription-number-stepper-btn" data-subscription-step-target="subscriptionPlanItemsPerOrderInput" data-subscription-step="-1" tabindex="-1"><i class="fas fa-caret-down"></i></button>
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="subscriptionPlanExactItemsSwitch" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Обязательно выбрать все товары</span>
+              </label>
+              <div class="subscription-inline-rewards-row">
+                <label class="subscription-inline-reward-field">
+                  <span>Скидка</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanDiscountRewardValueInput" type="number" min="0" step="0.01" inputmode="decimal" />
+                    <span class="discount-inline-value-toggle" data-subscription-inline-type-group="discount">
+                      <button class="discount-inline-value-type" type="button" data-subscription-inline-type="percent" aria-pressed="false" title="Процент">
+                        <span class="discount-inline-value-type-symbol">%</span>
+                      </button>
+                      <button class="discount-inline-value-type" type="button" data-subscription-inline-type="fixed" aria-pressed="false" title="Сумма">
+                        <span class="discount-inline-value-type-symbol">₽</span>
+                      </button>
+                    </span>
+                  </span>
+                </label>
+                <label class="subscription-inline-reward-field">
+                  <span>Бонус</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanBonusRewardValueInput" type="number" min="0" step="0.01" inputmode="decimal" />
+                    <span class="discount-inline-value-toggle" data-subscription-inline-type-group="bonus">
+                      <button class="discount-inline-value-type" type="button" data-subscription-inline-type="percent" aria-pressed="false" title="Процент">
+                        <span class="discount-inline-value-type-symbol">%</span>
+                      </button>
+                      <button class="discount-inline-value-type" type="button" data-subscription-inline-type="fixed" aria-pressed="false" title="Бонусы">
+                        <span class="discount-inline-value-type-symbol">Б</span>
+                      </button>
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <div class="subscription-price-fields" id="subscriptionPlanPriceRow">
+                <label class="subscription-inline-reward-field subscription-price-field">
+                  <span>Цена</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanPriceTotalInput" type="number" min="0" step="0.01" inputmode="decimal" />
+                  </span>
+                </label>
+                <label class="subscription-inline-reward-field subscription-price-field">
+                  <span>Старая цена</span>
+                  <span class="discount-inline-value-control subscription-inline-value-control">
+                    <input class="control discount-inline-value-input" id="subscriptionPlanOldPriceTotalInput" type="number" min="0" step="0.01" inputmode="decimal" readonly />
+                  </span>
+                </label>
+              </div>
+              <section class="subscription-plan-section" id="subscriptionItemsSection">
+                <div class="subscription-plan-section-title">Товары подписки</div>
+                <div class="subscription-ready-items-empty" id="subscriptionItemsHint">Товары будут выбраны администратором из каталога.</div>
+                <div class="subscription-items-grid" id="subscriptionItemsGrid"></div>
+                <button class="subscription-items-total" type="button" id="subscriptionItemsTotalBtn">Сумма товаров: 0 ₽</button>
+              </section>
+            </div>
+          </div>
+        </div>
+      </form>
+      <div class="panel-footer hidden" id="subscriptionPlanEditorFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel subscription-footer-close" type="button" id="subscriptionPlanCancelBtn" aria-label="Отмена" title="Отмена">
+            <i class="fas fa-times"></i>
+          </button>
+          <button class="product-footer-btn product-footer-save" type="button" id="subscriptionPlanSaveBtn">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="subscriptionGlobalSettingsWrap" class="banner-settings-panel settings-right-panel-fixed-footer hidden subscription-plan-editor">
+      <form id="subscriptionGlobalSettingsForm" class="subscription-plan-form settings-panel-scroll">
+        <section class="subscription-storefront-preview" id="subscriptionStorefrontPreview">
+          <div class="subscription-storefront-preview-copy">
+            <strong id="subscriptionStorefrontPreviewTitle">Получайте больше выгоды</strong>
+            <div id="subscriptionStorefrontPreviewDescription"></div>
+            <span class="subscription-storefront-preview-button" id="subscriptionStorefrontPreviewButton">
+              <span id="subscriptionStorefrontPreviewButtonText">Смотреть подписки</span>
+              <img class="hidden" id="subscriptionStorefrontPreviewButtonIcon" alt="" />
+              <i class="fas fa-chevron-right" id="subscriptionStorefrontPreviewChevron"></i>
+            </span>
+          </div>
+          <img class="subscription-storefront-preview-image hidden" id="subscriptionStorefrontPreviewImage" alt="" />
+        </section>
+
+        <div class="subscription-storefront-settings-fields">
+          <label class="switch">
+            <input class="switch-input" type="checkbox" id="subscriptionStorefrontActiveSwitch" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Показывать блок подписок</span>
+          </label>
+          <div class="subscription-storefront-two-columns">
+            <label class="subscription-inline-reward-field">
+              <span>Размер блока</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontAspectRatioInput" type="text" value="11:5" readonly />
+              </span>
+            </label>
+            <label class="subscription-inline-reward-field">
+              <span>Цвет блока</span>
+              <span class="subscription-storefront-color-field">
+                <input id="subscriptionStorefrontBackgroundColorInput" type="color" value="#f1e8ff" />
+                <span id="subscriptionStorefrontBackgroundColorValue">#f1e8ff</span>
+              </span>
+            </label>
+          </div>
+          <div class="subscription-storefront-three-columns">
+            <label class="subscription-inline-reward-field">
+              <span>Заголовок</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontTitleInput" type="text" maxlength="150" />
+              </span>
+            </label>
+            <label class="subscription-inline-reward-field">
+              <span>Размер заголовка</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontTitleSizeInput" type="number" min="12" max="48" step="1" />
+              </span>
+            </label>
+            <label class="subscription-inline-reward-field">
+              <span>Цвет заголовка</span>
+              <span class="subscription-storefront-color-field">
+                <input id="subscriptionStorefrontTitleColorInput" type="color" value="#7651c9" />
+                <span id="subscriptionStorefrontTitleColorValue">#7651c9</span>
+              </span>
+            </label>
+          </div>
+          <label class="subscription-inline-reward-field">
+            <span>Описание (до 3 строк)</span>
+            <span class="discount-inline-value-control subscription-inline-value-control subscription-description-control">
+              <textarea class="control discount-inline-value-input" id="subscriptionStorefrontDescriptionInput" rows="3" maxlength="500"></textarea>
+            </span>
+          </label>
+          <div class="subscription-storefront-two-columns">
+            <label class="subscription-inline-reward-field">
+              <span>Размер описания</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontDescriptionSizeInput" type="number" min="10" max="24" step="1" />
+              </span>
+            </label>
+            <label class="subscription-inline-reward-field">
+              <span>Цвет описания</span>
+              <span class="subscription-storefront-color-field">
+                <input id="subscriptionStorefrontDescriptionColorInput" type="color" value="#7651c9" />
+                <span id="subscriptionStorefrontDescriptionColorValue">#7651c9</span>
+              </span>
+            </label>
+          </div>
+          <div class="subscription-storefront-upload-row">
+            <span>Изображение блока</span>
+            <button class="product-footer-btn product-footer-cancel" type="button" id="subscriptionStorefrontImageButton">Загрузить</button>
+            <button class="product-footer-btn product-footer-cancel hidden" type="button" id="subscriptionStorefrontImageDeleteBtn">Удалить</button>
+            <input class="hidden" id="subscriptionStorefrontImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+          </div>
+          <div class="subscription-storefront-three-columns">
+            <label class="subscription-inline-reward-field">
+              <span>Текст кнопки</span>
+              <span class="discount-inline-value-control subscription-inline-value-control">
+                <input class="control discount-inline-value-input" id="subscriptionStorefrontButtonTextInput" type="text" maxlength="80" />
+              </span>
+            </label>
+            <label class="subscription-inline-reward-field">
+              <span>Цвет кнопки</span>
+              <span class="subscription-storefront-color-field">
+                <input id="subscriptionStorefrontButtonColorInput" type="color" value="#ffffff" />
+                <span id="subscriptionStorefrontButtonColorValue">#ffffff</span>
+              </span>
+            </label>
+            <div class="subscription-inline-reward-field">
+              <span>Иконка кнопки</span>
+              <span class="subscription-storefront-upload-control">
+                <button class="product-footer-btn product-footer-cancel" type="button" id="subscriptionStorefrontButtonIconButton">Загрузить</button>
+                <button class="product-footer-btn product-footer-cancel hidden" type="button" id="subscriptionStorefrontButtonIconDeleteBtn">Вернуть шеврон</button>
+                <input class="hidden" id="subscriptionStorefrontButtonIconInput" type="file" accept="image/png,image/jpeg,image/webp,image/*" />
+              </span>
+            </div>
+          </div>
+        </div>
+      </form>
+      <div class="panel-footer hidden" id="subscriptionGlobalSettingsFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel subscription-footer-close" type="button" id="subscriptionGlobalSettingsCancelBtn" aria-label="Отмена" title="Отмена">
+            <i class="fas fa-times"></i>
+          </button>
+          <button class="product-footer-btn product-footer-save" type="button" id="subscriptionGlobalSettingsSaveBtn">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="subscriptionInfoEmptyWrap" class="banner-settings-panel hidden subscription-right-panel">
+      <div class="empty-hint" id="subscriptionInfoEmptyText"></div>
+    </div>
+
+    <div id="subscriptionInfoSlidesWrap" class="banner-settings-panel settings-right-panel-fixed-footer hidden subscription-plan-editor">
+      <div class="settings-panel-scroll subscription-info-slides-editor">
+        <div class="subscription-info-slides-toolbar">
+          <div id="subscriptionInfoSlidesList"></div>
+          <button class="product-footer-btn product-footer-cancel subscription-info-slide-add" type="button" id="subscriptionInfoSlideAddBtn" aria-label="Добавить слайд" title="Добавить слайд">+</button>
+        </div>
+        <div id="subscriptionInfoSlideEditor" class="hidden"></div>
+      </div>
+      <div class="panel-footer hidden" id="subscriptionInfoSlidesFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel subscription-footer-close" type="button" id="subscriptionInfoSlidesCancelBtn"><i class="fas fa-times"></i></button>
+          <button class="product-footer-btn product-footer-save" type="button" id="subscriptionInfoSlidesSaveBtn">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="subscriptionFaqWrap" class="banner-settings-panel settings-right-panel-fixed-footer hidden subscription-plan-editor">
+      <div class="settings-panel-scroll subscription-faq-editor">
+        <label class="subscription-inline-reward-field">
+          <span>Заголовок</span>
+          <span class="discount-inline-value-control subscription-inline-value-control">
+            <input class="control discount-inline-value-input" id="subscriptionFaqTitleInput" type="text" maxlength="150" />
+          </span>
+        </label>
+        <div id="subscriptionFaqItems"></div>
+        <button class="product-footer-btn product-footer-cancel" type="button" id="subscriptionFaqAddBtn">+</button>
+      </div>
+      <div class="panel-footer hidden" id="subscriptionFaqFooter">
+        <div class="product-footer-actions">
+          <button class="product-footer-btn product-footer-cancel subscription-footer-close" type="button" id="subscriptionFaqCancelBtn" aria-label="Отмена" title="Отмена"><i class="fas fa-times"></i></button>
+          <button class="product-footer-btn product-footer-save" type="button" id="subscriptionFaqSaveBtn">Сохранить</button>
+        </div>
+      </div>
     </div>
 
     <div id="importantMessagesRightWrap" class="promo-messages-right-panel settings-right-panel settings-right-panel-fixed-footer hidden">
@@ -1873,10 +2185,12 @@
         <button class="new-order-right-footer-benefits-btn" type="button" id="clientBenefitsOpenBtn" aria-label="Выгоды"
           title="Выгоды">
           <i class="fas fa-tags" aria-hidden="true"></i>
+          <span>Выгоды</span>
         </button>
         <button class="new-order-right-footer-benefits-btn" type="button" id="clientBonusesOpenBtn" aria-label="Бонусы"
           title="Бонусы">
-          <span aria-hidden="true">Б</span>
+          <strong aria-hidden="true">Б</strong>
+          <span>Бонусы</span>
         </button>
       </div>
     </div>

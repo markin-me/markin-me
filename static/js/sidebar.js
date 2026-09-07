@@ -36,16 +36,18 @@
   }
 
   function openMobileSidebar() {
-    if (isMobile()) {
-      closeMobileSidebar();
-      return;
-    }
+    if (!isMobile()) return;
     requestAnimationFrame(() => {
       sidebar.classList.add('is-open');
       overlay.classList.add('is-active');
       document.body.classList.add('sidebar-open');
     });
   }
+
+  window.__adminSidebarApi = {
+    open: openMobileSidebar,
+    close: closeMobileSidebar,
+  };
 
   function closeMobileSidebar() {
     requestAnimationFrame(() => {

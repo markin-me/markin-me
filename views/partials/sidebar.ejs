@@ -1,4 +1,5 @@
 <aside id="app-sidebar" class="panel app-sidebar">
+  <div class="admin-sidebar-brand" id="adminSidebarBrand"></div>
   <nav class="app-sidebar-nav no-scrollbar">
     <ul class="app-sidebar-list">
       <% (Array.isArray(adminNavItems) ? adminNavItems : []).forEach(function (item) { %>
@@ -21,9 +22,9 @@
       <% }) %>
     </ul>
   </nav>
+  <div class="admin-sidebar-account" id="adminSidebarAccount" aria-label="Тема и профиль"></div>
   <button id="sidebar-edge-toggle" class="sidebar-edge-toggle" type="button" aria-label="Свернуть/развернуть меню">
     <i class="fas fa-chevron-left sidebar-edge-icon sidebar-edge-expanded" aria-hidden="true"></i>
     <i class="fas fa-chevron-right sidebar-edge-icon sidebar-edge-collapsed" aria-hidden="true"></i>
   </button>
 </aside>
-<div id="sidebar-open-tab" class="sidebar-open-tab" aria-label="Открыть меню" title="Открыть меню"><i class="fas fa-chevron-right"></i></div>

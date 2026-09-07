@@ -2063,6 +2063,7 @@
   const elToolbarBackBtn = $("#clientsToolbarBackBtn");
   const elSortToggle = $("#clientsSortToggle");
   const elSortDropdown = $("#clientsSortDropdown");
+  const clientsSortDropdownInitialHtml = elSortDropdown ? elSortDropdown.innerHTML : '';
   const elSortWrap = $("#clientsSortWrap");
   const elBannersSwitchWrap = $("#clientsBannersSwitchWrap");
   const elBannersEnabledSwitch = $("#clientsBannersEnabledSwitch");
@@ -2085,6 +2086,9 @@
   const elBonusReferralsBtn = $("#bonusReferralsBtn");
   const elBonusProgramsBtn = $("#bonusProgramsBtn");
   const elBonusSettingsNavBtn = $("#bonusSettingsNavBtn");
+  const elSubscriptionHistoryBtn = $("#subscriptionHistoryBtn");
+  const elSubscriptionSettingsBtn = $("#subscriptionSettingsBtn");
+  const elSubscriptionInfoBtn = $("#subscriptionInfoBtn");
   const elImportantMessagesBtn = $("#importantMessagesBtn");
   const elBonusSettingsEditBtn = $("#bonusSettingsEditBtn");
   const elClientsScroll = elList ? elList.closest(".panel-body") : null;
@@ -2130,6 +2134,10 @@
   const elBonusClientsList = $("#bonusClientsList");
   const elBonusClientsEmptyHint = $("#bonusClientsEmptyHint");
   const elBonusHistoryPagination = $("#bonusHistoryPagination");
+  const elSubscriptionHistoryList = $("#subscriptionHistoryList");
+  const elSubscriptionHistoryEmptyHint = $("#subscriptionHistoryEmptyHint");
+  const elSubscriptionPlansList = $("#subscriptionPlansList");
+  const elSubscriptionPlansEmptyHint = $("#subscriptionPlansEmptyHint");
   const elBonusReferralLevelsTrack = $("#bonusReferralLevelsTrack");
   const elBonusReferralsList = $("#bonusReferralsList");
   const elBonusReferralsEmptyHint = $("#bonusReferralsEmptyHint");
@@ -2363,15 +2371,107 @@
   // Always scope right-panel selectors to the actual visible right column.
   const clientRightRoot = document.querySelector(".page-col-right .client-info-panel") || document;
   const right$ = (sel) => $(sel, clientRightRoot);
+  const subscriptionPreviewInfoBtn = $("#subscriptionPreviewInfoBtn");
+  const subscriptionAboutInfoBtn = $("#subscriptionAboutInfoBtn");
+  const subscriptionFaqInfoBtn = $("#subscriptionFaqInfoBtn");
+  const subscriptionInfoEmptyWrap = right$("#subscriptionInfoEmptyWrap");
+  const subscriptionInfoEmptyText = right$("#subscriptionInfoEmptyText");
+  const subscriptionFaqWrap = right$("#subscriptionFaqWrap");
+  const subscriptionFaqFooter = right$("#subscriptionFaqFooter");
+  const subscriptionFaqTitleInput = right$("#subscriptionFaqTitleInput");
+  const subscriptionFaqItems = right$("#subscriptionFaqItems");
+  const subscriptionFaqAddBtn = right$("#subscriptionFaqAddBtn");
+  const subscriptionFaqCancelBtn = right$("#subscriptionFaqCancelBtn");
+  const subscriptionFaqSaveBtn = right$("#subscriptionFaqSaveBtn");
+  const subscriptionInfoSlidesWrap = right$("#subscriptionInfoSlidesWrap");
+  const subscriptionInfoSlidesFooter = right$("#subscriptionInfoSlidesFooter");
+  const subscriptionInfoSlideAddBtn = right$("#subscriptionInfoSlideAddBtn");
+  const subscriptionInfoSlidesList = right$("#subscriptionInfoSlidesList");
+  const subscriptionInfoSlideEditor = right$("#subscriptionInfoSlideEditor");
+  const subscriptionInfoSlidesSaveBtn = right$("#subscriptionInfoSlidesSaveBtn");
+  const subscriptionInfoSlidesCancelBtn = right$("#subscriptionInfoSlidesCancelBtn");
 
   const clientTabsHeader = right$("#clientTabsHeader");
   const clientTabsHomeBtn = right$("#clientTabsHomeBtn");
-  const clientTabs = right$("#clientTabs");
+  const clientTabs = $("#clientTabs");
   const clientEmpty = right$("#clientEmpty");
   const bannerEmpty = right$("#bannerEmpty");
   const bonusLevelEmpty = right$("#bonusLevelEmpty");
   const bonusReferralsEmpty = right$("#bonusReferralsEmpty");
   const bonusSettingsEmpty = right$("#bonusSettingsEmpty");
+  const subscriptionHistoryEmpty = right$("#subscriptionHistoryEmpty");
+  const subscriptionPlanEmpty = right$("#subscriptionPlanEmpty");
+  const subscriptionHistoryInfoWrap = right$("#subscriptionHistoryInfoWrap");
+  const subscriptionHistoryInfoContent = right$("#subscriptionHistoryInfoContent");
+  const subscriptionHistoryInfoFooter = right$("#subscriptionHistoryInfoFooter");
+  const subscriptionHistoryCloseBtn = right$("#subscriptionHistoryCloseBtn");
+  const subscriptionPlanEditorWrap = right$("#subscriptionPlanEditorWrap");
+  const subscriptionPlanEditorFooter = right$("#subscriptionPlanEditorFooter");
+  const subscriptionGlobalSettingsWrap = right$("#subscriptionGlobalSettingsWrap");
+  const subscriptionGlobalSettingsFooter = right$("#subscriptionGlobalSettingsFooter");
+  const subscriptionGlobalSettingsCancelBtn = right$("#subscriptionGlobalSettingsCancelBtn");
+  const subscriptionGlobalSettingsSaveBtn = right$("#subscriptionGlobalSettingsSaveBtn");
+  const subscriptionGlobalSettingsForm = right$("#subscriptionGlobalSettingsForm");
+  const subscriptionStorefrontPreview = right$("#subscriptionStorefrontPreview");
+  const subscriptionStorefrontPreviewTitle = right$("#subscriptionStorefrontPreviewTitle");
+  const subscriptionStorefrontPreviewDescription = right$("#subscriptionStorefrontPreviewDescription");
+  const subscriptionStorefrontPreviewButton = right$("#subscriptionStorefrontPreviewButton");
+  const subscriptionStorefrontPreviewButtonText = right$("#subscriptionStorefrontPreviewButtonText");
+  const subscriptionStorefrontPreviewButtonIcon = right$("#subscriptionStorefrontPreviewButtonIcon");
+  const subscriptionStorefrontPreviewChevron = right$("#subscriptionStorefrontPreviewChevron");
+  const subscriptionStorefrontPreviewImage = right$("#subscriptionStorefrontPreviewImage");
+  const subscriptionStorefrontActiveSwitch = right$("#subscriptionStorefrontActiveSwitch");
+  const subscriptionStorefrontBackgroundColorInput = right$("#subscriptionStorefrontBackgroundColorInput");
+  const subscriptionStorefrontBackgroundColorValue = right$("#subscriptionStorefrontBackgroundColorValue");
+  const subscriptionStorefrontTitleInput = right$("#subscriptionStorefrontTitleInput");
+  const subscriptionStorefrontTitleSizeInput = right$("#subscriptionStorefrontTitleSizeInput");
+  const subscriptionStorefrontTitleColorInput = right$("#subscriptionStorefrontTitleColorInput");
+  const subscriptionStorefrontTitleColorValue = right$("#subscriptionStorefrontTitleColorValue");
+  const subscriptionStorefrontDescriptionInput = right$("#subscriptionStorefrontDescriptionInput");
+  const subscriptionStorefrontDescriptionSizeInput = right$("#subscriptionStorefrontDescriptionSizeInput");
+  const subscriptionStorefrontDescriptionColorInput = right$("#subscriptionStorefrontDescriptionColorInput");
+  const subscriptionStorefrontDescriptionColorValue = right$("#subscriptionStorefrontDescriptionColorValue");
+  const subscriptionStorefrontImageButton = right$("#subscriptionStorefrontImageButton");
+  const subscriptionStorefrontImageDeleteBtn = right$("#subscriptionStorefrontImageDeleteBtn");
+  const subscriptionStorefrontImageInput = right$("#subscriptionStorefrontImageInput");
+  const subscriptionStorefrontButtonTextInput = right$("#subscriptionStorefrontButtonTextInput");
+  const subscriptionStorefrontButtonColorInput = right$("#subscriptionStorefrontButtonColorInput");
+  const subscriptionStorefrontButtonColorValue = right$("#subscriptionStorefrontButtonColorValue");
+  const subscriptionStorefrontButtonIconButton = right$("#subscriptionStorefrontButtonIconButton");
+  const subscriptionStorefrontButtonIconDeleteBtn = right$("#subscriptionStorefrontButtonIconDeleteBtn");
+  const subscriptionStorefrontButtonIconInput = right$("#subscriptionStorefrontButtonIconInput");
+  const subscriptionPlanForm = right$("#subscriptionPlanForm");
+  const subscriptionPlanTitleInput = right$("#subscriptionPlanTitleInput");
+  const subscriptionPlanIconButton = right$("#subscriptionPlanIconButton");
+  const subscriptionPlanIconPreview = right$("#subscriptionPlanIconPreview");
+  const subscriptionPlanIconPlaceholder = right$("#subscriptionPlanIconPlaceholder");
+  const subscriptionPlanIconInput = right$("#subscriptionPlanIconInput");
+  const subscriptionPlanIconPopover = right$("#subscriptionPlanIconPopover");
+  const subscriptionPlanThemeColorInput = right$("#subscriptionPlanThemeColorInput");
+  const subscriptionPlanThemeColorValue = right$("#subscriptionPlanThemeColorValue");
+  const subscriptionPlanDescriptionInput = right$("#subscriptionPlanDescriptionInput");
+  const subscriptionPlanActiveSwitch = right$("#subscriptionPlanActiveSwitch");
+  const subscriptionPlanDeliveryCountField = right$("#subscriptionPlanDeliveryCountField");
+  const subscriptionPlanDeliveryCountInput = right$("#subscriptionPlanDeliveryCountInput");
+  const subscriptionPlanItemsPerOrderInput = right$("#subscriptionPlanItemsPerOrderInput");
+  const subscriptionPlanExactItemsSwitch = right$("#subscriptionPlanExactItemsSwitch");
+  const subscriptionPlanExactItemsField = subscriptionPlanExactItemsSwitch?.closest('.switch') || null;
+  const subscriptionPlanPriceTotalInput = right$("#subscriptionPlanPriceTotalInput");
+  const subscriptionPlanOldPriceTotalInput = right$("#subscriptionPlanOldPriceTotalInput");
+  const subscriptionPlanBonusRewardValueInput = right$("#subscriptionPlanBonusRewardValueInput");
+  const subscriptionPlanCancelBtn = right$("#subscriptionPlanCancelBtn");
+  const subscriptionPlanSaveBtn = right$("#subscriptionPlanSaveBtn");
+  const subscriptionPlanModeTabs = right$("#subscriptionPlanModeTabs");
+  const subscriptionItemsSection = right$("#subscriptionItemsSection");
+  const subscriptionItemsHint = right$("#subscriptionItemsHint");
+  const subscriptionItemsGrid = right$("#subscriptionItemsGrid");
+  const subscriptionItemsTotalBtn = right$("#subscriptionItemsTotalBtn");
+  const subscriptionDayCountModeField = right$("#subscriptionDayCountModeField");
+  const subscriptionPlanCustomerSelectDaysSwitch = right$("#subscriptionPlanCustomerSelectDaysSwitch");
+  const subscriptionPlanDeliveryCountLabel = right$("#subscriptionPlanDeliveryCountLabel");
+  const subscriptionPlanPriceRow = right$("#subscriptionPlanPriceRow");
+  let subscriptionItemInfoPopoverTimer = null;
+  const subscriptionPlanDiscountRewardValueInput = right$("#subscriptionPlanDiscountRewardValueInput");
   const bonusSettingsBrandWrap = right$("#bonusSettingsBrandWrap");
   
   const bonusSettingsLogoPreviewBase = right$("#bonusSettingsLogoPreviewBase");
@@ -2604,6 +2704,10 @@
   const clientTabDiscounts = right$("#clientTabDiscounts");
   const clientAddressesList = right$("#clientAddresses");
   const clientOrdersList = right$("#clientOrdersList");
+  const clientActiveOrderCard = right$("#clientActiveOrderCard");
+  const clientCompletedOrdersAccordion = right$("#clientCompletedOrdersAccordion");
+  const clientCompletedOrdersList = right$("#clientCompletedOrdersList");
+  const clientCompletedOrdersMore = right$("#clientCompletedOrdersMore");
   const clientOrdersListView = right$("#clientOrdersListView");
   const clientDiscountsList = right$("#clientDiscountsList");
   const clientDiscountsEmpty = right$("#clientDiscountsEmpty");
@@ -2664,6 +2768,11 @@
     orderStatusesLoading: false,
     addresses: [],
     clientOrders: [],
+    clientActiveOrder: null,
+    clientCompletedOrders: [],
+    clientCompletedNextOffset: 0,
+    clientCompletedHasMore: false,
+    clientCompletedLoading: false,
     clientDiscounts: [],      // Скидки клиента
     totals: { all: 0 },
     activeContentTab: "addresses",
@@ -2784,6 +2893,22 @@
     bonusReferralLevelsDraft: createDefaultBonusReferralLevels(),
     bonusReferralEvents: [],
     bonusHistoryPage: 1,
+    subscriptionHistory: [],
+    subscriptionHistoryLoaded: false,
+    subscriptionHistoryLoading: false,
+    subscriptionPlans: [],
+    subscriptionPlansLoaded: false,
+    subscriptionPlansLoading: false,
+    subscriptionStorefrontSettings: null,
+    subscriptionStorefrontSettingsDraft: null,
+    subscriptionStorefrontSettingsLoading: false,
+    activeSubscriptionId: null,
+    activeSubscription: null,
+    activeSubscriptionPlanId: null,
+    subscriptionPlanDraft: null,
+    subscriptionItemPicker: null,
+    subscriptionSearchQuery: '',
+    subscriptionSort: 'created_desc',
     bonusFlippedLevelIds: new Set(),
     bonusAnimatingLevelIds: new Set(),
     bonusFlipAnimationTimer: null,
@@ -2878,7 +3003,9 @@
       gender: false,
     },
   };
-  const CLIENTS_PAGE_LIMIT = 80;
+  const CLIENTS_PAGE_LIMIT = 50;
+  const CLIENTS_LIST_CACHE_PREFIX = `admin:clients:list:v1:${tenantId}:`;
+  const CLIENTS_LIST_CACHE_MAX_QUERIES = 20;
   const CLIENTS_SCROLL_THRESHOLD_PX = 220;
   let clientsRequestToken = 0;
   let clientProfileRequestToken = 0;
@@ -2887,6 +3014,8 @@
   let discountCustomerSearchDebounce = null;
   let importantProductSearchDebounce = null;
   let importantProductPickerRequestSeq = 0;
+  const subscriptionCatalogProductsByCategory = new Map();
+  const SUBSCRIPTION_CATALOG_PAGE_SIZE = 8;
   const clientOrderMetricsRequests = new Map();
   let customFilterCountsRequestToken = 0;
   let filterDraftCountPreview = null;
@@ -3323,6 +3452,10 @@
           addresses: sanitizeCachedAddresses(item.addresses),
           orders: sanitizeCachedOrders(item.orders),
           discounts: sanitizeCachedDiscounts(item.discounts),
+          activeOrder: item.activeOrder || null,
+          completedOrders: sanitizeCachedOrders(item.completedOrders),
+          completedNextOffset: Number(item.completedNextOffset || 0),
+          completedHasMore: item.completedHasMore === true,
         });
       });
       return out;
@@ -3344,6 +3477,10 @@
           addresses: sanitizeCachedAddresses(item?.addresses),
           orders: sanitizeCachedOrders(item?.orders),
           discounts: sanitizeCachedDiscounts(item?.discounts),
+          activeOrder: item?.activeOrder || null,
+          completedOrders: sanitizeCachedOrders(item?.completedOrders),
+          completedNextOffset: Number(item?.completedNextOffset || 0),
+          completedHasMore: item?.completedHasMore === true,
         };
       });
       localStorage.setItem(CLIENT_DETAILS_CACHE_KEY, JSON.stringify(payload));
@@ -3365,6 +3502,10 @@
       addresses: sanitizeCachedAddresses(entry.addresses),
       orders: sanitizeCachedOrders(entry.orders),
       discounts: sanitizeCachedDiscounts(entry.discounts),
+      activeOrder: entry.activeOrder || null,
+      completedOrders: sanitizeCachedOrders(entry.completedOrders),
+      completedNextOffset: Number(entry.completedNextOffset || 0),
+      completedHasMore: entry.completedHasMore === true,
       updatedAt,
     };
   }
@@ -3377,6 +3518,10 @@
       addresses: [],
       orders: [],
       discounts: [],
+      activeOrder: null,
+      completedOrders: [],
+      completedNextOffset: 0,
+      completedHasMore: false,
       updatedAt: 0,
     };
     const nextClient = Object.prototype.hasOwnProperty.call(patch, "client")
@@ -3391,6 +3536,8 @@
     const nextDiscounts = Object.prototype.hasOwnProperty.call(patch, "discounts")
       ? sanitizeCachedDiscounts(patch.discounts)
       : prev.discounts;
+    const nextActiveOrder = Object.prototype.hasOwnProperty.call(patch, "activeOrder") ? patch.activeOrder : prev.activeOrder;
+    const nextCompletedOrders = Object.prototype.hasOwnProperty.call(patch, "completedOrders") ? sanitizeCachedOrders(patch.completedOrders) : prev.completedOrders;
     if (!nextClient) return;
     state.clientDetailsCache.set(key, {
       updatedAt: Date.now(),
@@ -3398,11 +3545,38 @@
       addresses: nextAddresses,
       orders: nextOrders,
       discounts: nextDiscounts,
+      activeOrder: nextActiveOrder || null,
+      completedOrders: nextCompletedOrders,
+      completedNextOffset: Object.prototype.hasOwnProperty.call(patch, "completedNextOffset") ? Number(patch.completedNextOffset || 0) : prev.completedNextOffset,
+      completedHasMore: Object.prototype.hasOwnProperty.call(patch, "completedHasMore") ? patch.completedHasMore === true : prev.completedHasMore,
     });
     saveClientDetailsCache();
+    persistClientCache(key, state.clientDetailsCache.get(key));
   }
 
   state.clientDetailsCache = loadClientDetailsCache();
+
+  function clientCacheKey(clientId) {
+    const storeId = localStorage.getItem('activeStoreId') || '1';
+    return `admin:client-card:v1:${tenantId}:${storeId}:${Number(clientId || 0)}`;
+  }
+
+  async function hydrateClientCache(clientId) {
+    if (!window.AdminPersistentCache) return null;
+    try {
+      const data = await window.AdminPersistentCache.read(clientCacheKey(clientId));
+      if (data && typeof data === 'object') {
+        setCachedClientDetails(clientId, data);
+        return getCachedClientDetails(clientId);
+      }
+    } catch (err) { console.warn('Client cache read failed:', err); }
+    return null;
+  }
+
+  function persistClientCache(clientId, data) {
+    if (!window.AdminPersistentCache) return;
+    void window.AdminPersistentCache.write(clientCacheKey(clientId), data).catch((err) => console.warn('Client cache write failed:', err));
+  }
 
   function normalizeDiscountProductConfigMode(value) {
     return String(value || '').trim().toLowerCase() === 'exact' ? 'exact' : 'any';
@@ -3864,20 +4038,25 @@
     const hasTabs = tabsState.tabs.length > 0;
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     const isBonusSettingsView = state.currentView === 'bonus-settings';
+    const isSubscriptionHistoryView = state.currentView === 'subscription-history';
+    const isSubscriptionSettingsView = state.currentView === 'subscription-settings';
+    const isSubscriptionInfoView = state.currentView === 'subscription-info';
     const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
     const visibleTabs = isBonusReferralsView
       ? tabsState.tabs.filter((tab) => tab.type === 'bonus-referral-card')
       : isBonusSettingsView
         ? tabsState.tabs.filter((tab) => tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories' || tab.type === 'bonus-settings-modals')
+        : isSubscriptionHistoryView || isSubscriptionSettingsView || isSubscriptionInfoView
+          ? tabsState.tabs.filter((tab) => ['subscription-history', 'subscription-plan', 'subscription-global-settings', 'subscription-info'].includes(tab.type))
         : tabsState.tabs;
     const hasVisibleTabs = visibleTabs.length > 0;
-    clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs && !isHomeBtnView);
+    clientTabsHeader.classList.toggle("hidden", !hasVisibleTabs);
     if (clientTabsHomeBtn) {
       clientTabsHomeBtn.classList.toggle('hidden', !isHomeBtnView);
       clientTabsHomeBtn.classList.toggle('is-active', isHomeBtnView && !hasVisibleTabs);
     }
-    clientTabs.classList.toggle('hidden', isHomeBtnView && !hasVisibleTabs);
-    if (isHomeBtnView && !hasVisibleTabs) {
+    clientTabs.classList.toggle('hidden', !hasVisibleTabs);
+    if (!hasVisibleTabs) {
       clientTabs.innerHTML = "";
       showEmptyState();
       return;
@@ -3935,6 +4114,14 @@
             ? 'bonus-referrals'
           : tab.type === 'bonus-settings-brand' || tab.type === 'bonus-settings-coin' || tab.type === 'bonus-settings-favorite-categories' || tab.type === 'bonus-settings-modals'
             ? 'bonus-settings'
+          : tab.type === 'subscription-history'
+            ? 'subscription-history'
+          : tab.type === 'subscription-plan'
+            ? 'subscription-settings'
+          : tab.type === 'subscription-global-settings'
+            ? 'subscription-info'
+          : tab.type === 'subscription-info'
+            ? 'subscription-info'
           : 'clients';
     if (state.currentView !== targetView) {
       switchView(targetView);
@@ -3985,6 +4172,9 @@
     if (activate) {
       tabsState.activationToken += 1;
       setActiveTabKey(key);
+      if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+        window.__adminMobilePages.openRight(title || 'Маркетинг');
+      }
     } else {
       renderTabs();
     }
@@ -4034,6 +4224,16 @@
       }
     } else if (closedTab.type === 'bonus-referral-card') {
       closeBonusReferralCardInlinePopovers();
+    } else if (closedTab.type === 'subscription-history') {
+      if (Number(state.activeSubscriptionId || 0) === Number(closedTab.id || 0)) {
+        state.activeSubscriptionId = null;
+        state.activeSubscription = null;
+      }
+    } else if (closedTab.type === 'subscription-plan') {
+      if (String(state.activeSubscriptionPlanId || '') === String(closedTab.id || '')) {
+        state.activeSubscriptionPlanId = null;
+        state.subscriptionPlanDraft = null;
+      }
     } else if (closedTab.type === 'order') {
       if (state.activeOrderId === closedTab.id) {
         state.activeOrderId = null;
@@ -4057,6 +4257,10 @@
           renderBonusLevels();
         } else if (state.currentView === 'bonus-referrals') {
           renderBonusReferralLevels();
+        } else if (state.currentView === 'subscription-history') {
+          renderSubscriptionHistory();
+        } else if (state.currentView === 'subscription-settings') {
+          renderSubscriptionPlans();
         }
         syncDiscountToolbarState();
         updateRightPanel();
@@ -4154,7 +4358,7 @@
     if (!clientOrderInfoWrap) return;
 
     const statusOptionBtn = e.target.closest('[data-action="order-status-menu-select"]');
-    if (statusOptionBtn && clientOrderInfoWrap.contains(statusOptionBtn)) {
+    if (statusOptionBtn && clientOrderInfoWrap?.contains(statusOptionBtn)) {
       e.preventDefault();
       e.stopPropagation();
       const nextStatusId = Number(statusOptionBtn.getAttribute('data-status-id') || 0);
@@ -4165,7 +4369,7 @@
     }
 
     const statusToggleBtn = e.target.closest('[data-action="order-status-menu-toggle"]');
-    if (statusToggleBtn && clientOrderInfoWrap.contains(statusToggleBtn)) {
+    if (statusToggleBtn && clientOrderInfoWrap?.contains(statusToggleBtn)) {
       e.preventDefault();
       e.stopPropagation();
       const wrap = statusToggleBtn.closest('[data-role="order-inline-status"]');
@@ -4181,7 +4385,7 @@
     }
 
     const discountInfoBtn = e.target.closest('[data-info="discount-info-btn"]');
-    if (discountInfoBtn && clientOrderInfoWrap.contains(discountInfoBtn)) {
+    if (discountInfoBtn && clientOrderInfoWrap?.contains(discountInfoBtn)) {
       e.preventDefault();
       e.stopPropagation();
       const summaryCard = discountInfoBtn.closest('.order-summary');
@@ -4196,7 +4400,7 @@
     }
 
     const markPaidBtn = e.target.closest('[data-action="order-mark-paid"]');
-    if (markPaidBtn && clientOrderInfoWrap.contains(markPaidBtn)) {
+    if (markPaidBtn && clientOrderInfoWrap?.contains(markPaidBtn)) {
       e.preventDefault();
       e.stopPropagation();
       openClientOrderPaymentDialog().catch(console.error);
@@ -4204,7 +4408,7 @@
     }
 
     const statusNextBtn = e.target.closest('[data-action="order-status-next"]');
-    if (statusNextBtn && clientOrderInfoWrap.contains(statusNextBtn)) {
+    if (statusNextBtn && clientOrderInfoWrap?.contains(statusNextBtn)) {
       e.preventDefault();
       e.stopPropagation();
       cycleActiveClientOrderStatus().catch(console.error);
@@ -4212,7 +4416,7 @@
     }
 
     const editOrderBtn = e.target.closest('[data-action="order-edit"]');
-    if (editOrderBtn && clientOrderInfoWrap.contains(editOrderBtn)) {
+    if (editOrderBtn && clientOrderInfoWrap?.contains(editOrderBtn)) {
       e.preventDefault();
       e.stopPropagation();
       openActiveClientOrderInOrders();
@@ -4220,7 +4424,7 @@
     }
 
     const printOrderBtn = e.target.closest('[data-action="order-print"]');
-    if (printOrderBtn && clientOrderInfoWrap.contains(printOrderBtn)) {
+    if (printOrderBtn && clientOrderInfoWrap?.contains(printOrderBtn)) {
       e.preventDefault();
       e.stopPropagation();
       printActiveClientOrder().catch(console.error);
@@ -4401,11 +4605,35 @@
     setClientBenefitsModeToggleState("customer");
   }
 
+  function isClientBenefitsMobilePage() {
+    return window.matchMedia("(max-width: 768px)").matches
+      && document.body.classList.contains("admin-mobile-pages")
+      && !!window.__adminMobilePages;
+  }
+
+  function openClientBenefitsMobilePage(title) {
+    if (!isClientBenefitsMobilePage()) return false;
+    ensureClientBenefitsOverlay();
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.add("admin-benefits-page");
+    document.body.classList.add("admin-benefits-page-open");
+    window.__adminMobilePages.openSubview(String(title || "Выгоды"), closeClientBenefitsOverlay);
+    return true;
+  }
+
+  function closeClientBenefitsMobilePage() {
+    const { backdrop } = getClientBenefitsOverlayElements();
+    if (backdrop) backdrop.classList.remove("admin-benefits-page");
+    document.body.classList.remove("admin-benefits-page-open");
+    window.__adminMobilePages?.closeSubview?.();
+  }
+
   function closeClientBenefitsOverlay() {
     if (String(state.clientBenefitsModal.screen || "main") === "main") {
       captureClientBenefitsMainViewScroll();
     }
     window.AdminBenefitsModal?.hide({ clearBody: false });
+    closeClientBenefitsMobilePage();
     state.clientBenefitsModal.customerId = null;
     state.clientBenefitsModal.context = "benefits";
     state.clientBenefitsModal.mode = "customer";
@@ -6283,6 +6511,7 @@
     state.clientBenefitsModal.payload = null;
     state.clientBenefitsModal.error = "";
     state.clientBenefitsModal.busyActionKey = "";
+    openClientBenefitsMobilePage("Выгоды");
     if (restoreClientBenefitsMainView()) {
       return;
     }
@@ -6351,6 +6580,7 @@
     state.clientBenefitsModal.bonusCardError = "";
     state.clientBenefitsModal.bonusCardScreen = "main";
     state.clientBenefitsModal.bonusTransactionFilter = "all";
+    openClientBenefitsMobilePage("Бонусная программа");
     renderClientBenefitsOverlay();
     await loadClientBonusCard();
   }
@@ -7880,9 +8110,7 @@
       const tenant = json?.tenant && typeof json.tenant === 'object' ? json.tenant : null;
       if (tenant) {
         state.importantMessagesEnabled = normalizeImportantMessagesEnabled(tenant.important_messages_enabled);
-        if (elImportantMessagesEnabledSwitch) {
-          elImportantMessagesEnabledSwitch.checked = state.importantMessagesEnabled;
-        }
+        if (elImportantMessagesEnabledSwitch) elImportantMessagesEnabledSwitch.checked = state.importantMessagesEnabled;
       }
       state.importantMessagesSettingsLoaded = true;
       return state.importantMessagesEnabled;
@@ -7893,6 +8121,10 @@
 
   function openSheet(options = {}) {
     const persistState = options.persistState !== false;
+    if (document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight();
+      return;
+    }
     if (isChatRightSheetMode()) {
       try {
         if (window.__adminChatMobileApi && typeof window.__adminChatMobileApi.closeClientsPanel === "function") {
@@ -7997,9 +8229,7 @@
     btnAll.addEventListener("click", () => {
       state.activeFilter = "all";
       state.activeCustomFilterId = null;
-      if (state.currentView !== 'clients') {
-        switchView('clients');
-      }
+      openMarketingCenter('clients', 'Все клиенты');
       renderFilters();
       loadClients().catch(console.error);
     });
@@ -8020,9 +8250,7 @@
       btn.addEventListener("click", () => {
         state.activeFilter = "custom";
         state.activeCustomFilterId = filter.id;
-        if (state.currentView !== 'clients') {
-          switchView('clients');
-        }
+        openMarketingCenter('clients', filter.title || 'Клиенты');
         renderFilters();
         loadClients().catch(console.error);
       });
@@ -8669,8 +8897,11 @@
       state.discountOrders = [];
       tabsState.activeKey = null;
       if (state.currentView !== 'discounts') {
-        switchView('discounts');
+        openMarketingCenter('discounts', 'Все скидки');
       } else {
+        if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+          window.__adminMobilePages.openCenter('Все скидки');
+        }
         renderDiscountsList();
         updateRightPanel();
       }
@@ -8777,8 +9008,11 @@
         state.editingBannerId = null;
         closeBannerPicker();
         if (state.currentView !== 'banners') {
-          switchView('banners');
+          openMarketingCenter('banners', meta.title);
         } else {
+          if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+            window.__adminMobilePages.openCenter(meta.title);
+          }
           renderBannerFilters();
           renderBannerPlacement();
           renderBannerList();
@@ -8801,6 +9035,18 @@
     }
     if (elBonusProgramsBtn) {
       elBonusProgramsBtn.classList.remove('is-active');
+    }
+    if (elBonusSettingsNavBtn) {
+      elBonusSettingsNavBtn.classList.toggle('is-active', state.currentView === 'bonus-settings');
+    }
+    if (elSubscriptionHistoryBtn) {
+      elSubscriptionHistoryBtn.classList.toggle('is-active', state.currentView === 'subscription-history');
+    }
+    if (elSubscriptionSettingsBtn) {
+      elSubscriptionSettingsBtn.classList.toggle('is-active', state.currentView === 'subscription-settings');
+    }
+    if (elSubscriptionInfoBtn) {
+      elSubscriptionInfoBtn.classList.toggle('is-active', state.currentView === 'subscription-info');
     }
   }
 
@@ -8944,6 +9190,8 @@
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     const isBonusSettingsView = state.currentView === 'bonus-settings';
+    const isSubscriptionHistoryView = state.currentView === 'subscription-history';
+    const isSubscriptionSettingsView = state.currentView === 'subscription-settings';
     const isEditableBonusView = isBonusCardsView || isBonusReferralsView || isBonusSettingsView;
     if (elBonusPointRateWrap) elBonusPointRateWrap.classList.add('hidden');
     if (elBonusProgramSwitchWrap) elBonusProgramSwitchWrap.classList.toggle('hidden', !isBonusCardsView);
@@ -19740,8 +19988,11 @@
         state.discountCenterMode = 'list';
         syncDiscountToolbarState();
         if (state.currentView !== 'discounts') {
-          switchView('discounts');
+          openMarketingCenter('discounts', filter.title);
         } else {
+          if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+            window.__adminMobilePages.openCenter(filter.title);
+          }
           renderDiscountsList();
           updateRightPanel();
         }
@@ -20224,6 +20475,9 @@
     renderTabs();
     renderDiscountInfo(targetDiscount);
     updateRightPanel();
+    if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(targetDiscount.title || 'Скидка');
+    }
     openDiscountHistory(targetDiscount, { reload: true });
 
     try {
@@ -22210,6 +22464,9 @@
     favorite_category: { value: 'favorite_category', label: 'Любимая категория', kind: 'entity', entity: 'category' },
   };
 
+  filterFieldDefinitions.subscription_event = { value: 'subscription_event', label: 'Событие кнопки подписки', kind: 'event' };
+  filterFieldDefinitions.notification_consent = { value: 'notification_consent', label: 'Разрешили уведомления', kind: 'event' };
+
   const filterOperatorOptionsNumeric = [
     { value: '>=', label: '>=' },
     { value: '<=', label: '<=' },
@@ -22249,7 +22506,7 @@
 
   function getFilterOperatorOptions(field) {
     const definition = getFilterFieldDefinition(field);
-    if (definition.kind === 'entity' || definition.kind === 'enum') {
+    if (definition.kind === 'entity' || definition.kind === 'enum' || definition.kind === 'event') {
       return filterOperatorOptionsEquality;
     }
     return filterOperatorOptionsNumeric;
@@ -22293,6 +22550,35 @@
     return options;
   }
 
+  function getSubscriptionEventOptions(currentValue = '') {
+    const slides = Array.isArray(state.subscriptionStorefrontSettings?.info_slides)
+      ? state.subscriptionStorefrontSettings.info_slides
+      : [];
+    const labels = new Set();
+    const options = [{ value: '', label: 'Выберите кнопку' }];
+    slides.forEach((slide) => {
+      const label = String(slide?.button_text || '').trim();
+      if (!label || labels.has(label) || slide?.show_button === false || slide?.event_enabled !== true || slide?.event_type !== 'notification') return;
+      labels.add(label);
+      options.push({ value: label, label });
+    });
+    if (currentValue && !labels.has(String(currentValue))) {
+      options.push({ value: String(currentValue), label: `${String(currentValue)} (недоступно)` });
+    }
+    return options;
+  }
+
+  function getNotificationConsentOptions(currentValue = '') {
+    const options = [
+      { value: '', label: 'Выберите источник' },
+      { value: 'subscription', label: 'Подписка' },
+    ];
+    if (currentValue && !options.some((option) => option.value === String(currentValue))) {
+      options.push({ value: String(currentValue), label: `${String(currentValue)} (недоступно)` });
+    }
+    return options;
+  }
+
   function getFilterNumberInputStep(field) {
     return field === 'total_spent' ? '0.01' : '1';
   }
@@ -22301,12 +22587,16 @@
     const list = Array.isArray(fields) && fields.length ? fields : [];
     const needsCategoryCatalog = list.some((field) => getFilterFieldDefinition(field).entity === 'category');
     const needsProductCatalog = list.some((field) => getFilterFieldDefinition(field).entity === 'product');
+    const needsSubscriptionEvents = list.includes('subscription_event');
     const tasks = [];
     if (needsCategoryCatalog && state.catalogCategories.length === 0) {
       tasks.push(loadCatalogCategories());
     }
     if (needsProductCatalog && state.filterRuleCatalogProducts.length === 0) {
       tasks.push(loadFilterRuleCatalogProducts());
+    }
+    if (needsSubscriptionEvents && !state.subscriptionStorefrontSettings) {
+      tasks.push(loadSubscriptionStorefrontSettings());
     }
     if (!tasks.length) return;
     await Promise.all(tasks);
@@ -22327,6 +22617,15 @@
     }
     if (definition.kind === 'enum') {
       return createCustomSelect(filterGenderOptions, String(rule.value ?? ''), 'rule-value-select');
+    }
+    if (definition.kind === 'event') {
+      return createCustomSelect(
+        rule.field === 'notification_consent'
+          ? getNotificationConsentOptions(String(rule.value ?? ''))
+          : getSubscriptionEventOptions(String(rule.value ?? '')),
+        String(rule.value ?? ''),
+        'rule-value-select'
+      );
     }
     if (definition.kind === 'entity') {
       return createCustomSelect(
@@ -22358,6 +22657,1929 @@
   }
 
 
+  const SUBSCRIPTION_SORT_OPTIONS = [
+    { value: 'created_desc', label: 'Сначала новые' },
+    { value: 'name_asc', label: 'По имени' },
+    { value: 'progress_desc', label: 'По прогрессу' },
+    { value: 'status_asc', label: 'По статусу' },
+  ];
+
+  function subscriptionStatusText(status) {
+    const value = String(status || '').toLowerCase();
+    if (value === 'active') return 'Активна';
+    if (value === 'paused') return 'Пауза';
+    if (value === 'completed') return 'Завершена';
+    if (value === 'cancelled' || value === 'canceled') return 'Отменена';
+    return status || 'Статус';
+  }
+
+  function subscriptionPaymentText(status) {
+    const value = String(status || '').toLowerCase();
+    if (value === 'paid') return 'Оплачено';
+    if (value === 'partial_refund') return 'Частичный возврат';
+    if (value === 'refunded') return 'Возврат';
+    if (value === 'pending') return 'Ожидает оплаты';
+    return status || 'Оплата не указана';
+  }
+
+  function subscriptionSelectionModeText(plan) {
+    const count = Math.min(9, Math.max(1, Number(plan?.items_per_order || 4)));
+    return String(plan?.item_selection_mode || '') === 'exact'
+      ? `ровно ${count} товара`
+      : `до ${count} товаров`;
+  }
+
+  function subscriptionModeText(plan) {
+    return String(plan?.settings?.subscription_mode || 'custom') === 'ready'
+      ? 'Готовая подписка'
+      : 'Клиент выбирает сам';
+  }
+
+  function subscriptionDiscountText(plan) {
+    const type = String(plan?.settings?.discount_reward_type || 'none');
+    const value = Number(plan?.settings?.discount_reward_value || 0);
+    if (type === 'percent' && value > 0) return `скидка ${value}%`;
+    if (type === 'fixed' && value > 0) return `скидка ${money(value)}`;
+    return 'без скидки';
+  }
+
+  function subscriptionBonusText(plan) {
+    const type = String(plan?.bonus_reward_type || 'none');
+    const value = Number(plan?.bonus_reward_value || 0);
+    if (type === 'percent' && value > 0) return `${value}% бонусами`;
+    if (type === 'fixed' && value > 0) return `${value} Б`;
+    return 'без бонуса';
+  }
+
+  function subscriptionProgressText(item) {
+    const completed = Math.max(0, Number(item?.delivery_completed || 0));
+    const total = Math.max(0, Number(item?.delivery_total || 0));
+    return `${completed} из ${total} доставок`;
+  }
+
+  async function loadSubscriptionHistory(force = false) {
+    if (state.subscriptionHistoryLoading) return;
+    if (state.subscriptionHistoryLoaded && !force) return;
+    state.subscriptionHistoryLoading = true;
+    try {
+      const json = await apiJson('/api/admin/subscriptions/history');
+      state.subscriptionHistory = Array.isArray(json.data) ? json.data : [];
+      state.subscriptionHistoryLoaded = true;
+    } catch (error) {
+      console.error('Failed to load subscription history:', error);
+      state.subscriptionHistory = [];
+      state.subscriptionHistoryLoaded = true;
+    } finally {
+      state.subscriptionHistoryLoading = false;
+      renderSubscriptionHistory();
+    }
+  }
+
+  async function loadSubscriptionPlans(force = false) {
+    if (state.subscriptionPlansLoading) return;
+    if (state.subscriptionPlansLoaded && !force) return;
+    state.subscriptionPlansLoading = true;
+    try {
+      const json = await apiJson('/api/admin/subscriptions/plans');
+      state.subscriptionPlans = Array.isArray(json.data) ? json.data : [];
+      state.subscriptionPlansLoaded = true;
+    } catch (error) {
+      console.error('Failed to load subscription plans:', error);
+      state.subscriptionPlans = [];
+      state.subscriptionPlansLoaded = true;
+    } finally {
+      state.subscriptionPlansLoading = false;
+      renderSubscriptionPlans();
+    }
+  }
+
+  function filteredSubscriptionHistory() {
+    const query = String(state.subscriptionSearchQuery || '').trim().toLowerCase();
+    const rows = state.subscriptionHistory.filter((item) => {
+      if (!query) return true;
+      return [
+        item.id,
+        item.status,
+        item.customer_name,
+        item.customer_phone,
+        item.plan_title,
+        subscriptionProgressText(item),
+      ].some((value) => String(value || '').toLowerCase().includes(query));
+    });
+    return rows.sort((a, b) => {
+      if (state.subscriptionSort === 'name_asc') return String(a.customer_name || '').localeCompare(String(b.customer_name || ''), 'ru');
+      if (state.subscriptionSort === 'progress_desc') {
+        const pa = Number(a.delivery_total || 0) ? Number(a.delivery_completed || 0) / Number(a.delivery_total || 1) : 0;
+        const pb = Number(b.delivery_total || 0) ? Number(b.delivery_completed || 0) / Number(b.delivery_total || 1) : 0;
+        return pb - pa;
+      }
+      if (state.subscriptionSort === 'status_asc') return String(a.status || '').localeCompare(String(b.status || ''), 'ru');
+      return Number(b.id || 0) - Number(a.id || 0);
+    });
+  }
+
+  function renderSubscriptionHistory() {
+    if (!elSubscriptionHistoryList) return;
+    const rows = filteredSubscriptionHistory();
+    elSubscriptionHistoryList.innerHTML = '';
+    if (!rows.length) {
+      if (elSubscriptionHistoryEmptyHint) elSubscriptionHistoryEmptyHint.classList.remove('hidden');
+      return;
+    }
+    if (elSubscriptionHistoryEmptyHint) elSubscriptionHistoryEmptyHint.classList.add('hidden');
+    rows.forEach((item) => {
+      const row = document.createElement('div');
+      const tabKey = buildTabKey('subscription-history', item.id);
+      row.className = `order-row ${tabsState.activeKey === tabKey ? 'is-active' : ''}`;
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.innerHTML = `
+        <div class="order-left">
+          <div>${escapeHtml(String(item.id || ''))}</div>
+          <span>${escapeHtml(subscriptionStatusText(item.status))}</span>
+        </div>
+        <div class="order-mid">
+          <strong>${escapeHtml(item.customer_name || 'Клиент')}</strong>
+          <div><i class="fas fa-phone"></i> ${escapeHtml(item.customer_phone || '')}</div>
+          <div>${escapeHtml(item.plan_title || 'Подписка')}</div>
+          <div>${escapeHtml(subscriptionProgressText(item))}</div>
+        </div>
+        <div class="order-actions">
+          <span class="pill">${escapeHtml(subscriptionStatusText(item.status))}</span>
+        </div>
+      `;
+      row.addEventListener('click', () => openSubscriptionHistoryTab(item.id));
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openSubscriptionHistoryTab(item.id);
+        }
+      });
+      elSubscriptionHistoryList.appendChild(row);
+    });
+  }
+
+  function subscriptionThemeTextColor(color) {
+    const value = String(color || '').replace('#', '');
+    if (!/^[0-9a-f]{6}$/i.test(value)) return '#ffffff';
+    const red = parseInt(value.slice(0, 2), 16);
+    const green = parseInt(value.slice(2, 4), 16);
+    const blue = parseInt(value.slice(4, 6), 16);
+    return ((red * 299 + green * 587 + blue * 114) / 1000) > 160 ? '#172033' : '#ffffff';
+  }
+
+  function subscriptionPlanBadgeNumber(value) {
+    const number = Math.max(0, Number(value || 0));
+    return number.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+  }
+
+  function subscriptionPlanDiscountBadge(plan) {
+    const type = String(plan?.settings?.discount_reward_type || 'none');
+    const value = Math.max(0, Number(plan?.settings?.discount_reward_value || 0));
+    if (!(value > 0) || !['percent', 'fixed'].includes(type)) return '';
+    return type === 'fixed' ? `-${subscriptionPlanBadgeNumber(value)} ₽` : `-${subscriptionPlanBadgeNumber(value)}%`;
+  }
+
+  function subscriptionPlanBonusBadge(plan) {
+    const type = String(plan?.bonus_reward_type || 'none');
+    const value = Math.max(0, Number(plan?.bonus_reward_value || 0));
+    if (!(value > 0) || !['percent', 'fixed'].includes(type)) return '';
+    return type === 'fixed' ? `+${subscriptionPlanBadgeNumber(value)} Б` : `+${subscriptionPlanBadgeNumber(value)}% Б`;
+  }
+
+  function renderSubscriptionPlans() {
+    if (!elSubscriptionPlansList) return;
+    elSubscriptionPlansList.innerHTML = '';
+    if (!state.subscriptionPlans.length) {
+      if (elSubscriptionPlansEmptyHint) elSubscriptionPlansEmptyHint.classList.remove('hidden');
+      return;
+    }
+    if (elSubscriptionPlansEmptyHint) elSubscriptionPlansEmptyHint.classList.add('hidden');
+    state.subscriptionPlans.forEach((plan) => {
+      const row = document.createElement('div');
+      const tabKey = buildTabKey('subscription-plan', plan.id);
+      const color = /^#[0-9a-f]{6}$/i.test(String(plan?.theme_color || '')) ? String(plan.theme_color) : '#ff6b00';
+      const textColor = subscriptionThemeTextColor(color);
+      const iconUrl = String(plan?.icon_url || '').trim();
+      const discountBadge = subscriptionPlanDiscountBadge(plan);
+      const bonusBadge = subscriptionPlanBonusBadge(plan);
+      row.className = `order-row subscription-plan-list-row ${tabsState.activeKey === tabKey ? 'is-active' : ''}`;
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.innerHTML = `
+        <span class="subscription-plan-client-preview">
+          <button class="subscription-plan-client-pill" type="button" style="--subscription-color:${escapeHtml(color)};--subscription-text:${escapeHtml(textColor)}">
+            ${iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="" />` : '<i class="fas fa-calendar-check"></i>'}
+            <strong>${escapeHtml(plan.title || 'Подписка')}</strong>
+          </button>
+          ${(discountBadge || bonusBadge) ? `<span class="subscription-plan-client-badges">
+            ${discountBadge ? `<span class="subscription-picker-product-badge subscription-plan-client-badge">${escapeHtml(discountBadge)}</span>` : ''}
+            ${bonusBadge ? `<span class="subscription-picker-product-badge subscription-plan-client-badge">${escapeHtml(bonusBadge)}</span>` : ''}
+          </span>` : ''}
+        </span>
+        <span class="subscription-plan-list-type">${escapeHtml(subscriptionModeText(plan))}</span>
+        <label class="switch subscription-plan-list-status" title="${plan.is_active ? 'Активна' : 'Неактивна'}">
+          <input class="switch-input" type="checkbox" data-subscription-plan-status="${Number(plan.id || 0)}" ${plan.is_active ? 'checked' : ''} />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">${plan.is_active ? 'Активна' : 'Неактивна'}</span>
+        </label>
+      `;
+      row.addEventListener('click', (event) => {
+        if (event.target.closest('.subscription-plan-list-status')) return;
+        openSubscriptionPlanTab(plan.id);
+      });
+      row.querySelector('[data-subscription-plan-status]')?.addEventListener('change', async (event) => {
+        event.stopPropagation();
+        const input = event.currentTarget;
+        const nextActive = input.checked;
+        input.disabled = true;
+        try {
+          const json = await apiJson(`/api/admin/subscriptions/plans/${plan.id}/status`, { method: 'PATCH', body: { is_active: nextActive } });
+          const index = state.subscriptionPlans.findIndex((item) => Number(item.id) === Number(plan.id));
+          if (index >= 0 && json.data) state.subscriptionPlans[index] = json.data;
+          renderSubscriptionPlans();
+        } catch (error) {
+          input.checked = !nextActive;
+          input.disabled = false;
+          console.error('Failed to update subscription plan status:', error);
+        }
+      });
+      row.addEventListener('keydown', (event) => {
+        if (event.target.closest?.('[data-subscription-plan-status]')) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openSubscriptionPlanTab(plan.id);
+        }
+      });
+      elSubscriptionPlansList.appendChild(row);
+    });
+  }
+
+  function createSubscriptionPlanDraft(plan = null) {
+    return {
+      id: plan?.id || null,
+      title: plan?.title || '',
+      description: plan?.description || '',
+      icon_url: String(plan?.icon_url || '').trim(),
+      theme_color: /^#[0-9a-f]{6}$/i.test(String(plan?.theme_color || '')) ? String(plan.theme_color).toLowerCase() : '#ff6b00',
+      delivery_count: Math.max(1, Number(plan?.delivery_count || 1)),
+      items_per_order: Math.min(9, Math.max(1, Number(plan?.items_per_order || 4))),
+      item_selection_mode: ['exact', 'up_to'].includes(String(plan?.item_selection_mode || '')) ? plan.item_selection_mode : 'up_to',
+      delivery_interval_days: Math.max(1, Number(plan?.delivery_interval_days || 1)),
+      price_total: Number(plan?.price_total || 0),
+      old_price_total: Number(plan?.settings?.old_price_total || 0),
+      bonus_reward_type: ['none', 'percent', 'fixed'].includes(String(plan?.bonus_reward_type || '')) ? plan.bonus_reward_type : 'none',
+      bonus_reward_value: Number(plan?.bonus_reward_value || 0),
+      subscription_mode: ['ready', 'custom'].includes(String(plan?.settings?.subscription_mode || '')) ? plan.settings.subscription_mode : 'custom',
+      day_count_mode: ['fixed', 'customer_select'].includes(String(plan?.settings?.day_count_mode || '')) ? plan.settings.day_count_mode : 'fixed',
+      discount_reward_type: ['none', 'percent', 'fixed'].includes(String(plan?.settings?.discount_reward_type || '')) ? plan.settings.discount_reward_type : 'none',
+      discount_reward_value: Number(plan?.settings?.discount_reward_value || 0),
+      discount_reward_percent_value: plan?.settings?.discount_reward_percent_value != null
+        ? Number(plan.settings.discount_reward_percent_value)
+        : (String(plan?.settings?.discount_reward_type || '') === 'percent' ? Number(plan?.settings?.discount_reward_value || 0) : null),
+      discount_reward_fixed_value: plan?.settings?.discount_reward_fixed_value != null
+        ? Number(plan.settings.discount_reward_fixed_value)
+        : (String(plan?.settings?.discount_reward_type || '') === 'fixed' ? Number(plan?.settings?.discount_reward_value || 0) : null),
+      sort_order: Number(plan?.sort_order || 0),
+      is_active: plan ? plan.is_active !== false : true,
+      items: Array.isArray(plan?.items) ? plan.items : [],
+    };
+  }
+
+  async function openSubscriptionHistoryTab(id) {
+    const row = state.subscriptionHistory.find((item) => Number(item.id) === Number(id));
+    ensureTab({
+      type: 'subscription-history',
+      id,
+      title: `${row?.customer_name || 'Клиент'} / Подписка`,
+      onActivate: () => activateSubscriptionHistoryTab(id),
+    });
+  }
+
+  async function activateSubscriptionHistoryTab(id) {
+    state.activeSubscriptionId = Number(id || 0);
+    try {
+      const json = await apiJson(`/api/admin/subscriptions/history/${state.activeSubscriptionId}`);
+      state.activeSubscription = json.data || null;
+    } catch (error) {
+      console.error('Failed to load subscription detail:', error);
+      state.activeSubscription = null;
+    }
+    renderSubscriptionHistoryInfo();
+    renderSubscriptionHistory();
+  }
+
+  function renderSubscriptionHistoryInfo() {
+    if (!subscriptionHistoryInfoContent) return;
+    const detail = state.activeSubscription || {};
+    const item = detail.subscription || null;
+    const deliveries = Array.isArray(detail.deliveries) ? detail.deliveries : [];
+    if (!item) {
+      subscriptionHistoryInfoContent.innerHTML = '<div class="empty-hint">Подписка не найдена</div>';
+      return;
+    }
+    const items = Array.isArray(item.plan_items) ? item.plan_items : [];
+    subscriptionHistoryInfoContent.innerHTML = `
+      <div class="bonus-tariff-settings-grid">
+        <div class="bonus-tariff-settings-card">
+          <div class="bonus-tariff-settings-head">
+            <div class="bonus-tariff-settings-icon"><i class="fas fa-user"></i></div>
+            <div class="bonus-tariff-settings-info">
+              <div class="bonus-tariff-settings-title">${escapeHtml(item.customer_name || 'Клиент')}</div>
+              <div class="bonus-tariff-settings-subtitle">${escapeHtml(item.customer_phone || '')}</div>
+            </div>
+          </div>
+          <div class="bonus-tariff-settings-body subscription-detail-grid">
+            <div><b>Подписка</b><span>${escapeHtml(item.plan_title || 'Подписка')}</span></div>
+            <div><b>Период</b><span>${escapeHtml(item.starts_at || item.started_at || '')} - ${escapeHtml(item.ends_at || '')}</span></div>
+            <div><b>Прогресс</b><span>${escapeHtml(subscriptionProgressText(item))}</span></div>
+            <div><b>Оплата</b><span>${escapeHtml(subscriptionPaymentText(item.payment_status))}: ${escapeHtml(money(item.paid_amount || 0))}</span></div>
+            <div><b>Возврат</b><span>${escapeHtml(money(item.refunded_amount || 0))}</span></div>
+            <div><b>Заказ оплаты</b><span>${item.payment_order_id ? `#${escapeHtml(String(item.payment_order_id))}` : 'Не указан'}</span></div>
+          </div>
+        </div>
+        <div class="bonus-tariff-settings-card">
+          <div class="bonus-tariff-settings-head">
+            <div class="bonus-tariff-settings-icon"><i class="fas fa-box"></i></div>
+            <div class="bonus-tariff-settings-info">
+              <div class="bonus-tariff-settings-title">Что заказал</div>
+              <div class="bonus-tariff-settings-subtitle">${items.length ? `${items.length} позиций` : 'Состав пока пустой'}</div>
+            </div>
+          </div>
+          <pre class="subscription-json-preview">${escapeHtml(JSON.stringify(items, null, 2))}</pre>
+        </div>
+        <div class="bonus-tariff-settings-card">
+          <div class="bonus-tariff-settings-head">
+            <div class="bonus-tariff-settings-icon"><i class="fas fa-truck"></i></div>
+            <div class="bonus-tariff-settings-info">
+              <div class="bonus-tariff-settings-title">Доставки</div>
+              <div class="bonus-tariff-settings-subtitle">${deliveries.length ? `${deliveries.length} записей` : 'Доставок нет'}</div>
+            </div>
+          </div>
+          <div class="subscription-delivery-list">
+            ${deliveries.map((delivery) => `
+              <div class="subscription-delivery-row">
+                <span>${escapeHtml(String(delivery.sequence_no || delivery.id || ''))}</span>
+                <b>${escapeHtml(subscriptionStatusText(delivery.status))}</b>
+                <small>${escapeHtml(delivery.scheduled_at || '')}</small>
+                <small>${delivery.order_id ? `Заказ #${escapeHtml(String(delivery.order_id))}` : 'Заказ не связан'}</small>
+              </div>
+            `).join('') || '<div class="empty-hint">Связанных доставок нет</div>'}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function openSubscriptionPlanTab(id = null) {
+    const isNew = id === null || id === 'new';
+    const plan = isNew ? null : state.subscriptionPlans.find((item) => Number(item.id) === Number(id));
+    const tabId = isNew ? 'new' : plan?.id;
+    ensureTab({
+      type: 'subscription-plan',
+      id: tabId,
+      title: isNew ? 'Новая подписка' : (plan?.title || 'Подписка'),
+      onActivate: () => activateSubscriptionPlanTab(tabId),
+    });
+  }
+
+  function createSubscriptionStorefrontSettings(source = {}) {
+    const hasDescription = Object.prototype.hasOwnProperty.call(source || {}, 'description');
+    return {
+      is_active: source?.is_active === true,
+      aspect_ratio: '11:5',
+      background_color: /^#[0-9a-f]{6}$/i.test(String(source?.background_color || '')) ? String(source.background_color).toLowerCase() : '#f1e8ff',
+      title: String(source?.title ?? 'Получайте больше выгоды').slice(0, 150),
+      title_font_size: Math.min(48, Math.max(12, Number(source?.title_font_size || 18))),
+      title_color: /^#[0-9a-f]{6}$/i.test(String(source?.title_color || '')) ? String(source.title_color).toLowerCase() : '#7651c9',
+      description: String(hasDescription ? (source?.description || '') : 'Бесплатная доставка\nДополнительные бонусы\nЭксклюзивные акции').replace(/\r\n?/g, '\n').split('\n').slice(0, 3).join('\n').slice(0, 500),
+      description_font_size: Math.min(24, Math.max(10, Number(source?.description_font_size || 12))),
+      description_color: /^#[0-9a-f]{6}$/i.test(String(source?.description_color || '')) ? String(source.description_color).toLowerCase() : '#7651c9',
+      image_url: String(source?.image_url || '').trim(),
+      button_text: String(source?.button_text ?? 'Смотреть подписки').slice(0, 80),
+      button_color: /^#[0-9a-f]{6}$/i.test(String(source?.button_color || '')) ? String(source.button_color).toLowerCase() : '#ffffff',
+      button_icon_url: String(source?.button_icon_url || '').trim(),
+      faq_title: String(source?.faq_title || 'Часто задаваемые вопросы').slice(0, 150),
+      faq_items: Array.isArray(source?.faq_items) ? source.faq_items.map((item) => ({ id: String(item?.id || `faq-${Date.now()}-${Math.random().toString(36).slice(2)}`), question: String(item?.question || ''), answer: String(item?.answer || '') })) : [],
+      info_slides: Array.isArray(source?.info_slides) ? source.info_slides.map((item) => ({ id: String(item?.id || `slide-${Date.now()}-${Math.random().toString(36).slice(2)}`), image_url: String(item?.image_url || ''), description: String(item?.description || ''), button_text: String(item?.button_text || ''), button_color: String(item?.button_color || '#ff6b00'), button_text_color: String(item?.button_text_color || '#ffffff'), show_description: item?.show_description !== false, show_button: item?.show_button !== false, show_shadow: item?.show_shadow !== false, event_enabled: item?.event_enabled === true, event_type: ['none', 'notification', 'link'].includes(String(item?.event_type || '')) ? String(item.event_type) : 'none', event_url: String(item?.event_url || ''), duration_seconds: Math.min(60, Math.max(1, Math.floor(Number(item?.duration_seconds || 5)))) })) : [],
+    };
+  }
+
+  function renderSubscriptionFaq() {
+    const draft = state.subscriptionStorefrontSettingsDraft || createSubscriptionStorefrontSettings();
+    if (subscriptionFaqTitleInput) subscriptionFaqTitleInput.value = draft.faq_title;
+    if (!subscriptionFaqItems) return;
+    subscriptionFaqItems.innerHTML = draft.faq_items.map((item) => `
+      <div class="subscription-faq-item" draggable="true" data-faq-id="${escapeHtml(item.id)}">
+        <span class="subscription-faq-drag" draggable="true" title="Перетащить">⠿</span>
+        <input class="control" data-faq-question value="${escapeHtml(item.question)}" placeholder="Вопрос" />
+        <button class="subscription-faq-delete" type="button" data-faq-delete aria-label="Удалить">×</button>
+        <textarea class="control subscription-faq-answer" data-faq-answer rows="3" placeholder="Ответ">${escapeHtml(item.answer)}</textarea>
+      </div>`).join('');
+    subscriptionFaqItems.querySelectorAll('[data-faq-answer]').forEach((textarea) => {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    });
+  }
+
+  let activeSubscriptionInfoSlideId = null;
+  let expandedSubscriptionInfoSlideId = null;
+  let subscriptionInfoSlideImageUploading = false;
+  function resizeSubscriptionInfoSlideDescription(textarea) {
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+    textarea.closest('.subscription-description-control')?.classList.toggle('is-single-line', textarea.scrollHeight <= 30);
+  }
+  function refreshSubscriptionInfoSlidePreview(slide) {
+    const row = Array.from(subscriptionInfoSlidesList?.querySelectorAll('[data-info-slide-id]') || []).find((item) => item.dataset.infoSlideId === slide?.id);
+    if (!row || !slide) return;
+    const content = `${slide.show_description && slide.description ? `<span class="subscription-info-slide-preview-description">${escapeHtml(slide.description)}</span>` : ''}${slide.show_button && slide.button_text ? `<span class="subscription-info-slide-preview-button" style="background-color:${escapeHtml(slide.button_color)};color:${escapeHtml(slide.button_text_color)}">${escapeHtml(slide.button_text)}</span>` : ''}`;
+    row.innerHTML = `<span class="subscription-info-slide-preview-content ${slide.show_shadow && content ? 'has-shadow' : ''} ${expandedSubscriptionInfoSlideId === slide.id ? 'is-expanded' : ''}">${content}</span>`;
+  }
+  function renderSubscriptionInfoSlides() {
+    const draft = state.subscriptionStorefrontSettingsDraft || createSubscriptionStorefrontSettings();
+    if (!subscriptionInfoSlidesList || !subscriptionInfoSlideEditor) return;
+    if (!draft.info_slides.length) {
+      activeSubscriptionInfoSlideId = null;
+      subscriptionInfoSlidesList.innerHTML = '<div class="empty-hint">Добавьте первый слайд</div>';
+      subscriptionInfoSlideEditor.classList.add('hidden');
+      return;
+    }
+    if (!draft.info_slides.some((item) => item.id === activeSubscriptionInfoSlideId)) activeSubscriptionInfoSlideId = draft.info_slides[0].id;
+    subscriptionInfoSlidesList.innerHTML = draft.info_slides.map((item) => {
+      const isActive = item.id === activeSubscriptionInfoSlideId;
+      const content = `${item.show_description && item.description ? `<span class="subscription-info-slide-preview-description">${escapeHtml(item.description)}</span>` : ''}${item.show_button && item.button_text ? `<span class="subscription-info-slide-preview-button" style="background-color:${escapeHtml(item.button_color)};color:${escapeHtml(item.button_text_color)}">${escapeHtml(item.button_text)}</span>` : ''}`;
+      const hasContent = Boolean(content);
+      return `<div class="subscription-info-slide-item ${isActive ? 'is-active' : ''}"><button type="button" class="subscription-info-slide-row ${isActive ? 'is-active' : ''}" data-info-slide-id="${escapeHtml(item.id)}" aria-label="Выбрать слайд" style="background-image:url('${escapeHtml(item.image_url)}')"><span class="subscription-info-slide-preview-content ${item.show_shadow && hasContent ? 'has-shadow' : ''} ${expandedSubscriptionInfoSlideId === item.id ? 'is-expanded' : ''}">${content}</span></button>${isActive ? `<button type="button" class="subscription-info-slide-delete" data-info-slide-delete="${escapeHtml(item.id)}" aria-label="Удалить слайд" title="Удалить слайд"><i class="fas fa-trash"></i></button>` : ''}</div>`;
+    }).join('');
+    const slide = draft.info_slides.find((item) => item.id === activeSubscriptionInfoSlideId);
+    subscriptionInfoSlideEditor.classList.remove('hidden');
+    subscriptionInfoSlideEditor.innerHTML = `
+      <div class="subscription-storefront-upload-row"><span>Фото</span>${subscriptionInfoSlideImageUploading ? '<span class="subscription-info-slide-upload-spinner" role="status" aria-label="Загрузка"></span>' : '<label class="product-footer-btn product-footer-cancel" for="subscriptionInfoSlideImageInput">Загрузить</label><input class="hidden" id="subscriptionInfoSlideImageInput" type="file" accept="image/*" data-info-slide-image />'}</div>
+      <label class="subscription-info-slide-duration"><span>Время показа, секунд</span><input class="control" type="number" min="1" max="60" step="1" data-info-slide-duration value="${slide.duration_seconds}" /></label>
+      <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-description ${slide.show_description ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать описание</span></label>
+      <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-button ${slide.show_button ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать кнопку</span></label>
+      <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-show-shadow ${slide.show_shadow ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Показывать тень</span></label>
+      <label class="switch"><input class="switch-input" type="checkbox" data-info-slide-event-enabled ${slide.event_enabled ? 'checked' : ''} /><span class="switch-ui"></span><span class="switch-text">Включить событие</span></label>
+      <label class="subscription-inline-reward-field"><span>Событие кнопки</span><span class="discount-inline-value-control subscription-inline-value-control"><select class="control discount-inline-value-input" data-info-slide-event-type ${slide.event_enabled ? '' : 'disabled'}><option value="none" ${slide.event_type === 'none' ? 'selected' : ''}>Не выбрано</option><option value="notification" ${slide.event_type === 'notification' ? 'selected' : ''}>Уведомление</option><option value="link" ${slide.event_type === 'link' ? 'selected' : ''}>Ссылка</option></select></span></label>
+      <label class="subscription-inline-reward-field ${slide.event_enabled && slide.event_type === 'link' ? '' : 'hidden'}"><span>Ссылка</span><span class="discount-inline-value-control subscription-inline-value-control"><input class="control discount-inline-value-input" type="url" maxlength="1000" data-info-slide-event-url value="${escapeHtml(slide.event_url)}" placeholder="https://example.com" /></span></label>
+      <label class="subscription-inline-reward-field ${slide.show_description ? '' : 'hidden'}"><span>Описание</span><span class="discount-inline-value-control subscription-inline-value-control subscription-description-control"><textarea class="control discount-inline-value-input" rows="1" data-info-slide-description placeholder="Описание">${escapeHtml(slide.description)}</textarea></span></label>
+      <div class="subscription-storefront-three-columns ${slide.show_button ? '' : 'hidden'}"><label class="subscription-inline-reward-field"><span>Текст кнопки</span><span class="discount-inline-value-control subscription-inline-value-control"><input class="control discount-inline-value-input" data-info-slide-button-text value="${escapeHtml(slide.button_text)}" placeholder="Текст кнопки" /></span></label><label class="subscription-inline-reward-field"><span>Цвет кнопки</span><span class="subscription-storefront-color-field"><input type="color" data-info-slide-button-color value="${escapeHtml(slide.button_color)}" /><span>${escapeHtml(slide.button_color)}</span></span></label><label class="subscription-inline-reward-field"><span>Цвет текста кнопки</span><span class="subscription-storefront-color-field"><input type="color" data-info-slide-button-text-color value="${escapeHtml(slide.button_text_color)}" /><span>${escapeHtml(slide.button_text_color)}</span></span></label></div>`;
+    resizeSubscriptionInfoSlideDescription(subscriptionInfoSlideEditor.querySelector('[data-info-slide-description]'));
+  }
+
+  function subscriptionStorefrontContrastColor(hex) {
+    const value = String(hex || '').replace('#', '');
+    if (!/^[0-9a-f]{6}$/i.test(value)) return '#1f2937';
+    const r = parseInt(value.slice(0, 2), 16);
+    const g = parseInt(value.slice(2, 4), 16);
+    const b = parseInt(value.slice(4, 6), 16);
+    return ((r * 299 + g * 587 + b * 114) / 1000) >= 150 ? '#1f2937' : '#ffffff';
+  }
+
+  function renderSubscriptionStorefrontSettings() {
+    const draft = state.subscriptionStorefrontSettingsDraft || createSubscriptionStorefrontSettings();
+    if (subscriptionStorefrontActiveSwitch) subscriptionStorefrontActiveSwitch.checked = draft.is_active;
+    if (subscriptionStorefrontBackgroundColorInput) subscriptionStorefrontBackgroundColorInput.value = draft.background_color;
+    if (subscriptionStorefrontBackgroundColorValue) subscriptionStorefrontBackgroundColorValue.textContent = draft.background_color;
+    if (subscriptionStorefrontTitleInput) subscriptionStorefrontTitleInput.value = draft.title;
+    if (subscriptionStorefrontTitleSizeInput) subscriptionStorefrontTitleSizeInput.value = String(draft.title_font_size);
+    if (subscriptionStorefrontTitleColorInput) subscriptionStorefrontTitleColorInput.value = draft.title_color;
+    if (subscriptionStorefrontTitleColorValue) subscriptionStorefrontTitleColorValue.textContent = draft.title_color;
+    if (subscriptionStorefrontDescriptionInput) subscriptionStorefrontDescriptionInput.value = draft.description;
+    if (subscriptionStorefrontDescriptionSizeInput) subscriptionStorefrontDescriptionSizeInput.value = String(draft.description_font_size);
+    if (subscriptionStorefrontDescriptionColorInput) subscriptionStorefrontDescriptionColorInput.value = draft.description_color;
+    if (subscriptionStorefrontDescriptionColorValue) subscriptionStorefrontDescriptionColorValue.textContent = draft.description_color;
+    if (subscriptionStorefrontButtonTextInput) subscriptionStorefrontButtonTextInput.value = draft.button_text;
+    if (subscriptionStorefrontButtonColorInput) subscriptionStorefrontButtonColorInput.value = draft.button_color;
+    if (subscriptionStorefrontButtonColorValue) subscriptionStorefrontButtonColorValue.textContent = draft.button_color;
+    if (subscriptionStorefrontPreview) subscriptionStorefrontPreview.style.backgroundColor = draft.background_color;
+    if (subscriptionStorefrontPreviewTitle) {
+      subscriptionStorefrontPreviewTitle.textContent = draft.title;
+      subscriptionStorefrontPreviewTitle.style.fontSize = `${draft.title_font_size}px`;
+      subscriptionStorefrontPreviewTitle.style.color = draft.title_color;
+    }
+    if (subscriptionStorefrontPreviewDescription) {
+      subscriptionStorefrontPreviewDescription.textContent = draft.description;
+      subscriptionStorefrontPreviewDescription.style.fontSize = `${draft.description_font_size}px`;
+      subscriptionStorefrontPreviewDescription.style.color = draft.description_color;
+    }
+    if (subscriptionStorefrontPreviewButton) {
+      subscriptionStorefrontPreviewButton.style.backgroundColor = draft.button_color;
+      subscriptionStorefrontPreviewButton.style.color = subscriptionStorefrontContrastColor(draft.button_color);
+    }
+    if (subscriptionStorefrontPreviewButtonText) subscriptionStorefrontPreviewButtonText.textContent = draft.button_text;
+    if (subscriptionStorefrontPreviewImage) {
+      subscriptionStorefrontPreviewImage.src = draft.image_url;
+      subscriptionStorefrontPreviewImage.classList.toggle('hidden', !draft.image_url);
+    }
+    if (subscriptionStorefrontPreviewButtonIcon) {
+      subscriptionStorefrontPreviewButtonIcon.src = draft.button_icon_url;
+      subscriptionStorefrontPreviewButtonIcon.classList.toggle('hidden', !draft.button_icon_url);
+    }
+    if (subscriptionStorefrontPreviewChevron) subscriptionStorefrontPreviewChevron.classList.toggle('hidden', Boolean(draft.button_icon_url));
+    if (subscriptionStorefrontImageButton) subscriptionStorefrontImageButton.textContent = draft.image_url ? 'Заменить' : 'Загрузить';
+    if (subscriptionStorefrontImageDeleteBtn) subscriptionStorefrontImageDeleteBtn.classList.toggle('hidden', !draft.image_url);
+    if (subscriptionStorefrontButtonIconButton) subscriptionStorefrontButtonIconButton.textContent = draft.button_icon_url ? 'Заменить' : 'Загрузить';
+    if (subscriptionStorefrontButtonIconDeleteBtn) subscriptionStorefrontButtonIconDeleteBtn.classList.toggle('hidden', !draft.button_icon_url);
+    renderSubscriptionFaq();
+    renderSubscriptionInfoSlides();
+  }
+
+  async function loadSubscriptionStorefrontSettings() {
+    if (state.subscriptionStorefrontSettingsLoading) return;
+    state.subscriptionStorefrontSettingsLoading = true;
+    try {
+      const json = await apiJson('/api/admin/subscriptions/storefront-settings');
+      state.subscriptionStorefrontSettings = createSubscriptionStorefrontSettings(json.data || {});
+      state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings);
+      renderSubscriptionStorefrontSettings();
+    } catch (error) {
+      console.error('Failed to load subscription storefront settings:', error);
+      alert('Не удалось загрузить настройки блока подписок');
+    } finally {
+      state.subscriptionStorefrontSettingsLoading = false;
+    }
+  }
+
+  async function activateSubscriptionGlobalSettingsTab() {
+    updateRightPanel();
+    await loadSubscriptionStorefrontSettings();
+  }
+
+  async function saveSubscriptionStorefrontSettings() {
+    if (state.subscriptionStorefrontSettingsDraft && subscriptionFaqItems) {
+      state.subscriptionStorefrontSettingsDraft.faq_title = subscriptionFaqTitleInput?.value || '';
+      state.subscriptionStorefrontSettingsDraft.faq_items = Array.from(subscriptionFaqItems.querySelectorAll('[data-faq-id]')).map((card) => {
+        const id = card.dataset.faqId;
+        const previous = state.subscriptionStorefrontSettingsDraft.faq_items.find((item) => item.id === id) || { id, question: '', answer: '' };
+        return { id, question: card.querySelector('[data-faq-question]')?.value ?? previous.question, answer: card.querySelector('[data-faq-answer]')?.value ?? previous.answer };
+      });
+    }
+    const draft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettingsDraft || {});
+    const json = await apiJson('/api/admin/subscriptions/storefront-settings', { method: 'PUT', body: draft });
+    state.subscriptionStorefrontSettings = createSubscriptionStorefrontSettings(json.data || draft);
+    state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings);
+    renderSubscriptionStorefrontSettings();
+  }
+
+  async function uploadSubscriptionStorefrontAsset(field, file, draftKey) {
+    if (!file) return;
+    const uploaded = await uploadTenantAsset(field, file);
+    if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
+    state.subscriptionStorefrontSettingsDraft[draftKey] = String(uploaded.url || '');
+    renderSubscriptionStorefrontSettings();
+  }
+
+  function openSubscriptionGlobalSettingsTab() {
+    ensureTab({
+      type: 'subscription-global-settings',
+      id: 'settings',
+      title: 'Настройка превью',
+      onActivate: activateSubscriptionGlobalSettingsTab,
+    });
+  }
+
+  function openSubscriptionInfoTab(id, title, placeholder) {
+    const tab = ensureTab({
+      type: 'subscription-info',
+      id,
+      title,
+      onActivate: async () => {
+        if (subscriptionInfoEmptyText) subscriptionInfoEmptyText.textContent = placeholder;
+        if (id === 'faq') {
+          await loadSubscriptionStorefrontSettings();
+          renderSubscriptionFaq();
+        }
+        if (id === 'about') {
+          await loadSubscriptionStorefrontSettings();
+          renderSubscriptionInfoSlides();
+        }
+      },
+    });
+    tab.placeholder = placeholder;
+  }
+
+  function activateSubscriptionPlanTab(id) {
+    const isNew = id === 'new';
+    const plan = isNew ? null : state.subscriptionPlans.find((item) => Number(item.id) === Number(id));
+    state.activeSubscriptionPlanId = isNew ? 'new' : Number(id || 0);
+    state.subscriptionPlanDraft = createSubscriptionPlanDraft(plan);
+    renderSubscriptionPlanEditor();
+    renderSubscriptionPlans();
+  }
+
+  function renderSubscriptionPlanAppearance() {
+    const draft = state.subscriptionPlanDraft || createSubscriptionPlanDraft();
+    const iconUrl = String(draft.icon_url || '').trim();
+    const color = /^#[0-9a-f]{6}$/i.test(String(draft.theme_color || '')) ? String(draft.theme_color).toLowerCase() : '#ff6b00';
+    if (subscriptionPlanIconPreview) {
+      subscriptionPlanIconPreview.src = iconUrl;
+      subscriptionPlanIconPreview.classList.toggle('hidden', !iconUrl);
+    }
+    if (subscriptionPlanIconPlaceholder) subscriptionPlanIconPlaceholder.classList.toggle('hidden', Boolean(iconUrl));
+    if (subscriptionPlanIconButton) subscriptionPlanIconButton.style.setProperty('--subscription-color', color);
+    if (subscriptionPlanThemeColorInput) subscriptionPlanThemeColorInput.value = color;
+    if (subscriptionPlanThemeColorValue) subscriptionPlanThemeColorValue.textContent = color;
+  }
+
+  function closeSubscriptionPlanIconPopover() {
+    subscriptionPlanIconPopover?.classList.add('hidden');
+  }
+
+  function openSubscriptionPlanIconPopover() {
+    if (!subscriptionPlanIconPopover || !subscriptionPlanIconButton) return;
+    const rect = subscriptionPlanIconButton.getBoundingClientRect();
+    subscriptionPlanIconPopover.classList.remove('hidden');
+    const width = Math.max(180, subscriptionPlanIconPopover.offsetWidth || 180);
+    subscriptionPlanIconPopover.style.left = `${Math.min(window.innerWidth - width - 8, Math.max(8, rect.left))}px`;
+    subscriptionPlanIconPopover.style.top = `${Math.min(window.innerHeight - 96, Math.max(8, rect.bottom + 8))}px`;
+  }
+
+  function renderSubscriptionPlanEditor() {
+    const draft = state.subscriptionPlanDraft || createSubscriptionPlanDraft();
+    if (subscriptionPlanTitleInput) subscriptionPlanTitleInput.value = draft.title || '';
+    if (subscriptionPlanDescriptionInput) subscriptionPlanDescriptionInput.value = draft.description || '';
+    renderSubscriptionPlanAppearance();
+    if (subscriptionPlanActiveSwitch) subscriptionPlanActiveSwitch.checked = draft.is_active !== false;
+    if (subscriptionPlanDeliveryCountInput) subscriptionPlanDeliveryCountInput.value = String(draft.delivery_count || 1);
+    if (subscriptionPlanItemsPerOrderInput) subscriptionPlanItemsPerOrderInput.value = String(draft.items_per_order || 4);
+    if (subscriptionPlanExactItemsSwitch) subscriptionPlanExactItemsSwitch.checked = draft.item_selection_mode === 'exact';
+    if (subscriptionPlanPriceTotalInput) subscriptionPlanPriceTotalInput.value = String(draft.price_total || 0);
+    if (subscriptionPlanOldPriceTotalInput) subscriptionPlanOldPriceTotalInput.value = String(draft.old_price_total || 0);
+    if (subscriptionPlanBonusRewardValueInput) subscriptionPlanBonusRewardValueInput.value = String(draft.bonus_reward_value || 0);
+    if (subscriptionPlanCustomerSelectDaysSwitch) subscriptionPlanCustomerSelectDaysSwitch.checked = draft.day_count_mode === 'customer_select';
+    if (subscriptionPlanDiscountRewardValueInput) subscriptionPlanDiscountRewardValueInput.value = String(draft.discount_reward_value || 0);
+    syncSubscriptionInlineRewardType('discount', draft.discount_reward_type || 'percent');
+    syncSubscriptionInlineRewardType('bonus', draft.bonus_reward_type || 'percent');
+    syncSubscriptionPlanModeUi();
+    renderSubscriptionItemsGrid();
+  }
+
+  function setSubscriptionPlanMode(mode) {
+    if (!state.subscriptionPlanDraft) state.subscriptionPlanDraft = createSubscriptionPlanDraft();
+    state.subscriptionPlanDraft.subscription_mode = mode === 'ready' ? 'ready' : 'custom';
+    syncSubscriptionPlanModeUi();
+  }
+
+  function syncSubscriptionPlanModeUi() {
+    const mode = state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'ready' : 'custom';
+    $$('[data-subscription-mode]', subscriptionPlanModeTabs || document).forEach((button) => {
+      button.classList.toggle('is-active', button.dataset.subscriptionMode === mode);
+    });
+    if (subscriptionItemsSection) subscriptionItemsSection.classList.remove('hidden');
+    if (subscriptionItemsHint) {
+      subscriptionItemsHint.textContent = mode === 'ready'
+        ? 'Товары будут выбраны администратором из каталога.'
+        : 'Эти места клиент заполнит товарами при оформлении на сайте.';
+    }
+    if (subscriptionDayCountModeField) subscriptionDayCountModeField.classList.toggle('hidden', mode !== 'custom');
+    if (subscriptionPlanExactItemsField) subscriptionPlanExactItemsField.classList.toggle('hidden', mode !== 'custom');
+    if (subscriptionPlanDeliveryCountField) {
+      const hideDaysInput = mode === 'custom' && subscriptionPlanCustomerSelectDaysSwitch?.checked === true;
+      subscriptionPlanDeliveryCountField.classList.toggle('hidden', hideDaysInput);
+    }
+    if (subscriptionPlanPriceRow) subscriptionPlanPriceRow.classList.toggle('hidden', mode !== 'ready');
+    if (subscriptionPlanDeliveryCountLabel) {
+      subscriptionPlanDeliveryCountLabel.textContent = mode === 'custom' ? 'Дней' : 'Заказов';
+    }
+    renderSubscriptionItemsGrid();
+  }
+
+  function getSubscriptionItemsPerOrderValue() {
+    const raw = Number(subscriptionPlanItemsPerOrderInput?.value || state.subscriptionPlanDraft?.items_per_order || 4);
+    if (!Number.isFinite(raw)) return 4;
+    return Math.min(9, Math.max(1, Math.floor(raw)));
+  }
+
+  function getSubscriptionDraftItem(dayIndex, slotIndex) {
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    const day = Math.max(1, Number(dayIndex || 1));
+    const slot = Math.max(1, Number(slotIndex || 1));
+    return items.find((item) => (
+      Number(item?.day_index || item?.day || 1) === day
+      && Number(item?.slot_index || item?.slot || 1) === slot
+    )) || null;
+  }
+
+  function setSubscriptionDraftItem(dayIndex, slotIndex, product) {
+    if (!state.subscriptionPlanDraft) state.subscriptionPlanDraft = createSubscriptionPlanDraft();
+    const day = Math.max(1, Number(dayIndex || 1));
+    const slot = Math.max(1, Number(slotIndex || 1));
+    const items = Array.isArray(state.subscriptionPlanDraft.items) ? state.subscriptionPlanDraft.items.slice() : [];
+    const productId = Number(product?.id || product?.product_id || 0);
+    if (!(productId > 0)) return;
+    const photos = Array.isArray(product?.photos) ? product.photos.filter(Boolean) : [];
+    const nextItem = {
+      type: 'product',
+      product_id: productId,
+      id: productId,
+      day_index: day,
+      slot_index: slot,
+      title: String(product?.name || product?.title || `Товар #${productId}`).trim(),
+      photo: photos[0] || '',
+      price: Number(product?.price || 0),
+      sku: String(product?.sku || '').trim(),
+    };
+    const index = items.findIndex((item) => (
+      Number(item?.day_index || item?.day || 1) === day
+      && Number(item?.slot_index || item?.slot || 1) === slot
+    ));
+    if (index >= 0) items[index] = nextItem;
+    else items.push(nextItem);
+    state.subscriptionPlanDraft.items = items;
+  }
+
+  function subscriptionDayTotal(dayIndex) {
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    const day = Math.max(1, Number(dayIndex || 1));
+    return items
+      .filter((item) => Number(item?.day_index || item?.day || 1) === day)
+      .reduce((sum, item) => sum + (Math.max(0, Number(item?.price || 0)) * Math.max(1, Number(item?.qty || 1))), 0);
+  }
+
+  function subscriptionItemOldPrice(item) {
+    const price = Math.max(0, Number(item?.price || 0));
+    const beforeDiscount = Number(item?.unit_price_before_discount || 0);
+    const oldPrice = Number(item?.old_price || 0);
+    if (beforeDiscount > price) return beforeDiscount;
+    if (oldPrice > price) return oldPrice;
+    return price;
+  }
+
+  function subscriptionDayOldTotal(dayIndex) {
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    const day = Math.max(1, Number(dayIndex || 1));
+    return items
+      .filter((item) => Number(item?.day_index || item?.day || 1) === day)
+      .reduce((sum, item) => sum + (subscriptionItemOldPrice(item) * Math.max(1, Number(item?.qty || 1))), 0);
+  }
+
+  function subscriptionItemsTotal() {
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    return items.reduce((sum, item) => sum + (Math.max(0, Number(item?.price || 0)) * Math.max(1, Number(item?.qty || 1))), 0);
+  }
+
+  function subscriptionItemsOldTotal() {
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    return items.reduce((sum, item) => sum + (subscriptionItemOldPrice(item) * Math.max(1, Number(item?.qty || 1))), 0);
+  }
+
+  function syncSubscriptionPlanPricesFromItems() {
+    const currentTotal = roundDiscountPickerPrice(subscriptionItemsTotal());
+    const oldTotal = roundDiscountPickerPrice(subscriptionItemsOldTotal());
+    if (subscriptionPlanOldPriceTotalInput) subscriptionPlanOldPriceTotalInput.value = String(oldTotal);
+    if (subscriptionPlanPriceTotalInput) subscriptionPlanPriceTotalInput.value = String(currentTotal);
+    if (state.subscriptionPlanDraft) {
+      state.subscriptionPlanDraft.old_price_total = oldTotal;
+      state.subscriptionPlanDraft.price_total = currentTotal;
+    }
+    const discountValue = oldTotal > currentTotal
+      ? (state.subscriptionPlanDraft?.discount_reward_type === 'fixed'
+          ? roundDiscountPickerPrice(oldTotal - currentTotal)
+          : Math.round(((oldTotal - currentTotal) / oldTotal) * 10000) / 100)
+      : 0;
+    if (subscriptionPlanDiscountRewardValueInput) subscriptionPlanDiscountRewardValueInput.value = String(discountValue);
+    if (state.subscriptionPlanDraft) {
+      state.subscriptionPlanDraft.discount_reward_value = discountValue;
+      const type = state.subscriptionPlanDraft.discount_reward_type === 'fixed' ? 'fixed' : 'percent';
+      state.subscriptionPlanDraft[type === 'fixed' ? 'discount_reward_fixed_value' : 'discount_reward_percent_value'] = discountValue;
+    }
+  }
+
+  function recalculateSubscriptionPriceFromDiscount() {
+    const oldTotal = Math.max(0, Number(subscriptionPlanOldPriceTotalInput?.value || state.subscriptionPlanDraft?.old_price_total || 0));
+    const value = Math.max(0, Number(String(subscriptionPlanDiscountRewardValueInput?.value || 0).replace(',', '.')));
+    const type = String(state.subscriptionPlanDraft?.discount_reward_type || 'percent');
+    const price = type === 'fixed'
+      ? Math.max(0, oldTotal - value)
+      : Math.max(0, oldTotal * (1 - Math.min(100, value) / 100));
+    const roundedPrice = roundDiscountPickerPrice(price);
+    if (subscriptionPlanPriceTotalInput) subscriptionPlanPriceTotalInput.value = String(roundedPrice);
+    if (state.subscriptionPlanDraft) {
+      state.subscriptionPlanDraft.price_total = roundedPrice;
+      state.subscriptionPlanDraft.discount_reward_value = value;
+      state.subscriptionPlanDraft[type === 'fixed' ? 'discount_reward_fixed_value' : 'discount_reward_percent_value'] = value;
+    }
+  }
+
+  function recalculateSubscriptionDiscountFromPrice() {
+    const oldTotal = Math.max(0, Number(subscriptionPlanOldPriceTotalInput?.value || state.subscriptionPlanDraft?.old_price_total || 0));
+    const price = Math.max(0, Number(subscriptionPlanPriceTotalInput?.value || 0));
+    const type = String(state.subscriptionPlanDraft?.discount_reward_type || 'percent');
+    const discountValue = oldTotal > price
+      ? (type === 'fixed'
+          ? roundDiscountPickerPrice(oldTotal - price)
+          : Math.round(((oldTotal - price) / oldTotal) * 10000) / 100)
+      : 0;
+    if (subscriptionPlanDiscountRewardValueInput) subscriptionPlanDiscountRewardValueInput.value = String(discountValue);
+    if (state.subscriptionPlanDraft) {
+      state.subscriptionPlanDraft.price_total = price;
+      state.subscriptionPlanDraft.discount_reward_value = discountValue;
+      state.subscriptionPlanDraft[type === 'fixed' ? 'discount_reward_fixed_value' : 'discount_reward_percent_value'] = discountValue;
+    }
+  }
+
+  function getStorefrontCategoryChildren(parentId) {
+    const safeParentId = Number(parentId || 0);
+    return (Array.isArray(state.catalogCategories) ? state.catalogCategories : [])
+      .filter((category) => {
+        if (String(category?.code || '').trim() === 'all') return false;
+        if (Number(category?.is_active ?? 1) !== 1) return false;
+        if (Object.prototype.hasOwnProperty.call(category || {}, 'site_visibility') && Number(category.site_visibility) !== 1) return false;
+        return Number(category?.parent_id || 0) === safeParentId && Number(category?.id || 0) > 0;
+      });
+  }
+
+  function setSubscriptionPickerHeader({ title = 'Выбор товара подписки', showBack = false, showClose = true, onBack = null } = {}) {
+    window.AdminBenefitsModal?.show({
+      title,
+      showBack,
+      showModeToggle: false,
+      clearBody: false,
+      onBack: typeof onBack === 'function' ? onBack : null,
+      onClose: closeSubscriptionItemPicker,
+    });
+    const { closeBtn } = getClientBenefitsOverlayElements();
+    if (closeBtn) closeBtn.classList.toggle('hidden', showClose !== true);
+  }
+
+  function getSubscriptionPickerSelectedIds() {
+    const selected = state.subscriptionItemPicker?.selectedItems;
+    if (!(selected instanceof Map)) return new Set();
+    return new Set(Array.from(selected.keys()).map((id) => Number(id || 0)).filter((id) => id > 0));
+  }
+
+  function getSubscriptionPickerItemsPerOrder() {
+    return Math.min(9, Math.max(1, Number(subscriptionPlanItemsPerOrderInput?.value || state.subscriptionPlanDraft?.items_per_order || 1) || 1));
+  }
+
+  function getSubscriptionPickerDisplayPrice(product) {
+    if (product?.display_price != null) {
+      const price = roundDiscountPickerPrice(Number(product.display_price || 0));
+      const defaultVariantOriginalPrice = Number(product?.default_variant?.variant_original_price || 0);
+      const discountAmount = Number(product?.discount?.discount_amount || 0);
+      const discountOriginalPrice = Number(product?.original_price || 0);
+      const rawOldPrice = defaultVariantOriginalPrice > price
+        ? defaultVariantOriginalPrice
+        : (discountAmount > 0
+            ? (discountOriginalPrice > price ? discountOriginalPrice : price + discountAmount)
+            : Number(product?.old_price || 0));
+      const oldPrice = rawOldPrice > price ? roundDiscountPickerPrice(rawOldPrice) : 0;
+      const discountPercent = oldPrice > price && oldPrice > 0 ? Math.round(((oldPrice - price) / oldPrice) * 100) : 0;
+      return { price, oldPrice, discountPercent };
+    }
+    const productId = Number(product?.id || 0);
+    const variantGroups = getDiscountPickerProductVariants(productId);
+    const ingredientRows = getDiscountPickerProductIngredients(productId);
+    const selectedVariants = getDiscountPickerProductVariantSelection(productId, variantGroups);
+    const firstGroup = Array.isArray(variantGroups) && variantGroups.length ? variantGroups[0] : null;
+    const selectedIndex = firstGroup ? Number(selectedVariants?.[Number(firstGroup?.id || 0)]) : 0;
+    const price = roundDiscountPickerPrice(getDiscountPickerProductDisplayPrice(product, variantGroups, ingredientRows));
+    let oldPrice = Number(product?.old_price || 0);
+    if (oldPrice > 0) {
+      oldPrice = roundDiscountPickerPrice(getDiscountPickerVariantUnitPrice(product, variantGroups, selectedIndex, oldPrice));
+      if (!(oldPrice > price)) oldPrice = 0;
+    }
+    const discountPercent = oldPrice > price && oldPrice > 0 ? Math.round(((oldPrice - price) / oldPrice) * 100) : 0;
+    return { price, oldPrice, discountPercent };
+  }
+
+  function getSubscriptionPickerProductTitle(product) {
+    const defaultVariantLabel = String(product?.default_variant?.variant_label || '').trim();
+    const productName = String(product?.name || product?.title || '').trim();
+    if (defaultVariantLabel) return [defaultVariantLabel, productName].filter(Boolean).join(' ');
+    const productId = Number(product?.id || 0);
+    const variantGroups = getDiscountPickerProductVariants(productId);
+    const selectedVariants = getDiscountPickerProductVariantSelection(productId, variantGroups);
+    const firstGroup = Array.isArray(variantGroups) && variantGroups.length ? variantGroups[0] : null;
+    const selectedIndex = firstGroup ? Number(selectedVariants?.[Number(firstGroup?.id || 0)]) : 0;
+    const variantLabel = firstGroup ? String(formatDiscountPickerVariantValue(firstGroup, selectedIndex) || '').trim() : '';
+    const unitLabel = String(firstGroup?.unitShortTitle || firstGroup?.unitCode || firstGroup?.unitTitle || '').trim();
+    const name = String(product?.name || product?.title || `Товар #${productId}`).trim();
+    return [variantLabel, unitLabel, name].filter(Boolean).join(' ');
+  }
+
+  function getSubscriptionPickerSelectionSeed(dayIndex, slotIndex) {
+    const selected = new Map();
+    const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    const safeDay = Math.max(1, Number(dayIndex || 1));
+    const safeSlot = Math.max(1, Number(slotIndex || 1));
+    items
+      .slice()
+      .sort((a, b) => {
+        const dayDiff = Number(a?.day_index || 1) - Number(b?.day_index || 1);
+        if (dayDiff !== 0) return dayDiff;
+        return Number(a?.slot_index || 1) - Number(b?.slot_index || 1);
+      })
+      .forEach((item) => {
+        const itemDay = Number(item?.day_index || 1);
+        const itemSlot = Number(item?.slot_index || 1);
+        const productId = Number(item?.product_id || item?.id || 0);
+        if (!(productId > 0)) return;
+        if (itemDay < safeDay) return;
+        if (itemDay === safeDay && itemSlot < safeSlot) return;
+        if (selected.size >= getSubscriptionPickerItemsPerOrder()) return;
+        selected.set(productId, { ...item, id: productId, product_id: productId });
+      });
+    return selected;
+  }
+
+  function saveSubscriptionPickerSelection() {
+    const picker = state.subscriptionItemPicker;
+    if (!picker) return;
+    const selectedItems = picker.selectedItems instanceof Map ? Array.from(picker.selectedItems.values()) : [];
+    const startDay = Math.max(1, Number(picker.dayIndex || 1));
+    const startSlot = Math.max(1, Number(picker.slotIndex || 1));
+    const keep = (Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : []).filter((item) => {
+      const itemDay = Number(item?.day_index || 1);
+      const itemSlot = Number(item?.slot_index || 1);
+      if (itemDay < startDay) return true;
+      if (itemDay === startDay && itemSlot < startSlot) return true;
+      return false;
+    });
+    selectedItems.slice(0, getSubscriptionPickerItemsPerOrder()).forEach((item, index) => {
+      keep.push({
+        ...item,
+        day_index: startDay,
+        slot_index: startSlot + index,
+      });
+    });
+    state.subscriptionPlanDraft.items = keep;
+  }
+
+  function renderSubscriptionPickerFooter(footerEl, html = '') {
+    if (!footerEl) return;
+    footerEl.innerHTML = html;
+  }
+
+  function renderSubscriptionItemsGrid() {
+    if (!subscriptionItemsGrid) return;
+    const count = getSubscriptionItemsPerOrderValue();
+    const days = Math.max(1, Math.floor(Number(subscriptionPlanDeliveryCountInput?.value || state.subscriptionPlanDraft?.delivery_count || 1)) || 1);
+    const mode = state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'ready' : 'custom';
+    subscriptionItemsGrid.innerHTML = '';
+    const renderSlots = (root, dayIndex = null) => {
+      for (let index = 0; index < count; index += 1) {
+        const slotIndex = index + 1;
+        const item = getSubscriptionDraftItem(dayIndex || 1, slotIndex);
+        const slot = document.createElement(item ? 'div' : 'button');
+        slot.className = `subscription-item-slot${item ? ' is-filled' : ''}`;
+        if (!item) slot.type = 'button';
+        if (!item) slot.dataset.subscriptionItemSlot = '1';
+        if (item) slot.dataset.subscriptionItemOpen = '1';
+        slot.dataset.dayIndex = String(dayIndex || 1);
+        slot.dataset.slotIndex = String(slotIndex);
+        slot.setAttribute('aria-label', dayIndex ? `День ${dayIndex}, товар ${slotIndex}` : `Товар ${slotIndex}`);
+        if (item) {
+          const baseTitle = String(item.title || item.name || `Товар #${item.product_id || item.id || ''}`).trim();
+          const variantLabel = String(item.variant_label || '').trim();
+          const itemQty = Math.max(1, Number(item?.qty || 1));
+          const title = `${itemQty} × ${[variantLabel, baseTitle].filter(Boolean).join(' ')}`;
+          const photo = String(item.photo || '').trim();
+          const price = Math.max(0, Number(item.price || 0)) * itemQty;
+          const oldPrice = subscriptionItemOldPrice(item) * itemQty;
+          const discountPercent = oldPrice > price && oldPrice > 0 ? Math.round(((oldPrice - price) / oldPrice) * 100) : 0;
+          const infoLines = getSubscriptionPickerSelectedLines(item, []);
+          slot.innerHTML = `
+            ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(title)}" />` : '<span><i class="fas fa-utensils"></i></span>'}
+            <div class="subscription-item-slot-actions">
+              <button type="button" data-subscription-item-info aria-label="Состав товара"><i class="fas fa-info"></i></button>
+              <button type="button" data-subscription-item-remove aria-label="Удалить товар"><i class="fas fa-times"></i></button>
+            </div>
+            ${discountPercent > 0 ? `<span class="subscription-item-slot-discount">-${discountPercent}%</span>` : ''}
+            <div class="subscription-item-slot-caption">
+              <b>${escapeHtml(title)}</b>
+              <small>${oldPrice > price ? `<em>${escapeHtml(money(oldPrice))}</em>` : ''}<strong>${escapeHtml(money(price))}</strong></small>
+            </div>
+            <div class="subscription-item-info-popover hidden" data-subscription-item-info-popover>
+              <b>${escapeHtml(title)}</b>
+              ${infoLines.length ? infoLines.map((line) => `<span>• ${escapeHtml(line)}</span>`).join('') : '<span>Дополнительный состав не выбран</span>'}
+            </div>
+          `;
+        } else {
+          slot.innerHTML = '<i class="fas fa-plus"></i>';
+        }
+        root.appendChild(slot);
+      }
+    };
+    if (mode === 'ready') {
+      for (let day = 1; day <= days; day += 1) {
+        const group = document.createElement('div');
+        group.className = 'subscription-items-day';
+        const dayPrice = subscriptionDayTotal(day);
+        const dayOldPrice = subscriptionDayOldTotal(day);
+        group.innerHTML = `<div class="subscription-items-day-title">День ${day}</div><div class="subscription-items-day-grid"></div><button class="subscription-items-total" type="button">Сумма товаров: ${dayOldPrice > dayPrice ? `<em>${escapeHtml(money(dayOldPrice))}</em>` : ''}<strong>${escapeHtml(money(dayPrice))}</strong></button>`;
+        renderSlots(group.querySelector('.subscription-items-day-grid'), day);
+        subscriptionItemsGrid.appendChild(group);
+      }
+    } else {
+      renderSlots(subscriptionItemsGrid);
+    }
+    if (subscriptionItemsTotalBtn) {
+      subscriptionItemsTotalBtn.classList.toggle('hidden', mode === 'ready');
+      subscriptionItemsTotalBtn.textContent = `Сумма товаров: ${money(subscriptionItemsTotal())}`;
+    }
+    if (mode === 'ready') syncSubscriptionPlanPricesFromItems();
+  }
+
+  function closeSubscriptionItemInfoPopovers() {
+    if (subscriptionItemInfoPopoverTimer) clearTimeout(subscriptionItemInfoPopoverTimer);
+    subscriptionItemInfoPopoverTimer = null;
+    $$('.subscription-item-info-popover', subscriptionPlanForm || document).forEach((entry) => entry.classList.add('hidden'));
+  }
+
+  function closeSubscriptionItemPicker() {
+    const { backdrop, closeBtn } = getClientBenefitsOverlayElements();
+    state.subscriptionItemPicker?.productLazyObserver?.disconnect?.();
+    if (backdrop) backdrop.classList.remove('bonus-range-editor-overlay');
+    if (backdrop) backdrop.classList.remove('subscription-item-picker-overlay');
+    if (closeBtn) closeBtn.classList.remove('hidden');
+    state.subscriptionItemPicker = null;
+    window.AdminBenefitsModal?.hide();
+  }
+
+  async function openSubscriptionDraftItemDetails(dayIndex, slotIndex) {
+    const day = Math.max(1, Number(dayIndex || 1));
+    const slot = Math.max(1, Number(slotIndex || 1));
+    const item = getSubscriptionDraftItem(day, slot);
+    const productId = Number(item?.product_id || item?.id || 0);
+    if (!item || !(productId > 0)) return;
+    state.subscriptionItemPicker = { dayIndex: day, slotIndex: slot, screen: 'details', selectedItems: new Map([[productId, item]]) };
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) {
+      backdrop.classList.add('bonus-range-editor-overlay');
+      backdrop.classList.add('subscription-item-picker-overlay');
+    }
+    body.innerHTML = '';
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: true });
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+    const closeDetails = () => {
+      renderSubscriptionItemsGrid();
+      closeSubscriptionItemPicker();
+    };
+    setSubscriptionPickerHeader({
+      title: String(item.title || item.name || 'Товар').trim() || 'Товар',
+      showBack: true,
+      showClose: false,
+      onBack: closeDetails,
+    });
+    if (frame.footerEl) frame.footerEl.innerHTML = '';
+    const host = document.createElement('div');
+    host.className = 'shared-product-details-host';
+    frame.scrollEl.appendChild(host);
+    await window.SharedProductDetails.mount({
+      container: host,
+      product: {
+        id: productId,
+        name: item.title || item.name || '',
+        photos: Array.isArray(item.photos) ? item.photos : (item.photo ? [item.photo] : []),
+      },
+      productId,
+      mode: 'subscription',
+      initialValue: item,
+      onBack: closeDetails,
+      onSave: (nextItem) => {
+        const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items.slice() : [];
+        const index = items.findIndex((entry) => (
+          Number(entry?.day_index || entry?.day || 1) === day
+          && Number(entry?.slot_index || entry?.slot || 1) === slot
+        ));
+        if (index >= 0) {
+          items[index] = { ...nextItem, qty: Math.max(1, Number(nextItem?.qty || 1)), day_index: day, slot_index: slot };
+          state.subscriptionPlanDraft.items = items;
+        }
+        closeDetails();
+      },
+    });
+  }
+
+  function getStorefrontCatalogCategories() {
+    return (Array.isArray(state.catalogCategories) ? state.catalogCategories : [])
+      .filter((category) => {
+        if (String(category?.code || '').trim() === 'all') return false;
+        if (Number(category?.is_active ?? 1) !== 1) return false;
+        if (Object.prototype.hasOwnProperty.call(category || {}, 'parent_id') && Number(category.parent_id || 0) > 0) return false;
+        if (Object.prototype.hasOwnProperty.call(category || {}, 'site_visibility') && Number(category.site_visibility) !== 1) return false;
+        return Number(category?.id || 0) > 0;
+      });
+  }
+
+  function getStorefrontCatalogProducts() {
+    return (Array.isArray(state.catalogProducts) ? state.catalogProducts : [])
+      .filter((product) => {
+        if (Number(product?.is_active ?? 1) !== 1) return false;
+        if (Object.prototype.hasOwnProperty.call(product || {}, 'site_visibility') && Number(product.site_visibility) !== 1) return false;
+        return Number(product?.id || 0) > 0;
+      });
+  }
+
+  function renderSubscriptionItemPickerCategories(shell) {
+    if (!shell) return;
+    const { title } = getClientBenefitsOverlayElements();
+    if (title) title.textContent = 'Категории';
+    const categories = getStorefrontCatalogCategories();
+    shell.innerHTML = `
+      <div class="subscription-picker-category-list">
+        ${categories.length ? categories.map((category) => {
+          const categoryId = Number(category?.id || 0);
+          const title = String(category?.title || `Категория #${categoryId}`).trim();
+          const icon = String(category?.icon || '').trim();
+          const media = icon
+            ? (isDiscountEntityImageUrl(icon) ? `<img src="${escapeHtml(icon)}" alt="${escapeHtml(title)}">` : `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`)
+            : '<i class="fas fa-layer-group" aria-hidden="true"></i>';
+          return `
+            <button type="button" class="subscription-picker-category-card" data-subscription-picker-category="${categoryId}">
+              <span>${media}</span>
+              <b>${escapeHtml(title)}</b>
+            </button>
+          `;
+        }).join('') : '<div class="option-picker-empty">Категории для витрины не найдены</div>'}
+      </div>
+    `;
+  }
+
+  function renderSubscriptionItemPickerProducts(shell, category) {
+    if (!shell) return;
+    const products = getStorefrontCatalogProducts();
+    const selectedId = Number(state.subscriptionItemPicker?.selectedProduct?.id || state.subscriptionItemPicker?.selectedProduct?.product_id || 0);
+    const categoryTitle = String(category?.title || 'Товары').trim();
+    const { title } = getClientBenefitsOverlayElements();
+    if (title) title.textContent = categoryTitle;
+    shell.innerHTML = `
+      <div class="subscription-picker-products-head">
+        <button type="button" class="subscription-picker-back" data-subscription-picker-back aria-label="Назад">
+          <i class="fas fa-arrow-left"></i>
+        </button>
+      </div>
+      <div class="subscription-picker-product-list">
+        ${products.length ? products.map((product) => {
+          const productId = Number(product?.id || 0);
+          const name = String(product?.name || product?.title || `Товар #${productId}`).trim();
+          const photos = Array.isArray(product?.photos) ? product.photos.filter(Boolean) : [];
+          const photo = photos[0] || '';
+          const defaultLines = (Array.isArray(product?.catalog_default_lines) ? product.catalog_default_lines : [])
+            .map((line) => String(line || '').trim())
+            .filter(Boolean);
+          const description = String(product?.description_short || product?.description || product?.composition || '').trim();
+          const hasConfig = Number(product?.has_variants || 0) === 1 || Number(product?.has_changeable_composition || 0) === 1;
+          const isSelected = productId === selectedId;
+          return `
+            <button type="button" class="subscription-picker-product-card${isSelected ? ' is-selected' : ''}" data-subscription-picker-product="${productId}">
+              <span class="subscription-picker-product-photo">
+                ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(name)}" />` : '<i class="fas fa-image"></i>'}
+              </span>
+              <span class="subscription-picker-product-main">
+                <b>${escapeHtml(name)}</b>
+                ${description ? `<small>${escapeHtml(description)}</small>` : ''}
+                <strong>${escapeHtml(money(product?.price || 0))}</strong>
+              </span>
+              <span class="subscription-picker-product-actions">
+                <span class="subscription-picker-gear${hasConfig ? '' : ' is-disabled'}"><i class="fas fa-cog"></i></span>
+                <span class="subscription-picker-check"><i class="fas fa-check"></i></span>
+              </span>
+            </button>
+          `;
+        }).join('') : '<div class="option-picker-empty">Товары в этой категории не найдены</div>'}
+      </div>
+    `;
+  }
+
+  async function openSubscriptionItemPicker(dayIndex, slotIndex) {
+    const mode = state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'ready' : 'custom';
+    state.subscriptionItemPicker = {
+      dayIndex: Math.max(1, Number(dayIndex || 1)),
+      slotIndex: Math.max(1, Number(slotIndex || 1)),
+      mode,
+      categoryId: null,
+      selectedProduct: null,
+    };
+    await loadCatalogCategories();
+
+    window.AdminBenefitsModal?.show({
+      title: 'Категории',
+      showBack: false,
+      showModeToggle: false,
+      onClose: closeSubscriptionItemPicker,
+    });
+
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) backdrop.classList.add('bonus-range-editor-overlay');
+    if (backdrop) backdrop.classList.add('subscription-item-picker-overlay');
+    body.innerHTML = '';
+
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: false });
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement('div');
+    shell.className = 'bonus-range-editor-modal subscription-item-picker-modal';
+    frame.scrollEl.appendChild(shell);
+    renderSubscriptionItemPickerCategories(shell);
+
+    shell.addEventListener('click', async (event) => {
+      const backBtn = event.target.closest?.('[data-subscription-picker-back]');
+      if (backBtn) {
+        state.subscriptionItemPicker.categoryId = null;
+        state.subscriptionItemPicker.selectedProduct = null;
+        renderSubscriptionItemPickerCategories(shell);
+        return;
+      }
+      const categoryBtn = event.target.closest?.('[data-subscription-picker-category]');
+      if (categoryBtn) {
+        const categoryId = Number(categoryBtn.dataset.subscriptionPickerCategory || 0);
+        const category = getStorefrontCatalogCategories().find((item) => Number(item.id) === categoryId) || null;
+        state.subscriptionItemPicker.categoryId = categoryId;
+        state.subscriptionItemPicker.selectedProduct = null;
+        shell.innerHTML = '<div class="option-picker-empty">Загрузка товаров...</div>';
+        await loadCatalogProducts(categoryId);
+        renderSubscriptionItemPickerProducts(shell, category);
+        return;
+      }
+      const productBtn = event.target.closest?.('[data-subscription-picker-product]');
+      if (productBtn) {
+        const productId = Number(productBtn.dataset.subscriptionPickerProduct || 0);
+        const product = getStorefrontCatalogProducts().find((item) => Number(item.id) === productId) || null;
+        if (!product) return;
+        state.subscriptionItemPicker.selectedProduct = product;
+        const picker = state.subscriptionItemPicker || {};
+        if (picker.mode === 'ready') {
+          setSubscriptionDraftItem(picker.dayIndex, picker.slotIndex, product);
+          renderSubscriptionItemsGrid();
+        }
+        closeSubscriptionItemPicker();
+      }
+    });
+  }
+
+  function renderSubscriptionItemPickerCategoriesV2(shell, footerEl = null) {
+    if (!shell) return;
+    setSubscriptionPickerHeader({ title: 'Выбор товара подписки', showBack: false, showClose: true });
+    renderSubscriptionPickerFooter(footerEl, '');
+    const categories = getStorefrontCatalogCategories();
+    shell.innerHTML = `
+      <div class="subscription-picker-category-list">
+        ${categories.length ? categories.map((category) => {
+          const categoryId = Number(category?.id || 0);
+          const title = String(category?.title || `Категория #${categoryId}`).trim();
+          const icon = String(category?.icon || '').trim();
+          const media = icon
+            ? (isDiscountEntityImageUrl(icon) ? `<img src="${escapeHtml(icon)}" alt="${escapeHtml(title)}">` : `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`)
+            : '<i class="fas fa-layer-group" aria-hidden="true"></i>';
+          return `
+            <button type="button" class="subscription-picker-category-card" data-subscription-picker-category="${categoryId}">
+              <span>${media}</span>
+              <b>${escapeHtml(title)}</b>
+            </button>
+          `;
+        }).join('') : '<div class="option-picker-empty">Категории для витрины не найдены</div>'}
+      </div>
+    `;
+  }
+
+  function getSubscriptionPickerSelectedItem(productId) {
+    const selectedItems = state.subscriptionItemPicker?.selectedItems;
+    if (!(selectedItems instanceof Map)) return null;
+    return selectedItems.get(productId)
+      || selectedItems.get(String(productId))
+      || Array.from(selectedItems.values()).find((item) => Number(item?.product_id || item?.id || 0) === productId)
+      || null;
+  }
+
+  function getSubscriptionPickerSelectedLines(item, fallbackLines = []) {
+    if (!item) return fallbackLines;
+    const lines = [];
+    (Array.isArray(item?.ingredients) ? item.ingredients : []).forEach((ingredient) => {
+      const quantity = ingredient?.quantity ?? ingredient?.qty;
+      const unit = String(ingredient?.unit_label || ingredient?.unit_short_title || ingredient?.unit_title || '').trim();
+      const name = String(ingredient?.ingredient_name || ingredient?.name || ingredient?.title || '').trim();
+      const line = [quantity, unit, name].filter((value) => value !== null && value !== undefined && String(value).trim() !== '').join(' ');
+      if (line) lines.push(line);
+    });
+    (Array.isArray(item?.option_items) ? item.option_items : []).forEach((option) => {
+      const quantity = option?.qty ?? option?.quantity;
+      const variant = String(option?.variant_label || '').trim();
+      const unit = String(option?.variant_unit || option?.unit_label || '').trim();
+      const name = String(option?.title || option?.name || option?.product_name || '').trim();
+      const line = variant
+        ? [variant, name].filter(Boolean).join(' ')
+        : [quantity, unit, name].filter((value) => value !== null && value !== undefined && String(value).trim() !== '').join(' ');
+      if (line) lines.push(line);
+    });
+    return lines.length ? lines : fallbackLines;
+  }
+
+  function createSubscriptionPickerDefaultItem(product) {
+    const productId = Number(product?.id || 0);
+    const pricing = getSubscriptionPickerDisplayPrice(product);
+    const defaultVariant = product?.default_variant && typeof product.default_variant === 'object' ? product.default_variant : {};
+    const photos = Array.isArray(product?.photos) ? product.photos.filter(Boolean) : [];
+    return {
+      type: 'product',
+      id: productId,
+      product_id: productId,
+      title: String(product?.name || product?.title || '').trim(),
+      photo: photos[0] || '',
+      photos,
+      qty: 1,
+      subscription_default_selection: true,
+      price: pricing.price,
+      old_price: pricing.oldPrice,
+      unit_price_before_discount: pricing.oldPrice > pricing.price ? pricing.oldPrice : null,
+      variant_group_id: defaultVariant?.variant_group_id ?? null,
+      variant_value_index: defaultVariant?.variant_value_index ?? null,
+      variant_label: String(defaultVariant?.variant_label || '').trim(),
+      variant_group_title: String(defaultVariant?.variant_group_title || '').trim(),
+      variant_unit: String(defaultVariant?.variant_unit || '').trim(),
+      variant_unit_price: Number(defaultVariant?.variant_unit_price ?? pricing.price),
+      catalog_default_lines: Array.isArray(product?.catalog_default_lines) ? product.catalog_default_lines.slice() : [],
+    };
+  }
+
+  async function hydrateSubscriptionPickerDefaultItem(product, item) {
+    const productId = Number(product?.id || item?.product_id || 0);
+    if (!(productId > 0) || typeof window.SharedProductDetails?.getPassport !== 'function') return item;
+    const passport = await window.SharedProductDetails.getPassport(productId);
+    const defaultConfig = passport?.defaultConfig && typeof passport.defaultConfig === 'object' ? passport.defaultConfig : null;
+    if (!defaultConfig) return item;
+    return {
+      ...item,
+      ...defaultConfig,
+      id: productId,
+      product_id: productId,
+      qty: Math.max(1, Number(item?.qty || 1)),
+      price: item.price,
+      old_price: item.old_price,
+      unit_price_before_discount: item.unit_price_before_discount,
+      option_item_ids: Array.isArray(defaultConfig.option_item_ids) ? defaultConfig.option_item_ids.slice() : [],
+      option_items: Array.isArray(defaultConfig.option_items) ? defaultConfig.option_items.map((option) => ({ ...option })) : [],
+      ingredients: Array.isArray(defaultConfig.ingredients) ? defaultConfig.ingredients.map((ingredient) => ({ ...ingredient })) : [],
+      subscription_default_selection: false,
+    };
+  }
+
+  function subscriptionPickerProductCardHtml(product) {
+    const productId = Number(product?.id || 0);
+    const selectedItem = getSubscriptionPickerSelectedItem(productId);
+    const selectedVariantLabel = String(selectedItem?.variant_label || '').trim();
+    const selectedProductName = String(selectedItem?.title || product?.name || product?.title || '').trim();
+    const name = selectedItem && selectedVariantLabel
+      ? [selectedVariantLabel, selectedProductName].filter(Boolean).join(' ')
+      : getSubscriptionPickerProductTitle(product);
+    const photos = Array.isArray(product?.photos) ? product.photos.filter(Boolean) : [];
+    const photo = photos[0] || '';
+    const defaultLines = (Array.isArray(product?.catalog_default_lines) ? product.catalog_default_lines : [])
+      .map((line) => String(line || '').trim())
+      .filter(Boolean);
+    const description = String(product?.description_short || product?.description || product?.composition || '').trim();
+    const pricing = getSubscriptionPickerDisplayPrice(product);
+    const isSelected = Boolean(selectedItem);
+    const displayLines = getSubscriptionPickerSelectedLines(selectedItem, defaultLines);
+    const selectedPrice = selectedItem ? Number(selectedItem?.price ?? pricing.price) : pricing.price;
+    const itemQty = Math.max(1, Number(selectedItem?.qty || 1));
+    const selectedUnitPriceBeforeDiscount = Number(selectedItem?.unit_price_before_discount || 0);
+    const selectedStoredOldPrice = Number(selectedItem?.old_price || 0);
+    const selectedOldPrice = selectedItem
+      ? (selectedUnitPriceBeforeDiscount > selectedPrice
+          ? selectedUnitPriceBeforeDiscount
+          : (selectedStoredOldPrice > selectedPrice ? selectedStoredOldPrice : 0))
+      : pricing.oldPrice;
+    const selectedDiscountPercent = selectedOldPrice > selectedPrice && selectedOldPrice > 0
+      ? Math.round(((selectedOldPrice - selectedPrice) / selectedOldPrice) * 100)
+      : 0;
+    const displayPrice = selectedPrice * itemQty;
+    const displayOldPrice = selectedOldPrice * itemQty;
+    return `
+      <button type="button" class="subscription-picker-product-card${isSelected ? ' is-selected' : ''}" data-subscription-picker-product="${productId}">
+        ${selectedDiscountPercent > 0 ? `<span class="subscription-picker-product-badge" data-subscription-summary-badge>-${escapeHtml(String(selectedDiscountPercent))}%</span>` : ''}
+        <span class="subscription-picker-product-photo">
+          ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(name)}" loading="lazy" />` : '<i class="fas fa-image"></i>'}
+        </span>
+        <span class="subscription-picker-product-main">
+          <b data-subscription-summary-title>${escapeHtml(`${itemQty} × ${name}`)}</b>
+          <span data-subscription-summary-lines>${displayLines.length
+            ? displayLines.map((line) => `<small>• ${escapeHtml(line)}</small>`).join('')
+            : (description ? `<small>${escapeHtml(description)}</small>` : '')}</span>
+          <strong data-subscription-summary-price>${displayOldPrice > displayPrice ? `<em>${escapeHtml(money(displayOldPrice))}</em>` : ''}${escapeHtml(money(displayPrice || 0))}</strong>
+        </span>
+        <span class="subscription-picker-product-actions">
+          <span class="subscription-picker-qty" aria-label="Количество товара">
+            <span role="button" tabindex="0" data-subscription-picker-qty="-1" aria-label="Уменьшить количество">−</span>
+            <b>${itemQty}</b>
+            <span role="button" tabindex="0" data-subscription-picker-qty="1" aria-label="Увеличить количество">+</span>
+          </span>
+          <span class="subscription-picker-gear" data-subscription-picker-config="${productId}"><i class="fas fa-cog"></i></span>
+        </span>
+      </button>
+    `;
+  }
+
+  function renderSubscriptionItemPickerProductsV2(shell, category, footerEl = null) {
+    if (!shell || !category) return;
+    const rootCategoryId = Number(state.subscriptionItemPicker?.rootCategoryId || category?.id || 0);
+    const activeCategoryId = Number(state.subscriptionItemPicker?.categoryId || rootCategoryId || 0);
+    const cacheEntry = subscriptionCatalogProductsByCategory.get(activeCategoryId) || null;
+    const products = Array.isArray(cacheEntry?.items) ? cacheEntry.items : [];
+    state.catalogProducts = products.slice();
+    const selectedIds = getSubscriptionPickerSelectedIds();
+    const subcategories = getStorefrontCategoryChildren(rootCategoryId);
+    setSubscriptionPickerHeader({
+      title: String(category?.title || 'Категория').trim() || 'Категория',
+      showBack: true,
+      showClose: false,
+      onBack: () => {
+        state.subscriptionItemPicker.screen = 'categories';
+        state.subscriptionItemPicker.rootCategoryId = null;
+        state.subscriptionItemPicker.categoryId = null;
+        renderSubscriptionItemPickerCategoriesV2(shell, footerEl);
+      },
+    });
+    renderSubscriptionPickerFooter(footerEl, `
+      <div class="subscription-picker-footer-actions">
+        <button type="button" class="btn btn-primary" data-subscription-picker-save-selection>Сохранить выбор${selectedIds.size ? ` (${selectedIds.size})` : ''}</button>
+      </div>
+    `);
+    shell.innerHTML = `
+      <div class="subscription-picker-products-head">
+        ${subcategories.length ? `
+          <div class="subscription-picker-subchips">
+            <button type="button" class="shop-chip-btn subscription-picker-subchip${activeCategoryId === rootCategoryId ? ' is-active' : ''}" data-subscription-picker-subcategory="${rootCategoryId}">Все</button>
+            ${subcategories.map((sub) => `
+              <button type="button" class="shop-chip-btn subscription-picker-subchip${Number(sub?.id || 0) === activeCategoryId ? ' is-active' : ''}" data-subscription-picker-subcategory="${Number(sub?.id || 0)}">${escapeHtml(String(sub?.title || '').trim() || `#${Number(sub?.id || 0)}`)}</button>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+      <div class="subscription-picker-product-list">
+        ${products.length ? products.map((product) => subscriptionPickerProductCardHtml(product)).join('') : '<div class="option-picker-empty">Товары в этой категории не найдены</div>'}
+        ${cacheEntry?.hasMore ? '<div class="subscription-picker-load-sentinel" data-subscription-picker-load-more aria-hidden="true"></div>' : ''}
+      </div>
+    `;
+    setupSubscriptionProductLazyLoading(shell, category, footerEl);
+  }
+
+  function hydrateSubscriptionProductSummaries(shell, products) {
+    const productIds = (Array.isArray(products) ? products : [])
+      .map((product) => Number(product?.id || 0))
+      .filter((id) => id > 0);
+    if (!shell || !productIds.length || typeof window.SharedProductDetails?.getSummaries !== 'function') return;
+    window.SharedProductDetails.getSummaries(productIds).then((summaries) => {
+      if (!shell.isConnected) return;
+      productIds.forEach((productId) => {
+        const summary = summaries?.[productId] || summaries?.[String(productId)] || null;
+        const card = shell.querySelector(`[data-subscription-picker-product="${productId}"]`);
+        if (!summary || !card) return;
+        const titleEl = card.querySelector('[data-subscription-summary-title]');
+        const linesEl = card.querySelector('[data-subscription-summary-lines]');
+        const priceEl = card.querySelector('[data-subscription-summary-price]');
+         const selectedItem = getSubscriptionPickerSelectedItem(productId);
+         const itemQty = Math.max(1, Number(selectedItem?.qty || 1));
+         if (titleEl && !selectedItem) titleEl.textContent = `${itemQty} × ${String(summary.title || '').trim()}`;
+        if (linesEl) {
+          linesEl.innerHTML = (Array.isArray(summary.lines) ? summary.lines : [])
+            .map((line) => `<small>• ${escapeHtml(String(line || '').trim())}</small>`)
+            .join('');
+        }
+         if (priceEl && !selectedItem) {
+           const price = Number(summary.price || 0) * itemQty;
+           const oldPrice = Number(summary.oldPrice || 0) * itemQty;
+          priceEl.innerHTML = `${oldPrice > price ? `<em>${escapeHtml(money(oldPrice))}</em>` : ''}${escapeHtml(money(price))}`;
+        }
+        let badge = card.querySelector('[data-subscription-summary-badge]');
+        const discountPercent = Math.max(0, Number(summary.discountPercent || 0));
+        if (discountPercent > 0) {
+          if (!badge) {
+            badge = document.createElement('span');
+             badge.className = 'subscription-picker-product-badge';
+            badge.dataset.subscriptionSummaryBadge = '1';
+            card.prepend(badge);
+          }
+          badge.textContent = `-${Math.round(discountPercent)}%`;
+        } else if (badge) {
+          badge.remove();
+        }
+      });
+    }).catch(console.error);
+  }
+
+  async function loadSubscriptionCatalogProducts(categoryId, { nextPage = false } = {}) {
+    const safeCategoryId = Number(categoryId || 0);
+    if (!(safeCategoryId > 0)) return { items: [], entry: null };
+    let entry = subscriptionCatalogProductsByCategory.get(safeCategoryId) || null;
+    if (!entry) {
+      entry = { items: [], nextOffset: 0, hasMore: true, loadingPromise: null };
+      subscriptionCatalogProductsByCategory.set(safeCategoryId, entry);
+    }
+    if (!nextPage && entry.items.length) {
+      state.catalogProducts = entry.items.slice();
+      return { items: [], entry };
+    }
+    if (!entry.hasMore) return { items: [], entry };
+    if (entry.loadingPromise) return entry.loadingPromise;
+
+    entry.loadingPromise = (async () => {
+      const url = `/api/public/products?category_id=${encodeURIComponent(safeCategoryId)}&lite=1&limit=${SUBSCRIPTION_CATALOG_PAGE_SIZE}&offset=${entry.nextOffset}`;
+      const json = await apiJson(url);
+      const rows = (Array.isArray(json?.data) ? json.data : []).map((item) => {
+        const photos = Array.isArray(item?.photos)
+          ? item.photos.filter(Boolean)
+          : (Array.isArray(item?.photos_json) ? item.photos_json.filter(Boolean) : []);
+        return { ...item, photos, photos_json: photos };
+      });
+      const existingIds = new Set(entry.items.map((item) => Number(item?.id || 0)));
+      const newItems = rows.filter((item) => {
+        const productId = Number(item?.id || 0);
+        return productId > 0 && !existingIds.has(productId);
+      });
+      entry.items.push(...newItems);
+      entry.nextOffset += rows.length;
+      entry.hasMore = json?.has_more === true;
+      entry.items.forEach((product) => {
+        const productId = Number(product?.id || 0);
+        if (productId > 0) state.discountPickerProductMap.set(productId, product);
+      });
+      if (Number(state.subscriptionItemPicker?.categoryId || 0) === safeCategoryId) {
+        state.catalogProducts = entry.items.slice();
+      }
+      return { items: newItems, entry };
+    })().finally(() => {
+      entry.loadingPromise = null;
+    });
+    return entry.loadingPromise;
+  }
+
+  function setupSubscriptionProductLazyLoading(shell, category, footerEl = null) {
+    const picker = state.subscriptionItemPicker;
+    if (!picker || !shell) return;
+    if (picker.productLazyObserver) picker.productLazyObserver.disconnect();
+    picker.productLazyObserver = null;
+    const sentinel = shell.querySelector('[data-subscription-picker-load-more]');
+    if (!sentinel || typeof IntersectionObserver !== 'function') return;
+    const categoryId = Number(picker.categoryId || 0);
+    const observer = new IntersectionObserver(async (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      const result = await loadSubscriptionCatalogProducts(categoryId, { nextPage: true }).catch((error) => {
+        console.error(error);
+        return null;
+      });
+      if (!result || Number(state.subscriptionItemPicker?.categoryId || 0) !== categoryId || !shell.isConnected) return;
+      const list = shell.querySelector('.subscription-picker-product-list');
+      const currentSentinel = shell.querySelector('[data-subscription-picker-load-more]');
+      if (!list) return;
+      if (currentSentinel) currentSentinel.remove();
+      const selectedIds = getSubscriptionPickerSelectedIds();
+      if (result.items.length) {
+        list.insertAdjacentHTML('beforeend', result.items.map((product) => subscriptionPickerProductCardHtml(product)).join(''));
+        warmSubscriptionProductDetails(result.items);
+      }
+      if (result.entry?.hasMore) {
+        list.insertAdjacentHTML('beforeend', '<div class="subscription-picker-load-sentinel" data-subscription-picker-load-more aria-hidden="true"></div>');
+        setupSubscriptionProductLazyLoading(shell, category, footerEl);
+      }
+    }, {
+      root: shell.parentElement || null,
+      rootMargin: '240px 0px',
+      threshold: 0.01,
+    });
+    picker.productLazyObserver = observer;
+    observer.observe(sentinel);
+  }
+
+  function warmSubscriptionProductDetails(products) {
+    const productIds = (Array.isArray(products) ? products : [])
+      .map((product) => Number(product?.id || 0))
+      .filter((id) => id > 0);
+    if (!productIds.length) return;
+    window.SharedProductDetails?.prefetch?.(productIds).catch(console.error);
+  }
+
+  async function openSubscriptionItemPickerV2(dayIndex, slotIndex) {
+    window.SharedProductDetails?.preload?.().catch(console.error);
+    const mode = state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'ready' : 'custom';
+    state.subscriptionItemPicker = {
+      dayIndex: Math.max(1, Number(dayIndex || 1)),
+      slotIndex: Math.max(1, Number(slotIndex || 1)),
+      mode,
+      rootCategoryId: null,
+      categoryId: null,
+      screen: 'categories',
+      selectedProduct: null,
+      selectedItems: getSubscriptionPickerSelectionSeed(dayIndex, slotIndex),
+      defaultHydrationPromises: new Map(),
+    };
+    await loadCatalogCategories();
+    setSubscriptionPickerHeader({ title: 'Выбор товара подписки', showBack: false, showClose: true });
+
+    const { backdrop, body } = getClientBenefitsOverlayElements();
+    if (!body) return;
+    if (backdrop) backdrop.classList.add('bonus-range-editor-overlay');
+    if (backdrop) backdrop.classList.add('subscription-item-picker-overlay');
+    body.innerHTML = '';
+
+    const frame = window.AdminBenefitsModal?.createScrollableFrame({ hasFooter: true });
+    if (!frame?.root || !frame.scrollEl) return;
+    body.appendChild(frame.root);
+
+    const shell = document.createElement('div');
+    shell.className = 'bonus-range-editor-modal subscription-item-picker-modal';
+    frame.scrollEl.appendChild(shell);
+    renderSubscriptionItemPickerCategoriesV2(shell, frame.footerEl);
+
+    const showSubscriptionProductDetails = async (product, rootCategory) => {
+      const productId = Number(product?.id || 0);
+      if (!(productId > 0) || !rootCategory) return;
+      const selectedItems = state.subscriptionItemPicker?.selectedItems;
+      const selectedValue = selectedItems instanceof Map
+        ? (
+            selectedItems.get(productId)
+            || selectedItems.get(String(productId))
+            || Array.from(selectedItems.values()).find((item) => Number(item?.product_id || item?.id || 0) === productId)
+            || null
+          )
+        : null;
+      const initialValue = selectedValue?.subscription_default_selection === true ? null : selectedValue;
+      const returnToProducts = () => {
+        frame.scrollEl.innerHTML = '';
+        frame.scrollEl.appendChild(shell);
+        renderSubscriptionItemPickerProductsV2(shell, rootCategory, frame.footerEl);
+      };
+      setSubscriptionPickerHeader({
+        title: String(product?.name || product?.title || 'Товар').trim() || 'Товар',
+        showBack: true,
+        showClose: false,
+        onBack: returnToProducts,
+      });
+      if (frame.footerEl) frame.footerEl.innerHTML = '';
+      frame.scrollEl.innerHTML = '<div class="option-picker-empty">Загрузка настроек товара...</div>';
+      const host = document.createElement('div');
+      host.className = 'shared-product-details-host';
+      frame.scrollEl.innerHTML = '';
+      frame.scrollEl.appendChild(host);
+      await window.SharedProductDetails.mount({
+        container: host,
+        product,
+        productId,
+        mode: 'subscription',
+        initialValue,
+        onBack: returnToProducts,
+        onSave: (item) => {
+          const nextSelected = state.subscriptionItemPicker?.selectedItems instanceof Map
+            ? new Map(state.subscriptionItemPicker.selectedItems)
+            : new Map();
+          const wasSelected = Boolean(getSubscriptionPickerSelectedItem(productId));
+          if (!wasSelected && nextSelected.size >= getSubscriptionPickerItemsPerOrder()) {
+            showBonusLevelRequirementsValidationMessage(`Можно выбрать не больше ${getSubscriptionPickerItemsPerOrder()} товаров в заказ`);
+            return;
+          }
+          Array.from(nextSelected.entries()).forEach(([key, selectedItem]) => {
+            if (Number(selectedItem?.product_id || selectedItem?.id || key || 0) === productId) nextSelected.delete(key);
+          });
+          nextSelected.set(productId, { ...item, qty: Math.max(1, Number(item?.qty || 1)), subscription_default_selection: false });
+          state.subscriptionItemPicker.selectedItems = nextSelected;
+          returnToProducts();
+        },
+      });
+    };
+
+    shell.addEventListener('click', async (event) => {
+      const categoryBtn = event.target.closest?.('[data-subscription-picker-category]');
+      if (categoryBtn) {
+        const categoryId = Number(categoryBtn.dataset.subscriptionPickerCategory || 0);
+        const category = getStorefrontCatalogCategories().find((item) => Number(item.id) === categoryId) || null;
+        if (!category) return;
+        state.subscriptionItemPicker.rootCategoryId = categoryId;
+        state.subscriptionItemPicker.categoryId = categoryId;
+        shell.innerHTML = '<div class="option-picker-empty">Загрузка товаров...</div>';
+        const productsPromise = loadSubscriptionCatalogProducts(categoryId);
+        Promise.all([
+          ensureDiscountPickerTenantPriceRoundingSettings(),
+          loadDiscountPickerUnitConversions(),
+        ]).catch(console.error);
+        const productsResult = await productsPromise;
+        warmSubscriptionProductDetails(productsResult?.items || []);
+        renderSubscriptionItemPickerProductsV2(shell, category, frame.footerEl);
+        return;
+      }
+      const subcategoryBtn = event.target.closest?.('[data-subscription-picker-subcategory]');
+      if (subcategoryBtn) {
+        const categoryId = Number(subcategoryBtn.dataset.subscriptionPickerSubcategory || 0);
+        const rootCategory = (Array.isArray(state.catalogCategories) ? state.catalogCategories : []).find((item) => Number(item?.id || 0) === Number(state.subscriptionItemPicker?.rootCategoryId || 0)) || null;
+        if (!rootCategory) return;
+        state.subscriptionItemPicker.categoryId = categoryId;
+        shell.innerHTML = '<div class="option-picker-empty">Загрузка товаров...</div>';
+        const productsPromise = loadSubscriptionCatalogProducts(categoryId);
+        Promise.all([
+          ensureDiscountPickerTenantPriceRoundingSettings(),
+          loadDiscountPickerUnitConversions(),
+        ]).catch(console.error);
+        const productsResult = await productsPromise;
+        warmSubscriptionProductDetails(productsResult?.items || []);
+        renderSubscriptionItemPickerProductsV2(shell, rootCategory, frame.footerEl);
+        return;
+      }
+      const qtyButton = event.target.closest?.('[data-subscription-picker-qty]');
+      if (qtyButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const productCard = qtyButton.closest('[data-subscription-picker-product]');
+        const productId = Number(productCard?.dataset.subscriptionPickerProduct || 0);
+        const product = getStorefrontCatalogProducts().find((item) => Number(item.id) === productId) || null;
+        if (!product) return;
+        const selectedItems = state.subscriptionItemPicker?.selectedItems instanceof Map
+          ? new Map(state.subscriptionItemPicker.selectedItems)
+          : new Map();
+        const selectedItem = getSubscriptionPickerSelectedItem(productId);
+        const currentQty = Math.max(1, Number(selectedItem?.qty || 1));
+        const nextQty = Math.max(1, currentQty + Number(qtyButton.dataset.subscriptionPickerQty || 0));
+        if (!selectedItem && nextQty === 1) return;
+        if (!selectedItem && selectedItems.size >= getSubscriptionPickerItemsPerOrder()) {
+          showBonusLevelRequirementsValidationMessage(`Можно выбрать не больше ${getSubscriptionPickerItemsPerOrder()} товаров в заказ`);
+          return;
+        }
+        const nextItem = selectedItem
+          ? { ...selectedItem, qty: nextQty }
+          : { ...createSubscriptionPickerDefaultItem(product), qty: nextQty };
+        Array.from(selectedItems.entries()).forEach(([key, item]) => {
+          if (Number(item?.product_id || item?.id || key || 0) === productId) selectedItems.delete(key);
+        });
+        selectedItems.set(productId, nextItem);
+        state.subscriptionItemPicker.selectedItems = selectedItems;
+        if (!selectedItem) {
+          const hydrationPromise = hydrateSubscriptionPickerDefaultItem(product, nextItem)
+            .then((hydratedItem) => {
+              const picker = state.subscriptionItemPicker;
+              if (!picker?.selectedItems?.has(productId)) return;
+              const latestItem = picker.selectedItems.get(productId);
+              const nextItems = new Map(picker.selectedItems);
+              nextItems.set(productId, { ...hydratedItem, qty: Math.max(1, Number(latestItem?.qty || hydratedItem?.qty || 1)) });
+              picker.selectedItems = nextItems;
+            })
+            .catch(console.error)
+            .finally(() => state.subscriptionItemPicker?.defaultHydrationPromises?.delete(productId));
+          state.subscriptionItemPicker?.defaultHydrationPromises?.set(productId, hydrationPromise);
+        }
+        productCard.outerHTML = subscriptionPickerProductCardHtml(product);
+        const saveSelectionBtn = frame.footerEl?.querySelector('[data-subscription-picker-save-selection]');
+        if (saveSelectionBtn) saveSelectionBtn.textContent = `Сохранить выбор (${selectedItems.size})`;
+        return;
+      }
+      const configBtn = event.target.closest?.('[data-subscription-picker-config]');
+      if (configBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        const productId = Number(configBtn.dataset.subscriptionPickerConfig || 0);
+        const product = getStorefrontCatalogProducts().find((item) => Number(item.id) === productId) || null;
+        const rootCategory = (Array.isArray(state.catalogCategories) ? state.catalogCategories : []).find((item) => Number(item?.id || 0) === Number(state.subscriptionItemPicker?.rootCategoryId || 0)) || null;
+        if (!product || !rootCategory) return;
+        await showSubscriptionProductDetails(product, rootCategory);
+        return;
+      }
+      const productBtn = event.target.closest?.('[data-subscription-picker-product]');
+      if (productBtn) {
+        const productId = Number(productBtn.dataset.subscriptionPickerProduct || 0);
+        const product = getStorefrontCatalogProducts().find((item) => Number(item.id) === productId) || null;
+        if (!product) return;
+        const selectedItems = state.subscriptionItemPicker?.selectedItems instanceof Map
+          ? new Map(state.subscriptionItemPicker.selectedItems)
+          : new Map();
+        if (getSubscriptionPickerSelectedItem(productId)) {
+          Array.from(selectedItems.entries()).forEach(([key, item]) => {
+            if (Number(item?.product_id || item?.id || key || 0) === productId) selectedItems.delete(key);
+          });
+        } else {
+          if (selectedItems.size >= getSubscriptionPickerItemsPerOrder()) {
+            showBonusLevelRequirementsValidationMessage(`Можно выбрать не больше ${getSubscriptionPickerItemsPerOrder()} товаров в заказ`);
+            return;
+          }
+          const defaultItem = createSubscriptionPickerDefaultItem(product);
+          selectedItems.set(productId, defaultItem);
+          const hydrationPromise = hydrateSubscriptionPickerDefaultItem(product, defaultItem)
+            .then((hydratedItem) => {
+              const picker = state.subscriptionItemPicker;
+              if (!picker?.selectedItems?.has(productId)) return;
+              const nextItems = new Map(picker.selectedItems);
+              nextItems.set(productId, hydratedItem);
+              picker.selectedItems = nextItems;
+            })
+            .catch(console.error)
+            .finally(() => state.subscriptionItemPicker?.defaultHydrationPromises?.delete(productId));
+          state.subscriptionItemPicker?.defaultHydrationPromises?.set(productId, hydrationPromise);
+        }
+        state.subscriptionItemPicker.selectedItems = selectedItems;
+        productBtn.outerHTML = subscriptionPickerProductCardHtml(product);
+        const saveSelectionBtn = frame.footerEl?.querySelector('[data-subscription-picker-save-selection]');
+        if (saveSelectionBtn) {
+          saveSelectionBtn.textContent = `Сохранить выбор${selectedItems.size ? ` (${selectedItems.size})` : ''}`;
+        }
+      }
+    });
+
+    frame.root.addEventListener('click', async (event) => {
+      const saveSelectionBtn = event.target.closest?.('[data-subscription-picker-save-selection]');
+      if (saveSelectionBtn) {
+        const pendingDefaults = Array.from(state.subscriptionItemPicker?.defaultHydrationPromises?.values?.() || []);
+        if (pendingDefaults.length) await Promise.all(pendingDefaults);
+        saveSubscriptionPickerSelection();
+        renderSubscriptionItemsGrid();
+        closeSubscriptionItemPicker();
+      }
+    });
+  }
+
+  function syncSubscriptionInlineRewardType(group, value) {
+    const safeGroup = group === 'bonus' ? 'bonus' : 'discount';
+    const safeValue = ['percent', 'fixed'].includes(String(value || '')) ? value : 'percent';
+    if (!state.subscriptionPlanDraft) state.subscriptionPlanDraft = createSubscriptionPlanDraft();
+    if (safeGroup === 'bonus') state.subscriptionPlanDraft.bonus_reward_type = safeValue;
+    else {
+      const rawPreviousType = String(state.subscriptionPlanDraft.discount_reward_type || '');
+      const previousType = rawPreviousType === 'fixed' ? 'fixed' : 'percent';
+      const currentValue = Math.max(0, Number(String(subscriptionPlanDiscountRewardValueInput?.value || 0).replace(',', '.')) || 0);
+      state.subscriptionPlanDraft[previousType === 'fixed' ? 'discount_reward_fixed_value' : 'discount_reward_percent_value'] = currentValue;
+      state.subscriptionPlanDraft.discount_reward_type = safeValue;
+      const valueKey = safeValue === 'fixed' ? 'discount_reward_fixed_value' : 'discount_reward_percent_value';
+      let nextValue = currentValue;
+      if (['percent', 'fixed'].includes(rawPreviousType) && previousType !== safeValue) {
+        const oldTotal = Math.max(0, Number(subscriptionPlanOldPriceTotalInput?.value || state.subscriptionPlanDraft.old_price_total || 0));
+        const price = Math.max(0, Number(subscriptionPlanPriceTotalInput?.value || state.subscriptionPlanDraft.price_total || 0));
+        nextValue = safeValue === 'fixed'
+          ? roundDiscountPickerPrice(Math.max(0, oldTotal - price))
+          : (oldTotal > price && oldTotal > 0 ? Math.round(((oldTotal - price) / oldTotal) * 10000) / 100 : 0);
+      }
+      state.subscriptionPlanDraft[valueKey] = nextValue;
+      state.subscriptionPlanDraft.discount_reward_value = nextValue;
+      if (subscriptionPlanDiscountRewardValueInput) subscriptionPlanDiscountRewardValueInput.value = String(nextValue);
+    }
+    $$(`[data-subscription-inline-type-group="${safeGroup}"] [data-subscription-inline-type]`, subscriptionPlanForm || document).forEach((button) => {
+      const active = button.dataset.subscriptionInlineType === safeValue;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
+  function getSubscriptionRewardPayloadType(group, value) {
+    const numeric = Number(String(value || '').replace(',', '.'));
+    if (!Number.isFinite(numeric) || numeric <= 0) return 'none';
+    const draftKey = group === 'bonus' ? 'bonus_reward_type' : 'discount_reward_type';
+    const type = String(state.subscriptionPlanDraft?.[draftKey] || 'percent');
+    return ['percent', 'fixed'].includes(type) ? type : 'percent';
+  }
+
+  async function saveSubscriptionPlan() {
+    const draftItems = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+    const id = state.activeSubscriptionPlanId;
+    const body = {
+      title: subscriptionPlanTitleInput?.value || '',
+      description: subscriptionPlanDescriptionInput?.value || '',
+      icon_url: state.subscriptionPlanDraft?.icon_url || null,
+      theme_color: state.subscriptionPlanDraft?.theme_color || '#ff6b00',
+      delivery_count: subscriptionPlanDeliveryCountInput?.value || 1,
+      items_per_order: subscriptionPlanItemsPerOrderInput?.value || 4,
+      item_selection_mode: state.subscriptionPlanDraft?.subscription_mode === 'ready' ? 'exact' : (subscriptionPlanExactItemsSwitch?.checked === true ? 'exact' : 'up_to'),
+      delivery_interval_days: state.subscriptionPlanDraft?.delivery_interval_days || 1,
+      price_total: state.subscriptionPlanDraft?.subscription_mode === 'ready' ? (subscriptionPlanPriceTotalInput?.value || 0) : 0,
+      bonus_reward_type: getSubscriptionRewardPayloadType('bonus', subscriptionPlanBonusRewardValueInput?.value),
+      bonus_reward_value: subscriptionPlanBonusRewardValueInput?.value || 0,
+      settings: {
+        subscription_mode: state.subscriptionPlanDraft?.subscription_mode || 'custom',
+        day_count_mode: subscriptionPlanCustomerSelectDaysSwitch?.checked === true ? 'customer_select' : 'fixed',
+        discount_reward_type: getSubscriptionRewardPayloadType('discount', subscriptionPlanDiscountRewardValueInput?.value),
+        discount_reward_value: subscriptionPlanDiscountRewardValueInput?.value || 0,
+        discount_reward_percent_value: state.subscriptionPlanDraft?.discount_reward_percent_value ?? null,
+        discount_reward_fixed_value: state.subscriptionPlanDraft?.discount_reward_fixed_value ?? null,
+        old_price_total: subscriptionPlanOldPriceTotalInput?.value || 0,
+      },
+      sort_order: state.subscriptionPlanDraft?.sort_order || 0,
+      is_active: subscriptionPlanActiveSwitch?.checked === true,
+      items: draftItems,
+    };
+    const isNew = id === 'new' || !Number(id || 0);
+    try {
+      const json = await apiJson(isNew ? '/api/admin/subscriptions/plans' : `/api/admin/subscriptions/plans/${id}`, {
+        method: isNew ? 'POST' : 'PUT',
+        body,
+      });
+      await loadSubscriptionPlans(true);
+      const saved = json.data;
+      if (isNew) {
+        await closeTab(buildTabKey('subscription-plan', 'new'));
+      }
+      if (saved?.id) openSubscriptionPlanTab(saved.id);
+    } catch (error) {
+      console.error('Failed to save subscription plan:', error);
+      alert('Не удалось сохранить подписку');
+    }
+  }
+
+  function closeSubscriptionActiveTab() {
+    if (tabsState.activeKey) closeTab(tabsState.activeKey).catch(console.error);
+  }
+
 
   function switchView(viewName) {
     state.currentView = viewName;
@@ -22375,6 +24597,9 @@
         'bonus-cards': state.bonusProgramNameBase || 'Бонусная программа',
         'bonus-referrals': 'Рефералы',
         'bonus-settings': 'Настройки',
+        'subscription-history': 'История подписок',
+        'subscription-settings': 'Настройка подписки',
+        'subscription-info': 'Информация',
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
     }
@@ -22413,6 +24638,8 @@
             'bonus-cards': 'fas fa-gift',
             'bonus-referrals': 'fas fa-user-friends',
             'bonus-settings': 'fas fa-cog',
+            'subscription-history': 'fas fa-calendar-check',
+            'subscription-settings': 'fas fa-list-check',
           };
           icon.className = icons[viewName] || 'fas fa-users';
           if (viewName === 'important-messages') {
@@ -22422,15 +24649,30 @@
       }
     }
 
-    if (elSearchWrap) elSearchWrap.style.display = viewName === 'clients' ? '' : 'none';
-    if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
+    const isSubscriptionHistoryView = viewName === 'subscription-history';
+    if (elSearchWrap) elSearchWrap.style.display = (viewName === 'clients' || isSubscriptionHistoryView) ? '' : 'none';
+    if (elSearch) {
+      elSearch.placeholder = isSubscriptionHistoryView ? 'Поиск по подпискам' : 'Поиск клиентов';
+      elSearch.value = isSubscriptionHistoryView ? state.subscriptionSearchQuery : state.q;
+    }
+    if (elSortWrap) elSortWrap.style.display = (viewName === 'clients' || isSubscriptionHistoryView) ? '' : 'none';
+    if (elSortDropdown && isSubscriptionHistoryView) {
+      elSortDropdown.innerHTML = SUBSCRIPTION_SORT_OPTIONS.map((option) => (
+        `<button type="button" class="cl-sort-option ${state.subscriptionSort === option.value ? 'is-active' : ''}" data-sort-val="${option.value}">${escapeHtml(option.label)}</button>`
+      )).join('');
+    } else if (elSortDropdown && viewName === 'clients' && clientsSortDropdownInitialHtml) {
+      elSortDropdown.innerHTML = clientsSortDropdownInitialHtml;
+      $$("[data-sort-val]", elSortDropdown).forEach((button) => {
+        button.classList.toggle("is-active", button.dataset.sortVal === state.sort);
+      });
+    }
     if (elBannersSwitchWrap) elBannersSwitchWrap.classList.toggle('hidden', viewName !== 'banners');
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
     if (elImportantMessagesSwitchWrap) elImportantMessagesSwitchWrap.classList.toggle('hidden', viewName !== 'important-messages');
     if (elImportantMessagesEnabledSwitch) elImportantMessagesEnabledSwitch.checked = state.importantMessagesEnabled === true;
-    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings');
+    if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings' || viewName === 'subscription-history');
     if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.toggle('hidden', viewName !== 'important-messages');
-    
+
     syncBonusToolbarState();
     syncBonusMenuState();
 
@@ -22465,6 +24707,22 @@
       renderBonusReferralsList();
     } else if (viewName === 'bonus-settings') {
       renderBonusSettings();
+    } else if (viewName === 'subscription-history') {
+      window.SharedProductDetails?.preload?.().catch(console.error);
+      loadCatalogCategories().catch(console.error);
+      renderSubscriptionHistory();
+      if (!state.subscriptionHistoryLoaded && !state.subscriptionHistoryLoading) {
+        loadSubscriptionHistory().catch(console.error);
+      }
+    } else if (viewName === 'subscription-settings') {
+      window.SharedProductDetails?.preload?.().catch(console.error);
+      loadCatalogCategories().catch(console.error);
+      renderSubscriptionPlans();
+      if (!state.subscriptionPlansLoaded && !state.subscriptionPlansLoading) {
+        loadSubscriptionPlans().catch(console.error);
+      }
+    } else if (viewName === 'subscription-info') {
+      renderTabs();
     } else if (viewName === 'clients') {
       maybeLoadMoreClientsOnScroll();
       ensureClientsScrollable().catch(console.error);
@@ -22474,11 +24732,21 @@
     updateRightPanel();
   }
 
+  function openMarketingCenter(viewName, title) {
+    switchView(viewName);
+    if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+      window.__adminMobilePages.openCenter(title || 'Маркетинг');
+    }
+  }
+
   function updateRightPanel() {
     syncDiscountToolbarState();
     const isBonusCardsView = state.currentView === 'bonus-cards';
     const isBonusReferralsView = state.currentView === 'bonus-referrals';
     const isBonusSettingsView = state.currentView === 'bonus-settings';
+    const isSubscriptionHistoryView = state.currentView === 'subscription-history';
+    const isSubscriptionSettingsView = state.currentView === 'subscription-settings';
+    const isSubscriptionInfoView = state.currentView === 'subscription-info';
     const hasBonusReferralCardTab = tabsState.tabs.some((tab) => tab.type === 'bonus-referral-card');
     const hasBonusSettingsBrandTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-brand');
     const hasBonusSettingsCoinTab = tabsState.tabs.some((tab) => tab.type === 'bonus-settings-coin');
@@ -22487,7 +24755,7 @@
     const isHomeBtnView = isBonusReferralsView || isBonusSettingsView;
     const hasVisibleHomeBtnTab = isBonusReferralsView ? hasBonusReferralCardTab : isBonusSettingsView ? (hasBonusSettingsBrandTab || hasBonusSettingsCoinTab || hasBonusSettingsFavoriteCategoriesTab || hasBonusSettingsModalsTab) : false;
     if (clientTabsHeader) {
-      clientTabsHeader.classList.toggle('hidden', isHomeBtnView ? false : tabsState.tabs.length === 0);
+      clientTabsHeader.classList.toggle('hidden', isHomeBtnView ? !hasVisibleHomeBtnTab : tabsState.tabs.length === 0);
     }
     if (clientTabsHomeBtn) {
       clientTabsHomeBtn.classList.toggle('hidden', !isHomeBtnView);
@@ -22520,6 +24788,15 @@
       if (bonusLevelEmpty) bonusLevelEmpty.classList.toggle('hidden', state.currentView !== 'bonus-cards');
       if (bonusReferralsEmpty) bonusReferralsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-referrals');
       if (bonusSettingsEmpty) bonusSettingsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-settings');
+      if (subscriptionHistoryEmpty) subscriptionHistoryEmpty.classList.toggle('hidden', state.currentView !== 'subscription-history');
+      if (subscriptionPlanEmpty) subscriptionPlanEmpty.classList.toggle('hidden', state.currentView !== 'subscription-settings');
+      if (subscriptionHistoryInfoWrap) subscriptionHistoryInfoWrap.classList.add('hidden');
+      if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.add('hidden');
+      if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.add('hidden');
+      if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.add('hidden');
+      if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.add('hidden');
+      if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.add('hidden');
+      if (subscriptionInfoEmptyWrap) subscriptionInfoEmptyWrap.classList.add('hidden');
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
@@ -22545,6 +24822,12 @@
     const isBonusSettingsCoinTab = activeTab?.type === 'bonus-settings-coin';
     const isBonusSettingsFavoriteCategoriesTab = activeTab?.type === 'bonus-settings-favorite-categories';
     const isBonusSettingsModalsTab = activeTab?.type === 'bonus-settings-modals';
+    const isSubscriptionHistoryTab = activeTab?.type === 'subscription-history';
+    const isSubscriptionPlanTab = activeTab?.type === 'subscription-plan';
+    const isSubscriptionGlobalSettingsTab = activeTab?.type === 'subscription-global-settings';
+    const isSubscriptionInfoTab = activeTab?.type === 'subscription-info';
+    const isSubscriptionFaqTab = isSubscriptionInfoTab && activeTab?.id === 'faq';
+    const isSubscriptionAboutTab = isSubscriptionInfoTab && activeTab?.id === 'about';
     const hasClientId = Number(state.activeClientId || 0) > 0;
     const noTabs = !activeTab;
     // In chat mode right panel must be driven only by right tabs state.
@@ -22557,7 +24840,7 @@
       && hasClientId
       && state.currentView === 'clients';
 
-    if (isBonusCardsView || isBonusReferralsView || isBonusSettingsView) {
+    if (isBonusCardsView || isBonusReferralsView || isBonusSettingsView || isSubscriptionHistoryView || isSubscriptionSettingsView || isSubscriptionInfoView) {
       if (clientEmpty) clientEmpty.classList.add('hidden');
       if (clientInfoWrap) clientInfoWrap.classList.add('hidden');
       if (clientOrderInfoWrap) clientOrderInfoWrap.classList.add('hidden');
@@ -22580,6 +24863,8 @@
       if (bonusSettingsEmpty) {
         bonusSettingsEmpty.classList.toggle('hidden', state.currentView !== 'bonus-settings' || !!activeTab);
       }
+      if (subscriptionHistoryEmpty) subscriptionHistoryEmpty.classList.toggle('hidden', state.currentView !== 'subscription-history' || isSubscriptionHistoryTab);
+      if (subscriptionPlanEmpty) subscriptionPlanEmpty.classList.toggle('hidden', state.currentView !== 'subscription-settings' || isSubscriptionPlanTab || isSubscriptionGlobalSettingsTab);
       if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.toggle('hidden', !isBonusReferralCardTab || state.currentView !== 'bonus-referrals');
       if (bonusSettingsBrandWrap) bonusSettingsBrandWrap.classList.toggle('hidden', !isBonusSettingsBrandTab || state.currentView !== 'bonus-settings');
       if (bonusSettingsCoinWrap) bonusSettingsCoinWrap.classList.toggle('hidden', !isBonusSettingsCoinTab || state.currentView !== 'bonus-settings');
@@ -22588,12 +24873,38 @@
       if (state.currentView === 'bonus-referrals') renderBonusReferralRightHome();
       if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
       if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.toggle('hidden', !isBonusLevelTab || state.currentView !== 'bonus-cards');
+      const isSubscriptionView = isSubscriptionHistoryView || isSubscriptionSettingsView || isSubscriptionInfoView;
+      if (subscriptionHistoryInfoWrap) subscriptionHistoryInfoWrap.classList.toggle('hidden', !isSubscriptionHistoryTab || !isSubscriptionView);
+      if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.toggle('hidden', !isSubscriptionHistoryTab || !isSubscriptionView);
+      if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.toggle('hidden', !isSubscriptionPlanTab || !isSubscriptionView);
+      if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.toggle('hidden', !isSubscriptionPlanTab || !isSubscriptionView);
+      if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.toggle('hidden', !isSubscriptionGlobalSettingsTab || !isSubscriptionView);
+      if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.toggle('hidden', !isSubscriptionGlobalSettingsTab || !isSubscriptionView);
+      if (subscriptionInfoEmptyWrap) subscriptionInfoEmptyWrap.classList.toggle('hidden', !isSubscriptionInfoTab || isSubscriptionFaqTab || isSubscriptionAboutTab || state.currentView !== 'subscription-info');
+      if (subscriptionFaqWrap) subscriptionFaqWrap.classList.toggle('hidden', !isSubscriptionFaqTab || state.currentView !== 'subscription-info');
+      if (subscriptionFaqFooter) subscriptionFaqFooter.classList.toggle('hidden', !isSubscriptionFaqTab || state.currentView !== 'subscription-info');
+      if (subscriptionInfoSlidesWrap) subscriptionInfoSlidesWrap.classList.toggle('hidden', !isSubscriptionAboutTab || state.currentView !== 'subscription-info');
+      if (subscriptionInfoSlidesFooter) subscriptionInfoSlidesFooter.classList.toggle('hidden', !isSubscriptionAboutTab || state.currentView !== 'subscription-info');
+      if (subscriptionInfoEmptyText && isSubscriptionInfoTab) subscriptionInfoEmptyText.textContent = activeTab?.placeholder || '';
       if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
       return;
     }
 
     if (clientEmpty) clientEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'clients');
     if (bonusReferralsEmpty) bonusReferralsEmpty.classList.add('hidden');
+    if (subscriptionHistoryEmpty) subscriptionHistoryEmpty.classList.add('hidden');
+    if (subscriptionPlanEmpty) subscriptionPlanEmpty.classList.add('hidden');
+    if (subscriptionHistoryInfoWrap) subscriptionHistoryInfoWrap.classList.add('hidden');
+    if (subscriptionHistoryInfoFooter) subscriptionHistoryInfoFooter.classList.add('hidden');
+    if (subscriptionPlanEditorWrap) subscriptionPlanEditorWrap.classList.add('hidden');
+    if (subscriptionPlanEditorFooter) subscriptionPlanEditorFooter.classList.add('hidden');
+    if (subscriptionGlobalSettingsWrap) subscriptionGlobalSettingsWrap.classList.add('hidden');
+    if (subscriptionGlobalSettingsFooter) subscriptionGlobalSettingsFooter.classList.add('hidden');
+      if (subscriptionInfoEmptyWrap) subscriptionInfoEmptyWrap.classList.add('hidden');
+      if (subscriptionFaqWrap) subscriptionFaqWrap.classList.add('hidden');
+      if (subscriptionFaqFooter) subscriptionFaqFooter.classList.add('hidden');
+      if (subscriptionInfoSlidesWrap) subscriptionInfoSlidesWrap.classList.add('hidden');
+      if (subscriptionInfoSlidesFooter) subscriptionInfoSlidesFooter.classList.add('hidden');
     if (bonusReferralCardInfoWrap) bonusReferralCardInfoWrap.classList.add('hidden');
     if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !(isClientTab || forceClientPanelWithoutTabs));
     if (clientOrderInfoWrap) clientOrderInfoWrap.classList.toggle('hidden', !isOrderTab);
@@ -23001,7 +25312,7 @@
           if (normalizedDays !== '') {
             value = `-${normalizedDays}d`;
           }
-        } else if (definition.kind === 'enum' || definition.kind === 'entity') {
+        } else if (definition.kind === 'enum' || definition.kind === 'entity' || definition.kind === 'event') {
           value = String(row.querySelector('.rule-value-select')?.dataset?.value || '');
         } else {
           value = String(row.querySelector('.rule-value')?.value || '').trim();
@@ -24288,6 +26599,90 @@
     await selectActiveClientOrderStatus(nextStatusId);
   }
 
+  function renderClientActiveOrder() {
+    if (!clientActiveOrderCard) return;
+    const order = state.clientActiveOrder;
+    clientActiveOrderCard.classList.toggle('hidden', !order);
+    if (!order) return;
+    clientActiveOrderCard.innerHTML = `<strong>Текущий заказ #${escapeHtml(order.id)}</strong><div class="muted">${escapeHtml(order.status_title || 'В работе')} · ${escapeHtml(fmtDateTime(order.created_at))}</div><div>${money(order.total_price || 0)}</div>`;
+    clientActiveOrderCard.onclick = () => openOrderTab(order.id);
+  }
+
+  async function loadClientActiveOrder(clientId, options = {}) {
+    const cached = getCachedClientDetails(clientId);
+    if (options.preferCache !== false && cached?.activeOrder) {
+      state.clientActiveOrder = cached.activeOrder;
+      renderClientActiveOrder();
+    }
+    if (options.refresh === false) return;
+    try {
+      const json = await apiJson(`/api/admin/clients/${clientId}/orders/header-candidate`);
+      state.clientActiveOrder = json?.data || null;
+      setCachedClientDetails(clientId, { activeOrder: state.clientActiveOrder });
+      renderClientActiveOrder();
+    } catch (err) { console.error(err); }
+  }
+
+  function renderClientCompletedOrders() {
+    if (!clientCompletedOrdersList) return;
+    clientCompletedOrdersList.innerHTML = '';
+    state.clientCompletedOrders.forEach((o) => {
+      const card = document.createElement('div');
+      card.className = 'shop-profile-card order-client-history-card';
+      card.innerHTML = `<div><strong>Заказ #${escapeHtml(o.id)}</strong> <span class="muted">• ${escapeHtml(o.status_title || '—')}</span></div><div class="muted">${escapeHtml(fmtDateTime(o.created_at))}</div><div><strong>${money(o.total_price || 0)}</strong></div>`;
+      card.onclick = () => openOrderTab(o.id);
+      clientCompletedOrdersList.appendChild(card);
+    });
+    if (clientCompletedOrdersMore) clientCompletedOrdersMore.classList.toggle('hidden', !state.clientCompletedHasMore);
+  }
+
+  async function loadMoreClientCompletedOrders() {
+    if (!state.activeClientId || state.clientCompletedLoading || !state.clientCompletedHasMore && state.clientCompletedNextOffset) return;
+    state.clientCompletedLoading = true;
+    try {
+      const offset = state.clientCompletedNextOffset;
+      const json = await apiJson(`/api/admin/clients/${state.activeClientId}/orders?view=completed&limit=10&offset=${offset}`);
+      const rows = Array.isArray(json.data) ? json.data : [];
+      state.clientCompletedOrders.push(...rows);
+      state.clientCompletedNextOffset = Number(json.next_offset ?? offset + rows.length);
+      state.clientCompletedHasMore = json.has_more === true;
+      renderClientCompletedOrders();
+      const cached = getCachedClientDetails(state.activeClientId) || {};
+      setCachedClientDetails(state.activeClientId, { completedOrders: state.clientCompletedOrders, completedNextOffset: state.clientCompletedNextOffset, completedHasMore: state.clientCompletedHasMore });
+    } catch (err) {
+      console.error(err);
+      if (!state.clientCompletedOrders.length && clientCompletedOrdersList) clientCompletedOrdersList.innerHTML = '<div class="muted">Ошибка загрузки истории</div>';
+    } finally { state.clientCompletedLoading = false; }
+  }
+
+  if (clientCompletedOrdersAccordion) clientCompletedOrdersAccordion.addEventListener('toggle', () => {
+    if (clientCompletedOrdersAccordion.open && !state.clientCompletedOrders.length) void loadMoreClientCompletedOrders();
+  });
+  if (clientCompletedOrdersMore) clientCompletedOrdersMore.addEventListener('click', () => void loadMoreClientCompletedOrders());
+
+  let clientMobilePaymentModalOrigin = null;
+
+  function mountClientMobilePaymentPage() {
+    const modal = document.getElementById("appModal");
+    if (!modal || clientMobilePaymentModalOrigin) return;
+    const activeColumn = document.body.classList.contains("admin-mobile-view-right")
+      ? document.querySelector(".page-col-right")
+      : document.querySelector(".page-col-center");
+    if (!activeColumn || !modal.parentNode) return;
+    clientMobilePaymentModalOrigin = document.createComment("client-mobile-payment-modal-origin");
+    modal.parentNode.insertBefore(clientMobilePaymentModalOrigin, modal);
+    activeColumn.appendChild(modal);
+  }
+
+  function restoreClientMobilePaymentModal() {
+    const modal = document.getElementById("appModal");
+    if (modal && clientMobilePaymentModalOrigin?.parentNode) {
+      clientMobilePaymentModalOrigin.parentNode.insertBefore(modal, clientMobilePaymentModalOrigin);
+      clientMobilePaymentModalOrigin.remove();
+    }
+    clientMobilePaymentModalOrigin = null;
+  }
+
   async function openClientOrderPaymentDialog(order) {
     const targetOrder = order || getActiveClientOrder();
     const orderId = Number(targetOrder?.id || 0);
@@ -24314,6 +26709,27 @@
       return;
     }
 
+    const useMobilePaymentPage = isMobile()
+      && document.body.classList.contains("admin-mobile-pages")
+      && !!window.__adminMobilePages;
+    const paymentPageOptions = useMobilePaymentPage
+      ? {
+          onOpen() {
+            document.body.classList.add("admin-payment-page-open");
+            mountClientMobilePaymentPage();
+            window.__adminMobilePages.openSubview(
+              `Принять оплату №${String(Number(targetOrder?.id || 0) || "—")}`,
+              () => window.AppModal?.close?.("back")
+            );
+          },
+          onClose() {
+            window.__adminMobilePages?.closeSubview?.();
+            restoreClientMobilePaymentModal();
+            document.body.classList.remove("admin-payment-page-open");
+          },
+        }
+      : {};
+
     await sharedOrderPayment.open({
       order: targetOrder,
       apiJson,
@@ -24333,6 +26749,7 @@
       onError(err) {
         console.error("clients payment modal error:", err);
       },
+      ...paymentPageOptions,
     });
   }
 
@@ -24466,7 +26883,7 @@
     state.activeOrder = null;
     forceShowClientProfilePanel();
     const activeId = Number(state.activeClientId || 0);
-    const cached = getCachedClientDetails(activeId);
+    const cached = getCachedClientDetails(activeId) || await hydrateClientCache(activeId);
     const hasCachedAddresses = !!(cached && Array.isArray(cached.addresses) && cached.addresses.length);
     const hasCachedOrders = !!(cached && Array.isArray(cached.orders) && cached.orders.length);
     const useCacheOnlyForPreload = isChatBridgeMode && !!cached;
@@ -24484,6 +26901,12 @@
       renderAddresses();
       renderClientOrders();
       renderClientDiscounts();
+      state.clientActiveOrder = cached.activeOrder || null;
+      state.clientCompletedOrders = Array.isArray(cached.completedOrders) ? cached.completedOrders.slice() : [];
+      state.clientCompletedNextOffset = Number(cached.completedNextOffset || 0);
+      state.clientCompletedHasMore = cached.completedHasMore === true;
+      renderClientActiveOrder();
+      renderClientCompletedOrders();
     }
 
     let loadedClient = null;
@@ -24519,25 +26942,25 @@
     showOrdersList();
     setContentTab("addresses");
 
+    if (!cached) {
+      state.clientCompletedOrders = [];
+      state.clientCompletedNextOffset = 0;
+      state.clientCompletedHasMore = false;
+    }
+    if (!cached) {
+      if (clientCompletedOrdersList) clientCompletedOrdersList.innerHTML = '';
+      if (clientCompletedOrdersMore) clientCompletedOrdersMore.classList.add('hidden');
+    } else {
+      renderClientCompletedOrders();
+    }
+
     const preloadTasks = [
       loadAddresses({
         preferCache: true,
         refresh: useCacheOnlyForPreload ? !hasCachedAddresses : true,
       }),
-      loadClientDiscounts({
-        preferCache: true,
-        refresh: true,
-      }),
-      loadClientOrders({
-        preferCache: true,
-        refresh: useCacheOnlyForPreload ? !hasCachedOrders : true,
-      }),
+      loadClientActiveOrder(activeId, { preferCache: true, refresh: !useCacheOnlyForPreload || !cached?.activeOrder }),
     ];
-    preloadTasks.push(
-      prefetchClientBenefitsForCustomer(activeId, {
-        modes: ["customer", "all"],
-      })
-    );
     await Promise.allSettled(preloadTasks);
     if (requestToken !== clientProfileRequestToken) return;
     if (!isExpectedClientTabActive()) return;
@@ -24658,7 +27081,13 @@
     if (opts.forceRefresh === true) {
       activateOrderById(id).catch(console.error);
     }
-    if (isMobile() && opts.skipMobileSheet !== true) openSheet();
+    if (isMobile() && opts.skipMobileSheet !== true) {
+      if (document.body.classList.contains('admin-mobile-pages') && window.__adminMobilePages) {
+        window.__adminMobilePages.openRight(title || 'Клиент');
+      } else {
+        openSheet();
+      }
+    }
   }
 
   async function findClientIdByPhone(phoneValue) {
@@ -24714,11 +27143,33 @@
     qs.set("limit", String(limit));
     qs.set("offset", String(offset));
     qs.set("sort", state.sort || "last_desc");
+    qs.set("mode", "lightweight");
     if (state.q) qs.set("q", state.q);
     if (state.activeFilter === "custom" && state.activeCustomFilterId) {
       qs.set("filter_id", String(state.activeCustomFilterId));
     }
     return qs;
+  }
+
+  function clientsListCacheKey() {
+    const storeId = localStorage.getItem('activeStoreId') || '1';
+    const qs = buildClientsListQuery(0, CLIENTS_PAGE_LIMIT);
+    qs.delete('offset');
+    return `${CLIENTS_LIST_CACHE_PREFIX}${storeId}:${qs.toString()}`;
+  }
+
+  async function readClientsListCache() {
+    if (!window.AdminPersistentCache) return null;
+    try { return await window.AdminPersistentCache.read(clientsListCacheKey()); }
+    catch (err) { console.warn('Clients list cache read failed:', err); return null; }
+  }
+
+  function writeClientsListCache() {
+    if (!window.AdminPersistentCache) return;
+    const data = { query: clientsListCacheKey(), rows: state.clients, offset: state.clientsOffset, total: state.clientsTotal, hasMore: state.clientsHasMore };
+    void window.AdminPersistentCache.write(clientsListCacheKey(), data)
+      .then(() => window.AdminPersistentCache.prunePrefix(CLIENTS_LIST_CACHE_PREFIX, CLIENTS_LIST_CACHE_MAX_QUERIES))
+      .catch((err) => console.warn('Clients list cache write failed:', err));
   }
 
   async function loadMoreClients() {
@@ -24739,9 +27190,10 @@
       state.clients = (state.clients || []).concat(append);
       state.clientsOffset += chunk.length;
       state.clientsTotal = Number(json.total || 0);
-      state.clientsHasMore = chunk.length > 0 && state.clients.length < state.clientsTotal;
+      state.clientsHasMore = json.has_more === true || (json.has_more === undefined && chunk.length > 0 && state.clients.length < state.clientsTotal);
 
       appendClients(append);
+      writeClientsListCache();
       refreshCustomFilterCountsFromClientList();
     } finally {
       if (token === clientsRequestToken) {
@@ -24771,17 +27223,27 @@
   async function loadClients() {
     clientsRequestToken += 1;
     state.clientsLoading = false;
-    state.clients = [];
-    state.clientsOffset = 0;
-    state.clientsTotal = 0;
-    state.clientsHasMore = true;
+    const cached = await readClientsListCache();
+    const cachedRows = Array.isArray(cached?.rows) ? cached.rows : [];
+    state.clients = cachedRows;
+    state.clientsOffset = Number(cached?.offset || cachedRows.length || 0);
+    state.clientsTotal = Number(cached?.total || 0);
+    state.clientsHasMore = cached?.hasMore !== false;
+    rememberCustomers(cachedRows);
     renderClients();
     refreshCustomFilterCountsFromClientList();
 
-    await loadTotals();
     renderFilters();
-
+    const cachedOffset = state.clientsOffset;
+    if (cachedRows.length) {
+      state.clientsOffset = 0;
+      state.clientsHasMore = true;
+    }
     await loadMoreClients();
+    if (cachedRows.length) {
+      state.clientsOffset = Math.max(cachedOffset, state.clientsOffset);
+      writeClientsListCache();
+    }
     await ensureClientsScrollable();
   }
 
@@ -24797,6 +27259,11 @@
   }
 
   const onSearch = debounce(() => {
+    if (state.currentView === 'subscription-history') {
+      state.subscriptionSearchQuery = elSearch ? elSearch.value.trim() : "";
+      renderSubscriptionHistory();
+      return;
+    }
     state.q = elSearch ? elSearch.value.trim() : "";
     loadClients().catch(console.error);
   }, 250);
@@ -24857,6 +27324,13 @@
   function closeSearch() {
     if (elSearchWrap) elSearchWrap.classList.remove("is-open");
     if (elSearch) elSearch.value = "";
+    if (state.currentView === 'subscription-history') {
+      if (state.subscriptionSearchQuery) {
+        state.subscriptionSearchQuery = "";
+        renderSubscriptionHistory();
+      }
+      return;
+    }
     if (state.q) {
       state.q = "";
       loadClients().catch(console.error);
@@ -24902,6 +27376,15 @@
       const btn = e.target.closest("[data-sort-val]");
       if (!btn) return;
       e.stopPropagation();
+      if (state.currentView === 'subscription-history') {
+        state.subscriptionSort = btn.dataset.sortVal || "created_desc";
+        $$("[data-sort-val]", elSortDropdown).forEach((b) => {
+          b.classList.toggle("is-active", b.dataset.sortVal === state.subscriptionSort);
+        });
+        closeSortDropdown();
+        renderSubscriptionHistory();
+        return;
+      }
       state.sort = btn.dataset.sortVal || "last_desc";
       // update active state
       $$("[data-sort-val]", elSortDropdown).forEach((b) => {
@@ -24932,6 +27415,8 @@
         openDiscountEditor(null);
       } else if (state.currentView === 'important-messages') {
         openImportantMessageEditor(null);
+      } else if (state.currentView === 'subscription-settings') {
+        openSubscriptionPlanTab('new');
       } else {
         // TODO: открыть форму добавления клиента
       }
@@ -24941,33 +27426,248 @@
   // Кнопка "Категории" внутри аккордеона
   if (elOpenFilterCategoriesBtn) {
     elOpenFilterCategoriesBtn.addEventListener('click', () => {
-      switchView('filter-categories');
+      openMarketingCenter('filter-categories', 'Выборки');
     });
   }
 
   if (elBonusCardsBtn) {
     elBonusCardsBtn.addEventListener('click', () => {
-      switchView('bonus-cards');
+      openMarketingCenter('bonus-cards', 'Базовый тариф');
+    });
+  }
+
+  if (elBonusPaidTariffBtn) {
+    elBonusPaidTariffBtn.addEventListener('click', () => {
+      openMarketingCenter('bonus-settings', 'Платный тариф');
+      openBonusSettingsBrandTab();
     });
   }
 
   if (elImportantMessagesBtn) {
     elImportantMessagesBtn.addEventListener('click', () => {
-      switchView('important-messages');
+      openMarketingCenter('important-messages', 'Promo рассылки');
     });
   }
 
   if (elBonusReferralsBtn) {
     elBonusReferralsBtn.addEventListener('click', () => {
-      switchView('bonus-referrals');
+      openMarketingCenter('bonus-referrals', 'Рефералы');
+    });
+  }
+
+  if (elBonusProgramsBtn) {
+    elBonusProgramsBtn.addEventListener('click', () => {
+      openMarketingCenter('bonus-cards', 'Бонусы');
     });
   }
 
   if (elBonusSettingsNavBtn) {
     elBonusSettingsNavBtn.addEventListener('click', () => {
-      switchView('bonus-settings');
+      openMarketingCenter('bonus-settings', 'Настройки');
     });
   }
+
+  if (elSubscriptionHistoryBtn) {
+    elSubscriptionHistoryBtn.addEventListener('click', () => {
+      openMarketingCenter('subscription-history', 'История подписок');
+    });
+  }
+
+  if (elSubscriptionSettingsBtn) {
+    elSubscriptionSettingsBtn.addEventListener('click', () => {
+      openMarketingCenter('subscription-settings', 'Настройка подписки');
+    });
+  }
+
+  if (elSubscriptionInfoBtn) {
+    elSubscriptionInfoBtn.addEventListener('click', () => {
+      openMarketingCenter('subscription-info', 'Информация');
+    });
+  }
+  if (subscriptionPreviewInfoBtn) {
+    subscriptionPreviewInfoBtn.addEventListener('click', openSubscriptionGlobalSettingsTab);
+  }
+  if (subscriptionAboutInfoBtn) {
+    subscriptionAboutInfoBtn.addEventListener('click', () => {
+      openSubscriptionInfoTab('about', 'Что такое подписка', '');
+    });
+  }
+  if (subscriptionFaqInfoBtn) {
+    subscriptionFaqInfoBtn.addEventListener('click', () => {
+      openSubscriptionInfoTab('faq', 'Часто задаваемые вопросы', '');
+      if (state.subscriptionStorefrontSettingsDraft) renderSubscriptionFaq();
+    });
+  }
+  if (subscriptionFaqAddBtn) {
+    subscriptionFaqAddBtn.addEventListener('click', () => {
+      if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
+      state.subscriptionStorefrontSettingsDraft.faq_items.push({ id: `faq-${Date.now()}-${Math.random().toString(36).slice(2)}`, question: '', answer: '' });
+      renderSubscriptionFaq();
+    });
+  }
+  if (subscriptionFaqItems) {
+    subscriptionFaqItems.addEventListener('input', (event) => {
+      const item = event.target.closest('[data-faq-id]');
+      if (!item || !state.subscriptionStorefrontSettingsDraft) return;
+      const faq = state.subscriptionStorefrontSettingsDraft.faq_items.find((entry) => entry.id === item.dataset.faqId);
+      if (!faq) return;
+      if (event.target.matches('[data-faq-question]')) faq.question = event.target.value;
+      if (event.target.matches('[data-faq-answer]')) faq.answer = event.target.value;
+    });
+    subscriptionFaqItems.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-faq-delete]');
+      if (!button || !state.subscriptionStorefrontSettingsDraft) return;
+      const item = button.closest('[data-faq-id]');
+      state.subscriptionStorefrontSettingsDraft.faq_items = state.subscriptionStorefrontSettingsDraft.faq_items.filter((entry) => entry.id !== item.dataset.faqId);
+      renderSubscriptionFaq();
+    });
+    subscriptionFaqItems.addEventListener('input', (event) => {
+      if (!event.target.matches('[data-faq-answer]')) return;
+      event.target.style.height = 'auto';
+      event.target.style.height = `${event.target.scrollHeight}px`;
+    });
+    let draggedFaqIndex = null;
+    let draggedFaqPosition = 'before';
+    subscriptionFaqItems.addEventListener('dragstart', (event) => {
+      const handle = event.target.closest('.subscription-faq-drag');
+      if (!handle) { event.preventDefault(); return; }
+      const card = handle.closest('[data-faq-id]');
+      draggedFaqIndex = card?.dataset.faqId || null;
+      card?.classList.add('is-dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedFaqIndex);
+    });
+    subscriptionFaqItems.addEventListener('dragover', (event) => {
+      if (draggedFaqIndex === null) return;
+      event.preventDefault();
+      const target = event.target.closest('[data-faq-id]');
+      subscriptionFaqItems.querySelectorAll('.is-drag-over-before,.is-drag-over-after').forEach((item) => item.classList.remove('is-drag-over-before', 'is-drag-over-after'));
+      if (!target || target.dataset.faqId === draggedFaqIndex) return;
+      const rect = target.getBoundingClientRect();
+      draggedFaqPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+      target.classList.add(draggedFaqPosition === 'before' ? 'is-drag-over-before' : 'is-drag-over-after');
+    });
+    subscriptionFaqItems.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const target = event.target.closest('[data-faq-id]');
+      const targetId = target?.dataset.faqId;
+      if (!draggedFaqIndex || !targetId || targetId === draggedFaqIndex) return;
+      const items = state.subscriptionStorefrontSettingsDraft.faq_items;
+      const sourceIndex = items.findIndex((item) => item.id === draggedFaqIndex);
+      const targetIndex = items.findIndex((item) => item.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return;
+      const [moved] = items.splice(sourceIndex, 1);
+      const nextTargetIndex = items.findIndex((item) => item.id === targetId);
+      items.splice(nextTargetIndex + (draggedFaqPosition === 'after' ? 1 : 0), 0, moved);
+      renderSubscriptionFaq();
+    });
+    subscriptionFaqItems.addEventListener('dragend', () => {
+      draggedFaqIndex = null;
+      draggedFaqPosition = 'before';
+      subscriptionFaqItems.querySelectorAll('.is-dragging,.is-drag-over-before,.is-drag-over-after').forEach((item) => item.classList.remove('is-dragging', 'is-drag-over-before', 'is-drag-over-after'));
+    });
+  }
+  if (subscriptionFaqTitleInput) subscriptionFaqTitleInput.addEventListener('input', () => {
+    if (state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft.faq_title = subscriptionFaqTitleInput.value;
+  });
+  if (subscriptionFaqCancelBtn) subscriptionFaqCancelBtn.addEventListener('click', () => {
+    state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings || {});
+    closeSubscriptionActiveTab();
+  });
+  if (subscriptionFaqSaveBtn) subscriptionFaqSaveBtn.addEventListener('click', () => saveSubscriptionStorefrontSettings().catch(console.error));
+  if (subscriptionInfoSlideAddBtn) subscriptionInfoSlideAddBtn.addEventListener('click', () => {
+    if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
+    const previousSlide = state.subscriptionStorefrontSettingsDraft.info_slides.at(-1);
+    const slide = { id: `slide-${Date.now()}-${Math.random().toString(36).slice(2)}`, image_url: '', description: '', button_text: '', button_color: '#ff6b00', button_text_color: '#ffffff', show_description: true, show_button: true, show_shadow: true, event_enabled: false, event_type: 'none', event_url: '', duration_seconds: previousSlide?.duration_seconds || 5 };
+    state.subscriptionStorefrontSettingsDraft.info_slides.push(slide);
+    activeSubscriptionInfoSlideId = slide.id;
+    renderSubscriptionInfoSlides();
+  });
+  if (subscriptionInfoSlidesList) subscriptionInfoSlidesList.addEventListener('click', (event) => {
+    const deleteButton = event.target.closest('[data-info-slide-delete]');
+    if (deleteButton) {
+      const slides = state.subscriptionStorefrontSettingsDraft?.info_slides || [];
+      const index = slides.findIndex((item) => item.id === deleteButton.dataset.infoSlideDelete);
+      if (index < 0) return;
+      slides.splice(index, 1);
+      activeSubscriptionInfoSlideId = slides[Math.min(index, slides.length - 1)]?.id || null;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    const row = event.target.closest('[data-info-slide-id]');
+    if (!row) return;
+    if (activeSubscriptionInfoSlideId === row.dataset.infoSlideId) {
+      if (expandedSubscriptionInfoSlideId === activeSubscriptionInfoSlideId && event.target.closest('.subscription-info-slide-preview-content')) return;
+      expandedSubscriptionInfoSlideId = expandedSubscriptionInfoSlideId === activeSubscriptionInfoSlideId ? null : activeSubscriptionInfoSlideId;
+    } else {
+      activeSubscriptionInfoSlideId = row.dataset.infoSlideId;
+      expandedSubscriptionInfoSlideId = null;
+    }
+    renderSubscriptionInfoSlides();
+  });
+  if (subscriptionInfoSlideEditor) subscriptionInfoSlideEditor.addEventListener('input', (event) => {
+    const slide = state.subscriptionStorefrontSettingsDraft?.info_slides.find((item) => item.id === activeSubscriptionInfoSlideId);
+    if (!slide) return;
+    if (event.target.matches('[data-info-slide-description]')) {
+      slide.description = event.target.value;
+      resizeSubscriptionInfoSlideDescription(event.target);
+    }
+    if (event.target.matches('[data-info-slide-button-text]')) slide.button_text = event.target.value;
+    if (event.target.matches('[data-info-slide-button-color]')) slide.button_color = event.target.value;
+    if (event.target.matches('[data-info-slide-button-text-color]')) slide.button_text_color = event.target.value;
+    if (event.target.matches('[data-info-slide-duration]')) slide.duration_seconds = Math.min(60, Math.max(1, Math.floor(Number(event.target.value || 5))));
+    const colorValue = event.target.closest('.subscription-storefront-color-field')?.querySelector('span');
+    if (colorValue && event.target.matches('input[type="color"]')) colorValue.textContent = event.target.value;
+    if (event.target.matches('[data-info-slide-description],[data-info-slide-button-text],[data-info-slide-button-color],[data-info-slide-button-text-color]')) refreshSubscriptionInfoSlidePreview(slide);
+  });
+  if (subscriptionInfoSlideEditor) subscriptionInfoSlideEditor.addEventListener('change', (event) => {
+    const slide = state.subscriptionStorefrontSettingsDraft?.info_slides.find((item) => item.id === activeSubscriptionInfoSlideId);
+    if (!slide) return;
+    if (event.target.matches('[data-info-slide-show-description]')) {
+      slide.show_description = event.target.checked;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-show-button]')) {
+      slide.show_button = event.target.checked;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-show-shadow]')) {
+      slide.show_shadow = event.target.checked;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-event-enabled]')) {
+      slide.event_enabled = event.target.checked;
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-event-type]')) {
+      slide.event_type = ['none', 'notification', 'link'].includes(event.target.value) ? event.target.value : 'none';
+      renderSubscriptionInfoSlides();
+      return;
+    }
+    if (event.target.matches('[data-info-slide-event-url]')) {
+      slide.event_url = event.target.value.slice(0, 1000);
+      return;
+    }
+    if (!event.target.matches('[data-info-slide-image]') || !event.target.files?.[0]) return;
+    subscriptionInfoSlideImageUploading = true;
+    renderSubscriptionInfoSlides();
+    uploadTenantAsset('subscription_info_slide_image', event.target.files[0]).then((uploaded) => {
+      const currentSlide = state.subscriptionStorefrontSettingsDraft?.info_slides.find((item) => item.id === activeSubscriptionInfoSlideId);
+      if (currentSlide) { currentSlide.image_url = String(uploaded.url || ''); renderSubscriptionInfoSlides(); }
+    }).catch(console.error).finally(() => {
+      subscriptionInfoSlideImageUploading = false;
+      renderSubscriptionInfoSlides();
+    });
+  });
+  if (subscriptionInfoSlidesSaveBtn) subscriptionInfoSlidesSaveBtn.addEventListener('click', () => saveSubscriptionStorefrontSettings().catch(console.error));
+  if (subscriptionInfoSlidesCancelBtn) subscriptionInfoSlidesCancelBtn.addEventListener('click', () => {
+    state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings || {});
+    closeSubscriptionActiveTab();
+  });
 
   // Кнопка "Скидки" — переключить на view скидок
   if (elAddDiscountBtn) {
@@ -24983,6 +27683,268 @@
       if (state.currentView === 'banners') {
         updateRightPanel();
       }
+    });
+  }
+
+  if (subscriptionHistoryCloseBtn) {
+    subscriptionHistoryCloseBtn.addEventListener('click', closeSubscriptionActiveTab);
+  }
+  if (subscriptionPlanCancelBtn) {
+    subscriptionPlanCancelBtn.addEventListener('click', closeSubscriptionActiveTab);
+  }
+  if (subscriptionPlanSaveBtn) {
+    subscriptionPlanSaveBtn.addEventListener('click', () => saveSubscriptionPlan().catch(console.error));
+  }
+  if (subscriptionGlobalSettingsCancelBtn) {
+    subscriptionGlobalSettingsCancelBtn.addEventListener('click', () => {
+      state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings(state.subscriptionStorefrontSettings || {});
+      closeSubscriptionActiveTab();
+    });
+  }
+  if (subscriptionGlobalSettingsSaveBtn) {
+    subscriptionGlobalSettingsSaveBtn.addEventListener('click', () => {
+      saveSubscriptionStorefrontSettings().catch((error) => {
+        console.error('Failed to save subscription storefront settings:', error);
+        alert('Не удалось сохранить настройки блока подписок');
+      });
+    });
+  }
+  if (subscriptionGlobalSettingsForm) {
+    subscriptionGlobalSettingsForm.addEventListener('input', (event) => {
+      if (!state.subscriptionStorefrontSettingsDraft) state.subscriptionStorefrontSettingsDraft = createSubscriptionStorefrontSettings();
+      const draft = state.subscriptionStorefrontSettingsDraft;
+      const target = event.target;
+      if (target === subscriptionStorefrontActiveSwitch) draft.is_active = target.checked;
+      else if (target === subscriptionStorefrontBackgroundColorInput) draft.background_color = target.value;
+      else if (target === subscriptionStorefrontTitleInput) draft.title = target.value.slice(0, 150);
+      else if (target === subscriptionStorefrontTitleSizeInput) draft.title_font_size = Math.min(48, Math.max(12, Number(target.value || 18)));
+      else if (target === subscriptionStorefrontTitleColorInput) draft.title_color = target.value;
+      else if (target === subscriptionStorefrontDescriptionInput) {
+        const limited = target.value.replace(/\r\n?/g, '\n').split('\n').slice(0, 3).join('\n').slice(0, 500);
+        if (target.value !== limited) target.value = limited;
+        draft.description = limited;
+      } else if (target === subscriptionStorefrontDescriptionSizeInput) draft.description_font_size = Math.min(24, Math.max(10, Number(target.value || 12)));
+      else if (target === subscriptionStorefrontDescriptionColorInput) draft.description_color = target.value;
+      else if (target === subscriptionStorefrontButtonTextInput) draft.button_text = target.value.slice(0, 80);
+      else if (target === subscriptionStorefrontButtonColorInput) draft.button_color = target.value;
+      else return;
+      renderSubscriptionStorefrontSettings();
+    });
+  }
+  if (subscriptionStorefrontImageButton && subscriptionStorefrontImageInput) {
+    subscriptionStorefrontImageButton.addEventListener('click', () => subscriptionStorefrontImageInput.click());
+    subscriptionStorefrontImageInput.addEventListener('change', () => {
+      const file = subscriptionStorefrontImageInput.files?.[0];
+      subscriptionStorefrontImageInput.value = '';
+      uploadSubscriptionStorefrontAsset('subscription_storefront_image', file, 'image_url').catch((error) => {
+        console.error('Subscription storefront image upload failed:', error);
+        alert('Не удалось загрузить изображение блока');
+      });
+    });
+  }
+  if (subscriptionStorefrontImageDeleteBtn) {
+    subscriptionStorefrontImageDeleteBtn.addEventListener('click', () => {
+      if (!state.subscriptionStorefrontSettingsDraft) return;
+      state.subscriptionStorefrontSettingsDraft.image_url = '';
+      renderSubscriptionStorefrontSettings();
+    });
+  }
+  if (subscriptionStorefrontButtonIconButton && subscriptionStorefrontButtonIconInput) {
+    subscriptionStorefrontButtonIconButton.addEventListener('click', () => subscriptionStorefrontButtonIconInput.click());
+    subscriptionStorefrontButtonIconInput.addEventListener('change', () => {
+      const file = subscriptionStorefrontButtonIconInput.files?.[0];
+      subscriptionStorefrontButtonIconInput.value = '';
+      uploadSubscriptionStorefrontAsset('subscription_storefront_button_icon', file, 'button_icon_url').catch((error) => {
+        console.error('Subscription storefront button icon upload failed:', error);
+        alert('Не удалось загрузить иконку кнопки');
+      });
+    });
+  }
+  if (subscriptionStorefrontButtonIconDeleteBtn) {
+    subscriptionStorefrontButtonIconDeleteBtn.addEventListener('click', () => {
+      if (!state.subscriptionStorefrontSettingsDraft) return;
+      state.subscriptionStorefrontSettingsDraft.button_icon_url = '';
+      renderSubscriptionStorefrontSettings();
+    });
+  }
+  if (subscriptionPlanModeTabs) {
+    subscriptionPlanModeTabs.addEventListener('click', (event) => {
+      const button = event.target.closest?.('[data-subscription-mode]');
+      if (!button) return;
+      setSubscriptionPlanMode(button.dataset.subscriptionMode);
+    });
+  }
+  if (subscriptionPlanItemsPerOrderInput) {
+    subscriptionPlanItemsPerOrderInput.addEventListener('input', renderSubscriptionItemsGrid);
+    subscriptionPlanItemsPerOrderInput.addEventListener('change', () => {
+      const normalized = getSubscriptionItemsPerOrderValue();
+      subscriptionPlanItemsPerOrderInput.value = String(normalized);
+      renderSubscriptionItemsGrid();
+    });
+  }
+  if (subscriptionPlanDeliveryCountInput) {
+    subscriptionPlanDeliveryCountInput.addEventListener('input', renderSubscriptionItemsGrid);
+    subscriptionPlanDeliveryCountInput.addEventListener('change', () => {
+      const raw = Number(subscriptionPlanDeliveryCountInput.value || 1);
+      subscriptionPlanDeliveryCountInput.value = String(Math.max(1, Math.floor(Number.isFinite(raw) ? raw : 1)));
+      renderSubscriptionItemsGrid();
+    });
+  }
+  if (subscriptionPlanCustomerSelectDaysSwitch) {
+    subscriptionPlanCustomerSelectDaysSwitch.addEventListener('change', syncSubscriptionPlanModeUi);
+  }
+  if (subscriptionPlanExactItemsSwitch) {
+    subscriptionPlanExactItemsSwitch.addEventListener('change', () => {
+      if (!state.subscriptionPlanDraft) state.subscriptionPlanDraft = createSubscriptionPlanDraft();
+      state.subscriptionPlanDraft.item_selection_mode = subscriptionPlanExactItemsSwitch.checked ? 'exact' : 'up_to';
+    });
+  }
+  if (subscriptionPlanDiscountRewardValueInput) {
+    subscriptionPlanDiscountRewardValueInput.addEventListener('input', recalculateSubscriptionPriceFromDiscount);
+  }
+  if (subscriptionPlanPriceTotalInput) {
+    subscriptionPlanPriceTotalInput.addEventListener('input', recalculateSubscriptionDiscountFromPrice);
+  }
+  if (subscriptionPlanIconButton) {
+    subscriptionPlanIconButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (String(state.subscriptionPlanDraft?.icon_url || '').trim()) openSubscriptionPlanIconPopover();
+      else subscriptionPlanIconInput?.click();
+    });
+  }
+  if (subscriptionPlanIconPopover) {
+    subscriptionPlanIconPopover.addEventListener('click', (event) => {
+      const actionButton = event.target.closest('[data-subscription-icon-action]');
+      if (!actionButton) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const action = actionButton.dataset.subscriptionIconAction;
+      closeSubscriptionPlanIconPopover();
+      if (action === 'upload') subscriptionPlanIconInput?.click();
+      if (action === 'delete' && state.subscriptionPlanDraft) {
+        state.subscriptionPlanDraft.icon_url = '';
+        renderSubscriptionPlanAppearance();
+      }
+    });
+  }
+  if (subscriptionPlanIconInput) {
+    subscriptionPlanIconInput.addEventListener('change', async () => {
+      const file = subscriptionPlanIconInput.files?.[0] || null;
+      subscriptionPlanIconInput.value = '';
+      if (!file || !state.subscriptionPlanDraft) return;
+      subscriptionPlanIconButton?.classList.add('is-loading');
+      try {
+        const uploaded = await apiUploadBannerImages([file]);
+        const iconUrl = String(uploaded?.urls?.[0] || '').trim();
+        if (!iconUrl) throw new Error('SUBSCRIPTION_ICON_UPLOAD_FAILED');
+        state.subscriptionPlanDraft.icon_url = iconUrl;
+        renderSubscriptionPlanAppearance();
+      } catch (error) {
+        console.error('Failed to upload subscription icon:', error);
+        showBonusLevelRequirementsValidationMessage('Не удалось загрузить иконку подписки');
+      } finally {
+        subscriptionPlanIconButton?.classList.remove('is-loading');
+      }
+    });
+  }
+  if (subscriptionPlanThemeColorInput) {
+    subscriptionPlanThemeColorInput.addEventListener('input', () => {
+      if (!state.subscriptionPlanDraft) return;
+      state.subscriptionPlanDraft.theme_color = subscriptionPlanThemeColorInput.value;
+      renderSubscriptionPlanAppearance();
+    });
+  }
+  if (subscriptionPlanForm) {
+    subscriptionPlanForm.addEventListener('click', (event) => {
+      const infoButton = event.target.closest?.('[data-subscription-item-info]');
+      if (infoButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const slot = infoButton.closest('.subscription-item-slot');
+        const popover = slot?.querySelector('[data-subscription-item-info-popover]');
+        const shouldOpen = Boolean(popover?.classList.contains('hidden'));
+        closeSubscriptionItemInfoPopovers();
+        if (popover && shouldOpen) {
+          popover.classList.remove('hidden');
+          const areaRect = (subscriptionPlanForm || document.documentElement).getBoundingClientRect();
+          const anchorRect = infoButton.getBoundingClientRect();
+          const popoverWidth = Math.max(120, Math.min(260, areaRect.width - 24));
+          const minLeft = areaRect.left + 12;
+          const maxLeft = Math.max(minLeft, areaRect.right - popoverWidth - 12);
+          const left = Math.min(Math.max(anchorRect.left, minLeft), maxLeft);
+          popover.style.width = `${popoverWidth}px`;
+          popover.style.left = `${left}px`;
+          popover.style.top = `${anchorRect.bottom + 8}px`;
+          const popoverRect = popover.getBoundingClientRect();
+          if (popoverRect.bottom > window.innerHeight - 12) {
+            popover.style.top = `${Math.max(12, anchorRect.top - popoverRect.height - 8)}px`;
+          }
+          subscriptionItemInfoPopoverTimer = setTimeout(closeSubscriptionItemInfoPopovers, 5000);
+        }
+        return;
+      }
+      closeSubscriptionItemInfoPopovers();
+      const removeButton = event.target.closest?.('[data-subscription-item-remove]');
+      if (removeButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const slot = removeButton.closest('.subscription-item-slot');
+        const day = Number(slot?.dataset.dayIndex || 1);
+        const position = Number(slot?.dataset.slotIndex || 1);
+        const items = Array.isArray(state.subscriptionPlanDraft?.items) ? state.subscriptionPlanDraft.items : [];
+        state.subscriptionPlanDraft.items = items.filter((item) => !(
+          Number(item?.day_index || item?.day || 1) === day
+          && Number(item?.slot_index || item?.slot || 1) === position
+        ));
+        renderSubscriptionItemsGrid();
+        return;
+      }
+      const filledSlot = event.target.closest?.('[data-subscription-item-open]');
+      if (filledSlot) {
+        event.preventDefault();
+        openSubscriptionDraftItemDetails(filledSlot.dataset.dayIndex, filledSlot.dataset.slotIndex).catch(console.error);
+        return;
+      }
+      const slot = event.target.closest?.('[data-subscription-item-slot]');
+      if (slot) {
+        event.preventDefault();
+        openSubscriptionItemPickerV2(slot.dataset.dayIndex, slot.dataset.slotIndex).catch(console.error);
+        return;
+      }
+      const button = event.target.closest?.('[data-subscription-inline-type]');
+      if (!button) return;
+      const group = button.closest?.('[data-subscription-inline-type-group]')?.dataset?.subscriptionInlineTypeGroup;
+      syncSubscriptionInlineRewardType(group, button.dataset.subscriptionInlineType);
+      if (group === 'discount') recalculateSubscriptionPriceFromDiscount();
+    });
+  }
+  document.addEventListener('click', (event) => {
+    if (subscriptionPlanIconPopover && !subscriptionPlanIconPopover.classList.contains('hidden')
+      && !subscriptionPlanIconPopover.contains(event.target)
+      && !subscriptionPlanIconButton?.contains(event.target)) closeSubscriptionPlanIconPopover();
+    if (event.target.closest?.('[data-subscription-item-info], [data-subscription-item-info-popover]')) return;
+    closeSubscriptionItemInfoPopovers();
+  });
+  $$('.subscription-number-stepper-btn', clientRightRoot).forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = right$(`#${button.dataset.subscriptionStepTarget || ''}`);
+      if (!target) return;
+      const step = Number(button.dataset.subscriptionStep || 0);
+      const min = Number(target.getAttribute('min') || 0);
+      const maxAttr = target.getAttribute('max');
+      const max = maxAttr === null || maxAttr === '' ? Infinity : Number(maxAttr);
+      const current = Number(target.value || min || 0);
+      const next = Math.min(max, Math.max(min, Math.floor((Number.isFinite(current) ? current : min) + step)));
+      target.value = String(next);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+  if (subscriptionPlanForm) {
+    subscriptionPlanForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      saveSubscriptionPlan().catch(console.error);
     });
   }
 
@@ -27939,6 +30901,9 @@
     },
     openBenefitsByClientId(id) {
       return openClientBenefitsOverlay(id);
+    },
+    openBonusesByClientId(id) {
+      return openClientBonusesOverlay(id);
     },
     ensureOrderStatusesLoaded(force = false) {
       return ensureOrderStatusesLoaded(force);

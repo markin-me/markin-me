@@ -719,6 +719,7 @@ const comboBlockPreviewWarmCache = new Map();
 const comboBlockPreviewResolvedCache = new Map();
 const productDetailsBatchInflight = new Map();
 const productPassportBatchInflight = new Map();
+const productPassportInflightById = new Map();
 let productDetailsPrefetchTimer = null;
 let comboDetailsPrefetchTimer = null;
 const COMBO_DETAILS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -841,13 +842,22 @@ function applyProductPassportPayload(productId, payload) {
 }
 
 async function preloadProductPassportsBatch(productIds, opts = {}) {
-  const ids = normalizeProductDetailIds(productIds)
+  let ids = normalizeProductDetailIds(productIds)
     .filter((id) => {
       const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
       if (!passport) return true;
       if (!passport.product) return true;
       return Boolean(opts.details) && !productPassportHasDetails(id);
     });
+  if (!ids.length) return;
+
+  const existingTasks = Array.from(new Set(ids.map((id) => productPassportInflightById.get(id)).filter(Boolean)));
+  if (existingTasks.length) await Promise.all(existingTasks);
+  ids = ids.filter((id) => {
+    const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
+    if (!passport?.product) return true;
+    return Boolean(opts.details) && !productPassportHasDetails(id);
+  });
   if (!ids.length) return;
 
   const batchKey = productDetailsBatchKey(ids);
@@ -868,9 +878,13 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
     });
   })().finally(() => {
     if (batchKey) productPassportBatchInflight.delete(batchKey);
+    ids.forEach((id) => {
+      if (productPassportInflightById.get(id) === task) productPassportInflightById.delete(id);
+    });
   });
 
   if (batchKey) productPassportBatchInflight.set(batchKey, task);
+  ids.forEach((id) => productPassportInflightById.set(id, task));
   await task;
 }
 
@@ -5403,8 +5417,9 @@ async function openProductBuyXGetYBenefitDetail(product) {
 }
 
 
-async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton } = {}) {
+async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton, mode, onSave } = {}) {
   if (!container) return;
+  const isSubscriptionMode = mode === 'subscription';
   const productIdForRender = Number(product?.id || 0);
   const isMobileViewport = window.matchMedia("(max-width: 768px)").matches;
   const isStaticProductView = !cartKey && !prefillItem;
@@ -5712,7 +5727,7 @@ optionGroups.forEach((group) => {
     plusEnabled: available,
   });
 
-  let qtyPlusBlockedByStock = available && cartCountTotal() > 0;
+  let qtyPlusBlockedByStock = !isSubscriptionMode && available && cartCountTotal() > 0;
   let updateQtyUi = () => {
     if (qtyPill?.center) qtyPill.center.textContent = String(qty);
     // минус блокируем визуально на 1
@@ -5928,6 +5943,10 @@ optionGroups.forEach((group) => {
       </span>
       <span class="shop-pd-action-label">${editMode ? "Сохранить" : "в корзину"}</span>
     `;
+    if (isSubscriptionMode) {
+      const label = actionBtnRef.querySelector('.shop-pd-action-label');
+      if (label) label.textContent = 'сохранить';
+    }
 
     if (basePriceElRef) {
       const variantLabel = str(variantState?.label || "").trim();
@@ -6280,7 +6299,7 @@ optionGroups.forEach((group) => {
       if (!entry || entry.qty === null || entry.qty === undefined || entry.isUnlimited) continue;
       const stockQty = Number(entry.qty);
       if (!Number.isFinite(stockQty)) continue;
-      let cartConsumed = calcProductStockConsumed(pid);
+      let cartConsumed = isSubscriptionMode ? 0 : calcProductStockConsumed(pid);
       // В режиме редактирования вычитаем потребление редактируемого элемента
       if (editMode && editingItem) {
         cartConsumed -= calcProductStockConsumed(pid, [editingItem]);
@@ -6603,7 +6622,7 @@ optionGroups.forEach((group) => {
           if (priceEl) {
             elMobileProductPrice.textContent = priceEl.textContent;
           }
-          elMobileProductLabel.textContent = editMode ? "Сохранить" : "в корзину";
+          elMobileProductLabel.textContent = isSubscriptionMode ? "сохранить" : (editMode ? "Сохранить" : "в корзину");
         }
       }
       // Обновляем qty в клонированном pill
@@ -6925,6 +6944,35 @@ optionGroups.forEach((group) => {
         }
       : null;
 
+    if (isSubscriptionMode) {
+      if (typeof onSave === 'function') {
+        onSave({
+          type: 'product',
+          product_id: Number(product.id || 0),
+          id: Number(product.id || 0),
+          title: String(product.name || product.title || '').trim(),
+          photo: (Array.isArray(product.photos) ? product.photos.filter(Boolean)[0] : '') || '',
+          photos: Array.isArray(product.photos) ? product.photos.filter(Boolean) : [],
+          sku: String(product.sku || '').trim(),
+          qty: safeQty,
+          price: Number(pricing?.unitPrice || 0),
+          old_price: cartOldPrice,
+          unit_price_before_discount: cartUnitPriceBeforeDiscount,
+          discount: cartDiscount,
+          option_item_ids: optionItemIds,
+          option_items: selectedItems,
+          ingredients: ingredientQuantities,
+          ingredient_price_diff: ingredientsPriceDiff || 0,
+          variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
+          variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
+          variant_label: variantLabel,
+          variant_group_title: hasVariantSelection ? variantGroupTitle : '',
+          variant_unit: hasVariantSelection ? variantUnit : '',
+          variant_unit_price: Number(variantUnitPrice || 0),
+        });
+      }
+      return;
+    }
     if (editMode && editingItem) {
       // режим редактирования: обновляем qty и конфигурацию, с merge если совпало
       const sameItem = getCartItemByKey(nextKey);
@@ -7162,6 +7210,21 @@ optionGroups.forEach((group) => {
   }
 }
 
+async function mountProductDetails(options = {}) {
+  if (window.SharedProductDetails && typeof window.SharedProductDetails.mount === 'function') {
+    return window.SharedProductDetails.mount(options);
+  }
+  return renderProductDetailsInto(options.container, options.product, {
+    mode: options.mode,
+    cartKey: options.cartKey,
+    prefillItem: options.initialValue || options.prefillItem,
+    readOnly: options.mode === 'readonly' || options.readOnly === true,
+    favoriteButton: options.favoriteButton,
+    onSave: options.onSave,
+    onBack: options.onBack,
+  });
+}
+
   const standaloneDetailsPage = document.getElementById("shopDetailsPage");
   const standaloneDetailsContent = document.getElementById("shopDetailsPageContent");
   const standaloneDetailsBackBtn = document.getElementById("shopDetailsPageBackBtn");
@@ -7274,7 +7337,7 @@ optionGroups.forEach((group) => {
       onBack,
       returnTarget,
     });
-    await renderProductDetailsInto(standaloneDetailsContent, product, {
+    await mountProductDetails({ container: standaloneDetailsContent, product, productId: product?.id, mode: cartKey ? 'cart-edit' : 'cart',
       onBack: closeStandaloneDetailsPage,
       cartKey,
       prefillItem,
@@ -7338,7 +7401,7 @@ optionGroups.forEach((group) => {
         window.AppModal.body.classList.add("shop-kso-product-modal-body-host");
       }
       applyKsoModalHeaderUi();
-      await renderProductDetailsInto(modalBody, p, {
+      await mountProductDetails({ container: modalBody, product: p, productId: p?.id, mode: cartKey ? 'cart-edit' : 'cart',
         onBack: () => window.AppModal?.close?.("back"),
         cartKey,
         prefillItem,
@@ -7348,7 +7411,7 @@ optionGroups.forEach((group) => {
     }
 
     showProductView(p.name);
-    await renderProductDetailsInto(elProductContent, p, { onBack: resolvedOnBack, cartKey, prefillItem, readOnly });
+    await mountProductDetails({ container: elProductContent, product: p, productId: p?.id, mode: readOnly ? 'readonly' : (cartKey ? 'cart-edit' : 'cart'), onBack: resolvedOnBack, cartKey, prefillItem, readOnly });
   }
 
   function comboDiscountedPrice(price, discountPercent) {
@@ -27087,7 +27150,7 @@ function applySheetAddressTitle(backMode = "cart") {
       openProductCtx.onBack === resolvedOnBack &&
       Boolean(openProductCtx.readOnly) === Boolean(readOnly);
     if (!canReuseProductView) {
-      renderProductDetailsInto(productWrap, product, { onBack: resolvedOnBack, cartKey, prefillItem, readOnly });
+      mountProductDetails({ container: productWrap, product, productId: product?.id, mode: readOnly ? 'readonly' : (cartKey ? 'cart-edit' : 'cart'), onBack: resolvedOnBack, cartKey, prefillItem, readOnly });
     }
     
     // На мобильных: скрываем ботомщит активного заказа при открытии карточки товара
@@ -42131,6 +42194,146 @@ function initShopLate() {
         });
       };
 
+      const shopRootHistoryEnabled = !document.body?.classList.contains("page-kso")
+        && window.matchMedia?.("(max-width: 768px)").matches === true;
+      let shopRootHistoryRestoring = false;
+      let shopExitPromptOpen = false;
+      const shopRootTransientHistoryKeys = [
+        "sheet",
+        "shopBack",
+        "shopCompanyChatPage",
+        "shopCompanyMessagesScreen",
+        "shopImportantMessageId",
+        "shopAddressPage",
+        "shopAddressFormPage",
+        "shopAddressSource",
+        "shopCartCheckout",
+        "shopCheckoutSelection",
+        "shopCheckoutAuthPage",
+        "shopBenefitsPage",
+        "shopBenefitsSource",
+        "shopCategoriesPage",
+        "shopFavoritesPage",
+        "shopFavoritesSource",
+        "shopOrdersPage",
+        "shopOrderDetails",
+        "shopOrdersSource",
+      ];
+      const buildShopRootHistoryState = (screen, extraState = {}) => {
+        const nextState = window.history.state && typeof window.history.state === "object"
+          ? { ...window.history.state }
+          : {};
+        shopRootTransientHistoryKeys.forEach((key) => delete nextState[key]);
+        return {
+          ...nextState,
+          shopRootPage: true,
+          shopRootScreen: String(screen || "home"),
+          shopRootGuard: false,
+          ...extraState,
+        };
+      };
+      window.buildShopRootHistoryState = buildShopRootHistoryState;
+      const getShopRootScreen = () => String(window.history.state?.shopRootScreen || "home");
+      const pushShopRootScreen = (screen) => {
+        if (!shopRootHistoryEnabled || shopRootHistoryRestoring) return;
+        const nextScreen = String(screen || "home");
+        const currentState = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
+        const nextState = buildShopRootHistoryState(nextScreen);
+        if (currentState.shopRootPage === true && String(currentState.shopRootScreen || "home") !== "home") {
+          window.history.replaceState(nextState, "", window.location.href);
+          return;
+        }
+        if (currentState.shopRootPage === true && String(currentState.shopRootScreen || "home") === nextScreen) {
+          window.history.replaceState(nextState, "", window.location.href);
+          return;
+        }
+        window.history.pushState(nextState, "", window.location.href);
+      };
+      window.pushShopRootScreen = pushShopRootScreen;
+
+      const showShopRootHome = () => {
+        document.getElementById("shopCartPage")?.classList.add("hidden");
+        document.body?.classList.remove("shop-cart-page-active");
+        if (!document.getElementById("shopCompanyChatOverlay")?.classList.contains("is-open")) {
+          document.body?.classList.remove(
+            "shop-company-chat-open",
+            "shop-company-chat-page-active",
+            "shop-company-messages-root-active"
+          );
+        }
+        if (document.body?.classList.contains("shop-profile-page-active")) showCartView();
+        setActiveNav("menu");
+        queueMobileUiStateSync("shop-root-history-home");
+      };
+
+      const restoreShopRootGuard = () => {
+        const currentState = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
+        window.history.pushState({
+          ...currentState,
+          shopRootPage: true,
+          shopRootScreen: "home",
+          shopRootGuard: true,
+        }, "", window.location.href);
+      };
+
+      const openShopExitPrompt = () => {
+        if (shopExitPromptOpen) return;
+        shopExitPromptOpen = true;
+        if (typeof window.openShopExitConfirmation !== "function") {
+          restoreShopRootGuard();
+          shopExitPromptOpen = false;
+          return;
+        }
+        window.openShopExitConfirmation({
+          onStay: () => {
+            restoreShopRootGuard();
+            shopExitPromptOpen = false;
+          },
+          onExit: () => {
+            shopExitPromptOpen = false;
+            window.history.back();
+          },
+        });
+      };
+
+      if (shopRootHistoryEnabled && window.history.state?.shopRootPage !== true) {
+        const initialState = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
+        window.history.replaceState({
+          ...initialState,
+          shopRootPage: true,
+          shopRootScreen: "home",
+          shopRootGuard: false,
+        }, "", window.location.href);
+        restoreShopRootGuard();
+      } else if (
+        shopRootHistoryEnabled
+        && String(window.history.state?.shopRootScreen || "home") === "home"
+        && window.history.state?.shopRootGuard !== true
+      ) {
+        restoreShopRootGuard();
+      }
+
+      if (shopRootHistoryEnabled) {
+        elNavCart?.addEventListener("click", () => pushShopRootScreen("cart"), { capture: true });
+        elNavProfile?.addEventListener("click", () => pushShopRootScreen("profile"), { capture: true });
+        elNavMenu?.addEventListener("click", (event) => {
+          if (getShopRootScreen() === "home") return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          window.history.back();
+        }, { capture: true });
+        window.addEventListener("popstate", (event) => {
+          if (event.state?.shopRootPage !== true || String(event.state.shopRootScreen || "home") !== "home") return;
+          shopRootHistoryRestoring = true;
+          try {
+            showShopRootHome();
+          } finally {
+            shopRootHistoryRestoring = false;
+          }
+          if (event.state.shopRootGuard !== true) openShopExitPrompt();
+        });
+      }
+
       const openBenefitsSheetFromNav = () => {
         const cartSheetOpen =
           window.AppModal &&
@@ -42248,7 +42451,13 @@ function initShopLate() {
       let hasSheetHistoryEntry = false;
       const ensureSheetHistoryEntry = () => {
         if (hasSheetHistoryEntry) return;
-        window.history.pushState({ sheet: true, shopBack: true }, '', window.location.href);
+        const currentState = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
+        const nextState = { ...currentState, sheet: true, shopBack: true };
+        if (currentState.shopRootPage === true && String(currentState.shopRootScreen || "home") !== "home") {
+          window.history.replaceState(nextState, '', window.location.href);
+        } else {
+          window.history.pushState(nextState, '', window.location.href);
+        }
         hasSheetHistoryEntry = true;
       };
       if (originalOpen && typeof originalOpen === 'function') {
@@ -42322,8 +42531,12 @@ function initShopLate() {
           e.stopPropagation();
           // Добавляем запись обратно в историю, чтобы можно было снова нажать "назад"
           isHandlingBackButton = true;
-          window.history.pushState({ sheet: true, shopBack: true }, '', window.location.href);
-          hasSheetHistoryEntry = true;
+          if (e.state?.shopRootPage === true && String(e.state.shopRootScreen || "home") === "home") {
+            hasSheetHistoryEntry = false;
+          } else {
+            window.history.pushState({ ...(window.history.state || {}), sheet: true, shopBack: true }, '', window.location.href);
+            hasSheetHistoryEntry = true;
+          }
           setTimeout(() => {
             isHandlingBackButton = false;
           }, 0);
@@ -43442,5 +43655,74 @@ window.syncShopCartBenefitsServiceUi = syncCartBenefitsServiceBlocksUi;
 window.handleShopBenefitsOrderStateChange = handleShopBenefitsOrderStateChange;
 window.openShopBenefitsSheet = openUnifiedBenefitsSheet;
 window.openCategoriesSheet = openCategoriesSheet;
+window.__applySharedProductPassportPayloads = function applySharedProductPassportPayloads(payloads = {}) {
+  Object.keys(payloads || {}).forEach((rawId) => {
+    const productId = Number(rawId || 0);
+    if (productId > 0) applyProductPassportPayload(productId, payloads[rawId]);
+  });
+};
+window.__getSharedProductListSummaries = async function getSharedProductListSummaries(productIds = []) {
+  const ids = normalizeProductDetailIds(productIds);
+  const entries = await Promise.all(ids.map(async (productId) => {
+    const passport = typeof getProductPassport === "function" ? getProductPassport(productId) : null;
+    const product = passport?.product || state.productCache.get(productId) || null;
+    if (!product) return [productId, null];
+    const config = passport?.defaultConfig && typeof passport.defaultConfig === "object"
+      ? passport.defaultConfig
+      : buildImmediateUpsellDefaults(product);
+    const variantLabel = str(config?.variant_label || product?.default_variant?.variant_label || "").trim();
+    const title = [variantLabel, str(product?.name || product?.title || "").trim()].filter(Boolean).join(" ");
+    const lines = [
+      ...(Array.isArray(config?.ingredients) ? config.ingredients.map(formatIngredientLineForOrder) : []),
+      ...(Array.isArray(config?.option_items) ? config.option_items.map((option) => {
+        if (str(option?.variant_label || "").trim()) return formatOptionLineForOrder(option);
+        const qty = Math.max(1, Number(option?.qty || option?.quantity || 1));
+        return `${qty} шт ${str(option?.title || option?.name || "").trim()}`.trim();
+      }) : []),
+    ].map((line) => str(line || "").trim()).filter(Boolean);
+    const price = Number(await calculateDefaultPrice(product)) || 0;
+    let oldPrice = 0;
+    if (product?.discount && Number(product?.original_price || 0) > price) {
+      oldPrice = Number(product.original_price || 0);
+    } else {
+      const scaledOld = scaleProductBasePriceForCurrentUnit(product, price, Number(product?.old_price || 0));
+      if (scaledOld > price) oldPrice = scaledOld;
+    }
+    const discountPercent = oldPrice > price && oldPrice > 0
+      ? Math.round(((oldPrice - price) / oldPrice) * 100)
+      : 0;
+    return [productId, { productId, title, lines, price, oldPrice, discountPercent }];
+  }));
+  return Object.fromEntries(entries.filter(([, summary]) => summary));
+};
+window.__prefetchSharedProductDetails = async function prefetchSharedProductDetails(productIds = []) {
+  const ids = normalizeProductDetailIds(productIds);
+  if (!ids.length) return;
+  await preloadProductsByIdsToCache(ids);
+  await preloadProductDetailsConfigBatch(ids);
+};
+window.__mountSharedProductDetails = async function mountSharedProductDetails(options = {}) {
+  const container = options.container || null;
+  const productId = Number(options.productId || options.product?.id || 0);
+  if (!container || !(productId > 0)) throw new Error('INVALID_PRODUCT_DETAILS_TARGET');
+  const sourceProduct = options.product && typeof options.product === 'object' ? options.product : null;
+  const loadedProduct = state.productCache.get(productId) || sourceProduct || await ensureProduct(productId);
+  let product = loadedProduct
+    ? { ...(sourceProduct || {}), ...loadedProduct }
+    : sourceProduct;
+  if (!product) throw new Error('PRODUCT_NOT_FOUND');
+  if (!Array.isArray(product.photos)) product.photos = safePhotos(product);
+  state.productCache.set(productId, product);
+  await renderProductDetailsInto(container, product, {
+    mode: options.mode || 'cart',
+    cartKey: options.cartKey || null,
+    prefillItem: options.initialValue || options.prefillItem || null,
+    readOnly: options.mode === 'readonly' || options.readOnly === true,
+    favoriteButton: options.favoriteButton || null,
+    onSave: typeof options.onSave === 'function' ? options.onSave : null,
+    onBack: typeof options.onBack === 'function' ? options.onBack : null,
+  });
+  return { productId, product };
+};
 
 

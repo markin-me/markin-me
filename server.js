@@ -60,6 +60,7 @@ const {
 const makeAuthRouter = require('./api/auth');
 const makeAdminClientsRouter = require('./api/admin/clients');
 const makeAdminBonusRouter = require('./api/admin/bonus');
+const makeAdminSubscriptionsRouter = require('./api/admin/subscriptions');
 const makeAdminDiscountsRouter = require('./api/admin/discounts');
 const makeAdminImportantMessagesRouter = require('./api/admin/importantMessages');
 const makeAdminOrdersRouter = require('./api/admin/orders');
@@ -1301,12 +1302,7 @@ const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/js/chat-sidebar-badge.js'),
   app.locals.assetUrl('/static/js/appModal.js'),
   app.locals.assetUrl('/static/js/shared-order-panel.js'),
-  app.locals.assetUrl('/static/js/shared-order-payment.js'),
-  app.locals.assetUrl('/static/js/new-order.js'),
-  app.locals.assetUrl('/static/js/courier-screen.js'),
-  app.locals.assetUrl('/static/js/orders.js'),
-  app.locals.assetUrl('/static/js/analytics.js'),
-  app.locals.assetUrl('/static/css/analytics.css')
+  app.locals.assetUrl('/static/js/shared-order-payment.js')
 ];
 const serviceWorkerWarmPages = [
   '/dashboard/cash',
@@ -1907,6 +1903,7 @@ app.use('/api/chat-temp', makeChatTempRouter());
 // ------------------------------
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
 app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers }));
+app.use('/api/admin/subscriptions', authMiddleware, makeAdminSubscriptionsRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
 app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessagesRouter({
   db,

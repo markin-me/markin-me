@@ -3,9 +3,78 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const multer = require('multer');
+const productPassportSnapshots = require('../../services/product-passport-snapshots');
 
 module.exports = function makeAdminProductsRouter({ db, helpers }) {
   const router = express.Router();
+
+  async function invalidateProductPassportsForMutation(req) {
+    const method = String(req.method || '').toUpperCase();
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return;
+    const requestPath = String(req.path || req.originalUrl || '');
+    if (!/(prod_products|admin\/products|admin\/options|admin\/variants|admin\/units|unit-conversions|unit-links|ingredients|sort\/prod_products)/.test(requestPath)) return;
+    const tenantId = helpers.getTenantId(req);
+    const storeId = helpers.getStoreId(req);
+    const directMatch = requestPath.match(/(?:prod_products|admin\/products)\/(\d+)/);
+    let productIds = directMatch ? [Number(directMatch[1])] : [];
+    const bodyIds = [
+      ...(Array.isArray(req.body?.product_ids) ? req.body.product_ids : []),
+      ...(Array.isArray(req.body?.ids) ? req.body.ids : []),
+      ...(Array.isArray(req.body?.items) ? req.body.items.map((item) => item?.product_id || item?.id) : []),
+      req.body?.product_id,
+      req.body?.assign_type === 'product' ? req.body?.assign_id : null,
+    ];
+    productIds.push(...bodyIds);
+    if (Number(resolvedCreatedProductId(req)) > 0) productIds.push(Number(resolvedCreatedProductId(req)));
+
+    if (/admin\/options/.test(requestPath)) {
+      const [rows] = await db.query(
+        `SELECT DISTINCT assign_id AS product_id FROM prod_option_assignments
+         WHERE tenant_id=? AND assign_type='product' AND is_active=1`,
+        [tenantId]
+      );
+      productIds.push(...rows.map((row) => row.product_id));
+    }
+    if (/admin\/variants/.test(requestPath)) {
+      const [rows] = await db.query(
+        `SELECT DISTINCT product_id FROM prod_variant_assignments
+         WHERE tenant_id=? AND is_active=1`,
+        [tenantId]
+      );
+      productIds.push(...rows.map((row) => row.product_id));
+    }
+    if (/(admin\/units|unit-conversions|unit-links)/.test(requestPath)) {
+      const [rows] = await db.query(
+        `SELECT DISTINCT id AS product_id FROM prod_products
+         WHERE tenant_id=? AND is_active=1 AND site_visibility=1`,
+        [tenantId]
+      );
+      productIds.push(...rows.map((row) => row.product_id));
+    }
+    await productPassportSnapshots.markRelatedProductsDirty({ db, tenantId, storeId, productIds });
+  }
+
+  router.use((req, res, next) => {
+    const originalJson = res.json.bind(res);
+    res.json = (payload) => {
+      if (payload?.ok === true && Number(payload?.id || 0) > 0 && String(req.path || '') === '/prod_products') {
+        req.__createdProductId = Number(payload.id);
+      }
+      return originalJson(payload);
+    };
+    res.once('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        setImmediate(() => invalidateProductPassportsForMutation(req).catch((error) => {
+          console.error('product passport invalidation failed:', error);
+        }));
+      }
+    });
+    next();
+  });
+
+  function resolvedCreatedProductId(req) {
+    return Number(req?.__createdProductId || 0);
+  }
   let hasCategoryCheckoutVisibilityColumn = null;
   let productPromoColumnsReady = false;
   let ensureProductPromoColumnsPromise = null;

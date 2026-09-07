@@ -1140,6 +1140,8 @@
     var isPaidOrderFn = typeof options.isPaidOrder === 'function' ? options.isPaidOrder : isPaidOrder;
     var submitPayload = typeof options.submitPayload === 'function' ? options.submitPayload : null;
     var onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : function () {};
+    var onOpen = typeof options.onOpen === 'function' ? options.onOpen : function () {};
+    var onClose = typeof options.onClose === 'function' ? options.onClose : function () {};
     var onError = typeof options.onError === 'function'
       ? options.onError
       : function (err) { console.error('shared order payment error:', err); };
@@ -1212,6 +1214,7 @@
         });
       });
     }).catch(function (err) {
+      onClose();
       onError(err);
       return null;
     });
@@ -1230,6 +1233,8 @@
     var isPaidOrderFn = typeof options.isPaidOrder === 'function' ? options.isPaidOrder : isPaidOrder;
     var submitPayload = typeof options.submitPayload === 'function' ? options.submitPayload : null;
     var onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : function () {};
+    var onOpen = typeof options.onOpen === 'function' ? options.onOpen : function () {};
+    var onClose = typeof options.onClose === 'function' ? options.onClose : function () {};
     var onError = typeof options.onError === 'function'
       ? options.onError
       : function (err) { console.error('shared order payment error:', err); };
@@ -1350,12 +1355,15 @@
             },
             onClose: function () {
               toggleCashPaymentModalSkin(false);
+              onClose();
               finish(null);
             },
           });
+          onOpen();
         });
       });
     }).catch(function (err) {
+      onClose();
       onError(err);
       return null;
     });
