@@ -12,10 +12,17 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Reanimated, {
+  Extrapolation,
+  interpolate,
+  measure,
+  useAnimatedRef,
+  useAnimatedStyle,
+  useScrollOffset,
+} from 'react-native-reanimated';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
@@ -1046,11 +1053,10 @@ function AccentGradientSurface({ shape = 'pill' }: { shape?: 'pill' | 'rounded' 
 export function CartPage() {
   const navigation = useNavigation<CartNavigation>();
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
   const headerScrollY = useRef(new Animated.Value(0)).current;
-  const checkoutButtonRef = useRef<View>(null);
-  const checkoutVisibilityFrameRef = useRef<number | null>(null);
-  const inlineCheckoutVisibleRef = useRef(false);
+  const cartScrollRef = useAnimatedRef<ScrollView>();
+  const checkoutScrollY = useScrollOffset(cartScrollRef);
+  const checkoutAnchorRef = useAnimatedRef<View>();
   const { mergeStockRows, refreshMany, stockLevels } = useProductStock();
   const cartHydratedRef = useRef(false);
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -1083,7 +1089,7 @@ export function CartPage() {
   const [isLoading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
-  const [inlineCheckoutVisible, setInlineCheckoutVisible] = useState(false);
+  const [inlineCheckoutWidth, setInlineCheckoutWidth] = useState(0);
   const [stockBlockedLineIds, setStockBlockedLineIds] = useState<Set<string>>(() => new Set());
   const benefitsPreviewSeqRef = useRef(0);
   const benefitsPreviewRef = useRef<CheckoutBenefitsPreviewData | null>(null);
@@ -1093,24 +1099,6 @@ export function CartPage() {
   const pendingLineQuantitiesRef = useRef<Map<string, number>>(new Map());
   const syncCartFromCacheRef = useRef<(() => Promise<unknown>) | null>(null);
   const deliveryQuoteRequestKeyRef = useRef<string | null>(null);
-
-  const syncInlineCheckoutVisibility = useCallback(() => {
-    if (checkoutVisibilityFrameRef.current != null) return;
-    checkoutVisibilityFrameRef.current = requestAnimationFrame(() => {
-      checkoutVisibilityFrameRef.current = null;
-      checkoutButtonRef.current?.measureInWindow((_x, y, _width, height) => {
-        const navTop = windowHeight - theme.sizes.tabBarHeight - Math.max(0, insets.bottom);
-        const visible = y >= 0 && y + height <= navTop;
-        if (inlineCheckoutVisibleRef.current === visible) return;
-        inlineCheckoutVisibleRef.current = visible;
-        setInlineCheckoutVisible(visible);
-      });
-    });
-  }, [insets.bottom, windowHeight]);
-
-  useEffect(() => () => {
-    if (checkoutVisibilityFrameRef.current != null) cancelAnimationFrame(checkoutVisibilityFrameRef.current);
-  }, []);
 
   const setBenefitsPreviewValue = useCallback((preview: CheckoutBenefitsPreviewData | null) => {
     benefitsPreviewRef.current = preview;
@@ -1135,6 +1123,46 @@ export function CartPage() {
   const selectedStore = useMemo(() => findSelectedStore(stores, selection), [selection, stores]);
   const selectedDeliveryStore = useMemo(() => findDeliveryStore(stores, selectedAddress), [selectedAddress, stores]);
   const isDelivery = selection.mode === 'delivery';
+  const checkoutButtonPositionStyle = useAnimatedStyle(() => {
+    const scrollOffset = checkoutScrollY.value;
+    if (!Number.isFinite(scrollOffset)) return {};
+    const scrollLayout = measure(cartScrollRef);
+    const anchorLayout = measure(checkoutAnchorRef);
+    if (!scrollLayout || !anchorLayout) return {};
+    const fixedTop = scrollLayout.pageY
+      + scrollLayout.height
+      - theme.sizes.tabBarHeight
+      - Math.max(0, insets.bottom)
+      - theme.spacing.sm
+      - anchorLayout.height;
+    return {
+      transform: [{ translateY: Math.min(0, fixedTop - anchorLayout.pageY) }],
+    };
+  });
+  const checkoutButtonSurfaceStyle = useAnimatedStyle(() => {
+    const scrollOffset = checkoutScrollY.value;
+    if (!Number.isFinite(scrollOffset)) return {};
+    const scrollLayout = measure(cartScrollRef);
+    const anchorLayout = measure(checkoutAnchorRef);
+    if (!scrollLayout || !anchorLayout) return {};
+    const fixedTop = scrollLayout.pageY
+      + scrollLayout.height
+      - theme.sizes.tabBarHeight
+      - Math.max(0, insets.bottom)
+      - theme.spacing.sm
+      - anchorLayout.height;
+    const morphDistance = theme.spacing.xl * 2 + theme.spacing.sm;
+    const morphProgress = interpolate(
+      anchorLayout.pageY - fixedTop,
+      [morphDistance, -morphDistance],
+      [0, 1],
+      Extrapolation.CLAMP,
+    );
+    const compactScale = inlineCheckoutWidth > 0 ? Math.min(1, 254 / inlineCheckoutWidth) : 1;
+    return {
+      transform: [{ scaleX: compactScale + (1 - compactScale) * morphProgress }],
+    };
+  }, [inlineCheckoutWidth]);
   const toggleOpacity = headerScrollY.interpolate({
     inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
     outputRange: [1, 0],
@@ -2111,15 +2139,17 @@ export function CartPage() {
               ) : null}
             </Animated.View>
 
-            <Animated.ScrollView
+            <Reanimated.ScrollView
+              ref={cartScrollRef}
               style={styles.scroll}
               contentContainerStyle={[
                 styles.content,
+                { paddingBottom: theme.sizes.tabBarHeight + Math.max(0, insets.bottom) + theme.spacing.sm + theme.spacing.xl * 2 + theme.spacing.sm },
                 visibleDeliveryProgress ? styles.contentWithHeader : styles.contentWithHeaderWithoutProgress,
               ]}
               onScroll={Animated.event(
                 [{ nativeEvent: { contentOffset: { y: headerScrollY } } }],
-                { listener: syncInlineCheckoutVisibility, useNativeDriver: false },
+                { useNativeDriver: false },
               )}
               refreshControl={<RefreshControl refreshing={refreshing} tintColor={theme.colors.accent} onRefresh={refreshCart} />}
               scrollEventThrottle={16}
@@ -2362,41 +2392,36 @@ export function CartPage() {
                   <Text style={styles.summaryTotalLabel}>Итого</Text>
                   <Text style={styles.summaryTotalValue}>{formatPrice(cartSummary.total)}</Text>
                 </View>
-                <Pressable
-                  ref={checkoutButtonRef}
-                  disabled={hasProblemLines}
-                  onLayout={syncInlineCheckoutVisibility}
-                  onPress={openCheckout}
-                  style={[styles.checkoutButton, hasProblemLines && styles.checkoutButtonDisabled]}
+                <Reanimated.View
+                  ref={checkoutAnchorRef}
+                  onLayout={(event) => {
+                    const { width } = event.nativeEvent.layout;
+                    if (width > 0) {
+                      setInlineCheckoutWidth((current) => (Math.abs(current - width) < 1 ? current : width));
+                    }
+                  }}
+                  style={styles.checkoutButtonAnchor}
                 >
-                  <AccentGradientSurface />
-                  <Text style={styles.checkoutButtonText}>Оформить</Text>
-                  <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
-                </Pressable>
+                  <Reanimated.View style={[styles.checkoutButtonVisual, checkoutButtonPositionStyle]}>
+                    <Reanimated.View
+                      pointerEvents="none"
+                      style={[styles.checkoutButtonSurface, checkoutButtonSurfaceStyle]}
+                    >
+                      <AccentGradientSurface />
+                    </Reanimated.View>
+                    <Pressable
+                      disabled={hasProblemLines}
+                      onPress={openCheckout}
+                      style={[styles.checkoutButtonContent, hasProblemLines && styles.checkoutButtonDisabled]}
+                    >
+                      <Text style={styles.checkoutButtonText}>Оформить</Text>
+                      <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
+                    </Pressable>
+                  </Reanimated.View>
+                </Reanimated.View>
               </View>
             ) : null}
-            </Animated.ScrollView>
-            {lines.length > 0 && !inlineCheckoutVisible ? (
-              <View
-                pointerEvents="box-none"
-                style={[
-                  styles.floatingCheckoutWrap,
-                  {
-                    bottom: theme.sizes.tabBarHeight + Math.max(0, insets.bottom) + theme.spacing.sm,
-                  },
-                ]}
-              >
-                <Pressable
-                  disabled={hasProblemLines}
-                  onPress={openCheckout}
-                  style={[styles.checkoutButton, styles.floatingCheckoutButton, hasProblemLines && styles.checkoutButtonDisabled]}
-                >
-                  <AccentGradientSurface />
-                  <Text style={styles.checkoutButtonText}>Оформить</Text>
-                  <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
-                </Pressable>
-              </View>
-            ) : null}
+            </Reanimated.ScrollView>
           </>
         )}
         <BottomSheet
@@ -2855,6 +2880,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.16,
     shadowRadius: 12,
   },
+  checkoutButtonAnchor: {
+    marginTop: theme.spacing.md,
+    minHeight: 50,
+    position: 'relative',
+    width: '100%',
+    zIndex: 4,
+  },
+  checkoutButtonVisual: {
+    height: 50,
+    width: '100%',
+  },
   checkoutButtonDisabled: {
     opacity: 0.45,
   },
@@ -2863,17 +2899,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
-  floatingCheckoutWrap: {
+  checkoutButtonContent: {
     alignItems: 'center',
-    left: theme.spacing.lg,
-    position: 'absolute',
-    right: theme.spacing.lg,
-    zIndex: 4,
-  },
-  floatingCheckoutButton: {
-    marginTop: 0,
-    maxWidth: 254,
+    flexDirection: 'row',
+    gap: 5,
+    height: 50,
+    justifyContent: 'center',
     width: '100%',
+  },
+  checkoutButtonSurface: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    elevation: 5,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
   },
   comboImage: {
     height: '100%',

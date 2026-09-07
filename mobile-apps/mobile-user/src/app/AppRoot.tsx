@@ -62,10 +62,12 @@ import {
   type CartAddAnimation,
 } from '../features/cart';
 import { ChatPushProvider, ChatUnreadProvider, useChatUnread } from '../features/chat';
+import { openOrderEventsStream } from '../features/chat/api';
 import { readFulfillmentSelection } from '../features/checkout';
 import {
   readCachedCustomerPassport,
   readCachedMobileCatalogSnapshot,
+  subscribeCustomerPassport,
 } from '../shared/api';
 import { theme } from '../shared/config/theme';
 
@@ -201,8 +203,8 @@ function CartFlightLayer() {
   const startX = frame.x + (frame.width - startSize) / 2;
   const startY = frame.y + (frame.height - startSize) / 2;
   const targetSize = 20;
-  const tabItemWidth = Math.max(0, windowWidth - 96) / 4;
-  const targetX = 48 + tabItemWidth * 1.5 - targetSize / 2;
+  const tabItemWidth = Math.max(0, windowWidth - 96) / 5;
+  const targetX = 48 + tabItemWidth * 2.5 - targetSize / 2;
   const targetY = windowHeight
     - theme.sizes.tabBarHeight
     - Math.max(0, insets.bottom)
@@ -414,6 +416,7 @@ function MainTabs() {
   const supportChatOpenRef = useRef(false);
   const [cartBounceToken, setCartBounceToken] = useState(0);
   const [cartItemCount, setCartItemCount] = useState(0);
+  const [orderBadgeVisible, setOrderBadgeVisible] = useState(false);
   const [supportChatVisible, setSupportChatVisible] = useState(false);
   const [supportChatActive, setSupportChatActive] = useState(false);
   const [supportChatInteractive, setSupportChatInteractive] = useState(false);
@@ -421,11 +424,11 @@ function MainTabs() {
   const baseTabBarStyle = {
     backgroundColor: 'transparent',
     borderTopWidth: 0,
-    bottom: 0,
+    bottom: bottomInset,
     elevation: 0,
-    height: theme.sizes.tabBarHeight + bottomInset,
+    height: theme.sizes.tabBarHeight,
     left: 0,
-    paddingBottom: 2 + bottomInset,
+    paddingBottom: 2,
     paddingHorizontal: 48,
     paddingTop: 10,
     position: 'absolute' as const,
@@ -448,6 +451,31 @@ function MainTabs() {
       active = false;
       unsubscribeLines();
       unsubscribeAddAnimation();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let source: ReturnType<typeof openOrderEventsStream> | null = null;
+    const syncOrderEvents = (passport: Awaited<ReturnType<typeof readCachedCustomerPassport>>) => {
+      source?.close();
+      source = null;
+      if (cancelled) return;
+      const token = String(passport?.token || '').trim();
+      if (!token) return;
+      source = openOrderEventsStream(token);
+      source.addEventListener('order.updated', () => {
+        if (!cancelled) setOrderBadgeVisible(true);
+      });
+    };
+    void readCachedCustomerPassport().then(syncOrderEvents);
+    const unsubscribePassport = subscribeCustomerPassport(() => {
+      void readCachedCustomerPassport().then(syncOrderEvents);
+    });
+    return () => {
+      cancelled = true;
+      source?.close();
+      unsubscribePassport();
     };
   }, []);
 
@@ -622,6 +650,21 @@ function MainTabs() {
             tabBarIcon: ({ focused }) => <MainTabIcon focused={focused} name="home" />,
             tabBarLabel: 'Каталог',
             title: 'Каталог',
+          }}
+        />
+        <Tab.Screen
+          name={routes.orders}
+          component={OrdersPage}
+          listeners={{
+            focus: () => setOrderBadgeVisible(false),
+            tabPress: () => setOrderBadgeVisible(false),
+          }}
+          options={{
+            tabBarIcon: ({ focused }) => (
+              <MainTabIcon badged={orderBadgeVisible} focused={focused} name="receipt" />
+            ),
+            tabBarLabel: 'Заказы',
+            title: 'Заказы',
           }}
         />
         <Tab.Screen

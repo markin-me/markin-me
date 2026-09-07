@@ -246,6 +246,7 @@
 
   const elNavCategories = $("#shopNavCategories");
   const elNavMenu = $("#shopNavMenu");
+  const elNavOrders = $("#shopNavOrders");
   const elNavCart = $("#shopNavCart");
   const elNavProfile = $("#shopNavProfile");
   const elNavFav = $("#shopNavFav");
@@ -5435,6 +5436,7 @@
     const tab = normalizeTab(stateSnapshot.tab);
     const navMap = {
       menu: elNavMenu,
+      orders: elNavOrders,
       benefits: elNavCategories,
       cart: elNavCart,
       fav: elNavFav,

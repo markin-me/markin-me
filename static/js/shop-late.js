@@ -33367,6 +33367,10 @@ function renderSheetAddressList() {
 
     function setActiveTab(tab) {
       const normalizedTab = tab;
+      if (normalizedTab === "orders") {
+        window.__shopOrdersNavBadgeRead = true;
+        document.getElementById("shopNavOrdersBadge")?.classList.add("hidden");
+      }
       [tabAddresses, tabOrders, tabSettings].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === normalizedTab));
       [addressesPanel, ordersPanel, settingsPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === normalizedTab));
       const activeBtn = tabs.querySelector('.shop-profile-tab.is-active');
@@ -35373,6 +35377,7 @@ function setActiveNav(key) {
   document.body.classList.toggle("shop-catalog-tab-active", activeKey === "menu");
   const map = {
     menu: elNavMenu,
+    orders: document.getElementById("shopNavOrders"),
     benefits: elNavCategories,
     cart: elNavCart,
     profile: elNavProfile,
@@ -42204,6 +42209,21 @@ function initShopLate() {
           openCartSheet();
         });
       }
+      const elNavOrders = document.getElementById("shopNavOrders");
+      const elNavOrdersBadge = document.getElementById("shopNavOrdersBadge");
+      if (elNavOrders) {
+        elNavOrders.addEventListener("click", async () => {
+          if (!isShopPage()) return;
+          window.__shopOrdersNavBadgeRead = true;
+          elNavOrdersBadge?.classList.add("hidden");
+          document.getElementById("shopCartPage")?.classList.add("hidden");
+          document.body.classList.remove("shop-cart-page-active");
+          closeShopSheetIfOpen();
+          setActiveNav("orders");
+          await openProfileSheet({ initialTab: "orders", ordersOnly: true, sourceScreen: "home" });
+          setActiveNav("orders");
+        });
+      }
       if (elNavProfile) {
         elNavProfile.addEventListener("click", () => {
           if (document.body?.classList.contains("shop-profile-page-active")) {
@@ -42413,11 +42433,14 @@ function initShopLate() {
         activeOrdersEventSource = source;
         source.addEventListener("order.updated", (event) => {
           if (activeOrdersEventSource !== source) return;
+          window.__shopOrdersNavBadgeRead = false;
           const isOpenOrdersList = sheetNavigationState?.type === "activeOrders"
             && sheetNavigationState?.screen === "list";
           const isOpenProfileOrdersList = sheetNavigationState?.type === "profile"
             && [null, "orders", "ordersList"].includes(sheetNavigationState?.screen);
           Promise.resolve(updateActiveOrdersBadge({ force: true })).then(() => {
+            const ordersBadge = document.getElementById("shopNavOrdersBadge");
+            if (ordersBadge) ordersBadge.classList.remove("hidden");
             if (isOpenOrdersList && typeof renderActiveOrdersListContent === "function") {
               renderActiveOrdersListContent(window._activeOrders || []);
             }
@@ -42469,7 +42492,8 @@ function initShopLate() {
       // Активные заказы: обновление бейджа и обработчик клика
       window.updateActiveOrdersBadge = async function updateActiveOrdersBadge(opts = {}) {
         const badges = [elActiveOrdersBadge, elActiveOrdersBadgeMobile, elActiveOrdersSheetCollapsed].filter(Boolean);
-        if (badges.length === 0) return;
+        const ordersNavBadge = document.getElementById("shopNavOrdersBadge");
+        if (badges.length === 0 && !ordersNavBadge) return;
       
         // Проверяем, находимся ли мы на главной странице витрины
         const isShopMainPage = isShopPage();
@@ -42497,6 +42521,13 @@ function initShopLate() {
           }
         }
 
+        if (ordersNavBadge) {
+          const activeTab = document.querySelector(".shop-nav-btn.is-active")?.dataset.tab;
+          ordersNavBadge.classList.toggle("hidden", window.__shopOrdersNavBadgeRead === true
+            || activeTab === "orders"
+            || !(window._activeOrders || []).length);
+        }
+
         // Если не главная вкладка/страница или открыт модал — скрываем мгновенно
         const isProductOpen = elMobileProductActions && !elMobileProductActions.classList.contains("hidden");
         if (isMobile && (!isShopMainPage || !isMainTabActive || isAnyModalOpen || isProductOpen)) {
@@ -42519,6 +42550,7 @@ function initShopLate() {
         try {
           const token = getCustomerToken();
           if (!token) {
+            ordersNavBadge?.classList.add("hidden");
             badges.forEach(badge => badge.classList.add("hidden"));
             window._activeOrders = [];
             syncActiveOrdersEventSource([]);
@@ -42547,6 +42579,11 @@ function initShopLate() {
           activeOrdersBadgeLastSyncAt = Date.now();
 
           const count = activeOrders.length;
+          if (ordersNavBadge) {
+            ordersNavBadge.classList.toggle("hidden", window.__shopOrdersNavBadgeRead === true
+              || count === 0
+              || document.querySelector(".shop-nav-btn.is-active")?.dataset.tab === "orders");
+          }
         
           if (count > 0) {
             badges.forEach(badge => {
@@ -42601,6 +42638,7 @@ function initShopLate() {
               }
             });
           } else {
+            ordersNavBadge?.classList.add("hidden");
             badges.forEach(badge => badge.classList.add("hidden"));
             window._activeOrders = [];
             syncActiveOrdersEventSource([]);

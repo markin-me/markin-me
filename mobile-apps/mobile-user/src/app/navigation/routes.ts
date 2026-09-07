@@ -73,6 +73,7 @@ export type ChatTabParamList = {
 
 export type MainTabParamList = {
   home: { selectedCategoryId?: number; categorySelectionNonce?: number } | undefined;
+  orders: undefined;
   cart: undefined;
   chat: NavigatorScreenParams<ChatTabParamList> | undefined;
   profile: undefined;

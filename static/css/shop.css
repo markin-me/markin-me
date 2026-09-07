@@ -8268,7 +8268,8 @@ body.page-shop .shop-company-chat-btn{
   -webkit-tap-highlight-color: transparent;
 }
 
-body.page-shop .shop-company-chat-unread{
+body.page-shop .shop-company-chat-unread,
+body.page-shop .shop-orders-unread{
   position: absolute;
   top: -4px;
   right: -4px;
@@ -28887,10 +28888,10 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   .shop-mobile-bottom-container .shop-mobile-order-details-actions:not(.hidden) + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-address-actions:not(.hidden) + .shop-mobile-address-confirm.hidden + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-address-confirm:not(.hidden) + .shop-nav {
-    grid-template-columns: repeat(4, 50px);
+    grid-template-columns: repeat(5, 50px);
     justify-content: center;
     align-items: start;
-    gap: 18px;
+    gap: 12px;
     height: calc(68px + env(safe-area-inset-bottom));
     padding: 0 0 env(safe-area-inset-bottom);
     margin-top: 0;
@@ -31197,7 +31198,8 @@ body.page-kso .shop-products-panel{
 }
 
 @media (max-width: 768px){
-  body.page-shop #shopCompanyChatUnreadBadge{
+  body.page-shop #shopCompanyChatUnreadBadge,
+  body.page-shop #shopNavOrdersBadge{
     width: 14px;
     min-width: 14px;
     height: 14px;

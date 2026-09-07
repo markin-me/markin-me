@@ -519,7 +519,7 @@ export function ProfilePage() {
       return;
     }
     if (key === 'my-orders') {
-      navigation.navigate(routes.orders);
+      navigation.navigate('main', { screen: routes.orders });
       return;
     }
     if (key === 'promocodes') {
