@@ -1,2 +1,7 @@
 .expo/
 google-services.json
+node_modules/
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/

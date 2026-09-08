@@ -1175,10 +1175,13 @@ export function CartPage() {
       [0, 1],
       Extrapolation.CLAMP,
     );
-    const horizontalInset = compactInset * (1 - morphProgress);
+    const compactScale = inlineCheckoutWidth > 0
+      ? Math.max(0, (inlineCheckoutWidth - compactInset * 2) / inlineCheckoutWidth)
+      : 1;
     return {
-      left: horizontalInset,
-      right: horizontalInset,
+      transform: [{
+        scaleX: compactScale + (1 - compactScale) * morphProgress,
+      }],
     };
   }, [inlineCheckoutWidth]);
 
