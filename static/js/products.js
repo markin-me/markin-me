@@ -14506,6 +14506,13 @@ const isViewMode = state.comboPanel.mode === "view";
             },
           };
           upsertSavedProductInList(savedProductForView, payload.category_ids);
+          document.dispatchEvent(new CustomEvent("catalog:product-updated", {
+            detail: {
+              productId,
+              product: savedProductForView,
+              categoryIds: payload.category_ids,
+            },
+          }));
           if (state.productDetailsCache instanceof Map) {
             state.productDetailsCache.forEach((cached) => {
               if (!Array.isArray(cached?.ingredients)) return;

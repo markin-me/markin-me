@@ -18,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import sys
+import uuid
 if os.name == "nt":
     try:
         import winreg
@@ -191,7 +192,8 @@ DEFAULT_CONFIG = {
     "crm_base_url": normalize_crm_base_url(DEFAULT_CRM_BASE_URL),
     "token": "",
     "copies": 1,
-    "autostart": False
+    "autostart": False,
+    "installation_id": ""
 }
 
 
@@ -261,19 +263,35 @@ logging.basicConfig(
 )
 
 
+def _ensure_installation_id(value):
+    try:
+        return str(uuid.UUID(str(value or "").strip()))
+    except (ValueError, AttributeError, TypeError):
+        return str(uuid.uuid4())
+
+
 def load_config():
     if not os.path.exists(CONFIG_PATH):
-        return DEFAULT_CONFIG.copy()
+        data = DEFAULT_CONFIG.copy()
+        data["installation_id"] = _ensure_installation_id(None)
+        save_config(data)
+        return data
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         if not isinstance(data, dict):
-            return DEFAULT_CONFIG.copy()
+            data = DEFAULT_CONFIG.copy()
     except Exception:
-        return DEFAULT_CONFIG.copy()
+        data = DEFAULT_CONFIG.copy()
     merged = DEFAULT_CONFIG.copy()
     merged.update(data)
     merged["crm_base_url"] = normalize_crm_base_url(merged.get("crm_base_url"))
+    installation_id = _ensure_installation_id(merged.get("installation_id"))
+    if merged.get("installation_id") != installation_id:
+        merged["installation_id"] = installation_id
+        save_config(merged)
+    else:
+        merged["installation_id"] = installation_id
     return merged
 
 
@@ -1186,6 +1204,7 @@ class PrintServer:
     def __init__(self, token_getter, copies_getter, poll_interval=2.0):
         self._token_getter = token_getter
         self._copies_getter = copies_getter
+        self._installation_id = load_config().get("installation_id", "")
         self._poll_interval = max(1.0, float(poll_interval))
         self._request_timeout = max(3.0, float(CRM_HTTP_TIMEOUT))
         self._fetch_retries = max(1, int(CRM_FETCH_RETRIES))
@@ -1409,6 +1428,7 @@ class PrintServer:
 
         printer_name, printer_online = _get_default_printer_state()
         payload = {
+            "installation_id": self._installation_id,
             "printer_name": printer_name or None,
             "printer_online": bool(printer_online),
             "agent_name": APP_NAME,
@@ -1447,6 +1467,7 @@ class PrintServer:
             return False
 
         payload = _build_printers_sync_payload()
+        payload["installation_id"] = self._installation_id
         url = build_crm_request_url(CRM_BASE_URL, "/api/print/printers/sync")
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
@@ -1545,7 +1566,11 @@ class PrintServer:
     def _initialize_messages_cursor(self, token):
         if self._messages_cursor_initialized:
             return
-        url = build_crm_request_url(CRM_BASE_URL, "/api/print/poll?after_message_id=-1")
+        url = build_crm_request_url(
+            CRM_BASE_URL,
+            "/api/print/poll?after_message_id=-1&installation_id="
+            + urllib.parse.quote(self._installation_id, safe=""),
+        )
         req = urllib.request.Request(url, method="GET", headers={"X-Api-Key": token})
         try:
             with urllib.request.urlopen(req, timeout=6) as resp:
@@ -1594,7 +1619,11 @@ class PrintServer:
 
     def _fetch_poll_bundle(self, token):
         cursor = int(self._last_message_event_id or 0)
-        url = build_crm_request_url(CRM_BASE_URL, f"/api/print/poll?after_message_id={cursor}")
+        url = build_crm_request_url(
+            CRM_BASE_URL,
+            f"/api/print/poll?after_message_id={cursor}&installation_id="
+            + urllib.parse.quote(self._installation_id, safe=""),
+        )
         req = urllib.request.Request(url, method="GET", headers={"X-Api-Key": token})
         body = ""
         for attempt in range(1, self._fetch_retries + 1):
@@ -1642,7 +1671,9 @@ class PrintServer:
 
     def _post_job_result(self, token, job_id, endpoint, payload=None):
         url = build_crm_request_url(CRM_BASE_URL, f"/api/print/jobs/{job_id}/{endpoint}")
-        raw = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+        result_payload = dict(payload or {})
+        result_payload["installation_id"] = self._installation_id
+        raw = json.dumps(result_payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             url,
             data=raw,

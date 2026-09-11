@@ -1944,6 +1944,118 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   }
 
   // ---------------------------
+  // Cash period aggregates
+  // ---------------------------
+  // GET /api/admin/orders/cash-summary
+  router.get("/cash-summary", async (req, res) => {
+    try {
+      setOrdersNoStore(res);
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const range = normalizeDateRange(req.query.start_date, req.query.end_date);
+      const storeTimezone = await getStoreTimezone(tenantId, storeId);
+      const bounds = buildOrderDateBounds(range, storeTimezone);
+      const orderFilter = String(req.query.filter || 'all').toLowerCase();
+      const filterWhere = orderFilter === 'paid' ? ' AND o.is_paid=1' : orderFilter === 'unpaid' ? ' AND (o.is_paid=0 OR o.is_paid IS NULL)' : '';
+      const baseWhere = `o.tenant_id=? AND o.store_id=? AND o.is_active=1 AND s.code <> 'canceled'${bounds ? ' AND o.created_at >= ? AND o.created_at < ?' : ''}`;
+      const where = `${baseWhere}${filterWhere}`;
+      const baseParams = [tenantId, storeId];
+      if (bounds) baseParams.push(bounds.createdStartUtc, bounds.createdEndUtcExclusive);
+
+      const [summaryRows] = await db.query(
+        `SELECT COUNT(*) AS total_orders,
+                SUM(CASE WHEN s.code='new' THEN 1 ELSE 0 END) AS new_orders,
+                SUM(CASE WHEN s.code='delivered' THEN 1 ELSE 0 END) AS delivered_orders,
+                COALESCE(SUM(CASE WHEN s.code='delivered' THEN o.total_price ELSE 0 END), 0) AS delivered_total,
+                SUM(CASE WHEN o.is_paid=1 THEN 1 ELSE 0 END) AS paid_orders,
+                SUM(CASE WHEN o.is_paid=1 THEN 0 ELSE 1 END) AS unpaid_orders,
+                COALESCE(SUM(CASE WHEN o.is_paid=1 AND (LOWER(COALESCE(p.code,'')) LIKE '%cash%' OR LOWER(COALESCE(p.title,'')) LIKE '%нал%') THEN o.total_price ELSE 0 END), 0) AS cash_paid_total,
+                COALESCE(SUM(CASE WHEN o.is_paid=1 AND (LOWER(COALESCE(p.code,'')) LIKE '%online%' OR LOWER(COALESCE(p.title,'')) LIKE '%онлайн%') THEN o.total_price ELSE 0 END), 0) AS online_paid_total,
+                COALESCE(SUM(CASE WHEN o.is_paid=1 AND NOT (LOWER(COALESCE(p.code,'')) LIKE '%cash%' OR LOWER(COALESCE(p.title,'')) LIKE '%нал%' OR LOWER(COALESCE(p.code,'')) LIKE '%online%' OR LOWER(COALESCE(p.title,'')) LIKE '%онлайн%') THEN o.total_price ELSE 0 END), 0) AS card_paid_total
+           FROM order_orders o
+           LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+           LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+          WHERE ${baseWhere}`,
+        baseParams
+      );
+      const [dayRows] = await db.query(
+        `SELECT DATE_FORMAT(DATE_ADD(o.created_at, INTERVAL ? MINUTE), '%Y-%m-%d') AS day,
+                COUNT(*) AS orders_count,
+                COALESCE(SUM(o.total_price), 0) AS total,
+                SUM(CASE WHEN s.code='delivered' THEN 1 ELSE 0 END) AS delivered_orders,
+                COALESCE(SUM(CASE WHEN s.code='delivered' THEN o.total_price ELSE 0 END), 0) AS delivered_total,
+                SUM(CASE WHEN o.is_paid=1 THEN 1 ELSE 0 END) AS paid_count,
+                SUM(CASE WHEN o.is_paid=1 THEN 0 ELSE 1 END) AS unpaid_count
+           FROM order_orders o
+           LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+          WHERE ${where}
+          GROUP BY day ORDER BY day ASC`,
+        [helpers.parseTimezoneOffsetToMinutes(storeTimezone), ...baseParams]
+      );
+      const [stageRows] = await db.query(
+        `SELECT s.id AS status_id, s.title AS status_title, COUNT(*) AS orders_count,
+                COALESCE(SUM(o.total_price), 0) AS total
+           FROM order_orders o
+           LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+          WHERE ${baseWhere}
+          GROUP BY s.id, s.title ORDER BY s.id`,
+        baseParams
+      );
+      const summary = summaryRows[0] || {};
+      res.json({ ok: true, data: {
+        summary: Object.fromEntries(Object.entries(summary).map(([key, value]) => [key, Number(value || 0)])),
+        stages: stageRows.map((row) => ({ status_id: Number(row.status_id || 0), title: String(row.status_title || '—'), count: Number(row.orders_count || 0), amount: Number(row.total || 0) })),
+        days: dayRows.map((row) => Object.assign({}, row, Object.fromEntries(['orders_count','delivered_orders','paid_count','unpaid_count'].map((key) => [key, Number(row[key] || 0)])), { total: Number(row.total || 0), delivered_total: Number(row.delivered_total || 0) })),
+        timezone: storeTimezone,
+      }});
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // GET /api/admin/orders/cash-day
+  router.get("/cash-day", async (req, res) => {
+    try {
+      setOrdersNoStore(res);
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const day = normalizeDateRange(req.query.date, req.query.date);
+      if (!day) return res.status(400).json({ ok: false, error: "INVALID_DATE" });
+      const timezone = await getStoreTimezone(tenantId, storeId);
+      const bounds = buildOrderDateBounds(day, timezone);
+      const filter = String(req.query.filter || 'all').toLowerCase();
+      let where = `o.tenant_id=? AND o.store_id=? AND o.is_active=1 AND s.code <> 'canceled' AND o.created_at >= ? AND o.created_at < ?`;
+      const params = [tenantId, storeId, bounds.createdStartUtc, bounds.createdEndUtcExclusive];
+      if (filter === 'paid') where += ' AND o.is_paid=1';
+      else if (filter === 'unpaid') where += ' AND (o.is_paid=0 OR o.is_paid IS NULL)';
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit || 50)));
+      const offset = Math.max(0, Number(req.query.offset || 0));
+      const [rows] = await db.query(`
+        SELECT o.id, o.store_id, o.public_id, DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+          o.customer_id, o.customer_name, o.customer_phone, o.address, o.comment, o.address_comment,
+          o.total_price, o.payment_id, o.is_paid, o.status_id, o.delivery_type_id, o.delivery_address_id,
+          o.pickup_store_id, s.code AS status_code, s.title AS status_title, s.color AS status_color,
+          p.code AS payment_code, p.title AS payment_title, p.icon AS payment_icon,
+          m.code AS method_code, m.title AS method_title, t.code AS time_option_code, t.title AS time_option_title,
+          t.icon AS time_option_icon, ps.name AS pickup_store_name, ps.address AS pickup_store_address,
+          dz.name AS delivery_zone_name
+        FROM order_orders o
+        LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+        LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+        LEFT JOIN order_delivery_types m ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
+        LEFT JOIN order_time_options t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+        LEFT JOIN ten_stores ps ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
+        LEFT JOIN cust_customer_addresses ca ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
+        LEFT JOIN ten_delivery_zones dz ON dz.tenant_id=o.tenant_id AND dz.id=ca.delivery_zone_id
+        WHERE ${where} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`,
+        [...params, limit + 1, offset]);
+      const hasMore = rows.length > limit;
+      res.json({ ok: true, data: rows.slice(0, limit).map((row) => ({ ...row, created_at: helpers.utcToStoreDateTime(row.created_at, timezone), total_price: Number(row.total_price || 0), is_paid: Number(row.is_paid || 0) === 1 ? 1 : 0 })), has_more: hasMore, next_offset: hasMore ? offset + limit : null });
+    } catch (e) { console.error(e); res.status(500).json({ ok: false, error: "DB_ERROR" }); }
+  });
+
+  // ---------------------------
   // statuses summary (counts)
   // ---------------------------
   // GET /api/admin/orders/statuses
@@ -2064,7 +2176,6 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             o.id,
             o.store_id,
             o.public_id,
-            o.created_at AS updated_at,
             DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
             o.customer_id,
             o.customer_name,
@@ -2144,7 +2255,6 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.id,
           o.store_id,
           o.public_id,
-          o.created_at AS updated_at,
           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
           o.customer_id,
           o.customer_name,
@@ -3441,6 +3551,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           items.push({
             type: "combo",
             combo_id: comboId > 0 ? comboId : null,
+            checkout_block_id: Number(rawItem?.checkout_block_id || 0) || null,
+            checkout_require_all: rawItem?.checkout_require_all == null ? null : Boolean(rawItem.checkout_require_all),
+            checkout_category_ids: Array.isArray(rawItem?.checkout_category_ids)
+              ? rawItem.checkout_category_ids.map((categoryId) => Number(categoryId || 0)).filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index)
+              : [],
             combo_category_id: Number(rawItem?.combo_category_id || comboCategoryIds[0] || 0) || null,
             category_ids: comboCategoryIds,
             name: String(rawItem?.name || rawItem?.combo_title || "Комбо").trim() || "Комбо",
@@ -3486,6 +3601,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
         items.push({
           product_id: productId,
+          checkout_block_id: Number(rawItem?.checkout_block_id || 0) || null,
+          checkout_require_all: rawItem?.checkout_require_all == null ? null : Boolean(rawItem.checkout_require_all),
+          checkout_category_ids: Array.isArray(rawItem?.checkout_category_ids)
+            ? rawItem.checkout_category_ids.map((categoryId) => Number(categoryId || 0)).filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index)
+            : [],
           category_id: Number(rawItem?.category_id || rawItem?._category_id || rawItem?.product_category_id || 0) || null,
           category_ids: Array.isArray(rawItem?.category_ids)
             ? rawItem.category_ids.map((categoryId) => Number(categoryId || 0)).filter((categoryId, index, list) => categoryId > 0 && list.indexOf(categoryId) === index)

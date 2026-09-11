@@ -6,56 +6,6 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-  const ordersMojibakeDecoder = typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
-  const ordersMojibakeExtras = new Map([
-    [0x0402, 0x80], [0x0403, 0x81], [0x201A, 0x82], [0x0453, 0x83], [0x201E, 0x84], [0x2026, 0x85], [0x2020, 0x86], [0x2021, 0x87],
-    [0x20AC, 0x88], [0x2030, 0x89], [0x0409, 0x8A], [0x2039, 0x8B], [0x040A, 0x8C], [0x040C, 0x8D], [0x040B, 0x8E], [0x040F, 0x8F],
-    [0x0452, 0x90], [0x2018, 0x91], [0x2019, 0x92], [0x201C, 0x93], [0x201D, 0x94], [0x2022, 0x95], [0x2013, 0x96], [0x2014, 0x97],
-    [0x2122, 0x99], [0x0459, 0x9A], [0x203A, 0x9B], [0x045A, 0x9C], [0x045C, 0x9D], [0x045B, 0x9E], [0x045F, 0x9F],
-    [0x0401, 0xA8], [0x0404, 0xAA], [0x0407, 0xAF], [0x0406, 0xB2], [0x0456, 0xB3], [0x0491, 0xB4], [0x0451, 0xB8], [0x2116, 0xB9],
-    [0x0452, 0x90], [0x0459, 0x9A], [0x045A, 0x9C], [0x045B, 0x9E], [0x045C, 0x9D], [0x045E, 0xA2], [0x045F, 0x9F], [0x0458, 0xBC], [0x040F, 0x8F],
-  ]);
-  function repairOrdersMojibake(value) {
-    const source = String(value || "");
-    if (!ordersMojibakeDecoder || !/(?:Р.|С.|в[А-яЁё]|Г[А-яЁё]|[ÐÑ].)/u.test(source)) return source;
-    const bytes = [];
-    for (const char of source) {
-      const code = char.codePointAt(0);
-      if (code <= 0x7f) bytes.push(code);
-      else if (code >= 0x410 && code <= 0x44f) bytes.push(code - 0x350);
-      else if (code >= 0x80 && code <= 0xff) bytes.push(code);
-      else if (ordersMojibakeExtras.has(code)) bytes.push(ordersMojibakeExtras.get(code));
-      else return source;
-    }
-    try {
-      const repaired = ordersMojibakeDecoder.decode(new Uint8Array(bytes));
-      return repaired && repaired !== source ? repaired : source;
-    } catch {
-      return source;
-    }
-  }
-  function repairOrdersDom(root = document) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const nodes = [];
-    let node;
-    while ((node = walker.nextNode())) nodes.push(node);
-    nodes.forEach((textNode) => {
-      const repaired = repairOrdersMojibake(textNode.nodeValue);
-      if (repaired !== textNode.nodeValue) textNode.nodeValue = repaired;
-    });
-  }
-  const ordersMojibakeObserver = new MutationObserver((records) => {
-    records.forEach((record) => {
-      record.addedNodes.forEach((node) => {
-        if (node.nodeType === Node.TEXT_NODE) {
-          const repaired = repairOrdersMojibake(node.nodeValue);
-          if (repaired !== node.nodeValue) node.nodeValue = repaired;
-        } else if (node.nodeType === Node.ELEMENT_NODE) repairOrdersDom(node);
-      });
-    });
-  });
-  ordersMojibakeObserver.observe(document.body, { childList: true, subtree: true });
-  repairOrdersDom();
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
   let wasMobileViewport = isMobile();
   function getTenantId() {
@@ -86,13 +36,19 @@
     || (document.body?.dataset?.adminActivePage === "courier-screen" ? "courier" : "orders")
   ).trim().toLowerCase();
   const isCourierWorkspace = workspaceMode === "courier";
+  const workspaceCapabilities = {
+    payment: rawWorkspaceConfig.capabilities?.payment !== false,
+    status: rawWorkspaceConfig.capabilities?.status !== false,
+    edit: rawWorkspaceConfig.capabilities?.edit !== false,
+    print: rawWorkspaceConfig.capabilities?.print !== false,
+  };
   const courierBucketDefs = (
     Array.isArray(rawWorkspaceConfig.courierBuckets) && rawWorkspaceConfig.courierBuckets.length
       ? rawWorkspaceConfig.courierBuckets
       : [
-          { id: "available", title: "РЎРІРѕР±РѕРґРЅС‹Рµ", icon: "fa-user-clock" },
-          { id: "in-transit", title: "Р’ РїСѓС‚Рё", icon: "fa-truck" },
-          { id: "delivered", title: "Р”РѕСЃС‚Р°РІР»РµРЅС‹", icon: "fa-circle-check" },
+          { id: "available", title: "Свободные", icon: "fa-user-clock" },
+          { id: "in-transit", title: "В пути", icon: "fa-truck" },
+          { id: "delivered", title: "Доставлены", icon: "fa-circle-check" },
         ]
   ).map((bucket) => ({
     id: String(bucket?.id || "").trim(),
@@ -110,12 +66,12 @@
       "on_the_way",
       "in_transit",
       "courier",
-      "РІ_РїСѓС‚Рё",
+      "в_пути",
     ])
       .map((value) => String(value || "")
         .trim()
         .toLowerCase()
-        .replace(/С‘/g, "Рµ")
+        .replace(/ё/g, "е")
         .replace(/[\s-]+/g, "_")
         .replace(/_+/g, "_"))
       .filter(Boolean)
@@ -126,21 +82,21 @@
       "completed",
       "done",
       "delivery_done",
-      "РґРѕСЃС‚Р°РІР»РµРЅ",
-      "РґРѕСЃС‚Р°РІР»РµРЅР°",
-      "РґРѕСЃС‚Р°РІР»РµРЅРѕ",
-      "РґРѕСЃС‚Р°РІР»РµРЅС‹",
-      "РІСЂСѓС‡РµРЅ",
-      "РІСЂСѓС‡РµРЅРѕ",
-      "РІС‹РїРѕР»РЅРµРЅ",
-      "РІС‹РїРѕР»РЅРµРЅРѕ",
-      "Р·Р°РІРµСЂС€РµРЅ",
-      "Р·Р°РІРµСЂС€РµРЅРѕ",
+      "доставлен",
+      "доставлена",
+      "доставлено",
+      "доставлены",
+      "вручен",
+      "вручено",
+      "выполнен",
+      "выполнено",
+      "завершен",
+      "завершено",
     ])
       .map((value) => String(value || "")
         .trim()
         .toLowerCase()
-        .replace(/С‘/g, "Рµ")
+        .replace(/ё/g, "е")
         .replace(/[\s-]+/g, "_")
         .replace(/_+/g, "_"))
       .filter(Boolean)
@@ -164,13 +120,37 @@
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
   const ORDER_BROWSER_ALERTS_ENABLED = false;
   const ORDER_UPDATED_EVENT = "dashboard:order-updated";
-  const lazyFeatureScriptUrls = { newOrder: "/static/js/new-order.js?v=20260506a", clients: "/static/js/clients.js?v=20260831-mobile-client-benefits-pages" };
+  const canonicalAdminAssetUrls = window.__ADMIN_ASSET_URLS__ && typeof window.__ADMIN_ASSET_URLS__ === "object"
+    ? window.__ADMIN_ASSET_URLS__
+    : {};
+  const lazyFeatureScriptUrls = { newOrder: canonicalAdminAssetUrls.newOrder || "/static/js/new-order.js", clients: canonicalAdminAssetUrls.clients || "/static/js/clients.js" };
   const lazyFeatureScriptPromises = new Map();
+  function findLoadedFeatureScript(src) {
+    let expected;
+    try {
+      expected = new URL(src, window.location.href);
+    } catch {
+      return null;
+    }
+    return Array.from(document.scripts).find((script) => {
+      try {
+        const current = new URL(script.src, window.location.href);
+        return current.origin === expected.origin && current.pathname === expected.pathname;
+      } catch {
+        return false;
+      }
+    }) || null;
+  }
   function loadOrdersFeatureScript(name) {
+    if (name === "clients" && window.SharedOrderPanel && typeof window.SharedOrderPanel.ensureAdminAsset === "function") {
+      return window.SharedOrderPanel.ensureAdminAsset("clients");
+    }
     const src = lazyFeatureScriptUrls[name];
     if (!src) return Promise.reject(new Error(`Unknown Orders feature: ${name}`));
     const existing = lazyFeatureScriptPromises.get(name);
     if (existing) return existing;
+    const loadedScript = findLoadedFeatureScript(src);
+    if (loadedScript) return Promise.resolve(loadedScript);
     const promise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
       script.src = src;
@@ -196,7 +176,7 @@
   }
 
   async function apiJson(url, opts = {}) {
-    // РџРѕР»СѓС‡Р°РµРј С‚РѕРєРµРЅ Рё store_id РёР· localStorage
+    // Получаем токен и store_id из localStorage
     const token = localStorage.getItem('authToken');
     const storeId = localStorage.getItem('activeStoreId') || '1';
     const headers = {
@@ -204,12 +184,12 @@
       ...(opts.headers || {}),
     };
 
-    // Р”РѕР±Р°РІР»СЏРµРј С‚РѕРєРµРЅ Р°РІС‚РѕСЂРёР·Р°С†РёРё, РµСЃР»Рё РѕРЅ РµСЃС‚СЊ
+    // Добавляем токен авторизации, если он есть
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    // Р”РѕР±Р°РІР»СЏРµРј ID РІС‹Р±СЂР°РЅРЅРѕР№ Р¤РёР»РёР°Р»С‹
+    // Добавляем ID выбранной Филиалы
     headers['x-store-id'] = storeId;
     
     let res;
@@ -226,7 +206,7 @@
       throw err;
     }
     
-    // Р•СЃР»Рё 401 - РїРµСЂРµРЅР°РїСЂР°РІР»СЏРµРј РЅР° Р»РѕРіРёРЅ
+    // Если 401 - перенаправляем на логин
     if (res.status === 401) {
       localStorage.removeItem('authToken');
       localStorage.removeItem('user');
@@ -430,9 +410,6 @@
     addrToggleBtn: clientAddrToggleBtn,
     addrFormCard: clientAddrFormCard,
   } = desktopClientDom;
-  const ordersClientBenefitsFooter = $("#ordersClientBenefitsFooter");
-  const ordersClientBenefitsOpenBtn = $("#ordersClientBenefitsOpenBtn");
-  const ordersClientBonusesOpenBtn = $("#ordersClientBonusesOpenBtn");
   const sheetOrderInfoFooter = sheet ? $('[data-role="order-info-footer"]', sheet) : null;
   const sheetOrderInfoPaymentBtn = sheet ? $('[data-role="order-info-payment-btn"]', sheet) : null;
   const sharedOrderPanel = window.SharedOrderPanel || null;
@@ -731,52 +708,8 @@
     return valueText;
   }
 
-  const CP1251_PUNCT_TO_BYTE = Object.freeze({
-    0x201A: 0x82, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x20AC: 0x88,
-    0x2030: 0x89, 0x0409: 0x8A, 0x2039: 0x8B, 0x040A: 0x8C, 0x040C: 0x8D, 0x040B: 0x8E,
-    0x040F: 0x8F, 0x0452: 0x90, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94,
-    0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x2122: 0x99, 0x0459: 0x9A, 0x203A: 0x9B,
-    0x045A: 0x9C, 0x045C: 0x9D, 0x045B: 0x9E, 0x045F: 0x9F, 0x00A0: 0xA0, 0x040E: 0xA1,
-    0x045E: 0xA2, 0x0408: 0xA3, 0x00A4: 0xA4, 0x0490: 0xA5, 0x00A6: 0xA6, 0x00A7: 0xA7,
-    0x00A9: 0xA9, 0x0404: 0xAA, 0x00AB: 0xAB, 0x00AC: 0xAC, 0x00AD: 0xAD, 0x00AE: 0xAE,
-    0x0407: 0xAF, 0x00B0: 0xB0, 0x00B1: 0xB1, 0x0406: 0xB2, 0x0456: 0xB3, 0x0491: 0xB4,
-    0x00B5: 0xB5, 0x00B6: 0xB6, 0x00B7: 0xB7, 0x2116: 0xB9, 0x0454: 0xBA, 0x00BB: 0xBB,
-    0x0458: 0xBC, 0x0405: 0xBD, 0x0455: 0xBE, 0x0457: 0xBF,
-  });
-  const MOJIBAKE_RE = /(?:Р[\u0400-\u04FF\u2018-\u203A]|С[\u0400-\u04FF\u2018-\u203A]|вЂ|в„–|Г—)/;
-
-  function cp1251ByteForCodePoint(code) {
-    if (code >= 0x00 && code <= 0x7F) return code;
-    if (code >= 0x0410 && code <= 0x044F) return code - 0x350;
-    if (code === 0x0401) return 0xA8;
-    if (code === 0x0451) return 0xB8;
-    if (Object.prototype.hasOwnProperty.call(CP1251_PUNCT_TO_BYTE, code)) {
-      return CP1251_PUNCT_TO_BYTE[code];
-    }
-    return null;
-  }
-
-  function decodeCp1251Mojibake(value) {
-    const raw = String(value ?? "");
-    if (!raw || !MOJIBAKE_RE.test(raw)) return raw;
-    const bytes = [];
-    for (const ch of raw) {
-      const code = ch.codePointAt(0);
-      const b = cp1251ByteForCodePoint(code);
-      if (b == null) return raw;
-      bytes.push(b);
-    }
-    try {
-      const decoded = new TextDecoder("utf-8").decode(new Uint8Array(bytes));
-      if (!decoded || decoded.includes("\uFFFD")) return raw;
-      return decoded;
-    } catch {
-      return raw;
-    }
-  }
-
   function escapeHtml(s) {
-    return decodeCp1251Mojibake(s)
+    return String(s ?? "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
@@ -919,7 +852,7 @@
     return String(value || "")
       .trim()
       .toLowerCase()
-      .replace(/С‘/g, "Рµ")
+      .replace(/ё/g, "е")
       .replace(/[\s-]+/g, "_")
       .replace(/_+/g, "_");
   }
@@ -1035,7 +968,7 @@
   function getCourierTransitStatusMeta(order) {
     if (!isCourierWorkspace) return null;
     if (courierTransitStatusId !== null) {
-      return getCourierConfiguredStatusMeta(courierTransitStatusId, order, "Р’ РїСѓС‚Рё");
+      return getCourierConfiguredStatusMeta(courierTransitStatusId, order, "В пути");
     }
     const statuses = getSortedStatuses();
     if (!statuses.length) return null;
@@ -1058,7 +991,7 @@
   function getCourierDeliveredStatusMeta(order) {
     if (!isCourierWorkspace) return null;
     if (courierDeliveredStatusId !== null) {
-      return getCourierConfiguredStatusMeta(courierDeliveredStatusId, order, "Р”РѕСЃС‚Р°РІР»РµРЅ");
+      return getCourierConfiguredStatusMeta(courierDeliveredStatusId, order, "Доставлен");
     }
     const statuses = getSortedStatuses();
     if (!statuses.length) return null;
@@ -1107,27 +1040,27 @@
       && Number(deliveredStatus.id || 0) !== Number(currentStatusId)
     );
     let disabledReason = "";
-    let actionLabel = "Р—Р°Р±СЂР°С‚СЊ";
+    let actionLabel = "Забрать";
     let actionIcon = "fas fa-truck";
     let targetStatus = transitStatus;
 
     if (!isDeliveryOrder(order)) {
-      disabledReason = "Р”РµР№СЃС‚РІРёРµ РґРѕСЃС‚СѓРїРЅРѕ С‚РѕР»СЊРєРѕ РґР»СЏ РґРѕСЃС‚Р°РІРєРё";
+      disabledReason = "Действие доступно только для доставки";
     } else if (canDeliver) {
-      actionLabel = "Р”РѕСЃС‚Р°РІР»РµРЅ";
+      actionLabel = "Доставлен";
       actionIcon = "fas fa-circle-check";
       targetStatus = deliveredStatus;
     } else if (isCurrentDeliveredStatus) {
-      actionLabel = "Р”РѕСЃС‚Р°РІР»РµРЅ";
+      actionLabel = "Доставлен";
       actionIcon = "fas fa-circle-check";
       targetStatus = deliveredStatus;
-      disabledReason = "Р—Р°РєР°Р· СѓР¶Рµ РґРѕСЃС‚Р°РІР»РµРЅ";
+      disabledReason = "Заказ уже доставлен";
     } else if (!transitStatus) {
-      disabledReason = "РќРµ РЅР°Р№РґРµРЅ СЃС‚Р°С‚СѓСЃ В«Р’ РїСѓС‚РёВ»";
+      disabledReason = "Не найден статус «В пути»";
     } else if (isAlreadyTransit) {
-      disabledReason = "Р—Р°РєР°Р· СѓР¶Рµ РІ РїСѓС‚Рё";
+      disabledReason = "Заказ уже в пути";
     } else if (isFinalStatusMeta(currentStatus) || isAlreadyDelivered || isDeliveredStatusMeta(currentStatus) || matchesCourierCanceledStatus(currentStatus)) {
-      disabledReason = "Р”РµР№СЃС‚РІРёРµ РЅРµРґРѕСЃС‚СѓРїРЅРѕ РґР»СЏ С„РёРЅР°Р»СЊРЅРѕРіРѕ СЃС‚Р°С‚СѓСЃР°";
+      disabledReason = "Действие недоступно для финального статуса";
     }
 
     return {
@@ -1142,11 +1075,11 @@
   function buildCourierPickupButtonHtml(order) {
     const pickupState = getCourierPickupState(order);
     const targetStatusId = Number(pickupState?.transitStatus?.id || 0);
-    const actionLabel = String(pickupState?.actionLabel || "Р—Р°Р±СЂР°С‚СЊ").trim() || "Р—Р°Р±СЂР°С‚СЊ";
+    const actionLabel = String(pickupState?.actionLabel || "Забрать").trim() || "Забрать";
     const actionIcon = String(pickupState?.actionIcon || "fas fa-truck").trim() || "fas fa-truck";
     const buttonTitle = pickupState.canPickup
-      ? `РџРµСЂРµРІРµСЃС‚Рё РІ В«${String(pickupState?.transitStatus?.title || "Р’ РїСѓС‚Рё").trim() || "Р’ РїСѓС‚Рё"}В»`
-      : (pickupState.disabledReason || "Р”РµР№СЃС‚РІРёРµ РЅРµРґРѕСЃС‚СѓРїРЅРѕ");
+      ? `Перевести в «${String(pickupState?.transitStatus?.title || "В пути").trim() || "В пути"}»`
+      : (pickupState.disabledReason || "Действие недоступно");
 
     return `
       <button
@@ -1160,7 +1093,7 @@
         aria-label="${escapeHtml(buttonTitle)}"
       >
         <i class="${escapeHtml(actionIcon)}" aria-hidden="true"></i>
-        <span>Р—Р°Р±СЂР°С‚СЊ</span>
+        <span>Забрать</span>
       </button>
     `;
   }
@@ -1169,11 +1102,11 @@
     const pickupState = getCourierPickupState(order);
     const targetStatus = pickupState?.transitStatus || null;
     const targetStatusId = Number(targetStatus?.id || 0);
-    const actionLabel = String(pickupState?.actionLabel || "Р—Р°Р±СЂР°С‚СЊ").trim() || "Р—Р°Р±СЂР°С‚СЊ";
+    const actionLabel = String(pickupState?.actionLabel || "Забрать").trim() || "Забрать";
     const actionIcon = String(pickupState?.actionIcon || "fas fa-truck").trim() || "fas fa-truck";
     const buttonTitle = pickupState.canPickup
-      ? `РџРµСЂРµРІРµСЃС‚Рё РІ В«${String(targetStatus?.title || actionLabel).trim() || actionLabel}В»`
-      : (pickupState.disabledReason || "Р”РµР№СЃС‚РІРёРµ РЅРµРґРѕСЃС‚СѓРїРЅРѕ");
+      ? `Перевести в «${String(targetStatus?.title || actionLabel).trim() || actionLabel}»`
+      : (pickupState.disabledReason || "Действие недоступно");
 
     return `
       <button
@@ -1200,11 +1133,11 @@
           class="order-courier-action-btn order-courier-action-btn--call"
           type="button"
           disabled
-          aria-label="РўРµР»РµС„РѕРЅ РєР»РёРµРЅС‚Р° РЅРµРґРѕСЃС‚СѓРїРµРЅ"
-          title="РўРµР»РµС„РѕРЅ РєР»РёРµРЅС‚Р° РЅРµРґРѕСЃС‚СѓРїРµРЅ"
+          aria-label="Телефон клиента недоступен"
+          title="Телефон клиента недоступен"
         >
           <i class="fas fa-phone" aria-hidden="true"></i>
-          <span>РџРѕР·РІРѕРЅРёС‚СЊ</span>
+          <span>Позвонить</span>
         </button>
       `;
     }
@@ -1214,11 +1147,11 @@
         class="order-courier-action-btn order-courier-action-btn--call"
         href="tel:${escapeHtml(phoneHref)}"
         data-action="courier-call"
-        aria-label="РџРѕР·РІРѕРЅРёС‚СЊ РєР»РёРµРЅС‚Сѓ"
-        title="РџРѕР·РІРѕРЅРёС‚СЊ РєР»РёРµРЅС‚Сѓ"
+        aria-label="Позвонить клиенту"
+        title="Позвонить клиенту"
       >
         <i class="fas fa-phone" aria-hidden="true"></i>
-        <span>РџРѕР·РІРѕРЅРёС‚СЊ</span>
+        <span>Позвонить</span>
       </a>
     `;
   }
@@ -1255,7 +1188,7 @@
     const nextStatusId = Number(nextStatus?.id || 0);
     if (!currentStatus || !Number.isFinite(nextStatusId) || nextStatusId <= 0) return "";
 
-    const currentTitle = String(currentStatus.title || "").trim() || "Р­С‚Р°Рї";
+    const currentTitle = String(currentStatus.title || "").trim() || "Этап";
     const nextTitle = String(nextStatus.title || "").trim() || currentTitle;
     const titleAttr = escapeHtml(`${currentTitle} -> ${nextTitle}`);
     const iconValue = resolveOrderStatusIcon(currentStatus);
@@ -1357,7 +1290,7 @@
     const re = /\b(?:\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?)\s*([\p{L}\d\-\/]+)/iu;
     const m = src.match(re);
     if (!m || !m[1]) return "";
-    return `РєРІ ${m[1]}`;
+    return `кв ${m[1]}`;
   }
 
   function stripApartmentToken(token) {
@@ -1481,8 +1414,8 @@
     const fromPhone = String(phone || "").trim();
     if (fromPhone) return formatPhoneDigitsToRU(fromPhone);
     const clientId = Number(client?.id || id || 0);
-    if (Number.isFinite(clientId) && clientId > 0) return `РљР»РёРµРЅС‚ #${clientId}`;
-    return "РљР»РёРµРЅС‚";
+    if (Number.isFinite(clientId) && clientId > 0) return `Клиент #${clientId}`;
+    return "Клиент";
   }
 
   function syncActiveOrderRowState() {
@@ -1729,8 +1662,8 @@
       const isActive = tab.key === tabsState.activeKey;
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-order-tab-key="${escapeHtml(tab.key)}">
-          <span class="product-tab-title">${escapeHtml(tab.title || (tab.type === "client" ? "РљР»РёРµРЅС‚" : "Р—Р°РєР°Р·"))}</span>
-          <button class="product-tab-close" type="button" data-order-tab-close="${escapeHtml(tab.key)}" aria-label="Р—Р°РєСЂС‹С‚СЊ">&times;</button>
+          <span class="product-tab-title">${escapeHtml(tab.title || (tab.type === "client" ? "Клиент" : "Заказ"))}</span>
+          <button class="product-tab-close" type="button" data-order-tab-close="${escapeHtml(tab.key)}" aria-label="Закрыть">&times;</button>
         </div>
       `;
     }).join("");
@@ -1814,7 +1747,8 @@
   }
 
   function goToOrdersHomeView() {
-    tabsState.tabs = [];
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    if (activeTab) captureCheckoutSessionForTab(activeTab);
     tabsState.activeKey = null;
     state.activeOrderId = null;
     state.activeOrder = null;
@@ -1898,10 +1832,21 @@
           return ensureFullOrderById(orderId, { strict: true });
         },
         openTab(order, orderId, context = {}) {
-          return ensureOrderTab(order, {
+          const tab = ensureOrderTab(order, {
             activate: true,
             openMobile: context.openMobile !== false,
           });
+          if (tab) {
+            tab.orderPassportContext = context;
+            syncOrderCapabilities();
+          }
+          return tab;
+        },
+        close(reason, context = {}) {
+          const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+          if (activeTab && activeTab.type === "order" && context.keepTabOnClose !== true) closeOrderTab(activeTab.key);
+          if (typeof context.onBack === "function") return context.onBack(reason);
+          return null;
         },
         onError(error) {
           console.error("order details open error:", error);
@@ -1934,7 +1879,7 @@
   async function openNewDraftTab() {
     const key = `new:${Date.now()}:${Math.floor(Math.random() * 1000)}`;
     const nextNumber = tabsState.tabs.filter((tab) => tab.type === "order" && normalizeTabMode(tab.mode) === "new").length + 1;
-    const title = nextNumber === 1 ? "РќРѕРІС‹Р№ Р·Р°РєР°Р·" : `РќРѕРІС‹Р№ Р·Р°РєР°Р· ${nextNumber}`;
+    const title = nextNumber === 1 ? "Новый заказ" : `Новый заказ ${nextNumber}`;
     let checkoutSession = null;
     try {
       const bridge = await getReadyNewOrderBridge();
@@ -2370,7 +2315,7 @@
     if (failedItem) {
       return {
         mode: "error",
-        text: failedItem.error ? `РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ: ${failedItem.error}` : "РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ",
+        text: failedItem.error ? `Не удалось отправить изменения: ${failedItem.error}` : "Не удалось отправить изменения",
         retry: true,
       };
     }
@@ -2384,21 +2329,21 @@
     if (courierOfflineState.syncing && courierOfflineState.queue.length) {
       return {
         mode: "syncing",
-        text: `РћС‚РїСЂР°РІР»СЏРµРј РёР·РјРµРЅРµРЅРёСЏ: ${courierOfflineState.queue.length}`,
+        text: `Отправляем изменения: ${courierOfflineState.queue.length}`,
         retry: false,
       };
     }
     if (!courierOfflineState.online && courierOfflineState.queue.length) {
       return {
         mode: "offline",
-        text: `РќРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°. РР·РјРµРЅРµРЅРёСЏ СЃРѕС…СЂР°РЅРµРЅС‹ Рё Р±СѓРґСѓС‚ РѕС‚РїСЂР°РІР»РµРЅС‹: ${courierOfflineState.queue.length}`,
+        text: `Нет интернета. Изменения сохранены и будут отправлены: ${courierOfflineState.queue.length}`,
         retry: false,
       };
     }
     if (!courierOfflineState.online) {
       return {
         mode: "offline",
-        text: "РќРµС‚ РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє РёРЅС‚РµСЂРЅРµС‚Сѓ",
+        text: "Нет подключения к интернету",
         retry: false,
       };
     }
@@ -2459,7 +2404,7 @@
       courierOfflineState.syncing = false;
     }
     if (normalized && !prev && showRestored) {
-      showCourierTransientBanner("online", "РџРѕРґРєР»СЋС‡РµРЅРёРµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРѕ");
+      showCourierTransientBanner("online", "Подключение восстановлено");
       return;
     }
     refreshCourierConnectionBanner();
@@ -2619,7 +2564,7 @@
           current.state = "error";
           current.error = String(err?.message || "API_ERROR");
         }
-        courierOfflineState.syncError = "РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ";
+        courierOfflineState.syncError = "Не удалось отправить изменения";
         persistCourierOfflineState();
         refreshCourierConnectionBanner();
         return;
@@ -2629,7 +2574,7 @@
     courierOfflineState.syncing = false;
     persistCourierOfflineState();
     if (processedAny && courierOfflineState.online) {
-      showCourierTransientBanner("online", "РџРѕРґРєР»СЋС‡РµРЅРёРµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРѕ");
+      showCourierTransientBanner("online", "Подключение восстановлено");
     } else {
       refreshCourierConnectionBanner();
     }
@@ -2694,7 +2639,7 @@
             type: "order",
             mode: normalizeTabMode(row.mode),
             orderId: Number.isFinite(Number(row.orderId)) && Number(row.orderId) > 0 ? Number(row.orderId) : null,
-            title: String(row.title || "").trim() || "Р—Р°РєР°Р·",
+            title: String(row.title || "").trim() || "Заказ",
             order: row.order && typeof row.order === "object" ? row.order : null,
             checkoutSession: row.checkoutSession && typeof row.checkoutSession === "object" ? row.checkoutSession : null,
           };
@@ -2703,7 +2648,7 @@
           key,
           type: "client",
           clientId: Number.isFinite(Number(row.clientId)) && Number(row.clientId) > 0 ? Number(row.clientId) : null,
-          title: String(row.title || "").trim() || "РљР»РёРµРЅС‚",
+          title: String(row.title || "").trim() || "Клиент",
           fallbackName: String(row.fallbackName || "").trim(),
           fallbackPhone: String(row.fallbackPhone || "").trim(),
           activeContentTab: String(row.activeContentTab || "addresses"),
@@ -2996,7 +2941,7 @@
           : null;
         return {
           key: String(entry?.key || "").trim() || null,
-          title: String(entry?.title || entry?.name || "РЎРєРёРґРєР°").trim() || "РЎРєРёРґРєР°",
+          title: String(entry?.title || entry?.name || "Скидка").trim() || "Скидка",
           amount: roundMoney(Number(entry?.discount_amount ?? entry?.amount ?? 0)),
           sourceKind,
           promoCode,
@@ -3027,7 +2972,7 @@
         if (!(amount > 0)) return;
         const normalized = {
           key: String(entry?.key || "").trim() || null,
-          title: String(entry?.title || "РЎРєРёРґРєР°").trim() || "РЎРєРёРґРєР°",
+          title: String(entry?.title || "Скидка").trim() || "Скидка",
           amount,
           sourceKind: normalizeOrderDiscountBreakdownSourceKind(entry),
           promoCode: String(entry?.promoCode || entry?.promo_code || "").trim().toUpperCase() || null,
@@ -3102,9 +3047,9 @@
     return {
       totalDiscount: roundMoney(comboDiscount + productDiscount + autoAddDiscount),
       breakdown: [
-        { key: "combo_discount", title: "РљРѕРјР±Рѕ", amount: comboDiscount },
-        { key: "product_discount", title: "РўРѕРІР°СЂРЅС‹Рµ СЃРєРёРґРєРё", amount: productDiscount },
-        { key: "auto_add_discount", title: "РђРІС‚РѕРґРѕР±Р°РІР»РµРЅРёРµ", amount: autoAddDiscount },
+        { key: "combo_discount", title: "Комбо", amount: comboDiscount },
+        { key: "product_discount", title: "Товарные скидки", amount: productDiscount },
+        { key: "auto_add_discount", title: "Автодобавление", amount: autoAddDiscount },
       ].filter((entry) => Number(entry.amount || 0) > 0),
     };
   }
@@ -3119,7 +3064,7 @@
   }
 
   function formatOrderDiscountBreakdownTitle(entry) {
-    const title = String(entry?.title || "РЎРєРёРґРєР°").trim() || "РЎРєРёРґРєР°";
+    const title = String(entry?.title || "Скидка").trim() || "Скидка";
     const promoCode = String(entry?.promoCode || "").trim();
     if (!promoCode) return title;
     return `${title} (${promoCode})`;
@@ -3169,10 +3114,10 @@
     const subtotalBeforeDiscount = roundMoney(itemsPayableAfterAllDiscounts + totalDiscount);
 
     let breakdown = [
-      { title: "РљРѕРјР±Рѕ", amount: comboDiscount },
-      { title: "РўРѕРІР°СЂРЅС‹Рµ СЃРєРёРґРєРё", amount: productDiscount },
-      { title: "РђРІС‚РѕРґРѕР±Р°РІР»РµРЅРёРµ", amount: autoAddDiscount },
-      { title: "РљР»РёРµРЅС‚СЃРєР°СЏ СЃРєРёРґРєР°", amount: customerOrderDiscount },
+      { title: "Комбо", amount: comboDiscount },
+      { title: "Товарные скидки", amount: productDiscount },
+      { title: "Автодобавление", amount: autoAddDiscount },
+      { title: "Клиентская скидка", amount: customerOrderDiscount },
     ].filter((entry) => Number(entry.amount || 0) > 0);
 
     const breakdownTotal = roundMoney(
@@ -3202,14 +3147,14 @@
     const rows = Array.isArray(summary.breakdown) ? summary.breakdown : [];
     rows.forEach((entry) => {
       html += `<div class="order-summary-discount-breakdown-row">`;
-      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(entry.title || "РЎРєРёРґРєР°")}</span>`;
+      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(entry.title || "Скидка")}</span>`;
       html += `<span class="order-summary-discount-breakdown-value">-${money(entry.amount || 0)}</span>`;
       html += `</div>`;
     });
 
     const titles = Array.isArray(summary.orderDiscountTitles) ? summary.orderDiscountTitles : [];
     if (titles.length > 0) {
-      html += `<div class="order-summary-discount-breakdown-note">РЎРєРёРґРєР° РєР»РёРµРЅС‚Р°: ${escapeHtml(titles.join(", "))}</div>`;
+      html += `<div class="order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(titles.join(", "))}</div>`;
     }
 
     return html;
@@ -3228,7 +3173,7 @@
 
     const titles = Array.isArray(summary.orderDiscountTitles) ? summary.orderDiscountTitles : [];
     if (titles.length > 0) {
-      html += `<div class="order-summary-discount-breakdown-note">РЎРєРёРґРєР° РєР»РёРµРЅС‚Р°: ${escapeHtml(titles.join(", "))}</div>`;
+      html += `<div class="order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(titles.join(", "))}</div>`;
     }
 
     return html;
@@ -3281,11 +3226,11 @@
     });
   }
 
-  /** РџРѕР·РёС†РёРё В«РџСЂРёР±РѕСЂС‹В» Рё РїСЂРѕС‡РёРµ auto_add — РІ РєРѕРЅРµС† СЃРїРёСЃРєР° (РїРѕ С„Р»Р°РіСѓ РёР»Рё РїРѕ РЅР°Р·РІР°РЅРёСЋ). */
+  /** Позиции «Приборы» и прочие auto_add — в конец списка (по флагу или по названию). */
   function isAutoAddItem(item) {
     if (Number(item?.auto_add || 0) === 1) return true;
     const name = String(item?.product_name || item?.name || '').trim().toLowerCase();
-    return name === 'РїСЂРёР±РѕСЂС‹';
+    return name === 'приборы';
   }
 
   function itemsToHtml(items) {
@@ -3327,22 +3272,22 @@
       if (!raw) return "";
       const key = raw.toLowerCase();
       const dict = {
-        "С€С‚СѓРє": "С€С‚",
-        "С€С‚СѓРєР°": "С€С‚",
-        "С€С‚": "С€С‚",
-        "РіСЂР°РјРј": "Рі",
-        "РіСЂР°РјРјР°": "Рі",
-        "РіСЂ": "Рі",
-        "Рі": "Рі",
-        "РєРёР»РѕРіСЂР°РјРј": "РєРі",
-        "РєРёР»РѕРіСЂР°РјРјР°": "РєРі",
-        "РєРі": "РєРі",
-        "РјРёР»Р»РёР»РёС‚СЂ": "РјР»",
-        "РјРёР»Р»РёР»РёС‚СЂР°": "РјР»",
-        "РјР»": "РјР»",
-        "Р»РёС‚СЂ": "Р»",
-        "Р»РёС‚СЂР°": "Р»",
-        "Р»": "Р»",
+        "штук": "шт",
+        "штука": "шт",
+        "шт": "шт",
+        "грамм": "г",
+        "грамма": "г",
+        "гр": "г",
+        "г": "г",
+        "килограмм": "кг",
+        "килограмма": "кг",
+        "кг": "кг",
+        "миллилитр": "мл",
+        "миллилитра": "мл",
+        "мл": "мл",
+        "литр": "л",
+        "литра": "л",
+        "л": "л",
       };
       const safeDict = {
         "\u0448\u0442\u0443\u043a": "\u0448\u0442",
@@ -3522,7 +3467,7 @@
         }
       }
       const primaryVariantLine = variantLines.length ? variantLines[0] : "";
-      const giftSuffix = isGiftRewardOrderItem(it) ? " (РџРѕРґР°СЂРѕРє)" : "";
+      const giftSuffix = isGiftRewardOrderItem(it) ? " (Подарок)" : "";
       const titleText = ([primaryVariantLine, nameRaw].filter(Boolean).join(" ").trim() || nameRaw) + giftSuffix;
       const titleHtml = `${qty} x ${escapeHtml(titleText)}`;
       const photoHtml = renderThumbHtml(it?.photos, nameRaw);
@@ -3602,7 +3547,7 @@
     infoEls.itemsList.forEach((container) => {
       if (!container) return;
       
-      // РћР±СЂР°Р±РѕС‚С‡РёРєРё РґР»СЏ РєР°Р¶РґРѕРіРѕ С‚РѕРІР°СЂР° (РїСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ РµС‰Рµ РЅРµ РёРЅРёС†РёР°Р»РёР·РёСЂРѕРІР°РЅ)
+      // Обработчики для каждого товара (проверяем, что еще не инициализирован)
       container.querySelectorAll('[data-item-photos]:not([data-photos-initialized])').forEach((photoContainer) => {
         const uniqueId = photoContainer.getAttribute('data-item-photos');
         const mainImg = photoContainer.querySelector('.order-item-photo-img');
@@ -3614,10 +3559,10 @@
         
         if (!mainImg) return;
         
-        // РџРѕРјРµС‡Р°РµРј РєР°Рє РёРЅРёС†РёР°Р»РёР·РёСЂРѕРІР°РЅРЅС‹Р№
+        // Помечаем как инициализированный
         photoContainer.setAttribute('data-photos-initialized', 'true');
         
-        // РџРѕР»СѓС‡Р°РµРј РІСЃРµ С„РѕС‚Рѕ РёР· РјРёРЅРёР°С‚СЋСЂ
+        // Получаем все фото из миниатюр
         const thumbs = thumbsContainer ? Array.from(thumbsContainer.querySelectorAll('.order-item-photo-thumb')) : [];
         const photos = thumbs.map(thumb => {
           const img = thumb.querySelector('img');
@@ -3634,12 +3579,12 @@
           mainImg.src = photos[idx];
           mainImg.setAttribute('data-photo-idx', String(idx));
           
-          // РћР±РЅРѕРІР»СЏРµРј Р°РєС‚РёРІРЅСѓСЋ РјРёРЅРёР°С‚СЋСЂСѓ
+          // Обновляем активную миниатюру
           thumbs.forEach((thumb, i) => {
             thumb.classList.toggle('is-active', i === idx);
           });
           
-          // РџСЂРѕРєСЂСѓС‡РёРІР°РµРј РјРёРЅРёР°С‚СЋСЂС‹ Рє Р°РєС‚РёРІРЅРѕР№
+          // Прокручиваем миниатюры к активной
           if (thumbsContainer && thumbs[idx]) {
             const thumb = thumbs[idx];
             const containerRect = thumbsContainer.getBoundingClientRect();
@@ -3653,7 +3598,7 @@
           }
         }
         
-        // РќР°РІРёРіР°С†РёСЏ СЃС‚СЂРµР»РєР°РјРё РЅР° РіР»Р°РІРЅРѕРј С„РѕС‚Рѕ
+        // Навигация стрелками на главном фото
         if (prevBtn) {
           prevBtn.addEventListener('click', () => {
             setActivePhoto((currentIdx - 1 + photos.length) % photos.length);
@@ -3666,14 +3611,14 @@
           });
         }
         
-        // РљР»РёРє РЅР° РјРёРЅРёР°С‚СЋСЂСѓ
+        // Клик на миниатюру
         thumbs.forEach((thumb, idx) => {
           thumb.addEventListener('click', () => {
             setActivePhoto(idx);
           });
         });
         
-        // Р›РёСЃС‚Р°РЅРёРµ РјРёРЅРёР°С‚СЋСЂ СЃС‚СЂРµР»РєР°РјРё
+        // Листание миниатюр стрелками
         if (thumbsPrevBtn && thumbsContainer) {
           thumbsPrevBtn.addEventListener('click', () => {
             thumbsContainer.scrollBy({ left: -80, behavior: 'smooth' });
@@ -3717,8 +3662,8 @@
   function getOrderRefundStateTitle(order) {
     if (sharedOrderPayment?.getRefundStateTitle) return sharedOrderPayment.getRefundStateTitle(order);
     const state = getOrderRefundState(order);
-    if (state === "full") return "Р’РѕР·РІСЂР°С‰РµРЅРѕ";
-    if (state === "partial") return "Р§Р°СЃС‚РёС‡РЅС‹Р№ РІРѕР·РІСЂР°С‚";
+    if (state === "full") return "Возвращено";
+    if (state === "partial") return "Частичный возврат";
     return "";
   }
 
@@ -3790,7 +3735,7 @@
   }
 
   function setTextAll(list, value) {
-    const normalizedValue = decodeCp1251Mojibake(value);
+    const normalizedValue = String(value ?? "");
     list.forEach((el) => {
       if (!el) return;
       el.textContent = normalizedValue;
@@ -3917,13 +3862,35 @@
     return fromTabs?.order || null;
   }
 
+  function getActiveOrderCapabilities() {
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    const overrides = activeTab?.orderPassportContext?.capabilities;
+    if (!overrides || typeof overrides !== "object") return workspaceCapabilities;
+    return {
+      payment: overrides.payment == null ? workspaceCapabilities.payment : overrides.payment !== false,
+      status: overrides.status == null ? workspaceCapabilities.status : overrides.status !== false,
+      edit: overrides.edit == null ? workspaceCapabilities.edit : overrides.edit !== false,
+      print: overrides.print == null ? workspaceCapabilities.print : overrides.print !== false,
+    };
+  }
+
+  function syncOrderCapabilities() {
+    const capabilities = getActiveOrderCapabilities();
+    orderInfoPaymentButtons.forEach((node) => node.classList.toggle("hidden", !capabilities.payment));
+    $$('[data-action="order-status-next"], [data-action="order-status-menu-toggle"]').forEach((node) => node.classList.toggle("hidden", !capabilities.status));
+    $$('[data-action="order-edit"]').forEach((node) => node.classList.toggle("hidden", !capabilities.edit));
+    $$('[data-action="order-print"], [data-action="order-print-item-label"]').forEach((node) => node.classList.toggle("hidden", !capabilities.print));
+    return capabilities;
+  }
+
   function syncOrderPaymentFooter(order) {
+    const capabilities = syncOrderCapabilities();
     if (!orderInfoPaymentButtons.length) return;
     const hasOrder = Number(order?.id || 0) > 0;
     const label = getOrderPaymentActionLabel(order);
     orderInfoPaymentButtons.forEach((button) => {
       if (!button) return;
-      button.disabled = !hasOrder || isOrderFullyRefunded(order);
+      button.disabled = !capabilities.payment || !hasOrder || isOrderFullyRefunded(order);
       const labelEl = button.querySelector("span");
       if (labelEl) labelEl.textContent = label;
       else button.textContent = label;
@@ -4021,10 +3988,11 @@
   }
 
   async function openOrderPaymentDialog(order) {
+    if (!getActiveOrderCapabilities().payment) return;
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
     if (isCourierWorkspace && !courierOfflineState.online && isPaidOrder(order)) {
-      showCourierTransientBanner("error", "Р’РѕР·РІСЂР°С‚ РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РїСЂРё РёРЅС‚РµСЂРЅРµС‚Рµ.", { duration: 3200 });
+      showCourierTransientBanner("error", "Возврат доступен только при интернете.", { duration: 3200 });
       return;
     }
 
@@ -4145,7 +4113,7 @@
       onSuccess() {},
       onError(err) {
         if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
-          showCourierTransientBanner("error", "РќРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°. РЎРїРѕСЃРѕР±С‹ РѕРїР»Р°С‚С‹ РµС‰С‘ РЅРµ СЃРѕС…СЂР°РЅРµРЅС‹.", { duration: 3200 });
+          showCourierTransientBanner("error", "Нет интернета. Способы оплаты ещё не сохранены.", { duration: 3200 });
           return;
         }
         console.error("orders payment modal error:", err);
@@ -4167,7 +4135,7 @@
         cacheOnlyPaymentMethods: useOfflineCollection,
         onError(err) {
           if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
-            showCourierTransientBanner("error", "РќРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°. РЎРїРѕСЃРѕР±С‹ РѕРїР»Р°С‚С‹ РµС‰С‘ РЅРµ СЃРѕС…СЂР°РЅРµРЅС‹.", { duration: 3200 });
+            showCourierTransientBanner("error", "Нет интернета. Способы оплаты ещё не сохранены.", { duration: 3200 });
             return;
           }
           console.error("orders payment modal error:", err);
@@ -4283,6 +4251,7 @@
   }
 
   async function updateOrderStatus(orderId, statusId) {
+    if (!getActiveOrderCapabilities().status) return;
     const id = Number(orderId || 0);
     const nextStatusId = Number(statusId || 0);
     if (!(id > 0) || !(nextStatusId > 0)) return;
@@ -4410,6 +4379,7 @@
     return {
       root,
       infoWrap: $("#clientInfoWrap", root),
+      benefitsFooter: $("[data-client-passport-footer]", root),
       photo: $("#clientPhoto", root),
       photoPlaceholder: $("#clientPhotoPlaceholder", root),
       infoName: $("#clientInfoName", root),
@@ -4433,7 +4403,7 @@
 
   function setSheetTitle(text) {
     if (!sheetTitleEl) return;
-    sheetTitleEl.textContent = String(text || "РРЅС„РѕСЂРјР°С†РёСЏ").trim() || "РРЅС„РѕСЂРјР°С†РёСЏ";
+    sheetTitleEl.textContent = String(text || "Информация").trim() || "Информация";
   }
 
   function shouldPreserveChatClientSurfaces() {
@@ -4448,44 +4418,36 @@
     if (shouldPreserveChatClientSurfaces()) return;
     clientSurfaces.forEach((dom) => {
       if (dom?.infoWrap) dom.infoWrap.classList.add("hidden");
+      if (dom?.benefitsFooter) dom.benefitsFooter.classList.add("hidden");
     });
-  }
-
-  function setOrdersClientBenefitsFooterVisible(isVisible) {
-    if (!ordersClientBenefitsFooter) return;
-    ordersClientBenefitsFooter.classList.toggle("hidden", !isVisible);
   }
 
   function showEmptyInfo() {
     if (sharedOrderInfoRenderers.length) {
       sharedOrderInfoRenderers.forEach((renderer) => renderer.showEmpty());
       hideClientSurfaces();
-      setOrdersClientBenefitsFooterVisible(false);
-      setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+      setSheetTitle("Информация");
       return;
     }
     setHiddenAll(infoEls.empty, false);
     setHiddenAll(infoEls.content, true);
     hideClientSurfaces();
-    setOrdersClientBenefitsFooterVisible(false);
     orderInfoFooters.forEach((footer) => footer.classList.add("hidden"));
-    setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+    setSheetTitle("Информация");
   }
 
   function showOrderInfo() {
     if (sharedOrderInfoRenderers.length) {
       sharedOrderInfoRenderers.forEach((renderer) => renderer.showOrder());
       hideClientSurfaces();
-      setOrdersClientBenefitsFooterVisible(false);
-      setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+      setSheetTitle("Информация");
       return;
     }
     setHiddenAll(infoEls.empty, true);
     setHiddenAll(infoEls.content, false);
     hideClientSurfaces();
-    setOrdersClientBenefitsFooterVisible(false);
     orderInfoFooters.forEach((footer) => footer.classList.remove("hidden"));
-    setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+    setSheetTitle("Информация");
   }
 
   function showClientInfo(surface = "desktop") {
@@ -4494,9 +4456,9 @@
     hideClientSurfaces();
     const targetDom = surface === "sheet" ? sheetClientDom : desktopClientDom;
     if (targetDom?.infoWrap) targetDom.infoWrap.classList.remove("hidden");
-    setOrdersClientBenefitsFooterVisible(surface === "desktop");
+    if (targetDom?.benefitsFooter) targetDom.benefitsFooter.classList.remove("hidden");
     orderInfoFooters.forEach((footer) => footer.classList.add("hidden"));
-    setSheetTitle(surface === "sheet" ? "РљР»РёРµРЅС‚" : "РРЅС„РѕСЂРјР°С†РёСЏ");
+    setSheetTitle(surface === "sheet" ? "Клиент" : "Информация");
   }
 
   function formatClientDate(value) {
@@ -4580,26 +4542,6 @@
   bindClientContentTabs(desktopClientDom);
   bindClientContentTabs(sheetClientDom);
 
-  if (ordersClientBenefitsOpenBtn) {
-    ordersClientBenefitsOpenBtn.addEventListener("click", (event) => {
-      event.preventDefault();
-      const activeClientTab = getActiveClientTab();
-      const clientId = Number(activeClientTab?.clientId || 0);
-      if (!(clientId > 0)) return;
-      void window.__clientsDashboardApi?.openBenefitsByClientId?.(clientId);
-    });
-  }
-
-  if (ordersClientBonusesOpenBtn) {
-    ordersClientBonusesOpenBtn.addEventListener("click", (event) => {
-      event.preventDefault();
-      const activeClientTab = getActiveClientTab();
-      const clientId = Number(activeClientTab?.clientId || 0);
-      if (!(clientId > 0)) return;
-      void window.__clientsDashboardApi?.openBonusesByClientId?.(clientId);
-    });
-  }
-
   function renderClientAddressesHtml(addresses) {
     const list = Array.isArray(addresses) ? addresses : [];
     if (!list.length) return '<div class="muted" style="padding:4px 0;">\u0410\u0434\u0440\u0435\u0441\u043e\u0432 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.</div>';
@@ -4632,11 +4574,11 @@
 
   function renderClientOrdersHistoryHtml(clientOrders) {
     const list = Array.isArray(clientOrders) ? clientOrders : [];
-    if (!list.length) return '<div class="muted" style="padding:4px 0;">Р—Р°РєР°Р·РѕРІ РїРѕРєР° РЅРµС‚.</div>';
+    if (!list.length) return '<div class="muted" style="padding:4px 0;">Заказов пока нет.</div>';
 
     return list.map((order) => {
       const orderId = Number(order?.id || 0);
-      const title = Number.isFinite(orderId) && orderId > 0 ? `Р—Р°РєР°Р· #${orderId}` : "Р—Р°РєР°Р·";
+      const title = Number.isFinite(orderId) && orderId > 0 ? `Заказ #${orderId}` : "Заказ";
       const statusTitle = String(order?.status_title || "").trim();
       const metaParts = [formatClientDateTime(order?.created_at)];
       if (statusTitle) metaParts.push(statusTitle);
@@ -4673,7 +4615,7 @@
         <div class="discount-row">
           <div class="discount-row-icon"><i class="fas fa-percentage"></i></div>
           <div class="discount-row-info">
-            <div class="discount-row-title">${escapeHtml(discount.title || "РЎРєРёРґРєР°")}</div>
+            <div class="discount-row-title">${escapeHtml(discount.title || "Скидка")}</div>
             <div class="discount-row-meta">${escapeHtml(linkTypeText)}</div>
           </div>
           <div class="discount-row-value">${escapeHtml(valueText)}</div>
@@ -4790,8 +4732,8 @@
     } catch (error) {
       console.error(error);
       tab.error = navigator.onLine === false
-        ? "РќРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°. РџРѕРєР°Р·С‹РІР°РµРј РґРѕСЃС‚СѓРїРЅС‹Рµ РѕС„Р»Р°Р№РЅ-РґР°РЅРЅС‹Рµ."
-        : "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РґР°РЅРЅС‹Рµ РєР»РёРµРЅС‚Р°";
+        ? "Нет интернета. Показываем доступные офлайн-данные."
+        : "Не удалось загрузить данные клиента";
       if (tabsState.activeKey === tab.key) {
         showClientInfo(activeSurface);
         renderClientTabState(tab, { error: tab.error }, activeClientDom);
@@ -4803,6 +4745,32 @@
 
   async function activateClientTab(tab, { openMobile = false, forceReload = false } = {}) {
     if (!tab || tab.type !== "client") return;
+    const clientsApi = window.__clientsDashboardApi;
+    if (clientsApi && typeof clientsApi.openClientPassport === "function" && Number(tab.clientId || 0) > 0) {
+      const activeSurface = openMobile && shouldUseClientSheet() ? "sheet" : "desktop";
+      showClientInfo(activeSurface);
+      await clientsApi.openClientPassport(tab.clientId, {
+        source: "orders",
+        nested: orderDetailsOpener?.getContext?.()?.source === "client",
+        title: tab.title || tab.fallbackName || "",
+        skipMobileSheet: !openMobile,
+        onBack: () => {
+          const current = tabsState.tabs.find((item) => item.key === tabsState.activeKey);
+          if (current && current.type === "order") setActiveOrderTab(current.key);
+        },
+        onOrderOpen: (orderId) => openOrderDetailsById(orderId, {
+          source: "client",
+          nested: true,
+          keepTabOnClose: true,
+          openMobile: true,
+          onBack: () => setActiveOrderTab(tab.key, { openMobile: true }),
+        }),
+      });
+      if (tabsState.activeKey !== tab.key) return;
+      showClientInfo(activeSurface);
+      if (openMobile && shouldUseClientSheet()) openSheet();
+      return;
+    }
     const activeSurface = openMobile && shouldUseClientSheet() ? "sheet" : "desktop";
     const activeClientDom = activeSurface === "sheet" ? sheetClientDom : desktopClientDom;
 
@@ -4835,15 +4803,15 @@
     syncOrderPaymentFooter(order);
     if (sharedOrderInfoRenderers.length) {
       hideClientSurfaces();
-      setOrdersClientBenefitsFooterVisible(false);
-      setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+      setSheetTitle("Информация");
       sharedOrderInfoRenderers.forEach((renderer) => renderer.setOrder(order));
+      syncOrderCapabilities();
       return;
     }
     if (!order) {
       showEmptyInfo();
-      setTextAll(infoEls.title, "Р—Р°РєР°Р· РЅРµ РІС‹Р±СЂР°РЅ");
-      setTextAll(infoEls.meta, "Р’С‹Р±РµСЂРёС‚Рµ Р·Р°РєР°Р· СЃР»РµРІР°.");
+      setTextAll(infoEls.title, "Заказ не выбран");
+      setTextAll(infoEls.meta, "Выберите заказ слева.");
       setHiddenAll(infoEls.meta, true);
       setTextAll(infoEls.status, "?");
       setTextAll(infoEls.clientName, "?");
@@ -4858,7 +4826,7 @@
       setTextAll(infoEls.total, "?");
       setTextAll(infoEls.deliveryType, "?");
       setTextAll(infoEls.deliveryDatetime, "?");
-      setTextAll(infoEls.deliveryQty, "0 С€С‚.");
+      setTextAll(infoEls.deliveryQty, "0 шт.");
       setTextAll(infoEls.deliveryInterval, "?");
       setTextAll(infoEls.deliveryAddressTitle, "Адрес доставки");
       setTextAll(infoEls.deliveryZone, "");
@@ -4887,7 +4855,7 @@
     writeCachedFullOrder(order);
     showOrderInfo();
 
-    setTextAll(infoEls.title, `Р—РђРљРђР— #${order.id}`);
+    setTextAll(infoEls.title, `ЗАКАЗ #${order.id}`);
     setTextAll(infoEls.meta, formatDateTimeNumeric(order.created_at) || "—");
     setHiddenAll(infoEls.meta, false);
     setTextAll(infoEls.status, order.status_title || "?");
@@ -4977,9 +4945,9 @@
     });
 
     const qty = totalQty(order.items || []);
-    setTextAll(infoEls.deliveryQty, `${qty} С€С‚.`);
+    setTextAll(infoEls.deliveryQty, `${qty} шт.`);
 
-    const methodTitle = order.method_title || (order.method_code === "pickup" ? "РЎР°РјРѕРІС‹РІРѕР·" : "Р”РѕСЃС‚Р°РІРєР°");
+    const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
     setTextAll(infoEls.deliveryType, methodTitle || "?");
     setTextAll(infoEls.deliveryDatetime, formatDateTime(order.created_at) || "?");
 
@@ -4997,7 +4965,7 @@
     const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent");
     setHiddenAll(infoEls.deliveryUrgent, !urgent);
 
-    // Р”Р»СЏ СЃР°РјРѕРІС‹РІРѕР·Р° РїРѕРєР°Р·С‹РІР°РµРј Р°РґСЂРµСЃ С‚РѕС‡РєРё, РґР»СЏ РґРѕСЃС‚Р°РІРєРё - Р°РґСЂРµСЃ РєР»РёРµРЅС‚Р°
+    // Для самовывоза показываем адрес точки, для доставки - адрес клиента
     let address = order.address;
     if (!address && order.pickup_store_address) {
       address = order.pickup_store_name
@@ -5021,8 +4989,9 @@
     setHiddenAll(infoEls.orderCommentBlock, isCourierWorkspace ? true : !orderComment);
 
     setHtmlAll(infoEls.itemsList, orderItemsToHtml(order.items || [], order));
+    syncOrderCapabilities();
     
-    // РРЅРёС†РёР°Р»РёР·РёСЂСѓРµРј Р»РёСЃС‚Р°РЅРёРµ С„РѕС‚Рѕ РїРѕСЃР»Рµ СЂРµРЅРґРµСЂРёРЅРіР°
+    // Инициализируем листание фото после рендеринга
     setTimeout(() => {
       initOrderItemPhotos();
     }, 0);
@@ -5113,7 +5082,7 @@
     btn.type = "button";
     btn.setAttribute("data-status-id", String(id));
 
-    const displayTitle = repairOrdersMojibake(title);
+    const displayTitle = String(title ?? "");
     btn.innerHTML = `
       <span class="stage-icon"><i class="fas ${escapeHtml(icon)}"></i></span>
       <span class="stage-text">
@@ -5391,11 +5360,11 @@
     if (state.date.start && state.date.end) {
       // Use scheduled_at if available, otherwise fall back to created_at
       const dateStr = order.scheduled_at || order.created_at;
-      // Р’СЂРµРјСЏ РІ Р±Р°Р·Рµ СѓР¶Рµ РІ timezone С„РёР»РёР°Р»Р°
+      // Время в базе уже в timezone филиала
       const d = new Date(String(dateStr).replace(' ', 'T'));
       if (Number.isNaN(d.getTime())) return false;
 
-      // РЎСЂР°РІРЅРёРІР°РµРј РґР°С‚С‹ РЅР°РїСЂСЏРјСѓСЋ
+      // Сравниваем даты напрямую
       const key = toDateKey(d);
       const startKey = toDateKey(state.date.start);
       const endKey = toDateKey(state.date.end);
@@ -5535,8 +5504,8 @@
       ? sharedOrderPanel.renderOrderTimeIcon(order)
       : renderOrderTimeIcon(order);
     const stageCycleBtnHtml = renderOrderStatusHoverCycleButton(order);
-    const addressCommentDisplay = repairOrdersMojibake(order.address_comment || order.comment || "Нет комментария");
-    const rawAddress = repairOrdersMojibake(order.address ||
+    const addressCommentDisplay = String(order.address_comment || order.comment || "Нет комментария");
+    const rawAddress = String(order.address ||
       (order.pickup_store_address
         ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
         : "?"
@@ -5580,7 +5549,7 @@
         `
       );
 
-    const payment = repairOrdersMojibake(String(order.payment_title || "").trim());
+    const payment = String(order.payment_title || "").trim();
     const totalText = money(getOrderDisplayTotal(order));
     const paymentCode = (order.payment_code || "").toLowerCase();
     const isCash = paymentCode.includes("cash");
@@ -5621,7 +5590,7 @@
             class="order-id-select-hit"
             data-action="order-multi-select"
             data-order-id="${escapeHtml(order.id)}"
-            title="Р’С‹Р±СЂР°С‚СЊ Р·Р°РєР°Р·"
+            title="Выбрать заказ"
           >
             <input
               type="checkbox"
@@ -5741,7 +5710,7 @@
           class="order-id-select-hit"
           data-action="order-multi-select"
           data-order-id="${escapeHtml(order.id)}"
-          title="Р’С‹Р±СЂР°С‚СЊ Р·Р°РєР°Р·"
+          title="Выбрать заказ"
         >
           <input
             type="checkbox"
@@ -6032,7 +6001,7 @@
     const first = new Date(year, month, 1);
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const offset = (first.getDay() + 6) % 7;
-    // РСЃРїРѕР»СЊР·СѓРµРј getStoreDateNow РґР»СЏ РѕРїСЂРµРґРµР»РµРЅРёСЏ "СЃРµРіРѕРґРЅСЏ" РІ С‡Р°СЃРѕРІРѕРј РїРѕСЏСЃРµ С„РёР»РёР°Р»Р°
+    // Используем getStoreDateNow для определения "сегодня" в часовом поясе филиала
     const todayKey = toDateKey(getStoreDateNow(state.storeTimezone));
 
     const monthTitle = first.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
@@ -6075,7 +6044,7 @@
     const clicked = parseDateKey(dateKey);
     if (!clicked) return;
 
-    // Р•СЃР»Рё СѓР¶Рµ РµСЃС‚СЊ Рё start Рё end, СЃР±СЂР°СЃС‹РІР°РµРј Рё РЅР°С‡РёРЅР°РµРј Р·Р°РЅРѕРІРѕ
+    // Если уже есть и start и end, сбрасываем и начинаем заново
     if (state.date.start && state.date.end) {
       state.date.start = clicked;
       state.date.end = null;
@@ -6083,7 +6052,7 @@
       return;
     }
 
-    // РџРµСЂРІС‹Р№ РєР»РёРє - СѓСЃС‚Р°РЅР°РІР»РёРІР°РµРј start
+    // Первый клик - устанавливаем start
     if (!state.date.start) {
       state.date.start = clicked;
       state.date.end = null;
@@ -6091,7 +6060,7 @@
       return;
     }
 
-    // Р’С‚РѕСЂРѕР№ РєР»РёРє - СѓСЃС‚Р°РЅР°РІР»РёРІР°РµРј end Рё Р·Р°РєСЂС‹РІР°РµРј РєР°Р»РµРЅРґР°СЂСЊ
+    // Второй клик - устанавливаем end и закрываем календарь
     if (state.date.start && !state.date.end) {
       state.date.end = clicked;
       if (state.date.end < state.date.start) {
@@ -6105,7 +6074,7 @@
   }
 
   function onDateDoubleClick(dateKey) {
-    // РћС‚РјРµРЅСЏРµРј РѕРґРёРЅРѕС‡РЅС‹Р№ РєР»РёРє, РµСЃР»Рё РѕРЅ Р±С‹Р» Р·Р°РїР»Р°РЅРёСЂРѕРІР°РЅ
+    // Отменяем одиночный клик, если он был запланирован
     if (clickTimer) {
       clearTimeout(clickTimer);
       clickTimer = null;
@@ -6114,7 +6083,7 @@
     const clicked = parseDateKey(dateKey);
     if (!clicked) return;
 
-    // Р”РІРѕР№РЅРѕР№ РєР»РёРє - РІС‹Р±РёСЂР°РµРј РѕРґРёРЅ РґРµРЅСЊ (СЃРѕР·РґР°РµРј РЅРѕРІС‹Р№ РѕР±СЉРµРєС‚ Date РґР»СЏ end)
+    // Двойной клик - выбираем один день (создаем новый объект Date для end)
     state.date.start = new Date(clicked);
     state.date.end = new Date(clicked);
     renderCalendar();
@@ -6218,8 +6187,8 @@
   }
 
   function notifyNewOrders(orders) {
-    // Р“Р»РѕР±Р°Р»СЊРЅС‹Рµ СѓРІРµРґРѕРјР»РµРЅРёСЏ/Р·РІСѓРє РѕР±СЂР°Р±Р°С‚С‹РІР°СЋС‚СЃСЏ РІ orders-sidebar-badge.js
-    // С‡С‚РѕР±С‹ РЅРµ Р±С‹Р»Рѕ РґСѓР±Р»РµР№ РЅР° СЃС‚СЂР°РЅРёС†Рµ Р·Р°РєР°Р·РѕРІ.
+    // Глобальные уведомления/звук обрабатываются в orders-sidebar-badge.js
+    // чтобы не было дублей на странице заказов.
     void orders;
   }
 
@@ -6377,8 +6346,8 @@
     return nextOrder;
   }
 
-  // Р¤РѕРЅРѕРІС‹Р№ РѕРїСЂРѕСЃ СЃРїРёСЃРєР° Р·Р°РєР°Р·РѕРІ (СЂРµР·РµСЂРІ, РєРѕРіРґР° SSE РѕР±СЂС‹РІР°РµС‚СЃСЏ РЅР° С…РѕСЃС‚РёРЅРіРµ)
-  // Р’Р°Р¶РЅРѕ: Chrome С‚СЂРѕС‚С‚Р»РёС‚ setInterval РІ С„РѕРЅРѕРІС‹С… РІРєР»Р°РґРєР°С… РґРѕ 1 СЂР°Р·Р° РІ РјРёРЅСѓС‚Сѓ Рё Р±РѕР»РµРµ.
+  // Фоновый опрос списка заказов (резерв, когда SSE обрывается на хостинге)
+  // Важно: Chrome троттлит setInterval в фоновых вкладках до 1 раза в минуту и более.
   function applyOrdersChangesEvents(changes, { notifyCreated = true } = {}) {
     const rows = Array.isArray(changes) ? changes : [];
     const createdOrders = [];
@@ -6634,6 +6603,7 @@
 
     const markPaidBtn = e.target.closest('[data-action="order-mark-paid"]');
     if (markPaidBtn) {
+      if (!getActiveOrderCapabilities().payment) return;
       e.preventDefault();
       e.stopPropagation();
       const activeOrder = getActiveOrder();
@@ -6645,6 +6615,7 @@
 
     const editOrderBtn = e.target.closest('[data-action="order-edit"]');
     if (editOrderBtn) {
+      if (!getActiveOrderCapabilities().edit) return;
       e.preventDefault();
       e.stopPropagation();
       const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
@@ -6852,7 +6823,7 @@
       return;
     }
 
-    // РќРµ РІС‹Р±РёСЂР°С‚СЊ Р·Р°РєР°Р· РїСЂРё РєР»РёРєРµ РЅР° РєРЅРѕРїРєСѓ РѕРїР»Р°С‚С‹
+    // Не выбирать заказ при клике на кнопку оплаты
     const rowPaymentBtn = e.target.closest(".order-payment-btn");
     if (rowPaymentBtn) {
       e.preventDefault();
@@ -6953,13 +6924,13 @@
       requestNotificationPermission().then((perm) => {
         if (perm === "granted") {
           notifyBtn.classList.add("is-enabled");
-          notifyBtn.title = "РЈРІРµРґРѕРјР»РµРЅРёСЏ РІРєР»СЋС‡РµРЅС‹";
+          notifyBtn.title = "Уведомления включены";
         }
       }).catch(() => {});
     });
     if ("Notification" in window && Notification.permission === "granted") {
       notifyBtn.classList.add("is-enabled");
-      notifyBtn.title = "РЈРІРµРґРѕРјР»РµРЅРёСЏ РІРєР»СЋС‡РµРЅС‹";
+      notifyBtn.title = "Уведомления включены";
     }
   }
 
@@ -6994,7 +6965,7 @@
       const btn = e.target.closest("[data-date]");
       if (!btn) return;
       
-      // РСЃРїРѕР»СЊР·СѓРµРј С‚Р°Р№РјРµСЂ, С‡С‚РѕР±С‹ РѕС‚Р»РёС‡РёС‚СЊ РѕРґРёРЅРѕС‡РЅС‹Р№ РєР»РёРє РѕС‚ РґРІРѕР№РЅРѕРіРѕ
+      // Используем таймер, чтобы отличить одиночный клик от двойного
       if (clickTimer) {
         clearTimeout(clickTimer);
       }
@@ -7038,6 +7009,12 @@
   }
 
   window.__ordersDashboardApi = {
+    openOrderPassport(orderId, context = {}) {
+      return openOrderDetailsById(orderId, context);
+    },
+    closeOrderPassport(reason = "back") {
+      return orderDetailsOpener ? orderDetailsOpener.close(reason) : Promise.resolve();
+    },
     async openOrderById(orderId, options = {}) {
       return openOrderDetailsById(orderId, options);
     },
@@ -7061,11 +7038,14 @@
       return true;
     },
   };
+  window.openOrderPassport = (orderId, context = {}) => openOrderDetailsById(orderId, context);
+  window.closeOrderPassport = (reason = "back") => orderDetailsOpener ? orderDetailsOpener.close(reason) : Promise.resolve();
 
-  // РџРµСЂРµРєР»СЋС‡РµРЅРёРµ СЃС‚Р°С‚СѓСЃР° РїРѕ РєР»РёРєСѓ РЅР° Р±РѕР»СЊС€СѓСЋ РїРёР»СЋР»СЋ
+  // Переключение статуса по клику на большую пилюлю
   document.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="order-status-next"]');
     if (!btn) return;
+    if (!getActiveOrderCapabilities().status) return;
     e.preventDefault();
     e.stopPropagation();
     cycleActiveOrderStatus().catch((err) => {
@@ -7073,10 +7053,11 @@
     });
   });
 
-  // РћР±СЂР°Р±РѕС‚С‡РёРє РєРЅРѕРїРєРё РїРµС‡Р°С‚Рё
+  // Обработчик кнопки печати
   document.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="order-print"]');
     if (!btn) return;
+    if (!getActiveOrderCapabilities().print) return;
     
     e.preventDefault();
     e.stopPropagation();
@@ -7096,6 +7077,7 @@
   document.addEventListener("click", async (e) => {
     const btn = e.target.closest('[data-action="order-print-item-label"]');
     if (!btn) return;
+    if (!getActiveOrderCapabilities().print) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -7127,7 +7109,7 @@
     }
   });
 
-  // Р¤СѓРЅРєС†РёСЏ РїРµС‡Р°С‚Рё С‡РµРєР° С‡РµСЂРµР· СЃРёСЃС‚РµРјРЅСѓСЋ РїРµС‡Р°С‚СЊ Р±СЂР°СѓР·РµСЂР°
+  // Функция печати чека через системную печать браузера
   async function printOrderReceipt(order) {
     if (!isOrderPrintable(order)) return;
     const orderId = Number(order?.id || 0);
@@ -7146,13 +7128,13 @@
       receiptHtml = generateReceiptHTML(order);
     }
     
-    // Р’С‹С‡РёСЃР»СЏРµРј СЂР°Р·РјРµСЂС‹ Рё РїРѕР·РёС†РёСЋ РґР»СЏ С†РµРЅС‚СЂРёСЂРѕРІР°РЅРёСЏ РѕРєРЅР°
+    // Вычисляем размеры и позицию для центрирования окна
     const width = 400;
     const height = 600;
     const left = (screen.width / 2) - (width / 2);
     const top = (screen.height / 2) - (height / 2);
     
-    // РћС‚РєСЂС‹РІР°РµРј РЅРѕРІРѕРµ РѕРєРЅРѕ СЃ С‡РµРєРѕРј РїРѕ С†РµРЅС‚СЂСѓ СЌРєСЂР°РЅР°
+    // Открываем новое окно с чеком по центру экрана
     const printWindow = window.open('', '_blank', `width=${width},height=${height},left=${left},top=${top}`);
     if (!printWindow) {
       alert('Пожалуйста, разрешите всплывающие окна для печати');
@@ -7162,20 +7144,20 @@
     printWindow.document.write(receiptHtml);
     printWindow.document.close();
     
-    // Р–РґРµРј Р·Р°РіСЂСѓР·РєРё Рё РІС‹Р·С‹РІР°РµРј РїРµС‡Р°С‚СЊ
+    // Ждем загрузки и вызываем печать
     printWindow.onload = () => {
       setTimeout(() => {
         printWindow.print();
       }, 250);
     };
     
-    // Р—Р°РєСЂС‹РІР°РµРј РѕРєРЅРѕ РїРѕСЃР»Рµ РїРµС‡Р°С‚Рё (РїРѕСЃР»Рµ Р·Р°РєСЂС‹С‚РёСЏ РґРёР°Р»РѕРіР° РїРµС‡Р°С‚Рё)
+    // Закрываем окно после печати (после закрытия диалога печати)
     printWindow.addEventListener('afterprint', () => {
       printWindow.close();
     });
     
-    // РўР°РєР¶Рµ Р·Р°РєСЂС‹РІР°РµРј РѕРєРЅРѕ, РµСЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ Р·Р°РєСЂС‹Р» РµРіРѕ РІСЂСѓС‡РЅСѓСЋ
-    // РёР»Рё РµСЃР»Рё РґРёР°Р»РѕРі РїРµС‡Р°С‚Рё Р±С‹Р» РѕС‚РјРµРЅРµРЅ (fallback)
+    // Также закрываем окно, если пользователь закрыл его вручную
+    // или если диалог печати был отменен (fallback)
     const checkClosed = setInterval(() => {
       if (printWindow.closed) {
         clearInterval(checkClosed);
@@ -7183,11 +7165,11 @@
     }, 100);
   }
 
-  // Р¤СѓРЅРєС†РёСЏ РіРµРЅРµСЂР°С†РёРё HTML РґР»СЏ С‡РµРєР°
+  // Функция генерации HTML для чека
   function generateReceiptHTML(order) {
     const receiptOrder = getDisplayOrder(order) || order;
     const hasRefunds = hasOrderRefunds(order);
-    // Р’СЂРµРјСЏ РІ Р±Р°Р·Рµ СѓР¶Рµ РІ timezone С„РёР»РёР°Р»Р°
+    // Время в базе уже в timezone филиала
     const createdAtStr = String(receiptOrder.created_at).replace(' ', 'T');
     const date = new Date(createdAtStr);
 
@@ -7199,7 +7181,7 @@
 
     const dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
-    const methodTitle = receiptOrder.method_title || (receiptOrder.method_code === "pickup" ? "РЎР°РјРѕРІС‹РІРѕР·" : "Р”РѕСЃС‚Р°РІРєР°");
+    const methodTitle = receiptOrder.method_title || (receiptOrder.method_code === "pickup" ? "Самовывоз" : "Доставка");
     const deliverySectionTitle = receiptOrder.method_code === "pickup" ? "Самовывоз:" : "Доставка:";
     let address = receiptOrder.address;
     if (!address && receiptOrder.pickup_store_address) {
@@ -7236,8 +7218,8 @@
     const comboItems = receiptItems.filter((item) => String(item?.type || "") === "combo");
     const productItems = receiptItems.filter((item) => String(item?.type || "") !== "combo");
     const itemGroups = [];
-    if (comboItems.length) itemGroups.push({ key: "combo", title: "РљРћРњР‘Рћ", items: comboItems });
-    if (productItems.length) itemGroups.push({ key: "product", title: "РўРћР’РђР Р«", items: productItems });
+    if (comboItems.length) itemGroups.push({ key: "combo", title: "КОМБО", items: comboItems });
+    if (productItems.length) itemGroups.push({ key: "product", title: "ТОВАРЫ", items: productItems });
 
     function mergeVariantUnit(label, unit) {
       const cleanLabel = String(label || "").trim();
@@ -7260,22 +7242,22 @@
       if (!raw) return "";
       const key = raw.toLowerCase();
       const dict = {
-        "С€С‚СѓРє": "С€С‚",
-        "С€С‚СѓРєР°": "С€С‚",
-        "С€С‚": "С€С‚",
-        "РіСЂР°РјРј": "Рі",
-        "РіСЂР°РјРјР°": "Рі",
-        "РіСЂ": "Рі",
-        "Рі": "Рі",
-        "РєРёР»РѕРіСЂР°РјРј": "РєРі",
-        "РєРёР»РѕРіСЂР°РјРјР°": "РєРі",
-        "РєРі": "РєРі",
-        "РјРёР»Р»РёР»РёС‚СЂ": "РјР»",
-        "РјРёР»Р»РёР»РёС‚СЂР°": "РјР»",
-        "РјР»": "РјР»",
-        "Р»РёС‚СЂ": "Р»",
-        "Р»РёС‚СЂР°": "Р»",
-        "Р»": "Р»",
+        "штук": "шт",
+        "штука": "шт",
+        "шт": "шт",
+        "грамм": "г",
+        "грамма": "г",
+        "гр": "г",
+        "г": "г",
+        "килограмм": "кг",
+        "килограмма": "кг",
+        "кг": "кг",
+        "миллилитр": "мл",
+        "миллилитра": "мл",
+        "мл": "мл",
+        "литр": "л",
+        "литра": "л",
+        "л": "л",
       };
       const safeDict = {
         "\u0448\u0442\u0443\u043a": "\u0448\u0442",
@@ -7329,7 +7311,7 @@
     }
 
     function renderComboItem(item) {
-      const name = escapeHtml(item?.name || item?.combo_title || "РљРѕРјР±Рѕ");
+      const name = escapeHtml(item?.name || item?.combo_title || "Комбо");
       const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
       const qtyStr = `${qty} x`;
       const priceStr = renderLinePrice(item, 0);
@@ -7337,7 +7319,7 @@
       const compositionLines = [];
 
       selections.forEach((sel) => {
-        const productName = String(sel?.product_name || "").trim() || "РўРѕРІР°СЂ";
+        const productName = String(sel?.product_name || "").trim() || "Товар";
         const variantHead = mergeVariantUnit(sel?.variant_label, sel?.variant_unit);
         const primaryLine = [variantHead, productName].filter(Boolean).join(" ").trim();
         if (primaryLine) {
@@ -7372,7 +7354,7 @@
     }
 
     function renderProductItem(item) {
-      const rawName = String(item?.product_name || item?.name || "РўРѕРІР°СЂ").trim() || "РўРѕРІР°СЂ";
+      const rawName = String(item?.product_name || item?.name || "Товар").trim() || "Товар";
       const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
       const basePrice = parseFloat(item?.price || 0);
       const qtyStr = `${qty} x`;
@@ -7395,7 +7377,7 @@
       });
 
       const primaryVariantLine = variantLines.length ? variantLines[0] : "";
-      const giftSuffix = isGiftRewardOrderItem(item) ? " (РџРѕРґР°СЂРѕРє)" : "";
+      const giftSuffix = isGiftRewardOrderItem(item) ? " (Подарок)" : "";
       const titleLine = ([primaryVariantLine, rawName].filter(Boolean).join(" ").trim() || rawName) + giftSuffix;
       const name = escapeHtml(titleLine);
       if (variantLines.length > 1) {
@@ -7410,7 +7392,7 @@
         const line = formatQtyUnitName(
           ing?.quantity ?? ing?.qty,
           ing?.unit_label || ing?.unit || ing?.unitLabel || ing?.unit_short_title || ing?.unit_title || "",
-          ing?.name || "РРЅРіСЂРµРґРёРµРЅС‚"
+          ing?.name || "Ингредиент"
         );
         if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
       });
@@ -7419,7 +7401,7 @@
         .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0);
       options.forEach((opt) => {
         const variant = mergeVariantUnit(opt?.variant_label || opt?.variantLabel, opt?.variant_unit || opt?.variantUnit);
-        const title = String(opt?.title || "РћРїС†РёСЏ").trim();
+        const title = String(opt?.title || "Опция").trim();
         const line = variant
           ? `${variant} ${title}`.trim()
           : `${Math.max(1, Number(opt?.qty || opt?.quantity || 1))} ${title}`.trim();
@@ -7468,7 +7450,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Р§РµРє Р·Р°РєР°Р·Р° #${order.id}</title>
+  <title>Чек заказа #${order.id}</title>
   <style>
     @media print {
       @page {
@@ -7644,13 +7626,13 @@
   </style>
 </head>
 <body>
-  <div class="receipt-header">Р—РђРљРђР— #${receiptOrder.id}</div>
+  <div class="receipt-header">ЗАКАЗ #${receiptOrder.id}</div>
   <div class="receipt-date">${dateStr}</div>
   
   <div class="receipt-divider"></div>
   ${(scheduleText || isUrgent) ? `
   <div class="receipt-section receipt-when-block">
-    <div class="receipt-when-text">${escapeHtml(scheduleText || (isUrgent ? "Р‘С‹СЃС‚СЂРµРµ" : ""))}</div>
+    <div class="receipt-when-text">${escapeHtml(scheduleText || (isUrgent ? "Быстрее" : ""))}</div>
   </div>
   <div class="receipt-divider"></div>
   ` : ''}
@@ -7685,9 +7667,9 @@
   <div class="receipt-divider"></div>
 
   <div class="receipt-section">
-    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">РћРїР»Р°С‚Р°</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ''}
-    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">РЎРґР°С‡Р° СЃ</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ''}
-    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">РЎРґР°С‡Р°</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
+    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ''}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ''}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">\u0421\u0443\u043c\u043c\u0430 \u0442\u043e\u0432\u0430\u0440\u043e\u0432</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ''}
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">\u0421\u043a\u0438\u0434\u043a\u0430</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ''}
     ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ''}
@@ -7696,7 +7678,7 @@
   </div>
   
   <div style="margin-top: 20px; text-align: center; font-size: 10pt;">
-    <div>РЎРїР°СЃРёР±Рѕ Р·Р° Р·Р°РєР°Р·!</div>
+    <div>Спасибо за заказ!</div>
   </div>
 </body>
 </html>
@@ -7771,6 +7753,7 @@
         ordersPersistentCacheRestored = true;
       }
       hydrateOrdersFromCache(cachedBootstrap);
+      resetDateStateToToday();
       if (persistentOrders?.orders?.length) {
         state.orders = persistentOrders.orders.filter(shouldKeepOrderInState);
         ordersPersistentCacheRestored = true;
@@ -7883,9 +7866,9 @@
     } catch {}
     stopOrdersPolling();
   });
-  // РЎР»СѓС€Р°С‚СЊ РёР·РјРµРЅРµРЅРёРµ С„РёР»РёР°Р»Р°: РїРµСЂРµРїРѕРґРєР»СЋС‡РёС‚СЊ SSE Рє РєР°РЅР°Р»Сѓ РЅРѕРІРѕРіРѕ С„РёР»РёР°Р»Р° Рё РїРµСЂРµР·Р°РіСЂСѓР·РёС‚СЊ Р·Р°РєР°Р·С‹
+  // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
-    console.log('Р¤РёР»РёР°Р» РёР·РјРµРЅРµРЅ:', event.detail.store);
+    console.log('Филиал изменен:', event.detail.store);
     state.clientsCache.clear();
     state.statuses = [];
     state.orders = [];
@@ -7906,6 +7889,7 @@
     closeSheet();
     loadStoreTimezone()
       .then(() => {
+        resetDateStateToToday();
         ensureDateStateInitialized();
         renderCalendar();
         updateDateLabel();

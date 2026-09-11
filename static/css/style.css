@@ -8453,6 +8453,20 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   font-weight:700;
 }
 .settings-print-api-token-actions{margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.settings-print-api-store-value{min-height:40px;display:flex;align-items:center;padding:0 12px;border:1px solid var(--color-border);border-radius:10px;background:var(--color-surface-2);font-weight:600}
+.settings-print-api-connection-status{display:flex;align-items:center;min-height:32px;font-size:13px;font-weight:600;color:var(--color-text-muted)}
+.settings-print-api-hierarchy{display:grid;gap:10px}
+.settings-print-api-agent{border:1px solid var(--color-border);border-radius:10px;overflow:hidden;background:var(--color-surface)}
+.settings-print-api-agent-header{display:flex;flex-direction:column;gap:3px;padding:10px 12px;background:var(--color-surface-2);border-bottom:1px solid var(--color-border)}
+.settings-print-api-agent-meta{font-size:12px;color:var(--color-text-muted);line-height:1.35}
+.settings-print-api-table-wrap{overflow-x:auto}
+.settings-print-api-table{width:100%;border-collapse:collapse;font-size:12px}
+.settings-print-api-table th,.settings-print-api-table td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--color-border);vertical-align:middle}
+.settings-print-api-table th{color:var(--color-text-muted);font-size:10px;font-weight:700;text-transform:uppercase;white-space:nowrap}
+.settings-print-api-table tr:last-child td{border-bottom:0}
+.settings-print-api-table th:last-child,.settings-print-api-table td:last-child{text-align:right;width:1%;white-space:nowrap}
+.settings-print-api-table .is-online{color:var(--color-success,#219653);font-weight:600}
+.settings-print-api-table .is-offline{color:var(--color-text-muted)}
 .settings-password-grid{display:grid;gap:8px}
 .settings-password-grid .btn{justify-self:start}
 .settings-site-link{margin-top:6px;display:flex;gap:6px;align-items:center;font-size:12px;color:var(--color-text-muted)}
@@ -11184,6 +11198,48 @@ body.page-cash #ordersRightPane .orders-info > #cashPaymentFooter{
 .panel-footer.new-order-right-footer .shop-cart-footer-actions .shop-checkout-btn--secondary:hover{
   background:var(--color-surface-2);
   border-color:var(--color-border);
+}
+
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout{
+  display:grid;
+  grid-template-columns:repeat(6,minmax(0,1fr));
+  gap:8px;
+  align-items:stretch;
+}
+
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout > :is(.shop-cart-clear,.new-order-right-footer-benefits-btn){
+  grid-column:span 2;
+  width:100%;
+  height:44px;
+  border-radius:999px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+}
+
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout > .shop-checkout-btn{
+  grid-column:span 3;
+  width:100%;
+  min-height:52px;
+}
+
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout .shop-cart-clear.is-edit-cancel{
+  position:static;
+  color:var(--color-text);
+  background:var(--color-surface);
+  border:1px solid var(--color-border);
+}
+
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout .shop-cart-clear.is-edit-cancel span,
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout .new-order-right-footer-label{
+  font-size:13px;
+  line-height:1;
+  font-weight:800;
+}
+
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout .new-order-right-footer-benefits-btn > span[aria-hidden="true"]{
+  font-size:17px;
 }
 
 .panel-footer.new-order-right-footer .new-order-right-footer-status-wrap{
@@ -19568,7 +19624,82 @@ body.page-clients.admin-mobile-pages .center-stack > .clients-panel > .panel-bod
   flex-direction:column;
   flex:1 1 auto;
   min-height:0 !important;
-  height:100%;
+}
+
+.client-info-panel #clientInfoBody:has(> [data-client-passport-footer]:not(.hidden)),
+#orderInfoRoot:has(> [data-client-passport-footer]:not(.hidden)){
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+  overflow:hidden;
+}
+
+#orderInfoRoot:has(> [data-client-passport-footer]:not(.hidden)){
+  flex:1 1 auto;
+  height:auto;
+}
+
+:is(.client-info-panel #clientInfoBody,#orderInfoRoot):has(> [data-client-passport-footer]:not(.hidden)) > #clientInfoWrap:not(.hidden){
+  flex:1 1 auto;
+  min-height:0;
+  overflow-x:hidden;
+  overflow-y:auto;
+}
+
+#ordersRightPane .orders-info > .panel-body:has(> #orderInfoRoot > [data-client-passport-footer]:not(.hidden)){
+  display:flex;
+  flex-direction:column;
+  overflow:hidden !important;
+}
+
+#ordersRightPane .orders-info > .panel-body:has(> #orderInfoRoot > [data-client-passport-footer]:not(.hidden))::after{
+  height:0;
+}
+
+[data-client-passport-footer]:not(.hidden){
+  display:block;
+  flex:0 0 auto;
+  width:100%;
+  margin-top:auto;
+  box-sizing:border-box;
+  background:var(--color-surface);
+}
+
+.panel-footer[data-client-passport-footer] > .shop-cart-footer{
+  width:100%;
+  margin:0;
+  padding:0;
+  border-top:0;
+  box-sizing:border-box;
+}
+
+[data-client-passport-footer] .shop-cart-footer-actions{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+  width:100%;
+  margin:0;
+}
+
+.panel-footer[data-client-passport-footer] .new-order-right-footer-benefits-btn{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:100%;
+  min-width:0;
+  height:52px;
+  padding:0 16px;
+  border-radius:999px;
+  gap:8px;
+  white-space:nowrap;
+}
+
+.panel-footer[data-client-passport-footer] .new-order-right-footer-benefits-btn span{
+  display:inline;
+  width:auto;
+  height:auto;
+  font-size:14px;
+  font-weight:800;
 }
 
 .client-info-panel #clientTabOrders.shop-profile-tab-panel.is-active{
@@ -19576,7 +19707,6 @@ body.page-clients.admin-mobile-pages .center-stack > .clients-panel > .panel-bod
   flex-direction:column;
   flex:1 1 auto;
   min-height:0 !important;
-  height:100%;
   overflow:hidden;
 }
 
@@ -19587,10 +19717,49 @@ body.page-clients.admin-mobile-pages .center-stack > .clients-panel > .panel-bod
 
 .client-info-panel #clientTabOrders #clientCompletedOrdersAccordion{
   flex:0 0 auto;
+  min-height:0;
+}
+
+.client-info-panel #clientTabOrders #clientCompletedOrdersAccordion[open]{
+  position:relative;
+  flex:1 1 auto;
+  height:0;
+  max-height:100%;
+  overflow:hidden;
+}
+
+.client-info-panel #clientTabOrders #clientCompletedOrdersAccordion > summary{
+  height:24px;
+  line-height:24px;
+}
+
+.client-info-panel #clientTabOrders .client-completed-orders-viewport{
+  position:absolute;
+  top:24px;
+  right:0;
+  bottom:0;
+  left:0;
+  min-height:0;
+  overflow-x:hidden;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  scrollbar-width:thin;
+  -webkit-overflow-scrolling:touch;
+}
+
+.client-info-panel #clientTabOrders #clientCompletedOrdersMore{
+  position:sticky;
+  bottom:0;
+  z-index:1;
+  background:var(--color-surface);
+}
+
+.client-info-panel #clientTabOrders #clientCompletedOrdersList{
+  min-height:100%;
 }
 
 .client-info-panel #clientTabOrders #clientCompletedOrdersAccordion:not([open]) #clientCompletedOrdersList,
-.client-info-panel #clientTabOrders #clientCompletedOrdersAccordion:not([open]) #clientCompletedOrdersMore{
+.client-info-panel #clientTabOrders #clientCompletedOrdersAccordion:not([open]) .client-completed-orders-viewport{
   display:none;
 }
 
@@ -19762,7 +19931,7 @@ body.page-clients.admin-mobile-pages .center-stack > .clients-panel > .panel-bod
 
 .client-info-panel #clientTabOrders.shop-profile-tab-panel.is-active{
   min-height:0;
-  height:100%;
+  height:auto;
 }
 
 .client-info-panel #clientOrdersListView{
@@ -29752,7 +29921,7 @@ body.page-chat .page-col-right > .client-info-panel > .panel-body{
     height:0;
   }
 
-  body.page-chat .page-col-right #clientBenefitsFooter{
+  body.page-chat .page-col-right [data-client-passport-footer]{
     position:static;
     flex:0 0 auto;
     z-index:2;
@@ -29764,28 +29933,28 @@ body.page-chat .page-col-right > .client-info-panel > .panel-body{
     box-shadow:0 -6px 18px rgba(15,23,42,.10);
   }
 
-  body.page-chat .page-col-right #clientBenefitsFooter .shop-cart-footer{
+  body.page-chat .page-col-right [data-client-passport-footer] .shop-cart-footer{
     margin:0;
     padding:0;
     border-top:0;
     background:transparent;
   }
 
-  body.page-chat .page-col-right #clientBenefitsFooter .shop-cart-footer-actions{
+  body.page-chat .page-col-right [data-client-passport-footer] .shop-cart-footer-actions{
     display:grid;
     grid-template-columns:repeat(2,minmax(0,1fr));
     gap:10px;
     margin:0;
   }
 
-  body.page-chat .page-col-right #clientBenefitsFooter .new-order-right-footer-benefits-btn{
+  body.page-chat .page-col-right [data-client-passport-footer] .new-order-right-footer-benefits-btn{
     width:100%;
     min-width:0;
     height:52px;
     border-radius:999px;
   }
 
-  body.page-chat .page-col-right #clientBenefitsFooter .new-order-right-footer-benefits-btn span{
+  body.page-chat .page-col-right [data-client-passport-footer] .new-order-right-footer-benefits-btn span{
     display:inline;
     width:auto;
     height:auto;
@@ -33092,7 +33261,7 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
     box-shadow:0 -6px 18px rgba(15,23,42,.10);
   }
 
-  body.admin-mobile-pages.admin-mobile-view-right :is(#clientBenefitsFooter,#ordersClientBenefitsFooter):not(.hidden){
+  body.admin-mobile-pages.admin-mobile-view-right [data-client-passport-footer]:not(.hidden){
     position:static;
     flex:0 0 auto;
     z-index:82;
@@ -33104,13 +33273,13 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
     box-shadow:0 -6px 18px rgba(15,23,42,.10);
   }
 
-  body.admin-mobile-pages.admin-mobile-view-right :is(#clientBenefitsFooter,#ordersClientBenefitsFooter) .shop-cart-footer-actions{
+  body.admin-mobile-pages.admin-mobile-view-right [data-client-passport-footer] .shop-cart-footer-actions{
     display:grid;
     grid-template-columns:repeat(2,minmax(0,1fr));
     gap:10px;
   }
 
-  body.admin-mobile-pages.admin-mobile-view-right :is(#clientBenefitsFooter,#ordersClientBenefitsFooter) > .shop-cart-footer{
+  body.admin-mobile-pages.admin-mobile-view-right [data-client-passport-footer] > .shop-cart-footer{
     position:static;
     bottom:auto;
     width:100%;
@@ -33120,7 +33289,7 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
     background:transparent;
   }
 
-  body.admin-mobile-pages.admin-mobile-view-right :is(#clientBenefitsFooter,#ordersClientBenefitsFooter) .new-order-right-footer-benefits-btn{
+  body.admin-mobile-pages.admin-mobile-view-right [data-client-passport-footer] .new-order-right-footer-benefits-btn{
     width:100%;
     min-width:0;
     height:52px;
@@ -33128,7 +33297,7 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
     gap:8px;
   }
 
-  body.admin-mobile-pages.admin-mobile-view-right :is(#clientBenefitsFooter,#ordersClientBenefitsFooter) .new-order-right-footer-benefits-btn span{
+  body.admin-mobile-pages.admin-mobile-view-right [data-client-passport-footer] .new-order-right-footer-benefits-btn span{
     display:inline;
     width:auto;
     height:auto;
@@ -33140,18 +33309,34 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
     padding-bottom:calc(88px + env(safe-area-inset-bottom));
   }
 
-  body.admin-mobile-pages.admin-mobile-view-right :is(.client-info-panel:has(#clientBenefitsFooter:not(.hidden)),#ordersRightPane .orders-info:has(#ordersClientBenefitsFooter:not(.hidden))){
+  body.admin-mobile-pages.admin-mobile-view-right :is(.client-info-panel,#ordersRightPane .orders-info):has([data-client-passport-footer]:not(.hidden)){
     display:flex;
     flex-direction:column;
     min-height:0;
     overflow:hidden;
   }
 
-  body.admin-mobile-pages.admin-mobile-view-right :is(.client-info-panel:has(#clientBenefitsFooter:not(.hidden)),#ordersRightPane .orders-info:has(#ordersClientBenefitsFooter:not(.hidden))) > .panel-body{
+  body.admin-mobile-pages.admin-mobile-view-right :is(.client-info-panel,#ordersRightPane .orders-info):has([data-client-passport-footer]:not(.hidden)) > .panel-body{
     flex:1 1 auto;
+    display:flex;
+    flex-direction:column;
     min-height:0;
     padding-bottom:12px;
     overflow:hidden;
+  }
+
+  body.admin-mobile-pages.admin-mobile-view-right #orderInfoRoot:has([data-client-passport-footer]:not(.hidden)){
+    display:flex;
+    flex:1 1 auto;
+    flex-direction:column;
+    min-height:0;
+  }
+
+  body.admin-mobile-pages.admin-mobile-view-right :is(.client-info-panel,#ordersRightPane .orders-info) #clientInfoWrap:not(.hidden){
+    flex:1 1 auto;
+    min-height:0;
+    overflow-x:hidden;
+    overflow-y:auto;
   }
 
   body.page-clients.admin-mobile-pages.admin-mobile-view-right #clientOrdersList > *{

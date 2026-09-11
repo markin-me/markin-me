@@ -1,32 +1,50 @@
 ﻿(function () {
-  var sharedMojibakeDecoder = typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
-  var sharedMojibakeExtras = {
-    0x0402: 0x80, 0x0403: 0x81, 0x201A: 0x82, 0x0453: 0x83, 0x201E: 0x84, 0x2026: 0x85,
-    0x2020: 0x86, 0x2021: 0x87, 0x20AC: 0x88, 0x2030: 0x89, 0x0409: 0x8A, 0x2039: 0x8B,
-    0x040A: 0x8C, 0x040C: 0x8D, 0x040B: 0x8E, 0x040F: 0x8F, 0x0452: 0x90, 0x2018: 0x91,
-    0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
-    0x2122: 0x99, 0x0459: 0x9A, 0x203A: 0x9B, 0x045A: 0x9C, 0x045C: 0x9D, 0x045B: 0x9E,
-    0x045F: 0x9F, 0x0401: 0xA8, 0x0404: 0xAA, 0x0407: 0xAF, 0x0406: 0xB2, 0x0456: 0xB3,
-    0x0491: 0xB4, 0x0451: 0xB8, 0x2116: 0xB9, 0x0454: 0xBA, 0x0458: 0xBC,
-  };
-  function repairSharedMojibake(value) {
-    var source = String(value == null ? "" : value);
-    if (!sharedMojibakeDecoder || !/(?:Р.|С.|в[А-яЁё]|Г[А-яЁё]|[ÐÑ].)/u.test(source)) return source;
-    var bytes = [];
-    for (var i = 0; i < source.length; i += 1) {
-      var code = source.charCodeAt(i);
-      if (code <= 0x7f) bytes.push(code);
-      else if (code >= 0x410 && code <= 0x44f) bytes.push(code - 0x350);
-      else if (code >= 0x80 && code <= 0xff) bytes.push(code);
-      else if (Object.prototype.hasOwnProperty.call(sharedMojibakeExtras, code)) bytes.push(sharedMojibakeExtras[code]);
-      else return source;
-    }
+  var adminAssetLoadPromises = new Map();
+
+  function findLoadedAdminAsset(src) {
+    var expected;
     try {
-      var repaired = sharedMojibakeDecoder.decode(new Uint8Array(bytes));
-      return repaired && repaired !== source ? repaired : source;
+      expected = new URL(src, window.location.href);
     } catch (err) {
-      return source;
+      return null;
     }
+    return Array.from(document.scripts).find(function (script) {
+      try {
+        var current = new URL(script.src, window.location.href);
+        return current.origin === expected.origin && current.pathname === expected.pathname;
+      } catch (err) {
+        return false;
+      }
+    }) || null;
+  }
+
+  function ensureAdminAsset(name) {
+    var urls = window.__ADMIN_ASSET_URLS__ && typeof window.__ADMIN_ASSET_URLS__ === "object"
+      ? window.__ADMIN_ASSET_URLS__
+      : {};
+    var src = String(urls[name] || "").trim();
+    if (!src) return Promise.reject(new Error("UNKNOWN_ADMIN_ASSET_" + String(name || "")));
+    var existingPromise = adminAssetLoadPromises.get(name);
+    if (existingPromise) return existingPromise;
+    var loadedScript = findLoadedAdminAsset(src);
+    if (loadedScript) return Promise.resolve(loadedScript);
+
+    var promise = new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = function () { resolve(script); };
+      script.onerror = function () {
+        script.remove();
+        reject(new Error("FAILED_TO_LOAD_ADMIN_ASSET_" + String(name || "")));
+      };
+      document.head.appendChild(script);
+    }).catch(function (error) {
+      adminAssetLoadPromises.delete(name);
+      throw error;
+    });
+    adminAssetLoadPromises.set(name, promise);
+    return promise;
   }
 
   function toArray(value) {
@@ -553,7 +571,7 @@
 
   function setTextAll(list, value) {
     toArray(list).forEach(function (el) {
-      el.textContent = repairSharedMojibake(value);
+      el.textContent = String(value == null ? "" : value);
     });
   }
 
@@ -1081,42 +1099,70 @@
   function createDetailsOpener(options) {
     options = options || {};
     var pendingById = new Map();
+    var openGeneration = 0;
+    var activeContext = null;
+    var contextStack = [];
 
     function open(orderId, context) {
       var id = Number(orderId || 0);
       if (!(id > 0)) return Promise.resolve(null);
-      if (pendingById.has(id)) return pendingById.get(id);
+      var requestGeneration = ++openGeneration;
+      var nextContext = context && typeof context === "object" ? context : {};
+      if (nextContext.nested === true && activeContext) contextStack.push(activeContext);
+      else if (nextContext.nested !== true) contextStack.length = 0;
+      activeContext = nextContext;
 
       var pending = Promise.resolve()
         .then(function () {
           if (typeof options.loadOrder !== "function") throw new Error("ORDER_DETAILS_LOADER_MISSING");
-          return options.loadOrder(id, context || {});
+          return options.loadOrder(id, nextContext);
         })
         .then(function (order) {
+          if (requestGeneration !== openGeneration) return null;
           if (!order || Number(order.id || 0) !== id) throw new Error("ORDER_DETAILS_NOT_FOUND");
           if (typeof options.openTab !== "function") throw new Error("ORDER_DETAILS_TAB_OPENER_MISSING");
-          return Promise.resolve(options.openTab(order, id, context || {})).then(function (tab) {
-            if (typeof options.afterOpen === "function") options.afterOpen(order, tab || null);
+          return Promise.resolve(options.openTab(order, id, nextContext)).then(function (tab) {
+            if (requestGeneration !== openGeneration) return null;
+            if (typeof options.afterOpen === "function") options.afterOpen(order, tab || null, nextContext);
             return tab || null;
           });
         })
         .catch(function (error) {
+          if (requestGeneration !== openGeneration) return null;
           if (typeof options.onError === "function") options.onError(error, id);
           else console.error(error);
           return null;
         })
         .finally(function () {
-          pendingById.delete(id);
+          if (pendingById.get(id) === pending) pendingById.delete(id);
         });
 
       pendingById.set(id, pending);
       return pending;
     }
 
-    return { open: open };
+    function close(reason) {
+      openGeneration += 1;
+      var context = activeContext;
+      activeContext = contextStack.length ? contextStack.pop() : null;
+      if (typeof options.close === "function") {
+        return Promise.resolve(options.close(reason || "back", context || {}));
+      }
+      if (context && typeof context.onBack === "function") {
+        return Promise.resolve(context.onBack(reason || "back"));
+      }
+      return Promise.resolve();
+    }
+
+    function getContext() {
+      return activeContext;
+    }
+
+    return { open: open, close: close, getContext: getContext };
   }
 
   window.SharedOrderPanel = {
+    ensureAdminAsset: ensureAdminAsset,
     bindTabsWheelScroll: bindTabsWheelScroll,
     buildOrderClientPhoneHtml: buildOrderClientPhoneHtml,
     buildOrderListRowInnerHtml: buildOrderListRowInnerHtml,

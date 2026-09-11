@@ -1404,10 +1404,11 @@ function makePrintApiRouter({ db, helpers }) {
     };
   }
 
-  async function claimNextPrintJob(tokenRow) {
+  async function claimNextPrintJob(tokenRow, context = null) {
     const tenantId = Number(tokenRow.tenant_id);
     const storeId = Number(tokenRow.store_id);
     const tokenId = Number(tokenRow.id);
+    const agentId = Number(context?.agent?.id || 0);
     const storeClock = await getStoreClock(tenantId, storeId);
     const staleBeforeSql = storeClock.staleBeforeSql || helpers.formatUtcDateTime(Date.now() - 5 * 60 * 1000);
     const nowSql = storeClock.nowSql || helpers.formatUtcDateTime(Date.now());
@@ -1416,18 +1417,22 @@ function makePrintApiRouter({ db, helpers }) {
       await conn.beginTransaction();
       const [rows] = await conn.query(
         `
-        SELECT id, order_id, public_id, job_name, pdf_base64, attempts
-        FROM print_jobs
-        WHERE tenant_id=? AND store_id=? AND token_id=?
+        SELECT j.id, j.order_id, j.public_id, j.job_name, j.pdf_base64, j.attempts,
+               j.target_printer_id, j.target_agent_id, p.system_name AS target_printer_system_name
+        FROM print_jobs j
+        LEFT JOIN print_printers p ON p.tenant_id=j.tenant_id AND p.store_id=j.store_id AND p.id=j.target_printer_id
+        WHERE j.tenant_id=? AND j.store_id=? AND j.token_id=?
+          AND (j.target_agent_id IS NULL OR j.target_agent_id=? )
+          AND (j.target_printer_id IS NULL OR (p.agent_id=? AND p.token_id=j.token_id))
           AND (
-            status='pending'
-            OR (status='processing' AND locked_at < ?)
+            j.status='pending'
+            OR (j.status='processing' AND j.locked_at < ?)
           )
-        ORDER BY created_at ASC, id ASC
+        ORDER BY j.created_at ASC, j.id ASC
         LIMIT 1
         FOR UPDATE
         `,
-        [tenantId, storeId, tokenId, staleBeforeSql]
+        [tenantId, storeId, tokenId, agentId || 0, agentId || 0, staleBeforeSql]
       );
 
       if (!rows.length) {
@@ -1439,10 +1444,11 @@ function makePrintApiRouter({ db, helpers }) {
       await conn.query(
         `
         UPDATE print_jobs
-        SET status='processing', attempts=attempts+1, locked_at=?, last_error=NULL, updated_at=?
-        WHERE id=?
+        SET status='processing', attempts=attempts+1, claimed_by_agent_id=CASE WHEN ? > 0 THEN ? ELSE claimed_by_agent_id END, locked_at=?, last_error=NULL, updated_at=?
+        WHERE id=? AND status IN ('pending','processing')
+          AND (target_agent_id IS NULL OR target_agent_id=?)
         `,
-        [nowSql, nowSql, job.id]
+        [agentId || 0, agentId || 0, nowSql, nowSql, job.id, agentId || 0]
       );
       await conn.commit();
       return {
@@ -1468,6 +1474,39 @@ function makePrintApiRouter({ db, helpers }) {
 
   async function buildOrderTemplateHtml(tenantId, storeId, orderId) {
     return orderPrintTemplateBuilder.buildOrderTemplateHtml(tenantId, storeId, orderId);
+  }
+
+  async function resolvePrintContext(tokenRow, installationIdRaw) {
+    const tenantId = Number(tokenRow?.tenant_id || 0);
+    const storeId = Number(tokenRow?.store_id || 0);
+    const tokenId = Number(tokenRow?.id || 0);
+    const installationId = String(installationIdRaw || "").trim().slice(0, 128);
+    const isLegacy = installationId ? 0 : 1;
+    if (!(tenantId > 0) || !(storeId > 0) || !(tokenId > 0)) return null;
+
+    const lookupSql = installationId
+      ? `SELECT * FROM print_agents
+         WHERE tenant_id=? AND store_id=? AND installation_id=? LIMIT 1`
+      : `SELECT * FROM print_agents
+         WHERE tenant_id=? AND store_id=? AND token_id=? AND is_legacy=1 LIMIT 1`;
+    const lookupParams = installationId
+      ? [tenantId, storeId, installationId]
+      : [tenantId, storeId, tokenId];
+    let [rows] = await db.query(lookupSql, lookupParams);
+    if (rows.length && Number(rows[0].token_id) !== tokenId) return null;
+
+    if (!rows.length) {
+      await db.query(
+        `INSERT INTO print_agents
+           (tenant_id, store_id, token_id, installation_id, is_legacy, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE updated_at=updated_at`,
+        [tenantId, storeId, tokenId, installationId || null, isLegacy]
+      );
+      [rows] = await db.query(lookupSql, lookupParams);
+    }
+    if (!rows.length) return null;
+    return { token: tokenRow, agent: rows[0] };
   }
 
   function parseLocalDate(value) {
@@ -1788,12 +1827,35 @@ function makePrintApiRouter({ db, helpers }) {
       const agentNameRaw = req.body?.agent_name;
       const agentVersionRaw = req.body?.agent_version;
       const runningRaw = req.body?.running;
+      const installationId = String(req.body?.installation_id || "").trim().slice(0, 128);
 
       const printerName = printerNameRaw == null ? null : String(printerNameRaw).trim().slice(0, 255);
       const printerOnline = printerOnlineRaw === true || printerOnlineRaw === "true" || printerOnlineRaw === 1 || printerOnlineRaw === "1" ? 1 : 0;
       const agentName = agentNameRaw == null ? null : String(agentNameRaw).trim().slice(0, 255);
       const agentVersion = agentVersionRaw == null ? null : String(agentVersionRaw).trim().slice(0, 64);
       let running = runningRaw === false || runningRaw === "false" || runningRaw === 0 || runningRaw === "0" ? 0 : 1;
+
+      const context = await resolvePrintContext(tokenRow, installationId);
+      if (!context) {
+        return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
+      }
+
+      await db.query(
+        `UPDATE print_agents
+         SET device_name=?, agent_version=?, printer_name=?, last_heartbeat_at=NOW(),
+             agent_running=?, updated_at=NOW()
+         WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?`,
+        [
+          agentName || null,
+          agentVersion || null,
+          printerName || null,
+          running,
+          Number(context.agent.id),
+          Number(tokenRow.tenant_id),
+          Number(tokenRow.store_id),
+          Number(tokenRow.id)
+        ]
+      );
 
       await db.query(
         `
@@ -1861,23 +1923,30 @@ function makePrintApiRouter({ db, helpers }) {
       const tenantId = Number(tokenRow.tenant_id);
       const storeId = Number(tokenRow.store_id);
       const tokenId = Number(tokenRow.id);
+      const context = await resolvePrintContext(tokenRow, req.body?.installation_id);
+      if (!context) {
+        return res.status(409).json({ ok: false, success: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
+      }
+      const agentId = Number(context.agent.id);
       const printerNames = Array.from(printersByName.keys());
 
       for (const printer of printersByName.values()) {
         const [defaultRows] = await db.query(
-          "SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=? AND is_default=1 LIMIT 1",
-          [tenantId, storeId, tokenId]
+          "SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND agent_id=? AND is_default=1 LIMIT 1",
+          [tenantId, storeId, agentId]
         );
         const hasDefaultPrinter = defaultRows.length > 0;
         await db.query(
           `
           INSERT INTO print_printers
-            (tenant_id, store_id, token_id, system_name, display_name, is_default, status, last_seen_at, created_at, updated_at)
+            (tenant_id, store_id, token_id, agent_id, system_name, display_name, is_default, status, last_seen_at, created_at, updated_at)
           VALUES
-            (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+            (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
           ON DUPLICATE KEY UPDATE
             tenant_id=VALUES(tenant_id),
             store_id=VALUES(store_id),
+            token_id=VALUES(token_id),
+            agent_id=VALUES(agent_id),
             display_name=VALUES(display_name),
             is_default=IF(?, is_default, VALUES(is_default)),
             status=VALUES(status),
@@ -1888,6 +1957,7 @@ function makePrintApiRouter({ db, helpers }) {
             tenantId,
             storeId,
             tokenId,
+            agentId,
             printer.systemName,
             printer.displayName,
             printer.isDefault,
@@ -1902,19 +1972,19 @@ function makePrintApiRouter({ db, helpers }) {
           `
           UPDATE print_printers
           SET status='offline', updated_at=NOW()
-          WHERE tenant_id=? AND store_id=? AND token_id=?
+          WHERE tenant_id=? AND store_id=? AND agent_id=?
             AND system_name NOT IN (?)
           `,
-          [tenantId, storeId, tokenId, printerNames]
+          [tenantId, storeId, agentId, printerNames]
         );
       } else {
         await db.query(
           `
           UPDATE print_printers
           SET status='offline', updated_at=NOW()
-          WHERE tenant_id=? AND store_id=? AND token_id=?
+          WHERE tenant_id=? AND store_id=? AND agent_id=?
           `,
-          [tenantId, storeId, tokenId]
+          [tenantId, storeId, agentId]
         );
       }
 
@@ -1922,10 +1992,10 @@ function makePrintApiRouter({ db, helpers }) {
         `
         SELECT system_name, display_name, is_default, status, last_seen_at
         FROM print_printers
-        WHERE tenant_id=? AND store_id=? AND token_id=?
+        WHERE tenant_id=? AND store_id=? AND agent_id=?
         ORDER BY is_default DESC, display_name ASC, system_name ASC
         `,
-        [tenantId, storeId, tokenId]
+        [tenantId, storeId, agentId]
       );
 
       await touchTokenUsage(tokenId);
@@ -1961,11 +2031,16 @@ function makePrintApiRouter({ db, helpers }) {
       const tenantId = Number(tokenRow.tenant_id);
       const storeId = Number(tokenRow.store_id);
       const tokenId = Number(tokenRow.id);
+      const context = await resolvePrintContext(tokenRow, req.body?.installation_id);
+      if (!context) {
+        return res.status(409).json({ ok: false, success: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
+      }
+      const agentId = Number(context.agent.id);
       const [result] = await db.query(
         `UPDATE print_printers
          SET display_name=?, updated_at=NOW()
-         WHERE tenant_id=? AND store_id=? AND token_id=? AND system_name=?`,
-        [displayName, tenantId, storeId, tokenId, systemName]
+         WHERE tenant_id=? AND store_id=? AND token_id=? AND agent_id=? AND system_name=?`,
+        [displayName, tenantId, storeId, tokenId, agentId, systemName]
       );
 
       if (!result || !Number(result.affectedRows || 0)) {
@@ -1975,9 +2050,9 @@ function makePrintApiRouter({ db, helpers }) {
       const [printers] = await db.query(
         `SELECT system_name, display_name, is_default, status, last_seen_at
          FROM print_printers
-         WHERE tenant_id=? AND store_id=? AND token_id=?
+         WHERE tenant_id=? AND store_id=? AND agent_id=?
          ORDER BY is_default DESC, display_name ASC, system_name ASC`,
-        [tenantId, storeId, tokenId]
+        [tenantId, storeId, agentId]
       );
 
       await touchTokenUsage(tokenId);
@@ -2000,8 +2075,9 @@ function makePrintApiRouter({ db, helpers }) {
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
-
-      const job = await claimNextPrintJob(tokenRow);
+      const context = await resolvePrintContext(tokenRow, req.query?.installation_id);
+      if (!context) return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
+      const job = await claimNextPrintJob(tokenRow, context);
       await touchTokenUsage(tokenRow.id);
 
       if (!job) {
@@ -2047,6 +2123,8 @@ function makePrintApiRouter({ db, helpers }) {
           job_id: Number(job.id),
           job_name: job.job_name || "CRM Receipt",
           attempts: Number(job.attempts || 0),
+          target_printer_id: Number(job.target_printer_id || 0) || null,
+          printer_name: job.target_printer_system_name || null,
           order: {
             id: Number(job.order_id || 0) || null,
             public_id: job.public_id || null
@@ -2135,7 +2213,9 @@ function makePrintApiRouter({ db, helpers }) {
       const tenantId = Number(tokenRow.tenant_id);
       const storeId = Number(tokenRow.store_id);
 
-      const job = await claimNextPrintJob(tokenRow);
+      const context = await resolvePrintContext(tokenRow, req.query?.installation_id);
+      if (!context) return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
+      const job = await claimNextPrintJob(tokenRow, context);
       let jobData = null;
       if (job) {
         let jobPayload = job.pdf_base64 || "";
@@ -2163,6 +2243,8 @@ function makePrintApiRouter({ db, helpers }) {
           job_id: Number(job.id),
           job_name: job.job_name || "CRM Receipt",
           attempts: Number(job.attempts || 0),
+          target_printer_id: Number(job.target_printer_id || 0) || null,
+          printer_name: job.target_printer_system_name || null,
           order: {
             id: Number(job.order_id || 0) || null,
             public_id: job.public_id || null
@@ -2303,6 +2385,9 @@ function makePrintApiRouter({ db, helpers }) {
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
+      const context = await resolvePrintContext(tokenRow, req.body?.installation_id);
+      if (!context) return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
+      const agentId = Number(context.agent.id);
 
       const jobId = Number(req.params.id);
       if (!Number.isFinite(jobId) || jobId <= 0) {
@@ -2314,10 +2399,11 @@ function makePrintApiRouter({ db, helpers }) {
       const [result] = await db.query(
         `
         UPDATE print_jobs
-        SET status='done', locked_at=NULL, acked_at=?, last_error=NULL, updated_at=?
+        SET status='done', locked_at=NULL, acked_at=?, claimed_by_agent_id=?, last_error=NULL, updated_at=?
         WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing'
+          AND ((target_agent_id IS NULL AND (claimed_by_agent_id IS NULL OR claimed_by_agent_id=?)) OR claimed_by_agent_id=?)
         `,
-        [nowSql, nowSql, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+        [nowSql, agentId, nowSql, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id), agentId, agentId]
       );
 
       if (!Number(result.affectedRows || 0)) {
@@ -2358,6 +2444,9 @@ function makePrintApiRouter({ db, helpers }) {
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
+      const context = await resolvePrintContext(tokenRow, req.body?.installation_id);
+      if (!context) return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
+      const agentId = Number(context.agent.id);
 
       const jobId = Number(req.params.id);
       if (!Number.isFinite(jobId) || jobId <= 0) {
@@ -2376,8 +2465,9 @@ function makePrintApiRouter({ db, helpers }) {
           last_error=?,
           updated_at=?
         WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing'
+          AND ((target_agent_id IS NULL AND claimed_by_agent_id=?) OR claimed_by_agent_id=?)
         `,
-        [errorText, nowSql, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+        [errorText, nowSql, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id), agentId, agentId]
       );
 
       if (!Number(result.affectedRows || 0)) {

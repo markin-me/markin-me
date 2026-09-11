@@ -73,6 +73,31 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   let ensureOrderDeliveryTypeColumnsPromise = null;
   let orderBenefitsMetaColumnReady = false;
   let ensureOrderBenefitsMetaColumnPromise = null;
+  function stableSubmissionJson(value) {
+    if (Array.isArray(value)) return `[${value.map(stableSubmissionJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.keys(value).sort().filter((key) => value[key] !== undefined)
+        .map((key) => `${JSON.stringify(key)}:${stableSubmissionJson(value[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  function buildOrderSubmissionFingerprint(body) {
+    const payload = body && typeof body === 'object' ? JSON.parse(JSON.stringify(body)) : {};
+    if (payload.pricing_snapshot?.context) delete payload.pricing_snapshot.context.generated_at;
+    return crypto.createHash('sha256').update(stableSubmissionJson(payload)).digest('hex');
+  }
+
+  async function findOrderSubmission(tenantId, scopeStoreId, submissionId) {
+    const [rows] = await db.query(
+      `SELECT id, public_id, submission_fingerprint
+       FROM order_orders
+       WHERE tenant_id=? AND submission_scope_store_id=? AND submission_id=?
+       LIMIT 1`,
+      [tenantId, scopeStoreId, submissionId]
+    );
+    return Array.isArray(rows) && rows.length ? rows[0] : null;
+  }
   async function syncCustomerOrderMetrics(queryable, tenantId, customerIds) {
     const ids = [...new Set((Array.isArray(customerIds) ? customerIds : [customerIds])
       .map((value) => Number(value || 0))
@@ -22592,6 +22617,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       let orderStoreId = storeId;
+      const submissionId = String(req.headers['idempotency-key'] || '').trim().toLowerCase();
+      if (submissionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(submissionId)) {
+        return res.status(400).json({ ok: false, error: 'BAD_IDEMPOTENCY_KEY' });
+      }
+      const submissionFingerprint = submissionId ? buildOrderSubmissionFingerprint(req.body) : null;
+      if (submissionId) {
+        const existingSubmission = await findOrderSubmission(tenantId, storeId, submissionId);
+        if (existingSubmission) {
+          if (String(existingSubmission.submission_fingerprint || '') !== submissionFingerprint) {
+            return res.status(409).json({ ok: false, error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
+          }
+          return res.json({
+            ok: true,
+            data: { id: Number(existingSubmission.id), public_id: existingSubmission.public_id },
+            idempotent_replay: true,
+          });
+        }
+      }
       await ensureOrderDeliveryTypeColumns();
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
@@ -24718,6 +24761,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           orderDiscountAmount,
           discountsJson,
         ];
+        if (submissionId) {
+          orderInsertColumns.push('submission_scope_store_id', 'submission_id', 'submission_fingerprint');
+          orderInsertParams.push(storeId, submissionId, submissionFingerprint);
+        }
         if (hasBenefitsMetaColumn) {
           orderInsertColumns.push('benefits_meta_json');
           orderInsertParams.push(benefitsMetaJson);
@@ -24809,6 +24856,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       } catch (txErr) {
         await conn.rollback();
         conn.release();
+        if (submissionId && String(txErr?.code || '') === 'ER_DUP_ENTRY') {
+          const existingSubmission = await findOrderSubmission(tenantId, storeId, submissionId);
+          if (!existingSubmission) throw txErr;
+          if (String(existingSubmission.submission_fingerprint || '') !== submissionFingerprint) {
+            return res.status(409).json({ ok: false, error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
+          }
+          return res.json({
+            ok: true,
+            data: { id: Number(existingSubmission.id), public_id: existingSubmission.public_id },
+            idempotent_replay: true,
+          });
+        }
         if (txErr && txErr.code === 'OUT_OF_STOCK') {
           return res.status(409).json({
             ok: false,

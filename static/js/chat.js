@@ -3275,13 +3275,13 @@
   function syncMobileClientCardFooter(view) {
     if (!document.body || !document.body.classList.contains("page-chat")) return;
     if (!isChatMobileViewport()) return;
-    const footer = document.getElementById("clientBenefitsFooter");
-    if (!footer) return;
+    const footers = Array.from(document.querySelectorAll("[data-client-passport-footer]"));
+    if (!footers.length) return;
     const nextView = String(view || "").trim().toLowerCase();
     const hasActiveClient = Number(state.activeClientId || 0) > 0;
     const isOrderMode = document.body.classList.contains("chat-right-order-mode");
     const shouldShow = nextView === "right" && !isOrderMode && hasActiveClient;
-    footer.classList.toggle("hidden", !shouldShow);
+    footers.forEach((footer) => footer.classList.toggle("hidden", !shouldShow));
   }
 
   function syncMobileChatView(view, options = {}) {
@@ -3360,13 +3360,22 @@
           selectedFromList?.name || "",
           { skipMobileSheet: true }
         ).catch(console.error);
-      } else if (typeof clientsRightApi.selectClientById === "function") {
-        await clientsRightApi.selectClientById(
+      } else if (typeof clientsRightApi.openClientPassport === "function") {
+        await clientsRightApi.openClientPassport(
           activeClientId,
-          selectedFromList?.name || "",
           {
+            source: "chat",
+            title: selectedFromList?.name || "",
             chatGuest: isGuestClient,
             skipMobileSheet: true,
+            onBack: () => syncMobileChatView("center", { persistState: true }),
+            onOrderOpen: (orderId) => {
+              const id = Number(orderId || 0);
+              if (!(id > 0)) return null;
+              showChatRightPane("order");
+              upsertChatRightTab("order", id);
+              return openCanonicalChatOrder(id, { backToClient: true });
+            },
           }
         ).catch(console.error);
       }
@@ -3827,10 +3836,9 @@
       captureClientContentTab();
       captureClientOrdersListScrollTop();
       showChatRightPane("order");
-      const ordersRightApi = getOrdersRightApi();
-      if (ordersRightApi && typeof ordersRightApi.openOrderById === "function") {
-        ordersRightApi.openOrderById(id, { openMobile: false });
-      }
+      const activeTabIndex = state.rightTabs.findIndex((tab) => buildChatRightTabKey(tab.kind, tab.id) === k);
+      const previousTab = activeTabIndex > 0 ? state.rightTabs[activeTabIndex - 1] : null;
+      await openCanonicalChatOrder(id, { backToClient: previousTab?.kind === "client" });
       if (activationToken !== state.rightTabActivationToken) return;
       syncMobileChatView("right");
       return;
@@ -3844,8 +3852,21 @@
     if (clientsRightApi) {
       if (isGuestClient && typeof clientsRightApi.selectGuestChatClient === "function") {
         await clientsRightApi.selectGuestChatClient(id, preferredTitle, { skipMobileSheet: true }).catch(console.error);
-      } else if (typeof clientsRightApi.selectClientById === "function") {
-        await clientsRightApi.selectClientById(id, preferredTitle, { chatGuest: isGuestClient, skipMobileSheet: true }).catch(console.error);
+      } else if (typeof clientsRightApi.openClientPassport === "function") {
+        await clientsRightApi.openClientPassport(id, {
+          source: "chat",
+          title: preferredTitle,
+          chatGuest: isGuestClient,
+          skipMobileSheet: true,
+          onBack: () => syncMobileChatView("center", { persistState: true }),
+          onOrderOpen: (orderId) => {
+            const orderIdNumber = Number(orderId || 0);
+            if (!(orderIdNumber > 0)) return null;
+            showChatRightPane("order");
+            upsertChatRightTab("order", orderIdNumber);
+            return openCanonicalChatOrder(orderIdNumber, { backToClient: true });
+          },
+        }).catch(console.error);
       }
     }
     if (activationToken !== state.rightTabActivationToken) return;
@@ -4714,7 +4735,6 @@
         method_code: String(order?.method_code || ""),
         created_at: String(order?.created_at || ""),
         scheduled_at: String(order?.scheduled_at || ""),
-        updated_at: String(order?.updated_at || ""),
       }))
       .sort((a, b) => a.id - b.id);
     return stableSerialize(normalized);
@@ -16524,10 +16544,7 @@
     captureClientOrdersListScrollTop();
     showChatRightPane("order");
     upsertChatRightTab("order", headerOrderId);
-    const ordersRightApi = getOrdersRightApi();
-    if (!ordersRightApi || typeof ordersRightApi.openOrderById !== "function") return;
-    ordersRightApi.openOrderById(headerOrderId, { openMobile: false });
-    syncMobileChatView("right");
+    openCanonicalChatOrder(headerOrderId, { backToClient: false });
   }
 
   function openOrderFromMessageCard(orderId, options = {}) {
@@ -16540,10 +16557,35 @@
     captureClientOrdersListScrollTop();
     showChatRightPane("order");
     upsertChatRightTab("order", id);
+    openCanonicalChatOrder(id, { backToClient: opts.fromClientCard === true });
+  }
+
+  function restoreChatAfterOrder(backToClient) {
+    state.rightOrderOpenedFromMessageBubble = false;
+    state.rightOrderOpenedFromHeader = false;
+    if (backToClient && Number(state.activeClientId || 0) > 0) {
+      showChatRightPane("client");
+      syncMobileChatView("right", { persistState: true });
+      restoreClientPanelState();
+      return;
+    }
+    syncMobileChatView("center", { persistState: true });
+  }
+
+  function openCanonicalChatOrder(orderId, options = {}) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return Promise.resolve(null);
+    const backToClient = options.backToClient === true;
     const ordersRightApi = getOrdersRightApi();
-    if (!ordersRightApi || typeof ordersRightApi.openOrderById !== "function") return;
-    ordersRightApi.openOrderById(id, { openMobile: false });
+    if (!ordersRightApi || typeof ordersRightApi.openOrderPassport !== "function") return Promise.resolve(null);
     syncMobileChatView("right");
+    return ordersRightApi.openOrderPassport(id, {
+      source: "chat",
+      nested: backToClient,
+      openMobile: false,
+      capabilities: { payment: true, status: true, edit: true, print: true },
+      onBack: () => restoreChatAfterOrder(backToClient),
+    });
   }
 
   function bindChatRightOrderOpenRequests() {
@@ -16554,6 +16596,7 @@
       const source = String(detail.source || "").trim().toLowerCase();
       openOrderFromMessageCard(orderId, {
         fromMessageBubble: source === "message-bubble",
+        fromClientCard: source === "client-card",
       });
     });
   }
@@ -17638,6 +17681,11 @@
         event.stopPropagation();
         const isOrderMode = document.body && document.body.classList.contains("chat-right-order-mode");
         if (isOrderMode && Number(state.activeClientId || 0) > 0) {
+          const ordersRightApi = getOrdersRightApi();
+          if (ordersRightApi && typeof ordersRightApi.closeOrderPassport === "function") {
+            ordersRightApi.closeOrderPassport("back").catch(console.error);
+            return;
+          }
           if (state.rightOrderOpenedFromMessageBubble === true || state.rightOrderOpenedFromHeader === true) {
             state.rightOrderOpenedFromMessageBubble = false;
             state.rightOrderOpenedFromHeader = false;
@@ -17689,9 +17737,7 @@
   function init() {
     pendingNotificationChatOpenRequest = pendingNotificationChatOpenRequest || readChatNotificationOpenRequestFromLocation();
     state.chatWidgetEnabled = getTenantChatWidgetEnabledFromStorage();
-    if (isChatMobileViewport()) {
-      syncMobileChatView("clients", { persistState: true });
-    }
+    syncMobileChatViewFromState({ persistState: false });
     setSidebarChatNavVisibility(state.chatWidgetEnabled !== false);
     setChatBootstrapLoading(state.chatWidgetEnabled !== false);
     ensureDesktopChatHeaderMarkup();

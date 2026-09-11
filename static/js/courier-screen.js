@@ -13,6 +13,12 @@
     courierTransitStatusId: 4,
     courierDeliveredStatusId: 5,
     courierCanceledStatusIds: [6],
+    capabilities: {
+      payment: true,
+      status: true,
+      edit: false,
+      print: false,
+    },
     courierTransitAliases: [
       "delivery",
       "delivering",

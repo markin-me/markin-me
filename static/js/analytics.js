@@ -110,7 +110,6 @@
     const payload = await response.json().catch(() => null);
     if (response.status === 409) throw new Error('Этот чек уже принят.');
     if (!response.ok || !payload?.ok) throw new Error('Не удалось сохранить чек.');
-    await loadExpenseDocuments();
     document.dispatchEvent(new Event('expense-documents-changed'));
   }
 
@@ -122,29 +121,6 @@
       if (typeof window.AppModal?.setFooterNotice === 'function') window.AppModal.setFooterNotice(error instanceof Error ? error.message : 'Не удалось сохранить чек.');
       return { saved: false, message: error instanceof Error ? error.message : 'Не удалось сохранить чек.' };
     }
-  }
-
-  async function loadExpenseDocuments() {
-    try {
-      const token = typeof getAuthToken === 'function' ? getAuthToken() : '';
-      const response = await fetch('/api/admin/analytics/expense-documents', {
-        headers: token ? { Authorization: 'Bearer ' + token } : {}
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok || !payload?.ok) return;
-      const documents = Array.isArray(payload.documents) ? payload.documents : [];
-      const summary = payload.summary || {};
-      const total = document.getElementById('analyticsExpensesTotal');
-      const count = document.getElementById('analyticsDocumentsCount');
-      const empty = document.getElementById('analyticsEmptyState');
-      const list = document.getElementById('analyticsDocumentsList');
-      if (total) total.textContent = formatKopecks(summary.total_sum_kopecks);
-      if (count) count.textContent = String(summary.count || 0);
-      if (empty) empty.classList.toggle('hidden', documents.length > 0);
-      if (!list) return;
-      list.classList.toggle('hidden', documents.length === 0);
-      list.innerHTML = documents.map((document) => '<div class="analytics-document-row"><div><strong>' + escapeHtml(document.supplier_name || 'Фискальный чек') + '</strong><small>' + escapeHtml(document.receipt_datetime || document.accepted_at || '') + '</small></div><strong>' + formatKopecks(document.total_sum_kopecks) + '</strong></div>').join('');
-    } catch (_) {}
   }
 
   function showReceipt(receipt, qrraw) {
@@ -343,5 +319,4 @@
     if (type === 'invoice') openInvoicePicker();
   });
   if (addDocumentButton) addDocumentButton.addEventListener('click', openDocumentMenu);
-  loadExpenseDocuments();
 })();
