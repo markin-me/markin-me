@@ -151,7 +151,7 @@
     })();
   </script>
 
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260907-client-passport-footer-v12') %>" />
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260912-pwa7-fixes-v2') %>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
@@ -212,20 +212,7 @@
   data-admin-chat-url="<%= adminChatHref %>"
   data-app-version="<%= appVersion || '' %>"
 >
-  <%- include('../partials/header') %>
-
-  <% if (appActivePage === 'courier-screen') { %>
-    <div id="courierConnectionBanner" class="courier-connection-banner hidden" aria-live="polite" role="status">
-      <span class="courier-connection-banner__text"></span>
-      <button
-        type="button"
-        class="courier-connection-banner__retry hidden"
-        data-action="courier-connection-retry"
-      >
-        Повторить
-      </button>
-    </div>
-  <% } %>
+  <%- include('../partials/header', { appActivePage: appActivePage, adminNavItems: adminNavItems }) %>
 
   <div class="main-container app-grid">
     <%- include('../partials/sidebar', { activePage: appActivePage, adminNavItems: adminNavItems }) %>
@@ -254,6 +241,13 @@
 
   <!-- Скрипты -->
   <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-persistent-cache.js?v=20260912-pwa9-v1') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-reference-cache.js?v=20260912-pwa8-v1') %>"></script>
+  <script>
+    if (window.AdminPersistentCache && typeof window.AdminPersistentCache.scheduleMaintenance === 'function') {
+      window.AdminPersistentCache.scheduleMaintenance();
+    }
+  </script>
   <script src="<%= assetUrl('/static/js/current-time.js') %>"></script>
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
@@ -272,17 +266,15 @@
   <script>
     (function () {
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function () {
-          var serviceWorkerUrl = window.__APP_SERVICE_WORKER_URL__ || '/sw.js';
-          navigator.serviceWorker
-            .register(serviceWorkerUrl, { scope: '/' })
-            .then(function (registration) {
-              if (registration && typeof registration.update === 'function') {
-                registration.update().catch(function () {});
-              }
-            })
-            .catch(function () {});
-        });
+        var serviceWorkerUrl = window.__APP_SERVICE_WORKER_URL__ || '/sw.js';
+        navigator.serviceWorker
+          .register(serviceWorkerUrl, { scope: '/' })
+          .then(function (registration) {
+            if (registration && typeof registration.update === 'function') {
+              registration.update().catch(function () {});
+            }
+          })
+          .catch(function () {});
       }
     })();
   </script>
@@ -381,6 +373,12 @@
             if (typeof logout === 'function') {
               logout();
             } else {
+              if (window.AdminReferenceCache && typeof window.AdminReferenceCache.resetRuntime === 'function') {
+                window.AdminReferenceCache.resetRuntime();
+              }
+              if (window.AdminPersistentCache && typeof window.AdminPersistentCache.resetRuntimeScope === 'function') {
+                window.AdminPersistentCache.resetRuntimeScope();
+              }
               localStorage.removeItem('authToken');
               localStorage.removeItem('user');
               localStorage.removeItem('tenant');
@@ -430,15 +428,48 @@
             var tenant = JSON.parse(tenantStr);
             var tenantId = tenant.id;
 
-            var response = await fetch('/api/public/tenant/stores?tenant_id=' + tenantId);
-            var data = await response.json();
+            var loadStoresFromNetwork = async function () {
+              var response = await fetch('/api/public/tenant/stores?tenant_id=' + tenantId);
+              if (!response.ok) throw new Error('STORE_FETCH_FAILED');
+              return response.json();
+            };
+            var normalizeStores = function (data) {
+              if (!data || data.ok !== true || !Array.isArray(data.stores)) throw new Error('INVALID_STORES_RESPONSE');
+              return (Array.isArray(data && data.stores) ? data.stores : []).map(function (store) {
+                return {
+                  tenant_id: store.tenant_id,
+                  id: store.id,
+                  code: store.code,
+                  name: store.name,
+                  city: store.city,
+                  address: store.address,
+                  phone: store.phone,
+                  timezone: store.timezone,
+                  is_active: store.is_active
+                };
+              });
+            };
+            var data = window.AdminReferenceCache
+              ? await window.AdminReferenceCache.getOrLoadReference('stores', {
+                  load: loadStoresFromNetwork,
+                  normalize: normalizeStores,
+                  validate: function (value) { return Array.isArray(value); },
+                  onUpdate: function (value) {
+                    stores = value;
+                    applyStores();
+                  }
+                })
+              : normalizeStores(await loadStoresFromNetwork());
 
-            if (!data || !data.ok || !Array.isArray(data.stores)) {
-              console.error('Failed to load stores');
-              return;
-            }
+            stores = data;
+            applyStores();
+          } catch (err) {
+            console.error('Error loading stores:', err);
+          }
+        }
 
-            stores = data.stores;
+        function applyStores() {
+            if (storeSection) storeSection.style.display = '';
 
             // Если точек нет, скрыть секцию
             if (stores.length === 0) {
@@ -464,9 +495,6 @@
 
             updateStoreName(currentStore);
             renderStoreOptions();
-          } catch (err) {
-            console.error('Error loading stores:', err);
-          }
         }
 
         function updateStoreName(store) {

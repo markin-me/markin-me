@@ -156,7 +156,7 @@
 
   startUtf8MojibakeRepair();
   const CHECKOUT_SCREEN_ID = "__checkout_screen__";
-  const CHECKOUT_DRAFT_CACHE_VERSION = 1;
+  const CHECKOUT_DRAFT_CACHE_VERSION = 2;
   const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const DURABLE_CREATE_DRAFT_VERSION = 1;
   const DURABLE_CREATE_DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -190,6 +190,7 @@
     productByIdCache: new Map(),
     comboDetailsCache: new Map(),
     checkoutSavedDraft: { blocks: [] },
+    checkoutDraftReady: false,
     checkoutCategoryProducts: new Map(),
     checkoutSelectedProductByCategory: new Map(),
     checkoutProductsScrollByCategory: new Map(),
@@ -7944,6 +7945,8 @@
         checkoutSavedDraft: state.checkoutSavedDraft && typeof state.checkoutSavedDraft === "object"
           ? { blocks: Array.isArray(state.checkoutSavedDraft.blocks) ? state.checkoutSavedDraft.blocks : [] }
           : { blocks: [] },
+        checkoutDraftReady: state.checkoutDraftReady === true,
+        checkoutDraftCacheVersion: CHECKOUT_DRAFT_CACHE_VERSION,
         categoryProductsById,
         productVariantsById: mapToObject(state.productVariants),
         productIngredientsById: mapToObject(state.productIngredients),
@@ -8036,6 +8039,8 @@
     state.checkoutSavedDraft = snapshot.checkoutSavedDraft && typeof snapshot.checkoutSavedDraft === "object"
       ? { blocks: Array.isArray(snapshot.checkoutSavedDraft.blocks) ? snapshot.checkoutSavedDraft.blocks : [] }
       : { blocks: [] };
+    state.checkoutDraftReady = snapshot.checkoutDraftReady === true
+      && Number(snapshot.checkoutDraftCacheVersion || 0) === CHECKOUT_DRAFT_CACHE_VERSION;
 
     state.categoryProductsCache.clear();
     state.checkoutCategoryProducts.clear();
@@ -17020,21 +17025,23 @@
         }
       });
     }
+    state.checkoutIngredientsPopoverKey = null;
+    state.checkoutIngredientsPopoverPos = null;
+    renderCheckoutEditorContent();
     await warmRightOrderProductPricingContext(allProducts, {
       includeOptionDetails: true,
       includeOptionTargets: true,
     });
-    state.checkoutIngredientsPopoverKey = null;
-    state.checkoutIngredientsPopoverPos = null;
     schedulePersistBootstrapSnapshot(0);
 
-    renderCheckoutEditorContent();
+    if (isCheckoutScreenActive()) renderCheckoutEditorContent();
   }
 
   async function loadCheckoutDraftFromApi(force = false) {
     const cached = force ? null : readDraftCache();
     if (cached && Array.isArray(cached.blocks)) {
       state.checkoutSavedDraft = { blocks: cached.blocks };
+      state.checkoutDraftReady = true;
       schedulePersistBootstrapSnapshot();
       return;
     }
@@ -17042,6 +17049,7 @@
     const blocks = Array.isArray(json?.data?.blocks) ? json.data.blocks : [];
     const normalized = blocks.map(normalizeBlock).filter(Boolean);
     state.checkoutSavedDraft = { blocks: normalized };
+    state.checkoutDraftReady = true;
     writeDraftCache(normalized);
     schedulePersistBootstrapSnapshot();
   }
@@ -19006,12 +19014,6 @@
         seedRightOrderProductsByIdCache(payload.activeOnly);
         allProducts.push(...payload.activeOnly);
       });
-      await warmRightOrderProductPricingContext(allProducts);
-      void warmRightOrderProductPricingContext(allProducts, {
-        includeBase: false,
-        includeOptionDetails: true,
-        includeOptionTargets: true,
-      }).catch(() => {});
       schedulePersistBootstrapSnapshot(0);
       return true;
     } catch {
@@ -19048,11 +19050,14 @@
         const combinedPayload = buildCombinedCategoryPayload(loadIds);
         state.currentProducts = combinedPayload.currentProducts;
         seedRightOrderProductsByIdCache(combinedPayload.activeOnly);
+        renderProducts(state.currentProducts);
         await warmRightOrderProductPricingContext(combinedPayload.activeOnly, {
           includeOptionDetails: true,
           includeOptionTargets: true,
         });
-        renderProducts(state.currentProducts);
+        if (String(state.activeCategoryId) !== CHECKOUT_SCREEN_ID && getActiveProductCategoryId() === cid) {
+          renderProducts(state.currentProducts);
+        }
         return;
       }
 
@@ -19063,11 +19068,14 @@
           seedRightOrderProductsByIdCache(cachedPayload.activeOnly);
         }
         state.currentProducts = Array.isArray(cachedPayload?.currentProducts) ? cachedPayload.currentProducts : [];
+        renderProducts(state.currentProducts);
         await warmRightOrderProductPricingContext(cachedPayload?.activeOnly || [], {
           includeOptionDetails: true,
           includeOptionTargets: true,
         });
-        renderProducts(state.currentProducts);
+        if (String(state.activeCategoryId) !== CHECKOUT_SCREEN_ID && getActiveProductCategoryId() === cid) {
+          renderProducts(state.currentProducts);
+        }
         return;
       }
 
@@ -19084,12 +19092,15 @@
       state.checkoutCategoryProducts.set(cid, payload.activeOnly);
       seedRightOrderProductsByIdCache(payload.activeOnly);
       state.currentProducts = payload.currentProducts;
+      renderProducts(state.currentProducts);
       await warmRightOrderProductPricingContext(payload.activeOnly, {
         includeOptionDetails: true,
         includeOptionTargets: true,
       });
       schedulePersistBootstrapSnapshot(0);
-      renderProducts(state.currentProducts);
+      if (String(state.activeCategoryId) !== CHECKOUT_SCREEN_ID && getActiveProductCategoryId() === cid) {
+        renderProducts(state.currentProducts);
+      }
     } catch (e) {
       if (productsEmptyEl) {
         productsEmptyEl.textContent = "РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё С‚РѕРІР°СЂРѕРІ";
@@ -20011,6 +20022,8 @@
             return;
           }
           state.checkoutSavedDraft = draftToSave;
+          state.checkoutDraftReady = true;
+          schedulePersistBootstrapSnapshot(0);
           state.checkoutEditMode = false;
           state.checkoutDraft = null;
           renderMainContentMode();
@@ -21209,6 +21222,7 @@
       const blocks = Array.isArray(data.checkout?.blocks) ? data.checkout.blocks : [];
       const normalizedBlocks = blocks.map(normalizeBlock).filter(Boolean);
       state.checkoutSavedDraft = { blocks: normalizedBlocks };
+      state.checkoutDraftReady = true;
       writeDraftCache(normalizedBlocks);
       schedulePersistBootstrapSnapshot(0);
       return true;
@@ -21321,11 +21335,12 @@
       await loadRefsFromApi();
     }
 
-    if (checkoutChanged || !Array.isArray(state.checkoutSavedDraft?.blocks)) {
+    if (checkoutChanged || !state.checkoutDraftReady || !Array.isArray(state.checkoutSavedDraft?.blocks)) {
       try {
-        await loadCheckoutDraftFromApi(checkoutChanged || forceFull);
+        await loadCheckoutDraftFromApi(checkoutChanged || forceFull || !state.checkoutDraftReady);
       } catch {
         state.checkoutSavedDraft = { blocks: [] };
+        state.checkoutDraftReady = false;
       }
     }
 
@@ -22655,12 +22670,13 @@
           await loadCheckoutDraftFromApi();
         } catch {
           state.checkoutSavedDraft = { blocks: [] };
+          state.checkoutDraftReady = false;
         }
         await preloadAllCategoryProducts(getPreloadCategoryIds());
       }
     } else {
       const manifestChanged = !areManifestTokensEqual(prevManifest, nextManifest);
-      if ((!hydrated && !bootstrapped) || manifestChanged) {
+      if ((!hydrated && !bootstrapped) || manifestChanged || !state.checkoutDraftReady) {
         await syncDataByManifest(nextManifest, prevManifest, !hydrated && !bootstrapped);
       }
     }

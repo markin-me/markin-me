@@ -1,5 +1,6 @@
 
 const express = require("express");
+const crypto = require("crypto");
 const productPassportSnapshots = require("../../services/product-passport-snapshots");
 const { sendOrderToPrintBot, enqueueSingleLabelPrintJob } = require("../printPush");
 const {
@@ -42,6 +43,96 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   let ensureOrderBenefitsMetaColumnPromise = null;
   let refundTablesReady = false;
   let ensureRefundTablesPromise = null;
+
+  function stableIdempotencyJson(value) {
+    if (Array.isArray(value)) return value.map(stableIdempotencyJson);
+    if (!value || typeof value !== "object") return value;
+    return Object.keys(value).sort().reduce((out, key) => {
+      out[key] = stableIdempotencyJson(value[key]);
+      return out;
+    }, {});
+  }
+
+  function readIdempotencyKey(req) {
+    const key = String(req.headers["idempotency-key"] || "").trim().toLowerCase();
+    if (!key) return null;
+    if (key.length > 128) {
+      const err = new Error("IDEMPOTENCY_KEY_INVALID");
+      err.code = "IDEMPOTENCY_KEY_INVALID";
+      throw err;
+    }
+    return key;
+  }
+
+  function buildMutationFingerprint(operation, orderId, body) {
+    return crypto.createHash("sha256").update(JSON.stringify(stableIdempotencyJson({
+      operation,
+      orderId: Number(orderId),
+      body: body && typeof body === "object" ? body : {},
+    }))).digest("hex");
+  }
+
+  async function claimOrderMutationIdempotency(conn, req, { tenantId, storeId, orderId, operation, body }) {
+    const key = readIdempotencyKey(req);
+    if (!key) return { enabled: false };
+    const actorUserId = Number(req.user?.userId || 0) || 0;
+    const fingerprint = buildMutationFingerprint(operation, orderId, body);
+    try {
+      const [result] = await conn.query(
+        `INSERT INTO order_mutation_idempotency
+          (tenant_id, store_id, actor_user_id, operation, idempotency_key, request_fingerprint, state, order_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'processing', ?)`,
+        [tenantId, storeId, actorUserId, operation, key, fingerprint, orderId]
+      );
+      return { enabled: true, claimed: true, id: Number(result?.insertId || 0), key, fingerprint };
+    } catch (err) {
+      if (String(err?.code || "") !== "ER_DUP_ENTRY") throw err;
+      const [rows] = await conn.query(
+        `SELECT id, request_fingerprint, state, response_status, response_json
+           FROM order_mutation_idempotency
+          WHERE tenant_id=? AND store_id=? AND actor_user_id=? AND operation=? AND idempotency_key=?
+          LIMIT 1
+          FOR UPDATE`,
+        [tenantId, storeId, actorUserId, operation, key]
+      );
+      const existing = rows[0] || null;
+      if (!existing) throw err;
+      if (String(existing.request_fingerprint || "") !== fingerprint) {
+        return { enabled: true, conflict: true, code: "IDEMPOTENCY_KEY_REUSED" };
+      }
+      if (String(existing.state || "") === "completed") {
+        let responseBody = null;
+        try { responseBody = JSON.parse(existing.response_json || "null"); } catch {}
+        return {
+          enabled: true,
+          replay: true,
+          responseStatus: Number(existing.response_status || 200) || 200,
+          responseBody,
+        };
+      }
+      return { enabled: true, inProgress: true, code: "IDEMPOTENCY_IN_PROGRESS" };
+    }
+  }
+
+  async function completeOrderMutationIdempotency(conn, claim, responseStatus, responseBody) {
+    if (!claim?.enabled || !claim.claimed || !(claim.id > 0)) return;
+    await conn.query(
+      `UPDATE order_mutation_idempotency
+          SET state='completed', response_status=?, response_json=?, updated_at=CURRENT_TIMESTAMP
+        WHERE id=? AND state='processing'`,
+      [Number(responseStatus || 200), JSON.stringify(responseBody || { ok: true }), claim.id]
+    );
+  }
+
+  function pruneCompletedOrderMutationIdempotency(tenantId, storeId) {
+    return db.query(
+      `DELETE FROM order_mutation_idempotency
+        WHERE tenant_id=? AND store_id=? AND state='completed'
+          AND updated_at < (CURRENT_TIMESTAMP - INTERVAL 30 DAY)
+        LIMIT 200`,
+      [tenantId, storeId]
+    );
+  }
 
   async function syncCustomerOrderMetrics(queryable, tenantId, customerIds) {
     const ids = [...new Set((Array.isArray(customerIds) ? customerIds : [customerIds])
@@ -2670,6 +2761,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // ---------------------------
   // PUT /api/admin/orders/:id/paid
   router.put("/:id/paid", async (req, res) => {
+    let conn = null;
+    let transactionStarted = false;
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
@@ -2684,7 +2777,30 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         return res.status(400).json({ ok: false, error: "BAD_IS_PAID" });
       }
 
-      const [existingRows] = await db.query(
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+      transactionStarted = true;
+      const claim = await claimOrderMutationIdempotency(conn, req, {
+        tenantId, storeId, orderId: id, operation: "order.payment", body: req.body,
+      });
+      if (claim.conflict || claim.inProgress || claim.replay) {
+        await conn.rollback();
+        transactionStarted = false;
+        conn.release();
+        conn = null;
+        if (claim.conflict) {
+          return res.status(409).json({ ok: false, error: claim.code });
+        }
+        if (claim.inProgress) {
+          return res.status(425).json({ ok: false, error: claim.code });
+        }
+        const replayPayload = await fetchOrderPayload(tenantId, storeId, id);
+        return res.status(claim.responseStatus).json(replayPayload
+          ? { ok: true, data: replayPayload, idempotency_replay: true }
+          : (claim.responseBody || { ok: true, idempotency_replay: true }));
+      }
+
+      const [existingRows] = await conn.query(
         `SELECT o.id,
                 o.total_price,
                 o.change_from,
@@ -2696,10 +2812,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             AND p.store_id=o.store_id
             AND p.id=o.payment_id
           WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
-          LIMIT 1`,
+          LIMIT 1
+          FOR UPDATE`,
         [tenantId, storeId, id]
       );
       if (!existingRows.length) {
+        await conn.rollback();
+        transactionStarted = false;
+        conn.release();
+        conn = null;
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
@@ -2710,9 +2831,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       if (hasPaymentCode) {
         const paymentCode = String(req.body?.payment_code || "").trim();
         if (!paymentCode) {
+          await conn.rollback();
+          transactionStarted = false;
+          conn.release();
+          conn = null;
           return res.status(400).json({ ok: false, error: "BAD_PAYMENT_CODE" });
         }
-        const [paymentRows] = await db.query(
+        const [paymentRows] = await conn.query(
           `SELECT id, code
              FROM order_payments
             WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1
@@ -2720,6 +2845,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           [tenantId, storeId, paymentCode]
         );
         if (!paymentRows.length) {
+          await conn.rollback();
+          transactionStarted = false;
+          conn.release();
+          conn = null;
           return res.status(400).json({ ok: false, error: "BAD_PAYMENT_CODE" });
         }
         nextPaymentId = Number(paymentRows[0]?.id || 0) > 0 ? Number(paymentRows[0].id) : null;
@@ -2741,6 +2870,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           if (!Number.isFinite(numericChangeFrom) || numericChangeFrom <= 0) {
             nextChangeFrom = null;
           } else if (numericChangeFrom <= totalPrice) {
+            await conn.rollback();
+            transactionStarted = false;
+            conn.release();
+            conn = null;
             return res.status(400).json({ ok: false, error: "BAD_CHANGE_FROM" });
           } else {
             nextChangeFrom = numericChangeFrom;
@@ -2748,7 +2881,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         }
       }
 
-      const [result] = await db.query(
+      const [result] = await conn.query(
         `UPDATE order_orders
          SET is_paid=?,
              payment_id=?,
@@ -2757,8 +2890,21 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         [isPaidRaw, nextPaymentId, nextChangeFrom, tenantId, storeId, id]
       );
       if (!Number(result?.affectedRows || 0)) {
+        await conn.rollback();
+        transactionStarted = false;
+        conn.release();
+        conn = null;
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
+
+      await completeOrderMutationIdempotency(conn, claim, 200, { ok: true, order_id: id });
+      await conn.commit();
+      transactionStarted = false;
+      conn.release();
+      conn = null;
+      void pruneCompletedOrderMutationIdempotency(tenantId, storeId).catch((err) => {
+        console.warn("Order mutation idempotency cleanup failed:", String(err?.message || err));
+      });
 
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (!payload) {
@@ -2770,7 +2916,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       res.json({ ok: true, data: payload });
     } catch (e) {
+      if (transactionStarted && conn) {
+        try { await conn.rollback(); } catch {}
+      }
+      if (conn) conn.release();
       console.error(e);
+      if (e?.code === "IDEMPOTENCY_KEY_INVALID") {
+        return res.status(400).json({ ok: false, error: e.code });
+      }
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });
@@ -3018,6 +3171,26 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       await conn.beginTransaction();
       transactionStarted = true;
+      const claim = await claimOrderMutationIdempotency(conn, req, {
+        tenantId, storeId, orderId: id, operation: "order.status", body: req.body,
+      });
+      if (claim.conflict || claim.inProgress || claim.replay) {
+        await conn.rollback();
+        transactionStarted = false;
+        safeRelease();
+        if (claim.conflict) {
+          return res.status(409).json({ ok: false, error: claim.code });
+        }
+        if (claim.inProgress) {
+          return res.status(425).json({ ok: false, error: claim.code });
+        }
+        const replayPayload = await fetchOrderPayload(tenantId, storeId, id);
+        return res.status(claim.responseStatus).json({
+          ...(claim.responseBody || { ok: true }),
+          ...(replayPayload ? { data: replayPayload } : {}),
+          idempotency_replay: true,
+        });
+      }
 
       const [statusRows] = await conn.query(
         `SELECT id, code, is_final
@@ -3251,9 +3424,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         benefitsMetaRaw: orderRow?.benefits_meta_json || null,
       });
 
+      await completeOrderMutationIdempotency(conn, claim, 200, { ok: true, order_id: id });
       await conn.commit();
       transactionStarted = false;
       safeRelease();
+      void pruneCompletedOrderMutationIdempotency(tenantId, storeId).catch((err) => {
+        console.warn("Order mutation idempotency cleanup failed:", String(err?.message || err));
+      });
 
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (payload) {
@@ -3302,7 +3479,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         });
       }
 
-      res.json({ ok: true });
+      res.json(payload ? { ok: true, data: payload } : { ok: true });
     } catch (e) {
       if (transactionStarted) {
         try {
@@ -3311,6 +3488,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
       safeRelease();
       console.error(e);
+      if (e?.code === "IDEMPOTENCY_KEY_INVALID") {
+        return res.status(400).json({ ok: false, error: e.code });
+      }
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });

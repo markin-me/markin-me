@@ -6,6 +6,7 @@
   const menuButton = document.getElementById("adminMobileMenuBtn");
   const backButton = document.getElementById("adminMobileHeaderBackBtn");
   const titleNode = document.getElementById("adminMobilePageTitle");
+  const headerCopy = document.getElementById("adminMobileHeaderCopy");
   const mobileOrderTabs = document.getElementById("adminMobileOrderTabs");
   const mobileActions = document.getElementById("adminMobileHeaderActions");
   const sidebarBrand = document.getElementById("adminSidebarBrand");
@@ -127,7 +128,7 @@
       && hasOrderTabs
       && !!mobileOrderTabs.querySelector(".product-tab");
     mobileOrderTabs.classList.toggle("hidden", !showTabs);
-    titleNode.classList.toggle("hidden", showTabs && !keepSubviewOrderTabs);
+    (headerCopy || titleNode).classList.toggle("hidden", showTabs && !keepSubviewOrderTabs);
   }
 
   function moveOrderTabs() {
@@ -159,7 +160,7 @@
       orderTabsObserver = null;
     }
     if (mobileOrderTabs) mobileOrderTabs.classList.add("hidden");
-    titleNode.classList.remove("hidden");
+    (headerCopy || titleNode).classList.remove("hidden");
   }
 
   function closeSidebar() {
@@ -242,7 +243,7 @@
     );
     if (!item || !centerColumn.contains(item) || item.matches(".empty-hint, .hidden") || item.closest(".toolbar")) return null;
     const nestedControl = target.closest("button, input, label, select, textarea, a");
-    if (nestedControl && nestedControl !== item) return null;
+    if (nestedControl) return null;
     return item;
   }
 

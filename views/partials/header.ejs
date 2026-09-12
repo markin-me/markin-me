@@ -7,7 +7,24 @@
       <button class="header-btn admin-mobile-header-btn" id="adminMobileMenuBtn" type="button" aria-label="Открыть меню" aria-expanded="false">
         <i class="fas fa-bars" aria-hidden="true"></i>
       </button>
-      <div class="admin-mobile-header-title" id="adminMobilePageTitle"><%= (Array.isArray(typeof adminNavItems !== 'undefined' ? adminNavItems : null) && adminNavItems.find(function (item) { return item.key === appActivePage; }) || {}).label || pageTitle || 'Админка' %></div>
+      <div class="admin-mobile-header-copy" id="adminMobileHeaderCopy">
+        <div class="admin-mobile-header-title" id="adminMobilePageTitle"><%= (Array.isArray(typeof adminNavItems !== 'undefined' ? adminNavItems : null) && adminNavItems.find(function (item) { return item.key === appActivePage; }) || {}).label || pageTitle || 'Админка' %></div>
+        <% if (appActivePage === 'courier-screen' || appActivePage === 'orders' || appActivePage === 'cash') { %>
+          <div id="<%= appActivePage === 'cash' ? 'cashConnectionBannerMobile' : 'ordersConnectionBannerMobile' %>" class="courier-connection-banner hidden" <%- appActivePage === 'cash' ? 'data-cash-connection-banner' : 'data-orders-connection-banner' %> aria-live="polite" role="status">
+            <span class="courier-connection-banner__indicator" aria-hidden="true"></span>
+            <span class="courier-connection-banner__text"></span>
+            <button
+              type="button"
+              class="courier-connection-banner__retry hidden"
+              data-action="<%= appActivePage === 'cash' ? 'cash-connection-retry' : 'orders-connection-retry' %>"
+              aria-label="Повторить синхронизацию"
+              title="Повторить"
+            >
+              <span aria-hidden="true">↻</span>
+            </button>
+          </div>
+        <% } %>
+      </div>
       <div class="admin-mobile-order-tabs hidden no-scrollbar" id="adminMobileOrderTabs" aria-label="Открытые заказы"></div>
     </div>
     <div class="header-left">

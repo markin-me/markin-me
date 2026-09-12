@@ -1293,38 +1293,63 @@ app.get('/manifest.json', async (req, res) => {
 
 // Service Worker для PWA (Android / установка на домашний экран)
 const serviceWorkerPrecacheUrls = [
-  app.locals.assetUrl('/static/css/style.css'),
+  app.locals.assetUrl('/static/css/style.css?v=20260912-pwa7-fixes-v2'),
   app.locals.assetUrl('/static/js/auth.js'),
   app.locals.assetUrl('/static/js/current-time.js'),
   app.locals.assetUrl('/static/js/theme.js'),
   app.locals.assetUrl('/static/js/sidebar.js'),
-  app.locals.assetUrl('/static/js/admin-mobile-nav.js'),
-  app.locals.assetUrl('/static/js/chat-sidebar-badge.js'),
+  app.locals.assetUrl('/static/js/admin-mobile-nav.js?v=20260902-mobile-chat-pages-v2'),
+  app.locals.assetUrl('/static/js/chat-sidebar-badge.js?v=20260410a'),
   app.locals.assetUrl('/static/js/appModal.js'),
+  app.locals.assetUrl('/static/js/admin-benefits-modal.js'),
   app.locals.assetUrl('/static/js/shared-order-panel.js'),
-  app.locals.assetUrl('/static/js/shared-order-payment.js')
-];
-const serviceWorkerWarmPages = [
-  '/dashboard/cash',
-  '/dashboard/products',
-  '/dashboard/orders',
-  '/dashboard/courier-screen',
-  '/dashboard/new-order',
-  '/dashboard/clients',
-  '/dashboard/team',
-  '/dashboard/settings'
+  app.locals.assetUrl('/static/js/shared-order-payment.js?v=20260831-mobile-payment-screen-v3'),
+  app.locals.assetUrl('/static/js/shared-order-items.js?v=20260329a'),
+  app.locals.assetUrl('/static/js/courier-screen.js?v=20260907-orderpass-capabilities-v1'),
+  app.locals.assetUrl('/static/js/admin-persistent-cache.js?v=20260912-pwa9-v1'),
+  app.locals.assetUrl('/static/js/admin-reference-cache.js?v=20260912-pwa8-v1'),
+  app.locals.assetUrl('/static/js/orders.js')
 ];
 const serviceWorkerScript = `
 var SW_VERSION = ${JSON.stringify(SERVICE_WORKER_VERSION)};
 var STATIC_CACHE = 'admin-static-' + SW_VERSION;
 var PAGE_CACHE = 'admin-pages-' + SW_VERSION;
+var OWNED_CACHE_PREFIXES = ['admin-static-', 'admin-pages-'];
 var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
 var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
 var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
-var WARM_PAGES = ${JSON.stringify(serviceWorkerWarmPages)};
+var COURIER_SHELL_PATH = '/dashboard/courier-screen';
 
-function shouldCacheResponse(response) {
-  return !!response && (response.ok || response.type === 'opaqueredirect');
+function shouldCacheStaticResponse(response) {
+  return !!response && (response.ok || response.type === 'opaque');
+}
+
+function shouldCacheCourierShell(response) {
+  if (!response || response.status !== 200 || response.redirected || response.type !== 'basic') return false;
+  var contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (contentType.indexOf('text/html') === -1) return false;
+  try {
+    var responseUrl = new URL(response.url);
+    return responseUrl.origin === self.location.origin && responseUrl.pathname === COURIER_SHELL_PATH;
+  } catch (err) {
+    return false;
+  }
+}
+
+function shouldCacheDashboardPage(response) {
+  if (!response || response.status !== 200 || response.redirected || response.type !== 'basic') return false;
+  try {
+    var responseUrl = new URL(response.url);
+    return responseUrl.origin === self.location.origin && responseUrl.pathname.indexOf('/dashboard') === 0;
+  } catch (err) {
+    return false;
+  }
+}
+
+function isOwnedCacheName(name) {
+  return OWNED_CACHE_PREFIXES.some(function (prefix) {
+    return String(name || '').indexOf(prefix) === 0;
+  });
 }
 
 function isChatImageRequest(request, url) {
@@ -1371,24 +1396,22 @@ async function handleChatImageFetch(request) {
 
 async function cacheStaticAssets() {
   var cache = await caches.open(STATIC_CACHE);
-  await Promise.allSettled(PRECACHE_URLS.map(function (url) {
+  await Promise.all(PRECACHE_URLS.map(function (url) {
     return cache.add(url);
   }));
 }
 
-async function warmPages() {
-  await Promise.allSettled(WARM_PAGES.map(async function (url) {
-    try {
-      var response = await fetch(url, { credentials: 'same-origin' });
-      if (shouldCacheResponse(response)) {
-        var cache = await caches.open(PAGE_CACHE);
-        await cache.put(url, response.clone());
-      }
-    } catch (err) {
-      return null;
+async function warmCourierShell() {
+  try {
+    var response = await fetch(COURIER_SHELL_PATH, { credentials: 'same-origin' });
+    if (shouldCacheCourierShell(response)) {
+      var cache = await caches.open(PAGE_CACHE);
+      await cache.put(COURIER_SHELL_PATH, response.clone());
     }
+  } catch (err) {
     return null;
-  }));
+  }
+  return null;
 }
 
 async function cacheFirst(request) {
@@ -1397,24 +1420,33 @@ async function cacheFirst(request) {
   if (cached) return cached;
 
   var response = await fetch(request);
-  if (shouldCacheResponse(response)) {
+  if (shouldCacheStaticResponse(response)) {
     cache.put(request, response.clone()).catch(function () {});
   }
   return response;
 }
 
-async function fetchAndCachePage(request) {
+async function fetchAndCacheCourierShell(request) {
   var cache = await caches.open(PAGE_CACHE);
   var response = await fetch(request);
-  if (shouldCacheResponse(response)) {
+  if (shouldCacheCourierShell(response)) {
+    cache.put(COURIER_SHELL_PATH, response.clone()).catch(function () {});
+  }
+  return response;
+}
+
+async function fetchAndCacheDashboardPage(request) {
+  var cache = await caches.open(PAGE_CACHE);
+  var response = await fetch(request);
+  if (shouldCacheDashboardPage(response)) {
     cache.put(request, response.clone()).catch(function () {});
   }
   return response;
 }
 
-async function networkFirstPage(request) {
+async function networkFirstDashboardPage(request) {
   try {
-    return await fetchAndCachePage(request);
+    return await fetchAndCacheDashboardPage(request);
   } catch (err) {
     var cache = await caches.open(PAGE_CACHE);
     var cached = await cache.match(request) || await cache.match(request.url);
@@ -1423,10 +1455,23 @@ async function networkFirstPage(request) {
   }
 }
 
-async function staleWhileRevalidate(request, event) {
+async function staleWhileRevalidateDashboardPage(request, event) {
   var cache = await caches.open(PAGE_CACHE);
   var cached = await cache.match(request) || await cache.match(request.url);
-  var networkPromise = fetchAndCachePage(request);
+  var networkPromise = fetchAndCacheDashboardPage(request);
+
+  if (event && typeof event.waitUntil === 'function') {
+    event.waitUntil(networkPromise.catch(function () {}));
+  }
+
+  if (cached) return cached;
+  return networkPromise;
+}
+
+async function courierShellWhileRevalidate(request, event) {
+  var cache = await caches.open(PAGE_CACHE);
+  var cached = await cache.match(COURIER_SHELL_PATH);
+  var networkPromise = fetchAndCacheCourierShell(request);
 
   if (event && typeof event.waitUntil === 'function') {
     event.waitUntil(networkPromise.catch(function () {}));
@@ -1439,8 +1484,8 @@ async function staleWhileRevalidate(request, event) {
 self.addEventListener('install', function (event) {
   event.waitUntil(
     Promise.all([
-      cacheStaticAssets().catch(function () {}),
-      warmPages().catch(function () {})
+      cacheStaticAssets(),
+      warmCourierShell().catch(function () {})
     ]).then(function () {
       return self.skipWaiting();
     })
@@ -1453,7 +1498,7 @@ self.addEventListener('activate', function (event) {
       return Promise.all(
         keys.map(function (key) {
           if (key === STATIC_CACHE || key === PAGE_CACHE) return Promise.resolve();
-          return caches.delete(key);
+          return isOwnedCacheName(key) ? caches.delete(key) : Promise.resolve();
         })
       );
     }).then(function () {
@@ -1495,14 +1540,15 @@ self.addEventListener('fetch', function (event) {
   }
 
   if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
-    if (
-      url.pathname === '/dashboard/chat'
-      || url.pathname === '/dashboard/courier-screen'
-    ) {
-      event.respondWith(networkFirstPage(request));
+    if (url.pathname === COURIER_SHELL_PATH) {
+      event.respondWith(courierShellWhileRevalidate(request, event));
       return;
     }
-    event.respondWith(staleWhileRevalidate(request, event));
+    if (url.pathname === '/dashboard/chat') {
+      event.respondWith(networkFirstDashboardPage(request));
+      return;
+    }
+    event.respondWith(staleWhileRevalidateDashboardPage(request, event));
     return;
   }
 });

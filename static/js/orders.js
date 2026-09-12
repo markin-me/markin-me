@@ -206,88 +206,314 @@
       throw err;
     }
     
-    // Если 401 - перенаправляем на логин
+    const json = await res.json().catch(() => null);
     if (res.status === 401) {
       localStorage.removeItem('authToken');
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
       window.location.href = '/login';
-      throw new Error('UNAUTHORIZED');
+      const authError = new Error(json?.error || 'UNAUTHORIZED');
+      authError.status = 401;
+      authError.code = String(json?.error || 'UNAUTHORIZED');
+      throw authError;
     }
-    
-    const json = await res.json().catch(() => null);
+
     if (!json || json.ok !== true) {
-      const err = json?.error || `API_ERROR (${res.status})`;
-      throw new Error(err);
+      const apiError = new Error(json?.error || `API_ERROR (${res.status})`);
+      apiError.status = Number(res.status || 0);
+      apiError.code = String(json?.error || "API_ERROR");
+      apiError.retryAfter = String(res.headers.get("Retry-After") || "").trim() || null;
+      throw apiError;
     }
     return json;
   }
 
-  const ORDER_DETAILS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-  const ORDER_DETAILS_CACHE_MAX = 400;
+  const ORDER_DETAILS_CACHE_DOMAIN = "orders:detail:shared";
+  const ORDER_DETAILS_CACHE_VERSION = 1;
+  const ORDER_DETAILS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+  const ORDER_DETAILS_CACHE_MAX = 200;
+  const LEGACY_ORDER_DETAILS_CACHE_DOMAINS = ["orders:detail:courier", "orders:detail:orders"];
+  const COURIER_DETAIL_PREWARM_LIMIT = 40;
+  const COURIER_DETAIL_PREWARM_CONCURRENCY = 3;
   const orderDetailsRevalidation = new Map();
-  const orderDetailsCacheKey = (id) => `orders:detail:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${id}`;
+  const orderDetailsMergeQueue = new Map();
+  const orderDetailsDirty = new Set();
+  const orderDetailsMutationGeneration = new Map();
+  const courierDetailPrewarmInFlight = new Set();
+  const authoritativeFullOrderRuntimeKeys = new Set();
+  const courierPassportCacheStates = new Map();
+  const courierDetailPrewarmWaiters = [];
+  let courierDetailPrewarmActiveCount = 0;
+  const orderDetailsCacheKey = (id, scope = ordersCacheScope) => `orders:detail:v1:${scope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${id}`;
   const isFullOrder = (order) => Boolean(order && Array.isArray(order.items) && Number(order.store_id || order.storeId || 0) > 0);
 
-  async function readCachedFullOrder(id, row) {
+  function orderDetailsPersistentScope() {
+    if (window.AdminPersistentCache?.orderPassport?.scope) {
+      return window.AdminPersistentCache.orderPassport.scope();
+    }
+    if (!window.AdminPersistentCache?.scope) return null;
+    return window.AdminPersistentCache.scope({
+      domain: ORDER_DETAILS_CACHE_DOMAIN,
+      version: ORDER_DETAILS_CACHE_VERSION,
+    });
+  }
+
+  function legacyOrderDetailsPersistentScopes() {
+    if (!window.AdminPersistentCache?.scope) return [];
+    return LEGACY_ORDER_DETAILS_CACHE_DOMAINS.map((domain) => window.AdminPersistentCache.scope({
+      domain,
+      version: 1,
+    })).filter((cache) => cache?.complete);
+  }
+
+  function orderDetailsContext(id, cache = orderDetailsPersistentScope()) {
+    return {
+      cache,
+      id: Number(id),
+      runtimeKey: `${cache?.namespace || "incomplete"}:${Number(id)}`,
+    };
+  }
+
+  function isCurrentOrderDetailsContext(context) {
+    return Boolean(context?.cache?.complete
+      && orderDetailsPersistentScope()?.namespace === context.cache.namespace);
+  }
+
+  function courierPassportStateLabel(state) {
+    if (state === "saved") return "Доступен офлайн";
+    if (state === "saving" || state === "checking") return "Сохраняем для офлайн-доступа";
+    if (state === "stale") return "Сохранённая версия требует обновления";
+    return "Не сохранён для офлайн-доступа";
+  }
+
+  function setCourierPassportCacheState(id, state, context = orderDetailsContext(id)) {
+    if (!(Number(id) > 0) || !context?.runtimeKey) return;
+    courierPassportCacheStates.set(context.runtimeKey, state);
+    if (!isCurrentOrderDetailsContext(context)) return;
+    const row = elOrdersList?.querySelector(`.order-row[data-order-id="${Number(id)}"]`);
+    const indicator = row?.querySelector("[data-courier-passport-cache-state]");
+    if (!indicator) return;
+    indicator.className = `courier-order-cache-indicator courier-order-cache-indicator--${state}`;
+    const label = courierPassportStateLabel(state);
+    indicator.setAttribute("aria-label", label);
+    indicator.setAttribute("title", label);
+  }
+
+  function renderCourierPassportCacheIndicator(id) {
+    const context = orderDetailsContext(id);
+    const state = courierPassportCacheStates.get(context.runtimeKey) || "unknown";
+    const label = courierPassportStateLabel(state);
+    return `<span class="courier-order-cache-indicator courier-order-cache-indicator--${state}" data-courier-passport-cache-state aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"></span>`;
+  }
+
+  async function migrateLegacyFullOrder(id, order, cache) {
+    const context = orderDetailsContext(id, cache);
+    return queueOrderDetailsOperation(context, async () => {
+      const existing = await cache.getEntry(String(id), { allowStale: true });
+      if (existing?.data?.detailCompleteness === "full" && isFullOrder(existing.data.order)) return true;
+      return writeCachedFullOrder(order, { cache, authoritative: true });
+    });
+  }
+
+  async function readLegacyFullOrderEntry(id) {
+    const candidates = [];
+    for (const legacyCache of legacyOrderDetailsPersistentScopes()) {
+      const entry = await legacyCache.getEntry(String(id), { allowStale: true });
+      if (entry?.data?.detailCompleteness === "full" && isFullOrder(entry.data.order)) {
+        candidates.push({
+          order: entry.data.order,
+          stale: entry.stale === true,
+          updatedAt: Number(entry.updatedAt || entry.data.cachedAt || 0),
+        });
+      }
+    }
+    for (const scope of ["courier", "orders"]) {
+      const cached = await window.AdminPersistentCache.read(orderDetailsCacheKey(id, scope));
+      if (cached?.detailCompleteness === "full" && isFullOrder(cached.order)) {
+        candidates.push({
+          order: cached.order,
+          stale: Date.now() - Number(cached.cachedAt || 0) > ORDER_DETAILS_CACHE_MAX_AGE_MS,
+          updatedAt: Number(cached.cachedAt || 0),
+        });
+      }
+    }
+    candidates.sort((left, right) => right.updatedAt - left.updatedAt);
+    return candidates[0] || null;
+  }
+
+  async function readCachedFullOrderEntry(id, { allowStale = true, cache = orderDetailsPersistentScope() } = {}) {
     if (!window.AdminPersistentCache) return null;
     try {
-      const cached = await window.AdminPersistentCache.read(orderDetailsCacheKey(id));
-      if (!cached || Date.now() - Number(cached.cachedAt || 0) > ORDER_DETAILS_CACHE_MAX_AGE_MS) return null;
-      return isFullOrder(cached.order) ? cached.order : null;
+      if (cache?.complete) {
+        const sharedEntry = window.AdminPersistentCache.orderPassport?.read
+          ? await window.AdminPersistentCache.orderPassport.read(id, { cache, allowStale: true })
+          : null;
+        const entry = sharedEntry || (!window.AdminPersistentCache.orderPassport?.read
+          ? await cache.getEntry(String(id), { allowStale: true })
+          : null);
+        const cachedOrder = sharedEntry?.order || entry?.data?.order;
+        const entryStale = sharedEntry ? sharedEntry.stale === true : entry?.stale === true;
+        if ((sharedEntry || entry?.data?.detailCompleteness === "full") && isFullOrder(cachedOrder)) {
+          authoritativeFullOrderRuntimeKeys.add(`${cache.namespace}:${Number(id)}`);
+          setCourierPassportCacheState(id, entryStale ? "stale" : "saved", orderDetailsContext(id, cache));
+          return entryStale && !allowStale ? null : { order: cachedOrder, stale: entryStale };
+        }
+      }
+      if (!cache?.complete) return null;
+      const legacy = await readLegacyFullOrderEntry(id);
+      if (!legacy?.order) return null;
+      authoritativeFullOrderRuntimeKeys.add(`${cache.namespace}:${Number(id)}`);
+      setCourierPassportCacheState(id, legacy.stale ? "stale" : "saved", orderDetailsContext(id, cache));
+      void migrateLegacyFullOrder(id, legacy.order, cache).catch((err) => {
+        console.error("Legacy order detail cache migration failed:", err);
+      });
+      return legacy.stale && !allowStale ? null : legacy;
     } catch (err) {
       console.error("Order detail IndexedDB read failed:", err);
       return null;
     }
   }
 
-  function revalidateCachedFullOrder(id) {
-    if (orderDetailsRevalidation.has(id)) return;
+  function revalidateCachedFullOrder(id, { updateState = true, context = orderDetailsContext(id) } = {}) {
+    const runtimeKey = context.runtimeKey;
+    if (orderDetailsRevalidation.has(runtimeKey)) return orderDetailsRevalidation.get(runtimeKey);
+    const startGeneration = orderDetailsMutationGeneration.get(runtimeKey) || 0;
+    let superseded = false;
     const promise = apiJson(`/api/admin/orders/${id}`)
-      .then((json) => {
+      .then(async (json) => {
         const fullOrder = json?.data || null;
-        if (!isFullOrder(fullOrder)) return;
-        const nextOrder = overlayCourierShadowOrder(fullOrder);
-        writeCachedFullOrder(nextOrder);
-        const idx = state.orders.findIndex((order) => Number(order?.id) === id);
-        if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
-        else state.orders.unshift(nextOrder);
-        const tab = tabsState.tabs.find((item) => Number(item?.orderId) === id);
-        if (tab) tab.order = { ...tab.order, ...nextOrder };
-        if (Number(state.activeOrderId) === id) setInfo(nextOrder);
-        rebuildOrdersStageIndex();
-        renderOrders();
+        if (!isFullOrder(fullOrder)) return null;
+        return queueOrderDetailsOperation(context, async () => {
+          if ((orderDetailsMutationGeneration.get(runtimeKey) || 0) !== startGeneration) {
+            superseded = true;
+            return null;
+          }
+          const nextOrder = overlayCourierShadowOrder(fullOrder);
+          orderDetailsDirty.delete(runtimeKey);
+          orderDetailsMutationGeneration.delete(runtimeKey);
+          const stored = await writeCachedFullOrder(nextOrder, { cache: context.cache, authoritative: true });
+          if (stored) {
+            authoritativeFullOrderRuntimeKeys.add(runtimeKey);
+            setCourierPassportCacheState(id, "saved", context);
+          } else {
+            authoritativeFullOrderRuntimeKeys.delete(runtimeKey);
+            setCourierPassportCacheState(id, "missing", context);
+          }
+          if (!updateState || !isCurrentOrderDetailsContext(context)) return nextOrder;
+          const idx = state.orders.findIndex((order) => Number(order?.id) === id);
+          if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+          else if (shouldKeepOrderInState(nextOrder)) state.orders.unshift(nextOrder);
+          const tab = tabsState.tabs.find((item) => Number(item?.orderId) === id);
+          if (tab) tab.order = { ...tab.order, ...nextOrder };
+          if (Number(state.activeOrderId) === id) setInfo(nextOrder);
+          rebuildOrdersStageIndex();
+          renderOrders();
+          return nextOrder;
+        });
       })
-      .catch((err) => console.error("Order detail background revalidation failed:", err))
-      .finally(() => orderDetailsRevalidation.delete(id));
-    orderDetailsRevalidation.set(id, promise);
+      .catch((err) => {
+        console.warn(`Order detail background revalidation failed for ${id}:`, err);
+        setCourierPassportCacheState(
+          id,
+          authoritativeFullOrderRuntimeKeys.has(runtimeKey) ? "stale" : "missing",
+          context
+        );
+        return null;
+      })
+      .finally(() => {
+        orderDetailsRevalidation.delete(runtimeKey);
+        if (superseded && orderDetailsDirty.has(runtimeKey)
+          && navigator.onLine !== false && isCurrentOrderDetailsContext(context)) {
+          void revalidateCachedFullOrder(id, { updateState, context });
+        } else if (superseded && !orderDetailsDirty.has(runtimeKey)) {
+          orderDetailsMutationGeneration.delete(runtimeKey);
+        }
+      });
+    orderDetailsRevalidation.set(runtimeKey, promise);
+    return promise;
   }
 
-  function writeCachedFullOrder(order) {
-    if (!window.AdminPersistentCache || !isFullOrder(order)) return;
-    window.AdminPersistentCache.write(orderDetailsCacheKey(Number(order.id)), {
-      cachedAt: Date.now(), order: { ...order },
-    }).catch((err) => console.error("Order detail IndexedDB write failed:", err));
-    window.AdminPersistentCache.prunePrefix?.(
-      `orders:detail:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:`,
-      ORDER_DETAILS_CACHE_MAX
-    ).catch((err) => console.error("Order detail IndexedDB cleanup failed:", err));
+  function writeCachedFullOrder(order, { cache = orderDetailsPersistentScope(), authoritative = false } = {}) {
+    if (!authoritative || !window.AdminPersistentCache || !isFullOrder(order) || !cache?.complete) return Promise.resolve(false);
+    if (window.AdminPersistentCache.orderPassport?.write) {
+      return window.AdminPersistentCache.orderPassport.write(order, { cache, authoritative: true })
+        .catch((err) => {
+          console.error("Order detail IndexedDB write failed:", err);
+          return false;
+        });
+    }
+    const data = {
+      cachedAt: Date.now(),
+      detailCompleteness: "full",
+      order: { ...order },
+    };
+    return cache.set(String(order.id), data, { ttlMs: ORDER_DETAILS_CACHE_MAX_AGE_MS })
+      .then(async () => {
+        await cache.prune(ORDER_DETAILS_CACHE_MAX);
+        return true;
+      })
+      .catch((err) => {
+        console.error("Order detail IndexedDB write failed:", err);
+        return false;
+      });
   }
 
-  function invalidateCachedFullOrder(id) {
-    const normalizedId = Number(id);
-    if (!(normalizedId > 0)) return;
-    const stateOrder = state.orders.find((order) => Number(order?.id) === normalizedId);
-    if (stateOrder && Array.isArray(stateOrder.items)) delete stateOrder.items;
-    tabsState.tabs.forEach((tab) => {
-      if (Number(tab?.orderId) === normalizedId && tab.order && Array.isArray(tab.order.items)) {
-        delete tab.order.items;
+  function mergeOrderPassportPatch(cachedOrder, eventOrder) {
+    if (window.AdminPersistentCache?.orderPassport?.mergePatch) {
+      return window.AdminPersistentCache.orderPassport.mergePatch(cachedOrder, eventOrder);
+    }
+    const next = { ...cachedOrder };
+    const protectedNullableFields = new Set([
+      "customer_name", "customer_phone", "address", "comment", "address_comment",
+      "scheduled_at", "payment_code", "payment_title", "payment_icon",
+      "method_code", "method_title", "time_option_code", "time_option_title", "time_option_icon",
+      "discounts_json", "benefits_meta", "delivery_address_city", "delivery_address_street",
+      "delivery_address_house", "delivery_address_entrance", "delivery_address_floor",
+      "delivery_address_apartment", "delivery_address_ref", "delivery_address_context_locality",
+      "delivery_address_normalized_display",
+    ]);
+    Object.keys(eventOrder || {}).forEach((key) => {
+      const value = eventOrder[key];
+      if (Array.isArray(value) && !isFullOrder(eventOrder)) return;
+      if (protectedNullableFields.has(key) && value == null) return;
+      if (["customer", "delivery", "payment"].includes(key)
+        && value && typeof value === "object" && !Array.isArray(value)
+        && next[key] && typeof next[key] === "object" && !Array.isArray(next[key])) {
+        const definedPatch = Object.fromEntries(
+          Object.entries(value).filter(([, nestedValue]) => nestedValue != null)
+        );
+        next[key] = { ...next[key], ...definedPatch };
+        return;
+      }
+      if (value !== undefined) next[key] = value;
+    });
+    return next;
+  }
+
+  async function mergeCachedFullOrderPatch(order, context = orderDetailsContext(order?.id)) {
+    const id = Number(order?.id || 0);
+    if (!(id > 0) || !window.AdminPersistentCache || !context.cache?.complete) return;
+    const cached = await readCachedFullOrderEntry(id, { allowStale: true, cache: context.cache });
+    if (!cached?.order) return;
+    await writeCachedFullOrder(mergeOrderPassportPatch(cached.order, order), {
+      cache: context.cache,
+      authoritative: true,
+    });
+  }
+
+  function queueOrderDetailsOperation(context, operation) {
+    const previous = orderDetailsMergeQueue.get(context.runtimeKey) || Promise.resolve();
+    const promise = previous.catch(() => {}).then(operation);
+    orderDetailsMergeQueue.set(context.runtimeKey, promise);
+    return promise.finally(() => {
+      if (orderDetailsMergeQueue.get(context.runtimeKey) === promise) {
+        orderDetailsMergeQueue.delete(context.runtimeKey);
       }
     });
-    if (!window.AdminPersistentCache) return;
-    window.AdminPersistentCache.remove(orderDetailsCacheKey(normalizedId)).catch((err) => {
-      console.error("Order detail IndexedDB delete failed:", err);
-    });
+  }
+
+  function queueCachedFullOrderPatch(order, context) {
+    return queueOrderDetailsOperation(context, () => mergeCachedFullOrderPatch(order, context));
   }
 
   function isAbortError(err) {
@@ -483,13 +709,10 @@
   const sharedOrderInfoRenderers = [sharedOrderInfoRenderer, sheetOrderInfoRenderer].filter(Boolean);
   const orderInfoFooters = [orderInfoFooter, sheetOrderInfoFooter].filter(Boolean);
   const orderInfoPaymentButtons = [orderInfoPaymentBtn, sheetOrderInfoPaymentBtn].filter(Boolean);
-  const courierConnectionBanner = isCourierWorkspace ? $("#courierConnectionBanner") : null;
-  const courierConnectionBannerText = courierConnectionBanner
-    ? $(".courier-connection-banner__text", courierConnectionBanner)
-    : null;
-  const courierConnectionBannerRetryBtn = courierConnectionBanner
-    ? $('[data-action="courier-connection-retry"]', courierConnectionBanner)
-    : null;
+  const ordersConnectionBanners = $$('[data-orders-connection-banner]');
+  const ordersConnectionBannerRetryBtns = ordersConnectionBanners
+    .map((banner) => $('[data-action="orders-connection-retry"]', banner))
+    .filter(Boolean);
 
   const closeButtons = $$('[data-action="order-close"]');
 
@@ -535,19 +758,36 @@
     tabs: [],
     activeKey: null,
   };
+  const orderStatusSyncStates = new Map();
 
   const ORDERS_CACHE_VERSION = 4;
   const ORDERS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const ORDERS_PERSISTENT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const ORDERS_WORKSPACE_CACHE_MAX_AGE_MS = 72 * 60 * 60 * 1000;
   let ordersPersistentCacheRestored = false;
+  let ordersInitialRestoreComplete = false;
+  let ordersCachedSnapshotVisible = false;
+  let ordersNetworkConfirmed = false;
+  let ordersRefreshFailed = false;
+  let courierNetworkConfirmed = false;
+  let courierCachedSnapshotVisible = false;
   const COURIER_OFFLINE_QUEUE_VERSION = 1;
+  const COURIER_OUTBOX_MAX_ITEMS = 200;
+  const COURIER_OUTBOX_ENTRY_KEY = "pending";
+  const courierOutboxOperations = new Map();
+  const courierOutboxProcessing = new Map();
+  let courierOptimisticOverlaySuspended = 0;
   let ordersCachePersistTimer = null;
   const courierOfflineState = {
     queue: [],
     shadowOrders: new Map(),
+    nextSequence: 1,
     syncing: false,
+    reconciling: false,
+    processingNamespace: "",
     online: navigator.onLine !== false,
     syncError: "",
+    refreshError: "",
     transientBanner: null,
     restoredHideTimer: null,
   };
@@ -1098,19 +1338,43 @@
     `;
   }
 
+  function getCourierStatusQueueState(orderId) {
+    if (!isCourierWorkspace) return null;
+    const items = courierOfflineState.queue.filter((item) => (
+      item?.type === "status" && Number(item?.orderId || 0) === Number(orderId || 0)
+    ));
+    if (!items.length) return null;
+    if (items.some((item) => item.state === "failed" || item.state === "blocked")) {
+      return { mode: "error", label: "Не отправлено" };
+    }
+    if (courierOfflineState.syncing && courierOfflineState.online) {
+      return { mode: "sending", label: "Отправляем…" };
+    }
+    return { mode: "queued", label: "В очереди" };
+  }
+
   function buildCourierActionButtonHtml(order) {
     const pickupState = getCourierPickupState(order);
+    const queueState = getCourierStatusQueueState(order?.id);
     const targetStatus = pickupState?.transitStatus || null;
     const targetStatusId = Number(targetStatus?.id || 0);
     const actionLabel = String(pickupState?.actionLabel || "Забрать").trim() || "Забрать";
     const actionIcon = String(pickupState?.actionIcon || "fas fa-truck").trim() || "fas fa-truck";
-    const buttonTitle = pickupState.canPickup
+    const baseButtonTitle = pickupState.canPickup
       ? `Перевести в «${String(targetStatus?.title || actionLabel).trim() || actionLabel}»`
       : (pickupState.disabledReason || "Действие недоступно");
+    const buttonTitle = queueState ? `${baseButtonTitle}. ${queueState.label}` : baseButtonTitle;
+    const queueClass = queueState ? ` is-queue-${queueState.mode}` : "";
+    const queueIcon = queueState?.mode === "error"
+      ? "fa-circle-exclamation"
+      : (queueState?.mode === "sending" ? "fa-spinner" : "fa-clock");
+    const queueStatusHtml = queueState
+      ? `<small class="order-courier-action-queue"><i class="fas ${queueIcon}" aria-hidden="true"></i>${escapeHtml(queueState.label)}</small>`
+      : "";
 
     return `
       <button
-        class="order-courier-action-btn order-courier-action-btn--pickup"
+        class="order-courier-action-btn order-courier-action-btn--pickup${queueClass}"
         type="button"
         data-action="courier-pickup"
         data-order-id="${escapeHtml(order?.id || "")}"
@@ -1120,9 +1384,25 @@
         aria-label="${escapeHtml(buttonTitle)}"
       >
         <i class="${escapeHtml(actionIcon)}" aria-hidden="true"></i>
-        <span>${escapeHtml(actionLabel)}</span>
+        <span class="order-courier-action-copy">
+          <span>${escapeHtml(actionLabel)}</span>
+          ${queueStatusHtml}
+        </span>
       </button>
     `;
+  }
+
+  function refreshCourierOrderQueueButtons(orderIds) {
+    if (!isCourierWorkspace || !elOrdersList) return;
+    Array.from(orderIds || []).forEach((rawOrderId) => {
+      const orderId = Number(rawOrderId || 0);
+      if (!(orderId > 0)) return;
+      const order = state.orders.find((item) => Number(item?.id || 0) === orderId) || null;
+      const row = elOrdersList.querySelector(`.order-row[data-order-id="${orderId}"]`);
+      const button = row?.querySelector('[data-action="courier-pickup"]');
+      if (!order || !button) return;
+      button.outerHTML = buildCourierActionButtonHtml(order);
+    });
   }
 
   function buildCourierCallButtonHtml(order) {
@@ -1282,6 +1562,47 @@
         </span>
       </button>
     `;
+  }
+
+  function renderOrderStatusControl(order) {
+    const buttonHtml = renderOrderStatusHoverCycleButton(order);
+    if (isCourierWorkspace) return buttonHtml;
+    const syncState = orderStatusSyncStates.get(Number(order?.id || 0)) || null;
+    if (!syncState) return buttonHtml;
+    const iconClass = syncState.mode === "syncing"
+      ? "fa-spinner fa-spin"
+      : (syncState.mode === "saved" ? "fa-check" : "fa-circle-exclamation");
+    return `
+      <div class="order-status-sync-control is-${escapeHtml(syncState.mode)}" data-order-status-sync-state="${escapeHtml(syncState.mode)}">
+        ${buttonHtml}
+        <span class="order-status-sync-feedback" role="status">
+          <i class="fas ${iconClass}" aria-hidden="true"></i>
+          <span>${escapeHtml(syncState.label)}</span>
+        </span>
+      </div>
+    `;
+  }
+
+  function refreshOrderStatusSyncControl(orderId) {
+    const id = Number(orderId || 0);
+    const row = elOrdersList?.querySelector(`.order-row[data-order-id="${id}"]`);
+    const order = state.orders.find((item) => Number(item?.id || 0) === id) || null;
+    if (row && order) updateOrderRow(row, order);
+  }
+
+  function setOrderStatusSyncState(orderId, mode, label, duration = 0) {
+    const id = Number(orderId || 0);
+    if (!(id > 0) || isCourierWorkspace) return;
+    const marker = { mode, label, token: `${Date.now()}:${Math.random()}` };
+    orderStatusSyncStates.set(id, marker);
+    refreshOrderStatusSyncControl(id);
+    if (duration > 0) {
+      setTimeout(() => {
+        if (orderStatusSyncStates.get(id)?.token !== marker.token) return;
+        orderStatusSyncStates.delete(id);
+        refreshOrderStatusSyncControl(id);
+      }, duration);
+    }
   }
 
   function normalizeApartmentToken(token) {
@@ -1797,33 +2118,173 @@
   async function ensureFullOrderById(orderId, { strict = false } = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
+    const context = orderDetailsContext(id);
     const fromState = state.orders.find((order) => Number(order?.id) === id) || null;
-    if (isFullOrder(fromState)) return fromState;
-    const cachedOrder = await readCachedFullOrder(id, fromState);
-    if (cachedOrder) {
-      const nextOrder = overlayCourierShadowOrder(cachedOrder);
+    if (isFullOrder(fromState) && authoritativeFullOrderRuntimeKeys.has(context.runtimeKey)) {
+      if (orderDetailsDirty.has(context.runtimeKey) && navigator.onLine !== false) {
+        revalidateCachedFullOrder(id, { context });
+      }
+      return fromState;
+    }
+    const cachedEntry = await readCachedFullOrderEntry(id, {
+      allowStale: true,
+      cache: context.cache,
+    });
+    if (cachedEntry?.order) {
+      const nextOrder = overlayCourierShadowOrder(cachedEntry.order);
       const idx = state.orders.findIndex((order) => Number(order?.id) === id);
       if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
-      else state.orders.unshift(nextOrder);
-      revalidateCachedFullOrder(id);
+      else if (shouldKeepOrderInState(nextOrder)) state.orders.unshift(nextOrder);
+      if ((cachedEntry.stale || orderDetailsDirty.has(context.runtimeKey)) && navigator.onLine !== false) {
+        revalidateCachedFullOrder(id, { context });
+      }
       return nextOrder;
     }
     try {
-      const json = await apiJson(`/api/admin/orders/${id}`);
-      const fullOrder = json?.data || null;
-      if (!fullOrder || !Number.isFinite(Number(fullOrder.id))) return fromState;
-      const nextOrder = overlayCourierShadowOrder(fullOrder);
-      writeCachedFullOrder(nextOrder);
-      const idx = state.orders.findIndex((order) => Number(order?.id) === Number(fullOrder.id));
+      const nextOrder = await revalidateCachedFullOrder(id, { updateState: false, context });
+      if (!isFullOrder(nextOrder)) return strict ? null : fromState;
+      if (!isCurrentOrderDetailsContext(context)) return nextOrder;
+      const idx = state.orders.findIndex((order) => Number(order?.id) === id);
       if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
-      else state.orders.unshift(nextOrder);
+      else if (shouldKeepOrderInState(nextOrder)) state.orders.unshift(nextOrder);
       rebuildOrdersStageIndex();
       renderOrders();
-      return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || nextOrder;
+      return state.orders.find((order) => Number(order?.id) === id) || nextOrder;
     } catch (err) {
       console.error(err);
       return strict ? null : fromState;
     }
+  }
+
+  function courierPrewarmPriority(order) {
+    const bucketId = getCourierBucketId(order);
+    if (bucketId === "in-transit") return 0;
+    if (bucketId === "available") return 1;
+    if (bucketId === "delivered") return 2;
+    return 3;
+  }
+
+  function selectCourierOrdersForPrewarm(orders) {
+    return (Array.isArray(orders) ? orders : [])
+      .filter((order) => Number(order?.id || 0) > 0 && getCourierBucketId(order))
+      .sort((a, b) => {
+        const priorityDiff = courierPrewarmPriority(a) - courierPrewarmPriority(b);
+        if (priorityDiff) return priorityDiff;
+        return Number(b?.id || 0) - Number(a?.id || 0);
+      })
+      .slice(0, COURIER_DETAIL_PREWARM_LIMIT);
+  }
+
+  function acquireCourierDetailPrewarmSlot(highPriority = false) {
+    if (courierDetailPrewarmActiveCount < COURIER_DETAIL_PREWARM_CONCURRENCY) {
+      courierDetailPrewarmActiveCount += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      if (highPriority) courierDetailPrewarmWaiters.unshift(resolve);
+      else courierDetailPrewarmWaiters.push(resolve);
+    });
+  }
+
+  function releaseCourierDetailPrewarmSlot() {
+    const next = courierDetailPrewarmWaiters.shift();
+    if (next) {
+      next();
+      return;
+    }
+    courierDetailPrewarmActiveCount = Math.max(0, courierDetailPrewarmActiveCount - 1);
+  }
+
+  async function prewarmCourierOrderDetail(order, { highPriority = false } = {}) {
+    const id = Number(order?.id || 0);
+    const context = orderDetailsContext(id);
+    if (!(id > 0) || courierDetailPrewarmInFlight.has(context.runtimeKey)) return;
+    courierDetailPrewarmInFlight.add(context.runtimeKey);
+    setCourierPassportCacheState(id, "checking", context);
+    try {
+      const cached = await readCachedFullOrderEntry(id, { allowStale: true, cache: context.cache });
+      if (cached && !cached.stale && !orderDetailsDirty.has(context.runtimeKey)) return;
+      if (!cached) {
+        authoritativeFullOrderRuntimeKeys.delete(context.runtimeKey);
+        setCourierPassportCacheState(id, "missing", context);
+      }
+      if (navigator.onLine === false) return;
+      await acquireCourierDetailPrewarmSlot(highPriority);
+      if (navigator.onLine === false) {
+        releaseCourierDetailPrewarmSlot();
+        return;
+      }
+      try {
+        setCourierPassportCacheState(id, "saving", context);
+        await revalidateCachedFullOrder(id, { updateState: false, context });
+      } finally {
+        releaseCourierDetailPrewarmSlot();
+      }
+    } finally {
+      courierDetailPrewarmInFlight.delete(context.runtimeKey);
+    }
+  }
+
+  async function prewarmCourierOrderDetails(orders = state.orders) {
+    if (!isCourierWorkspace) return;
+    const queue = selectCourierOrdersForPrewarm(orders);
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < queue.length) {
+        const order = queue[nextIndex];
+        nextIndex += 1;
+        try {
+          await prewarmCourierOrderDetail(order);
+        } catch (err) {
+          console.warn(`Courier order passport prewarm failed for ${Number(order?.id || 0)}:`, err);
+        }
+      }
+    };
+    await Promise.all(Array.from(
+      { length: Math.min(COURIER_DETAIL_PREWARM_CONCURRENCY, queue.length) },
+      () => worker()
+    ));
+  }
+
+  async function inspectOrdersSharedPassportCache(orders = getOrdersForActiveStage()) {
+    if (isCourierWorkspace) return;
+    const queue = (Array.isArray(orders) ? orders : [])
+      .map((order) => ({ order, context: orderDetailsContext(order?.id) }))
+      .filter(({ order, context }) => (
+        Number(order?.id) > 0
+        && context.cache?.complete
+        && !courierPassportCacheStates.has(context.runtimeKey)
+      ));
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < queue.length) {
+        const { order, context } = queue[nextIndex++];
+        if (!isCurrentOrderDetailsContext(context)) continue;
+        setCourierPassportCacheState(order.id, "checking", context);
+        try {
+          const sharedEntry = window.AdminPersistentCache.orderPassport?.read
+            ? await window.AdminPersistentCache.orderPassport.read(order.id, { cache: context.cache, allowStale: true })
+            : null;
+          const entry = sharedEntry || (!window.AdminPersistentCache.orderPassport?.read
+            ? await context.cache.getEntry(String(order.id), { allowStale: true })
+            : null);
+          if (!isCurrentOrderDetailsContext(context)) continue;
+          const hasFullPassport = Boolean(sharedEntry) || (entry?.data?.detailCompleteness === "full"
+            && isFullOrder(entry.data.order));
+          setCourierPassportCacheState(
+            order.id,
+            hasFullPassport ? ((sharedEntry?.stale === true || entry?.stale === true) ? "stale" : "saved") : "missing",
+            context
+          );
+        } catch (err) {
+          if (isCurrentOrderDetailsContext(context)) {
+            setCourierPassportCacheState(order.id, "missing", context);
+          }
+          console.warn(`Order passport cache check failed for ${Number(order.id || 0)}:`, err);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
   }
 
   const orderDetailsOpener = sharedOrderPanel && typeof sharedOrderPanel.createDetailsOpener === "function"
@@ -2198,6 +2659,50 @@
     return `courier_offline_shadow_v${COURIER_OFFLINE_QUEUE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
   }
 
+  function courierOutboxScope() {
+    if (!window.AdminPersistentCache?.scope) return null;
+    return window.AdminPersistentCache.scope({
+      domain: "orders:outbox:courier",
+      version: COURIER_OFFLINE_QUEUE_VERSION,
+    });
+  }
+
+  function courierOutboxContext(cache = courierOutboxScope()) {
+    return {
+      cache,
+      namespace: cache?.complete ? String(cache.namespace || "") : "",
+      tenantId: Number(cache?.tenantId || 0) || 0,
+      storeId: Number(cache?.storeId || 0) || 0,
+    };
+  }
+
+  function isCurrentCourierOutboxContext(context) {
+    return Boolean(context?.namespace
+      && courierOutboxScope()?.namespace === context.namespace);
+  }
+
+  function queueCourierOutboxOperation(context, operation) {
+    if (!context?.namespace) return Promise.reject(new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE"));
+    const previous = courierOutboxOperations.get(context.namespace) || Promise.resolve();
+    const promise = previous.catch(() => {}).then(operation);
+    courierOutboxOperations.set(context.namespace, promise);
+    return promise.finally(() => {
+      if (courierOutboxOperations.get(context.namespace) === promise) {
+        courierOutboxOperations.delete(context.namespace);
+      }
+    });
+  }
+
+  function createCourierMutationId() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    if (window.crypto?.getRandomValues) {
+      const parts = new Uint32Array(4);
+      window.crypto.getRandomValues(parts);
+      return `courier-${Date.now().toString(36)}-${Array.from(parts, (part) => part.toString(16)).join("-")}`;
+    }
+    return `courier-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+  }
+
   function normalizeCourierQueueItem(raw) {
     const type = String(raw?.type || "").trim().toLowerCase();
     if (type !== "status" && type !== "payment") return null;
@@ -2207,15 +2712,24 @@
     const url = String(request.url || "").trim();
     const method = String(request.method || "PUT").trim().toUpperCase() || "PUT";
     if (!url) return null;
+    const createdAt = Number(raw?.createdAt || Date.now()) || Date.now();
     return {
-      id: String(raw?.id || `${type}:${orderId}:${Date.now()}:${Math.random()}`).trim(),
+      id: String(raw?.id || "").trim(),
       type,
       orderId,
       tenantId: Number(raw?.tenantId || getTenantIdFromStorage() || 0) || 0,
       storeId: Number(raw?.storeId || getStoreIdFromStorage() || 0) || 0,
-      createdAt: Number(raw?.createdAt || Date.now()) || Date.now(),
-      state: String(raw?.state || "pending").trim().toLowerCase() === "error" ? "error" : "pending",
+      sequence: Number(raw?.sequence || 0) || 0,
+      createdAt,
+      updatedAt: Number(raw?.updatedAt || createdAt) || createdAt,
+      attempts: Math.max(0, Number(raw?.attempts || 0) || 0),
+      state: ["failed", "blocked"].includes(String(raw?.state || "").trim().toLowerCase())
+        ? String(raw?.state || "").trim().toLowerCase()
+        : "pending",
       error: raw?.error ? String(raw.error) : "",
+      lastError: raw?.lastError && typeof raw.lastError === "object" ? { ...raw.lastError } : null,
+      nextAttemptAt: Number(raw?.nextAttemptAt || 0) || null,
+      blockedBy: raw?.blockedBy ? String(raw.blockedBy) : null,
       request: {
         url,
         method,
@@ -2227,75 +2741,58 @@
     };
   }
 
-  function readCourierOfflineQueue() {
-    try {
-      const raw = localStorage.getItem(courierOfflineQueueKey());
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return (Array.isArray(parsed?.items) ? parsed.items : [])
-        .map(normalizeCourierQueueItem)
-        .filter(Boolean);
-    } catch {
-      return [];
-    }
+  function normalizeCourierOutboxPayload(raw) {
+    const rawItems = Array.isArray(raw?.items) ? raw.items : [];
+    const items = rawItems
+      .map(normalizeCourierQueueItem)
+      .filter((item) => item?.id && item.sequence > 0)
+      .sort((left, right) => left.sequence - right.sequence);
+    if (items.length !== rawItems.length) throw new Error("COURIER_OUTBOX_CORRUPT");
+    const maxSequence = items.reduce((max, item) => Math.max(max, item.sequence), 0);
+    return {
+      items,
+      nextSequence: Math.max(maxSequence + 1, Number(raw?.nextSequence || 1) || 1),
+    };
   }
 
-  function readCourierShadowOrders() {
-    try {
-      const raw = localStorage.getItem(courierOfflineShadowKey());
-      if (!raw) return new Map();
-      const parsed = JSON.parse(raw);
-      const rows = Array.isArray(parsed?.orders) ? parsed.orders : [];
-      return new Map(
-        rows
-          .map((row) => {
-            const orderId = Number(Array.isArray(row) ? row[0] : 0);
-            const order = Array.isArray(row) ? row[1] : null;
-            if (!(orderId > 0) || !order || typeof order !== "object") return null;
-            return [orderId, { ...order }];
-          })
-          .filter(Boolean)
-      );
-    } catch {
-      return new Map();
-    }
+  async function readCourierOutbox(context) {
+    if (!context?.cache?.complete) throw new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE");
+    const stored = await context.cache.get(COURIER_OUTBOX_ENTRY_KEY);
+    return normalizeCourierOutboxPayload(stored);
   }
 
-  function persistCourierOfflineState() {
-    if (!isCourierWorkspace) return;
-    try {
-      if (courierOfflineState.queue.length) {
-        localStorage.setItem(courierOfflineQueueKey(), JSON.stringify({
-          items: courierOfflineState.queue.map((item) => ({
-            id: item.id,
-            type: item.type,
-            orderId: item.orderId,
-            tenantId: item.tenantId,
-            storeId: item.storeId,
-            createdAt: item.createdAt,
-            state: item.state,
-            error: item.error || "",
-            request: item.request,
-            optimisticOrder: item.optimisticOrder && typeof item.optimisticOrder === "object"
-              ? item.optimisticOrder
-              : null,
-          })),
-        }));
-      } else {
-        localStorage.removeItem(courierOfflineQueueKey());
-      }
-    } catch {}
+  async function writeCourierOutbox(context, payload) {
+    if (!context?.cache?.complete) throw new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE");
+    const normalized = normalizeCourierOutboxPayload(payload);
+    await context.cache.set(COURIER_OUTBOX_ENTRY_KEY, {
+      version: COURIER_OFFLINE_QUEUE_VERSION,
+      nextSequence: normalized.nextSequence,
+      items: normalized.items,
+    });
+    return normalized;
+  }
 
+  function applyCourierOutboxPayload(payload, context) {
+    if (!isCurrentCourierOutboxContext(context)) return false;
+    const normalized = normalizeCourierOutboxPayload(payload);
+    const affectedOrderIds = new Set([
+      ...courierOfflineState.queue.map((item) => Number(item?.orderId || 0)),
+      ...normalized.items.map((item) => Number(item?.orderId || 0)),
+    ]);
+    courierOfflineState.queue = normalized.items;
+    courierOfflineState.nextSequence = normalized.nextSequence;
+    courierOfflineState.syncError = "";
+    syncCourierShadowOrdersFromQueue();
+    applyCourierShadowOrdersToState();
+    refreshCourierConnectionBanner();
+    refreshCourierOrderQueueButtons(affectedOrderIds);
+    return true;
+  }
+
+  function reportLegacyCourierOutbox() {
     try {
-      if (courierOfflineState.shadowOrders.size) {
-        localStorage.setItem(courierOfflineShadowKey(), JSON.stringify({
-          orders: Array.from(courierOfflineState.shadowOrders.entries()).map(([orderId, order]) => [
-            Number(orderId),
-            order && typeof order === "object" ? order : null,
-          ]),
-        }));
-      } else {
-        localStorage.removeItem(courierOfflineShadowKey());
+      if (localStorage.getItem(courierOfflineQueueKey()) || localStorage.getItem(courierOfflineShadowKey())) {
+        console.warn("Legacy courier outbox was left untouched because it has no user identity scope.");
       }
     } catch {}
   }
@@ -2309,13 +2806,11 @@
       }
       courierOfflineState.transientBanner = null;
     }
-    const failedItem = courierOfflineState.queue[0]?.state === "error"
-      ? courierOfflineState.queue[0]
-      : null;
+    const failedItem = courierOfflineState.queue.find((item) => item?.state === "failed") || null;
     if (failedItem) {
       return {
         mode: "error",
-        text: failedItem.error ? `Не удалось отправить изменения: ${failedItem.error}` : "Не удалось отправить изменения",
+        text: "Не отправлено",
         retry: true,
       };
     }
@@ -2326,53 +2821,121 @@
         retry: true,
       };
     }
+    if (courierOfflineState.reconciling) {
+      return {
+        mode: "syncing",
+        text: courierOfflineState.queue.length
+          ? `Синхронизируем · ${courierOfflineState.queue.length}`
+          : "Обновляем данные…",
+        retry: false,
+      };
+    }
     if (courierOfflineState.syncing && courierOfflineState.queue.length) {
       return {
         mode: "syncing",
-        text: `Отправляем изменения: ${courierOfflineState.queue.length}`,
+        text: `Отправляем · ${courierOfflineState.queue.length}`,
         retry: false,
       };
     }
     if (!courierOfflineState.online && courierOfflineState.queue.length) {
       return {
         mode: "offline",
-        text: `Нет интернета. Изменения сохранены и будут отправлены: ${courierOfflineState.queue.length}`,
+        text: `Офлайн · ждут отправки: ${courierOfflineState.queue.length}`,
         retry: false,
       };
     }
     if (!courierOfflineState.online) {
       return {
         mode: "offline",
-        text: "Нет подключения к интернету",
+        text: courierCachedSnapshotVisible
+          ? "Офлайн · сохранённые данные"
+          : "Нет сохранённых данных",
         retry: false,
       };
     }
-    return null;
+    if (courierOfflineState.refreshError) {
+      return {
+        mode: "error",
+        text: courierOfflineState.refreshError,
+        retry: false,
+      };
+    }
+    if (courierCachedSnapshotVisible && !courierNetworkConfirmed) {
+      return {
+        mode: "syncing",
+        text: "Обновляем сохранённые данные…",
+        retry: false,
+      };
+    }
+    return {
+      mode: "online",
+      text: "Онлайн",
+      retry: false,
+    };
+  }
+
+  function getOrdersBannerState() {
+    if (isCourierWorkspace) return getCourierBannerState();
+    if (navigator.onLine === false) {
+      return {
+        mode: ordersCachedSnapshotVisible ? "offline" : "error",
+        text: ordersCachedSnapshotVisible
+          ? "Офлайн · сохранённые данные"
+          : "Нет сохранённых данных",
+        retry: false,
+      };
+    }
+    if (ordersRefreshFailed) {
+      return {
+        mode: "error",
+        text: ordersCachedSnapshotVisible ? "Не удалось обновить" : "Нет сохранённых данных",
+        retry: true,
+      };
+    }
+    if (ordersCachedSnapshotVisible && !ordersNetworkConfirmed) {
+      return {
+        mode: "syncing",
+        text: "Обновляем сохранённые данные…",
+        retry: false,
+      };
+    }
+    if (!ordersNetworkConfirmed) {
+      return {
+        mode: "syncing",
+        text: "Загружаем данные…",
+        retry: false,
+      };
+    }
+    return {
+      mode: "online",
+      text: "Онлайн",
+      retry: false,
+    };
   }
 
   function refreshCourierConnectionBanner() {
-    if (!isCourierWorkspace || !courierConnectionBanner || !courierConnectionBannerText) return;
-    const bannerState = getCourierBannerState();
-    courierConnectionBanner.classList.remove(
-      "courier-connection-banner--offline",
-      "courier-connection-banner--syncing",
-      "courier-connection-banner--online",
-      "courier-connection-banner--error"
-    );
-    if (!bannerState) {
-      courierConnectionBanner.classList.add("hidden");
-      courierConnectionBannerText.textContent = "";
-      if (courierConnectionBannerRetryBtn) {
-        courierConnectionBannerRetryBtn.classList.add("hidden");
+    if (!ordersConnectionBanners.length) return;
+    const bannerState = getOrdersBannerState();
+    ordersConnectionBanners.forEach((banner) => {
+      const text = $(".courier-connection-banner__text", banner);
+      const retry = $('[data-action="orders-connection-retry"]', banner);
+      banner.classList.remove(
+        "courier-connection-banner--offline",
+        "courier-connection-banner--syncing",
+        "courier-connection-banner--online",
+        "courier-connection-banner--error"
+      );
+      if (!bannerState) {
+        banner.classList.add("hidden");
+        if (text) text.textContent = "";
+        if (retry) retry.classList.add("hidden");
+        return;
       }
-      return;
-    }
-    courierConnectionBanner.classList.remove("hidden");
-    courierConnectionBanner.classList.add(`courier-connection-banner--${bannerState.mode}`);
-    courierConnectionBannerText.textContent = String(bannerState.text || "").trim();
-    if (courierConnectionBannerRetryBtn) {
-      courierConnectionBannerRetryBtn.classList.toggle("hidden", !bannerState.retry);
-    }
+      banner.classList.remove("hidden");
+      banner.classList.add(`courier-connection-banner--${bannerState.mode}`);
+      if (text) text.textContent = String(bannerState.text || "").trim();
+      if (retry) retry.classList.toggle("hidden", !bannerState.retry);
+    });
   }
 
   function showCourierTransientBanner(mode, text, { retry = false, duration = 2500 } = {}) {
@@ -2400,11 +2963,8 @@
     const normalized = nextOnline !== false;
     const prev = courierOfflineState.online;
     courierOfflineState.online = normalized;
-    if (!normalized) {
-      courierOfflineState.syncing = false;
-    }
     if (normalized && !prev && showRestored) {
-      showCourierTransientBanner("online", "Подключение восстановлено");
+      showCourierTransientBanner("online", "Связь восстановлена");
       return;
     }
     refreshCourierConnectionBanner();
@@ -2414,6 +2974,7 @@
     if (!isCourierWorkspace) return;
     const nextShadowOrders = new Map();
     courierOfflineState.queue.forEach((item) => {
+      if (item?.state !== "pending") return;
       const orderId = Number(item?.orderId || 0);
       const optimisticOrder = item?.optimisticOrder && typeof item.optimisticOrder === "object"
         ? { ...item.optimisticOrder }
@@ -2431,12 +2992,13 @@
 
   function overlayCourierShadowOrder(order) {
     if (!order || !isCourierWorkspace) return order;
+    if (courierOptimisticOverlaySuspended > 0) return order;
     const shadow = getCourierShadowOrder(order.id);
     return shadow ? { ...order, ...shadow } : order;
   }
 
   function applyCourierShadowOrdersToState() {
-    if (!isCourierWorkspace || !courierOfflineState.shadowOrders.size) return;
+    if (!isCourierWorkspace || courierOptimisticOverlaySuspended > 0 || !courierOfflineState.shadowOrders.size) return;
     const existingIds = new Set();
     state.orders = (Array.isArray(state.orders) ? state.orders : []).map((order) => {
       const orderId = Number(order?.id || 0);
@@ -2450,17 +3012,21 @@
     });
   }
 
-  function hydrateCourierOfflineStateFromStorage() {
+  async function hydrateCourierOfflineStateFromStorage() {
     if (!isCourierWorkspace) return;
-    courierOfflineState.queue = readCourierOfflineQueue();
-    courierOfflineState.shadowOrders = readCourierShadowOrders();
+    const context = courierOutboxContext();
+    reportLegacyCourierOutbox();
+    const payload = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
+    if (!isCurrentCourierOutboxContext(context)) return;
+    courierOfflineState.queue = payload.items;
+    courierOfflineState.nextSequence = payload.nextSequence;
+    syncCourierShadowOrdersFromQueue();
     courierOfflineState.syncing = false;
+    courierOfflineState.reconciling = false;
+    courierOfflineState.processingNamespace = "";
     courierOfflineState.syncError = "";
+    courierOfflineState.refreshError = "";
     courierOfflineState.online = navigator.onLine !== false;
-    if (!courierOfflineState.shadowOrders.size && courierOfflineState.queue.length) {
-      syncCourierShadowOrdersFromQueue();
-      persistCourierOfflineState();
-    }
     applyCourierShadowOrdersToState();
     refreshCourierConnectionBanner();
   }
@@ -2469,33 +3035,39 @@
     if (!isCourierWorkspace) return;
     courierOfflineState.queue = [];
     courierOfflineState.shadowOrders = new Map();
+    courierOfflineState.nextSequence = 1;
     courierOfflineState.syncing = false;
+    courierOfflineState.processingNamespace = "";
     courierOfflineState.syncError = "";
+    courierOfflineState.refreshError = "";
     courierOfflineState.transientBanner = null;
     courierOfflineState.online = navigator.onLine !== false;
     refreshCourierConnectionBanner();
   }
 
-  function queueCourierMutation({ type, orderId, request, optimisticOrder }) {
+  async function queueCourierMutation({ type, orderId, request, optimisticOrder }) {
     if (!isCourierWorkspace) return null;
-    const item = normalizeCourierQueueItem({
-      id: `${type}:${Number(orderId || 0)}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
-      type,
-      orderId,
-      tenantId: getTenantIdFromStorage(),
-      storeId: getStoreIdFromStorage(),
-      createdAt: Date.now(),
-      state: "pending",
-      request,
-      optimisticOrder,
+    const context = courierOutboxContext();
+    return queueCourierOutboxOperation(context, async () => {
+      const current = await readCourierOutbox(context);
+      if (current.items.length >= COURIER_OUTBOX_MAX_ITEMS) {
+        throw new Error("COURIER_OUTBOX_FULL");
+      }
+      const now = Date.now();
+      const item = normalizeCourierQueueItem({
+        id: createCourierMutationId(), type, orderId,
+        tenantId: context.tenantId, storeId: context.storeId,
+        sequence: current.nextSequence, createdAt: now, updatedAt: now, attempts: 0,
+        state: "pending", request, optimisticOrder,
+      });
+      if (!item) throw new Error("COURIER_OUTBOX_MUTATION_INVALID");
+      const next = await writeCourierOutbox(context, {
+        items: [...current.items, item],
+        nextSequence: current.nextSequence + 1,
+      });
+      applyCourierOutboxPayload(next, context);
+      return item;
     });
-    if (!item) return null;
-    courierOfflineState.queue.push(item);
-    courierOfflineState.syncError = "";
-    syncCourierShadowOrdersFromQueue();
-    persistCourierOfflineState();
-    refreshCourierConnectionBanner();
-    return item;
   }
 
   function updateCourierActiveOrderInfo() {
@@ -2504,80 +3076,202 @@
     if (activeOrder) setInfo(activeOrder);
   }
 
+  function mutateCourierOutbox(context, mutate) {
+    return queueCourierOutboxOperation(context, async () => {
+      const current = await readCourierOutbox(context);
+      const nextPayload = mutate(current);
+      const next = await writeCourierOutbox(context, nextPayload || current);
+      applyCourierOutboxPayload(next, context);
+      return next;
+    });
+  }
+
+  function classifyCourierMutationFailure(err) {
+    if (isLikelyNetworkError(err)) return { type: "retryable", code: "NETWORK_ERROR", status: 0 };
+    const status = Number(err?.status || 0);
+    const code = String(err?.code || err?.message || "API_ERROR").trim() || "API_ERROR";
+    if (status === 401 || status === 403) return { type: "auth", code, status };
+    if (status === 408 || status === 425 || status === 429 || status >= 500) {
+      return { type: "retryable", code, status };
+    }
+    if (status === 409) {
+      return { type: code === "IDEMPOTENCY_IN_PROGRESS" ? "retryable" : "conflict", code, status };
+    }
+    if (status === 400 || status === 404 || status === 422) return { type: "permanent", code, status };
+    return { type: "retryable", code, status };
+  }
+
+  function courierMutationErrorRecord(err, failure) {
+    let nextAttemptAt = null;
+    const retryAfter = String(err?.retryAfter || "").trim();
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      const parsedDate = Date.parse(retryAfter);
+      if (Number.isFinite(seconds) && seconds >= 0) nextAttemptAt = Date.now() + (seconds * 1000);
+      else if (Number.isFinite(parsedDate)) nextAttemptAt = parsedDate;
+    }
+    return {
+      error: {
+        type: failure.type,
+        status: failure.status || null,
+        code: failure.code,
+        message: String(err?.message || failure.code),
+        at: Date.now(),
+      },
+      nextAttemptAt,
+    };
+  }
+
+  function selectNextCourierMutation(items, { force = false } = {}) {
+    const blockedOrderIds = new Set();
+    const now = Date.now();
+    for (const item of Array.isArray(items) ? items : []) {
+      const orderId = Number(item?.orderId || 0);
+      if (item?.state === "failed" || item?.state === "blocked") {
+        if (orderId > 0) blockedOrderIds.add(orderId);
+        continue;
+      }
+      if (item?.state !== "pending" || blockedOrderIds.has(orderId)) continue;
+      if (!force && Number(item.nextAttemptAt || 0) > now) {
+        if (orderId > 0) blockedOrderIds.add(orderId);
+        continue;
+      }
+      return item;
+    }
+    return null;
+  }
+
   async function processCourierOfflineQueue({ force = false } = {}) {
-    if (!isCourierWorkspace) return;
-    if (courierOfflineState.syncing) return;
+    if (!isCourierWorkspace) return { confirmedOrders: [] };
     if (!courierOfflineState.queue.length) {
       courierOfflineState.syncError = "";
       syncCourierShadowOrdersFromQueue();
-      persistCourierOfflineState();
       refreshCourierConnectionBanner();
-      return;
+      return { confirmedOrders: [] };
     }
     if (!courierOfflineState.online) {
       refreshCourierConnectionBanner();
-      return;
-    }
-    if (courierOfflineState.queue[0]?.state === "error" && !force) {
-      refreshCourierConnectionBanner();
-      return;
+      return { confirmedOrders: [] };
     }
 
     let processedAny = false;
+    const confirmedOrders = [];
+    const context = courierOutboxContext();
+    if (!context.namespace) {
+      courierOfflineState.syncError = "Хранилище недоступно";
+      refreshCourierConnectionBanner();
+      return { confirmedOrders };
+    }
+    const existingProcessing = courierOutboxProcessing.get(context.namespace);
+    if (existingProcessing) return existingProcessing;
+    let resolveProcessing;
+    const processingPromise = new Promise((resolve) => { resolveProcessing = resolve; });
+    courierOutboxProcessing.set(context.namespace, processingPromise);
     courierOfflineState.syncing = true;
+    refreshCourierOrderQueueButtons(courierOfflineState.queue.map((item) => item?.orderId));
+    courierOfflineState.processingNamespace = context.namespace;
     courierOfflineState.syncError = "";
     refreshCourierConnectionBanner();
 
-    while (courierOfflineState.online && courierOfflineState.queue.length) {
-      const current = courierOfflineState.queue[0];
-      if (!current) break;
-      current.state = "pending";
-      current.error = "";
-      persistCourierOfflineState();
-      refreshCourierConnectionBanner();
+    try {
+      while (isCurrentCourierOutboxContext(context) && courierOfflineState.online) {
+        const stored = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
+        const current = selectNextCourierMutation(stored.items, { force });
+        if (!current) break;
 
-      try {
-        const json = await apiJson(current.request.url, {
-          method: current.request.method || "PUT",
-          body: current.request.body || {},
-        });
-        courierOfflineState.queue.shift();
-        processedAny = true;
-        syncCourierShadowOrdersFromQueue();
-        applyCourierShadowOrdersToState();
-        if (json?.data) {
-          handleOrderEvent(json.data);
+        try {
+          await mutateCourierOutbox(context, (payload) => ({
+            ...payload,
+            items: payload.items.map((item) => item.id === current.id
+              ? { ...item, state: "pending", error: "", attempts: item.attempts + 1, updatedAt: Date.now() }
+              : item),
+          }));
+          const json = await apiJson(current.request.url, {
+            method: current.request.method || "PUT",
+            body: current.request.body || {},
+            headers: { "Idempotency-Key": current.id },
+          });
+          await mutateCourierOutbox(context, (payload) => ({
+            ...payload,
+            items: payload.items.filter((item) => item.id !== current.id),
+          }));
+          processedAny = true;
+          if (json?.data && isCurrentCourierOutboxContext(context)) {
+            confirmedOrders.push({ ...json.data });
+            handleOrderEvent(overlayCourierShadowOrder(json.data));
+          }
+        } catch (err) {
+          const failure = classifyCourierMutationFailure(err);
+          const errorRecord = courierMutationErrorRecord(err, failure);
+          if (failure.type === "retryable" || failure.type === "auth") {
+            await mutateCourierOutbox(context, (payload) => ({
+              ...payload,
+              items: payload.items.map((item) => item.id === current.id
+                ? {
+                    ...item,
+                    state: "pending",
+                    error: errorRecord.error.message,
+                    lastError: errorRecord.error,
+                    nextAttemptAt: errorRecord.nextAttemptAt,
+                    updatedAt: Date.now(),
+                  }
+                : item),
+            })).catch((persistErr) => console.error("Courier outbox update failed:", persistErr));
+            if (isCurrentCourierOutboxContext(context)) {
+              if (failure.code === "NETWORK_ERROR") setCourierOnlineState(false);
+              courierOfflineState.syncError = failure.type === "auth"
+                ? "Нужно войти снова"
+                : "Не удалось отправить";
+              refreshCourierConnectionBanner();
+            }
+            return { confirmedOrders };
+          }
+          await mutateCourierOutbox(context, (payload) => ({
+            ...payload,
+            items: payload.items.map((item) => {
+              if (item.id === current.id) {
+                return {
+                  ...item,
+                  state: "failed",
+                  error: errorRecord.error.message,
+                  lastError: errorRecord.error,
+                  nextAttemptAt: null,
+                  updatedAt: Date.now(),
+                };
+              }
+              if (item.sequence > current.sequence && Number(item.orderId) === Number(current.orderId)
+                && item.state === "pending") {
+                return { ...item, state: "blocked", blockedBy: current.id, updatedAt: Date.now() };
+              }
+              return item;
+            }),
+          })).catch((persistErr) => console.error("Courier outbox update failed:", persistErr));
+          if (isCurrentCourierOutboxContext(context)) {
+            courierOfflineState.syncError = failure.type === "conflict"
+              ? "Конфликт изменений"
+              : "Есть неотправленные изменения";
+            refreshCourierConnectionBanner();
+          }
         }
-        persistCourierOfflineState();
-      } catch (err) {
+      }
+    } finally {
+      if (courierOutboxProcessing.get(context.namespace) === processingPromise) {
+        courierOutboxProcessing.delete(context.namespace);
+      }
+      resolveProcessing({ confirmedOrders });
+      if (isCurrentCourierOutboxContext(context)) {
         courierOfflineState.syncing = false;
-        if (current) {
-          current.state = "pending";
-        }
-        if (isLikelyNetworkError(err)) {
-          setCourierOnlineState(false);
-          persistCourierOfflineState();
+        courierOfflineState.processingNamespace = "";
+        refreshCourierOrderQueueButtons(courierOfflineState.queue.map((item) => item?.orderId));
+        if (processedAny && courierOfflineState.online
+          && !courierOfflineState.syncError && !courierOfflineState.reconciling) {
+          showCourierTransientBanner("online", "Связь восстановлена");
+        } else {
           refreshCourierConnectionBanner();
-          return;
         }
-        if (current) {
-          current.state = "error";
-          current.error = String(err?.message || "API_ERROR");
-        }
-        courierOfflineState.syncError = "Не удалось отправить изменения";
-        persistCourierOfflineState();
-        refreshCourierConnectionBanner();
-        return;
       }
     }
-
-    courierOfflineState.syncing = false;
-    persistCourierOfflineState();
-    if (processedAny && courierOfflineState.online) {
-      showCourierTransientBanner("online", "Подключение восстановлено");
-    } else {
-      refreshCourierConnectionBanner();
-    }
+    return { confirmedOrders };
   }
 
   function markCourierOfflineFromError(err) {
@@ -2791,6 +3485,7 @@
     if (!cache || typeof cache !== "object") return false;
     state.statuses = [];
     state.activeStatusId = cache.activeStatusId != null ? cache.activeStatusId : state.activeStatusId;
+    state.storeTimezone = String(cache.storeTimezone || state.storeTimezone || "+0");
     state.orders = [];
     state.activeOrderId = null;
     state.lastEventId = null;
@@ -3934,6 +4629,26 @@
     return state.orders.find((row) => Number(row?.id || 0) === Number(order.id || 0)) || order;
   }
 
+  async function queueCourierMutationOrRestore(mutation, previousOrder) {
+    try {
+      return await queueCourierMutation(mutation);
+    } catch (err) {
+      if (previousOrder) applyLocalCourierOrderSnapshot(previousOrder);
+      syncCourierShadowOrdersFromQueue();
+      applyCourierShadowOrdersToState();
+      showCourierTransientBanner("error", "Изменение не сохранено", { duration: 3200 });
+      throw err;
+    }
+  }
+
+  function throwIfCourierMutationFailed(mutationId) {
+    const item = courierOfflineState.queue.find((entry) => entry?.id === mutationId) || null;
+    if (!item || (item.state !== "failed" && item.state !== "blocked")) return;
+    const error = new Error(item.error || "COURIER_MUTATION_FAILED");
+    error.code = item.lastError?.code || "COURIER_MUTATION_FAILED";
+    throw error;
+  }
+
   let mobilePaymentModalOrigin = null;
 
   function mountMobilePaymentPage() {
@@ -3954,27 +4669,110 @@
     return `orders:list:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${dateKey}`;
   }
 
+  function ordersPersistentScope() {
+    if (!window.AdminPersistentCache?.scope) return null;
+    return window.AdminPersistentCache.scope({
+      domain: `orders:list:${ordersCacheScope}`,
+      version: 1,
+    });
+  }
+
+  function ordersPersistentEntryKey() {
+    if (!isCourierWorkspace) return "last-workspace";
+    return state.date.start && state.date.end
+      ? `${toDateKey(state.date.start)}_${toDateKey(state.date.end)}`
+      : "default";
+  }
+
+  function currentOrdersQuery() {
+    return {
+      startDate: state.date.start ? toDateKey(state.date.start) : null,
+      endDate: state.date.end ? toDateKey(state.date.end) : null,
+    };
+  }
+
+  function currentOrdersQueryKey() {
+    const query = currentOrdersQuery();
+    return `${query.startDate || ""}:${query.endDate || ""}`;
+  }
+
+  function isOrdersSnapshotQueryCompatible(snapshot) {
+    if (isCourierWorkspace) return true;
+    const query = snapshot?.query;
+    if (!query || typeof query !== "object") return false;
+    const current = currentOrdersQuery();
+    return String(query.startDate || "") === String(current.startDate || "")
+      && String(query.endDate || "") === String(current.endDate || "");
+  }
+
   async function readPersistentOrdersCache() {
     try {
-      const data = await window.AdminPersistentCache?.read(ordersPersistentCacheKey());
-      if (!data || Date.now() - Number(data.ts || 0) > ORDERS_PERSISTENT_CACHE_MAX_AGE_MS) return null;
-      return data;
+      const cache = ordersPersistentScope();
+      if (cache?.complete) {
+        const entry = await cache.getEntry(ordersPersistentEntryKey(), { allowStale: true });
+        if (entry?.data && isOrdersSnapshotQueryCompatible(entry.data)) {
+          return { ...entry.data, stale: entry.stale === true };
+        }
+      }
+      if (!isCourierWorkspace) return null;
+      const legacyData = await window.AdminPersistentCache?.read(ordersPersistentCacheKey());
+      return legacyData && Number(legacyData.ts || 0) > 0
+        ? { ...legacyData, stale: Date.now() - Number(legacyData.ts) > ORDERS_PERSISTENT_CACHE_MAX_AGE_MS }
+        : null;
     } catch (err) {
       console.error("Orders IndexedDB read failed:", err);
       return null;
     }
   }
 
+  function restorePersistentOrdersSnapshot(snapshot) {
+    if (!Array.isArray(snapshot?.orders)) return false;
+    state.orders = snapshot.orders.filter(shouldKeepOrderInState);
+    if (Array.isArray(snapshot.statuses)) {
+      state.statuses = snapshot.statuses.map((status) => ({ ...status }));
+    }
+    state.ordersPagination = {
+      hasMore: snapshot.pagination?.hasMore === true,
+      nextOffset: Number(snapshot.pagination?.nextOffset || state.orders.length),
+      loading: false,
+    };
+    state.lastEventId = Number(snapshot.syncCursor || 0) || null;
+    ordersPersistentCacheRestored = true;
+    courierCachedSnapshotVisible = isCourierWorkspace;
+    ordersCachedSnapshotVisible = !isCourierWorkspace;
+    rebuildOrdersStageIndex();
+    return true;
+  }
+
   function persistOrdersListCache() {
-    if (!window.AdminPersistentCache || !state.orders.length) return;
+    if (!window.AdminPersistentCache) return Promise.resolve(false);
     const data = {
       ts: Date.now(),
       orders: state.orders.map((order) => ({ ...order })),
       pagination: { hasMore: state.ordersPagination.hasMore, nextOffset: state.ordersPagination.nextOffset },
       syncCursor: Number(state.lastEventId || 0),
+      query: currentOrdersQuery(),
+      statuses: Array.isArray(state.statuses) ? state.statuses.map((status) => ({ ...status })) : [],
+      updatedAt: Date.now(),
     };
-    window.AdminPersistentCache.write(ordersPersistentCacheKey(), data).catch((err) => {
+    const cache = ordersPersistentScope();
+    const ttlMs = isCourierWorkspace
+      ? ORDERS_PERSISTENT_CACHE_MAX_AGE_MS
+      : ORDERS_WORKSPACE_CACHE_MAX_AGE_MS;
+    const writePromise = cache?.complete
+      ? cache.set(ordersPersistentEntryKey(), data, { ttlMs })
+      : window.AdminPersistentCache.write(ordersPersistentCacheKey(), data);
+    return writePromise.then(() => {
+      if (isCourierWorkspace) {
+        courierCachedSnapshotVisible = true;
+        refreshCourierConnectionBanner();
+      } else {
+        ordersCachedSnapshotVisible = true;
+      }
+      return true;
+    }).catch((err) => {
       console.error("Orders IndexedDB write failed:", err);
+      return false;
     });
   }
 
@@ -3992,13 +4790,35 @@
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
     if (isCourierWorkspace && !courierOfflineState.online && isPaidOrder(order)) {
-      showCourierTransientBanner("error", "Возврат доступен только при интернете.", { duration: 3200 });
+      showCourierTransientBanner("error", "Для возврата нужен интернет", { duration: 3200 });
       return;
     }
 
     if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
       if (isPaidOrder(order)) return;
       try {
+        if (isCourierWorkspace) {
+          const payload = { is_paid: 1 };
+          const optimisticOrder = buildOptimisticOrderPaymentSnapshot(order, payload);
+          if (!optimisticOrder) throw new Error("PAYMENT_PAYLOAD_INVALID");
+          const queuedMutation = await queueCourierMutationOrRestore({
+            type: "payment",
+            orderId,
+            request: {
+              url: `/api/admin/orders/${orderId}/paid`,
+              method: "PUT",
+              body: payload,
+            },
+            optimisticOrder,
+          }, order);
+          applyLocalCourierOrderSnapshot(optimisticOrder);
+          if (courierOfflineState.online) {
+            await reconcileCourierAfterReconnect({ reason: "payment-mutation" });
+            throwIfCourierMutationFailed(queuedMutation?.id);
+          }
+          refreshCourierConnectionBanner();
+          return;
+        }
         const json = await apiJson(`/api/admin/orders/${orderId}/paid`, {
           method: "PUT",
           body: { is_paid: 1 },
@@ -4066,54 +4886,30 @@
         if (!optimisticOrder) {
           throw new Error("PAYMENT_PAYLOAD_INVALID");
         }
-        const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
         const queueRequest = {
           url: `/api/admin/orders/${orderId}/paid`,
           method: "PUT",
           body: payload,
         };
 
-        if (!courierOfflineState.online) {
-          queueCourierMutation({
-            type: "payment",
-            orderId,
-            request: queueRequest,
-            optimisticOrder: appliedOrder || optimisticOrder,
-          });
-          refreshCourierConnectionBanner();
-          return appliedOrder || optimisticOrder;
+        const queuedMutation = await queueCourierMutationOrRestore({
+          type: "payment",
+          orderId,
+          request: queueRequest,
+          optimisticOrder,
+        }, liveOrder);
+        const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
+        if (courierOfflineState.online) {
+          await reconcileCourierAfterReconnect({ reason: "payment-mutation" });
+          throwIfCourierMutationFailed(queuedMutation?.id);
         }
-
-        try {
-          const json = await apiJson(queueRequest.url, {
-            method: queueRequest.method,
-            body: queueRequest.body,
-          });
-          if (json?.data) handleOrderEvent(json.data);
-          return json?.data || appliedOrder || optimisticOrder;
-        } catch (err) {
-          if (markCourierOfflineFromError(err)) {
-            queueCourierMutation({
-              type: "payment",
-              orderId,
-              request: queueRequest,
-              optimisticOrder: appliedOrder || optimisticOrder,
-            });
-            refreshCourierConnectionBanner();
-            return appliedOrder || optimisticOrder;
-          }
-          try {
-            await loadAndRenderOrders(true);
-          } catch (syncErr) {
-            console.error(syncErr);
-          }
-          throw err;
-        }
+        refreshCourierConnectionBanner();
+        return state.orders.find((row) => Number(row?.id || 0) === orderId) || appliedOrder || optimisticOrder;
       },
       onSuccess() {},
       onError(err) {
         if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
-          showCourierTransientBanner("error", "Нет интернета. Способы оплаты ещё не сохранены.", { duration: 3200 });
+          showCourierTransientBanner("error", "Способы оплаты недоступны офлайн", { duration: 3200 });
           return;
         }
         console.error("orders payment modal error:", err);
@@ -4121,76 +4917,6 @@
       ...paymentPageOptions,
     });
 
-    let paymentPayload = null;
-    try {
-      paymentPayload = await sharedOrderPayment.open({
-        order,
-        apiJson,
-        money,
-        formatDateTimeNumeric,
-        getOrderId: (row) => Number(row?.id || 0),
-        getOrderNumber,
-        isPaidOrder,
-        collectPayloadOnly: true,
-        cacheOnlyPaymentMethods: useOfflineCollection,
-        onError(err) {
-          if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
-            showCourierTransientBanner("error", "Нет интернета. Способы оплаты ещё не сохранены.", { duration: 3200 });
-            return;
-          }
-          console.error("orders payment modal error:", err);
-        },
-      });
-    } catch (err) {
-      console.error("orders payment modal error:", err);
-      return;
-    }
-    if (!paymentPayload) return;
-
-    const optimisticOrder = buildOptimisticOrderPaymentSnapshot(order, paymentPayload);
-    if (!optimisticOrder) return;
-    const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
-    const queueRequest = {
-      url: `/api/admin/orders/${orderId}/paid`,
-      method: "PUT",
-      body: paymentPayload,
-    };
-
-    if (!courierOfflineState.online) {
-      queueCourierMutation({
-        type: "payment",
-        orderId,
-        request: queueRequest,
-        optimisticOrder: appliedOrder || optimisticOrder,
-      });
-      refreshCourierConnectionBanner();
-      return;
-    }
-
-    try {
-      const json = await apiJson(queueRequest.url, {
-        method: queueRequest.method,
-        body: queueRequest.body,
-      });
-      if (json?.data) handleOrderEvent(json.data);
-    } catch (err) {
-      if (markCourierOfflineFromError(err)) {
-        queueCourierMutation({
-          type: "payment",
-          orderId,
-          request: queueRequest,
-          optimisticOrder: appliedOrder || optimisticOrder,
-        });
-        refreshCourierConnectionBanner();
-        return;
-      }
-      try {
-        await loadAndRenderOrders(true);
-      } catch (syncErr) {
-        console.error(syncErr);
-      }
-      console.error("orders payment update error:", err);
-    }
   }
 
   function setStatusControlsDisabled(disabled) {
@@ -4264,64 +4990,51 @@
     const optimisticOrder = buildOptimisticOrderStatusSnapshot(prevOrder, nextStatusId);
     const targetStatusMeta = getStatusMetaById(nextStatusId) || null;
     if (isForbiddenStatusTransition(prevStatusMeta, targetStatusMeta)) return;
-    let optimisticApplied = false;
-    let appliedOrder = null;
-
-    if (optimisticOrder && prevStatusId !== nextStatusId) {
-      appliedOrder = handleOrderEvent(optimisticOrder, { localOnly: true }) || optimisticOrder;
-      setStatusControlsDisabled(true);
-      optimisticApplied = true;
-    }
-
     const request = {
       url: `/api/admin/orders/${id}/status`,
       method: "PUT",
       body: { status_id: nextStatusId },
     };
 
-    if (isCourierWorkspace && optimisticApplied && !courierOfflineState.online) {
-      queueCourierMutation({
+    if (isCourierWorkspace) {
+      if (!optimisticOrder || prevStatusId === nextStatusId) return;
+      handleOrderEvent(optimisticOrder, { localOnly: true, persistList: false });
+      const queuedMutation = await queueCourierMutationOrRestore({
         type: "status",
         orderId: id,
         request,
-        optimisticOrder: appliedOrder || optimisticOrder,
-      });
+        optimisticOrder,
+      }, prevOrder);
+      await persistOrdersListCache();
+      if (courierOfflineState.online) {
+        await reconcileCourierAfterReconnect({ reason: "status-mutation" });
+        throwIfCourierMutationFailed(queuedMutation?.id);
+      }
       refreshCourierConnectionBanner();
       return;
     }
 
+    if (!optimisticOrder || prevStatusId === nextStatusId) return;
+    if (orderStatusSyncStates.get(id)?.mode === "syncing") return;
+    if (navigator.onLine === false) {
+      setOrderStatusSyncState(id, "error", "Нужен интернет", 2600);
+      return;
+    }
+    setOrderStatusSyncState(id, "syncing", "Сохраняем…");
+    handleOrderEvent(optimisticOrder, { localOnly: true });
     try {
-      await apiJson(request.url, {
+      const json = await apiJson(request.url, {
         method: request.method,
         body: request.body,
       });
-      if (!optimisticApplied) {
-        const freshOrder = await ensureFullOrderById(id);
-        if (freshOrder) {
-          handleOrderEvent(freshOrder, { localOnly: true, skipStageRefresh: true });
-        }
-      }
+      const confirmedOrder = json?.data && typeof json.data === "object"
+        ? { ...optimisticOrder, ...json.data }
+        : optimisticOrder;
+      handleOrderEvent(confirmedOrder);
+      setOrderStatusSyncState(id, "saved", "Сохранено", 1200);
     } catch (err) {
-      if (isCourierWorkspace && optimisticApplied && markCourierOfflineFromError(err)) {
-        queueCourierMutation({
-          type: "status",
-          orderId: id,
-          request,
-          optimisticOrder: appliedOrder || optimisticOrder,
-        });
-        refreshCourierConnectionBanner();
-        return;
-      }
-      if (optimisticApplied && prevOrder) {
-        handleOrderEvent(prevOrder, { localOnly: true });
-      }
-      try {
-        await loadStatuses();
-        renderStages();
-        await loadAndRenderOrders(true);
-      } catch (syncErr) {
-        console.error(syncErr);
-      }
+      if (prevOrder) handleOrderEvent(prevOrder, { localOnly: true });
+      setOrderStatusSyncState(id, "error", "Не сохранено", 2600);
       throw err;
     }
   }
@@ -4852,7 +5565,6 @@
       return;
     }
 
-    writeCachedFullOrder(order);
     showOrderInfo();
 
     setTextAll(infoEls.title, `ЗАКАЗ #${order.id}`);
@@ -5503,7 +6215,7 @@
     const timeIconHtml = sharedOrderPanel && typeof sharedOrderPanel.renderOrderTimeIcon === "function"
       ? sharedOrderPanel.renderOrderTimeIcon(order)
       : renderOrderTimeIcon(order);
-    const stageCycleBtnHtml = renderOrderStatusHoverCycleButton(order);
+    const stageCycleBtnHtml = renderOrderStatusControl(order);
     const addressCommentDisplay = String(order.address_comment || order.comment || "Нет комментария");
     const rawAddress = String(order.address ||
       (order.pickup_store_address
@@ -5600,7 +6312,7 @@
               tabindex="-1"
               ${multiSelected ? "checked" : ""}
             />
-            <div class="order-id-num">${escapeHtml(order.id)}</div>
+            <div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>
             <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
           </label>
         </div>
@@ -5653,7 +6365,7 @@
               tabindex="-1"
               ${multiSelected ? "checked" : ""}
             />
-            <div class="order-id-num">${escapeHtml(order.id)}</div>
+            <div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>
             <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
           </label>
         </div>
@@ -5689,6 +6401,7 @@
       row.innerHTML = sharedOrderPanel.buildOrderListRowInnerHtml({
         orderId,
         orderNumberText: String(order.id || ""),
+        orderIdNumHtml: `<div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>`,
         createdAtText: formatTime(order.created_at),
         showMultiSelect: true,
         multiSelected,
@@ -5720,7 +6433,7 @@
             tabindex="-1"
             ${multiSelected ? "checked" : ""}
           />
-          <div class="order-id-num">${escapeHtml(order.id)}</div>
+          <div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>
           <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
         </label>
       </div>
@@ -5765,7 +6478,20 @@
     normalizeSelectedOrderIds();
     const filtered = getOrdersForActiveStage();
     if (!filtered.length) {
-      if (elEmptyHint) elEmptyHint.classList.remove("hidden");
+      if (elEmptyHint) {
+        if (isCourierWorkspace && !courierNetworkConfirmed && !courierCachedSnapshotVisible) {
+          elEmptyHint.textContent = ordersInitialRestoreComplete && !courierOfflineState.online
+            ? "Нет сохранённых данных. Подключитесь к интернету для первой загрузки."
+            : "Загрузка заказов…";
+        } else if (!isCourierWorkspace && !ordersNetworkConfirmed && !ordersCachedSnapshotVisible) {
+          elEmptyHint.textContent = ordersInitialRestoreComplete && (ordersRefreshFailed || navigator.onLine === false)
+            ? "Нет сохранённых данных для этого периода."
+            : "Загрузка заказов…";
+        } else {
+          elEmptyHint.textContent = "Заказов нет";
+        }
+        elEmptyHint.classList.remove("hidden");
+      }
       if (!tabsState.tabs.length || !state.activeOrderId) {
         setInfo(null);
       }
@@ -5779,6 +6505,7 @@
       const row = buildOrderRow(o);
       elOrdersList.appendChild(row);
     });
+    void inspectOrdersSharedPassportCache(filtered);
 
     if (tabsState.tabs.length) {
       syncActiveOrderRowState();
@@ -5812,6 +6539,7 @@
 
     const row = buildOrderRow(order);
     elOrdersList.prepend(row);
+    void inspectOrdersSharedPassportCache([order]);
   }
 
   function clearSelection() {
@@ -5830,19 +6558,21 @@
   // -----------------------------
   // Data loading
   // -----------------------------
-  async function loadStatuses() {
+  async function loadStatuses({ context = null } = {}) {
     const qs = new URLSearchParams();
     if (state.date.start && state.date.end) {
       qs.set("start_date", toDateKey(state.date.start));
       qs.set("end_date", toDateKey(state.date.end));
     }
     const json = await apiJson(`/api/admin/orders/statuses?${qs.toString()}`);
+    if (context && !isCurrentCourierSyncContext(context)) return false;
     state.statuses = Array.isArray(json.data) ? json.data : [];
+    return true;
   }
 
   let ordersQueryGeneration = 0;
 
-  async function loadOrders({ resetPagination = true, append = false } = {}) {
+  async function loadOrders({ resetPagination = true, append = false, context = null } = {}) {
     const queryGeneration = resetPagination ? ++ordersQueryGeneration : ordersQueryGeneration;
     const keepRestoredPagination = resetPagination && ordersPersistentCacheRestored && state.orders.length > 0;
     if (resetPagination && !keepRestoredPagination) {
@@ -5858,7 +6588,8 @@
     qs.set("offset", String(resetPagination || !append ? 0 : state.ordersPagination.nextOffset));
 
     const json = await apiJson(`/api/admin/orders?${qs.toString()}`);
-    if (queryGeneration !== ordersQueryGeneration) return;
+    if (queryGeneration !== ordersQueryGeneration
+      || (context && !isCurrentCourierSyncContext(context))) return false;
     const rows = Array.isArray(json.data) ? json.data : [];
     if (resetPagination && (!ordersPersistentCacheRestored || !state.orders.length)) {
       state.orders = rows.filter(shouldKeepOrderInState);
@@ -5884,11 +6615,17 @@
     }
     applyCourierShadowOrdersToState();
     rebuildOrdersStageIndex();
+    if (!isCourierWorkspace) {
+      ordersNetworkConfirmed = true;
+      ordersRefreshFailed = false;
+      refreshCourierConnectionBanner();
+    }
     if (elOrdersLoadMore) {
       elOrdersLoadMore.classList.toggle("hidden", !state.ordersPagination.hasMore);
       elOrdersLoadMore.disabled = false;
     }
-    persistOrdersListCache();
+    void persistOrdersListCache();
+    return true;
   }
 
   async function loadMoreOrders() {
@@ -5917,13 +6654,14 @@
     });
   }
 
-  async function loadAndRenderOrders(keepSelection = false) {
+  async function loadAndRenderOrders(keepSelection = false, { context = null } = {}) {
     const prevActive = keepSelection ? state.activeOrderId : null;
     if (!keepSelection && !tabsState.tabs.length) {
       state.activeOrderId = null;
     }
 
-    await loadOrders();
+    const loaded = await loadOrders({ context });
+    if (loaded === false) return false;
     if (isCourierWorkspace) {
       ensureActiveStatusSelection();
     }
@@ -5948,6 +6686,7 @@
       }
     }
     schedulePersistOrdersCache();
+    return true;
   }
 
   // -----------------------------
@@ -5967,10 +6706,28 @@
   function applyDateFilter(closePopover = true) {
     updateDateLabel();
     schedulePersistOrdersCache(0);
+    if (!isCourierWorkspace) {
+      ordersPersistentCacheRestored = false;
+      ordersCachedSnapshotVisible = false;
+      ordersNetworkConfirmed = false;
+      ordersRefreshFailed = false;
+      state.orders = [];
+      state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
+      state.lastEventId = null;
+      rebuildOrdersStageIndex();
+      renderOrders();
+      refreshCourierConnectionBanner();
+    }
     loadStatuses()
       .then(renderStages)
       .then(() => loadAndRenderOrders(false))
-      .catch(console.error);
+      .catch((err) => {
+        console.error(err);
+        if (!isCourierWorkspace) {
+          ordersRefreshFailed = true;
+          renderOrders();
+        }
+      });
 
     if (closePopover) closeDatePopover();
   }
@@ -6239,9 +6996,17 @@
     return changed;
   }
 
-  function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false } = {}) {
+  function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false, persistList = true } = {}) {
     if (!order || !order.id) return;
-    invalidateCachedFullOrder(order.id);
+    const detailContext = orderDetailsContext(order.id);
+    orderDetailsMutationGeneration.set(
+      detailContext.runtimeKey,
+      (orderDetailsMutationGeneration.get(detailContext.runtimeKey) || 0) + 1
+    );
+    orderDetailsDirty.add(detailContext.runtimeKey);
+    const detailMergePromise = queueCachedFullOrderPatch(order, detailContext).catch((err) => {
+      console.warn(`Order detail cache merge failed for ${Number(order.id || 0)}:`, err);
+    });
 
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
     const wasExisting = idx >= 0;
@@ -6295,6 +7060,7 @@
       reconcileOrderListDom(prevOrder || order, { prevVisible, nextVisible: false });
       emitOrderUpdated(order, { removed: true, localOnly: !!localOnly });
       schedulePersistOrdersCache();
+      if (persistList && (isCourierWorkspace || !localOnly)) void persistOrdersListCache();
       return null;
     }
 
@@ -6343,19 +7109,23 @@
     }
     emitOrderUpdated(nextOrder, { localOnly: !!localOnly });
     schedulePersistOrdersCache();
+    if (persistList && (isCourierWorkspace || !localOnly)) void persistOrdersListCache();
+    if (isCourierWorkspace && navigator.onLine !== false && getCourierBucketId(nextOrder)) {
+      void detailMergePromise.then(() => prewarmCourierOrderDetail(nextOrder, { highPriority: true }));
+    }
     return nextOrder;
   }
 
   // Фоновый опрос списка заказов (резерв, когда SSE обрывается на хостинге)
   // Важно: Chrome троттлит setInterval в фоновых вкладках до 1 раза в минуту и более.
-  function applyOrdersChangesEvents(changes, { notifyCreated = true } = {}) {
+  function applyOrdersChangesEvents(changes, { notifyCreated = true, advanceCursor = true, persist = true } = {}) {
     const rows = Array.isArray(changes) ? changes : [];
     const createdOrders = [];
     rows.forEach((evt) => {
       const eventOrderId = Number(evt?.data?.id || 0);
       const hadOrder = eventOrderId > 0 && state.orders.some((row) => Number(row?.id || 0) === eventOrderId);
-      state.lastEventId = evt?.id || state.lastEventId;
-      const nextOrder = handleOrderEvent(evt?.data);
+      const nextOrder = handleOrderEvent(evt?.data, { persistList: false });
+      if (advanceCursor) state.lastEventId = evt?.id || state.lastEventId;
       if (!hadOrder && nextOrder && state.ordersPagination.nextOffset > 0) {
         state.ordersPagination.nextOffset += 1;
       }
@@ -6366,7 +7136,7 @@
     if (notifyCreated && createdOrders.length) {
       notifyNewOrders(createdOrders);
     }
-    if (rows.length) persistOrdersListCache();
+    if (rows.length && persist) void persistOrdersListCache();
   }
 
   async function fetchOrdersChanges(since = 0) {
@@ -6384,24 +7154,36 @@
     };
   }
 
-  async function synchronizeOrdersChanges({ notifyCreated = true } = {}) {
+  async function synchronizeOrdersChanges({ notifyCreated = true, context = null } = {}) {
     const since = Number(state.lastEventId || 0);
     const payload = await fetchOrdersChanges(since);
+    if (context && !isCurrentCourierSyncContext(context)) return { ...payload, obsolete: true };
     if (payload.resetRequired) return payload;
+    if (payload.changes.length) {
+      applyOrdersChangesEvents(payload.changes, { notifyCreated, advanceCursor: false, persist: false });
+    }
+    if (context && !isCurrentCourierSyncContext(context)) return { ...payload, obsolete: true };
     if (payload.cursor > 0) {
       state.lastEventId = since > 0 ? Math.max(since, payload.cursor) : payload.cursor;
     }
-    if (payload.changes.length) {
-      applyOrdersChangesEvents(payload.changes, { notifyCreated });
+    const persisted = await persistOrdersListCache();
+    if (!persisted) throw new Error("ORDERS_RECONCILIATION_PERSIST_FAILED");
+    if (!isCourierWorkspace) {
+      ordersNetworkConfirmed = true;
+      ordersRefreshFailed = false;
+      refreshCourierConnectionBanner();
     }
     return payload;
   }
 
-  async function bootstrapOrdersData({ keepSelection = false, preserveExisting = false } = {}) {
-    if (ordersPersistentCacheRestored && state.orders.length && Number(state.lastEventId || 0) > 0) {
-      await loadStatuses();
+  async function bootstrapOrdersData({ keepSelection = false, preserveExisting = false, context = null } = {}) {
+    if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
+    if (ordersPersistentCacheRestored && Number(state.lastEventId || 0) > 0) {
+      await loadStatuses({ context });
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       ensureActiveStatusSelection();
-      const synced = await synchronizeOrdersChanges({ notifyCreated: false });
+      const synced = await synchronizeOrdersChanges({ notifyCreated: false, context });
+      if (synced?.obsolete) return synced;
       if (!synced.resetRequired) {
         renderStages();
         renderOrders();
@@ -6411,14 +7193,19 @@
     }
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const bootstrap = await fetchOrdersChanges(0);
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       const snapshotCursor = Number(bootstrap.cursor || 0);
       state.lastEventId = snapshotCursor > 0 ? snapshotCursor : null;
 
-      await loadStatuses();
+      await loadStatuses({ context });
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       ensureActiveStatusSelection();
-      await loadAndRenderOrders(keepSelection);
+      ordersPersistentCacheRestored = false;
+      await loadAndRenderOrders(keepSelection, { context });
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
 
       const catchup = await fetchOrdersChanges(snapshotCursor);
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       if (catchup.resetRequired) {
         state.lastEventId = null;
         if (preserveExisting && state.orders.length) {
@@ -6427,16 +7214,180 @@
         continue;
       }
 
+      if (catchup.changes.length) {
+        applyOrdersChangesEvents(catchup.changes, { notifyCreated: false, advanceCursor: false, persist: false });
+      }
       if (catchup.cursor > 0) {
         state.lastEventId = Math.max(Number(state.lastEventId || 0), catchup.cursor);
       }
-      if (catchup.changes.length) {
-        applyOrdersChangesEvents(catchup.changes, { notifyCreated: false });
-      }
+      const persisted = await persistOrdersListCache();
+      if (!persisted) throw new Error("ORDERS_BOOTSTRAP_PERSIST_FAILED");
       return;
     }
 
     throw new Error("ORDERS_BOOTSTRAP_RESET_REQUIRED");
+  }
+
+  let courierSyncGeneration = 0;
+  let courierReconciliationInFlight = null;
+
+  function courierSyncContext() {
+    const outbox = courierOutboxContext();
+    const ordersCache = ordersPersistentScope();
+    return {
+      generation: courierSyncGeneration,
+      namespace: isCourierWorkspace ? outbox.namespace : ordersCache?.namespace,
+      outbox,
+      ordersCache,
+      ordersEntryKey: ordersPersistentEntryKey(),
+    };
+  }
+
+  function isCurrentCourierSyncContext(context) {
+    return Boolean(context?.namespace
+      && context.generation === courierSyncGeneration
+      && ordersPersistentScope()?.namespace === context.ordersCache?.namespace
+      && (!isCourierWorkspace || courierOutboxScope()?.namespace === context.namespace));
+  }
+
+  async function restoreCourierAuthoritativeSnapshot(context) {
+    if (!context?.ordersCache?.complete) throw new Error("COURIER_SYNC_SCOPE_INCOMPLETE");
+    const entry = await context.ordersCache.getEntry(context.ordersEntryKey, { allowStale: true });
+    if (!isCurrentCourierSyncContext(context)) return false;
+    const snapshot = entry?.data;
+    if (!snapshot || !Array.isArray(snapshot.orders)) return false;
+    state.orders = snapshot.orders.filter(shouldKeepOrderInState);
+    state.ordersPagination = {
+      hasMore: snapshot.pagination?.hasMore === true,
+      nextOffset: Number(snapshot.pagination?.nextOffset || state.orders.length),
+      loading: false,
+    };
+    state.lastEventId = Number(snapshot.syncCursor || 0) || null;
+    rebuildOrdersStageIndex();
+    return true;
+  }
+
+  function reconcileCourierAfterReconnect({ reason = "reconnect", resumePolling = true, forceOutbox = false } = {}) {
+    if (!isCourierWorkspace || navigator.onLine === false) return Promise.resolve({ ok: false, reason: "offline" });
+    const context = courierSyncContext();
+    if (!context.namespace) return Promise.resolve({ ok: false, reason: "scope-incomplete" });
+    if (courierReconciliationInFlight
+      && courierReconciliationInFlight.namespace === context.namespace
+      && courierReconciliationInFlight.generation === context.generation) {
+      return courierReconciliationInFlight.promise;
+    }
+
+    const promise = (async () => {
+      stopOrdersPolling();
+      if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+      setCourierOnlineState(navigator.onLine !== false);
+      courierOfflineState.reconciling = true;
+      courierOfflineState.refreshError = "";
+      refreshCourierConnectionBanner();
+      let visibleFallback = null;
+
+      try {
+        const flushResult = await processCourierOfflineQueue({ force: forceOutbox });
+        if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+        visibleFallback = {
+          orders: state.orders.map((order) => ({ ...order })),
+          pagination: { ...state.ordersPagination },
+          cursor: state.lastEventId,
+        };
+
+        courierOptimisticOverlaySuspended += 1;
+        try {
+          const restored = await restoreCourierAuthoritativeSnapshot(context);
+          if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+          (Array.isArray(flushResult?.confirmedOrders) ? flushResult.confirmedOrders : []).forEach((order) => {
+            handleOrderEvent(order, { skipStageRefresh: true, persistList: false });
+          });
+          await loadStatuses({ context });
+          if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+          ensureActiveStatusSelection();
+          let synced;
+          if (restored && Number(state.lastEventId || 0) > 0) {
+            synced = await synchronizeOrdersChanges({ notifyCreated: false, context });
+          } else {
+            synced = await bootstrapOrdersData({
+              keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+              preserveExisting: true,
+              context,
+            });
+          }
+          if (synced?.obsolete || !isCurrentCourierSyncContext(context)) {
+            return { ok: false, reason: "obsolete" };
+          }
+          if (synced?.resetRequired) {
+            ordersPersistentCacheRestored = false;
+            synced = await bootstrapOrdersData({
+              keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+              preserveExisting: true,
+              context,
+            });
+          }
+          if (synced?.obsolete || !isCurrentCourierSyncContext(context)) {
+            return { ok: false, reason: "obsolete" };
+          }
+          const persisted = await persistOrdersListCache();
+          if (!persisted) throw new Error("COURIER_RECONCILIATION_PERSIST_FAILED");
+        } finally {
+          courierOptimisticOverlaySuspended = Math.max(0, courierOptimisticOverlaySuspended - 1);
+        }
+
+        if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+        syncCourierShadowOrdersFromQueue();
+        applyCourierShadowOrdersToState();
+        ensureActiveStatusSelection();
+        renderStages();
+        renderOrders();
+        updateCourierActiveOrderInfo();
+        courierNetworkConfirmed = true;
+        return {
+          ok: true,
+          reason,
+          pendingCount: courierOfflineState.queue.length,
+          cursor: Number(state.lastEventId || 0),
+        };
+      } catch (err) {
+        if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+        console.error("Courier reconnect reconciliation failed:", err);
+        if (!markCourierOfflineFromError(err)) {
+          courierOfflineState.refreshError = "Ошибка синхронизации";
+        }
+        if (visibleFallback) {
+          state.orders = visibleFallback.orders;
+          state.ordersPagination = visibleFallback.pagination;
+          state.lastEventId = visibleFallback.cursor;
+          rebuildOrdersStageIndex();
+        }
+        syncCourierShadowOrdersFromQueue();
+        applyCourierShadowOrdersToState();
+        renderStages();
+        renderOrders();
+        return { ok: false, reason: String(err?.message || "RECONCILIATION_FAILED") };
+      } finally {
+        if (isCurrentCourierSyncContext(context)) {
+          courierOfflineState.reconciling = false;
+          refreshCourierConnectionBanner();
+          if (resumePolling && courierOfflineState.online && navigator.onLine !== false
+            && (!document.visibilityState || document.visibilityState === "visible")) {
+            startOrdersPolling();
+          }
+        }
+      }
+    })();
+
+    courierReconciliationInFlight = {
+      namespace: context.namespace,
+      generation: context.generation,
+      promise,
+    };
+    return promise.finally(() => {
+      if (courierReconciliationInFlight?.promise === promise) {
+        courierReconciliationInFlight = null;
+      }
+    });
   }
 
   let ordersLongPollActive = false;
@@ -6472,34 +7423,54 @@
 
   function startOrdersPolling() {
     if (ordersLongPollActive) return;
+    if (isCourierWorkspace && courierOfflineState.reconciling) return;
     if (document.visibilityState && document.visibilityState !== "visible") return;
     ordersLongPollActive = true;
     ordersLongPollToken += 1;
     const token = ordersLongPollToken;
+    const syncContext = courierSyncContext();
+    const courierContext = isCourierWorkspace ? syncContext : null;
 
     const tickChanges = async () => {
       while (ordersLongPollActive && token === ordersLongPollToken) {
         try {
           const waited = await waitOrdersChanges(state.lastEventId || 0, 20000);
           if (!ordersLongPollActive || token !== ordersLongPollToken) return;
+          if (!isCurrentCourierSyncContext(syncContext)) return;
+
+          if (courierContext && (waited.changed || waited.resetRequired)) {
+            stopOrdersPolling();
+            await reconcileCourierAfterReconnect({ reason: "long-poll" });
+            return;
+          }
 
           if (waited.resetRequired) {
-            await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
+            await bootstrapOrdersData({
+              keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+              preserveExisting: true,
+              context: syncContext,
+            });
             continue;
           }
 
-          if (Number.isFinite(waited.cursor) && waited.cursor > 0 && !state.lastEventId) {
-            state.lastEventId = waited.cursor;
-          }
-
           if (waited.changed) {
-            const synced = await synchronizeOrdersChanges({ notifyCreated: true });
+            const synced = await synchronizeOrdersChanges({ notifyCreated: true, context: syncContext });
+            if (synced?.obsolete) return;
             if (synced.resetRequired) {
-              await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
+              await bootstrapOrdersData({
+                keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+                preserveExisting: true,
+                context: syncContext,
+              });
             }
           }
         } catch (e) {
           if (isAbortError(e)) return;
+          if (courierContext && isLikelyNetworkError(e)) {
+            stopOrdersPolling();
+            void reconcileCourierAfterReconnect({ reason: "poll-recovery" });
+            return;
+          }
           console.error(e);
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
@@ -6520,13 +7491,26 @@
 
   async function resumeOrdersRealtime() {
     if (document.visibilityState && document.visibilityState !== "visible") return;
+    if (isCourierWorkspace) {
+      await reconcileCourierAfterReconnect({ reason: "visible" });
+      void prewarmCourierOrderDetails();
+      return;
+    }
+    const context = courierSyncContext();
     try {
       if (!state.lastEventId) {
-        await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+        await bootstrapOrdersData({
+          keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+          context,
+        });
       } else {
-        const synced = await synchronizeOrdersChanges({ notifyCreated: false });
+        const synced = await synchronizeOrdersChanges({ notifyCreated: false, context });
         if (synced?.resetRequired) {
-          await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
+          await bootstrapOrdersData({
+            keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+            preserveExisting: true,
+            context,
+          });
         }
       }
     } catch (err) {
@@ -6546,9 +7530,6 @@
       .finally(() => {
         if (isCourierWorkspace) {
           setCourierOnlineState(navigator.onLine !== false);
-          if (navigator.onLine !== false) {
-            processCourierOfflineQueue().catch(console.error);
-          }
         }
         void resumeOrdersRealtime();
       });
@@ -6706,11 +7687,19 @@
       const nextStatusId = Number(rowStageBtn.getAttribute("data-next-status-id") || 0);
       if (!Number.isFinite(orderId) || orderId <= 0) return;
       if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
-      setStatusControlsDisabled(true);
-      try {
-        await updateOrderStatus(orderId, nextStatusId);
-      } finally {
-        setStatusControlsDisabled(false);
+      if (isCourierWorkspace) {
+        setStatusControlsDisabled(true);
+        try {
+          await updateOrderStatus(orderId, nextStatusId);
+        } finally {
+          setStatusControlsDisabled(false);
+        }
+      } else {
+        try {
+          await updateOrderStatus(orderId, nextStatusId);
+        } catch (err) {
+          console.error(err);
+        }
       }
       return;
     }
@@ -6730,7 +7719,7 @@
     const courierPickupBtn = e.target.closest('[data-action="courier-pickup"]');
     if (courierPickupBtn) {
       e.preventDefault();
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       if (courierPickupBtn.disabled) return;
       const orderId = Number(courierPickupBtn.getAttribute("data-order-id") || 0);
       const targetStatusId = Number(courierPickupBtn.getAttribute("data-target-status-id") || 0);
@@ -6746,7 +7735,7 @@
 
     const courierCallBtn = e.target.closest('[data-action="courier-call"]');
     if (courierCallBtn) {
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       return;
     }
 
@@ -6847,6 +7836,7 @@
       return;
     }
 
+    if (e.target.closest("button, a, input, label, select, textarea, [data-action]")) return;
     const row = e.target.closest(".js-order");
     if (!row) return;
     const orderId = Number(row.getAttribute("data-order-id")) || null;
@@ -7690,9 +8680,19 @@
   // -----------------------------
   async function loadStoreTimezone() {
     try {
-      const response = await apiJson("/api/admin/tenant/current-time");
-      if (response?.data?.storeTimezone != null) {
-        state.storeTimezone = String(response.data.storeTimezone || "+0");
+      const load = async () => {
+        const response = await apiJson("/api/admin/tenant/current-time");
+        return { storeTimezone: String(response?.data?.storeTimezone || "+0"), storeTimestamp: Number(response?.data?.storeTimestamp || 0), fetchedAt: Date.now() };
+      };
+      const data = window.AdminReferenceCache
+        ? await window.AdminReferenceCache.getOrLoadReference("store-time", {
+            load,
+            validate: (value) => Boolean(value && Number(value.storeTimestamp) > 0 && Number(value.fetchedAt) > 0),
+            onUpdate: (value) => { state.storeTimezone = String(value.storeTimezone || "+0"); },
+          })
+        : await load();
+      if (data?.storeTimezone != null) {
+        state.storeTimezone = String(data.storeTimezone || "+0");
       }
     } catch (err) {
       console.error("Failed to load store timezone:", err);
@@ -7737,38 +8737,50 @@
   async function init() {
     try {
       const cachedBootstrap = readOrdersBootstrapCache();
-      hydrateCourierOfflineStateFromStorage();
-
-      await loadStoreTimezone();
-      ensureDateStateInitialized();
-      const persistentOrders = await readPersistentOrdersCache();
-      if (persistentOrders?.orders?.length) {
-        state.orders = persistentOrders.orders.filter(shouldKeepOrderInState);
-        state.ordersPagination = {
-          hasMore: persistentOrders.pagination?.hasMore === true,
-          nextOffset: Number(persistentOrders.pagination?.nextOffset || state.orders.length),
-          loading: false,
-        };
-        state.lastEventId = Number(persistentOrders.syncCursor || 0) || null;
-        ordersPersistentCacheRestored = true;
-      }
+      await hydrateCourierOfflineStateFromStorage();
       hydrateOrdersFromCache(cachedBootstrap);
       resetDateStateToToday();
-      if (persistentOrders?.orders?.length) {
-        state.orders = persistentOrders.orders.filter(shouldKeepOrderInState);
-        ordersPersistentCacheRestored = true;
-      }
+      ensureDateStateInitialized();
+      const persistentOrders = await readPersistentOrdersCache();
+      restorePersistentOrdersSnapshot(persistentOrders);
+      applyCourierShadowOrdersToState();
+      ordersInitialRestoreComplete = true;
       renderCalendar();
       updateDateLabel();
-      if (state.orders.length) {
-        rebuildOrdersStageIndex();
-        renderStages();
-        renderOrders();
-      }
+      renderStages();
+      renderOrders();
+      refreshCourierConnectionBanner();
       bindOrderTabsWheelScroll();
 
       try {
-        await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+        const restoredQueryKey = currentOrdersQueryKey();
+        courierOfflineState.refreshError = "";
+        await loadStoreTimezone();
+        resetDateStateToToday();
+        ensureDateStateInitialized();
+        if (!isCourierWorkspace && ordersCachedSnapshotVisible
+          && restoredQueryKey !== currentOrdersQueryKey()) {
+          ordersPersistentCacheRestored = false;
+          ordersCachedSnapshotVisible = false;
+          state.orders = [];
+          state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
+          state.lastEventId = null;
+          rebuildOrdersStageIndex();
+          renderStages();
+          renderOrders();
+          refreshCourierConnectionBanner();
+        }
+        renderCalendar();
+        updateDateLabel();
+        if (isCourierWorkspace) {
+          await reconcileCourierAfterReconnect({ reason: "startup", resumePolling: false });
+        } else {
+          await bootstrapOrdersData({
+            keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+            context: courierSyncContext(),
+          });
+        }
+        if (isCourierWorkspace) void prewarmCourierOrderDetails();
         if (tabsState.activeKey) {
           setActiveOrderTab(tabsState.activeKey);
         } else {
@@ -7776,6 +8788,14 @@
         }
       } catch (refreshErr) {
         console.error(refreshErr);
+        if (!isCourierWorkspace) {
+          ordersRefreshFailed = true;
+          refreshCourierConnectionBanner();
+        }
+        if (!markCourierOfflineFromError(refreshErr) && isCourierWorkspace) {
+          courierOfflineState.refreshError = "Не удалось обновить";
+          refreshCourierConnectionBanner();
+        }
         ensureActiveStatusSelection();
         renderStages();
         renderOrders();
@@ -7820,10 +8840,7 @@
         });
       }
 
-      if (isCourierWorkspace) {
-        refreshCourierConnectionBanner();
-        processCourierOfflineQueue().catch(console.error);
-      }
+      if (isCourierWorkspace) refreshCourierConnectionBanner();
 
       if (!isCourierWorkspace) {
         document.addEventListener("click", unlockAudioOnce, { once: true });
@@ -7839,13 +8856,19 @@
 
   init();
 
-  if (isCourierWorkspace && courierConnectionBannerRetryBtn) {
-    courierConnectionBannerRetryBtn.addEventListener("click", () => {
-      courierOfflineState.syncError = "";
-      setCourierOnlineState(navigator.onLine !== false);
-      processCourierOfflineQueue({ force: true }).catch(console.error);
+  ordersConnectionBannerRetryBtns.forEach((button) => {
+    button.addEventListener("click", () => {
+      if (isCourierWorkspace) {
+        courierOfflineState.syncError = "";
+        setCourierOnlineState(navigator.onLine !== false);
+        reconcileCourierAfterReconnect({ reason: "manual-retry", forceOutbox: true }).catch(console.error);
+        return;
+      }
+      ordersRefreshFailed = false;
+      refreshCourierConnectionBanner();
+      void resumeOrdersRealtime();
     });
-  }
+  });
 
   if (isCourierWorkspace) {
     window.addEventListener("offline", () => {
@@ -7853,22 +8876,37 @@
     });
 
     window.addEventListener("online", () => {
-      const hasPending = courierOfflineState.queue.length > 0;
-      setCourierOnlineState(true, { showRestored: !hasPending });
-      processCourierOfflineQueue().catch(console.error);
+      courierOfflineState.refreshError = "";
+      setCourierOnlineState(true);
+      reconcileCourierAfterReconnect({ reason: "online" }).catch(console.error);
     });
 
+  } else {
+    window.addEventListener("offline", () => {
+      stopOrdersPolling();
+      refreshCourierConnectionBanner();
+    });
+    window.addEventListener("online", () => {
+      ordersRefreshFailed = false;
+      refreshCourierConnectionBanner();
+      void resumeOrdersRealtime();
+    });
   }
 
   window.addEventListener("beforeunload", () => {
-    try {
-      persistCourierOfflineState();
-    } catch {}
     stopOrdersPolling();
   });
   // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен:', event.detail.store);
+    stopOrdersPolling();
+    courierSyncGeneration += 1;
+    orderDetailsDirty.clear();
+    orderDetailsMutationGeneration.clear();
+    courierDetailPrewarmInFlight.clear();
+    authoritativeFullOrderRuntimeKeys.clear();
+    courierPassportCacheStates.clear();
+    orderStatusSyncStates.clear();
     state.clientsCache.clear();
     state.statuses = [];
     state.orders = [];
@@ -7879,39 +8917,75 @@
     tabsState.tabs = [];
     tabsState.activeKey = null;
     state.activeOrderId = null;
+    ordersPersistentCacheRestored = false;
+    ordersCachedSnapshotVisible = false;
+    ordersNetworkConfirmed = false;
+    ordersRefreshFailed = false;
     resetCourierOfflineRuntimeState();
-    hydrateCourierOfflineStateFromStorage();
     setOrdersCheckoutLayoutEnabled(false);
-    renderStages();
-    renderOrders();
-    renderOrderTabs();
-    setInfo(null);
     closeSheet();
-    loadStoreTimezone()
+    let restoredStoreQueryKey = "";
+    hydrateCourierOfflineStateFromStorage()
+      .then(async () => {
+        const cachedBootstrap = readOrdersBootstrapCache();
+        hydrateOrdersFromCache(cachedBootstrap);
+        resetDateStateToToday();
+        ensureDateStateInitialized();
+        const persistentOrders = await readPersistentOrdersCache();
+        restorePersistentOrdersSnapshot(persistentOrders);
+        restoredStoreQueryKey = currentOrdersQueryKey();
+        applyCourierShadowOrdersToState();
+        ordersInitialRestoreComplete = true;
+        renderCalendar();
+        updateDateLabel();
+        renderStages();
+        renderOrders();
+        refreshCourierConnectionBanner();
+        renderOrderTabs();
+        setInfo(null);
+        return loadStoreTimezone();
+      })
       .then(() => {
         resetDateStateToToday();
         ensureDateStateInitialized();
+        if (!isCourierWorkspace && ordersCachedSnapshotVisible
+          && restoredStoreQueryKey !== currentOrdersQueryKey()) {
+          ordersPersistentCacheRestored = false;
+          ordersCachedSnapshotVisible = false;
+          state.orders = [];
+          state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
+          state.lastEventId = null;
+          rebuildOrdersStageIndex();
+          renderStages();
+          renderOrders();
+          refreshCourierConnectionBanner();
+        }
         renderCalendar();
         updateDateLabel();
-        return bootstrapOrdersData({ keepSelection: false });
+        if (isCourierWorkspace) {
+          return reconcileCourierAfterReconnect({ reason: "store-switch" });
+        }
+        return bootstrapOrdersData({ keepSelection: false, context: courierSyncContext() });
       })
       .then(() => {
         renderOrderTabs();
+        if (isCourierWorkspace) void prewarmCourierOrderDetails();
         if (isCourierWorkspace && sharedOrderPayment?.warmCache && courierOfflineState.online) {
           return sharedOrderPayment.warmCache(apiJson, state.orders[0] || null).catch(() => null);
         }
         return null;
       })
       .then(() => {
-        if (isCourierWorkspace) {
-          refreshCourierConnectionBanner();
-          return processCourierOfflineQueue().catch(console.error);
-        }
-        return null;
+        if (!isCourierWorkspace) startOrdersPolling();
       })
-      .catch(console.error);
-    stopOrdersPolling();
-    startOrdersPolling();
+      .catch((err) => {
+        console.error(err);
+        if (!isCourierWorkspace) {
+          ordersRefreshFailed = true;
+          refreshCourierConnectionBanner();
+          renderOrders();
+        }
+      });
   });
 })();
 

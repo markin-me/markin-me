@@ -6,6 +6,11 @@
         <span id="cashSectionTitle">Журнал заказов</span>
       </div>
       <div class="toolbar-right">
+        <div id="cashConnectionBannerDesktop" class="courier-connection-banner orders-connection-banner-desktop hidden" data-cash-connection-banner aria-live="polite" role="status">
+          <span class="courier-connection-banner__indicator" aria-hidden="true"></span>
+          <span class="courier-connection-banner__text"></span>
+          <button type="button" class="courier-connection-banner__retry hidden" data-action="cash-connection-retry" aria-label="Повторить обновление" title="Повторить"><span aria-hidden="true">↻</span></button>
+        </div>
         <div class="new-order-right-select-wrap cash-toolbar-filter" id="cashOrderFilterWrap">
           <button class="new-order-right-select-trigger cash-toolbar-filter-trigger" type="button" id="cashOrderFilterBtn" aria-haspopup="listbox" aria-expanded="false">
             <span class="cash-toolbar-filter-main">

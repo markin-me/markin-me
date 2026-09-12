@@ -53,6 +53,12 @@ function isAuthenticated() {
  * Выход из системы
  */
 function logout() {
+  if (window.AdminReferenceCache && typeof window.AdminReferenceCache.resetRuntime === 'function') {
+    window.AdminReferenceCache.resetRuntime();
+  }
+  if (window.AdminPersistentCache && typeof window.AdminPersistentCache.resetRuntimeScope === 'function') {
+    window.AdminPersistentCache.resetRuntimeScope();
+  }
   localStorage.removeItem('authToken');
   localStorage.removeItem('user');
   localStorage.removeItem('tenant');
