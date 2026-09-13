@@ -74,7 +74,14 @@
   const CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX = 14;
   const CHAT_CLIENTS_PAGE_SIZE = 10;
   const CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX = 140;
-  const CHAT_CLIENTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  const CHAT_SUMMARIES_CACHE_DOMAIN = "chat:summaries";
+  const CHAT_THREADS_CACHE_DOMAIN = "chat:threads";
+  const CHAT_PERSISTENT_CACHE_VERSION = 1;
+  const CHAT_SUMMARIES_CACHE_KEY = "latest";
+  const CHAT_SUMMARIES_CACHE_RETENTION_MS = 24 * 60 * 60 * 1000;
+  const CHAT_THREADS_CACHE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+  const CHAT_THREADS_CACHE_MAX_ENTRIES = 40;
+  const CHAT_PERSISTENT_CACHE_WRITE_DEBOUNCE_MS = 350;
   const CHAT_REMOTE_CLIENTS_PAGE_CACHE_TTL_MS = 1200;
   const CLIENT_DETAILS_SHARED_CACHE_TTL_MS = 10 * 60 * 1000;
   const SHARED_ORDER_DETAILS_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -225,6 +232,7 @@
       search: $("#chatClientsSearch"),
       list: $("#chatClientsList"),
       empty: $("#chatClientsEmpty"),
+      connectionStatus: $("#chatConnectionStatus"),
       mobileCloseBtn: $("#chatMobileClientsCloseBtn"),
     },
     center: {
@@ -598,9 +606,20 @@
     activeThreadEventSource: null,
     activeThreadEventSourceClientId: "",
     summariesEventSource: null,
+    connectionState: "connecting",
+    connectionWasOnline: false,
     summariesSsePullTimer: 0,
     summariesSsePullPending: false,
     summariesSsePullInFlight: false,
+    persistentCacheNamespace: "",
+    persistentSummariesScope: null,
+    persistentThreadsScope: null,
+    bootstrapGeneration: 0,
+    remoteSummariesAppliedGeneration: 0,
+    threadSelectionGeneration: 0,
+    remoteThreadAppliedSelectionByClient: {},
+    persistentSummariesWriteTimer: 0,
+    persistentThreadWriteTimers: {},
     isRealtimePaused: false,
     isBootstrapLoading: true,
     chatWidgetEnabled: true,
@@ -623,12 +642,8 @@
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
   state.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.store?.ui?.threadPinnedBottomByClient);
   state.clientsPager = createDefaultClientsPager();
-  if (dom.center.startupSplash && document.body && dom.center.startupSplash.parentElement !== document.body) {
-    document.body.appendChild(dom.center.startupSplash);
-  }
-  if (document.body && dom.center.startupSplash && !dom.center.startupSplash.classList.contains("hidden")) {
-    document.body.classList.add("chat-startup-splash-active");
-  }
+  if (document.body) document.body.classList.remove("chat-startup-splash-active");
+  if (dom.center.startupSplash) dom.center.startupSplash.classList.add("hidden");
 
   function refreshDesktopHeaderDomRefs() {
     dom.center.headerOrder = $("#chatHeaderOrder");
@@ -3508,33 +3523,184 @@
     return msg.includes("aborted");
   }
 
+  function getChatPersistentCacheScopes() {
+    const cacheApi = window.AdminPersistentCache;
+    if (!cacheApi || typeof cacheApi.createScope !== "function") return null;
+    const summaries = cacheApi.createScope({
+      domain: CHAT_SUMMARIES_CACHE_DOMAIN,
+      version: CHAT_PERSISTENT_CACHE_VERSION,
+    });
+    const threads = cacheApi.createScope({
+      domain: CHAT_THREADS_CACHE_DOMAIN,
+      version: CHAT_PERSISTENT_CACHE_VERSION,
+    });
+    if (!summaries.complete || !threads.complete) return null;
+    if (String(summaries.userId) !== String(threads.userId)
+      || String(summaries.tenantId) !== String(threads.tenantId)
+      || String(summaries.storeId) !== String(threads.storeId)) return null;
+    return { summaries, threads, identityKey: `${summaries.userId}:${summaries.tenantId}:${summaries.storeId}` };
+  }
+
+  function resetChatPersistentCacheContext() {
+    const scopes = getChatPersistentCacheScopes();
+    const nextNamespace = scopes ? scopes.identityKey : "";
+    const changed = nextNamespace !== state.persistentCacheNamespace;
+    if (changed) {
+      if (state.persistentSummariesWriteTimer) window.clearTimeout(state.persistentSummariesWriteTimer);
+      state.persistentSummariesWriteTimer = 0;
+      Object.values(state.persistentThreadWriteTimers || {}).forEach((timerId) => window.clearTimeout(timerId));
+      state.persistentThreadWriteTimers = {};
+      state.bootstrapGeneration += 1;
+      state.threadSelectionGeneration += 1;
+      state.remoteSummariesAppliedGeneration = 0;
+      state.remoteThreadAppliedSelectionByClient = {};
+      state.persistentCacheNamespace = nextNamespace;
+      state.persistentSummariesScope = scopes?.summaries || null;
+      state.persistentThreadsScope = scopes?.threads || null;
+      state.clientsLoadInFlight = null;
+      resetClientsPager();
+    }
+    return { changed, generation: state.bootstrapGeneration, scopes };
+  }
+
+  function cloneChatCacheValue(value) {
+    try {
+      return JSON.parse(JSON.stringify(value, (key, item) => {
+        if (typeof File !== "undefined" && item instanceof File) return undefined;
+        if (typeof Blob !== "undefined" && item instanceof Blob) return undefined;
+        if (typeof item === "function") return undefined;
+        if (typeof item === "string" && (/^data:/i.test(item) || /^blob:/i.test(item))) return undefined;
+        return item;
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  function buildChatSummariesCacheSnapshot() {
+    const clients = sanitizeCachedClientRows(state.clients || []);
+    const allowedIds = new Set(clients.map((row) => normalizeClientIdKey(row?.id)).filter(Boolean));
+    const summaries = {};
+    Object.keys(state.remoteSummariesByClient || {}).forEach((key) => {
+      const normalizedKey = normalizeClientIdKey(key);
+      if (!normalizedKey || !allowedIds.has(normalizedKey)) return;
+      const value = cloneChatCacheValue(state.remoteSummariesByClient[key]);
+      if (value && typeof value === "object") summaries[normalizedKey] = value;
+    });
+    return {
+      clients,
+      summaries,
+      summariesUpdatedAt: String(state.summariesUpdatedAt || ""),
+      summariesRevision: Number(state.summariesRevision || 0),
+      cachedAt: Date.now(),
+    };
+  }
+
+  function scheduleChatSummariesCacheWrite() {
+    if (!state.persistentSummariesScope?.complete) return;
+    if (state.persistentSummariesWriteTimer) window.clearTimeout(state.persistentSummariesWriteTimer);
+    const scope = state.persistentSummariesScope;
+    const namespace = state.persistentCacheNamespace;
+    state.persistentSummariesWriteTimer = window.setTimeout(() => {
+      state.persistentSummariesWriteTimer = 0;
+      if (scope !== state.persistentSummariesScope || namespace !== state.persistentCacheNamespace) return;
+      const snapshot = buildChatSummariesCacheSnapshot();
+      scope.set(CHAT_SUMMARIES_CACHE_KEY, snapshot, { ttlMs: CHAT_SUMMARIES_CACHE_RETENTION_MS })
+        .catch((error) => console.warn("Chat summaries cache write failed", error));
+    }, CHAT_PERSISTENT_CACHE_WRITE_DEBOUNCE_MS);
+  }
+
+  function buildChatThreadCacheSnapshot(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    const source = Array.isArray(state.store?.threads?.[key]) ? state.store.threads[key] : [];
+    const messages = cloneChatCacheValue(source.slice(-CHAT_THREAD_PAGE_SIZE));
+    if (!Array.isArray(messages)) return null;
+    return {
+      clientId: Number(key),
+      messages,
+      updatedAt: String(state.remoteThreadUpdatedAt[key] || ""),
+      cachedAt: Date.now(),
+    };
+  }
+
+  function scheduleChatThreadCacheWrite(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || !state.persistentThreadsScope?.complete) return;
+    const previous = state.persistentThreadWriteTimers[key];
+    if (previous) window.clearTimeout(previous);
+    const scope = state.persistentThreadsScope;
+    const namespace = state.persistentCacheNamespace;
+    state.persistentThreadWriteTimers[key] = window.setTimeout(() => {
+      delete state.persistentThreadWriteTimers[key];
+      if (scope !== state.persistentThreadsScope || namespace !== state.persistentCacheNamespace) return;
+      const snapshot = buildChatThreadCacheSnapshot(key);
+      if (!snapshot) return;
+      scope.set(`client:${key}`, snapshot, { ttlMs: CHAT_THREADS_CACHE_RETENTION_MS })
+        .then(() => scope.prune(CHAT_THREADS_CACHE_MAX_ENTRIES))
+        .catch((error) => console.warn("Chat thread cache write failed", error));
+    }, CHAT_PERSISTENT_CACHE_WRITE_DEBOUNCE_MS);
+  }
+
+  async function hydrateChatSummariesFromPersistentCache(generation) {
+    const scope = state.persistentSummariesScope;
+    const namespace = state.persistentCacheNamespace;
+    if (!scope?.complete) return false;
+    try {
+      const entry = await scope.getEntry(CHAT_SUMMARIES_CACHE_KEY, { allowStale: true });
+      if (!entry?.data || generation !== state.bootstrapGeneration || namespace !== state.persistentCacheNamespace) return false;
+      if (state.remoteSummariesAppliedGeneration === generation) return false;
+      const snapshot = entry.data;
+      const clients = sanitizeCachedClientRows(snapshot.clients || []);
+      if (!clients.length) return false;
+      state.clients = clients;
+      state.remoteSummariesByClient = cloneChatCacheValue(snapshot.summaries || {}) || {};
+      state.summariesUpdatedAt = String(snapshot.summariesUpdatedAt || "");
+      state.summariesRevision = Number(snapshot.summariesRevision || 0);
+      applyClientFilter();
+      restoreClientsListScrollPosition({ defer: true });
+      return true;
+    } catch (error) {
+      console.warn("Chat summaries cache read failed", error);
+      return false;
+    }
+  }
+
+  async function hydrateChatThreadFromPersistentCache(clientId, selectionGeneration) {
+    const key = normalizeClientIdKey(clientId);
+    const scope = state.persistentThreadsScope;
+    const namespace = state.persistentCacheNamespace;
+    if (!key || !scope?.complete) return false;
+    try {
+      const entry = await scope.getEntry(`client:${key}`, { allowStale: true });
+      if (!entry?.data || namespace !== state.persistentCacheNamespace) return false;
+      if (selectionGeneration !== state.threadSelectionGeneration || Number(state.activeClientId) !== Number(key)) return false;
+      if (state.remoteThreadAppliedSelectionByClient[key] === selectionGeneration) return false;
+      const cachedMessages = sanitizeThread(Array.isArray(entry.data.messages) ? entry.data.messages : []);
+      if (!cachedMessages.length) return false;
+      const existing = Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
+      state.store.threads[key] = sanitizeThread(cachedMessages.concat(existing));
+      if (entry.data.updatedAt) state.remoteThreadUpdatedAt[key] = String(entry.data.updatedAt);
+      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+      if (!restoreThreadScrollPosition(key)) scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+      saveThreadScrollPosition(key);
+      applyClientFilter();
+      return true;
+    } catch (error) {
+      console.warn("Chat thread cache read failed", error);
+      return false;
+    }
+  }
+
   function setChatBootstrapLoading(active) {
     const nextActive = active === true;
     state.isBootstrapLoading = nextActive;
-    if (dom.center.startupSplash) {
-      if (chatStartupSplashHideTimer) {
-        window.clearTimeout(chatStartupSplashHideTimer);
-        chatStartupSplashHideTimer = 0;
-      }
-      if (nextActive) {
-        if (document.body) document.body.classList.add("chat-startup-splash-active");
-        dom.center.startupSplash.classList.remove("hidden", "is-done");
-      } else {
-        dom.center.startupSplash.classList.add("is-done");
-        chatStartupSplashHideTimer = window.setTimeout(() => {
-          chatStartupSplashHideTimer = 0;
-          if (!dom.center.startupSplash) return;
-          dom.center.startupSplash.classList.add("hidden");
-          if (document.body) document.body.classList.remove("chat-startup-splash-active");
-        }, 320);
-      }
-    }
-    if (dom.center.bootstrapLoader) {
-      dom.center.bootstrapLoader.classList.toggle("hidden", !nextActive);
-    }
-    if (dom.center.messagesWrap) {
-      dom.center.messagesWrap.classList.toggle("is-bootstrap-loading", nextActive);
-    }
+    if (chatStartupSplashHideTimer) window.clearTimeout(chatStartupSplashHideTimer);
+    chatStartupSplashHideTimer = 0;
+    if (document.body) document.body.classList.remove("chat-startup-splash-active");
+    if (dom.center.startupSplash) dom.center.startupSplash.classList.add("hidden");
+    if (dom.center.bootstrapLoader) dom.center.bootstrapLoader.classList.add("hidden");
+    if (dom.center.messagesWrap) dom.center.messagesWrap.classList.remove("is-bootstrap-loading");
   }
 
   function setHeaderLoading(active) {
@@ -4329,21 +4495,32 @@
     if (!runtimeState.enabled) return false;
 
     if (runtimeState.changed || options.reload === true) {
+      const cacheContext = resetChatPersistentCacheContext();
+      const generation = cacheContext.generation;
+      if (cacheContext.changed) {
+        abortAllActiveApiRequests();
+        stopActiveThreadSseConnection();
+        stopSummariesSseConnection();
+        state.clients = [];
+        state.filteredClients = [];
+        state.store.threads = {};
+        state.remoteSummariesByClient = {};
+        state.remoteSummaryFingerprints = {};
+        state.remoteThreadUpdatedAt = {};
+        state.activeClientId = null;
+        state.activeClient = null;
+        renderClientsList();
+        renderChatHeader();
+        renderMessages();
+        startRemoteSyncLoops();
+      }
       state.summariesUpdatedAt = "";
       state.summariesRevision = 0;
-      const cachedClientsCount = Array.isArray(state.store?.clientsCache) ? state.store.clientsCache.length : 0;
-      const localThreadsCount = state.store && state.store.threads && typeof state.store.threads === "object"
-        ? Object.keys(state.store.threads).length
-        : 0;
-      const hasInstantBootstrapData = cachedClientsCount > 0 || localThreadsCount > 0;
-      setChatBootstrapLoading(!hasInstantBootstrapData);
-      loadClients()
+      setChatBootstrapLoading(false);
+      hydrateChatSummariesFromPersistentCache(generation).catch(console.warn);
+      loadClients({ generation })
         .catch(console.error)
-        .finally(() => {
-          if (isChatWidgetEnabledRuntime()) {
-            setChatBootstrapLoading(false);
-          }
-        });
+        .finally(() => setChatBootstrapLoading(false));
     }
     return true;
   }
@@ -4462,6 +4639,74 @@
       source.onmessage = null;
       if (typeof source.close === "function") source.close();
     } catch {}
+  }
+
+  function setChatConnectionState(nextState) {
+    const allowedStates = new Set(["connecting", "online", "reconnecting", "offline"]);
+    const normalizedState = allowedStates.has(nextState) ? nextState : "connecting";
+    if (normalizedState === "online") state.connectionWasOnline = true;
+    const changed = state.connectionState !== normalizedState;
+    state.connectionState = normalizedState;
+
+    const statusNode = dom.left.connectionStatus;
+    if (!statusNode || (!changed && statusNode.dataset.connectionState === normalizedState)) return normalizedState;
+    const statusView = {
+      connecting: { text: "Синхронизация…", className: "is-syncing" },
+      online: { text: "Онлайн", className: "is-online" },
+      reconnecting: { text: "Переподключение…", className: "is-reconnecting" },
+      offline: { text: "Офлайн", className: "is-offline" },
+    }[normalizedState];
+    statusNode.dataset.connectionState = normalizedState;
+    statusNode.classList.remove("is-syncing", "is-online", "is-reconnecting", "is-offline");
+    statusNode.classList.add(statusView.className);
+    const textNode = statusNode.querySelector(".chat-connection-status-text");
+    if (textNode && textNode.textContent !== statusView.text) textNode.textContent = statusView.text;
+    statusNode.setAttribute("aria-label", `Статус соединения чата: ${statusView.text}`);
+    return normalizedState;
+  }
+
+  function syncChatConnectionStateFromNetwork() {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      return setChatConnectionState("offline");
+    }
+    const source = state.summariesEventSource;
+    if (
+      source
+      && typeof EventSource !== "undefined"
+      && source.readyState === EventSource.OPEN
+    ) {
+      return setChatConnectionState("online");
+    }
+    return setChatConnectionState(state.connectionWasOnline ? "reconnecting" : "connecting");
+  }
+
+  function initChatConnectionStatus() {
+    if (typeof window === "undefined") return;
+    syncChatConnectionStateFromNetwork();
+    window.addEventListener("offline", () => {
+      setChatConnectionState("offline");
+    });
+    window.addEventListener("online", () => {
+      syncRemoteSummariesSnapshot({ forceThreads: true }).catch(console.error);
+      if (state.activeClientId) {
+        pullThreadFromRemoteIfChanged(state.activeClientId, {
+          force: true,
+          skipReadMark: true,
+          ignoreIncomingBadge: true,
+        }).catch(console.error);
+      }
+      const source = state.summariesEventSource;
+      if (
+        source
+        && typeof EventSource !== "undefined"
+        && source.readyState === EventSource.CLOSED
+      ) {
+        stopSummariesSseConnection();
+        ensureSummariesSseConnection();
+        return;
+      }
+      syncChatConnectionStateFromNetwork();
+    });
   }
 
   function parseChatSsePayload(event) {
@@ -4636,6 +4881,8 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     state.localThreadMutations[key] = getThreadMutationVersion(key) + 1;
+    scheduleChatThreadCacheWrite(key);
+    scheduleChatSummariesCacheWrite();
   }
 
   function compareIsoDates(a, b) {
@@ -5332,6 +5579,10 @@
     }
 
     state.remoteThreadUpdatedAt[key] = remoteUpdatedAt;
+    if (Number(state.activeClientId) === Number(key)) {
+      state.remoteThreadAppliedSelectionByClient[key] = state.threadSelectionGeneration;
+    }
+    scheduleChatThreadCacheWrite(key);
     if (appendOlder || !preserveHistory) {
       updateThreadHistoryFromSnapshot(key, snapshot);
     }
@@ -6057,6 +6308,7 @@
     const forceThreads = options.forceThreads === true;
     const normalizedRows = Array.isArray(rows) ? rows : [];
     if (!normalizedRows.length) return false;
+    state.remoteSummariesAppliedGeneration = state.bootstrapGeneration;
     const previousUnreadByClient = {};
     const summaryAlerts = [];
     const hadSummaryBaseline = messageAlertSummariesPrimed;
@@ -6072,6 +6324,7 @@
       }
       state.remoteSummariesByClient[key] = row && typeof row === "object" ? { ...row } : {};
     });
+    scheduleChatSummariesCacheWrite();
     normalizedRows.forEach((row) => {
       const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
       if (!key) return;
@@ -6605,10 +6858,17 @@
     if (!CHAT_SSE_ENABLED || state.isRealtimePaused) return false;
     if (state.summariesEventSource) return true;
 
+    syncChatConnectionStateFromNetwork();
+
     const source = new EventSource(
       buildChatSseUrl(`${CHAT_TEMP_API_BASE}/summaries/stream`, "out")
     );
     state.summariesEventSource = source;
+
+    source.onopen = () => {
+      if (state.summariesEventSource !== source) return;
+      setChatConnectionState("online");
+    };
 
     source.addEventListener("summaries", (event) => {
       const payload = parseChatSsePayload(event);
@@ -6663,6 +6923,7 @@
 
     source.onerror = () => {
       if (state.summariesEventSource !== source) return;
+      syncChatConnectionStateFromNetwork();
     };
 
     return true;
@@ -6882,8 +7143,6 @@
         threads: {},
         hiddenMessageIds: {},
         lastOpenClientId: null,
-        clientsCache: [],
-        clientsCacheUpdatedAt: 0,
         ui: {
           clientsListScrollTop: 0,
           threadScrollTopByClient: {},
@@ -6916,10 +7175,6 @@
         threads: {},
         hiddenMessageIds: {},
         lastOpenClientId: Number(parsed?.lastOpenClientId || 0) || null,
-        clientsCache: Array.isArray(parsed?.clientsCache) ? parsed.clientsCache : [],
-        clientsCacheUpdatedAt: Number.isFinite(Number(parsed?.clientsCacheUpdatedAt))
-          ? Math.max(0, Math.trunc(Number(parsed.clientsCacheUpdatedAt)))
-          : 0,
         ui: {
           clientsListScrollTop: toStoredScrollTop(parsedUi?.clientsListScrollTop),
           threadScrollTopByClient: sanitizeStoredThreadScrollTopByClient(resolvedThreadScrollMap),
@@ -6934,6 +7189,8 @@
       if (parsed && typeof parsed.hiddenMessageIds === "object" && Object.keys(parsed.hiddenMessageIds).length) {
         changed = true;
       }
+      if (parsed && (Object.prototype.hasOwnProperty.call(parsed, "clientsCache")
+        || Object.prototype.hasOwnProperty.call(parsed, "clientsCacheUpdatedAt"))) changed = true;
       TEST_CHAT_IDS_TO_PRUNE.forEach((id) => {
         if (Object.prototype.hasOwnProperty.call(nextStore.ui.threadScrollTopByClient, id)) {
           delete nextStore.ui.threadScrollTopByClient[id];
@@ -6953,8 +7210,6 @@
         threads: {},
         hiddenMessageIds: {},
         lastOpenClientId: null,
-        clientsCache: [],
-        clientsCacheUpdatedAt: 0,
         ui: {
           clientsListScrollTop: 0,
           threadScrollTopByClient: {},
@@ -7133,6 +7388,8 @@
         threads: {},
         hiddenMessageIds: {},
       };
+      delete lightweightStore.clientsCache;
+      delete lightweightStore.clientsCacheUpdatedAt;
       localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(lightweightStore));
     } catch {}
   }
@@ -10122,6 +10379,31 @@
     emitUnreadChangedSoon();
   }
 
+  function resolveClientAvatar(client) {
+    const source = client && typeof client === "object" ? client : {};
+    const name = String(source.name || "").replace(/\s+/g, " ").trim();
+    const isGeneratedVirtualName = source._isVirtualChatClient === true
+      && /^\u043a\u043b\u0438\u0435\u043d\u0442\s*#?\d+$/i.test(name);
+    const words = !name || isGeneratedVirtualName ? [] : name.split(" ").filter(Boolean);
+    let initials = "";
+    if (words.length === 1) {
+      initials = Array.from(words[0])[0] || "";
+    } else if (words.length > 1) {
+      initials = `${Array.from(words[0])[0] || ""}${Array.from(words[words.length - 1])[0] || ""}`;
+    }
+    return {
+      photoUrl: String(source.photo || "").trim(),
+      initials: initials.toLocaleUpperCase("ru-RU"),
+    };
+  }
+
+  function renderClientAvatarFallback(avatar) {
+    if (!avatar || typeof avatar !== "object") return '<i class="fas fa-user" aria-hidden="true"></i>';
+    return avatar.initials
+      ? `<span class="chat-client-avatar-initials" aria-hidden="true">${escapeHtml(avatar.initials)}</span>`
+      : '<i class="fas fa-user" aria-hidden="true"></i>';
+  }
+
   function buildChatClientRow(client) {
     const active = Number(state.activeClientId) === Number(client.id);
     const unread = getUnreadCount(client.id);
@@ -10139,12 +10421,18 @@
           : "";
     const unreadText = unread > 99 ? "99+" : String(unread);
     const canDeleteGuest = isGuestChatClient(client);
+    const avatar = resolveClientAvatar(client);
+    const avatarFallback = renderClientAvatarFallback(avatar);
 
     const row = document.createElement("div");
     row.className = `chat-client-row${active ? " is-active" : ""}`;
     row.setAttribute("data-client-id", String(client.id));
     row.innerHTML = `
       <button type="button" class="chat-client-row-main" aria-label="${escapeHtml(client.name || `Клиент #${client.id}`)}">
+        <span class="chat-client-avatar${avatar.photoUrl ? " has-photo" : ""}">
+          <span class="chat-client-avatar-fallback">${avatarFallback}</span>
+          ${avatar.photoUrl ? `<img class="chat-client-avatar-image" src="${escapeHtml(avatar.photoUrl)}" alt="" loading="lazy" decoding="async">` : ""}
+        </span>
         <span class="chat-client-main">
         <span class="chat-client-top">
           <span class="chat-client-name" data-chat-client-open-details="1">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
@@ -10168,6 +10456,16 @@
         <button type="button" class="chat-client-row-action is-delete${canDeleteGuest ? "" : " hidden"}" data-chat-client-action-inline="delete-guest">Удалить</button>
       </div>
     `;
+
+    const avatarImage = $(".chat-client-avatar-image", row);
+    if (avatarImage) {
+      avatarImage.addEventListener("error", () => {
+        const avatarNode = avatarImage.closest(".chat-client-avatar");
+        if (avatarNode) avatarNode.classList.remove("has-photo");
+        avatarImage.removeAttribute("src");
+        avatarImage.remove();
+      }, { once: true });
+    }
 
     const previewEl = $(".chat-client-preview", row);
     if (previewEl) {
@@ -10258,6 +10556,11 @@
       const nextRow = dom.left.list.querySelector(`.chat-client-row[data-client-id="${cssEscape(String(nextId))}"]`);
       if (nextRow) nextRow.classList.add("is-active");
     }
+  }
+
+  function syncConversationStageState() {
+    if (!dom.center.stack) return;
+    dom.center.stack.classList.toggle("is-conversation-active", Number(state.activeClientId || 0) > 0);
   }
 
   function normalizeEmojiCategoryName(rawCategory) {
@@ -13216,6 +13519,10 @@
     const hiddenMap = ensureHiddenMessageMap();
     if (hiddenMap && typeof hiddenMap === "object") delete hiddenMap[key];
     if (state.store?.threads && typeof state.store.threads === "object") delete state.store.threads[key];
+    if (state.persistentThreadsScope?.complete) {
+      state.persistentThreadsScope.remove(`client:${key}`)
+        .catch((error) => console.warn("Chat thread cache remove failed", error));
+    }
 
     const ui = ensureUiStoreState();
     if (ui?.threadScrollTopByClient && typeof ui.threadScrollTopByClient === "object") {
@@ -13257,6 +13564,7 @@
     }
 
     saveStore();
+    scheduleChatSummariesCacheWrite();
     return { removed: true, wasActive };
   }
 
@@ -13790,6 +14098,7 @@
 
   function renderChatHeader() {
     ensureDesktopChatHeaderMarkup();
+    syncConversationStageState();
     setHeaderLoading(state.activeClientDataLoading === true);
     const legacySetOrderStatusView = (text, _color, order = null) => {
       if (!dom.center.headerOrder) return;
@@ -17021,6 +17330,16 @@
     resetThreadImageDrop();
 
     state.activeClientId = id;
+    const selectionGeneration = ++state.threadSelectionGeneration;
+    hydrateChatThreadFromPersistentCache(id, selectionGeneration).catch(console.warn);
+    const remoteThreadPromise = pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true })
+      .then((changed) => {
+        if (selectionGeneration === state.threadSelectionGeneration) {
+          state.remoteThreadAppliedSelectionByClient[String(id)] = selectionGeneration;
+        }
+        scheduleChatThreadCacheWrite(id);
+        return changed;
+      });
     if (!isAdminMobileChatLayout()) {
       state.forceDesktopBottomClientId = String(id);
       state.forceDesktopBottomUntil = Date.now() + 3000;
@@ -17128,12 +17447,45 @@
     }
     syncActiveThreadReadState({ clientId: id });
     restorePersistedAttachPreviewDraft(id).catch(console.error);
-    pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true })
+    remoteThreadPromise
       .then(() => {
         if (Number(state.activeClientId) !== id) return;
         syncActiveThreadReadState({ clientId: id });
       })
       .catch(console.error);
+  }
+
+  function closeActiveConversationView() {
+    const previousActiveClientId = state.activeClientId;
+    if (!(Number(previousActiveClientId || 0) > 0)) return;
+
+    stopLocalTypingSession(previousActiveClientId, { flush: true, force: true });
+    saveThreadScrollPosition(previousActiveClientId);
+    persistComposerDraftForClient(previousActiveClientId);
+    closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
+    cancelEditingMessage();
+    clearComposerReply();
+    if (state.pendingDeleteConfirm) closeDeleteConfirm();
+    setSelectionMode(false);
+    hideMessageContextMenu();
+    hideEmojiPopover();
+    resetThreadImageDrop();
+
+    state.requestToken += 1;
+    state.activeClientId = null;
+    state.activeClient = null;
+    state.activeClientDataLoading = false;
+    state.headerOrderSnapshot = null;
+    state.headerOrderId = 0;
+    state.forceDesktopBottomClientId = "";
+    state.forceDesktopBottomUntil = 0;
+    state.store.lastOpenClientId = 0;
+    setActiveOrders([], { forceRender: false });
+    ensureActiveThreadSseConnection();
+    syncActiveClientRowSelection(previousActiveClientId, null);
+    renderChatHeader();
+    renderMessages();
+    scheduleUiStatePersist(0);
   }
 
   function mergeClientsIntoState(rows, { reset = false } = {}) {
@@ -17167,35 +17519,6 @@
     return filtered.length ? filtered : list;
   }
 
-  function buildLocalClientsFromStoredThreads() {
-    const threads = state.store && typeof state.store.threads === "object" ? state.store.threads : {};
-    return Object.keys(threads)
-      .map((key) => normalizeClientIdKey(key))
-      .filter(Boolean)
-      .map((key) => {
-        const thread = Array.isArray(threads[key]) ? threads[key] : [];
-        const lastMessage = thread.length ? thread[thread.length - 1] : null;
-        const lastAt = String(
-          lastMessage?.createdAt
-          || lastMessage?.created_at
-          || lastMessage?.updatedAt
-          || lastMessage?.updated_at
-          || ""
-        );
-        return {
-          id: Number(key),
-          name: `Клиент #${key}`,
-          phone: "",
-          total_orders: 0,
-          created_at: lastAt || "",
-          updated_at: lastAt || "",
-          last_order_date: lastAt || "",
-          _isVirtualChatClient: true,
-        };
-      })
-      .sort((a, b) => compareIsoDates(String(b.last_order_date || ""), String(a.last_order_date || "")));
-  }
-
   function sanitizeCachedClientRows(rows) {
     const source = Array.isArray(rows) ? rows : [];
     const out = [];
@@ -17206,8 +17529,9 @@
       seen.add(key);
       out.push({
         id: Number(key),
-        name: String(row?.name || `Клиент #${key}`),
+        name: String(row?.name || ""),
         phone: String(row?.phone || ""),
+        photo: String(row?.photo || ""),
         total_orders: Number(row?.total_orders || 0),
         total_spent: Number(row?.total_spent || 0),
         last_order_date: String(row?.last_order_date || ""),
@@ -17219,34 +17543,16 @@
     return out.slice(0, CHAT_CLIENTS_CACHE_MAX_ROWS);
   }
 
-  function readCachedClientsRows() {
-    const updatedAt = Number(state.store?.clientsCacheUpdatedAt || 0);
-    if (!updatedAt) return [];
-    if (Date.now() - updatedAt > CHAT_CLIENTS_CACHE_TTL_MS) return [];
-    return sanitizeCachedClientRows(state.store?.clientsCache || []);
-  }
-
-  function writeCachedClientsRows(rows) {
-    const nextRows = sanitizeCachedClientRows(rows);
-    state.store.clientsCache = nextRows;
-    state.store.clientsCacheUpdatedAt = Date.now();
-    saveStore();
-  }
-
   async function loadClientsPage(options = {}) {
     if (!isChatWidgetEnabledRuntime()) return false;
     const reset = options.reset === true;
+    const generation = Number(options.generation || state.bootstrapGeneration);
     const ensureSelection = options.ensureSelection === true;
     const pager = ensureClientsPager();
     if (pager.loading) return false;
 
     if (reset) {
       resetClientsPager();
-      const localThreadClients = buildLocalClientsFromStoredThreads();
-      const cachedClients = readCachedClientsRows();
-      state.clients = filterOpenChatClients(mergeRemoteClients(cachedClients, localThreadClients));
-      state.filteredClients = [];
-      applyClientFilter();
       if (dom.left.list) {
         if (!state.clients.length) {
           dom.left.list.innerHTML = '<div class="muted" style="padding:8px;">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0447\u0430\u0442\u043e\u0432\u2026</div>';
@@ -17265,20 +17571,30 @@
       adminQs.set("offset", String(activePager.adminOffset || 0));
       adminQs.set("sort", "last_desc");
 
+      let adminFailed = false;
+      let remoteFailed = false;
       const [adminJson, remotePage] = await Promise.all([
-        apiJson("/api/admin/clients?" + adminQs.toString()).catch(() => ({
-          data: [],
-          total: activePager.adminTotal || 0,
-        })),
+        apiJson("/api/admin/clients?" + adminQs.toString()).catch(() => {
+          adminFailed = true;
+          return {
+            data: [],
+            total: activePager.adminTotal || 0,
+          };
+        }),
         loadRemoteChatClientsPage({
           limit: pageSize,
           offset: activePager.remoteOffset || 0,
-        }).catch(() => ({
-          rows: [],
-          total: activePager.remoteTotal || 0,
-          hasMore: false,
-        })),
+        }).catch(() => {
+          remoteFailed = true;
+          return {
+            rows: [],
+            total: activePager.remoteTotal || 0,
+            hasMore: false,
+          };
+        }),
       ]);
+      if (generation !== state.bootstrapGeneration) return false;
+      if (adminFailed && remoteFailed) return false;
 
       const adminRows = Array.isArray(adminJson?.data) ? adminJson.data : [];
       const adminTotalRaw = Number(adminJson?.total);
@@ -17311,9 +17627,10 @@
           .map((client) => normalizeClientIdKey(client?.id))
           .filter(Boolean)
       );
-      mergeClientsIntoState(preparedRows, { reset });
+      mergeClientsIntoState(preparedRows, { reset: reset && !adminFailed && !remoteFailed });
       applyClientFilter();
-      writeCachedClientsRows(state.clients);
+      state.remoteSummariesAppliedGeneration = generation;
+      scheduleChatSummariesCacheWrite();
 
       const remoteSummaryIdSet = new Set(
         remoteRows
@@ -17393,19 +17710,20 @@
     loadClientsPage({ reset: false, ensureSelection: false }).catch(console.error);
   }
 
-  async function loadClients() {
+  async function loadClients(options = {}) {
     if (!isChatWidgetEnabledRuntime()) return;
     if (!dom.left.list) return;
     if (state.clientsLoadInFlight) return state.clientsLoadInFlight;
     const mobileStart = isChatMobileViewport();
     state.clientsViewportPrefillDone = false;
     // Do not block the first paint on slow DB/API responses.
-    state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: false })
+    const generation = Number(options.generation || state.bootstrapGeneration);
+    state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: false, generation })
       .catch((err) => {
         if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return;
         console.error(err);
-        dom.left.list.innerHTML = "";
-        if (dom.left.empty) {
+        if (!state.clients.length) dom.left.list.innerHTML = "";
+        if (dom.left.empty && !state.clients.length) {
           dom.left.empty.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0447\u0430\u0442\u044b";
           dom.left.empty.classList.remove("hidden");
         }
@@ -17438,7 +17756,7 @@
 
     state.clients = filterOpenChatClients(mergeRemoteClients(state.clients || [], [summary]));
     applyClientFilter();
-    writeCachedClientsRows(state.clients);
+    scheduleChatSummariesCacheWrite();
 
     client = (state.clients || []).find((row) => Number(row?.id) === Number(key)) || null;
     return client;
@@ -17662,7 +17980,11 @@
       dom.center.mobileClientsBackBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        openClientsPanel();
+        if (isChatMobileViewport()) {
+          openClientsPanel();
+          return;
+        }
+        closeActiveConversationView();
       });
     }
 
@@ -17852,6 +18174,7 @@
       }, { passive: true });
     }
     bindSearch();
+    initChatConnectionStatus();
     initMobileChatControls();
     bindAdminMobileChatOverlayLayout();
     bindAdminChatKeyboardViewportSync();

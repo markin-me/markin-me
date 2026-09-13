@@ -1,6 +1,16 @@
 <div class="panel chat-clients-panel">
   <div class="panel-header">
     <div class="panel-title"><i class="fas fa-comments"></i> Чаты</div>
+    <div
+      class="chat-connection-status is-syncing"
+      id="chatConnectionStatus"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span class="chat-connection-status-dot" aria-hidden="true"></span>
+      <span class="chat-connection-status-text">Синхронизация…</span>
+    </div>
   </div>
 
   <div class="panel-body chat-clients-body no-scrollbar">
