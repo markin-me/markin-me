@@ -89,17 +89,20 @@
   }
 
   function moveAccountControls() {
-    if (!sidebarAccount || !isMobile()) return;
+    if (!sidebarAccount) return;
     if (brand && sidebarBrand && brand.parentNode !== sidebarBrand) {
       brand.parentNode.insertBefore(brandOrigin, brand);
       sidebarBrand.appendChild(brand);
     }
     if (themeButton && themeButton.parentNode !== sidebarAccount) {
       themeButton.parentNode.insertBefore(themeOrigin, themeButton);
+      themeButton.setAttribute("data-sidebar-tooltip", "Сменить тему");
       sidebarAccount.appendChild(themeButton);
     }
     if (accountMenu && accountMenu.parentNode !== sidebarAccount) {
       accountMenu.parentNode.insertBefore(accountOrigin, accountMenu);
+      const profileButton = accountMenu.querySelector("#shopProfileBtn");
+      if (profileButton) profileButton.setAttribute("data-sidebar-tooltip", "Профиль");
       sidebarAccount.appendChild(accountMenu);
     }
   }
@@ -295,7 +298,7 @@
       return;
     }
     restoreContextActions();
-    restoreAccountControls();
+    moveAccountControls();
     restoreOrderTabs();
     closeSidebar();
     body.classList.remove("admin-mobile-pages", "admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");

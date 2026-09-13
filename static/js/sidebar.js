@@ -25,6 +25,7 @@
     // класс не обязателен для сетки, но полезен для внутренних анимаций
     requestAnimationFrame(() => {
       sidebar.classList.toggle('is-collapsed', collapsed);
+      edgeToggle.setAttribute('aria-label', collapsed ? 'Открыть боковую панель' : 'Закрыть боковую панель');
     });
   }
 
@@ -72,6 +73,7 @@
       document.documentElement.setAttribute('data-sidebar-collapsed', willCollapse ? '1' : '0');
       localStorage.setItem('sidebar:collapsed', willCollapse ? '1' : '0');
       sidebar.classList.toggle('is-collapsed', willCollapse);
+      edgeToggle.setAttribute('aria-label', willCollapse ? 'Открыть боковую панель' : 'Закрыть боковую панель');
     });
   });
 
