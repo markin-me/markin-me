@@ -24613,6 +24613,10 @@ function openCartSheet() {
     checkoutOverlayHost.classList.toggle("hidden", !nextActive);
     checkoutOverlayHost.classList.toggle("is-active", nextActive);
     checkoutWrap.classList.toggle("shop-checkout-content--overlay", nextActive);
+    if (nextActive) {
+      const checkoutUpsell = checkoutOverlayFooterHost.querySelector(".shop-cart-upsell");
+      if (checkoutUpsell) list.appendChild(checkoutUpsell);
+    }
     if (typeof checkoutActions !== "undefined" && checkoutActions) {
       if (nextActive) {
         checkoutOverlayFooterHost.appendChild(checkoutActions);
@@ -38679,9 +38683,9 @@ function setBottomNavActive(tab) {
     cLabel.className = "field-label";
     cLabel.textContent = "Комментарий";
     cLabel.style.display = "none";
-    const comment = document.createElement("input");
+    const comment = document.createElement("textarea");
     comment.className = "control shop-checkout-comment";
-    comment.type = "text";
+    comment.rows = 1;
     comment.placeholder = "Введите комментарий к заказу";
     comment.value = draft.comment || "";
     const mobileNameWrap = document.getElementById("shopMobileCheckoutNameWrap");
@@ -38697,32 +38701,41 @@ function setBottomNavActive(tab) {
       field.style.height = "auto";
       const minHeight = 40;
       const maxHeight = 150;
-      const nextHeight = Math.max(minHeight, Math.min(maxHeight, field.scrollHeight || minHeight));
+      const contentHeight = field.scrollHeight || minHeight;
+      const nextHeight = Math.max(minHeight, Math.min(maxHeight, contentHeight));
       field.style.height = `${nextHeight}px`;
-      field.scrollTop = field.scrollHeight;
+      field.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+      if (contentHeight > maxHeight) field.scrollTop = contentHeight;
     };
     const collapseCommentField = (field) => {
       if (!isCommentTextarea(field)) return;
       field.classList.remove("is-expanded");
       field.style.height = "";
+      field.style.overflowY = "hidden";
       field.scrollTop = 0;
     };
-    const bindCommentFieldAutogrow = (field) => {
+    const bindCommentFieldAutogrow = (field, { collapseOnBlur = true } = {}) => {
       if (!isCommentTextarea(field)) return;
       if (field.dataset.commentGrowBound === "1") return;
       field.dataset.commentGrowBound = "1";
-      collapseCommentField(field);
+      if (collapseOnBlur) {
+        collapseCommentField(field);
+      } else {
+        field.classList.add("is-expanded");
+        autosizeCommentField(field);
+      }
       field.addEventListener("focus", () => {
         field.classList.add("is-expanded");
         autosizeCommentField(field);
       });
       field.addEventListener("blur", () => {
-        collapseCommentField(field);
+        if (collapseOnBlur) collapseCommentField(field);
       });
       field.addEventListener("input", () => {
         autosizeCommentField(field);
       });
     };
+    bindCommentFieldAutogrow(comment, { collapseOnBlur: false });
     bindCommentFieldAutogrow(mobileCommentInput);
     bindCommentFieldAutogrow(desktopFooterCommentInput);
     if (mobileNameInput) {
@@ -39403,12 +39416,14 @@ function setBottomNavActive(tab) {
     if (isKsoCheckout) timeSection.root.classList.add("hidden");
     const timeModesGrid = document.createElement("div");
     timeModesGrid.className = "shop-checkout-card-grid shop-checkout-card-grid--modes";
-    bindCheckoutHorizontalWheelScroll(timeModesGrid);
+    if (!isMobileCheckout) bindCheckoutHorizontalWheelScroll(timeModesGrid);
     const timeModeButtons = new Map();
     timeOptions.forEach((option) => {
       const card = createCheckoutCardOption({
         title: option.title || option.code || "",
         value: option.code === "asap" ? getCheckoutEtaLabel() : "",
+        meta: option.code === "asap" ? "Привезём как можно скорее" : "",
+        icon: getTimeOptionIconElement(option.code, option.icon),
         onClick: () => {
           if (option.code === "at_time") {
             openAtTimeSelectionSheet();
@@ -39805,7 +39820,7 @@ function setBottomNavActive(tab) {
           setCheckoutCardOptionContent(card, {
             title: getTimeOptionTitle(code),
             value: getCheckoutEtaLabel(),
-            meta: "",
+            meta: "Привезём как можно скорее",
           });
           return;
         }
@@ -39988,6 +40003,7 @@ function setBottomNavActive(tab) {
     payments.forEach((payment) => {
       const card = createCheckoutCardOption({
         title: payment.title || payment.code || "",
+        icon: getPaymentOptionIconElement(payment.code, payment.icon),
         onClick: () => {
           if (payment.code === "cash") {
             openCashChangeSelectionSheet();
@@ -40002,14 +40018,16 @@ function setBottomNavActive(tab) {
       paymentCards.set(payment.code, card);
       paymentCardsGrid.appendChild(card);
     });
-    bindCheckoutHorizontalWheelScroll(paymentCardsGrid);
+    if (!isMobileCheckout) bindCheckoutHorizontalWheelScroll(paymentCardsGrid);
     paymentSection.root.appendChild(paymentCardsGrid);
     checkoutMainSection.appendChild(paymentSection.root);
 
     const commentSection = document.createElement("section");
     commentSection.className = "shop-checkout-card-subsection shop-checkout-card-subsection--comment";
     commentSection.appendChild(comment);
-    if (!isKsoCheckout) checkoutMainSection.appendChild(commentSection);
+    if (!isKsoCheckout) {
+      checkoutMainSection.appendChild(commentSection);
+    }
     wrap.appendChild(checkoutMainSection);
     wrap.appendChild(timeInput);
 
@@ -40049,7 +40067,9 @@ function setBottomNavActive(tab) {
         setCheckoutCardOptionContent(card, {
           title: card.dataset.baseTitle || "",
           value: "",
-          meta: code === "card" ? "при получении" : "",
+          meta: code === "cash" || code === "card"
+            ? "при получении"
+            : (code === "online" ? "Оплатить сразу на сайте" : ""),
         });
       });
     }
@@ -41040,6 +41060,7 @@ function setBottomNavActive(tab) {
     }
 
     container.appendChild(wrap);
+    if (!isKsoCheckout) autosizeCommentField(comment);
     if (timeSelect && typeof timeSelect.ensureCentered === "function") {
       timeSelect.ensureCentered();
     }

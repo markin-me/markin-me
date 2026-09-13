@@ -19159,6 +19159,11 @@ function updateCartBadge() {
         ? openCartSheetCtx?.checkoutUpsellHostEl?.querySelector(".shop-cart-upsell")
         : null
     );
+    var isActiveCheckoutList = openCartSheetCtx?.listEl === listEl
+      && document.body?.classList.contains("shop-checkout-overlay-open");
+    var checkoutUpsellHost = openCartSheetCtx?.listEl === listEl && !isActiveCheckoutList
+      ? openCartSheetCtx?.checkoutUpsellHostEl
+      : null;
     var scrollEl;
 
     if (!upsellEl) {
@@ -19178,9 +19183,6 @@ function updateCartBadge() {
       }, { passive: false });
       upsellEl.appendChild(titleEl);
       upsellEl.appendChild(scrollEl);
-      var checkoutUpsellHost = openCartSheetCtx?.listEl === listEl
-        ? openCartSheetCtx?.checkoutUpsellHostEl
-        : null;
       (checkoutUpsellHost || listEl).appendChild(upsellEl);
     } else {
       scrollEl = upsellEl.querySelector(".shop-cart-upsell-scroll");
@@ -19193,6 +19195,11 @@ function updateCartBadge() {
       if (upsellEl.parentNode === listEl && upsellEl !== listEl.lastElementChild) {
         listEl.appendChild(upsellEl);
       }
+    }
+
+    var targetUpsellParent = checkoutUpsellHost || listEl;
+    if (upsellEl.parentNode !== targetUpsellParent) {
+      targetUpsellParent.appendChild(upsellEl);
     }
 
     const marqueeTrack = scrollEl.querySelector(":scope > .shop-cart-upsell-marquee-track");
@@ -19232,7 +19239,9 @@ function updateCartBadge() {
     if (openCartSheetCtx?.checkoutUpsellHostEl?.contains(upsellEl)) {
       enableCheckoutUpsellAutoScroll(scrollEl);
     }
-    if (openCartSheetCtx?.listEl === listEl) moveKsoCartUpsellToFooter(openCartSheetCtx);
+    if (openCartSheetCtx?.listEl === listEl && !isActiveCheckoutList) {
+      moveKsoCartUpsellToFooter(openCartSheetCtx);
+    }
   }
 
   function moveKsoCartUpsellToFooter(ctx = openCartSheetCtx) {
