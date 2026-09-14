@@ -1188,66 +1188,6 @@ export function CartPage() {
   const handleCartScroll = useAnimatedScrollHandler((event) => {
     checkoutScrollY.value = event.contentOffset.y;
   });
-  const toggleAnimatedStyle = useAnimatedStyle(() => ({
-    height: interpolate(
-      checkoutScrollY.value,
-      [0, CART_HEADER_TOGGLE_SCROLL],
-      [CART_HEADER_TOGGLE_HEIGHT, 0],
-      Extrapolation.CLAMP,
-    ),
-    opacity: interpolate(
-      checkoutScrollY.value,
-      [0, CART_HEADER_TOGGLE_SCROLL],
-      [1, 0],
-      Extrapolation.CLAMP,
-    ),
-    transform: [{
-      translateY: interpolate(
-        checkoutScrollY.value,
-        [0, CART_HEADER_TOGGLE_SCROLL],
-        [0, -12],
-        Extrapolation.CLAMP,
-      ),
-    }],
-  }));
-  const addressAnimatedStyle = useAnimatedStyle(() => ({
-    marginTop: interpolate(
-      checkoutScrollY.value,
-      [0, CART_HEADER_TOGGLE_SCROLL],
-      [theme.spacing.md, 0],
-      Extrapolation.CLAMP,
-    ),
-  }));
-  const metaAnimatedStyle = useAnimatedStyle(() => ({
-    height: interpolate(
-      checkoutScrollY.value,
-      [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
-      [CART_HEADER_META_HEIGHT, 0],
-      Extrapolation.CLAMP,
-    ),
-    opacity: interpolate(
-      checkoutScrollY.value,
-      [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
-      [1, 0],
-      Extrapolation.CLAMP,
-    ),
-    transform: [{
-      translateY: interpolate(
-        checkoutScrollY.value,
-        [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
-        [0, -10],
-        Extrapolation.CLAMP,
-      ),
-    }],
-  }));
-  const progressAnimatedStyle = useAnimatedStyle(() => ({
-    marginTop: interpolate(
-      checkoutScrollY.value,
-      [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
-      [theme.spacing.md, theme.spacing.xs],
-      Extrapolation.CLAMP,
-    ),
-  }));
   const bonusState = useMemo(
     () => buildCartBonusState(activeLines, bonusConfig, bonusFavoriteCategories, catalogSnapshot),
     [activeLines, bonusConfig, bonusFavoriteCategories, catalogSnapshot],
@@ -1298,6 +1238,69 @@ export function CartPage() {
   }, [cartSummary.lineStates]);
   const deliveryProgressSubtotal = Math.max(0, cartSummary.itemsTotal - cartSummary.bonusRedeemAmount);
   const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(deliveryProgressSubtotal, deliveryMeta) : null;
+  const headerPrimaryCollapse = CART_HEADER_TOGGLE_HEIGHT + theme.spacing.md;
+  const headerSecondaryCollapse = CART_HEADER_META_HEIGHT + (visibleDeliveryProgress
+    ? theme.spacing.md - theme.spacing.xs
+    : 0);
+  const modeCardAnimatedStyle = useAnimatedStyle(() => {
+    const primaryCollapse = interpolate(
+      checkoutScrollY.value,
+      [0, CART_HEADER_TOGGLE_SCROLL],
+      [0, headerPrimaryCollapse],
+      Extrapolation.CLAMP,
+    );
+    const secondaryCollapse = interpolate(
+      checkoutScrollY.value,
+      [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+      [0, headerSecondaryCollapse],
+      Extrapolation.CLAMP,
+    );
+    return {
+      transform: [{ translateY: -(primaryCollapse + secondaryCollapse) }],
+    };
+  }, [headerPrimaryCollapse, headerSecondaryCollapse]);
+  const toggleAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      checkoutScrollY.value,
+      [0, CART_HEADER_TOGGLE_SCROLL],
+      [1, 0],
+      Extrapolation.CLAMP,
+    ),
+    transform: [{
+      translateY: interpolate(
+        checkoutScrollY.value,
+        [0, CART_HEADER_TOGGLE_SCROLL],
+        [0, CART_HEADER_TOGGLE_HEIGHT],
+        Extrapolation.CLAMP,
+      ),
+    }],
+  }));
+  const addressAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{
+      translateY: interpolate(
+        checkoutScrollY.value,
+        [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+        [0, headerSecondaryCollapse],
+        Extrapolation.CLAMP,
+      ),
+    }],
+  }), [headerSecondaryCollapse]);
+  const metaAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      checkoutScrollY.value,
+      [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+      [1, 0],
+      Extrapolation.CLAMP,
+    ),
+    transform: [{
+      translateY: interpolate(
+        checkoutScrollY.value,
+        [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+        [0, headerSecondaryCollapse - 10],
+        Extrapolation.CLAMP,
+      ),
+    }],
+  }), [headerSecondaryCollapse]);
   const discountDetails = useMemo<CartDiscountDetailDisplayItem[]>(() => {
     const detailItems = Array.isArray(cartSummary.discountDetailItems)
       ? cartSummary.discountDetailItems
@@ -2096,7 +2099,10 @@ export function CartPage() {
           </View>
         ) : (
           <>
-            <View style={styles.modeCard}>
+            <Reanimated.View
+              renderToHardwareTextureAndroid={Platform.OS === 'android'}
+              style={[styles.modeCard, modeCardAnimatedStyle]}
+            >
               <Reanimated.View style={[styles.toggleClip, toggleAnimatedStyle]}>
               <View style={styles.toggle}>
                 {(['delivery', 'pickup'] as FulfillmentMode[]).map((mode) => {
@@ -2117,7 +2123,7 @@ export function CartPage() {
               </View>
               </Reanimated.View>
 
-              <Reanimated.View style={addressAnimatedStyle}>
+              <Reanimated.View style={[styles.addressHeaderRow, addressAnimatedStyle]}>
               <Pressable onPress={openAddresses} style={styles.addressRow}>
                 <View style={styles.deliveryMetaIcon}>
                   <AccentGradientSurface shape="rounded" />
@@ -2132,7 +2138,7 @@ export function CartPage() {
               </Pressable>
               </Reanimated.View>
 
-              <Reanimated.View style={[styles.metaClip, metaAnimatedStyle]}>
+              <Reanimated.View pointerEvents="none" style={[styles.metaClip, metaAnimatedStyle]}>
               <View style={styles.metaWrap}>
                 <View style={styles.metaRow}>
                   <View style={styles.deliveryMetaIcon}>
@@ -2163,7 +2169,7 @@ export function CartPage() {
               </Reanimated.View>
 
               {visibleDeliveryProgress ? (
-                <Reanimated.View style={[styles.progressSurface, progressAnimatedStyle]}>
+                <Reanimated.View style={styles.progressSurface}>
                   <View style={[styles.progressFill, { width: `${visibleDeliveryProgress.value}%` }]}>
                     <AccentGradientSurface />
                   </View>
@@ -2172,7 +2178,7 @@ export function CartPage() {
                   </Text>
                 </Reanimated.View>
               ) : null}
-            </View>
+            </Reanimated.View>
 
             <Reanimated.ScrollView
               onLayout={(event) => {
@@ -2468,6 +2474,7 @@ export function CartPage() {
                 <View style={styles.checkoutButtonVisual}>
                   <Reanimated.View
                     pointerEvents="none"
+                    renderToHardwareTextureAndroid={Platform.OS === 'android'}
                     style={[styles.checkoutButtonSurface, checkoutButtonSurfaceStyle]}
                   >
                     <AccentGradientSurface />
@@ -2550,6 +2557,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: theme.spacing.sm,
+  },
+  addressHeaderRow: {
+    marginTop: theme.spacing.md,
   },
   addressText: {
     color: theme.colors.text,
@@ -3174,6 +3184,7 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.md,
   },
   metaClip: {
+    height: CART_HEADER_META_HEIGHT,
     overflow: 'hidden',
   },
   modeCard: {
@@ -3282,6 +3293,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 24,
     justifyContent: 'center',
+    marginTop: theme.spacing.md,
     overflow: 'hidden',
   },
   quantityPriceCenter: {
@@ -3308,6 +3320,7 @@ const styles = StyleSheet.create({
   root: {
     backgroundColor: theme.colors.mutedBackground,
     flex: 1,
+    overflow: 'hidden',
     position: 'relative',
   },
   scroll: {
@@ -3445,6 +3458,7 @@ const styles = StyleSheet.create({
     padding: 3,
   },
   toggleClip: {
+    height: CART_HEADER_TOGGLE_HEIGHT,
     overflow: 'hidden',
   },
   toggleButton: {

@@ -3216,10 +3216,15 @@ export function CatalogPage() {
     const layouts = categoryHeaderLayoutsRef.current;
     let categoryId: number | null = null;
 
-    for (let index = layouts.length - 1; index >= 0; index -= 1) {
-      if (layouts[index].offset <= activationOffset) {
-        categoryId = layouts[index].categoryId;
-        break;
+    let low = 0;
+    let high = layouts.length - 1;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      if (layouts[middle].offset <= activationOffset) {
+        categoryId = layouts[middle].categoryId;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
       }
     }
 
@@ -3901,11 +3906,11 @@ export function CatalogPage() {
               onRefresh={refreshCatalogFromPull}
             />
           )}
-          removeClippedSubviews={false}
+          removeClippedSubviews={isAndroid}
           renderItem={renderCatalogItem}
-          scrollEventThrottle={16}
+          scrollEventThrottle={32}
           stickyHeaderIndices={[1]}
-          updateCellsBatchingPeriod={16}
+          updateCellsBatchingPeriod={32}
           windowSize={7}
         />
       )}

@@ -801,11 +801,30 @@
                 <span class="domain-check-text">Сайт отвечает</span>
                 <span class="domain-check-status" id="domainCheckHttpStatus"></span>
               </div>
-              <div class="domain-check-item" id="domainCheckSsl">
-                <span class="domain-check-icon"><i class="fas fa-circle"></i></span>
-                <span class="domain-check-text">SSL-сертификат</span>
-                <span class="domain-check-status" id="domainCheckSslStatus"></span>
+            </div>
+          </div>
+
+          <div class="settings-site-field hidden" id="domainCertificateBlock">
+            <label class="field-label">СЕРТИФИКАТ</label>
+            <div class="domain-check-list">
+              <div class="domain-check-item">
+                <span class="domain-check-icon is-pending" id="domainCertificateIcon"><i class="fas fa-circle"></i></span>
+                <span class="domain-check-text">Статус</span>
+                <span class="domain-check-status" id="domainCertificateStatus">Проверяем...</span>
               </div>
+              <div class="domain-check-item">
+                <span class="domain-check-text">Действителен до</span>
+                <span class="domain-check-status" id="domainCertificateExpires">—</span>
+              </div>
+              <div class="domain-check-item">
+                <span class="domain-check-text">Осталось</span>
+                <span class="domain-check-status" id="domainCertificateDays">—</span>
+              </div>
+            </div>
+            <div class="domain-action-row" style="margin-top:8px;">
+              <button class="btn btn-secondary btn-sm" type="button" id="domainRenewCertificateBtn">
+                <i class="fas fa-sync-alt"></i> Перевыпустить сертификат
+              </button>
             </div>
           </div>
         </div>

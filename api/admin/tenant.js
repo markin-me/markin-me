@@ -1170,6 +1170,63 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     });
   }
 
+  async function resolveOwnedTenantDomain(tenantId, rawDomain) {
+    const normalized = normalizeCustomDomain(rawDomain);
+    if (!normalized.provided || normalized.invalid || !normalized.ascii) return null;
+    await ensureTenantDomainsTable();
+    const [domainRows] = await db.query(
+      'SELECT id FROM ten_tenant_domains WHERE tenant_id=? AND domain_ascii=? LIMIT 1',
+      [tenantId, normalized.ascii]
+    );
+    if (domainRows.length) return normalized.ascii;
+    const [legacyRows] = await db.query(
+      'SELECT id FROM ten_tenants WHERE id=? AND custom_domain_ascii=? LIMIT 1',
+      [tenantId, normalized.ascii]
+    );
+    return legacyRows.length ? normalized.ascii : null;
+  }
+
+  function readTenantCertificate(domainAscii) {
+    const certificatePath = `/etc/letsencrypt/live/${domainAscii}/fullchain.pem`;
+    return new Promise((resolve) => {
+      if (!fs.existsSync(certificatePath)) {
+        resolve({ exists: false, status: 'missing', domain: domainAscii });
+        return;
+      }
+      execFile(
+        'openssl',
+        ['x509', '-in', certificatePath, '-noout', '-subject', '-issuer', '-startdate', '-enddate'],
+        { timeout: 10000, maxBuffer: 64 * 1024 },
+        (err, stdout) => {
+          if (err) {
+            resolve({ exists: false, status: 'invalid', domain: domainAscii });
+            return;
+          }
+          const values = {};
+          String(stdout || '').split(/\r?\n/).forEach((line) => {
+            const separator = line.indexOf('=');
+            if (separator <= 0) return;
+            values[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
+          });
+          const validFrom = values.notBefore ? new Date(values.notBefore).toISOString() : null;
+          const expiresAt = values.notAfter ? new Date(values.notAfter).toISOString() : null;
+          const daysLeft = expiresAt ? Math.ceil((Date.parse(expiresAt) - Date.now()) / 86400000) : null;
+          resolve({
+            exists: true,
+            status: daysLeft !== null && daysLeft <= 0 ? 'expired' : (daysLeft !== null && daysLeft <= 30 ? 'expiring' : 'valid'),
+            domain: domainAscii,
+            domains: [`${domainAscii}`, `www.${domainAscii}`],
+            subject: values.subject || null,
+            issuer: values.issuer || null,
+            valid_from: validFrom,
+            expires_at: expiresAt,
+            days_left: daysLeft
+          });
+        }
+      );
+    });
+  }
+
   function normalizeChatAssistantGender(value) {
     if (value === undefined) return undefined;
     if (value === null) return null;
@@ -6703,6 +6760,40 @@ async function fetchStoreWithHours(tenantId, storeId) {
     } catch (err) {
       console.error('check-domain error:', err);
       res.status(500).json({ ok: false, error: 'CHECK_FAILED' });
+    }
+  });
+
+  router.post('/certificate', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const domainAscii = await resolveOwnedTenantDomain(tenantId, req.body?.domain);
+      if (!domainAscii) return res.status(404).json({ ok: false, error: 'DOMAIN_NOT_FOUND' });
+      return res.json({ ok: true, certificate: await readTenantCertificate(domainAscii) });
+    } catch (err) {
+      console.error('certificate status error:', err);
+      return res.status(500).json({ ok: false, error: 'CERTIFICATE_STATUS_FAILED' });
+    }
+  });
+
+  router.post('/renew-certificate', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const domainAscii = await resolveOwnedTenantDomain(tenantId, req.body?.domain);
+      if (!domainAscii) return res.status(404).json({ ok: false, error: 'DOMAIN_NOT_FOUND' });
+
+      const setup = getTenantDomainSetup();
+      if (!setup.auto_connect_enabled) {
+        return res.status(403).json({ ok: false, error: 'AUTO_CONNECT_DISABLED' });
+      }
+
+      await runTenantDomainAutomation({
+        domainAscii,
+        includeWww: setup.auto_connect_include_www
+      });
+      return res.json({ ok: true, certificate: await readTenantCertificate(domainAscii) });
+    } catch (err) {
+      console.error('certificate renewal error:', err);
+      return res.status(500).json({ ok: false, error: 'CERTIFICATE_RENEW_FAILED' });
     }
   });
 
