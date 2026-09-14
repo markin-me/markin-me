@@ -2064,6 +2064,7 @@
   const elSearchWrap = $("#clientsSearchWrap");
   const elToolbarTitle = $("#clientsToolbarTitle");
   const elToolbarText = $("#clientsToolbarText");
+  const elOnlineCount = $("#clientsOnlineCount");
   const elToolbarBackBtn = $("#clientsToolbarBackBtn");
   const elSortToggle = $("#clientsSortToggle");
   const elSortDropdown = $("#clientsSortDropdown");
@@ -2752,7 +2753,7 @@
   // -----------------------------
   const state = {
     currentView: "clients",   // "clients" | "filter-categories" | "discounts" | "banners" | "bonus-cards" | "bonus-referrals"
-    activeFilter: "all",      // "all" | "custom_<id>"
+    activeFilter: "all",      // "all" | "online" | "custom"
     activeCustomFilterId: null,
     q: "",
     sort: "last_desc",
@@ -2783,6 +2784,7 @@
     clientActiveOrderRequest: null,
     clientDiscounts: [],      // Скидки клиента
     totals: { all: 0 },
+    onlineCount: null,
     activeContentTab: "addresses",
     clientBenefitsModal: {
       customerId: null,
@@ -8405,6 +8407,24 @@
     elFilters.appendChild(btnAll);
 
     // Кастомные категории клиентов
+    const btnOnline = document.createElement("button");
+    btnOnline.type = "button";
+    btnOnline.className = "stage-item";
+    btnOnline.setAttribute("data-filter", "online");
+    btnOnline.classList.toggle("is-active", state.activeFilter === "online");
+    btnOnline.innerHTML = `
+      <span class="stage-meta stage-text"><b>На сайте</b></span>
+      <span class="stage-count">${state.onlineCount === null ? "—" : escapeHtml(state.onlineCount)}</span>
+    `;
+    btnOnline.addEventListener("click", () => {
+      state.activeFilter = "online";
+      state.activeCustomFilterId = null;
+      openMarketingCenter('clients', 'На сайте');
+      renderFilters();
+      loadClients().catch(console.error);
+    });
+    elFilters.appendChild(btnOnline);
+
     state.customFilters.forEach((filter) => {
       const displayedCount = getDisplayedFilterCount(filter);
       const btn = document.createElement("button");
@@ -24752,6 +24772,7 @@
 
   function switchView(viewName) {
     state.currentView = viewName;
+    if (elOnlineCount) elOnlineCount.classList.toggle('hidden', viewName !== 'clients');
 
     $$('[data-view-content]').forEach((el) => {
       el.classList.toggle('hidden', el.dataset.viewContent !== viewName);
@@ -25621,6 +25642,32 @@
   // -----------------------------
   // Render: clients list
   // -----------------------------
+  function getClientPresenceState(clientId) {
+    return window.AdminPresence?.getClientState?.(clientId) || 'offline';
+  }
+
+  function getClientPresenceBadgeHtml(clientId) {
+    const presenceState = getClientPresenceState(clientId);
+    if (presenceState === 'offline') return '';
+    const chatAttrs = presenceState === 'chat' ? ' title="Клиент сейчас в чате" aria-label="Клиент на сайте, сейчас в чате"' : '';
+    return `<span class="clients-presence-badge${presenceState === 'chat' ? ' is-chat' : ''}" data-client-presence-badge${chatAttrs}>На сайте</span>`;
+  }
+
+  function patchClientPresence(clientId) {
+    const row = elList?.querySelector(`.js-client[data-client-id="${Number(clientId)}"]`);
+    if (!row) return;
+    const nameLine = row.querySelector('.order-line');
+    if (!nameLine) return;
+    const current = nameLine.querySelector('[data-client-presence-badge]');
+    const html = getClientPresenceBadgeHtml(clientId);
+    if (!html) {
+      if (current) current.remove();
+      return;
+    }
+    if (current) current.outerHTML = html;
+    else nameLine.insertAdjacentHTML('beforeend', html);
+  }
+
   function buildClientRow(c) {
     const row = document.createElement("div");
     row.className = "order-row js-client";
@@ -25637,7 +25684,7 @@
         <div class="order-time">${escapeHtml(c.is_active ? "Активен" : "Неактивен")}</div>
       </div>
       <div class="order-mid">
-        <div class="order-line"><strong>${escapeHtml(c.name || "—")}</strong></div>
+        <div class="order-line"><strong>${escapeHtml(c.name || "—")}</strong>${getClientPresenceBadgeHtml(c.id)}</div>
         <div class="order-line muted"><i class="fas fa-phone"></i> <span class="client-phone" style="white-space:nowrap;display:inline-block;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${escapeHtml(formatPhoneDigitsToRU(c.phone))}</span></div>
       </div>
       <div class="order-actions">
@@ -26920,6 +26967,13 @@
     const targetOrder = order || getActiveClientOrder();
     const orderId = Number(targetOrder?.id || 0);
     if (!(orderId > 0)) return;
+    if (
+      document.body?.classList.contains("page-chat")
+      && !window.SharedOrderPayment
+      && window.SharedOrderPanel?.ensureAdminAsset
+    ) {
+      await window.SharedOrderPanel.ensureAdminAsset("sharedOrderPayment");
+    }
     const sharedOrderPayment = window.SharedOrderPayment || null;
     if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
       if (Number(targetOrder?.is_paid || 0) === 1) return;
@@ -27452,7 +27506,12 @@
     if (state.activeFilter === "custom" && state.activeCustomFilterId) {
       qs.set("filter_id", String(state.activeCustomFilterId));
     }
+    if (state.activeFilter === "online") qs.set("online", "1");
     return qs;
+  }
+
+  function isPresenceSensitiveClientsList() {
+    return state.activeFilter === "online" || state.sort === "online_desc";
   }
 
   function clientsListCacheKey() {
@@ -27463,12 +27522,14 @@
   }
 
   async function readClientsListCache() {
+    if (isPresenceSensitiveClientsList()) return null;
     if (!window.AdminPersistentCache) return null;
     try { return await window.AdminPersistentCache.read(clientsListCacheKey()); }
     catch (err) { console.warn('Clients list cache read failed:', err); return null; }
   }
 
   function writeClientsListCache() {
+    if (isPresenceSensitiveClientsList()) return;
     if (!window.AdminPersistentCache) return;
     const data = { query: clientsListCacheKey(), rows: state.clients, offset: state.clientsOffset, total: state.clientsTotal, hasMore: state.clientsHasMore };
     void window.AdminPersistentCache.write(clientsListCacheKey(), data)
@@ -27576,6 +27637,47 @@
     state.q = elSearch ? elSearch.value.trim() : "";
     loadClients().catch(console.error);
   }, 250);
+
+  const reconcilePresenceClientsList = debounce(() => {
+    if (state.currentView !== 'clients' || !isPresenceSensitiveClientsList()) return;
+    loadClients().catch(console.error);
+  }, 220);
+
+  function renderMarketingPresenceSummary(counts, ready) {
+    state.onlineCount = ready ? Math.max(0, Number(counts?.identifiedOnlineClients || 0) || 0) : null;
+    if (elOnlineCount) elOnlineCount.textContent = state.onlineCount === null ? '· — онлайн' : `· ${state.onlineCount} онлайн`;
+    const filterCount = elFilters?.querySelector('[data-filter="online"] .stage-count');
+    if (filterCount) filterCount.textContent = state.onlineCount === null ? '—' : String(state.onlineCount);
+  }
+
+  function bindMarketingPresence() {
+    if (!window.AdminPresence?.subscribe) return;
+    window.AdminPresence.subscribe((change) => {
+      const ready = change.type !== 'pending' && change.type !== 'reset';
+      renderMarketingPresenceSummary(change.counts, ready);
+
+      if (change.type === 'reset') {
+        elList?.querySelectorAll('.js-client[data-client-id]').forEach((row) => {
+          patchClientPresence(Number(row.getAttribute('data-client-id') || 0));
+        });
+        return;
+      }
+
+      if (change.type === 'snapshot') {
+        elList?.querySelectorAll('.js-client[data-client-id]').forEach((row) => {
+          patchClientPresence(Number(row.getAttribute('data-client-id') || 0));
+        });
+        if (isPresenceSensitiveClientsList()) reconcilePresenceClientsList();
+        return;
+      }
+
+      if (change.type !== 'delta' || !(Number(change.clientId) > 0)) return;
+      patchClientPresence(change.clientId);
+      const wasOnline = change.previousState && change.previousState !== 'offline';
+      const isOnline = change.state !== 'offline';
+      if (wasOnline !== isOnline && isPresenceSensitiveClientsList()) reconcilePresenceClientsList();
+    });
+  }
 
   function maybeLoadMoreClientsOnScroll() {
     if (!elClientsScroll) return;
@@ -31148,6 +31250,7 @@
   if (!isChatBridgeMode && !isClientPassportBridgeMode) {
     const initialClientOpenRequest = getClientOpenRequestFromUrl();
     updateDiscountPromoUi();
+    bindMarketingPresence();
 
   loadCustomFilters().catch(console.error);
   loadClients()

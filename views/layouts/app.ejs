@@ -48,6 +48,8 @@
     window.__ADMIN_ASSET_URLS__ = {
       orders: <%- JSON.stringify(assetUrl('/static/js/orders.js')) %>,
       sharedOrderPanel: <%- JSON.stringify(assetUrl('/static/js/shared-order-panel.js')) %>,
+      sharedOrderPayment: <%- JSON.stringify(assetUrl('/static/js/shared-order-payment.js?v=20260831-mobile-payment-screen-v3')) %>,
+      sharedOrderItems: <%- JSON.stringify(assetUrl('/static/js/shared-order-items.js?v=20260628b')) %>,
       clients: <%- JSON.stringify(assetUrl('/static/js/clients.js')) %>,
       newOrder: <%- JSON.stringify(assetUrl('/static/js/new-order.js')) %>
     };
@@ -151,7 +153,7 @@
     })();
   </script>
 
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260913-chat-list-edge-v1') %>" />
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260913-chat-instant-bootstrap-v1') %>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
@@ -252,6 +254,7 @@
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-mobile-nav.js?v=20260902-mobile-chat-pages-v2') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-presence.js') %>"></script>
   <% if (appActivePage !== 'chat' && appActivePage !== 'settings') { %>
     <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js?v=20260410a') %>"></script>
   <% } else if (appActivePage === 'settings') { %>

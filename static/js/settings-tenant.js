@@ -1,5 +1,19 @@
 (() => {
 
+  function initSettingsPresenceCounts() {
+    const siteCount = document.getElementById("settingsPresenceSiteCount");
+    const chatCount = document.getElementById("settingsPresenceChatCount");
+    if (!siteCount || !chatCount || !window.AdminPresence || typeof window.AdminPresence.subscribe !== "function") return;
+    window.AdminPresence.subscribe(function (change) {
+      if (change && change.type === "pending") return;
+      const counts = window.AdminPresence.getCounts();
+      siteCount.textContent = String(Number(counts.siteVisitors || 0));
+      chatCount.textContent = String(Number(counts.chatActiveClients || 0));
+    });
+  }
+
+  initSettingsPresenceCounts();
+
 
 
   function formatValue(key, value) {

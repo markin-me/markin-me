@@ -11,7 +11,7 @@ const {
   serializeCustomerAddress,
 } = require('../../data/customer-address');
 
-module.exports = function makeAdminClientsRouter({ db, helpers }) {
+module.exports = function makeAdminClientsRouter({ db, helpers, presenceService }) {
   const router = express.Router();
   let customerGenderColumnPromise = null;
 
@@ -859,6 +859,11 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       sql: 'created_at DESC, id DESC',
       requiresOrderMetrics: false,
     },
+    online_desc: {
+      sql: 'COALESCE(last_order_date, created_at) DESC, id DESC',
+      requiresOrderMetrics: true,
+      onlineFirst: true,
+    },
   });
 
   function getClientSortQueryPlan(sortRaw) {
@@ -1011,9 +1016,19 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     };
   }
 
-  function sortClientsRows(rows, sortRaw) {
+  function sortClientsRows(rows, sortRaw, options = {}) {
     const list = Array.isArray(rows) ? rows.slice() : [];
     const sort = String(sortRaw || 'last_desc');
+    if (sort === 'online_desc') {
+      const onlineClientIds = options.onlineClientIds instanceof Set ? options.onlineClientIds : new Set();
+      return list.sort((a, b) => {
+        const onlineDiff = Number(onlineClientIds.has(Number(b?.id || 0))) - Number(onlineClientIds.has(Number(a?.id || 0)));
+        if (onlineDiff !== 0) return onlineDiff;
+        const left = a?.last_order_date ? new Date(a.last_order_date).getTime() : new Date(a?.created_at || 0).getTime();
+        const right = b?.last_order_date ? new Date(b.last_order_date).getTime() : new Date(b?.created_at || 0).getTime();
+        return right - left || Number(b?.id || 0) - Number(a?.id || 0);
+      });
+    }
     if (sort === 'name_asc') {
       return list.sort((a, b) => {
         const nameA = String(a?.name || '').trim();
@@ -1373,6 +1388,11 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       const filterId = req.query.filter_id ? Number(req.query.filter_id) : null;
       const sortRaw = helpers.strOrNull(req.query.sort) || 'last_desc';
       const lightweight = String(req.query.mode || '').trim().toLowerCase() === 'lightweight';
+      const onlineRaw = req.query.online === undefined ? '' : String(req.query.online).trim();
+      if (onlineRaw && onlineRaw !== '0' && onlineRaw !== '1') {
+        return res.status(400).json({ ok: false, error: 'BAD_ONLINE_FILTER' });
+      }
+      const onlineOnly = onlineRaw === '1';
 
       let limit = Number(req.query.limit ?? 50);
       let offset = Number(req.query.offset ?? 0);
@@ -1382,7 +1402,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       const defaultFilterConditions = { logic: 'AND', rules: [] };
       let customFilterQueryPlan = buildClientFilterQueryPlan(defaultFilterConditions, { sort: sortRaw });
-      const orderBy = customFilterQueryPlan.sortPlan.sql;
+      const needsOnlineIds = onlineOnly || customFilterQueryPlan.sortPlan.onlineFirst === true;
+      const onlineClientIds = new Set(needsOnlineIds && presenceService
+        ? presenceService.getOnlineClientIds({ tenantId, storeId }).map(Number)
+        : []);
 
       const where = ['c.tenant_id=?'];
       const params = [tenantId];
@@ -1395,6 +1418,17 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       if (qText) {
         where.push('(c.name LIKE ? OR c.phone LIKE ?)');
         params.push(`%${qText}%`, `%${qPhone || qText}%`);
+      }
+
+      if (onlineOnly) {
+        if (!onlineClientIds.size) {
+          if (lightweight) {
+            return res.json({ ok: true, data: [], has_more: false, next_offset: offset, limit, offset });
+          }
+          return res.json({ ok: true, data: [], total: 0, limit, offset });
+        }
+        where.push(`c.id IN (${Array.from(onlineClientIds, () => '?').join(',')})`);
+        params.push(...onlineClientIds);
       }
 
       // Применяем кастомный фильтр если указан
@@ -1439,7 +1473,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         const matchedRows = clients.filter((client) => (
           doesClientMatchCustomFilter(client, customFilterNodeConditions, { allowGender: !!filterSupport.gender })
         ));
-        const sortedRows = sortClientsRows(matchedRows, sortRaw);
+        const sortedRows = sortClientsRows(matchedRows, sortRaw, { onlineClientIds });
         const pageRows = sortedRows.slice(offset, offset + limit);
         if (lightweight) {
           return res.json({
@@ -1462,6 +1496,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       const clientsDatasetSql = getClientsDatasetSql(where.join(' AND '), { includeGender: !!filterSupport.gender });
       const clientsDatasetParams = params;
+      const onlineOrderIds = customFilterQueryPlan.sortPlan.onlineFirst ? Array.from(onlineClientIds) : [];
+      const orderBy = onlineOrderIds.length
+        ? `CASE WHEN id IN (${onlineOrderIds.map(() => '?').join(',')}) THEN 0 ELSE 1 END ASC, ${customFilterQueryPlan.sortPlan.sql}`
+        : customFilterQueryPlan.sortPlan.sql;
 
       const [rows] = await db.query(
         `SELECT
@@ -1475,7 +1513,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
          WHERE 1=1${customFilterClause}
          ORDER BY ${orderBy}
          LIMIT ? OFFSET ?`,
-        [...clientsDatasetParams, ...customFilterParams, lightweight ? limit + 1 : limit, offset]
+        [...clientsDatasetParams, ...customFilterParams, ...onlineOrderIds, lightweight ? limit + 1 : limit, offset]
       );
 
       if (lightweight) {

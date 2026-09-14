@@ -49,6 +49,7 @@ const {
 } = require('./data/tenant-map-config');
 const { searchSystemMapGeocoder, searchSystemAddressSuggest } = require('./data/map-geocoder');
 const { searchLocalAddressSuggest } = require('./data/local-address-index');
+const presenceService = require('./services/presence');
 const {
   isAddressServiceConfigured,
   suggestCities: suggestAddressServiceCities,
@@ -1932,14 +1933,98 @@ app.post('/api/max/webhook', (req, res) => {
 // ------------------------------
 // API: Public (публичные роуты должны быть ПЕРЕД админскими)
 // ------------------------------
-app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents }));
+app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents, presenceService }));
 app.use('/api/print', makePrintApiRouter({ db, helpers }));
 app.use('/api/chat-temp', makeChatTempRouter());
 
 // ------------------------------
 // API: Admin (требуют авторизации)
 // ------------------------------
-app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
+app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
+  const tenantId = Number(req.user?.tenantId || 0);
+  const storeId = Number(req.query?.store_id || 0);
+  if (!(tenantId > 0) || !(storeId > 0)) {
+    return res.status(400).json({ ok: false, error: 'INVALID_PRESENCE_SCOPE' });
+  }
+
+  try {
+    const [stores] = await db.query(
+      'SELECT id FROM ten_stores WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1',
+      [tenantId, storeId]
+    );
+    if (!Array.isArray(stores) || !stores.length) {
+      return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+    }
+  } catch (error) {
+    console.error('ADMIN_PRESENCE_SCOPE_FAILED:', error);
+    return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+  }
+
+  const scope = { tenantId, storeId };
+  const normalizeCounts = (counts) => ({
+    siteVisitors: Number(counts?.siteVisitors || 0),
+    identifiedOnlineClients: Number(counts?.identifiedClients || 0),
+    chatActiveClients: Number(counts?.chatClients || 0),
+  });
+  const writeEvent = (payload) => {
+    if (res.destroyed || res.writableEnded) return false;
+    try {
+      res.write(`event: presence\ndata: ${JSON.stringify(payload)}\n\n`);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  if (req.socket && typeof req.socket.setTimeout === 'function') req.socket.setTimeout(0);
+  res.write(': connected\n\n');
+
+  let closed = false;
+  const listener = (delta) => {
+    if (closed || Number(delta?.scope?.tenantId) !== tenantId || Number(delta?.scope?.storeId) !== storeId) return;
+    if (!writeEvent({
+      type: 'delta',
+      clientId: Number(delta.clientId || 0) || null,
+      previousState: String(delta.previousState || 'offline'),
+      state: String(delta.state || 'offline'),
+      counts: normalizeCounts(delta.counts),
+    })) cleanup();
+  };
+  const unsubscribe = presenceService.subscribe(listener);
+  const snapshot = presenceService.getSnapshot(scope);
+  let keepaliveTimer = null;
+  if (!writeEvent({
+    type: 'snapshot',
+    counts: normalizeCounts(snapshot.counts),
+    clients: snapshot.clients.map((client) => ({ clientId: Number(client.clientId), state: client.state })),
+  })) {
+    unsubscribe();
+    return res.end();
+  }
+
+  keepaliveTimer = setInterval(() => {
+    if (closed || res.destroyed || res.writableEnded) return cleanup();
+    try { res.write(': heartbeat\n\n'); } catch (_) { cleanup(); }
+  }, 25_000);
+  if (typeof keepaliveTimer.unref === 'function') keepaliveTimer.unref();
+
+  function cleanup() {
+    if (closed) return;
+    closed = true;
+    if (keepaliveTimer) clearInterval(keepaliveTimer);
+    unsubscribe();
+  }
+  req.on('close', cleanup);
+  res.on('close', cleanup);
+});
+
+app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers, presenceService }));
 app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers }));
 app.use('/api/admin/subscriptions', authMiddleware, makeAdminSubscriptionsRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
