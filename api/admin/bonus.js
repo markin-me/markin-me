@@ -1376,6 +1376,130 @@ async function promoteBonusAccountIfEligible(db, tenantId, customerId, accountRo
   return updatedAccountRow || accountRow;
 }
 
+async function buildCustomerBonusCard({ db, tenantId, customerId }) {
+  const [[customerRow]] = await db.query(
+    `SELECT
+        c.id, c.name, c.phone, c.photo,
+        COALESCE(order_metrics.total_orders, 0) AS total_orders,
+        COALESCE(order_metrics.total_spent, 0) AS total_spent
+       FROM cust_customers c
+       LEFT JOIN (
+         SELECT tenant_id, customer_id, COUNT(*) AS total_orders,
+                COALESCE(SUM(COALESCE(total_price, 0)), 0) AS total_spent
+           FROM order_orders
+          WHERE tenant_id = ? AND is_active = 1 AND customer_id IS NOT NULL
+          GROUP BY tenant_id, customer_id
+       ) order_metrics
+         ON order_metrics.tenant_id = c.tenant_id
+        AND order_metrics.customer_id = c.id
+      WHERE c.tenant_id = ? AND c.id = ?
+      LIMIT 1`,
+    [tenantId, tenantId, customerId]
+  );
+  if (!customerRow) {
+    throw Object.assign(new Error('CUSTOMER_NOT_FOUND'), { statusCode: 404 });
+  }
+
+  const config = await loadConfig(db, tenantId);
+  const [[accountRow]] = await db.query(
+    `SELECT id, customer_id, level_id, balance, total_accrued, total_redeemed,
+            total_expired, status, joined_at, level_assigned_at
+       FROM mkt_customer_bonus_accounts
+      WHERE tenant_id = ? AND customer_id = ?
+      LIMIT 1`,
+    [tenantId, customerId]
+  );
+  const promotedAccountRow = await promoteBonusAccountIfEligible(db, tenantId, customerId, accountRow, config.levels);
+  const accountLevelId = Number(promotedAccountRow?.level_id || 0);
+  const level = config.levels.find((item) => Number(item?.id || 0) === accountLevelId)
+    || config.levels.find((item) => item?.is_active)
+    || config.levels[0]
+    || null;
+  const levelId = Number(level?.id || accountLevelId || 0);
+  const progressByLevel = await loadBonusProgressByLevel(db, tenantId, customerId, promotedAccountRow, config.levels);
+  const levelsWithProgress = config.levels.map((item) => ({
+    ...item,
+    progress: progressByLevel.get(Number(item?.id || 0)) || null,
+  }));
+  const currentLevel = level
+    ? (levelsWithProgress.find((item) => Number(item?.id || 0) === Number(level.id || 0)) || level)
+    : null;
+
+  let favoriteCategories = [];
+  if (levelId > 0) {
+    const favoriteLimit = Math.max(0, Math.floor(Number(currentLevel?.favorite_categories_limit || 0)));
+    const [categoryRows] = await db.query(
+      `SELECT pc.id, pc.title, pc.icon, pc.sort_order, i.bonus_percent,
+              CASE WHEN selected.category_id IS NULL THEN 0 ELSE 1 END AS selected,
+              selected.created_at AS selected_at
+         FROM mkt_bonus_category_groups g
+         JOIN mkt_bonus_category_group_items i
+           ON i.tenant_id = g.tenant_id AND i.group_id = g.id
+         JOIN prod_categories pc
+           ON pc.tenant_id = i.tenant_id AND pc.id = i.category_id
+         LEFT JOIN mkt_customer_bonus_favorite_categories selected
+           ON selected.tenant_id = i.tenant_id
+          AND selected.customer_id = ?
+          AND selected.period_key = DATE_FORMAT(CURDATE(), '%Y-%m')
+          AND selected.category_id = i.category_id
+        WHERE g.tenant_id = ? AND g.month_number = MONTH(CURDATE()) AND pc.is_active = 1
+        ORDER BY selected.category_id IS NULL ASC, selected.created_at ASC, pc.sort_order ASC, pc.id ASC`,
+      [customerId, tenantId]
+    );
+    let selectedCount = 0;
+    favoriteCategories = (Array.isArray(categoryRows) ? categoryRows : []).map((row) => {
+      const selected = Number(row.selected || 0) === 1 && favoriteLimit > 0 && selectedCount < favoriteLimit;
+      if (selected) selectedCount += 1;
+      return {
+        id: Number(row.id || 0),
+        title: row.title || '',
+        icon: row.icon || null,
+        bonus_percent: Math.max(0, Number(row.bonus_percent || 0)),
+        selected,
+      };
+    });
+  }
+
+  const [transactionRows] = await db.query(
+    `SELECT t.id, t.level_id, t.type, t.amount, t.balance_after, t.reason, t.created_at,
+            l.title AS level_title
+       FROM mkt_customer_bonus_transactions t
+       LEFT JOIN mkt_bonus_levels l ON l.tenant_id = t.tenant_id AND l.id = t.level_id
+      WHERE t.tenant_id = ? AND t.customer_id = ?
+      ORDER BY t.created_at DESC, t.id DESC
+      LIMIT 10`,
+    [tenantId, customerId]
+  );
+
+  return {
+    settings: config.settings,
+    customer: {
+      id: Number(customerRow.id || 0),
+      name: customerRow.name || '',
+      phone: customerRow.phone || '',
+      photo: customerRow.photo || '',
+      total_orders: Number(customerRow.total_orders || 0),
+      total_spent: Number(customerRow.total_spent || 0),
+    },
+    account: promotedAccountRow ? {
+      id: Number(promotedAccountRow.id || 0),
+      customer_id: Number(promotedAccountRow.customer_id || 0),
+      level_id: promotedAccountRow.level_id == null ? null : Number(promotedAccountRow.level_id),
+      balance: Number(promotedAccountRow.balance || 0),
+      total_accrued: Number(promotedAccountRow.total_accrued || 0),
+      total_redeemed: Number(promotedAccountRow.total_redeemed || 0),
+      total_expired: Number(promotedAccountRow.total_expired || 0),
+      status: promotedAccountRow.status || 'active',
+      joined_at: promotedAccountRow.joined_at || null,
+      level_assigned_at: promotedAccountRow.level_assigned_at || null,
+    } : null,
+    level: currentLevel,
+    levels: levelsWithProgress,
+    favorite_categories: favoriteCategories,
+    transactions: (Array.isArray(transactionRows) ? transactionRows : []).map(mapBonusTransactionRow),
+  };
+}
+
 module.exports = function makeAdminBonusRouter({ db, helpers }) {
   const router = express.Router();
 
@@ -1518,135 +1642,12 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
       if (!Number.isInteger(customerId) || customerId <= 0) {
         return res.status(400).json({ ok: false, error: 'INVALID_CUSTOMER_ID' });
       }
-
-      const [[customerRow]] = await db.query(
-        `SELECT
-            c.id, c.name, c.phone, c.photo,
-            COALESCE(order_metrics.total_orders, 0) AS total_orders,
-            COALESCE(order_metrics.total_spent, 0) AS total_spent
-           FROM cust_customers c
-           LEFT JOIN (
-             SELECT
-               tenant_id,
-               customer_id,
-               COUNT(*) AS total_orders,
-               COALESCE(SUM(COALESCE(total_price, 0)), 0) AS total_spent
-             FROM order_orders
-             WHERE tenant_id = ? AND is_active = 1 AND customer_id IS NOT NULL
-             GROUP BY tenant_id, customer_id
-           ) order_metrics
-             ON order_metrics.tenant_id = c.tenant_id
-            AND order_metrics.customer_id = c.id
-          WHERE c.tenant_id = ? AND c.id = ?
-          LIMIT 1`,
-        [tenantId, tenantId, customerId]
-      );
-      if (!customerRow) {
+      const data = await buildCustomerBonusCard({ db, tenantId, customerId });
+      return res.json({ ok: true, data });
+    } catch (err) {
+      if (Number(err?.statusCode || 0) === 404) {
         return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
       }
-
-      const config = await loadConfig(db, tenantId);
-      const [[accountRow]] = await db.query(
-        `SELECT id, customer_id, level_id, balance, total_accrued, total_redeemed,
-                total_expired, status, joined_at, level_assigned_at
-           FROM mkt_customer_bonus_accounts
-          WHERE tenant_id = ? AND customer_id = ?
-          LIMIT 1`,
-        [tenantId, customerId]
-      );
-      const promotedAccountRow = await promoteBonusAccountIfEligible(db, tenantId, customerId, accountRow, config.levels);
-      const accountLevelId = Number(promotedAccountRow?.level_id || 0);
-      const level = config.levels.find((item) => Number(item?.id || 0) === accountLevelId)
-        || config.levels.find((item) => item?.is_active)
-        || config.levels[0]
-        || null;
-      const levelId = Number(level?.id || accountLevelId || 0);
-      const progressByLevel = await loadBonusProgressByLevel(db, tenantId, customerId, promotedAccountRow, config.levels);
-      const levelsWithProgress = config.levels.map((item) => ({
-        ...item,
-        progress: progressByLevel.get(Number(item?.id || 0)) || null,
-      }));
-      const currentLevel = level
-        ? (levelsWithProgress.find((item) => Number(item?.id || 0) === Number(level.id || 0)) || level)
-        : null;
-
-      let favoriteCategories = [];
-      if (levelId > 0) {
-        const favoriteLimit = Math.max(0, Math.floor(Number(currentLevel?.favorite_categories_limit || 0)));
-        const [categoryRows] = await db.query(
-          `SELECT pc.id, pc.title, pc.icon, pc.sort_order, i.bonus_percent,
-                  CASE WHEN selected.category_id IS NULL THEN 0 ELSE 1 END AS selected,
-                  selected.created_at AS selected_at
-             FROM mkt_bonus_category_groups g
-             JOIN mkt_bonus_category_group_items i
-               ON i.tenant_id = g.tenant_id AND i.group_id = g.id
-             JOIN prod_categories pc
-               ON pc.tenant_id = i.tenant_id AND pc.id = i.category_id
-             LEFT JOIN mkt_customer_bonus_favorite_categories selected
-               ON selected.tenant_id = i.tenant_id
-              AND selected.customer_id = ?
-              AND selected.period_key = DATE_FORMAT(CURDATE(), '%Y-%m')
-              AND selected.category_id = i.category_id
-            WHERE g.tenant_id = ? AND g.month_number = MONTH(CURDATE()) AND pc.is_active = 1
-            ORDER BY selected.category_id IS NULL ASC, selected.created_at ASC, pc.sort_order ASC, pc.id ASC`,
-          [customerId, tenantId]
-        );
-        let selectedCount = 0;
-        favoriteCategories = (Array.isArray(categoryRows) ? categoryRows : []).map((row) => {
-          const selected = Number(row.selected || 0) === 1 && favoriteLimit > 0 && selectedCount < favoriteLimit;
-          if (selected) selectedCount += 1;
-          return {
-          id: Number(row.id || 0),
-          title: row.title || '',
-          icon: row.icon || null,
-          bonus_percent: Math.max(0, Number(row.bonus_percent || 0)),
-          selected,
-        };
-        });
-      }
-
-      const [transactionRows] = await db.query(
-        `SELECT t.id, t.level_id, t.type, t.amount, t.balance_after, t.reason, t.created_at,
-                l.title AS level_title
-           FROM mkt_customer_bonus_transactions t
-           LEFT JOIN mkt_bonus_levels l ON l.tenant_id = t.tenant_id AND l.id = t.level_id
-          WHERE t.tenant_id = ? AND t.customer_id = ?
-          ORDER BY t.created_at DESC, t.id DESC
-          LIMIT 10`,
-        [tenantId, customerId]
-      );
-
-      return res.json({
-        ok: true,
-        data: {
-          settings: config.settings,
-          customer: {
-            id: Number(customerRow.id || 0),
-            name: customerRow.name || '',
-            phone: customerRow.phone || '',
-            photo: customerRow.photo || '',
-            total_orders: Number(customerRow.total_orders || 0),
-            total_spent: Number(customerRow.total_spent || 0),
-          },
-          account: promotedAccountRow ? {
-            id: Number(promotedAccountRow.id || 0),
-            customer_id: Number(promotedAccountRow.customer_id || 0),
-            level_id: promotedAccountRow.level_id == null ? null : Number(promotedAccountRow.level_id),
-            balance: Number(promotedAccountRow.balance || 0),
-            total_accrued: Number(promotedAccountRow.total_accrued || 0),
-            total_redeemed: Number(promotedAccountRow.total_redeemed || 0),
-            total_expired: Number(promotedAccountRow.total_expired || 0),
-            status: promotedAccountRow.status || 'active',
-            joined_at: promotedAccountRow.joined_at || null,
-            level_assigned_at: promotedAccountRow.level_assigned_at || null,
-          } : null,
-          level: currentLevel,
-          levels: levelsWithProgress,
-          favorite_categories: favoriteCategories,
-          transactions: (Array.isArray(transactionRows) ? transactionRows : []).map(mapBonusTransactionRow),
-        },
-      });
-    } catch (err) {
       console.error('GET /api/admin/bonus/customers/:customerId/card error:', err);
       return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
     }
@@ -1681,3 +1682,5 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
 
   return router;
 };
+
+module.exports.buildCustomerBonusCard = buildCustomerBonusCard;

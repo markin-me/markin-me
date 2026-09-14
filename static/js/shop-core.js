@@ -5004,14 +5004,11 @@
     const cachedEnabled = isStorefrontChatWidgetEnabled();
     syncStorefrontChatButtonVisibility(cachedEnabled);
     if (window.__shopChatUrl === "") return;
-    ensureShopChatLoaded().catch(function () {});
-
     const resolved = await resolveStorefrontChatWidgetEnabledFromApi(cachedEnabled);
     if (resolved === cachedEnabled) return;
 
     persistStorefrontChatWidgetEnabled(resolved);
     syncStorefrontChatButtonVisibility(resolved);
-    ensureShopChatLoaded().catch(function () {});
     broadcastStorefrontChatWidgetChanged(resolved);
   }
 
@@ -5031,7 +5028,6 @@
     persistStorefrontChatWidgetEnabled(enabled);
     syncStorefrontChatButtonVisibility(enabled);
     if (window.__shopChatUrl === "") return;
-    ensureShopChatLoaded().catch(function () {});
     broadcastStorefrontChatWidgetChanged(enabled);
   }
 
@@ -13058,6 +13054,10 @@ async function initAddresses() {
 
       ensureShopLateLoaded().then(() => {
         openSheet();
+      }).catch(() => {
+        if (elCatSheetTriggerBtn) {
+          elCatSheetTriggerBtn.setAttribute('title', 'Не удалось загрузить категории. Повторите попытку.');
+        }
       });
     };
 
@@ -13656,8 +13656,9 @@ async function initAddresses() {
 
   let __shopChatPromise = null;
   function ensureShopChatLoaded() {
+    if (window.__shopChatUrl === "") return Promise.reject(new Error('SHOP_CHAT_UNAVAILABLE'));
     if (__shopChatPromise) return __shopChatPromise;
-    __shopChatPromise = new Promise((resolve) => {
+    __shopChatPromise = new Promise((resolve, reject) => {
       if (window.__shopChatLoaded) {
         resolve();
         return;
@@ -13669,8 +13670,9 @@ async function initAddresses() {
           resolve();
         });
         existing.addEventListener('error', () => {
+          try { existing.remove(); } catch {}
           __shopChatPromise = null;
-          resolve();
+          reject(new Error('SHOP_CHAT_LOAD_FAILED'));
         });
         return;
       }
@@ -13684,8 +13686,9 @@ async function initAddresses() {
         resolve();
       };
       sc.onerror = () => {
+        try { sc.remove(); } catch {}
         __shopChatPromise = null;
-        resolve();
+        reject(new Error('SHOP_CHAT_LOAD_FAILED'));
       };
       document.head.appendChild(sc);
     });
@@ -13696,7 +13699,7 @@ async function initAddresses() {
   let __shopLatePromise = null;
   function ensureShopLateLoaded() {
     if (__shopLatePromise) return __shopLatePromise;
-    __shopLatePromise = new Promise((resolve) => {
+    __shopLatePromise = new Promise((resolve, reject) => {
       if (window.__shopLateLoaded) {
         resolve();
         return;
@@ -13714,7 +13717,7 @@ async function initAddresses() {
         existing.addEventListener('error', () => {
           try { existing.remove(); } catch {}
           __shopLatePromise = null;
-          resolve();
+          reject(new Error('SHOP_LATE_LOAD_FAILED'));
         });
         return;
       }
@@ -13733,7 +13736,7 @@ async function initAddresses() {
       s.onerror = () => {
         try { s.remove(); } catch {}
         __shopLatePromise = null;
-        resolve();
+        reject(new Error('SHOP_LATE_LOAD_FAILED'));
       };
       document.head.appendChild(s);
     });
@@ -13811,6 +13814,9 @@ async function initAddresses() {
           ensureShopLateLoaded().then(() => {
             try { el.disabled = prevDisabled; } catch {}
             try { el.click(); } catch {}
+          }).catch(() => {
+            try { el.disabled = prevDisabled; } catch {}
+            el.setAttribute('title', 'Не удалось загрузить. Повторите попытку.');
           });
         },
         { capture: true }
@@ -13821,20 +13827,25 @@ async function initAddresses() {
     bindClickLazy(elCheckoutBtn);
     bindClickLazy(elCartClearBtn);
 
-    if (elCompanyChatOpenBtn && elCompanyChatOpenBtn.addEventListener) {
-      elCompanyChatOpenBtn.addEventListener(
+    [elCompanyChatOpenBtn, document.getElementById("shopHeaderCompanyChatOpenBtn")].filter(Boolean).forEach((chatButton) => {
+      chatButton.addEventListener(
         "click",
         (e) => {
           if (window.__shopChatLoaded) return;
           e.preventDefault();
           e.stopPropagation();
+          chatButton.setAttribute('aria-busy', 'true');
           ensureShopChatLoaded().then(() => {
-            try { elCompanyChatOpenBtn.click(); } catch {}
+            chatButton.removeAttribute('aria-busy');
+            try { chatButton.click(); } catch {}
+          }).catch(() => {
+            chatButton.removeAttribute('aria-busy');
+            chatButton.setAttribute('title', 'Не удалось открыть чат. Повторите попытку.');
           });
         },
         { capture: true }
       );
-    }
+    });
   }
 
   function openComboDetails(comboId, opts = {}) {
@@ -19150,6 +19161,11 @@ function updateCartBadge() {
         ? openCartSheetCtx?.checkoutUpsellHostEl?.querySelector(".shop-cart-upsell")
         : null
     );
+    var isActiveCheckoutList = openCartSheetCtx?.listEl === listEl
+      && document.body?.classList.contains("shop-checkout-overlay-open");
+    var checkoutUpsellHost = openCartSheetCtx?.listEl === listEl && !isActiveCheckoutList
+      ? openCartSheetCtx?.checkoutUpsellHostEl
+      : null;
     var scrollEl;
 
     if (!upsellEl) {
@@ -19169,9 +19185,6 @@ function updateCartBadge() {
       }, { passive: false });
       upsellEl.appendChild(titleEl);
       upsellEl.appendChild(scrollEl);
-      var checkoutUpsellHost = openCartSheetCtx?.listEl === listEl
-        ? openCartSheetCtx?.checkoutUpsellHostEl
-        : null;
       (checkoutUpsellHost || listEl).appendChild(upsellEl);
     } else {
       scrollEl = upsellEl.querySelector(".shop-cart-upsell-scroll");
@@ -19184,6 +19197,11 @@ function updateCartBadge() {
       if (upsellEl.parentNode === listEl && upsellEl !== listEl.lastElementChild) {
         listEl.appendChild(upsellEl);
       }
+    }
+
+    var targetUpsellParent = checkoutUpsellHost || listEl;
+    if (upsellEl.parentNode !== targetUpsellParent) {
+      targetUpsellParent.appendChild(upsellEl);
     }
 
     const marqueeTrack = scrollEl.querySelector(":scope > .shop-cart-upsell-marquee-track");
@@ -19223,7 +19241,9 @@ function updateCartBadge() {
     if (openCartSheetCtx?.checkoutUpsellHostEl?.contains(upsellEl)) {
       enableCheckoutUpsellAutoScroll(scrollEl);
     }
-    if (openCartSheetCtx?.listEl === listEl) moveKsoCartUpsellToFooter(openCartSheetCtx);
+    if (openCartSheetCtx?.listEl === listEl && !isActiveCheckoutList) {
+      moveKsoCartUpsellToFooter(openCartSheetCtx);
+    }
   }
 
   function moveKsoCartUpsellToFooter(ctx = openCartSheetCtx) {
@@ -20158,7 +20178,6 @@ function updateCartBadge() {
 // -----------------------------
 const SHOP_SPLASH_MIN_VISIBLE_MS = 1500;
 const SHOP_SPLASH_INTERACTION_READY_MIN_MS = 2500;
-const SHOP_SPLASH_INTERACTION_READY_MAX_MS = 7000;
 const SHOP_SPLASH_PRODUCTS_READY_MAX_MS = 4500;
 const SHOP_SPLASH_FADE_OUT_MS = 350;
 const __shopSplashStartedAt = Date.now();
@@ -20305,22 +20324,7 @@ async function initCore() {
         queueVisibleProductStockRefresh("first_products_loaded", 0);
         prioritizeAboveFoldCardImages();
         scheduleAllProductIngredientBatch();
-        if (Number.isFinite(Number(state.activeCategoryId)) && Number(state.activeCategoryId) > 0) {
-          void warmInitialCatalogInteractionData({
-            categoryIds: [Number(state.activeCategoryId)],
-            productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
-            comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
-          });
-        }
       }).catch(() => {});
-    }
-    const shopLateReadyPromise = ensureShopLateLoaded().catch(() => false);
-    if (productsReadyForFirstPaint && Number.isFinite(Number(state.activeCategoryId)) && Number(state.activeCategoryId) > 0) {
-      warmInitialCatalogInteractionData({
-        categoryIds: [Number(state.activeCategoryId)],
-        productLimit: INITIAL_CATALOG_PREFETCH_PRODUCTS,
-        comboLimit: INITIAL_CATALOG_PREFETCH_COMBOS,
-      }).catch(() => false);
     }
     void homeBonusConfigPromise;
     cartEnhancersStartupPromise.then(() => {
@@ -20336,13 +20340,6 @@ async function initCore() {
     }).catch(() => {});
 
     // Убираем loader — контент готов
-    await withShopSplashTimeout(
-      Promise.allSettled([
-        shopLateReadyPromise,
-        addressPromise,
-      ]),
-      SHOP_SPLASH_INTERACTION_READY_MAX_MS
-    );
     scheduleHideShopSplash(SHOP_SPLASH_INTERACTION_READY_MIN_MS);
 
     // Batch-загрузка ингредиентов для всех товаров одним запросом
@@ -20373,12 +20370,6 @@ async function initCore() {
     syncStorefrontChatWidgetStateOnBoot().catch(function () {});
     startStockSync();
 
-    // Раньше initShopLate/ensureShopLateLoaded запускались только после первого клика.
-    // Теперь мы инициализируем late-часть сразу после загрузки магазина,
-    // чтобы корзина и остальные элементы не зависели от первого взаимодействия.
-    try {
-      ensureShopLateLoaded();
-    } catch {}
   } catch (e) {
     console.error(e);
     scheduleHideShopSplash();

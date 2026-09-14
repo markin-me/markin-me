@@ -1,5 +1,19 @@
 (() => {
 
+  function initSettingsPresenceCounts() {
+    const siteCount = document.getElementById("settingsPresenceSiteCount");
+    const chatCount = document.getElementById("settingsPresenceChatCount");
+    if (!siteCount || !chatCount || !window.AdminPresence || typeof window.AdminPresence.subscribe !== "function") return;
+    window.AdminPresence.subscribe(function (change) {
+      if (change && change.type === "pending") return;
+      const counts = window.AdminPresence.getCounts();
+      siteCount.textContent = String(Number(counts.siteVisitors || 0));
+      chatCount.textContent = String(Number(counts.chatActiveClients || 0));
+    });
+  }
+
+  initSettingsPresenceCounts();
+
 
 
   function formatValue(key, value) {
@@ -3104,7 +3118,7 @@
         body: JSON.stringify({ pwa_qr_badge_text: nextText })
       });
       const data = await response.json();
-      if (!data || !data.ok || !data.tenant) return;
+      if (!data || !data.ok || !data.tenant) return null;
       if (saveSeq !== tenantPwaDesignerBadgeSaveSeq) return;
       if (typeof updateTenantCache === "function") {
         updateTenantCache(data.tenant);
@@ -6012,12 +6026,13 @@
 
       }
 
-
+      return tenant;
 
     } catch (err) {
       const errMessage = err && err.message ? String(err.message) : String(err || "");
       const errStack = err && err.stack ? String(err.stack) : "";
       console.error("Не удалось загрузить профиль tenant:", errMessage, errStack);
+      return null;
     }
 
 
@@ -7130,7 +7145,7 @@
 
 
 
-        ensurePrintTemplatesLoaded();
+        // Data initialization is handled by ensureSettingsSection().
 
 
 
@@ -7162,7 +7177,24 @@
 
 
 
-    const initialSettingsSection = document.body.getAttribute("data-settings-section") || "tenant";
+    const settingsSectionKeys = new Set(
+      Array.from(settingsSectionButtons)
+        .map((button) => String(button.getAttribute("data-settings-section") || "").trim())
+        .filter(Boolean)
+    );
+
+    function getSettingsSectionFromLocation() {
+      const hashSection = decodeURIComponent(String(window.location.hash || "").replace(/^#/, "")).trim();
+      return settingsSectionKeys.has(hashSection) ? hashSection : "tenant";
+    }
+
+    const initialSettingsSection = getSettingsSectionFromLocation();
+
+    settingsSectionButtons.forEach((button) => {
+      button.classList.toggle("is-active", button.getAttribute("data-settings-section") === initialSettingsSection);
+    });
+
+    document.body.setAttribute("data-settings-section", initialSettingsSection);
 
 
 
@@ -7190,7 +7222,7 @@
 
 
 
-      ensureChatSidebarBadgeScriptLoaded().catch(() => {});
+      // Chat dependencies are loaded by ensureSettingsSection("chats").
 
 
 
@@ -7286,7 +7318,7 @@
 
 
 
-          ensureChatSidebarBadgeScriptLoaded().catch(() => {});
+          // Chat dependencies are loaded by ensureSettingsSection("chats").
 
 
 
@@ -7422,15 +7454,7 @@
 
 
 
-        if (isProductionZones) {
-
-
-
-          loadProductionZones();
-
-
-
-        }
+        // Section data is loaded by the shared one-time lifecycle below.
 
 
 
@@ -7490,7 +7514,7 @@
 
 
 
-          loadStores();
+          // Stores are loaded by ensureSettingsSection("stores").
 
 
 
@@ -8290,6 +8314,7 @@
 
 
     const settingsPrintApiStore = document.getElementById("settingsPrintApiStore");
+    const settingsPrintApiStoreValue = document.getElementById("settingsPrintApiStoreValue");
 
 
 
@@ -8302,6 +8327,7 @@
 
 
     const settingsPrintApiCopyToken = document.getElementById("settingsPrintApiCopyToken");
+    const settingsPrintApiRevealToken = document.getElementById("settingsPrintApiRevealToken");
 
 
 
@@ -8310,10 +8336,14 @@
 
 
     const settingsPrintApiPrinterStatus = document.getElementById("settingsPrintApiPrinterStatus");
+    const settingsPrintApiPrinterStatusValue = document.getElementById("settingsPrintApiPrinterStatusValue");
 
 
 
     const settingsPrintApiPrinterName = document.getElementById("settingsPrintApiPrinterName");
+    const settingsPrintApiName = document.getElementById("settingsPrintApiName");
+    const settingsPrintApiHierarchy = document.getElementById("settingsPrintApiHierarchy");
+    const settingsPrintApiActive = document.getElementById("settingsPrintApiActive");
 
 
 
@@ -9056,6 +9086,7 @@
 
     let printApiListItems = [];
     let printApiActiveStoreId = 0;
+    let printApiSelectedConnectionId = 0;
 
 
 
@@ -12882,7 +12913,7 @@
 
 
 
-    loadTenantProfile();
+    // The active section requests tenant data through ensureSettingsSection().
 
 
 
@@ -27815,6 +27846,8 @@
 
 
         const storeId = Number(settingsPrintApiStore.value);
+        printApiActiveStoreId = storeId;
+        printApiSelectedConnectionId = 0;
 
 
 
@@ -27822,7 +27855,7 @@
 
 
 
-          loadPrintApiToken(storeId);
+          resetPrintApiFormForCreate(storeId);
 
 
 
@@ -27862,7 +27895,7 @@
 
 
 
-        if (storeId) checkPrintApiConnection(storeId);
+        if (storeId && printApiSelectedConnectionId) checkPrintApiConnection(storeId);
 
 
 
@@ -27963,6 +27996,8 @@
 
 
           setPrintApiDraftMode(false);
+
+          await loadPrintApiCards();
 
 
 
@@ -42902,9 +42937,13 @@
 
 
 
-    function resetPrintApiFormForCreate() {
-      if (settingsPrintApiStore) settingsPrintApiStore.value = "";
+    function resetPrintApiFormForCreate(storeId = 0) {
+      if (settingsPrintApiStore) settingsPrintApiStore.value = storeId ? String(storeId) : "";
+      if (settingsPrintApiName) settingsPrintApiName.value = "";
+      if (settingsPrintApiActive) settingsPrintApiActive.checked = true;
       if (settingsPrintApiToken) settingsPrintApiToken.value = "";
+      if (settingsPrintApiToken) settingsPrintApiToken.type = "password";
+      if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.textContent = "Показать";
       resetPrintApiDeviceState({
         statusText: "Сначала выберите филиал",
         printerText: "Нет токена подключения"
@@ -42926,11 +42965,12 @@
 
 
 
-    function setPrintApiDeviceState(statusText, printerText, printers = []) {
+    function setPrintApiDeviceState(statusText, printerText, printers = [], agents = []) {
 
 
 
       if (settingsPrintApiPrinterStatus) settingsPrintApiPrinterStatus.value = String(statusText || "");
+      if (settingsPrintApiPrinterStatusValue) settingsPrintApiPrinterStatusValue.textContent = String(statusText || "");
 
 
 
@@ -42943,6 +42983,10 @@
           opt.textContent = String(printerText || "Нет подключенных принтеров");
           settingsPrintApiPrinterName.appendChild(opt);
         } else {
+          const emptyOpt = document.createElement("option");
+          emptyOpt.value = "";
+          emptyOpt.textContent = "Не выбран";
+          settingsPrintApiPrinterName.appendChild(emptyOpt);
           items.forEach((printer) => {
             const opt = document.createElement("option");
             const id = Number(printer && printer.id);
@@ -42950,22 +42994,75 @@
             const displayName = String((printer && printer.display_name) || systemName);
             const status = String((printer && printer.status) || "");
             opt.value = id > 0 ? String(id) : "";
-            const isDefault = Number(printer && printer.is_default) === 1;
             const flags = [];
-            if (isDefault) flags.push("по умолчанию");
             if (status) flags.push(status);
-            opt.textContent = `${displayName || systemName}${displayName && systemName && displayName !== systemName ? ` (${systemName})` : ""}${flags.length ? ` - ${flags.join(", ")}` : ""}`;
+            const connection = printApiListItems.find((item) => Number(item.token_id) === Number(printer.token_id));
+            opt.textContent = `${connection?.display_name || `Подключение #${printer.token_id}`} → ${printer.device_name || `Компьютер #${printer.agent_id}`} → ${displayName || systemName}${displayName && systemName && displayName !== systemName ? ` (${systemName})` : ""}${flags.length ? ` - ${flags.join(", ")}` : ""}`;
             if (status === "offline") opt.className = "muted";
-            if (isDefault) opt.selected = true;
             settingsPrintApiPrinterName.appendChild(opt);
           });
-          if (!settingsPrintApiPrinterName.value && settingsPrintApiPrinterName.options.length) {
-            settingsPrintApiPrinterName.selectedIndex = 0;
-          }
         }
       }
 
 
+
+      if (settingsPrintApiHierarchy) {
+        settingsPrintApiHierarchy.innerHTML = "";
+        const connectionAgents = Array.isArray(agents) ? agents : [];
+        if (!connectionAgents.length) settingsPrintApiHierarchy.textContent = "Устройства ещё не подключены";
+        connectionAgents.forEach((agent) => {
+          const agentId = Number(agent.id || 0);
+          const agentPrinters = Array.isArray(agent.printers) ? agent.printers : [];
+          const block = document.createElement("div");
+          block.className = "settings-print-api-agent";
+          const header = document.createElement("div");
+          header.className = "settings-print-api-agent-header";
+          const title = document.createElement("strong");
+          title.textContent = String(agent.device_name || (agentId ? `Компьютер #${agentId}` : "Устройство"));
+          const meta = document.createElement("span");
+          meta.className = "settings-print-api-agent-meta";
+          meta.textContent = `${Number(agent.is_online) === 1 ? "Онлайн" : "Не в сети"} · ${agent.last_heartbeat_at ? "Последняя связь: " + agent.last_heartbeat_at : "Связь не установлена"} · версия ${agent.agent_version || "—"}`;
+          header.append(title, meta);
+          block.appendChild(header);
+          const tableWrap = document.createElement("div");
+          tableWrap.className = "settings-print-api-table-wrap";
+          const table = document.createElement("table");
+          table.className = "settings-print-api-table";
+          table.innerHTML = "<thead><tr><th>Принтер</th><th>Статус</th><th>Действие</th></tr></thead>";
+          const tbody = document.createElement("tbody");
+          if (!agentPrinters.length) {
+            const emptyRow = document.createElement("tr");
+            const emptyCell = document.createElement("td");
+            emptyCell.colSpan = 3;
+            emptyCell.className = "muted";
+            emptyCell.textContent = "Принтеры ещё не подключены";
+            emptyRow.appendChild(emptyCell);
+            tbody.appendChild(emptyRow);
+          }
+          agentPrinters.forEach((printer) => {
+            const row = document.createElement("tr");
+            const nameCell = document.createElement("td");
+            nameCell.textContent = String(printer.display_name || printer.system_name || "Принтер");
+            const statusCell = document.createElement("td");
+            const isOffline = String(printer.status || "offline") === "offline";
+            statusCell.textContent = isOffline ? "Не в сети" : "Онлайн";
+            statusCell.className = isOffline ? "is-offline" : "is-online";
+            const actionCell = document.createElement("td");
+            const testBtn = document.createElement("button");
+            testBtn.type = "button";
+            testBtn.className = "btn btn-link btn-sm";
+            testBtn.textContent = "Тест";
+            testBtn.addEventListener("click", () => testPrintApiPrinter(Number(printer.id)));
+            actionCell.appendChild(testBtn);
+            row.append(nameCell, statusCell, actionCell);
+            tbody.appendChild(row);
+          });
+          table.appendChild(tbody);
+          tableWrap.appendChild(table);
+          block.appendChild(tableWrap);
+          settingsPrintApiHierarchy.appendChild(block);
+        });
+      }
 
       if (printApiListLoaded) {
         renderPrintApiCards();
@@ -43121,8 +43218,15 @@
 
     function getProductionZonePrinterName(printerId) {
       const printer = productionZonesState.printers.find((item) => Number(item.id) === Number(printerId));
-      if (!printer) return "";
-      return String(printer.display_name || printer.system_name || "");
+      if (!printer) return printerId ? `\u041f\u0440\u0438\u043d\u0442\u0435\u0440 #${printerId} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d` : "";
+      const name = String(printer.display_name || printer.system_name || `#${printer.id}`);
+      const agentName = String(printer.agent_name || `PC #${printer.agent_id || "-"}`);
+      const connectionName = String(printer.connection_name || `\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 #${printer.token_id || "-"}`);
+      const isOnline = Number(printer.agent_online || 0) === 1 && String(printer.status || "").toLowerCase() === "online";
+      const status = Number(printer.connection_active || 0) !== 1
+        ? "\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 \u043e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u043e"
+        : (isOnline ? "\u043e\u043d\u043b\u0430\u0439\u043d" : "\u043e\u0444\u043b\u0430\u0439\u043d");
+      return `${name} \u00b7 ${agentName} \u00b7 ${connectionName} \u00b7 ${status}`;
     }
 
 
@@ -43175,19 +43279,24 @@
       if (!printers.length) {
         const opt = document.createElement("option");
         opt.value = "";
-        opt.textContent = "\u041d\u0435\u0442 online-\u043f\u0440\u0438\u043d\u0442\u0435\u0440\u043e\u0432";
+        opt.textContent = "\u041d\u0435\u0442 \u0437\u0430\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0445 \u043f\u0440\u0438\u043d\u0442\u0435\u0440\u043e\u0432";
         productionZonePrinterSelect.appendChild(opt);
         return;
       }
       printers.forEach((printer) => {
         const opt = document.createElement("option");
         opt.value = String(printer.id);
-        const name = String(printer.display_name || printer.system_name || "");
-        opt.textContent = printer.is_default ? `${name} - \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e` : name;
+        opt.textContent = getProductionZonePrinterName(printer.id);
         if (Number(printer.id) === Number(selectedPrinterId)) opt.selected = true;
         productionZonePrinterSelect.appendChild(opt);
       });
-      if (!productionZonePrinterSelect.value && productionZonePrinterSelect.options.length) {
+      if (selectedPrinterId > 0 && !productionZonePrinterSelect.value) {
+        const missing = document.createElement("option");
+        missing.value = String(selectedPrinterId);
+        missing.textContent = `\u041f\u0440\u0438\u043d\u0442\u0435\u0440 #${selectedPrinterId} \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d / \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d`;
+        missing.selected = true;
+        productionZonePrinterSelect.appendChild(missing);
+      } else if (!productionZonePrinterSelect.value && productionZonePrinterSelect.options.length) {
         productionZonePrinterSelect.selectedIndex = 0;
       }
     }
@@ -43321,17 +43430,17 @@
       apiPanelCards.innerHTML = "";
       const stores = Array.isArray(storesState.items) ? storesState.items : [];
       const rows = Array.isArray(printApiListItems) ? printApiListItems : [];
-      const rowByStoreId = new Map(rows.map((row) => [Number(row.store_id || 0), row]));
       if (settingsApiCardsHeader) settingsApiCardsHeader.classList.toggle("hidden", !stores.length);
       if (!stores.length) return;
       stores.forEach((store) => {
-        const rowData = rowByStoreId.get(Number(store.id)) || {};
+        const connections = rows.filter((item) => Number(item.store_id || 0) === Number(store.id) && Number(item.token_id || 0) > 0);
+        const renderRow = (rowData) => {
         const isConnected = Number(rowData.agent_online || 0) === 1;
-        const hasToken = Boolean(rowData.token);
+        const hasConnection = Number(rowData.token_id || 0) > 0;
         const row = document.createElement("button");
         row.type = "button";
         row.className = "settings-home-card settings-card settings-api-card";
-        row.classList.toggle("is-active", Number(settingsPrintApiStore && settingsPrintApiStore.value || 0) === Number(store.id));
+        row.classList.toggle("is-active", hasConnection && printApiSelectedConnectionId === Number(rowData.token_id));
 
         const avatar = document.createElement("div");
         avatar.className = "product-avatar";
@@ -43341,10 +43450,10 @@
         info.className = "order-col";
         const title = document.createElement("div");
         title.className = "product-title";
-        title.textContent = "API для печати на удалённом принтере";
+        title.textContent = hasConnection ? String(rowData.display_name || `Подключение #${rowData.token_id}`) : "Нет подключений";
         const subtitle = document.createElement("div");
         subtitle.className = "muted";
-        subtitle.textContent = String(store.name || `Филиал #${store.id}`);
+        subtitle.textContent = `${String(store.name || `Филиал #${store.id}`)}${hasConnection ? ` · устройств: ${Number(rowData.agent_count || 0)}` : ""}`;
         info.appendChild(title);
         info.appendChild(subtitle);
 
@@ -43359,17 +43468,33 @@
         action.className = "order-col settings-api-card-actions";
         const badge = document.createElement("span");
         badge.className = "badge";
-        badge.textContent = hasToken ? "Открыть" : "Создать";
+        badge.textContent = hasConnection ? (Number(rowData.is_active) === 1 ? "Активно" : "Отключено") : "Добавить";
         action.appendChild(badge);
 
         row.appendChild(avatar);
         row.appendChild(info);
         row.appendChild(status);
         row.appendChild(action);
-        row.addEventListener("click", () => openPrintApiForStore(Number(store.id), String(store.name || `Филиал #${store.id}`)));
+        row.addEventListener("click", () => openPrintApiForStore(Number(store.id), String(store.name || `Филиал #${store.id}`), Number(rowData.token_id || 0)));
         apiPanelCards.appendChild(row);
+        };
+        if (connections.length) connections.forEach(renderRow);
+        else renderRow({ store_id: store.id });
       });
     }
+
+    if (settingsPrintApiRevealToken && settingsPrintApiToken) {
+      settingsPrintApiRevealToken.addEventListener("click", () => {
+        const shouldReveal = settingsPrintApiToken.type === "password";
+        settingsPrintApiToken.type = shouldReveal ? "text" : "password";
+        settingsPrintApiRevealToken.textContent = shouldReveal ? "Скрыть" : "Показать";
+      });
+    }
+
+    [settingsPrintApiName, settingsPrintApiActive].filter(Boolean).forEach((control) => {
+      control.addEventListener("input", markPrintApiSettingsDirty);
+      control.addEventListener("change", markPrintApiSettingsDirty);
+    });
 
 
 
@@ -43418,6 +43543,9 @@
     function collectPrintApiFormSnapshot() {
       return {
         store_id: Number(settingsPrintApiStore && settingsPrintApiStore.value) || 0,
+        connection_id: printApiSelectedConnectionId,
+        name: String(settingsPrintApiName && settingsPrintApiName.value || ""),
+        is_active: settingsPrintApiActive && settingsPrintApiActive.checked ? 1 : 0,
         token: String((settingsPrintApiToken && settingsPrintApiToken.value) || ""),
         printer_status: String((settingsPrintApiPrinterStatus && settingsPrintApiPrinterStatus.value) || ""),
         printer_name: String((settingsPrintApiPrinterName && settingsPrintApiPrinterName.value) || ""),
@@ -43434,7 +43562,12 @@
     function applyPrintApiSnapshot(snapshot) {
       const safe = snapshot || {};
       if (settingsPrintApiStore) settingsPrintApiStore.value = safe.store_id ? String(safe.store_id) : "";
+      printApiSelectedConnectionId = Number(safe.connection_id || 0);
+      if (settingsPrintApiName) settingsPrintApiName.value = String(safe.name || "");
+      if (settingsPrintApiActive) settingsPrintApiActive.checked = Number(safe.is_active ?? 1) === 1;
       if (settingsPrintApiToken) settingsPrintApiToken.value = String(safe.token || "");
+      if (settingsPrintApiToken) settingsPrintApiToken.type = "password";
+      if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.textContent = "Показать";
       setPrintApiDeviceState(safe.printer_status, safe.printer_name);
       applyPrintApiNotificationSettings(safe);
       if (settingsPrintApiGenerateBtn) {
@@ -43495,7 +43628,7 @@
 
 
 
-    async function openPrintApiForStore(storeId, title) {
+    async function openPrintApiForStore(storeId, title, connectionId = 0) {
       if (!storeId) return;
       const tabId = getPrintApiTabKey(storeId);
       let tab = getPrintApiTabState(tabId);
@@ -43516,9 +43649,12 @@
       }
       populatePrintApiStores(storesState.items);
       printApiActiveStoreId = Number(storeId);
+      if (settingsPrintApiStore) settingsPrintApiStore.value = String(storeId);
+      printApiSelectedConnectionId = Number(connectionId || 0);
       renderPrintApiCards();
       setActiveRightTab(tabId);
-      await loadPrintApiToken(storeId);
+      if (printApiSelectedConnectionId) await loadPrintApiToken(storeId, printApiSelectedConnectionId);
+      else resetPrintApiFormForCreate(storeId);
     }
 
 
@@ -43531,6 +43667,7 @@
         await loadPrintApiCards();
       }
       const tabId = getPrintApiNewTabKey();
+      printApiSelectedConnectionId = 0;
       const tab = {
         key: tabId,
         title: "Новый API",
@@ -43629,7 +43766,7 @@
         return;
       }
       if (!printerId) {
-        alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 online-\u043f\u0440\u0438\u043d\u0442\u0435\u0440.");
+        alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0440\u0438\u043d\u0442\u0435\u0440.");
         return;
       }
       if (!templateId) {
@@ -43653,7 +43790,7 @@
         if (!data || !data.ok || !data.data) {
           const error = data && data.error;
           if (error === "ZONE_NAME_EXISTS") alert("\u0417\u043e\u043d\u0430 \u0441 \u0442\u0430\u043a\u0438\u043c \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435\u043c \u0443\u0436\u0435 \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u0435\u0442.");
-          else if (error === "PRINT_PRINTER_NOT_FOUND") alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 online-\u043f\u0440\u0438\u043d\u0442\u0435\u0440 \u044d\u0442\u043e\u0433\u043e \u0444\u0438\u043b\u0438\u0430\u043b\u0430.");
+          else if (error === "PRINT_PRINTER_NOT_FOUND") alert("\u0412\u044b\u0435\u0440\u0438\u0442\u0435 \u0437\u0430\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0439 \u043f\u0440\u0438\u043d\u0442\u0435\u0440 \u044d\u0442\u043e\u0433\u043e \u0444\u0438\u043b\u0438\u0430\u043b\u0430.");
           else alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0441\u0442\u0432\u0435\u043d\u043d\u0443\u044e \u0437\u043e\u043d\u0443.");
           return;
         }
@@ -43809,7 +43946,14 @@
 
 
 
-      setPrintApiDeviceState(statusText, printerText, info.printers);
+      setPrintApiDeviceState(statusText, printerText, info.printers, info.agents);
+      if (settingsPrintApiName) settingsPrintApiName.value = String(info.display_name || "");
+      if (settingsPrintApiActive) settingsPrintApiActive.checked = Number(info.is_active) === 1;
+      if (settingsPrintApiCopyToken) settingsPrintApiCopyToken.disabled = !String(info.token || "");
+      if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.disabled = !String(info.token || "");
+      if (settingsPrintApiPrinterName && Number(info.default_printer_id || 0) > 0) {
+        settingsPrintApiPrinterName.value = String(info.default_printer_id);
+      }
 
 
 
@@ -44158,6 +44302,9 @@
 
 
         store_id: Number(settingsPrintApiStore && settingsPrintApiStore.value) || 0,
+        connection_id: printApiSelectedConnectionId,
+        name: String(settingsPrintApiName && settingsPrintApiName.value || ""),
+        is_active: settingsPrintApiActive && settingsPrintApiActive.checked ? 1 : 0,
 
 
 
@@ -44203,6 +44350,9 @@
 
 
     function applyPrintApiOriginalState() {
+      printApiSelectedConnectionId = Number(printApiOriginal.connection_id || 0);
+      if (settingsPrintApiName) settingsPrintApiName.value = String(printApiOriginal.name || "");
+      if (settingsPrintApiActive) settingsPrintApiActive.checked = Number(printApiOriginal.is_active ?? 1) === 1;
 
 
 
@@ -44264,9 +44414,18 @@
 
       printApiDraftMode = Boolean(enabled);
 
+      if (settingsPrintApiStore) settingsPrintApiStore.classList.toggle("hidden", !printApiDraftMode);
+      if (settingsPrintApiStoreValue) {
+        const selectedStore = storesState.items.find((store) => Number(store.id) === Number(settingsPrintApiStore && settingsPrintApiStore.value || 0));
+        settingsPrintApiStoreValue.textContent = selectedStore ? String(selectedStore.name || `Филиал #${selectedStore.id}`) : "Филиал не выбран";
+        settingsPrintApiStoreValue.classList.toggle("hidden", printApiDraftMode);
+      }
+
 
 
       if (settingsPrintApiStore) settingsPrintApiStore.disabled = !printApiDraftMode;
+      if (settingsPrintApiName) settingsPrintApiName.disabled = !printApiDraftMode;
+      if (settingsPrintApiActive) settingsPrintApiActive.disabled = !printApiDraftMode;
 
 
 
@@ -44326,7 +44485,8 @@
 
 
 
-      if (settingsPrintApiCopyToken) settingsPrintApiCopyToken.disabled = !printApiDraftMode;
+      if (settingsPrintApiCopyToken) settingsPrintApiCopyToken.disabled = !String(settingsPrintApiToken && settingsPrintApiToken.value || "");
+      if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.disabled = !String(settingsPrintApiToken && settingsPrintApiToken.value || "");
 
 
 
@@ -44414,7 +44574,7 @@
 
 
 
-        await loadPrintApiToken(originalStoreId);
+        await loadPrintApiToken(originalStoreId, printApiSelectedConnectionId);
 
 
 
@@ -44482,7 +44642,7 @@
 
 
 
-      let currentInfo = await fetchPrintApiInfo(storeId);
+      let currentInfo = printApiSelectedConnectionId ? await fetchPrintApiInfo(storeId, printApiSelectedConnectionId) : null;
 
 
 
@@ -44502,7 +44662,7 @@
 
 
 
-          body: JSON.stringify({ store_id: storeId })
+          body: JSON.stringify({ store_id: storeId, name: String(settingsPrintApiName && settingsPrintApiName.value || "").trim() })
 
 
 
@@ -44519,6 +44679,7 @@
 
 
         currentInfo = createData.data || null;
+        printApiSelectedConnectionId = Number(currentInfo && (currentInfo.connection_id || currentInfo.id) || 0);
 
 
 
@@ -44531,6 +44692,9 @@
 
 
         store_id: storeId,
+        connection_id: printApiSelectedConnectionId,
+        name: String(settingsPrintApiName && settingsPrintApiName.value || "").trim(),
+        is_active: settingsPrintApiActive && settingsPrintApiActive.checked ? 1 : 0,
 
 
 
@@ -44636,11 +44800,12 @@
 
 
 
-    async function fetchPrintApiInfo(storeId) {
+    async function fetchPrintApiInfo(storeId, connectionId = printApiSelectedConnectionId) {
 
 
 
-      const res = await authFetch(`/api/admin/tenant/print-api?store_id=${encodeURIComponent(storeId)}&_ts=${Date.now()}`);
+      if (!(Number(connectionId) > 0)) return null;
+      const res = await authFetch(`/api/admin/tenant/print-api?store_id=${encodeURIComponent(storeId)}&connection_id=${encodeURIComponent(connectionId)}&_ts=${Date.now()}`);
 
 
 
@@ -44664,7 +44829,7 @@
 
 
 
-    async function loadPrintApiToken(storeId) {
+    async function loadPrintApiToken(storeId, connectionId = printApiSelectedConnectionId) {
 
 
 
@@ -44680,7 +44845,7 @@
 
 
 
-        const info = await fetchPrintApiInfo(storeId);
+        const info = await fetchPrintApiInfo(storeId, connectionId);
 
 
 
@@ -44745,6 +44910,8 @@
 
 
         settingsPrintApiToken.value = token;
+        settingsPrintApiToken.type = "password";
+        if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.textContent = "Показать";
 
 
 
@@ -44864,7 +45031,9 @@
 
 
 
-        const res = await authFetch("/api/admin/tenant/print-api", {
+        const isRegenerate = printApiSelectedConnectionId > 0;
+        if (isRegenerate && !confirm("Перевыпустить ключ? Для Bot этого подключения потребуется новый token.")) return;
+        const res = await authFetch(isRegenerate ? "/api/admin/tenant/print-api/regenerate" : "/api/admin/tenant/print-api", {
 
 
 
@@ -44876,7 +45045,11 @@
 
 
 
-          body: JSON.stringify({ store_id: storeId })
+          body: JSON.stringify({
+            store_id: storeId,
+            connection_id: printApiSelectedConnectionId || undefined,
+            name: String(settingsPrintApiName && settingsPrintApiName.value || "").trim()
+          })
 
 
 
@@ -44917,6 +45090,7 @@
 
 
         const token = data.data && data.data.token ? data.data.token : "";
+        printApiSelectedConnectionId = Number(data.data && (data.data.connection_id || data.data.id) || printApiSelectedConnectionId);
 
 
 
@@ -44953,6 +45127,7 @@
 
 
         updatePrintApiOriginalFromCurrentForm();
+        await loadPrintApiCards();
 
 
 
@@ -45048,7 +45223,8 @@
 
 
 
-        const info = await fetchPrintApiInfo(storeId);
+        const connectionId = printApiSelectedConnectionId;
+        const info = await fetchPrintApiInfo(storeId, connectionId);
 
 
 
@@ -45080,6 +45256,7 @@
 
 
 
+        if (connectionId !== printApiSelectedConnectionId) return;
         if (settingsPrintApiToken) settingsPrintApiToken.value = String(info.token || "");
 
 
@@ -45232,7 +45409,7 @@
 
 
 
-          await loadPrintApiToken(storeId);
+          if (printApiSelectedConnectionId) await loadPrintApiToken(storeId, printApiSelectedConnectionId);
 
 
 
@@ -51756,6 +51933,25 @@
       });
 
 
+
+    }
+
+    async function testPrintApiPrinter(printerId) {
+      const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value || 0);
+      if (!(storeId > 0) || !(printerId > 0)) return;
+      try {
+        const res = await authFetch("/api/admin/tenant/print-api/test-print", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ store_id: storeId, printer_id: printerId })
+        });
+        const data = await res.json().catch(() => null);
+        if (!data || data.ok !== true) throw new Error(data?.error || "PRINT_TEST_FAILED");
+        alert("Тестовое задание отправлено на выбранный принтер.");
+      } catch (err) {
+        console.error("Не удалось отправить тестовую печать:", err);
+        alert("Не удалось отправить тестовую печать.");
+      }
 
     }
 
@@ -63377,71 +63573,7 @@
 
 
 
-          // Load stores first for delivery conditions, zones and map context.
-
-
-
-          if (!storesState.loaded) {
-
-
-
-            fetchStores().then((data) => {
-
-
-
-              if (data && data.ok) {
-
-
-
-                storesState.items = data.stores || [];
-
-
-
-                storesState.loaded = true;
-
-
-
-                syncDeliveryMapStoresState();
-
-
-
-              }
-
-
-
-              loadDeliverySettings();
-
-
-
-              loadDeliveryZones();
-
-
-
-              refreshDeliveryMapPreview(true);
-
-
-
-            });
-
-
-
-          } else {
-
-
-
-            loadDeliverySettings();
-
-
-
-            loadDeliveryZones();
-
-
-
-            refreshDeliveryMapPreview(true);
-
-
-
-          }
+          // Delivery datasets are loaded by ensureSettingsSection("delivery").
 
 
 
@@ -63497,17 +63629,7 @@
 
 
 
-        if (section === "api") {
-
-          if (!storesState.loaded) {
-            loadStores().then(() => {
-              loadPrintApiCards();
-            });
-          } else {
-            loadPrintApiCards();
-          }
-
-        }
+        // API data is loaded by ensureSettingsSection("api").
 
 
 
@@ -63522,6 +63644,162 @@
 
 
 
+
+    const settingsSectionLifecycle = new Map();
+    let sharedTenantProfilePromise = null;
+    let settingsNavigationFromHistory = false;
+    const settingsTenantScope = (() => {
+      const tenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+      return String(tenant && (tenant.id || tenant.tenant_id) || "tenant");
+    })();
+
+    function getSettingsTenantScope() {
+      return settingsTenantScope;
+    }
+
+    function getSettingsSectionPanel(section) {
+      if (section === "stores") return storesPanel;
+      if (section === "delivery") return deliveryPanel;
+      if (section === "site") return siteSectionPanel;
+      if (section === "api") return apiSectionPanel;
+      if (section === "print-templates") return printTemplatesSectionPanel;
+      if (section === "production-zones") return productionZonesPanel;
+      if (section === "system") return systemSectionPanel;
+      return settingsCardsPanel;
+    }
+
+    function renderSettingsSectionStatus(section, status) {
+      const panel = getSettingsSectionPanel(section);
+      if (!panel) return;
+      panel.setAttribute("aria-busy", status === "loading" ? "true" : "false");
+      const existing = panel.querySelector(`[data-settings-section-status="${section}"]`);
+      if (status === "ready") {
+        if (existing) existing.remove();
+        return;
+      }
+      const statusNode = existing || document.createElement("div");
+      statusNode.className = "empty-state";
+      statusNode.setAttribute("data-settings-section-status", section);
+      statusNode.innerHTML = status === "loading"
+        ? "<p>Загрузка...</p>"
+        : `<p>Не удалось загрузить раздел.</p><button class="btn btn-secondary" type="button" data-settings-section-retry="${section}">Повторить</button>`;
+      const body = panel.querySelector(".panel-body") || panel;
+      if (!existing) body.prepend(statusNode);
+    }
+
+    async function ensureSharedTenantProfile() {
+      if (sharedTenantProfilePromise) return sharedTenantProfilePromise;
+      sharedTenantProfilePromise = loadTenantProfile().then((tenant) => {
+        if (!tenant) throw new Error("LOAD_TENANT_FAILED");
+        return tenant;
+      }).catch((error) => {
+        sharedTenantProfilePromise = null;
+        throw error;
+      });
+      return sharedTenantProfilePromise;
+    }
+
+    const settingsSectionInitializers = {
+      tenant: ensureSharedTenantProfile,
+      site: ensureSharedTenantProfile,
+      chats: async () => {
+        await Promise.all([ensureSharedTenantProfile(), ensureChatSidebarBadgeScriptLoaded()]);
+      },
+      stores: async () => {
+        if (!storesState.loaded) await loadStores();
+        if (!storesState.loaded) throw new Error("LOAD_STORES_FAILED");
+      },
+      delivery: async () => {
+        if (!storesState.loaded) await loadStores();
+        if (!storesState.loaded) throw new Error("LOAD_STORES_FAILED");
+        await Promise.all([loadDeliverySettings(), loadDeliveryZones()]);
+        if (!deliverySettingsState.loaded || !deliveryZonesState.loaded) throw new Error("LOAD_DELIVERY_FAILED");
+        await refreshDeliveryMapPreview(true);
+      },
+      api: async () => {
+        if (!storesState.loaded) await loadStores();
+        if (!storesState.loaded) throw new Error("LOAD_STORES_FAILED");
+        if (!printApiListLoaded) await loadPrintApiCards();
+        if (!printApiListLoaded) throw new Error("LOAD_PRINT_API_FAILED");
+      },
+      "print-templates": async () => {
+        if (!await ensurePrintTemplatesLoaded()) throw new Error("LOAD_PRINT_TEMPLATES_FAILED");
+      },
+      "production-zones": async () => {
+        if (!await ensureProductionZonesLoaded()) throw new Error("LOAD_PRODUCTION_ZONES_FAILED");
+      },
+      system: async () => {},
+    };
+
+    function ensureSettingsSection(section, options = {}) {
+      const sectionKey = settingsSectionKeys.has(section) ? section : "tenant";
+      const scope = getSettingsTenantScope();
+      let lifecycle = settingsSectionLifecycle.get(sectionKey);
+      if (!lifecycle || lifecycle.scope !== scope) {
+        lifecycle = { status: "not_initialized", promise: null, scope, generation: 0 };
+        settingsSectionLifecycle.set(sectionKey, lifecycle);
+      }
+      if (options.retry && lifecycle.status === "error") {
+        lifecycle.status = "not_initialized";
+        lifecycle.promise = null;
+      }
+      if (lifecycle.status === "ready") return Promise.resolve(true);
+      if (lifecycle.promise) return lifecycle.promise;
+
+      const generation = lifecycle.generation + 1;
+      lifecycle.generation = generation;
+      lifecycle.status = "loading";
+      renderSettingsSectionStatus(sectionKey, "loading");
+      const initializer = settingsSectionInitializers[sectionKey] || settingsSectionInitializers.tenant;
+      lifecycle.promise = Promise.resolve()
+        .then(initializer)
+        .then(() => {
+          if (lifecycle.generation !== generation || lifecycle.scope !== getSettingsTenantScope()) return false;
+          lifecycle.status = "ready";
+          lifecycle.promise = null;
+          renderSettingsSectionStatus(sectionKey, "ready");
+          return true;
+        })
+        .catch((error) => {
+          if (lifecycle.generation !== generation) return false;
+          lifecycle.status = "error";
+          lifecycle.promise = null;
+          renderSettingsSectionStatus(sectionKey, "error");
+          console.error(`Не удалось инициализировать раздел Settings "${sectionKey}":`, error);
+          return false;
+        });
+      return lifecycle.promise;
+    }
+
+    settingsSectionButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const section = String(button.getAttribute("data-settings-section") || "tenant");
+        if (!settingsNavigationFromHistory && window.location.hash !== `#${section}`) {
+          const url = new URL(window.location.href);
+          url.hash = section;
+          window.history.pushState({ settingsSection: section }, "", url);
+        }
+        void ensureSettingsSection(section);
+      });
+    });
+
+    document.addEventListener("click", (event) => {
+      const retryButton = event.target.closest("[data-settings-section-retry]");
+      if (!retryButton) return;
+      const section = String(retryButton.getAttribute("data-settings-section-retry") || "tenant");
+      void ensureSettingsSection(section, { retry: true });
+    });
+
+    window.addEventListener("popstate", () => {
+      const section = getSettingsSectionFromLocation();
+      const button = document.querySelector(`[data-settings-section="${section}"]`);
+      if (!button) return;
+      settingsNavigationFromHistory = true;
+      button.click();
+      settingsNavigationFromHistory = false;
+    });
+
+    void ensureSettingsSection(initialSettingsSection);
 
     // Add new delivery setting button
 

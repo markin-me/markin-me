@@ -6,6 +6,7 @@
   const menuButton = document.getElementById("adminMobileMenuBtn");
   const backButton = document.getElementById("adminMobileHeaderBackBtn");
   const titleNode = document.getElementById("adminMobilePageTitle");
+  const headerCopy = document.getElementById("adminMobileHeaderCopy");
   const mobileOrderTabs = document.getElementById("adminMobileOrderTabs");
   const mobileActions = document.getElementById("adminMobileHeaderActions");
   const sidebarBrand = document.getElementById("adminSidebarBrand");
@@ -88,17 +89,20 @@
   }
 
   function moveAccountControls() {
-    if (!sidebarAccount || !isMobile()) return;
+    if (!sidebarAccount) return;
     if (brand && sidebarBrand && brand.parentNode !== sidebarBrand) {
       brand.parentNode.insertBefore(brandOrigin, brand);
       sidebarBrand.appendChild(brand);
     }
     if (themeButton && themeButton.parentNode !== sidebarAccount) {
       themeButton.parentNode.insertBefore(themeOrigin, themeButton);
+      themeButton.setAttribute("data-sidebar-tooltip", "Сменить тему");
       sidebarAccount.appendChild(themeButton);
     }
     if (accountMenu && accountMenu.parentNode !== sidebarAccount) {
       accountMenu.parentNode.insertBefore(accountOrigin, accountMenu);
+      const profileButton = accountMenu.querySelector("#shopProfileBtn");
+      if (profileButton) profileButton.setAttribute("data-sidebar-tooltip", "Профиль");
       sidebarAccount.appendChild(accountMenu);
     }
   }
@@ -127,7 +131,7 @@
       && hasOrderTabs
       && !!mobileOrderTabs.querySelector(".product-tab");
     mobileOrderTabs.classList.toggle("hidden", !showTabs);
-    titleNode.classList.toggle("hidden", showTabs && !keepSubviewOrderTabs);
+    (headerCopy || titleNode).classList.toggle("hidden", showTabs && !keepSubviewOrderTabs);
   }
 
   function moveOrderTabs() {
@@ -159,7 +163,7 @@
       orderTabsObserver = null;
     }
     if (mobileOrderTabs) mobileOrderTabs.classList.add("hidden");
-    titleNode.classList.remove("hidden");
+    (headerCopy || titleNode).classList.remove("hidden");
   }
 
   function closeSidebar() {
@@ -242,7 +246,7 @@
     );
     if (!item || !centerColumn.contains(item) || item.matches(".empty-hint, .hidden") || item.closest(".toolbar")) return null;
     const nestedControl = target.closest("button, input, label, select, textarea, a");
-    if (nestedControl && nestedControl !== item) return null;
+    if (nestedControl) return null;
     return item;
   }
 
@@ -294,7 +298,7 @@
       return;
     }
     restoreContextActions();
-    restoreAccountControls();
+    moveAccountControls();
     restoreOrderTabs();
     closeSidebar();
     body.classList.remove("admin-mobile-pages", "admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");

@@ -2109,12 +2109,34 @@ function getTenantChangeEntry(tenantId, create = false) {
   return entry || null;
 }
 
-function getSummariesPageCacheKey(tenantId, limit, offset) {
+function getSummariesPageCacheKey(tenantId, limit, cursor, query) {
   const tenantKey = getTenantKey(tenantId);
   if (!tenantKey) return "";
   const safeLimit = Math.max(0, Math.trunc(Number(limit) || 0));
-  const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
-  return `${tenantKey}:${safeLimit}:${safeOffset}`;
+  return `${tenantKey}:${safeLimit}:${String(cursor || "")}:${String(query || "")}`;
+}
+
+function encodeSummariesCursor(row) {
+  const updatedAt = toIsoOrEmpty(row?.updated_at);
+  const clientId = normalizeClientId(row?.client_id);
+  if (!updatedAt || !clientId) return "";
+  return Buffer.from(JSON.stringify({ updatedAt, clientId }), "utf8").toString("base64url");
+}
+
+function decodeSummariesCursor(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (raw.length > 500) throw Object.assign(new Error("INVALID_CURSOR"), { statusCode: 400 });
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    const updatedAt = String(parsed?.updatedAt || "").trim();
+    const updatedAtDate = new Date(updatedAt);
+    const clientId = normalizeClientId(parsed?.clientId);
+    if (!updatedAt || Number.isNaN(updatedAtDate.getTime()) || !clientId) throw new Error("invalid");
+    return { updatedAt: updatedAtDate, clientId };
+  } catch {
+    throw Object.assign(new Error("INVALID_CURSOR"), { statusCode: 400 });
+  }
 }
 
 function clearSummariesPageCacheForTenant(tenantId) {
@@ -3050,8 +3072,10 @@ function mapSummaryRow(row, actorKey = "out") {
   const typingUntilMs = typingExpiresAt ? new Date(typingExpiresAt).getTime() : 0;
   const typingActiveNow = typingFlag && Number.isFinite(typingUntilMs) && typingUntilMs > Date.now();
   const typingText = typingActiveNow ? sanitizeTypingText(row?.[`${peerPrefix}_text`]) : "";
+  const firstUnreadMessageId = String(row.first_unread_message_id ?? row.firstUnreadMessageId ?? "");
   return {
     client_id: Number(row.client_id),
+    client_photo: String(row.client_photo || ""),
     updated_at: toIsoOrEmpty(row.updated_at),
     message_count: Number(row.message_count || 0),
     unread_count: Number(row.unread_count || 0),
@@ -3061,6 +3085,11 @@ function mapSummaryRow(row, actorKey = "out") {
     lastMessageMessageId: String(row.last_message_message_id ?? row.lastMessageMessageId ?? ""),
     last_message_at: toIsoOrEmpty(row.last_message_at),
     last_message_text: getSummaryLastPreviewText(row),
+    last_message_direction: normalizeMessageDirection(row.last_message_direction, row.last_message_message_id),
+    last_delivery_status: String(row.last_delivery_status || "").toLowerCase().slice(0, 16),
+    last_delivered_at: toIsoOrEmpty(row.last_delivered_at),
+    last_read_at: toIsoOrEmpty(row.last_read_at),
+    first_unread_message_id: firstUnreadMessageId,
     typing_active: typingActiveNow,
     typing_text: typingText,
     typing_updated_at: typingUpdatedAt,
@@ -3262,6 +3291,80 @@ async function readThreadMessagesPage(
     nextBeforeId: nextBeforeId > 0 ? nextBeforeId : null,
     limit: safeLimit,
     beforeId: safeBeforeId > 0 ? safeBeforeId : null,
+  };
+}
+
+async function readThreadMessagesAround(
+  tenantId,
+  clientId,
+  { aroundId, limit = CHAT_THREAD_PAGE_DEFAULT_LIMIT, actorKey = "" } = {},
+  conn = db
+) {
+  await ensureHiddenMessagesTable();
+  await ensureChatMessageOrderCardsColumn();
+  const safeLimit = parsePositiveInt(limit, CHAT_THREAD_PAGE_DEFAULT_LIMIT, 1, CHAT_THREAD_PAGE_MAX_LIMIT);
+  const safeActor = actorKey === "in" ? "in" : "out";
+  const safeAroundId = String(aroundId || "").trim().slice(0, 120);
+  if (!safeAroundId) return null;
+  const hiddenClause = ` AND NOT EXISTS (
+    SELECT 1
+      FROM chat_message_hidden h
+     WHERE h.tenant_id = chat_messages.tenant_id
+       AND h.client_id = chat_messages.client_id
+       AND h.message_id = chat_messages.message_id
+       AND h.actor = ?
+  )`;
+  const [anchorRows] = await conn.query(
+    `SELECT id AS row_id, message_id, direction, text, created_at, edited_at, is_read, is_pinned,
+            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
+            delivery_status, delivered_at, read_at
+       FROM chat_messages
+      WHERE tenant_id = ? AND client_id = ? AND message_id = ?${hiddenClause}
+      LIMIT 1`,
+    [tenantId, clientId, safeAroundId, safeActor]
+  );
+  const anchorRow = Array.isArray(anchorRows) ? anchorRows[0] : null;
+  const anchorRowId = Number(anchorRow?.row_id || 0);
+  if (!(anchorRowId > 0)) return null;
+
+  const beforeLimit = Math.min(20, Math.max(0, safeLimit - 1));
+  const afterLimit = Math.max(0, safeLimit - beforeLimit - 1);
+  const [beforeRows] = beforeLimit > 0
+    ? await conn.query(
+        `SELECT id AS row_id, message_id, direction, text, created_at, edited_at, is_read, is_pinned,
+                reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
+                delivery_status, delivered_at, read_at
+           FROM chat_messages
+          WHERE tenant_id = ? AND client_id = ? AND id < ?${hiddenClause}
+          ORDER BY id DESC
+          LIMIT ?`,
+        [tenantId, clientId, anchorRowId, safeActor, beforeLimit + 1]
+      )
+    : [[]];
+  const [afterRows] = afterLimit > 0
+    ? await conn.query(
+        `SELECT id AS row_id, message_id, direction, text, created_at, edited_at, is_read, is_pinned,
+                reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
+                delivery_status, delivered_at, read_at
+           FROM chat_messages
+          WHERE tenant_id = ? AND client_id = ? AND id > ?${hiddenClause}
+          ORDER BY id ASC
+          LIMIT ?`,
+        [tenantId, clientId, anchorRowId, safeActor, afterLimit]
+      )
+    : [[]];
+  const rawBefore = Array.isArray(beforeRows) ? beforeRows : [];
+  const visibleBefore = rawBefore.slice(0, beforeLimit).reverse();
+  const combinedRows = visibleBefore.concat(anchorRow, Array.isArray(afterRows) ? afterRows : []);
+  const earliestRowId = Number(combinedRows[0]?.row_id || 0);
+  return {
+    messages: sanitizeThread(combinedRows.map(mapDbMessageRowToApi)),
+    hasMore: rawBefore.length > beforeLimit,
+    nextBeforeId: earliestRowId > 0 ? Math.trunc(earliestRowId) : null,
+    limit: safeLimit,
+    beforeId: null,
+    aroundId: safeAroundId,
+    anchorFound: true,
   };
 }
 
@@ -3841,6 +3944,7 @@ async function querySummaryRows(
         t.updated_at,
         COALESCE(NULLIF(TRIM(t.meta_name), ''), NULLIF(TRIM(c.name), '')) AS meta_name,
         COALESCE(NULLIF(TRIM(t.meta_phone), ''), NULLIF(TRIM(c.phone), '')) AS meta_phone,
+        c.photo AS client_photo,
         t.meta_last_welcome_day,
         t.typing_in_active,
         t.typing_in_text,
@@ -3853,10 +3957,15 @@ async function querySummaryRows(
         COALESCE(s.last_message_id, 0) AS last_message_id,
         COALESCE(s.message_count, 0) AS message_count,
         COALESCE(s.unread_count, 0) AS unread_count,
+        fu.message_id AS first_unread_message_id,
         m.message_id AS last_message_message_id,
         m.created_at AS last_message_at,
         m.text AS last_message_text,
-        m.attachment_json AS last_attachment_json
+        m.attachment_json AS last_attachment_json,
+        m.direction AS last_message_direction,
+        m.delivery_status AS last_delivery_status,
+        m.delivered_at AS last_delivered_at,
+        m.read_at AS last_read_at
       FROM chat_threads t
       LEFT JOIN cust_customers c
         ON c.tenant_id = t.tenant_id
@@ -3866,6 +3975,16 @@ async function querySummaryRows(
           tenant_id,
           client_id,
           MAX(id) AS last_message_id,
+          MIN(
+            CASE
+              WHEN direction = 'in'
+                AND is_read = 0
+                AND message_id NOT LIKE 'assistant-auto-%'
+                AND message_id NOT LIKE 'daily-welcome-%'
+              THEN id
+              ELSE NULL
+            END
+          ) AS first_unread_id,
           COUNT(*) AS message_count,
           SUM(
             CASE
@@ -3886,6 +4005,10 @@ async function querySummaryRows(
         ON m.tenant_id = t.tenant_id
        AND m.client_id = t.client_id
        AND m.id = s.last_message_id
+      LEFT JOIN chat_messages fu
+        ON fu.tenant_id = t.tenant_id
+       AND fu.client_id = t.client_id
+       AND fu.id = s.first_unread_id
       WHERE t.tenant_id = ?${idsClause}
       ORDER BY t.updated_at DESC, t.client_id DESC
       ${paginationClause}
@@ -3895,7 +4018,7 @@ async function querySummaryRows(
   return rows || [];
 }
 
-async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
+async function querySummaryRowsForPage(tenantId, { limit, cursor = null, offset = 0, query = "" } = {}) {
   await ensureChatCoreIndexes().catch(() => {});
   await ensureChatThreadTypingColumns().catch(() => {});
   await cleanupExpiredThreadTypingFlagsForTenant(tenantId).catch(() => {});
@@ -3905,7 +4028,22 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
     1,
     CHAT_SUMMARIES_PAGE_MAX_LIMIT
   );
-  const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+  const safeCursor = cursor && typeof cursor === "object" ? cursor : null;
+  const safeQuery = String(query || "").trim().slice(0, 120);
+  const safeQueryDigits = safeQuery.replace(/\D/g, "");
+  const where = ["chat_threads.tenant_id = ?"];
+  const params = [tenantId];
+  if (safeQuery) {
+    where.push("(COALESCE(NULLIF(TRIM(chat_threads.meta_name), ''), NULLIF(TRIM(cust.name), '')) LIKE ? OR COALESCE(NULLIF(TRIM(chat_threads.meta_phone), ''), NULLIF(TRIM(cust.phone), '')) LIKE ?)");
+    params.push(`%${safeQuery}%`, `%${safeQueryDigits || safeQuery}%`);
+  }
+  if (safeCursor) {
+    where.push("(chat_threads.updated_at < ? OR (chat_threads.updated_at = ? AND chat_threads.client_id < ?))");
+    params.push(safeCursor.updatedAt, safeCursor.updatedAt, safeCursor.clientId);
+  }
+  params.push(safeLimit);
+  const safeOffset = safeCursor ? 0 : Math.max(0, Math.trunc(Number(offset) || 0));
+  if (safeOffset > 0) params.push(safeOffset);
 
   const [threadRows] = await db.query(
     `
@@ -3914,6 +4052,7 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
         chat_threads.updated_at,
         COALESCE(NULLIF(TRIM(chat_threads.meta_name), ''), NULLIF(TRIM(cust.name), '')) AS meta_name,
         COALESCE(NULLIF(TRIM(chat_threads.meta_phone), ''), NULLIF(TRIM(cust.phone), '')) AS meta_phone,
+        cust.photo AS client_photo,
         chat_threads.meta_last_welcome_day,
         chat_threads.typing_in_active,
         chat_threads.typing_in_text,
@@ -3927,14 +4066,14 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
       LEFT JOIN cust_customers cust
         ON cust.tenant_id = chat_threads.tenant_id
        AND cust.id = chat_threads.client_id
-      WHERE chat_threads.tenant_id = ?
+      WHERE ${where.join(" AND ")}
       ORDER BY chat_threads.updated_at DESC, chat_threads.client_id DESC
-      LIMIT ? OFFSET ?
+      LIMIT ?${safeOffset > 0 ? " OFFSET ?" : ""}
     `,
-    [tenantId, safeLimit, safeOffset]
+    params
   );
 
-  const rows = Array.isArray(threadRows) ? threadRows : [];
+  const rows = (Array.isArray(threadRows) ? threadRows : []).slice(0, safeLimit);
   const clientIds = rows
     .map((row) => normalizeClientId(row?.client_id))
     .filter(Boolean);
@@ -3946,6 +4085,16 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
       SELECT
         client_id,
         MAX(id) AS last_message_id,
+        MIN(
+          CASE
+            WHEN direction = 'in'
+              AND is_read = 0
+              AND message_id NOT LIKE 'assistant-auto-%'
+              AND message_id NOT LIKE 'daily-welcome-%'
+            THEN id
+            ELSE NULL
+          END
+        ) AS first_unread_id,
         COUNT(*) AS message_count,
         SUM(
           CASE
@@ -3972,15 +4121,18 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
     const messageCount = Number(row?.message_count || 0);
     const unreadCount = Number(row?.unread_count || 0);
     const lastMessageId = Number(row?.last_message_id || 0);
+    const firstUnreadId = Number(row?.first_unread_id || 0);
     aggregateByClient.set(clientIdKey, {
       message_count: Number.isFinite(messageCount) && messageCount > 0 ? Math.trunc(messageCount) : 0,
       unread_count: Number.isFinite(unreadCount) && unreadCount > 0 ? Math.trunc(unreadCount) : 0,
       last_message_id: Number.isFinite(lastMessageId) && lastMessageId > 0 ? Math.trunc(lastMessageId) : 0,
+      first_unread_id: Number.isFinite(firstUnreadId) && firstUnreadId > 0 ? Math.trunc(firstUnreadId) : 0,
     });
     if (lastMessageId > 0) lastMessageIds.push(lastMessageId);
+    if (firstUnreadId > 0) lastMessageIds.push(firstUnreadId);
   });
 
-  const lastMessageByClient = new Map();
+  const messageByRowId = new Map();
   if (lastMessageIds.length) {
     const messagePlaceholders = lastMessageIds.map(() => "?").join(",");
     const [lastMessageRows] = await db.query(
@@ -3991,24 +4143,29 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
           client_id,
           created_at,
           text,
-          attachment_json
+          attachment_json,
+          direction,
+          delivery_status,
+          delivered_at,
+          read_at
         FROM chat_messages
         WHERE tenant_id = ? AND id IN (${messagePlaceholders})
       `,
       [tenantId, ...lastMessageIds]
     );
     (Array.isArray(lastMessageRows) ? lastMessageRows : []).forEach((row) => {
-      const clientIdKey = normalizeClientId(row?.client_id);
-      if (!clientIdKey) return;
-      lastMessageByClient.set(clientIdKey, row);
+      const rowId = Number(row?.id || 0);
+      if (rowId > 0) messageByRowId.set(Math.trunc(rowId), row);
     });
   }
 
   return rows.map((row) => {
     const clientIdKey = normalizeClientId(row?.client_id);
     const aggregate = clientIdKey ? aggregateByClient.get(clientIdKey) : null;
-    const lastMessage = clientIdKey ? lastMessageByClient.get(clientIdKey) : null;
     const lastMessageId = Number(aggregate?.last_message_id || 0);
+    const firstUnreadId = Number(aggregate?.first_unread_id || 0);
+    const lastMessage = lastMessageId > 0 ? messageByRowId.get(lastMessageId) : null;
+    const firstUnread = firstUnreadId > 0 ? messageByRowId.get(firstUnreadId) : null;
     return {
       ...row,
       last_message_id: Number.isFinite(lastMessageId) && lastMessageId > 0 ? Math.trunc(lastMessageId) : 0,
@@ -4018,6 +4175,11 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
       last_message_at: lastMessage?.created_at || null,
       last_message_text: lastMessage?.text || "",
       last_attachment_json: lastMessage?.attachment_json || "",
+      last_message_direction: lastMessage?.direction || "",
+      last_delivery_status: lastMessage?.delivery_status || "",
+      last_delivered_at: lastMessage?.delivered_at || null,
+      last_read_at: lastMessage?.read_at || null,
+      first_unread_message_id: String(firstUnread?.message_id || ""),
     };
   });
 }
@@ -4058,15 +4220,17 @@ async function listSummaries(tenantId, selectedClientIds = [], actorKey = "out")
   });
 }
 
-async function listSummariesPage(tenantId, { limit, offset, actorKey = "out" } = {}) {
+async function listSummariesPage(tenantId, { limit, cursor: cursorRaw, offset = 0, query = "", actorKey = "out" } = {}) {
   const safeLimit = parsePositiveInt(
     limit,
     CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT,
     1,
     CHAT_SUMMARIES_PAGE_MAX_LIMIT
   );
-  const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
-  const cacheKey = getSummariesPageCacheKey(tenantId, safeLimit, safeOffset);
+  const cursor = decodeSummariesCursor(cursorRaw);
+  const safeOffset = cursor ? 0 : Math.max(0, Math.trunc(Number(offset) || 0));
+  const safeQuery = String(query || "").trim().slice(0, 120);
+  const cacheKey = getSummariesPageCacheKey(tenantId, safeLimit, cursorRaw || `offset:${safeOffset}`, safeQuery);
   const now = Date.now();
   const cachedEntry = cacheKey ? summariesPageRequestCache.get(cacheKey) : null;
   let rawPage = null;
@@ -4084,30 +4248,17 @@ async function listSummariesPage(tenantId, { limit, offset, actorKey = "out" } =
   if (!rawPage) {
     const requestPromise = (async () => {
       const rows = await querySummaryRowsForPage(tenantId, {
-        limit: safeLimit,
+        limit: safeLimit + 1,
+        cursor,
         offset: safeOffset,
+        query: safeQuery,
       });
       const normalizedRows = Array.isArray(rows) ? rows : [];
-      let total = 0;
-
-      if (normalizedRows.length < safeLimit) {
-        total = safeOffset + normalizedRows.length;
-      } else {
-        const [countRows] = await db.query(
-          `SELECT COUNT(*) AS total
-             FROM chat_threads
-            WHERE tenant_id = ?`,
-          [tenantId]
-        );
-        total = Number(countRows?.[0]?.[0]?.total || countRows?.[0]?.total || 0);
-      }
 
       return {
-        rows: normalizedRows,
-        total,
+        rows: normalizedRows.slice(0, safeLimit),
         limit: safeLimit,
-        offset: safeOffset,
-        hasMore: safeOffset + normalizedRows.length < total,
+        hasMore: normalizedRows.length > safeLimit,
       };
     })();
 
@@ -4138,17 +4289,18 @@ async function listSummariesPage(tenantId, { limit, offset, actorKey = "out" } =
     }
   }
 
-  const total = Number(rawPage?.total || 0);
   const mappedRows = (Array.isArray(rawPage?.rows) ? rawPage.rows : [])
     .map((row) => mapSummaryRow(row, actorKey))
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
 
   return {
     rows: mappedRows,
-    total,
     limit: safeLimit,
     offset: safeOffset,
-    hasMore: safeOffset + mappedRows.length < total,
+    hasMore: rawPage?.hasMore === true,
+    nextCursor: rawPage?.hasMore === true && rawPage.rows?.length
+      ? encodeSummariesCursor(rawPage.rows[rawPage.rows.length - 1])
+      : "",
   };
 }
 
@@ -4985,15 +5137,24 @@ function makeChatTempRouter() {
       const pageBeforeId = Number.isFinite(Number(req.query.before_id)) && Number(req.query.before_id) > 0
         ? Math.trunc(Number(req.query.before_id))
         : null;
+      const aroundId = String(req.query.around_id || "").trim().slice(0, 120);
 
-      const [metaRow, page] = await Promise.all([
+      const [metaRow, aroundPage, totalCount] = await Promise.all([
         readThreadMeta(tenantId, clientId),
-        readThreadMessagesPage(tenantId, clientId, {
+        aroundId
+          ? readThreadMessagesAround(tenantId, clientId, {
+              limit: pageLimit,
+              aroundId,
+              actorKey,
+            })
+          : Promise.resolve(null),
+        readThreadMessageCount(tenantId, clientId, actorKey),
+      ]);
+      const page = aroundPage || await readThreadMessagesPage(tenantId, clientId, {
           limit: pageLimit,
           beforeId: pageBeforeId,
           actorKey,
-        }),
-      ]);
+        });
 
       const updatedAt = toIsoOrEmpty(metaRow?.updated_at);
       const meta = sanitizeMetaFromDbRow(metaRow);
@@ -5003,6 +5164,7 @@ function makeChatTempRouter() {
         data: {
           client_id: Number(clientId),
           updated_at: updatedAt,
+          message_count: Number(totalCount || 0),
           meta,
           messages: Array.isArray(page?.messages) ? page.messages : [],
           page: {
@@ -5010,6 +5172,8 @@ function makeChatTempRouter() {
             before_id: page?.beforeId ? Number(page.beforeId) : null,
             next_before_id: page?.nextBeforeId ? Number(page.nextBeforeId) : null,
             has_more: page?.hasMore === true,
+            around_id: aroundId || null,
+            anchor_found: page?.anchorFound === true,
           },
         },
       });
@@ -5459,19 +5623,21 @@ function makeChatTempRouter() {
         ? idsRaw.split(",").map((part) => normalizeClientId(part)).filter(Boolean)
         : [];
 
-      if (!selectedIds.length && (req.query.limit !== undefined || req.query.offset !== undefined)) {
+      if (!selectedIds.length && (req.query.limit !== undefined || req.query.cursor !== undefined)) {
         const page = await listSummariesPage(tenantId, {
           limit: req.query.limit,
+          cursor: req.query.cursor,
           offset: req.query.offset,
+          query: req.query.q,
           actorKey,
         });
         return res.json({
           ok: true,
           data: page.rows,
-          total: page.total,
           limit: page.limit,
           offset: page.offset,
           has_more: page.hasMore,
+          next_cursor: page.nextCursor,
         });
       }
 
@@ -5479,6 +5645,7 @@ function makeChatTempRouter() {
       return res.json({ ok: true, data: summaries });
     } catch (err) {
       console.error("chat-temp GET /summaries error:", err);
+      if (Number(err?.statusCode) === 400) return res.status(400).json({ ok: false, error: "INVALID_CURSOR" });
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });
@@ -5489,19 +5656,22 @@ function makeChatTempRouter() {
       const actorKey = getRequestReactionActor(req);
       const page = await listSummariesPage(tenantId, {
         limit: req.query.limit,
+        cursor: req.query.cursor,
         offset: req.query.offset,
+        query: req.query.q,
         actorKey,
       });
       return res.json({
         ok: true,
         data: page.rows,
-        total: page.total,
         limit: page.limit,
         offset: page.offset,
         has_more: page.hasMore,
+        next_cursor: page.nextCursor,
       });
     } catch (err) {
       console.error("chat-temp GET /clients error:", err);
+      if (Number(err?.statusCode) === 400) return res.status(400).json({ ok: false, error: "INVALID_CURSOR" });
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });

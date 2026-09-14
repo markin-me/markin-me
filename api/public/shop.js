@@ -62,7 +62,7 @@ const {
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 
-module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
+module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, presenceService }) {
   const router = express.Router();
   const PUBLIC_BONUS_MODAL_DEFAULTS = [
     { key: 'join', title: '\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043a \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435', description: '', image_url: null, is_enabled: 1, sort_order: 0 },
@@ -73,6 +73,31 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   let ensureOrderDeliveryTypeColumnsPromise = null;
   let orderBenefitsMetaColumnReady = false;
   let ensureOrderBenefitsMetaColumnPromise = null;
+  function stableSubmissionJson(value) {
+    if (Array.isArray(value)) return `[${value.map(stableSubmissionJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.keys(value).sort().filter((key) => value[key] !== undefined)
+        .map((key) => `${JSON.stringify(key)}:${stableSubmissionJson(value[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  function buildOrderSubmissionFingerprint(body) {
+    const payload = body && typeof body === 'object' ? JSON.parse(JSON.stringify(body)) : {};
+    if (payload.pricing_snapshot?.context) delete payload.pricing_snapshot.context.generated_at;
+    return crypto.createHash('sha256').update(stableSubmissionJson(payload)).digest('hex');
+  }
+
+  async function findOrderSubmission(tenantId, scopeStoreId, submissionId) {
+    const [rows] = await db.query(
+      `SELECT id, public_id, submission_fingerprint
+       FROM order_orders
+       WHERE tenant_id=? AND submission_scope_store_id=? AND submission_id=?
+       LIMIT 1`,
+      [tenantId, scopeStoreId, submissionId]
+    );
+    return Array.isArray(rows) && rows.length ? rows[0] : null;
+  }
   async function syncCustomerOrderMetrics(queryable, tenantId, customerIds) {
     const ids = [...new Set((Array.isArray(customerIds) ? customerIds : [customerIds])
       .map((value) => Number(value || 0))
@@ -5209,7 +5234,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return r2.length ? Number(r2[0].id) : null;
   }
 
-  async function getCustomerByToken(tenantId, token) {
+  async function getCustomerByToken(tenantId, token, options = {}) {
     if (!token) return null;
     const sessionTable = 'cust_customer_sessions';
     const [rows] = await db.query(
@@ -5246,7 +5271,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     // Sliding session: refresh TTL only when expiry is near.
     // This reduces write pressure under frequent /me, /me/orders, /me/addresses calls.
     try {
-      await db.query(
+      if (options.refreshSession !== false) await db.query(
         `UPDATE ${sessionTable}
          SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
          WHERE id=? AND tenant_id=? AND is_active=1
@@ -5265,6 +5290,49 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     };
     return data;
   }
+
+  router.post('/presence/heartbeat', async (req, res) => {
+    try {
+      if (!presenceService) return res.status(503).json({ ok: false, error: 'PRESENCE_UNAVAILABLE' });
+      if (Number(req.headers['content-length'] || 0) > 2048) {
+        return res.status(413).json({ ok: false, error: 'PRESENCE_BODY_TOO_LARGE' });
+      }
+      const allowedFields = new Set(['presenceSessionId', 'tabId', 'mode', 'visible']);
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      if (Object.keys(body).some((key) => !allowedFields.has(key))) {
+        return res.status(400).json({ ok: false, error: 'INVALID_PRESENCE_BODY' });
+      }
+      const presenceSessionId = typeof body.presenceSessionId === 'string' ? body.presenceSessionId.trim() : '';
+      const tabId = typeof body.tabId === 'string' ? body.tabId.trim() : '';
+      const mode = body.mode;
+      const visible = body.visible;
+      const validId = (value) => /^[A-Za-z0-9_-]{16,128}$/.test(value);
+      if (!validId(presenceSessionId) || !validId(tabId) || !['site', 'chat'].includes(mode) || typeof visible !== 'boolean') {
+        return res.status(400).json({ ok: false, error: 'INVALID_PRESENCE_BODY' });
+      }
+
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token, { refreshSession: false }) : null;
+      if (token && !customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const presence = {
+        scope: { tenantId, storeId },
+        presenceSessionId,
+        tabId,
+      };
+      if (visible) {
+        presenceService.touch({ ...presence, clientId: customer ? Number(customer.id) : null, mode, visible: true });
+      } else {
+        presenceService.leave(presence);
+      }
+      return res.sendStatus(204);
+    } catch (error) {
+      console.error('PUBLIC_PRESENCE_HEARTBEAT_FAILED:', error);
+      return res.status(500).json({ ok: false, error: 'PRESENCE_FAILED' });
+    }
+  });
 
 
   async function pickIdByCodeOrFirstActive({ tenantId, storeId, table, code }) {
@@ -22727,6 +22795,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       let orderStoreId = storeId;
+      const submissionId = String(req.headers['idempotency-key'] || '').trim().toLowerCase();
+      if (submissionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(submissionId)) {
+        return res.status(400).json({ ok: false, error: 'BAD_IDEMPOTENCY_KEY' });
+      }
+      const submissionFingerprint = submissionId ? buildOrderSubmissionFingerprint(req.body) : null;
+      if (submissionId) {
+        const existingSubmission = await findOrderSubmission(tenantId, storeId, submissionId);
+        if (existingSubmission) {
+          if (String(existingSubmission.submission_fingerprint || '') !== submissionFingerprint) {
+            return res.status(409).json({ ok: false, error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
+          }
+          return res.json({
+            ok: true,
+            data: { id: Number(existingSubmission.id), public_id: existingSubmission.public_id },
+            idempotent_replay: true,
+          });
+        }
+      }
       await ensureOrderDeliveryTypeColumns();
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
@@ -24853,6 +24939,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           orderDiscountAmount,
           discountsJson,
         ];
+        if (submissionId) {
+          orderInsertColumns.push('submission_scope_store_id', 'submission_id', 'submission_fingerprint');
+          orderInsertParams.push(storeId, submissionId, submissionFingerprint);
+        }
         if (hasBenefitsMetaColumn) {
           orderInsertColumns.push('benefits_meta_json');
           orderInsertParams.push(benefitsMetaJson);
@@ -24944,6 +25034,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       } catch (txErr) {
         await conn.rollback();
         conn.release();
+        if (submissionId && String(txErr?.code || '') === 'ER_DUP_ENTRY') {
+          const existingSubmission = await findOrderSubmission(tenantId, storeId, submissionId);
+          if (!existingSubmission) throw txErr;
+          if (String(existingSubmission.submission_fingerprint || '') !== submissionFingerprint) {
+            return res.status(409).json({ ok: false, error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
+          }
+          return res.json({
+            ok: true,
+            data: { id: Number(existingSubmission.id), public_id: existingSubmission.public_id },
+            idempotent_replay: true,
+          });
+        }
         if (txErr && txErr.code === 'OUT_OF_STOCK') {
           return res.status(409).json({
             ok: false,

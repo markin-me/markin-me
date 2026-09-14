@@ -1,5 +1,15 @@
 <aside id="app-sidebar" class="panel app-sidebar">
-  <div class="admin-sidebar-brand" id="adminSidebarBrand"></div>
+  <div class="admin-sidebar-brand" id="adminSidebarBrand">
+    <button
+      id="sidebar-edge-toggle"
+      class="sidebar-edge-toggle"
+      type="button"
+      aria-label="Закрыть боковую панель"
+      data-sidebar-tooltip="Открыть боковую панель"
+    >
+      <i class="fas fa-columns sidebar-edge-icon" aria-hidden="true"></i>
+    </button>
+  </div>
   <nav class="app-sidebar-nav no-scrollbar">
     <ul class="app-sidebar-list">
       <% (Array.isArray(adminNavItems) ? adminNavItems : []).forEach(function (item) { %>
@@ -9,8 +19,8 @@
             <% if (item.desktopId) { %>id="<%= item.desktopId %>"<% } %>
             class="nav-item <%= item.desktopLinkClasses || '' %> <%= item.key === activePage ? 'active-nav' : '' %>"
             data-nav-key="<%= item.key %>"
+            data-sidebar-tooltip="<%= item.label %>"
             aria-label="<%= item.ariaLabel || item.label %>"
-            title="<%= item.label %>"
           >
             <i class="fas <%= item.icon %> nav-icon"></i>
             <% if (item.desktopBadgeId) { %>
@@ -23,8 +33,4 @@
     </ul>
   </nav>
   <div class="admin-sidebar-account" id="adminSidebarAccount" aria-label="Тема и профиль"></div>
-  <button id="sidebar-edge-toggle" class="sidebar-edge-toggle" type="button" aria-label="Свернуть/развернуть меню">
-    <i class="fas fa-chevron-left sidebar-edge-icon sidebar-edge-expanded" aria-hidden="true"></i>
-    <i class="fas fa-chevron-right sidebar-edge-icon sidebar-edge-collapsed" aria-hidden="true"></i>
-  </button>
 </aside>

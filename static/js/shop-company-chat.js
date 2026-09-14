@@ -8273,6 +8273,9 @@
 
   function leaveSupportChatForMessages() {
     if (!isSupportChatOpen()) return;
+    if (window.ShopPresence && typeof window.ShopPresence.setMode === "function") {
+      window.ShopPresence.setMode("site");
+    }
     supportChatOpenGeneration += 1;
     attachPreviewDraftRestoreToken += 1;
     stopSharedThreadPolling();
@@ -8362,6 +8365,9 @@
       return;
     }
     showMessageCenterOverlay("support");
+    if (window.ShopPresence && typeof window.ShopPresence.setMode === "function") {
+      window.ShopPresence.setMode("chat");
+    }
     const openGeneration = ++supportChatOpenGeneration;
     closeOpenAppModalBeforeChat();
     syncCompanyChatPageHeader();
@@ -8515,6 +8521,9 @@
 
   function closeCompanyChat(options) {
     const closeOptions = options && typeof options === "object" ? options : {};
+    if (window.ShopPresence && typeof window.ShopPresence.setMode === "function") {
+      window.ShopPresence.setMode("site");
+    }
     if (
       isCompanyChatPageMode()
       && closeOptions.fromHistory !== true

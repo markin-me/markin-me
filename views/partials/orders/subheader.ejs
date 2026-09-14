@@ -4,6 +4,21 @@
       <i class="fas fa-shopping-cart"></i>
       <span id="ordersToolbarTitle"><%= activePage === 'new-order' ? 'Новый заказ' : 'Заказы' %></span>
     </div>
+    <% if (activePage === 'orders') { %>
+      <div id="ordersConnectionBannerDesktop" class="courier-connection-banner orders-connection-banner-desktop hidden" data-orders-connection-banner aria-live="polite" role="status">
+        <span class="courier-connection-banner__indicator" aria-hidden="true"></span>
+        <span class="courier-connection-banner__text"></span>
+        <button
+          type="button"
+          class="courier-connection-banner__retry hidden"
+          data-action="orders-connection-retry"
+          aria-label="Повторить обновление"
+          title="Повторить"
+        >
+          <span aria-hidden="true">↻</span>
+        </button>
+      </div>
+    <% } %>
   </div>
 
   <div class="toolbar-right">

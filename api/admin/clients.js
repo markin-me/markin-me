@@ -1,6 +1,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const discountHelpers = require('../helpers/discounts');
+const { getCheckoutBenefitsPreviewProvider } = require('../../services/checkout-benefits-preview-provider');
+const { buildCustomerBonusCard } = require('./bonus');
 const {
   customerAddressSelectFields,
   ensureCustomerAddressIdentityColumns,
@@ -9,7 +11,7 @@ const {
   serializeCustomerAddress,
 } = require('../../data/customer-address');
 
-module.exports = function makeAdminClientsRouter({ db, helpers }) {
+module.exports = function makeAdminClientsRouter({ db, helpers, presenceService }) {
   const router = express.Router();
   let customerGenderColumnPromise = null;
 
@@ -821,6 +823,12 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     return validResults.every(Boolean);
   }
 
+  function getNodeFilterConditions(conditions, queryPlan) {
+    if (!queryPlan?.hasResidualRules) return { logic: 'AND', rules: [] };
+    if (conditions?.logic === 'OR') return conditions;
+    return { logic: 'AND', rules: queryPlan.residualRules };
+  }
+
   function buildGenderSqlCondition(operator, value) {
     const maleExpr = "LOWER(TRIM(COALESCE(gender, ''))) IN ('m','male','man','м','муж','мужской')";
     const femaleExpr = "LOWER(TRIM(COALESCE(gender, ''))) IN ('f','female','woman','ж','жен','женский')";
@@ -833,67 +841,194 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     return operator === '!=' ? `NOT (${expr})` : expr;
   }
 
-  function buildFilterWhereClause(conditions, tenantId, options = {}) {
+  const ORDER_METRIC_FILTER_FIELDS = new Set(['total_orders', 'total_spent', 'last_order_date']);
+  const CLIENT_SORT_QUERY_PLANS = Object.freeze({
+    last_desc: {
+      sql: 'COALESCE(last_order_date, created_at) DESC, id DESC',
+      requiresOrderMetrics: true,
+    },
+    name_asc: {
+      sql: "CASE WHEN name IS NULL OR name='' THEN 1 ELSE 0 END ASC, name ASC, id DESC",
+      requiresOrderMetrics: false,
+    },
+    orders_desc: {
+      sql: 'total_orders DESC, id DESC',
+      requiresOrderMetrics: true,
+    },
+    created_desc: {
+      sql: 'created_at DESC, id DESC',
+      requiresOrderMetrics: false,
+    },
+    online_desc: {
+      sql: 'COALESCE(last_order_date, created_at) DESC, id DESC',
+      requiresOrderMetrics: true,
+      onlineFirst: true,
+    },
+  });
+
+  function getClientSortQueryPlan(sortRaw) {
+    const key = Object.prototype.hasOwnProperty.call(CLIENT_SORT_QUERY_PLANS, sortRaw)
+      ? sortRaw
+      : 'last_desc';
+    return { key, ...CLIENT_SORT_QUERY_PLANS[key], isSqlSafe: true };
+  }
+
+  function formatLocalDateParameter(rawValue) {
+    const date = new Date(rawValue);
+    if (!Number.isFinite(date.getTime())) return null;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function buildSqlFilterRule(rule, options = {}) {
+    const kind = getRuleFieldKind(rule?.field, options);
+    if (!kind) return null;
+
+    if (rule.field === 'subscription_event' || rule.field === 'notification_consent') {
+      const matchColumn = rule.field === 'subscription_event' ? 'button_text' : 'source_key';
+      const enabledColumn = rule.field === 'subscription_event' ? 'interested' : 'notifications_enabled';
+      const existsSql = `EXISTS (
+        SELECT 1
+          FROM mkt_customer_notification_consents filter_consent
+         WHERE filter_consent.tenant_id = clients.tenant_id
+           AND filter_consent.store_id = ?
+           AND filter_consent.customer_id = clients.id
+           AND filter_consent.${enabledColumn} = 1
+           AND filter_consent.${matchColumn} = ?
+      )`;
+      return {
+        clause: rule.operator === '!=' ? `NOT ${existsSql}` : existsSql,
+        params: [Number(options.storeId || 0), String(rule.value || '')],
+        requiresOrderMetrics: false,
+      };
+    }
+
+    if (isAdvancedFilterRule(rule)) return null;
+
+    if (kind === 'number' && rule.field === 'age') {
+      return {
+        clause: `birthday IS NOT NULL AND TIMESTAMPDIFF(YEAR, birthday, CURDATE()) ${rule.operator} ?`,
+        params: [Number(rule.value)],
+        requiresOrderMetrics: false,
+      };
+    }
+
+    if (kind === 'enum' && rule.field === 'gender') {
+      return {
+        clause: buildGenderSqlCondition(rule.operator, normalizeCustomerGender(rule.value)),
+        params: [],
+        requiresOrderMetrics: false,
+      };
+    }
+
+    if (kind === 'date') {
+      if (typeof rule.value === 'string' && /^-\d+d$/.test(rule.value)) {
+        const days = Number.parseInt(rule.value.slice(1, -1), 10);
+        const relativeDateSql = `DATE_SUB(CURDATE(), INTERVAL ${days} DAY)`;
+        return {
+          clause: rule.operator === '=' || rule.operator === '!='
+            ? `DATE(${rule.field}) ${rule.operator} ${relativeDateSql}`
+            : `${rule.field} ${rule.operator} ${relativeDateSql}`,
+          params: [],
+          requiresOrderMetrics: ORDER_METRIC_FILTER_FIELDS.has(rule.field),
+        };
+      }
+
+      if (rule.operator === '=' || rule.operator === '!=') {
+        const dateValue = formatLocalDateParameter(rule.value);
+        if (!dateValue) return null;
+        return {
+          clause: `DATE(${rule.field}) ${rule.operator} ?`,
+          params: [dateValue],
+          requiresOrderMetrics: ORDER_METRIC_FILTER_FIELDS.has(rule.field),
+        };
+      }
+    }
+
+    if (kind === 'number' || kind === 'date') {
+      return {
+        clause: `${rule.field} ${rule.operator} ?`,
+        params: [rule.value],
+        requiresOrderMetrics: ORDER_METRIC_FILTER_FIELDS.has(rule.field),
+      };
+    }
+
+    return null;
+  }
+
+  function buildClientFilterQueryPlan(conditions, options = {}) {
+    const sortPlan = getClientSortQueryPlan(options.sort);
     if (!conditions || !Array.isArray(conditions.rules) || !conditions.rules.length) {
-      return { whereClause: '', params: [], advancedRules: [] };
+      return {
+        whereClause: '',
+        params: [],
+        sqlRules: [],
+        residualRules: [],
+        requiresOrderMetrics: false,
+        hasResidualRules: false,
+        hasResidualFilters: false,
+        sortPlan,
+        isSortSqlSafe: sortPlan.isSqlSafe,
+        canPaginateInSql: sortPlan.isSqlSafe,
+        canCountInSql: true,
+        pageNeedsOrderMetrics: true,
+        countNeedsOrderMetrics: false,
+      };
     }
 
     const logic = conditions.logic === 'OR' ? ' OR ' : ' AND ';
-    const clauses = [];
-    const params = [];
-    const advancedRules = [];
+    const sqlRules = [];
+    const residualRules = [];
 
     for (const rule of conditions.rules) {
-      if (isAdvancedFilterRule(rule)) {
-        advancedRules.push(rule);
-        continue;
-      }
-
-      const kind = getRuleFieldKind(rule.field, options);
-      if (!kind) continue;
-
-      if (kind === 'number' && rule.field === 'age') {
-        clauses.push(`birthday IS NOT NULL AND TIMESTAMPDIFF(YEAR, birthday, CURDATE()) ${rule.operator} ?`);
-        params.push(Number(rule.value));
-        continue;
-      }
-
-      if (kind === 'enum' && rule.field === 'gender') {
-        clauses.push(buildGenderSqlCondition(rule.operator, normalizeCustomerGender(rule.value)));
-        continue;
-      }
-
-      if (kind === 'date' && typeof rule.value === 'string' && /^-\d+d$/.test(rule.value)) {
-        const days = parseInt(rule.value.slice(1, -1), 10);
-        const expr = `DATE_SUB(CURDATE(), INTERVAL ${days} DAY)`;
-        if (rule.operator === '=' || rule.operator === '!=') {
-          clauses.push(`DATE(${rule.field}) ${rule.operator} ${expr}`);
-        } else {
-          clauses.push(`${rule.field} ${rule.operator} ${expr}`);
-        }
-        continue;
-      }
-
-      if (kind === 'number' || kind === 'date') {
-        clauses.push(`${rule.field} ${rule.operator} ?`);
-        params.push(rule.value);
+      const sqlRule = buildSqlFilterRule(rule, options);
+      if (sqlRule) {
+        sqlRules.push({ ...sqlRule, rule });
+      } else if (isAdvancedFilterRule(rule)) {
+        residualRules.push(rule);
       }
     }
 
-    if (!clauses.length) {
-      return { whereClause: '', params: [], advancedRules };
-    }
+    // For OR mixed with residual rules no SQL rule is independently required,
+    // so applying one here could discard a client that matches a residual rule.
+    const canPushSqlRules = sqlRules.length > 0 && !(conditions.logic === 'OR' && residualRules.length > 0);
+    const pushedSqlRules = canPushSqlRules ? sqlRules : [];
 
+    const hasResidualFilters = residualRules.length > 0;
     return {
-      whereClause: ` AND (${clauses.join(logic)})`,
-      params,
-      advancedRules,
+      whereClause: pushedSqlRules.length
+        ? ` AND (${pushedSqlRules.map((entry) => entry.clause).join(logic)})`
+        : '',
+      params: pushedSqlRules.flatMap((entry) => entry.params),
+      sqlRules,
+      residualRules,
+      requiresOrderMetrics: sqlRules.some((entry) => entry.requiresOrderMetrics),
+      hasResidualRules: hasResidualFilters,
+      hasResidualFilters,
+      sortPlan,
+      isSortSqlSafe: sortPlan.isSqlSafe,
+      canPaginateInSql: !hasResidualFilters && sortPlan.isSqlSafe,
+      canCountInSql: !hasResidualFilters,
+      pageNeedsOrderMetrics: true,
+      countNeedsOrderMetrics: sqlRules.some((entry) => entry.requiresOrderMetrics),
     };
   }
 
-  function sortClientsRows(rows, sortRaw) {
+  function sortClientsRows(rows, sortRaw, options = {}) {
     const list = Array.isArray(rows) ? rows.slice() : [];
     const sort = String(sortRaw || 'last_desc');
+    if (sort === 'online_desc') {
+      const onlineClientIds = options.onlineClientIds instanceof Set ? options.onlineClientIds : new Set();
+      return list.sort((a, b) => {
+        const onlineDiff = Number(onlineClientIds.has(Number(b?.id || 0))) - Number(onlineClientIds.has(Number(a?.id || 0)));
+        if (onlineDiff !== 0) return onlineDiff;
+        const left = a?.last_order_date ? new Date(a.last_order_date).getTime() : new Date(a?.created_at || 0).getTime();
+        const right = b?.last_order_date ? new Date(b.last_order_date).getTime() : new Date(b?.created_at || 0).getTime();
+        return right - left || Number(b?.id || 0) - Number(a?.id || 0);
+      });
+    }
     if (sort === 'name_asc') {
       return list.sort((a, b) => {
         const nameA = String(a?.name || '').trim();
@@ -1063,40 +1198,48 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
   function getClientsDatasetSql(baseWhereSql, options = {}) {
     const genderSelectSql = options.includeGender ? ', c.gender' : '';
+    const includeOrderMetrics = options.includeOrderMetrics !== false;
+    const orderMetricsSelectSql = includeOrderMetrics
+      ? `COUNT(active_orders.id) AS total_orders,
+         COALESCE(SUM(COALESCE(active_orders.total_price, 0)), 0) AS total_spent,
+         MAX(active_orders.created_at) AS last_order_date,`
+      : `0 AS total_orders,
+         0 AS total_spent,
+         NULL AS last_order_date,`;
+    const orderMetricsJoinSql = includeOrderMetrics
+      ? `LEFT JOIN order_orders active_orders
+        ON active_orders.tenant_id = c.tenant_id
+       AND active_orders.customer_id = c.id
+       AND active_orders.is_active = 1`
+      : '';
+    const orderMetricsGroupSql = includeOrderMetrics
+      ? `GROUP BY
+          c.id, c.tenant_id, c.name, c.phone, c.birthday, c.photo,
+          c.registration_date, c.is_active, c.created_at, c.updated_at
+          ${options.includeGender ? ', c.gender' : ''}`
+      : '';
     return `
       SELECT
         c.id, c.tenant_id,
         c.name, c.phone, c.birthday,
         c.photo,
-        COALESCE(order_metrics.total_orders, 0) AS total_orders,
-        COALESCE(order_metrics.total_spent, 0) AS total_spent,
-        order_metrics.last_order_date AS last_order_date,
+        ${orderMetricsSelectSql}
         c.registration_date,
         c.is_active,
         c.created_at, c.updated_at
         ${genderSelectSql}
       FROM cust_customers c
-      LEFT JOIN (
-        SELECT
-          tenant_id,
-          customer_id,
-          COUNT(*) AS total_orders,
-          COALESCE(SUM(COALESCE(total_price, 0)), 0) AS total_spent,
-          MAX(created_at) AS last_order_date
-        FROM order_orders
-        WHERE tenant_id=? AND is_active=1 AND customer_id IS NOT NULL
-        GROUP BY tenant_id, customer_id
-      ) order_metrics
-        ON order_metrics.tenant_id = c.tenant_id
-       AND order_metrics.customer_id = c.id
+      ${orderMetricsJoinSql}
       WHERE ${baseWhereSql}
+      ${orderMetricsGroupSql}
     `;
   }
 
   async function loadClientsForFilterEvaluation(tenantId, baseWhereSql, baseParams, options = {}) {
     const filterSupport = options.filterSupport || {};
     const includeGender = !!filterSupport.gender;
-    const clientsDatasetSql = getClientsDatasetSql(baseWhereSql, { includeGender });
+    const includeOrderMetrics = options.includeOrderMetrics !== false;
+    const clientsDatasetSql = getClientsDatasetSql(baseWhereSql, { includeGender, includeOrderMetrics });
     const outerWhereClause = options.postWhereClause || '';
     const outerParams = Array.isArray(options.postWhereParams) ? options.postWhereParams : [];
     const [rows] = await db.query(
@@ -1110,7 +1253,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
          ${includeGender ? ', gender' : ''}
        FROM (${clientsDatasetSql}) clients
        WHERE 1=1${outerWhereClause}`,
-      [tenantId, ...baseParams, ...outerParams]
+      [...baseParams, ...outerParams]
     );
 
     const clients = rows.map((row) => ({
@@ -1160,15 +1303,32 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   async function getCustomFilterCount(tenantId, conditions, options = {}) {
     const filterSupport = options.filterSupport || {};
     const normalized = normalizeFilterConditions(conditions, { allowGender: !!filterSupport.gender });
-    const { whereClause, params, advancedRules } = buildFilterWhereClause(normalized, tenantId, { allowGender: !!filterSupport.gender });
+    const queryPlan = buildClientFilterQueryPlan(normalized, {
+      allowGender: !!filterSupport.gender,
+      storeId: options.storeId,
+    });
+    const { whereClause, params } = queryPlan;
 
-    if (!advancedRules.length) {
+    if (queryPlan.canCountInSql) {
+      if (!queryPlan.countNeedsOrderMetrics) {
+        const [countRows] = await db.query(
+          `SELECT COUNT(*) AS c
+             FROM cust_customers clients
+            WHERE tenant_id=?${whereClause}`,
+          [tenantId, ...params]
+        );
+        return {
+          conditions: normalized,
+          count: Number(countRows?.[0]?.c || 0),
+        };
+      }
+
       const clientsDatasetSql = getClientsDatasetSql('c.tenant_id=?', { includeGender: !!filterSupport.gender });
       const [countRows] = await db.query(
         `SELECT COUNT(*) AS c
          FROM (${clientsDatasetSql}) clients
          WHERE 1=1${whereClause}`,
-        [tenantId, tenantId, ...params]
+        [tenantId, ...params]
       );
       return {
         conditions: normalized,
@@ -1176,7 +1336,8 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       };
     }
 
-    const canNarrowBySimpleRules = normalized.logic !== 'OR' && whereClause;
+    const nodeConditions = getNodeFilterConditions(normalized, queryPlan);
+    const nodeNeedsOrderMetrics = nodeConditions.rules.some((rule) => ORDER_METRIC_FILTER_FIELDS.has(rule.field));
     const clients = await loadClientsForFilterEvaluation(
       tenantId,
       'c.tenant_id=?',
@@ -1184,15 +1345,16 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       {
         filterSupport,
         storeId: options.storeId,
-        needFavorites: advancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
-        needSubscriptionEvents: advancedRules.some((rule) => rule.field === 'subscription_event'),
-        needNotificationConsents: advancedRules.some((rule) => rule.field === 'notification_consent'),
-        postWhereClause: canNarrowBySimpleRules ? whereClause : '',
-        postWhereParams: canNarrowBySimpleRules ? params : [],
+        needFavorites: nodeConditions.rules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
+        needSubscriptionEvents: nodeConditions.rules.some((rule) => rule.field === 'subscription_event'),
+        needNotificationConsents: nodeConditions.rules.some((rule) => rule.field === 'notification_consent'),
+        includeOrderMetrics: nodeNeedsOrderMetrics,
+        postWhereClause: whereClause,
+        postWhereParams: params,
       }
     );
 
-    const count = clients.filter((client) => doesClientMatchCustomFilter(client, normalized, { allowGender: !!filterSupport.gender })).length;
+    const count = clients.filter((client) => doesClientMatchCustomFilter(client, nodeConditions, { allowGender: !!filterSupport.gender })).length;
     return {
       conditions: normalized,
       count,
@@ -1226,6 +1388,11 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       const filterId = req.query.filter_id ? Number(req.query.filter_id) : null;
       const sortRaw = helpers.strOrNull(req.query.sort) || 'last_desc';
       const lightweight = String(req.query.mode || '').trim().toLowerCase() === 'lightweight';
+      const onlineRaw = req.query.online === undefined ? '' : String(req.query.online).trim();
+      if (onlineRaw && onlineRaw !== '0' && onlineRaw !== '1') {
+        return res.status(400).json({ ok: false, error: 'BAD_ONLINE_FILTER' });
+      }
+      const onlineOnly = onlineRaw === '1';
 
       let limit = Number(req.query.limit ?? 50);
       let offset = Number(req.query.offset ?? 0);
@@ -1233,13 +1400,12 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       if (limit > 200) limit = 200;
       if (!Number.isFinite(offset) || offset < 0) offset = 0;
 
-      const orderByMap = {
-        last_desc: 'COALESCE(last_order_date, created_at) DESC, id DESC',
-        name_asc: "CASE WHEN name IS NULL OR name='' THEN 1 ELSE 0 END ASC, name ASC, id DESC",
-        orders_desc: 'total_orders DESC, id DESC',
-        created_desc: 'created_at DESC, id DESC',
-      };
-      const orderBy = orderByMap[sortRaw] || orderByMap.last_desc;
+      const defaultFilterConditions = { logic: 'AND', rules: [] };
+      let customFilterQueryPlan = buildClientFilterQueryPlan(defaultFilterConditions, { sort: sortRaw });
+      const needsOnlineIds = onlineOnly || customFilterQueryPlan.sortPlan.onlineFirst === true;
+      const onlineClientIds = new Set(needsOnlineIds && presenceService
+        ? presenceService.getOnlineClientIds({ tenantId, storeId }).map(Number)
+        : []);
 
       const where = ['c.tenant_id=?'];
       const params = [tenantId];
@@ -1254,11 +1420,22 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         params.push(`%${qText}%`, `%${qPhone || qText}%`);
       }
 
+      if (onlineOnly) {
+        if (!onlineClientIds.size) {
+          if (lightweight) {
+            return res.json({ ok: true, data: [], has_more: false, next_offset: offset, limit, offset });
+          }
+          return res.json({ ok: true, data: [], total: 0, limit, offset });
+        }
+        where.push(`c.id IN (${Array.from(onlineClientIds, () => '?').join(',')})`);
+        params.push(...onlineClientIds);
+      }
+
       // Применяем кастомный фильтр если указан
       let normalizedFilterConditions = null;
       let customFilterClause = '';
       let customFilterParams = [];
-      let customFilterAdvancedRules = [];
+      let customFilterNodeConditions = null;
       if (filterId && Number.isFinite(filterId) && filterId > 0) {
         const [filterRows] = await db.query(
           `SELECT conditions FROM cust_categories WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 LIMIT 1`,
@@ -1266,15 +1443,19 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         );
         if (filterRows.length) {
           normalizedFilterConditions = normalizeFilterConditions(filterRows[0].conditions, { allowGender: !!filterSupport.gender });
-          const result = buildFilterWhereClause(normalizedFilterConditions, tenantId, { allowGender: !!filterSupport.gender });
+          const result = buildClientFilterQueryPlan(normalizedFilterConditions, {
+            allowGender: !!filterSupport.gender,
+            storeId,
+            sort: sortRaw,
+          });
+          customFilterQueryPlan = result;
           customFilterClause = result.whereClause;
           customFilterParams = result.params;
-          customFilterAdvancedRules = result.advancedRules;
+          customFilterNodeConditions = getNodeFilterConditions(normalizedFilterConditions, result);
         }
       }
 
-      if (normalizedFilterConditions && customFilterAdvancedRules.length) {
-        const canNarrowBySimpleRules = normalizedFilterConditions.logic !== 'OR' && customFilterClause;
+      if (normalizedFilterConditions && !customFilterQueryPlan.canPaginateInSql) {
         const clients = await loadClientsForFilterEvaluation(
           tenantId,
           where.join(' AND '),
@@ -1282,20 +1463,31 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
           {
             filterSupport,
             storeId,
-            needFavorites: customFilterAdvancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
-            needSubscriptionEvents: customFilterAdvancedRules.some((rule) => rule.field === 'subscription_event'),
-            needNotificationConsents: customFilterAdvancedRules.some((rule) => rule.field === 'notification_consent'),
-            postWhereClause: canNarrowBySimpleRules ? customFilterClause : '',
-            postWhereParams: canNarrowBySimpleRules ? customFilterParams : [],
+            needFavorites: customFilterNodeConditions.rules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
+            needSubscriptionEvents: customFilterNodeConditions.rules.some((rule) => rule.field === 'subscription_event'),
+            needNotificationConsents: customFilterNodeConditions.rules.some((rule) => rule.field === 'notification_consent'),
+            postWhereClause: customFilterClause,
+            postWhereParams: customFilterParams,
           }
         );
         const matchedRows = clients.filter((client) => (
-          doesClientMatchCustomFilter(client, normalizedFilterConditions, { allowGender: !!filterSupport.gender })
+          doesClientMatchCustomFilter(client, customFilterNodeConditions, { allowGender: !!filterSupport.gender })
         ));
-        const sortedRows = sortClientsRows(matchedRows, sortRaw);
+        const sortedRows = sortClientsRows(matchedRows, sortRaw, { onlineClientIds });
+        const pageRows = sortedRows.slice(offset, offset + limit);
+        if (lightweight) {
+          return res.json({
+            ok: true,
+            data: pageRows,
+            has_more: offset + pageRows.length < sortedRows.length,
+            next_offset: offset + pageRows.length,
+            limit,
+            offset,
+          });
+        }
         return res.json({
           ok: true,
-          data: sortedRows.slice(offset, offset + limit),
+          data: pageRows,
           total: sortedRows.length,
           limit,
           offset,
@@ -1303,7 +1495,11 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       }
 
       const clientsDatasetSql = getClientsDatasetSql(where.join(' AND '), { includeGender: !!filterSupport.gender });
-      const clientsDatasetParams = [tenantId, ...params];
+      const clientsDatasetParams = params;
+      const onlineOrderIds = customFilterQueryPlan.sortPlan.onlineFirst ? Array.from(onlineClientIds) : [];
+      const orderBy = onlineOrderIds.length
+        ? `CASE WHEN id IN (${onlineOrderIds.map(() => '?').join(',')}) THEN 0 ELSE 1 END ASC, ${customFilterQueryPlan.sortPlan.sql}`
+        : customFilterQueryPlan.sortPlan.sql;
 
       const [rows] = await db.query(
         `SELECT
@@ -1317,7 +1513,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
          WHERE 1=1${customFilterClause}
          ORDER BY ${orderBy}
          LIMIT ? OFFSET ?`,
-        [...clientsDatasetParams, ...customFilterParams, lightweight ? limit + 1 : limit, offset]
+        [...clientsDatasetParams, ...customFilterParams, ...onlineOrderIds, lightweight ? limit + 1 : limit, offset]
       );
 
       if (lightweight) {
@@ -1325,12 +1521,23 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         return res.json({ ok: true, data, has_more: rows.length > limit, next_offset: offset + data.length, limit, offset });
       }
 
-      const [cntRows] = await db.query(
-        `SELECT COUNT(*) AS c
-         FROM (${clientsDatasetSql}) clients
-         WHERE 1=1${customFilterClause}`,
-        [...clientsDatasetParams, ...customFilterParams]
-      );
+      let cntRows = [];
+      if (customFilterQueryPlan.countNeedsOrderMetrics) {
+        [cntRows] = await db.query(
+          `SELECT COUNT(*) AS c
+             FROM (${clientsDatasetSql}) clients
+            WHERE 1=1${customFilterClause}`,
+          [...clientsDatasetParams, ...customFilterParams]
+        );
+      } else {
+        const countBaseWhereSql = where.join(' AND ').replace(/\bc\./g, 'clients.');
+        [cntRows] = await db.query(
+          `SELECT COUNT(*) AS c
+             FROM cust_customers clients
+            WHERE ${countBaseWhereSql}${customFilterClause}`,
+          [...params, ...customFilterParams]
+        );
+      }
 
       res.json({
         ok: true,
@@ -1367,7 +1574,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
            created_at, updated_at
          FROM (${clientDatasetSql}) clients
          LIMIT 1`,
-        [tenantId, tenantId, id]
+        [tenantId, id]
       );
 
       if (!rows.length) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
@@ -1615,10 +1822,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
   /**
    * GET /api/admin/clients/:id/orders/header-candidate
-   * Priority:
-   *   1) latest active (non-final)
-   *   2) latest completed (final, non-cancelled)
-   *   3) latest cancelled
+   * Returns the most relevant active order only.
    */
   router.get('/:id/orders/header-candidate', async (req, res) => {
     try {
@@ -1642,17 +1846,8 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
-         ORDER BY
-           CASE
-             WHEN COALESCE(s.is_final, 0)=0 THEN 0
-             WHEN (
-               LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
-               OR LOWER(COALESCE(s.title, '')) LIKE 'отмен%%'
-               OR LOWER(COALESCE(s.title, '')) LIKE 'cancel%%'
-             ) THEN 2
-             ELSE 1
-           END ASC,
-           o.created_at DESC,
+           AND COALESCE(s.is_final, 0)=0
+         ORDER BY o.created_at DESC,
            o.id DESC
          LIMIT 1`,
         [tenantId, storeId, customerId]
@@ -1903,40 +2098,14 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         filter,
         conditions: normalizeFilterConditions(filter.conditions, { allowGender: !!filterSupport.gender }),
       }));
-      const hasAdvancedFilters = normalizedFilters.some(({ conditions }) => (
-        conditions.rules.some((rule) => isAdvancedFilterRule(rule))
-      ));
-
-      let filtersWithCounts = [];
-      if (hasAdvancedFilters) {
-        const advancedRules = normalizedFilters.flatMap(({ conditions }) => conditions.rules.filter((rule) => isAdvancedFilterRule(rule)));
-        const clients = await loadClientsForFilterEvaluation(
-          tenantId,
-          'c.tenant_id=?',
-          [tenantId],
-          {
-            filterSupport,
-            storeId,
-            needFavorites: advancedRules.some((rule) => rule.field === 'favorite_product' || rule.field === 'favorite_category'),
-            needSubscriptionEvents: advancedRules.some((rule) => rule.field === 'subscription_event'),
-            needNotificationConsents: advancedRules.some((rule) => rule.field === 'notification_consent'),
-          }
-        );
-        filtersWithCounts = normalizedFilters.map(({ filter, conditions }) => ({
+      const filtersWithCounts = await Promise.all(normalizedFilters.map(async ({ filter, conditions }) => {
+        const result = await getCustomFilterCount(tenantId, conditions, { filterSupport, storeId });
+        return {
           ...filter,
-          conditions,
-          count: clients.filter((client) => doesClientMatchCustomFilter(client, conditions, { allowGender: !!filterSupport.gender })).length,
-        }));
-      } else {
-        filtersWithCounts = await Promise.all(rows.map(async (filter) => {
-          const result = await getCustomFilterCount(tenantId, filter.conditions, { filterSupport, storeId });
-          return {
-            ...filter,
-            conditions: result.conditions,
-            count: result.count,
-          };
-        }));
-      }
+          conditions: result.conditions,
+          count: result.count,
+        };
+      }));
 
       res.json({
         ok: true,
@@ -2204,6 +2373,64 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       return res.json({ ok: true, data });
     } catch (e) {
       console.error('GET /api/admin/clients/:id/benefits/catalog error:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/:id/benefits-snapshot', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const clientId = Number(req.params.id);
+      if (!Number.isInteger(clientId) || clientId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [customerRows] = await db.query(
+        `SELECT *
+           FROM cust_customers
+          WHERE tenant_id = ? AND store_id = ? AND id = ? AND is_active = 1
+          LIMIT 1`,
+        [tenantId, storeId, clientId]
+      );
+      const customer = Array.isArray(customerRows) && customerRows.length ? customerRows[0] : null;
+      if (!customer) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const previewProvider = getCheckoutBenefitsPreviewProvider();
+      if (!previewProvider || typeof previewProvider.buildPreview !== 'function') {
+        return res.status(503).json({ ok: false, error: 'BENEFITS_PREVIEW_UNAVAILABLE' });
+      }
+
+      const [customerBenefits, benefitsCatalog, bonusCard] = await Promise.all([
+        previewProvider.buildPreview({
+          tenantId,
+          storeId,
+          customer,
+          draft: { customer_id: clientId, mode: 'customer' },
+          mode: 'customer',
+        }),
+        buildGeneralBenefitsCatalog({ tenantId, storeId, customerId: clientId }),
+        buildCustomerBonusCard({ db, tenantId, customerId: clientId }),
+      ]);
+
+      return res.json({
+        ok: true,
+        data: {
+          client_id: clientId,
+          store_id: storeId,
+          benefits: {
+            customer: customerBenefits && typeof customerBenefits === 'object'
+              ? { ...customerBenefits, mode: 'customer' }
+              : customerBenefits,
+            catalog: benefitsCatalog,
+          },
+          bonuses: bonusCard,
+        },
+      });
+    } catch (e) {
+      console.error('GET /api/admin/clients/:id/benefits-snapshot error:', e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });

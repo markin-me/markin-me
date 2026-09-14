@@ -17,9 +17,6 @@
     var cashOrderTabsEl = document.getElementById('orderTabs');
     var cashOrderInfoFooterEl = document.getElementById('orderInfoFooter');
     var cashOrderPaymentBtnEl = document.getElementById('orderInfoPaymentBtn');
-    var ordersClientBenefitsFooterEl = document.getElementById('ordersClientBenefitsFooter');
-    var ordersClientBenefitsOpenBtnEl = document.getElementById('ordersClientBenefitsOpenBtn');
-    var ordersClientBonusesOpenBtnEl = document.getElementById('ordersClientBonusesOpenBtn');
     var appModalEl = document.getElementById('appModal');
     var appModalBodyEl = document.getElementById('appModalBody');
     var sectionTitleEl = document.getElementById('cashSectionTitle');
@@ -36,6 +33,7 @@
     var datePrev = document.getElementById('cashDatePrev');
     var dateNext = document.getElementById('cashDateNext');
     var dateReset = document.getElementById('cashDateReset');
+    var cashConnectionBanners = Array.prototype.slice.call(document.querySelectorAll('[data-cash-connection-banner]'));
     var sharedOrderPanel = window.SharedOrderPanel || null;
     var sharedOrderPayment = window.SharedOrderPayment || null;
     var clientInfoWrap = document.getElementById('clientInfoWrap');
@@ -58,6 +56,10 @@
 
     var WAIT_TIMEOUT_MS = 20000;
     var WAIT_RETRY_MS = 1500;
+    var CASH_WORKSPACE_DOMAIN = 'cash:workspace';
+    var CASH_WORKSPACE_VERSION = 1;
+    var CASH_WORKSPACE_KEY = 'last-workspace';
+    var CASH_WORKSPACE_TTL_MS = 72 * 60 * 60 * 1000;
     var CASH_CHANGE_OPTIONS = [
       { value: 'no_change', label: 'Без сдачи' },
       { value: '500', label: '500 ₽' },
@@ -72,12 +74,20 @@
     var state = {
       statuses: [],
       orders: [],
+      periodAggregate: null,
+      dayRows: {},
+      dayRequestGeneration: 0,
       paymentMethods: [],
+      paymentMethodsLoaded: false,
       paymentMethodsPromise: null,
       currentSection: 'orders',
       expenseDocuments: [],
       expenseSummary: { count: 0, total_sum_kopecks: 0 },
+      expenseDocumentsStatus: 'idle',
+      expenseDocumentsError: null,
       expenseDocumentsLoadPromise: null,
+      expenseDocumentsRequestKey: '',
+      expenseDocumentsRequestGeneration: 0,
       activeExpenseDocument: null,
       orderFilter: 'all',
       orderFilterMenuOpen: false,
@@ -93,6 +103,13 @@
       clientsCache: new Map(),
       date: { start: null, end: null, viewYear: null, viewMonth: null },
     };
+    var cashSyncGeneration = 0;
+    var cashSnapshotVisible = false;
+    var cashNetworkConfirmed = false;
+    var cashRefreshFailed = false;
+    var cashInitialRestoreComplete = false;
+    var cashPassportCacheStates = new Map();
+    var cashPassportChecksInFlight = new Set();
     var tabsState = { tabs: [], activeKey: null };
     var fullOrdersById = new Map();
 
@@ -125,7 +142,7 @@
           throw new Error('UNAUTHORIZED');
         }
         return res.json().catch(function () { return null; }).then(function (json) {
-          if (!json || json.ok !== true) throw new Error((json && json.error) || ('API_ERROR_' + String(res.status || 0)));
+          if (!res.ok || !json || json.ok !== true) throw new Error((json && json.error) || ('API_ERROR_' + String(res.status || 0)));
           return json;
         });
       });
@@ -152,6 +169,122 @@
       var numeric = Number(value || 0);
       if (!Number.isFinite(numeric)) return 0;
       return Math.round(numeric * 100) / 100;
+    }
+
+    function cashWorkspaceScope() {
+      return window.AdminPersistentCache && typeof window.AdminPersistentCache.scope === 'function'
+        ? window.AdminPersistentCache.scope({ domain: CASH_WORKSPACE_DOMAIN, version: CASH_WORKSPACE_VERSION })
+        : null;
+    }
+
+    function cashSyncContext() {
+      var cache = cashWorkspaceScope();
+      return { generation: cashSyncGeneration, cache: cache, namespace: cache && cache.namespace || null };
+    }
+
+    function isCurrentCashContext(context) {
+      var current = cashWorkspaceScope();
+      return Boolean(context && context.generation === cashSyncGeneration
+        && (!current || current.namespace === context.namespace));
+    }
+
+    function currentCashQuery() {
+      return {
+        startDate: state.date.start ? toDateKey(state.date.start) : '',
+        endDate: state.date.end ? toDateKey(state.date.end) : '',
+        filter: String(state.orderFilter || 'all'),
+      };
+    }
+
+    function cashQueryKey(query) {
+      query = query || {};
+      return [String(query.startDate || ''), String(query.endDate || ''), String(query.filter || 'all')].join('|');
+    }
+
+    function serializeCashDayRows() {
+      var result = {};
+      Object.keys(state.dayRows || {}).forEach(function (dayKey) {
+        var row = state.dayRows[dayKey];
+        if (!row || !Array.isArray(row.items)) return;
+        result[dayKey] = {
+          items: row.items.map(toCashOrderSummary),
+          nextOffset: Number(row.nextOffset || 0),
+          hasMore: row.hasMore === true,
+        };
+      });
+      return result;
+    }
+
+    function toCashOrderSummary(order) {
+      var summary = Object.assign({}, order || {});
+      ['items', 'order_items', 'modifiers', 'customer', 'delivery', 'payments', 'refunds'].forEach(function (key) {
+        delete summary[key];
+      });
+      return summary;
+    }
+
+    function persistCashWorkspace(context) {
+      context = context || cashSyncContext();
+      if (!isCurrentCashContext(context) || !context.cache || !context.cache.complete) return Promise.resolve(false);
+      var snapshot = {
+        query: currentCashQuery(),
+        orders: Array.isArray(state.orders) ? state.orders.map(toCashOrderSummary) : [],
+        periodAggregate: state.periodAggregate,
+        dayRows: serializeCashDayRows(),
+        statuses: Array.isArray(state.statuses) ? state.statuses.slice() : [],
+        paymentMethods: Array.isArray(state.paymentMethods) ? state.paymentMethods.slice() : [],
+        storeTimezone: String(state.storeTimezone || '+0'),
+        syncCursor: Number(state.eventsCursor || 0),
+        updatedAt: Date.now(),
+      };
+      return context.cache.set(CASH_WORKSPACE_KEY, snapshot, { ttlMs: CASH_WORKSPACE_TTL_MS })
+        .catch(function (err) { console.error('cash workspace cache write error:', err); return false; });
+    }
+
+    function restoreCashWorkspace(entry, context) {
+      var snapshot = entry && entry.data;
+      var query = snapshot && snapshot.query;
+      if (!snapshot || !query || !isCurrentCashContext(context)) return false;
+      var snapshotTimezone = String(snapshot.storeTimezone || state.storeTimezone || '+0');
+      var today = getStoreDateNow(snapshotTimezone);
+      var todayKey = toDateKey(today);
+      if (String(query.startDate || '') !== todayKey || String(query.endDate || '') !== todayKey) return false;
+      state.date.start = today;
+      state.date.end = new Date(today);
+      state.date.viewYear = today.getFullYear();
+      state.date.viewMonth = today.getMonth();
+      state.orderFilter = ['all', 'paid', 'unpaid'].indexOf(String(query.filter || 'all')) !== -1 ? String(query.filter || 'all') : 'all';
+      if (cashQueryKey(query) !== cashQueryKey(currentCashQuery())) return false;
+      state.orders = Array.isArray(snapshot.orders) ? snapshot.orders.slice() : [];
+      state.periodAggregate = snapshot.periodAggregate && typeof snapshot.periodAggregate === 'object' ? snapshot.periodAggregate : null;
+      state.dayRows = snapshot.dayRows && typeof snapshot.dayRows === 'object' ? snapshot.dayRows : {};
+      state.statuses = Array.isArray(snapshot.statuses) ? snapshot.statuses.slice() : [];
+      state.paymentMethods = Array.isArray(snapshot.paymentMethods) ? snapshot.paymentMethods.slice() : [];
+      state.storeTimezone = String(snapshot.storeTimezone || '+0');
+      state.eventsCursor = Number(snapshot.syncCursor || 0);
+      cashSnapshotVisible = true;
+      return true;
+    }
+
+    function getCashBannerState() {
+      if (navigator.onLine === false) return cashSnapshotVisible
+        ? { mode: 'offline', text: 'Офлайн · сохранённые данные', retry: false }
+        : { mode: 'error', text: 'Нет сохранённых данных', retry: false };
+      if (cashRefreshFailed) return { mode: 'error', text: cashSnapshotVisible ? 'Не удалось обновить' : 'Нет сохранённых данных', retry: true };
+      if (!cashNetworkConfirmed) return { mode: 'syncing', text: cashSnapshotVisible ? 'Обновляем сохранённые данные…' : 'Загружаем данные…', retry: false };
+      return { mode: 'online', text: 'Онлайн', retry: false };
+    }
+
+    function refreshCashConnectionBanner() {
+      var bannerState = getCashBannerState();
+      cashConnectionBanners.forEach(function (banner) {
+        var textEl = banner.querySelector('.courier-connection-banner__text');
+        var retryEl = banner.querySelector('[data-action="cash-connection-retry"]');
+        banner.classList.remove('hidden', 'courier-connection-banner--offline', 'courier-connection-banner--syncing', 'courier-connection-banner--online', 'courier-connection-banner--error');
+        banner.classList.add('courier-connection-banner--' + bannerState.mode);
+        if (textEl) textEl.textContent = bannerState.text;
+        if (retryEl) retryEl.classList.toggle('hidden', !bannerState.retry);
+      });
     }
 
     function formatCount(value) {
@@ -1145,7 +1278,7 @@
     }
 
     function ensurePaymentMethodsLoaded(order) {
-      if (Array.isArray(state.paymentMethods) && state.paymentMethods.length) {
+      if (state.paymentMethodsLoaded === true) {
         return Promise.resolve(getActivePaymentMethods(order));
       }
       if (state.paymentMethodsPromise) {
@@ -1153,12 +1286,31 @@
           return getActivePaymentMethods(order);
         });
       }
-      state.paymentMethodsPromise = apiJson('/api/admin/tenant/order-payments').then(function (json) {
-        state.paymentMethods = Array.isArray(json && json.items) ? json.items.slice() : [];
+      var context = cashSyncContext();
+      var load = function () { return apiJson('/api/admin/tenant/order-payments'); };
+      var request = window.AdminReferenceCache
+        ? window.AdminReferenceCache.getOrLoadReference('payment-methods', {
+            load: load,
+            normalize: function (json) {
+              if (!json || !Array.isArray(json.items)) throw new Error('INVALID_PAYMENT_METHODS_RESPONSE');
+              return json.items.slice();
+            },
+            validate: function (items) { return Array.isArray(items); },
+            onUpdate: function (items) {
+              if (isCurrentCashContext(context)) state.paymentMethods = items.slice();
+            }
+          })
+        : load().then(function (json) {
+            if (!json || !Array.isArray(json.items)) throw new Error('INVALID_PAYMENT_METHODS_RESPONSE');
+            return json.items.slice();
+          });
+      state.paymentMethodsPromise = request.then(function (items) {
+        if (!isCurrentCashContext(context)) return state.paymentMethods;
+        state.paymentMethods = items.slice();
+        state.paymentMethodsLoaded = true;
         return state.paymentMethods;
       }).catch(function (err) {
         console.error('cash payment methods load error:', err);
-        state.paymentMethods = [];
         return state.paymentMethods;
       }).finally(function () {
         state.paymentMethodsPromise = null;
@@ -1417,6 +1569,14 @@
     }
 
     function renderJournalDayGroups(entries) {
+      if (state.currentSection === 'orders' && state.periodAggregate && Array.isArray(state.periodAggregate.days)) {
+        return state.periodAggregate.days.map(function (day) {
+          var key = String(day.day || ''), cache = state.dayRows[key] || {}, collapsed = state.dayGroupsCollapsed[key] !== false;
+          var items = Array.isArray(cache.items) ? cache.items : [];
+          var footer = cache.error ? '<div class="cash-day-error">Не удалось загрузить заказы <button type="button" data-cash-day-retry="' + escapeHtml(key) + '">Повторить</button></div>' : (cache.loading ? '<div class="cash-day-loading">Загрузка…</div>' : (cache.hasMore ? '<button class="btn btn-ghost cash-day-load-more" type="button" data-cash-day-more="' + escapeHtml(key) + '">Показать ещё</button>' : ''));
+          return '<section class="cash-day-section"><button class="cash-day-header" type="button" data-cash-day-toggle="' + escapeHtml(key) + '"><span class="cash-day-title"><strong>' + escapeHtml(formatJournalDayLabel(key)) + '</strong><span class="cash-day-count">' + escapeHtml(formatCount(day.orders_count || 0) + ' заказ. · ' + money(day.total || 0)) + '</span></span><span class="cash-day-chevron' + (collapsed ? ' is-collapsed' : '') + '"><i class="fas fa-chevron-down"></i></span></button><div class="cash-day-panel cash-day-panel--orders' + (collapsed ? ' hidden' : '') + '">' + items.map(buildJournalRow).join('') + footer + '</div></section>';
+        }).join('');
+      }
       return buildJournalDayGroups(entries).map(function (group) {
         var collapsed = !Object.prototype.hasOwnProperty.call(state.dayGroupsCollapsed || {}, group.dayKey)
           ? true
@@ -1846,7 +2006,19 @@
           renderMoneyMethodCards(moneySummary);
         return;
       }
-      var summary = buildOrdersSummary(getOrderJournalOrders());
+      var aggregate = state.periodAggregate && state.periodAggregate.summary;
+      var summary = aggregate ? {
+        deliveredOrders: Number(aggregate.delivered_orders || 0),
+        deliveredTotal: Number(aggregate.delivered_total || 0),
+        paidOrders: Number(aggregate.paid_orders || 0),
+        unpaidOrders: Number(aggregate.unpaid_orders || 0),
+        cashPaidTotal: Number(aggregate.cash_paid_total || 0),
+        cardPaidTotal: Number(aggregate.card_paid_total || 0),
+        onlinePaidTotal: Number(aggregate.online_paid_total || 0)
+      } : {
+        deliveredOrders: 0, deliveredTotal: 0, paidOrders: 0, unpaidOrders: 0,
+        cashPaidTotal: 0, cardPaidTotal: 0, onlinePaidTotal: 0
+      };
       summaryCardsEl.innerHTML =
         '<div class="cash-summary-card cash-summary-card--half"><span>Доставлены</span><strong>' + escapeHtml(formatCount(summary.deliveredOrders)) + '</strong></div>' +
         '<div class="cash-summary-card cash-summary-card--half"><span>Сумма доставленных</span><strong>' + escapeHtml(money(summary.deliveredTotal)) + '</strong></div>' +
@@ -1859,8 +2031,20 @@
 
     function renderSidebarSummary() {
       if (!sidebarSummaryEl) return;
-      var ordersSummary = buildOrdersSummary(getAllActiveOrders());
-      var stageStats = buildStageStats(getAllPeriodOrders());
+      var aggregate = state.currentSection === 'orders' && state.periodAggregate;
+      var aggregateSummary = aggregate && aggregate.summary || {};
+      var ordersSummary = aggregate ? {
+        totalOrders: Number(aggregateSummary.total_orders || 0),
+        newOrders: Number(aggregateSummary.new_orders || 0),
+        unpaidOrders: Number(aggregateSummary.unpaid_orders || 0),
+        paidOrders: Number(aggregateSummary.paid_orders || 0)
+      } : buildOrdersSummary(getAllActiveOrders());
+      var stageStats = aggregate && Array.isArray(aggregate.stages)
+        ? getSortedStatuses().map(function (status) {
+          var stage = aggregate.stages.find(function (item) { return Number(item && item.status_id || 0) === Number(status && status.id || 0); });
+          return { id: Number(status && status.id || 0), title: String(status && status.title || '—').trim() || '—', count: Number(stage && stage.count || 0), amount: Number(stage && stage.amount || 0) };
+        })
+        : buildStageStats(getAllPeriodOrders());
       var moneySummary = getMoneySummary();
       sidebarSummaryEl.innerHTML =
         '<div class="cash-balance-card">' +
@@ -1988,7 +2172,6 @@
       }
       if (clientInfoWrap) clientInfoWrap.classList.remove('hidden');
       if (cashOrderInfoFooterEl) cashOrderInfoFooterEl.classList.add('hidden');
-      if (ordersClientBenefitsFooterEl) ordersClientBenefitsFooterEl.classList.remove('hidden');
     }
 
     function setClientContentTab(tabName) {
@@ -2018,36 +2201,6 @@
         event.preventDefault();
         event.stopPropagation();
         setClientContentTab(btn.getAttribute('data-ctab'));
-      });
-    }
-
-    function openActiveClientBenefits(mode) {
-      var activeClientTab = getActiveClientTab();
-      var clientId = Number(activeClientTab && activeClientTab.clientId || 0);
-      if (!(clientId > 0)) return;
-      var clientsApi = window.__clientsDashboardApi;
-      if (!clientsApi) {
-        console.error('clients dashboard api is not available');
-        return;
-      }
-      if (mode === 'bonuses' && typeof clientsApi.openBonusesByClientId === 'function') {
-        clientsApi.openBonusesByClientId(clientId);
-        return;
-      }
-      if (typeof clientsApi.openBenefitsByClientId === 'function') clientsApi.openBenefitsByClientId(clientId);
-    }
-
-    if (ordersClientBenefitsOpenBtnEl) {
-      ordersClientBenefitsOpenBtnEl.addEventListener('click', function (event) {
-        event.preventDefault();
-        openActiveClientBenefits('benefits');
-      });
-    }
-
-    if (ordersClientBonusesOpenBtnEl) {
-      ordersClientBonusesOpenBtnEl.addEventListener('click', function (event) {
-        event.preventDefault();
-        openActiveClientBenefits('bonuses');
       });
     }
 
@@ -2149,7 +2302,7 @@
         return;
       }
       if (config.error) {
-        if (clientAddressesList) clientAddressesList.innerHTML = '<div class="muted">' + escapeHtml(config.error) + '</div>';
+        if (clientAddressesList) clientAddressesList.innerHTML = '<div class="muted">' + escapeHtml(config.error) + '</div><button class="btn btn-secondary" type="button" data-action="retry-client-passport-runtime">Повторить</button>';
         if (clientOrdersList) clientOrdersList.innerHTML = '';
         if (clientDiscountsList) clientDiscountsList.innerHTML = '';
         if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add('hidden');
@@ -2222,8 +2375,55 @@
       }
     }
 
-    async function activateClientTab(tab) {
+    async function activateClientTabOnce(tab) {
       if (!tab || String(tab.type || '') !== 'client') return;
+      var activationKey = String(tab.key || '');
+      if (!window.__clientsDashboardApi && sharedOrderPanel && typeof sharedOrderPanel.ensureAdminAsset === 'function') {
+        try {
+          await sharedOrderPanel.ensureAdminAsset('clients');
+        } catch (error) {
+          console.error('Failed to load Client Passport runtime:', error);
+          tab.error = 'Не удалось загрузить карточку клиента';
+          showClientInfo();
+          renderClientTabState(tab, { error: tab.error });
+          return;
+        }
+      }
+      if (tabsState.activeKey !== activationKey) return;
+      var clientsApi = window.__clientsDashboardApi;
+      if (!clientsApi || typeof clientsApi.openClientPassport !== 'function') {
+        tab.error = 'Не удалось инициализировать карточку клиента';
+        showClientInfo();
+        renderClientTabState(tab, { error: tab.error });
+        return;
+      }
+      if (clientsApi && typeof clientsApi.openClientPassport === 'function' && Number(tab.clientId || 0) > 0) {
+        tab.error = null;
+        await clientsApi.openClientPassport(tab.clientId, {
+          source: 'cash',
+          nested: cashOrderDetailsOpener?.getContext?.()?.source === 'client',
+          title: tab.title || tab.fallbackName || '',
+          skipMobileSheet: true,
+          onBack: function () {
+            var current = getActiveTab();
+            if (current && String(current.type || 'order') === 'order') setActiveOrderTab(current.key);
+            else renderAll();
+          },
+          onOrderOpen: function (orderId) {
+            var clientTabKey = String(tab.key || '');
+            return openOrderById(orderId, {
+              source: 'client',
+              nested: true,
+              keepTabOnClose: true,
+              onBack: function () {
+                if (getTabByKey(clientTabKey)) setActiveOrderTab(clientTabKey);
+              }
+            });
+          }
+        });
+        showClientInfo();
+        return;
+      }
       var cached = state.clientsCache.get(Number(tab.clientId));
       if (cached && !tab.client) {
         tab.client = cached.client || null;
@@ -2243,6 +2443,16 @@
         loading: !tab.client || !Array.isArray(tab.addresses) || !Array.isArray(tab.orders) || !Array.isArray(tab.discounts)
       });
       await loadClientTabData(tab);
+    }
+
+    function activateClientTab(tab) {
+      if (!tab || String(tab.type || '') !== 'client') return Promise.resolve();
+      if (tab.activationPromise) return tab.activationPromise;
+      var promise = activateClientTabOnce(tab).finally(function () {
+        if (tab.activationPromise === promise) tab.activationPromise = null;
+      });
+      tab.activationPromise = promise;
+      return promise;
     }
 
     async function findClientIdByPhone(phoneValue) {
@@ -2329,21 +2539,8 @@
       });
     }
 
-    function syncCashPaymentFooter(order) {
-      if (!cashOrderPaymentBtnEl) return;
-      if (!order) {
-        cashOrderPaymentBtnEl.textContent = 'Принять оплату';
-        cashOrderPaymentBtnEl.disabled = false;
-        return;
-      }
-      var paid = isPaidOrder(order);
-      cashOrderPaymentBtnEl.textContent = paid ? 'Оплачено' : 'Принять оплату';
-      cashOrderPaymentBtnEl.disabled = paid;
-    }
-
     function renderRightPane() {
       if (state.currentSection === 'expenses' && state.activeExpenseDocument) {
-        if (ordersClientBenefitsFooterEl) ordersClientBenefitsFooterEl.classList.add('hidden');
         var expense = state.activeExpenseDocument;
         var items = Array.isArray(expense.items) ? expense.items : [];
         var receiptData = expense.receiptData || {};
@@ -2379,7 +2576,6 @@
       var activeClientTab = getActiveClientTab();
       var activeOrder = activeClientTab ? null : getActiveOrder();
       var showHome = !activeTab || (!activeOrder && !activeClientTab);
-      if (ordersClientBenefitsFooterEl) ordersClientBenefitsFooterEl.classList.toggle('hidden', !activeClientTab);
       if (cashOrderTabsHeaderEl) cashOrderTabsHeaderEl.classList.remove('hidden');
       if (sidebarSummaryEl) sidebarSummaryEl.classList.toggle('hidden', !showHome);
       if (cashOrderInfoRootEl) cashOrderInfoRootEl.classList.toggle('hidden', showHome);
@@ -2474,10 +2670,13 @@
             statusText: paymentStatusText
           })
           : '';
+        var passportState = cashPassportCacheStates.get(String(orderId)) || 'unknown';
+        var passportLabels = { saved: 'Доступен офлайн', checking: 'Проверяем офлайн-доступ', saving: 'Сохраняем для офлайн-доступа', stale: 'Сохранённая версия требует обновления', missing: 'Не сохранён для офлайн-доступа', unknown: 'Состояние офлайн-доступа неизвестно' };
         return '<div class="order-row order-list-card js-order js-cash-order-row shared-order-summary-row ' + (isActive ? 'is-active' : '') + '" role="button" tabindex="0" data-order-id="' + String(orderId) + '">' +
           sharedOrderPanel.buildOrderListRowInnerHtml({
             orderId: orderId,
             orderNumberText: String(getOrderNumber(order)),
+            orderIdNumHtml: '<div class="order-id-num">' + escapeHtml(String(getOrderNumber(order))) + '<span class="courier-order-cache-indicator courier-order-cache-indicator--' + passportState + '" data-cash-passport-cache-state aria-label="' + escapeHtml(passportLabels[passportState] || passportLabels.unknown) + '" title="' + escapeHtml(passportLabels[passportState] || passportLabels.unknown) + '"></span></div>',
             createdAtText: formatTime(order && order.created_at),
             showMultiSelect: false,
             multiSelected: false,
@@ -2504,7 +2703,7 @@
       renderFilterState();
       if (state.currentSection === 'expenses') {
         journalListEl.classList.remove('cash-journal-list--orders');
-        journalListEl.innerHTML = state.expenseDocuments.map(function (document) {
+        var expenseRowsHtml = state.expenseDocuments.map(function (document) {
           var documentDateTime = document.receipt_datetime || document.accepted_at;
           var expenseDateTime = window.matchMedia('(max-width: 768px)').matches
             ? formatDateTime(documentDateTime).split(',')[0]
@@ -2515,21 +2714,34 @@
             : [supplierName, document.retail_place || 'Место расчёта не указано', document.supplier_inn ? 'ИНН ' + document.supplier_inn : 'ИНН не указан'].join(' · ');
           return '<div class="cash-expense-document-row"><button class="cash-journal-entry" type="button" data-expense-document-id="' + String(document.id) + '"><div class="cash-journal-entry-icon"><i class="fas fa-receipt"></i></div><time class="cash-expense-document-date">' + escapeHtml(expenseDateTime) + '</time><div class="cash-journal-entry-main"><div class="cash-journal-entry-top"><strong>' + escapeHtml(expenseDetails) + '</strong></div></div><div class="cash-journal-entry-amount is-negative">-' + escapeHtml(money(Number(document.total_sum_kopecks || 0) / 100)) + '</div></button><button class="btn btn-icon cash-expense-document-delete" type="button" data-expense-document-delete-id="' + String(document.id) + '" aria-label="Удалить документ"><i class="fas fa-trash"></i><span>Удалить</span></button></div>';
         }).join('');
-        if (journalEmptyEl) { journalEmptyEl.textContent = 'Документов расходов пока нет'; journalEmptyEl.classList.toggle('hidden', state.expenseDocuments.length > 0); }
+        var expenseStateHtml = '';
+        if (state.expenseDocumentsStatus === 'loading' && state.expenseDocuments.length === 0) {
+          expenseStateHtml = '<div class="empty-hint" role="status">Загрузка документов расходов…</div>';
+        } else if (state.expenseDocumentsStatus === 'error') {
+          expenseStateHtml = '<div class="empty-hint" role="alert">' + (state.expenseDocuments.length > 0 ? 'Не удалось обновить документы расходов' : 'Не удалось загрузить документы расходов') + '<br><button class="btn btn-ghost btn-sm" type="button" data-expense-documents-retry>Повторить</button></div>';
+        }
+        journalListEl.innerHTML = expenseStateHtml + expenseRowsHtml;
+        if (journalEmptyEl) {
+          journalEmptyEl.textContent = 'Документов расходов пока нет';
+          journalEmptyEl.classList.toggle('hidden', state.expenseDocumentsStatus !== 'success' || state.expenseDocuments.length > 0);
+        }
         if (loadMoreBtnEl) loadMoreBtnEl.classList.add('hidden');
         return;
       }
       var orders = state.currentSection === 'money' ? getMoneyJournalEntries() : getOrderJournalOrders();
       journalListEl.classList.toggle('cash-journal-list--orders', state.currentSection === 'orders');
-      journalListEl.innerHTML = isMultiDayRange()
-        ? renderJournalDayGroups(orders)
+      journalListEl.innerHTML = (state.currentSection === 'orders' && state.periodAggregate)
+        ? renderJournalDayGroups([])
         : orders.map(buildJournalRow).join('');
       if (journalEmptyEl) {
         journalEmptyEl.textContent = state.currentSection === 'money' ? 'Движений денег пока нет' : 'Заказов пока нет';
-        journalEmptyEl.classList.toggle('hidden', orders.length > 0);
+        var hasJournalEntries = state.currentSection === 'orders' && state.periodAggregate
+          ? Array.isArray(state.periodAggregate.days) && state.periodAggregate.days.length > 0
+          : orders.length > 0;
+        journalEmptyEl.classList.toggle('hidden', hasJournalEntries);
       }
       if (loadMoreBtnEl) {
-        loadMoreBtnEl.classList.toggle('hidden', !state.ordersHasMore || state.loading);
+        loadMoreBtnEl.classList.toggle('hidden', state.currentSection === 'orders' || !state.ordersHasMore || state.loading);
         loadMoreBtnEl.disabled = state.loading;
       }
     }
@@ -2585,8 +2797,7 @@
     function loadFullOrderForTab(tab) {
       var orderId = Number(tab && tab.orderId || 0);
       if (!(orderId > 0) || tab.fullOrderLoaded || tab.fullOrderPromise) return tab && tab.fullOrderPromise || Promise.resolve(tab && tab.order || null);
-      tab.fullOrderPromise = apiJson('/api/admin/orders/' + String(orderId)).then(function (json) {
-        var fullOrder = json && json.data || null;
+      tab.fullOrderPromise = ensureCashFullOrder(orderId).then(function (fullOrder) {
         if (!fullOrder || getOrderId(fullOrder) !== orderId) return tab.order || null;
         fullOrdersById.set(orderId, Object.assign({}, fullOrder));
         tab.order = Object.assign({}, tab.order, fullOrder);
@@ -2626,8 +2837,7 @@
     var cashOrderDetailsOpener = sharedOrderPanel && typeof sharedOrderPanel.createDetailsOpener === 'function'
       ? sharedOrderPanel.createDetailsOpener({
           loadOrder: function (id) {
-            return apiJson('/api/admin/orders/' + String(id)).then(function (json) {
-              var fullOrder = json && json.data || null;
+            return ensureCashFullOrder(id).then(function (fullOrder) {
               if (!fullOrder || getOrderId(fullOrder) !== id) return null;
               var listOrder = state.orders.find(function (order) { return getOrderId(order) === id; }) || {};
               var detailsOrder = mergeOrderTabSnapshot({ order: listOrder, fullOrderLoaded: true }, fullOrder);
@@ -2636,8 +2846,16 @@
               return detailsOrder;
             });
           },
-          openTab: function (order) {
-            return ensureOrderTab(order, { activate: true, fullOrderLoaded: true });
+          openTab: function (order, orderId, context) {
+            var tab = ensureOrderTab(order, { activate: true, fullOrderLoaded: true });
+            if (tab) tab.orderPassportContext = context || {};
+            return tab;
+          },
+          close: function (reason, context) {
+            var activeTab = getTabByKey(tabsState.activeKey);
+            if (activeTab && String(activeTab.type || 'order') === 'order' && !(context && context.keepTabOnClose === true)) closeOrderTab(activeTab.key);
+            if (context && typeof context.onBack === 'function') return context.onBack(reason);
+            return null;
           },
           afterOpen: function (order, tab) {
             if (!tab || String(tabsState.activeKey || '') !== String(tab.key || '')) return;
@@ -2651,7 +2869,105 @@
 
     function openOrderById(orderId) {
       if (!cashOrderDetailsOpener) return Promise.resolve(null);
-      return cashOrderDetailsOpener.open(orderId);
+      return cashOrderDetailsOpener.open(orderId, arguments.length > 1 ? arguments[1] : {});
+    }
+
+    function setCashPassportState(orderId, value) {
+      var id = Number(orderId || 0);
+      if (!(id > 0)) return;
+      cashPassportCacheStates.set(String(id), value);
+      var row = journalListEl.querySelector('[data-order-id="' + String(id) + '"]');
+      var indicator = row && row.querySelector('[data-cash-passport-cache-state]');
+      if (indicator) renderJournal();
+    }
+
+    function ensureCashFullOrder(orderId) {
+      var id = Number(orderId || 0);
+      var passport = window.AdminPersistentCache && window.AdminPersistentCache.orderPassport;
+      if (!(id > 0)) return Promise.resolve(null);
+      var isFullOrder = passport && typeof passport.isFull === 'function'
+        ? passport.isFull
+        : function (order) { return Boolean(order && Array.isArray(order.items)); };
+      function loadFromNetwork() {
+        if (navigator.onLine === false) return Promise.resolve(null);
+        setCashPassportState(id, 'saving');
+        return apiJson('/api/admin/orders/' + String(id)).then(function (json) {
+          var fullOrder = json && json.data || null;
+          if (!isFullOrder(fullOrder)) return null;
+          fullOrdersById.set(id, Object.assign({}, fullOrder));
+          if (!passport || typeof passport.write !== 'function') {
+            setCashPassportState(id, 'unknown');
+            return fullOrder;
+          }
+          void passport.write(fullOrder, { authoritative: true }).then(function (saved) {
+            setCashPassportState(id, saved ? 'saved' : 'unknown');
+          }).catch(function (err) {
+            setCashPassportState(id, 'unknown');
+            console.error('cash shared passport write error:', err);
+          });
+          return fullOrder;
+        });
+      }
+      var cachedRuntime = fullOrdersById.get(id);
+      if (cachedRuntime && isFullOrder(cachedRuntime)) return Promise.resolve(cachedRuntime);
+      if (!passport || typeof passport.read !== 'function') return loadFromNetwork();
+      setCashPassportState(id, 'checking');
+      return passport.read(id, { allowStale: true }).then(function (entry) {
+        if (entry && entry.order) {
+          fullOrdersById.set(id, Object.assign({}, entry.order));
+          setCashPassportState(id, entry.stale ? 'stale' : 'saved');
+          if (entry.stale && navigator.onLine !== false) {
+            setCashPassportState(id, 'saving');
+            void apiJson('/api/admin/orders/' + String(id)).then(function (json) {
+              var freshOrder = json && json.data || null;
+              if (!passport.isFull(freshOrder)) return;
+              return passport.write(freshOrder, { authoritative: true }).then(function (saved) {
+                fullOrdersById.set(id, Object.assign({}, freshOrder));
+                setCashPassportState(id, saved ? 'saved' : 'unknown');
+                updateOrderInState(freshOrder);
+                renderAll();
+              });
+            }).catch(function () { setCashPassportState(id, 'stale'); });
+          }
+          return entry.order;
+        }
+        setCashPassportState(id, 'missing');
+        return loadFromNetwork();
+      }).catch(function (err) {
+        setCashPassportState(id, navigator.onLine === false ? 'missing' : 'unknown');
+        if (navigator.onLine === false) throw err;
+        console.error('cash shared passport read error:', err);
+        return loadFromNetwork();
+      });
+    }
+
+    function inspectCashPassportCaches() {
+      var passport = window.AdminPersistentCache && window.AdminPersistentCache.orderPassport;
+      if (!passport) return;
+      var ids = [];
+      Object.keys(state.dayRows || {}).forEach(function (dayKey) {
+        (state.dayRows[dayKey].items || []).forEach(function (order) {
+          var id = getOrderId(order);
+          if (id > 0 && ids.indexOf(id) === -1) ids.push(id);
+        });
+      });
+      var queued = false;
+      ids.slice(0, 200).forEach(function (id) {
+        var key = String(id);
+        if (cashPassportCacheStates.has(key) || cashPassportChecksInFlight.has(key)) return;
+        cashPassportChecksInFlight.add(key);
+        cashPassportCacheStates.set(key, 'checking');
+        queued = true;
+        passport.read(id, { allowStale: true }).then(function (entry) {
+          cashPassportCacheStates.set(key, entry ? (entry.stale ? 'stale' : 'saved') : 'missing');
+        }).catch(function () {
+          cashPassportCacheStates.set(key, 'unknown');
+        }).finally(function () {
+          cashPassportChecksInFlight.delete(key);
+          renderJournal();
+        });
+      });
+      if (queued) renderJournal();
     }
 
     function closeOrderTab(key) {
@@ -2673,6 +2989,12 @@
       var index = state.orders.findIndex(function (row) { return getOrderId(row) === orderId; });
       if (index === -1) state.orders.unshift(order);
       else state.orders[index] = Object.assign({}, state.orders[index], order);
+      Object.keys(state.dayRows).forEach(function (dayKey) {
+        var day = state.dayRows[dayKey];
+        if (!day || !Array.isArray(day.items)) return;
+        var dayIndex = day.items.findIndex(function (row) { return getOrderId(row) === orderId; });
+        if (dayIndex !== -1) day.items[dayIndex] = Object.assign({}, day.items[dayIndex], order);
+      });
       syncTabsWithLatestOrders();
     }
 
@@ -2680,8 +3002,19 @@
       var id = Number(orderId || 0);
       if (!(id > 0)) return false;
       var index = state.orders.findIndex(function (row) { return getOrderId(row) === id; });
-      if (index === -1) return false;
-      state.orders.splice(index, 1);
+      var changed = index !== -1;
+      if (changed) state.orders.splice(index, 1);
+      Object.keys(state.dayRows).forEach(function (dayKey) {
+        var day = state.dayRows[dayKey];
+        if (!day || !Array.isArray(day.items)) return;
+        var before = day.items.length;
+        day.items = day.items.filter(function (row) { return getOrderId(row) !== id; });
+        if (day.items.length !== before) {
+          changed = true;
+          day.nextOffset = Math.max(0, Number(day.nextOffset || 0) - (before - day.items.length));
+        }
+      });
+      if (!changed) return false;
       syncTabsWithLatestOrders();
       return true;
     }
@@ -2689,7 +3022,7 @@
     function orderMatchesActiveDateRange(order) {
       if (!(getOrderId(order) > 0)) return false;
       if (!state.date.start || !state.date.end) return true;
-      var parts = parseLocalDateParts(order && (order.scheduled_at || order.created_at));
+      var parts = parseLocalDateParts(order && order.created_at);
       if (!parts) return false;
       var key = [String(parts.year || ''), String(parts.month).padStart(2, '0'), String(parts.day).padStart(2, '0')].join('-');
       var startKey = toDateKey(state.date.start);
@@ -2702,7 +3035,41 @@
       if (!(orderId > 0)) return false;
       if (!orderMatchesActiveDateRange(order)) return removeOrderFromState(orderId);
       updateOrderInState(order);
+      var passport = window.AdminPersistentCache && window.AdminPersistentCache.orderPassport;
+      if (passport) void passport.merge(order).then(function (saved) {
+        if (saved) setCashPassportState(orderId, 'saved');
+      }).catch(function (err) { console.error('cash shared passport merge error:', err); });
+      if (state.currentSection === 'orders') {
+        var filter = String(state.orderFilter || 'all');
+        Object.keys(state.dayRows).forEach(function (dayKey) {
+          var day = state.dayRows[dayKey];
+          if (!day || !Array.isArray(day.items)) return;
+          var excluded = isCanceledOrder(order)
+            || (filter === 'paid' && !isPaidOrder(order))
+            || (filter === 'unpaid' && isPaidOrder(order));
+          if (excluded) {
+            var before = day.items.length;
+            day.items = day.items.filter(function (row) { return getOrderId(row) !== orderId; });
+            day.nextOffset = Math.max(0, Number(day.nextOffset || 0) - (before - day.items.length));
+          }
+        });
+      }
       return true;
+    }
+
+    function reconcileCashOrderMutation(order) {
+      if (!applyOrderChange(order)) return Promise.resolve();
+      var passport = window.AdminPersistentCache && window.AdminPersistentCache.orderPassport;
+      if (passport && passport.isFull(order)) {
+        void passport.write(order, { authoritative: true }).then(function (saved) {
+          if (saved) setCashPassportState(getOrderId(order), 'saved');
+        }).catch(function (err) { console.error('cash shared passport write error:', err); });
+      }
+      document.dispatchEvent(new CustomEvent('dashboard:order-updated', {
+        detail: { order: Object.assign({}, order), source: 'cash' }
+      }));
+      renderAll();
+      return loadPeriodAggregate().then(function () { return persistCashWorkspace(); }).finally(renderAll);
     }
 
     function buildDateQuery(qs) {
@@ -2714,8 +3081,24 @@
     }
 
     function loadStoreTimezone() {
-      return apiJson('/api/admin/tenant/current-time').then(function (json) {
-        if (json && json.data && json.data.storeTimezone != null) state.storeTimezone = String(json.data.storeTimezone || '+0');
+      var context = cashSyncContext();
+      var load = function () {
+        return apiJson('/api/admin/tenant/current-time').then(function (json) {
+          return { storeTimezone: String(json && json.data && json.data.storeTimezone || '+0'), storeTimestamp: Number(json && json.data && json.data.storeTimestamp || 0), fetchedAt: Date.now() };
+        });
+      };
+      var request = window.AdminReferenceCache
+        ? window.AdminReferenceCache.getOrLoadReference('store-time', {
+            load: load,
+            validate: function (value) { return !!value && Number(value.storeTimestamp) > 0 && Number(value.fetchedAt) > 0; },
+            onUpdate: function (value) {
+              if (isCurrentCashContext(context)) state.storeTimezone = String(value.storeTimezone || '+0');
+            }
+          })
+        : load();
+      return request.then(function (data) {
+        if (!isCurrentCashContext(context)) return;
+        if (data && data.storeTimezone != null) state.storeTimezone = String(data.storeTimezone || '+0');
       }).catch(function (err) {
         console.error('cash timezone load error:', err);
       });
@@ -2798,12 +3181,22 @@
 
     function applyDateFilter(closePopoverAfter) {
       state.dayGroupsCollapsed = {};
+      state.dayRows = {};
+      state.dayRequestGeneration += 1;
       state.ordersHasMore = false;
       state.ordersNextOffset = 0;
+      state.periodAggregate = null;
+      state.orders = [];
+      cashSnapshotVisible = false;
+      cashNetworkConfirmed = false;
+      cashRefreshFailed = false;
+      refreshCashConnectionBanner();
       updateDateLabel();
-      var loads = [loadStatuses(), loadOrders()];
-      if (state.currentSection === 'expenses') loads.push(loadExpenseDocuments());
-      Promise.all(loads).then(function () { renderAll(); }).catch(console.error);
+      void refreshCashWorkspace(cashSyncContext()).then(function () {
+        return state.currentSection !== 'orders' ? loadOrders() : null;
+      }).then(function () {
+        return state.currentSection === 'expenses' ? loadExpenseDocuments() : null;
+      }).then(renderAll).catch(console.error);
       if (closePopoverAfter) closeDatePopover();
     }
 
@@ -2858,8 +3251,10 @@
     }
 
     function loadStatuses() {
+      var context = cashSyncContext();
       var qs = buildDateQuery(new URLSearchParams());
       return apiJson('/api/admin/orders/statuses?' + qs.toString()).then(function (json) {
+        if (!isCurrentCashContext(context)) return;
         state.statuses = Array.isArray(json && json.data) ? json.data.slice() : [];
         renderInlineStatusMenus(getActiveOrder());
       }).catch(function (err) {
@@ -2871,6 +3266,7 @@
       options = options || {};
       if (state.loadPromise) return state.loadPromise;
       state.loading = true;
+      var context = cashSyncContext();
       var qs = buildDateQuery(new URLSearchParams());
       qs.set('view', 'list');
       qs.set('limit', '50');
@@ -2878,6 +3274,7 @@
       var offset = append ? Number(state.ordersNextOffset || 0) : 0;
       qs.set('offset', String(offset));
       state.loadPromise = apiJson('/api/admin/orders?' + qs.toString()).then(function (json) {
+        if (!isCurrentCashContext(context)) return;
         var page = Array.isArray(json && json.data) ? json.data.slice() : [];
         state.orders = append ? state.orders.concat(page) : page;
         state.ordersHasMore = json && json.has_more === true;
@@ -2893,31 +3290,92 @@
       return state.loadPromise;
     }
 
-    function loadExpenseDocuments() {
-      if (state.expenseDocumentsLoadPromise) return state.expenseDocumentsLoadPromise;
+    function loadPeriodAggregate() {
+      var context = cashSyncContext();
       var qs = buildDateQuery(new URLSearchParams());
+      qs.set('filter', state.orderFilter || 'all');
+      return apiJson('/api/admin/orders/cash-summary?' + qs.toString()).then(function (json) {
+        if (!isCurrentCashContext(context)) return;
+        state.periodAggregate = json && json.data ? json.data : null;
+        return true;
+      }).catch(function (err) {
+        console.error('cash period aggregate load error:', err);
+        return false;
+      });
+    }
+
+    function loadCashDay(dayKey, append) {
+      var cache = state.dayRows[dayKey] || (state.dayRows[dayKey] = { items: [], nextOffset: 0, hasMore: true, loading: false, error: null });
+      if (cache.loading || (append && !cache.hasMore)) return Promise.resolve();
+      var generation = state.dayRequestGeneration, context = cashSyncContext(), offset = append ? Number(cache.nextOffset || 0) : 0;
+      cache.loading = true; cache.error = null; renderJournal();
+      var qs = new URLSearchParams({ date: dayKey, limit: '50', offset: String(offset), filter: state.orderFilter || 'all' });
+      return apiJson('/api/admin/orders/cash-day?' + qs.toString()).then(function (json) {
+        if (generation !== state.dayRequestGeneration || !isCurrentCashContext(context)) return;
+        var page = Array.isArray(json && json.data) ? json.data : [];
+        var existingIds = Object.create(null);
+        (append ? cache.items : []).forEach(function (item) { existingIds[String(getOrderId(item))] = true; });
+        cache.items = append
+          ? cache.items.concat(page.filter(function (item) {
+            var id = String(getOrderId(item));
+            if (existingIds[id]) return false;
+            existingIds[id] = true;
+            return true;
+          }))
+          : page;
+        cache.hasMore = json && json.has_more === true; cache.nextOffset = Number(json && json.next_offset || offset + page.length);
+        page.forEach(function (order) { updateOrderInState(order); });
+        return persistCashWorkspace(context);
+      }).catch(function (err) { if (generation === state.dayRequestGeneration) cache.error = err; console.error('cash day load error:', err); }).finally(function () { cache.loading = false; renderJournal(); });
+    }
+
+    function loadExpenseDocuments() {
+      var qs = buildDateQuery(new URLSearchParams());
+      var requestKey = qs.toString() + '|store=' + String(localStorage.getItem('activeStoreId') || '1');
+      if (state.expenseDocumentsLoadPromise && state.expenseDocumentsRequestKey === requestKey) return state.expenseDocumentsLoadPromise;
+      var generation = ++state.expenseDocumentsRequestGeneration;
       var previousFingerprint = JSON.stringify([state.expenseDocuments, state.expenseSummary]);
-      state.expenseDocumentsLoadPromise = apiJson('/api/admin/analytics/expense-documents?' + qs.toString()).then(function (payload) {
-        var documents = Array.isArray(payload.documents) ? payload.documents : [];
-        var summary = payload.summary || state.expenseSummary;
+      state.expenseDocumentsStatus = 'loading';
+      state.expenseDocumentsError = null;
+      state.expenseDocumentsRequestKey = requestKey;
+      if (state.currentSection === 'expenses') renderJournal();
+      var requestPromise = apiJson('/api/admin/analytics/expense-documents?' + qs.toString()).then(function (payload) {
+        if (!Array.isArray(payload.documents) || payload.documents.some(function (document) { return !document || typeof document !== 'object'; }) || !payload.summary || typeof payload.summary !== 'object') throw new Error('INVALID_EXPENSE_DOCUMENTS_PAYLOAD');
+        var summaryCount = Number(payload.summary.count);
+        var summaryTotal = Number(payload.summary.total_sum_kopecks);
+        if (payload.summary.count == null || payload.summary.total_sum_kopecks == null || !Number.isFinite(summaryCount) || !Number.isFinite(summaryTotal)) throw new Error('INVALID_EXPENSE_DOCUMENTS_PAYLOAD');
+        if (generation !== state.expenseDocumentsRequestGeneration) return false;
+        var documents = payload.documents;
+        var summary = payload.summary;
         var changed = previousFingerprint !== JSON.stringify([documents, summary]);
         state.expenseDocuments = documents;
         state.expenseSummary = summary;
+        state.expenseDocumentsStatus = 'success';
         return changed;
+      }).catch(function (error) {
+        if (generation !== state.expenseDocumentsRequestGeneration) return false;
+        state.expenseDocumentsStatus = 'error';
+        state.expenseDocumentsError = error;
+        console.error('expense documents load error:', error);
+        throw error;
       }).finally(function () {
+        if (generation !== state.expenseDocumentsRequestGeneration) return;
         state.expenseDocumentsLoadPromise = null;
+        state.expenseDocumentsRequestKey = '';
+        if (state.currentSection === 'expenses') renderJournal();
       });
-      return state.expenseDocumentsLoadPromise;
+      state.expenseDocumentsLoadPromise = requestPromise;
+      return requestPromise;
     }
 
     function buildFallbackReceiptHtml(order) {
       var displayOrder = getDisplayOrder(order) || order;
       var lines = (Array.isArray(displayOrder && displayOrder.items) ? displayOrder.items : []).map(function (item) {
         var qty = Math.max(1, Number(item && (item.qty || item.quantity) || 1));
-        var title = String(item && (item.product_name || item.name || item.combo_title) || 'РџРѕР·РёС†РёСЏ');
+        var title = String(item && (item.product_name || item.name || item.combo_title) || 'Позиция');
         return '<div style="display:flex;justify-content:space-between;gap:8px;"><span>' + escapeHtml(String(qty) + ' x ' + title) + '</span><span>' + escapeHtml(money(item && (item.line_total || item.total || item.total_price) || 0)) + '</span></div>';
       }).join('');
-      return '<!doctype html><html><head><meta charset="utf-8"><title>Р§РµРє</title></head><body style="font-family:Courier New,monospace;padding:16px;"><h3 style="margin:0 0 8px;">Р—Р°РєР°Р· #' + escapeHtml(getOrderNumber(displayOrder)) + '</h3><div style="margin-bottom:4px;">' + escapeHtml(formatDateTime(displayOrder.created_at)) + '</div><div style="margin-bottom:4px;">' + escapeHtml(String(displayOrder.customer_name || 'РљР»РёРµРЅС‚')) + '</div><div style="margin-bottom:12px;">' + escapeHtml(String(displayOrder.customer_phone || '')) + '</div><div style="display:grid;gap:6px;margin-bottom:12px;">' + lines + '</div><div style="display:flex;justify-content:space-between;font-weight:700;"><span>РС‚РѕРіРѕ</span><span>' + escapeHtml(money(displayOrder.total_price || 0)) + '</span></div></body></html>';
+      return '<!doctype html><html><head><meta charset="utf-8"><title>Чек</title></head><body style="font-family:Courier New,monospace;padding:16px;"><h3 style="margin:0 0 8px;">Заказ #' + escapeHtml(getOrderNumber(displayOrder)) + '</h3><div style="margin-bottom:4px;">' + escapeHtml(formatDateTime(displayOrder.created_at)) + '</div><div style="margin-bottom:4px;">' + escapeHtml(String(displayOrder.customer_name || 'Клиент')) + '</div><div style="margin-bottom:12px;">' + escapeHtml(String(displayOrder.customer_phone || '')) + '</div><div style="display:grid;gap:6px;margin-bottom:12px;">' + lines + '</div><div style="display:flex;justify-content:space-between;font-weight:700;"><span>Итого</span><span>' + escapeHtml(money(displayOrder.total_price || 0)) + '</span></div></body></html>';
     }
 
     async function printOrderReceipt(order) {
@@ -2978,8 +3436,12 @@
       return apiJson('/api/admin/orders/' + String(currentOrderId) + '/status', {
         method: 'PUT',
         body: { status_id: nextStatusId },
-      }).then(function () {
-        return loadOrders();
+      }).then(function (json) {
+        var updatedOrder = json && json.data;
+        if (updatedOrder) return reconcileCashOrderMutation(updatedOrder);
+        return apiJson('/api/admin/orders/' + String(currentOrderId)).then(function (freshJson) {
+          return reconcileCashOrderMutation(freshJson && freshJson.data);
+        });
       }).catch(function (err) {
         if (previous) {
           updateOrderInState(previous);
@@ -3203,71 +3665,6 @@
       };
     }
 
-    function openMarkPaidDialog(order) {
-      var orderId = getOrderId(order);
-      if (!(orderId > 0) || isPaidOrder(order)) return;
-      if (sharedOrderPayment && typeof sharedOrderPayment.open === 'function') {
-        return sharedOrderPayment.open({
-          order: order,
-          apiJson: apiJson,
-          money: money,
-          formatDateTimeNumeric: formatDateTimeNumeric,
-          getOrderId: getOrderId,
-          getOrderNumber: getOrderNumber,
-          isPaidOrder: isPaidOrder,
-          onSuccess: function (updatedOrder) {
-            updateOrderInState(updatedOrder);
-            renderAll();
-          },
-          onError: function (err) {
-            console.error('cash payment modal init error:', err);
-          },
-        });
-      }
-      var modal = window.AppModal;
-      var orderId = getOrderId(order);
-      if (!(orderId > 0) || isPaidOrder(order)) return;
-      if (!modal || typeof modal.open !== 'function') {
-        return apiJson('/api/admin/orders/' + orderId + '/paid', { method: 'PUT', body: { is_paid: 1 } }).then(function (json) {
-          updateOrderInState(json && json.data);
-          renderAll();
-        }).catch(function (err) {
-          console.error('cash paid update error:', err);
-        });
-      }
-      ensurePaymentMethodsLoaded(order).then(function (paymentMethods) {
-        var methods = Array.isArray(paymentMethods) && paymentMethods.length ? paymentMethods : getActivePaymentMethods(order);
-        var paymentController = createCashPaymentModalController(order, methods);
-        toggleCashPaymentModalSkin(true);
-        modal.open({
-          title: 'Принять оплату',
-          saveText: 'Принять оплату',
-          cancelText: 'Отмена',
-          content: paymentController.host,
-          onSave: function () {
-            var payload = paymentController.getPayload();
-            if (!payload) return false;
-            return apiJson('/api/admin/orders/' + orderId + '/paid', {
-              method: 'PUT',
-              body: payload,
-            }).then(function (json) {
-              updateOrderInState(json && json.data);
-              renderAll();
-              return true;
-            }).catch(function (err) {
-              paymentController.setError(translateCashPaymentError(err));
-              return false;
-            });
-          },
-          onClose: function () {
-            toggleCashPaymentModalSkin(false);
-          },
-        });
-      }).catch(function (err) {
-        console.error('cash payment modal init error:', err);
-      });
-    }
-
     function syncCashPaymentFooter(order) {
       if (!cashOrderPaymentBtnEl) return;
       if (!order) {
@@ -3292,8 +3689,9 @@
           getOrderNumber: getOrderNumber,
           isPaidOrder: isPaidOrder,
           onSuccess: function (updatedOrder) {
-            updateOrderInState(updatedOrder);
-            renderAll();
+            reconcileCashOrderMutation(updatedOrder).catch(function (err) {
+              console.error('cash aggregate refresh error:', err);
+            });
           },
           onError: function (err) {
             console.error('cash payment modal init error:', err);
@@ -3302,36 +3700,53 @@
       }
       if (isPaidOrder(order)) return;
       return apiJson('/api/admin/orders/' + orderId + '/paid', { method: 'PUT', body: { is_paid: 1 } }).then(function (json) {
-        updateOrderInState(json && json.data);
-        renderAll();
+        return reconcileCashOrderMutation(json && json.data);
       }).catch(function (err) {
         console.error('cash paid update error:', err);
       });
     }
 
     function bootstrapEventsCursor() {
+      if (navigator.onLine === false) return Promise.resolve(false);
       return apiJson('/api/admin/orders/changes?since=0').then(function (json) {
         var cursor = Number(json && json.cursor || 0);
         if (Number.isFinite(cursor) && cursor > 0) state.eventsCursor = cursor;
+        return persistCashWorkspace();
       }).catch(function (err) {
         console.error('cash events bootstrap error:', err);
       });
     }
 
     function fetchOrderChanges() {
+      var context = cashSyncContext();
       return apiJson('/api/admin/orders/changes?since=' + String(Number(state.eventsCursor || 0))).then(function (json) {
+        if (!isCurrentCashContext(context)) return;
         var cursor = Number(json && json.cursor || 0);
-        if (Number.isFinite(cursor) && cursor > 0) state.eventsCursor = Math.max(Number(state.eventsCursor || 0), cursor);
+        if (json && json.reset_required === true) {
+          state.eventsCursor = Number.isFinite(cursor) && cursor > 0 ? cursor : 0;
+          return persistCashWorkspace(context);
+        }
+        var nextCursor = Number(state.eventsCursor || 0);
+        if (Number.isFinite(cursor) && cursor > 0) nextCursor = Math.max(nextCursor, cursor);
         var changes = Array.isArray(json && json.data) ? json.data : [];
         var changed = false;
         changes.forEach(function (evt) {
           var eventId = Number(evt && evt.id || 0);
-          if (Number.isFinite(eventId) && eventId > 0) state.eventsCursor = Math.max(Number(state.eventsCursor || 0), eventId);
+          if (Number.isFinite(eventId) && eventId > 0) nextCursor = Math.max(nextCursor, eventId);
           var eventName = String(evt && evt.event || '').toLowerCase();
           if (eventName !== 'order.created' && eventName !== 'order.updated') return;
           if (applyOrderChange(evt && evt.data)) changed = true;
         });
-        if (changed) renderAll();
+        if (changed) {
+          return loadPeriodAggregate().then(function (ok) {
+            if (ok !== true) throw new Error('CASH_DELTA_AGGREGATE_REFRESH_FAILED');
+            state.eventsCursor = nextCursor;
+            renderAll();
+            return persistCashWorkspace(context);
+          });
+        }
+        state.eventsCursor = nextCursor;
+        return persistCashWorkspace(context);
       });
     }
 
@@ -3361,27 +3776,42 @@
     }
 
     function startWaitLoop() {
+      if (navigator.onLine === false) return;
       if (document.visibilityState && document.visibilityState !== 'visible') return;
       var token = ++state.waitLoopToken;
       (async function runWaitLoop() {
         if (!(Number(state.eventsCursor || 0) > 0)) await bootstrapEventsCursor();
         while (token === state.waitLoopToken) {
+          if (navigator.onLine === false) return;
           try {
             var data = await waitForOrderChanges();
             var cursor = Number(data && data.cursor || 0);
+            if (data && data.reset_required === true) {
+              stopWaitLoop();
+              await refreshCashWorkspace(cashSyncContext());
+              return;
+            }
             if (data && data.changed === true) {
               try {
                 await fetchOrderChanges();
               } catch (deltaErr) {
                 console.error('cash changes fetch error:', deltaErr);
-                if (Number.isFinite(cursor) && cursor > 0) state.eventsCursor = cursor;
                 await loadOrders();
               }
             } else if (Number.isFinite(cursor) && cursor > 0 && !(Number(state.eventsCursor || 0) > 0)) {
               state.eventsCursor = cursor;
+              await persistCashWorkspace();
+            } else if (!data || data.timeout !== true) {
+              await sleepMs(WAIT_RETRY_MS);
             }
           } catch (err) {
             if (isAbortError(err)) return;
+            if (navigator.onLine === false) {
+              stopWaitLoop();
+              cashRefreshFailed = false;
+              refreshCashConnectionBanner();
+              return;
+            }
             console.error('cash wait loop error:', err);
             await sleepMs(WAIT_RETRY_MS);
           }
@@ -3398,6 +3828,82 @@
       renderJournal();
       renderTabs();
       renderRightPane();
+      inspectCashPassportCaches();
+    }
+
+    function restoreCashWorkspaceCache(context) {
+      if (!context.cache || !context.cache.complete) return Promise.resolve(false);
+      return context.cache.getEntry(CASH_WORKSPACE_KEY, { allowStale: true }).then(function (entry) {
+        return restoreCashWorkspace(entry, context);
+      }).catch(function (err) {
+        console.error('cash workspace cache read error:', err);
+        return false;
+      });
+    }
+
+    async function refreshCashWorkspace(context, options) {
+      options = options || {};
+      if (!isCurrentCashContext(context) || navigator.onLine === false) {
+        refreshCashConnectionBanner();
+        return false;
+      }
+      stopWaitLoop();
+      cashRefreshFailed = false;
+      cashNetworkConfirmed = false;
+      refreshCashConnectionBanner();
+      try {
+        await loadStoreTimezone();
+        if (!isCurrentCashContext(context)) return false;
+        if (options.resetToday === true) {
+          resetDateStateToToday();
+          ensureDateStateInitialized();
+          renderCalendar();
+          renderAll();
+        }
+        var results = await Promise.all([
+          loadStatuses(),
+          loadPeriodAggregate(),
+          ensurePaymentMethodsLoaded(),
+        ]);
+        if (!isCurrentCashContext(context)) return false;
+        if (results[1] !== true) throw new Error('CASH_AGGREGATE_REFRESH_FAILED');
+        if (Number(state.eventsCursor || 0) > 0) await fetchOrderChanges();
+        else await bootstrapEventsCursor();
+        if (!isCurrentCashContext(context)) return false;
+        cashNetworkConfirmed = true;
+        cashSnapshotVisible = true;
+        cashRefreshFailed = false;
+        await persistCashWorkspace(context);
+        renderAll();
+        refreshCashConnectionBanner();
+        startWaitLoop();
+        return true;
+      } catch (err) {
+        if (!isCurrentCashContext(context)) return false;
+        console.error('cash workspace refresh error:', err);
+        cashRefreshFailed = true;
+        renderAll();
+        refreshCashConnectionBanner();
+        return false;
+      }
+    }
+
+    async function bootstrapCashWorkspace(options) {
+      options = options || {};
+      var context = cashSyncContext();
+      resetDateStateToToday();
+      ensureDateStateInitialized();
+      var restored = await restoreCashWorkspaceCache(context);
+      if (!isCurrentCashContext(context)) return;
+      if (!restored) {
+        resetDateStateToToday();
+        ensureDateStateInitialized();
+      }
+      cashInitialRestoreComplete = true;
+      renderCalendar();
+      renderAll();
+      refreshCashConnectionBanner();
+      await refreshCashWorkspace(context, { resetToday: !restored && options.storeSwitch === true });
     }
 
     if (sharedOrderPanel && cashOrderTabsEl) sharedOrderPanel.bindTabsWheelScroll([cashOrderTabsEl]);
@@ -3439,6 +3945,14 @@
         event.stopPropagation();
         state.orderFilter = String(optionBtn.getAttribute('data-cash-order-filter') || 'all');
         state.orderFilterMenuOpen = false;
+        state.dayRows = {};
+        state.dayRequestGeneration += 1;
+        state.periodAggregate = null;
+        state.orders = [];
+        cashSnapshotVisible = false;
+        cashNetworkConfirmed = false;
+        refreshCashConnectionBanner();
+        void refreshCashWorkspace(cashSyncContext());
         renderAll();
       });
     }
@@ -3466,6 +3980,20 @@
     }, { passive: true });
 
     journalListEl.addEventListener('click', function (event) {
+      var expenseDocumentsRetry = event.target && event.target.closest('[data-expense-documents-retry]');
+      if (expenseDocumentsRetry) {
+        event.preventDefault();
+        event.stopPropagation();
+        loadExpenseDocuments().catch(function (error) { console.error('expense documents retry error:', error); });
+        return;
+      }
+      var dayMore = event.target && event.target.closest('[data-cash-day-more]');
+      var dayRetry = event.target && event.target.closest('[data-cash-day-retry]');
+      if (dayMore || dayRetry) {
+        event.preventDefault(); event.stopPropagation();
+        loadCashDay(String((dayMore || dayRetry).getAttribute(dayMore ? 'data-cash-day-more' : 'data-cash-day-retry') || ''), !!dayMore);
+        return;
+      }
       var expenseDocumentDeleteBtn = event.target && event.target.closest('[data-expense-document-delete-id]');
       if (expenseDocumentDeleteBtn) {
         event.preventDefault();
@@ -3525,6 +4053,7 @@
             ? true
             : !!state.dayGroupsCollapsed[dayKey];
           state.dayGroupsCollapsed[dayKey] = !isCollapsed;
+          if (!state.dayGroupsCollapsed[dayKey] && state.currentSection === 'orders' && !state.dayRows[dayKey]) loadCashDay(dayKey, false);
           renderJournal();
         }
         return;
@@ -3577,6 +4106,15 @@
 
     document.addEventListener('click', function (event) {
       var target = event.target;
+      var retryClientPassportBtn = target && target.closest('[data-action="retry-client-passport-runtime"]');
+      if (retryClientPassportBtn && cashRightPaneEl && cashRightPaneEl.contains(retryClientPassportBtn)) {
+        event.preventDefault();
+        var activeClientTab = getActiveTab();
+        if (activeClientTab && String(activeClientTab.type || '') === 'client') {
+          activateClientTab(activeClientTab).catch(console.error);
+        }
+        return;
+      }
       if (window.matchMedia('(max-width: 768px)').matches && (!target || !target.closest('.cash-expense-document-row'))) {
         Array.prototype.forEach.call(journalListEl.querySelectorAll('.cash-expense-document-row.is-delete-revealed'), function (expenseRow) {
           expenseRow.classList.remove('is-delete-revealed');
@@ -3754,8 +4292,12 @@
         stopWaitLoop();
         return;
       }
-      loadOrders();
-      startWaitLoop();
+      if (navigator.onLine === false) {
+        refreshCashConnectionBanner();
+        return;
+      }
+      if (state.currentSection !== 'orders') loadOrders();
+      void refreshCashWorkspace(cashSyncContext());
     });
 
     window.setInterval(function () {
@@ -3775,43 +4317,77 @@
 
     document.addEventListener('tenantStoreChanged', function () {
       stopWaitLoop();
+      cashSyncGeneration += 1;
       state.orders = [];
+      state.periodAggregate = null;
+      state.dayRows = {};
+      state.dayRequestGeneration += 1;
+      state.expenseDocumentsRequestGeneration += 1;
+      state.expenseDocumentsLoadPromise = null;
+      state.expenseDocumentsRequestKey = '';
+      state.expenseDocumentsStatus = 'idle';
+      state.expenseDocumentsError = null;
+      state.expenseDocuments = [];
+      state.expenseSummary = { count: 0, total_sum_kopecks: 0 };
       state.ordersHasMore = false;
       state.ordersNextOffset = 0;
       state.statuses = [];
       state.paymentMethods = [];
+      state.paymentMethodsLoaded = false;
       state.paymentMethodsPromise = null;
       state.clientsCache.clear();
       fullOrdersById.clear();
+      cashPassportCacheStates.clear();
+      cashPassportChecksInFlight.clear();
       state.activeOrderId = 0;
       state.eventsCursor = 0;
       tabsState.tabs = [];
       tabsState.activeKey = null;
-      loadStoreTimezone().finally(function () {
-        resetDateStateToToday();
-        ensureDateStateInitialized();
-        renderCalendar();
-        bootstrapEventsCursor().finally(function () {
-          Promise.all([loadStatuses(), loadOrders(), ensurePaymentMethodsLoaded()]).finally(function () {
-            renderAll();
-            startWaitLoop();
-          });
-        });
+      cashSnapshotVisible = false;
+      cashNetworkConfirmed = false;
+      cashRefreshFailed = false;
+      cashInitialRestoreComplete = false;
+      void bootstrapCashWorkspace({ storeSwitch: true });
+    });
+
+    document.addEventListener('dashboard:order-updated', function (event) {
+      if (event && event.detail && event.detail.source === 'cash') return;
+      var order = event && event.detail && event.detail.order;
+      if (!order || !(getOrderId(order) > 0)) return;
+      reconcileCashOrderMutation(order).catch(function (err) {
+        console.error('cash order mutation sync error:', err);
       });
     });
 
-    loadStoreTimezone().finally(function () {
-      resetDateStateToToday();
-      ensureDateStateInitialized();
-      renderCalendar();
-      renderAll();
-      bootstrapEventsCursor().finally(function () {
-        Promise.all([loadStatuses(), loadOrders(), ensurePaymentMethodsLoaded()]).finally(function () {
-          renderAll();
-          startWaitLoop();
-        });
-      });
+    window.__cashOrderPassportApi = {
+      openOrderPassport: function (orderId, context) {
+        return openOrderById(orderId, context || {});
+      },
+      closeOrderPassport: function (reason) {
+        return cashOrderDetailsOpener ? cashOrderDetailsOpener.close(reason || 'back') : Promise.resolve();
+      }
+    };
+    window.openOrderPassport = window.__cashOrderPassportApi.openOrderPassport;
+    window.closeOrderPassport = window.__cashOrderPassportApi.closeOrderPassport;
+
+    cashConnectionBanners.forEach(function (banner) {
+      var retry = banner.querySelector('[data-action="cash-connection-retry"]');
+      if (retry) retry.addEventListener('click', function () { void refreshCashWorkspace(cashSyncContext()); });
     });
+
+    window.addEventListener('offline', function () {
+      stopWaitLoop();
+      cashNetworkConfirmed = false;
+      cashRefreshFailed = false;
+      refreshCashConnectionBanner();
+    });
+
+    window.addEventListener('online', function () {
+      cashRefreshFailed = false;
+      void refreshCashWorkspace(cashSyncContext());
+    });
+
+    void bootstrapCashWorkspace();
   } catch (err) {
     console.error('cash page init error:', err);
   }

@@ -262,11 +262,22 @@ async function buildProductionLabelJobs(db, { tenantId, storeId, order }) {
 
   const [ruleRows] = await db.query(
     `SELECT rr.production_zone_id, rr.printer_id, rr.template_id, rr.copies, rr.is_enabled,
+            p.id AS printer_id, a.id AS agent_id, t.id AS token_id,
             p.system_name AS printer_system_name, p.display_name AS printer_display_name
        FROM prod_store_print_rules rr
        LEFT JOIN print_printers p
          ON p.tenant_id=rr.tenant_id
+        AND p.store_id=rr.store_id
         AND p.id=rr.printer_id
+       LEFT JOIN print_agents a
+         ON a.tenant_id=p.tenant_id
+        AND a.store_id=p.store_id
+        AND a.token_id=p.token_id
+        AND a.id=p.agent_id
+       LEFT JOIN print_api_tokens t
+         ON t.tenant_id=p.tenant_id
+        AND t.store_id=p.store_id
+        AND t.id=p.token_id
        WHERE rr.tenant_id=? AND rr.store_id=? AND rr.document_type='label' AND rr.is_enabled=1
          AND rr.production_zone_id IN (${zoneIds.map(() => "?").join(",")})
        ORDER BY rr.updated_at DESC, rr.id DESC`,
@@ -279,6 +290,8 @@ async function buildProductionLabelJobs(db, { tenantId, storeId, order }) {
     if (!(zoneId > 0) || ruleByZoneId.has(zoneId)) return;
     ruleByZoneId.set(zoneId, {
       printer_id: Number(row.printer_id || 0) || null,
+      agent_id: Number(row.agent_id || 0) || null,
+      token_id: Number(row.token_id || 0) || null,
       template_id: Number(row.template_id || 0) || null,
       copies: Math.max(1, Number(row.copies || 1) || 1),
       printer_system_name: String(row.printer_system_name || "").trim(),
@@ -303,7 +316,9 @@ async function buildProductionLabelJobs(db, { tenantId, storeId, order }) {
     const zoneId = Number(product?.production_zone_id || 0);
     if (!(zoneId > 0)) continue;
     const rule = ruleByZoneId.get(zoneId) || null;
-    if (!rule?.printer_system_name || !rule?.template_id) continue;
+    if (!(rule?.printer_id > 0) || !(rule?.agent_id > 0) || !(rule?.token_id > 0) || !rule?.printer_system_name || !rule?.template_id) {
+      throw new Error("PRINT_PRODUCTION_ROUTE_INVALID");
+    }
     const zone = zoneById.get(zoneId) || null;
     const templateHtml = await fetchActivePrintTemplateHtml(db, tenantId, "label", rule.template_id);
     if (!templateHtml) continue;
@@ -363,6 +378,9 @@ async function buildProductionLabelJobs(db, { tenantId, storeId, order }) {
       job_name: zone?.name ? `CRM Label ${zone.name}` : "CRM Label",
       html,
       printer_name: rule.printer_system_name,
+      printer_id: rule.printer_id,
+      agent_id: rule.agent_id,
+      token_id: rule.token_id,
       copies: qty,
       kind: "label",
     });
@@ -420,7 +438,7 @@ async function findNewStatusId(db, tenantId, storeId) {
   return fallbackId;
 }
 
-async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, createdAt }) {
+async function enqueuePrintJob(db, { tenantId, storeId, tokenId, targetPrinterId = null, targetAgentId = null, order, html, createdAt }) {
   const orderId = Number(order?.id || order?.order_id || order?.orderId || 0);
   if (!orderId) return false;
   const publicId = order?.public_id || order?.publicId || null;
@@ -438,11 +456,11 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, cr
   await db.query(
     `
     INSERT INTO print_jobs
-      (tenant_id, store_id, token_id, order_id, public_id, job_name, pdf_base64, status, attempts, last_error, locked_at, acked_at, created_at, updated_at)
+      (tenant_id, store_id, token_id, target_printer_id, target_agent_id, order_id, public_id, job_name, pdf_base64, status, attempts, last_error, locked_at, acked_at, created_at, updated_at)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, COALESCE(?, NOW()), COALESCE(?, NOW()))
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, COALESCE(?, NOW()), COALESCE(?, NOW()))
     ON DUPLICATE KEY UPDATE
-      token_id=VALUES(token_id),
+      token_id=VALUES(token_id), target_printer_id=VALUES(target_printer_id), target_agent_id=VALUES(target_agent_id),
       public_id=VALUES(public_id),
       job_name=VALUES(job_name),
       pdf_base64=VALUES(pdf_base64),
@@ -456,6 +474,8 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, cr
       tenantId,
       storeId,
       tokenId,
+      targetPrinterId,
+      targetAgentId,
       orderId,
       publicId,
       jobName,
@@ -465,6 +485,21 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html, cr
     ]
   );
   return true;
+}
+
+async function getDefaultPrintRoute(db, tenantId, storeId) {
+  const [rows] = await db.query(
+    `SELECT p.id, p.agent_id, p.token_id FROM print_printers p
+     INNER JOIN ten_stores s ON s.tenant_id=p.tenant_id AND s.id=p.store_id
+      AND s.default_receipt_printer_id=p.id
+     WHERE p.tenant_id=? AND p.store_id=?
+     ORDER BY p.id ASC LIMIT 1`,
+    [tenantId, storeId]
+  );
+  const row = rows[0] || null;
+  return row && Number(row.agent_id) > 0 && Number(row.token_id) > 0
+    ? { printerId: Number(row.id), agentId: Number(row.agent_id), tokenId: Number(row.token_id) }
+    : null;
 }
 
 async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order, reprintNonce = 0 }) {
@@ -490,11 +525,11 @@ async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order, re
     await db.query(
       `
       INSERT INTO print_jobs
-        (tenant_id, store_id, token_id, order_id, public_id, job_name, pdf_base64, status, attempts, last_error, locked_at, acked_at, created_at, updated_at)
+        (tenant_id, store_id, token_id, target_printer_id, target_agent_id, order_id, public_id, job_name, pdf_base64, status, attempts, last_error, locked_at, acked_at, created_at, updated_at)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, COALESCE(?, NOW()), COALESCE(?, NOW()))
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, COALESCE(?, NOW()), COALESCE(?, NOW()))
       ON DUPLICATE KEY UPDATE
-        token_id=VALUES(token_id),
+        token_id=VALUES(token_id), target_printer_id=VALUES(target_printer_id), target_agent_id=VALUES(target_agent_id),
         public_id=VALUES(public_id),
         job_name=VALUES(job_name),
         pdf_base64=VALUES(pdf_base64),
@@ -507,7 +542,9 @@ async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order, re
       [
         tenantId,
         storeId,
-        tokenId,
+        Number(job.token_id || tokenId),
+        job.printer_id,
+        job.agent_id,
         syntheticOrderId,
         publicId,
         job.job_name || "CRM Label",
@@ -612,13 +649,17 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
     }
   }
   if (!html) return fail("RECEIPT_HTML_EMPTY");
+  const receiptRoute = await getDefaultPrintRoute(db, resolvedTenantId, resolvedStoreId);
+  if (!receiptRoute) return fail("PRINT_RECEIPT_ROUTE_NOT_FOUND");
   const storeTimezone = await getStoreTimezone(db, resolvedTenantId, resolvedStoreId);
   const createdAt = getStoreNowDateTime(storeTimezone);
 
   const enqueued = await enqueuePrintJob(db, {
     tenantId: resolvedTenantId,
     storeId: resolvedStoreId,
-    tokenId: Number(tokenRow.id),
+    tokenId: receiptRoute.tokenId,
+    targetPrinterId: receiptRoute.printerId,
+    targetAgentId: receiptRoute.agentId,
     order: {
       ...order,
       receipt_copies: receiptCopies,

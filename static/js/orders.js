@@ -6,56 +6,6 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-  const ordersMojibakeDecoder = typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
-  const ordersMojibakeExtras = new Map([
-    [0x0402, 0x80], [0x0403, 0x81], [0x201A, 0x82], [0x0453, 0x83], [0x201E, 0x84], [0x2026, 0x85], [0x2020, 0x86], [0x2021, 0x87],
-    [0x20AC, 0x88], [0x2030, 0x89], [0x0409, 0x8A], [0x2039, 0x8B], [0x040A, 0x8C], [0x040C, 0x8D], [0x040B, 0x8E], [0x040F, 0x8F],
-    [0x0452, 0x90], [0x2018, 0x91], [0x2019, 0x92], [0x201C, 0x93], [0x201D, 0x94], [0x2022, 0x95], [0x2013, 0x96], [0x2014, 0x97],
-    [0x2122, 0x99], [0x0459, 0x9A], [0x203A, 0x9B], [0x045A, 0x9C], [0x045C, 0x9D], [0x045B, 0x9E], [0x045F, 0x9F],
-    [0x0401, 0xA8], [0x0404, 0xAA], [0x0407, 0xAF], [0x0406, 0xB2], [0x0456, 0xB3], [0x0491, 0xB4], [0x0451, 0xB8], [0x2116, 0xB9],
-    [0x0452, 0x90], [0x0459, 0x9A], [0x045A, 0x9C], [0x045B, 0x9E], [0x045C, 0x9D], [0x045E, 0xA2], [0x045F, 0x9F], [0x0458, 0xBC], [0x040F, 0x8F],
-  ]);
-  function repairOrdersMojibake(value) {
-    const source = String(value || "");
-    if (!ordersMojibakeDecoder || !/(?:Р.|С.|в[А-яЁё]|Г[А-яЁё]|[ÐÑ].)/u.test(source)) return source;
-    const bytes = [];
-    for (const char of source) {
-      const code = char.codePointAt(0);
-      if (code <= 0x7f) bytes.push(code);
-      else if (code >= 0x410 && code <= 0x44f) bytes.push(code - 0x350);
-      else if (code >= 0x80 && code <= 0xff) bytes.push(code);
-      else if (ordersMojibakeExtras.has(code)) bytes.push(ordersMojibakeExtras.get(code));
-      else return source;
-    }
-    try {
-      const repaired = ordersMojibakeDecoder.decode(new Uint8Array(bytes));
-      return repaired && repaired !== source ? repaired : source;
-    } catch {
-      return source;
-    }
-  }
-  function repairOrdersDom(root = document) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const nodes = [];
-    let node;
-    while ((node = walker.nextNode())) nodes.push(node);
-    nodes.forEach((textNode) => {
-      const repaired = repairOrdersMojibake(textNode.nodeValue);
-      if (repaired !== textNode.nodeValue) textNode.nodeValue = repaired;
-    });
-  }
-  const ordersMojibakeObserver = new MutationObserver((records) => {
-    records.forEach((record) => {
-      record.addedNodes.forEach((node) => {
-        if (node.nodeType === Node.TEXT_NODE) {
-          const repaired = repairOrdersMojibake(node.nodeValue);
-          if (repaired !== node.nodeValue) node.nodeValue = repaired;
-        } else if (node.nodeType === Node.ELEMENT_NODE) repairOrdersDom(node);
-      });
-    });
-  });
-  ordersMojibakeObserver.observe(document.body, { childList: true, subtree: true });
-  repairOrdersDom();
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
   let wasMobileViewport = isMobile();
   function getTenantId() {
@@ -86,13 +36,19 @@
     || (document.body?.dataset?.adminActivePage === "courier-screen" ? "courier" : "orders")
   ).trim().toLowerCase();
   const isCourierWorkspace = workspaceMode === "courier";
+  const workspaceCapabilities = {
+    payment: rawWorkspaceConfig.capabilities?.payment !== false,
+    status: rawWorkspaceConfig.capabilities?.status !== false,
+    edit: rawWorkspaceConfig.capabilities?.edit !== false,
+    print: rawWorkspaceConfig.capabilities?.print !== false,
+  };
   const courierBucketDefs = (
     Array.isArray(rawWorkspaceConfig.courierBuckets) && rawWorkspaceConfig.courierBuckets.length
       ? rawWorkspaceConfig.courierBuckets
       : [
-          { id: "available", title: "РЎРІРѕР±РѕРґРЅС‹Рµ", icon: "fa-user-clock" },
-          { id: "in-transit", title: "Р’ РїСѓС‚Рё", icon: "fa-truck" },
-          { id: "delivered", title: "Р”РѕСЃС‚Р°РІР»РµРЅС‹", icon: "fa-circle-check" },
+          { id: "available", title: "Свободные", icon: "fa-user-clock" },
+          { id: "in-transit", title: "В пути", icon: "fa-truck" },
+          { id: "delivered", title: "Доставлены", icon: "fa-circle-check" },
         ]
   ).map((bucket) => ({
     id: String(bucket?.id || "").trim(),
@@ -110,12 +66,12 @@
       "on_the_way",
       "in_transit",
       "courier",
-      "РІ_РїСѓС‚Рё",
+      "в_пути",
     ])
       .map((value) => String(value || "")
         .trim()
         .toLowerCase()
-        .replace(/С‘/g, "Рµ")
+        .replace(/ё/g, "е")
         .replace(/[\s-]+/g, "_")
         .replace(/_+/g, "_"))
       .filter(Boolean)
@@ -126,21 +82,21 @@
       "completed",
       "done",
       "delivery_done",
-      "РґРѕСЃС‚Р°РІР»РµРЅ",
-      "РґРѕСЃС‚Р°РІР»РµРЅР°",
-      "РґРѕСЃС‚Р°РІР»РµРЅРѕ",
-      "РґРѕСЃС‚Р°РІР»РµРЅС‹",
-      "РІСЂСѓС‡РµРЅ",
-      "РІСЂСѓС‡РµРЅРѕ",
-      "РІС‹РїРѕР»РЅРµРЅ",
-      "РІС‹РїРѕР»РЅРµРЅРѕ",
-      "Р·Р°РІРµСЂС€РµРЅ",
-      "Р·Р°РІРµСЂС€РµРЅРѕ",
+      "доставлен",
+      "доставлена",
+      "доставлено",
+      "доставлены",
+      "вручен",
+      "вручено",
+      "выполнен",
+      "выполнено",
+      "завершен",
+      "завершено",
     ])
       .map((value) => String(value || "")
         .trim()
         .toLowerCase()
-        .replace(/С‘/g, "Рµ")
+        .replace(/ё/g, "е")
         .replace(/[\s-]+/g, "_")
         .replace(/_+/g, "_"))
       .filter(Boolean)
@@ -164,13 +120,37 @@
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
   const ORDER_BROWSER_ALERTS_ENABLED = false;
   const ORDER_UPDATED_EVENT = "dashboard:order-updated";
-  const lazyFeatureScriptUrls = { newOrder: "/static/js/new-order.js?v=20260506a", clients: "/static/js/clients.js?v=20260831-mobile-client-benefits-pages" };
+  const canonicalAdminAssetUrls = window.__ADMIN_ASSET_URLS__ && typeof window.__ADMIN_ASSET_URLS__ === "object"
+    ? window.__ADMIN_ASSET_URLS__
+    : {};
+  const lazyFeatureScriptUrls = { newOrder: canonicalAdminAssetUrls.newOrder || "/static/js/new-order.js", clients: canonicalAdminAssetUrls.clients || "/static/js/clients.js" };
   const lazyFeatureScriptPromises = new Map();
+  function findLoadedFeatureScript(src) {
+    let expected;
+    try {
+      expected = new URL(src, window.location.href);
+    } catch {
+      return null;
+    }
+    return Array.from(document.scripts).find((script) => {
+      try {
+        const current = new URL(script.src, window.location.href);
+        return current.origin === expected.origin && current.pathname === expected.pathname;
+      } catch {
+        return false;
+      }
+    }) || null;
+  }
   function loadOrdersFeatureScript(name) {
+    if (name === "clients" && window.SharedOrderPanel && typeof window.SharedOrderPanel.ensureAdminAsset === "function") {
+      return window.SharedOrderPanel.ensureAdminAsset("clients");
+    }
     const src = lazyFeatureScriptUrls[name];
     if (!src) return Promise.reject(new Error(`Unknown Orders feature: ${name}`));
     const existing = lazyFeatureScriptPromises.get(name);
     if (existing) return existing;
+    const loadedScript = findLoadedFeatureScript(src);
+    if (loadedScript) return Promise.resolve(loadedScript);
     const promise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
       script.src = src;
@@ -196,7 +176,7 @@
   }
 
   async function apiJson(url, opts = {}) {
-    // РџРѕР»СѓС‡Р°РµРј С‚РѕРєРµРЅ Рё store_id РёР· localStorage
+    // Получаем токен и store_id из localStorage
     const token = localStorage.getItem('authToken');
     const storeId = localStorage.getItem('activeStoreId') || '1';
     const headers = {
@@ -204,12 +184,12 @@
       ...(opts.headers || {}),
     };
 
-    // Р”РѕР±Р°РІР»СЏРµРј С‚РѕРєРµРЅ Р°РІС‚РѕСЂРёР·Р°С†РёРё, РµСЃР»Рё РѕРЅ РµСЃС‚СЊ
+    // Добавляем токен авторизации, если он есть
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    // Р”РѕР±Р°РІР»СЏРµРј ID РІС‹Р±СЂР°РЅРЅРѕР№ Р¤РёР»РёР°Р»С‹
+    // Добавляем ID выбранной Филиалы
     headers['x-store-id'] = storeId;
     
     let res;
@@ -226,88 +206,314 @@
       throw err;
     }
     
-    // Р•СЃР»Рё 401 - РїРµСЂРµРЅР°РїСЂР°РІР»СЏРµРј РЅР° Р»РѕРіРёРЅ
+    const json = await res.json().catch(() => null);
     if (res.status === 401) {
       localStorage.removeItem('authToken');
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
       window.location.href = '/login';
-      throw new Error('UNAUTHORIZED');
+      const authError = new Error(json?.error || 'UNAUTHORIZED');
+      authError.status = 401;
+      authError.code = String(json?.error || 'UNAUTHORIZED');
+      throw authError;
     }
-    
-    const json = await res.json().catch(() => null);
+
     if (!json || json.ok !== true) {
-      const err = json?.error || `API_ERROR (${res.status})`;
-      throw new Error(err);
+      const apiError = new Error(json?.error || `API_ERROR (${res.status})`);
+      apiError.status = Number(res.status || 0);
+      apiError.code = String(json?.error || "API_ERROR");
+      apiError.retryAfter = String(res.headers.get("Retry-After") || "").trim() || null;
+      throw apiError;
     }
     return json;
   }
 
-  const ORDER_DETAILS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-  const ORDER_DETAILS_CACHE_MAX = 400;
+  const ORDER_DETAILS_CACHE_DOMAIN = "orders:detail:shared";
+  const ORDER_DETAILS_CACHE_VERSION = 1;
+  const ORDER_DETAILS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+  const ORDER_DETAILS_CACHE_MAX = 200;
+  const LEGACY_ORDER_DETAILS_CACHE_DOMAINS = ["orders:detail:courier", "orders:detail:orders"];
+  const COURIER_DETAIL_PREWARM_LIMIT = 40;
+  const COURIER_DETAIL_PREWARM_CONCURRENCY = 3;
   const orderDetailsRevalidation = new Map();
-  const orderDetailsCacheKey = (id) => `orders:detail:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${id}`;
+  const orderDetailsMergeQueue = new Map();
+  const orderDetailsDirty = new Set();
+  const orderDetailsMutationGeneration = new Map();
+  const courierDetailPrewarmInFlight = new Set();
+  const authoritativeFullOrderRuntimeKeys = new Set();
+  const courierPassportCacheStates = new Map();
+  const courierDetailPrewarmWaiters = [];
+  let courierDetailPrewarmActiveCount = 0;
+  const orderDetailsCacheKey = (id, scope = ordersCacheScope) => `orders:detail:v1:${scope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${id}`;
   const isFullOrder = (order) => Boolean(order && Array.isArray(order.items) && Number(order.store_id || order.storeId || 0) > 0);
 
-  async function readCachedFullOrder(id, row) {
+  function orderDetailsPersistentScope() {
+    if (window.AdminPersistentCache?.orderPassport?.scope) {
+      return window.AdminPersistentCache.orderPassport.scope();
+    }
+    if (!window.AdminPersistentCache?.scope) return null;
+    return window.AdminPersistentCache.scope({
+      domain: ORDER_DETAILS_CACHE_DOMAIN,
+      version: ORDER_DETAILS_CACHE_VERSION,
+    });
+  }
+
+  function legacyOrderDetailsPersistentScopes() {
+    if (!window.AdminPersistentCache?.scope) return [];
+    return LEGACY_ORDER_DETAILS_CACHE_DOMAINS.map((domain) => window.AdminPersistentCache.scope({
+      domain,
+      version: 1,
+    })).filter((cache) => cache?.complete);
+  }
+
+  function orderDetailsContext(id, cache = orderDetailsPersistentScope()) {
+    return {
+      cache,
+      id: Number(id),
+      runtimeKey: `${cache?.namespace || "incomplete"}:${Number(id)}`,
+    };
+  }
+
+  function isCurrentOrderDetailsContext(context) {
+    return Boolean(context?.cache?.complete
+      && orderDetailsPersistentScope()?.namespace === context.cache.namespace);
+  }
+
+  function courierPassportStateLabel(state) {
+    if (state === "saved") return "Доступен офлайн";
+    if (state === "saving" || state === "checking") return "Сохраняем для офлайн-доступа";
+    if (state === "stale") return "Сохранённая версия требует обновления";
+    return "Не сохранён для офлайн-доступа";
+  }
+
+  function setCourierPassportCacheState(id, state, context = orderDetailsContext(id)) {
+    if (!(Number(id) > 0) || !context?.runtimeKey) return;
+    courierPassportCacheStates.set(context.runtimeKey, state);
+    if (!isCurrentOrderDetailsContext(context)) return;
+    const row = elOrdersList?.querySelector(`.order-row[data-order-id="${Number(id)}"]`);
+    const indicator = row?.querySelector("[data-courier-passport-cache-state]");
+    if (!indicator) return;
+    indicator.className = `courier-order-cache-indicator courier-order-cache-indicator--${state}`;
+    const label = courierPassportStateLabel(state);
+    indicator.setAttribute("aria-label", label);
+    indicator.setAttribute("title", label);
+  }
+
+  function renderCourierPassportCacheIndicator(id) {
+    const context = orderDetailsContext(id);
+    const state = courierPassportCacheStates.get(context.runtimeKey) || "unknown";
+    const label = courierPassportStateLabel(state);
+    return `<span class="courier-order-cache-indicator courier-order-cache-indicator--${state}" data-courier-passport-cache-state aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"></span>`;
+  }
+
+  async function migrateLegacyFullOrder(id, order, cache) {
+    const context = orderDetailsContext(id, cache);
+    return queueOrderDetailsOperation(context, async () => {
+      const existing = await cache.getEntry(String(id), { allowStale: true });
+      if (existing?.data?.detailCompleteness === "full" && isFullOrder(existing.data.order)) return true;
+      return writeCachedFullOrder(order, { cache, authoritative: true });
+    });
+  }
+
+  async function readLegacyFullOrderEntry(id) {
+    const candidates = [];
+    for (const legacyCache of legacyOrderDetailsPersistentScopes()) {
+      const entry = await legacyCache.getEntry(String(id), { allowStale: true });
+      if (entry?.data?.detailCompleteness === "full" && isFullOrder(entry.data.order)) {
+        candidates.push({
+          order: entry.data.order,
+          stale: entry.stale === true,
+          updatedAt: Number(entry.updatedAt || entry.data.cachedAt || 0),
+        });
+      }
+    }
+    for (const scope of ["courier", "orders"]) {
+      const cached = await window.AdminPersistentCache.read(orderDetailsCacheKey(id, scope));
+      if (cached?.detailCompleteness === "full" && isFullOrder(cached.order)) {
+        candidates.push({
+          order: cached.order,
+          stale: Date.now() - Number(cached.cachedAt || 0) > ORDER_DETAILS_CACHE_MAX_AGE_MS,
+          updatedAt: Number(cached.cachedAt || 0),
+        });
+      }
+    }
+    candidates.sort((left, right) => right.updatedAt - left.updatedAt);
+    return candidates[0] || null;
+  }
+
+  async function readCachedFullOrderEntry(id, { allowStale = true, cache = orderDetailsPersistentScope() } = {}) {
     if (!window.AdminPersistentCache) return null;
     try {
-      const cached = await window.AdminPersistentCache.read(orderDetailsCacheKey(id));
-      if (!cached || Date.now() - Number(cached.cachedAt || 0) > ORDER_DETAILS_CACHE_MAX_AGE_MS) return null;
-      return isFullOrder(cached.order) ? cached.order : null;
+      if (cache?.complete) {
+        const sharedEntry = window.AdminPersistentCache.orderPassport?.read
+          ? await window.AdminPersistentCache.orderPassport.read(id, { cache, allowStale: true })
+          : null;
+        const entry = sharedEntry || (!window.AdminPersistentCache.orderPassport?.read
+          ? await cache.getEntry(String(id), { allowStale: true })
+          : null);
+        const cachedOrder = sharedEntry?.order || entry?.data?.order;
+        const entryStale = sharedEntry ? sharedEntry.stale === true : entry?.stale === true;
+        if ((sharedEntry || entry?.data?.detailCompleteness === "full") && isFullOrder(cachedOrder)) {
+          authoritativeFullOrderRuntimeKeys.add(`${cache.namespace}:${Number(id)}`);
+          setCourierPassportCacheState(id, entryStale ? "stale" : "saved", orderDetailsContext(id, cache));
+          return entryStale && !allowStale ? null : { order: cachedOrder, stale: entryStale };
+        }
+      }
+      if (!cache?.complete) return null;
+      const legacy = await readLegacyFullOrderEntry(id);
+      if (!legacy?.order) return null;
+      authoritativeFullOrderRuntimeKeys.add(`${cache.namespace}:${Number(id)}`);
+      setCourierPassportCacheState(id, legacy.stale ? "stale" : "saved", orderDetailsContext(id, cache));
+      void migrateLegacyFullOrder(id, legacy.order, cache).catch((err) => {
+        console.error("Legacy order detail cache migration failed:", err);
+      });
+      return legacy.stale && !allowStale ? null : legacy;
     } catch (err) {
       console.error("Order detail IndexedDB read failed:", err);
       return null;
     }
   }
 
-  function revalidateCachedFullOrder(id) {
-    if (orderDetailsRevalidation.has(id)) return;
+  function revalidateCachedFullOrder(id, { updateState = true, context = orderDetailsContext(id) } = {}) {
+    const runtimeKey = context.runtimeKey;
+    if (orderDetailsRevalidation.has(runtimeKey)) return orderDetailsRevalidation.get(runtimeKey);
+    const startGeneration = orderDetailsMutationGeneration.get(runtimeKey) || 0;
+    let superseded = false;
     const promise = apiJson(`/api/admin/orders/${id}`)
-      .then((json) => {
+      .then(async (json) => {
         const fullOrder = json?.data || null;
-        if (!isFullOrder(fullOrder)) return;
-        const nextOrder = overlayCourierShadowOrder(fullOrder);
-        writeCachedFullOrder(nextOrder);
-        const idx = state.orders.findIndex((order) => Number(order?.id) === id);
-        if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
-        else state.orders.unshift(nextOrder);
-        const tab = tabsState.tabs.find((item) => Number(item?.orderId) === id);
-        if (tab) tab.order = { ...tab.order, ...nextOrder };
-        if (Number(state.activeOrderId) === id) setInfo(nextOrder);
-        rebuildOrdersStageIndex();
-        renderOrders();
+        if (!isFullOrder(fullOrder)) return null;
+        return queueOrderDetailsOperation(context, async () => {
+          if ((orderDetailsMutationGeneration.get(runtimeKey) || 0) !== startGeneration) {
+            superseded = true;
+            return null;
+          }
+          const nextOrder = overlayCourierShadowOrder(fullOrder);
+          orderDetailsDirty.delete(runtimeKey);
+          orderDetailsMutationGeneration.delete(runtimeKey);
+          const stored = await writeCachedFullOrder(nextOrder, { cache: context.cache, authoritative: true });
+          if (stored) {
+            authoritativeFullOrderRuntimeKeys.add(runtimeKey);
+            setCourierPassportCacheState(id, "saved", context);
+          } else {
+            authoritativeFullOrderRuntimeKeys.delete(runtimeKey);
+            setCourierPassportCacheState(id, "missing", context);
+          }
+          if (!updateState || !isCurrentOrderDetailsContext(context)) return nextOrder;
+          const idx = state.orders.findIndex((order) => Number(order?.id) === id);
+          if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+          else if (shouldKeepOrderInState(nextOrder)) state.orders.unshift(nextOrder);
+          const tab = tabsState.tabs.find((item) => Number(item?.orderId) === id);
+          if (tab) tab.order = { ...tab.order, ...nextOrder };
+          if (Number(state.activeOrderId) === id) setInfo(nextOrder);
+          rebuildOrdersStageIndex();
+          renderOrders();
+          return nextOrder;
+        });
       })
-      .catch((err) => console.error("Order detail background revalidation failed:", err))
-      .finally(() => orderDetailsRevalidation.delete(id));
-    orderDetailsRevalidation.set(id, promise);
+      .catch((err) => {
+        console.warn(`Order detail background revalidation failed for ${id}:`, err);
+        setCourierPassportCacheState(
+          id,
+          authoritativeFullOrderRuntimeKeys.has(runtimeKey) ? "stale" : "missing",
+          context
+        );
+        return null;
+      })
+      .finally(() => {
+        orderDetailsRevalidation.delete(runtimeKey);
+        if (superseded && orderDetailsDirty.has(runtimeKey)
+          && navigator.onLine !== false && isCurrentOrderDetailsContext(context)) {
+          void revalidateCachedFullOrder(id, { updateState, context });
+        } else if (superseded && !orderDetailsDirty.has(runtimeKey)) {
+          orderDetailsMutationGeneration.delete(runtimeKey);
+        }
+      });
+    orderDetailsRevalidation.set(runtimeKey, promise);
+    return promise;
   }
 
-  function writeCachedFullOrder(order) {
-    if (!window.AdminPersistentCache || !isFullOrder(order)) return;
-    window.AdminPersistentCache.write(orderDetailsCacheKey(Number(order.id)), {
-      cachedAt: Date.now(), order: { ...order },
-    }).catch((err) => console.error("Order detail IndexedDB write failed:", err));
-    window.AdminPersistentCache.prunePrefix?.(
-      `orders:detail:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:`,
-      ORDER_DETAILS_CACHE_MAX
-    ).catch((err) => console.error("Order detail IndexedDB cleanup failed:", err));
+  function writeCachedFullOrder(order, { cache = orderDetailsPersistentScope(), authoritative = false } = {}) {
+    if (!authoritative || !window.AdminPersistentCache || !isFullOrder(order) || !cache?.complete) return Promise.resolve(false);
+    if (window.AdminPersistentCache.orderPassport?.write) {
+      return window.AdminPersistentCache.orderPassport.write(order, { cache, authoritative: true })
+        .catch((err) => {
+          console.error("Order detail IndexedDB write failed:", err);
+          return false;
+        });
+    }
+    const data = {
+      cachedAt: Date.now(),
+      detailCompleteness: "full",
+      order: { ...order },
+    };
+    return cache.set(String(order.id), data, { ttlMs: ORDER_DETAILS_CACHE_MAX_AGE_MS })
+      .then(async () => {
+        await cache.prune(ORDER_DETAILS_CACHE_MAX);
+        return true;
+      })
+      .catch((err) => {
+        console.error("Order detail IndexedDB write failed:", err);
+        return false;
+      });
   }
 
-  function invalidateCachedFullOrder(id) {
-    const normalizedId = Number(id);
-    if (!(normalizedId > 0)) return;
-    const stateOrder = state.orders.find((order) => Number(order?.id) === normalizedId);
-    if (stateOrder && Array.isArray(stateOrder.items)) delete stateOrder.items;
-    tabsState.tabs.forEach((tab) => {
-      if (Number(tab?.orderId) === normalizedId && tab.order && Array.isArray(tab.order.items)) {
-        delete tab.order.items;
+  function mergeOrderPassportPatch(cachedOrder, eventOrder) {
+    if (window.AdminPersistentCache?.orderPassport?.mergePatch) {
+      return window.AdminPersistentCache.orderPassport.mergePatch(cachedOrder, eventOrder);
+    }
+    const next = { ...cachedOrder };
+    const protectedNullableFields = new Set([
+      "customer_name", "customer_phone", "address", "comment", "address_comment",
+      "scheduled_at", "payment_code", "payment_title", "payment_icon",
+      "method_code", "method_title", "time_option_code", "time_option_title", "time_option_icon",
+      "discounts_json", "benefits_meta", "delivery_address_city", "delivery_address_street",
+      "delivery_address_house", "delivery_address_entrance", "delivery_address_floor",
+      "delivery_address_apartment", "delivery_address_ref", "delivery_address_context_locality",
+      "delivery_address_normalized_display",
+    ]);
+    Object.keys(eventOrder || {}).forEach((key) => {
+      const value = eventOrder[key];
+      if (Array.isArray(value) && !isFullOrder(eventOrder)) return;
+      if (protectedNullableFields.has(key) && value == null) return;
+      if (["customer", "delivery", "payment"].includes(key)
+        && value && typeof value === "object" && !Array.isArray(value)
+        && next[key] && typeof next[key] === "object" && !Array.isArray(next[key])) {
+        const definedPatch = Object.fromEntries(
+          Object.entries(value).filter(([, nestedValue]) => nestedValue != null)
+        );
+        next[key] = { ...next[key], ...definedPatch };
+        return;
+      }
+      if (value !== undefined) next[key] = value;
+    });
+    return next;
+  }
+
+  async function mergeCachedFullOrderPatch(order, context = orderDetailsContext(order?.id)) {
+    const id = Number(order?.id || 0);
+    if (!(id > 0) || !window.AdminPersistentCache || !context.cache?.complete) return;
+    const cached = await readCachedFullOrderEntry(id, { allowStale: true, cache: context.cache });
+    if (!cached?.order) return;
+    await writeCachedFullOrder(mergeOrderPassportPatch(cached.order, order), {
+      cache: context.cache,
+      authoritative: true,
+    });
+  }
+
+  function queueOrderDetailsOperation(context, operation) {
+    const previous = orderDetailsMergeQueue.get(context.runtimeKey) || Promise.resolve();
+    const promise = previous.catch(() => {}).then(operation);
+    orderDetailsMergeQueue.set(context.runtimeKey, promise);
+    return promise.finally(() => {
+      if (orderDetailsMergeQueue.get(context.runtimeKey) === promise) {
+        orderDetailsMergeQueue.delete(context.runtimeKey);
       }
     });
-    if (!window.AdminPersistentCache) return;
-    window.AdminPersistentCache.remove(orderDetailsCacheKey(normalizedId)).catch((err) => {
-      console.error("Order detail IndexedDB delete failed:", err);
-    });
+  }
+
+  function queueCachedFullOrderPatch(order, context) {
+    return queueOrderDetailsOperation(context, () => mergeCachedFullOrderPatch(order, context));
   }
 
   function isAbortError(err) {
@@ -430,9 +636,6 @@
     addrToggleBtn: clientAddrToggleBtn,
     addrFormCard: clientAddrFormCard,
   } = desktopClientDom;
-  const ordersClientBenefitsFooter = $("#ordersClientBenefitsFooter");
-  const ordersClientBenefitsOpenBtn = $("#ordersClientBenefitsOpenBtn");
-  const ordersClientBonusesOpenBtn = $("#ordersClientBonusesOpenBtn");
   const sheetOrderInfoFooter = sheet ? $('[data-role="order-info-footer"]', sheet) : null;
   const sheetOrderInfoPaymentBtn = sheet ? $('[data-role="order-info-payment-btn"]', sheet) : null;
   const sharedOrderPanel = window.SharedOrderPanel || null;
@@ -506,13 +709,10 @@
   const sharedOrderInfoRenderers = [sharedOrderInfoRenderer, sheetOrderInfoRenderer].filter(Boolean);
   const orderInfoFooters = [orderInfoFooter, sheetOrderInfoFooter].filter(Boolean);
   const orderInfoPaymentButtons = [orderInfoPaymentBtn, sheetOrderInfoPaymentBtn].filter(Boolean);
-  const courierConnectionBanner = isCourierWorkspace ? $("#courierConnectionBanner") : null;
-  const courierConnectionBannerText = courierConnectionBanner
-    ? $(".courier-connection-banner__text", courierConnectionBanner)
-    : null;
-  const courierConnectionBannerRetryBtn = courierConnectionBanner
-    ? $('[data-action="courier-connection-retry"]', courierConnectionBanner)
-    : null;
+  const ordersConnectionBanners = $$('[data-orders-connection-banner]');
+  const ordersConnectionBannerRetryBtns = ordersConnectionBanners
+    .map((banner) => $('[data-action="orders-connection-retry"]', banner))
+    .filter(Boolean);
 
   const closeButtons = $$('[data-action="order-close"]');
 
@@ -558,19 +758,36 @@
     tabs: [],
     activeKey: null,
   };
+  const orderStatusSyncStates = new Map();
 
   const ORDERS_CACHE_VERSION = 4;
   const ORDERS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const ORDERS_PERSISTENT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const ORDERS_WORKSPACE_CACHE_MAX_AGE_MS = 72 * 60 * 60 * 1000;
   let ordersPersistentCacheRestored = false;
+  let ordersInitialRestoreComplete = false;
+  let ordersCachedSnapshotVisible = false;
+  let ordersNetworkConfirmed = false;
+  let ordersRefreshFailed = false;
+  let courierNetworkConfirmed = false;
+  let courierCachedSnapshotVisible = false;
   const COURIER_OFFLINE_QUEUE_VERSION = 1;
+  const COURIER_OUTBOX_MAX_ITEMS = 200;
+  const COURIER_OUTBOX_ENTRY_KEY = "pending";
+  const courierOutboxOperations = new Map();
+  const courierOutboxProcessing = new Map();
+  let courierOptimisticOverlaySuspended = 0;
   let ordersCachePersistTimer = null;
   const courierOfflineState = {
     queue: [],
     shadowOrders: new Map(),
+    nextSequence: 1,
     syncing: false,
+    reconciling: false,
+    processingNamespace: "",
     online: navigator.onLine !== false,
     syncError: "",
+    refreshError: "",
     transientBanner: null,
     restoredHideTimer: null,
   };
@@ -731,52 +948,8 @@
     return valueText;
   }
 
-  const CP1251_PUNCT_TO_BYTE = Object.freeze({
-    0x201A: 0x82, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x20AC: 0x88,
-    0x2030: 0x89, 0x0409: 0x8A, 0x2039: 0x8B, 0x040A: 0x8C, 0x040C: 0x8D, 0x040B: 0x8E,
-    0x040F: 0x8F, 0x0452: 0x90, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94,
-    0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x2122: 0x99, 0x0459: 0x9A, 0x203A: 0x9B,
-    0x045A: 0x9C, 0x045C: 0x9D, 0x045B: 0x9E, 0x045F: 0x9F, 0x00A0: 0xA0, 0x040E: 0xA1,
-    0x045E: 0xA2, 0x0408: 0xA3, 0x00A4: 0xA4, 0x0490: 0xA5, 0x00A6: 0xA6, 0x00A7: 0xA7,
-    0x00A9: 0xA9, 0x0404: 0xAA, 0x00AB: 0xAB, 0x00AC: 0xAC, 0x00AD: 0xAD, 0x00AE: 0xAE,
-    0x0407: 0xAF, 0x00B0: 0xB0, 0x00B1: 0xB1, 0x0406: 0xB2, 0x0456: 0xB3, 0x0491: 0xB4,
-    0x00B5: 0xB5, 0x00B6: 0xB6, 0x00B7: 0xB7, 0x2116: 0xB9, 0x0454: 0xBA, 0x00BB: 0xBB,
-    0x0458: 0xBC, 0x0405: 0xBD, 0x0455: 0xBE, 0x0457: 0xBF,
-  });
-  const MOJIBAKE_RE = /(?:Р[\u0400-\u04FF\u2018-\u203A]|С[\u0400-\u04FF\u2018-\u203A]|вЂ|в„–|Г—)/;
-
-  function cp1251ByteForCodePoint(code) {
-    if (code >= 0x00 && code <= 0x7F) return code;
-    if (code >= 0x0410 && code <= 0x044F) return code - 0x350;
-    if (code === 0x0401) return 0xA8;
-    if (code === 0x0451) return 0xB8;
-    if (Object.prototype.hasOwnProperty.call(CP1251_PUNCT_TO_BYTE, code)) {
-      return CP1251_PUNCT_TO_BYTE[code];
-    }
-    return null;
-  }
-
-  function decodeCp1251Mojibake(value) {
-    const raw = String(value ?? "");
-    if (!raw || !MOJIBAKE_RE.test(raw)) return raw;
-    const bytes = [];
-    for (const ch of raw) {
-      const code = ch.codePointAt(0);
-      const b = cp1251ByteForCodePoint(code);
-      if (b == null) return raw;
-      bytes.push(b);
-    }
-    try {
-      const decoded = new TextDecoder("utf-8").decode(new Uint8Array(bytes));
-      if (!decoded || decoded.includes("\uFFFD")) return raw;
-      return decoded;
-    } catch {
-      return raw;
-    }
-  }
-
   function escapeHtml(s) {
-    return decodeCp1251Mojibake(s)
+    return String(s ?? "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
@@ -919,7 +1092,7 @@
     return String(value || "")
       .trim()
       .toLowerCase()
-      .replace(/С‘/g, "Рµ")
+      .replace(/ё/g, "е")
       .replace(/[\s-]+/g, "_")
       .replace(/_+/g, "_");
   }
@@ -1035,7 +1208,7 @@
   function getCourierTransitStatusMeta(order) {
     if (!isCourierWorkspace) return null;
     if (courierTransitStatusId !== null) {
-      return getCourierConfiguredStatusMeta(courierTransitStatusId, order, "Р’ РїСѓС‚Рё");
+      return getCourierConfiguredStatusMeta(courierTransitStatusId, order, "В пути");
     }
     const statuses = getSortedStatuses();
     if (!statuses.length) return null;
@@ -1058,7 +1231,7 @@
   function getCourierDeliveredStatusMeta(order) {
     if (!isCourierWorkspace) return null;
     if (courierDeliveredStatusId !== null) {
-      return getCourierConfiguredStatusMeta(courierDeliveredStatusId, order, "Р”РѕСЃС‚Р°РІР»РµРЅ");
+      return getCourierConfiguredStatusMeta(courierDeliveredStatusId, order, "Доставлен");
     }
     const statuses = getSortedStatuses();
     if (!statuses.length) return null;
@@ -1107,27 +1280,27 @@
       && Number(deliveredStatus.id || 0) !== Number(currentStatusId)
     );
     let disabledReason = "";
-    let actionLabel = "Р—Р°Р±СЂР°С‚СЊ";
+    let actionLabel = "Забрать";
     let actionIcon = "fas fa-truck";
     let targetStatus = transitStatus;
 
     if (!isDeliveryOrder(order)) {
-      disabledReason = "Р”РµР№СЃС‚РІРёРµ РґРѕСЃС‚СѓРїРЅРѕ С‚РѕР»СЊРєРѕ РґР»СЏ РґРѕСЃС‚Р°РІРєРё";
+      disabledReason = "Действие доступно только для доставки";
     } else if (canDeliver) {
-      actionLabel = "Р”РѕСЃС‚Р°РІР»РµРЅ";
+      actionLabel = "Доставлен";
       actionIcon = "fas fa-circle-check";
       targetStatus = deliveredStatus;
     } else if (isCurrentDeliveredStatus) {
-      actionLabel = "Р”РѕСЃС‚Р°РІР»РµРЅ";
+      actionLabel = "Доставлен";
       actionIcon = "fas fa-circle-check";
       targetStatus = deliveredStatus;
-      disabledReason = "Р—Р°РєР°Р· СѓР¶Рµ РґРѕСЃС‚Р°РІР»РµРЅ";
+      disabledReason = "Заказ уже доставлен";
     } else if (!transitStatus) {
-      disabledReason = "РќРµ РЅР°Р№РґРµРЅ СЃС‚Р°С‚СѓСЃ В«Р’ РїСѓС‚РёВ»";
+      disabledReason = "Не найден статус «В пути»";
     } else if (isAlreadyTransit) {
-      disabledReason = "Р—Р°РєР°Р· СѓР¶Рµ РІ РїСѓС‚Рё";
+      disabledReason = "Заказ уже в пути";
     } else if (isFinalStatusMeta(currentStatus) || isAlreadyDelivered || isDeliveredStatusMeta(currentStatus) || matchesCourierCanceledStatus(currentStatus)) {
-      disabledReason = "Р”РµР№СЃС‚РІРёРµ РЅРµРґРѕСЃС‚СѓРїРЅРѕ РґР»СЏ С„РёРЅР°Р»СЊРЅРѕРіРѕ СЃС‚Р°С‚СѓСЃР°";
+      disabledReason = "Действие недоступно для финального статуса";
     }
 
     return {
@@ -1142,11 +1315,11 @@
   function buildCourierPickupButtonHtml(order) {
     const pickupState = getCourierPickupState(order);
     const targetStatusId = Number(pickupState?.transitStatus?.id || 0);
-    const actionLabel = String(pickupState?.actionLabel || "Р—Р°Р±СЂР°С‚СЊ").trim() || "Р—Р°Р±СЂР°С‚СЊ";
+    const actionLabel = String(pickupState?.actionLabel || "Забрать").trim() || "Забрать";
     const actionIcon = String(pickupState?.actionIcon || "fas fa-truck").trim() || "fas fa-truck";
     const buttonTitle = pickupState.canPickup
-      ? `РџРµСЂРµРІРµСЃС‚Рё РІ В«${String(pickupState?.transitStatus?.title || "Р’ РїСѓС‚Рё").trim() || "Р’ РїСѓС‚Рё"}В»`
-      : (pickupState.disabledReason || "Р”РµР№СЃС‚РІРёРµ РЅРµРґРѕСЃС‚СѓРїРЅРѕ");
+      ? `Перевести в «${String(pickupState?.transitStatus?.title || "В пути").trim() || "В пути"}»`
+      : (pickupState.disabledReason || "Действие недоступно");
 
     return `
       <button
@@ -1160,24 +1333,48 @@
         aria-label="${escapeHtml(buttonTitle)}"
       >
         <i class="${escapeHtml(actionIcon)}" aria-hidden="true"></i>
-        <span>Р—Р°Р±СЂР°С‚СЊ</span>
+        <span>Забрать</span>
       </button>
     `;
   }
 
+  function getCourierStatusQueueState(orderId) {
+    if (!isCourierWorkspace) return null;
+    const items = courierOfflineState.queue.filter((item) => (
+      item?.type === "status" && Number(item?.orderId || 0) === Number(orderId || 0)
+    ));
+    if (!items.length) return null;
+    if (items.some((item) => item.state === "failed" || item.state === "blocked")) {
+      return { mode: "error", label: "Не отправлено" };
+    }
+    if (courierOfflineState.syncing && courierOfflineState.online) {
+      return { mode: "sending", label: "Отправляем…" };
+    }
+    return { mode: "queued", label: "В очереди" };
+  }
+
   function buildCourierActionButtonHtml(order) {
     const pickupState = getCourierPickupState(order);
+    const queueState = getCourierStatusQueueState(order?.id);
     const targetStatus = pickupState?.transitStatus || null;
     const targetStatusId = Number(targetStatus?.id || 0);
-    const actionLabel = String(pickupState?.actionLabel || "Р—Р°Р±СЂР°С‚СЊ").trim() || "Р—Р°Р±СЂР°С‚СЊ";
+    const actionLabel = String(pickupState?.actionLabel || "Забрать").trim() || "Забрать";
     const actionIcon = String(pickupState?.actionIcon || "fas fa-truck").trim() || "fas fa-truck";
-    const buttonTitle = pickupState.canPickup
-      ? `РџРµСЂРµРІРµСЃС‚Рё РІ В«${String(targetStatus?.title || actionLabel).trim() || actionLabel}В»`
-      : (pickupState.disabledReason || "Р”РµР№СЃС‚РІРёРµ РЅРµРґРѕСЃС‚СѓРїРЅРѕ");
+    const baseButtonTitle = pickupState.canPickup
+      ? `Перевести в «${String(targetStatus?.title || actionLabel).trim() || actionLabel}»`
+      : (pickupState.disabledReason || "Действие недоступно");
+    const buttonTitle = queueState ? `${baseButtonTitle}. ${queueState.label}` : baseButtonTitle;
+    const queueClass = queueState ? ` is-queue-${queueState.mode}` : "";
+    const queueIcon = queueState?.mode === "error"
+      ? "fa-circle-exclamation"
+      : (queueState?.mode === "sending" ? "fa-spinner" : "fa-clock");
+    const queueStatusHtml = queueState
+      ? `<small class="order-courier-action-queue"><i class="fas ${queueIcon}" aria-hidden="true"></i>${escapeHtml(queueState.label)}</small>`
+      : "";
 
     return `
       <button
-        class="order-courier-action-btn order-courier-action-btn--pickup"
+        class="order-courier-action-btn order-courier-action-btn--pickup${queueClass}"
         type="button"
         data-action="courier-pickup"
         data-order-id="${escapeHtml(order?.id || "")}"
@@ -1187,9 +1384,25 @@
         aria-label="${escapeHtml(buttonTitle)}"
       >
         <i class="${escapeHtml(actionIcon)}" aria-hidden="true"></i>
-        <span>${escapeHtml(actionLabel)}</span>
+        <span class="order-courier-action-copy">
+          <span>${escapeHtml(actionLabel)}</span>
+          ${queueStatusHtml}
+        </span>
       </button>
     `;
+  }
+
+  function refreshCourierOrderQueueButtons(orderIds) {
+    if (!isCourierWorkspace || !elOrdersList) return;
+    Array.from(orderIds || []).forEach((rawOrderId) => {
+      const orderId = Number(rawOrderId || 0);
+      if (!(orderId > 0)) return;
+      const order = state.orders.find((item) => Number(item?.id || 0) === orderId) || null;
+      const row = elOrdersList.querySelector(`.order-row[data-order-id="${orderId}"]`);
+      const button = row?.querySelector('[data-action="courier-pickup"]');
+      if (!order || !button) return;
+      button.outerHTML = buildCourierActionButtonHtml(order);
+    });
   }
 
   function buildCourierCallButtonHtml(order) {
@@ -1200,11 +1413,11 @@
           class="order-courier-action-btn order-courier-action-btn--call"
           type="button"
           disabled
-          aria-label="РўРµР»РµС„РѕРЅ РєР»РёРµРЅС‚Р° РЅРµРґРѕСЃС‚СѓРїРµРЅ"
-          title="РўРµР»РµС„РѕРЅ РєР»РёРµРЅС‚Р° РЅРµРґРѕСЃС‚СѓРїРµРЅ"
+          aria-label="Телефон клиента недоступен"
+          title="Телефон клиента недоступен"
         >
           <i class="fas fa-phone" aria-hidden="true"></i>
-          <span>РџРѕР·РІРѕРЅРёС‚СЊ</span>
+          <span>Позвонить</span>
         </button>
       `;
     }
@@ -1214,11 +1427,11 @@
         class="order-courier-action-btn order-courier-action-btn--call"
         href="tel:${escapeHtml(phoneHref)}"
         data-action="courier-call"
-        aria-label="РџРѕР·РІРѕРЅРёС‚СЊ РєР»РёРµРЅС‚Сѓ"
-        title="РџРѕР·РІРѕРЅРёС‚СЊ РєР»РёРµРЅС‚Сѓ"
+        aria-label="Позвонить клиенту"
+        title="Позвонить клиенту"
       >
         <i class="fas fa-phone" aria-hidden="true"></i>
-        <span>РџРѕР·РІРѕРЅРёС‚СЊ</span>
+        <span>Позвонить</span>
       </a>
     `;
   }
@@ -1255,7 +1468,7 @@
     const nextStatusId = Number(nextStatus?.id || 0);
     if (!currentStatus || !Number.isFinite(nextStatusId) || nextStatusId <= 0) return "";
 
-    const currentTitle = String(currentStatus.title || "").trim() || "Р­С‚Р°Рї";
+    const currentTitle = String(currentStatus.title || "").trim() || "Этап";
     const nextTitle = String(nextStatus.title || "").trim() || currentTitle;
     const titleAttr = escapeHtml(`${currentTitle} -> ${nextTitle}`);
     const iconValue = resolveOrderStatusIcon(currentStatus);
@@ -1351,13 +1564,54 @@
     `;
   }
 
+  function renderOrderStatusControl(order) {
+    const buttonHtml = renderOrderStatusHoverCycleButton(order);
+    if (isCourierWorkspace) return buttonHtml;
+    const syncState = orderStatusSyncStates.get(Number(order?.id || 0)) || null;
+    if (!syncState) return buttonHtml;
+    const iconClass = syncState.mode === "syncing"
+      ? "fa-spinner fa-spin"
+      : (syncState.mode === "saved" ? "fa-check" : "fa-circle-exclamation");
+    return `
+      <div class="order-status-sync-control is-${escapeHtml(syncState.mode)}" data-order-status-sync-state="${escapeHtml(syncState.mode)}">
+        ${buttonHtml}
+        <span class="order-status-sync-feedback" role="status">
+          <i class="fas ${iconClass}" aria-hidden="true"></i>
+          <span>${escapeHtml(syncState.label)}</span>
+        </span>
+      </div>
+    `;
+  }
+
+  function refreshOrderStatusSyncControl(orderId) {
+    const id = Number(orderId || 0);
+    const row = elOrdersList?.querySelector(`.order-row[data-order-id="${id}"]`);
+    const order = state.orders.find((item) => Number(item?.id || 0) === id) || null;
+    if (row && order) updateOrderRow(row, order);
+  }
+
+  function setOrderStatusSyncState(orderId, mode, label, duration = 0) {
+    const id = Number(orderId || 0);
+    if (!(id > 0) || isCourierWorkspace) return;
+    const marker = { mode, label, token: `${Date.now()}:${Math.random()}` };
+    orderStatusSyncStates.set(id, marker);
+    refreshOrderStatusSyncControl(id);
+    if (duration > 0) {
+      setTimeout(() => {
+        if (orderStatusSyncStates.get(id)?.token !== marker.token) return;
+        orderStatusSyncStates.delete(id);
+        refreshOrderStatusSyncControl(id);
+      }, duration);
+    }
+  }
+
   function normalizeApartmentToken(token) {
     const src = String(token || "").trim();
     if (!src) return "";
     const re = /\b(?:\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?)\s*([\p{L}\d\-\/]+)/iu;
     const m = src.match(re);
     if (!m || !m[1]) return "";
-    return `РєРІ ${m[1]}`;
+    return `кв ${m[1]}`;
   }
 
   function stripApartmentToken(token) {
@@ -1481,8 +1735,8 @@
     const fromPhone = String(phone || "").trim();
     if (fromPhone) return formatPhoneDigitsToRU(fromPhone);
     const clientId = Number(client?.id || id || 0);
-    if (Number.isFinite(clientId) && clientId > 0) return `РљР»РёРµРЅС‚ #${clientId}`;
-    return "РљР»РёРµРЅС‚";
+    if (Number.isFinite(clientId) && clientId > 0) return `Клиент #${clientId}`;
+    return "Клиент";
   }
 
   function syncActiveOrderRowState() {
@@ -1729,8 +1983,8 @@
       const isActive = tab.key === tabsState.activeKey;
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-order-tab-key="${escapeHtml(tab.key)}">
-          <span class="product-tab-title">${escapeHtml(tab.title || (tab.type === "client" ? "РљР»РёРµРЅС‚" : "Р—Р°РєР°Р·"))}</span>
-          <button class="product-tab-close" type="button" data-order-tab-close="${escapeHtml(tab.key)}" aria-label="Р—Р°РєСЂС‹С‚СЊ">&times;</button>
+          <span class="product-tab-title">${escapeHtml(tab.title || (tab.type === "client" ? "Клиент" : "Заказ"))}</span>
+          <button class="product-tab-close" type="button" data-order-tab-close="${escapeHtml(tab.key)}" aria-label="Закрыть">&times;</button>
         </div>
       `;
     }).join("");
@@ -1814,7 +2068,8 @@
   }
 
   function goToOrdersHomeView() {
-    tabsState.tabs = [];
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    if (activeTab) captureCheckoutSessionForTab(activeTab);
     tabsState.activeKey = null;
     state.activeOrderId = null;
     state.activeOrder = null;
@@ -1863,33 +2118,173 @@
   async function ensureFullOrderById(orderId, { strict = false } = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
+    const context = orderDetailsContext(id);
     const fromState = state.orders.find((order) => Number(order?.id) === id) || null;
-    if (isFullOrder(fromState)) return fromState;
-    const cachedOrder = await readCachedFullOrder(id, fromState);
-    if (cachedOrder) {
-      const nextOrder = overlayCourierShadowOrder(cachedOrder);
+    if (isFullOrder(fromState) && authoritativeFullOrderRuntimeKeys.has(context.runtimeKey)) {
+      if (orderDetailsDirty.has(context.runtimeKey) && navigator.onLine !== false) {
+        revalidateCachedFullOrder(id, { context });
+      }
+      return fromState;
+    }
+    const cachedEntry = await readCachedFullOrderEntry(id, {
+      allowStale: true,
+      cache: context.cache,
+    });
+    if (cachedEntry?.order) {
+      const nextOrder = overlayCourierShadowOrder(cachedEntry.order);
       const idx = state.orders.findIndex((order) => Number(order?.id) === id);
       if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
-      else state.orders.unshift(nextOrder);
-      revalidateCachedFullOrder(id);
+      else if (shouldKeepOrderInState(nextOrder)) state.orders.unshift(nextOrder);
+      if ((cachedEntry.stale || orderDetailsDirty.has(context.runtimeKey)) && navigator.onLine !== false) {
+        revalidateCachedFullOrder(id, { context });
+      }
       return nextOrder;
     }
     try {
-      const json = await apiJson(`/api/admin/orders/${id}`);
-      const fullOrder = json?.data || null;
-      if (!fullOrder || !Number.isFinite(Number(fullOrder.id))) return fromState;
-      const nextOrder = overlayCourierShadowOrder(fullOrder);
-      writeCachedFullOrder(nextOrder);
-      const idx = state.orders.findIndex((order) => Number(order?.id) === Number(fullOrder.id));
+      const nextOrder = await revalidateCachedFullOrder(id, { updateState: false, context });
+      if (!isFullOrder(nextOrder)) return strict ? null : fromState;
+      if (!isCurrentOrderDetailsContext(context)) return nextOrder;
+      const idx = state.orders.findIndex((order) => Number(order?.id) === id);
       if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
-      else state.orders.unshift(nextOrder);
+      else if (shouldKeepOrderInState(nextOrder)) state.orders.unshift(nextOrder);
       rebuildOrdersStageIndex();
       renderOrders();
-      return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || nextOrder;
+      return state.orders.find((order) => Number(order?.id) === id) || nextOrder;
     } catch (err) {
       console.error(err);
       return strict ? null : fromState;
     }
+  }
+
+  function courierPrewarmPriority(order) {
+    const bucketId = getCourierBucketId(order);
+    if (bucketId === "in-transit") return 0;
+    if (bucketId === "available") return 1;
+    if (bucketId === "delivered") return 2;
+    return 3;
+  }
+
+  function selectCourierOrdersForPrewarm(orders) {
+    return (Array.isArray(orders) ? orders : [])
+      .filter((order) => Number(order?.id || 0) > 0 && getCourierBucketId(order))
+      .sort((a, b) => {
+        const priorityDiff = courierPrewarmPriority(a) - courierPrewarmPriority(b);
+        if (priorityDiff) return priorityDiff;
+        return Number(b?.id || 0) - Number(a?.id || 0);
+      })
+      .slice(0, COURIER_DETAIL_PREWARM_LIMIT);
+  }
+
+  function acquireCourierDetailPrewarmSlot(highPriority = false) {
+    if (courierDetailPrewarmActiveCount < COURIER_DETAIL_PREWARM_CONCURRENCY) {
+      courierDetailPrewarmActiveCount += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      if (highPriority) courierDetailPrewarmWaiters.unshift(resolve);
+      else courierDetailPrewarmWaiters.push(resolve);
+    });
+  }
+
+  function releaseCourierDetailPrewarmSlot() {
+    const next = courierDetailPrewarmWaiters.shift();
+    if (next) {
+      next();
+      return;
+    }
+    courierDetailPrewarmActiveCount = Math.max(0, courierDetailPrewarmActiveCount - 1);
+  }
+
+  async function prewarmCourierOrderDetail(order, { highPriority = false } = {}) {
+    const id = Number(order?.id || 0);
+    const context = orderDetailsContext(id);
+    if (!(id > 0) || courierDetailPrewarmInFlight.has(context.runtimeKey)) return;
+    courierDetailPrewarmInFlight.add(context.runtimeKey);
+    setCourierPassportCacheState(id, "checking", context);
+    try {
+      const cached = await readCachedFullOrderEntry(id, { allowStale: true, cache: context.cache });
+      if (cached && !cached.stale && !orderDetailsDirty.has(context.runtimeKey)) return;
+      if (!cached) {
+        authoritativeFullOrderRuntimeKeys.delete(context.runtimeKey);
+        setCourierPassportCacheState(id, "missing", context);
+      }
+      if (navigator.onLine === false) return;
+      await acquireCourierDetailPrewarmSlot(highPriority);
+      if (navigator.onLine === false) {
+        releaseCourierDetailPrewarmSlot();
+        return;
+      }
+      try {
+        setCourierPassportCacheState(id, "saving", context);
+        await revalidateCachedFullOrder(id, { updateState: false, context });
+      } finally {
+        releaseCourierDetailPrewarmSlot();
+      }
+    } finally {
+      courierDetailPrewarmInFlight.delete(context.runtimeKey);
+    }
+  }
+
+  async function prewarmCourierOrderDetails(orders = state.orders) {
+    if (!isCourierWorkspace) return;
+    const queue = selectCourierOrdersForPrewarm(orders);
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < queue.length) {
+        const order = queue[nextIndex];
+        nextIndex += 1;
+        try {
+          await prewarmCourierOrderDetail(order);
+        } catch (err) {
+          console.warn(`Courier order passport prewarm failed for ${Number(order?.id || 0)}:`, err);
+        }
+      }
+    };
+    await Promise.all(Array.from(
+      { length: Math.min(COURIER_DETAIL_PREWARM_CONCURRENCY, queue.length) },
+      () => worker()
+    ));
+  }
+
+  async function inspectOrdersSharedPassportCache(orders = getOrdersForActiveStage()) {
+    if (isCourierWorkspace) return;
+    const queue = (Array.isArray(orders) ? orders : [])
+      .map((order) => ({ order, context: orderDetailsContext(order?.id) }))
+      .filter(({ order, context }) => (
+        Number(order?.id) > 0
+        && context.cache?.complete
+        && !courierPassportCacheStates.has(context.runtimeKey)
+      ));
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < queue.length) {
+        const { order, context } = queue[nextIndex++];
+        if (!isCurrentOrderDetailsContext(context)) continue;
+        setCourierPassportCacheState(order.id, "checking", context);
+        try {
+          const sharedEntry = window.AdminPersistentCache.orderPassport?.read
+            ? await window.AdminPersistentCache.orderPassport.read(order.id, { cache: context.cache, allowStale: true })
+            : null;
+          const entry = sharedEntry || (!window.AdminPersistentCache.orderPassport?.read
+            ? await context.cache.getEntry(String(order.id), { allowStale: true })
+            : null);
+          if (!isCurrentOrderDetailsContext(context)) continue;
+          const hasFullPassport = Boolean(sharedEntry) || (entry?.data?.detailCompleteness === "full"
+            && isFullOrder(entry.data.order));
+          setCourierPassportCacheState(
+            order.id,
+            hasFullPassport ? ((sharedEntry?.stale === true || entry?.stale === true) ? "stale" : "saved") : "missing",
+            context
+          );
+        } catch (err) {
+          if (isCurrentOrderDetailsContext(context)) {
+            setCourierPassportCacheState(order.id, "missing", context);
+          }
+          console.warn(`Order passport cache check failed for ${Number(order.id || 0)}:`, err);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
   }
 
   const orderDetailsOpener = sharedOrderPanel && typeof sharedOrderPanel.createDetailsOpener === "function"
@@ -1898,10 +2293,21 @@
           return ensureFullOrderById(orderId, { strict: true });
         },
         openTab(order, orderId, context = {}) {
-          return ensureOrderTab(order, {
+          const tab = ensureOrderTab(order, {
             activate: true,
             openMobile: context.openMobile !== false,
           });
+          if (tab) {
+            tab.orderPassportContext = context;
+            syncOrderCapabilities();
+          }
+          return tab;
+        },
+        close(reason, context = {}) {
+          const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+          if (activeTab && activeTab.type === "order" && context.keepTabOnClose !== true) closeOrderTab(activeTab.key);
+          if (typeof context.onBack === "function") return context.onBack(reason);
+          return null;
         },
         onError(error) {
           console.error("order details open error:", error);
@@ -1934,7 +2340,7 @@
   async function openNewDraftTab() {
     const key = `new:${Date.now()}:${Math.floor(Math.random() * 1000)}`;
     const nextNumber = tabsState.tabs.filter((tab) => tab.type === "order" && normalizeTabMode(tab.mode) === "new").length + 1;
-    const title = nextNumber === 1 ? "РќРѕРІС‹Р№ Р·Р°РєР°Р·" : `РќРѕРІС‹Р№ Р·Р°РєР°Р· ${nextNumber}`;
+    const title = nextNumber === 1 ? "Новый заказ" : `Новый заказ ${nextNumber}`;
     let checkoutSession = null;
     try {
       const bridge = await getReadyNewOrderBridge();
@@ -2253,6 +2659,50 @@
     return `courier_offline_shadow_v${COURIER_OFFLINE_QUEUE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
   }
 
+  function courierOutboxScope() {
+    if (!window.AdminPersistentCache?.scope) return null;
+    return window.AdminPersistentCache.scope({
+      domain: "orders:outbox:courier",
+      version: COURIER_OFFLINE_QUEUE_VERSION,
+    });
+  }
+
+  function courierOutboxContext(cache = courierOutboxScope()) {
+    return {
+      cache,
+      namespace: cache?.complete ? String(cache.namespace || "") : "",
+      tenantId: Number(cache?.tenantId || 0) || 0,
+      storeId: Number(cache?.storeId || 0) || 0,
+    };
+  }
+
+  function isCurrentCourierOutboxContext(context) {
+    return Boolean(context?.namespace
+      && courierOutboxScope()?.namespace === context.namespace);
+  }
+
+  function queueCourierOutboxOperation(context, operation) {
+    if (!context?.namespace) return Promise.reject(new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE"));
+    const previous = courierOutboxOperations.get(context.namespace) || Promise.resolve();
+    const promise = previous.catch(() => {}).then(operation);
+    courierOutboxOperations.set(context.namespace, promise);
+    return promise.finally(() => {
+      if (courierOutboxOperations.get(context.namespace) === promise) {
+        courierOutboxOperations.delete(context.namespace);
+      }
+    });
+  }
+
+  function createCourierMutationId() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    if (window.crypto?.getRandomValues) {
+      const parts = new Uint32Array(4);
+      window.crypto.getRandomValues(parts);
+      return `courier-${Date.now().toString(36)}-${Array.from(parts, (part) => part.toString(16)).join("-")}`;
+    }
+    return `courier-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+  }
+
   function normalizeCourierQueueItem(raw) {
     const type = String(raw?.type || "").trim().toLowerCase();
     if (type !== "status" && type !== "payment") return null;
@@ -2262,15 +2712,24 @@
     const url = String(request.url || "").trim();
     const method = String(request.method || "PUT").trim().toUpperCase() || "PUT";
     if (!url) return null;
+    const createdAt = Number(raw?.createdAt || Date.now()) || Date.now();
     return {
-      id: String(raw?.id || `${type}:${orderId}:${Date.now()}:${Math.random()}`).trim(),
+      id: String(raw?.id || "").trim(),
       type,
       orderId,
       tenantId: Number(raw?.tenantId || getTenantIdFromStorage() || 0) || 0,
       storeId: Number(raw?.storeId || getStoreIdFromStorage() || 0) || 0,
-      createdAt: Number(raw?.createdAt || Date.now()) || Date.now(),
-      state: String(raw?.state || "pending").trim().toLowerCase() === "error" ? "error" : "pending",
+      sequence: Number(raw?.sequence || 0) || 0,
+      createdAt,
+      updatedAt: Number(raw?.updatedAt || createdAt) || createdAt,
+      attempts: Math.max(0, Number(raw?.attempts || 0) || 0),
+      state: ["failed", "blocked"].includes(String(raw?.state || "").trim().toLowerCase())
+        ? String(raw?.state || "").trim().toLowerCase()
+        : "pending",
       error: raw?.error ? String(raw.error) : "",
+      lastError: raw?.lastError && typeof raw.lastError === "object" ? { ...raw.lastError } : null,
+      nextAttemptAt: Number(raw?.nextAttemptAt || 0) || null,
+      blockedBy: raw?.blockedBy ? String(raw.blockedBy) : null,
       request: {
         url,
         method,
@@ -2282,75 +2741,58 @@
     };
   }
 
-  function readCourierOfflineQueue() {
-    try {
-      const raw = localStorage.getItem(courierOfflineQueueKey());
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return (Array.isArray(parsed?.items) ? parsed.items : [])
-        .map(normalizeCourierQueueItem)
-        .filter(Boolean);
-    } catch {
-      return [];
-    }
+  function normalizeCourierOutboxPayload(raw) {
+    const rawItems = Array.isArray(raw?.items) ? raw.items : [];
+    const items = rawItems
+      .map(normalizeCourierQueueItem)
+      .filter((item) => item?.id && item.sequence > 0)
+      .sort((left, right) => left.sequence - right.sequence);
+    if (items.length !== rawItems.length) throw new Error("COURIER_OUTBOX_CORRUPT");
+    const maxSequence = items.reduce((max, item) => Math.max(max, item.sequence), 0);
+    return {
+      items,
+      nextSequence: Math.max(maxSequence + 1, Number(raw?.nextSequence || 1) || 1),
+    };
   }
 
-  function readCourierShadowOrders() {
-    try {
-      const raw = localStorage.getItem(courierOfflineShadowKey());
-      if (!raw) return new Map();
-      const parsed = JSON.parse(raw);
-      const rows = Array.isArray(parsed?.orders) ? parsed.orders : [];
-      return new Map(
-        rows
-          .map((row) => {
-            const orderId = Number(Array.isArray(row) ? row[0] : 0);
-            const order = Array.isArray(row) ? row[1] : null;
-            if (!(orderId > 0) || !order || typeof order !== "object") return null;
-            return [orderId, { ...order }];
-          })
-          .filter(Boolean)
-      );
-    } catch {
-      return new Map();
-    }
+  async function readCourierOutbox(context) {
+    if (!context?.cache?.complete) throw new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE");
+    const stored = await context.cache.get(COURIER_OUTBOX_ENTRY_KEY);
+    return normalizeCourierOutboxPayload(stored);
   }
 
-  function persistCourierOfflineState() {
-    if (!isCourierWorkspace) return;
-    try {
-      if (courierOfflineState.queue.length) {
-        localStorage.setItem(courierOfflineQueueKey(), JSON.stringify({
-          items: courierOfflineState.queue.map((item) => ({
-            id: item.id,
-            type: item.type,
-            orderId: item.orderId,
-            tenantId: item.tenantId,
-            storeId: item.storeId,
-            createdAt: item.createdAt,
-            state: item.state,
-            error: item.error || "",
-            request: item.request,
-            optimisticOrder: item.optimisticOrder && typeof item.optimisticOrder === "object"
-              ? item.optimisticOrder
-              : null,
-          })),
-        }));
-      } else {
-        localStorage.removeItem(courierOfflineQueueKey());
-      }
-    } catch {}
+  async function writeCourierOutbox(context, payload) {
+    if (!context?.cache?.complete) throw new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE");
+    const normalized = normalizeCourierOutboxPayload(payload);
+    await context.cache.set(COURIER_OUTBOX_ENTRY_KEY, {
+      version: COURIER_OFFLINE_QUEUE_VERSION,
+      nextSequence: normalized.nextSequence,
+      items: normalized.items,
+    });
+    return normalized;
+  }
 
+  function applyCourierOutboxPayload(payload, context) {
+    if (!isCurrentCourierOutboxContext(context)) return false;
+    const normalized = normalizeCourierOutboxPayload(payload);
+    const affectedOrderIds = new Set([
+      ...courierOfflineState.queue.map((item) => Number(item?.orderId || 0)),
+      ...normalized.items.map((item) => Number(item?.orderId || 0)),
+    ]);
+    courierOfflineState.queue = normalized.items;
+    courierOfflineState.nextSequence = normalized.nextSequence;
+    courierOfflineState.syncError = "";
+    syncCourierShadowOrdersFromQueue();
+    applyCourierShadowOrdersToState();
+    refreshCourierConnectionBanner();
+    refreshCourierOrderQueueButtons(affectedOrderIds);
+    return true;
+  }
+
+  function reportLegacyCourierOutbox() {
     try {
-      if (courierOfflineState.shadowOrders.size) {
-        localStorage.setItem(courierOfflineShadowKey(), JSON.stringify({
-          orders: Array.from(courierOfflineState.shadowOrders.entries()).map(([orderId, order]) => [
-            Number(orderId),
-            order && typeof order === "object" ? order : null,
-          ]),
-        }));
-      } else {
-        localStorage.removeItem(courierOfflineShadowKey());
+      if (localStorage.getItem(courierOfflineQueueKey()) || localStorage.getItem(courierOfflineShadowKey())) {
+        console.warn("Legacy courier outbox was left untouched because it has no user identity scope.");
       }
     } catch {}
   }
@@ -2364,13 +2806,11 @@
       }
       courierOfflineState.transientBanner = null;
     }
-    const failedItem = courierOfflineState.queue[0]?.state === "error"
-      ? courierOfflineState.queue[0]
-      : null;
+    const failedItem = courierOfflineState.queue.find((item) => item?.state === "failed") || null;
     if (failedItem) {
       return {
         mode: "error",
-        text: failedItem.error ? `РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ: ${failedItem.error}` : "РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ",
+        text: "Не отправлено",
         retry: true,
       };
     }
@@ -2381,53 +2821,121 @@
         retry: true,
       };
     }
+    if (courierOfflineState.reconciling) {
+      return {
+        mode: "syncing",
+        text: courierOfflineState.queue.length
+          ? `Синхронизируем · ${courierOfflineState.queue.length}`
+          : "Обновляем данные…",
+        retry: false,
+      };
+    }
     if (courierOfflineState.syncing && courierOfflineState.queue.length) {
       return {
         mode: "syncing",
-        text: `РћС‚РїСЂР°РІР»СЏРµРј РёР·РјРµРЅРµРЅРёСЏ: ${courierOfflineState.queue.length}`,
+        text: `Отправляем · ${courierOfflineState.queue.length}`,
         retry: false,
       };
     }
     if (!courierOfflineState.online && courierOfflineState.queue.length) {
       return {
         mode: "offline",
-        text: `РќРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°. РР·РјРµРЅРµРЅРёСЏ СЃРѕС…СЂР°РЅРµРЅС‹ Рё Р±СѓРґСѓС‚ РѕС‚РїСЂР°РІР»РµРЅС‹: ${courierOfflineState.queue.length}`,
+        text: `Офлайн · ждут отправки: ${courierOfflineState.queue.length}`,
         retry: false,
       };
     }
     if (!courierOfflineState.online) {
       return {
         mode: "offline",
-        text: "РќРµС‚ РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє РёРЅС‚РµСЂРЅРµС‚Сѓ",
+        text: courierCachedSnapshotVisible
+          ? "Офлайн · сохранённые данные"
+          : "Нет сохранённых данных",
         retry: false,
       };
     }
-    return null;
+    if (courierOfflineState.refreshError) {
+      return {
+        mode: "error",
+        text: courierOfflineState.refreshError,
+        retry: false,
+      };
+    }
+    if (courierCachedSnapshotVisible && !courierNetworkConfirmed) {
+      return {
+        mode: "syncing",
+        text: "Обновляем сохранённые данные…",
+        retry: false,
+      };
+    }
+    return {
+      mode: "online",
+      text: "Онлайн",
+      retry: false,
+    };
+  }
+
+  function getOrdersBannerState() {
+    if (isCourierWorkspace) return getCourierBannerState();
+    if (navigator.onLine === false) {
+      return {
+        mode: ordersCachedSnapshotVisible ? "offline" : "error",
+        text: ordersCachedSnapshotVisible
+          ? "Офлайн · сохранённые данные"
+          : "Нет сохранённых данных",
+        retry: false,
+      };
+    }
+    if (ordersRefreshFailed) {
+      return {
+        mode: "error",
+        text: ordersCachedSnapshotVisible ? "Не удалось обновить" : "Нет сохранённых данных",
+        retry: true,
+      };
+    }
+    if (ordersCachedSnapshotVisible && !ordersNetworkConfirmed) {
+      return {
+        mode: "syncing",
+        text: "Обновляем сохранённые данные…",
+        retry: false,
+      };
+    }
+    if (!ordersNetworkConfirmed) {
+      return {
+        mode: "syncing",
+        text: "Загружаем данные…",
+        retry: false,
+      };
+    }
+    return {
+      mode: "online",
+      text: "Онлайн",
+      retry: false,
+    };
   }
 
   function refreshCourierConnectionBanner() {
-    if (!isCourierWorkspace || !courierConnectionBanner || !courierConnectionBannerText) return;
-    const bannerState = getCourierBannerState();
-    courierConnectionBanner.classList.remove(
-      "courier-connection-banner--offline",
-      "courier-connection-banner--syncing",
-      "courier-connection-banner--online",
-      "courier-connection-banner--error"
-    );
-    if (!bannerState) {
-      courierConnectionBanner.classList.add("hidden");
-      courierConnectionBannerText.textContent = "";
-      if (courierConnectionBannerRetryBtn) {
-        courierConnectionBannerRetryBtn.classList.add("hidden");
+    if (!ordersConnectionBanners.length) return;
+    const bannerState = getOrdersBannerState();
+    ordersConnectionBanners.forEach((banner) => {
+      const text = $(".courier-connection-banner__text", banner);
+      const retry = $('[data-action="orders-connection-retry"]', banner);
+      banner.classList.remove(
+        "courier-connection-banner--offline",
+        "courier-connection-banner--syncing",
+        "courier-connection-banner--online",
+        "courier-connection-banner--error"
+      );
+      if (!bannerState) {
+        banner.classList.add("hidden");
+        if (text) text.textContent = "";
+        if (retry) retry.classList.add("hidden");
+        return;
       }
-      return;
-    }
-    courierConnectionBanner.classList.remove("hidden");
-    courierConnectionBanner.classList.add(`courier-connection-banner--${bannerState.mode}`);
-    courierConnectionBannerText.textContent = String(bannerState.text || "").trim();
-    if (courierConnectionBannerRetryBtn) {
-      courierConnectionBannerRetryBtn.classList.toggle("hidden", !bannerState.retry);
-    }
+      banner.classList.remove("hidden");
+      banner.classList.add(`courier-connection-banner--${bannerState.mode}`);
+      if (text) text.textContent = String(bannerState.text || "").trim();
+      if (retry) retry.classList.toggle("hidden", !bannerState.retry);
+    });
   }
 
   function showCourierTransientBanner(mode, text, { retry = false, duration = 2500 } = {}) {
@@ -2455,11 +2963,8 @@
     const normalized = nextOnline !== false;
     const prev = courierOfflineState.online;
     courierOfflineState.online = normalized;
-    if (!normalized) {
-      courierOfflineState.syncing = false;
-    }
     if (normalized && !prev && showRestored) {
-      showCourierTransientBanner("online", "РџРѕРґРєР»СЋС‡РµРЅРёРµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРѕ");
+      showCourierTransientBanner("online", "Связь восстановлена");
       return;
     }
     refreshCourierConnectionBanner();
@@ -2469,6 +2974,7 @@
     if (!isCourierWorkspace) return;
     const nextShadowOrders = new Map();
     courierOfflineState.queue.forEach((item) => {
+      if (item?.state !== "pending") return;
       const orderId = Number(item?.orderId || 0);
       const optimisticOrder = item?.optimisticOrder && typeof item.optimisticOrder === "object"
         ? { ...item.optimisticOrder }
@@ -2486,12 +2992,13 @@
 
   function overlayCourierShadowOrder(order) {
     if (!order || !isCourierWorkspace) return order;
+    if (courierOptimisticOverlaySuspended > 0) return order;
     const shadow = getCourierShadowOrder(order.id);
     return shadow ? { ...order, ...shadow } : order;
   }
 
   function applyCourierShadowOrdersToState() {
-    if (!isCourierWorkspace || !courierOfflineState.shadowOrders.size) return;
+    if (!isCourierWorkspace || courierOptimisticOverlaySuspended > 0 || !courierOfflineState.shadowOrders.size) return;
     const existingIds = new Set();
     state.orders = (Array.isArray(state.orders) ? state.orders : []).map((order) => {
       const orderId = Number(order?.id || 0);
@@ -2505,17 +3012,21 @@
     });
   }
 
-  function hydrateCourierOfflineStateFromStorage() {
+  async function hydrateCourierOfflineStateFromStorage() {
     if (!isCourierWorkspace) return;
-    courierOfflineState.queue = readCourierOfflineQueue();
-    courierOfflineState.shadowOrders = readCourierShadowOrders();
+    const context = courierOutboxContext();
+    reportLegacyCourierOutbox();
+    const payload = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
+    if (!isCurrentCourierOutboxContext(context)) return;
+    courierOfflineState.queue = payload.items;
+    courierOfflineState.nextSequence = payload.nextSequence;
+    syncCourierShadowOrdersFromQueue();
     courierOfflineState.syncing = false;
+    courierOfflineState.reconciling = false;
+    courierOfflineState.processingNamespace = "";
     courierOfflineState.syncError = "";
+    courierOfflineState.refreshError = "";
     courierOfflineState.online = navigator.onLine !== false;
-    if (!courierOfflineState.shadowOrders.size && courierOfflineState.queue.length) {
-      syncCourierShadowOrdersFromQueue();
-      persistCourierOfflineState();
-    }
     applyCourierShadowOrdersToState();
     refreshCourierConnectionBanner();
   }
@@ -2524,33 +3035,39 @@
     if (!isCourierWorkspace) return;
     courierOfflineState.queue = [];
     courierOfflineState.shadowOrders = new Map();
+    courierOfflineState.nextSequence = 1;
     courierOfflineState.syncing = false;
+    courierOfflineState.processingNamespace = "";
     courierOfflineState.syncError = "";
+    courierOfflineState.refreshError = "";
     courierOfflineState.transientBanner = null;
     courierOfflineState.online = navigator.onLine !== false;
     refreshCourierConnectionBanner();
   }
 
-  function queueCourierMutation({ type, orderId, request, optimisticOrder }) {
+  async function queueCourierMutation({ type, orderId, request, optimisticOrder }) {
     if (!isCourierWorkspace) return null;
-    const item = normalizeCourierQueueItem({
-      id: `${type}:${Number(orderId || 0)}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
-      type,
-      orderId,
-      tenantId: getTenantIdFromStorage(),
-      storeId: getStoreIdFromStorage(),
-      createdAt: Date.now(),
-      state: "pending",
-      request,
-      optimisticOrder,
+    const context = courierOutboxContext();
+    return queueCourierOutboxOperation(context, async () => {
+      const current = await readCourierOutbox(context);
+      if (current.items.length >= COURIER_OUTBOX_MAX_ITEMS) {
+        throw new Error("COURIER_OUTBOX_FULL");
+      }
+      const now = Date.now();
+      const item = normalizeCourierQueueItem({
+        id: createCourierMutationId(), type, orderId,
+        tenantId: context.tenantId, storeId: context.storeId,
+        sequence: current.nextSequence, createdAt: now, updatedAt: now, attempts: 0,
+        state: "pending", request, optimisticOrder,
+      });
+      if (!item) throw new Error("COURIER_OUTBOX_MUTATION_INVALID");
+      const next = await writeCourierOutbox(context, {
+        items: [...current.items, item],
+        nextSequence: current.nextSequence + 1,
+      });
+      applyCourierOutboxPayload(next, context);
+      return item;
     });
-    if (!item) return null;
-    courierOfflineState.queue.push(item);
-    courierOfflineState.syncError = "";
-    syncCourierShadowOrdersFromQueue();
-    persistCourierOfflineState();
-    refreshCourierConnectionBanner();
-    return item;
   }
 
   function updateCourierActiveOrderInfo() {
@@ -2559,80 +3076,202 @@
     if (activeOrder) setInfo(activeOrder);
   }
 
+  function mutateCourierOutbox(context, mutate) {
+    return queueCourierOutboxOperation(context, async () => {
+      const current = await readCourierOutbox(context);
+      const nextPayload = mutate(current);
+      const next = await writeCourierOutbox(context, nextPayload || current);
+      applyCourierOutboxPayload(next, context);
+      return next;
+    });
+  }
+
+  function classifyCourierMutationFailure(err) {
+    if (isLikelyNetworkError(err)) return { type: "retryable", code: "NETWORK_ERROR", status: 0 };
+    const status = Number(err?.status || 0);
+    const code = String(err?.code || err?.message || "API_ERROR").trim() || "API_ERROR";
+    if (status === 401 || status === 403) return { type: "auth", code, status };
+    if (status === 408 || status === 425 || status === 429 || status >= 500) {
+      return { type: "retryable", code, status };
+    }
+    if (status === 409) {
+      return { type: code === "IDEMPOTENCY_IN_PROGRESS" ? "retryable" : "conflict", code, status };
+    }
+    if (status === 400 || status === 404 || status === 422) return { type: "permanent", code, status };
+    return { type: "retryable", code, status };
+  }
+
+  function courierMutationErrorRecord(err, failure) {
+    let nextAttemptAt = null;
+    const retryAfter = String(err?.retryAfter || "").trim();
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      const parsedDate = Date.parse(retryAfter);
+      if (Number.isFinite(seconds) && seconds >= 0) nextAttemptAt = Date.now() + (seconds * 1000);
+      else if (Number.isFinite(parsedDate)) nextAttemptAt = parsedDate;
+    }
+    return {
+      error: {
+        type: failure.type,
+        status: failure.status || null,
+        code: failure.code,
+        message: String(err?.message || failure.code),
+        at: Date.now(),
+      },
+      nextAttemptAt,
+    };
+  }
+
+  function selectNextCourierMutation(items, { force = false } = {}) {
+    const blockedOrderIds = new Set();
+    const now = Date.now();
+    for (const item of Array.isArray(items) ? items : []) {
+      const orderId = Number(item?.orderId || 0);
+      if (item?.state === "failed" || item?.state === "blocked") {
+        if (orderId > 0) blockedOrderIds.add(orderId);
+        continue;
+      }
+      if (item?.state !== "pending" || blockedOrderIds.has(orderId)) continue;
+      if (!force && Number(item.nextAttemptAt || 0) > now) {
+        if (orderId > 0) blockedOrderIds.add(orderId);
+        continue;
+      }
+      return item;
+    }
+    return null;
+  }
+
   async function processCourierOfflineQueue({ force = false } = {}) {
-    if (!isCourierWorkspace) return;
-    if (courierOfflineState.syncing) return;
+    if (!isCourierWorkspace) return { confirmedOrders: [] };
     if (!courierOfflineState.queue.length) {
       courierOfflineState.syncError = "";
       syncCourierShadowOrdersFromQueue();
-      persistCourierOfflineState();
       refreshCourierConnectionBanner();
-      return;
+      return { confirmedOrders: [] };
     }
     if (!courierOfflineState.online) {
       refreshCourierConnectionBanner();
-      return;
-    }
-    if (courierOfflineState.queue[0]?.state === "error" && !force) {
-      refreshCourierConnectionBanner();
-      return;
+      return { confirmedOrders: [] };
     }
 
     let processedAny = false;
+    const confirmedOrders = [];
+    const context = courierOutboxContext();
+    if (!context.namespace) {
+      courierOfflineState.syncError = "Хранилище недоступно";
+      refreshCourierConnectionBanner();
+      return { confirmedOrders };
+    }
+    const existingProcessing = courierOutboxProcessing.get(context.namespace);
+    if (existingProcessing) return existingProcessing;
+    let resolveProcessing;
+    const processingPromise = new Promise((resolve) => { resolveProcessing = resolve; });
+    courierOutboxProcessing.set(context.namespace, processingPromise);
     courierOfflineState.syncing = true;
+    refreshCourierOrderQueueButtons(courierOfflineState.queue.map((item) => item?.orderId));
+    courierOfflineState.processingNamespace = context.namespace;
     courierOfflineState.syncError = "";
     refreshCourierConnectionBanner();
 
-    while (courierOfflineState.online && courierOfflineState.queue.length) {
-      const current = courierOfflineState.queue[0];
-      if (!current) break;
-      current.state = "pending";
-      current.error = "";
-      persistCourierOfflineState();
-      refreshCourierConnectionBanner();
+    try {
+      while (isCurrentCourierOutboxContext(context) && courierOfflineState.online) {
+        const stored = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
+        const current = selectNextCourierMutation(stored.items, { force });
+        if (!current) break;
 
-      try {
-        const json = await apiJson(current.request.url, {
-          method: current.request.method || "PUT",
-          body: current.request.body || {},
-        });
-        courierOfflineState.queue.shift();
-        processedAny = true;
-        syncCourierShadowOrdersFromQueue();
-        applyCourierShadowOrdersToState();
-        if (json?.data) {
-          handleOrderEvent(json.data);
+        try {
+          await mutateCourierOutbox(context, (payload) => ({
+            ...payload,
+            items: payload.items.map((item) => item.id === current.id
+              ? { ...item, state: "pending", error: "", attempts: item.attempts + 1, updatedAt: Date.now() }
+              : item),
+          }));
+          const json = await apiJson(current.request.url, {
+            method: current.request.method || "PUT",
+            body: current.request.body || {},
+            headers: { "Idempotency-Key": current.id },
+          });
+          await mutateCourierOutbox(context, (payload) => ({
+            ...payload,
+            items: payload.items.filter((item) => item.id !== current.id),
+          }));
+          processedAny = true;
+          if (json?.data && isCurrentCourierOutboxContext(context)) {
+            confirmedOrders.push({ ...json.data });
+            handleOrderEvent(overlayCourierShadowOrder(json.data));
+          }
+        } catch (err) {
+          const failure = classifyCourierMutationFailure(err);
+          const errorRecord = courierMutationErrorRecord(err, failure);
+          if (failure.type === "retryable" || failure.type === "auth") {
+            await mutateCourierOutbox(context, (payload) => ({
+              ...payload,
+              items: payload.items.map((item) => item.id === current.id
+                ? {
+                    ...item,
+                    state: "pending",
+                    error: errorRecord.error.message,
+                    lastError: errorRecord.error,
+                    nextAttemptAt: errorRecord.nextAttemptAt,
+                    updatedAt: Date.now(),
+                  }
+                : item),
+            })).catch((persistErr) => console.error("Courier outbox update failed:", persistErr));
+            if (isCurrentCourierOutboxContext(context)) {
+              if (failure.code === "NETWORK_ERROR") setCourierOnlineState(false);
+              courierOfflineState.syncError = failure.type === "auth"
+                ? "Нужно войти снова"
+                : "Не удалось отправить";
+              refreshCourierConnectionBanner();
+            }
+            return { confirmedOrders };
+          }
+          await mutateCourierOutbox(context, (payload) => ({
+            ...payload,
+            items: payload.items.map((item) => {
+              if (item.id === current.id) {
+                return {
+                  ...item,
+                  state: "failed",
+                  error: errorRecord.error.message,
+                  lastError: errorRecord.error,
+                  nextAttemptAt: null,
+                  updatedAt: Date.now(),
+                };
+              }
+              if (item.sequence > current.sequence && Number(item.orderId) === Number(current.orderId)
+                && item.state === "pending") {
+                return { ...item, state: "blocked", blockedBy: current.id, updatedAt: Date.now() };
+              }
+              return item;
+            }),
+          })).catch((persistErr) => console.error("Courier outbox update failed:", persistErr));
+          if (isCurrentCourierOutboxContext(context)) {
+            courierOfflineState.syncError = failure.type === "conflict"
+              ? "Конфликт изменений"
+              : "Есть неотправленные изменения";
+            refreshCourierConnectionBanner();
+          }
         }
-        persistCourierOfflineState();
-      } catch (err) {
+      }
+    } finally {
+      if (courierOutboxProcessing.get(context.namespace) === processingPromise) {
+        courierOutboxProcessing.delete(context.namespace);
+      }
+      resolveProcessing({ confirmedOrders });
+      if (isCurrentCourierOutboxContext(context)) {
         courierOfflineState.syncing = false;
-        if (current) {
-          current.state = "pending";
-        }
-        if (isLikelyNetworkError(err)) {
-          setCourierOnlineState(false);
-          persistCourierOfflineState();
+        courierOfflineState.processingNamespace = "";
+        refreshCourierOrderQueueButtons(courierOfflineState.queue.map((item) => item?.orderId));
+        if (processedAny && courierOfflineState.online
+          && !courierOfflineState.syncError && !courierOfflineState.reconciling) {
+          showCourierTransientBanner("online", "Связь восстановлена");
+        } else {
           refreshCourierConnectionBanner();
-          return;
         }
-        if (current) {
-          current.state = "error";
-          current.error = String(err?.message || "API_ERROR");
-        }
-        courierOfflineState.syncError = "РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ";
-        persistCourierOfflineState();
-        refreshCourierConnectionBanner();
-        return;
       }
     }
-
-    courierOfflineState.syncing = false;
-    persistCourierOfflineState();
-    if (processedAny && courierOfflineState.online) {
-      showCourierTransientBanner("online", "РџРѕРґРєР»СЋС‡РµРЅРёРµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРѕ");
-    } else {
-      refreshCourierConnectionBanner();
-    }
+    return { confirmedOrders };
   }
 
   function markCourierOfflineFromError(err) {
@@ -2694,7 +3333,7 @@
             type: "order",
             mode: normalizeTabMode(row.mode),
             orderId: Number.isFinite(Number(row.orderId)) && Number(row.orderId) > 0 ? Number(row.orderId) : null,
-            title: String(row.title || "").trim() || "Р—Р°РєР°Р·",
+            title: String(row.title || "").trim() || "Заказ",
             order: row.order && typeof row.order === "object" ? row.order : null,
             checkoutSession: row.checkoutSession && typeof row.checkoutSession === "object" ? row.checkoutSession : null,
           };
@@ -2703,7 +3342,7 @@
           key,
           type: "client",
           clientId: Number.isFinite(Number(row.clientId)) && Number(row.clientId) > 0 ? Number(row.clientId) : null,
-          title: String(row.title || "").trim() || "РљР»РёРµРЅС‚",
+          title: String(row.title || "").trim() || "Клиент",
           fallbackName: String(row.fallbackName || "").trim(),
           fallbackPhone: String(row.fallbackPhone || "").trim(),
           activeContentTab: String(row.activeContentTab || "addresses"),
@@ -2846,6 +3485,7 @@
     if (!cache || typeof cache !== "object") return false;
     state.statuses = [];
     state.activeStatusId = cache.activeStatusId != null ? cache.activeStatusId : state.activeStatusId;
+    state.storeTimezone = String(cache.storeTimezone || state.storeTimezone || "+0");
     state.orders = [];
     state.activeOrderId = null;
     state.lastEventId = null;
@@ -2996,7 +3636,7 @@
           : null;
         return {
           key: String(entry?.key || "").trim() || null,
-          title: String(entry?.title || entry?.name || "РЎРєРёРґРєР°").trim() || "РЎРєРёРґРєР°",
+          title: String(entry?.title || entry?.name || "Скидка").trim() || "Скидка",
           amount: roundMoney(Number(entry?.discount_amount ?? entry?.amount ?? 0)),
           sourceKind,
           promoCode,
@@ -3027,7 +3667,7 @@
         if (!(amount > 0)) return;
         const normalized = {
           key: String(entry?.key || "").trim() || null,
-          title: String(entry?.title || "РЎРєРёРґРєР°").trim() || "РЎРєРёРґРєР°",
+          title: String(entry?.title || "Скидка").trim() || "Скидка",
           amount,
           sourceKind: normalizeOrderDiscountBreakdownSourceKind(entry),
           promoCode: String(entry?.promoCode || entry?.promo_code || "").trim().toUpperCase() || null,
@@ -3102,9 +3742,9 @@
     return {
       totalDiscount: roundMoney(comboDiscount + productDiscount + autoAddDiscount),
       breakdown: [
-        { key: "combo_discount", title: "РљРѕРјР±Рѕ", amount: comboDiscount },
-        { key: "product_discount", title: "РўРѕРІР°СЂРЅС‹Рµ СЃРєРёРґРєРё", amount: productDiscount },
-        { key: "auto_add_discount", title: "РђРІС‚РѕРґРѕР±Р°РІР»РµРЅРёРµ", amount: autoAddDiscount },
+        { key: "combo_discount", title: "Комбо", amount: comboDiscount },
+        { key: "product_discount", title: "Товарные скидки", amount: productDiscount },
+        { key: "auto_add_discount", title: "Автодобавление", amount: autoAddDiscount },
       ].filter((entry) => Number(entry.amount || 0) > 0),
     };
   }
@@ -3119,7 +3759,7 @@
   }
 
   function formatOrderDiscountBreakdownTitle(entry) {
-    const title = String(entry?.title || "РЎРєРёРґРєР°").trim() || "РЎРєРёРґРєР°";
+    const title = String(entry?.title || "Скидка").trim() || "Скидка";
     const promoCode = String(entry?.promoCode || "").trim();
     if (!promoCode) return title;
     return `${title} (${promoCode})`;
@@ -3169,10 +3809,10 @@
     const subtotalBeforeDiscount = roundMoney(itemsPayableAfterAllDiscounts + totalDiscount);
 
     let breakdown = [
-      { title: "РљРѕРјР±Рѕ", amount: comboDiscount },
-      { title: "РўРѕРІР°СЂРЅС‹Рµ СЃРєРёРґРєРё", amount: productDiscount },
-      { title: "РђРІС‚РѕРґРѕР±Р°РІР»РµРЅРёРµ", amount: autoAddDiscount },
-      { title: "РљР»РёРµРЅС‚СЃРєР°СЏ СЃРєРёРґРєР°", amount: customerOrderDiscount },
+      { title: "Комбо", amount: comboDiscount },
+      { title: "Товарные скидки", amount: productDiscount },
+      { title: "Автодобавление", amount: autoAddDiscount },
+      { title: "Клиентская скидка", amount: customerOrderDiscount },
     ].filter((entry) => Number(entry.amount || 0) > 0);
 
     const breakdownTotal = roundMoney(
@@ -3202,14 +3842,14 @@
     const rows = Array.isArray(summary.breakdown) ? summary.breakdown : [];
     rows.forEach((entry) => {
       html += `<div class="order-summary-discount-breakdown-row">`;
-      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(entry.title || "РЎРєРёРґРєР°")}</span>`;
+      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(entry.title || "Скидка")}</span>`;
       html += `<span class="order-summary-discount-breakdown-value">-${money(entry.amount || 0)}</span>`;
       html += `</div>`;
     });
 
     const titles = Array.isArray(summary.orderDiscountTitles) ? summary.orderDiscountTitles : [];
     if (titles.length > 0) {
-      html += `<div class="order-summary-discount-breakdown-note">РЎРєРёРґРєР° РєР»РёРµРЅС‚Р°: ${escapeHtml(titles.join(", "))}</div>`;
+      html += `<div class="order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(titles.join(", "))}</div>`;
     }
 
     return html;
@@ -3228,7 +3868,7 @@
 
     const titles = Array.isArray(summary.orderDiscountTitles) ? summary.orderDiscountTitles : [];
     if (titles.length > 0) {
-      html += `<div class="order-summary-discount-breakdown-note">РЎРєРёРґРєР° РєР»РёРµРЅС‚Р°: ${escapeHtml(titles.join(", "))}</div>`;
+      html += `<div class="order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(titles.join(", "))}</div>`;
     }
 
     return html;
@@ -3281,11 +3921,11 @@
     });
   }
 
-  /** РџРѕР·РёС†РёРё В«РџСЂРёР±РѕСЂС‹В» Рё РїСЂРѕС‡РёРµ auto_add — РІ РєРѕРЅРµС† СЃРїРёСЃРєР° (РїРѕ С„Р»Р°РіСѓ РёР»Рё РїРѕ РЅР°Р·РІР°РЅРёСЋ). */
+  /** Позиции «Приборы» и прочие auto_add — в конец списка (по флагу или по названию). */
   function isAutoAddItem(item) {
     if (Number(item?.auto_add || 0) === 1) return true;
     const name = String(item?.product_name || item?.name || '').trim().toLowerCase();
-    return name === 'РїСЂРёР±РѕСЂС‹';
+    return name === 'приборы';
   }
 
   function itemsToHtml(items) {
@@ -3327,22 +3967,22 @@
       if (!raw) return "";
       const key = raw.toLowerCase();
       const dict = {
-        "С€С‚СѓРє": "С€С‚",
-        "С€С‚СѓРєР°": "С€С‚",
-        "С€С‚": "С€С‚",
-        "РіСЂР°РјРј": "Рі",
-        "РіСЂР°РјРјР°": "Рі",
-        "РіСЂ": "Рі",
-        "Рі": "Рі",
-        "РєРёР»РѕРіСЂР°РјРј": "РєРі",
-        "РєРёР»РѕРіСЂР°РјРјР°": "РєРі",
-        "РєРі": "РєРі",
-        "РјРёР»Р»РёР»РёС‚СЂ": "РјР»",
-        "РјРёР»Р»РёР»РёС‚СЂР°": "РјР»",
-        "РјР»": "РјР»",
-        "Р»РёС‚СЂ": "Р»",
-        "Р»РёС‚СЂР°": "Р»",
-        "Р»": "Р»",
+        "штук": "шт",
+        "штука": "шт",
+        "шт": "шт",
+        "грамм": "г",
+        "грамма": "г",
+        "гр": "г",
+        "г": "г",
+        "килограмм": "кг",
+        "килограмма": "кг",
+        "кг": "кг",
+        "миллилитр": "мл",
+        "миллилитра": "мл",
+        "мл": "мл",
+        "литр": "л",
+        "литра": "л",
+        "л": "л",
       };
       const safeDict = {
         "\u0448\u0442\u0443\u043a": "\u0448\u0442",
@@ -3522,7 +4162,7 @@
         }
       }
       const primaryVariantLine = variantLines.length ? variantLines[0] : "";
-      const giftSuffix = isGiftRewardOrderItem(it) ? " (РџРѕРґР°СЂРѕРє)" : "";
+      const giftSuffix = isGiftRewardOrderItem(it) ? " (Подарок)" : "";
       const titleText = ([primaryVariantLine, nameRaw].filter(Boolean).join(" ").trim() || nameRaw) + giftSuffix;
       const titleHtml = `${qty} x ${escapeHtml(titleText)}`;
       const photoHtml = renderThumbHtml(it?.photos, nameRaw);
@@ -3602,7 +4242,7 @@
     infoEls.itemsList.forEach((container) => {
       if (!container) return;
       
-      // РћР±СЂР°Р±РѕС‚С‡РёРєРё РґР»СЏ РєР°Р¶РґРѕРіРѕ С‚РѕРІР°СЂР° (РїСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ РµС‰Рµ РЅРµ РёРЅРёС†РёР°Р»РёР·РёСЂРѕРІР°РЅ)
+      // Обработчики для каждого товара (проверяем, что еще не инициализирован)
       container.querySelectorAll('[data-item-photos]:not([data-photos-initialized])').forEach((photoContainer) => {
         const uniqueId = photoContainer.getAttribute('data-item-photos');
         const mainImg = photoContainer.querySelector('.order-item-photo-img');
@@ -3614,10 +4254,10 @@
         
         if (!mainImg) return;
         
-        // РџРѕРјРµС‡Р°РµРј РєР°Рє РёРЅРёС†РёР°Р»РёР·РёСЂРѕРІР°РЅРЅС‹Р№
+        // Помечаем как инициализированный
         photoContainer.setAttribute('data-photos-initialized', 'true');
         
-        // РџРѕР»СѓС‡Р°РµРј РІСЃРµ С„РѕС‚Рѕ РёР· РјРёРЅРёР°С‚СЋСЂ
+        // Получаем все фото из миниатюр
         const thumbs = thumbsContainer ? Array.from(thumbsContainer.querySelectorAll('.order-item-photo-thumb')) : [];
         const photos = thumbs.map(thumb => {
           const img = thumb.querySelector('img');
@@ -3634,12 +4274,12 @@
           mainImg.src = photos[idx];
           mainImg.setAttribute('data-photo-idx', String(idx));
           
-          // РћР±РЅРѕРІР»СЏРµРј Р°РєС‚РёРІРЅСѓСЋ РјРёРЅРёР°С‚СЋСЂСѓ
+          // Обновляем активную миниатюру
           thumbs.forEach((thumb, i) => {
             thumb.classList.toggle('is-active', i === idx);
           });
           
-          // РџСЂРѕРєСЂСѓС‡РёРІР°РµРј РјРёРЅРёР°С‚СЋСЂС‹ Рє Р°РєС‚РёРІРЅРѕР№
+          // Прокручиваем миниатюры к активной
           if (thumbsContainer && thumbs[idx]) {
             const thumb = thumbs[idx];
             const containerRect = thumbsContainer.getBoundingClientRect();
@@ -3653,7 +4293,7 @@
           }
         }
         
-        // РќР°РІРёРіР°С†РёСЏ СЃС‚СЂРµР»РєР°РјРё РЅР° РіР»Р°РІРЅРѕРј С„РѕС‚Рѕ
+        // Навигация стрелками на главном фото
         if (prevBtn) {
           prevBtn.addEventListener('click', () => {
             setActivePhoto((currentIdx - 1 + photos.length) % photos.length);
@@ -3666,14 +4306,14 @@
           });
         }
         
-        // РљР»РёРє РЅР° РјРёРЅРёР°С‚СЋСЂСѓ
+        // Клик на миниатюру
         thumbs.forEach((thumb, idx) => {
           thumb.addEventListener('click', () => {
             setActivePhoto(idx);
           });
         });
         
-        // Р›РёСЃС‚Р°РЅРёРµ РјРёРЅРёР°С‚СЋСЂ СЃС‚СЂРµР»РєР°РјРё
+        // Листание миниатюр стрелками
         if (thumbsPrevBtn && thumbsContainer) {
           thumbsPrevBtn.addEventListener('click', () => {
             thumbsContainer.scrollBy({ left: -80, behavior: 'smooth' });
@@ -3717,8 +4357,8 @@
   function getOrderRefundStateTitle(order) {
     if (sharedOrderPayment?.getRefundStateTitle) return sharedOrderPayment.getRefundStateTitle(order);
     const state = getOrderRefundState(order);
-    if (state === "full") return "Р’РѕР·РІСЂР°С‰РµРЅРѕ";
-    if (state === "partial") return "Р§Р°СЃС‚РёС‡РЅС‹Р№ РІРѕР·РІСЂР°С‚";
+    if (state === "full") return "Возвращено";
+    if (state === "partial") return "Частичный возврат";
     return "";
   }
 
@@ -3790,7 +4430,7 @@
   }
 
   function setTextAll(list, value) {
-    const normalizedValue = decodeCp1251Mojibake(value);
+    const normalizedValue = String(value ?? "");
     list.forEach((el) => {
       if (!el) return;
       el.textContent = normalizedValue;
@@ -3917,13 +4557,35 @@
     return fromTabs?.order || null;
   }
 
+  function getActiveOrderCapabilities() {
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    const overrides = activeTab?.orderPassportContext?.capabilities;
+    if (!overrides || typeof overrides !== "object") return workspaceCapabilities;
+    return {
+      payment: overrides.payment == null ? workspaceCapabilities.payment : overrides.payment !== false,
+      status: overrides.status == null ? workspaceCapabilities.status : overrides.status !== false,
+      edit: overrides.edit == null ? workspaceCapabilities.edit : overrides.edit !== false,
+      print: overrides.print == null ? workspaceCapabilities.print : overrides.print !== false,
+    };
+  }
+
+  function syncOrderCapabilities() {
+    const capabilities = getActiveOrderCapabilities();
+    orderInfoPaymentButtons.forEach((node) => node.classList.toggle("hidden", !capabilities.payment));
+    $$('[data-action="order-status-next"], [data-action="order-status-menu-toggle"]').forEach((node) => node.classList.toggle("hidden", !capabilities.status));
+    $$('[data-action="order-edit"]').forEach((node) => node.classList.toggle("hidden", !capabilities.edit));
+    $$('[data-action="order-print"], [data-action="order-print-item-label"]').forEach((node) => node.classList.toggle("hidden", !capabilities.print));
+    return capabilities;
+  }
+
   function syncOrderPaymentFooter(order) {
+    const capabilities = syncOrderCapabilities();
     if (!orderInfoPaymentButtons.length) return;
     const hasOrder = Number(order?.id || 0) > 0;
     const label = getOrderPaymentActionLabel(order);
     orderInfoPaymentButtons.forEach((button) => {
       if (!button) return;
-      button.disabled = !hasOrder || isOrderFullyRefunded(order);
+      button.disabled = !capabilities.payment || !hasOrder || isOrderFullyRefunded(order);
       const labelEl = button.querySelector("span");
       if (labelEl) labelEl.textContent = label;
       else button.textContent = label;
@@ -3967,6 +4629,26 @@
     return state.orders.find((row) => Number(row?.id || 0) === Number(order.id || 0)) || order;
   }
 
+  async function queueCourierMutationOrRestore(mutation, previousOrder) {
+    try {
+      return await queueCourierMutation(mutation);
+    } catch (err) {
+      if (previousOrder) applyLocalCourierOrderSnapshot(previousOrder);
+      syncCourierShadowOrdersFromQueue();
+      applyCourierShadowOrdersToState();
+      showCourierTransientBanner("error", "Изменение не сохранено", { duration: 3200 });
+      throw err;
+    }
+  }
+
+  function throwIfCourierMutationFailed(mutationId) {
+    const item = courierOfflineState.queue.find((entry) => entry?.id === mutationId) || null;
+    if (!item || (item.state !== "failed" && item.state !== "blocked")) return;
+    const error = new Error(item.error || "COURIER_MUTATION_FAILED");
+    error.code = item.lastError?.code || "COURIER_MUTATION_FAILED";
+    throw error;
+  }
+
   let mobilePaymentModalOrigin = null;
 
   function mountMobilePaymentPage() {
@@ -3987,27 +4669,110 @@
     return `orders:list:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${dateKey}`;
   }
 
+  function ordersPersistentScope() {
+    if (!window.AdminPersistentCache?.scope) return null;
+    return window.AdminPersistentCache.scope({
+      domain: `orders:list:${ordersCacheScope}`,
+      version: 1,
+    });
+  }
+
+  function ordersPersistentEntryKey() {
+    if (!isCourierWorkspace) return "last-workspace";
+    return state.date.start && state.date.end
+      ? `${toDateKey(state.date.start)}_${toDateKey(state.date.end)}`
+      : "default";
+  }
+
+  function currentOrdersQuery() {
+    return {
+      startDate: state.date.start ? toDateKey(state.date.start) : null,
+      endDate: state.date.end ? toDateKey(state.date.end) : null,
+    };
+  }
+
+  function currentOrdersQueryKey() {
+    const query = currentOrdersQuery();
+    return `${query.startDate || ""}:${query.endDate || ""}`;
+  }
+
+  function isOrdersSnapshotQueryCompatible(snapshot) {
+    if (isCourierWorkspace) return true;
+    const query = snapshot?.query;
+    if (!query || typeof query !== "object") return false;
+    const current = currentOrdersQuery();
+    return String(query.startDate || "") === String(current.startDate || "")
+      && String(query.endDate || "") === String(current.endDate || "");
+  }
+
   async function readPersistentOrdersCache() {
     try {
-      const data = await window.AdminPersistentCache?.read(ordersPersistentCacheKey());
-      if (!data || Date.now() - Number(data.ts || 0) > ORDERS_PERSISTENT_CACHE_MAX_AGE_MS) return null;
-      return data;
+      const cache = ordersPersistentScope();
+      if (cache?.complete) {
+        const entry = await cache.getEntry(ordersPersistentEntryKey(), { allowStale: true });
+        if (entry?.data && isOrdersSnapshotQueryCompatible(entry.data)) {
+          return { ...entry.data, stale: entry.stale === true };
+        }
+      }
+      if (!isCourierWorkspace) return null;
+      const legacyData = await window.AdminPersistentCache?.read(ordersPersistentCacheKey());
+      return legacyData && Number(legacyData.ts || 0) > 0
+        ? { ...legacyData, stale: Date.now() - Number(legacyData.ts) > ORDERS_PERSISTENT_CACHE_MAX_AGE_MS }
+        : null;
     } catch (err) {
       console.error("Orders IndexedDB read failed:", err);
       return null;
     }
   }
 
+  function restorePersistentOrdersSnapshot(snapshot) {
+    if (!Array.isArray(snapshot?.orders)) return false;
+    state.orders = snapshot.orders.filter(shouldKeepOrderInState);
+    if (Array.isArray(snapshot.statuses)) {
+      state.statuses = snapshot.statuses.map((status) => ({ ...status }));
+    }
+    state.ordersPagination = {
+      hasMore: snapshot.pagination?.hasMore === true,
+      nextOffset: Number(snapshot.pagination?.nextOffset || state.orders.length),
+      loading: false,
+    };
+    state.lastEventId = Number(snapshot.syncCursor || 0) || null;
+    ordersPersistentCacheRestored = true;
+    courierCachedSnapshotVisible = isCourierWorkspace;
+    ordersCachedSnapshotVisible = !isCourierWorkspace;
+    rebuildOrdersStageIndex();
+    return true;
+  }
+
   function persistOrdersListCache() {
-    if (!window.AdminPersistentCache || !state.orders.length) return;
+    if (!window.AdminPersistentCache) return Promise.resolve(false);
     const data = {
       ts: Date.now(),
       orders: state.orders.map((order) => ({ ...order })),
       pagination: { hasMore: state.ordersPagination.hasMore, nextOffset: state.ordersPagination.nextOffset },
       syncCursor: Number(state.lastEventId || 0),
+      query: currentOrdersQuery(),
+      statuses: Array.isArray(state.statuses) ? state.statuses.map((status) => ({ ...status })) : [],
+      updatedAt: Date.now(),
     };
-    window.AdminPersistentCache.write(ordersPersistentCacheKey(), data).catch((err) => {
+    const cache = ordersPersistentScope();
+    const ttlMs = isCourierWorkspace
+      ? ORDERS_PERSISTENT_CACHE_MAX_AGE_MS
+      : ORDERS_WORKSPACE_CACHE_MAX_AGE_MS;
+    const writePromise = cache?.complete
+      ? cache.set(ordersPersistentEntryKey(), data, { ttlMs })
+      : window.AdminPersistentCache.write(ordersPersistentCacheKey(), data);
+    return writePromise.then(() => {
+      if (isCourierWorkspace) {
+        courierCachedSnapshotVisible = true;
+        refreshCourierConnectionBanner();
+      } else {
+        ordersCachedSnapshotVisible = true;
+      }
+      return true;
+    }).catch((err) => {
       console.error("Orders IndexedDB write failed:", err);
+      return false;
     });
   }
 
@@ -4021,16 +4786,39 @@
   }
 
   async function openOrderPaymentDialog(order) {
+    if (!getActiveOrderCapabilities().payment) return;
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
     if (isCourierWorkspace && !courierOfflineState.online && isPaidOrder(order)) {
-      showCourierTransientBanner("error", "Р’РѕР·РІСЂР°С‚ РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ РїСЂРё РёРЅС‚РµСЂРЅРµС‚Рµ.", { duration: 3200 });
+      showCourierTransientBanner("error", "Для возврата нужен интернет", { duration: 3200 });
       return;
     }
 
     if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
       if (isPaidOrder(order)) return;
       try {
+        if (isCourierWorkspace) {
+          const payload = { is_paid: 1 };
+          const optimisticOrder = buildOptimisticOrderPaymentSnapshot(order, payload);
+          if (!optimisticOrder) throw new Error("PAYMENT_PAYLOAD_INVALID");
+          const queuedMutation = await queueCourierMutationOrRestore({
+            type: "payment",
+            orderId,
+            request: {
+              url: `/api/admin/orders/${orderId}/paid`,
+              method: "PUT",
+              body: payload,
+            },
+            optimisticOrder,
+          }, order);
+          applyLocalCourierOrderSnapshot(optimisticOrder);
+          if (courierOfflineState.online) {
+            await reconcileCourierAfterReconnect({ reason: "payment-mutation" });
+            throwIfCourierMutationFailed(queuedMutation?.id);
+          }
+          refreshCourierConnectionBanner();
+          return;
+        }
         const json = await apiJson(`/api/admin/orders/${orderId}/paid`, {
           method: "PUT",
           body: { is_paid: 1 },
@@ -4098,54 +4886,30 @@
         if (!optimisticOrder) {
           throw new Error("PAYMENT_PAYLOAD_INVALID");
         }
-        const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
         const queueRequest = {
           url: `/api/admin/orders/${orderId}/paid`,
           method: "PUT",
           body: payload,
         };
 
-        if (!courierOfflineState.online) {
-          queueCourierMutation({
-            type: "payment",
-            orderId,
-            request: queueRequest,
-            optimisticOrder: appliedOrder || optimisticOrder,
-          });
-          refreshCourierConnectionBanner();
-          return appliedOrder || optimisticOrder;
+        const queuedMutation = await queueCourierMutationOrRestore({
+          type: "payment",
+          orderId,
+          request: queueRequest,
+          optimisticOrder,
+        }, liveOrder);
+        const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
+        if (courierOfflineState.online) {
+          await reconcileCourierAfterReconnect({ reason: "payment-mutation" });
+          throwIfCourierMutationFailed(queuedMutation?.id);
         }
-
-        try {
-          const json = await apiJson(queueRequest.url, {
-            method: queueRequest.method,
-            body: queueRequest.body,
-          });
-          if (json?.data) handleOrderEvent(json.data);
-          return json?.data || appliedOrder || optimisticOrder;
-        } catch (err) {
-          if (markCourierOfflineFromError(err)) {
-            queueCourierMutation({
-              type: "payment",
-              orderId,
-              request: queueRequest,
-              optimisticOrder: appliedOrder || optimisticOrder,
-            });
-            refreshCourierConnectionBanner();
-            return appliedOrder || optimisticOrder;
-          }
-          try {
-            await loadAndRenderOrders(true);
-          } catch (syncErr) {
-            console.error(syncErr);
-          }
-          throw err;
-        }
+        refreshCourierConnectionBanner();
+        return state.orders.find((row) => Number(row?.id || 0) === orderId) || appliedOrder || optimisticOrder;
       },
       onSuccess() {},
       onError(err) {
         if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
-          showCourierTransientBanner("error", "РќРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°. РЎРїРѕСЃРѕР±С‹ РѕРїР»Р°С‚С‹ РµС‰С‘ РЅРµ СЃРѕС…СЂР°РЅРµРЅС‹.", { duration: 3200 });
+          showCourierTransientBanner("error", "Способы оплаты недоступны офлайн", { duration: 3200 });
           return;
         }
         console.error("orders payment modal error:", err);
@@ -4153,76 +4917,6 @@
       ...paymentPageOptions,
     });
 
-    let paymentPayload = null;
-    try {
-      paymentPayload = await sharedOrderPayment.open({
-        order,
-        apiJson,
-        money,
-        formatDateTimeNumeric,
-        getOrderId: (row) => Number(row?.id || 0),
-        getOrderNumber,
-        isPaidOrder,
-        collectPayloadOnly: true,
-        cacheOnlyPaymentMethods: useOfflineCollection,
-        onError(err) {
-          if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
-            showCourierTransientBanner("error", "РќРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°. РЎРїРѕСЃРѕР±С‹ РѕРїР»Р°С‚С‹ РµС‰С‘ РЅРµ СЃРѕС…СЂР°РЅРµРЅС‹.", { duration: 3200 });
-            return;
-          }
-          console.error("orders payment modal error:", err);
-        },
-      });
-    } catch (err) {
-      console.error("orders payment modal error:", err);
-      return;
-    }
-    if (!paymentPayload) return;
-
-    const optimisticOrder = buildOptimisticOrderPaymentSnapshot(order, paymentPayload);
-    if (!optimisticOrder) return;
-    const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
-    const queueRequest = {
-      url: `/api/admin/orders/${orderId}/paid`,
-      method: "PUT",
-      body: paymentPayload,
-    };
-
-    if (!courierOfflineState.online) {
-      queueCourierMutation({
-        type: "payment",
-        orderId,
-        request: queueRequest,
-        optimisticOrder: appliedOrder || optimisticOrder,
-      });
-      refreshCourierConnectionBanner();
-      return;
-    }
-
-    try {
-      const json = await apiJson(queueRequest.url, {
-        method: queueRequest.method,
-        body: queueRequest.body,
-      });
-      if (json?.data) handleOrderEvent(json.data);
-    } catch (err) {
-      if (markCourierOfflineFromError(err)) {
-        queueCourierMutation({
-          type: "payment",
-          orderId,
-          request: queueRequest,
-          optimisticOrder: appliedOrder || optimisticOrder,
-        });
-        refreshCourierConnectionBanner();
-        return;
-      }
-      try {
-        await loadAndRenderOrders(true);
-      } catch (syncErr) {
-        console.error(syncErr);
-      }
-      console.error("orders payment update error:", err);
-    }
   }
 
   function setStatusControlsDisabled(disabled) {
@@ -4283,6 +4977,7 @@
   }
 
   async function updateOrderStatus(orderId, statusId) {
+    if (!getActiveOrderCapabilities().status) return;
     const id = Number(orderId || 0);
     const nextStatusId = Number(statusId || 0);
     if (!(id > 0) || !(nextStatusId > 0)) return;
@@ -4295,64 +4990,51 @@
     const optimisticOrder = buildOptimisticOrderStatusSnapshot(prevOrder, nextStatusId);
     const targetStatusMeta = getStatusMetaById(nextStatusId) || null;
     if (isForbiddenStatusTransition(prevStatusMeta, targetStatusMeta)) return;
-    let optimisticApplied = false;
-    let appliedOrder = null;
-
-    if (optimisticOrder && prevStatusId !== nextStatusId) {
-      appliedOrder = handleOrderEvent(optimisticOrder, { localOnly: true }) || optimisticOrder;
-      setStatusControlsDisabled(true);
-      optimisticApplied = true;
-    }
-
     const request = {
       url: `/api/admin/orders/${id}/status`,
       method: "PUT",
       body: { status_id: nextStatusId },
     };
 
-    if (isCourierWorkspace && optimisticApplied && !courierOfflineState.online) {
-      queueCourierMutation({
+    if (isCourierWorkspace) {
+      if (!optimisticOrder || prevStatusId === nextStatusId) return;
+      handleOrderEvent(optimisticOrder, { localOnly: true, persistList: false });
+      const queuedMutation = await queueCourierMutationOrRestore({
         type: "status",
         orderId: id,
         request,
-        optimisticOrder: appliedOrder || optimisticOrder,
-      });
+        optimisticOrder,
+      }, prevOrder);
+      await persistOrdersListCache();
+      if (courierOfflineState.online) {
+        await reconcileCourierAfterReconnect({ reason: "status-mutation" });
+        throwIfCourierMutationFailed(queuedMutation?.id);
+      }
       refreshCourierConnectionBanner();
       return;
     }
 
+    if (!optimisticOrder || prevStatusId === nextStatusId) return;
+    if (orderStatusSyncStates.get(id)?.mode === "syncing") return;
+    if (navigator.onLine === false) {
+      setOrderStatusSyncState(id, "error", "Нужен интернет", 2600);
+      return;
+    }
+    setOrderStatusSyncState(id, "syncing", "Сохраняем…");
+    handleOrderEvent(optimisticOrder, { localOnly: true });
     try {
-      await apiJson(request.url, {
+      const json = await apiJson(request.url, {
         method: request.method,
         body: request.body,
       });
-      if (!optimisticApplied) {
-        const freshOrder = await ensureFullOrderById(id);
-        if (freshOrder) {
-          handleOrderEvent(freshOrder, { localOnly: true, skipStageRefresh: true });
-        }
-      }
+      const confirmedOrder = json?.data && typeof json.data === "object"
+        ? { ...optimisticOrder, ...json.data }
+        : optimisticOrder;
+      handleOrderEvent(confirmedOrder);
+      setOrderStatusSyncState(id, "saved", "Сохранено", 1200);
     } catch (err) {
-      if (isCourierWorkspace && optimisticApplied && markCourierOfflineFromError(err)) {
-        queueCourierMutation({
-          type: "status",
-          orderId: id,
-          request,
-          optimisticOrder: appliedOrder || optimisticOrder,
-        });
-        refreshCourierConnectionBanner();
-        return;
-      }
-      if (optimisticApplied && prevOrder) {
-        handleOrderEvent(prevOrder, { localOnly: true });
-      }
-      try {
-        await loadStatuses();
-        renderStages();
-        await loadAndRenderOrders(true);
-      } catch (syncErr) {
-        console.error(syncErr);
-      }
+      if (prevOrder) handleOrderEvent(prevOrder, { localOnly: true });
+      setOrderStatusSyncState(id, "error", "Не сохранено", 2600);
       throw err;
     }
   }
@@ -4410,6 +5092,7 @@
     return {
       root,
       infoWrap: $("#clientInfoWrap", root),
+      benefitsFooter: $("[data-client-passport-footer]", root),
       photo: $("#clientPhoto", root),
       photoPlaceholder: $("#clientPhotoPlaceholder", root),
       infoName: $("#clientInfoName", root),
@@ -4433,7 +5116,7 @@
 
   function setSheetTitle(text) {
     if (!sheetTitleEl) return;
-    sheetTitleEl.textContent = String(text || "РРЅС„РѕСЂРјР°С†РёСЏ").trim() || "РРЅС„РѕСЂРјР°С†РёСЏ";
+    sheetTitleEl.textContent = String(text || "Информация").trim() || "Информация";
   }
 
   function shouldPreserveChatClientSurfaces() {
@@ -4448,44 +5131,36 @@
     if (shouldPreserveChatClientSurfaces()) return;
     clientSurfaces.forEach((dom) => {
       if (dom?.infoWrap) dom.infoWrap.classList.add("hidden");
+      if (dom?.benefitsFooter) dom.benefitsFooter.classList.add("hidden");
     });
-  }
-
-  function setOrdersClientBenefitsFooterVisible(isVisible) {
-    if (!ordersClientBenefitsFooter) return;
-    ordersClientBenefitsFooter.classList.toggle("hidden", !isVisible);
   }
 
   function showEmptyInfo() {
     if (sharedOrderInfoRenderers.length) {
       sharedOrderInfoRenderers.forEach((renderer) => renderer.showEmpty());
       hideClientSurfaces();
-      setOrdersClientBenefitsFooterVisible(false);
-      setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+      setSheetTitle("Информация");
       return;
     }
     setHiddenAll(infoEls.empty, false);
     setHiddenAll(infoEls.content, true);
     hideClientSurfaces();
-    setOrdersClientBenefitsFooterVisible(false);
     orderInfoFooters.forEach((footer) => footer.classList.add("hidden"));
-    setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+    setSheetTitle("Информация");
   }
 
   function showOrderInfo() {
     if (sharedOrderInfoRenderers.length) {
       sharedOrderInfoRenderers.forEach((renderer) => renderer.showOrder());
       hideClientSurfaces();
-      setOrdersClientBenefitsFooterVisible(false);
-      setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+      setSheetTitle("Информация");
       return;
     }
     setHiddenAll(infoEls.empty, true);
     setHiddenAll(infoEls.content, false);
     hideClientSurfaces();
-    setOrdersClientBenefitsFooterVisible(false);
     orderInfoFooters.forEach((footer) => footer.classList.remove("hidden"));
-    setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+    setSheetTitle("Информация");
   }
 
   function showClientInfo(surface = "desktop") {
@@ -4494,9 +5169,9 @@
     hideClientSurfaces();
     const targetDom = surface === "sheet" ? sheetClientDom : desktopClientDom;
     if (targetDom?.infoWrap) targetDom.infoWrap.classList.remove("hidden");
-    setOrdersClientBenefitsFooterVisible(surface === "desktop");
+    if (targetDom?.benefitsFooter) targetDom.benefitsFooter.classList.remove("hidden");
     orderInfoFooters.forEach((footer) => footer.classList.add("hidden"));
-    setSheetTitle(surface === "sheet" ? "РљР»РёРµРЅС‚" : "РРЅС„РѕСЂРјР°С†РёСЏ");
+    setSheetTitle(surface === "sheet" ? "Клиент" : "Информация");
   }
 
   function formatClientDate(value) {
@@ -4580,26 +5255,6 @@
   bindClientContentTabs(desktopClientDom);
   bindClientContentTabs(sheetClientDom);
 
-  if (ordersClientBenefitsOpenBtn) {
-    ordersClientBenefitsOpenBtn.addEventListener("click", (event) => {
-      event.preventDefault();
-      const activeClientTab = getActiveClientTab();
-      const clientId = Number(activeClientTab?.clientId || 0);
-      if (!(clientId > 0)) return;
-      void window.__clientsDashboardApi?.openBenefitsByClientId?.(clientId);
-    });
-  }
-
-  if (ordersClientBonusesOpenBtn) {
-    ordersClientBonusesOpenBtn.addEventListener("click", (event) => {
-      event.preventDefault();
-      const activeClientTab = getActiveClientTab();
-      const clientId = Number(activeClientTab?.clientId || 0);
-      if (!(clientId > 0)) return;
-      void window.__clientsDashboardApi?.openBonusesByClientId?.(clientId);
-    });
-  }
-
   function renderClientAddressesHtml(addresses) {
     const list = Array.isArray(addresses) ? addresses : [];
     if (!list.length) return '<div class="muted" style="padding:4px 0;">\u0410\u0434\u0440\u0435\u0441\u043e\u0432 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.</div>';
@@ -4632,11 +5287,11 @@
 
   function renderClientOrdersHistoryHtml(clientOrders) {
     const list = Array.isArray(clientOrders) ? clientOrders : [];
-    if (!list.length) return '<div class="muted" style="padding:4px 0;">Р—Р°РєР°Р·РѕРІ РїРѕРєР° РЅРµС‚.</div>';
+    if (!list.length) return '<div class="muted" style="padding:4px 0;">Заказов пока нет.</div>';
 
     return list.map((order) => {
       const orderId = Number(order?.id || 0);
-      const title = Number.isFinite(orderId) && orderId > 0 ? `Р—Р°РєР°Р· #${orderId}` : "Р—Р°РєР°Р·";
+      const title = Number.isFinite(orderId) && orderId > 0 ? `Заказ #${orderId}` : "Заказ";
       const statusTitle = String(order?.status_title || "").trim();
       const metaParts = [formatClientDateTime(order?.created_at)];
       if (statusTitle) metaParts.push(statusTitle);
@@ -4673,7 +5328,7 @@
         <div class="discount-row">
           <div class="discount-row-icon"><i class="fas fa-percentage"></i></div>
           <div class="discount-row-info">
-            <div class="discount-row-title">${escapeHtml(discount.title || "РЎРєРёРґРєР°")}</div>
+            <div class="discount-row-title">${escapeHtml(discount.title || "Скидка")}</div>
             <div class="discount-row-meta">${escapeHtml(linkTypeText)}</div>
           </div>
           <div class="discount-row-value">${escapeHtml(valueText)}</div>
@@ -4790,8 +5445,8 @@
     } catch (error) {
       console.error(error);
       tab.error = navigator.onLine === false
-        ? "РќРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°. РџРѕРєР°Р·С‹РІР°РµРј РґРѕСЃС‚СѓРїРЅС‹Рµ РѕС„Р»Р°Р№РЅ-РґР°РЅРЅС‹Рµ."
-        : "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РґР°РЅРЅС‹Рµ РєР»РёРµРЅС‚Р°";
+        ? "Нет интернета. Показываем доступные офлайн-данные."
+        : "Не удалось загрузить данные клиента";
       if (tabsState.activeKey === tab.key) {
         showClientInfo(activeSurface);
         renderClientTabState(tab, { error: tab.error }, activeClientDom);
@@ -4803,6 +5458,32 @@
 
   async function activateClientTab(tab, { openMobile = false, forceReload = false } = {}) {
     if (!tab || tab.type !== "client") return;
+    const clientsApi = window.__clientsDashboardApi;
+    if (clientsApi && typeof clientsApi.openClientPassport === "function" && Number(tab.clientId || 0) > 0) {
+      const activeSurface = openMobile && shouldUseClientSheet() ? "sheet" : "desktop";
+      showClientInfo(activeSurface);
+      await clientsApi.openClientPassport(tab.clientId, {
+        source: "orders",
+        nested: orderDetailsOpener?.getContext?.()?.source === "client",
+        title: tab.title || tab.fallbackName || "",
+        skipMobileSheet: !openMobile,
+        onBack: () => {
+          const current = tabsState.tabs.find((item) => item.key === tabsState.activeKey);
+          if (current && current.type === "order") setActiveOrderTab(current.key);
+        },
+        onOrderOpen: (orderId) => openOrderDetailsById(orderId, {
+          source: "client",
+          nested: true,
+          keepTabOnClose: true,
+          openMobile: true,
+          onBack: () => setActiveOrderTab(tab.key, { openMobile: true }),
+        }),
+      });
+      if (tabsState.activeKey !== tab.key) return;
+      showClientInfo(activeSurface);
+      if (openMobile && shouldUseClientSheet()) openSheet();
+      return;
+    }
     const activeSurface = openMobile && shouldUseClientSheet() ? "sheet" : "desktop";
     const activeClientDom = activeSurface === "sheet" ? sheetClientDom : desktopClientDom;
 
@@ -4835,15 +5516,15 @@
     syncOrderPaymentFooter(order);
     if (sharedOrderInfoRenderers.length) {
       hideClientSurfaces();
-      setOrdersClientBenefitsFooterVisible(false);
-      setSheetTitle("РРЅС„РѕСЂРјР°С†РёСЏ");
+      setSheetTitle("Информация");
       sharedOrderInfoRenderers.forEach((renderer) => renderer.setOrder(order));
+      syncOrderCapabilities();
       return;
     }
     if (!order) {
       showEmptyInfo();
-      setTextAll(infoEls.title, "Р—Р°РєР°Р· РЅРµ РІС‹Р±СЂР°РЅ");
-      setTextAll(infoEls.meta, "Р’С‹Р±РµСЂРёС‚Рµ Р·Р°РєР°Р· СЃР»РµРІР°.");
+      setTextAll(infoEls.title, "Заказ не выбран");
+      setTextAll(infoEls.meta, "Выберите заказ слева.");
       setHiddenAll(infoEls.meta, true);
       setTextAll(infoEls.status, "?");
       setTextAll(infoEls.clientName, "?");
@@ -4858,7 +5539,7 @@
       setTextAll(infoEls.total, "?");
       setTextAll(infoEls.deliveryType, "?");
       setTextAll(infoEls.deliveryDatetime, "?");
-      setTextAll(infoEls.deliveryQty, "0 С€С‚.");
+      setTextAll(infoEls.deliveryQty, "0 шт.");
       setTextAll(infoEls.deliveryInterval, "?");
       setTextAll(infoEls.deliveryAddressTitle, "Адрес доставки");
       setTextAll(infoEls.deliveryZone, "");
@@ -4884,10 +5565,9 @@
       return;
     }
 
-    writeCachedFullOrder(order);
     showOrderInfo();
 
-    setTextAll(infoEls.title, `Р—РђРљРђР— #${order.id}`);
+    setTextAll(infoEls.title, `ЗАКАЗ #${order.id}`);
     setTextAll(infoEls.meta, formatDateTimeNumeric(order.created_at) || "—");
     setHiddenAll(infoEls.meta, false);
     setTextAll(infoEls.status, order.status_title || "?");
@@ -4977,9 +5657,9 @@
     });
 
     const qty = totalQty(order.items || []);
-    setTextAll(infoEls.deliveryQty, `${qty} С€С‚.`);
+    setTextAll(infoEls.deliveryQty, `${qty} шт.`);
 
-    const methodTitle = order.method_title || (order.method_code === "pickup" ? "РЎР°РјРѕРІС‹РІРѕР·" : "Р”РѕСЃС‚Р°РІРєР°");
+    const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
     setTextAll(infoEls.deliveryType, methodTitle || "?");
     setTextAll(infoEls.deliveryDatetime, formatDateTime(order.created_at) || "?");
 
@@ -4997,7 +5677,7 @@
     const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent");
     setHiddenAll(infoEls.deliveryUrgent, !urgent);
 
-    // Р”Р»СЏ СЃР°РјРѕРІС‹РІРѕР·Р° РїРѕРєР°Р·С‹РІР°РµРј Р°РґСЂРµСЃ С‚РѕС‡РєРё, РґР»СЏ РґРѕСЃС‚Р°РІРєРё - Р°РґСЂРµСЃ РєР»РёРµРЅС‚Р°
+    // Для самовывоза показываем адрес точки, для доставки - адрес клиента
     let address = order.address;
     if (!address && order.pickup_store_address) {
       address = order.pickup_store_name
@@ -5021,8 +5701,9 @@
     setHiddenAll(infoEls.orderCommentBlock, isCourierWorkspace ? true : !orderComment);
 
     setHtmlAll(infoEls.itemsList, orderItemsToHtml(order.items || [], order));
+    syncOrderCapabilities();
     
-    // РРЅРёС†РёР°Р»РёР·РёСЂСѓРµРј Р»РёСЃС‚Р°РЅРёРµ С„РѕС‚Рѕ РїРѕСЃР»Рµ СЂРµРЅРґРµСЂРёРЅРіР°
+    // Инициализируем листание фото после рендеринга
     setTimeout(() => {
       initOrderItemPhotos();
     }, 0);
@@ -5113,7 +5794,7 @@
     btn.type = "button";
     btn.setAttribute("data-status-id", String(id));
 
-    const displayTitle = repairOrdersMojibake(title);
+    const displayTitle = String(title ?? "");
     btn.innerHTML = `
       <span class="stage-icon"><i class="fas ${escapeHtml(icon)}"></i></span>
       <span class="stage-text">
@@ -5391,11 +6072,11 @@
     if (state.date.start && state.date.end) {
       // Use scheduled_at if available, otherwise fall back to created_at
       const dateStr = order.scheduled_at || order.created_at;
-      // Р’СЂРµРјСЏ РІ Р±Р°Р·Рµ СѓР¶Рµ РІ timezone С„РёР»РёР°Р»Р°
+      // Время в базе уже в timezone филиала
       const d = new Date(String(dateStr).replace(' ', 'T'));
       if (Number.isNaN(d.getTime())) return false;
 
-      // РЎСЂР°РІРЅРёРІР°РµРј РґР°С‚С‹ РЅР°РїСЂСЏРјСѓСЋ
+      // Сравниваем даты напрямую
       const key = toDateKey(d);
       const startKey = toDateKey(state.date.start);
       const endKey = toDateKey(state.date.end);
@@ -5534,9 +6215,9 @@
     const timeIconHtml = sharedOrderPanel && typeof sharedOrderPanel.renderOrderTimeIcon === "function"
       ? sharedOrderPanel.renderOrderTimeIcon(order)
       : renderOrderTimeIcon(order);
-    const stageCycleBtnHtml = renderOrderStatusHoverCycleButton(order);
-    const addressCommentDisplay = repairOrdersMojibake(order.address_comment || order.comment || "Нет комментария");
-    const rawAddress = repairOrdersMojibake(order.address ||
+    const stageCycleBtnHtml = renderOrderStatusControl(order);
+    const addressCommentDisplay = String(order.address_comment || order.comment || "Нет комментария");
+    const rawAddress = String(order.address ||
       (order.pickup_store_address
         ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
         : "?"
@@ -5580,7 +6261,7 @@
         `
       );
 
-    const payment = repairOrdersMojibake(String(order.payment_title || "").trim());
+    const payment = String(order.payment_title || "").trim();
     const totalText = money(getOrderDisplayTotal(order));
     const paymentCode = (order.payment_code || "").toLowerCase();
     const isCash = paymentCode.includes("cash");
@@ -5621,7 +6302,7 @@
             class="order-id-select-hit"
             data-action="order-multi-select"
             data-order-id="${escapeHtml(order.id)}"
-            title="Р’С‹Р±СЂР°С‚СЊ Р·Р°РєР°Р·"
+            title="Выбрать заказ"
           >
             <input
               type="checkbox"
@@ -5631,7 +6312,7 @@
               tabindex="-1"
               ${multiSelected ? "checked" : ""}
             />
-            <div class="order-id-num">${escapeHtml(order.id)}</div>
+            <div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>
             <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
           </label>
         </div>
@@ -5684,7 +6365,7 @@
               tabindex="-1"
               ${multiSelected ? "checked" : ""}
             />
-            <div class="order-id-num">${escapeHtml(order.id)}</div>
+            <div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>
             <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
           </label>
         </div>
@@ -5720,6 +6401,7 @@
       row.innerHTML = sharedOrderPanel.buildOrderListRowInnerHtml({
         orderId,
         orderNumberText: String(order.id || ""),
+        orderIdNumHtml: `<div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>`,
         createdAtText: formatTime(order.created_at),
         showMultiSelect: true,
         multiSelected,
@@ -5741,7 +6423,7 @@
           class="order-id-select-hit"
           data-action="order-multi-select"
           data-order-id="${escapeHtml(order.id)}"
-          title="Р’С‹Р±СЂР°С‚СЊ Р·Р°РєР°Р·"
+          title="Выбрать заказ"
         >
           <input
             type="checkbox"
@@ -5751,7 +6433,7 @@
             tabindex="-1"
             ${multiSelected ? "checked" : ""}
           />
-          <div class="order-id-num">${escapeHtml(order.id)}</div>
+          <div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>
           <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
         </label>
       </div>
@@ -5796,7 +6478,20 @@
     normalizeSelectedOrderIds();
     const filtered = getOrdersForActiveStage();
     if (!filtered.length) {
-      if (elEmptyHint) elEmptyHint.classList.remove("hidden");
+      if (elEmptyHint) {
+        if (isCourierWorkspace && !courierNetworkConfirmed && !courierCachedSnapshotVisible) {
+          elEmptyHint.textContent = ordersInitialRestoreComplete && !courierOfflineState.online
+            ? "Нет сохранённых данных. Подключитесь к интернету для первой загрузки."
+            : "Загрузка заказов…";
+        } else if (!isCourierWorkspace && !ordersNetworkConfirmed && !ordersCachedSnapshotVisible) {
+          elEmptyHint.textContent = ordersInitialRestoreComplete && (ordersRefreshFailed || navigator.onLine === false)
+            ? "Нет сохранённых данных для этого периода."
+            : "Загрузка заказов…";
+        } else {
+          elEmptyHint.textContent = "Заказов нет";
+        }
+        elEmptyHint.classList.remove("hidden");
+      }
       if (!tabsState.tabs.length || !state.activeOrderId) {
         setInfo(null);
       }
@@ -5810,6 +6505,7 @@
       const row = buildOrderRow(o);
       elOrdersList.appendChild(row);
     });
+    void inspectOrdersSharedPassportCache(filtered);
 
     if (tabsState.tabs.length) {
       syncActiveOrderRowState();
@@ -5843,6 +6539,7 @@
 
     const row = buildOrderRow(order);
     elOrdersList.prepend(row);
+    void inspectOrdersSharedPassportCache([order]);
   }
 
   function clearSelection() {
@@ -5861,19 +6558,21 @@
   // -----------------------------
   // Data loading
   // -----------------------------
-  async function loadStatuses() {
+  async function loadStatuses({ context = null } = {}) {
     const qs = new URLSearchParams();
     if (state.date.start && state.date.end) {
       qs.set("start_date", toDateKey(state.date.start));
       qs.set("end_date", toDateKey(state.date.end));
     }
     const json = await apiJson(`/api/admin/orders/statuses?${qs.toString()}`);
+    if (context && !isCurrentCourierSyncContext(context)) return false;
     state.statuses = Array.isArray(json.data) ? json.data : [];
+    return true;
   }
 
   let ordersQueryGeneration = 0;
 
-  async function loadOrders({ resetPagination = true, append = false } = {}) {
+  async function loadOrders({ resetPagination = true, append = false, context = null } = {}) {
     const queryGeneration = resetPagination ? ++ordersQueryGeneration : ordersQueryGeneration;
     const keepRestoredPagination = resetPagination && ordersPersistentCacheRestored && state.orders.length > 0;
     if (resetPagination && !keepRestoredPagination) {
@@ -5889,7 +6588,8 @@
     qs.set("offset", String(resetPagination || !append ? 0 : state.ordersPagination.nextOffset));
 
     const json = await apiJson(`/api/admin/orders?${qs.toString()}`);
-    if (queryGeneration !== ordersQueryGeneration) return;
+    if (queryGeneration !== ordersQueryGeneration
+      || (context && !isCurrentCourierSyncContext(context))) return false;
     const rows = Array.isArray(json.data) ? json.data : [];
     if (resetPagination && (!ordersPersistentCacheRestored || !state.orders.length)) {
       state.orders = rows.filter(shouldKeepOrderInState);
@@ -5915,11 +6615,17 @@
     }
     applyCourierShadowOrdersToState();
     rebuildOrdersStageIndex();
+    if (!isCourierWorkspace) {
+      ordersNetworkConfirmed = true;
+      ordersRefreshFailed = false;
+      refreshCourierConnectionBanner();
+    }
     if (elOrdersLoadMore) {
       elOrdersLoadMore.classList.toggle("hidden", !state.ordersPagination.hasMore);
       elOrdersLoadMore.disabled = false;
     }
-    persistOrdersListCache();
+    void persistOrdersListCache();
+    return true;
   }
 
   async function loadMoreOrders() {
@@ -5948,13 +6654,14 @@
     });
   }
 
-  async function loadAndRenderOrders(keepSelection = false) {
+  async function loadAndRenderOrders(keepSelection = false, { context = null } = {}) {
     const prevActive = keepSelection ? state.activeOrderId : null;
     if (!keepSelection && !tabsState.tabs.length) {
       state.activeOrderId = null;
     }
 
-    await loadOrders();
+    const loaded = await loadOrders({ context });
+    if (loaded === false) return false;
     if (isCourierWorkspace) {
       ensureActiveStatusSelection();
     }
@@ -5979,6 +6686,7 @@
       }
     }
     schedulePersistOrdersCache();
+    return true;
   }
 
   // -----------------------------
@@ -5998,10 +6706,28 @@
   function applyDateFilter(closePopover = true) {
     updateDateLabel();
     schedulePersistOrdersCache(0);
+    if (!isCourierWorkspace) {
+      ordersPersistentCacheRestored = false;
+      ordersCachedSnapshotVisible = false;
+      ordersNetworkConfirmed = false;
+      ordersRefreshFailed = false;
+      state.orders = [];
+      state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
+      state.lastEventId = null;
+      rebuildOrdersStageIndex();
+      renderOrders();
+      refreshCourierConnectionBanner();
+    }
     loadStatuses()
       .then(renderStages)
       .then(() => loadAndRenderOrders(false))
-      .catch(console.error);
+      .catch((err) => {
+        console.error(err);
+        if (!isCourierWorkspace) {
+          ordersRefreshFailed = true;
+          renderOrders();
+        }
+      });
 
     if (closePopover) closeDatePopover();
   }
@@ -6032,7 +6758,7 @@
     const first = new Date(year, month, 1);
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const offset = (first.getDay() + 6) % 7;
-    // РСЃРїРѕР»СЊР·СѓРµРј getStoreDateNow РґР»СЏ РѕРїСЂРµРґРµР»РµРЅРёСЏ "СЃРµРіРѕРґРЅСЏ" РІ С‡Р°СЃРѕРІРѕРј РїРѕСЏСЃРµ С„РёР»РёР°Р»Р°
+    // Используем getStoreDateNow для определения "сегодня" в часовом поясе филиала
     const todayKey = toDateKey(getStoreDateNow(state.storeTimezone));
 
     const monthTitle = first.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
@@ -6075,7 +6801,7 @@
     const clicked = parseDateKey(dateKey);
     if (!clicked) return;
 
-    // Р•СЃР»Рё СѓР¶Рµ РµСЃС‚СЊ Рё start Рё end, СЃР±СЂР°СЃС‹РІР°РµРј Рё РЅР°С‡РёРЅР°РµРј Р·Р°РЅРѕРІРѕ
+    // Если уже есть и start и end, сбрасываем и начинаем заново
     if (state.date.start && state.date.end) {
       state.date.start = clicked;
       state.date.end = null;
@@ -6083,7 +6809,7 @@
       return;
     }
 
-    // РџРµСЂРІС‹Р№ РєР»РёРє - СѓСЃС‚Р°РЅР°РІР»РёРІР°РµРј start
+    // Первый клик - устанавливаем start
     if (!state.date.start) {
       state.date.start = clicked;
       state.date.end = null;
@@ -6091,7 +6817,7 @@
       return;
     }
 
-    // Р’С‚РѕСЂРѕР№ РєР»РёРє - СѓСЃС‚Р°РЅР°РІР»РёРІР°РµРј end Рё Р·Р°РєСЂС‹РІР°РµРј РєР°Р»РµРЅРґР°СЂСЊ
+    // Второй клик - устанавливаем end и закрываем календарь
     if (state.date.start && !state.date.end) {
       state.date.end = clicked;
       if (state.date.end < state.date.start) {
@@ -6105,7 +6831,7 @@
   }
 
   function onDateDoubleClick(dateKey) {
-    // РћС‚РјРµРЅСЏРµРј РѕРґРёРЅРѕС‡РЅС‹Р№ РєР»РёРє, РµСЃР»Рё РѕРЅ Р±С‹Р» Р·Р°РїР»Р°РЅРёСЂРѕРІР°РЅ
+    // Отменяем одиночный клик, если он был запланирован
     if (clickTimer) {
       clearTimeout(clickTimer);
       clickTimer = null;
@@ -6114,7 +6840,7 @@
     const clicked = parseDateKey(dateKey);
     if (!clicked) return;
 
-    // Р”РІРѕР№РЅРѕР№ РєР»РёРє - РІС‹Р±РёСЂР°РµРј РѕРґРёРЅ РґРµРЅСЊ (СЃРѕР·РґР°РµРј РЅРѕРІС‹Р№ РѕР±СЉРµРєС‚ Date РґР»СЏ end)
+    // Двойной клик - выбираем один день (создаем новый объект Date для end)
     state.date.start = new Date(clicked);
     state.date.end = new Date(clicked);
     renderCalendar();
@@ -6218,8 +6944,8 @@
   }
 
   function notifyNewOrders(orders) {
-    // Р“Р»РѕР±Р°Р»СЊРЅС‹Рµ СѓРІРµРґРѕРјР»РµРЅРёСЏ/Р·РІСѓРє РѕР±СЂР°Р±Р°С‚С‹РІР°СЋС‚СЃСЏ РІ orders-sidebar-badge.js
-    // С‡С‚РѕР±С‹ РЅРµ Р±С‹Р»Рѕ РґСѓР±Р»РµР№ РЅР° СЃС‚СЂР°РЅРёС†Рµ Р·Р°РєР°Р·РѕРІ.
+    // Глобальные уведомления/звук обрабатываются в orders-sidebar-badge.js
+    // чтобы не было дублей на странице заказов.
     void orders;
   }
 
@@ -6270,9 +6996,17 @@
     return changed;
   }
 
-  function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false } = {}) {
+  function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false, persistList = true } = {}) {
     if (!order || !order.id) return;
-    invalidateCachedFullOrder(order.id);
+    const detailContext = orderDetailsContext(order.id);
+    orderDetailsMutationGeneration.set(
+      detailContext.runtimeKey,
+      (orderDetailsMutationGeneration.get(detailContext.runtimeKey) || 0) + 1
+    );
+    orderDetailsDirty.add(detailContext.runtimeKey);
+    const detailMergePromise = queueCachedFullOrderPatch(order, detailContext).catch((err) => {
+      console.warn(`Order detail cache merge failed for ${Number(order.id || 0)}:`, err);
+    });
 
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
     const wasExisting = idx >= 0;
@@ -6326,6 +7060,7 @@
       reconcileOrderListDom(prevOrder || order, { prevVisible, nextVisible: false });
       emitOrderUpdated(order, { removed: true, localOnly: !!localOnly });
       schedulePersistOrdersCache();
+      if (persistList && (isCourierWorkspace || !localOnly)) void persistOrdersListCache();
       return null;
     }
 
@@ -6374,19 +7109,23 @@
     }
     emitOrderUpdated(nextOrder, { localOnly: !!localOnly });
     schedulePersistOrdersCache();
+    if (persistList && (isCourierWorkspace || !localOnly)) void persistOrdersListCache();
+    if (isCourierWorkspace && navigator.onLine !== false && getCourierBucketId(nextOrder)) {
+      void detailMergePromise.then(() => prewarmCourierOrderDetail(nextOrder, { highPriority: true }));
+    }
     return nextOrder;
   }
 
-  // Р¤РѕРЅРѕРІС‹Р№ РѕРїСЂРѕСЃ СЃРїРёСЃРєР° Р·Р°РєР°Р·РѕРІ (СЂРµР·РµСЂРІ, РєРѕРіРґР° SSE РѕР±СЂС‹РІР°РµС‚СЃСЏ РЅР° С…РѕСЃС‚РёРЅРіРµ)
-  // Р’Р°Р¶РЅРѕ: Chrome С‚СЂРѕС‚С‚Р»РёС‚ setInterval РІ С„РѕРЅРѕРІС‹С… РІРєР»Р°РґРєР°С… РґРѕ 1 СЂР°Р·Р° РІ РјРёРЅСѓС‚Сѓ Рё Р±РѕР»РµРµ.
-  function applyOrdersChangesEvents(changes, { notifyCreated = true } = {}) {
+  // Фоновый опрос списка заказов (резерв, когда SSE обрывается на хостинге)
+  // Важно: Chrome троттлит setInterval в фоновых вкладках до 1 раза в минуту и более.
+  function applyOrdersChangesEvents(changes, { notifyCreated = true, advanceCursor = true, persist = true } = {}) {
     const rows = Array.isArray(changes) ? changes : [];
     const createdOrders = [];
     rows.forEach((evt) => {
       const eventOrderId = Number(evt?.data?.id || 0);
       const hadOrder = eventOrderId > 0 && state.orders.some((row) => Number(row?.id || 0) === eventOrderId);
-      state.lastEventId = evt?.id || state.lastEventId;
-      const nextOrder = handleOrderEvent(evt?.data);
+      const nextOrder = handleOrderEvent(evt?.data, { persistList: false });
+      if (advanceCursor) state.lastEventId = evt?.id || state.lastEventId;
       if (!hadOrder && nextOrder && state.ordersPagination.nextOffset > 0) {
         state.ordersPagination.nextOffset += 1;
       }
@@ -6397,7 +7136,7 @@
     if (notifyCreated && createdOrders.length) {
       notifyNewOrders(createdOrders);
     }
-    if (rows.length) persistOrdersListCache();
+    if (rows.length && persist) void persistOrdersListCache();
   }
 
   async function fetchOrdersChanges(since = 0) {
@@ -6415,24 +7154,36 @@
     };
   }
 
-  async function synchronizeOrdersChanges({ notifyCreated = true } = {}) {
+  async function synchronizeOrdersChanges({ notifyCreated = true, context = null } = {}) {
     const since = Number(state.lastEventId || 0);
     const payload = await fetchOrdersChanges(since);
+    if (context && !isCurrentCourierSyncContext(context)) return { ...payload, obsolete: true };
     if (payload.resetRequired) return payload;
+    if (payload.changes.length) {
+      applyOrdersChangesEvents(payload.changes, { notifyCreated, advanceCursor: false, persist: false });
+    }
+    if (context && !isCurrentCourierSyncContext(context)) return { ...payload, obsolete: true };
     if (payload.cursor > 0) {
       state.lastEventId = since > 0 ? Math.max(since, payload.cursor) : payload.cursor;
     }
-    if (payload.changes.length) {
-      applyOrdersChangesEvents(payload.changes, { notifyCreated });
+    const persisted = await persistOrdersListCache();
+    if (!persisted) throw new Error("ORDERS_RECONCILIATION_PERSIST_FAILED");
+    if (!isCourierWorkspace) {
+      ordersNetworkConfirmed = true;
+      ordersRefreshFailed = false;
+      refreshCourierConnectionBanner();
     }
     return payload;
   }
 
-  async function bootstrapOrdersData({ keepSelection = false, preserveExisting = false } = {}) {
-    if (ordersPersistentCacheRestored && state.orders.length && Number(state.lastEventId || 0) > 0) {
-      await loadStatuses();
+  async function bootstrapOrdersData({ keepSelection = false, preserveExisting = false, context = null } = {}) {
+    if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
+    if (ordersPersistentCacheRestored && Number(state.lastEventId || 0) > 0) {
+      await loadStatuses({ context });
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       ensureActiveStatusSelection();
-      const synced = await synchronizeOrdersChanges({ notifyCreated: false });
+      const synced = await synchronizeOrdersChanges({ notifyCreated: false, context });
+      if (synced?.obsolete) return synced;
       if (!synced.resetRequired) {
         renderStages();
         renderOrders();
@@ -6442,14 +7193,19 @@
     }
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const bootstrap = await fetchOrdersChanges(0);
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       const snapshotCursor = Number(bootstrap.cursor || 0);
       state.lastEventId = snapshotCursor > 0 ? snapshotCursor : null;
 
-      await loadStatuses();
+      await loadStatuses({ context });
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       ensureActiveStatusSelection();
-      await loadAndRenderOrders(keepSelection);
+      ordersPersistentCacheRestored = false;
+      await loadAndRenderOrders(keepSelection, { context });
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
 
       const catchup = await fetchOrdersChanges(snapshotCursor);
+      if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       if (catchup.resetRequired) {
         state.lastEventId = null;
         if (preserveExisting && state.orders.length) {
@@ -6458,16 +7214,180 @@
         continue;
       }
 
+      if (catchup.changes.length) {
+        applyOrdersChangesEvents(catchup.changes, { notifyCreated: false, advanceCursor: false, persist: false });
+      }
       if (catchup.cursor > 0) {
         state.lastEventId = Math.max(Number(state.lastEventId || 0), catchup.cursor);
       }
-      if (catchup.changes.length) {
-        applyOrdersChangesEvents(catchup.changes, { notifyCreated: false });
-      }
+      const persisted = await persistOrdersListCache();
+      if (!persisted) throw new Error("ORDERS_BOOTSTRAP_PERSIST_FAILED");
       return;
     }
 
     throw new Error("ORDERS_BOOTSTRAP_RESET_REQUIRED");
+  }
+
+  let courierSyncGeneration = 0;
+  let courierReconciliationInFlight = null;
+
+  function courierSyncContext() {
+    const outbox = courierOutboxContext();
+    const ordersCache = ordersPersistentScope();
+    return {
+      generation: courierSyncGeneration,
+      namespace: isCourierWorkspace ? outbox.namespace : ordersCache?.namespace,
+      outbox,
+      ordersCache,
+      ordersEntryKey: ordersPersistentEntryKey(),
+    };
+  }
+
+  function isCurrentCourierSyncContext(context) {
+    return Boolean(context?.namespace
+      && context.generation === courierSyncGeneration
+      && ordersPersistentScope()?.namespace === context.ordersCache?.namespace
+      && (!isCourierWorkspace || courierOutboxScope()?.namespace === context.namespace));
+  }
+
+  async function restoreCourierAuthoritativeSnapshot(context) {
+    if (!context?.ordersCache?.complete) throw new Error("COURIER_SYNC_SCOPE_INCOMPLETE");
+    const entry = await context.ordersCache.getEntry(context.ordersEntryKey, { allowStale: true });
+    if (!isCurrentCourierSyncContext(context)) return false;
+    const snapshot = entry?.data;
+    if (!snapshot || !Array.isArray(snapshot.orders)) return false;
+    state.orders = snapshot.orders.filter(shouldKeepOrderInState);
+    state.ordersPagination = {
+      hasMore: snapshot.pagination?.hasMore === true,
+      nextOffset: Number(snapshot.pagination?.nextOffset || state.orders.length),
+      loading: false,
+    };
+    state.lastEventId = Number(snapshot.syncCursor || 0) || null;
+    rebuildOrdersStageIndex();
+    return true;
+  }
+
+  function reconcileCourierAfterReconnect({ reason = "reconnect", resumePolling = true, forceOutbox = false } = {}) {
+    if (!isCourierWorkspace || navigator.onLine === false) return Promise.resolve({ ok: false, reason: "offline" });
+    const context = courierSyncContext();
+    if (!context.namespace) return Promise.resolve({ ok: false, reason: "scope-incomplete" });
+    if (courierReconciliationInFlight
+      && courierReconciliationInFlight.namespace === context.namespace
+      && courierReconciliationInFlight.generation === context.generation) {
+      return courierReconciliationInFlight.promise;
+    }
+
+    const promise = (async () => {
+      stopOrdersPolling();
+      if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+      setCourierOnlineState(navigator.onLine !== false);
+      courierOfflineState.reconciling = true;
+      courierOfflineState.refreshError = "";
+      refreshCourierConnectionBanner();
+      let visibleFallback = null;
+
+      try {
+        const flushResult = await processCourierOfflineQueue({ force: forceOutbox });
+        if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+        visibleFallback = {
+          orders: state.orders.map((order) => ({ ...order })),
+          pagination: { ...state.ordersPagination },
+          cursor: state.lastEventId,
+        };
+
+        courierOptimisticOverlaySuspended += 1;
+        try {
+          const restored = await restoreCourierAuthoritativeSnapshot(context);
+          if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+          (Array.isArray(flushResult?.confirmedOrders) ? flushResult.confirmedOrders : []).forEach((order) => {
+            handleOrderEvent(order, { skipStageRefresh: true, persistList: false });
+          });
+          await loadStatuses({ context });
+          if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+          ensureActiveStatusSelection();
+          let synced;
+          if (restored && Number(state.lastEventId || 0) > 0) {
+            synced = await synchronizeOrdersChanges({ notifyCreated: false, context });
+          } else {
+            synced = await bootstrapOrdersData({
+              keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+              preserveExisting: true,
+              context,
+            });
+          }
+          if (synced?.obsolete || !isCurrentCourierSyncContext(context)) {
+            return { ok: false, reason: "obsolete" };
+          }
+          if (synced?.resetRequired) {
+            ordersPersistentCacheRestored = false;
+            synced = await bootstrapOrdersData({
+              keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+              preserveExisting: true,
+              context,
+            });
+          }
+          if (synced?.obsolete || !isCurrentCourierSyncContext(context)) {
+            return { ok: false, reason: "obsolete" };
+          }
+          const persisted = await persistOrdersListCache();
+          if (!persisted) throw new Error("COURIER_RECONCILIATION_PERSIST_FAILED");
+        } finally {
+          courierOptimisticOverlaySuspended = Math.max(0, courierOptimisticOverlaySuspended - 1);
+        }
+
+        if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+        syncCourierShadowOrdersFromQueue();
+        applyCourierShadowOrdersToState();
+        ensureActiveStatusSelection();
+        renderStages();
+        renderOrders();
+        updateCourierActiveOrderInfo();
+        courierNetworkConfirmed = true;
+        return {
+          ok: true,
+          reason,
+          pendingCount: courierOfflineState.queue.length,
+          cursor: Number(state.lastEventId || 0),
+        };
+      } catch (err) {
+        if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
+        console.error("Courier reconnect reconciliation failed:", err);
+        if (!markCourierOfflineFromError(err)) {
+          courierOfflineState.refreshError = "Ошибка синхронизации";
+        }
+        if (visibleFallback) {
+          state.orders = visibleFallback.orders;
+          state.ordersPagination = visibleFallback.pagination;
+          state.lastEventId = visibleFallback.cursor;
+          rebuildOrdersStageIndex();
+        }
+        syncCourierShadowOrdersFromQueue();
+        applyCourierShadowOrdersToState();
+        renderStages();
+        renderOrders();
+        return { ok: false, reason: String(err?.message || "RECONCILIATION_FAILED") };
+      } finally {
+        if (isCurrentCourierSyncContext(context)) {
+          courierOfflineState.reconciling = false;
+          refreshCourierConnectionBanner();
+          if (resumePolling && courierOfflineState.online && navigator.onLine !== false
+            && (!document.visibilityState || document.visibilityState === "visible")) {
+            startOrdersPolling();
+          }
+        }
+      }
+    })();
+
+    courierReconciliationInFlight = {
+      namespace: context.namespace,
+      generation: context.generation,
+      promise,
+    };
+    return promise.finally(() => {
+      if (courierReconciliationInFlight?.promise === promise) {
+        courierReconciliationInFlight = null;
+      }
+    });
   }
 
   let ordersLongPollActive = false;
@@ -6503,34 +7423,54 @@
 
   function startOrdersPolling() {
     if (ordersLongPollActive) return;
+    if (isCourierWorkspace && courierOfflineState.reconciling) return;
     if (document.visibilityState && document.visibilityState !== "visible") return;
     ordersLongPollActive = true;
     ordersLongPollToken += 1;
     const token = ordersLongPollToken;
+    const syncContext = courierSyncContext();
+    const courierContext = isCourierWorkspace ? syncContext : null;
 
     const tickChanges = async () => {
       while (ordersLongPollActive && token === ordersLongPollToken) {
         try {
           const waited = await waitOrdersChanges(state.lastEventId || 0, 20000);
           if (!ordersLongPollActive || token !== ordersLongPollToken) return;
+          if (!isCurrentCourierSyncContext(syncContext)) return;
+
+          if (courierContext && (waited.changed || waited.resetRequired)) {
+            stopOrdersPolling();
+            await reconcileCourierAfterReconnect({ reason: "long-poll" });
+            return;
+          }
 
           if (waited.resetRequired) {
-            await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
+            await bootstrapOrdersData({
+              keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+              preserveExisting: true,
+              context: syncContext,
+            });
             continue;
           }
 
-          if (Number.isFinite(waited.cursor) && waited.cursor > 0 && !state.lastEventId) {
-            state.lastEventId = waited.cursor;
-          }
-
           if (waited.changed) {
-            const synced = await synchronizeOrdersChanges({ notifyCreated: true });
+            const synced = await synchronizeOrdersChanges({ notifyCreated: true, context: syncContext });
+            if (synced?.obsolete) return;
             if (synced.resetRequired) {
-              await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
+              await bootstrapOrdersData({
+                keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+                preserveExisting: true,
+                context: syncContext,
+              });
             }
           }
         } catch (e) {
           if (isAbortError(e)) return;
+          if (courierContext && isLikelyNetworkError(e)) {
+            stopOrdersPolling();
+            void reconcileCourierAfterReconnect({ reason: "poll-recovery" });
+            return;
+          }
           console.error(e);
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
@@ -6551,13 +7491,26 @@
 
   async function resumeOrdersRealtime() {
     if (document.visibilityState && document.visibilityState !== "visible") return;
+    if (isCourierWorkspace) {
+      await reconcileCourierAfterReconnect({ reason: "visible" });
+      void prewarmCourierOrderDetails();
+      return;
+    }
+    const context = courierSyncContext();
     try {
       if (!state.lastEventId) {
-        await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+        await bootstrapOrdersData({
+          keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+          context,
+        });
       } else {
-        const synced = await synchronizeOrdersChanges({ notifyCreated: false });
+        const synced = await synchronizeOrdersChanges({ notifyCreated: false, context });
         if (synced?.resetRequired) {
-          await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), preserveExisting: true });
+          await bootstrapOrdersData({
+            keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+            preserveExisting: true,
+            context,
+          });
         }
       }
     } catch (err) {
@@ -6577,9 +7530,6 @@
       .finally(() => {
         if (isCourierWorkspace) {
           setCourierOnlineState(navigator.onLine !== false);
-          if (navigator.onLine !== false) {
-            processCourierOfflineQueue().catch(console.error);
-          }
         }
         void resumeOrdersRealtime();
       });
@@ -6634,6 +7584,7 @@
 
     const markPaidBtn = e.target.closest('[data-action="order-mark-paid"]');
     if (markPaidBtn) {
+      if (!getActiveOrderCapabilities().payment) return;
       e.preventDefault();
       e.stopPropagation();
       const activeOrder = getActiveOrder();
@@ -6645,6 +7596,7 @@
 
     const editOrderBtn = e.target.closest('[data-action="order-edit"]');
     if (editOrderBtn) {
+      if (!getActiveOrderCapabilities().edit) return;
       e.preventDefault();
       e.stopPropagation();
       const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
@@ -6735,11 +7687,19 @@
       const nextStatusId = Number(rowStageBtn.getAttribute("data-next-status-id") || 0);
       if (!Number.isFinite(orderId) || orderId <= 0) return;
       if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
-      setStatusControlsDisabled(true);
-      try {
-        await updateOrderStatus(orderId, nextStatusId);
-      } finally {
-        setStatusControlsDisabled(false);
+      if (isCourierWorkspace) {
+        setStatusControlsDisabled(true);
+        try {
+          await updateOrderStatus(orderId, nextStatusId);
+        } finally {
+          setStatusControlsDisabled(false);
+        }
+      } else {
+        try {
+          await updateOrderStatus(orderId, nextStatusId);
+        } catch (err) {
+          console.error(err);
+        }
       }
       return;
     }
@@ -6759,7 +7719,7 @@
     const courierPickupBtn = e.target.closest('[data-action="courier-pickup"]');
     if (courierPickupBtn) {
       e.preventDefault();
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       if (courierPickupBtn.disabled) return;
       const orderId = Number(courierPickupBtn.getAttribute("data-order-id") || 0);
       const targetStatusId = Number(courierPickupBtn.getAttribute("data-target-status-id") || 0);
@@ -6775,7 +7735,7 @@
 
     const courierCallBtn = e.target.closest('[data-action="courier-call"]');
     if (courierCallBtn) {
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       return;
     }
 
@@ -6852,7 +7812,7 @@
       return;
     }
 
-    // РќРµ РІС‹Р±РёСЂР°С‚СЊ Р·Р°РєР°Р· РїСЂРё РєР»РёРєРµ РЅР° РєРЅРѕРїРєСѓ РѕРїР»Р°С‚С‹
+    // Не выбирать заказ при клике на кнопку оплаты
     const rowPaymentBtn = e.target.closest(".order-payment-btn");
     if (rowPaymentBtn) {
       e.preventDefault();
@@ -6876,6 +7836,7 @@
       return;
     }
 
+    if (e.target.closest("button, a, input, label, select, textarea, [data-action]")) return;
     const row = e.target.closest(".js-order");
     if (!row) return;
     const orderId = Number(row.getAttribute("data-order-id")) || null;
@@ -6953,13 +7914,13 @@
       requestNotificationPermission().then((perm) => {
         if (perm === "granted") {
           notifyBtn.classList.add("is-enabled");
-          notifyBtn.title = "РЈРІРµРґРѕРјР»РµРЅРёСЏ РІРєР»СЋС‡РµРЅС‹";
+          notifyBtn.title = "Уведомления включены";
         }
       }).catch(() => {});
     });
     if ("Notification" in window && Notification.permission === "granted") {
       notifyBtn.classList.add("is-enabled");
-      notifyBtn.title = "РЈРІРµРґРѕРјР»РµРЅРёСЏ РІРєР»СЋС‡РµРЅС‹";
+      notifyBtn.title = "Уведомления включены";
     }
   }
 
@@ -6994,7 +7955,7 @@
       const btn = e.target.closest("[data-date]");
       if (!btn) return;
       
-      // РСЃРїРѕР»СЊР·СѓРµРј С‚Р°Р№РјРµСЂ, С‡С‚РѕР±С‹ РѕС‚Р»РёС‡РёС‚СЊ РѕРґРёРЅРѕС‡РЅС‹Р№ РєР»РёРє РѕС‚ РґРІРѕР№РЅРѕРіРѕ
+      // Используем таймер, чтобы отличить одиночный клик от двойного
       if (clickTimer) {
         clearTimeout(clickTimer);
       }
@@ -7038,6 +7999,12 @@
   }
 
   window.__ordersDashboardApi = {
+    openOrderPassport(orderId, context = {}) {
+      return openOrderDetailsById(orderId, context);
+    },
+    closeOrderPassport(reason = "back") {
+      return orderDetailsOpener ? orderDetailsOpener.close(reason) : Promise.resolve();
+    },
     async openOrderById(orderId, options = {}) {
       return openOrderDetailsById(orderId, options);
     },
@@ -7061,11 +8028,14 @@
       return true;
     },
   };
+  window.openOrderPassport = (orderId, context = {}) => openOrderDetailsById(orderId, context);
+  window.closeOrderPassport = (reason = "back") => orderDetailsOpener ? orderDetailsOpener.close(reason) : Promise.resolve();
 
-  // РџРµСЂРµРєР»СЋС‡РµРЅРёРµ СЃС‚Р°С‚СѓСЃР° РїРѕ РєР»РёРєСѓ РЅР° Р±РѕР»СЊС€СѓСЋ РїРёР»СЋР»СЋ
+  // Переключение статуса по клику на большую пилюлю
   document.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="order-status-next"]');
     if (!btn) return;
+    if (!getActiveOrderCapabilities().status) return;
     e.preventDefault();
     e.stopPropagation();
     cycleActiveOrderStatus().catch((err) => {
@@ -7073,10 +8043,11 @@
     });
   });
 
-  // РћР±СЂР°Р±РѕС‚С‡РёРє РєРЅРѕРїРєРё РїРµС‡Р°С‚Рё
+  // Обработчик кнопки печати
   document.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="order-print"]');
     if (!btn) return;
+    if (!getActiveOrderCapabilities().print) return;
     
     e.preventDefault();
     e.stopPropagation();
@@ -7096,6 +8067,7 @@
   document.addEventListener("click", async (e) => {
     const btn = e.target.closest('[data-action="order-print-item-label"]');
     if (!btn) return;
+    if (!getActiveOrderCapabilities().print) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -7127,7 +8099,7 @@
     }
   });
 
-  // Р¤СѓРЅРєС†РёСЏ РїРµС‡Р°С‚Рё С‡РµРєР° С‡РµСЂРµР· СЃРёСЃС‚РµРјРЅСѓСЋ РїРµС‡Р°С‚СЊ Р±СЂР°СѓР·РµСЂР°
+  // Функция печати чека через системную печать браузера
   async function printOrderReceipt(order) {
     if (!isOrderPrintable(order)) return;
     const orderId = Number(order?.id || 0);
@@ -7146,13 +8118,13 @@
       receiptHtml = generateReceiptHTML(order);
     }
     
-    // Р’С‹С‡РёСЃР»СЏРµРј СЂР°Р·РјРµСЂС‹ Рё РїРѕР·РёС†РёСЋ РґР»СЏ С†РµРЅС‚СЂРёСЂРѕРІР°РЅРёСЏ РѕРєРЅР°
+    // Вычисляем размеры и позицию для центрирования окна
     const width = 400;
     const height = 600;
     const left = (screen.width / 2) - (width / 2);
     const top = (screen.height / 2) - (height / 2);
     
-    // РћС‚РєСЂС‹РІР°РµРј РЅРѕРІРѕРµ РѕРєРЅРѕ СЃ С‡РµРєРѕРј РїРѕ С†РµРЅС‚СЂСѓ СЌРєСЂР°РЅР°
+    // Открываем новое окно с чеком по центру экрана
     const printWindow = window.open('', '_blank', `width=${width},height=${height},left=${left},top=${top}`);
     if (!printWindow) {
       alert('Пожалуйста, разрешите всплывающие окна для печати');
@@ -7162,20 +8134,20 @@
     printWindow.document.write(receiptHtml);
     printWindow.document.close();
     
-    // Р–РґРµРј Р·Р°РіСЂСѓР·РєРё Рё РІС‹Р·С‹РІР°РµРј РїРµС‡Р°С‚СЊ
+    // Ждем загрузки и вызываем печать
     printWindow.onload = () => {
       setTimeout(() => {
         printWindow.print();
       }, 250);
     };
     
-    // Р—Р°РєСЂС‹РІР°РµРј РѕРєРЅРѕ РїРѕСЃР»Рµ РїРµС‡Р°С‚Рё (РїРѕСЃР»Рµ Р·Р°РєСЂС‹С‚РёСЏ РґРёР°Р»РѕРіР° РїРµС‡Р°С‚Рё)
+    // Закрываем окно после печати (после закрытия диалога печати)
     printWindow.addEventListener('afterprint', () => {
       printWindow.close();
     });
     
-    // РўР°РєР¶Рµ Р·Р°РєСЂС‹РІР°РµРј РѕРєРЅРѕ, РµСЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ Р·Р°РєСЂС‹Р» РµРіРѕ РІСЂСѓС‡РЅСѓСЋ
-    // РёР»Рё РµСЃР»Рё РґРёР°Р»РѕРі РїРµС‡Р°С‚Рё Р±С‹Р» РѕС‚РјРµРЅРµРЅ (fallback)
+    // Также закрываем окно, если пользователь закрыл его вручную
+    // или если диалог печати был отменен (fallback)
     const checkClosed = setInterval(() => {
       if (printWindow.closed) {
         clearInterval(checkClosed);
@@ -7183,11 +8155,11 @@
     }, 100);
   }
 
-  // Р¤СѓРЅРєС†РёСЏ РіРµРЅРµСЂР°С†РёРё HTML РґР»СЏ С‡РµРєР°
+  // Функция генерации HTML для чека
   function generateReceiptHTML(order) {
     const receiptOrder = getDisplayOrder(order) || order;
     const hasRefunds = hasOrderRefunds(order);
-    // Р’СЂРµРјСЏ РІ Р±Р°Р·Рµ СѓР¶Рµ РІ timezone С„РёР»РёР°Р»Р°
+    // Время в базе уже в timezone филиала
     const createdAtStr = String(receiptOrder.created_at).replace(' ', 'T');
     const date = new Date(createdAtStr);
 
@@ -7199,7 +8171,7 @@
 
     const dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
-    const methodTitle = receiptOrder.method_title || (receiptOrder.method_code === "pickup" ? "РЎР°РјРѕРІС‹РІРѕР·" : "Р”РѕСЃС‚Р°РІРєР°");
+    const methodTitle = receiptOrder.method_title || (receiptOrder.method_code === "pickup" ? "Самовывоз" : "Доставка");
     const deliverySectionTitle = receiptOrder.method_code === "pickup" ? "Самовывоз:" : "Доставка:";
     let address = receiptOrder.address;
     if (!address && receiptOrder.pickup_store_address) {
@@ -7236,8 +8208,8 @@
     const comboItems = receiptItems.filter((item) => String(item?.type || "") === "combo");
     const productItems = receiptItems.filter((item) => String(item?.type || "") !== "combo");
     const itemGroups = [];
-    if (comboItems.length) itemGroups.push({ key: "combo", title: "РљРћРњР‘Рћ", items: comboItems });
-    if (productItems.length) itemGroups.push({ key: "product", title: "РўРћР’РђР Р«", items: productItems });
+    if (comboItems.length) itemGroups.push({ key: "combo", title: "КОМБО", items: comboItems });
+    if (productItems.length) itemGroups.push({ key: "product", title: "ТОВАРЫ", items: productItems });
 
     function mergeVariantUnit(label, unit) {
       const cleanLabel = String(label || "").trim();
@@ -7260,22 +8232,22 @@
       if (!raw) return "";
       const key = raw.toLowerCase();
       const dict = {
-        "С€С‚СѓРє": "С€С‚",
-        "С€С‚СѓРєР°": "С€С‚",
-        "С€С‚": "С€С‚",
-        "РіСЂР°РјРј": "Рі",
-        "РіСЂР°РјРјР°": "Рі",
-        "РіСЂ": "Рі",
-        "Рі": "Рі",
-        "РєРёР»РѕРіСЂР°РјРј": "РєРі",
-        "РєРёР»РѕРіСЂР°РјРјР°": "РєРі",
-        "РєРі": "РєРі",
-        "РјРёР»Р»РёР»РёС‚СЂ": "РјР»",
-        "РјРёР»Р»РёР»РёС‚СЂР°": "РјР»",
-        "РјР»": "РјР»",
-        "Р»РёС‚СЂ": "Р»",
-        "Р»РёС‚СЂР°": "Р»",
-        "Р»": "Р»",
+        "штук": "шт",
+        "штука": "шт",
+        "шт": "шт",
+        "грамм": "г",
+        "грамма": "г",
+        "гр": "г",
+        "г": "г",
+        "килограмм": "кг",
+        "килограмма": "кг",
+        "кг": "кг",
+        "миллилитр": "мл",
+        "миллилитра": "мл",
+        "мл": "мл",
+        "литр": "л",
+        "литра": "л",
+        "л": "л",
       };
       const safeDict = {
         "\u0448\u0442\u0443\u043a": "\u0448\u0442",
@@ -7329,7 +8301,7 @@
     }
 
     function renderComboItem(item) {
-      const name = escapeHtml(item?.name || item?.combo_title || "РљРѕРјР±Рѕ");
+      const name = escapeHtml(item?.name || item?.combo_title || "Комбо");
       const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
       const qtyStr = `${qty} x`;
       const priceStr = renderLinePrice(item, 0);
@@ -7337,7 +8309,7 @@
       const compositionLines = [];
 
       selections.forEach((sel) => {
-        const productName = String(sel?.product_name || "").trim() || "РўРѕРІР°СЂ";
+        const productName = String(sel?.product_name || "").trim() || "Товар";
         const variantHead = mergeVariantUnit(sel?.variant_label, sel?.variant_unit);
         const primaryLine = [variantHead, productName].filter(Boolean).join(" ").trim();
         if (primaryLine) {
@@ -7372,7 +8344,7 @@
     }
 
     function renderProductItem(item) {
-      const rawName = String(item?.product_name || item?.name || "РўРѕРІР°СЂ").trim() || "РўРѕРІР°СЂ";
+      const rawName = String(item?.product_name || item?.name || "Товар").trim() || "Товар";
       const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
       const basePrice = parseFloat(item?.price || 0);
       const qtyStr = `${qty} x`;
@@ -7395,7 +8367,7 @@
       });
 
       const primaryVariantLine = variantLines.length ? variantLines[0] : "";
-      const giftSuffix = isGiftRewardOrderItem(item) ? " (РџРѕРґР°СЂРѕРє)" : "";
+      const giftSuffix = isGiftRewardOrderItem(item) ? " (Подарок)" : "";
       const titleLine = ([primaryVariantLine, rawName].filter(Boolean).join(" ").trim() || rawName) + giftSuffix;
       const name = escapeHtml(titleLine);
       if (variantLines.length > 1) {
@@ -7410,7 +8382,7 @@
         const line = formatQtyUnitName(
           ing?.quantity ?? ing?.qty,
           ing?.unit_label || ing?.unit || ing?.unitLabel || ing?.unit_short_title || ing?.unit_title || "",
-          ing?.name || "РРЅРіСЂРµРґРёРµРЅС‚"
+          ing?.name || "Ингредиент"
         );
         if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
       });
@@ -7419,7 +8391,7 @@
         .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0);
       options.forEach((opt) => {
         const variant = mergeVariantUnit(opt?.variant_label || opt?.variantLabel, opt?.variant_unit || opt?.variantUnit);
-        const title = String(opt?.title || "РћРїС†РёСЏ").trim();
+        const title = String(opt?.title || "Опция").trim();
         const line = variant
           ? `${variant} ${title}`.trim()
           : `${Math.max(1, Number(opt?.qty || opt?.quantity || 1))} ${title}`.trim();
@@ -7468,7 +8440,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Р§РµРє Р·Р°РєР°Р·Р° #${order.id}</title>
+  <title>Чек заказа #${order.id}</title>
   <style>
     @media print {
       @page {
@@ -7644,13 +8616,13 @@
   </style>
 </head>
 <body>
-  <div class="receipt-header">Р—РђРљРђР— #${receiptOrder.id}</div>
+  <div class="receipt-header">ЗАКАЗ #${receiptOrder.id}</div>
   <div class="receipt-date">${dateStr}</div>
   
   <div class="receipt-divider"></div>
   ${(scheduleText || isUrgent) ? `
   <div class="receipt-section receipt-when-block">
-    <div class="receipt-when-text">${escapeHtml(scheduleText || (isUrgent ? "Р‘С‹СЃС‚СЂРµРµ" : ""))}</div>
+    <div class="receipt-when-text">${escapeHtml(scheduleText || (isUrgent ? "Быстрее" : ""))}</div>
   </div>
   <div class="receipt-divider"></div>
   ` : ''}
@@ -7685,9 +8657,9 @@
   <div class="receipt-divider"></div>
 
   <div class="receipt-section">
-    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">РћРїР»Р°С‚Р°</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ''}
-    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">РЎРґР°С‡Р° СЃ</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ''}
-    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">РЎРґР°С‡Р°</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
+    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ''}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ''}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">\u0421\u0443\u043c\u043c\u0430 \u0442\u043e\u0432\u0430\u0440\u043e\u0432</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ''}
     ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">\u0421\u043a\u0438\u0434\u043a\u0430</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ''}
     ${receiptPromoCode ? `<div class="receipt-summary-row"><div class="receipt-summary-label">\u041f\u0440\u043e\u043c\u043e\u043a\u043e\u0434</div><div class="receipt-summary-value">${escapeHtml(receiptPromoCode)}</div></div>` : ''}
@@ -7696,7 +8668,7 @@
   </div>
   
   <div style="margin-top: 20px; text-align: center; font-size: 10pt;">
-    <div>РЎРїР°СЃРёР±Рѕ Р·Р° Р·Р°РєР°Р·!</div>
+    <div>Спасибо за заказ!</div>
   </div>
 </body>
 </html>
@@ -7708,9 +8680,19 @@
   // -----------------------------
   async function loadStoreTimezone() {
     try {
-      const response = await apiJson("/api/admin/tenant/current-time");
-      if (response?.data?.storeTimezone != null) {
-        state.storeTimezone = String(response.data.storeTimezone || "+0");
+      const load = async () => {
+        const response = await apiJson("/api/admin/tenant/current-time");
+        return { storeTimezone: String(response?.data?.storeTimezone || "+0"), storeTimestamp: Number(response?.data?.storeTimestamp || 0), fetchedAt: Date.now() };
+      };
+      const data = window.AdminReferenceCache
+        ? await window.AdminReferenceCache.getOrLoadReference("store-time", {
+            load,
+            validate: (value) => Boolean(value && Number(value.storeTimestamp) > 0 && Number(value.fetchedAt) > 0),
+            onUpdate: (value) => { state.storeTimezone = String(value.storeTimezone || "+0"); },
+          })
+        : await load();
+      if (data?.storeTimezone != null) {
+        state.storeTimezone = String(data.storeTimezone || "+0");
       }
     } catch (err) {
       console.error("Failed to load store timezone:", err);
@@ -7755,37 +8737,50 @@
   async function init() {
     try {
       const cachedBootstrap = readOrdersBootstrapCache();
-      hydrateCourierOfflineStateFromStorage();
-
-      await loadStoreTimezone();
+      await hydrateCourierOfflineStateFromStorage();
+      hydrateOrdersFromCache(cachedBootstrap);
+      resetDateStateToToday();
       ensureDateStateInitialized();
       const persistentOrders = await readPersistentOrdersCache();
-      if (persistentOrders?.orders?.length) {
-        state.orders = persistentOrders.orders.filter(shouldKeepOrderInState);
-        state.ordersPagination = {
-          hasMore: persistentOrders.pagination?.hasMore === true,
-          nextOffset: Number(persistentOrders.pagination?.nextOffset || state.orders.length),
-          loading: false,
-        };
-        state.lastEventId = Number(persistentOrders.syncCursor || 0) || null;
-        ordersPersistentCacheRestored = true;
-      }
-      hydrateOrdersFromCache(cachedBootstrap);
-      if (persistentOrders?.orders?.length) {
-        state.orders = persistentOrders.orders.filter(shouldKeepOrderInState);
-        ordersPersistentCacheRestored = true;
-      }
+      restorePersistentOrdersSnapshot(persistentOrders);
+      applyCourierShadowOrdersToState();
+      ordersInitialRestoreComplete = true;
       renderCalendar();
       updateDateLabel();
-      if (state.orders.length) {
-        rebuildOrdersStageIndex();
-        renderStages();
-        renderOrders();
-      }
+      renderStages();
+      renderOrders();
+      refreshCourierConnectionBanner();
       bindOrderTabsWheelScroll();
 
       try {
-        await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+        const restoredQueryKey = currentOrdersQueryKey();
+        courierOfflineState.refreshError = "";
+        await loadStoreTimezone();
+        resetDateStateToToday();
+        ensureDateStateInitialized();
+        if (!isCourierWorkspace && ordersCachedSnapshotVisible
+          && restoredQueryKey !== currentOrdersQueryKey()) {
+          ordersPersistentCacheRestored = false;
+          ordersCachedSnapshotVisible = false;
+          state.orders = [];
+          state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
+          state.lastEventId = null;
+          rebuildOrdersStageIndex();
+          renderStages();
+          renderOrders();
+          refreshCourierConnectionBanner();
+        }
+        renderCalendar();
+        updateDateLabel();
+        if (isCourierWorkspace) {
+          await reconcileCourierAfterReconnect({ reason: "startup", resumePolling: false });
+        } else {
+          await bootstrapOrdersData({
+            keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
+            context: courierSyncContext(),
+          });
+        }
+        if (isCourierWorkspace) void prewarmCourierOrderDetails();
         if (tabsState.activeKey) {
           setActiveOrderTab(tabsState.activeKey);
         } else {
@@ -7793,6 +8788,14 @@
         }
       } catch (refreshErr) {
         console.error(refreshErr);
+        if (!isCourierWorkspace) {
+          ordersRefreshFailed = true;
+          refreshCourierConnectionBanner();
+        }
+        if (!markCourierOfflineFromError(refreshErr) && isCourierWorkspace) {
+          courierOfflineState.refreshError = "Не удалось обновить";
+          refreshCourierConnectionBanner();
+        }
         ensureActiveStatusSelection();
         renderStages();
         renderOrders();
@@ -7837,10 +8840,7 @@
         });
       }
 
-      if (isCourierWorkspace) {
-        refreshCourierConnectionBanner();
-        processCourierOfflineQueue().catch(console.error);
-      }
+      if (isCourierWorkspace) refreshCourierConnectionBanner();
 
       if (!isCourierWorkspace) {
         document.addEventListener("click", unlockAudioOnce, { once: true });
@@ -7856,13 +8856,19 @@
 
   init();
 
-  if (isCourierWorkspace && courierConnectionBannerRetryBtn) {
-    courierConnectionBannerRetryBtn.addEventListener("click", () => {
-      courierOfflineState.syncError = "";
-      setCourierOnlineState(navigator.onLine !== false);
-      processCourierOfflineQueue({ force: true }).catch(console.error);
+  ordersConnectionBannerRetryBtns.forEach((button) => {
+    button.addEventListener("click", () => {
+      if (isCourierWorkspace) {
+        courierOfflineState.syncError = "";
+        setCourierOnlineState(navigator.onLine !== false);
+        reconcileCourierAfterReconnect({ reason: "manual-retry", forceOutbox: true }).catch(console.error);
+        return;
+      }
+      ordersRefreshFailed = false;
+      refreshCourierConnectionBanner();
+      void resumeOrdersRealtime();
     });
-  }
+  });
 
   if (isCourierWorkspace) {
     window.addEventListener("offline", () => {
@@ -7870,22 +8876,37 @@
     });
 
     window.addEventListener("online", () => {
-      const hasPending = courierOfflineState.queue.length > 0;
-      setCourierOnlineState(true, { showRestored: !hasPending });
-      processCourierOfflineQueue().catch(console.error);
+      courierOfflineState.refreshError = "";
+      setCourierOnlineState(true);
+      reconcileCourierAfterReconnect({ reason: "online" }).catch(console.error);
     });
 
+  } else {
+    window.addEventListener("offline", () => {
+      stopOrdersPolling();
+      refreshCourierConnectionBanner();
+    });
+    window.addEventListener("online", () => {
+      ordersRefreshFailed = false;
+      refreshCourierConnectionBanner();
+      void resumeOrdersRealtime();
+    });
   }
 
   window.addEventListener("beforeunload", () => {
-    try {
-      persistCourierOfflineState();
-    } catch {}
     stopOrdersPolling();
   });
-  // РЎР»СѓС€Р°С‚СЊ РёР·РјРµРЅРµРЅРёРµ С„РёР»РёР°Р»Р°: РїРµСЂРµРїРѕРґРєР»СЋС‡РёС‚СЊ SSE Рє РєР°РЅР°Р»Сѓ РЅРѕРІРѕРіРѕ С„РёР»РёР°Р»Р° Рё РїРµСЂРµР·Р°РіСЂСѓР·РёС‚СЊ Р·Р°РєР°Р·С‹
+  // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
-    console.log('Р¤РёР»РёР°Р» РёР·РјРµРЅРµРЅ:', event.detail.store);
+    console.log('Филиал изменен:', event.detail.store);
+    stopOrdersPolling();
+    courierSyncGeneration += 1;
+    orderDetailsDirty.clear();
+    orderDetailsMutationGeneration.clear();
+    courierDetailPrewarmInFlight.clear();
+    authoritativeFullOrderRuntimeKeys.clear();
+    courierPassportCacheStates.clear();
+    orderStatusSyncStates.clear();
     state.clientsCache.clear();
     state.statuses = [];
     state.orders = [];
@@ -7896,38 +8917,75 @@
     tabsState.tabs = [];
     tabsState.activeKey = null;
     state.activeOrderId = null;
+    ordersPersistentCacheRestored = false;
+    ordersCachedSnapshotVisible = false;
+    ordersNetworkConfirmed = false;
+    ordersRefreshFailed = false;
     resetCourierOfflineRuntimeState();
-    hydrateCourierOfflineStateFromStorage();
     setOrdersCheckoutLayoutEnabled(false);
-    renderStages();
-    renderOrders();
-    renderOrderTabs();
-    setInfo(null);
     closeSheet();
-    loadStoreTimezone()
-      .then(() => {
+    let restoredStoreQueryKey = "";
+    hydrateCourierOfflineStateFromStorage()
+      .then(async () => {
+        const cachedBootstrap = readOrdersBootstrapCache();
+        hydrateOrdersFromCache(cachedBootstrap);
+        resetDateStateToToday();
         ensureDateStateInitialized();
+        const persistentOrders = await readPersistentOrdersCache();
+        restorePersistentOrdersSnapshot(persistentOrders);
+        restoredStoreQueryKey = currentOrdersQueryKey();
+        applyCourierShadowOrdersToState();
+        ordersInitialRestoreComplete = true;
         renderCalendar();
         updateDateLabel();
-        return bootstrapOrdersData({ keepSelection: false });
+        renderStages();
+        renderOrders();
+        refreshCourierConnectionBanner();
+        renderOrderTabs();
+        setInfo(null);
+        return loadStoreTimezone();
+      })
+      .then(() => {
+        resetDateStateToToday();
+        ensureDateStateInitialized();
+        if (!isCourierWorkspace && ordersCachedSnapshotVisible
+          && restoredStoreQueryKey !== currentOrdersQueryKey()) {
+          ordersPersistentCacheRestored = false;
+          ordersCachedSnapshotVisible = false;
+          state.orders = [];
+          state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
+          state.lastEventId = null;
+          rebuildOrdersStageIndex();
+          renderStages();
+          renderOrders();
+          refreshCourierConnectionBanner();
+        }
+        renderCalendar();
+        updateDateLabel();
+        if (isCourierWorkspace) {
+          return reconcileCourierAfterReconnect({ reason: "store-switch" });
+        }
+        return bootstrapOrdersData({ keepSelection: false, context: courierSyncContext() });
       })
       .then(() => {
         renderOrderTabs();
+        if (isCourierWorkspace) void prewarmCourierOrderDetails();
         if (isCourierWorkspace && sharedOrderPayment?.warmCache && courierOfflineState.online) {
           return sharedOrderPayment.warmCache(apiJson, state.orders[0] || null).catch(() => null);
         }
         return null;
       })
       .then(() => {
-        if (isCourierWorkspace) {
-          refreshCourierConnectionBanner();
-          return processCourierOfflineQueue().catch(console.error);
-        }
-        return null;
+        if (!isCourierWorkspace) startOrdersPolling();
       })
-      .catch(console.error);
-    stopOrdersPolling();
-    startOrdersPolling();
+      .catch((err) => {
+        console.error(err);
+        if (!isCourierWorkspace) {
+          ordersRefreshFailed = true;
+          refreshCourierConnectionBanner();
+          renderOrders();
+        }
+      });
   });
 })();
 

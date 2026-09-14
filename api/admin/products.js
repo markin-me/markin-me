@@ -198,6 +198,24 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     return crypto.createHash("sha1").update(src).digest("hex").slice(0, 16);
   }
 
+  async function readNewOrderInventory(tenantId, storeId) {
+    const [rows] = await db.query(
+      `SELECT product_id, qty
+       FROM prod_product_stocks
+       WHERE tenant_id=? AND store_id=?
+       ORDER BY product_id ASC`,
+      [tenantId, storeId]
+    );
+    const items = (Array.isArray(rows) ? rows : []).map((row) => ({
+      product_id: Number(row.product_id),
+      stock_qty: row.qty == null ? null : Number(row.qty),
+    }));
+    return {
+      revision: makeStampToken(items.map((item) => [item.product_id, item.stock_qty])),
+      items,
+    };
+  }
+
   router.use((req, res, next) => {
     const method = String(req.method || "").toUpperCase();
     const shouldWatch = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
@@ -1178,7 +1196,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
             checkoutBlockCategoriesStamp,
             productsStamp,
             productCategoriesStamp,
-            productStocksStamp,
+            inventoryState,
             variantsAssignmentsStamp,
             variantGroupsStamp,
             variantDiscountTiersStamp,
@@ -1206,7 +1224,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
             readTableStamp("prod_checkout_constructor_block_categories", "tenant_id=?", [tenantId]),
             readTableStamp("prod_products", "tenant_id=?", [tenantId]),
             readTableStamp("prod_product_categories", "tenant_id=?", [tenantId]),
-            readTableStamp("prod_product_stocks", "tenant_id=? AND store_id=?", [tenantId, storeId]),
+            readNewOrderInventory(tenantId, storeId),
             readTableStamp("prod_variant_assignments", "tenant_id=?", [tenantId]),
             readTableStamp("prod_variant_groups", "tenant_id=?", [tenantId]),
             readTableStamp("prod_variant_discount_tiers", "tenant_id=?", [tenantId]),
@@ -1241,7 +1259,6 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
               token: makeStampToken([
                 productsStamp,
                 productCategoriesStamp,
-                productStocksStamp,
                 variantsAssignmentsStamp,
                 variantGroupsStamp,
                 variantDiscountTiersStamp,
@@ -1260,6 +1277,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
                 unitConversionsStamp,
               ]),
             },
+            inventory: {
+              token: inventoryState.revision,
+            },
             refs: {
               token: makeStampToken([
                 tenantStamp,
@@ -1275,6 +1295,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
             ok: true,
             data: {
               generated_at: Date.now(),
+              catalog_revision: domains.products.token,
+              inventory_revision: domains.inventory.token,
               domains,
             },
           };
@@ -1286,6 +1308,18 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  router.get('/new-order/inventory', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const inventory = await readNewOrderInventory(tenantId, storeId);
+      return res.json({ ok: true, data: { revision: inventory.revision, items: inventory.items } });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 

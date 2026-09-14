@@ -5451,10 +5451,11 @@ async function fetchStoreWithHours(tenantId, storeId) {
    * GET /api/admin/tenant/print-api?store_id=1
    * Р’РѕР·РІСЂР°С‰Р°РµС‚ С‚РѕРєРµРЅ РґР»СЏ РїРµС‡Р°С‚Рё РїРѕ С„РёР»РёР°Р»Сѓ
    */
-  async function selectPrintApiRow(tenantId, storeId) {
+  async function selectPrintApiRow(tenantId, storeId, connectionId) {
+    if (!(Number(connectionId) > 0)) return null;
     try {
       const [rows] = await db.query(
-        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
+        `SELECT id, tenant_id, store_id, display_name, token, is_active, created_at, updated_at, last_used_at,
                 notify_new_order_enabled, notify_new_message_enabled,
                 sound_new_order_url, sound_new_message_url,
                 printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
@@ -5472,14 +5473,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
                   0
                 ) AS printer_online
          FROM print_api_tokens
-         WHERE tenant_id=? AND store_id=? LIMIT 1`,
-        [tenantId, storeId]
+         WHERE id=? AND tenant_id=? AND store_id=? LIMIT 1`,
+        [connectionId, tenantId, storeId]
       );
       return rows[0] || null;
     } catch (err) {
       if (String(err?.code || "") !== "ER_BAD_FIELD_ERROR") throw err;
       const [rows] = await db.query(
-        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
+        `SELECT id, tenant_id, store_id, display_name, token, is_active, created_at, updated_at, last_used_at,
                 printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
                 IF(
                   last_heartbeat_at IS NOT NULL
@@ -5495,8 +5496,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
                   0
                 ) AS printer_online
          FROM print_api_tokens
-         WHERE tenant_id=? AND store_id=? LIMIT 1`,
-        [tenantId, storeId]
+         WHERE id=? AND tenant_id=? AND store_id=? LIMIT 1`,
+        [connectionId, tenantId, storeId]
       );
       const row = rows[0] || null;
       if (!row) return null;
@@ -5510,32 +5511,53 @@ async function fetchStoreWithHours(tenantId, storeId) {
     }
   }
 
-  async function selectPrintApiPrinters(tenantId, storeId, tokenId) {
-    if (!tokenId) return [];
-    let [rows] = await db.query(
-      `SELECT id, system_name, display_name, is_default, status, last_seen_at, updated_at
-       FROM print_printers
-       WHERE tenant_id=? AND store_id=? AND token_id=?
-       ORDER BY is_default DESC, display_name ASC, system_name ASC`,
-      [tenantId, storeId, tokenId]
+  async function selectPrintApiPrinters(tenantId, storeId) {
+    const [rows] = await db.query(
+      `SELECT p.id, p.token_id, p.agent_id, p.system_name, p.display_name, p.is_default,
+              p.status, p.last_seen_at, p.updated_at, a.device_name, a.agent_version,
+              a.last_heartbeat_at, a.agent_running, a.is_legacy
+       FROM print_printers p
+       LEFT JOIN print_agents a ON a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.id=p.agent_id
+       WHERE p.tenant_id=? AND p.store_id=?
+       ORDER BY p.agent_id ASC, p.display_name ASC, p.system_name ASC`,
+      [tenantId, storeId]
     );
-    if (!rows.length) {
-      [rows] = await db.query(
-        `SELECT id, system_name, display_name, is_default, status, last_seen_at, updated_at
-         FROM print_printers
-         WHERE tenant_id=? AND store_id=?
-         ORDER BY is_default DESC, display_name ASC, system_name ASC`,
-        [tenantId, storeId]
-      );
-    }
     return rows || [];
   }
 
-  async function selectPrintApiData(tenantId, storeId) {
-    const row = await selectPrintApiRow(tenantId, storeId);
+  async function selectPrintApiAgents(tenantId, storeId, connectionId) {
+    const [rows] = await db.query(
+      `SELECT id, token_id, installation_id, is_legacy, device_name, agent_version,
+              last_heartbeat_at, agent_running,
+              IF(last_heartbeat_at IS NOT NULL AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),1,0) AS is_online
+       FROM print_agents
+       WHERE tenant_id=? AND store_id=? AND token_id=?
+       ORDER BY id ASC`,
+      [tenantId, storeId, connectionId]
+    );
+    return rows || [];
+  }
+
+  async function selectPrintApiData(tenantId, storeId, connectionId) {
+    const row = await selectPrintApiRow(tenantId, storeId, connectionId);
     if (!row) return null;
-    const printers = await selectPrintApiPrinters(tenantId, storeId, Number(row.id));
-    return { ...row, printers };
+    const [storeRows] = await db.query(`SELECT default_receipt_printer_id FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1`, [tenantId, storeId]);
+    const printers = await selectPrintApiPrinters(tenantId, storeId);
+    const agents = await selectPrintApiAgents(tenantId, storeId, connectionId);
+    const printersByAgentId = new Map();
+    printers.forEach((printer) => {
+      const agentId = Number(printer.agent_id || 0);
+      if (!printersByAgentId.has(agentId)) printersByAgentId.set(agentId, []);
+      printersByAgentId.get(agentId).push(printer);
+    });
+    return {
+      ...row,
+      connection_id: Number(row.id),
+      agent_online: agents.some((agent) => Number(agent.is_online) === 1) ? 1 : 0,
+      default_printer_id: Number(storeRows[0]?.default_receipt_printer_id || 0) || null,
+      printers,
+      agents: agents.map((agent) => ({ ...agent, printers: printersByAgentId.get(Number(agent.id)) || [] }))
+    };
   }
 
   async function selectPrintApiList(tenantId) {
@@ -5544,12 +5566,13 @@ async function fetchStoreWithHours(tenantId, storeId) {
           s.id AS store_id,
           s.name AS store_name,
           t.id AS token_id,
-          t.token,
+          t.display_name,
           t.is_active,
           t.agent_name,
           t.agent_version,
           t.last_heartbeat_at,
           t.agent_running,
+          (SELECT COUNT(*) FROM print_agents a WHERE a.tenant_id=s.tenant_id AND a.store_id=s.id AND a.token_id=t.id) AS agent_count,
           IF(
             t.last_heartbeat_at IS NOT NULL
             AND t.last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
@@ -5577,7 +5600,11 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const storeExists = await ensureStoreExists(tenantId, storeId);
       if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
 
-      const row = await selectPrintApiData(tenantId, storeId);
+      const connectionId = Number(req.query.connection_id);
+      if (!Number.isFinite(connectionId) || connectionId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_CONNECTION_ID' });
+      }
+      const row = await selectPrintApiData(tenantId, storeId, connectionId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ print API:', err);
@@ -5590,7 +5617,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       const rows = await selectPrintApiList(tenantId);
-      res.json({ ok: true, data: { items: rows } });
+      res.json({ ok: true, data: { items: rows, connections: rows.filter((row) => Number(row.token_id || 0) > 0) } });
     } catch (err) {
       console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ print API list:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -5614,22 +5641,13 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
 
       const token = makePrintApiToken();
-      await db.query(
-        `INSERT INTO print_api_tokens (tenant_id, store_id, token, is_active)
-         VALUES (?,?,?,1)
-         ON DUPLICATE KEY UPDATE
-           token=VALUES(token),
-           is_active=1,
-           updated_at=NOW(),
-           printer_name=NULL,
-           agent_name=NULL,
-           agent_version=NULL,
-           last_heartbeat_at=NULL,
-           agent_running=0`,
-        [tenantId, storeId, token]
+      const [insertResult] = await db.query(
+        `INSERT INTO print_api_tokens (tenant_id, store_id, display_name, token, is_active)
+         VALUES (?,?,?,?,1)`,
+        [tenantId, storeId, String(req.body?.name || 'Новое подключение').trim().slice(0, 255) || 'Новое подключение', token]
       );
 
-      const row = await selectPrintApiData(tenantId, storeId);
+      const row = await selectPrintApiData(tenantId, storeId, Number(insertResult.insertId));
       res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('РћС€РёР±РєР° РіРµРЅРµСЂР°С†РёРё print API:', err);
@@ -5645,16 +5663,21 @@ async function fetchStoreWithHours(tenantId, storeId) {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       const storeId = Number(req.body?.store_id || req.query?.store_id);
+      const connectionId = Number(req.body?.connection_id || req.query?.connection_id);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       if (!Number.isFinite(storeId) || storeId <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      }
+      if (!Number.isFinite(connectionId) || connectionId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_CONNECTION_ID' });
       }
       const storeExists = await ensureStoreExists(tenantId, storeId);
       if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
 
       const [rows] = await db.query(
-        `SELECT id, token, is_active FROM print_api_tokens WHERE tenant_id=? AND store_id=? LIMIT 1`,
-        [tenantId, storeId]
+        `SELECT id, token, is_active FROM print_api_tokens
+         WHERE id=? AND tenant_id=? AND store_id=? LIMIT 1`,
+        [connectionId, tenantId, storeId]
       );
       if (!rows.length) {
         return res.status(404).json({ ok: false, error: 'PRINT_TOKEN_NOT_FOUND' });
@@ -5680,9 +5703,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
             sound_new_order_url,
             sound_new_message_url
          FROM print_api_tokens
-         WHERE tenant_id=? AND store_id=?
+         WHERE id=? AND tenant_id=? AND store_id=?
          LIMIT 1`,
-        [tenantId, storeId]
+        [connectionId, tenantId, storeId]
       );
       const current = currentRows[0] || {};
       const notifyNewOrder = hasOwn("notify_new_order_enabled")
@@ -5702,8 +5725,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
         await db.query(
           `UPDATE print_api_tokens
            SET notify_new_order_enabled=?, notify_new_message_enabled=?, sound_new_order_url=?, sound_new_message_url=?, updated_at=NOW()
-           WHERE tenant_id=? AND store_id=?`,
-          [notifyNewOrder, notifyNewMessage, soundNewOrder, soundNewMessage, tenantId, storeId]
+           WHERE id=? AND tenant_id=? AND store_id=?`,
+          [notifyNewOrder, notifyNewMessage, soundNewOrder, soundNewMessage, Number(rows[0].id), tenantId, storeId]
         );
       } catch (updateErr) {
         if (String(updateErr?.code || "") === "ER_BAD_FIELD_ERROR") {
@@ -5725,18 +5748,85 @@ async function fetchStoreWithHours(tenantId, storeId) {
             return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
           }
           await db.query(
-            `UPDATE print_printers
-             SET is_default=IF(id=?,1,0), updated_at=NOW()
-             WHERE tenant_id=? AND store_id=?`,
+            `UPDATE ten_stores SET default_receipt_printer_id=? WHERE tenant_id=? AND id=?`,
             [defaultPrinterId, tenantId, storeId]
+          );
+        } else {
+          await db.query(
+            `UPDATE ten_stores SET default_receipt_printer_id=NULL WHERE tenant_id=? AND id=?`,
+            [tenantId, storeId]
           );
         }
       }
 
-      const row = await selectPrintApiData(tenantId, storeId);
+      if (hasOwn('name')) {
+        await db.query(
+          `UPDATE print_api_tokens SET display_name=? WHERE id=? AND tenant_id=? AND store_id=?`,
+          [String(req.body.name || '').trim().slice(0, 255) || 'Подключение', Number(rows[0].id), tenantId, storeId]
+        );
+      }
+
+      if (hasOwn('is_active')) {
+        await db.query(
+          `UPDATE print_api_tokens SET is_active=?, updated_at=NOW() WHERE id=? AND tenant_id=? AND store_id=?`,
+          [parseToggle(req.body.is_active, Number(rows[0].is_active) === 1 ? 1 : 0), connectionId, tenantId, storeId]
+        );
+      }
+
+      const row = await selectPrintApiData(tenantId, storeId, connectionId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ print API РЅР°СЃС‚СЂРѕРµРє:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/print-api/regenerate', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = Number(req.body?.store_id);
+      const connectionId = Number(req.body?.connection_id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!(storeId > 0)) return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      if (!(connectionId > 0)) return res.status(400).json({ ok: false, error: 'BAD_CONNECTION_ID' });
+      const [result] = await db.query(
+        `UPDATE print_api_tokens SET token=?, updated_at=NOW() WHERE id=? AND tenant_id=? AND store_id=?`,
+        [makePrintApiToken(), connectionId, tenantId, storeId]
+      );
+      if (!Number(result.affectedRows || 0)) return res.status(404).json({ ok: false, error: 'PRINT_TOKEN_NOT_FOUND' });
+      res.json({ ok: true, data: await selectPrintApiData(tenantId, storeId, connectionId) });
+    } catch (err) {
+      console.error('Print API token regeneration failed:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/print-api/test-print', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = Number(req.body?.store_id);
+      const printerId = Number(req.body?.printer_id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!(storeId > 0)) return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      if (!(printerId > 0)) return res.status(400).json({ ok: false, error: 'BAD_PRINTER_ID' });
+      const [printers] = await db.query(
+        `SELECT p.id, p.agent_id, p.token_id FROM print_printers p
+         INNER JOIN print_api_tokens t ON t.id=p.token_id AND t.tenant_id=p.tenant_id AND t.store_id=p.store_id
+         WHERE p.id=? AND p.tenant_id=? AND p.store_id=? AND t.is_active=1 LIMIT 1`,
+        [printerId, tenantId, storeId]
+      );
+      const printer = printers[0] || null;
+      if (!printer || !(Number(printer.agent_id) > 0)) return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
+      const nonce = Date.now();
+      await db.query(
+        `INSERT INTO print_jobs
+          (tenant_id, store_id, token_id, target_printer_id, target_agent_id, order_id, public_id, job_name, pdf_base64, status, attempts, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, 'CRM Test Print', ?, 'pending', 0, NOW(), NOW())`,
+        [tenantId, storeId, Number(printer.token_id), printerId, Number(printer.agent_id), nonce, Buffer.from('<!doctype html><meta charset="utf-8"><h1>Тестовая печать CRM</h1>').toString('base64')]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Print API test print failed:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -5963,6 +6053,13 @@ async function fetchStoreWithHours(tenantId, storeId) {
               p.display_name AS printer_display_name,
               p.system_name AS printer_system_name,
               p.status AS printer_status,
+              p.agent_id AS printer_agent_id,
+              p.token_id AS printer_connection_id,
+              a.device_name AS printer_agent_name,
+              a.last_heartbeat_at AS printer_agent_last_heartbeat_at,
+              a.agent_running AS printer_agent_running,
+              t.display_name AS printer_connection_name,
+              t.is_active AS printer_connection_active,
               pt.title AS template_title
        FROM prod_production_zones z
        LEFT JOIN prod_store_print_rules r
@@ -5980,7 +6077,17 @@ async function fetchStoreWithHours(tenantId, storeId) {
         AND s.id=r.store_id
        LEFT JOIN print_printers p
          ON p.tenant_id=z.tenant_id
+        AND p.store_id=r.store_id
         AND p.id=r.printer_id
+       LEFT JOIN print_agents a
+         ON a.tenant_id=p.tenant_id
+        AND a.store_id=p.store_id
+        AND a.token_id=p.token_id
+        AND a.id=p.agent_id
+       LEFT JOIN print_api_tokens t
+         ON t.tenant_id=p.tenant_id
+        AND t.store_id=p.store_id
+        AND t.id=p.token_id
        LEFT JOIN print_templates pt
          ON pt.tenant_id=z.tenant_id
         AND pt.id=r.template_id
@@ -5996,10 +6103,19 @@ async function fetchStoreWithHours(tenantId, storeId) {
       [tenantId]
     );
     const [printerRows] = await db.query(
-      `SELECT id, store_id, system_name, display_name, is_default, status
-       FROM print_printers
-       WHERE tenant_id=? AND status='online'
-       ORDER BY store_id ASC, is_default DESC, display_name ASC, system_name ASC`,
+      `SELECT p.id, p.store_id, p.token_id, p.agent_id, p.system_name, p.display_name,
+              p.is_default, p.status, p.last_seen_at,
+              a.device_name AS agent_name, a.last_heartbeat_at AS agent_last_heartbeat_at,
+              a.agent_running,
+              IF(a.last_heartbeat_at IS NOT NULL AND a.last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),1,0) AS agent_online,
+              t.display_name AS connection_name, t.is_active AS connection_active
+       FROM print_printers p
+       LEFT JOIN print_agents a
+         ON a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.token_id=p.token_id AND a.id=p.agent_id
+       LEFT JOIN print_api_tokens t
+         ON t.tenant_id=p.tenant_id AND t.store_id=p.store_id AND t.id=p.token_id
+       WHERE p.tenant_id=?
+       ORDER BY p.store_id ASC, t.display_name ASC, p.agent_id ASC, p.display_name ASC, p.system_name ASC`,
       [tenantId]
     );
     const [ruleRows] = await db.query(
@@ -6048,7 +6164,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
       const [printerRows] = await db.query(
         `SELECT id FROM print_printers
-         WHERE id=? AND tenant_id=? AND store_id=? AND status='online'
+         WHERE id=? AND tenant_id=? AND store_id=?
          LIMIT 1`,
         [printerId, tenantId, storeId]
       );
@@ -6125,7 +6241,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
       const [printerRows] = await db.query(
         `SELECT id FROM print_printers
-         WHERE id=? AND tenant_id=? AND store_id=? AND status='online'
+         WHERE id=? AND tenant_id=? AND store_id=?
          LIMIT 1`,
         [printerId, tenantId, storeId]
       );

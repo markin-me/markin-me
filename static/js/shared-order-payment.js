@@ -10,8 +10,8 @@
   var paymentMethodsCache = [];
   var paymentMethodsPromise = null;
   var paymentMethodsCacheStorageKey = '';
+  var paymentMethodsHydrated = false;
   var PAYMENT_METHODS_CACHE_VERSION = 1;
-  var PAYMENT_METHODS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
   function getTenantIdFromStorage() {
     try {
@@ -52,41 +52,14 @@
     }).filter(Boolean);
   }
 
-  function readPersistedPaymentMethods() {
-    try {
-      var raw = localStorage.getItem(paymentMethodsCacheKey());
-      if (!raw) return [];
-      var parsed = JSON.parse(raw);
-      var ts = Number(parsed && parsed.ts || 0);
-      if (!(ts > 0) || Date.now() - ts > PAYMENT_METHODS_CACHE_MAX_AGE_MS) return [];
-      return normalizePaymentMethodsPayload(parsed && parsed.items);
-    } catch (err) {
-      return [];
-    }
-  }
-
-  function persistPaymentMethods(items) {
-    try {
-      paymentMethodsCacheStorageKey = paymentMethodsCacheKey();
-      localStorage.setItem(paymentMethodsCacheKey(), JSON.stringify({
-        ts: Date.now(),
-        items: normalizePaymentMethodsPayload(items),
-      }));
-    } catch (err) {}
-  }
-
   function ensurePaymentMethodsHydrated() {
     var cacheKey = paymentMethodsCacheKey();
     if (paymentMethodsCacheStorageKey && paymentMethodsCacheStorageKey !== cacheKey) {
       paymentMethodsCache = [];
       paymentMethodsPromise = null;
+      paymentMethodsHydrated = false;
     }
     paymentMethodsCacheStorageKey = cacheKey;
-    if (Array.isArray(paymentMethodsCache) && paymentMethodsCache.length) return;
-    var persisted = readPersistedPaymentMethods();
-    if (persisted.length) {
-      paymentMethodsCache = persisted;
-    }
   }
 
   function escapeHtml(value) {
@@ -216,7 +189,7 @@
     var opts = options || {};
     var cacheOnly = !!opts.cacheOnly;
     ensurePaymentMethodsHydrated();
-    if (Array.isArray(paymentMethodsCache) && paymentMethodsCache.length) {
+    if (paymentMethodsHydrated) {
       return Promise.resolve(getActivePaymentMethods(order));
     }
     if (paymentMethodsPromise) {
@@ -224,16 +197,31 @@
         return getActivePaymentMethods(order);
       });
     }
-    if (cacheOnly) {
-      return Promise.reject(new Error('PAYMENT_METHODS_OFFLINE_UNAVAILABLE'));
-    }
-    paymentMethodsPromise = apiJson('/api/admin/tenant/order-payments').then(function (json) {
-      paymentMethodsCache = normalizePaymentMethodsPayload(json && json.items);
-      persistPaymentMethods(paymentMethodsCache);
+    var load = function () {
+      return cacheOnly
+        ? Promise.reject(new Error('PAYMENT_METHODS_OFFLINE_UNAVAILABLE'))
+        : apiJson('/api/admin/tenant/order-payments');
+    };
+    var request = window.AdminReferenceCache
+      ? window.AdminReferenceCache.getOrLoadReference('payment-methods', {
+          load: load,
+          normalize: function (json) {
+            if (!json || !Array.isArray(json.items)) throw new Error('INVALID_PAYMENT_METHODS_RESPONSE');
+            return normalizePaymentMethodsPayload(json.items);
+          },
+          validate: function (items) { return Array.isArray(items); },
+          onUpdate: function (items) { paymentMethodsCache = normalizePaymentMethodsPayload(items); }
+        })
+      : load().then(function (json) {
+          if (!json || !Array.isArray(json.items)) throw new Error('INVALID_PAYMENT_METHODS_RESPONSE');
+          return normalizePaymentMethodsPayload(json.items);
+        });
+    paymentMethodsPromise = request.then(function (items) {
+      paymentMethodsCache = normalizePaymentMethodsPayload(items);
+      paymentMethodsHydrated = true;
       return paymentMethodsCache;
     }).catch(function (err) {
       console.error('shared order payment methods load error:', err);
-      paymentMethodsCache = readPersistedPaymentMethods();
       return paymentMethodsCache;
     }).finally(function () {
       paymentMethodsPromise = null;
@@ -679,8 +667,10 @@
   function toggleCashPaymentModalSkin(enabled) {
     var appModalEl = document.getElementById('appModal');
     var appModalBodyEl = document.getElementById('appModalBody');
+    var appModalBackdropEl = document.getElementById('appModalBackdrop');
     if (appModalEl) appModalEl.classList.toggle('cash-payment-app-modal', !!enabled);
     if (appModalBodyEl) appModalBodyEl.classList.toggle('cash-payment-app-modal-body', !!enabled);
+    if (appModalBackdropEl) appModalBackdropEl.classList.toggle('cash-payment-modal-backdrop', !!enabled);
   }
 
   function translateOrderSettlementError(err, mode) {
@@ -1391,6 +1381,7 @@
       paymentMethodsCache = [];
       paymentMethodsPromise = null;
       paymentMethodsCacheStorageKey = '';
+      paymentMethodsHydrated = false;
     },
   };
 })();

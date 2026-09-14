@@ -27,6 +27,10 @@
   const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}`;
   const BONUS_HISTORY_PAGE_SIZE = 50;
   const BONUS_LEVEL_FLIP_ANIMATION_MS = 560;
+  const CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION = 1;
+  const CLIENT_BENEFITS_SNAPSHOT_FRESH_MS = 5 * 60 * 1000;
+  const CLIENT_BENEFITS_SNAPSHOT_HARD_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+  const CLIENT_BENEFITS_SNAPSHOT_CACHE_MAX = 200;
 
   function writePersistedMobileChatView(view) {
     if (!document.body || !document.body.classList.contains("page-chat")) return String(view || "");
@@ -2060,6 +2064,7 @@
   const elSearchWrap = $("#clientsSearchWrap");
   const elToolbarTitle = $("#clientsToolbarTitle");
   const elToolbarText = $("#clientsToolbarText");
+  const elOnlineCount = $("#clientsOnlineCount");
   const elToolbarBackBtn = $("#clientsToolbarBackBtn");
   const elSortToggle = $("#clientsSortToggle");
   const elSortDropdown = $("#clientsSortDropdown");
@@ -2371,6 +2376,7 @@
   // Always scope right-panel selectors to the actual visible right column.
   const clientRightRoot = document.querySelector(".page-col-right .client-info-panel") || document;
   const right$ = (sel) => $(sel, clientRightRoot);
+  const right$$ = (sel) => $$(sel, clientRightRoot);
   const subscriptionPreviewInfoBtn = $("#subscriptionPreviewInfoBtn");
   const subscriptionAboutInfoBtn = $("#subscriptionAboutInfoBtn");
   const subscriptionFaqInfoBtn = $("#subscriptionFaqInfoBtn");
@@ -2627,9 +2633,11 @@
   const clientInfoWrap = right$("#clientInfoWrap");
   const clientOrderInfoWrap = right$("#clientOrderInfoWrap");
   const clientOrderInfoFooter = right$("#clientOrderInfoFooter");
-  const clientBenefitsFooter = right$("#clientBenefitsFooter");
-  const clientBenefitsOpenBtn = right$("#clientBenefitsOpenBtn");
-  const clientBonusesOpenBtn = right$("#clientBonusesOpenBtn");
+  const clientBenefitsFooters = right$("[data-client-passport-footer]")
+    ? right$$("[data-client-passport-footer]")
+    : [];
+  const clientBenefitsOpenBtns = right$$('[data-client-passport-action="benefits"]');
+  const clientBonusesOpenBtns = right$$('[data-client-passport-action="bonuses"]');
 
   if (bannerEmpty) {
     const emptyTitle = bannerEmpty.querySelector('.empty-title');
@@ -2703,12 +2711,10 @@
   const clientTabOrders = right$("#clientTabOrders");
   const clientTabDiscounts = right$("#clientTabDiscounts");
   const clientAddressesList = right$("#clientAddresses");
-  const clientOrdersList = right$("#clientOrdersList");
   const clientActiveOrderCard = right$("#clientActiveOrderCard");
   const clientCompletedOrdersAccordion = right$("#clientCompletedOrdersAccordion");
   const clientCompletedOrdersList = right$("#clientCompletedOrdersList");
   const clientCompletedOrdersMore = right$("#clientCompletedOrdersMore");
-  const clientOrdersListView = right$("#clientOrdersListView");
   const clientDiscountsList = right$("#clientDiscountsList");
   const clientDiscountsEmpty = right$("#clientDiscountsEmpty");
   const clientOrderDetailView = right$("#clientOrderDetailView");
@@ -2749,7 +2755,7 @@
   // -----------------------------
   const state = {
     currentView: "clients",   // "clients" | "filter-categories" | "discounts" | "banners" | "bonus-cards" | "bonus-referrals"
-    activeFilter: "all",      // "all" | "custom_<id>"
+    activeFilter: "all",      // "all" | "online" | "custom"
     activeCustomFilterId: null,
     q: "",
     sort: "last_desc",
@@ -2773,8 +2779,14 @@
     clientCompletedNextOffset: 0,
     clientCompletedHasMore: false,
     clientCompletedLoading: false,
+    clientCompletedLoaded: false,
+    clientCompletedError: false,
+    clientPassportCache: new Map(),
+    clientPassportDirty: new Map(),
+    clientActiveOrderRequest: null,
     clientDiscounts: [],      // Скидки клиента
     totals: { all: 0 },
+    onlineCount: null,
     activeContentTab: "addresses",
     clientBenefitsModal: {
       customerId: null,
@@ -2803,7 +2815,11 @@
     },
     clientBenefitsPreviewByCustomerMode: new Map(),
     clientBenefitsPreviewKeyByCustomerMode: new Map(),
-    clientBenefitsPrefetchByCustomerMode: new Map(),
+    clientBenefitsSnapshotByCustomer: new Map(),
+    clientBenefitsSnapshotRequestByCustomer: new Map(),
+    clientBenefitsSnapshotDirty: new Set(),
+    clientBenefitsSnapshotErrorByCustomer: new Map(),
+    clientBenefitsSnapshotGenerationByCustomer: new Map(),
     clientBenefitsTokensByClient: new Map(),
     customFilters: [],        // Кастомные фильтры из БД
     editingFilterId: null,    // ID фильтра, который редактируем
@@ -3009,6 +3025,9 @@
   const CLIENTS_SCROLL_THRESHOLD_PX = 220;
   let clientsRequestToken = 0;
   let clientProfileRequestToken = 0;
+  let clientPassportOpenToken = 0;
+  let clientPassportContext = null;
+  let orderPassportContext = null;
   let orderRequestToken = 0;
   let discountCustomerSearchToken = 0;
   let discountCustomerSearchDebounce = null;
@@ -4333,6 +4352,7 @@
   }
 
   document.addEventListener('click', (e) => {
+    if (!document.body?.classList?.contains('page-clients')) return;
     const trigger = e.target.closest('[data-action="open-client"]');
     if (!trigger) return;
     e.preventDefault();
@@ -4345,13 +4365,13 @@
       if (!clientPhone) return;
       findClientIdByPhone(clientPhone)
         .then((id) => {
-          if (id) selectClient(id);
+          if (id) openClientPassport(id, { source: "marketing" });
         })
         .catch(console.error);
       return;
     }
 
-    selectClient(clientId).catch(console.error);
+    openClientPassport(clientId, { source: "marketing" }).catch(console.error);
   });
 
   document.addEventListener('click', (e) => {
@@ -4449,10 +4469,6 @@
     [clientTabAddresses, clientTabOrders].forEach((panel) => {
       if (panel) panel.classList.toggle("is-active", panel.dataset.ctab === tab);
     });
-    // lazy load orders
-    if (tab === "orders" && state.activeClientId) {
-      loadClientOrders().catch(console.error);
-    }
   }
 
   if (clientContentTabs) {
@@ -4462,19 +4478,19 @@
     });
   }
 
-  if (clientBenefitsOpenBtn) {
-    clientBenefitsOpenBtn.addEventListener("click", (event) => {
+  clientBenefitsOpenBtns.forEach((button) => {
+    button.addEventListener("click", (event) => {
       event.preventDefault();
       void openClientBenefitsOverlay();
     });
-  }
+  });
 
-  if (clientBonusesOpenBtn) {
-    clientBonusesOpenBtn.addEventListener("click", (event) => {
+  clientBonusesOpenBtns.forEach((button) => {
+    button.addEventListener("click", (event) => {
       event.preventDefault();
       void openClientBonusesOverlay();
     });
-  }
+  });
 
   function normalizeClientBenefitsMode(value) {
     return String(value || "").trim().toLowerCase() === "all" ? "all" : "customer";
@@ -4682,7 +4698,7 @@
   function getClientBenefitsCacheSlot(customerId, mode) {
     const id = Number(customerId || 0);
     const activeMode = normalizeClientBenefitsMode(mode);
-    return `${id}:${activeMode}`;
+    return `${getClientBenefitsSnapshotSlot(id)}:${activeMode}`;
   }
 
   function buildClientBenefitsPreviewKey() {
@@ -4735,56 +4751,187 @@
     return state.clientBenefitsPreviewByCustomerMode.get(getClientBenefitsCacheSlot(id, activeMode)) || null;
   }
 
-  async function prefetchClientBenefitsForCustomer(customerId, options = {}) {
-    const normalizedCustomerId = Number(customerId || 0);
-    if (!(normalizedCustomerId > 0)) return null;
-    const modes = Array.isArray(options?.modes) && options.modes.length
-      ? options.modes.map((mode) => normalizeClientBenefitsMode(mode))
-      : ["customer", "all"];
-    const force = options?.force === true;
-    const tasks = modes.map(async (mode) => {
-      const requestKey = buildClientBenefitsRequestKeyForCustomer(normalizedCustomerId, mode);
-      const cacheSlot = getClientBenefitsCacheSlot(normalizedCustomerId, mode);
-      if (!force && requestKey === String(state.clientBenefitsPreviewKeyByCustomerMode.get(cacheSlot) || "")) {
-        const cached = state.clientBenefitsPreviewByCustomerMode.get(cacheSlot) || null;
-        if (cached) return cached;
+  function getClientBenefitsSnapshotScope(customerId) {
+    const storeId = Number(localStorage.getItem("activeStoreId") || 1);
+    return {
+      tenantId: Number(tenantId || 0),
+      storeId: Number.isFinite(storeId) && storeId > 0 ? storeId : 1,
+      customerId: Number(customerId || 0),
+    };
+  }
+
+  function getClientBenefitsSnapshotSlot(customerId) {
+    const scope = getClientBenefitsSnapshotScope(customerId);
+    return `t${scope.tenantId}:s${scope.storeId}:c${scope.customerId}`;
+  }
+
+  function getClientBenefitsSnapshotPersistentKey(customerId) {
+    return `benefits-snapshot:v${CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION}:${getClientBenefitsSnapshotSlot(customerId)}`;
+  }
+
+  function isValidClientBenefitsSnapshot(snapshot, scope) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return false;
+    if (Number(snapshot.client_id || 0) !== scope.customerId) return false;
+    if (Number(snapshot.store_id || 0) !== scope.storeId) return false;
+    if (!snapshot.benefits || typeof snapshot.benefits !== "object") return false;
+    if (!snapshot.bonuses || typeof snapshot.bonuses !== "object") return false;
+    return true;
+  }
+
+  function applyClientBenefitsSnapshot(customerId, snapshot) {
+    const id = Number(customerId || 0);
+    const scope = getClientBenefitsSnapshotScope(id);
+    if (!(id > 0) || !isValidClientBenefitsSnapshot(snapshot, scope)) return null;
+    const slot = getClientBenefitsSnapshotSlot(id);
+    state.clientBenefitsSnapshotByCustomer.set(slot, snapshot);
+    state.clientBenefitsSnapshotDirty.delete(slot);
+    state.clientBenefitsSnapshotErrorByCustomer.delete(slot);
+    setClientBenefitsCachedData(id, "customer", snapshot?.benefits?.customer || {}, buildClientBenefitsRequestKeyForCustomer(id, "customer"));
+    setClientBenefitsCachedData(id, "all", snapshot?.benefits?.catalog || {}, buildClientBenefitsRequestKeyForCustomer(id, "all"));
+    return snapshot;
+  }
+
+  function patchVisibleClientBenefitsSnapshot(customerId, snapshot) {
+    if (Number(state.clientBenefitsModal.customerId || 0) !== Number(customerId || 0)) return;
+    if (state.clientBenefitsModal.context === "bonus") {
+      state.clientBenefitsModal.bonusCardData = snapshot?.bonuses || null;
+      state.clientBenefitsModal.bonusCardError = "";
+      renderClientBenefitsOverlay();
+      return;
+    }
+    const requestBody = buildClientBenefitsPreviewRequest();
+    const hasDynamicSelection = !!(
+      requestBody.selected_discount_id
+      || requestBody.promo_code
+      || requestBody.selected_promo_source
+      || requestBody.selected_promo_reward_id
+    );
+    if (hasDynamicSelection) return;
+    const mode = normalizeClientBenefitsMode(state.clientBenefitsModal.mode);
+    state.clientBenefitsModal.data = mode === "all" ? snapshot?.benefits?.catalog : snapshot?.benefits?.customer;
+    state.clientBenefitsModal.error = "";
+    renderClientBenefitsOverlay();
+  }
+
+  async function readPersistentClientBenefitsSnapshot(customerId) {
+    if (!window.AdminPersistentCache) return null;
+    const scope = getClientBenefitsSnapshotScope(customerId);
+    const key = getClientBenefitsSnapshotPersistentKey(customerId);
+    try {
+      const record = await window.AdminPersistentCache.read(key);
+      const fetchedAt = Number(record?.fetchedAt || 0);
+      const age = Date.now() - fetchedAt;
+      const valid = Number(record?.version || 0) === CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION
+        && Number(record?.tenantId || 0) === scope.tenantId
+        && Number(record?.storeId || 0) === scope.storeId
+        && Number(record?.customerId || 0) === scope.customerId
+        && fetchedAt > 0
+        && age >= 0
+        && age <= CLIENT_BENEFITS_SNAPSHOT_HARD_EXPIRY_MS
+        && isValidClientBenefitsSnapshot(record?.data, scope);
+      if (!valid) {
+        if (record) void window.AdminPersistentCache.remove(key).catch(() => {});
+        return null;
       }
-      const inflightKey = `${cacheSlot}:${requestKey}`;
-      const activePromise = state.clientBenefitsPrefetchByCustomerMode.get(inflightKey);
-      if (activePromise) return activePromise;
+      return { snapshot: record.data, stale: age > CLIENT_BENEFITS_SNAPSHOT_FRESH_MS };
+    } catch (error) {
+      console.warn("Client benefits cache read failed:", error);
+      return null;
+    }
+  }
 
-      const nextPromise = (async () => {
-        const json = mode === "all"
-          ? await apiJson(`/api/admin/clients/${normalizedCustomerId}/benefits/catalog`, {
-            method: "GET",
-          })
-          : await apiJson("/api/admin/orders/benefits/preview", {
-            method: "POST",
-            body: {
-              customer_id: normalizedCustomerId,
-              mode: "customer",
-            },
-          });
-        const payload = setClientBenefitsCachedData(
-          normalizedCustomerId,
-          mode,
-          json?.data && typeof json.data === "object" ? json.data : {},
-          requestKey
-        );
-        return payload;
-      })().finally(() => {
-        state.clientBenefitsPrefetchByCustomerMode.delete(inflightKey);
+  async function persistClientBenefitsSnapshot(customerId, snapshot) {
+    if (!window.AdminPersistentCache) return;
+    const scope = getClientBenefitsSnapshotScope(customerId);
+    const key = getClientBenefitsSnapshotPersistentKey(customerId);
+    const prefix = `benefits-snapshot:v${CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION}:t${scope.tenantId}:s${scope.storeId}:`;
+    try {
+      await window.AdminPersistentCache.write(key, {
+        version: CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION,
+        tenantId: scope.tenantId,
+        storeId: scope.storeId,
+        customerId: scope.customerId,
+        fetchedAt: Date.now(),
+        data: snapshot,
       });
+      void window.AdminPersistentCache.prunePrefix(prefix, CLIENT_BENEFITS_SNAPSHOT_CACHE_MAX).catch(() => {});
+    } catch (error) {
+      console.warn("Client benefits cache write failed:", error);
+    }
+  }
 
-      state.clientBenefitsPrefetchByCustomerMode.set(inflightKey, nextPromise);
-      return nextPromise;
+  function fetchClientBenefitsSnapshot(customerId, slot, generation) {
+    const request = apiJson(`/api/admin/clients/${customerId}/benefits-snapshot`)
+      .then(async (json) => {
+        const snapshot = json?.data || null;
+        if ((state.clientBenefitsSnapshotGenerationByCustomer.get(slot) || 0) !== generation) {
+          return state.clientBenefitsSnapshotRequestByCustomer.get(slot) || state.clientBenefitsSnapshotByCustomer.get(slot) || null;
+        }
+        const applied = applyClientBenefitsSnapshot(customerId, snapshot);
+        if (!applied) throw new Error("BENEFITS_SNAPSHOT_INVALID");
+        await persistClientBenefitsSnapshot(customerId, applied);
+        patchVisibleClientBenefitsSnapshot(customerId, applied);
+        return applied;
+      })
+      .catch((error) => {
+        state.clientBenefitsSnapshotErrorByCustomer.set(slot, String(error?.message || "API_ERROR"));
+        throw error;
+      })
+      .finally(() => {
+        if (state.clientBenefitsSnapshotRequestByCustomer.get(slot) === request) {
+          state.clientBenefitsSnapshotRequestByCustomer.delete(slot);
+        }
+      });
+    state.clientBenefitsSnapshotRequestByCustomer.set(slot, request);
+    return request;
+  }
+
+  function invalidateClientBenefitsSnapshot(customerId) {
+    const id = Number(customerId || 0);
+    if (!(id > 0)) return Promise.resolve();
+    const slot = getClientBenefitsSnapshotSlot(id);
+    state.clientBenefitsSnapshotDirty.add(slot);
+    state.clientBenefitsSnapshotGenerationByCustomer.set(slot, (state.clientBenefitsSnapshotGenerationByCustomer.get(slot) || 0) + 1);
+    state.clientBenefitsSnapshotByCustomer.delete(slot);
+    state.clientBenefitsSnapshotRequestByCustomer.delete(slot);
+    if (!window.AdminPersistentCache) return Promise.resolve();
+    return window.AdminPersistentCache.remove(getClientBenefitsSnapshotPersistentKey(id)).catch((error) => {
+      console.warn("Client benefits cache invalidation failed:", error);
     });
+  }
 
-    const settled = await Promise.allSettled(tasks);
-    return settled
-      .filter((entry) => entry.status === "fulfilled")
-      .map((entry) => entry.value)
-      .filter(Boolean);
+  async function ensureClientBenefitsSnapshot(customerId, options = {}) {
+    const id = Number(customerId || 0);
+    if (!(id > 0)) return null;
+    const slot = getClientBenefitsSnapshotSlot(id);
+    const force = options?.force === true || state.clientBenefitsSnapshotDirty.has(slot);
+    const cached = state.clientBenefitsSnapshotByCustomer.get(slot) || null;
+    if (!force && cached) return cached;
+    const activeRequest = state.clientBenefitsSnapshotRequestByCustomer.get(slot);
+    if (activeRequest) return activeRequest;
+    const generation = state.clientBenefitsSnapshotGenerationByCustomer.get(slot) || 0;
+    if (force) return fetchClientBenefitsSnapshot(id, slot, generation);
+
+    const request = readPersistentClientBenefitsSnapshot(id)
+      .then((persistent) => {
+        if ((state.clientBenefitsSnapshotGenerationByCustomer.get(slot) || 0) !== generation) {
+          return fetchClientBenefitsSnapshot(id, slot, state.clientBenefitsSnapshotGenerationByCustomer.get(slot) || 0);
+        }
+        if (!persistent) return fetchClientBenefitsSnapshot(id, slot, generation);
+        const snapshot = applyClientBenefitsSnapshot(id, persistent.snapshot);
+        if (!snapshot) return fetchClientBenefitsSnapshot(id, slot, generation);
+        if (persistent.stale) {
+          void fetchClientBenefitsSnapshot(id, slot, generation).catch(() => {});
+        }
+        return snapshot;
+      })
+      .finally(() => {
+        if (state.clientBenefitsSnapshotRequestByCustomer.get(slot) === request) {
+          state.clientBenefitsSnapshotRequestByCustomer.delete(slot);
+        }
+      });
+    state.clientBenefitsSnapshotRequestByCustomer.set(slot, request);
+    return request;
   }
 
   function refreshClientBenefitsAfterMutation(customerId, options = {}) {
@@ -4793,10 +4940,12 @@
     if (options?.refreshDiscounts === true && Number(state.activeClientId || 0) === normalizedCustomerId) {
       void loadClientDiscounts({ preferCache: true, refresh: true }).catch(console.error);
     }
-    void prefetchClientBenefitsForCustomer(normalizedCustomerId, {
-      modes: ["customer", "all"],
-      force: true,
-    }).catch(console.error);
+    const invalidation = invalidateClientBenefitsSnapshot(normalizedCustomerId);
+    const modalIsVisible = Number(state.clientBenefitsModal.customerId || 0) === normalizedCustomerId
+      && !document.getElementById("adminBenefitsOverlay")?.classList.contains("hidden");
+    if (modalIsVisible) {
+      void invalidation.then(() => ensureClientBenefitsSnapshot(normalizedCustomerId, { force: true })).catch(() => {});
+    }
   }
 
   function rememberClientBenefitsMainView(frame) {
@@ -4808,6 +4957,7 @@
       mode,
       requestKey: buildClientBenefitsPreviewKey(),
       snapshot: getClientBenefitsCachedPreview(customerId, mode),
+      renderedData: state.clientBenefitsModal.data,
       root: frame.root,
       scrollEl: frame.scrollEl,
       scrollTop: Number(frame.scrollEl.scrollTop || 0),
@@ -4830,6 +4980,7 @@
     if (normalizeClientBenefitsMode(mainView.mode) !== activeMode) return false;
     if (mainView.requestKey !== buildClientBenefitsPreviewKey()) return false;
     if (mainView.snapshot !== getClientBenefitsCachedPreview(customerId, activeMode)) return false;
+    if (mainView.renderedData !== state.clientBenefitsModal.data) return false;
 
     window.AdminBenefitsModal?.show({
       title: "Выгоды",
@@ -4896,6 +5047,23 @@
       default:
         return "Не удалось обновить выгоды.";
     }
+  }
+
+  function createClientBenefitsRetryCard(errorCode, onRetry) {
+    const card = document.createElement("div");
+    card.className = "shop-profile-card shop-checkout-benefits-empty";
+    const message = document.createElement("div");
+    message.textContent = getClientBenefitsActionErrorMessage({ message: errorCode });
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "shop-checkout-benefits-promo-entry-btn";
+    retry.textContent = "Повторить";
+    retry.addEventListener("click", (event) => {
+      event.preventDefault();
+      void onRetry();
+    });
+    card.append(message, retry);
+    return card;
   }
 
   function getClientBenefitsRenderData(previewData) {
@@ -6116,9 +6284,10 @@
     }
 
     if (state.clientBenefitsModal.bonusCardError) {
-      const errorCard = document.createElement("div");
-      errorCard.className = "shop-profile-card shop-checkout-benefits-empty";
-      errorCard.textContent = getClientBenefitsActionErrorMessage({ message: state.clientBenefitsModal.bonusCardError });
+      const errorCard = createClientBenefitsRetryCard(
+        state.clientBenefitsModal.bonusCardError,
+        () => loadClientBonusCard({ force: true })
+      );
       shell.appendChild(errorCard);
       return;
     }
@@ -6327,9 +6496,10 @@
       }
 
       if (state.clientBenefitsModal.error) {
-        const errorCard = document.createElement("div");
-        errorCard.className = "shop-profile-card shop-checkout-benefits-empty";
-        errorCard.textContent = getClientBenefitsActionErrorMessage({ message: state.clientBenefitsModal.error });
+        const errorCard = createClientBenefitsRetryCard(
+          state.clientBenefitsModal.error,
+          () => loadClientBenefitsPreview({ force: true })
+        );
         shell.appendChild(errorCard);
         return;
       }
@@ -6389,9 +6559,10 @@
     }
 
     if (state.clientBenefitsModal.error) {
-      const errorCard = document.createElement("div");
-      errorCard.className = "shop-profile-card shop-checkout-benefits-empty";
-      errorCard.textContent = getClientBenefitsActionErrorMessage({ message: state.clientBenefitsModal.error });
+      const errorCard = createClientBenefitsRetryCard(
+        state.clientBenefitsModal.error,
+        () => loadClientBenefitsPreview({ force: true })
+      );
       shell.appendChild(errorCard);
       return;
     }
@@ -6428,7 +6599,10 @@
     const mode = normalizeClientBenefitsMode(state.clientBenefitsModal.mode);
     const cacheSlot = getClientBenefitsCacheSlot(customerId, mode);
     const requestKey = buildClientBenefitsPreviewKey();
-    if (!opts?.force && requestKey === String(state.clientBenefitsPreviewKeyByCustomerMode.get(cacheSlot) || "")) {
+    const reqToken = ++clientBenefitsPreviewRequestToken;
+    if (!opts?.force
+      && !state.clientBenefitsSnapshotDirty.has(getClientBenefitsSnapshotSlot(customerId))
+      && requestKey === String(state.clientBenefitsPreviewKeyByCustomerMode.get(cacheSlot) || "")) {
       const cached = state.clientBenefitsPreviewByCustomerMode.get(cacheSlot) || null;
       if (cached) {
         state.clientBenefitsModal.data = cached;
@@ -6441,22 +6615,31 @@
       }
     }
 
-    const reqToken = ++clientBenefitsPreviewRequestToken;
     state.clientBenefitsModal.loading = true;
     state.clientBenefitsModal.error = "";
     if (opts?.render !== false) renderClientBenefitsOverlay();
     try {
-      const json = mode === "all"
-        ? await apiJson(`/api/admin/clients/${customerId}/benefits/catalog`, {
-          method: "GET",
-        })
-        : await apiJson("/api/admin/orders/benefits/preview", {
+      const requestBody = buildClientBenefitsPreviewRequest();
+      const isInitialSnapshotState = mode === "all" || (
+        !requestBody.selected_discount_id
+        && !requestBody.promo_code
+        && !requestBody.selected_promo_source
+        && !requestBody.selected_promo_reward_id
+      );
+      let nextPayload = null;
+      if (isInitialSnapshotState) {
+        const snapshot = await ensureClientBenefitsSnapshot(customerId, { force: opts?.force === true });
+        nextPayload = mode === "all" ? snapshot?.benefits?.catalog : snapshot?.benefits?.customer;
+      } else {
+        const json = await apiJson("/api/admin/orders/benefits/preview", {
           method: "POST",
-          body: buildClientBenefitsPreviewRequest(),
+          body: requestBody,
         });
+        nextPayload = json?.data;
+      }
       if (reqToken !== clientBenefitsPreviewRequestToken) return null;
       const nextData = setClientBenefitsLoadedData(
-        json?.data && typeof json.data === "object" ? json.data : {},
+        nextPayload && typeof nextPayload === "object" ? nextPayload : {},
         requestKey
       );
       return nextData;
@@ -6484,6 +6667,9 @@
     state.clientBenefitsModal.screen = "main";
     state.clientBenefitsModal.title = "Выгоды";
     state.clientBenefitsModal.payload = null;
+    state.clientBenefitsModal.data = null;
+    state.clientBenefitsModal.loading = false;
+    state.clientBenefitsModal.mainView = null;
     setClientBenefitsModeToggleState(nextMode);
     await loadClientBenefitsPreview();
   }
@@ -6492,6 +6678,18 @@
     const customerId = Number(customerIdOverride || state.activeClientId || 0);
     if (!(customerId > 0)) return;
     ensureClientBenefitsOverlay();
+    const previousCustomerId = Number(state.clientBenefitsModal.customerId || 0);
+    const hasReusableMainView = Number(state.clientBenefitsModal.mainView?.customerId || 0) === customerId;
+    if (previousCustomerId !== customerId) {
+      clientBenefitsPreviewRequestToken += 1;
+      state.clientBenefitsModal.data = hasReusableMainView
+        ? state.clientBenefitsModal.mainView.renderedData
+        : null;
+      state.clientBenefitsModal.loading = false;
+      if (!hasReusableMainView) {
+        state.clientBenefitsModal.mainView = null;
+      }
+    }
     state.clientBenefitsModal.customerId = customerId;
     state.clientBenefitsModal.context = "benefits";
     if (state.clientBenefitsModal.mainView && Number(state.clientBenefitsModal.mainView.customerId || 0) === customerId) {
@@ -6519,7 +6717,7 @@
     await loadClientBenefitsPreview();
   }
 
-  async function loadClientBonusCard() {
+  async function loadClientBonusCard(options = {}) {
     const customerId = Number(state.clientBenefitsModal.customerId || 0);
     if (!(customerId > 0)) {
       state.clientBenefitsModal.bonusCardLoading = false;
@@ -6531,8 +6729,9 @@
     state.clientBenefitsModal.bonusCardError = "";
     renderClientBenefitsOverlay();
     try {
-      const json = await apiJson(`/api/admin/bonus/customers/${customerId}/card`);
-      state.clientBenefitsModal.bonusCardData = json?.data || null;
+      const snapshot = await ensureClientBenefitsSnapshot(customerId, { force: options?.force === true });
+      if (Number(state.clientBenefitsModal.customerId || 0) !== customerId) return null;
+      state.clientBenefitsModal.bonusCardData = snapshot?.bonuses || null;
       state.clientBenefitsModal.bonusCardError = "";
       return state.clientBenefitsModal.bonusCardData;
     } catch (error) {
@@ -6552,6 +6751,7 @@
     renderClientBenefitsOverlay();
     try {
       await apiJson(`/api/admin/bonus/customers/${customerId}/join`, { method: "POST", body: {} });
+      await invalidateClientBenefitsSnapshot(customerId);
       await loadClientBonusCard();
     } catch (error) {
       state.clientBenefitsModal.bonusCardError = String(error?.message || "API_ERROR");
@@ -8236,6 +8436,24 @@
     elFilters.appendChild(btnAll);
 
     // Кастомные категории клиентов
+    const btnOnline = document.createElement("button");
+    btnOnline.type = "button";
+    btnOnline.className = "stage-item";
+    btnOnline.setAttribute("data-filter", "online");
+    btnOnline.classList.toggle("is-active", state.activeFilter === "online");
+    btnOnline.innerHTML = `
+      <span class="stage-meta stage-text"><b>На сайте</b></span>
+      <span class="stage-count">${state.onlineCount === null ? "—" : escapeHtml(state.onlineCount)}</span>
+    `;
+    btnOnline.addEventListener("click", () => {
+      state.activeFilter = "online";
+      state.activeCustomFilterId = null;
+      openMarketingCenter('clients', 'На сайте');
+      renderFilters();
+      loadClients().catch(console.error);
+    });
+    elFilters.appendChild(btnOnline);
+
     state.customFilters.forEach((filter) => {
       const displayedCount = getDisplayedFilterCount(filter);
       const btn = document.createElement("button");
@@ -24583,6 +24801,7 @@
 
   function switchView(viewName) {
     state.currentView = viewName;
+    if (elOnlineCount) elOnlineCount.classList.toggle('hidden', viewName !== 'clients');
 
     $$('[data-view-content]').forEach((el) => {
       el.classList.toggle('hidden', el.dataset.viewContent !== viewName);
@@ -24805,7 +25024,7 @@
       if (bonusSettingsCoinWrap) bonusSettingsCoinWrap.classList.add('hidden');
       if (bonusSettingsFavoriteCategoriesWrap) bonusSettingsFavoriteCategoriesWrap.classList.add('hidden');
       if (bonusSettingsModalsWrap) bonusSettingsModalsWrap.classList.add('hidden');
-      if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
+      clientBenefitsFooters.forEach((footer) => footer.classList.add('hidden'));
       return;
     }
 
@@ -24886,7 +25105,7 @@
       if (subscriptionInfoSlidesWrap) subscriptionInfoSlidesWrap.classList.toggle('hidden', !isSubscriptionAboutTab || state.currentView !== 'subscription-info');
       if (subscriptionInfoSlidesFooter) subscriptionInfoSlidesFooter.classList.toggle('hidden', !isSubscriptionAboutTab || state.currentView !== 'subscription-info');
       if (subscriptionInfoEmptyText && isSubscriptionInfoTab) subscriptionInfoEmptyText.textContent = activeTab?.placeholder || '';
-      if (clientBenefitsFooter) clientBenefitsFooter.classList.add('hidden');
+      clientBenefitsFooters.forEach((footer) => footer.classList.add('hidden'));
       return;
     }
 
@@ -24950,9 +25169,9 @@
     if (bonusLevelEmpty) bonusLevelEmpty.classList.add('hidden');
     if (bonusLevelInfoWrap) bonusLevelInfoWrap.classList.add('hidden');
     if (bonusLevelInfoFooter) bonusLevelInfoFooter.classList.add('hidden');
-    if (clientBenefitsFooter) {
+    if (clientBenefitsFooters.length) {
       const showBenefitsFooter = (isClientTab || forceClientPanelWithoutTabs) && state.currentView === 'clients' && hasClientId;
-      clientBenefitsFooter.classList.toggle('hidden', !showBenefitsFooter);
+      clientBenefitsFooters.forEach((footer) => footer.classList.toggle('hidden', !showBenefitsFooter));
       if (!showBenefitsFooter) {
         closeClientBenefitsOverlay();
       }
@@ -25455,6 +25674,32 @@
   // -----------------------------
   // Render: clients list
   // -----------------------------
+  function getClientPresenceState(clientId) {
+    return window.AdminPresence?.getClientState?.(clientId) || 'offline';
+  }
+
+  function getClientPresenceBadgeHtml(clientId) {
+    const presenceState = getClientPresenceState(clientId);
+    if (presenceState === 'offline') return '';
+    const chatAttrs = presenceState === 'chat' ? ' title="Клиент сейчас в чате" aria-label="Клиент на сайте, сейчас в чате"' : '';
+    return `<span class="clients-presence-badge${presenceState === 'chat' ? ' is-chat' : ''}" data-client-presence-badge${chatAttrs}>На сайте</span>`;
+  }
+
+  function patchClientPresence(clientId) {
+    const row = elList?.querySelector(`.js-client[data-client-id="${Number(clientId)}"]`);
+    if (!row) return;
+    const nameLine = row.querySelector('.order-line');
+    if (!nameLine) return;
+    const current = nameLine.querySelector('[data-client-presence-badge]');
+    const html = getClientPresenceBadgeHtml(clientId);
+    if (!html) {
+      if (current) current.remove();
+      return;
+    }
+    if (current) current.outerHTML = html;
+    else nameLine.insertAdjacentHTML('beforeend', html);
+  }
+
   function buildClientRow(c) {
     const row = document.createElement("div");
     row.className = "order-row js-client";
@@ -25471,7 +25716,7 @@
         <div class="order-time">${escapeHtml(c.is_active ? "Активен" : "Неактивен")}</div>
       </div>
       <div class="order-mid">
-        <div class="order-line"><strong>${escapeHtml(c.name || "—")}</strong></div>
+        <div class="order-line"><strong>${escapeHtml(c.name || "—")}</strong>${getClientPresenceBadgeHtml(c.id)}</div>
         <div class="order-line muted"><i class="fas fa-phone"></i> <span class="client-phone" style="white-space:nowrap;display:inline-block;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${escapeHtml(formatPhoneDigitsToRU(c.phone))}</span></div>
       </div>
       <div class="order-actions">
@@ -25846,93 +26091,72 @@
   // Orders history
   // -----------------------------
   function showOrdersList() {
-    if (clientOrdersListView) clientOrdersListView.classList.remove("hidden");
     if (clientOrderDetailView) clientOrderDetailView.classList.add("hidden");
   }
 
+  function getClientPassportSnapshot(clientId) {
+    const key = Number(clientId || 0);
+    return key > 0 ? state.clientPassportCache.get(key) || null : null;
+  }
+
+  function saveClientPassportSnapshot() {
+    const clientId = Number(state.activeClientId || 0);
+    if (!(clientId > 0) || !state.activeClient) return;
+    state.clientPassportCache.set(clientId, {
+      client: state.activeClient,
+      addresses: Array.isArray(state.addresses) ? state.addresses.slice() : [],
+      activeOrder: state.clientActiveOrder || null,
+      completedOrders: Array.isArray(state.clientCompletedOrders) ? state.clientCompletedOrders.slice() : [],
+      completedNextOffset: Number(state.clientCompletedNextOffset || 0),
+      completedHasMore: state.clientCompletedHasMore === true,
+      completedLoaded: state.clientCompletedLoaded === true,
+      completedError: state.clientCompletedError === true,
+      activeContentTab: state.activeContentTab || "addresses",
+      completedExpanded: !!clientCompletedOrdersAccordion?.open,
+    });
+  }
+
+  function markClientPassportDirty(clientId, sections = {}) {
+    const key = Number(clientId || 0);
+    if (!(key > 0)) return;
+    const previous = state.clientPassportDirty.get(key) || {};
+    state.clientPassportDirty.set(key, {
+      base: previous.base === true || sections.base === true,
+      addresses: previous.addresses === true || sections.addresses === true,
+      orders: previous.orders === true || sections.orders === true,
+    });
+  }
+
+  function getClientPassportDirty(clientId) {
+    return state.clientPassportDirty.get(Number(clientId || 0)) || {};
+  }
+
+  function restoreClientPassportSnapshot(snapshot) {
+    if (!snapshot) return false;
+    state.activeClient = snapshot.client;
+    state.addresses = snapshot.addresses.slice();
+    state.clientActiveOrder = snapshot.activeOrder || null;
+    state.clientCompletedOrders = snapshot.completedOrders.slice();
+    state.clientCompletedNextOffset = snapshot.completedNextOffset;
+    state.clientCompletedHasMore = snapshot.completedHasMore;
+    state.clientCompletedLoaded = snapshot.completedLoaded;
+    state.clientCompletedError = snapshot.completedError;
+    setClient(snapshot.client);
+    renderAddresses();
+    renderClientActiveOrder();
+    renderClientCompletedOrders();
+    setContentTab(snapshot.activeContentTab || "addresses");
+    showOrdersList();
+    if (clientCompletedOrdersAccordion) clientCompletedOrdersAccordion.open = snapshot.completedExpanded === true;
+    return true;
+  }
+
   function showOrderDetail() {
-    if (clientOrdersListView) clientOrdersListView.classList.add("hidden");
     if (clientOrderDetailView) clientOrderDetailView.classList.remove("hidden");
   }
 
   if (clientOrderBackBtn) {
     clientOrderBackBtn.addEventListener("click", showOrdersList);
-  }
-
-  async function loadClientOrders(options = {}) {
-    if (!state.activeClientId) return;
-    const clientId = Number(state.activeClientId || 0);
-    const preferCache = options?.preferCache !== false;
-    const refresh = options?.refresh !== false;
-    showOrdersList();
-
-    let usedCached = false;
-    if (preferCache) {
-      const cached = getCachedClientDetails(clientId);
-      if (cached && Array.isArray(cached.orders)) {
-        state.clientOrders = cached.orders.slice();
-        renderClientOrders();
-        if (cached.orders.length) {
-          updateClientRowMetrics(clientId, computeClientMetricsFromOrders(cached.orders));
-        }
-        usedCached = true;
-      }
-    }
-    if (!usedCached && clientOrdersList) {
-      clientOrdersList.innerHTML = `<div class="muted">Загрузка…</div>`;
-    }
-    if (!refresh) return;
-
-    try {
-      const json = await fetchClientOrdersShared(clientId);
-      const rows = Array.isArray(json.data) ? json.data : [];
-      state.clientOrders = rows;
-      setCachedClientDetails(clientId, { orders: rows });
-      updateClientRowMetrics(clientId, computeClientMetricsFromOrders(rows));
-      renderClientOrders();
-    } catch (err) {
-      console.error(err);
-      if (!usedCached && clientOrdersList) {
-        clientOrdersList.innerHTML = `<div class="muted">Ошибка загрузки заказов</div>`;
-      }
-    }
-  }
-
-  function renderClientOrders() {
-    if (!clientOrdersList) return;
-    clientOrdersList.innerHTML = "";
-
-    const list = state.clientOrders || [];
-    if (!list.length) {
-      clientOrdersList.innerHTML = `<div class="muted" style="padding:4px 0;">Заказов пока нет.</div>`;
-      return;
-    }
-
-    list.forEach((o) => {
-      let itemsCount = 0;
-      let items;
-      try {
-        items = typeof o.items === "string" ? JSON.parse(o.items) : o.items;
-      } catch {
-        items = [];
-      }
-      if (Array.isArray(items)) {
-        items.forEach((it) => {
-          itemsCount += Number(it.qty || it.quantity || 0) || 0;
-        });
-      }
-
-      const card = document.createElement("div");
-      card.className = "shop-profile-card order-client-history-card";
-      card.style.cursor = "pointer";
-      card.innerHTML = `
-        <div><strong>Заказ #${escapeHtml(o.id)}</strong> <span class="muted">• ${escapeHtml(o.status_title || "—")}</span></div>
-        <div class="muted">${escapeHtml(fmtDateTime(o.created_at))}</div>
-        <div><strong>${money(o.total_price || 0)}</strong> <span class="muted">• позиций: ${itemsCount}</span></div>
-      `;
-      card.addEventListener("click", () => openOrderTab(o.id));
-      clientOrdersList.appendChild(card);
-    });
   }
 
   // -----------------------------
@@ -26525,20 +26749,61 @@
     if (!order || typeof order !== "object") return;
     try {
       document.dispatchEvent(new CustomEvent("dashboard:order-updated", {
-        detail: { order: { ...order } },
+        detail: { order: { ...order }, source: "clients" },
       }));
     } catch {}
   }
 
-  function updateClientOrderInState(order) {
+  function updateClientOrderInState(order, options = {}) {
     const id = Number(order?.id || 0);
     if (!Number.isFinite(id) || id <= 0) return;
     state.clientOrders = (state.clientOrders || []).map((item) => {
       if (Number(item?.id || 0) !== id) return item;
       return { ...item, ...order };
     });
-    emitOrderUpdated(order);
+    const customerId = Number(order?.customer_id || state.activeClientId || 0);
+    if (customerId > 0) {
+      const statusMeta = state.orderStatuses.find((item) => Number(item?.id || 0) === Number(order?.status_id || 0));
+      const isFinal = Number(order?.status_is_final ?? statusMeta?.is_final ?? 0) === 1;
+      if (Number(state.activeClientId) === customerId) {
+        const completedIndex = state.clientCompletedOrders.findIndex((item) => Number(item?.id || 0) === id);
+        if (isFinal) {
+          if (Number(state.clientActiveOrder?.id || 0) === id) state.clientActiveOrder = null;
+          if (completedIndex === -1) {
+            state.clientCompletedOrders.unshift({ ...order });
+            state.clientCompletedNextOffset += 1;
+          } else {
+            state.clientCompletedOrders[completedIndex] = { ...state.clientCompletedOrders[completedIndex], ...order };
+          }
+        } else {
+          if (completedIndex !== -1) {
+            state.clientCompletedOrders.splice(completedIndex, 1);
+            state.clientCompletedNextOffset = Math.max(0, state.clientCompletedNextOffset - 1);
+          }
+          state.clientActiveOrder = { ...(state.clientActiveOrder || {}), ...order };
+        }
+        renderClientActiveOrder();
+        renderClientCompletedOrders();
+        setCachedClientDetails(customerId, {
+          activeOrder: state.clientActiveOrder,
+          completedOrders: state.clientCompletedOrders,
+          completedNextOffset: state.clientCompletedNextOffset,
+          completedHasMore: state.clientCompletedHasMore,
+        });
+        saveClientPassportSnapshot();
+      } else {
+        markClientPassportDirty(customerId, { orders: true });
+      }
+    }
+    if (options.emit !== false) emitOrderUpdated(order);
   }
+
+  document.addEventListener("dashboard:order-updated", (event) => {
+    if (event?.detail?.source === "clients") return;
+    const order = event?.detail?.order;
+    if (!order || !(Number(order.id || 0) > 0)) return;
+    updateClientOrderInState(order, { emit: false });
+  });
 
   async function selectActiveClientOrderStatus(statusId) {
     const orderId = Number(state.activeOrderId || state.activeOrder?.id || 0);
@@ -26562,10 +26827,11 @@
       state.orderCache.set(orderId, order);
       setSharedOrderDetails(order);
       updateClientOrderInState(order);
-      renderClientOrderInfo(order);
-      if (state.activeContentTab === "orders" && state.activeClientId) {
-        renderClientOrders();
+      const selectedStatus = state.orderStatuses.find((item) => Number(item?.id || 0) === nextStatusId);
+      if (Number(selectedStatus?.is_final || 0) === 1) {
+        invalidateClientBenefitsSnapshot(Number(order?.customer_id || state.activeClientId || 0));
       }
+      renderClientOrderInfo(order);
     } catch (err) {
       console.error(err);
     } finally {
@@ -26602,30 +26868,64 @@
   function renderClientActiveOrder() {
     if (!clientActiveOrderCard) return;
     const order = state.clientActiveOrder;
-    clientActiveOrderCard.classList.toggle('hidden', !order);
-    if (!order) return;
+    clientActiveOrderCard.classList.remove('hidden');
+    if (!order) {
+      clientActiveOrderCard.innerHTML = '<div class="muted">Текущих заказов нет.</div>';
+      clientActiveOrderCard.onclick = null;
+      return;
+    }
     clientActiveOrderCard.innerHTML = `<strong>Текущий заказ #${escapeHtml(order.id)}</strong><div class="muted">${escapeHtml(order.status_title || 'В работе')} · ${escapeHtml(fmtDateTime(order.created_at))}</div><div>${money(order.total_price || 0)}</div>`;
     clientActiveOrderCard.onclick = () => openOrderTab(order.id);
   }
 
   async function loadClientActiveOrder(clientId, options = {}) {
     const cached = getCachedClientDetails(clientId);
-    if (options.preferCache !== false && cached?.activeOrder) {
-      state.clientActiveOrder = cached.activeOrder;
+    const cachedActiveOrder = cached?.activeOrder && Number(cached.activeOrder.status_is_final || 0) !== 1
+      ? cached.activeOrder
+      : null;
+    if (options.preferCache !== false && cachedActiveOrder) {
+      state.clientActiveOrder = cachedActiveOrder;
       renderClientActiveOrder();
     }
     if (options.refresh === false) return;
+    if (state.clientActiveOrderRequest?.clientId === Number(clientId)) {
+      await state.clientActiveOrderRequest.promise;
+      return;
+    }
+    const requestPromise = (async () => {
+      try {
+        const json = await apiJson(`/api/admin/clients/${clientId}/orders/header-candidate`);
+        if (Number(state.activeClientId) !== Number(clientId)) return;
+        state.clientActiveOrder = json?.data || null;
+        setCachedClientDetails(clientId, { activeOrder: state.clientActiveOrder });
+        renderClientActiveOrder();
+      } catch (err) {
+        console.error(err);
+        if (Number(state.activeClientId) === Number(clientId) && clientActiveOrderCard && !cachedActiveOrder) {
+          clientActiveOrderCard.classList.remove('hidden');
+          clientActiveOrderCard.innerHTML = '<div class="muted">Не удалось загрузить текущий заказ.</div>';
+          clientActiveOrderCard.onclick = null;
+        }
+      }
+    })();
+    state.clientActiveOrderRequest = { clientId: Number(clientId), promise: requestPromise };
     try {
-      const json = await apiJson(`/api/admin/clients/${clientId}/orders/header-candidate`);
-      state.clientActiveOrder = json?.data || null;
-      setCachedClientDetails(clientId, { activeOrder: state.clientActiveOrder });
-      renderClientActiveOrder();
-    } catch (err) { console.error(err); }
+      await requestPromise;
+    } finally {
+      if (state.clientActiveOrderRequest?.promise === requestPromise) state.clientActiveOrderRequest = null;
+    }
   }
 
   function renderClientCompletedOrders() {
     if (!clientCompletedOrdersList) return;
     clientCompletedOrdersList.innerHTML = '';
+    if (state.clientCompletedError) {
+      clientCompletedOrdersList.innerHTML = '<div class="muted">Не удалось загрузить историю.</div><button type="button" class="shop-chip-btn" data-client-completed-retry>Повторить</button>';
+      return;
+    }
+    if (state.clientCompletedLoaded && !state.clientCompletedOrders.length) {
+      clientCompletedOrdersList.innerHTML = '<div class="muted">Завершённых заказов нет.</div>';
+    }
     state.clientCompletedOrders.forEach((o) => {
       const card = document.createElement('div');
       card.className = 'shop-profile-card order-client-history-card';
@@ -26637,26 +26937,38 @@
   }
 
   async function loadMoreClientCompletedOrders() {
-    if (!state.activeClientId || state.clientCompletedLoading || !state.clientCompletedHasMore && state.clientCompletedNextOffset) return;
+    if (!state.activeClientId || state.clientCompletedLoading || (state.clientCompletedLoaded && !state.clientCompletedHasMore)) return;
     state.clientCompletedLoading = true;
+    state.clientCompletedError = false;
+    renderClientCompletedOrders();
+    const requestClientId = Number(state.activeClientId);
     try {
+      const clientId = requestClientId;
       const offset = state.clientCompletedNextOffset;
-      const json = await apiJson(`/api/admin/clients/${state.activeClientId}/orders?view=completed&limit=10&offset=${offset}`);
+      const json = await apiJson(`/api/admin/clients/${clientId}/orders?view=completed&limit=10&offset=${offset}`);
+      if (Number(state.activeClientId) !== clientId) return;
       const rows = Array.isArray(json.data) ? json.data : [];
       state.clientCompletedOrders.push(...rows);
       state.clientCompletedNextOffset = Number(json.next_offset ?? offset + rows.length);
       state.clientCompletedHasMore = json.has_more === true;
+      state.clientCompletedLoaded = true;
       renderClientCompletedOrders();
       const cached = getCachedClientDetails(state.activeClientId) || {};
       setCachedClientDetails(state.activeClientId, { completedOrders: state.clientCompletedOrders, completedNextOffset: state.clientCompletedNextOffset, completedHasMore: state.clientCompletedHasMore });
     } catch (err) {
       console.error(err);
-      if (!state.clientCompletedOrders.length && clientCompletedOrdersList) clientCompletedOrdersList.innerHTML = '<div class="muted">Ошибка загрузки истории</div>';
-    } finally { state.clientCompletedLoading = false; }
+      state.clientCompletedError = true;
+      renderClientCompletedOrders();
+    } finally {
+      if (Number(state.activeClientId) === requestClientId) state.clientCompletedLoading = false;
+    }
   }
 
   if (clientCompletedOrdersAccordion) clientCompletedOrdersAccordion.addEventListener('toggle', () => {
-    if (clientCompletedOrdersAccordion.open && !state.clientCompletedOrders.length) void loadMoreClientCompletedOrders();
+    if (clientCompletedOrdersAccordion.open && !state.clientCompletedLoaded) void loadMoreClientCompletedOrders();
+  });
+  if (clientCompletedOrdersList) clientCompletedOrdersList.addEventListener('click', (event) => {
+    if (event.target.closest('[data-client-completed-retry]')) void loadMoreClientCompletedOrders();
   });
   if (clientCompletedOrdersMore) clientCompletedOrdersMore.addEventListener('click', () => void loadMoreClientCompletedOrders());
 
@@ -26687,6 +26999,13 @@
     const targetOrder = order || getActiveClientOrder();
     const orderId = Number(targetOrder?.id || 0);
     if (!(orderId > 0)) return;
+    if (
+      document.body?.classList.contains("page-chat")
+      && !window.SharedOrderPayment
+      && window.SharedOrderPanel?.ensureAdminAsset
+    ) {
+      await window.SharedOrderPanel.ensureAdminAsset("sharedOrderPayment");
+    }
     const sharedOrderPayment = window.SharedOrderPayment || null;
     if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
       if (Number(targetOrder?.is_paid || 0) === 1) return;
@@ -26701,6 +27020,7 @@
           state.orderCache.set(orderId, updated);
           setSharedOrderDetails(updated);
           updateClientOrderInState(updated);
+          invalidateClientBenefitsSnapshot(Number(updated?.customer_id || state.activeClientId || 0));
           renderClientOrderInfo(updated);
         }
       } catch (err) {
@@ -26744,6 +27064,7 @@
         state.orderCache.set(orderId, updatedOrder);
         setSharedOrderDetails(updatedOrder);
         updateClientOrderInState(updatedOrder);
+        invalidateClientBenefitsSnapshot(Number(updatedOrder?.customer_id || state.activeClientId || 0));
         renderClientOrderInfo(updatedOrder);
       },
       onError(err) {
@@ -26833,7 +27154,22 @@
   function openOrderTab(orderId, options = {}) {
     const id = Number(orderId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
-    const opts = options && typeof options === "object" ? options : {};
+    const opts = options && typeof options === "object" ? { ...options } : {};
+
+    if (clientPassportContext && typeof clientPassportContext.onOrderOpen === "function") {
+      Promise.resolve(clientPassportContext.onOrderOpen(id, {
+        source: clientPassportContext.source,
+        clientId: clientPassportContext.clientId,
+      })).catch(console.error);
+      return;
+    }
+
+    const sourceClientTabKey = tabsState.activeKey;
+    if (typeof opts.onBack !== "function" && tabsState.tabs.some((tab) => tab.key === sourceClientTabKey && tab.type === "client")) {
+      opts.source = opts.source || "client";
+      opts.onBack = () => setActiveTabKey(sourceClientTabKey);
+    }
+    orderPassportContext = opts;
 
     if (isChatBridgeMode) {
       document.dispatchEvent(new CustomEvent("chat:right-order-open-request", {
@@ -26878,6 +27214,20 @@
     };
     if (!isExpectedClientTabActive()) return;
 
+    const requestedClientId = Number(clientId || 0);
+    void ensureClientBenefitsSnapshot(requestedClientId).catch(() => {});
+    const previousClientId = Number(state.activeClientId || 0);
+    if (previousClientId > 0 && previousClientId !== requestedClientId) saveClientPassportSnapshot();
+    const passportSnapshot = getClientPassportSnapshot(requestedClientId);
+    const dirty = getClientPassportDirty(requestedClientId);
+    if (passportSnapshot && !dirty.base && !dirty.addresses && !dirty.orders) {
+      state.activeClientId = requestedClientId;
+      restoreClientPassportSnapshot(passportSnapshot);
+      hideEmptyState();
+      forceShowClientProfilePanel();
+      return;
+    }
+
     state.activeClientId = clientId;
     state.activeOrderId = null;
     state.activeOrder = null;
@@ -26899,24 +27249,33 @@
       state.clientOrders = Array.isArray(cached.orders) ? cached.orders.slice() : [];
       state.clientDiscounts = Array.isArray(cached.discounts) ? cached.discounts.slice() : [];
       renderAddresses();
-      renderClientOrders();
       renderClientDiscounts();
       state.clientActiveOrder = cached.activeOrder || null;
-      state.clientCompletedOrders = Array.isArray(cached.completedOrders) ? cached.completedOrders.slice() : [];
-      state.clientCompletedNextOffset = Number(cached.completedNextOffset || 0);
-      state.clientCompletedHasMore = cached.completedHasMore === true;
-      renderClientActiveOrder();
-      renderClientCompletedOrders();
+      if (Array.isArray(cached.completedOrders)) {
+        state.clientCompletedOrders = cached.completedOrders.slice();
+        state.clientCompletedNextOffset = Number(cached.completedNextOffset || 0);
+        state.clientCompletedHasMore = cached.completedHasMore === true;
+        state.clientCompletedLoaded = cached.completedOrders.length > 0 || state.clientCompletedHasMore === false;
+      }
+    }
+    if (passportSnapshot && !dirty.addresses) {
+      state.addresses = passportSnapshot.addresses.slice();
+      renderAddresses();
+    }
+    if (passportSnapshot && !dirty.orders) {
+      state.clientActiveOrder = passportSnapshot.activeOrder || state.clientActiveOrder;
     }
 
-    let loadedClient = null;
+    let loadedClient = passportSnapshot?.client || null;
     try {
-      const json = await apiJson(`/api/admin/clients/${state.activeClientId}`);
-      if (requestToken !== clientProfileRequestToken) return;
-      if (!isExpectedClientTabActive()) return;
-      loadedClient = json?.data || null;
-      if (loadedClient) {
-        setCachedClientDetails(activeId, { client: loadedClient });
+      if (!loadedClient || dirty.base) {
+        const json = await apiJson(`/api/admin/clients/${state.activeClientId}`);
+        if (requestToken !== clientProfileRequestToken) return;
+        if (!isExpectedClientTabActive()) return;
+        loadedClient = json?.data || null;
+        if (loadedClient) {
+          setCachedClientDetails(activeId, { client: loadedClient });
+        }
       }
     } catch (err) {
       console.error(err);
@@ -26940,26 +27299,22 @@
 
     // Reset content tab to addresses and order detail view
     showOrdersList();
-    setContentTab("addresses");
+    setContentTab(passportSnapshot?.activeContentTab || "addresses");
 
-    if (!cached) {
-      state.clientCompletedOrders = [];
-      state.clientCompletedNextOffset = 0;
-      state.clientCompletedHasMore = false;
-    }
-    if (!cached) {
-      if (clientCompletedOrdersList) clientCompletedOrdersList.innerHTML = '';
-      if (clientCompletedOrdersMore) clientCompletedOrdersMore.classList.add('hidden');
-    } else {
-      renderClientCompletedOrders();
-    }
+    state.clientCompletedOrders = dirty.orders ? [] : (passportSnapshot?.completedOrders?.slice() || []);
+    state.clientCompletedNextOffset = dirty.orders ? 0 : Number(passportSnapshot?.completedNextOffset || 0);
+    state.clientCompletedHasMore = dirty.orders ? false : passportSnapshot?.completedHasMore === true;
+    state.clientCompletedLoaded = dirty.orders ? false : passportSnapshot?.completedLoaded === true;
+    state.clientCompletedError = dirty.orders ? false : passportSnapshot?.completedError === true;
+    renderClientCompletedOrders();
+    if (clientCompletedOrdersAccordion) clientCompletedOrdersAccordion.open = passportSnapshot?.completedExpanded === true;
 
     const preloadTasks = [
       loadAddresses({
         preferCache: true,
-        refresh: useCacheOnlyForPreload ? !hasCachedAddresses : true,
+        refresh: dirty.addresses || (!passportSnapshot && (useCacheOnlyForPreload ? !hasCachedAddresses : true)),
       }),
-      loadClientActiveOrder(activeId, { preferCache: true, refresh: !useCacheOnlyForPreload || !cached?.activeOrder }),
+      loadClientActiveOrder(activeId, { preferCache: true, refresh: dirty.orders || (!passportSnapshot && (!useCacheOnlyForPreload || !cached?.activeOrder)) }),
     ];
     await Promise.allSettled(preloadTasks);
     if (requestToken !== clientProfileRequestToken) return;
@@ -26968,6 +27323,8 @@
     // Reset address form
     if (addrFormCard) addrFormCard.classList.add("hidden");
     if (addrToggleBtn) addrToggleBtn.textContent = "+ Новый адрес";
+    state.clientPassportDirty.delete(activeId);
+    saveClientPassportSnapshot();
   }
 
   function buildGuestClientProfile(clientId, preferredTitle = "") {
@@ -27042,7 +27399,6 @@
     state.clientOrders = [];
     state.clientDiscounts = [];
     renderAddresses();
-    renderClientOrders();
     renderClientDiscounts();
     if (requestToken !== clientProfileRequestToken) return;
     if (!isExpectedClientTabActive()) return;
@@ -27090,6 +27446,37 @@
     }
   }
 
+  async function openClientPassport(id, context = {}) {
+    const clientId = Number(id || 0);
+    if (!(clientId > 0)) return null;
+    const openToken = ++clientPassportOpenToken;
+    const nextContext = context && typeof context === "object" ? context : {};
+    const previousContext = nextContext.nested === true ? clientPassportContext : null;
+    clientPassportContext = {
+      clientId,
+      source: String(nextContext.source || "clients").trim() || "clients",
+      onBack: typeof nextContext.onBack === "function" ? nextContext.onBack : null,
+      onOrderOpen: typeof nextContext.onOrderOpen === "function" ? nextContext.onOrderOpen : null,
+      previousContext,
+    };
+    await selectClient(clientId, String(nextContext.title || ""), {
+      skipMobileSheet: nextContext.skipMobileSheet === true,
+      chatGuest: nextContext.chatGuest === true,
+    });
+    if (openToken !== clientPassportOpenToken) return null;
+    return { clientId, source: clientPassportContext.source };
+  }
+
+  function closeClientPassport(reason = "back") {
+    const context = clientPassportContext;
+    clientPassportContext = context?.previousContext || null;
+    clientPassportOpenToken += 1;
+    clientProfileRequestToken += 1;
+    if (context && typeof context.onBack === "function") {
+      context.onBack({ reason, clientId: context.clientId, source: context.source });
+    }
+  }
+
   async function findClientIdByPhone(phoneValue) {
     const digits = normalizePhoneDigits(phoneValue);
     if (!digits) return null;
@@ -27132,10 +27519,13 @@
   // -----------------------------
   // Load clients
   // -----------------------------
-  async function loadTotals() {
-    const q = state.q ? `&q=${encodeURIComponent(state.q)}` : "";
+  async function loadTotals(requestToken = clientsRequestToken) {
+    const query = String(state.q || "");
+    const q = query ? `&q=${encodeURIComponent(query)}` : "";
     const a = await apiJson(`/api/admin/clients?limit=1&offset=0${q}`);
+    if (requestToken !== clientsRequestToken || query !== String(state.q || "")) return;
     state.totals.all = Number(a.total || 0);
+    renderFilters();
   }
 
   function buildClientsListQuery(offset, limit) {
@@ -27148,7 +27538,12 @@
     if (state.activeFilter === "custom" && state.activeCustomFilterId) {
       qs.set("filter_id", String(state.activeCustomFilterId));
     }
+    if (state.activeFilter === "online") qs.set("online", "1");
     return qs;
+  }
+
+  function isPresenceSensitiveClientsList() {
+    return state.activeFilter === "online" || state.sort === "online_desc";
   }
 
   function clientsListCacheKey() {
@@ -27159,12 +27554,14 @@
   }
 
   async function readClientsListCache() {
+    if (isPresenceSensitiveClientsList()) return null;
     if (!window.AdminPersistentCache) return null;
     try { return await window.AdminPersistentCache.read(clientsListCacheKey()); }
     catch (err) { console.warn('Clients list cache read failed:', err); return null; }
   }
 
   function writeClientsListCache() {
+    if (isPresenceSensitiveClientsList()) return;
     if (!window.AdminPersistentCache) return;
     const data = { query: clientsListCacheKey(), rows: state.clients, offset: state.clientsOffset, total: state.clientsTotal, hasMore: state.clientsHasMore };
     void window.AdminPersistentCache.write(clientsListCacheKey(), data)
@@ -27189,7 +27586,7 @@
 
       state.clients = (state.clients || []).concat(append);
       state.clientsOffset += chunk.length;
-      state.clientsTotal = Number(json.total || 0);
+      if (Number.isFinite(Number(json.total))) state.clientsTotal = Number(json.total);
       state.clientsHasMore = json.has_more === true || (json.has_more === undefined && chunk.length > 0 && state.clients.length < state.clientsTotal);
 
       appendClients(append);
@@ -27222,6 +27619,10 @@
 
   async function loadClients() {
     clientsRequestToken += 1;
+    const requestToken = clientsRequestToken;
+    const totalsPromise = loadTotals(requestToken).catch((err) => {
+      if (requestToken === clientsRequestToken) console.error(err);
+    });
     state.clientsLoading = false;
     const cached = await readClientsListCache();
     const cachedRows = Array.isArray(cached?.rows) ? cached.rows : [];
@@ -27245,6 +27646,7 @@
       writeClientsListCache();
     }
     await ensureClientsScrollable();
+    await totalsPromise;
   }
 
   // -----------------------------
@@ -27267,6 +27669,47 @@
     state.q = elSearch ? elSearch.value.trim() : "";
     loadClients().catch(console.error);
   }, 250);
+
+  const reconcilePresenceClientsList = debounce(() => {
+    if (state.currentView !== 'clients' || !isPresenceSensitiveClientsList()) return;
+    loadClients().catch(console.error);
+  }, 220);
+
+  function renderMarketingPresenceSummary(counts, ready) {
+    state.onlineCount = ready ? Math.max(0, Number(counts?.identifiedOnlineClients || 0) || 0) : null;
+    if (elOnlineCount) elOnlineCount.textContent = state.onlineCount === null ? '· — онлайн' : `· ${state.onlineCount} онлайн`;
+    const filterCount = elFilters?.querySelector('[data-filter="online"] .stage-count');
+    if (filterCount) filterCount.textContent = state.onlineCount === null ? '—' : String(state.onlineCount);
+  }
+
+  function bindMarketingPresence() {
+    if (!window.AdminPresence?.subscribe) return;
+    window.AdminPresence.subscribe((change) => {
+      const ready = change.type !== 'pending' && change.type !== 'reset';
+      renderMarketingPresenceSummary(change.counts, ready);
+
+      if (change.type === 'reset') {
+        elList?.querySelectorAll('.js-client[data-client-id]').forEach((row) => {
+          patchClientPresence(Number(row.getAttribute('data-client-id') || 0));
+        });
+        return;
+      }
+
+      if (change.type === 'snapshot') {
+        elList?.querySelectorAll('.js-client[data-client-id]').forEach((row) => {
+          patchClientPresence(Number(row.getAttribute('data-client-id') || 0));
+        });
+        if (isPresenceSensitiveClientsList()) reconcilePresenceClientsList();
+        return;
+      }
+
+      if (change.type !== 'delta' || !(Number(change.clientId) > 0)) return;
+      patchClientPresence(change.clientId);
+      const wasOnline = change.previousState && change.previousState !== 'offline';
+      const isOnline = change.state !== 'offline';
+      if (wasOnline !== isOnline && isPresenceSensitiveClientsList()) reconcilePresenceClientsList();
+    });
+  }
 
   function maybeLoadMoreClientsOnScroll() {
     if (!elClientsScroll) return;
@@ -30818,8 +31261,10 @@
   // -----------------------------
   const isChatBridgeMode = !!(document.body && document.body.classList.contains("page-chat"));
   const isOrdersBenefitsBridgeMode = !!(document.body && document.body.classList.contains("page-orders"));
+  const isClientPassportBridgeMode = isOrdersBenefitsBridgeMode
+    || !!(document.body && document.body.classList.contains("page-cash"));
 
-  if (!isOrdersBenefitsBridgeMode) {
+  if (!isClientPassportBridgeMode) {
     initClientsAccordion();
     initBonusSettingsListeners();
 
@@ -30859,9 +31304,10 @@
     updateDiscountRestrictionUi();
   }
 
-  if (!isChatBridgeMode && !isOrdersBenefitsBridgeMode) {
+  if (!isChatBridgeMode && !isClientPassportBridgeMode) {
     const initialClientOpenRequest = getClientOpenRequestFromUrl();
     updateDiscountPromoUi();
+    bindMarketingPresence();
 
   loadCustomFilters().catch(console.error);
   loadClients()
@@ -30881,6 +31327,12 @@
   });
   }
   window.__clientsDashboardApi = {
+    openClientPassport(id, context = {}) {
+      return openClientPassport(id, context);
+    },
+    closeClientPassport(reason = "back") {
+      return closeClientPassport(reason);
+    },
     selectClientById(id, preferredTitle = "", options = {}) {
       return selectClient(id, preferredTitle, options);
     },
@@ -30918,4 +31370,20 @@
       applyChatRightForceEmpty(force);
     },
   };
+  window.openClientPassport = openClientPassport;
+  window.closeClientPassport = closeClientPassport;
+  if (typeof window.openOrderPassport !== "function") {
+    window.openOrderPassport = (orderId, context = {}) => openOrderTab(orderId, context);
+    window.closeOrderPassport = (reason = "back") => {
+      const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+      if (activeTab && activeTab.type === "order") closeActiveTab();
+      const context = orderPassportContext;
+      orderPassportContext = null;
+      orderRequestToken += 1;
+      if (context && typeof context.onBack === "function") {
+        return context.onBack(reason);
+      }
+      return null;
+    };
+  }
 })();
