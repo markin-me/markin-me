@@ -42,7 +42,8 @@ jobs:
           mkdir -p /tmp/robot-three
           cd /tmp/robot-three
           npm init -y >/dev/null 2>&1
-          npm install --no-audit --no-fund --silent esbuild@0.25.9 three@0.167.1
+          # r160 keeps broader WebGL compatibility while supporting the APIs used by the robot.
+          npm install --no-audit --no-fund --silent esbuild@0.25.9 three@0.160.1
           printf "import * as THREE from 'three'; window.THREE = THREE;\n" > entry.js
           npx esbuild entry.js --bundle --minify --format=iife --target=chrome71 --outfile="$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
           test -s "$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
