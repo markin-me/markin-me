@@ -32,22 +32,48 @@ jobs:
         shell: bash
         run: |
           python3 robot-apk/patch_android.py robot-apk/app/src/main/assets/index.html
+          python3 robot-apk/compat_post.py robot-apk/app/src/main/assets/index.html
           grep -q 'script src="three.min.js"' robot-apk/app/src/main/assets/index.html
           ! grep -q 'type="module"' robot-apk/app/src/main/assets/index.html
           ! grep -q 'structuredClone' robot-apk/app/src/main/assets/index.html
+          ! grep -qF '||=' robot-apk/app/src/main/assets/index.html
 
-      - name: Bundle Three.js into APK
+      - name: Bundle Three.js and compatibility compiler
         shell: bash
         run: |
+          rm -rf /tmp/robot-three
           mkdir -p /tmp/robot-three
           cd /tmp/robot-three
           npm init -y >/dev/null 2>&1
-          # r160 keeps broader WebGL compatibility while supporting the APIs used by the robot.
           npm install --no-audit --no-fund --silent esbuild@0.25.9 three@0.160.1
           printf "import * as THREE from 'three'; window.THREE = THREE;\n" > entry.js
-          npx esbuild entry.js --bundle --minify --format=iife --target=chrome71 --outfile="$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
+          npx esbuild entry.js --bundle --minify --format=iife --target=chrome61 --outfile="$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
           test -s "$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
-          ls -lh "$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
+
+      - name: Transpile app JavaScript for old Android WebView
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('robot-apk/app/src/main/assets/index.html')
+          s=p.read_text(encoding='utf-8')
+          marker='<script src="three.min.js"></script>\n<script>'
+          a=s.index(marker)+len(marker)
+          b=s.rfind('</script>')
+          Path('/tmp/robot-app.js').write_text(s[a:b],encoding='utf-8')
+          Path('/tmp/robot-prefix.html').write_text(s[:a],encoding='utf-8')
+          Path('/tmp/robot-suffix.html').write_text(s[b:],encoding='utf-8')
+          PY
+          /tmp/robot-three/node_modules/.bin/esbuild /tmp/robot-app.js --target=chrome61 --format=iife --minify-syntax --outfile=/tmp/robot-app.compat.js
+          python3 - <<'PY'
+          from pathlib import Path
+          out=Path('/tmp/robot-prefix.html').read_text(encoding='utf-8')+Path('/tmp/robot-app.compat.js').read_text(encoding='utf-8')+Path('/tmp/robot-suffix.html').read_text(encoding='utf-8')
+          Path('robot-apk/app/src/main/assets/index.html').write_text(out,encoding='utf-8')
+          PY
+          ! grep -qF '||=' robot-apk/app/src/main/assets/index.html
+          ! grep -qF '?.' robot-apk/app/src/main/assets/index.html
+          ! grep -qF '??' robot-apk/app/src/main/assets/index.html
+          grep -q 'rendererContext' robot-apk/app/src/main/assets/index.html
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -88,11 +114,15 @@ jobs:
           test -f "$APK"
           unzip -l "$APK" | grep 'assets/index.html'
           unzip -l "$APK" | grep 'assets/three.min.js'
+          unzip -p "$APK" assets/index.html > /tmp/final-index.html
+          grep -q 'rendererContext' /tmp/final-index.html
+          ! grep -qF '||=' /tmp/final-index.html
+          ! grep -qF '?.' /tmp/final-index.html
           ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RobotCharacterLab-Android9-v2
+          name: RobotCharacterLab-Android9-v3
           path: robot-apk/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 1
