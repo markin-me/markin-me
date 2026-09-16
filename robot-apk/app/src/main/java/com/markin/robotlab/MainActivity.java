@@ -22,9 +22,25 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         Window window = getWindow();
-        window.setStatusBarColor(Color.TRANSPARENT);
-        window.setNavigationBarColor(Color.BLACK);
+
+        // IMPORTANT: the app content must live BETWEEN Android system bars.
+        // Do not use LAYOUT_FULLSCREEN / LAYOUT_HIDE_NAVIGATION here.
+        window.setStatusBarColor(Color.rgb(214, 219, 226));
+        window.setNavigationBarColor(Color.rgb(214, 219, 226));
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+
+        int systemUi = View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            systemUi |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            systemUi |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        window.getDecorView().setSystemUiVisibility(systemUi);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(true);
+        }
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.rgb(214, 219, 226));
@@ -49,11 +65,10 @@ public class MainActivity extends Activity {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
 
-        webView.setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
-            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        );
+        // Helps form controls remain reachable after the soft keyboard resizes WebView.
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
+        webView.requestFocus(View.FOCUS_DOWN);
 
         setContentView(webView);
         webView.loadUrl("file:///android_asset/index.html");
@@ -83,6 +98,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (webView != null) {
+            webView.loadUrl("about:blank");
+            webView.stopLoading();
             webView.destroy();
             webView = null;
         }
