@@ -21,7 +21,7 @@ jobs:
           base64 -d /tmp/index.html.gz.b64 | gunzip > robot-apk/app/src/main/assets/index.html
           test -s robot-apk/app/src/main/assets/index.html
           grep -q "Robot Character Lab Pro" robot-apk/app/src/main/assets/index.html
-          wc -c robot-apk/app/src/main/assets/index.html
+          test "$(wc -c < robot-apk/app/src/main/assets/index.html)" -eq 130901
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -55,4 +55,4 @@ jobs:
           path: robot-apk/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 1
 
-# trigger: all HTML chunks uploaded
+# trigger: corrected complete HTML payload
