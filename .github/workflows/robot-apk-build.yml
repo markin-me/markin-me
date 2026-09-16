@@ -1,0 +1,56 @@
+name: Robot APK Build
+
+on:
+  push:
+    branches:
+      - tmp-robot-apk-build
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore web app
+        run: |
+          mkdir -p robot-apk/app/src/main/assets
+          cat robot-apk/source/part* > /tmp/index.html.gz.b64
+          base64 -d /tmp/index.html.gz.b64 | gunzip > robot-apk/app/src/main/assets/index.html
+          test -s robot-apk/app/src/main/assets/index.html
+          grep -q "Robot Character Lab Pro" robot-apk/app/src/main/assets/index.html
+          wc -c robot-apk/app/src/main/assets/index.html
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0" >/dev/null
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build debug APK
+        run: gradle -p robot-apk :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Verify APK
+        run: |
+          test -f robot-apk/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh robot-apk/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RobotCharacterLab-Android9
+          path: robot-apk/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 1
