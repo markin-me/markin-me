@@ -10,6 +10,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,11 +32,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
 
       - name: Install Android SDK packages
-        run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0" >/dev/null
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -55,4 +58,4 @@ jobs:
           path: robot-apk/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 1
 
-# trigger: corrected complete HTML payload
+# trigger: use preinstalled Android SDK on runner
