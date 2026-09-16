@@ -28,6 +28,26 @@ jobs:
           grep -q "Robot Character Lab Pro" robot-apk/app/src/main/assets/index.html
           test "$(wc -c < robot-apk/app/src/main/assets/index.html)" -eq 130901
 
+      - name: Patch web app for Android 9 WebView
+        shell: bash
+        run: |
+          python3 robot-apk/patch_android.py robot-apk/app/src/main/assets/index.html
+          grep -q 'script src="three.min.js"' robot-apk/app/src/main/assets/index.html
+          ! grep -q 'type="module"' robot-apk/app/src/main/assets/index.html
+          ! grep -q 'structuredClone' robot-apk/app/src/main/assets/index.html
+
+      - name: Bundle Three.js into APK
+        shell: bash
+        run: |
+          mkdir -p /tmp/robot-three
+          cd /tmp/robot-three
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund --silent esbuild@0.25.9 three@0.167.1
+          printf "import * as THREE from 'three'; window.THREE = THREE;\n" > entry.js
+          npx esbuild entry.js --bundle --minify --format=iife --target=chrome71 --outfile="$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
+          test -s "$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
+          ls -lh "$GITHUB_WORKSPACE/robot-apk/app/src/main/assets/three.min.js"
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -60,15 +80,18 @@ jobs:
         run: |
           gradle -p robot-apk :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify APK
+      - name: Verify APK contents
         shell: bash
         run: |
-          test -f robot-apk/app/build/outputs/apk/debug/app-debug.apk
-          ls -lh robot-apk/app/build/outputs/apk/debug/app-debug.apk
+          APK=robot-apk/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          unzip -l "$APK" | grep 'assets/index.html'
+          unzip -l "$APK" | grep 'assets/three.min.js'
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RobotCharacterLab-Android9
+          name: RobotCharacterLab-Android9-v2
           path: robot-apk/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 1
