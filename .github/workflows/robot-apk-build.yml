@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Restore web app
+        shell: bash
         run: |
           mkdir -p robot-apk/app/src/main/assets
           cat robot-apk/source/part* > /tmp/index.html.gz.b64
@@ -34,15 +35,20 @@ jobs:
           java-version: '17'
 
       - name: Check Android SDK
+        shell: bash
         run: |
           test -x "$SDKMANAGER"
           "$SDKMANAGER" --version
 
       - name: Accept Android SDK licenses
-        run: yes | "$SDKMANAGER" --licenses >/dev/null || true
+        shell: bash
+        run: |
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
 
       - name: Install Android SDK packages
-        run: "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        shell: bash
+        run: |
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -50,9 +56,12 @@ jobs:
           gradle-version: '8.7'
 
       - name: Build debug APK
-        run: gradle -p robot-apk :app:assembleDebug --no-daemon --stacktrace
+        shell: bash
+        run: |
+          gradle -p robot-apk :app:assembleDebug --no-daemon --stacktrace
 
       - name: Verify APK
+        shell: bash
         run: |
           test -f robot-apk/app/build/outputs/apk/debug/app-debug.apk
           ls -lh robot-apk/app/build/outputs/apk/debug/app-debug.apk
@@ -63,5 +72,3 @@ jobs:
           name: RobotCharacterLab-Android9
           path: robot-apk/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 1
-
-# trigger: use full sdkmanager path
