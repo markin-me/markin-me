@@ -750,7 +750,7 @@
                 </div>
                 <div class="domain-step">
                   <span class="domain-step-index">3</span>
-                  <span class="domain-step-text">Вернитесь сюда, нажмите «Проверить домен», а затем «Подключить автоматически».</span>
+                  <span class="domain-step-text">Вернитесь сюда, нажмите «Проверить домен», а затем «Подключить домен».</span>
                 </div>
               </div>
 
@@ -782,7 +782,7 @@
                 <i class="fas fa-sync-alt"></i> Проверить домен
               </button>
               <button class="btn btn-primary btn-sm" type="button" id="domainConnectBtn">
-                <i class="fas fa-bolt"></i> Подключить автоматически
+                <i class="fas fa-bolt"></i> Подключить домен
               </button>
             </div>
             <div class="field-hint" id="domainConnectHint">Добавьте домен, пропишите две A-записи и затем запустите автоподключение.</div>
@@ -794,12 +794,12 @@
               <div class="domain-check-item" id="domainCheckDns">
                 <span class="domain-check-icon"><i class="fas fa-circle"></i></span>
                 <span class="domain-check-text">A-записи</span>
-                <span class="domain-check-status" id="domainCheckDnsStatus"></span>
+                <span class="domain-check-status" id="domainCheckDnsStatus">Необходима проверка домена</span>
               </div>
               <div class="domain-check-item" id="domainCheckHttp">
                 <span class="domain-check-icon"><i class="fas fa-circle"></i></span>
                 <span class="domain-check-text">Сайт отвечает</span>
-                <span class="domain-check-status" id="domainCheckHttpStatus"></span>
+                <span class="domain-check-status" id="domainCheckHttpStatus">Необходима проверка домена</span>
               </div>
             </div>
           </div>
@@ -808,21 +808,21 @@
             <label class="field-label">СЕРТИФИКАТ</label>
             <div class="domain-check-list">
               <div class="domain-check-item">
-                <span class="domain-check-icon is-pending" id="domainCertificateIcon"><i class="fas fa-circle"></i></span>
+                <span class="domain-check-icon" id="domainCertificateIcon"><i class="fas fa-circle"></i></span>
                 <span class="domain-check-text">Статус</span>
-                <span class="domain-check-status" id="domainCertificateStatus">Проверяем...</span>
+                <span class="domain-check-status" id="domainCertificateStatus">Необходима проверка домена</span>
               </div>
               <div class="domain-check-item">
                 <span class="domain-check-text">Действителен до</span>
-                <span class="domain-check-status" id="domainCertificateExpires">—</span>
+                <span class="domain-check-status" id="domainCertificateExpires">Необходима проверка домена</span>
               </div>
               <div class="domain-check-item">
                 <span class="domain-check-text">Осталось</span>
-                <span class="domain-check-status" id="domainCertificateDays">—</span>
+                <span class="domain-check-status" id="domainCertificateDays">Необходима проверка домена</span>
               </div>
             </div>
-            <div class="domain-action-row" style="margin-top:8px;">
-              <button class="btn btn-secondary btn-sm" type="button" id="domainRenewCertificateBtn">
+            <div class="domain-action-row" style="margin:12px 8px;">
+              <button class="btn btn-primary btn-sm" type="button" id="domainRenewCertificateBtn">
                 <i class="fas fa-sync-alt"></i> Перевыпустить сертификат
               </button>
             </div>

@@ -433,6 +433,8 @@
 
 
   let tenantDomains = [];
+  let domainSslConnected = false;
+  let domainCheckCompleted = false;
 
 
 
@@ -4661,7 +4663,7 @@
 
 
 
-    if (connectBtn) connectBtn.disabled = !domainManageMode || !autoConnectEnabled || !getCurrentDomainValue();
+    if (connectBtn) connectBtn.disabled = !domainManageMode || !autoConnectEnabled || !getCurrentDomainValue() || !domainCheckCompleted || domainSslConnected;
     if (renewCertificateBtn) renewCertificateBtn.disabled = !domainManageMode || !autoConnectEnabled || !getCurrentDomainValue();
 
 
@@ -4682,7 +4684,7 @@
 
 
 
-        connectHint.textContent = "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u00bb, \u0437\u0430\u0442\u0435\u043c \u00ab\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438\u00bb.";
+        connectHint.textContent = "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u00bb, \u0437\u0430\u0442\u0435\u043c \u00ab\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d\u00bb.";
 
 
 
@@ -21418,7 +21420,7 @@
       if (domainCheckResultsEl) domainCheckResultsEl.classList.remove("hidden");
 
       const domainCertificateBlockEl = document.getElementById("domainCertificateBlock");
-      if (domainCertificateBlockEl) domainCertificateBlockEl.classList.toggle("hidden", !activeDomainValue);
+      if (domainCertificateBlockEl) domainCertificateBlockEl.classList.remove("hidden");
 
 
 
@@ -21479,7 +21481,7 @@
 
       const connectBtnEl = document.getElementById("domainConnectBtn");
       if (connectBtnEl) {
-        connectBtnEl.disabled = !domainManageMode || !autoConnectEnabled || !activeDomainValue;
+        connectBtnEl.disabled = !domainManageMode || !autoConnectEnabled || !activeDomainValue || !domainCheckCompleted || domainSslConnected;
       }
 
       const checkBtnEl = document.getElementById("domainCheckBtn");
@@ -22256,7 +22258,9 @@
 
 
 
-        selectedTenantDomainId = domainId;
+    selectedTenantDomainId = domainId;
+        domainCheckCompleted = false;
+        domainSslConnected = false;
         syncTenantPwaTargetFromSelectedDomain();
 
         if (linkActionBtn) {
@@ -26530,7 +26534,7 @@
 
 
 
-          status.textContent = statusText || "";
+          status.textContent = statusText || "Необходима проверка домена";
 
 
 
@@ -26558,19 +26562,18 @@
         if (certificateExpires) {
           certificateExpires.textContent = certificate && certificate.expires_at
             ? new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(certificate.expires_at))
-            : "—";
+            : "Необходима проверка домена";
         }
         if (certificateDays) {
           certificateDays.textContent = certificate && Number.isFinite(Number(certificate.days_left))
             ? (Number(certificate.days_left) > 0 ? Number(certificate.days_left) + " дн." : "истёк")
-            : "—";
+            : "Необходима проверка домена";
         }
       }
 
       async function loadCertificate(domain) {
         if (!certificateBlock || !domain) return;
         certificateBlock.classList.remove("hidden");
-        if (certificateIcon) certificateIcon.className = "domain-check-icon is-pending";
         if (certificateStatus) certificateStatus.textContent = "Проверяем...";
         try {
           var res = await authFetch("/api/admin/tenant/certificate", {
@@ -26685,13 +26688,15 @@
 
             setCheckState("domainCheckSsl", r.ssl ? "ok" : "fail", r.ssl_detail);
 
+            const isDomainConnected = !!(r.ssl || (r.http && /редирект/i.test(String(r.http_detail || ""))));
+
 
 
             if (connectHint) {
 
 
 
-              if (r.ssl) {
+              if (isDomainConnected) {
 
 
 
@@ -26703,7 +26708,7 @@
 
 
 
-                connectHint.textContent = "DNS найден. Теперь нажмите «Подключить автоматически».";
+                connectHint.textContent = "DNS найден. Теперь нажмите «Подключить домен».";
 
 
 
@@ -26727,7 +26732,9 @@
 
 
 
-              connectBtn.disabled = !domainManageMode || !r.dns;
+              if (!allowReadOnly) domainCheckCompleted = true;
+              domainSslConnected = isDomainConnected;
+              connectBtn.disabled = !domainManageMode || !r.dns || !domainCheckCompleted || domainSslConnected;
 
 
 
@@ -26739,6 +26746,8 @@
 
 
 
+            domainCheckCompleted = false;
+            domainSslConnected = false;
             setCheckState("domainCheckDns", "fail", "Ошибка проверки");
 
 
@@ -26759,6 +26768,8 @@
 
 
 
+          domainCheckCompleted = false;
+          domainSslConnected = false;
           setCheckState("domainCheckDns", "fail", "Ошибка сети");
 
 
@@ -26768,6 +26779,8 @@
 
 
           setCheckState("domainCheckSsl", "fail", "Ошибка сети");
+          if (connectHint) connectHint.textContent = "Не удалось проверить подключение домена.";
+          if (connectBtn) connectBtn.disabled = !domainManageMode || !domainSetup || !domainSetup.auto_connect_enabled || !getCurrentDomainValue() || !domainCheckCompleted;
 
 
 
@@ -26865,6 +26878,7 @@
 
 
       connectBtn.addEventListener("click", async function () {
+
         if (!domainManageMode) return;
 
 
@@ -27102,7 +27116,7 @@
 
 
 
-          connectBtn.disabled = !domainManageMode || !(domainSetup && domainSetup.auto_connect_enabled && getCurrentDomainValue());
+          connectBtn.disabled = !domainManageMode || !(domainSetup && domainSetup.auto_connect_enabled && getCurrentDomainValue() && domainCheckCompleted) || domainSslConnected;
 
 
 
