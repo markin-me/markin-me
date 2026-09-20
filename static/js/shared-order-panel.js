@@ -660,6 +660,66 @@
     });
   }
 
+  function orderItemHasSnapshotPhoto(item) {
+    if (!item || typeof item !== "object") return false;
+    if (Array.isArray(item.photos) && item.photos.some(function (photo) { return String(photo || "").trim(); })) return true;
+    return Boolean(String(item.photo || item.product_photo || item.image_url || item.photo_url || "").trim());
+  }
+
+  function collectOrderCatalogPhotoIds(items) {
+    var ids = new Set();
+    (Array.isArray(items) ? items : []).forEach(function (item) {
+      var isCombo = String(item && item.type || "").toLowerCase() === "combo"
+        || Number(item && item.combo_id || 0) > 0
+        || (Array.isArray(item && item.selections) && item.selections.length > 0);
+      var productId = Number(item && item.product_id || 0);
+      if (!isCombo && productId > 0 && !orderItemHasSnapshotPhoto(item)) ids.add(productId);
+    });
+    return Array.from(ids);
+  }
+
+  async function requestOrderCatalogSummaries(ids) {
+    var requestedIds = Array.isArray(ids) ? ids : [];
+    var token = window.localStorage ? localStorage.getItem("authToken") : "";
+    var storeId = window.localStorage ? (localStorage.getItem("activeStoreId") || "1") : "1";
+    var response = await fetch("/api/admin/catalog/product-summaries", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "x-store-id": storeId,
+        ...(token ? { Authorization: "Bearer " + token } : {})
+      },
+      body: JSON.stringify({ ids: requestedIds })
+    });
+    var payload = await response.json().catch(function () { return null; });
+    if (!response.ok || !payload || payload.ok === false) {
+      throw new Error(payload && payload.error || "CATALOG_PRODUCT_BATCH_FAILED");
+    }
+    var summaries = Array.isArray(payload.data) ? payload.data : [];
+    var summariesById = new Map(summaries.map(function (product) {
+      return [Number(product && (product.id || product.product_id) || 0), product];
+    }));
+    return requestedIds.map(function (id) {
+      return summariesById.get(Number(id)) || { id: id, unavailable: true };
+    });
+  }
+
+  async function ensureOrderCatalogPhotos(items) {
+    var repository = window.CatalogRepository;
+    if (!repository || typeof repository.ensureProducts !== "function") return false;
+    var ids = collectOrderCatalogPhotoIds(items);
+    if (!ids.length) return false;
+    await repository.init({ loader: requestOrderCatalogSummaries });
+    for (var offset = 0; offset < ids.length; offset += 80) {
+      await repository.ensureProducts(ids.slice(offset, offset + 80), {
+        requiredCompleteness: "summary"
+      });
+    }
+    return true;
+  }
+
   function createInfoRenderer(options) {
     var root = options && options.root ? options.root : document;
     var footerEl = options && options.footerEl ? options.footerEl : null;
@@ -669,6 +729,7 @@
     var showDeliveryZoneResolver = typeof (options && options.showDeliveryZone) === "function"
       ? options.showDeliveryZone
       : function () { return false; };
+    var catalogRenderGeneration = 0;
     var printButtons = footerEl ? queryAll(footerEl, '[data-action="order-print"]') : [];
     var infoEls = {
       empty: queryAll(root, '[data-info="empty"]'),
@@ -812,6 +873,7 @@
     }
 
     function setOrder(order) {
+      var currentCatalogRenderGeneration = ++catalogRenderGeneration;
       bindDiscountToggles();
 
       if (!order) {
@@ -1086,6 +1148,25 @@
       if (typeof options.afterRender === "function") {
         options.afterRender(order, infoEls, displayOrder);
       }
+
+      ensureOrderCatalogPhotos(displayItems).then(function (changed) {
+        if (!changed || currentCatalogRenderGeneration !== catalogRenderGeneration) return;
+        if (typeof orderItemsToHtml !== "function") return;
+        setHtmlAll(
+          infoEls.itemsList,
+          displayItems.length
+            ? orderItemsToHtml(displayItems, displayOrder)
+            : (hasRefunds
+              ? '<div class="muted">\u0412\u0441\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u044b.</div>'
+              : '<div class="muted">-</div>')
+        );
+        if (typeof options.afterRender === "function") {
+          options.afterRender(order, infoEls, displayOrder);
+        }
+      }).catch(function (error) {
+        if (window.navigator && navigator.onLine === false) return;
+        console.warn("Order catalog photo enrichment failed:", error);
+      });
     }
 
     return {

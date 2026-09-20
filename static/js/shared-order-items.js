@@ -93,6 +93,19 @@
       .slice(0, maxItems || 4);
   }
 
+  function getCurrentCatalogPhotos(item) {
+    var productId = Number(item && item.product_id || 0);
+    var product = productId > 0 && window.CatalogRepository
+      && typeof window.CatalogRepository.getProduct === "function"
+      ? window.CatalogRepository.getProduct(productId)
+      : null;
+    if (!product || product.unavailable === true) return [];
+    var photos = cleanPhotos(product.photos, 4);
+    if (photos.length) return photos;
+    var single = str(product.photo || product.image_url || product.photo_url).trim();
+    return single ? [single] : [];
+  }
+
   function normalizeVariantUnitLabel(unitRaw) {
     var raw = str(unitRaw).trim();
     if (!raw) return "";
@@ -409,6 +422,11 @@
 
   function renderProductThumbHtml(item, opts) {
     var photos = cleanPhotos(item && item.photos, 4);
+    if (!photos.length) {
+      var snapshotPhoto = str(item && (item.photo || item.product_photo || item.image_url || item.photo_url)).trim();
+      if (snapshotPhoto) photos = [snapshotPhoto];
+    }
+    if (!photos.length) photos = getCurrentCatalogPhotos(item);
     var placeholder = str(opts && opts.placeholderImage).trim() || "/static/img/placeholder.png";
     var mainPhoto = photos[0] || placeholder;
     var badgeHtml = renderBuyXGetYBadgeHtml(item);

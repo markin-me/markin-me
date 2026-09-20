@@ -4,15 +4,24 @@ const crypto = require('crypto');
 const fs = require('fs');
 const multer = require('multer');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
+const catalogSync = require('../../services/catalog-sync');
 
-module.exports = function makeAdminProductsRouter({ db, helpers }) {
+module.exports = function makeAdminProductsRouter({ db, helpers, buildAdminFullProductPassports }) {
   const router = express.Router();
+
+  async function hasCatalogStoreScope(tenantId, storeId) {
+    const [rows] = await db.query(
+      'SELECT id FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+      [tenantId, storeId]
+    );
+    return Array.isArray(rows) && rows.length > 0;
+  }
 
   async function invalidateProductPassportsForMutation(req) {
     const method = String(req.method || '').toUpperCase();
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return;
     const requestPath = String(req.path || req.originalUrl || '');
-    if (!/(prod_products|admin\/products|admin\/options|admin\/variants|admin\/units|unit-conversions|unit-links|ingredients|sort\/prod_products)/.test(requestPath)) return;
+    if (!/(prod_products|prod_categories|admin\/products|admin\/options|admin\/variants|admin\/units|admin\/combos|admin\/combo-blocks|unit-conversions|unit-links|ingredients|sort\/prod_)/.test(requestPath)) return;
     const tenantId = helpers.getTenantId(req);
     const storeId = helpers.getStoreId(req);
     const directMatch = requestPath.match(/(?:prod_products|admin\/products)\/(\d+)/);
@@ -21,54 +30,188 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       ...(Array.isArray(req.body?.product_ids) ? req.body.product_ids : []),
       ...(Array.isArray(req.body?.ids) ? req.body.ids : []),
       ...(Array.isArray(req.body?.items) ? req.body.items.map((item) => item?.product_id || item?.id) : []),
+      ...(Array.isArray(req.__catalogAffectedProductIds) ? req.__catalogAffectedProductIds : []),
       req.body?.product_id,
       req.body?.assign_type === 'product' ? req.body?.assign_id : null,
     ];
     productIds.push(...bodyIds);
     if (Number(resolvedCreatedProductId(req)) > 0) productIds.push(Number(resolvedCreatedProductId(req)));
 
-    if (/admin\/options/.test(requestPath)) {
-      const [rows] = await db.query(
-        `SELECT DISTINCT assign_id AS product_id FROM prod_option_assignments
-         WHERE tenant_id=? AND assign_type='product' AND is_active=1`,
-        [tenantId]
-      );
-      productIds.push(...rows.map((row) => row.product_id));
+    if (/admin\/(?:combos|combo-blocks)/.test(requestPath)) {
+      const comboMatch = requestPath.match(/admin\/combos\/(\d+)/);
+      const blockMatch = requestPath.match(/admin\/combo-blocks\/(\d+)/);
+      const entityId = Number(blockMatch?.[1] || comboMatch?.[1] || req.__catalogResponseId || 0) || null;
+      await catalogSync.recordTenantChange({
+        db,
+        tenantId,
+        entityType: blockMatch ? 'combo-block' : 'combo',
+        entityId,
+        operation: method === 'DELETE' ? 'delete' : 'upsert',
+      });
+      if (Array.isArray(req.__catalogAffectedComboIds) && req.__catalogAffectedComboIds.length) {
+        await catalogSync.recordTenantChanges(
+          { db, tenantId, entityType: 'combo', operation: 'upsert' },
+          req.__catalogAffectedComboIds
+        );
+      }
     }
-    if (/admin\/variants/.test(requestPath)) {
-      const [rows] = await db.query(
-        `SELECT DISTINCT product_id FROM prod_variant_assignments
-         WHERE tenant_id=? AND is_active=1`,
-        [tenantId]
+    const related = await productPassportSnapshots.markRelatedProductsDirty({ db, tenantId, storeId, productIds }) || [];
+    const deletedProductId = method === 'DELETE' ? Number(directMatch?.[1] || 0) : 0;
+    if (deletedProductId > 0 && /prod_products/.test(requestPath)) {
+      await catalogSync.recordTenantChanges({ db, tenantId, entityType: 'product', operation: 'delete' }, [deletedProductId]);
+      await catalogSync.recordTenantChanges(
+        { db, tenantId, entityType: 'product', operation: 'upsert' },
+        related.filter((id) => Number(id) !== deletedProductId)
       );
-      productIds.push(...rows.map((row) => row.product_id));
+    } else {
+      await catalogSync.recordTenantChanges({ db, tenantId, entityType: 'product', operation: 'upsert' }, related);
     }
-    if (/(admin\/units|unit-conversions|unit-links)/.test(requestPath)) {
-      const [rows] = await db.query(
-        `SELECT DISTINCT id AS product_id FROM prod_products
-         WHERE tenant_id=? AND is_active=1 AND site_visibility=1`,
-        [tenantId]
-      );
-      productIds.push(...rows.map((row) => row.product_id));
+    if (/prod_categories|sort\/prod_categories/.test(requestPath)) {
+      const categoryId = Number(requestPath.match(/prod_categories\/(\d+)/)?.[1] || req.body?.id || 0) || null;
+      await catalogSync.recordTenantChange({
+        db, tenantId, entityType: 'category',
+        entityId: categoryId,
+        operation: method === 'DELETE' ? 'delete' : 'upsert',
+      });
     }
-    await productPassportSnapshots.markRelatedProductsDirty({ db, tenantId, storeId, productIds });
+    if (req.__catalogReferenceChanged === true) {
+      await catalogSync.recordTenantChange({ db, tenantId, entityType: 'reference', entityId: null, operation: 'upsert' });
+    }
   }
+
+  router.use(async (req, res, next) => {
+    const method = String(req.method || '').toUpperCase();
+    const requestPath = String(req.path || '');
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return next();
+    const tenantId = helpers.getTenantId(req);
+    try {
+      let rows = [];
+      let comboRows = [];
+      let match = requestPath.match(/^\/admin\/combo-blocks\/(\d+)/);
+      if (match) {
+        [comboRows] = await db.query(
+          'SELECT DISTINCT combo_id FROM prod_combo_set_blocks WHERE tenant_id=? AND block_id=?',
+          [tenantId, Number(match[1])]
+        );
+      }
+      match = requestPath.match(/^\/admin\/combos\/(\d+)/);
+      if (match) {
+        comboRows.push({ combo_id: Number(match[1]) });
+      }
+      match = requestPath.match(/^\/prod_products\/(\d+)/);
+      if (match && method === 'DELETE') {
+        const [dependentRows] = await db.query(
+          `SELECT product_id FROM prod_product_ingredients WHERE tenant_id=? AND ingredient_id=?
+           UNION
+           SELECT oa.assign_id AS product_id
+             FROM prod_option_items oi
+             JOIN prod_option_assignments oa ON oa.tenant_id=oi.tenant_id AND oa.group_id=oi.group_id
+            WHERE oi.tenant_id=? AND oi.target_type='product' AND oi.target_product_id=? AND oa.assign_type='product'`,
+          [tenantId, Number(match[1]), tenantId, Number(match[1])]
+        );
+        rows.push(...dependentRows);
+      }
+      match = requestPath.match(/^\/prod_categories\/(\d+)/);
+      if (match && method === 'DELETE') {
+        const [categoryProductRows] = await db.query(
+          'SELECT product_id FROM prod_product_categories WHERE tenant_id=? AND category_id=?',
+          [tenantId, Number(match[1])]
+        );
+        rows.push(...categoryProductRows);
+      }
+      match = requestPath.match(/^\/admin\/options\/(?:groups|items)\/(\d+)/);
+      if (match) {
+        const table = requestPath.includes('/items/') ? 'prod_option_items' : 'prod_option_groups';
+        [rows] = await db.query(
+          `SELECT DISTINCT oa.assign_id AS product_id FROM ${table} source
+           JOIN prod_option_assignments oa ON oa.tenant_id=source.tenant_id AND oa.group_id=${table === 'prod_option_items' ? 'source.group_id' : 'source.id'}
+           WHERE source.tenant_id=? AND source.id=? AND oa.assign_type='product'`,
+          [tenantId, Number(match[1])]
+        );
+      }
+      match = requestPath.match(/^\/admin\/options\/assignments\/(\d+)/);
+      if (match) {
+        [rows] = await db.query(
+          `SELECT assign_id AS product_id FROM prod_option_assignments
+           WHERE tenant_id=? AND id=? AND assign_type='product'`,
+          [tenantId, Number(match[1])]
+        );
+      }
+      match = requestPath.match(/^\/admin\/variants\/groups\/(\d+)/);
+      if (match) {
+        [rows] = await db.query(
+          'SELECT DISTINCT product_id FROM prod_variant_assignments WHERE tenant_id=? AND group_id=?',
+          [tenantId, Number(match[1])]
+        );
+      }
+      match = requestPath.match(/^\/admin\/variants\/assignments\/(\d+)/);
+      if (match) {
+        [rows] = await db.query(
+          'SELECT product_id FROM prod_variant_assignments WHERE tenant_id=? AND id=?',
+          [tenantId, Number(match[1])]
+        );
+      }
+      if (/^\/admin\/(?:units|unit-conversions)(?:\/|$)/.test(requestPath)) {
+        req.__catalogReferenceChanged = true;
+        const unitIds = [req.body?.unit_id, req.body?.from_unit_id, req.body?.to_unit_id].map(Number).filter((value) => value > 0);
+        const routeId = Number(requestPath.match(/^\/admin\/units\/(\d+)/)?.[1] || 0);
+        if (routeId > 0) unitIds.push(routeId);
+        const conversionId = Number(requestPath.match(/^\/admin\/unit-conversions\/(\d+)/)?.[1] || 0);
+        if (conversionId > 0) {
+          const [conversionRows] = await db.query(
+            'SELECT from_unit_id, to_unit_id FROM prod_unit_conversions WHERE tenant_id=? AND id=?',
+            [tenantId, conversionId]
+          );
+          conversionRows.forEach((row) => unitIds.push(Number(row.from_unit_id), Number(row.to_unit_id)));
+        }
+        const distinctUnitIds = [...new Set(unitIds.filter((value) => value > 0))];
+        if (distinctUnitIds.length) {
+          const [unitProductRows] = await db.query(
+            `SELECT id AS product_id FROM prod_products WHERE tenant_id=? AND (unit_id IN (?) OR base_unit_id IN (?))
+             UNION SELECT product_id FROM prod_product_unit_links WHERE tenant_id=? AND (unit_id IN (?) OR base_unit_id IN (?))
+             UNION SELECT product_id FROM prod_product_ingredients WHERE tenant_id=? AND unit_id IN (?)
+             UNION SELECT va.product_id FROM prod_variant_groups vg
+                    JOIN prod_variant_assignments va ON va.tenant_id=vg.tenant_id AND va.variant_group_id=vg.id
+                    WHERE vg.tenant_id=? AND vg.unit_id IN (?)`,
+            [tenantId, distinctUnitIds, distinctUnitIds, tenantId, distinctUnitIds, distinctUnitIds,
+              tenantId, distinctUnitIds, tenantId, distinctUnitIds]
+          );
+          rows.push(...unitProductRows);
+        }
+      }
+      if (/\/unit-links(?:\/|$)/.test(requestPath)) req.__catalogReferenceChanged = true;
+      const assignmentIds = [
+        ...(Array.isArray(req.body?.assign_ids) ? req.body.assign_ids : []),
+        ...(Array.isArray(req.body?.assignments) ? req.body.assignments : []),
+      ].map((value) => Number(value?.assign_id ?? value?.product_id ?? value)).filter((value) => value > 0);
+      rows.push(...assignmentIds.map((product_id) => ({ product_id })));
+      req.__catalogAffectedProductIds = [...new Set((rows || []).map((row) => Number(row.product_id)).filter((id) => id > 0))];
+      req.__catalogAffectedComboIds = [...new Set((comboRows || []).map((row) => Number(row.combo_id)).filter((id) => id > 0))];
+    } catch (error) {
+      return next(error);
+    }
+    return next();
+  });
 
   router.use((req, res, next) => {
     const originalJson = res.json.bind(res);
-    res.json = (payload) => {
+    let catalogFinalizing = false;
+    res.json = async (payload) => {
       if (payload?.ok === true && Number(payload?.id || 0) > 0 && String(req.path || '') === '/prod_products') {
         req.__createdProductId = Number(payload.id);
       }
-      return originalJson(payload);
-    };
-    res.once('finish', () => {
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        setImmediate(() => invalidateProductPassportsForMutation(req).catch((error) => {
-          console.error('product passport invalidation failed:', error);
-        }));
+      if (Number(payload?.data?.id || 0) > 0) req.__catalogResponseId = Number(payload.data.id);
+      if (catalogFinalizing || res.statusCode < 200 || res.statusCode >= 300) return originalJson(payload);
+      catalogFinalizing = true;
+      try {
+        await invalidateProductPassportsForMutation(req);
+        return originalJson(payload);
+      } catch (error) {
+        console.error('product catalog change recording failed:', error);
+        res.status(500);
+        return originalJson({ ok: false, error: 'CATALOG_CHANGE_RECORD_FAILED' });
       }
-    });
+    };
     next();
   });
 
@@ -1166,6 +1309,283 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   // ------------------------------
   // Categories: /api/prod_categories
   // ------------------------------
+  router.post('/admin/catalog/product-targets', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      if (!(await hasCatalogStoreScope(tenantId, storeId))) {
+        return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      }
+      const rawCategoryIds = Array.isArray(req.body?.category_ids) ? req.body.category_ids : [];
+      const categoryIds = [...new Set(rawCategoryIds
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && id > 0))];
+      if (categoryIds.length > 100) {
+        return res.status(400).json({ ok: false, error: 'TOO_MANY_CATEGORIES' });
+      }
+
+      let rows;
+      if (categoryIds.length) {
+        [rows] = await db.query(
+          `SELECT DISTINCT p.id
+           FROM prod_products p
+           JOIN prod_product_categories pc
+             ON pc.tenant_id=p.tenant_id AND pc.product_id=p.id
+           WHERE p.tenant_id=?
+             AND pc.category_id IN (?)
+           ORDER BY p.id ASC`,
+          [tenantId, categoryIds]
+        );
+      } else {
+        [rows] = await db.query(
+          `SELECT p.id
+           FROM prod_products p
+           WHERE p.tenant_id=?
+           ORDER BY p.id ASC`,
+          [tenantId]
+        );
+      }
+      const productIds = (Array.isArray(rows) ? rows : [])
+        .map((row) => Number(row?.id || 0))
+        .filter((id) => id > 0);
+      return res.json({
+        ok: true,
+        data: {
+          product_ids: productIds,
+          total: productIds.length,
+          tenant_id: tenantId,
+          store_id: storeId,
+          generated_at: new Date().toISOString(),
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/catalog/product-summaries', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      if (!(await hasCatalogStoreScope(tenantId, storeId))) {
+        return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      }
+      const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+      if (!ids.length) return res.json({ ok: true, data: [] });
+      if (ids.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+      const [rows] = await db.query(
+        `SELECT id, name, price, old_price, unit_id, base_unit_id, base_qty, photos_json, is_active
+         FROM prod_products
+         WHERE tenant_id=? AND id IN (?)`,
+        [tenantId, ids]
+      );
+      const data = (Array.isArray(rows) ? rows : []).map((row) => ({
+        ...row,
+        photos: helpers.safeJsonArray(row.photos_json),
+      }));
+      return res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/catalog/product-passports', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      if (!(await hasCatalogStoreScope(tenantId, storeId))) {
+        return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      }
+      const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+      if (!ids.length) return res.json({ ok: true, data: {}, versions: {} });
+      if (ids.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+      if (typeof buildAdminFullProductPassports !== 'function') {
+        return res.status(503).json({ ok: false, error: 'PASSPORT_BUILDER_UNAVAILABLE' });
+      }
+      const payload = await buildAdminFullProductPassports({ tenantId, storeId, productIds: ids });
+      return res.json(payload);
+    } catch (e) {
+      console.error(e);
+      return res.status(e?.code === 'TOO_MANY' ? 400 : 500).json({
+        ok: false,
+        error: e?.code === 'TOO_MANY' ? 'TOO_MANY' : 'DB_ERROR',
+      });
+    }
+  });
+
+  router.get('/admin/catalog/combos', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const requestedIds = [...new Set(String(req.query.ids || '').split(',')
+        .map((value) => Number(value)).filter((id) => Number.isInteger(id) && id > 0))];
+      const requestedBlockIds = [...new Set(String(req.query.block_ids || '').split(',')
+        .map((value) => Number(value)).filter((id) => Number.isInteger(id) && id > 0))];
+      const categoryCodes = [...new Set(String(req.query.category_codes || '').split(',')
+        .map((value) => value.trim()).filter(Boolean))];
+      if (requestedIds.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY_IDS' });
+      if (requestedBlockIds.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY_BLOCK_IDS' });
+      if (categoryCodes.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY_CATEGORY_CODES' });
+      const filterSql = requestedIds.length
+        ? ` AND c.id IN (${requestedIds.map(() => '?').join(',')})`
+        : (requestedBlockIds.length
+          ? ` AND EXISTS (SELECT 1 FROM prod_combo_set_blocks requested_sb WHERE requested_sb.tenant_id=c.tenant_id AND requested_sb.combo_id=c.id AND requested_sb.block_id IN (${requestedBlockIds.map(() => '?').join(',')}))`
+          : (categoryCodes.length ? ` AND c.category_code IN (${categoryCodes.map(() => '?').join(',')})` : ''));
+      const [combos] = await db.query(
+        `SELECT c.id, c.tenant_id, c.title, c.description, c.discount_percent, c.category_code,
+                c.image_url, c.is_active, c.sort_order, c.created_at, c.updated_at
+           FROM prod_combos c
+          WHERE c.tenant_id=?${filterSql}
+          ORDER BY c.sort_order ASC, c.id ASC`,
+        [tenantId, ...(requestedIds.length ? requestedIds : (requestedBlockIds.length ? requestedBlockIds : categoryCodes))]
+      );
+      const comboIds = combos.map((row) => Number(row.id)).filter((id) => id > 0);
+      let relations = [];
+      if (comboIds.length) {
+        const comboPlaceholders = comboIds.map(() => '?').join(',');
+        [relations] = await db.query(
+          `SELECT sb.id, sb.combo_id, sb.block_id, sb.sort_order
+             FROM prod_combo_set_blocks sb
+            WHERE sb.tenant_id=? AND sb.combo_id IN (${comboPlaceholders})
+            ORDER BY sb.combo_id ASC, sb.sort_order ASC, sb.id ASC`,
+          [tenantId, ...comboIds]
+        );
+      }
+      let blockIds = [...new Set(relations.map((row) => Number(row.block_id)).filter((id) => id > 0))];
+      blockIds.push(...requestedBlockIds);
+      blockIds = [...new Set(blockIds)];
+      if (!requestedIds.length && !categoryCodes.length) {
+        const [allBlockIds] = await db.query('SELECT id FROM prod_combo_blocks WHERE tenant_id=?', [tenantId]);
+        blockIds = allBlockIds.map((row) => Number(row.id)).filter((id) => id > 0);
+      }
+      let blocks = [];
+      let blockProducts = [];
+      if (blockIds.length) {
+        const blockPlaceholders = blockIds.map(() => '?').join(',');
+        [blocks] = await db.query(
+          `SELECT id, title, sort_order, min_select, max_select, created_at, updated_at
+             FROM prod_combo_blocks
+            WHERE tenant_id=? AND id IN (${blockPlaceholders})`,
+          [tenantId, ...blockIds]
+        );
+        [blockProducts] = await db.query(
+          `SELECT id, block_id, product_id, sort_order, is_default
+             FROM prod_combo_block_products
+            WHERE tenant_id=? AND block_id IN (${blockPlaceholders})
+            ORDER BY block_id ASC, sort_order ASC, id ASC`,
+          [tenantId, ...blockIds]
+        );
+      }
+      const productsByBlockId = new Map();
+      blockProducts.forEach((row) => {
+        const blockId = Number(row.block_id);
+        if (!productsByBlockId.has(blockId)) productsByBlockId.set(blockId, []);
+        productsByBlockId.get(blockId).push(row);
+      });
+      const blockById = new Map(blocks.map((row) => [Number(row.id), {
+        ...row,
+        products: productsByBlockId.get(Number(row.id)) || [],
+      }]));
+      const relationsByComboId = new Map();
+      relations.forEach((row) => {
+        const comboId = Number(row.combo_id);
+        if (!relationsByComboId.has(comboId)) relationsByComboId.set(comboId, []);
+        relationsByComboId.get(comboId).push(row);
+      });
+      res.json({
+        ok: true,
+        blocks: [...blockById.values()],
+        data: combos.map((combo) => {
+          const comboRelations = relationsByComboId.get(Number(combo.id)) || [];
+          return {
+            combo,
+            relations: comboRelations,
+            blocks: comboRelations.map((relation) => blockById.get(Number(relation.block_id))).filter(Boolean),
+          };
+        }),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/catalog/manifest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = Number(req.query?.store_id || helpers.getStoreId(req));
+      if (!(await hasCatalogStoreScope(tenantId, storeId))) {
+        return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      }
+      const revision = await catalogSync.getManifest({ db, tenantId, storeId });
+      return res.json({ ok: true, data: { revision, tenant_id: tenantId, store_id: storeId } });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/catalog/changes', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = Number(req.query?.store_id || helpers.getStoreId(req));
+      if (!(await hasCatalogStoreScope(tenantId, storeId))) {
+        return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      }
+      const page = await catalogSync.getChanges({
+        db, tenantId, storeId, since: req.query?.since, limit: req.query?.limit,
+      });
+      const coalesced = new Map();
+      page.changes.forEach((change) => {
+        coalesced.set(`${change.entity_type}:${change.entity_id ?? 'all'}`, change);
+      });
+      return res.json({ ok: true, data: {
+        from_revision: catalogSync.revision(req.query?.since),
+        to_revision: page.next_revision,
+        changes: [...coalesced.values()],
+        has_more: page.has_more,
+        next_revision: page.next_revision,
+        reset_required: page.reset_required === true,
+      } });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/catalog/stream', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const storeId = Number(req.query?.store_id || 0);
+    let currentRevision;
+    try {
+      if (!(storeId > 0) || !(await hasCatalogStoreScope(tenantId, storeId))) {
+        return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      }
+      currentRevision = await catalogSync.getManifest({ db, tenantId, storeId });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    const write = (event, data) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    write('snapshot', { revision: currentRevision });
+    const unsubscribe = catalogSync.subscribe(tenantId, storeId, (change) => write('change', change));
+    const keepalive = setInterval(() => res.write(': keepalive\n\n'), 25000);
+    const cleanup = () => { clearInterval(keepalive); unsubscribe(); };
+    req.once('close', cleanup);
+    req.once('aborted', cleanup);
+  });
+
   router.get('/prod_categories', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -2618,6 +3038,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           itemCategoryMap.get(productId).push(categoryId);
         });
       }
+      const [dependentRows] = await conn.query(
+        'SELECT DISTINCT product_id FROM prod_product_ingredients WHERE tenant_id=? AND ingredient_id=?',
+        [tenantId, id]
+      );
+      req.__catalogAffectedProductIds = dependentRows.map((row) => Number(row.product_id)).filter((value) => value > 0);
 
       let excludedItemIds = new Set();
       if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
@@ -4197,7 +4622,49 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const categoryId = helpers.numOrNull(req.query.category_id);
+      const categoryIds = String(req.query.category_ids || '')
+        .split(',')
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && id > 0);
       const q = helpers.strOrNull(req.query.q);
+
+      if (categoryIds.length) {
+        const uniqueCategoryIds = [...new Set(categoryIds)];
+        if (uniqueCategoryIds.length > 50) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+        const storeId = helpers.getStoreId(req);
+        const placeholders = uniqueCategoryIds.map(() => '?').join(',');
+        const [rows] = await db.query(
+          `SELECT p.*, pc.category_id AS _category_id, pc.sort_order AS link_sort_order,
+             s.qty AS stock_qty,
+             CASE WHEN s.qty IS NULL OR s.qty > 0 THEN 1 ELSE 0 END AS is_available,
+             (SELECT 1 FROM prod_variant_assignments va
+              INNER JOIN prod_variant_groups vg ON vg.id=va.variant_group_id AND vg.tenant_id=va.tenant_id
+              WHERE va.tenant_id=p.tenant_id AND va.product_id=p.id AND va.is_active=1 AND vg.is_active=1 LIMIT 1) AS has_variants,
+             (SELECT 1 FROM prod_product_ingredients pi
+              WHERE pi.tenant_id=p.tenant_id AND pi.product_id=p.id AND pi.is_variable=1 LIMIT 1) AS has_changeable_composition,
+             (SELECT 1 FROM prod_option_assignments oa
+              INNER JOIN prod_option_groups og ON og.id=oa.group_id AND og.tenant_id=oa.tenant_id
+              WHERE oa.tenant_id=p.tenant_id AND oa.assign_type='product' AND oa.assign_id=p.id
+                AND oa.is_active=1 AND og.is_active=1 LIMIT 1) AS has_options
+           FROM prod_product_categories pc
+           INNER JOIN prod_products p ON p.tenant_id=pc.tenant_id AND p.id=pc.product_id
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           WHERE pc.tenant_id=? AND pc.category_id IN (${placeholders}) AND p.is_active=1
+           ORDER BY pc.category_id ASC, pc.sort_order ASC, pc.id ASC`,
+          [storeId, tenantId, ...uniqueCategoryIds]
+        );
+        const data = Object.fromEntries(uniqueCategoryIds.map((id) => [String(id), []]));
+        rows.forEach((row) => {
+          row.photos = helpers.safeJsonArray(row.photos_json);
+          row.photos_json = row.photos;
+          row.is_available = Number(row.is_available || 0) === 1;
+          row.has_variants = row.has_variants != null ? 1 : 0;
+          row.has_changeable_composition = row.has_changeable_composition != null ? 1 : 0;
+          row.has_options = row.has_options != null ? 1 : 0;
+          data[String(Number(row._category_id))]?.push(row);
+        });
+        return res.json({ ok: true, data });
+      }
 
       const params = [];
       let sql =
@@ -4206,7 +4673,11 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
             INNER JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
             WHERE va.tenant_id = p.tenant_id AND va.product_id = p.id AND va.is_active = 1 AND vg.is_active = 1 LIMIT 1) AS has_variants,
            (SELECT 1 FROM prod_product_ingredients pi
-            WHERE pi.tenant_id = p.tenant_id AND pi.product_id = p.id AND pi.is_variable = 1 LIMIT 1) AS has_changeable_composition
+            WHERE pi.tenant_id = p.tenant_id AND pi.product_id = p.id AND pi.is_variable = 1 LIMIT 1) AS has_changeable_composition,
+           (SELECT 1 FROM prod_option_assignments oa
+            INNER JOIN prod_option_groups og ON og.id=oa.group_id AND og.tenant_id=oa.tenant_id
+            WHERE oa.tenant_id=p.tenant_id AND oa.assign_type='product' AND oa.assign_id=p.id
+              AND oa.is_active=1 AND og.is_active=1 LIMIT 1) AS has_options
          FROM prod_products p`;
 
       if (categoryId) {
@@ -4232,6 +4703,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         r.photos_json = r.photos;
         r.has_variants = r.has_variants != null ? 1 : 0;
         r.has_changeable_composition = r.has_changeable_composition != null ? 1 : 0;
+        r.has_options = r.has_options != null ? 1 : 0;
       }
       
       res.json({ ok: true, data: rows });

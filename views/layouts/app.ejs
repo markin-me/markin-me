@@ -51,7 +51,7 @@
       sharedOrderPayment: <%- JSON.stringify(assetUrl('/static/js/shared-order-payment.js?v=20260831-mobile-payment-screen-v3')) %>,
       sharedOrderItems: <%- JSON.stringify(assetUrl('/static/js/shared-order-items.js?v=20260628b')) %>,
       clients: <%- JSON.stringify(assetUrl('/static/js/clients.js')) %>,
-      newOrder: <%- JSON.stringify(assetUrl('/static/js/new-order.js')) %>
+      newOrder: <%- JSON.stringify(assetUrl('/static/js/new-order.js?v=20260920-new-order-cache-v4')) %>
     };
     window.__APP_MANIFEST_CONTEXT__ = {
       app: 'admin',
@@ -153,7 +153,7 @@
     })();
   </script>
 
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260913-chat-instant-bootstrap-v1') %>" />
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20260914-catalog5-ui-v1') %>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
@@ -243,7 +243,8 @@
 
   <!-- Скрипты -->
   <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
-  <script src="<%= assetUrl('/static/js/admin-persistent-cache.js?v=20260912-pwa9-v1') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-persistent-cache.js?v=20260915-perf1-v1') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-catalog.js?v=20260920-products-cachefix-v3') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-reference-cache.js?v=20260912-pwa8-v1') %>"></script>
   <script>
     if (window.AdminPersistentCache && typeof window.AdminPersistentCache.scheduleMaintenance === 'function') {

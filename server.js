@@ -1308,6 +1308,7 @@ const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/js/shared-order-items.js?v=20260329a'),
   app.locals.assetUrl('/static/js/courier-screen.js?v=20260907-orderpass-capabilities-v1'),
   app.locals.assetUrl('/static/js/admin-persistent-cache.js?v=20260912-pwa9-v1'),
+  app.locals.assetUrl('/static/js/admin-catalog.js?v=20260920-products-cachefix-v2'),
   app.locals.assetUrl('/static/js/admin-reference-cache.js?v=20260912-pwa8-v1'),
   app.locals.assetUrl('/static/js/orders.js')
 ];
@@ -1933,7 +1934,8 @@ app.post('/api/max/webhook', (req, res) => {
 // ------------------------------
 // API: Public (публичные роуты должны быть ПЕРЕД админскими)
 // ------------------------------
-app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents, presenceService }));
+const publicShopRouter = makePublicShopRouter({ db, helpers, ordersEvents, presenceService });
+app.use('/api/public', publicShopRouter);
 app.use('/api/print', makePrintApiRouter({ db, helpers }));
 app.use('/api/chat-temp', makeChatTempRouter());
 
@@ -2216,7 +2218,11 @@ app.delete('/api/admin/analytics/expense-documents/:id', authMiddleware, async (
   }
 });
 
-const adminProductsRouter = makeAdminProductsRouter({ db, helpers });
+const adminProductsRouter = makeAdminProductsRouter({
+  db,
+  helpers,
+  buildAdminFullProductPassports: publicShopRouter.buildAdminFullProductPassports,
+});
 app.use('/api', authMiddleware, adminProductsRouter);
 
 // ------------------------------

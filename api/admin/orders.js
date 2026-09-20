@@ -1731,10 +1731,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     };
   }
 
-  function publishStockChanged(tenantId, storeId, payload = {}) {
+  async function publishStockChanged(tenantId, storeId, payload = {}) {
     try {
-      productPassportSnapshots.markRelatedProductsDirty({
-        db, tenantId, storeId, productIds: payload?.product_ids || [],
+      await productPassportSnapshots.markRelatedProductsDirty({
+        db, tenantId, storeId, productIds: payload?.product_ids || [], catalogChangeScope: 'store', operation: 'stock',
       }).catch((error) => console.error("stock passport invalidation failed:", error));
       if (ordersEvents && typeof ordersEvents.publish === "function") {
         ordersEvents.publish(tenantId, storeId, "stock.changed", {
@@ -3472,7 +3472,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         }
       }
       if (stockChangedProductIds.length) {
-        publishStockChanged(tenantId, storeId, {
+        await publishStockChanged(tenantId, storeId, {
           source: "order.status_update",
           order_id: Number(id),
           product_ids: stockChangedProductIds,

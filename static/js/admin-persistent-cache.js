@@ -140,6 +140,35 @@
   const readEntry = (key) => requestOperation("readonly", (store) => store.get(key));
   const deleteEntry = (key) => requestOperation("readwrite", (store) => store.delete(key));
 
+  function requestMany(mode, operations) {
+    return openDb().then((db) => new Promise((resolve, reject) => {
+      let transaction;
+      let settled = false;
+      const results = new Array(operations.length);
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+      try {
+        transaction = db.transaction(STORE_NAME, mode);
+        const store = transaction.objectStore(STORE_NAME);
+        operations.forEach((operation, index) => {
+          const request = operation(store);
+          request.onsuccess = () => { results[index] = request.result; };
+          request.onerror = () => fail(request.error || new Error("INDEXEDDB_OPERATION_FAILED"));
+        });
+      } catch (error) { fail(error); return; }
+      transaction.oncomplete = () => {
+        if (settled) return;
+        settled = true;
+        resolve(results);
+      };
+      transaction.onerror = () => fail(transaction.error || new Error("INDEXEDDB_TRANSACTION_FAILED"));
+      transaction.onabort = () => fail(transaction.error || new Error("INDEXEDDB_TRANSACTION_ABORTED"));
+    }));
+  }
+
   function isQuotaError(error) {
     if (!error) return false;
     const name = String(error.name || "").toLowerCase();
@@ -157,6 +186,16 @@
       expiresAt: Number.isFinite(ttl) && ttl > 0 ? now + ttl : null,
       data,
     }));
+  }
+
+  function makeEntry(key, namespace, data, version, ttlMs, now = Date.now()) {
+    const ttl = Number(ttlMs);
+    return {
+      key, namespace, schemaVersion: SCHEMA_VERSION, version,
+      createdAt: now, updatedAt: now,
+      expiresAt: Number.isFinite(ttl) && ttl > 0 ? now + ttl : null,
+      data,
+    };
   }
 
   async function writeEntry(key, namespace, data, version, ttlMs) {
@@ -349,12 +388,55 @@
           expiresAt: entry.expiresAt, schemaVersion: entry.schemaVersion, stale };
       },
       async get(key) { const entry = await this.getEntry(key); return entry ? entry.data : null; },
+      async getMany(keys, options = {}) {
+        const requested = Array.isArray(keys) ? keys : [];
+        const storageKeys = requested.map(scopedKey);
+        const result = new Map(requested.map((key) => [key, null]));
+        if (!resolved.complete || !requested.length) return result;
+        const entries = await requestMany("readonly", storageKeys.map((key) => (store) => store.get(key)));
+        const now = Date.now();
+        entries.forEach((entry, index) => {
+          if (!entry || entry.schemaVersion !== SCHEMA_VERSION) return;
+          if (entryIsStale(entry, now) && !options.allowStale) return;
+          result.set(requested[index], options.entries === true ? {
+            data: entry.data, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
+            expiresAt: entry.expiresAt, schemaVersion: entry.schemaVersion,
+            stale: entryIsStale(entry, now),
+          } : entry.data);
+        });
+        return result;
+      },
       set(key, data, options = {}) {
         const storageKey = scopedKey(key);
         if (!storageKey) return Promise.resolve(false);
         return writeEntry(storageKey, resolved.namespace, data, resolved.version, options.ttlMs).then(() => true);
       },
+      async setMany(entries, options = {}) {
+        const requested = entries instanceof Map ? [...entries.entries()] : (Array.isArray(entries) ? entries : []);
+        if (!resolved.complete || !requested.length) return false;
+        const now = Date.now();
+        const records = requested.map(([key, data]) => makeEntry(
+          scopedKey(key), resolved.namespace, data, resolved.version, options.ttlMs, now
+        ));
+        const write = () => requestMany("readwrite", records.map((entry) => (store) => store.put(entry)));
+        try { await write(); }
+        catch (error) {
+          if (!isQuotaError(error)) throw error;
+          console.warn("Persistent cache quota exceeded; running bounded safe cleanup");
+          await cleanup({ reason: "quota", force: true }).catch((cleanupError) => {
+            console.warn("Persistent cache quota cleanup failed", cleanupError);
+          });
+          await write();
+        }
+        return true;
+      },
       remove(key) { const storageKey = scopedKey(key); return storageKey ? deleteEntry(storageKey) : Promise.resolve(false); },
+      async removeMany(keys) {
+        const storageKeys = (Array.isArray(keys) ? keys : []).map(scopedKey).filter(Boolean);
+        if (!resolved.complete || !storageKeys.length) return false;
+        await requestMany("readwrite", storageKeys.map((key) => (store) => store.delete(key)));
+        return true;
+      },
       clear() { return resolved.complete ? clearNamespace(resolved.namespace) : Promise.resolve(false); },
       prune(maxEntries) { return resolved.complete ? pruneNamespace(resolved.namespace, maxEntries) : Promise.resolve(false); },
     };

@@ -4,10 +4,10 @@ const productPassportSnapshots = require('../../services/product-passport-snapsh
 module.exports = function makeAdminStockRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
 
-  function publishStockChanged(tenantId, storeId, payload = {}) {
+  async function publishStockChanged(tenantId, storeId, payload = {}) {
     try {
-      productPassportSnapshots.markRelatedProductsDirty({
-        db, tenantId, storeId, productIds: payload?.product_ids || [],
+      await productPassportSnapshots.markRelatedProductsDirty({
+        db, tenantId, storeId, productIds: payload?.product_ids || [], catalogChangeScope: 'store', operation: 'stock',
       }).catch((error) => console.error('stock passport invalidation failed:', error));
       if (ordersEvents && typeof ordersEvents.publish === 'function') {
         ordersEvents.publish(tenantId, storeId, 'stock.changed', {
@@ -784,7 +784,7 @@ module.exports = function makeAdminStockRouter({ db, helpers, ordersEvents }) {
         )
       );
       if (stockChangedProductIds.length) {
-        publishStockChanged(tenantId, storeId, {
+        await publishStockChanged(tenantId, storeId, {
           source: 'stock.document_post',
           doc_id: id,
           doc_type: docType,

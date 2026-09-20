@@ -166,6 +166,7 @@
   const NEW_ORDER_MANIFEST_FRESH_MS = 15 * 1000;
   const NEW_ORDER_IDLE_FALLBACK_DELAY_MS = 1500;
   const NEW_ORDER_RUNTIME_CLIENT_CACHE_LIMIT = 20;
+  let startupInventoryPromise = null;
 
   const state = {
     categories: [],
@@ -177,14 +178,18 @@
     selectedVariants: new Map(),
     currentProducts: [],
     categoryProductsCache: new Map(),
+    categoryIdsByProductId: new Map(),
     inventoryByProductId: new Map(),
     inventoryRevision: null,
     inventoryReady: false,
+    inventoryFreshReady: false,
     unitConversions: [],
     productIngredients: new Map(),
     ingredientStateByProduct: new Map(),
     productOptionGroups: new Map(),
     optionGroupDetails: new Map(),
+    productDetailsStatus: new Map(),
+    productDetailsInFlight: new Map(),
     optionSelections: new Map(),
     optionTargetProductCache: new Map(),
     productByIdCache: new Map(),
@@ -192,6 +197,9 @@
     checkoutSavedDraft: { blocks: [] },
     checkoutDraftReady: false,
     checkoutCategoryProducts: new Map(),
+    checkoutCategoryLoading: new Set(),
+    checkoutCategoryErrors: new Set(),
+    categoryWorkingSetComplete: new Set(),
     checkoutSelectedProductByCategory: new Map(),
     checkoutProductsScrollByCategory: new Map(),
     checkoutVariantsScrollByCategory: new Map(),
@@ -1606,8 +1614,7 @@
         });
         const preloadProducts = Array.from(preloadProductsMap.values());
         if (preloadProducts.length) {
-          await loadVariantsForProducts(preloadProducts);
-          await loadIngredientsForProducts(preloadProducts);
+          await ensureNewOrderProductDetails(preloadProducts.map((product) => product.id));
         }
         state.autoAddLoaded = true;
       } catch {
@@ -7151,7 +7158,7 @@
     });
   }
 
-  async function submitRightOrder(orderId, options = {}) {
+  async function submitRightOrderTask(orderId, options = {}) {
     const withPayment = options?.withPayment === true;
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
@@ -7520,6 +7527,7 @@
     try {
       let submittedPublicId = "";
       let submittedId = 0;
+      let submittedStockLevels = [];
       let paymentStepError = null;
       if (isEditSubmit) {
         const editStoreId = Number(order?.storeId || 0) > 0 ? Number(order.storeId) : null;
@@ -7547,7 +7555,9 @@
         });
         submittedPublicId = String(json?.data?.public_id || "").trim();
         submittedId = Number(json?.data?.id || 0);
+        submittedStockLevels = Array.isArray(json?.data?.stock_levels) ? json.data.stock_levels : [];
       }
+      if (!isEditSubmit && submittedStockLevels.length) applyAuthoritativeOrderStockLevels(submittedStockLevels);
       if (withPayment && submittedId > 0) {
         try {
           await apiJson(`/api/admin/orders/${submittedId}/paid`, {
@@ -7597,7 +7607,7 @@
           },
         })
       );
-      void refreshNewOrderInventory();
+      if (!submittedStockLevels.length) void refreshNewOrderInventory();
       if (paymentStepError) {
         showNewOrderAlert(`${isEditSubmit ? "Заказ сохранен" : "Заказ оформлен"}, но принять оплату не удалось: ${paymentStepError?.message || "UNKNOWN"}`);
       }
@@ -7618,6 +7628,13 @@
     } finally {
       setRightOrderSubmitFeedback(id, false);
     }
+  }
+
+  function submitRightOrder(orderId, options = {}) {
+    const run = () => submitRightOrderTask(orderId, options);
+    return window.CatalogRepository?.withForegroundWork
+      ? window.CatalogRepository.withForegroundWork(run)
+      : run();
   }
 
   function getTenantIdFromStorage() {
@@ -7912,11 +7929,12 @@
   let bootstrapPersistTimer = null;
 
   function persistBootstrapSnapshot() {
+    const repositoryOwnsProducts = Boolean(window.CatalogRepository?.getScope()?.complete);
     const categoryProductsById = {};
     state.categoryProductsCache.forEach((payload, key) => {
       const cid = Number(key || 0);
       if (!(cid > 0)) return;
-      const source = (Array.isArray(payload?.source) ? payload.source : []).map(toStableCatalogProduct);
+      const source = repositoryOwnsProducts ? [] : (Array.isArray(payload?.source) ? payload.source : []).map(toStableCatalogProduct);
       const combos = Array.isArray(payload?.combos) ? payload.combos : [];
       categoryProductsById[String(cid)] = { source, combos };
     });
@@ -7952,6 +7970,9 @@
         productIngredientsById: mapToObject(state.productIngredients),
         productOptionGroupsById: mapToObject(state.productOptionGroups),
         optionGroupDetailsById: mapToObject(state.optionGroupDetails),
+        inventoryByProductId: mapToObject(state.inventoryByProductId),
+        inventoryRevision: state.inventoryRevision || null,
+        inventoryCachedAt: state.inventoryReady ? Date.now() : null,
       },
     };
     if (window.AdminPersistentCache) {
@@ -7969,8 +7990,37 @@
     return stable;
   }
 
+  function getNewOrderIngredientsBlockVisibility(product) {
+    if (!product || typeof product !== "object") return null;
+    let config = product.blocks_config ?? product.blocks_config_json ?? null;
+    if (typeof config === "string") {
+      try {
+        config = JSON.parse(config);
+      } catch {
+        return null;
+      }
+    }
+    if (!config || typeof config !== "object" || !Object.prototype.hasOwnProperty.call(config, "ingredients")) return null;
+    return config.ingredients === true || Number(config.ingredients || 0) === 1;
+  }
+
+  function filterNewOrderConfigurableIngredients(product, ingredients) {
+    const source = Array.isArray(ingredients) ? ingredients : [];
+    if (getNewOrderIngredientsBlockVisibility(product) === false) return [];
+    return source.filter((ingredient) => ingredient?.is_variable == null || Number(ingredient.is_variable) === 1);
+  }
+
+  function normalizeNewOrderCatalogProduct(product) {
+    const stable = toStableCatalogProduct(product);
+    if (stable && getNewOrderIngredientsBlockVisibility(stable) === false) {
+      stable.has_changeable_composition = 0;
+    }
+    return stable;
+  }
+
   async function readSharedProductBootstrap() {
     if (!window.AdminPersistentCache) return null;
+    if (window.CatalogRepository) await window.CatalogRepository.init();
     const cached = await window.AdminPersistentCache.readProductCatalog(sharedProductCacheScope()).catch(() => null);
     return cached?.newOrderBootstrap && typeof cached.newOrderBootstrap === "object" ? cached.newOrderBootstrap : null;
   }
@@ -8041,6 +8091,7 @@
       : { blocks: [] };
     state.checkoutDraftReady = snapshot.checkoutDraftReady === true
       && Number(snapshot.checkoutDraftCacheVersion || 0) === CHECKOUT_DRAFT_CACHE_VERSION;
+    state.categoryWorkingSetComplete = new Set();
 
     state.categoryProductsCache.clear();
     state.checkoutCategoryProducts.clear();
@@ -8052,14 +8103,43 @@
       if (!(categoryId > 0)) return;
       const raw = categoryProductsById[key] || {};
       const payload = buildCategoryPayload(raw.source, raw.combos, categoryId);
-      state.categoryProductsCache.set(categoryId, payload);
+      setNewOrderCategoryPayload(categoryId, payload);
       state.checkoutCategoryProducts.set(categoryId, payload.activeOnly);
+      if (window.CatalogRepository) {
+        window.CatalogRepository.upsertProducts(payload.source, { categoryId, completeness: "summary" });
+      }
     });
+
+    if (window.CatalogRepository) {
+      window.CatalogRepository.upsertCategories([
+        ...(Array.isArray(snapshot.categories) ? snapshot.categories : []),
+        ...(Array.isArray(snapshot.productCategories) ? snapshot.productCategories : []),
+      ]);
+    }
 
     state.productVariants = objectToMap(snapshot.productVariantsById);
     state.productIngredients = objectToMap(snapshot.productIngredientsById);
+    state.productIngredients.forEach((ingredients, productId) => {
+      const product = state.productByIdCache.get(Number(productId || 0))
+        || window.CatalogRepository?.getProduct(Number(productId || 0));
+      state.productIngredients.set(productId, filterNewOrderConfigurableIngredients(product, ingredients));
+    });
     state.productOptionGroups = objectToMap(snapshot.productOptionGroupsById);
     state.optionGroupDetails = objectToMap(snapshot.optionGroupDetailsById);
+    state.inventoryByProductId = objectToMap(snapshot.inventoryByProductId);
+    state.inventoryRevision = snapshot.inventoryRevision || null;
+    state.inventoryReady = state.inventoryByProductId.size > 0;
+    state.inventoryFreshReady = false;
+
+    const detailProductIds = new Set([
+      ...state.productVariants.keys(),
+      ...state.productIngredients.keys(),
+      ...state.productOptionGroups.keys(),
+    ]);
+    detailProductIds.forEach((productId) => {
+      const pid = Number(productId || 0);
+      if (pid > 0 && hasCompleteNewOrderProductDetails(pid)) state.productDetailsStatus.set(pid, "ready");
+    });
 
     state.ingredientStateByProduct.clear();
     state.productIngredients.forEach((list, productId) => {
@@ -8467,10 +8547,7 @@
     try {
       const product = await ensureProductById(productId);
       if (!product) return next;
-      await loadVariantsForProducts([product]);
-      await loadIngredientsForProducts([product]);
-      await loadOptionsForProducts([product]);
-      await loadOptionDetailsForProducts([product]);
+      await ensureNewOrderProductDetails([productId]);
 
       const variants = Array.isArray(state.productVariants.get(productId))
         ? state.productVariants.get(productId)
@@ -11977,8 +12054,7 @@
             if (host.isConnected) host.innerHTML = "";
             return;
           }
-          await loadVariantsForProducts([product]);
-          await loadIngredientsForProducts([product]);
+          await ensureNewOrderProductDetails([productId]);
           const variants = Array.isArray(state.productVariants.get(productId))
             ? state.productVariants.get(productId)
             : [];
@@ -14687,6 +14763,13 @@
     };
   }
 
+  function isNewOrderProductDetailsPending(product, productId) {
+    const configurable = Number(product?.has_variants || 0) === 1
+      || Number(product?.has_options || 0) === 1
+      || Number(product?.has_changeable_composition || 0) === 1;
+    return configurable && state.productDetailsStatus.get(Number(productId || 0)) !== "ready";
+  }
+
   function addCartItemToRightOrder(orderId, cartItem) {
     const id = Number(orderId || 0);
     if (!(id > 0) || !cartItem) return false;
@@ -14704,6 +14787,15 @@
   function getProductById(productId) {
     const pid = Number(productId || 0);
     if (!(pid > 0)) return null;
+    const sharedCandidate = window.CatalogRepository?.getProduct(pid) || null;
+    const sharedPassport = window.CatalogRepository?.getProductPassport(pid) || null;
+    const sharedProduct = sharedPassport
+      ? applyCatalogPassportToNewOrder(sharedPassport)
+      : (sharedCandidate?.completeness === "order-ready" ? sharedCandidate : null);
+    if (sharedProduct) {
+      state.productByIdCache.set(pid, sharedProduct);
+      return sharedProduct;
+    }
     const fromCurrent = (Array.isArray(state.currentProducts) ? state.currentProducts : []).find((p) => Number(p?.id || 0) === pid);
     if (fromCurrent) {
       state.productByIdCache.set(pid, fromCurrent);
@@ -14753,14 +14845,7 @@
     const normalizedProducts = source.filter((product) => Number(product?.id || 0) > 0);
     if (!normalizedProducts.length) return;
     seedRightOrderProductsByIdCache(normalizedProducts);
-    if (opts?.includeBase !== false) {
-      await loadVariantsForProducts(normalizedProducts);
-      await loadIngredientsForProducts(normalizedProducts);
-      await loadOptionsForProducts(normalizedProducts);
-    }
-    if (opts?.includeOptionDetails === true || opts?.includeOptionTargets === true) {
-      await loadOptionDetailsForProducts(normalizedProducts);
-    }
+    if (opts?.includeBase !== false) await ensureNewOrderProductDetails(normalizedProducts.map((product) => product.id));
     if (opts?.includeOptionTargets === true) {
       const optionItems = collectOptionTargetItemsForProducts(normalizedProducts);
       if (optionItems.length) {
@@ -15050,10 +15135,19 @@
       return existing;
     }
     if (state.productByIdCache.has(pid)) return state.productByIdCache.get(pid);
+    if (window.CatalogRepository) {
+      const passport = window.CatalogRepository.getProductPassport(pid);
+      const localProduct = passport ? applyCatalogPassportToNewOrder(passport) : null;
+      if (localProduct) return localProduct;
+      if (!navigator.onLine) return null;
+    }
     try {
       const json = await apiJson(`/api/public/products/${pid}`);
       const product = json?.data || null;
       state.productByIdCache.set(pid, product);
+      if (product && window.CatalogRepository) {
+        window.CatalogRepository.markProductSummary(product);
+      }
       return product;
     } catch {
       state.productByIdCache.set(pid, null);
@@ -15061,7 +15155,7 @@
     }
   }
 
-  async function ensureProductsByIds(productIds) {
+  async function ensureProductsByIdsTask(productIds) {
     const ids = [...new Set((Array.isArray(productIds) ? productIds : [])
       .map((id) => Number(id || 0))
       .filter((id) => Number.isFinite(id) && id > 0))];
@@ -15071,18 +15165,34 @@
       ids.forEach((id) => out.set(id, getProductById(id) || state.productByIdCache.get(id) || null));
       return out;
     }
+    if (window.CatalogRepository) {
+      missingIds.forEach((id) => {
+        const passport = window.CatalogRepository.getProductPassport(id);
+        const product = passport ? applyCatalogPassportToNewOrder(passport) : null;
+        if (product) state.productByIdCache.set(id, product);
+      });
+    }
+    const serverMissingIds = missingIds.filter((id) => !getProductById(id) && !state.productByIdCache.has(id));
+    if (!serverMissingIds.length || !navigator.onLine) {
+      const out = new Map();
+      ids.forEach((id) => out.set(id, getProductById(id) || state.productByIdCache.get(id) || null));
+      return out;
+    }
     try {
       const json = await apiJson("/api/public/products/batch/by-ids", {
         method: "POST",
-        body: JSON.stringify({ ids: missingIds }),
+        body: JSON.stringify({ ids: serverMissingIds }),
       });
       const data = json && typeof json.data === "object" && json.data ? json.data : {};
-      missingIds.forEach((id) => {
+      serverMissingIds.forEach((id) => {
         const product = data[String(id)] || null;
         state.productByIdCache.set(id, product);
       });
+      if (window.CatalogRepository) {
+        queueMicrotask(() => window.CatalogRepository.upsertProducts(Object.values(data), { completeness: "summary" }));
+      }
     } catch {
-      missingIds.forEach((id) => {
+      serverMissingIds.forEach((id) => {
         state.productByIdCache.set(id, null);
       });
     }
@@ -15091,19 +15201,36 @@
     return out;
   }
 
-  async function resolveComboDetails(comboId) {
+  function ensureProductsByIds(productIds) {
+    const run = () => ensureProductsByIdsTask(productIds);
+    return window.CatalogRepository?.withForegroundWork
+      ? window.CatalogRepository.withForegroundWork(run)
+      : run();
+  }
+
+  async function resolveComboDetailsTask(comboId) {
     const id = Number(comboId || 0);
     if (!(id > 0)) return null;
-    if (state.comboDetailsCache.has(id)) return state.comboDetailsCache.get(id);
+    const local = window.CatalogRepository?.getComboForOrder?.(id) || null;
+    if (local && window.CatalogRepository?.isComboReady?.(id, { requiredCompleteness: "order-ready" })) return local;
     try {
+      if (state.comboDetailsCache.has(id)) return state.comboDetailsCache.get(id);
       const json = await apiJson(`/api/public/combos/${id}`);
-      const data = json?.data || null;
-      state.comboDetailsCache.set(id, data);
-      return data;
+      const combo = json?.data || null;
+      state.comboDetailsCache.set(id, combo);
+      if (combo && window.CatalogRepository) queueMicrotask(() => window.CatalogRepository.upsertComboBundle(combo));
+      return combo;
     } catch {
       state.comboDetailsCache.delete(id);
       return null;
     }
+  }
+
+  function resolveComboDetails(comboId) {
+    const run = () => resolveComboDetailsTask(comboId);
+    return window.CatalogRepository?.withForegroundWork
+      ? window.CatalogRepository.withForegroundWork(run)
+      : run();
   }
 
   function getComboOverlayElements() {
@@ -16049,7 +16176,7 @@
     return recalculateCartItemTotals(item);
   }
 
-  async function openComboOverlay(comboId, opts = {}) {
+  async function openComboOverlayTask(comboId, opts = {}) {
     const id = Number(comboId || 0);
     if (!(id > 0)) return;
     ensureComboOverlay();
@@ -16057,7 +16184,9 @@
     if (!backdrop) return;
     const combo = await resolveComboDetails(id);
     if (!combo) {
-      showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043a\u043e\u043c\u0431\u043e");
+      showNewOrderAlert(window.CatalogRepository?.getCombo?.(id)
+        ? "Данные комбо сохранены не полностью"
+        : "Не удалось загрузить комбо");
       return;
     }
     closeProductOverlay();
@@ -16120,6 +16249,13 @@
     if (list) list.scrollTop = 0;
   }
 
+  function openComboOverlay(comboId, opts = {}) {
+    const run = () => openComboOverlayTask(comboId, opts);
+    return window.CatalogRepository?.withForegroundWork
+      ? window.CatalogRepository.withForegroundWork(run)
+      : run();
+  }
+
   function getProductOverlayElements() {
     const backdrop = document.getElementById("newOrderProductOverlay");
     const list = document.getElementById("newOrderProductOverlayList");
@@ -16152,7 +16288,10 @@
     document.body.appendChild(wrap);
   }
 
+  let productOverlayRequestGeneration = 0;
+
   function closeProductOverlay() {
+    productOverlayRequestGeneration += 1;
     const { backdrop, list } = getProductOverlayElements();
     if (!backdrop) return;
     backdrop.classList.add("hidden");
@@ -16595,9 +16734,20 @@
     `;
   }
 
-  async function openProductOverlay(productId, opts = {}) {
+  async function openProductOverlayTask(productId, opts = {}) {
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
+    const generation = ++productOverlayRequestGeneration;
+    const product = await ensureProductById(pid);
+    if (generation !== productOverlayRequestGeneration) return;
+    if (!product) {
+      alert(navigator.onLine
+        ? "Товар сейчас недоступен"
+        : "Полная карточка товара не сохранена на устройстве. Подключитесь к интернету, чтобы загрузить её.");
+      return;
+    }
+    await ensureNewOrderProductDetails([pid]);
+    if (generation !== productOverlayRequestGeneration) return;
     closeComboOverlay();
     ensureProductOverlay();
     const { backdrop, list } = getProductOverlayElements();
@@ -16641,6 +16791,13 @@
     };
     renderProductOverlay();
     if (list) list.scrollTop = 0;
+  }
+
+  function openProductOverlay(productId, opts = {}) {
+    const run = () => openProductOverlayTask(productId, opts);
+    return window.CatalogRepository?.withForegroundWork
+      ? window.CatalogRepository.withForegroundWork(run)
+      : run();
   }
 
   function resetCheckoutBlockSelection(block) {
@@ -16852,6 +17009,9 @@
       const sectionKey = getCheckoutSectionKey(block.id, categoryId);
       const cat = categoryById.get(categoryId) || null;
       const catTitle = String(cat?.title || "РљР°С‚РµРіРѕСЂРёСЏ");
+      const categoryError = state.checkoutCategoryErrors.has(Number(categoryId));
+      const categoryKnown = state.checkoutCategoryProducts.has(Number(categoryId));
+      const categoryLoading = state.checkoutCategoryLoading.has(Number(categoryId)) || (!categoryKnown && !categoryError);
       const products = Array.isArray(state.checkoutCategoryProducts.get(categoryId)) ? state.checkoutCategoryProducts.get(categoryId) : [];
       const savedSelectedProductId = Number(state.checkoutSelectedProductByCategory.get(sectionKey) || 0);
       const firstAvailableProductId = block.requireAll
@@ -16911,7 +17071,9 @@
               </article>
             `;
           }).join("")
-        : `<div class="new-order-checkout-products-empty">Р’ РєР°С‚РµРіРѕСЂРёРё РїРѕРєР° РЅРµС‚ С‚РѕРІР°СЂРѕРІ</div>`;
+        : `<div class="new-order-checkout-products-empty">${categoryLoading
+          ? "Загрузка товаров…"
+          : (categoryError ? "Не удалось загрузить товары" : "В категории пока нет товаров")}</div>`;
       return `
         <section class="new-order-checkout-category-section" data-category-id="${categoryId}" data-block-id="${block.id}" data-section-key="${sectionKey}" data-require-all="${block.requireAll ? "1" : "0"}">
           <h3 class="new-order-checkout-category-title">${escapeHtml(catTitle)}</h3>
@@ -16985,6 +17147,8 @@
     const selectedIds = getAllCategoryIdsFromBlocks(getCheckoutBlocks());
     if (!selectedIds.length) {
       state.checkoutCategoryProducts.clear();
+      state.checkoutCategoryLoading.clear();
+      state.checkoutCategoryErrors.clear();
       schedulePersistBootstrapSnapshot(0);
       renderCheckoutEditorContent();
       return;
@@ -17001,21 +17165,42 @@
       if (!(cid > 0)) return;
       if (state.checkoutCategoryProducts.has(cid)) {
         allProducts.push(...(state.checkoutCategoryProducts.get(cid) || []));
+        if (!navigator.onLine || isRepositoryCategoryWorkingSetComplete(cid)) return;
+        missingIds.push(cid);
         return;
       }
       const categoryPayload = state.categoryProductsCache.get(cid);
       if (categoryPayload && Array.isArray(categoryPayload.activeOnly)) {
         state.checkoutCategoryProducts.set(cid, categoryPayload.activeOnly);
         allProducts.push(...categoryPayload.activeOnly);
+        if (!navigator.onLine || isRepositoryCategoryWorkingSetComplete(cid)) return;
+        missingIds.push(cid);
         return;
       }
       missingIds.push(cid);
     });
 
     if (missingIds.length) {
-      await preloadAllCategoryProducts(missingIds);
+      missingIds.forEach((categoryId) => {
+        state.checkoutCategoryLoading.add(Number(categoryId));
+        state.checkoutCategoryErrors.delete(Number(categoryId));
+      });
+      renderCheckoutEditorContent();
+      const loaded = await preloadAllCategoryProducts(missingIds);
+      if (loaded && window.CatalogRepository) {
+        const roots = [...new Set(missingIds.map((categoryId) => (
+          window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId)
+        )))];
+        roots.forEach((rootId) => { void discoverNewOrderCatalogTarget(rootId).catch(() => null); });
+      }
       missingIds.forEach((categoryId) => {
         const cid = Number(categoryId || 0);
+        state.checkoutCategoryLoading.delete(cid);
+        if (!loaded) {
+          state.checkoutCategoryErrors.add(cid);
+          return;
+        }
+        state.checkoutCategoryErrors.delete(cid);
         const payload = state.categoryProductsCache.get(cid);
         if (payload && Array.isArray(payload.activeOnly)) {
           state.checkoutCategoryProducts.set(cid, payload.activeOnly);
@@ -17028,7 +17213,7 @@
     state.checkoutIngredientsPopoverKey = null;
     state.checkoutIngredientsPopoverPos = null;
     renderCheckoutEditorContent();
-    await warmRightOrderProductPricingContext(allProducts, {
+    void warmRightOrderProductPricingContext(allProducts, {
       includeOptionDetails: true,
       includeOptionTargets: true,
     });
@@ -17082,6 +17267,312 @@
       throw error;
     }
     return data;
+  }
+
+  function loadNewOrderCatalogPassports(ids) {
+    return apiJson("/api/admin/catalog/product-passports", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  function getNewOrderCatalogRepositoryOptions() {
+    return {
+      loader: loadNewOrderCatalogPassports,
+      request: (url, options) => apiJson(url, options),
+      metadataLoader: refreshNewOrderCatalogMetadata,
+    };
+  }
+
+  function applyCatalogPassportToNewOrder(passport) {
+    if (!window.CatalogRepository?.isOrderReadyPassport(passport)) return null;
+    const product = normalizeNewOrderCatalogProduct(passport.product);
+    const productId = Number(product?.id || 0);
+    if (!(productId > 0)) return null;
+    const liveInventory = state.inventoryFreshReady ? state.inventoryByProductId.get(productId) : null;
+    const stockQty = liveInventory
+      ? (liveInventory.stock_qty == null ? null : Number(liveInventory.stock_qty))
+      : (passport.stock?.stock_qty == null ? null : Number(passport.stock.stock_qty));
+    product.stock_qty = Number.isFinite(stockQty) ? stockQty : null;
+    product.is_available = liveInventory
+      ? (liveInventory.is_available ? 1 : 0)
+      : (passport.availability?.is_available === true || Number(passport.availability?.is_available || 0) === 1 ? 1 : 0);
+    state.productByIdCache.set(productId, product);
+    state.productVariants.set(productId, Array.isArray(passport.variants) ? passport.variants : []);
+    const configurableIngredients = filterNewOrderConfigurableIngredients(product, passport.ingredients);
+    state.productIngredients.set(productId, configurableIngredients);
+    product.has_changeable_composition = configurableIngredients.length ? 1 : 0;
+    state.productOptionGroups.set(productId, Array.isArray(passport.optionAssignments) ? passport.optionAssignments : []);
+    (Array.isArray(passport.options) ? passport.options : []).forEach((group) => {
+      const groupId = Number(group?.group_id || group?.id || 0);
+      if (!(groupId > 0)) return;
+      state.optionGroupDetails.set(groupId, {
+        group: group?.group && typeof group.group === "object" ? group.group : group,
+        items: Array.isArray(group?.items) ? group.items : [],
+      });
+    });
+    if (!state.inventoryFreshReady) {
+      state.inventoryByProductId.set(productId, {
+        stock_qty: Number.isFinite(stockQty) ? stockQty : null,
+        is_available: product.is_available === 1,
+      });
+      state.inventoryReady = true;
+    }
+    if (Array.isArray(passport.unitConversions) && passport.unitConversions.length) {
+      state.unitConversions = passport.unitConversions;
+    }
+    if (!state.ingredientStateByProduct.has(productId)) {
+      state.ingredientStateByProduct.set(productId, createIngredientQtyMap(state.productIngredients.get(productId)));
+    }
+    state.productDetailsStatus.set(productId, "ready");
+    return product;
+  }
+
+  function applyAuthoritativeOrderStockLevels(rows) {
+    const levels = Array.isArray(rows) ? rows : [];
+    for (const row of levels) {
+      const productId = Number(row?.product_id || 0);
+      if (!(productId > 0)) continue;
+      const value = row?.stock_qty == null ? null : Number(row.stock_qty);
+      const stockQty = Number.isFinite(value) ? value : null;
+      const isAvailable = stockQty == null || stockQty > 0;
+      state.inventoryByProductId.set(productId, { stock_qty: stockQty, is_available: isAvailable });
+      const cachedProduct = state.productByIdCache.get(productId);
+      if (cachedProduct) {
+        cachedProduct.stock_qty = stockQty;
+        cachedProduct.is_available = isAvailable ? 1 : 0;
+      }
+      state.currentProducts.forEach((product) => {
+        if (Number(product?.id || 0) !== productId) return;
+        product.stock_qty = stockQty;
+        product.is_available = isAvailable ? 1 : 0;
+      });
+      if (window.CatalogRepository?.patchProductAuthoritative) {
+        window.CatalogRepository.patchProductAuthoritative(productId, { stock_qty: stockQty });
+      }
+      patchVisibleProductInventory(productId);
+    }
+    if (levels.length) state.inventoryReady = true;
+  }
+
+  function repositoryProductsForCategory(categoryId) {
+    const id = Number(categoryId || 0);
+    if (!(id > 0) || !window.CatalogRepository) return [];
+    return window.CatalogRepository.getProductsForCategory(id);
+  }
+
+  function repositoryCombosForCategory(categoryId) {
+    const category = window.CatalogRepository?.getCategory(categoryId);
+    const code = String(category?.code || "").trim();
+    if (!code) return [];
+    return window.CatalogRepository.getAllCombos().filter((combo) => (
+      String(combo?.category_code || "").trim() === code
+    )).map((combo) => window.CatalogRepository.getComboForOrder(combo.id)).filter(Boolean);
+  }
+
+  function hydrateNewOrderFromCatalogRepository(options = {}) {
+    if (!window.CatalogRepository) return false;
+    const categories = window.CatalogRepository.getAllCategories();
+    if (categories.length) {
+      state.productCategories = categories
+        .filter((category) => Number(category?.is_active ?? category?.active ?? 0) === 1)
+        .sort((a, b) => (Number(a?.sort_order ?? a?.sortOrder ?? 0) - Number(b?.sort_order ?? b?.sortOrder ?? 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+      state.categories = state.productCategories.filter(isCheckoutVisible);
+    }
+    const categoryIds = options.categoryIds || state.productCategories.map((category) => Number(category?.id || 0));
+    const hydratedProductIds = new Set();
+    categoryIds.forEach((categoryId) => {
+      const cid = Number(categoryId || 0);
+      if (!(cid > 0)) return;
+      const products = repositoryProductsForCategory(cid);
+      products.forEach((product) => hydratedProductIds.add(Number(product?.id || 0)));
+      const previous = state.categoryProductsCache.get(cid);
+      const localCombos = repositoryCombosForCategory(cid);
+      const payload = buildCategoryPayload(products, localCombos.length ? localCombos : (previous?.combos || []), cid);
+      setNewOrderCategoryPayload(cid, payload);
+      state.checkoutCategoryProducts.set(cid, payload.activeOnly);
+    });
+    const passportProductIds = options.categoryIds ? [...hydratedProductIds] : window.CatalogRepository.getAllProducts().map((product) => Number(product?.id || 0));
+    passportProductIds.forEach((productId) => {
+      const passport = window.CatalogRepository.getProductPassport(productId);
+      if (passport) applyCatalogPassportToNewOrder(passport);
+    });
+    return categories.length > 0 || window.CatalogRepository.getAllProducts().length > 0;
+  }
+
+  function applyNewOrderRepositoryProductChanges(productIds) {
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : []).map(Number).filter((id) => id > 0))];
+    if (!ids.length || !window.CatalogRepository) return false;
+    const changed = new Map(ids.map((id) => [id, window.CatalogRepository.getProduct(id) || null]));
+    changed.forEach((product, productId) => {
+      const passport = product ? window.CatalogRepository.getProductPassport(productId) : null;
+      if (passport) applyCatalogPassportToNewOrder(passport);
+    });
+    const affectedCategoryIds = new Set();
+    changed.forEach((product, productId) => {
+      (state.categoryIdsByProductId.get(productId) || []).forEach((categoryId) => affectedCategoryIds.add(categoryId));
+      if (product) {
+        [product.categoryId, product.category_id, ...(product.categoryIds || []), ...(product.category_ids || [])]
+          .map(Number).filter((id) => id > 0).forEach((categoryId) => affectedCategoryIds.add(categoryId));
+      }
+    });
+    affectedCategoryIds.forEach((categoryId) => {
+      const previous = state.categoryProductsCache.get(Number(categoryId));
+      if (!previous) return;
+      const cid = Number(categoryId || 0);
+      let source = Array.isArray(previous?.source) ? previous.source.slice() : [];
+      let touched = false;
+      changed.forEach((product, productId) => {
+        const existingIndex = source.findIndex((row) => Number(row?.id || 0) === productId);
+        const categoryIds = product ? [
+          product.categoryId,
+          product.category_id,
+          ...(Array.isArray(product.categoryIds) ? product.categoryIds : []),
+          ...(Array.isArray(product.category_ids) ? product.category_ids : []),
+        ].map(Number).filter((id) => id > 0) : [];
+        const belongs = categoryIds.includes(cid);
+        if (existingIndex >= 0 && !belongs) {
+          source.splice(existingIndex, 1);
+          touched = true;
+        } else if (product && belongs) {
+          if (existingIndex >= 0) source[existingIndex] = { ...source[existingIndex], ...product };
+          else source.push(product);
+          touched = true;
+        }
+      });
+      if (!touched) return;
+      const payload = buildCategoryPayload(source, previous?.combos || [], cid);
+      setNewOrderCategoryPayload(cid, payload);
+      state.checkoutCategoryProducts.set(cid, payload.activeOnly);
+    });
+    changed.forEach((product, productId) => {
+      if (product) {
+        if (!window.CatalogRepository.getProductPassport(productId)) state.productByIdCache.set(productId, toStableCatalogProduct(product));
+        const hasStock = ["stock_qty", "stockQty", "stock"].some((key) => Object.prototype.hasOwnProperty.call(product, key));
+        if (hasStock) {
+          const rawStock = product.stock_qty ?? product.stockQty ?? product.stock;
+          const stockQty = rawStock == null ? null : Number(rawStock);
+          state.inventoryByProductId.set(productId, {
+            stock_qty: Number.isFinite(stockQty) ? stockQty : null,
+            is_available: stockQty == null || (Number.isFinite(stockQty) && stockQty > 0),
+          });
+        }
+      } else {
+        state.productByIdCache.delete(productId);
+        state.inventoryByProductId.delete(productId);
+      }
+    });
+    return { ids, changed };
+  }
+
+  function applyNewOrderRepositoryComboChanges(comboIds) {
+    const ids = [...new Set((Array.isArray(comboIds) ? comboIds : []).map(Number).filter((id) => id > 0))];
+    if (!ids.length || !window.CatalogRepository) return [];
+    const changed = new Map(ids.map((id) => [id, window.CatalogRepository.getComboForOrder(id)]));
+    state.categoryProductsCache.forEach((previous, categoryId) => {
+      const categoryCode = String(window.CatalogRepository.getCategory(categoryId)?.code || "").trim();
+      let combos = Array.isArray(previous?.combos) ? previous.combos.slice() : [];
+      let touched = false;
+      changed.forEach((combo, comboId) => {
+        const existingIndex = combos.findIndex((row) => Number(row?.id || 0) === comboId);
+        const belongs = Boolean(combo && categoryCode && String(combo?.category_code || "").trim() === categoryCode);
+        if (existingIndex >= 0 && !belongs) {
+          combos.splice(existingIndex, 1);
+          touched = true;
+        } else if (belongs) {
+          if (existingIndex >= 0) combos[existingIndex] = combo;
+          else combos.push(combo);
+          touched = true;
+        }
+      });
+      if (!touched) return;
+      const payload = buildCategoryPayload(previous?.source || [], combos, Number(categoryId));
+      setNewOrderCategoryPayload(Number(categoryId), payload);
+      state.checkoutCategoryProducts.set(Number(categoryId), payload.activeOnly);
+    });
+    ids.forEach((id) => {
+      const combo = changed.get(id);
+      if (combo) state.comboDetailsCache.set(id, combo);
+      else state.comboDetailsCache.delete(id);
+    });
+    return ids;
+  }
+
+  async function discoverNewOrderCatalogTarget(categoryId) {
+    const cid = Number(categoryId || 0);
+    const categoryIds = cid > 0 ? window.CatalogRepository.getDescendantCategoryIds(cid) : [];
+    const json = await apiJson("/api/admin/catalog/product-targets", {
+      method: "POST",
+      body: JSON.stringify({ category_ids: categoryIds }),
+    });
+    const data = json?.data && typeof json.data === "object" ? json.data : null;
+    const ids = [...new Set((Array.isArray(data?.product_ids) ? data.product_ids : []).map(Number).filter((id) => id > 0))];
+    const scope = window.CatalogRepository.getScope();
+    if (!data || Number(data.total) !== ids.length || Number(data.tenant_id) !== Number(scope?.tenantId) || Number(data.store_id) !== Number(scope?.storeId)) {
+      throw new Error("CATALOG_TARGET_SCOPE_MISMATCH");
+    }
+    window.CatalogRepository.setCoverageTarget(ids, { categoryId: cid > 0 ? cid : null });
+    return ids;
+  }
+
+  async function refreshNewOrderCatalogMetadata(options = {}) {
+    if (options.categories) {
+      await loadCategoriesFromApi();
+      await window.CatalogRepository.replaceCategories(state.productCategories);
+    }
+    const tracked = new Set(window.CatalogRepository.getTrackedCoverageCategoryIds());
+    const activeId = getActiveProductCategoryId();
+    if (activeId > 0) tracked.add(window.CatalogRepository.getRootCategoryId(activeId));
+    for (const categoryId of tracked) await discoverNewOrderCatalogTarget(categoryId);
+    hydrateNewOrderFromCatalogRepository({ categoryIds: [...tracked] });
+    ensureValidActiveCategory();
+    renderCategories();
+    await renderActiveCategoryContent();
+  }
+
+  async function ensureRepositoryCategoryProducts(categoryId) {
+    if (!window.CatalogRepository) return false;
+    const rootId = window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId || 0);
+    const categoryIds = window.CatalogRepository.getDescendantCategoryIds(rootId);
+    let targetIds = window.CatalogRepository.getCoverageTargetIds({ categoryId: rootId });
+    const hasCompleteRuntimeSet = Array.isArray(targetIds)
+      && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds);
+    if (!hasCompleteRuntimeSet && navigator.onLine) {
+      const loaded = await preloadAllCategoryProducts(categoryIds.length ? categoryIds : [rootId]);
+      if (!loaded) throw new Error("NEW_ORDER_WORKING_SET_FAILED");
+      if (!Array.isArray(targetIds)) {
+        void discoverNewOrderCatalogTarget(rootId).catch(() => null);
+      }
+    }
+    hydrateNewOrderFromCatalogRepository({ categoryIds });
+    return categoryIds.some((id) => state.categoryProductsCache.has(Number(id)));
+  }
+
+  function hasCompleteRepositoryCategoryIndex(productIds, categoryIds) {
+    if (!window.CatalogRepository || !Array.isArray(productIds) || !Array.isArray(categoryIds) || !categoryIds.length) return false;
+    const included = new Set(categoryIds.map(Number).filter((id) => id > 0));
+    return productIds.every((productId) => {
+      const product = window.CatalogRepository.getProduct(productId);
+      if (!product) return false;
+      const memberships = new Set([
+        product.categoryId,
+        product.category_id,
+        ...(Array.isArray(product.categoryIds) ? product.categoryIds : []),
+        ...(Array.isArray(product.category_ids) ? product.category_ids : []),
+      ].map(Number).filter((id) => id > 0));
+      return [...memberships].some((id) => included.has(id));
+    });
+  }
+
+  function isRepositoryCategoryWorkingSetComplete(categoryId) {
+    const cid = Number(categoryId || 0);
+    if (state.categoryWorkingSetComplete.has(cid) && state.categoryProductsCache.has(cid)) return true;
+    if (!window.CatalogRepository) return false;
+    const rootId = window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId || 0);
+    const categoryIds = window.CatalogRepository.getDescendantCategoryIds(rootId);
+    const targetIds = window.CatalogRepository.getCoverageTargetIds({ categoryId: rootId });
+    return Array.isArray(targetIds)
+      && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds);
   }
 
   function isCheckoutVisible(category) {
@@ -17801,7 +18292,21 @@
     const cat = getCategoryById(id);
     if (!cat) return [id];
     if (Number(cat.parent_id || 0) > 0) return [id];
-    return [id, ...getCategoryChildren(id).map((child) => Number(child?.id || 0)).filter((childId) => childId > 0)];
+    if (window.CatalogRepository) {
+      const repositoryIds = window.CatalogRepository.getDescendantCategoryIds(id);
+      if (repositoryIds.length) return repositoryIds;
+    }
+    const result = [];
+    const queue = [id];
+    const seen = new Set();
+    while (queue.length) {
+      const currentId = Number(queue.shift() || 0);
+      if (!(currentId > 0) || seen.has(currentId)) continue;
+      seen.add(currentId);
+      result.push(currentId);
+      getCategoryChildren(currentId).forEach((child) => queue.push(Number(child?.id || 0)));
+    }
+    return result;
   }
 
   function buildCombinedCategoryPayload(categoryIds) {
@@ -17891,9 +18396,11 @@
     });
   }
 
-  function renderProducts(products) {
+  function renderProducts(products, options = {}) {
+    const targetGrid = options.container || productsGridEl;
+    const manageEmpty = options.manageEmpty !== false;
     const prevScrollByProduct = new Map();
-    Array.from(productsGridEl.querySelectorAll("[data-product-id]")).forEach((card) => {
+    Array.from(targetGrid.querySelectorAll("[data-product-id]")).forEach((card) => {
       const pid = Number(card.getAttribute("data-product-id") || 0);
       if (!Number.isFinite(pid) || pid <= 0) return;
       const snapshot = {
@@ -17919,7 +18426,7 @@
       prevScrollByProduct.set(pid, snapshot);
     });
 
-    productsGridEl.innerHTML = "";
+    targetGrid.innerHTML = "";
     const list = Array.isArray(products) ? products : [];
 
     if (!list.length) {
@@ -17929,7 +18436,7 @@
       }
       return;
     }
-    if (productsEmptyEl) productsEmptyEl.classList.add("hidden");
+    if (manageEmpty && productsEmptyEl) productsEmptyEl.classList.add("hidden");
 
     const restoreQueue = [];
     list.forEach((product) => {
@@ -17939,6 +18446,7 @@
       const qty = getProductCardQty(pid);
       const photoUrl = getProductPhoto(product);
       const pricing = getCurrentProductUnitPricing(product, pid);
+      const detailsPending = isNewOrderProductDetailsPending(product, pid);
       const price = Number(pricing.unitPrice || 0);
       const oldPrice = Number(pricing.oldPrice || 0);
       const hasOldPrice = Boolean(pricing.hasOldPrice);
@@ -17984,7 +18492,7 @@
             </button>
           </div>
         `;
-        productsGridEl.appendChild(card);
+        targetGrid.appendChild(card);
         return;
       }
       card.setAttribute("data-product-id", String(pid));
@@ -18021,22 +18529,22 @@
               <span>РћРїС†РёРё</span>
             </button>
           ` : ""}
-          <button class="new-order-add-btn" type="button" data-action="product-add-quick" title="Р”РѕР±Р°РІРёС‚СЊ РІ Р·Р°РєР°Р·"${isUnavailable ? " disabled aria-disabled=\"true\"" : ""}>
+          <button class="new-order-add-btn" type="button" data-action="product-add-quick" title="${detailsPending ? "Загрузка вариантов и цены" : "Добавить в заказ"}"${isUnavailable || detailsPending ? " disabled aria-disabled=\"true\"" : ""}>
             <span class="new-order-add-old ${hasOldPrice ? "" : "hidden"}">${hasOldPrice ? escapeHtml(toMoney(oldPrice)) : ""}</span>
-            <span class="new-order-add-price">${escapeHtml(toMoney(price))}</span>
+            <span class="new-order-add-price">${detailsPending ? "…" : escapeHtml(toMoney(price))}</span>
             <span class="new-order-add-plus">+</span>
           </button>
         </div>
       `;
       const prev = prevScrollByProduct.get(pid);
       if (prev) restoreQueue.push({ pid, prev });
-      productsGridEl.appendChild(card);
+      targetGrid.appendChild(card);
     });
 
     if (restoreQueue.length) {
       requestAnimationFrame(() => {
         restoreQueue.forEach(({ pid, prev }) => {
-          const card = productsGridEl.querySelector(`[data-product-id="${pid}"]`);
+          const card = targetGrid.querySelector(`[data-product-id="${pid}"]`);
           if (!card) return;
           const optionsRow = card.querySelector(".new-order-options");
           if (optionsRow && prev.optionsRow > 0) optionsRow.scrollLeft = prev.optionsRow;
@@ -18940,6 +19448,259 @@
     }
   }
 
+  function hasCompleteNewOrderProductDetails(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0) || !state.productVariants.has(pid) || !state.productIngredients.has(pid) || !state.productOptionGroups.has(pid)) return false;
+    return (state.productOptionGroups.get(pid) || []).every((group) => {
+      const groupId = Number(group?.group_id || group?.id || 0);
+      return !(groupId > 0) || state.optionGroupDetails.has(groupId);
+    });
+  }
+
+  function patchNewOrderProductDetails(productIds) {
+    const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : []).map(Number).filter((id) => id > 0)));
+    if (!ids.length) return;
+    requestAnimationFrame(() => {
+      patchActiveCatalogItems(ids);
+      patchCheckoutCatalogItems(ids);
+      if (Number(state.productModal?.productId || 0) > 0 && ids.includes(Number(state.productModal.productId))) {
+        renderProductOverlay();
+      }
+    });
+  }
+
+  async function ensureNewOrderProductDetails(productIds) {
+    const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : [])
+      .map(Number)
+      .filter((id) => Number.isFinite(id) && id > 0)));
+    ids.forEach((id) => {
+      if (hasCompleteNewOrderProductDetails(id)) state.productDetailsStatus.set(id, "ready");
+    });
+    const waiting = ids.map((id) => state.productDetailsInFlight.get(id)).filter(Boolean);
+    const missing = ids.filter((id) => state.productDetailsStatus.get(id) !== "ready" && !state.productDetailsInFlight.has(id));
+    if (!missing.length) {
+      await Promise.all(waiting);
+      return;
+    }
+
+    let requestPromise;
+    requestPromise = (async () => {
+      if (window.CatalogRepository) {
+        await window.CatalogRepository.loadPassports(missing);
+        missing.forEach((id) => {
+          const passport = window.CatalogRepository.getProductPassport(id);
+          if (passport) applyCatalogPassportToNewOrder(passport);
+        });
+      }
+
+      let unresolved = missing.filter((id) => !hasCompleteNewOrderProductDetails(id));
+      if (navigator.onLine) {
+        for (let offset = 0; offset < unresolved.length; offset += 200) {
+          const chunk = unresolved.slice(offset, offset + 200);
+          try {
+            const json = await apiJson("/api/public/products/batch/details", {
+              method: "POST",
+              body: JSON.stringify({ ids: chunk }),
+            });
+            const data = json?.data && typeof json.data === "object" ? json.data : null;
+            if (!data || !data.assignments || !data.ingredients || !data.variants || !data.option_groups) {
+              throw new Error("INVALID_PRODUCT_DETAILS_RESPONSE");
+            }
+            chunk.forEach((id) => {
+              const key = String(id);
+              if (!Array.isArray(data.assignments[key]) || !Array.isArray(data.ingredients[key]) || !Array.isArray(data.variants[key])) return;
+              const assignments = data.assignments[key];
+              state.productVariants.set(id, data.variants[key]);
+              const product = state.productByIdCache.get(id) || window.CatalogRepository?.getProduct(id);
+              state.productIngredients.set(id, filterNewOrderConfigurableIngredients(product, data.ingredients[key]));
+              state.productOptionGroups.set(id, assignments);
+              if (!state.ingredientStateByProduct.has(id)) {
+                state.ingredientStateByProduct.set(id, createIngredientQtyMap(state.productIngredients.get(id)));
+              }
+              assignments.forEach((assignment) => {
+                const groupId = Number(assignment?.group_id || assignment?.id || 0);
+                if (!(groupId > 0)) return;
+                const raw = data.option_groups[String(groupId)];
+                if (!raw || typeof raw !== "object") return;
+                state.optionGroupDetails.set(groupId, {
+                  group: raw.group || null,
+                  items: Array.isArray(raw.items) ? raw.items : [],
+                });
+              });
+            });
+          } catch (_) {
+            // The complete admin passport path below is the authoritative fallback.
+          }
+        }
+
+        unresolved = missing.filter((id) => !hasCompleteNewOrderProductDetails(id));
+        if (unresolved.length && window.CatalogRepository) {
+          for (let offset = 0; offset < unresolved.length; offset += 100) {
+            await window.CatalogRepository.ensureProducts(unresolved.slice(offset, offset + 100), {
+              requiredCompleteness: "order-ready",
+              priority: true,
+              awaitPersistence: true,
+            });
+          }
+          unresolved.forEach((id) => {
+            const passport = window.CatalogRepository.getProductPassport(id);
+            if (passport) applyCatalogPassportToNewOrder(passport);
+          });
+        }
+      }
+
+      const applied = [];
+      missing.forEach((id) => {
+        if (hasCompleteNewOrderProductDetails(id)) {
+          state.productDetailsStatus.set(id, "ready");
+          applied.push(id);
+        } else {
+          state.productDetailsStatus.set(id, "error");
+        }
+      });
+      if (applied.length) {
+        schedulePersistBootstrapSnapshot(0);
+        patchNewOrderProductDetails(applied);
+      }
+    })().catch(() => {
+      missing.forEach((id) => state.productDetailsStatus.set(id, "error"));
+    }).finally(() => {
+      missing.forEach((id) => {
+        if (state.productDetailsInFlight.get(id) === requestPromise) state.productDetailsInFlight.delete(id);
+      });
+    });
+    missing.forEach((id) => {
+      state.productDetailsStatus.set(id, "loading");
+      state.productDetailsInFlight.set(id, requestPromise);
+    });
+    await Promise.all([...waiting, requestPromise]);
+  }
+
+  function createNewOrderCatalogCard(product) {
+    const container = document.createElement("div");
+    renderProducts([product], { container, manageEmpty: false });
+    return container.firstElementChild;
+  }
+
+  function insertActiveCatalogCard(card, orderedProducts, itemIndex) {
+    if (!card) return;
+    const following = orderedProducts.slice(itemIndex + 1).map((item) => {
+      const comboId = Number(item?.combo_id || 0);
+      const productId = Number(item?.id || 0);
+      return comboId > 0
+        ? productsGridEl.querySelector(`.new-order-product-card[data-combo-id="${comboId}"]`)
+        : productsGridEl.querySelector(`.new-order-product-card[data-product-id="${productId}"]`);
+    }).find(Boolean);
+    productsGridEl.insertBefore(card, following || null);
+  }
+
+  function patchActiveCatalogItems(productIds, comboIds = []) {
+    const activeCategoryId = getActiveProductCategoryId();
+    if (!(activeCategoryId > 0) || String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) return;
+    const payload = getProductCategoryLoadIds(activeCategoryId).length > 1
+      ? buildCombinedCategoryPayload(getProductCategoryLoadIds(activeCategoryId))
+      : state.categoryProductsCache.get(activeCategoryId);
+    const orderedProducts = Array.isArray(payload?.currentProducts) ? payload.currentProducts : [];
+    state.currentProducts = orderedProducts;
+
+    productIds.forEach((productId) => {
+      const pid = Number(productId || 0);
+      const existing = productsGridEl.querySelector(`.new-order-product-card[data-product-id="${pid}"]`);
+      const itemIndex = orderedProducts.findIndex((item) => Number(item?.combo_id || 0) <= 0 && Number(item?.id || 0) === pid);
+      if (itemIndex < 0) {
+        if (existing) existing.remove();
+        return;
+      }
+      const card = createNewOrderCatalogCard(orderedProducts[itemIndex]);
+      if (existing) existing.replaceWith(card);
+      else insertActiveCatalogCard(card, orderedProducts, itemIndex);
+    });
+
+    comboIds.forEach((comboId) => {
+      const cid = Number(comboId || 0);
+      const existing = productsGridEl.querySelector(`.new-order-product-card[data-combo-id="${cid}"]`);
+      const itemIndex = orderedProducts.findIndex((item) => Number(item?.combo_id || 0) === cid);
+      if (itemIndex < 0) {
+        if (existing) existing.remove();
+        return;
+      }
+      const card = createNewOrderCatalogCard(orderedProducts[itemIndex]);
+      if (existing) existing.replaceWith(card);
+      else insertActiveCatalogCard(card, orderedProducts, itemIndex);
+    });
+
+    if (productsEmptyEl) productsEmptyEl.classList.toggle("hidden", orderedProducts.length > 0);
+  }
+
+  function createCheckoutCatalogCard(product, categoryId, sectionKey, selectedProductId) {
+    const productId = Number(product?.id || 0);
+    const photoUrl = getProductPhoto(product);
+    const name = String(product?.name || "Товар");
+    const isUnavailable = !isProductAvailableFlag(product);
+    const hasComposition = Array.isArray(state.productIngredients.get(productId)) && state.productIngredients.get(productId).length > 0;
+    const pricing = getCurrentProductUnitPricing(product, productId);
+    const detailsPending = isNewOrderProductDetailsPending(product, productId);
+    const card = document.createElement("article");
+    card.className = `new-order-checkout-product-item ${productId === selectedProductId ? "is-selected" : ""} ${hasComposition ? "has-composition" : ""} ${isUnavailable ? "is-unavailable" : ""}`;
+    card.setAttribute("data-product-id", String(productId));
+    card.setAttribute("data-category-id", String(categoryId));
+    card.setAttribute("data-section-key", sectionKey);
+    card.setAttribute("data-is-available", isUnavailable ? "0" : "1");
+    card.innerHTML = `
+      <span class="new-order-checkout-product-top">
+        <span class="new-order-checkout-product-photo-wrap">${photoUrl ? `<img class="new-order-checkout-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<span class="new-order-checkout-product-photo-placeholder"><i class="fas fa-image"></i></span>`}</span>
+        <span class="new-order-checkout-product-side"><span class="new-order-checkout-product-badges"></span><span class="new-order-checkout-product-meta"><span class="new-order-checkout-product-stock">${escapeHtml(getCheckoutSelectedVariantStockLabel(productId, product))}</span><span class="new-order-checkout-product-price">${detailsPending ? "…" : escapeHtml(toMoney(roundPrice(Number(pricing?.unitPrice || 0))))}</span></span></span>
+      </span>
+      <span class="new-order-checkout-product-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+      ${hasComposition ? `<button type="button" class="new-order-checkout-composition-btn" data-action="checkout-composition-toggle" data-product-id="${productId}" data-section-key="${escapeHtml(sectionKey)}" aria-label="Настроить состав" title="Настроить состав"${isUnavailable ? " disabled" : ""}>⚙</button>` : ""}
+    `;
+    return card;
+  }
+
+  function patchCheckoutCatalogItems(productIds) {
+    if (!checkoutContentEl) return;
+    productIds.forEach((productId) => {
+      const pid = Number(productId || 0);
+      checkoutContentEl.querySelectorAll(".new-order-checkout-category-section[data-category-id]").forEach((section) => {
+        const categoryId = Number(section.getAttribute("data-category-id") || 0);
+        const sectionKey = String(section.getAttribute("data-section-key") || "");
+        const products = state.checkoutCategoryProducts.get(categoryId) || [];
+        const itemIndex = products.findIndex((product) => Number(product?.id || 0) === pid);
+        const row = section.querySelector(".new-order-checkout-products-row");
+        const existing = row?.querySelector(`.new-order-checkout-product-item[data-product-id="${pid}"]`);
+        if (!row || itemIndex < 0) {
+          if (existing) existing.remove();
+        } else {
+          row.querySelector(".new-order-checkout-products-empty")?.remove();
+          const selectedId = Number(state.checkoutSelectedProductByCategory.get(sectionKey) || 0);
+          const card = createCheckoutCatalogCard(products[itemIndex], categoryId, sectionKey, selectedId);
+          if (existing) {
+            card.classList.toggle("is-selected", existing.classList.contains("is-selected") || pid === selectedId);
+            existing.replaceWith(card);
+          } else {
+            const following = products.slice(itemIndex + 1).map((product) => row.querySelector(`.new-order-checkout-product-item[data-product-id="${Number(product?.id || 0)}"]`)).find(Boolean);
+            row.insertBefore(card, following || null);
+          }
+        }
+        if (row && !row.querySelector(".new-order-checkout-product-item") && !row.querySelector(".new-order-checkout-products-empty")) {
+          const empty = document.createElement("div");
+          empty.className = "new-order-checkout-products-empty";
+          empty.textContent = "В категории пока нет товаров";
+          row.appendChild(empty);
+        }
+        const requireAll = section.getAttribute("data-require-all") === "1";
+        const selectedId = Number(state.checkoutSelectedProductByCategory.get(sectionKey) || 0);
+        const selectedStillValid = products.some((product) => Number(product?.id || 0) === selectedId && isProductAvailableFlag(product));
+        if (!selectedStillValid) {
+          const nextSelectedId = requireAll ? Number(products.find(isProductAvailableFlag)?.id || 0) : 0;
+          if (nextSelectedId > 0) state.checkoutSelectedProductByCategory.set(sectionKey, nextSelectedId);
+          else state.checkoutSelectedProductByCategory.delete(sectionKey);
+          row.querySelectorAll(".new-order-checkout-product-item[data-product-id]").forEach((card) => card.classList.toggle("is-selected", Number(card.getAttribute("data-product-id") || 0) === nextSelectedId));
+        }
+      });
+    });
+  }
+
   async function loadUnitConversions() {
     try {
       const json = await apiJson("/api/public/unit-conversions");
@@ -18979,9 +19740,9 @@
   }
 
   function buildCategoryPayload(productsSource, combosSource, categoryId = 0) {
-    const source = (Array.isArray(productsSource) ? productsSource : []).map(toStableCatalogProduct);
+    const source = (Array.isArray(productsSource) ? productsSource : []).map(normalizeNewOrderCatalogProduct);
     const combos = Array.isArray(combosSource) ? combosSource : [];
-    const activeOnly = source.filter((p) => Number(p?.is_active || 0) === 1 && isSiteVisibleProduct(p));
+    const activeOnly = source.filter((p) => Number(p?.is_active || 0) === 1);
     const comboCards = buildComboCardsFromPayload(combos, categoryId);
     return {
       source,
@@ -18998,27 +19759,71 @@
       .filter((id) => Number.isFinite(id) && id > 0))];
     if (!ids.length) return true;
     try {
-      const json = await apiJson("/api/public/products/batch/categories", {
-        method: "POST",
-        body: JSON.stringify({ category_ids: ids }),
+      const adminRequests = [];
+      for (let offset = 0; offset < ids.length; offset += 50) {
+        const chunk = ids.slice(offset, offset + 50);
+        adminRequests.push(apiJson(`/api/admin/catalog/products?category_ids=${encodeURIComponent(chunk.join(","))}`));
+      }
+      const [adminPayloads, publicPayload] = await Promise.all([
+        Promise.all(adminRequests),
+        apiJson("/api/public/products/batch/categories", {
+          method: "POST",
+          body: JSON.stringify({ category_ids: ids }),
+        }).catch(() => ({ data: {}, combos: {} })),
+      ]);
+      const productsByCategory = {};
+      ids.forEach((id) => { productsByCategory[String(id)] = []; });
+      adminPayloads.forEach((payload) => {
+        const data = payload && typeof payload.data === "object" && payload.data ? payload.data : {};
+        Object.entries(data).forEach(([categoryId, rows]) => {
+          if (Array.isArray(rows)) productsByCategory[String(categoryId)] = rows;
+        });
       });
-      const productsByCategory = json && typeof json.data === "object" && json.data ? json.data : {};
-      const combosByCategory = json && typeof json.combos === "object" && json.combos ? json.combos : {};
-      const allProducts = [];
+      const combosByCategory = publicPayload && typeof publicPayload.combos === "object" && publicPayload.combos
+        ? publicPayload.combos
+        : {};
       ids.forEach((cid) => {
         const source = Array.isArray(productsByCategory[String(cid)]) ? productsByCategory[String(cid)] : [];
         const combos = Array.isArray(combosByCategory[String(cid)]) ? combosByCategory[String(cid)] : [];
         const payload = buildCategoryPayload(source, combos, cid);
-        state.categoryProductsCache.set(cid, payload);
+        setNewOrderCategoryPayload(cid, payload);
         state.checkoutCategoryProducts.set(cid, payload.activeOnly);
         seedRightOrderProductsByIdCache(payload.activeOnly);
-        allProducts.push(...payload.activeOnly);
+        state.categoryWorkingSetComplete.add(cid);
       });
+      if (window.CatalogRepository) {
+        queueMicrotask(() => {
+          ids.forEach((cid) => {
+            const payload = state.categoryProductsCache.get(cid);
+            if (payload) window.CatalogRepository.upsertProducts(payload.source, { categoryId: cid, completeness: "summary" });
+          });
+        });
+      }
       schedulePersistBootstrapSnapshot(0);
       return true;
     } catch {
       return false;
     }
+  }
+
+  function setNewOrderCategoryPayload(categoryId, payload) {
+    const cid = Number(categoryId || 0);
+    if (!(cid > 0)) return;
+    const previous = state.categoryProductsCache.get(cid);
+    const previousIds = new Set((Array.isArray(previous?.source) ? previous.source : []).map((row) => Number(row?.id || 0)).filter((id) => id > 0));
+    const nextIds = new Set((Array.isArray(payload?.source) ? payload.source : []).map((row) => Number(row?.id || 0)).filter((id) => id > 0));
+    previousIds.forEach((productId) => {
+      if (nextIds.has(productId)) return;
+      const categoryIds = state.categoryIdsByProductId.get(productId);
+      if (!categoryIds) return;
+      categoryIds.delete(cid);
+      if (!categoryIds.size) state.categoryIdsByProductId.delete(productId);
+    });
+    nextIds.forEach((productId) => {
+      if (!state.categoryIdsByProductId.has(productId)) state.categoryIdsByProductId.set(productId, new Set());
+      state.categoryIdsByProductId.get(productId).add(cid);
+    });
+    state.categoryProductsCache.set(cid, payload);
   }
 
   function removeLegacyLocalProductCaches() {
@@ -19036,12 +19841,51 @@
     } catch {}
   }
 
-  async function loadProductsForCategory(categoryId, opts = {}) {
+  async function loadProductsForCategoryTask(categoryId, opts = {}) {
     if (!Number.isFinite(Number(categoryId))) return;
     const preferCache = opts.preferCache !== false;
     try {
       const cid = Number(categoryId || 0);
       const loadIds = getProductCategoryLoadIds(cid);
+      if (window.CatalogRepository) {
+        hydrateNewOrderFromCatalogRepository({ categoryIds: loadIds });
+        const localPayload = loadIds.length > 1
+          ? buildCombinedCategoryPayload(loadIds)
+          : state.categoryProductsCache.get(cid);
+        const localPayloadReady = Boolean(localPayload)
+          && ((Array.isArray(localPayload.currentProducts) && localPayload.currentProducts.length > 0)
+            || isRepositoryCategoryWorkingSetComplete(cid));
+        if (localPayloadReady) {
+          state.currentProducts = Array.isArray(localPayload.currentProducts) ? localPayload.currentProducts : [];
+          seedRightOrderProductsByIdCache(localPayload.activeOnly || []);
+          renderProducts(state.currentProducts);
+        } else if (productsEmptyEl) {
+          productsEmptyEl.textContent = "Загрузка товаров…";
+          productsEmptyEl.classList.remove("hidden");
+        }
+        try {
+          await ensureRepositoryCategoryProducts(cid);
+          const reconciledPayload = loadIds.length > 1
+            ? buildCombinedCategoryPayload(loadIds)
+            : state.categoryProductsCache.get(cid);
+          state.currentProducts = Array.isArray(reconciledPayload?.currentProducts) ? reconciledPayload.currentProducts : [];
+          seedRightOrderProductsByIdCache(reconciledPayload?.activeOnly || []);
+          renderProducts(state.currentProducts);
+          void warmRightOrderProductPricingContext(reconciledPayload?.activeOnly || [], {
+            includeOptionDetails: true,
+            includeOptionTargets: true,
+          });
+          return;
+        } catch (error) {
+          if (localPayloadReady) {
+            void warmRightOrderProductPricingContext(localPayload.activeOnly || [], {
+              includeOptionDetails: true,
+              includeOptionTargets: true,
+            });
+            return;
+          }
+        }
+      }
       if (loadIds.length > 1) {
         const missing = loadIds.filter((id) => !state.categoryProductsCache.has(id));
         if (!preferCache || missing.length) {
@@ -19051,7 +19895,7 @@
         state.currentProducts = combinedPayload.currentProducts;
         seedRightOrderProductsByIdCache(combinedPayload.activeOnly);
         renderProducts(state.currentProducts);
-        await warmRightOrderProductPricingContext(combinedPayload.activeOnly, {
+        void warmRightOrderProductPricingContext(combinedPayload.activeOnly, {
           includeOptionDetails: true,
           includeOptionTargets: true,
         });
@@ -19069,7 +19913,7 @@
         }
         state.currentProducts = Array.isArray(cachedPayload?.currentProducts) ? cachedPayload.currentProducts : [];
         renderProducts(state.currentProducts);
-        await warmRightOrderProductPricingContext(cachedPayload?.activeOnly || [], {
+        void warmRightOrderProductPricingContext(cachedPayload?.activeOnly || [], {
           includeOptionDetails: true,
           includeOptionTargets: true,
         });
@@ -19088,12 +19932,15 @@
       const source = Array.isArray(json?.data) ? json.data : [];
       const combos = Array.isArray(json?.combos) ? json.combos : [];
       const payload = buildCategoryPayload(source, combos, cid);
-      state.categoryProductsCache.set(cid, payload);
+      setNewOrderCategoryPayload(cid, payload);
       state.checkoutCategoryProducts.set(cid, payload.activeOnly);
+      if (window.CatalogRepository) {
+        window.CatalogRepository.upsertProducts(payload.source, { categoryId: cid, completeness: "summary" });
+      }
       seedRightOrderProductsByIdCache(payload.activeOnly);
       state.currentProducts = payload.currentProducts;
       renderProducts(state.currentProducts);
-      await warmRightOrderProductPricingContext(payload.activeOnly, {
+      void warmRightOrderProductPricingContext(payload.activeOnly, {
         includeOptionDetails: true,
         includeOptionTargets: true,
       });
@@ -20967,6 +21814,13 @@
 
   }
 
+  function loadProductsForCategory(categoryId, opts = {}) {
+    const run = () => loadProductsForCategoryTask(categoryId, opts);
+    return window.CatalogRepository?.withForegroundWork
+      ? window.CatalogRepository.withForegroundWork(run)
+      : run();
+  }
+
   async function fetchNewOrderManifest() {
     const scopeKey = newOrderCacheScopeKey();
     if (
@@ -21011,12 +21865,21 @@
 
   let inventoryRequestGeneration = 0;
 
+  function getVisibleNewOrderProductNodes(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return [];
+    const selector = `.new-order-product-card[data-product-id="${pid}"], .new-order-checkout-product-item[data-product-id="${pid}"]`;
+    return [productsGridEl, checkoutEditorEl]
+      .filter(Boolean)
+      .flatMap((root) => [...root.querySelectorAll(selector)]);
+  }
+
   function patchVisibleProductInventory(productId) {
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
     const product = getProductById(pid);
     const unavailable = product ? !isProductAvailableFlag(product) : false;
-    document.querySelectorAll(`.new-order-product-card[data-product-id="${pid}"], .new-order-checkout-product-item[data-product-id="${pid}"]`).forEach((card) => {
+    getVisibleNewOrderProductNodes(pid).forEach((card) => {
       card.classList.toggle("is-unavailable", unavailable);
       card.setAttribute("data-is-available", unavailable ? "0" : "1");
       card.querySelectorAll("[data-action='product-add-quick'], [data-action='product-options-open'], [data-action='checkout-composition-toggle']").forEach((button) => {
@@ -21034,7 +21897,7 @@
     const pid = Number(product?.id || 0);
     if (!(pid > 0)) return;
     const pricing = getCurrentProductUnitPricing(product, pid);
-    document.querySelectorAll(`.new-order-product-card[data-product-id="${pid}"], .new-order-checkout-product-item[data-product-id="${pid}"]`).forEach((card) => {
+    getVisibleNewOrderProductNodes(pid).forEach((card) => {
       const title = card.querySelector(".new-order-product-title, .new-order-checkout-product-name");
       if (title) {
         title.textContent = String(product?.name || "Товар");
@@ -21094,19 +21957,15 @@
     product.id = pid;
     const nextCategoryIds = new Set((Array.isArray(detail?.categoryIds) ? detail.categoryIds : [])
       .map(Number).filter((id) => id > 0));
-    let structureChanged = false;
     state.categoryProductsCache.forEach((payload, categoryId) => {
       const source = Array.isArray(payload?.source) ? payload.source : [];
       const hadProduct = source.some((row) => Number(row?.id || 0) === pid);
       const shouldHaveProduct = nextCategoryIds.has(Number(categoryId));
       if (!hadProduct && !shouldHaveProduct) return;
-      const wasVisible = payload?.activeOnly?.some((row) => Number(row?.id || 0) === pid) === true;
       const nextSource = source.filter((row) => Number(row?.id || 0) !== pid);
       if (shouldHaveProduct) nextSource.push(product);
       const nextPayload = buildCategoryPayload(nextSource, payload?.combos, Number(categoryId));
-      const isVisible = nextPayload.activeOnly.some((row) => Number(row?.id || 0) === pid);
-      structureChanged ||= hadProduct !== shouldHaveProduct || wasVisible !== isVisible;
-      state.categoryProductsCache.set(Number(categoryId), nextPayload);
+      setNewOrderCategoryPayload(Number(categoryId), nextPayload);
       state.checkoutCategoryProducts.set(Number(categoryId), nextPayload.activeOnly);
     });
     state.productByIdCache.set(pid, product);
@@ -21118,12 +21977,11 @@
         is_available: !Number.isFinite(stockQty) || stockQty > 0,
       });
     }
-    reconcileCartProductCatalog(product);
-    if (structureChanged) {
-      void renderActiveCategoryContent();
-    } else {
-      patchVisibleProductCatalog(product);
-    }
+    patchVisibleProductCatalog(product);
+    const affectedComboIds = window.CatalogRepository?.getAffectedComboIds([pid]) || [];
+    applyNewOrderRepositoryComboChanges(affectedComboIds);
+    patchActiveCatalogItems([pid], affectedComboIds);
+    patchCheckoutCatalogItems([pid]);
     manifestLastSuccessAt = 0;
     schedulePersistBootstrapSnapshot();
   }
@@ -21157,6 +22015,27 @@
       state.inventoryByProductId = next;
       state.inventoryRevision = responseRevision;
       state.inventoryReady = true;
+      state.inventoryFreshReady = true;
+      next.forEach((inventory, productId) => {
+        const applyStock = (product) => {
+          if (!product || typeof product !== "object") return;
+          product.stock_qty = inventory.stock_qty;
+          product.is_available = inventory.is_available ? 1 : 0;
+        };
+        applyStock(state.productByIdCache.get(productId));
+        state.currentProducts.forEach((product) => {
+          if (Number(product?.id || 0) === productId) applyStock(product);
+        });
+        state.categoryProductsCache.forEach((payload) => {
+          (Array.isArray(payload?.source) ? payload.source : []).forEach((product) => {
+            if (Number(product?.id || 0) === productId) applyStock(product);
+          });
+          (Array.isArray(payload?.activeOnly) ? payload.activeOnly : []).forEach((product) => {
+            if (Number(product?.id || 0) === productId) applyStock(product);
+          });
+        });
+        window.CatalogRepository?.patchProductAuthoritative?.(productId, { stock_qty: inventory.stock_qty });
+      });
       changedIds.forEach((productId) => {
         const before = previous.get(productId);
         const after = next.get(productId);
@@ -21164,6 +22043,7 @@
           patchVisibleProductInventory(productId);
         }
       });
+      schedulePersistBootstrapSnapshot(0);
       return true;
     } catch {
       if (generation === inventoryRequestGeneration) state.inventoryReady = state.inventoryByProductId.size > 0;
@@ -21184,6 +22064,7 @@
       state.categories = categoriesSource
         .filter((c) => Number(c?.is_active || 0) === 1 && isCheckoutVisible(c))
         .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+      if (window.CatalogRepository) window.CatalogRepository.upsertCategories(categoriesSource);
 
       const refs = data.refs && typeof data.refs === "object" ? data.refs : {};
       state.unitConversions = Array.isArray(refs.unit_conversions) ? refs.unit_conversions : [];
@@ -21240,6 +22121,7 @@
     state.categories = source
       .filter((c) => Number(c?.is_active || 0) === 1 && isCheckoutVisible(c))
       .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+    if (window.CatalogRepository) window.CatalogRepository.upsertCategories(source);
     schedulePersistBootstrapSnapshot(0);
   }
 
@@ -21300,12 +22182,18 @@
 
   function clearNewOrderProductCaches() {
     state.categoryProductsCache.clear();
+    state.categoryIdsByProductId.clear();
     state.checkoutCategoryProducts.clear();
+    state.checkoutCategoryLoading.clear();
+    state.checkoutCategoryErrors.clear();
+    state.categoryWorkingSetComplete.clear();
     state.productVariants.clear();
     state.productIngredients.clear();
     state.ingredientStateByProduct.clear();
     state.productOptionGroups.clear();
     state.optionGroupDetails.clear();
+    state.productDetailsStatus.clear();
+    state.productDetailsInFlight.clear();
     state.productByIdCache.clear();
     state.selectedVariants.clear();
   }
@@ -21568,7 +22456,7 @@
     if (!(pid > 0) || !options.length) return new Map();
 
     const groups = state.productOptionGroups.get(pid) || [];
-    await loadOptionDetailsForProducts([product]);
+    await ensureNewOrderProductDetails([pid]);
 
     const byGroup = new Map();
     const allGroups = Array.isArray(groups) ? groups : [];
@@ -21714,10 +22602,7 @@
     const product = await ensureProductById(productId);
     if (!product) return buildFallbackCartProductItem(orderItem);
 
-    await loadVariantsForProducts([product]);
-    await loadIngredientsForProducts([product]);
-    await loadOptionsForProducts([product]);
-    await loadOptionDetailsForProducts([product]);
+    await ensureNewOrderProductDetails([productId]);
 
     const selectedVariantIndex = resolveOrderVariantIndex(productId, orderItem);
     state.selectedVariants.set(productId, selectedVariantIndex);
@@ -22653,7 +23538,22 @@
     renderRightOrderTabs();
   }
 
-  async function refreshNewOrderData({ hydrated, bootstrapped, cachedManifest }) {
+  async function refreshNewOrderData({ hydrated, bootstrapped, cachedManifest, repositoryReady }) {
+    if (repositoryReady && window.CatalogRepository) {
+      const inventoryPromise = startupInventoryPromise || (navigator.onLine && !state.inventoryReady
+        ? refreshNewOrderInventory()
+        : null);
+      ensureValidActiveCategory();
+      renderCategories();
+      await renderActiveCategoryContent();
+      reconcileDurableDraftInventory();
+      await window.CatalogRepository.startSync();
+      if (inventoryPromise) {
+        void inventoryPromise.then(() => reconcileDurableDraftInventory());
+      }
+      scheduleNewOrderIdleWarmup();
+      return;
+    }
     const freshManifest = await fetchNewOrderManifest();
     const prevManifest = state.cacheManifest || cachedManifest || (bootstrapped ? freshManifest : null);
     const nextManifest = freshManifest || state.cacheManifest || cachedManifest || null;
@@ -22682,7 +23582,7 @@
     }
 
     if (!state.inventoryReady) {
-      await refreshNewOrderInventory(getManifestDomainToken(nextManifest, "inventory"));
+      await (startupInventoryPromise || refreshNewOrderInventory(getManifestDomainToken(nextManifest, "inventory")));
     }
     reconcileDurableDraftInventory();
 
@@ -22700,6 +23600,7 @@
   async function load() {
     renderStartupShell();
     markLoadReady();
+    startupInventoryPromise = null;
     const durableDraft = readDurableCreateDraft();
     const durableRestoreRevision = durableCreateDraftUserRevision;
 
@@ -22708,17 +23609,63 @@
       const cachedManifest = readNewOrderManifestCache();
       if (cachedManifest) state.cacheManifest = cachedManifest;
 
+      let repositoryReady = false;
+      const repositoryInitPromise = window.CatalogRepository
+        ? window.CatalogRepository.init(getNewOrderCatalogRepositoryOptions())
+        : Promise.resolve();
+      await repositoryInitPromise;
+      if (window.CatalogRepository) {
+        await Promise.all([
+          window.CatalogRepository.loadCategories(),
+          window.CatalogRepository.loadProducts(),
+        ]);
+        repositoryReady = hydrateNewOrderFromCatalogRepository();
+        if (repositoryReady) renderCachedStartupContent();
+      }
       const bootstrapSnapshot = await readSharedProductBootstrap();
       const activeSession = checkoutSessionRevision > 0 ? captureCheckoutSession() : null;
-      const hydrated = hydrateStateFromBootstrapSnapshot(bootstrapSnapshot);
+      let hydrated = hydrateStateFromBootstrapSnapshot(bootstrapSnapshot);
+      if (!hydrated && !navigator.onLine && window.CatalogRepository) {
+        await window.CatalogRepository.loadPassports();
+        repositoryReady = hydrateNewOrderFromCatalogRepository() || repositoryReady;
+        hydrated = repositoryReady;
+      }
+      if (window.CatalogRepository) {
+        repositoryReady = hydrateNewOrderFromCatalogRepository() || repositoryReady;
+      }
       if (activeSession) {
         await restoreCheckoutSession(activeSession);
       } else if (hydrated) {
         renderCachedStartupContent();
       }
+      if (navigator.onLine) {
+        let inventoryPromise;
+        inventoryPromise = refreshNewOrderInventory().finally(() => {
+          if (startupInventoryPromise === inventoryPromise) startupInventoryPromise = null;
+        });
+        startupInventoryPromise = inventoryPromise;
+      }
 
       await ensureTenantPriceRoundingSettings();
-      const bootstrapped = !hydrated ? await loadNewOrderBootstrapFromApi() : false;
+      const hasLocalProducts = Boolean(window.CatalogRepository?.getAllProducts().length)
+        || [...state.categoryProductsCache.values()].some((payload) => Array.isArray(payload?.source) && payload.source.length > 0);
+      const needsBootstrap = (
+        !state.categories.length
+        || !hasLocalProducts
+        || !state.checkoutDraftReady
+        || !state.rightDeliveryTypes.length
+        || !state.rightPaymentTypes.length
+        || !state.rightTimeOptions.length
+      );
+      const bootstrapped = navigator.onLine && needsBootstrap
+        ? await loadNewOrderBootstrapFromApi()
+        : false;
+      if (bootstrapped && !hasLocalProducts) {
+        await preloadAllCategoryProducts(getPreloadCategoryIds());
+      }
+      if (window.CatalogRepository) {
+        repositoryReady = hydrateNewOrderFromCatalogRepository() || repositoryReady || bootstrapped;
+      }
 
       if (!activeSession && bootstrapped) {
         renderCachedStartupContent();
@@ -22729,19 +23676,25 @@
       if (durableDraft && !activeSession) {
         await restoreDurableCreateDraft(durableDraft, durableRestoreRevision);
       }
-      return { hydrated, bootstrapped, cachedManifest };
+      return { hydrated, bootstrapped, cachedManifest, repositoryReady };
     })();
 
     try {
       const startup = await bootstrapDataReadyPromise;
       await refreshNewOrderData(startup);
     } catch (e) {
+      const offlineCatalogEmpty = !navigator.onLine
+        && (!window.CatalogRepository || window.CatalogRepository.getAllProducts().length === 0);
       if (categoriesEmptyEl) {
-        categoriesEmptyEl.textContent = "РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё РєР°С‚РµРіРѕСЂРёР№";
+        categoriesEmptyEl.textContent = offlineCatalogEmpty
+          ? "Каталог ещё не сохранён на устройстве"
+          : "Ошибка загрузки категорий";
         categoriesEmptyEl.classList.remove("hidden");
       }
-      if (productsEmptyEl) {
-        productsEmptyEl.textContent = "РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё";
+      if (manageEmpty && productsEmptyEl) {
+        productsEmptyEl.textContent = offlineCatalogEmpty
+          ? "Подключитесь к интернету, чтобы загрузить товары"
+          : "Ошибка загрузки";
         productsEmptyEl.classList.remove("hidden");
       }
       renderMainContentMode();
@@ -22751,18 +23704,149 @@
   }
 
   bindEvents();
-  document.addEventListener("catalog:product-updated", (event) => applyKnownProductUpdate(event?.detail));
+  let catalogRepositoryFrame = null;
+  const pendingRepositoryProductIds = new Set();
+  const pendingRepositoryComboIds = new Set();
+  const pendingRepositoryComboBlockIds = new Set();
+  let pendingRepositoryCategories = false;
+  let unsubscribeCatalogRepository = null;
+  if (window.CatalogRepository) {
+    unsubscribeCatalogRepository = window.CatalogRepository.subscribe((event) => {
+      const type = String(event?.type || "");
+      if (type === "products" || type === "removed") {
+        (event.ids || []).forEach((id) => pendingRepositoryProductIds.add(Number(id)));
+      } else if (type === "combos") {
+        (event.ids || []).forEach((id) => pendingRepositoryComboIds.add(Number(id)));
+      } else if (type === "combo-blocks") {
+        (event.ids || []).forEach((id) => pendingRepositoryComboBlockIds.add(Number(id)));
+      } else if (type === "categories") {
+        pendingRepositoryCategories = true;
+      } else {
+        return;
+      }
+      if (catalogRepositoryFrame) return;
+      const scheduleFrame = typeof window.requestAnimationFrame === "function" ? window.requestAnimationFrame.bind(window) : window.setTimeout.bind(window);
+      catalogRepositoryFrame = scheduleFrame(() => {
+        catalogRepositoryFrame = null;
+        const productIds = [...pendingRepositoryProductIds].filter((id) => id > 0);
+        const comboIds = new Set([...pendingRepositoryComboIds].filter((id) => id > 0));
+        const comboBlockIds = [...pendingRepositoryComboBlockIds].filter((id) => id > 0);
+        const categoriesChanged = pendingRepositoryCategories;
+        pendingRepositoryProductIds.clear();
+        pendingRepositoryComboIds.clear();
+        pendingRepositoryComboBlockIds.clear();
+        pendingRepositoryCategories = false;
+
+        if (categoriesChanged) {
+          const activeCategoryId = getActiveProductCategoryId();
+          const categoryIds = activeCategoryId > 0 ? getProductCategoryLoadIds(activeCategoryId) : [];
+          hydrateNewOrderFromCatalogRepository({ categoryIds });
+          ensureValidActiveCategory();
+          renderCategories();
+          if (String(state.activeCategoryId) !== CHECKOUT_SCREEN_ID) {
+            const nextActiveId = getActiveProductCategoryId();
+            const nextPayload = getProductCategoryLoadIds(nextActiveId).length > 1
+              ? buildCombinedCategoryPayload(getProductCategoryLoadIds(nextActiveId))
+              : state.categoryProductsCache.get(nextActiveId);
+            state.currentProducts = Array.isArray(nextPayload?.currentProducts) ? nextPayload.currentProducts : [];
+            renderProducts(state.currentProducts);
+          }
+        }
+
+        if (productIds.length) {
+          applyNewOrderRepositoryProductChanges(productIds);
+          productIds.forEach((productId) => {
+            const product = getProductById(productId);
+            if (product) patchVisibleProductCatalog(product);
+            else getVisibleNewOrderProductNodes(productId).forEach((node) => node.remove());
+          });
+          window.CatalogRepository.getAffectedComboIds(productIds).forEach((id) => comboIds.add(id));
+        }
+        if (comboBlockIds.length) {
+          window.CatalogRepository.getAffectedComboIdsForBlocks(comboBlockIds).forEach((id) => comboIds.add(id));
+        }
+        const changedComboIds = applyNewOrderRepositoryComboChanges([...comboIds]);
+        if (!categoriesChanged && (productIds.length || changedComboIds.length)) {
+          patchActiveCatalogItems(productIds, changedComboIds);
+          patchCheckoutCatalogItems(productIds);
+        }
+
+        const openComboId = Number(state.comboModal?.comboId || 0);
+        if (openComboId > 0 && comboIds.has(openComboId)) {
+          const previousBlocks = Array.isArray(state.comboModal.combo?.blocks) ? state.comboModal.combo.blocks : [];
+          const selectedIds = previousBlocks.map((block, index) => {
+            const products = Array.isArray(block?.products) ? block.products : [];
+            return Number(products[Number(state.comboModal.selectedIndexByBlock[index] || 0)]?.product_id || 0);
+          });
+          const nextCombo = window.CatalogRepository.getComboForOrder(openComboId);
+          if (nextCombo) {
+            state.comboModal.combo = nextCombo;
+            state.comboModal.selectedIndexByBlock = nextCombo.blocks.map((block, index) => {
+              const products = Array.isArray(block?.products) ? block.products : [];
+              const selectedIndex = products.findIndex((product) => Number(product?.product_id || 0) === selectedIds[index]);
+              if (selectedIndex >= 0) return selectedIndex;
+              const defaultIndex = products.findIndex((product) => Number(product?.is_default || 0) === 1);
+              return defaultIndex >= 0 ? defaultIndex : 0;
+            });
+            renderComboOverlay();
+          }
+        }
+      }, 16);
+    });
+  }
+  document.addEventListener("catalog:product-updated", (event) => {
+    if (!window.CatalogRepository) applyKnownProductUpdate(event?.detail);
+  });
   window.addEventListener("pagehide", writeDurableCreateDraftNow);
+  window.addEventListener("beforeunload", () => unsubscribeCatalogRepository?.(), { once: true });
   document.addEventListener("tenantStoreChanged", () => {
     idleWarmupGeneration += 1;
+    inventoryRequestGeneration += 1;
+    state.inventoryByProductId.clear();
+    state.inventoryRevision = null;
+    state.inventoryReady = false;
+    state.inventoryFreshReady = false;
+    if (navigator.onLine) {
+      let inventoryPromise;
+      inventoryPromise = refreshNewOrderInventory().finally(() => {
+        if (startupInventoryPromise === inventoryPromise) startupInventoryPromise = null;
+      });
+      startupInventoryPromise = inventoryPromise;
+    } else {
+      startupInventoryPromise = null;
+    }
     manifestRequestPromise = null;
     manifestLastSuccessAt = 0;
     manifestLastSuccessScope = "";
     if (durableCreateDraftSaveTimer) clearTimeout(durableCreateDraftSaveTimer);
     durableCreateDraftSaveTimer = null;
     durableCreateDraftUserRevision += 1;
+    if (catalogRepositoryFrame) {
+      window.cancelAnimationFrame?.(catalogRepositoryFrame);
+      clearTimeout(catalogRepositoryFrame);
+      catalogRepositoryFrame = null;
+    }
+    pendingRepositoryProductIds.clear();
+    pendingRepositoryComboIds.clear();
+    pendingRepositoryComboBlockIds.clear();
+    pendingRepositoryCategories = false;
+    clearNewOrderProductCaches();
+    state.categories = [];
+    state.productCategories = [];
+    void (async () => {
+      if (!window.CatalogRepository) return;
+      await window.CatalogRepository.init(getNewOrderCatalogRepositoryOptions());
+      hydrateNewOrderFromCatalogRepository();
+      renderStartupShell();
+      await renderActiveCategoryContent();
+      await window.CatalogRepository.startSync();
+    })();
   });
-  load();
+  if (window.CatalogRepository?.withForegroundWork) {
+    void window.CatalogRepository.withForegroundWork(load);
+  } else {
+    void load();
+  }
 })();
 
 

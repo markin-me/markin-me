@@ -1,5 +1,7 @@
 "use strict";
 
+const catalogSync = require('./catalog-sync');
+
 const SNAPSHOT_SCHEMA_VERSION = 1;
 const BUILD_BATCH_SIZE = 8;
 const memoryCache = new Map();
@@ -153,7 +155,7 @@ async function readPassports({ db, tenantId, storeId, productIds }) {
   return data;
 }
 
-async function markProductsDirty({ db, tenantId, storeId, productIds }) {
+async function markProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert' }) {
   const ids = positiveIds(productIds);
   if (!ids.length) return;
   clearMemory(tenantId, storeId, ids);
@@ -165,9 +167,15 @@ async function markProductsDirty({ db, tenantId, storeId, productIds }) {
     [tenantId, storeId, SNAPSHOT_SCHEMA_VERSION, tenantId, ids]
   );
   enqueueBuild(tenantId, storeId, ids);
+  if (catalogChangeScope === 'tenant') {
+    await catalogSync.recordTenantChanges({ db, tenantId, entityType: 'product', operation }, ids);
+  } else if (catalogChangeScope === 'store') {
+    await catalogSync.recordScopeChanges({ db, tenantId, storeId, entityType: 'product', operation }, ids);
+  }
+  return ids;
 }
 
-async function markRelatedProductsDirty({ db, tenantId, storeId, productIds }) {
+async function markRelatedProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert' }) {
   const seeds = positiveIds(productIds);
   if (!seeds.length) return;
   const [rows] = await db.query(
@@ -183,7 +191,8 @@ async function markRelatedProductsDirty({ db, tenantId, storeId, productIds }) {
     [tenantId, seeds, tenantId, seeds]
   );
   const related = positiveIds([...seeds, ...rows.map((row) => row.product_id)]);
-  await markProductsDirty({ db, tenantId, storeId, productIds: related });
+  await markProductsDirty({ db, tenantId, storeId, productIds: related, catalogChangeScope, operation });
+  return related;
 }
 
 async function scheduleInitialBackfill(db) {
