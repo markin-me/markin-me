@@ -6102,7 +6102,7 @@
         comboDiscount += lineDiscount;
       } else if (isRightOrderAutoAddItem(item)) {
         autoAddDiscount += lineDiscount;
-      } else if (!isCheckoutComposedCombo) {
+      } else {
         productDiscount += lineDiscount;
       }
     });
@@ -7713,12 +7713,15 @@
     }
     const productId = Number(item?.product_id || 0);
     if (!(productId > 0)) return null;
+    const variantGroupId = getCartItemVariantGroupId(item);
     return {
       type: "product",
       product_id: productId,
       qty,
-      variant_group_id: getCartItemVariantGroupId(item),
-      variant_value_index: Number.isFinite(Number(item?.variant?.selected_index)) ? Number(item.variant.selected_index) : null,
+      variant_group_id: variantGroupId,
+      variant_value_index: variantGroupId && Number.isFinite(Number(item?.variant?.selected_index))
+        ? Number(item.variant.selected_index)
+        : null,
       option_items: (Array.isArray(item?.option_items) ? item.option_items : []).map((row) => ({
         id: Number(row?.id || 0),
         group_id: Number(row?.group_id || 0) || null,
@@ -22452,11 +22455,13 @@
 
   async function buildOptionSelectionMapFromOrder(productId, orderItem, product) {
     const pid = Number(productId || 0);
-    const options = Array.isArray(orderItem?.options) ? orderItem.options : [];
+    const options = Array.isArray(orderItem?.option_items) && orderItem.option_items.length
+      ? orderItem.option_items
+      : (Array.isArray(orderItem?.options) ? orderItem.options : []);
     if (!(pid > 0) || !options.length) return new Map();
 
-    const groups = state.productOptionGroups.get(pid) || [];
     await ensureNewOrderProductDetails([pid]);
+    const groups = state.productOptionGroups.get(pid) || [];
 
     const byGroup = new Map();
     const allGroups = Array.isArray(groups) ? groups : [];
@@ -23248,16 +23253,31 @@
       };
     }
     const item = await buildCartItemFromOrderProduct(src);
+    const requestedVariantGroupId = Number(src.variant_group_id || 0);
     const requestedVariant = src.variant_value_index == null ? null : Number(src.variant_value_index);
+    const restoredVariantGroupId = getCartItemVariantGroupId(item);
     const variantValues = Array.isArray(item?.variant?.values) ? item.variant.values : [];
-    const missingVariant = requestedVariant != null && Number.isFinite(requestedVariant)
+    const missingVariant = requestedVariantGroupId > 0
+      && requestedVariant != null && Number.isFinite(requestedVariant)
       && requestedVariant >= 0
-      && (!variantValues.length || requestedVariant >= variantValues.length);
-    const requestedOptionIds = (Array.isArray(src.option_items) ? src.option_items : []).map((row) => Number(row?.id || 0)).filter((id) => id > 0);
-    const restoredOptionIds = (Array.isArray(item?.option_items) ? item.option_items : []).map((row) => Number(row?.id || 0)).filter((id) => id > 0);
-    const missingOption = requestedOptionIds.some((id) => !restoredOptionIds.includes(id));
+      && (
+        restoredVariantGroupId !== requestedVariantGroupId
+        || !variantValues.length
+        || requestedVariant >= variantValues.length
+      );
+    const optionKey = (row) => `${Number(row?.group_id || 0)}:${Number(row?.id || 0)}`;
+    const requestedOptionKeys = (Array.isArray(src.option_items) ? src.option_items : [])
+      .filter((row) => Number(row?.id || 0) > 0)
+      .map(optionKey);
+    const restoredOptionKeys = new Set(
+      (Array.isArray(item?.option_items) ? item.option_items : [])
+        .filter((row) => Number(row?.id || 0) > 0)
+        .map(optionKey)
+    );
+    const detailsReady = hasCompleteNewOrderProductDetails(productId);
+    const missingOption = detailsReady && requestedOptionKeys.some((key) => !restoredOptionKeys.has(key));
     const next = recalculateCartItemTotals(item);
-    if (missingVariant || missingOption) next.durableDraftIssue = "Вариант или опция изменились — проверьте позицию";
+    if (detailsReady && (missingVariant || missingOption)) next.durableDraftIssue = "Вариант или опция изменились — проверьте позицию";
     if (src.comment) next.comment = String(src.comment);
     return next;
   }
