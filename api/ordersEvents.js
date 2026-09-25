@@ -1,6 +1,7 @@
 function createOrdersEventsHub() {
   const channels = new Map();
   const waiters = new Map();
+  const subscribers = new Map();
   const MAX_EVENTS = 500;
   const LONG_POLL_MIN_TIMEOUT_MS = 1000;
   const LONG_POLL_MAX_TIMEOUT_MS = 25000;
@@ -31,12 +32,25 @@ function createOrdersEventsHub() {
     if (channel.log.length > MAX_EVENTS) channel.log.shift();
 
     const key = getKey(tenantId, storeId);
+    const listeners = subscribers.get(key);
+    if (listeners) listeners.forEach((listener) => { try { listener(payload); } catch {} });
     const set = waiters.get(key);
     if (set && set.size) {
       Array.from(set).forEach((resolveWaiter) => {
         try { resolveWaiter({ timeout: false, cursor: payload.id }); } catch {}
       });
     }
+  }
+
+  function subscribe(tenantId, storeId, listener) {
+    const key = getKey(tenantId, storeId);
+    const set = subscribers.get(key) || new Set();
+    set.add(listener);
+    subscribers.set(key, set);
+    return () => {
+      set.delete(listener);
+      if (!set.size) subscribers.delete(key);
+    };
   }
 
   function getChanges(tenantId, storeId, since) {
@@ -136,6 +150,7 @@ function createOrdersEventsHub() {
     getOldestCursor,
     inspectCursor,
     waitForChanges,
+    subscribe,
   };
 }
 

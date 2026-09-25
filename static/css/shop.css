@@ -8268,7 +8268,8 @@ body.page-shop .shop-company-chat-btn{
   -webkit-tap-highlight-color: transparent;
 }
 
-body.page-shop .shop-company-chat-unread{
+body.page-shop .shop-company-chat-unread,
+body.page-shop .shop-orders-unread{
   position: absolute;
   top: -4px;
   right: -4px;
@@ -9339,6 +9340,26 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   padding-right: 120px;
 }
 
+.shop-company-chat-mobile-context-scene__clone.is-agent .shop-company-chat-text,
+.shop-company-chat-mobile-context-scene__clone.is-agent .shop-company-chat-reply-snippet{
+  padding-right: 46px;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-user .shop-company-chat-text,
+.shop-company-chat-mobile-context-scene__clone.is-user .shop-company-chat-reply-snippet{
+  padding-right: 88px;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-agent.is-edited .shop-company-chat-text,
+.shop-company-chat-mobile-context-scene__clone.is-agent.is-edited .shop-company-chat-reply-snippet{
+  padding-right: 78px;
+}
+
+.shop-company-chat-mobile-context-scene__clone.is-user.is-edited .shop-company-chat-text,
+.shop-company-chat-mobile-context-scene__clone.is-user.is-edited .shop-company-chat-reply-snippet{
+  padding-right: 120px;
+}
+
 .shop-company-chat-reply-snippet[data-reply-jump-id]{
   cursor: pointer;
 }
@@ -10041,7 +10062,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   -webkit-backdrop-filter: blur(14px) saturate(118%);
   opacity: 0;
   pointer-events: auto;
-  transition: opacity .34s cubic-bezier(.22,.61,.36,1);
+  transition: opacity .26s cubic-bezier(.215,.61,.355,1);
 }
 
 .shop-company-chat-mobile-context-scene.is-open .shop-company-chat-mobile-context-scene__backdrop{
@@ -10062,7 +10083,7 @@ body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
   transform-style: preserve-3d;
-  contain: layout paint style;
+  contain: layout style;
 }
 
 .shop-company-chat-mobile-context-scene__clone > .shop-company-chat-bubble{
@@ -24169,6 +24190,70 @@ body.page-kso .shop-checkout-customer-phone{
   display: none;
 }
 
+.shop-profile-push-status-row{
+  justify-content: flex-start;
+  gap: 10px;
+  padding-left: 14px;
+}
+
+.shop-profile-push-statuses{
+  display: grid;
+  gap: 8px;
+}
+
+.shop-profile-push-checkbox{
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  cursor: pointer;
+}
+
+.shop-profile-push-checkbox-ui{
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-text-muted);
+  border-radius: 5px;
+  color: var(--color-white);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth);
+}
+
+.shop-profile-push-checkbox-ui::after{
+  content: "";
+  width: 5px;
+  height: 10px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-1px) rotate(45deg) scale(0);
+  transition: transform var(--dur-fast) var(--ease-smooth);
+}
+
+.shop-profile-push-checkbox .switch-input:checked + .shop-profile-push-checkbox-ui{
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.shop-profile-push-checkbox .switch-input:checked + .shop-profile-push-checkbox-ui::after{
+  transform: translateY(-1px) rotate(45deg) scale(1);
+}
+
+.shop-profile-push-checkbox .switch-input:focus-visible + .shop-profile-push-checkbox-ui{
+  box-shadow: 0 0 0 3px var(--primary-12);
+}
+
+.shop-profile-push-checkbox .switch-input:disabled + .shop-profile-push-checkbox-ui{
+  opacity: .55;
+  cursor: not-allowed;
+}
+
 .shop-profile-logout-btn{
   width: 100%;
   color: var(--color-primary);
@@ -29006,10 +29091,10 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   .shop-mobile-bottom-container .shop-mobile-order-details-actions:not(.hidden) + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-address-actions:not(.hidden) + .shop-mobile-address-confirm.hidden + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-address-confirm:not(.hidden) + .shop-nav {
-    grid-template-columns: repeat(4, 50px);
+    grid-template-columns: repeat(5, 50px);
     justify-content: center;
     align-items: start;
-    gap: 18px;
+    gap: 12px;
     height: calc(68px + env(safe-area-inset-bottom));
     padding: 0 0 env(safe-area-inset-bottom);
     margin-top: 0;
@@ -31352,7 +31437,8 @@ body.page-kso .shop-products-panel{
 }
 
 @media (max-width: 768px){
-  body.page-shop #shopCompanyChatUnreadBadge{
+  body.page-shop #shopCompanyChatUnreadBadge,
+  body.page-shop #shopNavOrdersBadge{
     width: 14px;
     min-width: 14px;
     height: 14px;

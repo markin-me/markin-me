@@ -402,6 +402,14 @@ export function unsubscribeChatPush(clientId: string, subscription: ChatPushSubs
   });
 }
 
+export function openOrderEventsStream(customerToken: string) {
+  return new EventSource<'order.updated'>(buildUrl('/api/public/changes/stream'), {
+    headers: buildHeaderRecord({ customerToken }),
+    pollingInterval: 5000,
+    timeout: 0,
+  });
+}
+
 export type CustomerPushPreferences = {
   chat: boolean;
   important: boolean;

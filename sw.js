@@ -89,6 +89,7 @@ self.addEventListener("push", function (event) {
         open_chat: payload && payload.open_chat === true,
         important_message_id: normalizeImportantMessageId(payload && payload.important_message_id),
         store_id: normalizeImportantMessageId(payload && payload.store_id),
+        order_id: normalizeImportantMessageId(payload && payload.order_id),
         open_important_messages: payload && payload.open_important_messages === true,
       },
       }),
@@ -173,6 +174,8 @@ function buildNotificationTargetUrl(data) {
   if (!parsed) return baseUrl;
   var type = String((data && data.type) || "").trim().toLowerCase();
   var shouldOpenChat = !!(data && data.open_chat === true && type === "chat_message");
+  var orderId = normalizeImportantMessageId(data && data.order_id);
+  var shouldOpenOrder = type === "order_status" && !!orderId;
   var importantMessageId = normalizeImportantMessageId(data && data.important_message_id);
   var importantStoreId = normalizeImportantMessageId(data && data.store_id);
   var shouldOpenImportant = !!(data && data.open_important_messages === true)
@@ -185,6 +188,10 @@ function buildNotificationTargetUrl(data) {
     if (clientId) parsed.searchParams.set("chat_client_id", clientId);
     var messageId = String((data && data.message_id) || "").trim();
     if (messageId) parsed.searchParams.set("chat_message_id", messageId.slice(0, 120));
+  }
+  if (shouldOpenOrder) {
+    parsed.searchParams.set("open_order", "1");
+    parsed.searchParams.set("order_id", orderId);
   }
   if (shouldOpenImportant) {
     parsed.searchParams.set("open_important_messages", "1");
@@ -215,8 +222,9 @@ function buildNotificationPostMessageData(data) {
   var isImportantMessage = !!(data && data.open_important_messages === true)
     || String((data && data.type) || "").trim().toLowerCase() === "important_message"
     || !!importantMessageId;
+  var isOrderStatus = String((data && data.type) || "").trim().toLowerCase() === "order_status";
   return {
-    type: isImportantMessage ? "important-message-notification-click" : "chat-notification-click",
+    type: isImportantMessage ? "important-message-notification-click" : (isOrderStatus ? "order-status-notification-click" : "chat-notification-click"),
     payload: {
       type: String((data && data.type) || ""),
       open_chat: data && data.open_chat === true,
@@ -226,6 +234,7 @@ function buildNotificationPostMessageData(data) {
       open_important_messages: isImportantMessage,
       important_message_id: importantMessageId,
       store_id: normalizeImportantMessageId(data && data.store_id),
+      order_id: normalizeImportantMessageId(data && data.order_id),
       url: String((data && data.url) || ""),
     },
   };

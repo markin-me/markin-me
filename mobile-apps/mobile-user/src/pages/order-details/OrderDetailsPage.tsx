@@ -26,9 +26,11 @@ import {
   readCachedCustomerOrder,
   readCachedCustomerPassport,
   resolveAssetUrl,
+  waitForPublicChanges,
   type CustomerOrder,
   type CustomerOrderItem,
 } from '../../shared/api';
+import { openOrderEventsStream } from '../../features/chat/api';
 import { routes, type RootStackParamList } from '../../app/navigation/routes';
 import { theme } from '../../shared/config/theme';
 import { Screen } from '../../shared/ui/Screen';
@@ -287,6 +289,52 @@ export function OrderDetailsPage() {
       isActive = false;
     };
   }, [orderId]);
+
+  useEffect(() => {
+    if (!(orderId > 0) || !order || Number(order.status_is_final || 0) === 1) return undefined;
+    let cancelled = false;
+    let fallbackCursor = 0;
+    const refresh = async () => {
+      const passport = await readCachedCustomerPassport();
+      const token = String(passport?.token || '').trim();
+      if (!token || cancelled) return;
+      const nextOrder = await fetchCustomerOrder(token, orderId).catch(() => null);
+      if (!cancelled && nextOrder) setOrder(nextOrder);
+    };
+    const fallback = async () => {
+      while (!cancelled) {
+        try {
+          const result = await waitForPublicChanges({ since: fallbackCursor, timeoutMs: 20000 });
+          if (cancelled) return;
+          fallbackCursor = Math.max(fallbackCursor, result.cursor);
+          if (result.changed) await refresh();
+        } catch {
+          if (!cancelled) await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    };
+    let source: ReturnType<typeof openOrderEventsStream> | null = null;
+    readCachedCustomerPassport().then((passport) => {
+      if (cancelled) return;
+      const token = String(passport?.token || '').trim();
+      if (!token) return;
+      const liveSource = openOrderEventsStream(token);
+      source = liveSource;
+      liveSource.addEventListener('order.updated', (event) => {
+        let updatedOrder: CustomerOrder | null = null;
+        try { updatedOrder = JSON.parse(String(event?.data || '')); } catch {}
+        if (!cancelled && Number(updatedOrder?.id || 0) === orderId) void refresh();
+      });
+      liveSource.addEventListener('error', () => {
+        liveSource.close();
+        if (!cancelled) void fallback();
+      });
+    }).catch(() => { if (!cancelled) void fallback(); });
+    return () => {
+      cancelled = true;
+      source?.close();
+    };
+  }, [order?.id, orderId]);
 
   const items = useMemo(() => sortOrderItems(order?.items), [order?.items]);
   const summary = useMemo(() => (order ? buildSummary(order) : null), [order]);

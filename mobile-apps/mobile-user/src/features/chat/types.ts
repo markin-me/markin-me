@@ -175,6 +175,8 @@ export type ChatSettings = {
   name?: string;
   client_push_enabled?: boolean | number | string;
   chat_client_push_enabled?: boolean | number | string;
+  important_messages_enabled?: boolean | number | string;
+  importantMessagesEnabled?: boolean | number | string;
 };
 
 export type ImportantMessage = {

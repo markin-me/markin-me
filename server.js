@@ -1584,6 +1584,7 @@ self.addEventListener('push', function (event) {
         open_chat: payload && payload.open_chat === true,
         important_message_id: normalizeImportantMessageId(payload && payload.important_message_id),
         store_id: normalizeImportantMessageId(payload && payload.store_id),
+        order_id: normalizeImportantMessageId(payload && payload.order_id),
         open_important_messages: payload && payload.open_important_messages === true
       }
       }),
@@ -1667,6 +1668,8 @@ function buildNotificationTargetUrl(data) {
   if (!parsed) return baseUrl;
   var type = String((data && data.type) || '').trim().toLowerCase();
   var shouldOpenChat = !!(data && data.open_chat === true && type === 'chat_message');
+  var orderId = normalizeImportantMessageId(data && data.order_id);
+  var shouldOpenOrder = type === 'order_status' && !!orderId;
   var importantMessageId = normalizeImportantMessageId(data && data.important_message_id);
   var importantStoreId = normalizeImportantMessageId(data && data.store_id);
   var shouldOpenImportant = !!(data && data.open_important_messages === true)
@@ -1679,6 +1682,10 @@ function buildNotificationTargetUrl(data) {
     if (clientId) parsed.searchParams.set('chat_client_id', clientId);
     var messageId = String((data && data.message_id) || '').trim();
     if (messageId) parsed.searchParams.set('chat_message_id', messageId.slice(0, 120));
+  }
+  if (shouldOpenOrder) {
+    parsed.searchParams.set('open_order', '1');
+    parsed.searchParams.set('order_id', orderId);
   }
   if (shouldOpenImportant) {
     parsed.searchParams.set('open_important_messages', '1');
@@ -1710,7 +1717,7 @@ function buildNotificationPostMessageData(data) {
     || String((data && data.type) || '').trim().toLowerCase() === 'important_message'
     || !!importantMessageId;
   return {
-    type: isImportantMessage ? 'important-message-notification-click' : 'chat-notification-click',
+    type: isImportantMessage ? 'important-message-notification-click' : (String((data && data.type) || '').trim().toLowerCase() === 'order_status' ? 'order-status-notification-click' : 'chat-notification-click'),
     payload: {
       type: String((data && data.type) || ''),
       open_chat: data && data.open_chat === true,
@@ -1720,6 +1727,7 @@ function buildNotificationPostMessageData(data) {
       open_important_messages: isImportantMessage,
       important_message_id: importantMessageId,
       store_id: normalizeImportantMessageId(data && data.store_id),
+      order_id: normalizeImportantMessageId(data && data.order_id),
       url: String((data && data.url) || '')
     }
   };
@@ -2171,6 +2179,75 @@ app.post('/api/admin/analytics/expense-documents/receipts', authMiddleware, asyn
   }
 });
 
+app.post('/api/admin/analytics/expense-documents/manual', authMiddleware, async (req, res) => {
+  const tenantId = Number(req.user?.tenantId || 0);
+  const supplierInn = String(req.body?.inn || '').replace(/\D/g, '');
+  const optionalText = (value, maxLength) => {
+    const text = String(value || '').trim();
+    return text ? text.slice(0, maxLength) : null;
+  };
+  const supplierName = optionalText(req.body?.supplier, 512);
+  if (!tenantId || !supplierName) return res.status(400).json({ ok: false, error: 'MANUAL_EXPENSE_SUPPLIER_REQUIRED' });
+  if (supplierInn && !/^\d{10}(\d{2})?$/.test(supplierInn)) {
+    return res.status(400).json({ ok: false, error: 'INVALID_SUPPLIER_INN' });
+  }
+  const parseDecimal = (value, maxFractionDigits) => {
+    const raw = String(value ?? '').trim().replace(/\s/g, '').replace(',', '.');
+    if (!new RegExp('^\\d+(?:\\.\\d{1,' + maxFractionDigits + '})?$').test(raw)) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const rawItems = Array.isArray(req.body?.items) ? req.body.items.slice(0, 100) : [];
+  if (!rawItems.length) return res.status(400).json({ ok: false, error: 'MANUAL_EXPENSE_ITEMS_REQUIRED' });
+  const itemRows = [];
+  for (const rawItem of rawItems) {
+    const itemName = optionalText(rawItem?.name, 1024);
+    const quantity = parseDecimal(rawItem?.quantity, 3);
+    const price = parseDecimal(rawItem?.price, 2);
+    if (!itemName || !(quantity > 0) || !(price >= 0)) {
+      return res.status(400).json({ ok: false, error: 'INVALID_MANUAL_EXPENSE_ITEM' });
+    }
+    const priceKopecks = Math.round(price * 100);
+    const sumKopecks = Math.round(quantity * priceKopecks);
+    itemRows.push({ itemName, quantity, priceKopecks, sumKopecks });
+  }
+  const totalSumKopecks = itemRows.reduce((total, item) => total + item.sumKopecks, 0);
+  if (!(totalSumKopecks > 0)) return res.status(400).json({ ok: false, error: 'INVALID_MANUAL_EXPENSE_ITEM' });
+  const payload = {
+    documentNumber: optionalText(req.body?.documentNumber, 128),
+    documentType: optionalText(req.body?.documentType, 128),
+    sourceText: optionalText(req.body?.sourceText, 50000),
+  };
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [result] = await connection.query(
+      `INSERT INTO fin_expense_documents
+        (tenant_id, source_type, provider, status, receipt_datetime, supplier_name, supplier_inn,
+         total_sum_kopecks, provider_payload_json, accepted_by)
+       VALUES (?, 'manual', 'manual', 'accepted', ?, ?, ?, ?, ?, ?)`,
+      [tenantId, optionalText(req.body?.date, 64), supplierName, supplierInn || null,
+        totalSumKopecks, JSON.stringify(payload), req.user?.userId || null]
+    );
+    const documentId = Number(result?.insertId || 0);
+    const rows = itemRows.map((item, index) => [tenantId, documentId, index + 1, item.itemName, item.quantity, item.priceKopecks, item.sumKopecks]);
+    await connection.query(
+      `INSERT INTO fin_expense_document_items
+        (tenant_id, document_id, line_number, item_name, quantity, price_kopecks, sum_kopecks)
+       VALUES ?`,
+      [rows]
+    );
+    await connection.commit();
+    return res.status(201).json({ ok: true, documentId });
+  } catch (error) {
+    await connection.rollback();
+    console.error('Manual expense document save failed:', error);
+    return res.status(500).json({ ok: false, error: 'MANUAL_EXPENSE_DOCUMENT_SAVE_FAILED' });
+  } finally {
+    connection.release();
+  }
+});
+
 app.get('/api/admin/analytics/expense-documents/:id', authMiddleware, async (req, res) => {
   const documentId = Number(req.params.id || 0);
   const tenantId = Number(req.user?.tenantId || 0);
@@ -2189,12 +2266,14 @@ app.get('/api/admin/analytics/expense-documents/:id', authMiddleware, async (req
     );
     let receiptData = null;
     let receiptHtml = '';
+    let manualData = null;
     try {
       const payload = JSON.parse(String(document.provider_payload_json || ''));
       receiptData = payload?.data?.json && typeof payload.data.json === 'object' ? payload.data.json : null;
       receiptHtml = typeof payload?.data?.html === 'string' ? payload.data.html : '';
+      manualData = document.source_type === 'manual' && payload && typeof payload === 'object' ? payload : null;
     } catch (_) {}
-    return res.json({ ok: true, document, items, receiptData, receiptHtml });
+    return res.json({ ok: true, document, items, receiptData, receiptHtml, manualData });
   } catch (error) {
     console.error('Expense document load failed:', error);
     return res.status(500).json({ ok: false, error: 'EXPENSE_DOCUMENT_LOAD_FAILED' });

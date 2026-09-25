@@ -88,6 +88,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Show customer chat button in storefront'"
     },
     {
+      name: 'important_messages_enabled',
+      sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Show important company messages in storefront'"
+    },
+    {
       name: 'chat_client_push_enabled',
       sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Enable customer chat push notifications'"
     },
@@ -1163,6 +1167,63 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
         }
         resolve({ stdout, stderr });
       });
+    });
+  }
+
+  async function resolveOwnedTenantDomain(tenantId, rawDomain) {
+    const normalized = normalizeCustomDomain(rawDomain);
+    if (!normalized.provided || normalized.invalid || !normalized.ascii) return null;
+    await ensureTenantDomainsTable();
+    const [domainRows] = await db.query(
+      'SELECT id FROM ten_tenant_domains WHERE tenant_id=? AND domain_ascii=? LIMIT 1',
+      [tenantId, normalized.ascii]
+    );
+    if (domainRows.length) return normalized.ascii;
+    const [legacyRows] = await db.query(
+      'SELECT id FROM ten_tenants WHERE id=? AND custom_domain_ascii=? LIMIT 1',
+      [tenantId, normalized.ascii]
+    );
+    return legacyRows.length ? normalized.ascii : null;
+  }
+
+  function readTenantCertificate(domainAscii) {
+    const certificatePath = `/etc/letsencrypt/live/${domainAscii}/fullchain.pem`;
+    return new Promise((resolve) => {
+      if (!fs.existsSync(certificatePath)) {
+        resolve({ exists: false, status: 'missing', domain: domainAscii });
+        return;
+      }
+      execFile(
+        'openssl',
+        ['x509', '-in', certificatePath, '-noout', '-subject', '-issuer', '-startdate', '-enddate'],
+        { timeout: 10000, maxBuffer: 64 * 1024 },
+        (err, stdout) => {
+          if (err) {
+            resolve({ exists: false, status: 'invalid', domain: domainAscii });
+            return;
+          }
+          const values = {};
+          String(stdout || '').split(/\r?\n/).forEach((line) => {
+            const separator = line.indexOf('=');
+            if (separator <= 0) return;
+            values[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
+          });
+          const validFrom = values.notBefore ? new Date(values.notBefore).toISOString() : null;
+          const expiresAt = values.notAfter ? new Date(values.notAfter).toISOString() : null;
+          const daysLeft = expiresAt ? Math.ceil((Date.parse(expiresAt) - Date.now()) / 86400000) : null;
+          resolve({
+            exists: true,
+            status: daysLeft !== null && daysLeft <= 0 ? 'expired' : (daysLeft !== null && daysLeft <= 30 ? 'expiring' : 'valid'),
+            domain: domainAscii,
+            domains: [`${domainAscii}`, `www.${domainAscii}`],
+            subject: values.subject || null,
+            issuer: values.issuer || null,
+            valid_from: validFrom,
+            expires_at: expiresAt,
+            days_left: daysLeft
+          });
+        }
+      );
     });
   }
 
@@ -3259,6 +3320,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
 
+      await ensureTenantChatColumns();
+
       const [rows] = await db.query(
         'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
         [tenantId]
@@ -3754,6 +3817,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const chatWidgetEnabled = req.body.chat_widget_enabled !== undefined
         ? (helpers.toBool(req.body.chat_widget_enabled, true) ? 1 : 0)
         : undefined;
+      const importantMessagesEnabled = req.body.important_messages_enabled !== undefined
+        ? (helpers.toBool(req.body.important_messages_enabled, true) ? 1 : 0)
+        : undefined;
       const chatClientPushEnabled = req.body.chat_client_push_enabled !== undefined
         ? (helpers.toBool(req.body.chat_client_push_enabled, true) ? 1 : 0)
         : undefined;
@@ -3972,6 +4038,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const nextChatWidgetEnabled = chatWidgetEnabled !== undefined
         ? chatWidgetEnabled
         : (Number(current.chat_widget_enabled) === 0 ? 0 : 1);
+      const nextImportantMessagesEnabled = importantMessagesEnabled !== undefined
+        ? importantMessagesEnabled
+        : (Number(current.important_messages_enabled) === 0 ? 0 : 1);
       const nextChatClientPushEnabled = chatClientPushEnabled !== undefined
         ? chatClientPushEnabled
         : (Number(current.chat_client_push_enabled) === 0 ? 0 : 1);
@@ -4007,8 +4076,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
         : null;
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextImportantMessagesEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
       );
 
       if (previousSiteMenuIconUrls && nextSiteMenuIconUrls) {
@@ -6807,6 +6876,40 @@ async function fetchStoreWithHours(tenantId, storeId) {
     } catch (err) {
       console.error('check-domain error:', err);
       res.status(500).json({ ok: false, error: 'CHECK_FAILED' });
+    }
+  });
+
+  router.post('/certificate', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const domainAscii = await resolveOwnedTenantDomain(tenantId, req.body?.domain);
+      if (!domainAscii) return res.status(404).json({ ok: false, error: 'DOMAIN_NOT_FOUND' });
+      return res.json({ ok: true, certificate: await readTenantCertificate(domainAscii) });
+    } catch (err) {
+      console.error('certificate status error:', err);
+      return res.status(500).json({ ok: false, error: 'CERTIFICATE_STATUS_FAILED' });
+    }
+  });
+
+  router.post('/renew-certificate', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const domainAscii = await resolveOwnedTenantDomain(tenantId, req.body?.domain);
+      if (!domainAscii) return res.status(404).json({ ok: false, error: 'DOMAIN_NOT_FOUND' });
+
+      const setup = getTenantDomainSetup();
+      if (!setup.auto_connect_enabled) {
+        return res.status(403).json({ ok: false, error: 'AUTO_CONNECT_DISABLED' });
+      }
+
+      await runTenantDomainAutomation({
+        domainAscii,
+        includeWww: setup.auto_connect_include_www
+      });
+      return res.json({ ok: true, certificate: await readTenantCertificate(domainAscii) });
+    } catch (err) {
+      console.error('certificate renewal error:', err);
+      return res.status(500).json({ ok: false, error: 'CERTIFICATE_RENEW_FAILED' });
     }
   });
 

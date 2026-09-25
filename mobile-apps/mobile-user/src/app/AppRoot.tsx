@@ -62,10 +62,12 @@ import {
   type CartAddAnimation,
 } from '../features/cart';
 import { ChatPushProvider, ChatUnreadProvider, useChatUnread } from '../features/chat';
+import { openOrderEventsStream } from '../features/chat/api';
 import { readFulfillmentSelection } from '../features/checkout';
 import {
   readCachedCustomerPassport,
   readCachedMobileCatalogSnapshot,
+  subscribeCustomerPassport,
 } from '../shared/api';
 import { theme } from '../shared/config/theme';
 
@@ -201,8 +203,8 @@ function CartFlightLayer() {
   const startX = frame.x + (frame.width - startSize) / 2;
   const startY = frame.y + (frame.height - startSize) / 2;
   const targetSize = 20;
-  const tabItemWidth = Math.max(0, windowWidth - 96) / 4;
-  const targetX = 48 + tabItemWidth * 1.5 - targetSize / 2;
+  const tabItemWidth = Math.max(0, windowWidth - 96) / 5;
+  const targetX = 48 + tabItemWidth * 2.5 - targetSize / 2;
   const targetY = windowHeight
     - theme.sizes.tabBarHeight
     - Math.max(0, insets.bottom)
@@ -294,6 +296,7 @@ const supportChatTransitionEasing = Platform.OS === 'android'
 
 type PushTarget =
   | { screen: 'importantMessages'; importantMessageId?: number }
+  | { screen: 'orderDetails'; orderId: number }
   | { screen: 'supportChat' };
 
 function getImportantMessagePushId(data: Record<string, unknown>) {
@@ -301,6 +304,12 @@ function getImportantMessagePushId(data: Record<string, unknown>) {
     ?? data.importantMessageId
     ?? data.promo_message_id
     ?? data.promoMessageId;
+  const id = Number(value || 0);
+  return Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
+}
+
+function getOrderPushId(data: Record<string, unknown>) {
+  const value = data.order_id ?? data.orderId;
   const id = Number(value || 0);
   return Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
 }
@@ -407,6 +416,7 @@ function MainTabs() {
   const supportChatOpenRef = useRef(false);
   const [cartBounceToken, setCartBounceToken] = useState(0);
   const [cartItemCount, setCartItemCount] = useState(0);
+  const [orderBadgeVisible, setOrderBadgeVisible] = useState(false);
   const [supportChatVisible, setSupportChatVisible] = useState(false);
   const [supportChatActive, setSupportChatActive] = useState(false);
   const [supportChatInteractive, setSupportChatInteractive] = useState(false);
@@ -414,11 +424,11 @@ function MainTabs() {
   const baseTabBarStyle = {
     backgroundColor: 'transparent',
     borderTopWidth: 0,
-    bottom: 0,
+    bottom: bottomInset,
     elevation: 0,
-    height: theme.sizes.tabBarHeight + bottomInset,
+    height: theme.sizes.tabBarHeight,
     left: 0,
-    paddingBottom: 2 + bottomInset,
+    paddingBottom: 2,
     paddingHorizontal: 48,
     paddingTop: 10,
     position: 'absolute' as const,
@@ -441,6 +451,31 @@ function MainTabs() {
       active = false;
       unsubscribeLines();
       unsubscribeAddAnimation();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let source: ReturnType<typeof openOrderEventsStream> | null = null;
+    const syncOrderEvents = (passport: Awaited<ReturnType<typeof readCachedCustomerPassport>>) => {
+      source?.close();
+      source = null;
+      if (cancelled) return;
+      const token = String(passport?.token || '').trim();
+      if (!token) return;
+      source = openOrderEventsStream(token);
+      source.addEventListener('order.updated', () => {
+        if (!cancelled) setOrderBadgeVisible(true);
+      });
+    };
+    void readCachedCustomerPassport().then(syncOrderEvents);
+    const unsubscribePassport = subscribeCustomerPassport(() => {
+      void readCachedCustomerPassport().then(syncOrderEvents);
+    });
+    return () => {
+      cancelled = true;
+      source?.close();
+      unsubscribePassport();
     };
   }, []);
 
@@ -618,6 +653,21 @@ function MainTabs() {
           }}
         />
         <Tab.Screen
+          name={routes.orders}
+          component={OrdersPage}
+          listeners={{
+            focus: () => setOrderBadgeVisible(false),
+            tabPress: () => setOrderBadgeVisible(false),
+          }}
+          options={{
+            tabBarIcon: ({ focused }) => (
+              <MainTabIcon badged={orderBadgeVisible} focused={focused} name="receipt" />
+            ),
+            tabBarLabel: 'Заказы',
+            title: 'Заказы',
+          }}
+        />
+        <Tab.Screen
           name={routes.cart}
           component={CartPage}
           options={{
@@ -703,6 +753,10 @@ export function AppRoot() {
       navigationRef.navigate(routes.supportChat);
       return;
     }
+    if (target.screen === 'orderDetails') {
+      navigationRef.navigate(routes.orderDetails, { orderId: target.orderId });
+      return;
+    }
     navigationRef.navigate('main', {
       screen: routes.chat,
       params: getChatStackParams(target),
@@ -712,6 +766,11 @@ export function AppRoot() {
   const handlePushNotificationPress = useCallback((data: Record<string, unknown>) => {
     const type = String(data.type || data.kind || data.route || data.target || '').toLowerCase();
     const url = String(data.url || '').toLowerCase();
+    const orderId = getOrderPushId(data);
+    if (type === 'order_status' || type.includes('order_status') || (orderId > 0 && url.includes('order'))) {
+      if (orderId > 0) navigateToPushTarget({ screen: 'orderDetails', orderId });
+      return;
+    }
     if (
       type.includes('important')
       || type.includes('promo')

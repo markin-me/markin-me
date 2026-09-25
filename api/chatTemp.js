@@ -965,12 +965,6 @@ async function sendPushToSubscriptions(subscriptions, payload) {
             subscription_id: rowId,
           });
         });
-        if (process.env.CHAT_PUSH_DEBUG === "1") {
-          console.log("expo push sent:", {
-            count: chunk.length,
-            ticket_count: tickets.length,
-          });
-        }
       } catch (err) {
         console.error("expo push send failed:", err && err.message ? err.message : err);
       }
@@ -1028,14 +1022,29 @@ async function sendOrderStatusPush(tenantId, storeId, order) {
         AND (push_order_status_ids_json IS NULL OR JSON_CONTAINS(push_order_status_ids_json, CAST(? AS JSON)))`,
     [Number(tenantId), Number(storeId), customerId, String(statusId)]
   );
-  await sendPushToSubscriptions(rows, {
+  const [statusRows] = await db.query(
+    `SELECT COALESCE(NULLIF(TRIM(customer_progress_title), ''), title) AS customer_title
+       FROM order_statuses
+      WHERE tenant_id=? AND store_id=? AND id=?
+      LIMIT 1`,
+    [Number(tenantId), Number(storeId), statusId]
+  );
+  const orderNumber = String(order?.id || "").trim();
+  const statusTitle = String(statusRows[0]?.customer_title || getCustomerOrderStatusTitle(order?.status_title, order?.status_code)).trim();
+  const statusText = statusTitle
+    ? statusTitle.charAt(0).toLocaleLowerCase("ru-RU") + statusTitle.slice(1)
+    : "обновлён";
+  await sendPushToSubscriptions(rows, Object.assign({
     type: "order_status",
     tenant_id: Number(tenantId),
     store_id: Number(storeId),
     order_id: Number(order?.id || 0),
     title: "Статус заказа обновлён",
-    body: `Заказ №${String(order?.public_id || order?.id || "").trim()}: ${getCustomerOrderStatusTitle(order?.status_title, order?.status_code)}`,
-  });
+    body: `Ваш заказ №${orderNumber} ${statusText}.`,
+  }, {
+    title: `\u0412\u0430\u0448 \u0437\u0430\u043a\u0430\u0437 \u2116${orderNumber} ${statusText}.`,
+    body: "",
+  }));
 }
 
 async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, message) {

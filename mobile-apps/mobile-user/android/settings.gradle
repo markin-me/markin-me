@@ -1,4 +1,9 @@
 pluginManagement {
+  def autolinkingCacheDir = new File(rootDir, "build/generated/autolinking")
+  if (!System.getProperty("os.name").toLowerCase().contains("windows")) {
+    autolinkingCacheDir.deleteDir()
+  }
+
   def reactNativeGradlePlugin = new File(
     providers.exec {
       workingDir(rootDir)

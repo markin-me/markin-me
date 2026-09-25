@@ -5,17 +5,22 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   ActivityIndicator,
-  Animated,
   Image,
   Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Reanimated, {
+  Extrapolation,
+  interpolate,
+  useAnimatedScrollHandler,
+  useAnimatedStyle,
+  useSharedValue,
+} from 'react-native-reanimated';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { RootStackParamList } from '../../app/navigation/routes';
@@ -222,6 +227,7 @@ const CART_HEADER_FULL_HEIGHT = 217;
 const CART_HEADER_WITHOUT_PROGRESS_HEIGHT = CART_HEADER_FULL_HEIGHT - 24 - theme.spacing.md;
 const CART_HEADER_COMPACT_HEIGHT = 77;
 const CART_HEADER_META_SCROLL = CART_HEADER_FULL_HEIGHT - CART_HEADER_COMPACT_HEIGHT;
+const CART_CHECKOUT_COMPACT_WIDTH = 220;
 const cartQuantityTapSlop = { bottom: 10, left: 10, right: 10, top: 10 };
 const cartSummaryInfoTapSlop = { bottom: 12, left: 12, right: 12, top: 12 };
 
@@ -1046,11 +1052,15 @@ function AccentGradientSurface({ shape = 'pill' }: { shape?: 'pill' | 'rounded' 
 export function CartPage() {
   const navigation = useNavigation<CartNavigation>();
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
-  const headerScrollY = useRef(new Animated.Value(0)).current;
-  const checkoutButtonRef = useRef<View>(null);
-  const checkoutVisibilityFrameRef = useRef<number | null>(null);
-  const inlineCheckoutVisibleRef = useRef(false);
+  const checkoutScrollY = useSharedValue(0);
+  const checkoutSummaryLayoutRef = useRef({ y: 0 });
+  const checkoutAnchorLayoutRef = useRef({ height: 0, y: 0 });
+  const checkoutViewportHeightRef = useRef(0);
+  const checkoutScrollRangeReadyRef = useRef(false);
+  const checkoutScrollRangeRef = useRef<{ end: number; start: number; target: number } | null>(null);
+  const checkoutTargetScrollY = useSharedValue(0);
+  const checkoutMorphStartScrollY = useSharedValue(0);
+  const checkoutMorphEndScrollY = useSharedValue(1);
   const { mergeStockRows, refreshMany, stockLevels } = useProductStock();
   const cartHydratedRef = useRef(false);
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -1083,7 +1093,7 @@ export function CartPage() {
   const [isLoading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
-  const [inlineCheckoutVisible, setInlineCheckoutVisible] = useState(false);
+  const [inlineCheckoutWidth, setInlineCheckoutWidth] = useState(0);
   const [stockBlockedLineIds, setStockBlockedLineIds] = useState<Set<string>>(() => new Set());
   const benefitsPreviewSeqRef = useRef(0);
   const benefitsPreviewRef = useRef<CheckoutBenefitsPreviewData | null>(null);
@@ -1093,24 +1103,6 @@ export function CartPage() {
   const pendingLineQuantitiesRef = useRef<Map<string, number>>(new Map());
   const syncCartFromCacheRef = useRef<(() => Promise<unknown>) | null>(null);
   const deliveryQuoteRequestKeyRef = useRef<string | null>(null);
-
-  const syncInlineCheckoutVisibility = useCallback(() => {
-    if (checkoutVisibilityFrameRef.current != null) return;
-    checkoutVisibilityFrameRef.current = requestAnimationFrame(() => {
-      checkoutVisibilityFrameRef.current = null;
-      checkoutButtonRef.current?.measureInWindow((_x, y, _width, height) => {
-        const navTop = windowHeight - theme.sizes.tabBarHeight - Math.max(0, insets.bottom);
-        const visible = y >= 0 && y + height <= navTop;
-        if (inlineCheckoutVisibleRef.current === visible) return;
-        inlineCheckoutVisibleRef.current = visible;
-        setInlineCheckoutVisible(visible);
-      });
-    });
-  }, [insets.bottom, windowHeight]);
-
-  useEffect(() => () => {
-    if (checkoutVisibilityFrameRef.current != null) cancelAnimationFrame(checkoutVisibilityFrameRef.current);
-  }, []);
 
   const setBenefitsPreviewValue = useCallback((preview: CheckoutBenefitsPreviewData | null) => {
     benefitsPreviewRef.current = preview;
@@ -1127,6 +1119,33 @@ export function CartPage() {
     linesRef.current = lines;
   }, [lines]);
 
+  const syncCheckoutScrollRange = useCallback(() => {
+    if (checkoutScrollRangeReadyRef.current) return;
+    const { height, y } = checkoutAnchorLayoutRef.current;
+    const viewportHeight = checkoutViewportHeightRef.current;
+    if (!(height > 0) || !(viewportHeight > 0)) return;
+    const fixedViewportBottom = viewportHeight
+      - theme.sizes.tabBarHeight
+      - Math.max(0, insets.bottom)
+      - theme.spacing.sm;
+    const target = checkoutSummaryLayoutRef.current.y + y + height - fixedViewportBottom;
+    const morphDistance = theme.spacing.xl * 2 + theme.spacing.sm;
+    const nextRange = { end: target + morphDistance, start: target - morphDistance, target };
+    const previousRange = checkoutScrollRangeRef.current;
+    if (
+      !previousRange
+      || Math.abs(previousRange.target - nextRange.target) >= 1
+      || Math.abs(previousRange.start - nextRange.start) >= 1
+      || Math.abs(previousRange.end - nextRange.end) >= 1
+    ) {
+      checkoutScrollRangeRef.current = nextRange;
+      checkoutTargetScrollY.value = nextRange.target;
+      checkoutMorphStartScrollY.value = nextRange.start;
+      checkoutMorphEndScrollY.value = nextRange.end;
+    }
+    checkoutScrollRangeReadyRef.current = true;
+  }, [checkoutMorphEndScrollY, checkoutMorphStartScrollY, checkoutTargetScrollY, insets.bottom]);
+
   const activeLines = useMemo(() => getActiveCartLines(lines), [lines]);
   const hasActiveLines = activeLines.length > 0;
   const hasProblemLines = lines.some((line) => line.isUnavailable === true);
@@ -1135,45 +1154,39 @@ export function CartPage() {
   const selectedStore = useMemo(() => findSelectedStore(stores, selection), [selection, stores]);
   const selectedDeliveryStore = useMemo(() => findDeliveryStore(stores, selectedAddress), [selectedAddress, stores]);
   const isDelivery = selection.mode === 'delivery';
-  const toggleOpacity = headerScrollY.interpolate({
-    inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
+  const checkoutButtonOverlayStyle = useMemo(() => ({
+    bottom: theme.sizes.tabBarHeight + Math.max(0, insets.bottom) + theme.spacing.sm,
+  }), [insets.bottom]);
+  const checkoutButtonPositionStyle = useAnimatedStyle(() => {
+    const target = checkoutTargetScrollY.value;
+    return {
+      transform: [{
+        translateY: target > 0 ? Math.min(0, target - checkoutScrollY.value) : 0,
+      }],
+    };
   });
-  const toggleHeight = headerScrollY.interpolate({
-    inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
-    outputRange: [CART_HEADER_TOGGLE_HEIGHT, 0],
-    extrapolate: 'clamp',
-  });
-  const toggleTranslateY = headerScrollY.interpolate({
-    inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
-    outputRange: [0, -12],
-    extrapolate: 'clamp',
-  });
-  const addressMarginTop = headerScrollY.interpolate({
-    inputRange: [0, CART_HEADER_TOGGLE_SCROLL],
-    outputRange: [theme.spacing.md, 0],
-    extrapolate: 'clamp',
-  });
-  const metaOpacity = headerScrollY.interpolate({
-    inputRange: [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-  const metaHeight = headerScrollY.interpolate({
-    inputRange: [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
-    outputRange: [CART_HEADER_META_HEIGHT, 0],
-    extrapolate: 'clamp',
-  });
-  const metaTranslateY = headerScrollY.interpolate({
-    inputRange: [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
-    outputRange: [0, -10],
-    extrapolate: 'clamp',
-  });
-  const progressMarginTop = headerScrollY.interpolate({
-    inputRange: [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
-    outputRange: [theme.spacing.md, theme.spacing.xs],
-    extrapolate: 'clamp',
+  const checkoutButtonSurfaceStyle = useAnimatedStyle(() => {
+    const compactInset = inlineCheckoutWidth > CART_CHECKOUT_COMPACT_WIDTH
+      ? (inlineCheckoutWidth - CART_CHECKOUT_COMPACT_WIDTH) / 2
+      : 0;
+    const morphProgress = interpolate(
+      checkoutScrollY.value,
+      [checkoutMorphStartScrollY.value, checkoutMorphEndScrollY.value],
+      [0, 1],
+      Extrapolation.CLAMP,
+    );
+    const compactScale = inlineCheckoutWidth > 0
+      ? Math.max(0, (inlineCheckoutWidth - compactInset * 2) / inlineCheckoutWidth)
+      : 1;
+    return {
+      transform: [{
+        scaleX: compactScale + (1 - compactScale) * morphProgress,
+      }],
+    };
+  }, [inlineCheckoutWidth]);
+
+  const handleCartScroll = useAnimatedScrollHandler((event) => {
+    checkoutScrollY.value = event.contentOffset.y;
   });
   const bonusState = useMemo(
     () => buildCartBonusState(activeLines, bonusConfig, bonusFavoriteCategories, catalogSnapshot),
@@ -1225,6 +1238,69 @@ export function CartPage() {
   }, [cartSummary.lineStates]);
   const deliveryProgressSubtotal = Math.max(0, cartSummary.itemsTotal - cartSummary.bonusRedeemAmount);
   const visibleDeliveryProgress = isDelivery ? buildDeliveryProgress(deliveryProgressSubtotal, deliveryMeta) : null;
+  const headerPrimaryCollapse = CART_HEADER_TOGGLE_HEIGHT + theme.spacing.md;
+  const headerSecondaryCollapse = CART_HEADER_META_HEIGHT + (visibleDeliveryProgress
+    ? theme.spacing.md - theme.spacing.xs
+    : 0);
+  const modeCardAnimatedStyle = useAnimatedStyle(() => {
+    const primaryCollapse = interpolate(
+      checkoutScrollY.value,
+      [0, CART_HEADER_TOGGLE_SCROLL],
+      [0, headerPrimaryCollapse],
+      Extrapolation.CLAMP,
+    );
+    const secondaryCollapse = interpolate(
+      checkoutScrollY.value,
+      [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+      [0, headerSecondaryCollapse],
+      Extrapolation.CLAMP,
+    );
+    return {
+      transform: [{ translateY: -(primaryCollapse + secondaryCollapse) }],
+    };
+  }, [headerPrimaryCollapse, headerSecondaryCollapse]);
+  const toggleAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      checkoutScrollY.value,
+      [0, CART_HEADER_TOGGLE_SCROLL],
+      [1, 0],
+      Extrapolation.CLAMP,
+    ),
+    transform: [{
+      translateY: interpolate(
+        checkoutScrollY.value,
+        [0, CART_HEADER_TOGGLE_SCROLL],
+        [0, CART_HEADER_TOGGLE_HEIGHT],
+        Extrapolation.CLAMP,
+      ),
+    }],
+  }));
+  const addressAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{
+      translateY: interpolate(
+        checkoutScrollY.value,
+        [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+        [0, headerSecondaryCollapse],
+        Extrapolation.CLAMP,
+      ),
+    }],
+  }), [headerSecondaryCollapse]);
+  const metaAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      checkoutScrollY.value,
+      [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+      [1, 0],
+      Extrapolation.CLAMP,
+    ),
+    transform: [{
+      translateY: interpolate(
+        checkoutScrollY.value,
+        [CART_HEADER_TOGGLE_SCROLL, CART_HEADER_META_SCROLL],
+        [0, headerSecondaryCollapse - 10],
+        Extrapolation.CLAMP,
+      ),
+    }],
+  }), [headerSecondaryCollapse]);
   const discountDetails = useMemo<CartDiscountDetailDisplayItem[]>(() => {
     const detailItems = Array.isArray(cartSummary.discountDetailItems)
       ? cartSummary.discountDetailItems
@@ -1774,12 +1850,21 @@ export function CartPage() {
       if (stockState.lines.some((line) => line.isUnavailable === true)) return;
     }
     if (stockCheck && stockCheck.available === false) return;
+    const checkoutSelection = {
+      ...selection,
+      addressId: selection.mode === 'delivery'
+        ? selection.addressId || toPositiveId(selectedAddress?.id)
+        : null,
+      pickupStoreId: selection.mode === 'pickup'
+        ? selection.pickupStoreId || toPositiveId(selectedStore?.id)
+        : null,
+    };
     await Promise.all([
-      saveFulfillmentSelection(selection),
+      saveFulfillmentSelection(checkoutSelection),
       saveCheckoutCartSummary(cartSummary),
     ]);
     navigation.navigate(routes.checkout);
-  }, [cartSummary, hasActiveLines, hasProblemLines, lines, mergeStockRows, navigation, refreshMany, selection, stockLevels]);
+  }, [cartSummary, hasActiveLines, hasProblemLines, lines, mergeStockRows, navigation, refreshMany, selectedAddress?.id, selectedStore?.id, selection, stockLevels]);
 
   const openBenefitPage = useCallback((page: keyof CartBenefitsCounts) => {
     if (page === 'discounts') {
@@ -2014,13 +2099,11 @@ export function CartPage() {
           </View>
         ) : (
           <>
-            <Animated.View style={styles.modeCard}>
-              <Animated.View
-                style={[
-                  styles.toggleClip,
-                  { height: toggleHeight, opacity: toggleOpacity, transform: [{ translateY: toggleTranslateY }] },
-                ]}
-              >
+            <Reanimated.View
+              renderToHardwareTextureAndroid={Platform.OS === 'android'}
+              style={[styles.modeCard, modeCardAnimatedStyle]}
+            >
+              <Reanimated.View style={[styles.toggleClip, toggleAnimatedStyle]}>
               <View style={styles.toggle}>
                 {(['delivery', 'pickup'] as FulfillmentMode[]).map((mode) => {
                   const active = selection.mode === mode;
@@ -2038,9 +2121,9 @@ export function CartPage() {
                   );
                 })}
               </View>
-              </Animated.View>
+              </Reanimated.View>
 
-              <Animated.View style={{ marginTop: addressMarginTop }}>
+              <Reanimated.View style={[styles.addressHeaderRow, addressAnimatedStyle]}>
               <Pressable onPress={openAddresses} style={styles.addressRow}>
                 <View style={styles.deliveryMetaIcon}>
                   <AccentGradientSurface shape="rounded" />
@@ -2053,14 +2136,9 @@ export function CartPage() {
                 </Text>
                 <Ionicons name="chevron-forward" color={theme.colors.text} size={20} />
               </Pressable>
-              </Animated.View>
+              </Reanimated.View>
 
-              <Animated.View
-                style={[
-                  styles.metaClip,
-                  { height: metaHeight, opacity: metaOpacity, transform: [{ translateY: metaTranslateY }] },
-                ]}
-              >
+              <Reanimated.View pointerEvents="none" style={[styles.metaClip, metaAnimatedStyle]}>
               <View style={styles.metaWrap}>
                 <View style={styles.metaRow}>
                   <View style={styles.deliveryMetaIcon}>
@@ -2088,30 +2166,36 @@ export function CartPage() {
                   </Text>
                 </View>
               </View>
-              </Animated.View>
+              </Reanimated.View>
 
               {visibleDeliveryProgress ? (
-                <Animated.View style={[styles.progressSurface, { marginTop: progressMarginTop }]}>
+                <Reanimated.View style={styles.progressSurface}>
                   <View style={[styles.progressFill, { width: `${visibleDeliveryProgress.value}%` }]}>
                     <AccentGradientSurface />
                   </View>
                   <Text style={[styles.progressLabel, visibleDeliveryProgress.free && styles.progressLabelFree]}>
                     {visibleDeliveryProgress.label}
                   </Text>
-                </Animated.View>
+                </Reanimated.View>
               ) : null}
-            </Animated.View>
+            </Reanimated.View>
 
-            <Animated.ScrollView
+            <Reanimated.ScrollView
+              onLayout={(event) => {
+                const viewportHeight = event.nativeEvent.layout.height;
+                if (Math.abs(checkoutViewportHeightRef.current - viewportHeight) >= 1) {
+                  checkoutViewportHeightRef.current = viewportHeight;
+                  checkoutScrollRangeReadyRef.current = false;
+                }
+                syncCheckoutScrollRange();
+              }}
               style={styles.scroll}
               contentContainerStyle={[
                 styles.content,
+                { paddingBottom: theme.sizes.tabBarHeight + Math.max(0, insets.bottom) + theme.spacing.sm + theme.spacing.xl * 2 + theme.spacing.sm },
                 visibleDeliveryProgress ? styles.contentWithHeader : styles.contentWithHeaderWithoutProgress,
               ]}
-              onScroll={Animated.event(
-                [{ nativeEvent: { contentOffset: { y: headerScrollY } } }],
-                { listener: syncInlineCheckoutVisibility, useNativeDriver: false },
-              )}
+              onScroll={handleCartScroll}
               refreshControl={<RefreshControl refreshing={refreshing} tintColor={theme.colors.accent} onRefresh={refreshCart} />}
               scrollEventThrottle={16}
             >
@@ -2294,7 +2378,17 @@ export function CartPage() {
             ) : null}
 
             {hasActiveLines ? (
-              <View style={styles.summaryCard}>
+              <View
+                onLayout={(event) => {
+                  const summaryY = event.nativeEvent.layout.y;
+                  if (Math.abs(checkoutSummaryLayoutRef.current.y - summaryY) >= 1) {
+                    checkoutSummaryLayoutRef.current.y = summaryY;
+                    checkoutScrollRangeReadyRef.current = false;
+                  }
+                  syncCheckoutScrollRange();
+                }}
+                style={styles.summaryCard}
+              >
                 {isDelivery ? (
                   <View style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>Стоимость доставки</Text>
@@ -2353,40 +2447,48 @@ export function CartPage() {
                   <Text style={styles.summaryTotalLabel}>Итого</Text>
                   <Text style={styles.summaryTotalValue}>{formatPrice(cartSummary.total)}</Text>
                 </View>
-                <Pressable
-                  ref={checkoutButtonRef}
-                  disabled={hasProblemLines}
-                  onLayout={syncInlineCheckoutVisibility}
-                  onPress={openCheckout}
-                  style={[styles.checkoutButton, hasProblemLines && styles.checkoutButtonDisabled]}
-                >
-                  <AccentGradientSurface />
-                  <Text style={styles.checkoutButtonText}>Оформить</Text>
-                  <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
-                </Pressable>
+                <View
+                  onLayout={(event) => {
+                    const { height, width, y } = event.nativeEvent.layout;
+                    const previousAnchorLayout = checkoutAnchorLayoutRef.current;
+                    if (
+                      Math.abs(previousAnchorLayout.height - height) >= 1
+                      || Math.abs(previousAnchorLayout.y - y) >= 1
+                    ) {
+                      checkoutAnchorLayoutRef.current = { height, y };
+                      checkoutScrollRangeReadyRef.current = false;
+                    }
+                    if (width > 0) {
+                      setInlineCheckoutWidth((current) => (Math.abs(current - width) < 1 ? current : width));
+                    }
+                    syncCheckoutScrollRange();
+                  }}
+                  style={styles.checkoutButtonSlot}
+                />
               </View>
             ) : null}
-            </Animated.ScrollView>
-            {lines.length > 0 && !inlineCheckoutVisible ? (
-              <View
-                pointerEvents="box-none"
-                style={[
-                  styles.floatingCheckoutWrap,
-                  {
-                    bottom: theme.sizes.tabBarHeight + Math.max(0, insets.bottom) + theme.spacing.sm,
-                  },
-                ]}
-              >
-                <Pressable
-                  disabled={hasProblemLines}
-                  onPress={openCheckout}
-                  style={[styles.checkoutButton, styles.floatingCheckoutButton, hasProblemLines && styles.checkoutButtonDisabled]}
-                >
-                  <AccentGradientSurface />
-                  <Text style={styles.checkoutButtonText}>Оформить</Text>
-                  <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
-                </Pressable>
-              </View>
+
+            </Reanimated.ScrollView>
+            {hasActiveLines ? (
+              <Reanimated.View style={[styles.checkoutButtonAnchor, checkoutButtonOverlayStyle, checkoutButtonPositionStyle]}>
+                <View style={styles.checkoutButtonVisual}>
+                  <Reanimated.View
+                    pointerEvents="none"
+                    renderToHardwareTextureAndroid={Platform.OS === 'android'}
+                    style={[styles.checkoutButtonSurface, checkoutButtonSurfaceStyle]}
+                  >
+                    <AccentGradientSurface />
+                  </Reanimated.View>
+                  <Pressable
+                    disabled={hasProblemLines}
+                    onPress={openCheckout}
+                    style={[styles.checkoutButtonContent, hasProblemLines && styles.checkoutButtonDisabled]}
+                  >
+                    <Text style={styles.checkoutButtonText}>Оформить</Text>
+                    <Text style={styles.checkoutButtonText}>· {formatPrice(cartSummary.total)}</Text>
+                  </Pressable>
+                </View>
+              </Reanimated.View>
             ) : null}
           </>
         )}
@@ -2455,6 +2557,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: theme.spacing.sm,
+  },
+  addressHeaderRow: {
+    marginTop: theme.spacing.md,
   },
   addressText: {
     color: theme.colors.text,
@@ -2846,6 +2951,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.16,
     shadowRadius: 12,
   },
+  checkoutButtonAnchor: {
+    height: 50,
+    left: 18,
+    minHeight: 50,
+    position: 'absolute',
+    right: 18,
+    zIndex: 4,
+  },
+  checkoutButtonSlot: {
+    height: 50,
+    marginTop: theme.spacing.md,
+  },
+  checkoutButtonVisual: {
+    height: 50,
+    width: '100%',
+  },
   checkoutButtonDisabled: {
     opacity: 0.45,
   },
@@ -2854,17 +2975,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
-  floatingCheckoutWrap: {
+  checkoutButtonContent: {
     alignItems: 'center',
-    left: theme.spacing.lg,
-    position: 'absolute',
-    right: theme.spacing.lg,
-    zIndex: 4,
-  },
-  floatingCheckoutButton: {
-    marginTop: 0,
-    maxWidth: 254,
+    flexDirection: 'row',
+    gap: 5,
+    height: 50,
+    justifyContent: 'center',
     width: '100%',
+  },
+  checkoutButtonSurface: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.pill,
+    elevation: 5,
+    shadowColor: '#141d30',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
   },
   comboImage: {
     height: '100%',
@@ -3057,6 +3184,7 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.md,
   },
   metaClip: {
+    height: CART_HEADER_META_HEIGHT,
     overflow: 'hidden',
   },
   modeCard: {
@@ -3165,6 +3293,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 24,
     justifyContent: 'center',
+    marginTop: theme.spacing.md,
     overflow: 'hidden',
   },
   quantityPriceCenter: {
@@ -3191,6 +3320,8 @@ const styles = StyleSheet.create({
   root: {
     backgroundColor: theme.colors.mutedBackground,
     flex: 1,
+    overflow: 'hidden',
+    position: 'relative',
   },
   scroll: {
     flex: 1,
@@ -3327,6 +3458,7 @@ const styles = StyleSheet.create({
     padding: 3,
   },
   toggleClip: {
+    height: CART_HEADER_TOGGLE_HEIGHT,
     overflow: 'hidden',
   },
   toggleButton: {

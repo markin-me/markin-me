@@ -38,8 +38,8 @@ const CONTEXT_BOTTOM_GAP = 20;
 const CONTEXT_MENU_GAP = 12;
 const CONTEXT_MENU_WIDTH = 246;
 const CONTEXT_BACKDROP_MS = 260;
-const CONTEXT_CLONE_MS = 680;
-const CONTEXT_MENU_DELAY_MS = 90;
+const CONTEXT_CLONE_MS = 600;
+const CONTEXT_MENU_DELAY_MS = 70;
 const CONTEXT_MENU_MS = 240;
 const CONTEXT_REACTIONS_EXPANDED_EXTRA_HEIGHT = 28;
 const CONTEXT_MENU_HEIGHT = {
@@ -76,6 +76,7 @@ export function ChatActionSheet({
   const cloneProgress = useRef(new Animated.Value(0)).current;
   const menuProgress = useRef(new Animated.Value(0)).current;
   const confirmProgress = useRef(new Animated.Value(0)).current;
+  const animationLayoutRef = useRef<typeof targetLayout>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleteForPeer, setDeleteForPeer] = useState(false);
 
@@ -86,6 +87,7 @@ export function ChatActionSheet({
 
   useEffect(() => {
     if (!visible) {
+      animationLayoutRef.current = null;
       backdropProgress.setValue(0);
       cloneProgress.setValue(0);
       menuProgress.setValue(0);
@@ -103,7 +105,7 @@ export function ChatActionSheet({
     confirmProgress.setValue(0);
     Animated.timing(backdropProgress, {
       duration: CONTEXT_BACKDROP_MS,
-      easing: Easing.out(Easing.cubic),
+      easing: Easing.bezier(0.215, 0.61, 0.355, 1),
       toValue: 1,
       useNativeDriver: true,
     }).start();
@@ -118,7 +120,7 @@ export function ChatActionSheet({
         Animated.delay(CONTEXT_MENU_DELAY_MS),
         Animated.timing(menuProgress, {
           duration: CONTEXT_MENU_MS,
-          easing: Easing.out(Easing.cubic),
+          easing: Easing.bezier(0.215, 0.61, 0.355, 1),
           toValue: 1,
           useNativeDriver: true,
         }),
@@ -207,17 +209,23 @@ export function ChatActionSheet({
     };
   }, [actor, canEdit, insets.bottom, insets.top, message, reactionsExpanded, targetLayout, windowSize.height, windowSize.width]);
 
+  const animationLayout = animationLayoutRef.current || layout;
+
+  useEffect(() => {
+    if (visible && !animationLayoutRef.current) animationLayoutRef.current = layout;
+  }, [layout, visible]);
+
   const backdropOpacity = backdropProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [0, 1],
   });
   const cloneTranslateX = cloneProgress.interpolate({
     inputRange: [0, 1],
-    outputRange: [layout.originTranslateX, 0],
+    outputRange: [animationLayout.originTranslateX, 0],
   });
   const cloneTranslateY = cloneProgress.interpolate({
     inputRange: [0, 1],
-    outputRange: [layout.originTranslateY, 0],
+    outputRange: [animationLayout.originTranslateY, 0],
   });
   const confirmCardTranslateY = confirmProgress.interpolate({
     inputRange: [0, 1],
@@ -264,10 +272,10 @@ export function ChatActionSheet({
             style={[
               styles.cloneHost,
               {
-                left: layout.bubbleLeft,
-                top: layout.bubbleTop,
+                left: animationLayout.bubbleLeft,
+                top: animationLayout.bubbleTop,
                 transform: [{ translateX: cloneTranslateX }, { translateY: cloneTranslateY }],
-                width: layout.bubbleWidth,
+                width: animationLayout.bubbleWidth,
               },
             ]}
           >

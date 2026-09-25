@@ -206,7 +206,7 @@ export function ImportantMessagesPage() {
           <View style={styles.stateCard}>
             <Ionicons color={theme.colors.muted} name="notifications-outline" size={30} />
             <Text style={styles.stateTitle}>Пока нет PROMO сообщений</Text>
-            <Text style={styles.stateText}>Новости, скидки и посты от компании появятся здесь в формате для телефона.</Text>
+            <Text style={styles.stateText}>Новости, скидки и посты от компании скоро появятся здесь</Text>
           </View>
         ) : null}
 

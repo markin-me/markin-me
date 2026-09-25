@@ -4347,8 +4347,8 @@
                 <span class="domain-managed-status${isEnabled ? "" : " is-disabled"}">${isEnabled ? "\u0421\u0430\u0439\u0442 \u0432\u043a\u043b\u044e\u0447\u0435\u043d" : "\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0437\u0430\u0433\u043b\u0443\u0448\u043a\u0430"}</span>
                 ${domainUrl ? `
                 <div class="settings-subdomain-actions domain-managed-link-actions">
-                  <button class="btn btn-sm btn-secondary" type="button" data-domain-link-action="open" data-domain-url="${domainUrl}">������� �� ����</button>
-                  <button class="btn btn-sm btn-icon btn-secondary" type="button" data-domain-link-action="copy" data-domain-url="${domainUrl}" title="����������� ������" aria-label="����������� ������">
+                  <button class="btn btn-sm btn-secondary" type="button" data-domain-link-action="open" data-domain-url="${domainUrl}">Открыть сайт</button>
+                  <button class="btn btn-sm btn-icon btn-secondary" type="button" data-domain-link-action="copy" data-domain-url="${domainUrl}" title="Скопировать ссылку" aria-label="Скопировать ссылку">
                     <i class="fas fa-copy"></i>
                   </button>
                 </div>
@@ -4626,6 +4626,8 @@
 
     const connectBtn = document.getElementById("domainConnectBtn");
 
+    const renewCertificateBtn = document.getElementById("domainRenewCertificateBtn");
+
 
 
     const connectHint = document.getElementById("domainConnectHint");
@@ -4660,6 +4662,7 @@
 
 
     if (connectBtn) connectBtn.disabled = !domainManageMode || !autoConnectEnabled || !getCurrentDomainValue();
+    if (renewCertificateBtn) renewCertificateBtn.disabled = !domainManageMode || !autoConnectEnabled || !getCurrentDomainValue();
 
 
 
@@ -6917,7 +6920,7 @@
             : section === "site"
               ? "\u0421\u0430\u0439\u0442"
               : section === "chats"
-                ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0430\u0442\u0430"
+                ? "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0430\u0442\u0430 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0438"
                 : section === "api"
                   ? "API"
                   : section === "print-templates"
@@ -7102,7 +7105,7 @@
 
 
 
-        if (settingsCenterTitle) settingsCenterTitle.textContent = "Чат";
+        if (settingsCenterTitle) settingsCenterTitle.textContent = "Чат поддержки";
 
 
 
@@ -21414,6 +21417,9 @@
 
       if (domainCheckResultsEl) domainCheckResultsEl.classList.remove("hidden");
 
+      const domainCertificateBlockEl = document.getElementById("domainCertificateBlock");
+      if (domainCertificateBlockEl) domainCertificateBlockEl.classList.toggle("hidden", !activeDomainValue);
+
 
 
       if (domainInputEl) {
@@ -21478,6 +21484,11 @@
 
       const checkBtnEl = document.getElementById("domainCheckBtn");
       if (checkBtnEl) checkBtnEl.disabled = !domainManageMode || !activeDomainValue;
+
+      const renewCertificateBtnEl = document.getElementById("domainRenewCertificateBtn");
+      if (renewCertificateBtnEl) {
+        renewCertificateBtnEl.disabled = !domainManageMode || !autoConnectEnabled || !activeDomainValue;
+      }
     }
 
     function setDomainDraftMode(enabled) {
@@ -26470,6 +26481,13 @@
 
       var resultsBlock = document.getElementById("domainCheckResults");
 
+      var certificateBlock = document.getElementById("domainCertificateBlock");
+      var renewCertificateBtn = document.getElementById("domainRenewCertificateBtn");
+      var certificateIcon = document.getElementById("domainCertificateIcon");
+      var certificateStatus = document.getElementById("domainCertificateStatus");
+      var certificateExpires = document.getElementById("domainCertificateExpires");
+      var certificateDays = document.getElementById("domainCertificateDays");
+
 
 
       var domainInput = document.getElementById("domainInput");
@@ -26526,6 +26544,47 @@
 
       }
 
+      function setCertificateInfo(certificate) {
+        if (!certificateBlock) return;
+        certificateBlock.classList.remove("hidden");
+        var certificateState = certificate && certificate.status === "valid" ? "ok" : "fail";
+        if (certificateIcon) certificateIcon.className = "domain-check-icon is-" + certificateState;
+        var statusText = "Сертификат не найден";
+        if (certificate && certificate.status === "valid") statusText = "Действителен";
+        if (certificate && certificate.status === "expiring") statusText = "Скоро истекает";
+        if (certificate && certificate.status === "expired") statusText = "Истёк";
+        if (certificate && certificate.status === "invalid") statusText = "Повреждён или недействителен";
+        if (certificateStatus) certificateStatus.textContent = statusText;
+        if (certificateExpires) {
+          certificateExpires.textContent = certificate && certificate.expires_at
+            ? new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(certificate.expires_at))
+            : "—";
+        }
+        if (certificateDays) {
+          certificateDays.textContent = certificate && Number.isFinite(Number(certificate.days_left))
+            ? (Number(certificate.days_left) > 0 ? Number(certificate.days_left) + " дн." : "истёк")
+            : "—";
+        }
+      }
+
+      async function loadCertificate(domain) {
+        if (!certificateBlock || !domain) return;
+        certificateBlock.classList.remove("hidden");
+        if (certificateIcon) certificateIcon.className = "domain-check-icon is-pending";
+        if (certificateStatus) certificateStatus.textContent = "Проверяем...";
+        try {
+          var res = await authFetch("/api/admin/tenant/certificate", {
+            method: "POST",
+            body: JSON.stringify({ domain: domain })
+          });
+          var data = await res.json();
+          setCertificateInfo(data && data.ok ? data.certificate : null);
+        } catch (e) {
+          setCertificateInfo(null);
+          if (certificateStatus) certificateStatus.textContent = "Не удалось проверить";
+        }
+      }
+
 
 
 
@@ -26542,6 +26601,8 @@
 
 
         if (!domain) return;
+
+        await loadCertificate(domain);
 
 
 
@@ -26736,6 +26797,38 @@
       checkBtn.addEventListener("domain:check", async function () {
         await runCheck(true);
       });
+
+      if (renewCertificateBtn) {
+        renewCertificateBtn.addEventListener("click", async function () {
+          if (!domainManageMode) return;
+          var domain = getCurrentDomainValue();
+          if (!domain) return;
+          renewCertificateBtn.disabled = true;
+          renewCertificateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Перевыпускаем...';
+          try {
+            var res = await authFetch("/api/admin/tenant/renew-certificate", {
+              method: "POST",
+              body: JSON.stringify({ domain: domain })
+            });
+            var data = await res.json();
+            if (!data || !data.ok) {
+              alert(data && data.error ? String(data.error) : "Не удалось перевыпустить сертификат.");
+              await loadCertificate(domain);
+              return;
+            }
+            setCertificateInfo(data.certificate);
+            await runCheck(false);
+          } catch (e) {
+            alert("Не удалось перевыпустить сертификат.");
+            await loadCertificate(domain);
+          } finally {
+            renewCertificateBtn.disabled = !domainManageMode || !(domainSetup && domainSetup.auto_connect_enabled) || !getCurrentDomainValue();
+            renewCertificateBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Перевыпустить сертификат';
+          }
+        });
+      }
+
+      if (getCurrentDomainValue()) runCheck(true);
 
 
 

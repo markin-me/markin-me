@@ -1,11 +1,14 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { InteractionManager, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation, type CompositeNavigationProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { routes, type ChatTabParamList, type RootStackParamList } from '../../app/navigation/routes';
-import { preloadUserChatThread, useChatUnread } from '../../features/chat';
+import { fetchChatSettings, preloadUserChatThread, useChatUnread } from '../../features/chat';
+import { isChatEnabled, isImportantMessagesEnabled } from '../../features/chat/helpers';
+import { readLastChatSettingsSync } from '../../features/chat/storage';
+import type { ChatSettings } from '../../features/chat/types';
 import { theme } from '../../shared/config/theme';
 import { AppText as Text } from '../../shared/ui';
 import { Screen } from '../../shared/ui/Screen';
@@ -22,9 +25,27 @@ type ChatMessagesPageProps = {
 export function ChatMessagesPage({ onOpenSupportChat }: ChatMessagesPageProps = {}) {
   const navigation = useNavigation<ChatMessagesNavigationProp>();
   const { chatUnread, promoUnread, refreshPromoUnread } = useChatUnread();
+  const [chatSettings, setChatSettings] = useState<ChatSettings | null>(() => readLastChatSettingsSync());
   const preloadingChatRef = useRef(false);
   const preloadTaskRef = useRef<ReturnType<typeof InteractionManager.runAfterInteractions> | null>(null);
   const preloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const importantMessagesEnabled = isImportantMessagesEnabled(chatSettings);
+  const supportChatEnabled = isChatEnabled(chatSettings);
+
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    const refreshSettings = () => {
+      void fetchChatSettings()
+        .then((nextSettings) => {
+          if (!cancelled) setChatSettings(nextSettings);
+        })
+        .catch(() => undefined);
+    };
+    refreshSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, []));
 
   const cancelPendingChatPreload = useCallback(() => {
     if (preloadTimerRef.current != null) {
@@ -78,6 +99,7 @@ export function ChatMessagesPage({ onOpenSupportChat }: ChatMessagesPageProps = 
       <View style={styles.root}>
         <Text style={styles.title}>Сообщения</Text>
 
+        {importantMessagesEnabled ? (
         <Pressable
           accessibilityRole="button"
           onPress={() => navigation.navigate(routes.importantMessages)}
@@ -92,7 +114,9 @@ export function ChatMessagesPage({ onOpenSupportChat }: ChatMessagesPageProps = 
           </View>
           <Ionicons color="#9ca3af" name="chevron-forward" size={20} />
         </Pressable>
+        ) : null}
 
+        {supportChatEnabled ? (
         <Pressable
           accessibilityRole="button"
           onPress={openSupportChat}
@@ -107,6 +131,7 @@ export function ChatMessagesPage({ onOpenSupportChat }: ChatMessagesPageProps = 
           </View>
           <Ionicons color="#9ca3af" name="chevron-forward" size={20} />
         </Pressable>
+        ) : null}
       </View>
     </Screen>
     </View>

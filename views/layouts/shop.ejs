@@ -64,7 +64,8 @@
   <% } %>
 
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css') %>" />
+  <link rel="preload" href="<%= assetUrl('/static/css/shop.css?v=20260907-mobile-orders-merge') %>" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="<%= assetUrl('/static/css/shop.css?v=20260907-mobile-orders-merge') %>" /></noscript>
   <link rel="preload" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" /></noscript>
 </head>
@@ -159,7 +160,7 @@
   <% } %>
 
   <script>
-    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js') %>";
+    window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260907-mobile-orders-merge') %>";
     <% if (!isKsoPage) { %>
       window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js') %>";
     <% } else { %>

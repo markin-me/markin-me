@@ -3191,10 +3191,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       quick_questions_config: quickQuestionsConfig,
       quick_questions_enabled: quickQuestionsEnabled,
       client_push_enabled: clientPushEnabled,
+      important_messages_enabled: isPublicImportantMessagesEnabled(row),
       is_enabled: isEnabled,
     };
     if (!publicDiscountText(row?.name).trim()) snapshot.name = 'Товар';
     return snapshot;
+  }
+
+  function isPublicImportantMessagesEnabled(tenantRow) {
+    const raw = tenantRow?.important_messages_enabled;
+    const normalized = str(raw).trim().toLowerCase();
+    return !(
+      raw === false
+      || raw === 0
+      || normalized === '0'
+      || normalized === 'false'
+    );
   }
 
   function normalizePhoneLookupCandidates(phoneRaw) {
@@ -4139,6 +4151,40 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/changes/stream', async (req, res) => {
+    try {
+      if (!ordersEvents || typeof ordersEvents.subscribe !== 'function') {
+        return res.status(503).json({ ok: false, error: 'EVENTS_UNAVAILABLE' });
+      }
+      // Не даём общему compression middleware буферизовать SSE-события.
+      req.headers['x-no-compression'] = '1';
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const customer = await getCustomerByToken(tenantId, str(req.headers['x-customer-token'] || req.query.customer_token));
+      const customerId = Number(customer?.id || 0);
+      if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      res.status(200);
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      if (req.socket && typeof req.socket.setTimeout === 'function') req.socket.setTimeout(0);
+      const write = (payload) => {
+        if (payload?.event !== 'order.updated' || Number(payload?.data?.customer_id || 0) !== customerId) return;
+        res.write(`event: order.updated\ndata: ${JSON.stringify(payload.data)}\n\n`);
+        if (typeof res.flush === 'function') res.flush();
+      };
+      res.write(`event: ready\ndata: ${JSON.stringify({ cursor: ordersEvents.getCurrentCursor(tenantId, storeId) })}\n\n`);
+      if (typeof res.flush === 'function') res.flush();
+      const unsubscribe = ordersEvents.subscribe(tenantId, storeId, write);
+      const heartbeat = setInterval(() => { try { res.write(': heartbeat\n\n'); } catch {} }, 20000);
+      req.on('close', () => { clearInterval(heartbeat); unsubscribe(); });
+    } catch (e) {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
@@ -7446,6 +7492,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const [[tenantRow]] = await db.query(
+        `SELECT *
+           FROM ten_tenants
+          WHERE id = ? AND is_active = 1
+          LIMIT 1`,
+        [tenantId]
+      );
+      if (!tenantRow || !isPublicImportantMessagesEnabled(tenantRow)) {
+        return res.json({ ok: true, data: { count: 0, revision: '0:0:0:0' } });
+      }
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const customerId = Number(customer?.id || 0) || 0;
@@ -7492,6 +7548,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const [[tenantRow]] = await db.query(
+        `SELECT *
+           FROM ten_tenants
+          WHERE id = ? AND is_active = 1
+          LIMIT 1`,
+        [tenantId]
+      );
+      if (!tenantRow || !isPublicImportantMessagesEnabled(tenantRow)) {
+        return res.json({ ok: true, data: [] });
+      }
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const customerId = Number(customer?.id || 0) || 0;
@@ -7685,7 +7751,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (actionType === 'none' && productIds.length) actionType = 'product_collection';
           if (actionType === 'none' && mode !== 'none') actionType = 'promo_code';
           const claim = claimByMessageId.get(messageId) || null;
+          const claimDiscountId = Number(claim?.discount_id || 0);
+          const claimPromoCodeId = Number(claim?.promo_code_id || 0);
+          const currentDiscountId = Number(row?.promo_discount_id || 0);
+          const currentPromoCodeId = Number(row?.promo_code_id || 0);
           const claimedCode = String(claim?.promo_code || '').trim();
+          const claimMatchesCurrentPromo = Boolean(
+            claim
+            && currentDiscountId > 0
+            && claimDiscountId === currentDiscountId
+            && (
+              mode === 'unique'
+              || (
+                mode === 'shared'
+                && currentPromoCodeId > 0
+                && claimPromoCodeId === currentPromoCodeId
+              )
+            )
+          );
           const sharedCode = String(row.promo_code || '').trim();
           return {
             id: messageId,
@@ -7698,14 +7781,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             product_id: actionType === 'product' ? productId : null,
             product_ids: actionType === 'product_collection' ? productIds : [],
             products: actionType === 'product_collection' ? products : [],
-            promo_code: mode === 'unique' ? claimedCode : sharedCode,
-            promo_code_masked: mode === 'unique' && !claimedCode,
+            promo_code: mode === 'unique' && claimMatchesCurrentPromo ? claimedCode : sharedCode,
+            promo_code_masked: mode === 'unique' && !(claimMatchesCurrentPromo && claimedCode),
             promo_code_mode: mode,
             promo_discount_id: Number(row.promo_discount_id || 0) || null,
             promo_code_id: mode === 'unique'
-              ? (Number(claim?.promo_code_id || 0) || null)
+              ? (claimMatchesCurrentPromo ? (Number(claim?.promo_code_id || 0) || null) : null)
               : (Number(row.promo_code_id || 0) || null),
-            promo_claimed: !!claimedCode,
+            promo_claimed: Boolean(claimMatchesCurrentPromo && claimedCode),
             promo_claimable: mode === 'shared' ? !!sharedCode : mode === 'unique',
             is_pinned: Number(row.is_pinned || 0) === 1,
             published_at: row.published_at || row.created_at || null,
@@ -7729,6 +7812,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const [[tenantRow]] = await db.query(
+        `SELECT *
+           FROM ten_tenants
+          WHERE id = ? AND is_active = 1
+          LIMIT 1`,
+        [tenantId]
+      );
+      if (!tenantRow || !isPublicImportantMessagesEnabled(tenantRow)) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
       const customerId = Number(customer.id || 0);
       const messageId = Number(req.params.id || 0);
       if (!(messageId > 0) || !(customerId > 0)) {
@@ -7777,7 +7870,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId, messageId, customerId]
       );
       const existingClaim = Array.isArray(existingClaims) && existingClaims.length ? existingClaims[0] : null;
-      if (existingClaim && String(existingClaim.promo_code || '').trim()) {
+      const mode = ['shared', 'unique'].includes(String(message.promo_code_mode || '').toLowerCase())
+        ? String(message.promo_code_mode || '').toLowerCase()
+        : (String(message.promo_code || '').trim() ? 'shared' : 'none');
+      const existingClaimMatchesCurrentPromo = Boolean(
+        existingClaim
+        && Number(message.promo_discount_id || 0) > 0
+        && Number(existingClaim.discount_id || 0) === Number(message.promo_discount_id || 0)
+        && (
+          mode === 'unique'
+          || (
+            mode === 'shared'
+            && Number(message.promo_code_id || 0) > 0
+            && Number(existingClaim.promo_code_id || 0) === Number(message.promo_code_id || 0)
+          )
+        )
+      );
+      if (existingClaimMatchesCurrentPromo && String(existingClaim.promo_code || '').trim()) {
         if (Number(existingClaim.promo_code_id || 0) > 0 && Number(existingClaim.discount_id || 0) > 0) {
           await saveCustomerBenefitPromoVisibility(conn, {
             tenantId,
@@ -7797,10 +7906,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           },
         });
       }
-
-      const mode = ['shared', 'unique'].includes(String(message.promo_code_mode || '').toLowerCase())
-        ? String(message.promo_code_mode || '').toLowerCase()
-        : (String(message.promo_code || '').trim() ? 'shared' : 'none');
 
       let promoCodeId = Number(message.promo_code_id || 0) || null;
       let discountId = Number(message.promo_discount_id || 0) || null;
@@ -7858,7 +7963,19 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           [tenantId, storeId, messageId, customerId]
         );
         const lockedClaim = Array.isArray(lockedClaims) && lockedClaims.length ? lockedClaims[0] : null;
-        if (lockedClaim && String(lockedClaim.promo_code || '').trim()) {
+        const lockedClaimMatchesCurrentPromo = Boolean(
+          lockedClaim
+          && Number(lockedClaim.discount_id || 0) === Number(discountId || 0)
+          && (
+            mode === 'unique'
+            || (
+              mode === 'shared'
+              && Number(message.promo_code_id || 0) > 0
+              && Number(lockedClaim.promo_code_id || 0) === Number(message.promo_code_id || 0)
+            )
+          )
+        );
+        if (lockedClaimMatchesCurrentPromo && String(lockedClaim.promo_code || '').trim()) {
           if (Number(lockedClaim.promo_code_id || 0) > 0 && Number(lockedClaim.discount_id || 0) > 0) {
             await saveCustomerBenefitPromoVisibility(conn, {
               tenantId,
@@ -8729,7 +8846,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
-           COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code, s.is_final AS status_is_final,
+           COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code,
+           CASE WHEN COALESCE(s.is_final, 0) = 1
+                  OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
+                THEN 1 ELSE 0 END AS status_is_final,
            p.title AS payment_title, p.code AS payment_code,
            ca.street AS deliveryAddressStreet,
            ca.house AS deliveryAddressHouse,
@@ -8745,6 +8865,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            ON c.tenant_id=o.tenant_id AND c.id=o.customer_id
          WHERE o.tenant_id=? AND o.store_id=? AND o.is_active=1
            AND COALESCE(s.is_final, 0)=0
+           AND LOWER(COALESCE(s.code, '')) NOT IN ('canceled', 'cancelled')
            AND (
              o.customer_phone IN (${placeholders})
              OR c.phone IN (${placeholders})
@@ -8830,8 +8951,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (statusIsFinal !== null) {
         const [summaryRows] = await db.query(
           `SELECT
-             SUM(CASE WHEN COALESCE(s.is_final, 0) = 1 THEN 1 ELSE 0 END) AS completed_count,
-             SUM(CASE WHEN COALESCE(s.is_final, 0) = 1 THEN 0 ELSE 1 END) AS active_count
+             SUM(CASE WHEN COALESCE(s.is_final, 0) = 1
+                       OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
+                      THEN 1 ELSE 0 END) AS completed_count,
+             SUM(CASE WHEN COALESCE(s.is_final, 0) = 1
+                       OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
+                      THEN 0 ELSE 1 END) AS active_count
            FROM order_orders o
            LEFT JOIN order_statuses s
              ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -8851,7 +8976,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
-           COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code, s.is_final AS status_is_final,
+           COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code,
+           CASE WHEN COALESCE(s.is_final, 0) = 1
+                  OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
+                THEN 1 ELSE 0 END AS status_is_final,
            p.title AS payment_title, p.code AS payment_code,
            ca.street AS deliveryAddressStreet,
            ca.house AS deliveryAddressHouse,
@@ -8864,7 +8992,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          LEFT JOIN cust_customer_addresses ca
            ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
-           AND (? IS NULL OR COALESCE(s.is_final, 0)=?)
+           AND (? IS NULL OR (
+             CASE WHEN COALESCE(s.is_final, 0) = 1
+                       OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
+                  THEN 1 ELSE 0 END
+           )=?)
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ?
          OFFSET ?`,
@@ -12614,7 +12746,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       ? await discountHelpers.getCustomerFirstOrderWindowStats(db, tenantId, customerId)
       : { customerId: null, completedSuccessfulOrders: 0, activeReservedOrders: 0 };
     const customerDiscounts = (await loadCustomerBenefitDiscountRows(tenantId, storeId, customerId))
-      .filter((discount) => discountHelpers.isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats));
+      .filter((discount) => (
+        discount?.is_customer_promo_saved === true
+        || discountHelpers.isDiscountAllowedByFirstOrderLimit(discount, firstOrderStats)
+      ));
     const automaticDiscountRows = customerDiscounts.filter((discount) => (
       isPublicAutomaticSimpleDiscount(discount) && !isHiddenBenefitsDiscount(discount)
     ));
@@ -25184,6 +25319,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (payload) {
             if (ordersEvents && typeof ordersEvents.publish === 'function') {
               ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
+            }
+            if (typeof makeChatTempRouter.sendOrderStatusPush === 'function') {
+              makeChatTempRouter.sendOrderStatusPush(tenantId, orderStoreId, payload).catch((err) => {
+                console.error('Order creation push failed:', err && err.message ? err.message : err);
+              });
             }
             const botToken = getEffectiveTelegramBotConfig().telegram_bot_token;
             if (botToken) {

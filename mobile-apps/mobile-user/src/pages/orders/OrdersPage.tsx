@@ -29,10 +29,12 @@ import {
   readCachedCustomerPassport,
   resolveAssetUrl,
   subscribeCustomerPassport,
+  waitForPublicChanges,
   type CustomerOrder,
   type CustomerOrderItem,
   type CustomerOrdersPayload,
 } from '../../shared/api';
+import { openOrderEventsStream } from '../../features/chat/api';
 import { theme } from '../../shared/config/theme';
 import { routes, type RootStackParamList } from '../../app/navigation/routes';
 import { Screen } from '../../shared/ui/Screen';
@@ -242,6 +244,7 @@ export function OrdersPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const changesCursorRef = useRef(0);
 
   const updateSummary = useCallback((summary: Record<string, unknown>) => {
     const nextActiveCount = Number(summary.active_count ?? summary.activeCount);
@@ -358,6 +361,35 @@ export function OrdersPage() {
       isActive = false;
     };
   }, [applyCachedOrders, loadOrders, token]));
+
+  useEffect(() => {
+    if (!token || !activeOrders.length) return undefined;
+    let cancelled = false;
+    const listenWithLongPollFallback = async () => {
+      while (!cancelled && tokenRef.current === token) {
+        try {
+          const result = await waitForPublicChanges({ since: changesCursorRef.current, timeoutMs: 20000 });
+          if (cancelled || tokenRef.current !== token) return;
+          if (result.cursor > changesCursorRef.current) changesCursorRef.current = result.cursor;
+          if (result.changed) await loadOrders(token, { reset: false });
+        } catch {
+          if (!cancelled) await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    };
+    const source = openOrderEventsStream(token);
+    source.addEventListener('order.updated', () => {
+      if (!cancelled) void loadOrders(token, { reset: false });
+    });
+    source.addEventListener('error', () => {
+      source.close();
+      if (!cancelled) void listenWithLongPollFallback();
+    });
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, [activeOrders.length, loadOrders, token]);
 
   const refreshOrders = useCallback(() => {
     if (!token) return;

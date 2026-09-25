@@ -22360,8 +22360,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     if (!["promo_code", "reward_promo"].includes(source)) return false;
     const disabledReasonCode = str(item?.disabled_reason_code || "").trim().toUpperCase();
     return disabledReasonCode === "PROMO_CUSTOMER_LIMIT_REACHED"
-      || disabledReasonCode === "PROMO_LIMIT_REACHED"
-      || disabledReasonCode === "FIRST_ORDER_LIMIT_REACHED";
+      || disabledReasonCode === "PROMO_LIMIT_REACHED";
   }
 
   function isCompletedCustomerLimitDiscountBenefit(item) {
@@ -32381,11 +32380,20 @@ function renderSheetAddressList() {
 
     const notificationInputs = [];
     const pushNotificationRows = [];
+    const orderStatusInputs = [];
+    let orderStatusRowsWrap = null;
     let pushPreferences = { chat: true, important: true, orders: true, orderStatusIds: [] };
     let pushPreferencesSaving = false;
 
     function setPushInputsDisabled(disabled) {
       notificationInputs.forEach((input) => { input.disabled = disabled; });
+      orderStatusInputs.forEach((input) => { input.disabled = disabled; });
+    }
+
+    function syncOrderStatusRowsVisibility() {
+      if (orderStatusRowsWrap) {
+        orderStatusRowsWrap.classList.toggle("hidden", pushPreferences.orders !== true || orderStatusInputs.length === 0);
+      }
     }
 
     async function savePushPreferences(nextPreferences) {
@@ -32408,6 +32416,10 @@ function renderSheetAddressList() {
         notificationInputs.forEach((input) => {
           input.checked = pushPreferences[input.dataset.pushPreference] === true;
         });
+        orderStatusInputs.forEach((input) => {
+          input.checked = pushPreferences.orderStatusIds.includes(Number(input.value));
+        });
+        syncOrderStatusRowsVisibility();
         setPushInputsDisabled(false);
       }
     }
@@ -32436,11 +32448,53 @@ function renderSheetAddressList() {
       notificationInputs.push(input);
       pushNotificationRows.push(row);
       settingsWrap.appendChild(row);
+      if (key === "orders") syncOrderStatusRowsVisibility();
     }
 
-    addPushPreferenceRow("Уведомления о новых сообщениях", "chat");
-    addPushPreferenceRow("Уведомления о заказах", "orders");
-    addPushPreferenceRow("Уведомления о важных сообщениях", "important");
+    addPushPreferenceRow("О моих заказах", "orders");
+
+    orderStatusRowsWrap = document.createElement("div");
+    orderStatusRowsWrap.className = "shop-profile-push-statuses hidden";
+    settingsWrap.appendChild(orderStatusRowsWrap);
+
+    function renderOrderStatusPushRows(statuses) {
+      orderStatusInputs.splice(0, orderStatusInputs.length);
+      orderStatusRowsWrap.replaceChildren();
+      (Array.isArray(statuses) ? statuses : []).forEach((status) => {
+        const statusId = Number(status?.id || 0);
+        if (!(statusId > 0)) return;
+        const row = document.createElement("div");
+        row.className = "shop-profile-settings-row shop-profile-push-status-row";
+        const title = document.createElement("div");
+        title.className = "shop-profile-settings-title";
+        title.textContent = String(status?.title || status?.code || "Этап");
+        const label = document.createElement("label");
+        label.className = "shop-profile-push-checkbox";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.className = "switch-input";
+        input.value = String(statusId);
+        input.checked = pushPreferences.orderStatusIds.includes(statusId);
+        input.disabled = pushPreferencesSaving;
+        input.addEventListener("change", () => {
+          const selected = orderStatusInputs
+            .filter((item) => item.checked)
+            .map((item) => Number(item.value))
+            .filter((id) => id > 0);
+          void savePushPreferences({ ...pushPreferences, orderStatusIds: selected });
+        });
+        const ui = document.createElement("span");
+        ui.className = "shop-profile-push-checkbox-ui";
+        label.append(input, ui);
+        row.append(label, title);
+        orderStatusRowsWrap.appendChild(row);
+        orderStatusInputs.push(input);
+      });
+      syncOrderStatusRowsVisibility();
+    }
+
+    addPushPreferenceRow("От чата поддержки", "chat");
+    addPushPreferenceRow("О важных сообщениях компании", "important");
 
     async function loadPushPreferences() {
       const notificationsApi = window.shopCompanyChatNotifications;
@@ -32448,12 +32502,45 @@ function renderSheetAddressList() {
       try {
         const payload = await notificationsApi.getPreferences();
         pushPreferences = payload.preferences;
+        let statuses = Array.isArray(payload.statuses) ? payload.statuses : [];
+        if (!statuses.length && typeof notificationsApi.getOrderStatuses === "function") {
+          try {
+            const fallbackStatuses = await notificationsApi.getOrderStatuses();
+            if (Array.isArray(fallbackStatuses)) statuses = fallbackStatuses;
+          } catch {}
+        }
+        if (!statuses.length && typeof apiJson === "function") {
+          try {
+            const configJson = await apiJson("/api/public/order-config");
+            statuses = Array.isArray(configJson?.data?.statuses) ? configJson.data.statuses : [];
+          } catch {}
+        }
+        renderOrderStatusPushRows(statuses);
         notificationInputs.forEach((input) => {
           input.checked = pushPreferences[input.dataset.pushPreference] === true;
         });
+        orderStatusInputs.forEach((input) => {
+          input.checked = pushPreferences.orderStatusIds.includes(Number(input.value));
+        });
+        syncOrderStatusRowsVisibility();
         setPushInputsDisabled(false);
       } catch {
-        // The settings remain disabled until a signed-in push profile is available.
+        // Список этапов не должен зависеть от уже созданной push-подписки.
+        // Если профиль push ещё не зарегистрирован, показываем этапы из публичной конфигурации.
+        try {
+          const fallbackApi = window.shopCompanyChatNotifications;
+          let fallbackStatuses = fallbackApi?.getOrderStatuses
+            ? await fallbackApi.getOrderStatuses()
+            : [];
+          if ((!Array.isArray(fallbackStatuses) || !fallbackStatuses.length) && typeof apiJson === "function") {
+            const configJson = await apiJson("/api/public/order-config");
+            fallbackStatuses = Array.isArray(configJson?.data?.statuses) ? configJson.data.statuses : [];
+          }
+          if (Array.isArray(fallbackStatuses)) {
+            renderOrderStatusPushRows(fallbackStatuses);
+            syncOrderStatusRowsVisibility();
+          }
+        } catch {}
       }
     }
     if (window.shopCompanyChatNotifications) void loadPushPreferences();
@@ -32940,7 +33027,7 @@ function renderSheetAddressList() {
     }
     if (settingsPage) {
       Array.from(settingsWrap.children).forEach((row) => {
-        if (!pushNotificationRows.includes(row)) row.remove();
+        if (!pushNotificationRows.includes(row) && row !== orderStatusRowsWrap) row.remove();
       });
       settingsPanel.classList.add("is-active");
       wrap.appendChild(settingsPanel);
@@ -33347,6 +33434,10 @@ function renderSheetAddressList() {
 
     function setActiveTab(tab) {
       const normalizedTab = tab;
+      if (normalizedTab === "orders") {
+        window.__shopOrdersNavBadgeRead = true;
+        document.getElementById("shopNavOrdersBadge")?.classList.add("hidden");
+      }
       [tabAddresses, tabOrders, tabSettings].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === normalizedTab));
       [addressesPanel, ordersPanel, settingsPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === normalizedTab));
       const activeBtn = tabs.querySelector('.shop-profile-tab.is-active');
@@ -33500,12 +33591,84 @@ function renderSheetAddressList() {
       }
     }
 
+    async function refreshOrderDetailsStatus(orderId) {
+      const safeOrderId = Number(orderId || 0);
+      if (!(safeOrderId > 0)) return;
+      const detailView = ordersDetailsHost.querySelector(
+        `.shop-profile-order-details-view[data-order-id="${safeOrderId}"]:not(.hidden)`
+      );
+      if (!detailView) return;
+      const order = await loadOrderDetails(safeOrderId);
+      if (!order) return;
+
+      const header = detailView.querySelector(".shop-order-details-header");
+      if (header) {
+        let status = header.querySelector(".shop-order-details-status");
+        const title = String(order.status_title || "").trim();
+        if (title) {
+          if (!status) {
+            status = document.createElement("div");
+            status.className = "shop-order-details-status";
+            header.appendChild(status);
+          }
+          status.textContent = title;
+        } else if (status) {
+          status.remove();
+        }
+      }
+
+      const progress = Array.isArray(order.customer_progress) ? order.customer_progress : [];
+      let progressView = detailView.querySelector(".shop-order-customer-progress");
+      if (!progress.length) {
+        progressView?.remove();
+      } else {
+        if (!progressView) {
+          progressView = document.createElement("div");
+          progressView.className = "shop-order-customer-progress";
+          const detailsRoot = detailView.querySelector(".shop-order-details");
+          const headerNode = detailsRoot?.querySelector(".shop-order-details-header");
+          if (detailsRoot && headerNode) detailsRoot.insertBefore(progressView, headerNode.nextSibling);
+        }
+        progressView.replaceChildren(...progress.map((step) => {
+          const row = document.createElement("div");
+          row.className = "shop-order-customer-progress__step";
+          if (step?.completed) row.classList.add("is-completed");
+          const marker = document.createElement("span");
+          marker.className = "shop-order-customer-progress__marker";
+          const label = document.createElement("span");
+          label.textContent = String(step?.title || "");
+          row.append(marker, label);
+          return row;
+        }));
+      }
+    }
+
+    async function refreshProfileOrderRowStatus(orderId) {
+      const safeOrderId = Number(orderId || 0);
+      if (!(safeOrderId > 0)) return;
+      const order = await loadOrderDetails(safeOrderId);
+      if (!order) return;
+      const rows = ordersList.querySelectorAll(
+        `.shop-profile-order-summary-card[data-order-id="${safeOrderId}"]`
+      );
+      rows.forEach((row) => {
+        const status = row.querySelector(".shop-order-summary-card__status");
+        if (status) status.textContent = String(order.status_title || "—");
+      });
+    }
+
     // formatOrderItem уже определена в глобальной области выше (строка 555)
     // Не переопределяем её здесь, чтобы избежать конфликтов
 
     async function showOrderDetails(orderId, { exitToHome = false } = {}) {
       currentOrdersView = "details";
       currentOrderId = orderId;
+      const requestedOrderId = Number(orderId || 0);
+      if (requestedOrderId > 0 && typeof window.syncShopActiveOrdersEventSource === "function") {
+        // Детали из профиля могут быть завершёнными и не входить в activeOrders,
+        // но их статус также должен обновляться через общий SSE-канал.
+        window.syncShopActiveOrdersEventSource([{ id: requestedOrderId }]);
+      }
       const shouldExitToHome = exitToHome === true;
       window._isViewingOrderDetails = true;
       window._showOrdersListCallback = showOrdersList;
@@ -33564,6 +33727,7 @@ function renderSheetAddressList() {
         orderDetailsViewCache.set(orderViewKey, detailView);
         ordersDetailsHost.appendChild(detailView);
       }
+      detailView.dataset.orderId = String(orderId);
       Array.from(ordersDetailsHost.children).forEach((node) => node.classList.add("hidden"));
       detailView.classList.remove("hidden");
       ordersList.classList.add("hidden");
@@ -33883,6 +34047,7 @@ function renderSheetAddressList() {
     function renderProfileOrderRow(o) {
       const row = document.createElement("div");
       row.className = "shop-profile-card shop-order-summary-card shop-profile-order-summary-card";
+      row.dataset.orderId = String(Number(o?.id || 0));
       row.style.cursor = "pointer";
       row.innerHTML = window.buildShopOrderSummaryCardInnerHtml(o, { maxPhotos: 8 });
 
@@ -34445,11 +34610,13 @@ function renderSheetAddressList() {
       setActiveTab("orders");
     }
 
-    return {
-      showEdit: () => setEditingMode(true),
-      hideEdit: () => setEditingMode(false),
-      showOrderDetails: (orderId, options) => showOrderDetails(orderId, options),
-      showOrdersList: () => showOrdersList(),
+      return {
+        showEdit: () => setEditingMode(true),
+        hideEdit: () => setEditingMode(false),
+        showOrderDetails: (orderId, options) => showOrderDetails(orderId, options),
+        refreshOrderDetailsStatus: (orderId) => refreshOrderDetailsStatus(orderId),
+        refreshProfileOrderRowStatus: (orderId) => refreshProfileOrderRowStatus(orderId),
+        showOrdersList: () => showOrdersList(),
       setActiveTab: (tab) => setActiveTab(tab),
     };
   }
@@ -35277,6 +35444,7 @@ function setActiveNav(key) {
   document.body.classList.toggle("shop-catalog-tab-active", activeKey === "menu");
   const map = {
     menu: elNavMenu,
+    orders: document.getElementById("shopNavOrders"),
     benefits: elNavCategories,
     cart: elNavCart,
     profile: elNavProfile,
@@ -42265,6 +42433,21 @@ function initShopLate() {
           openCartSheet();
         });
       }
+      const elNavOrders = document.getElementById("shopNavOrders");
+      const elNavOrdersBadge = document.getElementById("shopNavOrdersBadge");
+      if (elNavOrders) {
+        elNavOrders.addEventListener("click", async () => {
+          if (!isShopPage()) return;
+          window.__shopOrdersNavBadgeRead = true;
+          elNavOrdersBadge?.classList.add("hidden");
+          document.getElementById("shopCartPage")?.classList.add("hidden");
+          document.body.classList.remove("shop-cart-page-active");
+          closeShopSheetIfOpen();
+          setActiveNav("orders");
+          await openProfileSheet({ initialTab: "orders", ordersOnly: true, sourceScreen: "home" });
+          setActiveNav("orders");
+        });
+      }
       if (elNavProfile) {
         elNavProfile.addEventListener("click", () => {
           if (document.body?.classList.contains("shop-profile-page-active")) {
@@ -42461,12 +42644,90 @@ function initShopLate() {
       window._activeOrders = [];
       let activeOrdersBadgeLoading = false;
       let activeOrdersBadgeLastSyncAt = 0;
+      let activeOrdersEventSource = null;
       const ACTIVE_ORDERS_BADGE_MIN_REFRESH_MS = 4000;
+
+      const closeActiveOrdersEventSource = () => {
+        if (activeOrdersEventSource) activeOrdersEventSource.close();
+        activeOrdersEventSource = null;
+      };
+      const syncActiveOrdersEventSource = (activeOrders) => {
+        const token = getCustomerToken();
+        if (!token || !Array.isArray(activeOrders) || !activeOrders.length || typeof window.EventSource !== "function") {
+          closeActiveOrdersEventSource();
+          return;
+        }
+        if (activeOrdersEventSource) return;
+        const url = new URL("/api/public/changes/stream", window.location.origin);
+        const tenantMeta = document.querySelector('meta[name="tenant_id"]');
+        url.searchParams.set("tenant_id", String(tenantMeta?.content || "1"));
+        url.searchParams.set("store_id", String(getActiveStoreId() || "1"));
+        url.searchParams.set("customer_token", token);
+        const source = new EventSource(url.toString());
+        activeOrdersEventSource = source;
+        source.addEventListener("order.updated", (event) => {
+          if (activeOrdersEventSource !== source) return;
+          window.__shopOrdersNavBadgeRead = false;
+          const isOpenOrdersList = sheetNavigationState?.type === "activeOrders"
+            && sheetNavigationState?.screen === "list";
+          const isOpenProfileOrdersList = sheetNavigationState?.type === "profile"
+            && [null, "orders", "ordersList"].includes(sheetNavigationState?.screen);
+          Promise.resolve(updateActiveOrdersBadge({ force: true })).then(() => {
+            const ordersBadge = document.getElementById("shopNavOrdersBadge");
+            if (ordersBadge) ordersBadge.classList.remove("hidden");
+            if (isOpenOrdersList && typeof renderActiveOrdersListContent === "function") {
+              renderActiveOrdersListContent(window._activeOrders || []);
+            }
+          });
+          let order = null;
+          try { order = JSON.parse(String(event?.data || "")); } catch {}
+          const updatedOrderId = Number(order?.id || 0);
+          const openedOrderId = Number(sheetNavigationState?.data?.orderId || 0);
+          const visibleOrderDetails = updatedOrderId > 0
+            ? document.querySelector(`.shop-active-order-details[data-order-id="${updatedOrderId}"]:not(.hidden)`)
+            : null;
+          const isProfileOrderDetailsOpen = updatedOrderId > 0
+            && updatedOrderId === openedOrderId
+            && sheetNavigationState?.type === "profile"
+            && sheetNavigationState?.screen === "orderDetails";
+          if (isOpenProfileOrdersList && updatedOrderId > 0) {
+            const profileContext = window._profileContext;
+            if (profileContext && typeof profileContext.refreshProfileOrderRowStatus === "function") {
+              void profileContext.refreshProfileOrderRowStatus(updatedOrderId);
+            }
+          }
+          if (
+            updatedOrderId > 0
+            && (
+              (updatedOrderId === openedOrderId
+                && sheetNavigationState?.type === "activeOrders"
+                && sheetNavigationState?.screen === "details")
+              || visibleOrderDetails
+              || isProfileOrderDetailsOpen
+            )
+          ) {
+            if (isProfileOrderDetailsOpen) {
+              const profileContext = window._profileContext;
+              if (profileContext && typeof profileContext.refreshOrderDetailsStatus === "function") {
+                void profileContext.refreshOrderDetailsStatus(updatedOrderId);
+              }
+            } else {
+              void showActiveOrderDetails(updatedOrderId);
+            }
+          }
+        });
+        source.addEventListener("error", () => {
+          if (activeOrdersEventSource !== source) return;
+          closeActiveOrdersEventSource();
+        });
+      };
+      window.syncShopActiveOrdersEventSource = syncActiveOrdersEventSource;
     
       // Активные заказы: обновление бейджа и обработчик клика
       window.updateActiveOrdersBadge = async function updateActiveOrdersBadge(opts = {}) {
         const badges = [elActiveOrdersBadge, elActiveOrdersBadgeMobile, elActiveOrdersSheetCollapsed].filter(Boolean);
-        if (badges.length === 0) return;
+        const ordersNavBadge = document.getElementById("shopNavOrdersBadge");
+        if (badges.length === 0 && !ordersNavBadge) return;
       
         // Проверяем, находимся ли мы на главной странице витрины
         const isShopMainPage = isShopPage();
@@ -42494,6 +42755,13 @@ function initShopLate() {
           }
         }
 
+        if (ordersNavBadge) {
+          const activeTab = document.querySelector(".shop-nav-btn.is-active")?.dataset.tab;
+          ordersNavBadge.classList.toggle("hidden", window.__shopOrdersNavBadgeRead === true
+            || activeTab === "orders"
+            || !(window._activeOrders || []).length);
+        }
+
         // Если не главная вкладка/страница или открыт модал — скрываем мгновенно
         const isProductOpen = elMobileProductActions && !elMobileProductActions.classList.contains("hidden");
         if (isMobile && (!isShopMainPage || !isMainTabActive || isAnyModalOpen || isProductOpen)) {
@@ -42516,8 +42784,10 @@ function initShopLate() {
         try {
           const token = getCustomerToken();
           if (!token) {
+            ordersNavBadge?.classList.add("hidden");
             badges.forEach(badge => badge.classList.add("hidden"));
             window._activeOrders = [];
+            syncActiveOrdersEventSource([]);
             if (typeof window.renderShopHomeActiveOrdersBlock === "function") {
               window.renderShopHomeActiveOrdersBlock();
             }
@@ -42536,12 +42806,18 @@ function initShopLate() {
 
           // Сохраняем активные заказы в глобальную переменную
           window._activeOrders = activeOrders;
+          syncActiveOrdersEventSource(activeOrders);
           if (typeof window.renderShopHomeActiveOrdersBlock === "function") {
             window.renderShopHomeActiveOrdersBlock();
           }
           activeOrdersBadgeLastSyncAt = Date.now();
 
           const count = activeOrders.length;
+          if (ordersNavBadge) {
+            ordersNavBadge.classList.toggle("hidden", window.__shopOrdersNavBadgeRead === true
+              || count === 0
+              || document.querySelector(".shop-nav-btn.is-active")?.dataset.tab === "orders");
+          }
         
           if (count > 0) {
             badges.forEach(badge => {
@@ -42596,8 +42872,10 @@ function initShopLate() {
               }
             });
           } else {
+            ordersNavBadge?.classList.add("hidden");
             badges.forEach(badge => badge.classList.add("hidden"));
             window._activeOrders = [];
+            syncActiveOrdersEventSource([]);
             if (typeof window.renderShopHomeActiveOrdersBlock === "function") {
               window.renderShopHomeActiveOrdersBlock();
             }
@@ -42606,6 +42884,7 @@ function initShopLate() {
           // Если ошибка (не авторизован и т.д.), скрываем бейджи
           badges.forEach(badge => badge.classList.add("hidden"));
           window._activeOrders = [];
+          syncActiveOrdersEventSource([]);
           if (typeof window.renderShopHomeActiveOrdersBlock === "function") {
             window.renderShopHomeActiveOrdersBlock();
           }
@@ -42959,6 +43238,13 @@ function initShopLate() {
       // Показать детали активного заказа
       async function showActiveOrderDetails(orderId) {
         if (!window.AppModal) return;
+        const requestedOrderId = Number(orderId || 0);
+        if (requestedOrderId > 0) {
+          // Детали могут открываться напрямую (из push), до загрузки списка заказов.
+          // В этом случае список ещё пуст и обычный syncActiveOrdersEventSource не
+          // успевает создать SSE-подписку.
+          syncActiveOrdersEventSource([{ id: requestedOrderId }]);
+        }
         resetOrderDetailsTransientUi();
         resetShopModalHeaderUi();
         setActiveOrderDetailsSheetBodyState(true);
@@ -43215,6 +43501,32 @@ function initShopLate() {
       }
 
       window.openShopActiveOrderDetails = showActiveOrderDetails;
+      window.openShopOrderDetailsFromPush = (orderId) => {
+        const safeOrderId = Number(orderId || 0);
+        if (!(safeOrderId > 0)) return;
+        void (async () => {
+          await openProfileSheet({ initialTab: "orders", ordersOnly: true, forceModal: true });
+          const profileContext = window._profileContext;
+          if (profileContext && typeof profileContext.showOrderDetails === "function") {
+            profileContext.showOrderDetails(safeOrderId);
+          }
+        })();
+      };
+      try {
+        const pushUrl = new URL(window.location.href);
+        const pushOrderId = Number(pushUrl.searchParams.get("order_id") || 0);
+        const openFromPush = pushUrl.searchParams.get("open_order") === "1";
+        if (openFromPush && pushOrderId > 0) {
+          pushUrl.searchParams.delete("open_order");
+          pushUrl.searchParams.delete("order_id");
+          window.history.replaceState(window.history.state, "", pushUrl.pathname + pushUrl.search + pushUrl.hash);
+          window.setTimeout(() => {
+            if (typeof window.openShopOrderDetailsFromPush === "function") {
+              window.openShopOrderDetailsFromPush(pushOrderId);
+            }
+          }, 0);
+        }
+      } catch {}
 
       // Обработчик клика на десктоп бейдж
       if (elActiveOrdersBadge) {

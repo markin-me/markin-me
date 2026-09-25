@@ -86,6 +86,11 @@ server {
 
     client_max_body_size ${clientMaxBodySize};
 
+    location ^~ /.well-known/acme-challenge/ {
+        root ${acmeWebroot};
+        try_files $uri =404;
+    }
+
     location / {
         proxy_pass ${upstream};
         proxy_http_version 1.1;

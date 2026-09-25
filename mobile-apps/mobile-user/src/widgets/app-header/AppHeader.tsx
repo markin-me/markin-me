@@ -46,9 +46,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     backgroundColor: 'transparent',
-    minHeight: 52,
+    height: 60,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 0,
     position: 'relative',
   },
   backButton: {

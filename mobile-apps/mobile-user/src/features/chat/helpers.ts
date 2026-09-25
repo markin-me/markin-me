@@ -173,6 +173,12 @@ export function isChatEnabled(settings: ChatSettings | null) {
   return normalizeEnabledFlag(value, true);
 }
 
+export function isImportantMessagesEnabled(settings: ChatSettings | null) {
+  if (!settings) return true;
+  const value = firstSettingValue(settings, ['important_messages_enabled', 'importantMessagesEnabled']);
+  return normalizeEnabledFlag(value, true);
+}
+
 export function getAssistantName(settings: ChatSettings | null) {
   return firstSettingText(settings, ['assistant_name', 'assistantName', 'chat_assistant_name', 'chatAssistantName']) || DEFAULT_CHAT_ASSISTANT_NAME;
 }
