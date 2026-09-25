@@ -1872,6 +1872,7 @@
       const refreshComboBlocks = [];
       const deleteCombos = [];
       const deleteComboBlocks = [];
+      const inventoryChanges = [];
       let refreshAllCombos = fullRecovery;
       let metadataChanged = fullRecovery; let targetChanged = fullRecovery; let referenceChanged = fullRecovery;
       changes.forEach((change) => {
@@ -1892,7 +1893,12 @@
           else refreshAllCombos = true;
           return;
         }
+        if (change.entity_type === "inventory") {
+          if (Number(change.entity_id) > 0) inventoryChanges.push(Number(change.entity_id));
+          return;
+        }
         if (change.entity_type !== "product" || !(Number(change.entity_id) > 0)) return;
+        if (change.operation === "stock") inventoryChanges.push(Number(change.entity_id));
         if (change.operation === "delete") deletes.push(Number(change.entity_id));
         else if (durableOrderReadyProductIds.has(Number(change.entity_id))) refresh.push(Number(change.entity_id));
       });
@@ -1928,6 +1934,7 @@
       if (!scopeIsCurrent(targetScope, generation)) return false;
       await flushPersistence();
       if (!(await saveCheckpoint(serverRevision))) return false;
+      if (inventoryChanges.length || fullRecovery) notify("inventory", uniqueIds(inventoryChanges));
       setSyncState("online"); return true;
   }
   async function reconcile(options = {}) {

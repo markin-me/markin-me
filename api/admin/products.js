@@ -6,8 +6,82 @@ const multer = require('multer');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const catalogSync = require('../../services/catalog-sync');
 
-module.exports = function makeAdminProductsRouter({ db, helpers, buildAdminFullProductPassports }) {
+module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, buildAdminFullProductPassports }) {
   const router = express.Router();
+
+  async function applyInlineStockAdjustment(req, { tenantId, storeId, productId, stockQty }) {
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [rows] = await conn.query(
+        `SELECT p.id, p.unit_id, p.base_unit_id, p.cost_price, p.price, s.qty AS stock_qty
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+         WHERE p.tenant_id=? AND p.id=?
+         LIMIT 1
+         FOR UPDATE`,
+        [storeId, tenantId, productId]
+      );
+      if (!rows.length) {
+        await conn.rollback();
+        return { notFound: true };
+      }
+
+      const product = rows[0];
+      const previousQty = product.stock_qty == null ? null : Number(product.stock_qty);
+      const nextQty = stockQty == null ? null : Number(stockQty);
+      if (previousQty === nextQty) {
+        await conn.commit();
+        return { changed: false, previousQty, stockQty: nextQty };
+      }
+
+      const type = previousQty == null
+        ? 'out'
+        : (nextQty == null || nextQty > previousQty ? 'in' : 'out');
+      const difference = previousQty == null || nextQty == null
+        ? 0
+        : Math.abs(nextQty - previousQty);
+      const displayQty = (value) => value == null ? '∞' : String(value);
+      const direction = type === 'in' ? 'приход' : 'списание';
+      const comment = `Корректировка остатка из списка товаров: было ${displayQty(previousQty)}, установлено ${displayQty(nextQty)}; ${direction}.`;
+
+      const [documentResult] = await conn.query(
+        `INSERT INTO prod_stock_documents
+           (tenant_id, store_id, type, status, number, comment, posted_at, created_by)
+         VALUES (?, ?, ?, 'posted', NULL, ?, NOW(), ?)`,
+        [tenantId, storeId, type, comment, req.user?.userId || null]
+      );
+      const unitId = Number(product.base_unit_id || product.unit_id) || null;
+      await conn.query(
+        `INSERT INTO prod_stock_document_items
+           (tenant_id, document_id, product_id, qty, unit_id, cost_price, price)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [tenantId, documentResult.insertId, productId, difference, unitId,
+          helpers.numOrNull(product.cost_price), helpers.numOrNull(product.price)]
+      );
+      await conn.query(
+        `INSERT INTO prod_product_stocks (tenant_id, store_id, product_id, qty)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE qty=VALUES(qty)`,
+        [tenantId, storeId, productId, nextQty]
+      );
+
+      await conn.commit();
+      return {
+        changed: true,
+        documentId: Number(documentResult.insertId),
+        previousQty,
+        stockQty: nextQty,
+      };
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+  }
 
   async function hasCatalogStoreScope(tenantId, storeId) {
     const [rows] = await db.query(
@@ -65,6 +139,15 @@ module.exports = function makeAdminProductsRouter({ db, helpers, buildAdminFullP
       );
     } else {
       await catalogSync.recordTenantChanges({ db, tenantId, entityType: 'product', operation: 'upsert' }, related);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'stock')) {
+      await catalogSync.recordScopeChanges({
+        db,
+        tenantId,
+        storeId,
+        entityType: 'inventory',
+        operation: 'stock',
+      }, related);
     }
     if (/prod_categories|sort\/prod_categories/.test(requestPath)) {
       const categoryId = Number(requestPath.match(/prod_categories\/(\d+)/)?.[1] || req.body?.id || 0) || null;
@@ -2775,6 +2858,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, buildAdminFullP
       const hasProductionZoneId = Object.prototype.hasOwnProperty.call(req.body || {}, 'production_zone_id');
       const hasCategoryIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'category_ids');
       const hasStock = Object.prototype.hasOwnProperty.call(req.body || {}, 'stock');
+      const isInlineStockAdjustment = hasStock && req.body?.stock_adjustment === true;
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const price = helpers.numOrNull(req.body.price);
       const old_price = helpers.numOrNull(req.body.old_price);
@@ -2787,6 +2871,29 @@ module.exports = function makeAdminProductsRouter({ db, helpers, buildAdminFullP
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const fulfillment_mode = normalizeProductFulfillmentMode(req.body.fulfillment_mode);
+      if (isInlineStockAdjustment) {
+        const adjustment = await applyInlineStockAdjustment(req, {
+          tenantId,
+          storeId,
+          productId: id,
+          stockQty: stock_qty,
+        });
+        if (adjustment.notFound) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+        if (adjustment.changed && ordersEvents && typeof ordersEvents.publish === 'function') {
+          try {
+            ordersEvents.publish(tenantId, storeId, 'stock.changed', {
+              source: 'products.inline_adjustment',
+              document_id: adjustment.documentId,
+              product_ids: [id],
+              stock_qty: adjustment.stockQty,
+              previous_stock_qty: adjustment.previousQty,
+            });
+          } catch (error) {
+            console.error('inline stock adjustment event publish failed:', error);
+          }
+        }
+        return res.json({ ok: true, stock_qty: adjustment.stockQty, document_id: adjustment.documentId || null });
+      }
       if (hasProductionZoneId && production_zone_id != null) {
         const [zoneRows] = await db.query(
           `SELECT id FROM prod_production_zones WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,

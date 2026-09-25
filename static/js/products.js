@@ -7114,6 +7114,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
           const payload = {};
           payload[field] = field === "price" ? (normalizedValue ?? 0) : normalizedValue;
+          if (field === "stock") payload.stock_adjustment = true;
 
           input.dataset.inlineSaving = "1";
           input.disabled = true;

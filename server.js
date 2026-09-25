@@ -2221,6 +2221,7 @@ app.delete('/api/admin/analytics/expense-documents/:id', authMiddleware, async (
 const adminProductsRouter = makeAdminProductsRouter({
   db,
   helpers,
+  ordersEvents,
   buildAdminFullProductPassports: publicShopRouter.buildAdminFullProductPassports,
 });
 app.use('/api', authMiddleware, adminProductsRouter);

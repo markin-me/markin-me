@@ -22039,13 +22039,21 @@
         });
         window.CatalogRepository?.patchProductAuthoritative?.(productId, { stock_qty: inventory.stock_qty });
       });
+      const appliedChangedIds = [];
       changedIds.forEach((productId) => {
         const before = previous.get(productId);
         const after = next.get(productId);
         if (!wasReady || before?.stock_qty !== after?.stock_qty || before?.is_available !== after?.is_available) {
+          appliedChangedIds.push(productId);
           patchVisibleProductInventory(productId);
         }
       });
+      if (appliedChangedIds.length) {
+        const affectedComboIds = window.CatalogRepository?.getAffectedComboIds?.(appliedChangedIds) || [];
+        const changedComboIds = applyNewOrderRepositoryComboChanges(affectedComboIds);
+        patchActiveCatalogItems(appliedChangedIds, changedComboIds);
+        patchCheckoutCatalogItems(appliedChangedIds);
+      }
       schedulePersistBootstrapSnapshot(0);
       return true;
     } catch {
@@ -23729,6 +23737,22 @@
   const pendingRepositoryComboIds = new Set();
   const pendingRepositoryComboBlockIds = new Set();
   let pendingRepositoryCategories = false;
+  let repositoryInventoryRefreshPromise = null;
+  let repositoryInventoryRefreshAgain = false;
+  function requestRepositoryInventoryRefresh() {
+    if (repositoryInventoryRefreshPromise) {
+      repositoryInventoryRefreshAgain = true;
+      return repositoryInventoryRefreshPromise;
+    }
+    repositoryInventoryRefreshPromise = refreshNewOrderInventory().finally(() => {
+      repositoryInventoryRefreshPromise = null;
+      if (repositoryInventoryRefreshAgain) {
+        repositoryInventoryRefreshAgain = false;
+        void requestRepositoryInventoryRefresh();
+      }
+    });
+    return repositoryInventoryRefreshPromise;
+  }
   let unsubscribeCatalogRepository = null;
   if (window.CatalogRepository) {
     unsubscribeCatalogRepository = window.CatalogRepository.subscribe((event) => {
@@ -23741,6 +23765,9 @@
         (event.ids || []).forEach((id) => pendingRepositoryComboBlockIds.add(Number(id)));
       } else if (type === "categories") {
         pendingRepositoryCategories = true;
+      } else if (type === "inventory") {
+        void requestRepositoryInventoryRefresh();
+        return;
       } else {
         return;
       }
