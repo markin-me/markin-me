@@ -20,6 +20,91 @@
       return Number.isFinite(value) && value > 0 ? value : 0;
     })(),
   };
+  let productsStockSocket = null;
+  let productsStockReconnectTimer = null;
+  const pendingRemoteStockIds = new Set();
+  const stockEventGenerationByProductId = new Map();
+  let pendingRemoteStockTimer = null;
+
+  function advanceProductStockEventGeneration(productIds) {
+    (Array.isArray(productIds) ? productIds : []).forEach((value) => {
+      const id = Number(value || 0);
+      if (!(id > 0)) return;
+      stockEventGenerationByProductId.set(id, Number(stockEventGenerationByProductId.get(id) || 0) + 1);
+    });
+  }
+
+  async function flushRemoteStockChanges() {
+    const ids = Array.from(pendingRemoteStockIds);
+    pendingRemoteStockIds.clear();
+    if (!ids.length) return;
+    try {
+      const response = await api("/api/public/products/batch/availability", {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+      });
+      const rows = Array.isArray(response?.stock_levels) ? response.stock_levels : [];
+      rows.forEach((stockRow) => {
+        const productId = Number(stockRow?.product_id || stockRow?.productId || 0);
+        if (!(productId > 0)) return;
+        const qty = stockRow.stock_qty === null ? null : Number(stockRow.stock_qty);
+        const product = state.products.find((item) => Number(item?.id || 0) === productId);
+        if (product) product.stock_qty = qty;
+        window.CatalogRepository?.patchProductAuthoritative?.(productId, { stock_qty: qty }, { notify: false });
+        patchCachedProductStock(productId, qty);
+        const input = productsList?.querySelector(`.product-row[data-id="${productId}"] [data-inline-field="stock"]`);
+        if (input && document.activeElement !== input && input.dataset.inlineSaving !== "1") {
+          input.value = product ? getProductRowDisplayValue(product, "stock") : (qty == null ? "∞" : String(qty));
+        }
+      });
+    } catch (error) {
+      console.warn("Products stock reconciliation failed:", error);
+    }
+  }
+
+  function queueRemoteStockChanges(ids) {
+    (Array.isArray(ids) ? ids : []).forEach((value) => {
+      const id = Number(value || 0);
+      if (id > 0) pendingRemoteStockIds.add(id);
+    });
+    if (!pendingRemoteStockIds.size) return;
+    if (pendingRemoteStockTimer) clearTimeout(pendingRemoteStockTimer);
+    pendingRemoteStockTimer = setTimeout(() => {
+      pendingRemoteStockTimer = null;
+      void flushRemoteStockChanges();
+    }, 50);
+  }
+
+  function connectProductsStockSocket() {
+    const storeId = Number(localStorage.getItem("activeStoreId") || localStorage.getItem("store_id") || PRODUCT_CACHE_SCOPE.storeId || 1);
+    if (typeof WebSocket !== "function" || !(storeId > 0)) return;
+    try { productsStockSocket?.close(); } catch {}
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${protocol}//${location.host}/api/stock-ws?tenant_id=${encodeURIComponent(TENANT_ID)}&store_id=${encodeURIComponent(storeId)}`);
+    productsStockSocket = socket;
+    socket.addEventListener("open", () => {
+      if (productsStockSocket !== socket) return;
+      queueRemoteStockChanges(state.products.map((product) => product?.id));
+    });
+    socket.addEventListener("message", (event) => {
+      if (productsStockSocket !== socket) return;
+      try {
+        const payload = JSON.parse(String(event.data || ""));
+        if (payload.type === "stock.resync") queueRemoteStockChanges(state.products.map((product) => product?.id));
+        if (payload.type === "stock.changed") {
+          const affectedIds = payload.affected_product_ids || payload.product_ids || [];
+          advanceProductStockEventGeneration(affectedIds);
+          queueRemoteStockChanges(affectedIds);
+        }
+      } catch (_) {}
+    });
+    socket.addEventListener("close", () => {
+      if (productsStockSocket !== socket) return;
+      productsStockSocket = null;
+      if (productsStockReconnectTimer) clearTimeout(productsStockReconnectTimer);
+      productsStockReconnectTimer = setTimeout(connectProductsStockSocket, 1500);
+    });
+  }
   const PRODUCT_BLOCK_DEFINITIONS = Object.freeze([
     { key: "nutrition", label: "КБЖУ" },
     { key: "description", label: "Описание" },
@@ -1577,6 +1662,28 @@
       throw new Error((data && data.error) || `HTTP_${res.status}`);
     }
     return data;
+  }
+
+  function patchCachedProductStock(productId, stockQty) {
+    const id = Number(productId || 0);
+    if (!(id > 0)) return;
+    const cached = getCachedProductDetails(id);
+    if (cached?.product) {
+      cached.product.stock_qty = stockQty;
+      setCachedProductDetails(id, { product: cached.product });
+    }
+    if (!editingProducts.has(id)) {
+      clearCachedProductView(id);
+      if (Number(state.selectedProductId || 0) === id) {
+        if (currentNavigationState?.product && Number(currentNavigationState.product.id || 0) === id) {
+          currentNavigationState.product.stock_qty = stockQty;
+        }
+        const stockInput = document.querySelector('#productEditorForm [name="stock"]');
+        if (stockInput && document.activeElement !== stockInput) {
+          stockInput.value = stockQty == null ? "" : formatNumberForInput(stockQty);
+        }
+      }
+    }
   }
 
   async function apiUploadImages(files) {
@@ -5881,9 +5988,13 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (field !== "stock") return parseNumberFromInput(value);
     const unitLabel = String(getProductListUnitLabel(product) || "").trim();
     let normalized = String(value || "").trim();
-    if (unitLabel) normalized = normalized.replace(unitLabel, "").trim();
-    normalized = normalized.replace(/[^\d,.\-]/g, "");
-    return parseNumberFromInput(normalized);
+    if (unitLabel && normalized.endsWith(unitLabel)) {
+      normalized = normalized.slice(0, -unitLabel.length).trim();
+    }
+    if (normalized === "" || normalized === "∞") return null;
+    if (!/^\d+(?:[.,]\d+)?$/.test(normalized)) return Number.NaN;
+    const parsed = Number(normalized.replace(",", "."));
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : Number.NaN;
   }
 
   function applyInlineProductValue(product, field, value) {
@@ -7073,7 +7184,14 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       row.querySelectorAll(".product-row-inline-input[data-inline-field]").forEach((input) => {
         const field = input.dataset.inlineField;
         input.addEventListener("click", (event) => event.stopPropagation());
+        input.addEventListener("input", () => input.setCustomValidity(""));
         input.addEventListener("focus", () => {
+          if (input.dataset.inlineInvalidDraft === "1") {
+            input.dataset.inlineInvalidDraft = "";
+            input.select();
+            return;
+          }
+          input.setCustomValidity("");
           input.dataset.inlineOriginal = getProductRowEditableValue(product, field);
           input.dataset.inlineCancelled = "";
           input.value = getProductRowEditableValue(product, field);
@@ -7102,6 +7220,14 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
           const draftValue = String(input.value ?? "").trim();
           const normalizedValue = parseProductRowInlineNumber(field, draftValue, product);
+          if (field === "stock" && Number.isNaN(normalizedValue)) {
+            input.dataset.inlineInvalidDraft = "1";
+            input.setCustomValidity("Введите остаток числом не меньше нуля или оставьте поле пустым для бесконечного остатка");
+            input.reportValidity();
+            requestAnimationFrame(() => input.focus());
+            return;
+          }
+          input.setCustomValidity("");
           const previousComparable = getInlineProductComparableValue(product, field);
           const nextComparable = field === "price"
             ? (normalizedValue != null ? Number(normalizedValue) : 0)
@@ -7117,29 +7243,51 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           if (field === "stock") payload.stock_adjustment = true;
 
           input.dataset.inlineSaving = "1";
+          input.setAttribute("aria-busy", "true");
+          input.closest(".product-row-stock-input-wrap")?.classList.add("is-saving");
           input.disabled = true;
           applyInlineProductValue(product, field, payload[field]);
           syncProductRowInlineControl(row, product, field);
           const catalogPatch = window.CatalogRepository?.patchProductOptimistic(productId, payload) || null;
+          const stockEventGeneration = Number(stockEventGenerationByProductId.get(productId) || 0);
           try {
-            await api(`/api/prod_products/${productId}`, {
+            const response = await api(`/api/prod_products/${productId}`, {
               method: "PATCH",
               body: JSON.stringify(payload),
             });
-            if (catalogPatch) window.CatalogRepository.commitProductPatch(catalogPatch);
+            if (field === "stock" && Object.prototype.hasOwnProperty.call(response || {}, "stock_qty")) {
+              applyInlineProductValue(product, field, response.stock_qty);
+              syncProductRowInlineControl(row, product, field);
+            }
+            if (catalogPatch) {
+              const authoritativeFields = field === "stock" && Object.prototype.hasOwnProperty.call(response || {}, "stock_qty")
+                ? { stock_qty: response.stock_qty }
+                : null;
+              window.CatalogRepository.commitProductPatch(catalogPatch, authoritativeFields);
+            }
             if (field === "stock") {
-              upsertSavedProductInList(product, [state.currentCategoryId]);
+              patchCachedProductStock(productId, product.stock_qty);
+              syncProductRowInlineControl(row, product, field);
             } else {
               if (window.CatalogRepository) window.CatalogRepository.markProductSummary(product);
               syncProductRowInlineControl(row, product, field);
             }
           } catch (e) {
-            applyInlineProductValue(product, field, previousComparable);
-            if (catalogPatch) window.CatalogRepository.rollbackProductPatch(catalogPatch);
-            input.value = getProductRowDisplayValue(product, field);
-            alert("Ошибка сохранения поля товара: " + (e.message || "Неизвестная ошибка"));
+            const newerStockEventReceived = field === "stock"
+              && Number(stockEventGenerationByProductId.get(productId) || 0) !== stockEventGeneration;
+            if (!newerStockEventReceived) {
+              applyInlineProductValue(product, field, previousComparable);
+              if (catalogPatch) window.CatalogRepository.rollbackProductPatch(catalogPatch);
+              input.value = getProductRowDisplayValue(product, field);
+              alert("Ошибка сохранения поля товара: " + (e.message || "Неизвестная ошибка"));
+            } else {
+              if (catalogPatch) window.CatalogRepository.commitProductPatch(catalogPatch);
+              queueRemoteStockChanges([productId]);
+            }
           } finally {
             input.dataset.inlineSaving = "";
+            input.removeAttribute("aria-busy");
+            input.closest(".product-row-stock-input-wrap")?.classList.remove("is-saving");
             input.disabled = false;
           }
         });
@@ -25038,6 +25186,7 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
+    connectProductsStockSocket();
     bindAccordionContainer(productsAccordion);
     bindAccordionContainer(optionGroupInfo);
     bindAccordionContainer(variantGroupInfo);
@@ -25157,6 +25306,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
   // Слушать изменение Филиалы
   document.addEventListener('tenantStoreChanged', async () => {
+    connectProductsStockSocket();
     closeProductsCatalogMenu();
     productsRequestToken += 1;
     state.products = [];
@@ -25182,6 +25332,9 @@ const isViewMode = state.comboPanel.mode === "view";
     if (window.CatalogRepository) await window.CatalogRepository.startSync();
   });
   window.addEventListener("pagehide", () => {
+    try { productsStockSocket?.close(); } catch {}
+    productsStockSocket = null;
+    if (productsStockReconnectTimer) clearTimeout(productsStockReconnectTimer);
     closeProductsCatalogMenu();
     unsubscribeProductsCatalog?.();
     unsubscribeProductsCatalog = null;

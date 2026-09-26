@@ -656,7 +656,7 @@
     return ids.map((id) => productsById.get(id));
   }
 
-  function patchProductRuntime(productId, fields = {}) {
+  function patchProductRuntime(productId, fields = {}, options = {}) {
     const id = normalizeId(productId);
     const product = id ? productsById.get(id) : null;
     if (!id || !product) return false;
@@ -668,7 +668,8 @@
     if (passport) {
       if (passport.product && typeof passport.product === "object") {
         Object.keys(patch).forEach((key) => {
-          if (key !== "stock" && key !== "stock_qty" && patch[key] !== undefined) passport.product[key] = patch[key];
+          if (patch[key] === undefined) return;
+          passport.product[key === "stock" ? "stock_qty" : key] = patch[key];
         });
       }
       if (Object.prototype.hasOwnProperty.call(patch, "stock") || Object.prototype.hasOwnProperty.call(patch, "stock_qty")) {
@@ -677,7 +678,7 @@
         passport.availability = { ...(passport.availability || {}), stock_qty: value, is_available: value == null || Number(value) > 0 };
       }
     }
-    notify("products", [id]);
+    if (options.notify !== false) notify("products", [id]);
     return true;
   }
 
@@ -724,7 +725,14 @@
       fieldVersions.get(key === "stock" ? "stock_qty" : key) === token.version
     )));
     if (Object.keys(currentFields).length) patchProductRuntime(id, currentFields);
-    if (!(token.fields || []).some((key) => fieldVersions.get(key) === token.version)) return false;
+    if (!(token.fields || []).some((key) => fieldVersions.get(key) === token.version)) {
+      (token.fields || []).forEach((key) => {
+        if (pendingFields.get(key) === token.version) pendingFields.delete(key);
+      });
+      if (pendingFields.size) pendingMutationFields.set(id, pendingFields);
+      else pendingMutationFields.delete(id);
+      return false;
+    }
     (token.fields || []).forEach((key) => {
       if (pendingFields.get(key) === token.version) pendingFields.delete(key);
     });
@@ -736,9 +744,9 @@
     return true;
   }
 
-  function patchProductAuthoritative(productId, fields) {
+  function patchProductAuthoritative(productId, fields, options = {}) {
     const id = normalizeId(productId);
-    if (!id || !patchProductRuntime(id, fields)) return false;
+    if (!id || !patchProductRuntime(id, fields, options)) return false;
     const version = (mutationVersions.get(id) || 0) + 1;
     mutationVersions.set(id, version);
     const fieldVersions = mutationFieldVersions.get(id) || new Map();
@@ -866,6 +874,17 @@
       let passport = stableValue(rawPassport);
       if (!isOrderReadyPassport(passport)) return;
       const id = normalizeId(passport.product.id ?? passport.product.product_id);
+      const currentProduct = productsById.get(id);
+      if (currentProduct && Object.prototype.hasOwnProperty.call(currentProduct, "stock_qty")) {
+        const stockQty = currentProduct.stock_qty;
+        passport.product.stock_qty = stockQty;
+        passport.stock = { ...(passport.stock || {}), stock_qty: stockQty, qty: stockQty, is_unlimited: stockQty == null };
+        passport.availability = {
+          ...(passport.availability || {}),
+          stock_qty: stockQty,
+          is_available: stockQty == null || Number(stockQty) > 0,
+        };
+      }
       const editorReady = isEditorReadyPassport(passport);
       if (editorReady) passport = normalizeEditorReferences(passport);
       passportsByProductId.set(id, passport);

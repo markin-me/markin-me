@@ -758,6 +758,8 @@
     tabs: [],
     activeKey: null,
   };
+  let checkoutTabActivationRevision = 0;
+  let mountedCheckoutTabKey = null;
   const orderStatusSyncStates = new Map();
 
   const ORDERS_CACHE_VERSION = 4;
@@ -1897,7 +1899,7 @@
     return tab.checkoutSession;
   }
 
-  async function applyTabModeLayout(tab) {
+  async function applyTabModeLayout(tab, activationRevision) {
     if (!tab || tab.type !== "order") {
       setOrdersCheckoutLayoutEnabled(false);
       return;
@@ -1912,9 +1914,22 @@
     setOrdersCheckoutLayoutEnabled(true);
     const bridge = await getReadyNewOrderBridge();
     if (!bridge) return;
+    if (activationRevision !== checkoutTabActivationRevision || tabsState.activeKey !== tab.key) return;
     const session = await ensureCheckoutSessionForTab(tab);
+    if (activationRevision !== checkoutTabActivationRevision || tabsState.activeKey !== tab.key) return;
     if (session && typeof bridge.restoreSession === "function") {
-      await bridge.restoreSession(session);
+      const isCurrentActivation = () => (
+        activationRevision === checkoutTabActivationRevision
+        && tabsState.activeKey === tab.key
+      );
+      const restoredSession = await bridge.restoreSession(session, {
+        isCurrent: isCurrentActivation,
+        onApplied: () => {
+          if (isCurrentActivation()) mountedCheckoutTabKey = tab.key;
+        },
+      });
+      if (activationRevision !== checkoutTabActivationRevision || tabsState.activeKey !== tab.key) return;
+      if (restoredSession === false) return;
       tab.checkoutSessionHydrating = false;
       try {
         const restored = bridge.captureSession && bridge.captureSession();
@@ -1923,13 +1938,22 @@
           const fallbackSession = bridge.createBlankSession({ title: tab.title });
           if (fallbackSession && typeof fallbackSession === "object") {
             tab.checkoutSession = fallbackSession;
-            await bridge.restoreSession(fallbackSession);
+            if (activationRevision !== checkoutTabActivationRevision || tabsState.activeKey !== tab.key) return;
+            const restoredFallback = await bridge.restoreSession(fallbackSession, {
+              isCurrent: isCurrentActivation,
+              onApplied: () => {
+                if (isCurrentActivation()) mountedCheckoutTabKey = tab.key;
+              },
+            });
+            if (activationRevision !== checkoutTabActivationRevision || tabsState.activeKey !== tab.key) return;
+            if (restoredFallback === false) return;
             tab.checkoutSessionHydrating = false;
           }
         }
       } catch (err) {
         console.error(err);
       }
+      mountedCheckoutTabKey = tab.key;
     }
   }
 
@@ -1992,18 +2016,28 @@
   }
 
   function setActiveOrderTab(key, { openMobile = false } = {}) {
-    const prevTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey) || null;
-    if (prevTab) captureCheckoutSessionForTab(prevTab);
+    const mountedTab = tabsState.tabs.find((t) => t.key === mountedCheckoutTabKey) || null;
+    if (mountedTab) captureCheckoutSessionForTab(mountedTab);
 
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
+    if (tabsState.activeKey === key && mountedCheckoutTabKey === key && isCheckoutTab(tab)) {
+      renderOrderTabs();
+      syncActiveOrderRowState();
+      setOrdersCheckoutLayoutEnabled(true);
+      if (openMobile && shouldUseMobileSheet()) openSheet();
+      schedulePersistOrdersCache();
+      return;
+    }
     tabsState.activeKey = key;
+    const activationRevision = ++checkoutTabActivationRevision;
 
     if (tab.type === "order") {
       tab.mode = normalizeTabMode(tab.mode);
     }
 
     if (tab.type === "client") {
+      mountedCheckoutTabKey = null;
       state.activeOrderId = null;
       renderOrderTabs();
       syncActiveOrderRowState();
@@ -2017,7 +2051,7 @@
       state.activeOrderId = null;
       renderOrderTabs();
       syncActiveOrderRowState();
-      applyTabModeLayout(tab)
+      applyTabModeLayout(tab, activationRevision)
         .then(() => {
           if (openMobile && shouldUseMobileSheet()) openSheet();
         })
@@ -2029,6 +2063,7 @@
     }
 
     setOrdersCheckoutLayoutEnabled(false);
+    mountedCheckoutTabKey = null;
     state.activeOrderId = tab.orderId ? Number(tab.orderId) : null;
     const orderFromState = tab.orderId
       ? state.orders.find((o) => Number(o.id) === Number(tab.orderId))
@@ -2068,9 +2103,11 @@
   }
 
   function goToOrdersHomeView() {
-    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
-    if (activeTab) captureCheckoutSessionForTab(activeTab);
+    const mountedTab = tabsState.tabs.find((tab) => tab.key === mountedCheckoutTabKey) || null;
+    if (mountedTab) captureCheckoutSessionForTab(mountedTab);
     tabsState.activeKey = null;
+    checkoutTabActivationRevision += 1;
+    mountedCheckoutTabKey = null;
     state.activeOrderId = null;
     state.activeOrder = null;
     renderOrderTabs();
@@ -2566,7 +2603,7 @@
       setInfo(null);
       // During background orders polling we must not restore checkout session again,
       // otherwise in-progress draft edits are overwritten by stale tab snapshot.
-      captureCheckoutSessionForTab(activeTab);
+      if (activeTab.key === mountedCheckoutTabKey) captureCheckoutSessionForTab(activeTab);
       setOrdersCheckoutLayoutEnabled(true);
       schedulePersistOrdersCache();
       return;
@@ -2586,12 +2623,14 @@
     const idx = tabsState.tabs.findIndex((tab) => tab.key === key);
     if (idx < 0) return;
     const tabToClose = tabsState.tabs[idx];
-    captureCheckoutSessionForTab(tabToClose);
+    if (tabToClose.key === mountedCheckoutTabKey) captureCheckoutSessionForTab(tabToClose);
     const wasActive = tabsState.activeKey === key;
     tabsState.tabs.splice(idx, 1);
 
     if (!tabsState.tabs.length) {
       tabsState.activeKey = null;
+      checkoutTabActivationRevision += 1;
+      mountedCheckoutTabKey = null;
       state.activeOrderId = null;
       renderOrderTabs();
       syncActiveOrderRowState();
@@ -3422,8 +3461,8 @@
   }
 
   function persistOrdersCacheNow() {
-    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
-    if (activeTab) captureCheckoutSessionForTab(activeTab);
+    const mountedTab = tabsState.tabs.find((tab) => tab.key === mountedCheckoutTabKey) || null;
+    if (mountedTab) captureCheckoutSessionForTab(mountedTab);
     const cachedDate = state.date.start && state.date.end
       ? {
           start: toDateKey(state.date.start),

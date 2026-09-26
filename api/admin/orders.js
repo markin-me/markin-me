@@ -1733,12 +1733,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
   async function publishStockChanged(tenantId, storeId, payload = {}) {
     try {
-      await productPassportSnapshots.markRelatedProductsDirty({
-        db, tenantId, storeId, productIds: payload?.product_ids || [], catalogChangeScope: 'store', operation: 'stock',
+      const changedIds = payload?.product_ids || [];
+      const affectedIds = await productPassportSnapshots.markRelatedProductsDirty({
+        db, tenantId, storeId, productIds: changedIds, catalogChangeScope: 'store', operation: 'stock',
       }).catch((error) => console.error("stock passport invalidation failed:", error));
       if (ordersEvents && typeof ordersEvents.publish === "function") {
         ordersEvents.publish(tenantId, storeId, "stock.changed", {
           tenant_id: Number(tenantId), store_id: Number(storeId), ...payload,
+          changed_product_ids: changedIds, affected_product_ids: affectedIds || changedIds,
         });
       }
     } catch (err) {

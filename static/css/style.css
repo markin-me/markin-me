@@ -5798,6 +5798,26 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
 .product-row-stock-input-wrap:focus-within .product-row-stock-unit-hint:not(:empty){
   opacity:1;
 }
+.product-row-stock-input-wrap.is-saving::after{
+  content:"";
+  position:absolute;
+  top:50%;
+  right:8px;
+  width:12px;
+  height:12px;
+  margin-top:-6px;
+  border:2px solid rgba(255,122,0,.25);
+  border-top-color:var(--color-primary);
+  border-radius:50%;
+  animation:product-row-stock-spin .7s linear infinite;
+  pointer-events:none;
+}
+.product-row-stock-input-wrap.is-saving .product-row-stock-unit-hint{
+  opacity:0;
+}
+@keyframes product-row-stock-spin{
+  to{ transform:rotate(360deg); }
+}
 .product-row .control.product-row-input{
   pointer-events:auto;
   height:28px;
@@ -13094,6 +13114,13 @@ body.page-cash #ordersRightPane .orders-info > #cashPaymentFooter{
   -webkit-box-orient:vertical;
   overflow:hidden;
   text-overflow:ellipsis;
+}
+
+.new-order-product-stock{
+  color:var(--color-text-muted);
+  font-size:12px;
+  line-height:1.15;
+  font-weight:800;
 }
 
 .new-order-product-variants{

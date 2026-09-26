@@ -175,24 +175,62 @@ async function markProductsDirty({ db, tenantId, storeId, productIds, catalogCha
   return ids;
 }
 
-async function markRelatedProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert' }) {
+async function resolveRelatedProductIds({ db, tenantId, productIds }) {
   const seeds = positiveIds(productIds);
-  if (!seeds.length) return;
-  const [rows] = await db.query(
-    `SELECT product_id FROM prod_product_ingredients
-       WHERE tenant_id=? AND ingredient_id IN (?)
-     UNION
-     SELECT oa.assign_id AS product_id
-       FROM prod_option_items oi
-       JOIN prod_option_assignments oa
-         ON oa.tenant_id=oi.tenant_id AND oa.group_id=oi.group_id
-       WHERE oi.tenant_id=? AND oi.target_type='product' AND oi.target_product_id IN (?)
-         AND oa.assign_type='product' AND oa.is_active=1`,
-    [tenantId, seeds, tenantId, seeds]
-  );
-  const related = positiveIds([...seeds, ...rows.map((row) => row.product_id)]);
+  if (!seeds.length) return [];
+  const relatedSet = new Set(seeds);
+  let frontier = seeds;
+  while (frontier.length) {
+    const [rows] = await db.query(
+      `SELECT product_id FROM prod_product_ingredients
+         WHERE tenant_id=? AND ingredient_id IN (?)
+       UNION
+       SELECT oa.assign_id AS product_id
+         FROM prod_option_items oi
+         JOIN prod_option_assignments oa
+           ON oa.tenant_id=oi.tenant_id AND oa.group_id=oi.group_id
+         WHERE oi.tenant_id=? AND oi.target_type='product' AND oi.target_product_id IN (?)
+           AND oa.assign_type='product' AND oa.is_active=1`,
+      [tenantId, frontier, tenantId, frontier]
+    );
+    const next = positiveIds(rows.map((row) => row.product_id))
+      .filter((productId) => !relatedSet.has(productId));
+    next.forEach((productId) => relatedSet.add(productId));
+    frontier = next;
+  }
+  return [...relatedSet];
+}
+
+async function markRelatedProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert' }) {
+  const related = await resolveRelatedProductIds({ db, tenantId, productIds });
+  if (!related.length) return;
   await markProductsDirty({ db, tenantId, storeId, productIds: related, catalogChangeScope, operation });
   return related;
+}
+
+async function prepareRelatedProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert' }) {
+  const related = await resolveRelatedProductIds({ db, tenantId, productIds });
+  if (!related.length) return [];
+  await db.query(
+    `INSERT INTO prod_product_passport_snapshots (tenant_id, store_id, product_id, status, schema_version)
+     SELECT ?, ?, p.id, 'dirty', ? FROM prod_products p
+     WHERE p.tenant_id=? AND p.id IN (?)
+     ON DUPLICATE KEY UPDATE status='dirty', last_error=NULL`,
+    [tenantId, storeId, SNAPSHOT_SCHEMA_VERSION, tenantId, related]
+  );
+  if (catalogChangeScope === 'store') {
+    await catalogSync.recordScopeChanges({
+      db, tenantId, storeId, entityType: 'product', operation, deferEmit: true,
+    }, related);
+  }
+  return related;
+}
+
+function activatePreparedProductsDirty({ tenantId, storeId, productIds }) {
+  const ids = positiveIds(productIds);
+  if (!ids.length) return;
+  clearMemory(tenantId, storeId, ids);
+  enqueueBuild(tenantId, storeId, ids);
 }
 
 async function scheduleInitialBackfill(db) {
@@ -223,4 +261,6 @@ module.exports = {
   readPassports,
   markProductsDirty,
   markRelatedProductsDirty,
+  prepareRelatedProductsDirty,
+  activatePreparedProductsDirty,
 };

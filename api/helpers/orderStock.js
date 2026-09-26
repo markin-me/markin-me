@@ -250,7 +250,7 @@ async function buildDeductions({ db, tenantId, items }) {
           ? selection.ingredients_display
           : (Array.isArray(selection?.ingredients) ? selection.ingredients : []);
 
-        if (!selectionIngredients.length && selectionPid > 0) {
+        if (selectionPid > 0) {
           parentProductIdsNeedingDefaultIngredientsSet.add(selectionPid);
         }
 
@@ -285,6 +285,20 @@ async function buildDeductions({ db, tenantId, items }) {
       if (optionItemId > 0) optionItemIdsSet.add(optionItemId);
       const groupId = Number(option?.variant_group_id || 0);
       if (groupId > 0) variantGroupIdsSet.add(groupId);
+      const optionIngredients = Array.isArray(option?.ingredients_display)
+        ? option.ingredients_display
+        : (Array.isArray(option?.ingredients) ? option.ingredients : []);
+      if (optionPid > 0) {
+        parentProductIdsNeedingDefaultIngredientsSet.add(optionPid);
+      }
+      optionIngredients.forEach((ingredient) => {
+        const ingredientId = Number(ingredient?.ingredient_id || ingredient?.product_id || 0);
+        if (ingredientId > 0) {
+          productIdsSet.add(ingredientId);
+          ingredientIdsSet.add(ingredientId);
+        }
+        if (optionPid > 0) parentProductIdsForIngredientSet.add(optionPid);
+      });
     }
     const optionItemIds = Array.isArray(item.option_item_ids) ? item.option_item_ids : [];
     for (const optionItemIdRaw of optionItemIds) {
@@ -293,7 +307,7 @@ async function buildDeductions({ db, tenantId, items }) {
     }
 
     const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
-    if (!ingredients.length && pid > 0) {
+    if (pid > 0) {
       parentProductIdsNeedingDefaultIngredientsSet.add(pid);
     }
     for (const ing of ingredients) {
@@ -392,13 +406,26 @@ async function buildDeductions({ db, tenantId, items }) {
     const multiplier = Number(unitsCount || 0);
     if (!(parentId > 0) || !Number.isFinite(multiplier) || multiplier <= 0 || stack.has(parentId)) return;
 
-    const rows = Array.isArray(explicitIngredients) && explicitIngredients.length
-      ? explicitIngredients
-      : (defaultIngredientsByParentProduct.get(parentId) || []).map((ing) => ({
-          ingredient_id: ing.ingredientId,
-          quantity: ing.quantity,
-          unit_id: ing.unitId || null,
-        }));
+    const defaultRows = (defaultIngredientsByParentProduct.get(parentId) || []).map((ing) => ({
+      ingredient_id: ing.ingredientId,
+      quantity: ing.quantity,
+      unit_id: ing.unitId || null,
+    }));
+    const explicitRows = Array.isArray(explicitIngredients) ? explicitIngredients : [];
+    const explicitByIngredientId = new Map(
+      explicitRows
+        .map((row) => [Number(row?.ingredient_id || row?.product_id || 0), row])
+        .filter(([ingredientId]) => ingredientId > 0)
+    );
+    const rows = defaultRows.map((row) => (
+      explicitByIngredientId.get(Number(row.ingredient_id)) || row
+    ));
+    explicitRows.forEach((row) => {
+      const ingredientId = Number(row?.ingredient_id || row?.product_id || 0);
+      if (ingredientId > 0 && !defaultRows.some((item) => Number(item.ingredient_id) === ingredientId)) {
+        rows.push(row);
+      }
+    });
     if (!rows.length) return;
 
     stack.add(parentId);
@@ -568,7 +595,10 @@ async function buildDeductions({ db, tenantId, items }) {
         consumedPerOption = toPositiveNumber(optionProduct.base_qty, 1);
       }
 
-      await consumeProduct(optionPid, consumedPerOption * optionUnitsCount);
+      const optionIngredients = Array.isArray(option?.ingredients_display)
+        ? option.ingredients_display
+        : (Array.isArray(option?.ingredients) ? option.ingredients : []);
+      await consumeProduct(optionPid, consumedPerOption * optionUnitsCount, optionIngredients);
     }
   }
 

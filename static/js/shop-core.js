@@ -4548,6 +4548,8 @@
   let stockAvailabilityBatchTimer = null;
   let stockAvailabilityBatchInFlight = false;
   const stockAvailabilityBatchPendingIds = new Set();
+  const stockAvailabilityBatchActiveIds = new Set();
+  const stockConfigGenerationByProductId = new Map();
   let stockSyncIntervalHandle = null;
   let stockSyncWakeupBound = false;
   let autoAddLoadPromise = null;
@@ -4651,7 +4653,7 @@
       next.canFulfill = true;
     } else if (explicitAvailable !== undefined) {
       next.isAvailable = explicitAvailable;
-    } else if (hasQty) {
+    } else if (hasQty && source !== "stock_event_raw") {
       next.isAvailable = qty > 0;
     }
 
@@ -4759,6 +4761,67 @@
     return changed;
   }
 
+  function getStockConfigGeneration(productId) {
+    return Number(stockConfigGenerationByProductId.get(Number(productId || 0)) || 0);
+  }
+
+  function advanceStockConfigGeneration(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return 0;
+    const next = getStockConfigGeneration(pid) + 1;
+    stockConfigGenerationByProductId.set(pid, next);
+    return next;
+  }
+
+  function applyEffectiveStockConfigRow(productId, config, expectedGeneration = null) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0) || !config || typeof config !== "object") return;
+    const currentGeneration = getStockConfigGeneration(pid);
+    if (expectedGeneration != null && Number(expectedGeneration) !== currentGeneration) return;
+    const product = state.productCache.get(pid) || getProductPassport(pid)?.product || null;
+    if (!product) return;
+    product.stock_qty = config.stock_qty;
+    product.is_available = config.is_fulfillable === true || config.is_available === true;
+    product.default_variant = config.default_variant || null;
+    product.catalog_default_lines = Array.isArray(config.catalog_default_lines) ? config.catalog_default_lines : [];
+    if (Number.isFinite(Number(config.display_price))) product.display_price = Number(config.display_price);
+    state.productCache.set(pid, product);
+    // Availability must be checked against the same stock-aware ingredient
+    // quantities that are rendered on the card. Keeping the configured
+    // quantities here (for example 200 g after fallback to 100 g) would mark
+    // an otherwise fulfillable product as sold out.
+    productIngredientRequirementsCache.set(pid, {
+      status: "ready",
+      requirements: buildIngredientRequirementsMap(
+        Array.isArray(config.ingredients) ? config.ingredients : []
+      ),
+    });
+    upsertStockLevelRow({
+      productId: pid,
+      qty: config.stock_qty,
+      isAvailable: product.is_available,
+      canFulfill: product.is_available,
+    }, "effective_stock_config");
+    upsellDefaultConfigCache.set(pid, {
+      promise: Promise.resolve(config), data: config, ts: Date.now(), generation: currentGeneration,
+    });
+    mergeProductPassport(pid, { product, defaultConfig: config });
+
+    if (elProductsGrid) {
+      elProductsGrid.querySelectorAll(`.sp-card[data-product-id="${pid}"]`).forEach((card) => {
+        syncProductCardStaticContent(card, product);
+        const price = card.querySelector(".sp-current-price");
+        if (price && Number.isFinite(Number(product.display_price))) {
+          price.textContent = `${catalogMoneyNoKopeks(product.display_price)} ₽`;
+        }
+        applyCardState(card, product, cartQty(pid));
+      });
+    }
+    if (typeof window.applyEffectiveStockConfigToOpenProduct === "function") {
+      window.applyEffectiveStockConfigToOpenProduct(pid, config);
+    }
+  }
+
   function collectVisibleProductIdsForStock() {
     const ids = new Set();
     if (elProductsGrid) {
@@ -4809,31 +4872,27 @@
     const ids = Array.from(stockAvailabilityBatchPendingIds)
       .map((id) => Number(id))
       .filter((id) => Number.isFinite(id) && id > 0)
-      .slice(0, 500);
+      .slice(0, 20);
     if (!ids.length) return;
     ids.forEach((id) => stockAvailabilityBatchPendingIds.delete(id));
+    ids.forEach((id) => stockAvailabilityBatchActiveIds.add(id));
+    const requestGenerations = new Map(ids.map((id) => [id, getStockConfigGeneration(id)]));
     stockAvailabilityBatchInFlight = true;
     try {
-      const json = await apiJson('/api/public/products/batch/availability', {
+      const json = await apiJson('/api/public/products/batch/default-cart-config', {
         method: 'POST',
         body: { ids },
       });
-      const rows = Array.isArray(json?.stock_levels)
-        ? json.stock_levels
-        : Object.values(json?.data || {});
-      let changed = false;
-      rows.forEach((row) => {
-        if (applyStockAvailabilityRow(row, reason)) changed = true;
+      const configs = json?.data && typeof json.data === "object" ? json.data : {};
+      Object.entries(configs).forEach(([productId, config]) => {
+        applyEffectiveStockConfigRow(productId, config, requestGenerations.get(Number(productId)));
       });
-      if (changed || rows.length) {
-        pruneUnavailableCartItems();
-        scheduleSyncAllProductCardsFromCart();
-        if (typeof renderCart === "function") renderCart(true);
-        updateCartBadge();
-      }
+      pruneUnavailableCartItems();
+      updateCartBadge();
     } catch (err) {
       console.warn("Product stock availability refresh failed:", reason, err);
     } finally {
+      ids.forEach((id) => stockAvailabilityBatchActiveIds.delete(id));
       stockAvailabilityBatchInFlight = false;
       if (stockAvailabilityBatchPendingIds.size) {
         queueProductStockAvailabilityRefresh([], { reason: `${reason}_pending`, delayMs: 80 });
@@ -5033,8 +5092,43 @@
 
   function ensurePublicStockEventsConnection() {
     const currentStoreId = Number(getActiveStoreId() || 0) || 1;
+    if (stockEventsSource && stockEventsStoreId === currentStoreId
+      && (stockEventsSource.readyState === WebSocket.OPEN || stockEventsSource.readyState === WebSocket.CONNECTING)) return;
+    closeStockEventsSource();
     stockEventsStoreId = currentStoreId;
-    startPublicStockEventsWaitLoop();
+    if (typeof WebSocket !== "function") return;
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${protocol}//${location.host}/api/stock-ws?tenant_id=${encodeURIComponent(tenantId)}&store_id=${encodeURIComponent(currentStoreId)}`;
+    const socket = new WebSocket(url);
+    stockEventsSource = socket;
+    socket.addEventListener("open", () => {
+      if (stockEventsSource !== socket) return;
+      if (stockEventsReconnectTimer) clearTimeout(stockEventsReconnectTimer);
+      stockEventsReconnectTimer = null;
+    });
+    socket.addEventListener("message", (event) => {
+      if (stockEventsSource !== socket) return;
+      try {
+        const payload = JSON.parse(String(event.data || ""));
+        if (payload.type === "stock.changed") void applyStockChangedEvent(payload);
+        if (payload.type === "stock.resync") {
+          const visibleIds = collectVisibleProductIdsForStock();
+          visibleIds.forEach((id) => {
+            advanceStockConfigGeneration(id);
+            upsellDefaultConfigCache.delete(id);
+            const passport = getProductPassport(id);
+            if (passport && typeof passport === "object") delete passport.defaultConfig;
+          });
+          queueProductStockAvailabilityRefresh(visibleIds, { reason: "stock_ws_resync", delayMs: 0 });
+        }
+      } catch (_) {}
+    });
+    socket.addEventListener("close", () => {
+      if (stockEventsSource !== socket) return;
+      stockEventsSource = null;
+      if (stockEventsReconnectTimer) clearTimeout(stockEventsReconnectTimer);
+      stockEventsReconnectTimer = setTimeout(ensurePublicStockEventsConnection, 1200 + Math.floor(Math.random() * 800));
+    });
   }
 
   async function waitForPublicStockEventsChange(options = {}) {
@@ -5079,17 +5173,31 @@
     const data = evtData && typeof evtData === "object" ? evtData : {};
     const stockLevels = extractStockLevelsFromPayload(data);
     if (stockLevels.length) {
-      mergeStockLevels(stockLevels, "stock_event");
+      mergeStockLevels(stockLevels, "stock_event_raw");
+    }
+
+    const sourceIds = Array.isArray(data.affected_product_ids)
+      ? data.affected_product_ids
+      : (Array.isArray(data.product_ids) ? data.product_ids : []);
+    const productIds = sourceIds
+      ? sourceIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+    if (!productIds.length) {
       pruneUnavailableCartItems();
       return;
     }
-
-    const productIds = Array.isArray(data.product_ids)
-      ? data.product_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
-      : [];
-    if (!productIds.length) return;
-    queueProductStockAvailabilityRefresh(productIds, { reason: "stock_event_ids", delayMs: 0 });
-    pruneUnavailableCartItems();
+    const refreshIds = [];
+    productIds.forEach((id) => {
+      const isCatchupDuplicate = !stockLevels.length
+        && (stockAvailabilityBatchPendingIds.has(id) || stockAvailabilityBatchActiveIds.has(id));
+      if (isCatchupDuplicate) return;
+      advanceStockConfigGeneration(id);
+      upsellDefaultConfigCache.delete(id);
+      const passport = getProductPassport(id);
+      if (passport && typeof passport === "object") delete passport.defaultConfig;
+      refreshIds.push(id);
+    });
+    queueProductStockAvailabilityRefresh(refreshIds, { reason: "stock_event_ids", delayMs: 0 });
   }
 
   function shouldWatchPublicChangesLoop() {
@@ -5183,13 +5291,6 @@
   function startStockSync() {
     ensurePublicStockEventsConnection();
     bindStockSyncWakeupHandlers();
-
-    if (!stockSyncIntervalHandle) {
-      stockSyncIntervalHandle = setInterval(() => {
-        ensurePublicStockEventsConnection();
-        queueVisibleProductStockRefresh("stock_sync_interval", 0);
-      }, STOCK_SYNC_INTERVAL_MS);
-    }
   }
 
   // -----------------------------
@@ -6188,6 +6289,12 @@
                 variant_value_index: hasOptionVariant ? optionVariantValueIndex : null,
                 variant_label: hasOptionVariant ? str(opt.variant_label || "") : "",
                 variant_price_diff: hasOptionVariant ? Number(opt.variant_price_diff || 0) : 0,
+                unit_id: hasOptionVariant ? toFiniteNumberOrNull(opt.unit_id) : null,
+                variant_value: hasOptionVariant ? opt.variant_value : null,
+                ingredients: Array.isArray(opt.ingredients) ? opt.ingredients : [],
+                ingredients_display: Array.isArray(opt.ingredients_display)
+                  ? opt.ingredients_display
+                  : (Array.isArray(opt.ingredients) ? opt.ingredients : []),
               };
             })
             : normalizedOptionIds.map((id) => ({
@@ -18102,13 +18209,21 @@ function updateCartBadge() {
   function getUpsellDefaultConfigCacheEntry(productId) {
     const pid = Number(productId || 0);
     if (!Number.isFinite(pid) || pid <= 0) return null;
-    return upsellDefaultConfigCache.get(pid) || null;
+    const cached = upsellDefaultConfigCache.get(pid) || null;
+    if (!cached) return null;
+    if (Number(cached.generation || 0) !== getStockConfigGeneration(pid)) {
+      upsellDefaultConfigCache.delete(pid);
+      return null;
+    }
+    return cached;
   }
 
   window.cacheUpsellDefaultConfig = function cacheUpsellDefaultConfig(productId, config) {
     const pid = Number(productId || 0);
     if (!Number.isFinite(pid) || pid <= 0 || !config || typeof config !== "object") return;
-    upsellDefaultConfigCache.set(pid, { promise: Promise.resolve(config), data: config, ts: Date.now() });
+    upsellDefaultConfigCache.set(pid, {
+      promise: Promise.resolve(config), data: config, ts: Date.now(), generation: getStockConfigGeneration(pid),
+    });
   };
 
   function warmUpsellDefaultConfig(productId, sourceProduct) {
@@ -18116,15 +18231,18 @@ function updateCartBadge() {
     if (!Number.isFinite(pid) || pid <= 0) return null;
     const cached = getUpsellDefaultConfigCacheEntry(pid);
     if (cached && cached.promise) return cached.promise;
+    const requestGeneration = getStockConfigGeneration(pid);
     const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
-    if (passport?.defaultConfig && typeof passport.defaultConfig === "object") {
+    if (requestGeneration === 0 && passport?.defaultConfig && typeof passport.defaultConfig === "object") {
       const cfg = passport.defaultConfig;
-      upsellDefaultConfigCache.set(pid, { promise: Promise.resolve(cfg), data: cfg, ts: Date.now() });
+      upsellDefaultConfigCache.set(pid, {
+        promise: Promise.resolve(cfg), data: cfg, ts: Date.now(), generation: requestGeneration,
+      });
       return Promise.resolve(cfg);
     }
 
     const promise = (async () => {
-      if (typeof window.preloadProductPassportsBatch === "function") {
+      if (requestGeneration === 0 && typeof window.preloadProductPassportsBatch === "function") {
         await window.preloadProductPassportsBatch([pid], { details: true }).catch(() => {});
         const warmedPassport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
         if (warmedPassport?.defaultConfig && typeof warmedPassport.defaultConfig === "object") {
@@ -18134,7 +18252,11 @@ function updateCartBadge() {
       return buildUpsellDefaultCartConfig(pid, sourceProduct);
     })()
       .then((cfg) => {
-        upsellDefaultConfigCache.set(pid, { promise: Promise.resolve(cfg), data: cfg, ts: Date.now() });
+        if (requestGeneration !== getStockConfigGeneration(pid)) {
+          upsellDefaultConfigCache.delete(pid);
+          return warmUpsellDefaultConfig(pid, state.productCache.get(pid) || sourceProduct);
+        }
+        applyEffectiveStockConfigRow(pid, cfg, requestGeneration);
         if (typeof mergeProductPassport === "function") {
           mergeProductPassport(pid, { defaultConfig: cfg });
         }
@@ -18145,9 +18267,19 @@ function updateCartBadge() {
         throw err;
       });
 
-    upsellDefaultConfigCache.set(pid, { promise, data: null, ts: Date.now() });
+    upsellDefaultConfigCache.set(pid, {
+      promise, data: null, ts: Date.now(), generation: requestGeneration,
+    });
     return promise;
   }
+
+  window.ensureFreshEffectiveStockConfig = function ensureFreshEffectiveStockConfig(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return Promise.resolve(null);
+    const cached = getUpsellDefaultConfigCacheEntry(pid);
+    if (cached?.data) return Promise.resolve(cached.data);
+    return Promise.resolve(warmUpsellDefaultConfig(pid, state.productCache.get(pid) || null));
+  };
 
   async function warmUpsellDefaultConfigBatch(productIds, productsById) {
     const ids = Array.isArray(productIds)
@@ -18155,29 +18287,33 @@ function updateCartBadge() {
       : [];
     if (!ids.length) return;
 
-    const unresolved = ids.filter((id) => !upsellDefaultConfigCache.has(id));
+    const unresolved = ids.filter((id) => !getUpsellDefaultConfigCacheEntry(id));
     if (!unresolved.length) return;
 
     unresolved.forEach((id) => {
       const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
-      if (passport?.defaultConfig && typeof passport.defaultConfig === "object") {
+      if (getStockConfigGeneration(id) === 0 && passport?.defaultConfig && typeof passport.defaultConfig === "object") {
         const cfg = passport.defaultConfig;
-        upsellDefaultConfigCache.set(id, { promise: Promise.resolve(cfg), data: cfg, ts: Date.now() });
+        upsellDefaultConfigCache.set(id, {
+          promise: Promise.resolve(cfg), data: cfg, ts: Date.now(), generation: getStockConfigGeneration(id),
+        });
       }
     });
 
     const byId = productsById instanceof Map ? productsById : new Map();
-    let remaining = unresolved.filter((id) => !upsellDefaultConfigCache.has(id));
+    let remaining = unresolved.filter((id) => !getUpsellDefaultConfigCacheEntry(id));
     if (remaining.length && typeof window.preloadProductPassportsBatch === "function") {
       await window.preloadProductPassportsBatch(remaining, { details: true }).catch(() => {});
       remaining.forEach((id) => {
         const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
-        if (passport?.defaultConfig && typeof passport.defaultConfig === "object") {
+        if (getStockConfigGeneration(id) === 0 && passport?.defaultConfig && typeof passport.defaultConfig === "object") {
           const cfg = passport.defaultConfig;
-          upsellDefaultConfigCache.set(id, { promise: Promise.resolve(cfg), data: cfg, ts: Date.now() });
+          upsellDefaultConfigCache.set(id, {
+            promise: Promise.resolve(cfg), data: cfg, ts: Date.now(), generation: getStockConfigGeneration(id),
+          });
         }
       });
-      remaining = remaining.filter((id) => !upsellDefaultConfigCache.has(id));
+      remaining = remaining.filter((id) => !getUpsellDefaultConfigCacheEntry(id));
     }
     if (!remaining.length) return;
 
@@ -18196,8 +18332,16 @@ function updateCartBadge() {
       resolveShared = resolve;
       rejectShared = reject;
     });
+    const requestGenerations = new Map(requestIds.map((id) => [id, getStockConfigGeneration(id)]));
     requestIds.forEach((id) => {
-      upsellDefaultConfigCache.set(id, { promise: sharedPromise, data: null, ts: Date.now() });
+      const productPromise = sharedPromise.then(() => {
+        const current = getUpsellDefaultConfigCacheEntry(id);
+        if (current?.data) return current.data;
+        return warmUpsellDefaultConfig(id, byId.get(id) || state.productCache.get(id) || null);
+      });
+      upsellDefaultConfigCache.set(id, {
+        promise: productPromise, data: null, ts: Date.now(), generation: requestGenerations.get(id),
+      });
     });
 
     const resolved = new Set();
@@ -18211,7 +18355,9 @@ function updateCartBadge() {
       requestIds.forEach((pid) => {
         const cfg = data[pid];
         if (!cfg || typeof cfg !== "object") return;
-        upsellDefaultConfigCache.set(pid, { promise: Promise.resolve(cfg), data: cfg, ts: Date.now() });
+        const requestGeneration = requestGenerations.get(pid);
+        if (requestGeneration !== getStockConfigGeneration(pid)) return;
+        applyEffectiveStockConfigRow(pid, cfg, requestGeneration);
         if (typeof mergeProductPassport === "function") {
           mergeProductPassport(pid, { defaultConfig: cfg });
         }
@@ -18248,12 +18394,12 @@ function updateCartBadge() {
       : [];
     if (!ids.length) return;
 
-    const unresolved = ids.filter((id) => !upsellDefaultConfigCache.has(id));
+    const unresolved = ids.filter((id) => !getUpsellDefaultConfigCacheEntry(id));
     if (!unresolved.length) return;
     unresolved.forEach((id) => upsellConfigBatchPendingIds.add(id));
 
     const flush = async () => {
-      const batchIds = Array.from(upsellConfigBatchPendingIds).filter((id) => !upsellDefaultConfigCache.has(id));
+      const batchIds = Array.from(upsellConfigBatchPendingIds).filter((id) => !getUpsellDefaultConfigCacheEntry(id));
       upsellConfigBatchPendingIds.clear();
       if (!batchIds.length) return;
 
@@ -19508,7 +19654,10 @@ function updateCartBadge() {
   }
 
   async function addUpsellToCart(p, listEl) {
-    const effectiveProduct = mergeProductIntoCache(p, "cart_upsell_add") || p;
+    const sourceProductId = Number(p?.id || 0);
+    const effectiveProduct = state.productCache.get(sourceProductId)
+      || mergeProductIntoCache(p, "cart_upsell_add")
+      || p;
     const pid = Number(effectiveProduct.id);
     if (!Number.isFinite(pid)) return;
     const wasEmpty = cartCountTotal() === 0;

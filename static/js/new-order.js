@@ -180,6 +180,7 @@
     categoryProductsCache: new Map(),
     categoryIdsByProductId: new Map(),
     inventoryByProductId: new Map(),
+    effectiveStockConfigByProductId: new Map(),
     inventoryRevision: null,
     inventoryReady: false,
     inventoryFreshReady: false,
@@ -14150,6 +14151,13 @@
 
   function isProductAvailableFlag(product) {
     const productId = Number(product?.id || product?.product_id || 0);
+    const effective = productId > 0 ? state.effectiveStockConfigByProductId.get(productId) : null;
+    if (effective && typeof effective === "object") return effective.is_fulfillable === true;
+    const groups = productId > 0 ? (state.productVariants.get(productId) || []) : [];
+    if (groups.length && Array.isArray(groups[0]?.values) && groups[0].values.length) {
+      const available = getAvailableVariantIndexSet(productId, groups);
+      if (available && !available.size) return false;
+    }
     const inventory = productId > 0 ? state.inventoryByProductId.get(productId) : null;
     if (inventory) return inventory.is_available !== false;
     if (productId > 0 && !state.inventoryReady) return false;
@@ -14163,7 +14171,10 @@
     const primary = Array.isArray(variants) && variants.length ? variants[0] : null;
     const values = Array.isArray(primary?.values) ? primary.values : [];
     if (!values.length) return;
-    const rawDefault = primary?.default_value_index != null ? Number(primary.default_value_index) : 0;
+    const effective = state.effectiveStockConfigByProductId.get(safeProductId);
+    const rawDefault = effective?.variant_value_index != null
+      ? Number(effective.variant_value_index)
+      : (primary?.default_value_index != null ? Number(primary.default_value_index) : 0);
     const safeDefault = Number.isFinite(rawDefault) && rawDefault >= 0 && rawDefault < values.length ? rawDefault : 0;
     state.selectedVariants.set(safeProductId, safeDefault);
   }
@@ -15074,7 +15085,10 @@
     const variants = state.productVariants.get(pid) || [];
     if (Array.isArray(variants) && variants.length) {
       const values = Array.isArray(variants[0]?.values) ? variants[0].values : [];
-      const rawDefault = variants[0]?.default_value_index != null ? Number(variants[0].default_value_index) : 0;
+      const effective = state.effectiveStockConfigByProductId.get(pid);
+      const rawDefault = effective?.variant_value_index != null
+        ? Number(effective.variant_value_index)
+        : (variants[0]?.default_value_index != null ? Number(variants[0].default_value_index) : 0);
       const safeDefault = Number.isFinite(rawDefault) && rawDefault >= 0 && rawDefault < values.length ? rawDefault : 0;
       state.selectedVariants.set(pid, safeDefault);
     } else {
@@ -15082,6 +15096,12 @@
     }
 
     const ingredients = state.productIngredients.get(pid) || [];
+    const effectiveIngredients = state.effectiveStockConfigByProductId.get(pid)?.ingredients;
+    const effectiveQtyByIngredientId = new Map(
+      (Array.isArray(effectiveIngredients) ? effectiveIngredients : [])
+        .map((row) => [Number(row?.ingredient_id || 0), Number(row?.quantity ?? row?.qty)])
+        .filter(([ingredientId, quantity]) => ingredientId > 0 && Number.isFinite(quantity))
+    );
     const qtyMap = new Map();
     ingredients.forEach((ing) => {
       const ingId = Number(ing?.ingredient_id || 0);
@@ -15092,7 +15112,8 @@
       const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
       const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
       const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-      let initialQty = Math.max(min, Math.min(max, defaultQty));
+      const effectiveQty = effectiveQtyByIngredientId.get(ingId);
+      let initialQty = Math.max(min, Math.min(max, Number.isFinite(effectiveQty) ? effectiveQty : defaultQty));
       if (step > 0) {
         const stepsFromMin = Math.round((initialQty - min) / step);
         initialQty = min + (stepsFromMin * step);
@@ -16751,6 +16772,8 @@
     }
     await ensureNewOrderProductDetails([pid]);
     if (generation !== productOverlayRequestGeneration) return;
+    await refreshNewOrderEffectiveStockConfigs([pid]);
+    if (generation !== productOverlayRequestGeneration) return;
     closeComboOverlay();
     ensureProductOverlay();
     const { backdrop, list } = getProductOverlayElements();
@@ -16817,13 +16840,7 @@
         : 0;
       if (defaultProductId > 0) {
         state.checkoutSelectedProductByCategory.set(sectionKey, defaultProductId);
-        const variants = state.productVariants.get(defaultProductId) || [];
-        if (Array.isArray(variants) && variants.length) {
-          const values = Array.isArray(variants[0]?.values) ? variants[0].values : [];
-          const rawDefault = variants[0]?.default_value_index != null ? Number(variants[0].default_value_index) : 0;
-          const safeDefault = Number.isFinite(rawDefault) && rawDefault >= 0 && rawDefault < values.length ? rawDefault : 0;
-          state.selectedVariants.set(defaultProductId, safeDefault);
-        }
+        setCheckoutProductDefaultVariant(defaultProductId);
       } else {
         state.checkoutSelectedProductByCategory.delete(sectionKey);
       }
@@ -18508,6 +18525,7 @@
           </div>
           <div class="new-order-product-main">
             <div class="new-order-product-title" title="${escapeHtml(product?.name || "РўРѕРІР°СЂ")}">${escapeHtml(product?.name || "РўРѕРІР°СЂ")}</div>
+            <div class="new-order-product-stock">${escapeHtml(getCheckoutSelectedVariantStockLabel(pid, product))}</div>
             ${variantChips.length ? `<div class="new-order-product-variants no-scrollbar">${variantChips.map((chip) => `<button class="new-order-variant-chip${chip.isSelected ? " is-selected" : ""}" type="button" data-action="variant-select" data-variant-index="${chip.index}" title="${escapeHtml(chip.label)}">${escapeHtml(chip.label)}</button>`).join("")}</div>` : ""}
             ${ingredientRows.length ? `<div class="new-order-ingredients">${ingredientRows.join("")}</div>` : ""}
           </div>
@@ -19223,6 +19241,32 @@
     return "";
   }
 
+  function getAvailableVariantIndexSet(productId, groupsRaw) {
+    const pid = Number(productId || 0);
+    const effective = state.effectiveStockConfigByProductId.get(pid);
+    if (Array.isArray(effective?.available_variant_indices)) {
+      return new Set(effective.available_variant_indices.map(Number).filter((index) => Number.isFinite(index)));
+    }
+    const groups = Array.isArray(groupsRaw) ? groupsRaw : [];
+    const group = groups[0];
+    const values = Array.isArray(group?.values) ? group.values : [];
+    const stockRaw = state.inventoryByProductId.get(pid)?.stock_qty;
+    if (!values.length || stockRaw == null || !Number.isFinite(Number(stockRaw))) return null;
+    const product = getProductById(pid);
+    const baseUnitId = Number(product?.base_unit_id || product?.unit_id || group?.unit_id || 0);
+    const variantUnitId = Number(group?.unit_id || baseUnitId || 0);
+    const factor = baseUnitId && variantUnitId ? getConversionFactor(variantUnitId, baseUnitId) : null;
+    const stockQty = Number(stockRaw);
+    const available = new Set();
+    values.forEach((value, index) => {
+      const numeric = parseVariantValueNumber(value);
+      if (!Number.isFinite(numeric) || numeric <= 0) return;
+      const required = factor == null ? numeric : numeric * Number(factor || 0);
+      if (Number.isFinite(required) && stockQty + 1e-9 >= required) available.add(index);
+    });
+    return available;
+  }
+
   function getResolvedVariantIndex(productId, variantsRaw) {
     const pid = Number(productId || 0);
     const variants = Array.isArray(variantsRaw) ? variantsRaw : [];
@@ -19230,13 +19274,26 @@
     const values = Array.isArray(variants[0]?.values) ? variants[0].values : [];
     if (!values.length) return 0;
 
+    const effective = state.effectiveStockConfigByProductId.get(pid);
+    const available = getAvailableVariantIndexSet(pid, variants);
     const selectedRaw = Number(state.selectedVariants.get(pid));
-    if (Number.isFinite(selectedRaw) && selectedRaw >= 0 && selectedRaw < values.length) {
+    if (Number.isFinite(selectedRaw) && selectedRaw >= 0 && selectedRaw < values.length
+      && (!available || available.has(selectedRaw))) {
       return selectedRaw;
     }
 
-    const defaultRaw = variants[0]?.default_value_index != null ? Number(variants[0].default_value_index) : 0;
-    const safeDefault = Number.isFinite(defaultRaw) && defaultRaw >= 0 && defaultRaw < values.length ? defaultRaw : 0;
+    const defaultRaw = effective?.variant_value_index != null
+      ? Number(effective.variant_value_index)
+      : (variants[0]?.default_value_index != null ? Number(variants[0].default_value_index) : 0);
+    let safeDefault = Number.isFinite(defaultRaw) && defaultRaw >= 0 && defaultRaw < values.length ? defaultRaw : 0;
+    if (available && !available.has(safeDefault) && available.size) {
+      const configuredValue = parseVariantValueNumber(values[safeDefault]);
+      const fallback = [...available]
+        .map((index) => ({ index, value: parseVariantValueNumber(values[index]) }))
+        .filter((row) => Number.isFinite(row.value) && (!Number.isFinite(configuredValue) || row.value <= configuredValue + 1e-9))
+        .sort((a, b) => b.value - a.value)[0];
+      if (fallback) safeDefault = fallback.index;
+    }
     state.selectedVariants.set(pid, safeDefault);
     return safeDefault;
   }
@@ -19251,7 +19308,9 @@
     for (const group of groups) {
       const values = Array.isArray(group?.values) ? group.values : [];
       const unit = getVariantUnitLabel(group);
+      const available = getAvailableVariantIndexSet(pid, groups);
       values.forEach((value, index) => {
+        if (available && !available.has(index)) return;
         const label = toVariantLabel(value);
         if (!label) return;
         chips.push({
@@ -19988,7 +20047,12 @@
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
         state.activeProductCategoryId = null;
         schedulePersistBootstrapSnapshot(0);
-        void loadCheckoutProductsForSelectedCategories();
+        void loadCheckoutProductsForSelectedCategories().then(() => {
+          const ids = [...state.checkoutCategoryProducts.values()]
+            .flatMap((products) => Array.isArray(products) ? products : [])
+            .map((product) => Number(product?.id || 0));
+          return refreshNewOrderEffectiveStockConfigs(ids);
+        });
         renderCategories();
         renderMainContentMode();
         return;
@@ -20004,7 +20068,9 @@
       schedulePersistBootstrapSnapshot(0);
       renderCategories();
       renderMainContentMode();
-      loadProductsForCategory(cid);
+      void loadProductsForCategory(cid).then(() => refreshNewOrderEffectiveStockConfigs(
+        state.currentProducts.map((product) => Number(product?.id || 0))
+      ));
     });
 
     const rightInteractionEl = rightPanelEl || rightContentEl;
@@ -21867,6 +21933,77 @@
   }
 
   let inventoryRequestGeneration = 0;
+  const effectiveStockRequestGenerationByProductId = new Map();
+
+  function applyNewOrderEffectiveStockConfig(productId, config) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0) || !config || typeof config !== "object") return false;
+    state.effectiveStockConfigByProductId.set(pid, config);
+    const product = getProductById(pid);
+    if (product) product.is_available = config.is_fulfillable === true ? 1 : 0;
+
+    const groups = state.productVariants.get(pid) || [];
+    const values = Array.isArray(groups[0]?.values) ? groups[0].values : [];
+    const variantIndex = Number(config.variant_value_index);
+    if (values.length && Number.isFinite(variantIndex) && variantIndex >= 0 && variantIndex < values.length) {
+      state.selectedVariants.set(pid, variantIndex);
+    }
+
+    const configuredIngredients = state.productIngredients.get(pid) || [];
+    const effectiveIngredients = Array.isArray(config.ingredients) ? config.ingredients : [];
+    if (configuredIngredients.length && effectiveIngredients.length) {
+      const quantities = new Map(effectiveIngredients.map((row) => [
+        Number(row?.ingredient_id || 0), Number(row?.quantity ?? row?.qty),
+      ]));
+      const next = new Map(state.ingredientStateByProduct.get(pid) || []);
+      configuredIngredients.forEach((row) => {
+        const ingredientId = Number(row?.ingredient_id || 0);
+        const quantity = quantities.get(ingredientId);
+        if (ingredientId > 0 && Number.isFinite(quantity)) next.set(ingredientId, quantity);
+      });
+      state.ingredientStateByProduct.set(pid, next);
+    }
+    return true;
+  }
+
+  async function refreshNewOrderEffectiveStockConfigs(productIds) {
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : [])
+      .map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+    if (!ids.length || !navigator.onLine) return false;
+    const requestGenerations = new Map(ids.map((id) => {
+      const generation = Number(effectiveStockRequestGenerationByProductId.get(id) || 0) + 1;
+      effectiveStockRequestGenerationByProductId.set(id, generation);
+      return [id, generation];
+    }));
+    const appliedIds = [];
+    try {
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const chunk = ids.slice(offset, offset + 100);
+        const json = await apiJson("/api/public/products/batch/default-cart-config", {
+          method: "POST",
+          body: JSON.stringify({ ids: chunk }),
+        });
+        const data = json?.data && typeof json.data === "object" ? json.data : {};
+        chunk.forEach((id) => {
+          if (effectiveStockRequestGenerationByProductId.get(id) !== requestGenerations.get(id)) return;
+          if (applyNewOrderEffectiveStockConfig(id, data[id] || data[String(id)])) appliedIds.push(id);
+        });
+      }
+      if (appliedIds.length) {
+        patchActiveCatalogItems(appliedIds);
+        patchCheckoutCatalogItems(appliedIds);
+        if (Number(state.productModal?.productId || 0) > 0 && appliedIds.includes(Number(state.productModal.productId))) {
+          renderProductOverlay();
+        }
+        reconcileDurableDraftInventory();
+        renderRightOrderTabs();
+      }
+      return true;
+    } catch (error) {
+      console.warn("New Order effective stock refresh failed:", error);
+      return false;
+    }
+  }
 
   function getVisibleNewOrderProductNodes(productId) {
     const pid = Number(productId || 0);
@@ -21890,7 +22027,7 @@
         if (unavailable) button.setAttribute("aria-disabled", "true");
         else button.removeAttribute("aria-disabled");
       });
-      const stockLabel = card.querySelector(".new-order-checkout-product-stock");
+      const stockLabel = card.querySelector(".new-order-checkout-product-stock, .new-order-product-stock");
       if (stockLabel && product) stockLabel.textContent = getCheckoutSelectedVariantStockLabel(pid, product);
     });
     if (Number(state.productModal?.productId || 0) === pid) renderProductOverlay();
@@ -22180,8 +22317,15 @@
     ensureValidActiveCategory();
     if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) {
       await loadCheckoutProductsForSelectedCategories();
+      const checkoutIds = [...state.checkoutCategoryProducts.values()]
+        .flatMap((products) => Array.isArray(products) ? products : [])
+        .map((product) => Number(product?.id || 0));
+      await refreshNewOrderEffectiveStockConfigs(checkoutIds);
     } else if (state.activeCategoryId) {
       await loadProductsForCategory(getActiveProductCategoryId(), { preferCache: true });
+      await refreshNewOrderEffectiveStockConfigs(
+        state.currentProducts.map((product) => Number(product?.id || 0))
+      );
     } else if (productsEmptyEl) {
       productsEmptyEl.textContent = "РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… РєР°С‚РµРіРѕСЂРёР№";
       productsEmptyEl.classList.remove("hidden");
@@ -23305,14 +23449,26 @@
       const form = order?.form && typeof order.form === "object" ? { ...order.form } : {};
       const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
       const nextItems = cartItems.map((item) => {
-        if (String(item?.type || "product") !== "product" || item?.durableDraftIssue) return item;
+        if (String(item?.type || "product") !== "product") return item;
+        const isStockIssue = item?.durableDraftIssueType === "stock"
+          || String(item?.durableDraftIssue || "").startsWith("Запрошено больше текущего остатка");
+        if (item?.durableDraftIssue && !isStockIssue) return item;
         const productId = Number(item?.product_id || 0);
         const limit = getProductStockLimit(productId);
         if (limit == null) return item;
         const requested = getRightOrderProductStockUsageInCart(cartItems, productId);
-        if (requested <= limit + 1e-9) return item;
+        if (requested <= limit + 1e-9) {
+          if (!isStockIssue) return item;
+          const next = { ...item };
+          delete next.durableDraftIssue;
+          delete next.durableDraftIssueType;
+          changed = true;
+          return next;
+        }
+        const message = `Запрошено больше текущего остатка (${formatQtyPlain(limit)} шт.)`;
+        if (isStockIssue && item.durableDraftIssue === message) return item;
         changed = true;
-        return { ...item, durableDraftIssue: `Запрошено больше текущего остатка (${formatQtyPlain(limit)} шт.)` };
+        return { ...item, durableDraftIssue: message, durableDraftIssueType: "stock" };
       });
       return nextItems === cartItems ? order : { ...order, form: { ...form, cartItems: nextItems } };
     });
@@ -23423,7 +23579,9 @@
     };
   }
 
-  async function restoreCheckoutSession(session) {
+  async function restoreCheckoutSession(session, opts = {}) {
+    const isCurrent = typeof opts?.isCurrent === "function" ? opts.isCurrent : null;
+    if (isCurrent && !isCurrent()) return false;
     const src = session && typeof session === "object" ? session : {};
     const activeCategoryRaw = src.activeCategoryId;
     if (String(activeCategoryRaw) === CHECKOUT_SCREEN_ID) state.activeCategoryId = CHECKOUT_SCREEN_ID;
@@ -23503,12 +23661,16 @@
 
     ensureValidActiveCategory();
     renderCategories();
+    renderRightOrderTabs();
+    if (typeof opts?.onApplied === "function") opts.onApplied();
     await renderActiveCategoryContent();
+    if (isCurrent && !isCurrent()) return false;
     renderRightOrderTabs();
     state.rightOrders.forEach((row) => {
       const orderId = Number(row?.id || 0);
       if (orderId > 0) scheduleRightOrderBenefitsRefresh(orderId, { delay: 0 });
     });
+    return true;
   }
 
   function buildBlankDraftSession(opts = {}) {
@@ -23530,10 +23692,11 @@
       writeDurableCreateDraftNow();
       return captureCheckoutSession();
     },
-    restoreSession: async (session) => {
+    restoreSession: async (session, opts = {}) => {
       checkoutSessionRevision += 1;
       await loadReadyPromise;
-      await restoreCheckoutSession(session);
+      if (typeof opts?.isCurrent === "function" && !opts.isCurrent()) return false;
+      return restoreCheckoutSession(session, opts);
     },
     createBlankSession: (opts = {}) => buildBlankDraftSession(opts),
     createSessionFromOrder: async (order, opts = {}) => {
@@ -23753,6 +23916,72 @@
     });
     return repositoryInventoryRefreshPromise;
   }
+  let newOrderStockSocket = null;
+  let newOrderStockReconnectTimer = null;
+  let newOrderStockRefreshTimer = null;
+  const pendingNewOrderStockProductIds = new Set();
+
+  function closeNewOrderStockSocket() {
+    if (newOrderStockReconnectTimer) clearTimeout(newOrderStockReconnectTimer);
+    newOrderStockReconnectTimer = null;
+    const socket = newOrderStockSocket;
+    newOrderStockSocket = null;
+    if (socket) {
+      try { socket.close(); } catch {}
+    }
+  }
+
+  function queueNewOrderStockRefresh(productIds) {
+    (Array.isArray(productIds) ? productIds : []).forEach((id) => {
+      const pid = Number(id || 0);
+      if (pid > 0) pendingNewOrderStockProductIds.add(pid);
+    });
+    if (newOrderStockRefreshTimer) return;
+    newOrderStockRefreshTimer = setTimeout(() => {
+      newOrderStockRefreshTimer = null;
+      const ids = [...pendingNewOrderStockProductIds];
+      pendingNewOrderStockProductIds.clear();
+      void Promise.resolve(requestRepositoryInventoryRefresh())
+        .then(() => refreshNewOrderEffectiveStockConfigs(ids));
+    }, 40);
+  }
+
+  function ensureNewOrderStockSocket() {
+    const tenantId = getTenantIdFromStorage();
+    const storeId = getStoreIdFromStorage();
+    if (!(tenantId > 0) || !(storeId > 0) || typeof WebSocket !== "function") return;
+    if (newOrderStockSocket
+      && (newOrderStockSocket.readyState === WebSocket.OPEN || newOrderStockSocket.readyState === WebSocket.CONNECTING)) return;
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${protocol}//${location.host}/api/stock-ws?tenant_id=${encodeURIComponent(tenantId)}&store_id=${encodeURIComponent(storeId)}`);
+    newOrderStockSocket = socket;
+    socket.addEventListener("message", (event) => {
+      if (newOrderStockSocket !== socket) return;
+      try {
+        const payload = JSON.parse(String(event.data || ""));
+        if (payload?.type === "stock.resync") {
+          const visibleIds = [...new Set([
+            ...state.currentProducts.map((product) => Number(product?.id || 0)),
+            ...[...state.checkoutCategoryProducts.values()].flatMap((products) => Array.isArray(products) ? products : []).map((product) => Number(product?.id || 0)),
+          ].filter((id) => id > 0))];
+          queueNewOrderStockRefresh(visibleIds);
+          return;
+        }
+        if (payload?.type !== "stock.changed") return;
+        if (Array.isArray(payload.stock_levels)) applyAuthoritativeOrderStockLevels(payload.stock_levels);
+        const ids = Array.isArray(payload.affected_product_ids)
+          ? payload.affected_product_ids
+          : (Array.isArray(payload.product_ids) ? payload.product_ids : []);
+        queueNewOrderStockRefresh(ids);
+      } catch {}
+    });
+    socket.addEventListener("close", () => {
+      if (newOrderStockSocket !== socket) return;
+      newOrderStockSocket = null;
+      newOrderStockReconnectTimer = setTimeout(ensureNewOrderStockSocket, 1200 + Math.floor(Math.random() * 800));
+    });
+  }
+  ensureNewOrderStockSocket();
   let unsubscribeCatalogRepository = null;
   if (window.CatalogRepository) {
     unsubscribeCatalogRepository = window.CatalogRepository.subscribe((event) => {
@@ -23801,6 +24030,7 @@
         }
 
         if (productIds.length) {
+          productIds.forEach((productId) => state.effectiveStockConfigByProductId.delete(Number(productId)));
           applyNewOrderRepositoryProductChanges(productIds);
           productIds.forEach((productId) => {
             const product = getProductById(productId);
@@ -23817,6 +24047,7 @@
           patchActiveCatalogItems(productIds, changedComboIds);
           patchCheckoutCatalogItems(productIds);
         }
+        if (productIds.length) void refreshNewOrderEffectiveStockConfigs(productIds);
 
         const openComboId = Number(state.comboModal?.comboId || 0);
         if (openComboId > 0 && comboIds.has(openComboId)) {
@@ -23845,14 +24076,21 @@
     if (!window.CatalogRepository) applyKnownProductUpdate(event?.detail);
   });
   window.addEventListener("pagehide", writeDurableCreateDraftNow);
-  window.addEventListener("beforeunload", () => unsubscribeCatalogRepository?.(), { once: true });
+  window.addEventListener("beforeunload", () => {
+    unsubscribeCatalogRepository?.();
+    closeNewOrderStockSocket();
+  }, { once: true });
   document.addEventListener("tenantStoreChanged", () => {
+    closeNewOrderStockSocket();
     idleWarmupGeneration += 1;
     inventoryRequestGeneration += 1;
     state.inventoryByProductId.clear();
+    state.effectiveStockConfigByProductId.clear();
+    effectiveStockRequestGenerationByProductId.clear();
     state.inventoryRevision = null;
     state.inventoryReady = false;
     state.inventoryFreshReady = false;
+    ensureNewOrderStockSocket();
     if (navigator.onLine) {
       let inventoryPromise;
       inventoryPromise = refreshNewOrderInventory().finally(() => {

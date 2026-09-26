@@ -75,7 +75,7 @@ async function recordScopeChanges(options, entityIds) {
       operation: String(options.operation || 'upsert'),
     });
   }
-  scheduleAfterCommit(options.db, changes);
+  if (options.deferEmit !== true) scheduleAfterCommit(options.db, changes);
   return ids;
 }
 
@@ -109,7 +109,7 @@ async function recordTenantChanges(options, entityIds) {
       operation: String(options.operation || 'upsert'),
     })));
   }
-  scheduleAfterCommit(options.db, changes);
+  if (options.deferEmit !== true) scheduleAfterCommit(options.db, changes);
   return ids;
 }
 

@@ -2417,12 +2417,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
 
   async function publishStockChanged(tenantId, storeId, payload = {}) {
     try {
-      await productPassportSnapshots.markRelatedProductsDirty({
-        db, tenantId, storeId, productIds: payload?.product_ids || [], catalogChangeScope: 'store', operation: 'stock',
+      const changedIds = payload?.product_ids || [];
+      const affectedIds = await productPassportSnapshots.markRelatedProductsDirty({
+        db, tenantId, storeId, productIds: changedIds, catalogChangeScope: 'store', operation: 'stock',
       }).catch((error) => console.error('stock passport invalidation failed:', error));
       if (ordersEvents && typeof ordersEvents.publish === 'function') {
         ordersEvents.publish(tenantId, storeId, 'stock.changed', {
           tenant_id: Number(tenantId), store_id: Number(storeId), ...payload,
+          changed_product_ids: changedIds, affected_product_ids: affectedIds || changedIds,
         });
       }
     } catch (err) {
@@ -17322,10 +17324,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       };
 
       const [productRows] = await db.query(
-        `SELECT id, name, price, base_unit_id, base_qty, unit_id
-         FROM prod_products
-         WHERE tenant_id=? AND id IN (${ids.map(() => '?').join(',')})`,
-        [tenantId, ...ids]
+        `SELECT p.id, p.name, p.price, p.base_unit_id, p.base_qty, p.unit_id,
+                s.qty AS stock_qty
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+         WHERE p.tenant_id=? AND p.id IN (${ids.map(() => '?').join(',')})`,
+        [storeId, tenantId, ...ids]
       );
       const productsById = new Map(productRows.map((r) => [Number(r.id), r]));
 
@@ -17350,6 +17355,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            i.sort_order,
            p.name AS ingredient_name,
            p.photos_json AS ingredient_photos,
+           p.price AS ingredient_price,
+           p.base_qty AS ingredient_base_qty,
            u.code AS unit_code,
            u.title AS unit_title,
            u.short_title AS unit_short_title,
@@ -17734,6 +17741,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               );
               out.variant_group_id = Number(firstItemVariantGroup.id || 0) || null;
               out.variant_value_index = safeVariantIdx;
+              out.variant_value = itemVariantValues[safeVariantIdx];
+              out.unit_id = firstItemVariantGroup.unit_id ? Number(firstItemVariantGroup.unit_id) : null;
               out.variant_label = formatVariantValueLabel(
                 itemVariantValues[safeVariantIdx],
                 firstItemVariantGroup.unit_short_title || firstItemVariantGroup.unit_code || firstItemVariantGroup.unit_title || ''
@@ -17796,6 +17805,288 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       }
 
+      const selectedTargetIds = [...new Set(Object.values(result)
+        .flatMap((config) => config.option_items || [])
+        .map((item) => Number(item.target_product_id || 0)).filter((id) => id > 0))];
+      const targetIngredientsByProductId = new Map();
+      if (selectedTargetIds.length) {
+        const [rows] = await db.query(
+          `SELECT product_id, ingredient_id, quantity, unit_id, quantity_min, quantity_max, quantity_step, is_variable
+             FROM prod_product_ingredients
+            WHERE tenant_id=? AND product_id IN (${selectedTargetIds.map(() => '?').join(',')})
+              AND quantity IS NOT NULL AND quantity>0
+              AND (is_variable=1 OR is_variable IS NULL)
+            ORDER BY product_id, sort_order, id`,
+          [tenantId, ...selectedTargetIds]
+        );
+        rows.forEach((row) => {
+          const targetId = Number(row.product_id || 0);
+          if (!targetIngredientsByProductId.has(targetId)) targetIngredientsByProductId.set(targetId, []);
+          targetIngredientsByProductId.get(targetId).push({
+            ingredient_id: Number(row.ingredient_id), quantity: Number(row.quantity), qty: Number(row.quantity),
+            unit_id: row.unit_id ? Number(row.unit_id) : null,
+            quantity_min: row.quantity_min == null ? null : Number(row.quantity_min),
+            quantity_max: row.quantity_max == null ? null : Number(row.quantity_max),
+            quantity_step: row.quantity_step == null ? null : Number(row.quantity_step),
+            is_variable: Number(row.is_variable || 0),
+          });
+        });
+      }
+      for (const config of Object.values(result)) {
+        for (const item of (config.option_items || [])) {
+          const ingredients = targetIngredientsByProductId.get(Number(item.target_product_id || 0)) || [];
+          let effectiveIngredients = ingredients.map((ingredient) => ({ ...ingredient }));
+          const sourceItem = [...optionGroupDetailsById.values()]
+            .flatMap((details) => details?.items || [])
+            .find((candidate) => Number(candidate.id) === Number(item.id));
+          const variantGroup = sourceItem?.variants?.[0] || null;
+          const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+          const configuredIndex = Number(item.variant_value_index);
+          const configuredValue = parseVariantValueNumber(values[configuredIndex]);
+          const candidates = values.map((value, index) => ({ index, numeric: parseVariantValueNumber(value) }))
+            .filter((candidate) => Number.isFinite(candidate.numeric) && candidate.numeric > 0
+              && (!Number.isFinite(configuredValue) || candidate.numeric <= configuredValue + 1e-9))
+            .sort((a, b) => a.index === configuredIndex ? -1 : (b.index === configuredIndex ? 1 : b.numeric - a.numeric));
+          if (!candidates.length) candidates.push({ index: null, numeric: null });
+          for (const candidate of candidates) {
+            const variant = candidate.index == null ? [] : [{
+              variant_group_id: Number(variantGroup.id), value_index: candidate.index,
+              value: values[candidate.index], label: values[candidate.index], unit_id: variantGroup.unit_id,
+            }];
+            const candidateIngredients = ingredients.map((ingredient) => ({ ...ingredient }));
+            let check = null;
+            while (true) {
+              check = await checkStockAvailabilityForOrderItems({
+                db, tenantId, storeId,
+                items: [{ product_id: Number(item.target_product_id), qty: Number(item.qty || 1), variants: variant, ingredients: candidateIngredients }],
+              });
+              if (check.available) break;
+              let reduced = false;
+              for (const ingredient of candidateIngredients) {
+                if (Number(ingredient.is_variable || 0) !== 1) continue;
+                const minimum = Number(ingredient.quantity_min ?? ingredient.quantity);
+                const step = Number(ingredient.quantity_step || 0);
+                const next = step > 0 ? Number(ingredient.quantity) - step : minimum;
+                if (next + 1e-9 < minimum || next >= Number(ingredient.quantity)) continue;
+                ingredient.quantity = Math.max(minimum, Math.round(next * 1000) / 1000);
+                ingredient.qty = ingredient.quantity;
+                reduced = true;
+                break;
+              }
+              if (!reduced) break;
+            }
+            if (!check?.available) continue;
+            effectiveIngredients = candidateIngredients;
+            if (candidate.index != null) {
+              item.configured_variant_value_index = configuredIndex;
+              item.variant_value_index = candidate.index;
+              item.variant_value = values[candidate.index];
+              item.variant_label = formatVariantValueLabel(values[candidate.index], variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || '');
+              item.unit_id = variantGroup.unit_id ? Number(variantGroup.unit_id) : null;
+              const optionVariantPrice = getSimpleVariantPrice(
+                Number(sourceItem.price || 0), Number(sourceItem.product_base_qty || 1) || 1,
+                values, candidate.index, variantGroup.discount_tiers || []
+              );
+              item.variant_price_diff = Number(optionVariantPrice || 0) - Number(sourceItem.price || 0);
+              item.price = Number(optionVariantPrice || 0);
+            }
+            break;
+          }
+          item.ingredients = effectiveIngredients;
+          item.ingredients_display = effectiveIngredients;
+        }
+      }
+
+      // Resolve the temporary stock-aware default through the same aggregate
+      // deduction rules that are used immediately before an order is written.
+      for (const pid of ids) {
+        const entry = result[pid];
+        const product = productsById.get(Number(pid));
+        if (!entry || !product) continue;
+        const groups = variantsByProductId.get(Number(pid)) || [];
+        const group = groups[0] || null;
+        const values = Array.isArray(group?.values) ? group.values : [];
+        const configuredVariantIndex = entry.variant_value_index;
+        const configuredIngredients = (ingredientsByProductId.get(Number(pid)) || [])
+          .map((row) => ({ ...row }))
+          .filter((row) => Number(row.quantity || 0) > 0);
+
+        const variantCandidates = [];
+        if (group && values.length) {
+          const configuredValue = parseVariantValueNumber(values[configuredVariantIndex]);
+          values.forEach((value, index) => {
+            const numeric = parseVariantValueNumber(value);
+            if (!Number.isFinite(numeric) || numeric <= 0) return;
+            variantCandidates.push({
+              index,
+              numeric,
+              eligibleForDefault: !Number.isFinite(configuredValue) || numeric <= configuredValue + 1e-9,
+            });
+          });
+          variantCandidates.sort((a, b) => {
+            if (a.index === configuredVariantIndex) return -1;
+            if (b.index === configuredVariantIndex) return 1;
+            if (a.eligibleForDefault !== b.eligibleForDefault) return a.eligibleForDefault ? -1 : 1;
+            return b.numeric - a.numeric;
+          });
+        } else {
+          variantCandidates.push({ index: null, numeric: null, eligibleForDefault: true });
+        }
+
+        const ingredientCandidates = configuredIngredients.map((row) => {
+          const configured = Number(row.quantity || 0);
+          if (Number(row.is_variable || 0) !== 1) return [configured];
+          const minimum = Math.max(0, Number(row.quantity_min ?? configured));
+          const maximum = Math.max(minimum, Number(row.quantity_max ?? configured));
+          const step = Number(row.quantity_step || 0);
+          const upper = Math.min(maximum, configured);
+          const quantities = [upper];
+          if (step > 0) {
+            const stepsFromMinimum = Math.floor((upper - minimum + 1e-9) / step);
+            for (let stepIndex = stepsFromMinimum; stepIndex >= 0; stepIndex -= 1) {
+              const value = minimum + (stepIndex * step);
+              if (value >= upper - 1e-9) continue;
+              quantities.push(Math.round(value * 1000) / 1000);
+            }
+          } else if (minimum < upper) {
+            quantities.push(minimum);
+          }
+          return [...new Set(quantities.filter((value) => value + 1e-9 >= minimum))];
+        });
+
+        const buildIngredients = (indices) => configuredIngredients.map((row, index) => {
+          const quantity = ingredientCandidates[index]?.[indices[index] || 0] ?? Number(row.quantity || 0);
+          return {
+            ingredient_id: Number(row.ingredient_id),
+            ingredient_name: str(row.ingredient_name || ''),
+            name: str(row.ingredient_name || ''),
+            quantity,
+            qty: quantity,
+            unit_id: row.unit_id ? Number(row.unit_id) : null,
+            unit_label: str(row.unit_short_title || row.unit_title || row.unit_code || ''),
+            price_override: row.price_override == null ? null : Number(row.price_override),
+            ingredient_price: Number(row.ingredient_price || 0),
+            ingredient_base_qty: Number(row.ingredient_base_qty || 1) || 1,
+          };
+        });
+        const buildVariant = (candidate) => {
+          if (!group || candidate.index == null) return [];
+          return [{
+            variant_group_id: Number(group.id),
+            value_index: candidate.index,
+            value: values[candidate.index],
+            label: values[candidate.index],
+            unit_id: group.unit_id ? Number(group.unit_id) : null,
+          }];
+        };
+        const isFulfillable = async (candidate, ingredientIndexes) => {
+          const check = await checkStockAvailabilityForOrderItems({
+            db, tenantId, storeId,
+            items: [{
+              product_id: Number(pid), qty: 1,
+              variants: buildVariant(candidate),
+              ingredients: buildIngredients(ingredientIndexes),
+              option_items: entry.option_items,
+            }],
+          });
+          return check.available === true;
+        };
+
+        let selectedVariant = variantCandidates[0];
+        let selectedIngredientIndexes = ingredientCandidates.map(() => 0);
+        let fulfilled = false;
+        const availableVariantIndices = [];
+        for (const candidate of variantCandidates) {
+          const indexes = ingredientCandidates.map(() => 0);
+          let candidateFulfilled = await isFulfillable(candidate, indexes);
+          if (!candidateFulfilled) {
+            // Reduce one configured variable ingredient step at a time and
+            // recheck the full aggregate map after every candidate.
+            let progressed = true;
+            while (progressed && !candidateFulfilled) {
+              progressed = false;
+              for (let ingredientIndex = 0; ingredientIndex < ingredientCandidates.length; ingredientIndex += 1) {
+                if (indexes[ingredientIndex] + 1 >= ingredientCandidates[ingredientIndex].length) continue;
+                indexes[ingredientIndex] += 1;
+                progressed = true;
+                if (await isFulfillable(candidate, indexes)) {
+                  candidateFulfilled = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!candidateFulfilled) continue;
+          if (candidate.index != null) availableVariantIndices.push(Number(candidate.index));
+          if (!fulfilled && candidate.eligibleForDefault !== false) {
+            selectedVariant = candidate;
+            selectedIngredientIndexes = indexes.slice();
+            fulfilled = true;
+          }
+        }
+
+        entry.configured_variant_value_index = configuredVariantIndex;
+        entry.available_variant_indices = availableVariantIndices;
+        entry.is_fulfillable = fulfilled;
+        entry.selection_mode = fulfilled && selectedVariant?.index === configuredVariantIndex
+          && selectedIngredientIndexes.every((index) => index === 0)
+          ? 'configured_default'
+          : (fulfilled ? 'stock_fallback' : 'unavailable');
+        if (group && selectedVariant?.index != null) {
+          const selectedIndex = selectedVariant.index;
+          const valueLabel = formatVariantValueLabel(
+            values[selectedIndex],
+            group.unit_short_title || group.unit_code || group.unit_title || ''
+          );
+          entry.variant_value_index = selectedIndex;
+          entry.variant_label = valueLabel;
+          entry.variant_unit_price = getSimpleVariantPrice(
+            Number(product.price || 0), Number(product.base_qty || 1) || 1,
+            values, selectedIndex, group.discount_tiers || []
+          );
+        }
+        entry.ingredients = buildIngredients(selectedIngredientIndexes);
+        entry.ingredient_price_diff = entry.ingredients.reduce((sum, ingredient) => {
+          const configured = configuredIngredients.find((row) => Number(row.ingredient_id) === Number(ingredient.ingredient_id));
+          if (!configured) return sum;
+          const pricePerUnit = configured.price_override != null && Number(configured.price_override) >= 0
+            ? Number(configured.price_override)
+            : Number(configured.ingredient_price || 0) / (Number(configured.ingredient_base_qty || 1) || 1);
+          return sum + ((Number(ingredient.quantity || 0) - Number(configured.quantity || 0)) * pricePerUnit);
+        }, 0);
+        entry.configured_ingredients = configuredIngredients.map((row) => ({
+          ingredient_id: Number(row.ingredient_id), quantity: Number(row.quantity || 0),
+        }));
+        entry.dependency_product_ids = [...new Set([
+          Number(pid),
+          ...entry.ingredients.map((row) => Number(row.ingredient_id || 0)),
+          ...entry.option_items.map((row) => Number(row.target_product_id || 0)),
+        ].filter((id) => id > 0))];
+        entry.stock_qty = product.stock_qty == null ? null : Number(product.stock_qty);
+        entry.is_available = fulfilled;
+        entry.default_variant = entry.variant_group_id && entry.variant_value_index != null
+          ? {
+              variant_group_id: entry.variant_group_id,
+              variant_value_index: entry.variant_value_index,
+              variant_label: entry.variant_label,
+              variant_unit_price: Number(entry.variant_unit_price || 0),
+            }
+          : null;
+        entry.catalog_default_lines = [
+          ...entry.ingredients.map((ingredient) => {
+            const quantity = Number(ingredient.quantity || 0);
+            return `${quantity} ${str(ingredient.unit_label || '').trim()} ${str(ingredient.ingredient_name || ingredient.name || '').trim()}`.replace(/\s+/g, ' ').trim();
+          }),
+          ...entry.option_items.map((option) => {
+            const quantity = Math.max(1, Number(option.qty || option.quantity || 1));
+            const label = str(option.variant_label || option.title || option.name || '').trim();
+            return `${quantity} шт ${label}`.trim();
+          }),
+        ].filter(Boolean);
+        entry.display_price = Number(entry.variant_unit_price || product.price || 0)
+          + Number(entry.ingredient_price_diff || 0);
+      }
+
       const productBlockRows = await loadPublicProductBlockRows(tenantId, ids);
       const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
       ids.forEach((pid) => {
@@ -17824,6 +18115,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           entry.variant_label = '';
           entry.variant_unit_price = 0;
         }
+        entry.catalog_default_lines = [
+          ...entry.ingredients.map((ingredient) => {
+            const quantity = Number(ingredient.quantity || 0);
+            return `${quantity} ${str(ingredient.unit_label || '').trim()} ${str(ingredient.ingredient_name || ingredient.name || '').trim()}`.replace(/\s+/g, ' ').trim();
+          }),
+          ...entry.option_items.map((option) => {
+            const quantity = Math.max(1, Number(option.qty || option.quantity || 1));
+            const label = str(option.variant_label || option.title || option.name || '').trim();
+            return `${quantity} шт ${label}`.trim();
+          }),
+        ].filter(Boolean);
         result[pid] = entry;
       });
 
@@ -23707,6 +24009,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         // Р РЋР С•Р В·Р Т‘Р В°Р ВµР С map Р Т‘Р В»РЎРЏ Р В±РЎвЂ№РЎРѓРЎвЂљРЎР‚Р С•Р С–Р С• Р С—Р С•Р С‘РЎРѓР С”Р В° qty Р С‘ Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР С•Р Р† Р С‘Р В· Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В°
         const qtyMap = new Map();
         const optionVariantsMap = new Map(); // Р вЂ™Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљРЎвЂ№ Р Т‘Р В»РЎРЏ Р С”Р В°Р В¶Р Т‘Р С•Р в„– Р С•Р С—РЎвЂ Р С‘Р С‘
+        const optionIngredientsMap = new Map();
         optionItemsFromRequest.forEach(opt => {
           const id = Number(opt.id);
           if (Number.isFinite(id) && id > 0) {
@@ -23720,6 +24023,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 variant_price_diff: Number(opt.variant_price_diff || 0),
               });
             }
+            const optionIngredients = Array.isArray(opt.ingredients_display)
+              ? opt.ingredients_display
+              : (Array.isArray(opt.ingredients) ? opt.ingredients : []);
+            if (optionIngredients.length) optionIngredientsMap.set(id, optionIngredients);
           }
         });
 
@@ -23749,6 +24056,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             qty: optQty,
             target_product_id: optInfo.target_product_id || undefined,
           };
+          const optionIngredients = optionIngredientsMap.get(optId);
+          if (optionIngredients) {
+            optionEntry.ingredients = optionIngredients;
+            optionEntry.ingredients_display = optionIngredients;
+          }
 
           // Р вЂќР С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ Р С• Р Р†Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљР Вµ Р С•Р С—РЎвЂ Р С‘Р С‘, Р ВµРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ
           const optVariant = optionVariantsMap.get(optId);
