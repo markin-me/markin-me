@@ -16770,10 +16770,6 @@
         : "Полная карточка товара не сохранена на устройстве. Подключитесь к интернету, чтобы загрузить её.");
       return;
     }
-    await ensureNewOrderProductDetails([pid]);
-    if (generation !== productOverlayRequestGeneration) return;
-    await refreshNewOrderEffectiveStockConfigs([pid]);
-    if (generation !== productOverlayRequestGeneration) return;
     closeComboOverlay();
     ensureProductOverlay();
     const { backdrop, list } = getProductOverlayElements();
@@ -16790,21 +16786,6 @@
     state.productModal.mode = mode;
     state.productModal.editOrderId = editOrderId;
     state.productModal.editCartItemId = editCartItemId;
-    const optionGroups = Array.isArray(state.productOptionGroups.get(pid)) ? state.productOptionGroups.get(pid) : [];
-    const groupIds = optionGroups
-      .map((g) => Number(g?.group_id || g?.id || 0))
-      .filter((gid) => gid > 0);
-    const optionItemsForPrefetch = [];
-    if (groupIds.length) {
-      const detailsList = await Promise.all(groupIds.map((gid) => loadOptionGroupDetails(gid)));
-      detailsList.forEach((details) => {
-        const items = Array.isArray(details?.items) ? details.items : [];
-        if (items.length) optionItemsForPrefetch.push(...items);
-      });
-    }
-    if (optionItemsForPrefetch.length) {
-      await ensureOptionTargetProducts(optionItemsForPrefetch);
-    }
     if (mode === "edit" && sourceCartItem) {
       applyProductOverlayStateFromCartItem(pid, sourceCartItem);
     }
@@ -16817,6 +16798,28 @@
     };
     renderProductOverlay();
     if (list) list.scrollTop = 0;
+
+    void (async () => {
+      if (!hasCompleteNewOrderProductDetails(pid)) {
+        await ensureNewOrderProductDetails([pid]);
+      }
+      if (generation !== productOverlayRequestGeneration || Number(state.productModal.productId || 0) !== pid) return;
+      if (mode === "edit" && sourceCartItem) applyProductOverlayStateFromCartItem(pid, sourceCartItem);
+      if (!state.effectiveStockConfigByProductId.has(pid)) {
+        await refreshNewOrderEffectiveStockConfigs([pid]);
+      }
+      if (generation !== productOverlayRequestGeneration || Number(state.productModal.productId || 0) !== pid) return;
+      const optionGroups = Array.isArray(state.productOptionGroups.get(pid)) ? state.productOptionGroups.get(pid) : [];
+      const groupIds = optionGroups
+        .map((group) => Number(group?.group_id || group?.id || 0))
+        .filter((groupId) => groupId > 0);
+      const detailsList = await Promise.all(groupIds.map((groupId) => loadOptionGroupDetails(groupId)));
+      if (generation !== productOverlayRequestGeneration || Number(state.productModal.productId || 0) !== pid) return;
+      const optionItems = detailsList.flatMap((details) => Array.isArray(details?.items) ? details.items : []);
+      if (optionItems.length) await ensureOptionTargetProducts(optionItems);
+      if (generation !== productOverlayRequestGeneration || Number(state.productModal.productId || 0) !== pid) return;
+      renderProductOverlay();
+    })().catch(console.error);
   }
 
   function openProductOverlay(productId, opts = {}) {
@@ -19241,6 +19244,18 @@
     return "";
   }
 
+  function formatVariantValueWithUnit(value, unit) {
+    const label = String(value || "").trim();
+    const unitLabel = String(unit || "").trim();
+    if (!label || !unitLabel) return label;
+    const normalizedUnit = normalizeUnitLabelShort(unitLabel).toLocaleLowerCase("ru-RU").replace(/\.$/, "");
+    const normalizedLabel = label.toLocaleLowerCase("ru-RU").replace(/\.$/, "");
+    const lastToken = normalizedLabel.split(/\s+/).pop() || "";
+    const normalizedLastToken = normalizeUnitLabelShort(lastToken).toLocaleLowerCase("ru-RU").replace(/\.$/, "");
+    if (normalizedLabel.endsWith(normalizedUnit) || normalizedLastToken === normalizedUnit) return label;
+    return `${label} ${unitLabel}`;
+  }
+
   function getAvailableVariantIndexSet(productId, groupsRaw) {
     const pid = Number(productId || 0);
     const effective = state.effectiveStockConfigByProductId.get(pid);
@@ -19314,7 +19329,7 @@
         const label = toVariantLabel(value);
         if (!label) return;
         chips.push({
-          label: unit ? `${label} ${unit}` : label,
+          label: formatVariantValueWithUnit(label, unit),
           index,
           isSelected: index === selectedIndex,
         });
