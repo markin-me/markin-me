@@ -2719,13 +2719,18 @@
     }
     comboBlocksEmptyHint.classList.add("hidden");
     comboBlocksList.innerHTML = blocks.map((b) => `
-      <div class="stage-item order-row" data-block-id="${b.id}" type="button">
+      <div class="stage-item order-row ${Number(b.id) === Number(state.selectedComboBlockId) ? "is-active" : ""}" data-block-id="${b.id}" type="button">
         <span class="stage-meta stage-text"><b>${escapeHtml(b.title || "")}</b><small>${(b.products_count ?? 0)} т.</small></span>
         <span class="acc-spacer"></span>
       </div>
     `).join("");
     comboBlocksList.querySelectorAll("[data-block-id]").forEach((row) => {
-      row.addEventListener("click", () => openComboBlock(Number(row.dataset.blockId)));
+      row.addEventListener("click", () => {
+        const blockId = Number(row.dataset.blockId);
+        state.selectedComboBlockId = blockId;
+        renderComboBlocksList();
+        openComboBlock(blockId);
+      });
     });
   }
 
@@ -5544,7 +5549,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     listEl.classList.toggle("hidden", groups.length === 0);
 
     listEl.innerHTML = groups.map((group) => {
-      const isActive = Number(group.is_active || 0) === 1;
+      const isActive = Number(group.id) === Number(state.selectedVariantGroupId);
       const values = Array.isArray(group.values) ? group.values : [];
       const valuesText = values.length > 0 ? values.join(", ") : "нет значений";
 
