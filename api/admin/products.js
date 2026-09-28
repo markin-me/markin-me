@@ -3256,12 +3256,6 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
           itemCategoryMap.get(productId).push(categoryId);
         });
       }
-      const [dependentRows] = await conn.query(
-        'SELECT DISTINCT product_id FROM prod_product_ingredients WHERE tenant_id=? AND ingredient_id=?',
-        [tenantId, id]
-      );
-      req.__catalogAffectedProductIds = dependentRows.map((row) => Number(row.product_id)).filter((value) => value > 0);
-
       let excludedItemIds = new Set();
       if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
         try {
