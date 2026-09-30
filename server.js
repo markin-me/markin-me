@@ -15,6 +15,7 @@ const { URL, domainToASCII } = require('url');
 const db = require('./db');
 const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
+const { createStockWebSocketHub } = require('./services/stock-websocket');
 const {
   startPolling: startTelegramPolling,
   handleWebhookUpdate: handleTelegramWebhookUpdate,
@@ -1294,7 +1295,7 @@ app.get('/manifest.json', async (req, res) => {
 
 // Service Worker для PWA (Android / установка на домашний экран)
 const serviceWorkerPrecacheUrls = [
-  app.locals.assetUrl('/static/css/style.css?v=20260912-pwa7-fixes-v2'),
+  app.locals.assetUrl('/static/css/style.css?v=20260925-stock-inline-v2'),
   app.locals.assetUrl('/static/js/auth.js'),
   app.locals.assetUrl('/static/js/current-time.js'),
   app.locals.assetUrl('/static/js/theme.js'),
@@ -1308,6 +1309,7 @@ const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/js/shared-order-items.js?v=20260329a'),
   app.locals.assetUrl('/static/js/courier-screen.js?v=20260907-orderpass-capabilities-v1'),
   app.locals.assetUrl('/static/js/admin-persistent-cache.js?v=20260912-pwa9-v1'),
+  app.locals.assetUrl('/static/js/admin-catalog.js?v=20260925-stock-realtime-v2'),
   app.locals.assetUrl('/static/js/admin-reference-cache.js?v=20260912-pwa8-v1'),
   app.locals.assetUrl('/static/js/orders.js')
 ];
@@ -1941,7 +1943,8 @@ app.post('/api/max/webhook', (req, res) => {
 // ------------------------------
 // API: Public (публичные роуты должны быть ПЕРЕД админскими)
 // ------------------------------
-app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents, presenceService }));
+const publicShopRouter = makePublicShopRouter({ db, helpers, ordersEvents, presenceService });
+app.use('/api/public', publicShopRouter);
 app.use('/api/print', makePrintApiRouter({ db, helpers }));
 app.use('/api/chat-temp', makeChatTempRouter());
 
@@ -2295,7 +2298,12 @@ app.delete('/api/admin/analytics/expense-documents/:id', authMiddleware, async (
   }
 });
 
-const adminProductsRouter = makeAdminProductsRouter({ db, helpers });
+const adminProductsRouter = makeAdminProductsRouter({
+  db,
+  helpers,
+  ordersEvents,
+  buildAdminFullProductPassports: publicShopRouter.buildAdminFullProductPassports,
+});
 app.use('/api', authMiddleware, adminProductsRouter);
 
 // ------------------------------
@@ -2955,6 +2963,7 @@ const listenTarget = resolveListenTarget();
 const server = listenTarget.path
   ? app.listen(listenTarget.path)
   : app.listen(listenTarget.port, listenTarget.host);
+createStockWebSocketHub({ server, db, ordersEvents });
 
 server.on('listening', () => {
   const bindLabel = listenTarget.path

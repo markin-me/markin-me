@@ -5419,8 +5419,15 @@ async function openProductBuyXGetYBenefitDetail(product) {
 
 async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton, mode, onSave } = {}) {
   if (!container) return;
+  const renderGeneration = Number(container.__shopProductRenderGeneration || 0) + 1;
+  container.__shopProductRenderGeneration = renderGeneration;
   const isSubscriptionMode = mode === 'subscription';
   const productIdForRender = Number(product?.id || 0);
+  if (!openProductCtx || Number(openProductCtx.productId || 0) !== productIdForRender
+    || Number(container.dataset.stockSelectionProductId || 0) !== productIdForRender) {
+    container.dataset.stockSelectionMode = "auto";
+    container.dataset.stockSelectionProductId = String(productIdForRender || "");
+  }
   const isMobileViewport = window.matchMedia("(max-width: 768px)").matches;
   const isStaticProductView = !cartKey && !prefillItem;
   const canReuseStaticProductView =
@@ -5442,6 +5449,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   container.innerHTML = "";
 
   const productDetailsConfig = await resolveProductDetailsConfig(product.id);
+  if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
   let optionGroups = normalizeProductOptionGroups(productDetailsConfig?.optionGroups);
   const ingredients = Array.isArray(productDetailsConfig?.ingredients) ? productDetailsConfig.ingredients : [];
   const variants = Array.isArray(productDetailsConfig?.variants) ? productDetailsConfig.variants : [];
@@ -5498,12 +5506,17 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
 
   const isReadOnlyView = readOnly === true;
   const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
+  const productId = Number(product?.id || 0);
+  const effectiveDefaultConfig = !editingItem && !prefillItem && typeof getProductPassport === "function"
+    ? getProductPassport(productId)?.defaultConfig
+    : null;
   const seedItem =
     editingItem && typeof editingItem === "object"
       ? editingItem
-      : (prefillItem && typeof prefillItem === "object" ? prefillItem : null);
+      : (prefillItem && typeof prefillItem === "object"
+        ? prefillItem
+        : (effectiveDefaultConfig && typeof effectiveDefaultConfig === "object" ? effectiveDefaultConfig : null));
   const editMode = !isReadOnlyView && !!editingItem;
-  const productId = Number(product?.id || 0);
   const stockAvailable = isProductAvailable(product);
   const remainingStockForProduct =
     Number.isFinite(productId) &&
@@ -7200,7 +7213,25 @@ optionGroups.forEach((group) => {
     productId: product.id,
     onBack: typeof onBack === "function" ? onBack : null,
     readOnly: isReadOnlyView,
+    container,
+    product,
+    stockSelectionMode: container.dataset.stockSelectionMode || "auto",
+    refreshAvailability: refreshVariantAvailability,
   };
+  if (!container.dataset.stockSelectionMode) container.dataset.stockSelectionMode = "auto";
+  if (container.dataset.stockSelectionBound !== "1") {
+    container.dataset.stockSelectionBound = "1";
+    container.addEventListener("click", (event) => {
+      const control = event.target?.closest?.(
+        '[data-action="ingredient-minus"], [data-action="ingredient-plus"], .shop-pd-variant-btn, [data-variant-index]'
+      );
+      if (!control || !container.contains(control)) return;
+      container.dataset.stockSelectionMode = "manual";
+      if (openProductCtx && Number(openProductCtx.productId) === Number(product.id)) {
+        openProductCtx.stockSelectionMode = "manual";
+      }
+    }, true);
+  }
 
   if (isStaticProductView && Number.isFinite(productIdForRender) && productIdForRender > 0) {
     container.__shopRenderedViewType = "product";
@@ -7210,14 +7241,52 @@ optionGroups.forEach((group) => {
   }
 }
 
+window.applyEffectiveStockConfigToOpenProduct = function applyEffectiveStockConfigToOpenProduct(productId, config) {
+  const ctx = openProductCtx;
+  const pid = Number(productId || 0);
+  if (!ctx || Number(ctx.productId || 0) !== pid || !ctx.container) return false;
+  if (ctx.stockSelectionMode === "manual" || ctx.container.dataset.stockSelectionMode === "manual") {
+    void ctx.refreshAvailability?.({ forceNow: true, showToastOnOut: false });
+    return false;
+  }
+  const product = state.productCache.get(pid) || ctx.product;
+  if (!product) return false;
+  const prefillItem = {
+    product_id: pid,
+    variant_group_id: config?.variant_group_id,
+    variant_value_index: config?.variant_value_index,
+    variant_label: config?.variant_label,
+    ingredients: Array.isArray(config?.ingredients) ? config.ingredients : [],
+    option_items: Array.isArray(config?.option_items) ? config.option_items : [],
+  };
+  ctx.container.dataset.stockSelectionMode = "auto";
+  void renderProductDetailsInto(ctx.container, product, {
+    onBack: ctx.onBack,
+    readOnly: ctx.readOnly,
+    prefillItem,
+  }).then(() => {
+    if (openProductCtx && Number(openProductCtx.productId || 0) === pid) {
+      openProductCtx.stockSelectionMode = "auto";
+      openProductCtx.container.dataset.stockSelectionMode = "auto";
+    }
+  });
+  return true;
+};
+
 async function mountProductDetails(options = {}) {
+  const productId = Number(options.productId || options.product?.id || 0);
+  let initialValue = options.initialValue || options.prefillItem || null;
+  const isNewCatalogSelection = !options.cartKey && !initialValue && options.mode !== 'readonly' && options.readOnly !== true;
+  if (isNewCatalogSelection && productId > 0 && typeof window.ensureFreshEffectiveStockConfig === 'function') {
+    initialValue = await window.ensureFreshEffectiveStockConfig(productId).catch(() => null);
+  }
   if (window.SharedProductDetails && typeof window.SharedProductDetails.mount === 'function') {
-    return window.SharedProductDetails.mount(options);
+    return window.SharedProductDetails.mount({ ...options, initialValue });
   }
   return renderProductDetailsInto(options.container, options.product, {
     mode: options.mode,
     cartKey: options.cartKey,
-    prefillItem: options.initialValue || options.prefillItem,
+    prefillItem: initialValue,
     readOnly: options.mode === 'readonly' || options.readOnly === true,
     favoriteButton: options.favoriteButton,
     onSave: options.onSave,

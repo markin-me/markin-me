@@ -2189,28 +2189,65 @@ async function generateUniquePromoCodes(conn, { tenantId, storeId, discountId, c
 module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
   const router = express.Router();
 
+  async function resolveCatalogDiscountProductIds(tenantId, storeId, discountId) {
+    if (!(Number(discountId) > 0)) return [];
+    const [rows] = await db.query(
+      `SELECT DISTINCT dp.product_id
+         FROM mkt_discount_products dp
+         JOIN mkt_discounts d ON d.tenant_id=dp.tenant_id AND d.id=dp.discount_id AND d.store_id=?
+        WHERE dp.tenant_id=? AND dp.discount_id=? AND dp.product_id IS NOT NULL
+       UNION
+       SELECT DISTINCT pc.product_id
+         FROM mkt_discount_products dp
+         JOIN mkt_discounts d ON d.tenant_id=dp.tenant_id AND d.id=dp.discount_id AND d.store_id=?
+         JOIN prod_categories c ON c.tenant_id=dp.tenant_id AND c.id=dp.category_id
+         JOIN prod_product_categories pc ON pc.tenant_id=dp.tenant_id AND (pc.category_id=c.id OR pc.category_id IN (
+           SELECT child.id FROM prod_categories child WHERE child.tenant_id=dp.tenant_id AND child.parent_id=c.id
+         ))
+        WHERE dp.tenant_id=? AND dp.discount_id=? AND dp.category_id IS NOT NULL`,
+      [storeId, tenantId, discountId, storeId, tenantId, discountId]
+    );
+    return [...new Set((rows || []).map((row) => Number(row.product_id)).filter((id) => id > 0))];
+  }
+
+  router.use(async (req, res, next) => {
+    const discountId = Number(String(req.path || '').match(/^\/(\d+)/)?.[1] || 0);
+    if (!(discountId > 0) || !['PUT', 'DELETE', 'POST'].includes(String(req.method || '').toUpperCase())) return next();
+    try {
+      req.__catalogDiscountProductIds = await resolveCatalogDiscountProductIds(
+        helpers.getTenantId(req), helpers.getStoreId(req), discountId
+      );
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   router.use((req, res, next) => {
-    res.once('finish', () => {
+    const originalJson = res.json.bind(res);
+    let catalogFinalizing = false;
+    res.json = async (payload) => {
       const requestPath = String(req.path || '');
-      if (res.statusCode < 200 || res.statusCode >= 300 || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase())) return;
-      if (!/^\/(?:\d+(?:\/(?:restore|toggle))?)?\/?$/.test(requestPath)) return;
+      if (catalogFinalizing || res.statusCode < 200 || res.statusCode >= 300
+        || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase())
+        || !/^\/(?:\d+(?:\/(?:restore|toggle))?)?\/?$/.test(requestPath)) return originalJson(payload);
+      catalogFinalizing = true;
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
-      setImmediate(async () => {
-        try {
-          const [rows] = await db.query(
-            `SELECT id AS product_id FROM prod_products
-             WHERE tenant_id=? AND is_active=1 AND site_visibility=1`,
-            [tenantId]
-          );
-          await productPassportSnapshots.markProductsDirty({
-            db, tenantId, storeId, productIds: rows.map((row) => row.product_id),
-          });
-        } catch (error) {
-          console.error('discount passport invalidation failed:', error);
-        }
-      });
-    });
+      try {
+        const discountId = Number(String(requestPath).match(/^\/(\d+)/)?.[1] || req.__catalogCreatedDiscountId || req.body?.id || 0);
+        const currentIds = await resolveCatalogDiscountProductIds(tenantId, storeId, discountId);
+        const productIds = [...new Set([...(req.__catalogDiscountProductIds || []), ...currentIds])];
+        await productPassportSnapshots.markProductsDirty({
+          db, tenantId, storeId, productIds, catalogChangeScope: 'store',
+        });
+        return originalJson(payload);
+      } catch (error) {
+        console.error('discount catalog change recording failed:', error);
+        res.status(500);
+        return originalJson({ ok: false, error: 'CATALOG_CHANGE_RECORD_FAILED' });
+      }
+    };
     next();
   });
   let discountProductConfigColumnReady = false;
@@ -3002,6 +3039,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       );
 
       const discountId = Number(result.insertId || 0);
+      req.__catalogCreatedDiscountId = discountId;
       await saveDiscountCustomers(conn, tenantId, discountId, customers, false);
       await saveDiscountProducts(conn, tenantId, discountId, products, false);
 
