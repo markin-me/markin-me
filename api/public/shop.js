@@ -5538,6 +5538,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         o.customer_id,
         o.customer_name,
         o.customer_phone,
+        c.photo AS customer_photo,
+        o.pickup_store_id,
+        ps.name AS pickup_store_name,
+        ps.address AS pickup_store_address,
         o.promo_code,
         o.address,
         o.comment,
@@ -5558,6 +5562,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         o.status_id,
 
         s.code AS statusCode,
+        s.is_final AS status_is_final,
         COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS statusTitle,
 
         p.code AS paymentCode,
@@ -5569,7 +5574,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         t.code AS timeOptionCode,
         t.title AS timeOptionTitle,
 
-        ca.comment AS address_comment_from_cust
+        o.address_comment AS address_comment_snapshot
       FROM order_orders o
       LEFT JOIN order_statuses s
         ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -5579,8 +5584,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
       LEFT JOIN order_time_options t
         ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
-      LEFT JOIN cust_customer_addresses ca
-        ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
+      LEFT JOIN cust_customers c
+        ON c.tenant_id=o.tenant_id AND c.id=o.customer_id
+      LEFT JOIN ten_stores ps
+        ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
       WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
       LIMIT 1
       `,
@@ -5626,10 +5633,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       customer_id: r.customer_id,
       customer_name: r.customer_name,
       customer_phone: r.customer_phone,
+      customer_photo: r.customer_photo || null,
+      pickup_store_id: r.pickup_store_id || null,
+      pickup_store_name: r.pickup_store_name || null,
+      pickup_store_address: r.pickup_store_address || null,
       promo_code: publicDiscountText(r.promo_code) || null,
       address: r.address,
       comment: r.comment,
-      address_comment: (r.address_comment && String(r.address_comment).trim()) ? r.address_comment : (r.address_comment_from_cust && String(r.address_comment_from_cust).trim()) ? r.address_comment_from_cust : null,
+      address_comment: r.address_comment_snapshot || null,
       cutlery_qty: r.cutlery_qty,
       change_from: r.change_from,
       total_price: totalPrice,
@@ -5647,6 +5658,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       status_id: r.status_id,
 
       status_code: r.statusCode ?? null,
+      status_is_final: Number(r.status_is_final || 0),
       status_title: r.statusTitle ?? null,
 
       payment_code: r.paymentCode ?? null,
@@ -9046,6 +9058,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            CASE WHEN COALESCE(s.is_final, 0) = 1
                   OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
                 THEN 1 ELSE 0 END AS status_is_final,
+           m.code AS method_code, m.title AS method_title,
            p.title AS payment_title, p.code AS payment_code,
            ca.street AS deliveryAddressStreet,
            ca.house AS deliveryAddressHouse,
@@ -9053,6 +9066,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          FROM order_orders o
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+         LEFT JOIN order_delivery_types m
+           ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
          LEFT JOIN order_payments p
            ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
          LEFT JOIN cust_customer_addresses ca
@@ -9089,6 +9104,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           total_price: Number(r.total_price || 0),
           status_title: r.status_title || null,
           status_code: r.status_code || null,
+          method_code: r.method_code || null,
+          method_title: r.method_title || null,
           status_is_final: r.status_is_final ? Number(r.status_is_final) : 0,
           payment_title: r.payment_title || null,
           payment_code: r.payment_code || null,
@@ -23508,7 +23525,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return normalizedRewardIds.filter((rewardId) => conflictingRewardIds.has(rewardId));
   }
 
-  router.post('/orders', async (req, res) => {
+  // HTTP retries and WebSocket commands share the same submission lock and handler.
+  const orderSubmissionJobs = new Map();
+  async function submitOrder(req, res) {
+    const submissionId = String(req.headers['idempotency-key'] || '').trim().toLowerCase();
+    const key = submissionId ? `${helpers.getTenantId(req)}:${helpers.getStoreId(req)}:${submissionId}` : null;
+    if (!key) return createOrder(req, res);
+    const previous = orderSubmissionJobs.get(key);
+    let release;
+    const current = new Promise((resolve) => { release = resolve; });
+    orderSubmissionJobs.set(key, current);
+    try {
+      if (previous) await previous;
+      return await createOrder(req, res);
+    } finally {
+      release();
+      if (orderSubmissionJobs.get(key) === current) orderSubmissionJobs.delete(key);
+    }
+  }
+  router.post('/orders', submitOrder);
+  router.submitOrder = submitOrder;
+
+  async function createOrder(req, res) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
@@ -25878,7 +25916,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
-  });
+  }
 
 
   // ------------------------------
@@ -26048,5 +26086,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     settleReferralRewards: (params = {}) => settleReferralFirstPurchaseRewards(params?.queryable || db, params || {}),
   });
 
+  // Share the exact HTTP session validation with the customer WebSocket.
+  router.authenticateCustomer = (tenantId, token) => getCustomerByToken(tenantId, token, { refreshSession: false });
   return router;
 };

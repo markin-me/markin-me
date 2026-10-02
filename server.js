@@ -15,7 +15,7 @@ const { URL, domainToASCII } = require('url');
 const db = require('./db');
 const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
-const { createStockWebSocketHub } = require('./services/stock-websocket');
+const { createStockWebSocketHub, createOrdersWebSocketHub } = require('./services/stock-websocket');
 const {
   startPolling: startTelegramPolling,
   handleWebhookUpdate: handleTelegramWebhookUpdate,
@@ -2963,7 +2963,8 @@ const listenTarget = resolveListenTarget();
 const server = listenTarget.path
   ? app.listen(listenTarget.path)
   : app.listen(listenTarget.port, listenTarget.host);
-createStockWebSocketHub({ server, db, ordersEvents });
+createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer, submitOrder: publicShopRouter.submitOrder });
+createOrdersWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer });
 
 server.on('listening', () => {
   const bindLabel = listenTarget.path
