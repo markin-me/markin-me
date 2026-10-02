@@ -7164,6 +7164,12 @@
       const eventOrderId = Number(evt?.data?.id || 0);
       const hadOrder = eventOrderId > 0 && state.orders.some((row) => Number(row?.id || 0) === eventOrderId);
       const nextOrder = handleOrderEvent(evt?.data, { persistList: false });
+      if (!isCourierWorkspace && eventOrderId > 0
+        && String(evt?.event || "").toLowerCase() === "order.created") {
+        void prewarmCourierOrderDetail(evt.data, { highPriority: true }).catch((err) => {
+          console.error(`Order offline save failed for ${eventOrderId}:`, err);
+        });
+      }
       if (advanceCursor) state.lastEventId = evt?.id || state.lastEventId;
       if (!hadOrder && nextOrder && state.ordersPagination.nextOffset > 0) {
         state.ordersPagination.nextOffset += 1;
