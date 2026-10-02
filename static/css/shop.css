@@ -31608,3 +31608,40 @@ body.page-kso .shop-products-panel{
   .shop-order-details--variant-a *::after,
   .shop-order-card-leaving { animation: none !important; transition-duration: .01ms !important; }
 }
+
+/* My orders uses the existing details route without visible labels. */
+.shop-profile-order-summary-card { grid-template-rows: auto; }
+.shop-profile-order-summary-card .shop-order-summary-card__head strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.35;
+}
+.shop-profile-order-summary-card .shop-order-summary-card__address span { white-space: normal; }
+.shop-profile-order-summary-card .shop-order-progress__route { margin: 12px 0; }
+.shop-profile-order-summary-card [data-order-step-label] { display: none; }
+.shop-profile-order-summary-card .shop-order-summary-card__actions { grid-template-columns: minmax(0, 1fr); }
+.shop-profile-order-summary-card .shop-order-summary-card__actions.is-final { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.shop-profile-order-summary-card .is-final .shop-order-summary-card__status { background: transparent; font-weight: 800; }
+.shop-profile-order-summary-card .is-final .is-success { color: var(--color-success, #16a34a); }
+.shop-profile-order-summary-card .is-final .is-cancelled { color: var(--color-danger, #dc2626); }
+
+/* Order cards fill the available list and details width. */
+.shop-orders-page-content,
+.app-modal-body.shop-profile-orders-sheet-body .shop-profile-orders-sheet-content,
+.shop-profile-content:has(.shop-profile-tab-panel[data-tab="orders"].is-active),
+.app-modal.shop-order-modal .app-modal-body {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.shop-order-details.shop-order-details--variant-a .shop-cart-items .cart-row {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+@media (max-width: 420px) {
+  .shop-order-details.shop-order-details--variant-a .shop-cart-items .cart-row {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}

@@ -3025,13 +3025,16 @@
           minute: "2-digit",
         })
       : "\u2014";
-    const addressText = formatCatalogActiveOrderAddress(order);
+    const list = options.context === "orders";
+    const view = list ? { ...deriveCustomerOrderProgress(order), number: String(order?.order_number || order?.public_number || order?.id || ""), timing: window.getShopOrderTiming(order) } : null;
+    const addressText = list && !view.delivery
+      ? String(order?.pickup_store_address || "").trim()
+      : formatCatalogActiveOrderAddress(order);
     const maxPhotos = Math.max(1, Number(options?.maxPhotos || 8) || 8);
     const previewPhotos = collectHomeActiveOrderPreviewPhotos(order?.items, maxPhotos);
     return `
         <div class="shop-order-summary-card__head">
-          <strong>\u0417\u0430\u043a\u0430\u0437 #${escapeHtml(String(order?.id || ""))}</strong>
-          <span>${escapeHtml(dateText)}</span>
+          ${list ? `<strong>#${escapeHtml(view.number)} · ${escapeHtml(view.method)}${view.timing ? ` · ${escapeHtml(view.timing)}` : ""}</strong>` : `<strong>\u0417\u0430\u043a\u0430\u0437 #${escapeHtml(String(order?.id || ""))}</strong><span>${escapeHtml(dateText)}</span>`}
         </div>
         <div class="shop-order-summary-card__address${addressText ? "" : " is-empty"}">
           <i class="fas fa-location-dot" aria-hidden="true"></i>
@@ -3042,12 +3045,28 @@
             ${previewPhotos.map((src) => `<img class="shop-profile-order-photo" src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async" />`).join("")}
           </div>
         ` : ""}
-        <div class="shop-order-summary-card__actions">
+        ${list ? `<div data-order-list-footer data-progress-key="${escapeHtml(view.progressKey)}">${buildProfileOrderFooter(order)}</div>` : `<div class="shop-order-summary-card__actions">
           <span class="shop-order-summary-card__pill shop-order-summary-card__status">${escapeHtml(deriveCustomerOrderProgress(order).statusLabel || "\u2014")}</span>
           <span class="shop-order-summary-card__pill shop-order-summary-card__price">${money(order?.total_price || 0)}</span>
-        </div>
+        </div>`}
     `;
   }
+
+  function buildProfileOrderFooter(order) {
+    const progress = deriveCustomerOrderProgress(order);
+    const price = `<span class="shop-order-summary-card__pill shop-order-summary-card__price">${money(order?.total_price || 0)}</span>`;
+    return progress.isFinal
+      ? `<div class="shop-order-summary-card__actions is-final"><span class="shop-order-summary-card__status is-${progress.isCancelled ? "cancelled" : "success"}"><i class="fas ${progress.isCancelled ? "fa-xmark" : "fa-check"}" aria-hidden="true"></i> ${escapeHtml(progress.statusLabel)}</span>${price}</div>`
+      : `<div class="shop-order-progress__route" aria-label="${escapeHtml(progress.statusLabel)}">${progress.steps.map(window.renderShopOrderStep).join("")}</div><div class="shop-order-summary-card__actions">${price}</div>`;
+  }
+
+  window.patchProfileOrderProgress = (card, order) => {
+    const footer = card.querySelector("[data-order-list-footer]");
+    const key = deriveCustomerOrderProgress(order).progressKey;
+    if (!footer || footer.dataset.progressKey === key) return;
+    footer.innerHTML = buildProfileOrderFooter(order);
+    footer.dataset.progressKey = key;
+  };
 
   function formatCatalogActiveOrderAddress(order) {
     const street = String(order?.delivery_address_street || order?.address_street || "").trim();

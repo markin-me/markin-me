@@ -29321,19 +29321,38 @@ function renderSheetAddressList() {
   }
 
   const shopOrderSnapshots = new Map();
+  const shopOrderDetailsLoaded = new Set();
+  const shopOrdersListCache = new Map();
   const shopOrderScopeKey = () => `${getCustomerToken()}:${getActiveStoreId()}`;
+  let shopOrdersCacheScope = "";
+  function ensureShopOrdersCacheScope() {
+    const scope = shopOrderScopeKey();
+    if (shopOrdersCacheScope === scope) return;
+    shopOrdersCacheScope = scope;
+    shopOrdersListCache.clear();
+    shopOrderDetailsLoaded.clear();
+    shopOrderSnapshots.clear();
+  }
+
   let shopOrderScopeGeneration = 0;
   const shopOrderRequestScopeKey = () => `${shopOrderScopeKey()}:${shopOrderScopeGeneration}`;
+
+  function getShopOrderTiming(order) {
+    const timeCode = String(order?.time_option_code || "").toLowerCase();
+    const timeLabel = ({ asap: "Быстрее", urgent: "Быстрее", at_time: "Ко времени", on_date: "На дату" })[timeCode] || String(order?.time_option_title || "");
+    // scheduled_at is already a store-local wall time, never convert it via the device timezone.
+    const scheduled = String(order?.scheduled_at || "");
+    const date = scheduled.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const time = scheduled.match(/(?:[ T]|^)(\d{2}:\d{2})/);
+    return [timeLabel, date && timeCode === "on_date" ? `${date[3]}.${date[2]}` : "", time && ["at_time", "on_date"].includes(timeCode) ? time[1] : ""].filter(Boolean).join(" · ");
+  }
+  window.getShopOrderTiming = getShopOrderTiming;
 
   // One model for the existing profile and active-order detail shells.
   function deriveCustomerOrderView(order) {
     const progress = window.deriveCustomerOrderProgress(order);
     const { methodCode, delivery, method, stage, isFinal, isCancelled, steps } = progress;
-    const timeCode = String(order?.time_option_code || "").toLowerCase();
-    const timeLabel = ({ asap: "Быстрее", urgent: "Быстрее", at_time: "Ко времени", on_date: "На дату" })[timeCode] || String(order?.time_option_title || "");
-    // scheduled_at is already a store-local wall time, never convert it via the device timezone.
-    const scheduled = String(order?.scheduled_at || "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2})/);
-    const timing = [timeLabel, scheduled && timeCode === "on_date" ? `${scheduled[3]}.${scheduled[2]}` : "", scheduled && ["at_time", "on_date"].includes(timeCode) ? scheduled[4] : ""].filter(Boolean).join(" · ");
+    const timing = getShopOrderTiming(order);
     const paymentCode = String(order?.payment_code || "").toLowerCase();
     const payment = paymentCode === "online" && Number(order?.is_paid) === 1 ? "Оплачено онлайн" : paymentCode === "cash" ? "Наличными" : String(order?.payment_title || "");
     const summary = buildCanonicalOrderSummaryData(order);
@@ -29361,7 +29380,6 @@ function renderSheetAddressList() {
       summary, totalsSignature: JSON.stringify(summary),
     };
   }
-  window.deriveCustomerOrderView = deriveCustomerOrderView;
 
   function shopOrderDetailsTitle(view) { return `Заказ #${view.number}`; }
 
@@ -29411,6 +29429,8 @@ function renderSheetAddressList() {
   function renderShopOrderStep(step, index) {
     return `<div class="shop-order-progress__step is-${step.state}" data-order-progress-step="${index}" ${step.state === "current" ? 'aria-current="step"' : ""}><span class="shop-order-progress__node"><i class="fas ${step.state === "completed" ? "fa-check" : step.icon}" aria-hidden="true"></i></span><span data-order-step-label>${escapeHtml(step.title)}</span></div>`;
   }
+  window.renderShopOrderStep = renderShopOrderStep;
+
   function renderShopOrderAccordion(key, title, icon, subtitle, amount, content, open = false) {
     const bodyId = `shop-order-${key}-${renderShopOrderAccordion.orderId}`;
     return `<section class="shop-order-details-section shop-order-accordion${open ? " is-open" : ""}" data-order-section="${key}"><button class="shop-order-accordion__button" type="button" aria-expanded="${open}" aria-controls="${bodyId}"><span class="shop-order-accordion__icon"><i class="fas ${icon}" aria-hidden="true"></i></span><span class="shop-order-accordion__titles"><strong>${title}</strong><span data-order-section-subtitle>${escapeHtml(subtitle)}</span></span><strong data-order-section-summary>${escapeHtml(amount)}</strong><i class="fas fa-chevron-down shop-order-accordion__chevron" aria-hidden="true"></i></button><div class="shop-order-accordion__body" id="${bodyId}" ${open ? "" : "inert"}><div class="shop-order-accordion__clip"><div class="shop-order-accordion__content" data-order-${key}>${content}</div></div></div></section>`;
@@ -29418,6 +29438,7 @@ function renderSheetAddressList() {
   function renderShopOrderDetails(order) {
     const view = deriveCustomerOrderView(order);
     shopOrderSnapshots.set(view.id, order);
+    shopOrderDetailsLoaded.add(view.id);
     renderShopOrderAccordion.orderId = `${view.id}-${++renderShopOrderDetails.sequence}`;
     return `<div class="shop-order-details shop-order-details--variant-a" data-order-details-id="${view.id}"><section class="shop-order-progress" data-order-progress><div class="shop-order-progress__head"><strong data-order-method>${escapeHtml(view.method)}</strong><span data-order-timing>${escapeHtml(view.timing)}</span></div><div class="shop-order-progress__route">${view.steps.map(renderShopOrderStep).join("")}</div><span class="shop-order-progress__announcement" role="status" data-order-status-announcement>${escapeHtml(view.statusLabel)}</span></section>${view.comment ? `<section class="shop-order-comment" data-order-comment>${renderShopOrderComment(view.comment)}</section>` : ""}${renderShopOrderAccordion("products", "Товары", "fa-bag-shopping", `${view.items.length} позиций`, money(view.summary.subtotalBeforeDiscounts - view.summary.discountAmount), `<div class="shop-cart-items">${renderSharedReadonlyOrderItemsHtml(view.items, order)}</div>`, true)}${renderShopOrderAccordion("delivery", "Детали получения", "fa-location-dot", view.method, "", renderShopOrderPairs(view.deliveryRows))}<section class="shop-order-customer" data-order-customer>${renderShopOrderCustomer(view)}</section>${renderShopOrderAccordion("payment", "Оплата и суммы", "fa-wallet", view.payment, money(view.summary.orderTotal), renderShopOrderPayment(view))}</div>`;
   }
@@ -31983,6 +32004,7 @@ function renderSheetAddressList() {
   }
 
   function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false, returnToProfile = false } = {}) {
+    ensureShopOrdersCacheScope();
     host.innerHTML = "";
 
     const wrap = document.createElement("div");
@@ -33847,7 +33869,8 @@ function renderSheetAddressList() {
     let currentOrdersView = "list"; // "list" | "details"
     let currentOrderId = null;
 
-    async function loadOrderDetails(orderId) {
+    async function loadOrderDetails(orderId, { force = false } = {}) {
+      if (!force && shopOrderDetailsLoaded.has(Number(orderId))) return shopOrderSnapshots.get(Number(orderId));
       const requestScope = shopOrderRequestScopeKey();
       try {
         const json = await apiJson(`/api/public/me/orders/${orderId}`);
@@ -33861,7 +33884,7 @@ function renderSheetAddressList() {
     }
 
     async function refreshOrderDetailsStatus(orderId) {
-      const order = await loadOrderDetails(orderId);
+      const order = await loadOrderDetails(orderId, { force: true });
       const previous = shopOrderSnapshots.get(Number(orderId));
       if (order && previous) patchShopOrderDetails(previous, order);
     }
@@ -33869,14 +33892,15 @@ function renderSheetAddressList() {
     async function refreshProfileOrderRowStatus(orderId) {
       const safeOrderId = Number(orderId || 0);
       if (!(safeOrderId > 0)) return;
-      const order = await loadOrderDetails(safeOrderId);
+      const order = await loadOrderDetails(safeOrderId, { force: true });
       if (!order) return;
       const rows = ordersList.querySelectorAll(
         `.shop-profile-order-summary-card[data-order-id="${safeOrderId}"]`
       );
       rows.forEach((row) => {
+        window.patchProfileOrderProgress(row, order);
         const status = row.querySelector(".shop-order-summary-card__status");
-        if (status) status.textContent = window.deriveCustomerOrderProgress(order).statusLabel;
+        if (status && !row.querySelector("[data-order-list-footer]")) status.textContent = window.deriveCustomerOrderProgress(order).statusLabel;
       });
     }
 
@@ -33957,7 +33981,7 @@ function renderSheetAddressList() {
       ordersDetailsHost.classList.remove("hidden");
       
       // Заменяем содержимое ordersPanel на детали заказа
-      detailView.innerHTML = `<div class="muted">Загрузка…</div>`;
+      if (!shopOrderDetailsLoaded.has(Number(orderId))) detailView.innerHTML = `<div class="muted">Загрузка…</div>`;
       
       const order = await loadOrderDetails(orderId);
       if (Number(currentOrderId) !== Number(orderId) || currentOrdersView !== "details") return;
@@ -33993,7 +34017,7 @@ function renderSheetAddressList() {
           }
         }, 0);
       };
-      const bindItems = (snapshot) => bindRepeatOrderItemRows(detailView, sortRepeatOrderItemsForDisplay(snapshot.items), { onBack: reopenProfileOrderDetails, enableSwipeActions: true });
+      const bindItems = (snapshot) => bindRepeatOrderItemRows(detailView, sortRepeatOrderItemsForDisplay(snapshot.items), { onBack: reopenProfileOrderDetails, enableSwipeActions: false });
       detailView.querySelector("[data-order-details-id]").__shopBindItems = bindItems;
       bindItems(order);
       showMobileOrderDetailsActions(order);
@@ -34170,61 +34194,13 @@ function renderSheetAddressList() {
       row.className = "shop-profile-card shop-order-summary-card shop-profile-order-summary-card";
       row.dataset.orderId = String(Number(o?.id || 0));
       row.style.cursor = "pointer";
-      row.innerHTML = window.buildShopOrderSummaryCardInnerHtml(o, { maxPhotos: 8 });
+      row.innerHTML = window.buildShopOrderSummaryCardInnerHtml(o, { maxPhotos: 40, context: "orders" });
 
       row.addEventListener("click", () => {
         showOrderDetails(o.id);
       });
 
-      const isMobile = window.matchMedia("(max-width: 768px)").matches;
-      const canRepeat = isMobile && Array.isArray(o?.items) && o.items.length > 0;
-      if (!canRepeat) return row;
-
-      const swipeContainer = document.createElement("div");
-      swipeContainer.className = "shop-favorite-swipe-container shop-order-repeat-swipe-container shop-profile-order-swipe-container";
-
-      const repeatAction = document.createElement("button");
-      repeatAction.type = "button";
-      repeatAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--add";
-      repeatAction.setAttribute("aria-label", "\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u0437\u0430\u043a\u0430\u0437");
-      repeatAction.innerHTML = '<i class="fas fa-rotate-right"></i>';
-      swipeContainer.appendChild(repeatAction);
-
-      const content = document.createElement("div");
-      content.className = "shop-favorite-swipe-content";
-      swipeContainer.appendChild(content);
-      content.appendChild(row);
-
-      const repeatOrder = async () => {
-        if (repeatAction.disabled) return false;
-        repeatAction.disabled = true;
-        try {
-          return await repeatOrderItemsToCart(Array.isArray(o?.items) ? o.items : []);
-        } finally {
-          repeatAction.disabled = false;
-        }
-      };
-
-      repeatAction.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        await repeatOrder();
-        const closeFn = swipeContainer.__orderSwipeClose;
-        if (typeof closeFn === "function") closeFn(true);
-      });
-
-      initRepeatOrderSwipeRow(swipeContainer, content, {
-        onAddToCart: repeatOrder,
-        onAddToFavorites: null,
-        allowAddToCart: true,
-        allowAddToFavorites: false,
-        getCurrentSwiped: () => currentProfileOrderSwipedContainer,
-        setCurrentSwiped: (next) => {
-          currentProfileOrderSwipedContainer = next || null;
-        },
-      });
-
-      return swipeContainer;
+      return row;
     }
 
     function applyOrdersSummary(summary) {
@@ -34289,6 +34265,9 @@ function renderSheetAddressList() {
       if (!reset && !state.hasMore) return;
       if (sectionKey === "completed" && ordersCompletedSection.collapsed) return;
 
+      const requestScope = shopOrderRequestScopeKey();
+      const cacheKey = `${shopOrderScopeKey()}:${sectionKey}`;
+      const cached = reset ? shopOrdersListCache.get(cacheKey) : null;
       state.loading = true;
       if (reset) {
         section.items.replaceChildren();
@@ -34298,13 +34277,18 @@ function renderSheetAddressList() {
         }
         setOrdersSectionAnchorVisible(section, false);
       }
-      setOrdersSectionLoading(section, true);
+      setOrdersSectionLoading(section, !cached);
 
       try {
-        const json = await apiJson(
+        const json = cached || await apiJson(
           `/api/public/me/orders?limit=${PROFILE_ORDERS_PAGE_SIZE}&offset=${state.offset}&status_is_final=${state.statusFinal}`
         );
+        if (requestScope !== shopOrderRequestScopeKey()) return;
         const list = Array.isArray(json?.data) ? json.data : [];
+        if (!cached) {
+          const previous = reset ? null : shopOrdersListCache.get(cacheKey);
+          shopOrdersListCache.set(cacheKey, { ...json, data: [...(previous?.data || []), ...list] });
+        }
         if (reset) {
           const bucket = sectionKey === "completed" ? ordersRowCache.completed : ordersRowCache.active;
           const actualIds = new Set(
@@ -34333,7 +34317,8 @@ function renderSheetAddressList() {
           section.items.appendChild(getCachedOrderRow(sectionKey, o));
         });
 
-        state.offset += list.length;
+        state.offset = cached && Number.isFinite(Number(paging?.next_offset)) && paging?.next_offset != null
+          ? Number(paging.next_offset) : state.offset + list.length;
         state.hasMore = hasMore;
         state.initialized = true;
 
@@ -42810,6 +42795,27 @@ function initShopLate() {
         if (!summaryOnly) orderStateVersions.set(id, (orderStateVersions.get(id) || 0) + 1);
         const previous = shopOrderSnapshots.get(id) || (window._activeOrders || []).find((entry) => Number(entry.id) === id);
         const view = deriveCustomerOrderView(order);
+        const scope = shopOrderScopeKey();
+        const activeCache = shopOrdersListCache.get(`${scope}:active`);
+        const completedCache = shopOrdersListCache.get(`${scope}:completed`);
+        const wasActive = activeCache?.data.some((entry) => Number(entry.id) === id);
+        const wasCompleted = completedCache?.data.some((entry) => Number(entry.id) === id);
+        [activeCache, completedCache].filter(Boolean).forEach((cache) => {
+          cache.data = cache.data.map((entry) => Number(entry.id) === id ? { ...entry, ...order } : entry);
+          if (view.isFinal && wasActive && !wasCompleted && cache.summary) {
+            cache.summary = { ...cache.summary, active_count: Math.max(0, Number(cache.summary.active_count || 0) - 1), completed_count: Number(cache.summary.completed_count || 0) + 1 };
+          }
+        });
+        if (view.isFinal && wasActive) {
+          activeCache.data = activeCache.data.filter((entry) => Number(entry.id) !== id);
+          if (completedCache && !wasCompleted) completedCache.data.unshift(order);
+        } else if (!view.isFinal && activeCache && !wasActive) {
+          activeCache.data.unshift(order);
+          [activeCache, completedCache].filter(Boolean).forEach((cache) => {
+            if (cache.summary) cache.summary = { ...cache.summary, active_count: Number(cache.summary.active_count || 0) + 1 };
+          });
+        }
+
         const active = window._activeOrders || [];
         const index = active.findIndex((entry) => Number(entry.id) === id);
         if (view.isFinal) {
@@ -42824,8 +42830,9 @@ function initShopLate() {
           else shopOrderSnapshots.set(id, order);
         }
         document.querySelectorAll(`[data-order-id="${id}"]`).forEach((card) => {
+          window.patchProfileOrderProgress(card, order);
           const status = card.querySelector(".shop-order-summary-card__status");
-          if (status && status.textContent !== view.statusLabel) status.textContent = view.statusLabel;
+          if (status && !card.querySelector("[data-order-list-footer]") && status.textContent !== view.statusLabel) status.textContent = view.statusLabel;
           const price = card.querySelector(".shop-order-summary-card__price");
           if (price && price.textContent !== money(order.total_price)) price.textContent = money(order.total_price);
           if (!view.isFinal || !card.matches(".shop-home-active-order-card, .shop-active-order-card")) return;
@@ -42907,6 +42914,8 @@ function initShopLate() {
             orderRefreshJobs.forEach((job) => job.controller.abort());
             orderRefreshJobs.clear();
             shopOrderSnapshots.clear();
+            shopOrderDetailsLoaded.clear();
+            shopOrdersListCache.clear();
             window._activeOrders = [];
             window._savedActiveOrdersForBack = [];
           }
@@ -43492,6 +43501,7 @@ function initShopLate() {
     
       // Показать детали активного заказа
       async function showActiveOrderDetails(orderId) {
+        ensureShopOrdersCacheScope();
         if (!window.AppModal) return;
         const requestedOrderId = Number(orderId || 0);
         const requestScope = shopOrderRequestScopeKey();
@@ -43508,7 +43518,7 @@ function initShopLate() {
         shell.listView.classList.add("hidden");
         shell.emptyView.classList.add("hidden");
         shell.detailsHost.classList.remove("hidden");
-        setActiveOrdersDetailsMessage("Загрузка…");
+        if (!shopOrderDetailsLoaded.has(Number(orderId))) setActiveOrdersDetailsMessage("Загрузка…");
       
         // Сохраняем список активных заказов в глобальную переменную для использования при возврате
         const activeOrders = window._activeOrders || [];
@@ -43622,7 +43632,9 @@ function initShopLate() {
       
         // Загружаем детали заказа
         try {
-          const json = await apiJson(`/api/public/me/orders/${orderId}`);
+          const json = shopOrderDetailsLoaded.has(Number(orderId))
+            ? { data: shopOrderSnapshots.get(Number(orderId)) }
+            : await apiJson(`/api/public/me/orders/${orderId}`);
           if (requestScope !== shopOrderRequestScopeKey()
             || sheetNavigationState?.type !== "activeOrders"
             || sheetNavigationState?.screen !== "details"
@@ -43649,7 +43661,7 @@ function initShopLate() {
           const reopenActiveOrderDetails = () => {
             void showActiveOrderDetails(orderId);
           };
-          const bindItems = (snapshot) => bindRepeatOrderItemRows(detailView, sortRepeatOrderItemsForDisplay(snapshot.items), { onBack: reopenActiveOrderDetails, enableSwipeActions: true });
+          const bindItems = (snapshot) => bindRepeatOrderItemRows(detailView, sortRepeatOrderItemsForDisplay(snapshot.items), { onBack: reopenActiveOrderDetails, enableSwipeActions: false });
           detailView.querySelector("[data-order-details-id]").__shopBindItems = bindItems;
           bindItems(order);
           bindDesktopOrderDetailsFooter(order);

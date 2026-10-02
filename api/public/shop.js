@@ -9054,6 +9054,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
+           DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
+           t.code AS time_option_code, t.title AS time_option_title,
+           ps.address AS pickup_store_address,
            COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code,
            CASE WHEN COALESCE(s.is_final, 0) = 1
                   OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
@@ -9070,6 +9073,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
          LEFT JOIN order_payments p
            ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+         LEFT JOIN order_time_options t
+           ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+         LEFT JOIN ten_stores ps
+           ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
          LEFT JOIN cust_customer_addresses ca
            ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
@@ -9098,6 +9105,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           public_id: r.public_id || null,
           created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
           address: r.address || null,
+          scheduled_at: r.scheduled_at || null,
+          time_option_code: r.time_option_code || null,
+          time_option_title: r.time_option_title || null,
+          pickup_store_address: r.pickup_store_address || null,
           delivery_address_street: r.deliveryAddressStreet || null,
           delivery_address_house: r.deliveryAddressHouse || null,
           delivery_address_apartment: r.deliveryAddressApartment || null,
