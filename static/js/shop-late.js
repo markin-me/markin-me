@@ -5507,9 +5507,19 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   const isReadOnlyView = readOnly === true;
   const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
   const productId = Number(product?.id || 0);
-  const effectiveDefaultConfig = !editingItem && !prefillItem && typeof getProductPassport === "function"
+  let effectiveDefaultConfig = !editingItem && !prefillItem && typeof getProductPassport === "function"
     ? getProductPassport(productId)?.defaultConfig
     : null;
+  if (!editingItem && !prefillItem && !effectiveDefaultConfig && productId > 0) {
+    try {
+      const response = await apiJson('/api/public/products/batch/default-cart-config', {
+        method: 'POST', body: { ids: [productId] },
+      });
+      effectiveDefaultConfig = response?.data?.[productId] || null;
+    } catch (error) {
+      console.error('Failed to load product default option configuration', error);
+    }
+  }
   const seedItem =
     editingItem && typeof editingItem === "object"
       ? editingItem
@@ -43765,9 +43775,11 @@ window.__getSharedProductListSummaries = async function getSharedProductListSumm
     const lines = [
       ...(Array.isArray(config?.ingredients) ? config.ingredients.map(formatIngredientLineForOrder) : []),
       ...(Array.isArray(config?.option_items) ? config.option_items.map((option) => {
-        if (str(option?.variant_label || "").trim()) return formatOptionLineForOrder(option);
+        const title = str(option?.title || option?.name || "").trim();
+        const variantLabel = str(option?.variant_label || "").trim();
+        if (variantLabel) return `${variantLabel} ${title}`;
         const qty = Math.max(1, Number(option?.qty || option?.quantity || 1));
-        return `${qty} шт ${str(option?.title || option?.name || "").trim()}`.trim();
+        return qty > 1 ? `${qty} шт ${title}` : title;
       }) : []),
     ].map((line) => str(line || "").trim()).filter(Boolean);
     const price = Number(await calculateDefaultPrice(product)) || 0;

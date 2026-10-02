@@ -8639,6 +8639,13 @@
     const merged = current && typeof current === "object"
       ? { ...current, ...product }
       : { ...product };
+    const effectiveConfig = getUpsellDefaultConfigCacheEntry(pid)?.data;
+    if (current && effectiveConfig?.is_fulfillable != null &&
+        (stockSource === "product_passport_batch" || stockSource === "passport_background_refresh")) {
+      merged.display_price = current.display_price;
+      merged.catalog_default_lines = current.catalog_default_lines;
+      merged.default_variant = current.default_variant;
+    }
     if (!Array.isArray(merged.photos)) merged.photos = safePhotos(merged);
     cacheStockFromProductPayload(merged, stockSource);
     merged.is_available = isProductAvailable(merged);
@@ -13676,6 +13683,10 @@ async function initAddresses() {
    */
   async function calculateDefaultPrice(product) {
     const productId = product.id;
+
+    if (product.display_price != null && Number.isFinite(Number(product.display_price))) {
+      return Number(product.display_price);
+    }
     
     // ????????? ???
     if (defaultPriceCache.has(productId)) {
@@ -14383,10 +14394,11 @@ async function initAddresses() {
       const prefetchProductIds = [];
       const prefetchComboIds = [];
 
-      products.forEach((p) => {
-        const id = Number(p.id);
+      products.forEach((listedProduct) => {
+        const id = Number(listedProduct.id);
         if (!Number.isFinite(id)) return;
         if (appendOnly && existingProductIds && existingProductIds.has(id)) return;
+        const p = state.productCache.get(id) || listedProduct;
         prefetchProductIds.push(id);
         const qty = cartQty(id);
         const available = isProductAvailable(p);
