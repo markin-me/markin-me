@@ -5812,6 +5812,18 @@ body.page-cash #cashJournalList.orders-list .order-payment-cash{
   animation:product-row-stock-spin .7s linear infinite;
   pointer-events:none;
 }
+body.page-orders #ordersList{padding-left:26px;}
+body.page-orders .orders-list .order-row.js-order{
+  position:relative;
+}
+body.page-orders .orders-row-select-control{
+  position:absolute;
+  left:-26px;
+  top:50%;
+  transform:translateY(-50%);
+}
+body.page-orders .order-id-select-hit{cursor:inherit;}
+#ordersBulkFooter .products-bulk-footer-actions{justify-content:space-between;}
 .product-row-stock-input-wrap.is-saving .product-row-stock-unit-hint{
   opacity:0;
 }

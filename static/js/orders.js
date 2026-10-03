@@ -1769,8 +1769,88 @@
     const selected = isOrderMultiSelected(id);
     row.classList.toggle("is-multi-selected", selected);
     const checkbox = $('[data-role="order-multi-checkbox"]', row);
+    if (!isCourierWorkspace && document.body.classList.contains("page-orders") && checkbox
+      && !row.querySelector(".orders-row-select-control")) {
+      const numberLabel = checkbox.closest("label");
+      const control = document.createElement("label");
+      control.className = "product-row-select-control orders-row-select-control";
+      control.dataset.action = "order-multi-select";
+      control.dataset.orderId = String(id);
+      checkbox.className = "product-row-select-input";
+      checkbox.removeAttribute("tabindex");
+      control.appendChild(checkbox);
+      const box = document.createElement("span");
+      box.className = "product-row-select-box";
+      box.setAttribute("aria-hidden", "true");
+      control.appendChild(box);
+      row.prepend(control);
+      if (numberLabel) {
+        const numberBlock = document.createElement("div");
+        numberBlock.className = numberLabel.className;
+        while (numberLabel.firstChild) numberBlock.appendChild(numberLabel.firstChild);
+        numberLabel.replaceWith(numberBlock);
+      }
+    }
     if (checkbox) checkbox.checked = selected;
   }
+
+  let ordersBulkLoading = false;
+
+  function syncOrdersBulkFooter() {
+    const footer = document.getElementById("ordersBulkFooter");
+    if (!footer || isCourierWorkspace) return;
+    const orders = getOrdersForActiveStage();
+    const count = orders.filter((order) => isOrderMultiSelected(order.id)).length;
+    footer.classList.toggle("hidden", count === 0 && !ordersBulkLoading);
+    document.getElementById("ordersBulkSelectedCount").textContent = String(count);
+    const toggle = document.getElementById("ordersBulkToggleAll");
+    toggle.checked = orders.length > 0 && count === orders.length;
+    toggle.indeterminate = count > 0 && count < orders.length;
+    toggle.disabled = ordersBulkLoading;
+    document.getElementById("ordersBulkClear").disabled = ordersBulkLoading;
+  }
+
+  document.getElementById("ordersBulkClear")?.addEventListener("click", () => {
+    state.selectedOrderIds.clear();
+    elOrdersList?.querySelectorAll(".js-order").forEach((row) => applyOrderMultiSelectionState(row));
+    syncOrdersBulkFooter();
+  });
+
+  document.getElementById("ordersBulkToggleAll")?.addEventListener("change", async (event) => {
+    const selectAll = event.target.checked;
+    const queryKey = currentOrdersQueryKey();
+    const stageId = state.activeStatusId;
+    const isCurrent = () => queryKey === currentOrdersQueryKey() && stageId === state.activeStatusId;
+    ordersBulkLoading = true;
+    syncOrdersBulkFooter();
+    try {
+      if (selectAll) {
+        while (state.ordersPagination.loading && isCurrent()) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        while (state.ordersPagination.hasMore && isCurrent()) {
+          const loaded = await loadOrders({ resetPagination: false, append: true });
+          if (!loaded || !isCurrent()) return;
+        }
+      }
+      if (!isCurrent()) return;
+      getOrdersForActiveStage().forEach((order) => {
+        if (selectAll) state.selectedOrderIds.add(Number(order.id));
+        else state.selectedOrderIds.delete(Number(order.id));
+      });
+      if (selectAll) {
+        renderStages();
+        renderOrders();
+      }
+      else elOrdersList?.querySelectorAll(".js-order").forEach((row) => applyOrderMultiSelectionState(row));
+    } catch (err) {
+      console.error("Orders select all failed:", err);
+      alert("Не удалось загрузить все заказы для выделения: " + err.message);
+    } finally {
+      ordersBulkLoading = false;
+      syncOrdersBulkFooter();
+    }
+  });
 
   function toggleOrderMultiSelection(orderId) {
     const id = Number(orderId || 0);
@@ -6515,6 +6595,7 @@
     elOrdersList.innerHTML = "";
 
     normalizeSelectedOrderIds();
+    syncOrdersBulkFooter();
     const filtered = getOrdersForActiveStage();
     if (!filtered.length) {
       if (elEmptyHint) {
@@ -7099,6 +7180,7 @@
       reconcileOrderListDom(prevOrder || order, { prevVisible, nextVisible: false });
       emitOrderUpdated(order, { removed: true, localOnly: !!localOnly });
       schedulePersistOrdersCache();
+      syncOrdersBulkFooter();
       if (persistList && (isCourierWorkspace || !localOnly)) void persistOrdersListCache();
       return null;
     }
@@ -7149,6 +7231,7 @@
     emitOrderUpdated(nextOrder, { localOnly: !!localOnly });
     schedulePersistOrdersCache();
     if (persistList && (isCourierWorkspace || !localOnly)) void persistOrdersListCache();
+    syncOrdersBulkFooter();
     if (isCourierWorkspace && navigator.onLine !== false && getCourierBucketId(nextOrder)) {
       void detailMergePromise.then(() => prewarmCourierOrderDetail(nextOrder, { highPriority: true }));
     }
@@ -7871,13 +7954,14 @@
 
     const multiSelectToggle = e.target.closest('[data-action="order-multi-select"]');
     if (multiSelectToggle) {
-      e.preventDefault();
+      if (!e.target.matches(".orders-row-select-control input")) e.preventDefault();
       e.stopPropagation();
       const orderId = Number(multiSelectToggle.getAttribute("data-order-id") || 0);
       if (!(orderId > 0)) return;
       toggleOrderMultiSelection(orderId);
       const row = multiSelectToggle.closest(".js-order");
       if (row) applyOrderMultiSelectionState(row, orderId);
+      syncOrdersBulkFooter();
       return;
     }
 
