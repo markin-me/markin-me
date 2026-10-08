@@ -473,6 +473,29 @@
       </div>
     </div>
   </div>
+<% } else if (activePage === 'team') { %>
+  <div class="center-stack team-center-stack">
+    <div class="panel toolbar-island">
+      <div class="toolbar">
+        <div class="toolbar-title">
+          <i class="fas fa-users" id="teamCenterIcon"></i>
+          <span id="teamCenterTitle">Сотрудники</span>
+        </div>
+        <div class="toolbar-right">
+          <button class="btn btn-icon btn-primary" id="teamCreateBtn" type="button" title="Создать сотрудника" aria-label="Создать сотрудника">
+            <i class="fas fa-plus"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="panel orders-center-panel team-list-panel">
+      <div class="panel-body no-scrollbar">
+        <div class="orders-list team-entity-list" id="teamEntityList" aria-live="polite">
+          <div class="team-list-state muted">Загрузка...</div>
+        </div>
+      </div>
+    </div>
+  </div>
 <% } else { %>
   <div class="center-stack">
     <div class="panel toolbar-island">

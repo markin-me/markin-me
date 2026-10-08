@@ -1,5 +1,5 @@
 <%- include('../layouts/app', {
-  pageTitle: 'Главная',
+  pageTitle: activePage === 'team' ? 'Команда' : (activePage === 'settings' ? 'Настройки' : 'Главная'),
   activePage: activePage || '',
   pageClass: 'page-home',
   leftPartial: '../partials/home/left',
@@ -21,5 +21,5 @@
       '/static/vendor/html-to-image.min.js',
       '/static/js/settings-tenant.js'
     ]
-    : []
+    : (activePage === 'team' ? ['/static/js/team.js'] : [])
 }) %>

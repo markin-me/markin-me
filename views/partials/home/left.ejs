@@ -63,6 +63,24 @@
       </div>
     </div>
   </div>
+<% } else if (activePage === 'team') { %>
+  <div class="panel team-stage-panel">
+    <div class="panel-header">
+      <div class="panel-title">Команда</div>
+    </div>
+    <div class="panel-body no-scrollbar">
+      <div class="stage-list team-stage-list">
+        <button class="stage-item is-active" type="button" data-team-section="users">
+          <span class="stage-icon"><i class="fas fa-users"></i></span>
+          <span class="stage-text"><strong>Сотрудники</strong></span>
+        </button>
+        <button class="stage-item" type="button" data-team-section="roles">
+          <span class="stage-icon"><i class="fas fa-user-shield"></i></span>
+          <span class="stage-text"><strong>Роли и права</strong></span>
+        </button>
+      </div>
+    </div>
+  </div>
 <% } else { %>
   <div class="panel">
     <div class="panel-header">

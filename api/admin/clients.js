@@ -15,6 +15,42 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService 
   const router = express.Router();
   let customerGenderColumnPromise = null;
 
+  router.param('id', async (req, res, next, rawId) => {
+    try {
+      if (String(req.path || '').startsWith('/filters/')) return next();
+      const accessRule = String(req.permission?.accessRule || 'all');
+      if (accessRule === 'all') return next();
+      const clientId = Number(rawId);
+      const userId = Number(req.user?.userId || 0);
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      if (!(clientId > 0)) return res.status(403).json({ ok: false, error: 'RESOURCE_FORBIDDEN' });
+      if (accessRule === 'stores') {
+        const [customers] = await db.query(
+          `SELECT 1 FROM cust_customers
+           WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
+           LIMIT 1`,
+          [tenantId, storeId, clientId]
+        );
+        if (!customers.length) return res.status(403).json({ ok: false, error: 'STORE_FORBIDDEN' });
+        return next();
+      }
+      if (!(userId > 0)) return res.status(403).json({ ok: false, error: 'RESOURCE_FORBIDDEN' });
+      const actorColumn = accessRule === 'assigned' ? 'assigned_user_id' : 'created_by_user_id';
+      const [rows] = await db.query(
+        `SELECT 1 FROM order_orders
+         WHERE tenant_id=? AND store_id=? AND customer_id=? AND ${actorColumn}=? AND is_active=1
+         LIMIT 1`,
+        [tenantId, storeId, clientId, userId]
+      );
+      if (!rows.length) return res.status(403).json({ ok: false, error: 'RESOURCE_FORBIDDEN' });
+      return next();
+    } catch (error) {
+      console.error('CLIENT_ACCESS_CHECK_FAILED:', error);
+      return res.status(500).json({ ok: false, error: 'AUTHORIZATION_ERROR' });
+    }
+  });
+
   function makeToken32() {
     if (typeof crypto.randomUUID === 'function') {
       return crypto.randomUUID().replace(/-/g, '');
@@ -1409,6 +1445,24 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService 
 
       const where = ['c.tenant_id=?'];
       const params = [tenantId];
+      const accessRule = String(req.permission?.accessRule || 'all');
+      if (accessRule === 'stores') {
+        where.push('c.store_id=?');
+        params.push(storeId);
+      } else if (accessRule === 'assigned' || accessRule === 'own') {
+        const actorColumn = accessRule === 'assigned' ? 'assigned_user_id' : 'created_by_user_id';
+        where.push('c.store_id=?');
+        params.push(storeId);
+        where.push(`EXISTS (
+          SELECT 1 FROM order_orders scoped_order
+          WHERE scoped_order.tenant_id=c.tenant_id
+            AND scoped_order.store_id=c.store_id
+            AND scoped_order.customer_id=c.id
+            AND scoped_order.${actorColumn}=?
+            AND scoped_order.is_active=1
+        )`);
+        params.push(Number(req.user?.userId || 0));
+      }
 
       if (isActive !== null) {
         where.push('c.is_active=?');
@@ -1832,6 +1886,13 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService 
       if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
+      const accessRule = String(req.permission?.accessRule || 'all');
+      const actorClause = accessRule === 'assigned'
+        ? 'AND o.assigned_user_id=?'
+        : accessRule === 'own'
+          ? 'AND o.created_by_user_id=?'
+          : '';
+      const actorParams = actorClause ? [Number(req.user?.userId || 0)] : [];
 
       const [rows] = await db.query(
         `SELECT
@@ -1846,11 +1907,12 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService 
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+           ${actorClause}
            AND COALESCE(s.is_final, 0)=0
          ORDER BY o.created_at DESC,
            o.id DESC
          LIMIT 1`,
-        [tenantId, storeId, customerId]
+        [tenantId, storeId, customerId, ...actorParams]
       );
 
       const row = rows[0] || null;
@@ -1980,6 +2042,13 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService 
         ? "AND COALESCE(s.is_final, 0)=1 AND LOWER(COALESCE(s.code, '')) NOT IN ('canceled', 'cancelled') AND LOWER(COALESCE(s.title, '')) NOT LIKE 'отмен%%' AND LOWER(COALESCE(s.title, '')) NOT LIKE 'cancel%%'"
         : isActive ? "AND COALESCE(s.is_final, 0)=0" : '';
       const sqlLimit = hasPagedView ? limit + 1 : limit;
+      const accessRule = String(req.permission?.accessRule || 'all');
+      const actorClause = accessRule === 'assigned'
+        ? 'AND o.assigned_user_id=?'
+        : accessRule === 'own'
+          ? 'AND o.created_by_user_id=?'
+          : '';
+      const actorParams = actorClause ? [Number(req.user?.userId || 0)] : [];
       const [rows] = await db.query(
         `SELECT
            o.id, o.public_id,
@@ -1990,10 +2059,11 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService 
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+           ${actorClause}
            ${statusClause}
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ? OFFSET ?`,
-        [tenantId, storeId, customerId, sqlLimit, offset]
+        [tenantId, storeId, customerId, ...actorParams, sqlLimit, offset]
       );
       if (!hasPagedView) return res.json({ ok: true, data: rows });
       const data = rows.slice(0, limit);

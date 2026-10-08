@@ -414,10 +414,92 @@
         var storeDropdown = document.getElementById('userMenuStoreDropdown');
         var storeName = document.getElementById('userMenuStoreName');
         var storeSection = document.getElementById('userMenuStoreSection');
+        var roleSection = document.getElementById('userMenuRoleSection');
+        var roleDivider = document.getElementById('userMenuRoleDivider');
+        var roleButton = document.getElementById('userMenuRoleButton');
+        var roleName = document.getElementById('userMenuRoleName');
+        var roleDropdown = document.getElementById('userMenuRoleDropdown');
         var isChatPage = !!(document.body && document.body.classList.contains('page-chat'));
 
         var stores = [];
+        var allowedStoreIds = null;
         var currentStoreId = localStorage.getItem('activeStoreId') || '1';
+
+        function applyNavigationPermissions(permissions) {
+          var list = Array.isArray(permissions) ? permissions : [];
+          var fullAccess = list.indexOf('*') !== -1;
+          var keys = new Set(list.map(function (item) { return typeof item === 'string' ? item : item.key; }));
+          var navPermissions = {
+            cash: ['finance.view'], products: ['products.view'], orders: ['orders.view'],
+            'courier-screen': ['orders.view'], 'new-order': ['orders.edit'], clients: ['clients.view'],
+            team: ['users.view', 'users.manage', 'roles.manage'], chat: ['clients.view'], settings: ['settings.view']
+          };
+          document.querySelectorAll('[data-nav-key]').forEach(function (link) {
+            var required = navPermissions[link.getAttribute('data-nav-key')] || [];
+            var visible = fullAccess || required.length === 0 || required.some(function (key) { return keys.has(key); });
+            var item = link.closest('li');
+            if (item) item.classList.toggle('hidden', !visible);
+            else link.classList.toggle('hidden', !visible);
+          });
+        }
+
+        function renderRoleOptions(context) {
+          var roles = Array.isArray(context && context.roles) ? context.roles : [];
+          var activeRole = context && context.active_role;
+          if (!roleSection || !roleDropdown || roles.length < 2) {
+            if (roleSection) roleSection.classList.add('hidden');
+            if (roleDivider) roleDivider.classList.add('hidden');
+            return;
+          }
+          roleSection.classList.remove('hidden');
+          if (roleDivider) roleDivider.classList.remove('hidden');
+          if (roleName) roleName.textContent = activeRole ? activeRole.name : 'Выберите роль';
+          roleDropdown.innerHTML = '';
+          roles.forEach(function (role) {
+            var option = document.createElement('button');
+            option.type = 'button';
+            option.className = 'user-menu-store-option';
+            option.textContent = role.name;
+            if (activeRole && Number(activeRole.id) === Number(role.id)) option.classList.add('is-active');
+            option.addEventListener('click', async function (event) {
+              event.stopPropagation();
+              if (activeRole && Number(activeRole.id) === Number(role.id)) {
+                roleDropdown.classList.add('hidden');
+                return;
+              }
+              try {
+                var response = await authFetch('/api/auth/active-role', { method: 'POST', body: JSON.stringify({ role_id: Number(role.id) }) });
+                var result = await response.json();
+                if (!response.ok || result.ok !== true) throw new Error(result.error || 'ROLE_SWITCH_FAILED');
+                localStorage.setItem('authToken', result.token);
+                localStorage.setItem('user', JSON.stringify(result.user));
+                localStorage.setItem('tenant', JSON.stringify(result.tenant));
+                window.location.href = result.redirect || '/dashboard/products';
+              } catch (error) {
+                console.error('Role switch failed:', error);
+              }
+            });
+            roleDropdown.appendChild(option);
+          });
+        }
+
+        async function loadAccessContext() {
+          try {
+            var response = await authFetch('/api/auth/me');
+            var context = await response.json();
+            if (!response.ok || context.ok !== true) throw new Error(context.error || 'AUTH_CONTEXT_FAILED');
+            if (context.user) localStorage.setItem('user', JSON.stringify(context.user));
+            if (context.tenant) localStorage.setItem('tenant', JSON.stringify(context.tenant));
+            applyNavigationPermissions(context.permissions || []);
+            renderRoleOptions(context);
+            if (Array.isArray(context.stores)) {
+              allowedStoreIds = new Set(context.stores.map(function (store) { return String(store.id); }));
+              if (stores.length) applyStores();
+            }
+          } catch (error) {
+            console.error('Access context load failed:', error);
+          }
+        }
 
         // Загрузить список точек продаж
         async function loadStores() {
@@ -473,6 +555,9 @@
         }
 
         function applyStores() {
+            if (allowedStoreIds instanceof Set) {
+              stores = stores.filter(function (store) { return allowedStoreIds.has(String(store.id)); });
+            }
             if (storeSection) storeSection.style.display = '';
 
             // Если точек нет, скрыть секцию
@@ -553,15 +638,25 @@
             storeDropdown.classList.toggle('hidden');
           });
         }
+        if (roleButton && roleDropdown) {
+          roleButton.addEventListener('click', function (event) {
+            event.stopPropagation();
+            roleDropdown.classList.toggle('hidden');
+          });
+        }
 
         // Закрытие dropdown при клике вне
         document.addEventListener('click', function(e) {
           if (storeDropdown && !storeDropdown.contains(e.target) && e.target !== storeButton) {
             storeDropdown.classList.add('hidden');
           }
+          if (roleDropdown && !roleDropdown.contains(e.target) && e.target !== roleButton) {
+            roleDropdown.classList.add('hidden');
+          }
         });
 
         // Загрузить точки при открытии страницы
+        loadAccessContext();
         loadStores();
 
         // Проверка авторизации для страниц dashboard

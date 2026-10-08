@@ -32,7 +32,7 @@ const {
 const makePrintApiRouter = require("../print");
 const chatTempRuntime = require("../chatTemp");
 
-module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
+module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can }) {
   const router = express.Router();
   const orderPrintTemplateBuilder = typeof makePrintApiRouter.createOrderPrintTemplateBuilder === "function"
     ? makePrintApiRouter.createOrderPrintTemplateBuilder({ db, helpers })
@@ -43,6 +43,33 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   let ensureOrderBenefitsMetaColumnPromise = null;
   let refundTablesReady = false;
   let ensureRefundTablesPromise = null;
+
+  router.param("id", async (req, res, next, rawId) => {
+    try {
+      const id = Number(rawId);
+      if (!(id > 0) || typeof can !== "function") return next();
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const [rows] = await db.query(
+        `SELECT id, tenant_id, store_id, assigned_user_id, created_by_user_id
+         FROM order_orders
+         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
+         LIMIT 1`,
+        [tenantId, storeId, id]
+      );
+      if (!rows.length) return next();
+      const permissionKey = String(req.permission?.key || "orders.view");
+      const access = await can(req.user, permissionKey, rows[0]);
+      if (!access.allowed) {
+        return res.status(403).json({ ok: false, error: access.error || "RESOURCE_FORBIDDEN" });
+      }
+      req.orderAccessResource = rows[0];
+      return next();
+    } catch (error) {
+      console.error("ORDER_ACCESS_CHECK_FAILED:", error);
+      return res.status(500).json({ ok: false, error: "AUTHORIZATION_ERROR" });
+    }
+  });
 
   function stableIdempotencyJson(value) {
     if (Array.isArray(value)) return value.map(stableIdempotencyJson);
@@ -1838,6 +1865,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.public_id,
         DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
         o.customer_id,
+        o.assigned_user_id,
+        o.created_by_user_id,
         o.customer_name,
         o.customer_phone,
         o.promo_code,
@@ -2170,6 +2199,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
              (o.scheduled_at IS NULL AND o.created_at >= ? AND o.created_at < ?)
            )`
         : "";
+      const statusAccessRule = String(req.permission?.accessRule || "all");
+      const joinAccess = statusAccessRule === "assigned"
+        ? "AND o.assigned_user_id = ?"
+        : statusAccessRule === "own"
+          ? "AND o.created_by_user_id = ?"
+          : "";
 
       const params = [];
       if (bounds) {
@@ -2180,6 +2215,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           bounds.createdEndUtcExclusive
         );
       }
+      if (joinAccess) params.push(Number(req.user?.userId || 0));
       params.push(tenantId, storeId);
 
       const [rows] = await db.query(
@@ -2198,8 +2234,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           ON o.tenant_id = s.tenant_id
           AND o.store_id = s.store_id
           AND o.status_id = s.id
-          AND o.is_active = 1
-          ${joinDate}
+           AND o.is_active = 1
+           ${joinDate}
+           ${joinAccess}
         WHERE s.tenant_id = ? AND s.store_id = ? AND s.is_active = 1
         GROUP BY s.id
         ORDER BY s.sort ASC, s.id ASC
@@ -2240,6 +2277,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       let where = `o.tenant_id=? AND o.store_id=? AND o.is_active=1`;
       const params = [tenantId, storeId];
 
+      const accessRule = String(req.permission?.accessRule || "all");
+      if (accessRule === "assigned") {
+        where += ` AND o.assigned_user_id=?`;
+        params.push(Number(req.user?.userId || 0));
+      } else if (accessRule === "own") {
+        where += ` AND o.created_by_user_id=?`;
+        params.push(Number(req.user?.userId || 0));
+      }
+
       if (Number.isFinite(statusId) && statusId > 0) {
         where += ` AND o.status_id=?`;
         params.push(statusId);
@@ -2272,7 +2318,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             o.store_id,
             o.public_id,
             DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-            o.customer_id,
+             o.customer_id,
+             o.assigned_user_id,
             o.customer_name,
             o.customer_phone,
             o.address,
@@ -2351,7 +2398,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.store_id,
           o.public_id,
           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-          o.customer_id,
+           o.customer_id,
+           o.assigned_user_id,
+           o.created_by_user_id,
           o.customer_name,
           o.customer_phone,
           o.promo_code,
@@ -2527,6 +2576,16 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const since = Number(req.query.since || 0);
       const cursorState = ordersEvents.inspectCursor(tenantId, storeId, since);
       const cursor = Number(cursorState.currentCursor || 0);
+      const accessRule = String(req.permission?.accessRule || "all");
+      if (accessRule === "assigned" || accessRule === "own") {
+        return res.json({
+          ok: true,
+          data: [],
+          cursor,
+          reset_required: cursor > Math.max(0, since),
+          reason: cursor > Math.max(0, since) ? "permission_scope" : null,
+        });
+      }
       if (cursorState.resetRequired) {
         return res.json({
           ok: true,
@@ -2624,6 +2683,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const accessRule = String(req.permission?.accessRule || "all");
+      const scopeSql = accessRule === "assigned"
+        ? " AND o.assigned_user_id=?"
+        : accessRule === "own"
+          ? " AND o.created_by_user_id=?"
+          : "";
+      const scopeParams = scopeSql ? [Number(req.user?.userId || 0)] : [];
       const [rows] = await db.query(
         `SELECT COUNT(*) AS cnt
          FROM order_orders o
@@ -2634,8 +2700,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
            AND (
              LOWER(COALESCE(s.code, ''))='new'
              OR LOWER(COALESCE(s.title, '')) LIKE 'нов%'
-           )`,
-        [tenantId, storeId]
+           )${scopeSql}`,
+        [tenantId, storeId, ...scopeParams]
       );
       const total = Math.max(0, Number(rows?.[0]?.cnt || 0));
       res.json({ ok: true, data: { total } });
@@ -3144,6 +3210,48 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   });
 
   // ---------------------------
+  // assign employee
+  // ---------------------------
+  // PUT /api/admin/orders/:id/assignee
+  router.put("/:id/assignee", async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      const assignedUserId = Number(req.body?.user_id || 0);
+      if (!(id > 0)) return res.status(400).json({ ok: false, error: "BAD_ID" });
+
+      if (assignedUserId > 0) {
+        const [users] = await db.query(
+          `SELECT u.id
+           FROM app_users u
+           JOIN user_stores us
+             ON us.tenant_id=u.tenant_id AND us.user_id=u.id AND us.store_id=?
+           WHERE u.tenant_id=? AND u.id=? AND u.is_active=1
+           LIMIT 1`,
+          [storeId, tenantId, assignedUserId]
+        );
+        if (!users.length) return res.status(400).json({ ok: false, error: "INVALID_ASSIGNEE" });
+      }
+
+      const [result] = await db.query(
+        `UPDATE order_orders SET assigned_user_id=?
+         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1`,
+        [assignedUserId > 0 ? assignedUserId : null, tenantId, storeId, id]
+      );
+      if (!result.affectedRows) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      const payload = await fetchOrderPayload(tenantId, storeId, id);
+      if (payload && ordersEvents && typeof ordersEvents.publish === "function") {
+        ordersEvents.publish(tenantId, storeId, "order.updated", payload);
+      }
+      return res.json({ ok: true, data: payload });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // ---------------------------
   // change status
   // ---------------------------
   // PUT /api/admin/orders/:id/status
@@ -3507,6 +3615,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const accessRule = String(req.permission?.accessRule || "all");
+      if (accessRule === "assigned" || accessRule === "own") {
+        return res.status(403).json({ ok: false, error: "RESOURCE_SCOPE_UNSUPPORTED" });
+      }
       const statusId = Number(req.body.status_id);
       const orderedIdsRaw = Array.isArray(req.body.orderedIds) ? req.body.orderedIds : [];
 

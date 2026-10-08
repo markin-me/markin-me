@@ -2480,14 +2480,24 @@
       </div>
     </div>
   </div>
+<% } else if (activePage === 'team') { %>
+  <div class="panel team-editor-panel">
+    <div class="panel-header product-tabs-header team-tabs-header hidden" id="teamTabsHeader" aria-label="Открытые рабочие вкладки">
+      <div class="product-tabs-header-inner">
+        <div class="product-tabs team-tabs" id="teamTabs" role="tablist" aria-label="Открытые сотрудники и роли"></div>
+      </div>
+    </div>
+    <div class="panel-body no-scrollbar team-editor-body" id="teamEditorBody">
+      <div class="info-card team-empty-state" id="teamEmptyState">
+        <div class="info-title">Выберите сотрудника или роль</div>
+        <div class="info-text">Открытые карточки появятся здесь отдельными рабочими вкладками.</div>
+      </div>
+    </div>
+  </div>
 <% } else { %>
   <div class="panel">
-    <div class="panel-header">
-      <div class="panel-title">Информация</div>
-    </div>
-    <div class="panel-body no-scrollbar">
-      <p class="muted">Заглушка. Здесь потом будет информация.</p>
-    </div>
+    <div class="panel-header"><div class="panel-title">Информация</div></div>
+    <div class="panel-body no-scrollbar"><p class="muted">Заглушка. Здесь потом будет информация.</p></div>
   </div>
 <% } %>
 

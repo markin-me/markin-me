@@ -69,12 +69,13 @@ const makeAdminOrdersRouter = require('./api/admin/orders');
 const makeAdminProductsRouter = require('./api/admin/products');
 const makeAdminTenantRouter = require('./api/admin/tenant');
 const makeAdminStockRouter = require('./api/admin/stock');
+const makeAdminTeamRouter = require('./api/admin/team');
 const makePublicShopRouter = require('./api/public/shop');
 const makePrintApiRouter = require('./api/print');
 const makeChatTempRouter = require('./api/chatTemp');
 
 // middleware
-const { authMiddleware } = require('./api/middleware/auth');
+const { authMiddleware, requirePermission, userHasStore, can } = require('./api/middleware/auth');
 
 const app = express();
 const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '2';
@@ -784,7 +785,7 @@ function getAdminManifestPageTitle(startPath, fallbackTitle = '') {
     '/dashboard/new-order': 'Новый заказ',
     '/dashboard/clients': 'Клиенты',
     '/dashboard/chat': 'Чаты',
-    '/dashboard/team': 'Главная',
+    '/dashboard/team': 'Команда',
     '/dashboard/settings': 'Настройки',
   };
   return normalizeManifestTitle(fallbackTitle, defaults[pathname] || 'Админка');
@@ -1951,6 +1952,70 @@ app.use('/api/chat-temp', makeChatTempRouter());
 // ------------------------------
 // API: Admin (требуют авторизации)
 // ------------------------------
+function resolveAdminPermission(req) {
+  const route = String(req.path || '').toLowerCase();
+  const method = String(req.method || 'GET').toUpperCase();
+  const isRead = method === 'GET' || method === 'HEAD';
+  if (route.startsWith('/team')) return null;
+  if (route.startsWith('/orders')) {
+    if (route.includes('/cash-')) return 'finance.view';
+    if (isRead) return 'orders.view';
+    if (route.includes('/refund')) return 'orders.refund';
+    if (route.includes('/status') || route.endsWith('/paid')) return 'orders.status';
+    if (route.includes('/assign')) return 'orders.assign';
+    if (method === 'DELETE') return 'orders.cancel';
+    return 'orders.edit';
+  }
+  if (route.startsWith('/stock')) return isRead ? 'stock.view' : 'stock.edit';
+  if (route.startsWith('/clients') || route.startsWith('/bonus') || route.startsWith('/subscriptions')
+      || route.startsWith('/discounts') || route.startsWith('/important-messages')) {
+    return isRead ? 'clients.view' : 'clients.edit';
+  }
+  if (route.startsWith('/catalog') || route.startsWith('/products') || route.startsWith('/options')
+      || route.startsWith('/variants') || route.startsWith('/combos') || route.startsWith('/combo-blocks')
+      || route.startsWith('/auto-add') || route.startsWith('/units') || route.startsWith('/unit-conversions')) {
+    return isRead ? 'products.view' : 'products.edit';
+  }
+  if (route.startsWith('/analytics')) return 'finance.view';
+  if (route.startsWith('/tenant') || route.startsWith('/system')) {
+    return isRead ? 'settings.view' : 'settings.manage';
+  }
+  if (route.startsWith('/presence')) return 'clients.view';
+  return null;
+}
+
+async function requireAdminPermission(req, res, next) {
+  const permissionKey = resolveAdminPermission(req);
+  if (!permissionKey) return next();
+  return requirePermission(permissionKey)(req, res, async (error) => {
+    try {
+      if (error) return next(error);
+      const accessRule = String(req.permission && req.permission.accessRule || 'all');
+      const route = String(req.path || '').toLowerCase();
+      if ((accessRule === 'assigned' || accessRule === 'own')
+          && !route.startsWith('/orders') && !route.startsWith('/clients')) {
+        return res.status(403).json({ ok: false, error: 'RESOURCE_SCOPE_UNSUPPORTED' });
+      }
+      if ((accessRule === 'assigned' || accessRule === 'own')
+          && route.startsWith('/clients') && !['GET', 'HEAD'].includes(String(req.method || '').toUpperCase())) {
+        return res.status(403).json({ ok: false, error: 'RESOURCE_SCOPE_UNSUPPORTED' });
+      }
+      if (accessRule !== 'stores' || req.user.fullAccess === true) return next();
+      const storeId = Number(req.headers['x-store-id'] || req.query?.store_id || req.body?.store_id || 0);
+      if (!(storeId > 0) || !await userHasStore(req.user, storeId)) {
+        return res.status(403).json({ ok: false, error: 'STORE_FORBIDDEN' });
+      }
+      req.user.storeId = storeId;
+      return next();
+    } catch (permissionError) {
+      console.error('ADMIN_PERMISSION_SCOPE_FAILED:', permissionError);
+      return res.status(500).json({ ok: false, error: 'AUTHORIZATION_ERROR' });
+    }
+  });
+}
+
+app.use('/api/admin', authMiddleware, requireAdminPermission);
+
 app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
   const tenantId = Number(req.user?.tenantId || 0);
   const storeId = Number(req.query?.store_id || 0);
@@ -2045,9 +2110,10 @@ app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessa
   ensurePushSubscriptionsTable: makeChatTempRouter.ensurePushSubscriptionsTable,
   sendPushToSubscriptions: makeChatTempRouter.sendPushToSubscriptions,
 }));
-app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents }));
+app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents, can }));
 app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));
 app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents }));
+app.use('/api/admin/team', authMiddleware, makeAdminTeamRouter({ db, helpers, requirePermission }));
 
 app.post('/api/admin/analytics/receipts/recognize', authMiddleware, async (req, res) => {
   const rawQr = String(req.body?.qrraw || '').trim();
@@ -2304,7 +2370,35 @@ const adminProductsRouter = makeAdminProductsRouter({
   ordersEvents,
   buildAdminFullProductPassports: publicShopRouter.buildAdminFullProductPassports,
 });
-app.use('/api', authMiddleware, adminProductsRouter);
+function requireProductApiPermission(req, res, next) {
+  const route = String(req.path || '').toLowerCase();
+  if (route.startsWith('/admin/')) return next();
+  const isProductRoute = route.startsWith('/prod_')
+    || route.startsWith('/checkout-constructor')
+    || route.startsWith('/new-order')
+    || route.startsWith('/sort/prod_')
+    || route.startsWith('/upload/product')
+    || route.startsWith('/upload/category');
+  if (!isProductRoute) return next();
+  const method = String(req.method || 'GET').toUpperCase();
+  const permissionKey = method === 'GET' || method === 'HEAD' ? 'products.view' : 'products.edit';
+  return requirePermission(permissionKey)(req, res, async (error) => {
+    try {
+      if (error) return next(error);
+      if (String(req.permission?.accessRule || 'all') !== 'stores' || req.user.fullAccess === true) return next();
+      const storeId = Number(req.headers['x-store-id'] || req.query?.store_id || req.body?.store_id || 0);
+      if (!(storeId > 0) || !await userHasStore(req.user, storeId)) {
+        return res.status(403).json({ ok: false, error: 'STORE_FORBIDDEN' });
+      }
+      req.user.storeId = storeId;
+      return next();
+    } catch (permissionError) {
+      console.error('PRODUCT_PERMISSION_SCOPE_FAILED:', permissionError);
+      return res.status(500).json({ ok: false, error: 'AUTHORIZATION_ERROR' });
+    }
+  });
+}
+app.use('/api', authMiddleware, requireProductApiPermission, adminProductsRouter);
 
 // ------------------------------
 // Global errors (в т.ч. multer)
