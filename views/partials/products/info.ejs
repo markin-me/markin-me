@@ -234,7 +234,7 @@
           </div>
         </form>
 
-        <div class="info-card info-accordion">
+        <div class="info-accordion option-points-section">
           <div class="acc-item">
             <div class="acc-header">
               <button class="stage-item acc-trigger" type="button" data-acc-trigger>
@@ -255,7 +255,7 @@
           </div>
         </div>
 
-        <div class="info-card info-accordion">
+        <div class="info-accordion">
           <div class="acc-item">
             <div class="acc-header">
               <button class="stage-item acc-trigger" type="button" data-acc-trigger>
@@ -279,21 +279,25 @@
       </div>
 
       <div id="optionLevelPicker" class="hidden">
-        <div class="info-card">
-          <div class="option-group-section option-picker-panel">
-            <div class="option-picker-tabs" id="optionPickerTabs"></div>
-            <div class="option-picker-controls">
-              <div class="option-picker-search">
-                <input class="control" id="optionPickerSearch" type="search" placeholder="Поиск по названию" />
+          <div class="option-picker-panel">
+            <div class="option-picker-layout">
+              <div class="option-picker-parents" id="optionPickerParents"></div>
+              <div class="option-picker-main">
+                <div class="option-picker-top">
+                  <button class="btn btn-icon" id="optionPickerSearchToggle" type="button" title="Поиск" aria-label="Поиск"><i class="fas fa-search"></i></button>
+                  <input class="control" id="optionPickerSearch" type="search" placeholder="Поиск по названию" />
+                  <div class="option-picker-tabs" id="optionPickerTabs"></div>
+                </div>
+                <div class="option-picker-controls">
+                  <label class="option-picker-select-all" for="optionPickerSelectAll">
+                    <input id="optionPickerSelectAll" type="checkbox" aria-label="Выделить все в категории" />
+                    <span id="optionPickerSelectAllLabel">Выделить все</span>
+                  </label>
+                </div>
+                <div class="option-picker-list" id="optionPickerList"></div>
               </div>
-              <label class="option-picker-select-all" for="optionPickerSelectAll">
-                <input id="optionPickerSelectAll" type="checkbox" aria-label="Выделить все в категории" />
-                <span id="optionPickerSelectAllLabel">Выделить все</span>
-              </label>
             </div>
-            <div class="option-picker-list" id="optionPickerList"></div>
           </div>
-        </div>
       </div>
     </div>
 

@@ -8,6 +8,18 @@
     <!-- Основной список (скролл внутри panel-body) -->
     <div class="panel orders-center orders-center-panel">
       <%- include('./list') %>
+      <div class="panel-footer hidden" id="ordersBulkFooter">
+        <div class="products-bulk-footer-actions">
+          <div class="products-bulk-footer-count">
+            <label class="products-bulk-toggle-all" title="Выделить все / снять выделение">
+              <input class="products-bulk-toggle-all-input" type="checkbox" id="ordersBulkToggleAll" aria-label="Выделить все заказы текущего списка" />
+              <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+            </label>
+            <span>Выбрано: <b id="ordersBulkSelectedCount">0</b></span>
+          </div>
+          <button class="icon-btn" id="ordersBulkClear" type="button" title="Снять всё выделение" aria-label="Снять всё выделение"><i class="fas fa-times"></i></button>
+        </div>
+      </div>
     </div>
   </div>
 </div>

@@ -2958,9 +2958,50 @@
     return out;
   }
 
+  function normalizeCustomerOrderStatus(code) {
+    const value = String(code || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (["new", "accepted"].includes(value)) return "accepted";
+    if (["cooking", "preparing"].includes(value)) return "cooking";
+    if (["ready", "packed"].includes(value)) return "packed";
+    if (["on_the_way", "in_transit", "courier", "delivery", "delivering"].includes(value)) return "courier";
+    if (["delivered", "received", "completed", "done", "delivery_done"].includes(value)) return "completed";
+    if (["canceled", "cancelled"].includes(value)) return "cancelled";
+    return value;
+  }
+
+  function deriveCustomerOrderProgress(order) {
+    const methodCode = String(order?.method_code || "").toLowerCase();
+    const delivery = methodCode === "delivery";
+    const method = ({ delivery: "Доставка", pickup: "Самовывоз", dine_in: "В зале", takeaway: "С собой" })[methodCode] || String(order?.method_title || "");
+    let stage = normalizeCustomerOrderStatus(order?.status_code);
+    if (delivery && stage === "packed") stage = "cooking";
+    if (!delivery && stage === "courier") stage = "packed";
+    const isCancelled = stage === "cancelled";
+    const isFinal = isCancelled || stage === "completed" || Number(order?.status_is_final) === 1;
+    const route = [
+      { code: "accepted", title: "Принят", icon: "fa-check" },
+      { code: "cooking", title: "Готовится", icon: "fa-fire" },
+      { code: delivery ? "courier" : "packed", title: delivery ? "В пути" : "Собран", icon: delivery ? "fa-truck" : "fa-box" },
+      { code: "completed", title: delivery ? "Доставлен" : methodCode === "dine_in" ? "Выполнен" : "Получен", icon: "fa-check" },
+    ];
+    const stageIndex = route.findIndex((step) => step.code === stage);
+    const steps = route.map((step, index) => ({
+      ...step,
+      state: index === stageIndex ? (isFinal ? "success" : "current") : index < stageIndex ? "completed" : "future",
+    }));
+    // Cancellation has its own explicit result; don't invent the previous status history.
+    if (isCancelled) steps[3] = { code: "cancelled", title: "Отменён", icon: "fa-xmark", state: "cancelled" };
+    return {
+      methodCode, delivery, method, stage, isFinal, isCancelled, steps,
+      statusLabel: steps.find((step) => ["current", "success", "cancelled"].includes(step.state))?.title || String(order?.status_title || ""),
+      progressKey: JSON.stringify(steps),
+    };
+  }
+  window.deriveCustomerOrderProgress = deriveCustomerOrderProgress;
+
   function buildHomeActiveOrderCardHtml(order) {
     return `
-      <button class="shop-profile-card shop-home-active-order-card shop-order-summary-card" type="button" data-home-active-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}">
+      <button class="shop-profile-card shop-home-active-order-card shop-order-summary-card" type="button" data-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}" data-home-active-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}">
         ${buildShopOrderSummaryCardInnerHtml(order)}
       </button>
     `;
@@ -2968,7 +3009,7 @@
 
   function buildCatalogActiveOrderCardHtml(order) {
     return `
-      <button class="shop-profile-card shop-home-active-order-card shop-order-summary-card shop-catalog-active-order-card" type="button" data-home-active-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}">
+      <button class="shop-profile-card shop-home-active-order-card shop-order-summary-card shop-catalog-active-order-card" type="button" data-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}" data-home-active-order-id="${escapeHtml(String(Number(order?.id || 0) || ""))}">
         ${buildShopOrderSummaryCardInnerHtml(order)}
       </button>
     `;
@@ -2984,13 +3025,16 @@
           minute: "2-digit",
         })
       : "\u2014";
-    const addressText = formatCatalogActiveOrderAddress(order);
+    const list = options.context === "orders";
+    const view = list ? { ...deriveCustomerOrderProgress(order), number: String(order?.order_number || order?.public_number || order?.id || ""), timing: window.getShopOrderTiming(order) } : null;
+    const addressText = list && !view.delivery
+      ? String(order?.pickup_store_address || "").trim()
+      : formatCatalogActiveOrderAddress(order);
     const maxPhotos = Math.max(1, Number(options?.maxPhotos || 8) || 8);
     const previewPhotos = collectHomeActiveOrderPreviewPhotos(order?.items, maxPhotos);
     return `
         <div class="shop-order-summary-card__head">
-          <strong>\u0417\u0430\u043a\u0430\u0437 #${escapeHtml(String(order?.id || ""))}</strong>
-          <span>${escapeHtml(dateText)}</span>
+          ${list ? `<strong>#${escapeHtml(view.number)} · ${escapeHtml(view.method)}${view.timing ? ` · ${escapeHtml(view.timing)}` : ""}</strong>` : `<strong>\u0417\u0430\u043a\u0430\u0437 #${escapeHtml(String(order?.id || ""))}</strong><span>${escapeHtml(dateText)}</span>`}
         </div>
         <div class="shop-order-summary-card__address${addressText ? "" : " is-empty"}">
           <i class="fas fa-location-dot" aria-hidden="true"></i>
@@ -3001,12 +3045,28 @@
             ${previewPhotos.map((src) => `<img class="shop-profile-order-photo" src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async" />`).join("")}
           </div>
         ` : ""}
-        <div class="shop-order-summary-card__actions">
-          <span class="shop-order-summary-card__pill shop-order-summary-card__status">${escapeHtml(order?.status_title || "\u2014")}</span>
+        ${list ? `<div data-order-list-footer data-progress-key="${escapeHtml(view.progressKey)}">${buildProfileOrderFooter(order)}</div>` : `<div class="shop-order-summary-card__actions">
+          <span class="shop-order-summary-card__pill shop-order-summary-card__status">${escapeHtml(deriveCustomerOrderProgress(order).statusLabel || "\u2014")}</span>
           <span class="shop-order-summary-card__pill shop-order-summary-card__price">${money(order?.total_price || 0)}</span>
-        </div>
+        </div>`}
     `;
   }
+
+  function buildProfileOrderFooter(order) {
+    const progress = deriveCustomerOrderProgress(order);
+    const price = `<span class="shop-order-summary-card__pill shop-order-summary-card__price">${money(order?.total_price || 0)}</span>`;
+    return progress.isFinal
+      ? `<div class="shop-order-summary-card__actions is-final"><span class="shop-order-summary-card__status is-${progress.isCancelled ? "cancelled" : "success"}"><i class="fas ${progress.isCancelled ? "fa-xmark" : "fa-check"}" aria-hidden="true"></i> ${escapeHtml(progress.statusLabel)}</span>${price}</div>`
+      : `<div class="shop-order-progress__route" aria-label="${escapeHtml(progress.statusLabel)}">${progress.steps.map(window.renderShopOrderStep).join("")}</div><div class="shop-order-summary-card__actions">${price}</div>`;
+  }
+
+  window.patchProfileOrderProgress = (card, order) => {
+    const footer = card.querySelector("[data-order-list-footer]");
+    const key = deriveCustomerOrderProgress(order).progressKey;
+    if (!footer || footer.dataset.progressKey === key) return;
+    footer.innerHTML = buildProfileOrderFooter(order);
+    footer.dataset.progressKey = key;
+  };
 
   function formatCatalogActiveOrderAddress(order) {
     const street = String(order?.delivery_address_street || order?.address_street || "").trim();
@@ -4421,6 +4481,53 @@
   // -----------------------------
   // API
   // -----------------------------
+  let shopSubmission = null;
+  function shopSubmissionFingerprint(value) {
+    if (Array.isArray(value)) return `[${value.map(shopSubmissionFingerprint).join(",")}]`;
+    if (value && typeof value === "object") return `{${Object.keys(value).sort()
+      .map((key) => `${JSON.stringify(key)}:${shopSubmissionFingerprint(value[key])}`).join(",")}}`;
+    return JSON.stringify(value);
+  }
+  function newShopSubmissionId() {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  async function submitShopOrder(payload) {
+    const scope = `${tenantId}:${getActiveStoreId()}:${getCustomerToken() || ""}`;
+    const body = JSON.stringify(payload);
+    const intent = JSON.parse(body);
+    if (intent.pricing_snapshot?.context) delete intent.pricing_snapshot.context.generated_at;
+    const fingerprint = shopSubmissionFingerprint(intent);
+    if (!shopSubmission || shopSubmission.scope !== scope || shopSubmission.fingerprint !== fingerprint) {
+      shopSubmission = { scope, fingerprint, id: newShopSubmissionId() };
+    }
+    const submission = shopSubmission;
+    const headers = {
+      "x-tenant-id": String(tenantId), "x-store-id": String(getActiveStoreId()),
+      "x-customer-token": getCustomerToken() || "", "x-referral-code": getStoredReferralCode() || "",
+      "Idempotency-Key": submission.id,
+    };
+    let result;
+    try {
+      window.shopRealtime.sync();
+      result = await window.shopRealtime.request({
+        type: "order.create", request_id: submission.id, body: JSON.parse(body),
+        customer_token: headers["x-customer-token"], referral_code: headers["x-referral-code"],
+      });
+    } catch (error) {
+      if (!error.transportUnavailable) throw error;
+      if (scope !== `${tenantId}:${getActiveStoreId()}:${getCustomerToken() || ""}`) throw new Error("ORDER_SCOPE_CHANGED");
+      result = await apiJson("/api/public/orders", { method: "POST", body: JSON.parse(body), headers });
+    }
+    if (scope !== `${tenantId}:${getActiveStoreId()}:${getCustomerToken() || ""}`) throw new Error("ORDER_SCOPE_CHANGED");
+    if (result?.data?.id && shopSubmission === submission) shopSubmission = null;
+    return result;
+  }
+  window.submitShopOrder = submitShopOrder;
+
   async function apiJson(url, opts = {}) {
     const token = getCustomerToken();
     const referralCode = getStoredReferralCode();
@@ -4533,6 +4640,53 @@
   let categoryScrollRaf = null;
   let categoryFocusRaf = null;
   const STOCK_SYNC_INTERVAL_MS = 120000;
+  const shopRealtimeListeners = new Set();
+  const shopRealtimeRequests = new Map();
+  let shopRealtimeReady = false;
+  let shopRealtimeCustomerReady = false;
+  let stockEventsToken = "";
+  let stockReconnectAttempt = 0;
+  function shopTransportError() {
+    const error = new Error("SHOP_WEBSOCKET_UNAVAILABLE");
+    error.transportUnavailable = true;
+    return error;
+  }
+  function rejectShopRealtimeRequests() {
+    shopRealtimeReady = false;
+    shopRealtimeCustomerReady = false;
+    shopRealtimeRequests.forEach((job) => { clearTimeout(job.timeout); job.reject(shopTransportError()); });
+    shopRealtimeRequests.clear();
+  }
+  window.shopRealtime = {
+    sync: () => ensurePublicStockEventsConnection(),
+    subscribe(listener) {
+      shopRealtimeListeners.add(listener);
+      if (shopRealtimeCustomerReady) queueMicrotask(() => {
+        if (shopRealtimeListeners.has(listener) && shopRealtimeCustomerReady) listener({ type: "customer.ready" });
+      });
+      return () => shopRealtimeListeners.delete(listener);
+    },
+    request(message) {
+      if (!shopRealtimeReady || !stockEventsSource || stockEventsSource.readyState !== WebSocket.OPEN) return Promise.reject(shopTransportError());
+      // Large baskets keep the existing HTTP path instead of exceeding the socket payload limit.
+      const raw = JSON.stringify(message);
+      if (new TextEncoder().encode(raw).length > 1024 * 1024) return Promise.reject(shopTransportError());
+      return new Promise((resolve, reject) => {
+        if (shopRealtimeRequests.has(message.request_id)) { reject(new Error("ORDER_SUBMISSION_BUSY")); return; }
+        const timeout = setTimeout(() => {
+          shopRealtimeRequests.delete(message.request_id);
+          reject(shopTransportError());
+        }, 15000);
+        shopRealtimeRequests.set(message.request_id, { resolve, reject, timeout });
+        try { stockEventsSource.send(raw); }
+        catch (_) {
+          clearTimeout(timeout);
+          shopRealtimeRequests.delete(message.request_id);
+          reject(shopTransportError());
+        }
+      });
+    },
+  };
   let stockEventsSource = null;
   let stockEventsStoreId = null;
   let stockEventsReconnectTimer = null;
@@ -4918,6 +5072,7 @@
   }
 
   function closeStockEventsSource() {
+    rejectShopRealtimeRequests();
     if (stockEventsSource) {
       try { stockEventsSource.close(); } catch {}
     }
@@ -5092,10 +5247,14 @@
 
   function ensurePublicStockEventsConnection() {
     const currentStoreId = Number(getActiveStoreId() || 0) || 1;
-    if (stockEventsSource && stockEventsStoreId === currentStoreId
+    const token = getCustomerToken() || "";
+    if (stockEventsSource && stockEventsStoreId === currentStoreId && stockEventsToken === token
       && (stockEventsSource.readyState === WebSocket.OPEN || stockEventsSource.readyState === WebSocket.CONNECTING)) return;
+    if (stockEventsReconnectTimer) clearTimeout(stockEventsReconnectTimer);
+    stockEventsReconnectTimer = null;
     closeStockEventsSource();
     stockEventsStoreId = currentStoreId;
+    stockEventsToken = token;
     if (typeof WebSocket !== "function") return;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${protocol}//${location.host}/api/stock-ws?tenant_id=${encodeURIComponent(tenantId)}&store_id=${encodeURIComponent(currentStoreId)}`;
@@ -5110,6 +5269,31 @@
       if (stockEventsSource !== socket) return;
       try {
         const payload = JSON.parse(String(event.data || ""));
+        if (payload.type === "ready") {
+          stockReconnectAttempt = 0;
+          shopRealtimeReady = payload.order_commands === true;
+          if (token) socket.send(JSON.stringify({ type: "auth", customer_token: token }));
+        }
+        if (payload.type === "customer.ready") shopRealtimeCustomerReady = true;
+        if (payload.type === "customer.expired") shopRealtimeCustomerReady = false;
+        if (payload.type === "order.result") {
+          const job = shopRealtimeRequests.get(payload.request_id);
+          if (job) {
+            clearTimeout(job.timeout);
+            shopRealtimeRequests.delete(payload.request_id);
+            if (payload.payload?.ok === true) job.resolve(payload.payload);
+            else {
+              const error = new Error(payload.payload?.error || "ORDER_SUBMISSION_FAILED");
+              error.httpStatus = payload.status;
+              error.payload = payload.payload;
+              job.reject(error);
+            }
+          }
+        }
+        shopRealtimeListeners.forEach((listener) => {
+          try { listener(payload); }
+          catch (error) { console.error("Shop realtime subscriber failed:", error); }
+        });
         if (payload.type === "stock.changed") void applyStockChangedEvent(payload);
         if (payload.type === "stock.resync") {
           const visibleIds = collectVisibleProductIdsForStock();
@@ -5126,8 +5310,9 @@
     socket.addEventListener("close", () => {
       if (stockEventsSource !== socket) return;
       stockEventsSource = null;
+      rejectShopRealtimeRequests();
       if (stockEventsReconnectTimer) clearTimeout(stockEventsReconnectTimer);
-      stockEventsReconnectTimer = setTimeout(ensurePublicStockEventsConnection, 1200 + Math.floor(Math.random() * 800));
+      stockEventsReconnectTimer = setTimeout(ensurePublicStockEventsConnection, Math.min(15000, 1000 * (2 ** stockReconnectAttempt++)) + Math.floor(Math.random() * 500));
     });
   }
 
@@ -5281,10 +5466,17 @@
         stockEventsReconnectTimer = null;
       }
     });
-    document.addEventListener("tenantStoreChanged", () => {
+    const scopeChanged = () => {
+      ensurePublicStockEventsConnection();
       stockEventsCursor = 0;
       stockEventsCursorPrimed = false;
       stockEventsWaitSupported = true;
+    };
+    document.addEventListener("tenantStoreChanged", scopeChanged);
+    window.addEventListener("tenantStoreChanged", scopeChanged);
+    window.addEventListener("shop:customer-profile-changed", scopeChanged);
+    window.addEventListener("storage", (event) => {
+      if (event.key === "activeStoreId" || String(event.key || "").startsWith("shop_customer_token")) scopeChanged();
     });
   }
 
@@ -6141,6 +6333,7 @@
           savedOrders.forEach(order => {
             const card = document.createElement("div");
             card.className = "shop-active-order-card";
+            card.dataset.orderId = String(order.id);
             card.style.cursor = "pointer";
             card.style.padding = "16px";
             card.style.borderBottom = "1px solid var(--color-border, #e5e5e5)";
@@ -6158,7 +6351,8 @@
             const status = document.createElement("div");
             status.style.color = "var(--shop-buy, #f97316)";
             status.style.fontSize = "14px";
-            status.textContent = order.status_title || "";
+            status.className = "shop-order-summary-card__status";
+            status.textContent = deriveCustomerOrderProgress(order).statusLabel;
             
             header.appendChild(orderNum);
             header.appendChild(status);
@@ -8639,6 +8833,13 @@
     const merged = current && typeof current === "object"
       ? { ...current, ...product }
       : { ...product };
+    const effectiveConfig = getUpsellDefaultConfigCacheEntry(pid)?.data;
+    if (current && effectiveConfig?.is_fulfillable != null &&
+        (stockSource === "product_passport_batch" || stockSource === "passport_background_refresh")) {
+      merged.display_price = current.display_price;
+      merged.catalog_default_lines = current.catalog_default_lines;
+      merged.default_variant = current.default_variant;
+    }
     if (!Array.isArray(merged.photos)) merged.photos = safePhotos(merged);
     cacheStockFromProductPayload(merged, stockSource);
     merged.is_available = isProductAvailable(merged);
@@ -13676,6 +13877,10 @@ async function initAddresses() {
    */
   async function calculateDefaultPrice(product) {
     const productId = product.id;
+
+    if (product.display_price != null && Number.isFinite(Number(product.display_price))) {
+      return Number(product.display_price);
+    }
     
     // ????????? ???
     if (defaultPriceCache.has(productId)) {
@@ -14383,10 +14588,11 @@ async function initAddresses() {
       const prefetchProductIds = [];
       const prefetchComboIds = [];
 
-      products.forEach((p) => {
-        const id = Number(p.id);
+      products.forEach((listedProduct) => {
+        const id = Number(listedProduct.id);
         if (!Number.isFinite(id)) return;
         if (appendOnly && existingProductIds && existingProductIds.has(id)) return;
+        const p = state.productCache.get(id) || listedProduct;
         prefetchProductIds.push(id);
         const qty = cartQty(id);
         const available = isProductAvailable(p);

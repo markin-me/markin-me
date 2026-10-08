@@ -446,7 +446,9 @@
   const optionAssignmentsCount = $("#optionAssignmentsCount");
   const optionAssignmentsAddBtn = $("#optionAssignmentsAddBtn");
   const optionPickerTabs = $("#optionPickerTabs");
+  const optionPickerParents = $("#optionPickerParents");
   const optionPickerSearch = $("#optionPickerSearch");
+  const optionPickerSearchToggle = $("#optionPickerSearchToggle");
   const optionPickerSelectAll = $("#optionPickerSelectAll");
   const optionPickerSelectAllLabel = $("#optionPickerSelectAllLabel");
   const optionPickerList = $("#optionPickerList");
@@ -1220,11 +1222,15 @@
       if (existingIndex >= 0) state.optionGroups[existingIndex] = { ...state.optionGroups[existingIndex], ...summary };
       else state.optionGroups.push(summary);
       const assignment = optionAssignments.find((item) => Number(item?.group_id) === groupId) || null;
-      state.optionGroupCache.set(makeOptionGroupCacheKey(groupId, id), {
+      const scopedCacheKey = makeOptionGroupCacheKey(groupId, id);
+      if (state.optionGroupCache.has(scopedCacheKey) &&
+          !state.optionGroupCache.get(scopedCacheKey)?.passport_snapshot) return;
+      state.optionGroupCache.set(scopedCacheKey, {
         group: summary,
         items: Array.isArray(group.items) ? group.items : [],
         assignments: assignment ? [assignment] : [],
         product_scope: { product_id: id, excluded_item_ids: [], visible_item_ids: (group.items || []).map((item) => Number(item?.id)).filter((value) => value > 0) },
+        passport_snapshot: true,
       });
     });
     const variants = Array.isArray(passport.variants) ? passport.variants : [];
@@ -1757,6 +1763,10 @@
     return api(`/api/admin/options/groups/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
   }
 
+  async function apiSaveOptionGroupDraft(id, payload) {
+    return api(`/api/admin/options/groups/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+  }
+
   async function apiDeleteOptionGroup(id) {
     return api(`/api/admin/options/groups/${id}`, { method: "DELETE" });
   }
@@ -1895,10 +1905,13 @@
     return api("/api/admin/catalog/categories");
   }
 
-  async function apiGetCatalogProducts({ categoryId, query }) {
+  async function apiGetCatalogProducts({ categoryId, categoryTreeId, query, includeOptionVariants = false, offset = 0 }) {
     const params = new URLSearchParams();
     if (categoryId) params.set("category_id", String(categoryId));
+    if (categoryTreeId) params.set("category_tree_id", String(categoryTreeId));
     if (query) params.set("q", query);
+    if (includeOptionVariants) params.set("include_option_variants", "1");
+    if (offset) params.set("offset", String(offset));
     const qs = params.toString();
     return api(`/api/admin/catalog/products${qs ? `?${qs}` : ""}`);
   }
@@ -2034,14 +2047,24 @@
     });
   }
 
+  async function apiSetProductOptionOrder(productId, groupIds, reset = false) {
+    return api(`/api/admin/products/${productId}/option-assignments/order`, {
+      method: "PUT",
+      body: JSON.stringify(reset ? { reset: true } : { group_ids: groupIds }),
+    });
+  }
+
   async function apiDisableProductOptionAssignment(productId, groupId) {
     return api(`/api/admin/products/${productId}/option-assignments/${groupId}`, { method: "PATCH" });
   }
 
-  async function apiSetProductOptionItemExclusions(productId, groupId, excludedItemIds) {
+  async function apiSetProductOptionItemExclusions(productId, groupId, excludedItemIds, itemSettings = null) {
     return api(`/api/admin/products/${productId}/option-assignments/${groupId}/item-exclusions`, {
       method: "PUT",
-      body: JSON.stringify({ excluded_item_ids: excludedItemIds }),
+      body: JSON.stringify({
+        excluded_item_ids: excludedItemIds,
+        ...(itemSettings ? { item_settings: itemSettings } : {}),
+      }),
     });
   }
 
@@ -3216,7 +3239,9 @@
     const id = Number(groupId);
     if (!Number.isFinite(id)) return null;
     const cacheKey = makeOptionGroupCacheKey(id, productId);
-    if (state.optionGroupCache.has(cacheKey)) return state.optionGroupCache.get(cacheKey);
+    if (state.optionGroupCache.has(cacheKey) && !state.optionGroupCache.get(cacheKey)?.passport_snapshot) {
+      return state.optionGroupCache.get(cacheKey);
+    }
     const res = await apiGetOptionGroup(id, { productId });
     const details = res.data || null;
     if (details) state.optionGroupCache.set(cacheKey, details);
@@ -5699,32 +5724,78 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return `Мин: ${minLabel} · Макс: ${maxLabel}`;
   }
 
+  function getOptionProductDefaultVariant(item) {
+    const groups = Array.isArray(item?.available_variants) ? item.available_variants : [];
+    for (const group of groups) {
+      const values = Array.isArray(group.values) ? group.values : [];
+      if (!values.length) continue;
+      const index = Number(group.default_value_index ?? 0);
+      return {
+        groupId: Number(group.group_id),
+        valueIndex: Number.isInteger(index) && index >= 0 && index < values.length ? index : 0,
+      };
+    }
+    return null;
+  }
+
+  function getOptionProductPhoto(item) {
+    const rawPhotos = item.product_photos_json ?? item.photos ?? [];
+    let photos = Array.isArray(rawPhotos) ? rawPhotos : [];
+    if (!photos.length && typeof rawPhotos === "string") {
+      try { photos = JSON.parse(rawPhotos); } catch { photos = []; }
+    }
+    return Array.isArray(photos) && photos.length ? String(photos[0] || "") : "";
+  }
+
+  function renderOptionProductCard(item, { selected = false, editable = false, itemKey = "", allowVariants = true, checkboxKind = "default", showCheckbox = true, styledCheckbox = false } = {}) {
+    const photo = getOptionProductPhoto(item);
+    const displayPrice = item.price_mode === "fixed" && item.price_value != null
+      ? item.price_value
+      : item.product_price ?? item.price;
+    const variantGroups = allowVariants && Array.isArray(item.available_variants) ? item.available_variants : [];
+    const productDefault = getOptionProductDefaultVariant(item);
+    const activeGroupId = item.default_variant_group_id ?? item.effective_default_variant_group_id ?? productDefault?.groupId;
+    const activeValueIndex = item.default_variant_value_index ?? item.effective_default_variant_value_index ?? productDefault?.valueIndex;
+    const chips = variantGroups.flatMap((group) => {
+      const groupId = Number(group.group_id);
+      return (Array.isArray(group.values) ? group.values : []).map((value, index) => {
+        const isActive = Number(activeGroupId) === groupId && Number(activeValueIndex) === index;
+        const unit = String(group.unit_short_title || "").trim();
+        const label = [String(value ?? "").trim(), unit].filter(Boolean).join(" ");
+        return `<button class="option-product-variant ${isActive ? "is-active" : ""}" type="button"
+          data-option-variant-key="${escapeHtml(String(itemKey))}" data-option-variant-group="${groupId}"
+          data-option-variant-index="${index}" ${editable ? "" : "disabled"}>${escapeHtml(label)}</button>`;
+      });
+    }).join("");
+    return `
+      <div class="option-product-line ${selected ? "is-selected" : ""}">
+        ${showCheckbox ? `${checkboxKind === "member" || styledCheckbox ? '<label class="option-picker-check-control">' : ""}<input class="option-product-default ${checkboxKind === "member" || styledCheckbox ? "product-row-select-input" : ""}" type="checkbox" aria-label="${checkboxKind === "member" ? "Показывать пункт" : "Выбрать пункт по умолчанию для товаров с этой опцией"}"
+          title="${checkboxKind === "member" ? "Выбрать товар" : "Выбрать пункт по умолчанию для товаров с этой опцией"}"
+          ${checkboxKind === "member" ? "data-option-member" : "data-option-default"}="${escapeHtml(String(itemKey))}"
+          ${selected ? "checked" : ""} ${editable ? "" : "disabled"} />${checkboxKind === "member" || styledCheckbox ? '<span class="product-row-select-box" aria-hidden="true"></span></label>' : ""}` : ""}
+        <div class="option-product-card">
+          <div class="option-product-photo">${photo
+            ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" />`
+            : '<span>Нет фото</span>'}</div>
+          <div class="option-product-text">
+            <strong>${escapeHtml(item.product_name || item.name || "")}</strong>
+            <span>${displayPrice != null ? formatMoney(displayPrice) : "—"}</span>
+            ${chips ? `<div class="option-product-variants">${chips}</div>` : ""}
+          </div>
+        </div>
+      </div>`;
+  }
+
   function renderOptionItemsSummary(items) {
     if (!items.length) {
       return `<div class="empty-hint">Пока нет пунктов...</div>`;
     }
     return `
       <div class="option-summary-list">
-        ${items.map((item) => {
-          const basePrice = item.product_price != null ? formatMoney(item.product_price) : "—";
-          const hasOverride = item.price_mode === "fixed" && item.price_value != null;
-          const overridePrice = hasOverride ? formatMoney(item.price_value) : "";
-          const qtyMin = item.qty_min ?? 1;
-          const qtyMax = item.qty_max ?? 1;
-          const limitLabel = `Лимиты: ${qtyMin}–${qtyMax}`;
-          return `
-            <div class="option-summary-row">
-              <div>
-                <div class="option-summary-title">${escapeHtml(item.product_name || item.name || "")}</div>
-                <div class="option-summary-meta">${limitLabel}</div>
-              </div>
-              <div class="option-summary-price">
-                ${hasOverride ? `<s>${basePrice}</s>` : `<span>${basePrice}</span>`}
-                ${hasOverride ? `<span>${overridePrice}</span>` : ""}
-              </div>
-            </div>
-          `;
-        }).join("")}
+        ${items.map((item) => renderOptionProductCard(item, {
+          selected: Boolean(item.effective_default_selected ?? item.default_selected),
+          allowVariants: true,
+        })).join("")}
       </div>
     `;
   }
@@ -5770,7 +5841,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     `;
   }
 
-  function renderProductScopedOptionItemsSummary(items, { removable = false, groupId = null } = {}) {
+  function renderProductScopedOptionItemsSummary(items, { groupId = null, settingDraft = null, allowVariants = true } = {}) {
     const visibleItems = getVisibleOptionItems(items);
     if (!visibleItems.length) {
       return `<div class="empty-hint">\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043f\u0443\u043d\u043a\u0442\u043e\u0432...</div>`;
@@ -5778,28 +5849,28 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return `
       <div class="option-summary-list">
         ${visibleItems.map((item) => {
-          const basePrice = item.product_price != null ? formatMoney(item.product_price) : "\u2014";
-          const hasOverride = item.price_mode === "fixed" && item.price_value != null;
-          const overridePrice = hasOverride ? formatMoney(item.price_value) : "";
-          const qtyMin = item.qty_min ?? 1;
-          const qtyMax = item.qty_max ?? 1;
-          const limitLabel = `\u041b\u0438\u043c\u0438\u0442\u044b: ${qtyMin}\u2013${qtyMax}`;
-          const removeButton = removable && Number.isFinite(Number(groupId)) && Number.isFinite(Number(item.id))
-            ? `<button class="option-row-remove option-summary-remove" type="button" data-product-option-item-remove="${groupId}:${item.id}" title="\u0423\u0431\u0440\u0430\u0442\u044c \u043f\u0443\u043d\u043a\u0442 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430" aria-label="\u0423\u0431\u0440\u0430\u0442\u044c \u043f\u0443\u043d\u043a\u0442 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430"><i class="fas fa-times"></i></button>`
-            : "";
+          const setting = settingDraft?.get(Number(item.id));
+          const selected = setting?.default_selected == null
+            ? Boolean(item.default_selected)
+            : Boolean(setting.default_selected);
+          const cardItem = {
+            ...item,
+            default_variant_group_id: setting?.variant_override_enabled
+              ? (setting.default_variant_group_id ?? -1)
+              : (item.effective_default_variant_group_id ?? item.default_variant_group_id),
+            default_variant_value_index: setting?.variant_override_enabled
+              ? (setting.default_variant_value_index ?? -1)
+              : (item.effective_default_variant_value_index ?? item.default_variant_value_index),
+          };
           return `
-            <div class="option-summary-row ${removeButton ? "is-removable" : ""}">
-              <div>
-                <div class="option-summary-title">${escapeHtml(item.product_name || item.name || "")}</div>
-                <div class="option-summary-meta">${limitLabel}</div>
-              </div>
-              <div class="option-summary-price-wrap">
-                <div class="option-summary-price">
-                  ${hasOverride ? `<s>${basePrice}</s>` : `<span>${basePrice}</span>`}
-                  ${hasOverride ? `<span>${overridePrice}</span>` : ""}
-                </div>
-                ${removeButton}
-              </div>
+            <div class="option-product-entry">
+              ${renderOptionProductCard(cardItem, {
+                selected: settingDraft ? selected : Boolean(item.effective_default_selected ?? item.default_selected),
+                editable: false,
+                itemKey: `${groupId}:${item.id}`,
+                allowVariants,
+                showCheckbox: false,
+              })}
             </div>
           `;
         }).join("")}
@@ -7907,7 +7978,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       const details = getCachedOptionGroupDetails(groupId, { productId });
       const typeLabel = getSelectionLabel(assignment.selection_type);
       const limitsLabel = formatOptionLimits(assignment.min_select, assignment.max_select);
-      const itemsHtml = details ? renderOptionItemsSummary(details.items || []) : `<div class="muted">Раскройте, чтобы загрузить пункты.</div>`;
+      const itemsHtml = details ? renderProductScopedOptionItemsSummary(details.items || []) : `<div class="muted">Раскройте, чтобы загрузить пункты.</div>`;
       return `
         <div class="acc-item" data-option-group="${groupId}">
           <button class="stage-item acc-trigger" type="button" data-acc-trigger>
@@ -7936,12 +8007,12 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (!trigger || !panel) return;
       trigger.addEventListener("click", async () => {
         if (getCachedOptionGroupDetails(groupId, { productId })) return;
-        const details = await ensureOptionGroupDetails(groupId);
+        const details = await ensureOptionGroupDetails(groupId, { productId });
         if (!details) return;
         const inner = panel.querySelector(".acc-panel-inner");
         if (inner) {
           inner.innerHTML = `
-            ${renderOptionItemsSummary(details.items || [])}
+            ${renderProductScopedOptionItemsSummary(details.items || [])}
           `;
         }
         refreshOpenAccordions();
@@ -8723,12 +8794,19 @@ function updateOptionGroupSelectionUi() {
         : "";
 
       return `
-        <div class="option-item-row">
+        <div class="option-item-row ${item.default_selected ? "is-default" : ""}">
           <div class="option-item-title">
-            <div class="options-row-title">${escapeHtml(item.product_name || item.name || "")}</div>
+            ${renderOptionProductCard(item, {
+              selected: Boolean(item.default_selected),
+              editable,
+              itemKey,
+              styledCheckbox: true,
+              allowVariants: Boolean(document.getElementById("optionGroupAllowVariants")?.checked ?? state.optionDraft?.group?.allow_variants ?? state.optionGroupDetails?.group?.allow_variants),
+            })}
           </div>
           ${qtyControls}
           <div class="option-item-price">
+            <span class="option-item-price-label">Цена товара</span>
             ${!editable
               ? `
                 ${hasOverride
@@ -8738,7 +8816,7 @@ function updateOptionGroupSelectionUi() {
               `
               : `
                 <span class="option-item-price-value ${hasOverride ? "is-muted" : "is-accent"}">${catalogPrice}</span>
-                <input class="control" type="number" step="1" min="0" aria-label="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
+                <label class="option-item-price-input"><span>Своя цена</span><input class="control" type="number" step="1" min="0" aria-label="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" /></label>
               `}
           </div>
           ${editable ? `
@@ -8757,6 +8835,42 @@ function updateOptionGroupSelectionUi() {
       refreshOpenAccordions();
       return;
     }
+
+    optionItemsList.querySelectorAll("[data-option-default]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const item = state.optionDraft?.items?.find((row) =>
+          String(row.tempId ?? row.id ?? row.target_product_id) === input.dataset.optionDefault
+        );
+        if (!item) return;
+        if (input.checked && getOptionGroupSelectionType() === "multiple_group") {
+          const max = Number(optionGroupMaxInput?.value || 0);
+          const selectedCount = state.optionDraft.items.filter((row) => Boolean(row.default_selected)).length;
+          if (max > 0 && selectedCount >= max) {
+            input.checked = false;
+            showToast(`Можно выбрать не больше ${max} пунктов по умолчанию.`);
+            return;
+          }
+        }
+        if (input.checked && getOptionGroupSelectionType() === "single") {
+          state.optionDraft.items.forEach((row) => { row.default_selected = 0; });
+        }
+        item.default_selected = input.checked ? 1 : 0;
+        state.optionPanel.itemsDirty = true;
+        renderOptionItems(getOptionItemsSource());
+      });
+    });
+    optionItemsList.querySelectorAll("[data-option-variant-key]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const item = state.optionDraft?.items?.find((row) =>
+          String(row.tempId ?? row.id ?? row.target_product_id) === chip.dataset.optionVariantKey
+        );
+        if (!item) return;
+        item.default_variant_group_id = Number(chip.dataset.optionVariantGroup);
+        item.default_variant_value_index = Number(chip.dataset.optionVariantIndex);
+        state.optionPanel.itemsDirty = true;
+        renderOptionItems(getOptionItemsSource());
+      });
+    });
 
     optionItemsList.querySelectorAll("[data-item-remove]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -8817,9 +8931,18 @@ function updateOptionGroupSelectionUi() {
 
     optionAssignmentsList.innerHTML = assignments.map((assignment) => {
       const assignmentKey = assignment.tempId ?? assignment.id;
+      const productId = Number(assignment.assign_id ?? assignment.id);
+      const product = state.products.find((row) => Number(row.id) === productId)
+        || window.CatalogRepository?.getProduct(productId) || null;
+      const photo = getOptionProductPhoto({
+        product_photos_json: assignment.product_photos_json ?? product?.photos_json ?? product?.photos,
+      });
       return `
         <div class="option-assignment-row">
           <div class="option-assignment-title">
+            <div class="option-product-photo">${photo
+              ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" />`
+              : '<span>Нет фото</span>'}</div>
             <div class="options-row-title">${escapeHtml(assignment.product_name || assignment.name || "")}</div>
           </div>
           ${editable ? `<button class="option-row-remove" type="button" data-assignment-remove="${assignmentKey}" title="Удалить" aria-label="Удалить назначение"><i class="fas fa-times"></i></button>` : ""}
@@ -9555,10 +9678,35 @@ function updateOptionGroupSelectionUi() {
 
   function renderOptionPickerTabs() {
     if (!optionPickerTabs) return;
+    const categories = state.catalogCategories || [];
+    const knownIds = new Set(categories.map((category) => Number(category.id)));
+    const parents = categories.filter((category) =>
+      !Number(category.parent_id) || !knownIds.has(Number(category.parent_id))
+    );
+    const parentId = Number(state.optionPanel.pickerParentId || parents[0]?.id || 0);
+    if (optionPickerParents) {
+      optionPickerParents.innerHTML = parents.map((category) => {
+        const active = Number(category.id) === parentId;
+        return `<button class="option-picker-parent ${active ? "is-active" : ""}" type="button"
+          data-option-parent="${category.id}" title="${escapeHtml(category.title || "")}"
+          aria-label="${escapeHtml(category.title || "")}">${renderCategoryIcon(category.icon)}</button>`;
+      }).join("");
+      optionPickerParents.querySelectorAll("[data-option-parent]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const nextId = Number(button.dataset.optionParent);
+          state.optionPanel.pickerParentId = nextId;
+          state.optionPanel.pickerCategoryId = nextId;
+          renderOptionPickerTabs();
+          await refreshOptionPickerProducts();
+        });
+      });
+    }
     const lastScroll = Number.isFinite(state.optionPanel.pickerTabsScrollLeft)
       ? state.optionPanel.pickerTabsScrollLeft
       : optionPickerTabs.scrollLeft;
-    optionPickerTabs.innerHTML = state.catalogCategories.map((cat) => {
+    const children = categories.filter((category) => Number(category.parent_id) === parentId);
+    const tabs = [{ id: parentId, title: "Все товары" }, ...children];
+    optionPickerTabs.innerHTML = tabs.map((cat) => {
       const active = Number(cat.id) === Number(state.optionPanel.pickerCategoryId);
       return `
         <button class="option-picker-tab chip ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id}">
@@ -9584,25 +9732,53 @@ function updateOptionGroupSelectionUi() {
   function renderOptionPickerList() {
     if (!optionPickerList) return;
     optionPickerList.innerHTML = state.optionPanel.pickerProducts.map((product) => {
-      const checked = state.optionPanel.pickerSelection.has(product.id);
+      const productId = Number(product.id);
+      const checked = state.optionPanel.pickerSelection.has(productId);
+      const variant = state.optionPanel.pickerVariantSelection?.get(productId) || getOptionProductDefaultVariant(product);
       return `
-        <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-id="${product.id}">
-          <div class="option-picker-title">${escapeHtml(product.name || "")}</div>
-          <div class="option-picker-price">Цена: ${product.price != null ? formatPriceInteger(product.price) : "—"}</div>
-          <input class="option-picker-checkbox" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
+        <div class="option-picker-product">
+          ${renderOptionProductCard({
+            ...product,
+            product_price: product.price,
+            default_variant_group_id: variant?.groupId ?? null,
+            default_variant_value_index: variant?.valueIndex ?? null,
+          }, {
+            selected: checked,
+            editable: true,
+            itemKey: productId,
+            checkboxKind: "member",
+            allowVariants: state.optionPanel.pickerMode === "items" &&
+              Boolean(document.getElementById("optionGroupAllowVariants")?.checked),
+          })}
         </div>
       `;
     }).join("");
+    if (state.optionPanel.pickerHasMore) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "btn btn-secondary";
+      more.textContent = "Показать ещё";
+      more.addEventListener("click", () => refreshOptionPickerProducts(true));
+      optionPickerList.appendChild(more);
+    }
 
-    optionPickerList.querySelectorAll(".option-picker-row[data-product-id]").forEach((row) => {
-      row.addEventListener("click", () => {
-        const id = Number(row.dataset.productId);
-        if (!Number.isFinite(id)) return;
-        if (state.optionPanel.pickerSelection.has(id)) {
-          state.optionPanel.pickerSelection.delete(id);
-        } else {
-          state.optionPanel.pickerSelection.add(id);
-        }
+    optionPickerList.querySelectorAll("[data-option-member]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const id = Number(input.dataset.optionMember);
+        if (input.checked) state.optionPanel.pickerSelection.add(id);
+        else state.optionPanel.pickerSelection.delete(id);
+        renderOptionPickerList();
+        renderOptionHeader();
+      });
+    });
+    optionPickerList.querySelectorAll("[data-option-variant-key]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const productId = Number(chip.dataset.optionVariantKey);
+        state.optionPanel.pickerVariantSelection.set(productId, {
+          groupId: Number(chip.dataset.optionVariantGroup),
+          valueIndex: Number(chip.dataset.optionVariantIndex),
+        });
+        state.optionPanel.pickerSelection.add(productId);
         renderOptionPickerList();
         renderOptionHeader();
       });
@@ -9626,12 +9802,29 @@ function updateOptionGroupSelectionUi() {
     optionPickerSelectAll.setAttribute("aria-label", label);
   }
 
-  async function refreshOptionPickerProducts() {
+  async function refreshOptionPickerProducts(append = false) {
+    const requestId = (state.optionPanel.pickerRequestId || 0) + 1;
+    state.optionPanel.pickerRequestId = requestId;
+    const isParent = Number(state.optionPanel.pickerCategoryId) === Number(state.optionPanel.pickerParentId);
     const res = await apiGetCatalogProducts({
-      categoryId: state.optionPanel.pickerCategoryId,
+      categoryId: isParent ? null : state.optionPanel.pickerCategoryId,
+      categoryTreeId: isParent ? state.optionPanel.pickerParentId : null,
       query: state.optionPanel.pickerQuery,
+      includeOptionVariants: state.optionPanel.pickerMode === "items",
+      offset: append ? state.optionPanel.pickerProducts.length : 0,
     });
-    state.optionPanel.pickerProducts = Array.isArray(res.data) ? res.data : [];
+    if (requestId !== state.optionPanel.pickerRequestId || state.optionPanel.level !== "picker") return;
+    const page = Array.isArray(res.data) ? res.data : [];
+    state.optionPanel.pickerProducts = append ? state.optionPanel.pickerProducts.concat(page) : page;
+    state.optionPanel.pickerHasMore = page.length === 200;
+    state.optionPanel.pickerProducts.forEach((product) => {
+      state.optionPanel.pickerProductMap?.set(Number(product.id), product);
+      if (state.optionPanel.pickerMode === "items" &&
+          !state.optionPanel.pickerVariantSelection.has(Number(product.id))) {
+        const variant = getOptionProductDefaultVariant(product);
+        if (variant) state.optionPanel.pickerVariantSelection.set(Number(product.id), variant);
+      }
+    });
     renderOptionPickerList();
   }
 
@@ -9657,7 +9850,25 @@ function updateOptionGroupSelectionUi() {
     // keep selection on reopen
     state.optionPanel.pickerSelection = existingSelection;
     state.optionPanel.pickerInitialSelection = new Set(existingSelection);
-    state.optionPanel.pickerCategoryId = state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null;
+    state.optionPanel.pickerProductMap = new Map();
+    state.optionPanel.pickerVariantSelection = new Map();
+    if (mode === "items") {
+      getOptionItemsSource().forEach((item) => {
+        const productId = Number(item.target_product_id ?? item.id);
+        if (item.default_variant_group_id != null && item.default_variant_value_index != null) {
+          state.optionPanel.pickerVariantSelection.set(productId, {
+            groupId: Number(item.default_variant_group_id),
+            valueIndex: Number(item.default_variant_value_index),
+          });
+        }
+      });
+    }
+    const knownIds = new Set(state.catalogCategories.map((category) => Number(category.id)));
+    const firstParent = state.catalogCategories.find((category) =>
+      !Number(category.parent_id) || !knownIds.has(Number(category.parent_id))
+    );
+    state.optionPanel.pickerParentId = firstParent ? Number(firstParent.id) : null;
+    state.optionPanel.pickerCategoryId = state.optionPanel.pickerParentId;
     state.optionPanel.pickerQuery = "";
     if (optionPickerSearch) optionPickerSearch.value = "";
     await refreshOptionPickerProducts();
@@ -9682,31 +9893,47 @@ function updateOptionGroupSelectionUi() {
     delete window._saveOptionPickerFn;
     restoreOptionPanelPickerFooter();
     
-    if (isSameSelection(state.optionPanel.pickerSelection, state.optionPanel.pickerInitialSelection)) {
+    if (state.optionPanel.pickerMode !== "items" &&
+        isSameSelection(state.optionPanel.pickerSelection, state.optionPanel.pickerInitialSelection)) {
       // close picker silently if nothing changed
       state.optionPanel.level = "group";
       renderOptionGroupLevel();
       return;
     }
     const selectedIds = Array.from(state.optionPanel.pickerSelection);
-    if (!selectedIds.length) {
+    if (!selectedIds.length && state.optionPanel.pickerMode !== "items") {
       state.optionPanel.level = "group";
       renderOptionGroupLevel();
       return;
     }
 
     if (state.optionPanel.pickerMode === "items") {
+      state.optionDraft.items = state.optionDraft.items.filter((item) =>
+        state.optionPanel.pickerSelection.has(Number(item.target_product_id ?? item.id))
+      );
+      state.optionDraft.items.forEach((item) => {
+        const variant = state.optionPanel.pickerVariantSelection.get(Number(item.target_product_id ?? item.id));
+        if (!variant) return;
+        item.default_variant_group_id = variant.groupId;
+        item.default_variant_value_index = variant.valueIndex;
+      });
       if (state.optionPanel.mode === "create") {
         const existing = new Set(state.optionDraft.items.map((x) => x.id));
-        state.optionPanel.pickerProducts.forEach((product) => {
+        state.optionPanel.pickerProductMap.forEach((product) => {
           if (!state.optionPanel.pickerSelection.has(product.id)) return;
           if (existing.has(product.id)) return;
+          const variant = state.optionPanel.pickerVariantSelection.get(Number(product.id));
           state.optionDraft.items.push({
             tempId: `${product.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             id: product.id,
             name: product.name,
             product_name: product.name,
             product_price: product.price,
+            product_photos_json: product.photos || product.photos_json || [],
+            available_variants: product.available_variants || [],
+            default_selected: 0,
+            default_variant_group_id: variant?.groupId ?? null,
+            default_variant_value_index: variant?.valueIndex ?? null,
             newPrice: "",
             qty_min: 1,
             qty_max: 1,
@@ -9717,15 +9944,21 @@ function updateOptionGroupSelectionUi() {
         const existing = new Set(
           state.optionDraft.items.map((x) => Number(x.target_product_id ?? x.id)).filter(Number.isFinite)
         );
-        state.optionPanel.pickerProducts.forEach((product) => {
+        state.optionPanel.pickerProductMap.forEach((product) => {
           if (!state.optionPanel.pickerSelection.has(product.id)) return;
           if (existing.has(product.id)) return;
+          const variant = state.optionPanel.pickerVariantSelection.get(Number(product.id));
           state.optionDraft.items.push({
             tempId: `${product.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             target_product_id: product.id,
             name: product.name,
             product_name: product.name,
             product_price: product.price,
+            product_photos_json: product.photos || product.photos_json || [],
+            available_variants: product.available_variants || [],
+            default_selected: 0,
+            default_variant_group_id: variant?.groupId ?? null,
+            default_variant_value_index: variant?.valueIndex ?? null,
             price_mode: "from_target",
             price_value: null,
             qty_min: 1,
@@ -9746,6 +9979,7 @@ function updateOptionGroupSelectionUi() {
             id: product.id,
             name: product.name,
             product_name: product.name,
+            product_photos_json: product.photos || product.photos_json || [],
             priority: 0,
             sort_order: 0,
           });
@@ -9763,6 +9997,7 @@ function updateOptionGroupSelectionUi() {
             assign_id: product.id,
             name: product.name,
             product_name: product.name,
+            product_photos_json: product.photos || product.photos_json || [],
             priority: 0,
             sort_order: 0,
             isNew: true,
@@ -9778,6 +10013,7 @@ function updateOptionGroupSelectionUi() {
 
   function renderOptionPickerLevel() {
     if (!optionLevelPicker) return;
+    optionLevelPicker.classList.add("is-option-picker");
     if (optionLevelGroup) optionLevelGroup.classList.add("hidden");
     optionLevelPicker.classList.remove("hidden");
     renderOptionPickerTabs();
@@ -10788,6 +11024,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
   function renderVariantPickerLevel() {
     if (!optionLevelPicker) return;
+    optionLevelPicker.classList.remove("is-option-picker");
     // Hide variant group form, show picker
     if (variantLevelGroup) variantLevelGroup.classList.add("hidden");
     // Ensure variantGroupInfo is visible (it should contain picker now)
@@ -11421,6 +11658,9 @@ const isViewMode = state.comboPanel.mode === "view";
           price_value: isFixed ? Number(item.newPrice) : null,
           qty_min: selectionUi === "multiple_item" ? (item.qty_min ?? 1) : 1,
           qty_max: selectionUi === "multiple_item" ? (item.qty_max ?? 1) : 1,
+          default_selected: item.default_selected ? 1 : 0,
+          default_variant_group_id: payload.allow_variants ? (item.default_variant_group_id ?? null) : null,
+          default_variant_value_index: payload.allow_variants ? (item.default_variant_value_index ?? null) : null,
           sort_order: idx * 10,
         };
       });
@@ -11483,6 +11723,41 @@ const isViewMode = state.comboPanel.mode === "view";
         renderOptionGroupLevel();
         return;
       }
+
+      const items = (state.optionDraft?.items || []).map((item, index) => ({
+        target_product_id: Number(item.target_product_id ?? item.id),
+        price_mode: item.price_mode ?? "from_target",
+        price_value: item.price_value ?? null,
+        qty_min: selectionUi === "multiple_item" ? (item.qty_min ?? 1) : 1,
+        qty_max: selectionUi === "multiple_item" ? (item.qty_max ?? 1) : 1,
+        default_selected: item.default_selected ? 1 : 0,
+        default_variant_group_id: payload.allow_variants ? (item.default_variant_group_id ?? null) : null,
+        default_variant_value_index: payload.allow_variants ? (item.default_variant_value_index ?? null) : null,
+        sort_order: item.sort_order ?? index * 10,
+      }));
+      const assignments = (state.optionDraft?.assignments || []).map((assignment, index) => ({
+        assign_id: Number(assignment.assign_id ?? assignment.id),
+        priority: assignment.priority ?? 0,
+        sort_order: assignment.sort_order ?? index * 10,
+        out_of_stock_action: assignment.out_of_stock_action ?? 1,
+      }));
+      try {
+        await apiSaveOptionGroupDraft(state.selectedOptionGroupId, { group: payload, items, assignments });
+        await loadOptionGroups();
+        await loadOptionGroupDetails(state.selectedOptionGroupId);
+        renderAllOptionGroupsLists();
+        editingOptions.delete(state.selectedOptionGroupId);
+        state.optionPanel.mode = "view";
+        state.optionPanel.itemsDirty = false;
+        state.optionDraft = null;
+        state.optionPanel.snapshotData = null;
+        hideProductFooter();
+        renderOptionGroupLevel();
+        if (state.optionPanel.returnTo?.type === "product-edit") closeOptionDetails();
+      } catch (error) {
+        showToast(error?.message || "Не удалось сохранить изменения.");
+      }
+      return;
 
       const snapshot = state.optionPanel.snapshotData;
       const snapshotGroup = getOptionGroupUiValues(snapshot?.group, snapshot?.items || []);
@@ -14998,6 +15273,10 @@ const isViewMode = state.comboPanel.mode === "view";
       nutritionIncomplete: Boolean(product?.nutrition_incomplete),
       optionGroups: new Set(),
       initialOptionGroups: new Set(),
+      optionGroupOrder: [],
+      optionOrderCustomized: false,
+      optionOrderDirty: false,
+      optionOrderReset: false,
       variantGroupId: null,
       initialVariantGroupId: null,
       initialVariantAssignments: [],
@@ -15036,6 +15315,8 @@ const isViewMode = state.comboPanel.mode === "view";
       arr.filter((a) => a.is_active).forEach((a) => {
         draft.optionGroups.add(Number(a.group_id));
         draft.initialOptionGroups.add(Number(a.group_id));
+        draft.optionGroupOrder.push(Number(a.group_id));
+        if (a.product_display_order != null) draft.optionOrderCustomized = true;
       });
     })();
 
@@ -15269,6 +15550,8 @@ const isViewMode = state.comboPanel.mode === "view";
             console.error("Failed to save pcs link", e);
           }
 
+          let optionAssignmentsChanged = false;
+          const optionSettingsChanged = dirtyOptionSettingGroups.size > 0;
           // Сохранение опций
           try {
             const selected = new Set(Array.from(draft.optionGroups).filter((x) => Number.isFinite(x)));
@@ -15281,12 +15564,61 @@ const isViewMode = state.comboPanel.mode === "view";
               for (const gid of toRemove) {
                 await apiDisableProductOptionAssignment(productId, gid);
               }
+              optionAssignmentsChanged = toAdd.length > 0 || toRemove.length > 0;
             } else if (selected.size) {
               await apiAddProductOptionAssignments(productId, Array.from(selected));
+              optionAssignmentsChanged = true;
+            }
+            if (draft.optionOrderDirty) {
+              await apiSetProductOptionOrder(
+                productId,
+                draft.optionGroupOrder.filter((id) => selected.has(id)),
+                draft.optionOrderReset
+              );
+              optionAssignmentsChanged = true;
             }
           } catch (e) {
             console.error('Failed to save options', e);
-            // Не критично, продолжаем
+            alert('Не удалось сохранить опции товара: ' + (e.message || 'Неизвестная ошибка'));
+            return false;
+          }
+
+          try {
+            for (const groupId of dirtyOptionSettingGroups) {
+              if (!draft.optionGroups.has(groupId)) continue;
+              const details = getCachedProductScopedOptionDetails(groupId);
+              if (!details) throw new Error('Не удалось получить пункты опции для сохранения');
+              const excludedItemIds = (details.product_scope?.excluded_item_ids || [])
+                .map(Number).filter((id) => Number.isInteger(id) && id > 0);
+              const itemSettings = [...getOptionSettingDraft(groupId, details).values()];
+              await apiSetProductOptionItemExclusions(productId, groupId, excludedItemIds, itemSettings);
+              const savedDetails = (await apiGetOptionGroup(groupId, { productId })).data;
+              if (!savedDetails?.group || !Array.isArray(savedDetails.items)) {
+                throw new Error('Не удалось прочитать сохранённые настройки опции');
+              }
+              const savedItems = new Map(savedDetails.items.map((item) => [Number(item.id), item]));
+              const savedExcluded = new Set((savedDetails.product_scope?.excluded_item_ids || []).map(Number));
+              if (excludedItemIds.some((id) => !savedExcluded.has(id)) || savedExcluded.size !== excludedItemIds.length ||
+                  itemSettings.some((setting) => {
+                    const item = savedItems.get(Number(setting.option_item_id));
+                    if (!item) return true;
+                    if (setting.default_selected != null &&
+                        Number(item.product_default_selected) !== Number(setting.default_selected)) return true;
+                    return Boolean(item.product_variant_override_enabled) !== Boolean(setting.variant_override_enabled) ||
+                      (setting.variant_override_enabled && (
+                        Number(item.product_default_variant_group_id) !== Number(setting.default_variant_group_id) ||
+                        Number(item.product_default_variant_value_index) !== Number(setting.default_variant_value_index)
+                      ));
+                  })) {
+                throw new Error('Настройки опции не подтвердились после сохранения');
+              }
+              setCachedProductScopedOptionDetails(groupId, savedDetails);
+            }
+            dirtyOptionSettingGroups.clear();
+          } catch (e) {
+            console.error('Failed to save product option settings', e);
+            alert('Не удалось сохранить индивидуальные настройки опции: ' + (e.message || 'Неизвестная ошибка'));
+            return false;
           }
 
           // Сохранение варианта (одна группа на товар)
@@ -15432,31 +15764,68 @@ const isViewMode = state.comboPanel.mode === "view";
             });
           }
           const existingCachedDetails = getCachedProductDetails(productId);
+          let savedOptionAssignments = state.selectedProductOptionAssignments;
+          if (optionAssignmentsChanged || optionSettingsChanged) {
+            try {
+              const response = await apiGetProductOptionAssignments(productId);
+              savedOptionAssignments = Array.isArray(response.data) ? response.data : [];
+              const savedGroupIds = new Set(savedOptionAssignments
+                .filter((assignment) => Number(assignment.is_active) === 1)
+                .map((assignment) => Number(assignment.group_id)));
+              if ([...draft.optionGroups].some((groupId) => !savedGroupIds.has(Number(groupId)))) {
+                throw new Error('Назначенные опции не подтвердились после сохранения');
+              }
+              if (draft.optionOrderDirty) {
+                const activeAssignments = savedOptionAssignments.filter((assignment) => Number(assignment.is_active) === 1);
+                const savedOrder = activeAssignments.map((assignment) => Number(assignment.group_id));
+                const expectedOrder = draft.optionGroupOrder.filter((id) => draft.optionGroups.has(id));
+                if (savedOrder.length !== expectedOrder.length ||
+                    savedOrder.some((id, index) => id !== expectedOrder[index]) ||
+                    activeAssignments.some((assignment) => draft.optionOrderReset
+                      ? assignment.product_display_order != null
+                      : assignment.product_display_order == null)) {
+                  throw new Error('Порядок опций не подтвердился после сохранения');
+                }
+              }
+              state.selectedProductOptionAssignments = savedOptionAssignments;
+            } catch (error) {
+              console.error('Failed to read saved product options', error);
+              alert('Не удалось подтвердить сохранение опций товара: ' + (error.message || 'Неизвестная ошибка'));
+              return false;
+            }
+            clearCachedProductDetails(productId);
+          }
           setCachedProductDetails(productId, {
             product: savedProductForView,
             categories: Array.isArray(existingCachedDetails?.categories) && existingCachedDetails.categories.length
               ? existingCachedDetails.categories
               : Array.from(draft.categories).map((id) => ({ id: Number(id) })).filter((item) => Number.isFinite(item.id)),
-            optionAssignments: Array.isArray(existingCachedDetails?.optionAssignments) && existingCachedDetails.optionAssignments.length
+            optionAssignments: optionAssignmentsChanged || optionSettingsChanged
+              ? savedOptionAssignments
+              : Array.isArray(existingCachedDetails?.optionAssignments) && existingCachedDetails.optionAssignments.length
               ? existingCachedDetails.optionAssignments
               : state.selectedProductOptionAssignments,
             ingredients: savedIngredientsForCache,
           });
           if (window.CatalogRepository) {
             window.CatalogRepository.markProductSummary(savedProductForView, { categoryIds: payload.category_ids });
-            void window.CatalogRepository.ensureProducts([productId], {
+            const refreshPassport = window.CatalogRepository.ensureProducts([productId], {
                 requiredCompleteness: "editor-ready",
                 loader: loadProductsCatalogPassports,
                 force: true,
-                priority: false,
-              }).then(() => {
+                priority: optionAssignmentsChanged || optionSettingsChanged,
+              });
+            const applyRefreshedPassport = () => {
               const refreshedPassport = getEditorReadyProductPassport(productId);
               if (refreshedPassport && !editingProducts.has(Number(productId))) {
                 applyEditorPassportToProductsState(productId, refreshedPassport);
               }
-            }).catch((error) => {
+              return refreshedPassport;
+            };
+            const logPassportRefreshError = (error) => {
               console.error("Failed to refresh saved product passport", error);
-            });
+            };
+            void refreshPassport.then(applyRefreshedPassport).catch(logPassportRefreshError);
           }
           clearCachedProductView(productId);
 
@@ -15921,6 +16290,7 @@ const isViewMode = state.comboPanel.mode === "view";
       variantManageBtn: $("#peVariantManageBtn", wrapper),
       optionAccordion: $("#peOptionAccordion", wrapper),
       optionManageBtn: $("#peOptionManageBtn", wrapper),
+      optionOrderResetBtn: $("#peOptionOrderResetBtn", wrapper),
       optionBackdrop: $("#peOptionBackdrop", wrapper),
       optionModal: $("#peOptionModal", wrapper),
       optionClose: $("#peOptionClose", wrapper),
@@ -16997,6 +17367,8 @@ const isViewMode = state.comboPanel.mode === "view";
     let optionPickerSavedFooterState = null;
     let optionPickerSavedHandlers = null;
     const optionDetailsCache = new Map();
+    const optionSettingDrafts = new Map();
+    const dirtyOptionSettingGroups = new Set();
     let productOptionItemsPickerState = null;
     let productOptionItemsPickerSavedFooterState = null;
     let productOptionItemsPickerSavedHandlers = null;
@@ -17030,6 +17402,24 @@ const isViewMode = state.comboPanel.mode === "view";
       state.optionGroupCache.set(cacheKey, details);
     }
 
+    function getOptionSettingDraft(groupId, details) {
+      const id = Number(groupId);
+      if (!optionSettingDrafts.has(id)) {
+        const settings = new Map();
+        (Array.isArray(details?.items) ? details.items : []).forEach((item) => {
+          settings.set(Number(item.id), {
+            option_item_id: Number(item.id),
+            default_selected: item.product_default_selected ?? null,
+            variant_override_enabled: Boolean(item.product_variant_override_enabled),
+            default_variant_group_id: item.product_default_variant_group_id ?? null,
+            default_variant_value_index: item.product_default_variant_value_index ?? null,
+          });
+        });
+        optionSettingDrafts.set(id, settings);
+      }
+      return optionSettingDrafts.get(id);
+    }
+
     function clearCachedProductScopedOptionDetails(groupId) {
       const cacheKey = getProductScopedOptionDetailsCacheKey(groupId);
       optionDetailsCache.delete(cacheKey);
@@ -17038,17 +17428,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
     function getProductOptionPickerVisibleItems() {
       if (!productOptionItemsPickerState) return [];
-      const query = String(productOptionItemsPickerState.query || "").trim().toLowerCase();
-      const categoryId = Number(productOptionItemsPickerState.categoryId || 0);
-      return (Array.isArray(productOptionItemsPickerState.items) ? productOptionItemsPickerState.items : [])
-        .filter((item) => {
-          if (categoryId > 0) {
-            const categoryIds = Array.isArray(item.category_ids) ? item.category_ids.map((id) => Number(id)) : [];
-            if (!categoryIds.includes(categoryId)) return false;
-          }
-          if (!query) return true;
-          return String(item.product_name || item.name || "").toLowerCase().includes(query);
-        });
+      return productOptionItemsPickerState.items || [];
     }
 
     function updateProductOptionPickerSelectAllState(overlay) {
@@ -17071,46 +17451,6 @@ const isViewMode = state.comboPanel.mode === "view";
       input.setAttribute("aria-label", text);
     }
 
-    function renderProductOptionPickerTabs(overlay) {
-      if (!overlay || !productOptionItemsPickerState) return;
-      const tabsEl = overlay.querySelector("[data-product-option-picker-tabs]");
-      if (!tabsEl) return;
-      const itemCategoryIds = new Set();
-      (Array.isArray(productOptionItemsPickerState.items) ? productOptionItemsPickerState.items : []).forEach((item) => {
-        (Array.isArray(item.category_ids) ? item.category_ids : []).forEach((categoryId) => {
-          const id = Number(categoryId);
-          if (Number.isFinite(id) && id > 0) itemCategoryIds.add(id);
-        });
-      });
-      const tabs = [{ id: 0, title: "\u0412\u0441\u0435 \u0442\u043e\u0432\u0430\u0440\u044b" }].concat(
-        state.catalogCategories
-          .filter((category) => itemCategoryIds.has(Number(category.id)))
-          .filter((category) => {
-            const title = String(category?.title || "").trim();
-            const code = String(category?.code || "").trim().toLowerCase();
-            return code !== "all" && title !== "\u0412\u0441\u0435 \u0442\u043e\u0432\u0430\u0440\u044b";
-          })
-          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id)
-      );
-      tabsEl.innerHTML = tabs.map((tab) => {
-        const active = Number(productOptionItemsPickerState.categoryId || 0) === Number(tab.id || 0);
-        return `
-          <button class="option-picker-tab chip ${active ? "is-active" : ""}" type="button" data-product-option-picker-cat="${tab.id || 0}">
-            ${escapeHtml(tab.title || "")}
-          </button>
-        `;
-      }).join("");
-      if (typeof bindHorizontalScroll === "function") bindHorizontalScroll(tabsEl);
-      tabsEl.querySelectorAll("[data-product-option-picker-cat]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const nextCategoryId = Number(btn.dataset.productOptionPickerCat || 0);
-          productOptionItemsPickerState.categoryId = Number.isFinite(nextCategoryId) ? nextCategoryId : 0;
-          renderProductOptionPickerTabs(overlay);
-          renderProductOptionPickerList(overlay);
-        });
-      });
-    }
-
     function renderProductOptionPickerList(overlay) {
       if (!overlay || !productOptionItemsPickerState) return;
       const listEl = overlay.querySelector("[data-product-option-picker-list]");
@@ -17124,28 +17464,70 @@ const isViewMode = state.comboPanel.mode === "view";
       listEl.innerHTML = items.map((item) => {
         const itemId = Number(item.id);
         const checked = productOptionItemsPickerState.selection.has(itemId);
-        const photoList = Array.isArray(item.product_photos_json) ? item.product_photos_json : [];
-        const productPhoto = photoList.length ? photoList[0] : null;
+        const setting = productOptionItemsPickerState.settings.get(itemId);
+        const defaultSelected = setting?.default_selected == null
+          ? Boolean(item.default_selected) : Boolean(setting.default_selected);
         return `
-          <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-option-picker-item="${itemId}">
-            ${productPhoto ? `<div class="option-picker-photo"><img src="${escapeHtml(productPhoto)}" alt="" /></div>` : '<div class="option-picker-photo"></div>'}
-            <div class="option-picker-meta">
-              <div class="options-row-title">${escapeHtml(item.product_name || item.name || "")}</div>
-              <div class="options-row-meta">${item.product_price != null ? formatMoney(item.product_price) : "вЂ”"}</div>
-            </div>
-            <input class="option-picker-checkbox" type="checkbox" data-product-option-picker-checkbox="${itemId}" ${checked ? "checked" : ""} />
+          <div class="option-picker-product">
+            ${renderOptionProductCard({
+              ...item,
+              default_variant_group_id: setting?.variant_override_enabled
+                ? (setting.default_variant_group_id ?? -1) : item.default_variant_group_id,
+              default_variant_value_index: setting?.variant_override_enabled
+                ? (setting.default_variant_value_index ?? -1) : item.default_variant_value_index,
+            }, {
+              selected: checked,
+              editable: true,
+              itemKey: itemId,
+              checkboxKind: "member",
+              allowVariants: Boolean(productOptionItemsPickerState.allowVariants),
+            })}
+            <label class="option-picker-default"><input class="product-row-select-input" type="checkbox" data-product-option-default="${itemId}"
+              ${defaultSelected ? "checked" : ""} ${checked ? "" : "disabled"} /><span class="product-row-select-box" aria-hidden="true"></span> Выбран</label>
           </div>
         `;
       }).join("");
-      listEl.querySelectorAll("[data-product-option-picker-item]").forEach((row) => {
-        row.addEventListener("click", () => {
-          const itemId = Number(row.dataset.productOptionPickerItem);
+      listEl.querySelectorAll("[data-option-member]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const itemId = Number(input.dataset.optionMember);
           if (!Number.isFinite(itemId) || itemId <= 0) return;
-          if (productOptionItemsPickerState.selection.has(itemId)) {
-            productOptionItemsPickerState.selection.delete(itemId);
+          if (input.checked) productOptionItemsPickerState.selection.add(itemId);
+          else productOptionItemsPickerState.selection.delete(itemId);
+          renderProductOptionPickerList(overlay);
+        });
+      });
+      listEl.querySelectorAll("[data-product-option-default]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const itemId = Number(input.dataset.productOptionDefault);
+          const picker = productOptionItemsPickerState;
+          if (!picker.selection.has(itemId)) return;
+          if (input.checked && picker.selectionType === "single") {
+            picker.settings.forEach((setting, id) => { setting.default_selected = id === itemId ? 1 : 0; });
           } else {
-            productOptionItemsPickerState.selection.add(itemId);
+            if (input.checked && picker.maxSelect != null) {
+              const count = picker.items.filter((item) => picker.selection.has(Number(item.id)) &&
+                (picker.settings.get(Number(item.id))?.default_selected == null
+                  ? Boolean(item.default_selected) : Boolean(picker.settings.get(Number(item.id)).default_selected))).length;
+              if (count >= picker.maxSelect) {
+                input.checked = false;
+                showToast(`Можно выбрать не больше ${picker.maxSelect} пунктов по умолчанию.`);
+                return;
+              }
+            }
+            picker.settings.get(itemId).default_selected = input.checked ? 1 : 0;
           }
+          renderProductOptionPickerList(overlay);
+        });
+      });
+      listEl.querySelectorAll("[data-option-variant-key]").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const itemId = Number(chip.dataset.optionVariantKey);
+          if (!Number.isInteger(itemId) || itemId <= 0) return;
+          const setting = productOptionItemsPickerState.settings.get(itemId);
+          setting.variant_override_enabled = true;
+          setting.default_variant_group_id = Number(chip.dataset.optionVariantGroup);
+          setting.default_variant_value_index = Number(chip.dataset.optionVariantIndex);
+          productOptionItemsPickerState.selection.add(itemId);
           renderProductOptionPickerList(overlay);
         });
       });
@@ -17210,12 +17592,13 @@ const isViewMode = state.comboPanel.mode === "view";
 
     async function applyProductOptionItemsPickerSelection() {
       if (!productOptionItemsPickerState || !product || !product.id) return;
+      const picker = productOptionItemsPickerState;
       const excludedItemIds = (Array.isArray(productOptionItemsPickerState.items) ? productOptionItemsPickerState.items : [])
         .map((item) => Number(item.id))
         .filter((itemId) => Number.isFinite(itemId) && itemId > 0 && !productOptionItemsPickerState.selection.has(itemId));
-      await apiSetProductOptionItemExclusions(product.id, productOptionItemsPickerState.groupId, excludedItemIds);
-      const details = await ensureOptionGroupDetails(productOptionItemsPickerState.groupId, { productId: product.id });
+      const details = await ensureOptionGroupDetails(picker.groupId, { productId: product.id });
       if (details) {
+        optionSettingDrafts.set(Number(picker.groupId), picker.settings);
         const nextDetails = {
           ...details,
           items: (Array.isArray(details.items) ? details.items : []).map((item) => ({
@@ -17231,6 +17614,7 @@ const isViewMode = state.comboPanel.mode === "view";
           },
         };
         setCachedProductScopedOptionDetails(productOptionItemsPickerState.groupId, nextDetails);
+        dirtyOptionSettingGroups.add(Number(productOptionItemsPickerState.groupId));
       }
       closeProductOptionItemsPicker();
       await renderOptionAccordion();
@@ -17239,11 +17623,12 @@ const isViewMode = state.comboPanel.mode === "view";
     async function openProductOptionItemsPicker(groupId) {
       const numericGroupId = Number(groupId);
       if (!Number.isFinite(numericGroupId) || numericGroupId <= 0 || !isEdit || !product || !product.id) return;
-      if (!state.catalogCategories.length) {
-        await loadCatalogCategories();
-      }
-      const details = await ensureOptionGroupDetails(numericGroupId, { productId: product.id });
+      let details = await ensureOptionGroupDetails(numericGroupId, { productId: product.id });
       if (!details) return;
+      if ((details.items || []).some((item) => !Array.isArray(item.available_variants))) {
+        const res = await apiGetOptionGroup(numericGroupId, { productId: product.id });
+        details = res.data;
+      }
       setCachedProductScopedOptionDetails(numericGroupId, details);
       const items = Array.isArray(details.items) ? details.items : [];
       const selection = new Set(
@@ -17254,10 +17639,12 @@ const isViewMode = state.comboPanel.mode === "view";
       );
       productOptionItemsPickerState = {
         groupId: numericGroupId,
-        categoryId: 0,
-        query: "",
         items,
         selection,
+        settings: new Map([...getOptionSettingDraft(numericGroupId, details)].map(([id, setting]) => [id, { ...setting }])),
+        selectionType: details.group?.selection_type,
+        maxSelect: details.group?.max_select == null ? null : Number(details.group.max_select),
+        allowVariants: Boolean(details.group?.allow_variants ?? state.optionGroups.find((group) => Number(group.id) === numericGroupId)?.allow_variants),
       };
 
       const pickerOverlay = document.createElement("div");
@@ -17267,32 +17654,32 @@ const isViewMode = state.comboPanel.mode === "view";
       pickerContent.className = "picker-overlay-content";
       pickerContent.innerHTML = `
         <div class="picker-overlay-header">
-          <div class="panel-title">\u041f\u0443\u043d\u043a\u0442\u044b</div>
+          <div class="panel-title">Настройки опции</div>
+          <button class="btn btn-sm" type="button" data-product-option-reset>Сброс</button>
         </div>
         <div class="picker-overlay-body">
-          <div class="info-card">
-            <div class="option-picker-tabs" data-product-option-picker-tabs></div>
-            <div class="option-picker-search" style="margin-bottom: 16px;">
-              <input class="control" type="search" data-product-option-picker-search placeholder="\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e" />
-            </div>
-            <label class="option-picker-select-all">
-              <input type="checkbox" data-product-option-picker-select-all />
-              <span data-product-option-picker-select-all-label>\u0412\u044b\u0434\u0435\u043b\u0438\u0442\u044c \u0432\u0441\u0435</span>
-            </label>
-            <div class="option-picker-list" data-product-option-picker-list></div>
-          </div>
+          <label class="option-picker-select-all">
+            <input class="product-row-select-input" type="checkbox" data-product-option-picker-select-all />
+            <span class="product-row-select-box" aria-hidden="true"></span>
+            <span data-product-option-picker-select-all-label>\u0412\u044b\u0434\u0435\u043b\u0438\u0442\u044c \u0432\u0441\u0435</span>
+          </label>
+          <div class="option-picker-list" data-product-option-picker-list></div>
         </div>
       `;
       pickerOverlay.appendChild(pickerContent);
 
-      const searchInput = pickerOverlay.querySelector("[data-product-option-picker-search]");
       const selectAllInput = pickerOverlay.querySelector("[data-product-option-picker-select-all]");
-      if (searchInput) {
-        searchInput.addEventListener("input", () => {
-          productOptionItemsPickerState.query = searchInput.value || "";
-          renderProductOptionPickerList(pickerOverlay);
+      pickerOverlay.querySelector("[data-product-option-reset]")?.addEventListener("click", () => {
+        const picker = productOptionItemsPickerState;
+        picker.selection = new Set(picker.items.map((item) => Number(item.id)));
+        picker.settings.forEach((setting) => {
+          setting.default_selected = null;
+          setting.variant_override_enabled = false;
+          setting.default_variant_group_id = null;
+          setting.default_variant_value_index = null;
         });
-      }
+        renderProductOptionPickerList(pickerOverlay);
+      });
       if (selectAllInput) {
         selectAllInput.addEventListener("change", () => {
           const visibleItems = getProductOptionPickerVisibleItems();
@@ -17307,7 +17694,6 @@ const isViewMode = state.comboPanel.mode === "view";
         });
       }
 
-      renderProductOptionPickerTabs(pickerOverlay);
       renderProductOptionPickerList(pickerOverlay);
 
       const productInfoPanel = $("#productInfoPanel");
@@ -18368,6 +18754,32 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
+    function syncOptionOrderControls() {
+      const rows = [...(ui.optionAccordion?.querySelectorAll(".acc-item[data-option-group]") || [])];
+      rows.forEach((row, index) => {
+        const up = row.querySelector("[data-option-move-up]");
+        const down = row.querySelector("[data-option-move-down]");
+        if (up) up.disabled = index === 0;
+        if (down) down.disabled = index === rows.length - 1;
+      });
+      ui.optionOrderResetBtn?.classList.toggle("hidden", isView || !draft.optionOrderCustomized);
+    }
+
+    ui.optionOrderResetBtn?.addEventListener("click", () => {
+      const rows = [...(ui.optionAccordion?.querySelectorAll(".acc-item[data-option-group]") || [])];
+      rows.sort((left, right) => {
+        const a = state.optionGroups.find((group) => Number(group.id) === Number(left.dataset.optionGroup));
+        const b = state.optionGroups.find((group) => Number(group.id) === Number(right.dataset.optionGroup));
+        return (Number(a?.sort_order ?? 0) - Number(b?.sort_order ?? 0)) || Number(a?.id ?? 0) - Number(b?.id ?? 0);
+      });
+      rows.forEach((row) => ui.optionAccordion.appendChild(row));
+      draft.optionGroupOrder = rows.map((row) => Number(row.dataset.optionGroup));
+      draft.optionOrderCustomized = false;
+      draft.optionOrderDirty = true;
+      draft.optionOrderReset = true;
+      syncOptionOrderControls();
+    });
+
     function renderOptionPickerList(pickerSelection) {
       if (!ui.optionList) return;
       const query = String(ui.optionSearch.value || "").trim().toLowerCase();
@@ -18401,25 +18813,135 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
+    async function hideProductOptionItem(groupId, itemId) {
+      const details = getCachedProductScopedOptionDetails(groupId)
+        || await ensureOptionGroupDetails(groupId, { productId: product.id });
+      if (!details) return;
+      const excludedIds = new Set(
+        (details.product_scope?.excluded_item_ids || []).map(Number)
+      );
+      excludedIds.add(itemId);
+      setCachedProductScopedOptionDetails(groupId, {
+        ...details,
+        items: (details.items || []).map((item) => ({
+          ...item,
+          is_excluded_for_product: excludedIds.has(Number(item.id)),
+        })),
+        product_scope: { ...(details.product_scope || {}), excluded_item_ids: [...excludedIds] },
+      });
+      dirtyOptionSettingGroups.add(groupId);
+      await renderOptionAccordion();
+    }
+
+    function bindOptionSettingControls(container, { includeRemove = false } = {}) {
+      if (!container || !isEdit || !product?.id) return;
+      container.querySelectorAll("[data-option-default]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const [groupId, itemId] = String(input.dataset.optionDefault || "").split(":").map(Number);
+          const details = getCachedProductScopedOptionDetails(groupId);
+          const settings = getOptionSettingDraft(groupId, details);
+          const group = state.optionGroups.find((row) => Number(row.id) === groupId);
+          if (!settings?.has(itemId) || !group) return;
+          if (input.checked && group.selection_type === "multiple" && group.max_select != null) {
+            const max = Number(group.max_select);
+            const selectedCount = (details?.items || []).filter((item) => {
+              if (Number(item.id) === itemId || item.is_excluded_for_product) return false;
+              const own = settings.get(Number(item.id))?.default_selected;
+              return own == null ? Boolean(item.default_selected) : Boolean(own);
+            }).length;
+            if (selectedCount >= max) {
+              input.checked = false;
+              showToast(`Можно выбрать не больше ${max} пунктов по умолчанию.`);
+              return;
+            }
+          }
+          if (input.checked && group.selection_type === "single") {
+            settings.forEach((setting, id) => { setting.default_selected = id === itemId ? 1 : 0; });
+          } else {
+            settings.get(itemId).default_selected = input.checked ? 1 : 0;
+          }
+          dirtyOptionSettingGroups.add(groupId);
+          const groupElement = input.closest(".acc-item");
+          groupElement?.querySelectorAll("[data-option-default]").forEach((checkbox) => {
+            const checkboxItemId = Number(String(checkbox.dataset.optionDefault || "").split(":")[1]);
+            const setting = settings.get(checkboxItemId);
+            const item = details?.items?.find((row) => Number(row.id) === checkboxItemId);
+            const selected = setting?.default_selected == null
+              ? Boolean(item?.default_selected)
+              : Boolean(setting.default_selected);
+            checkbox.checked = selected;
+            checkbox.closest(".option-product-line")?.classList.toggle("is-selected", selected);
+          });
+        });
+      });
+      container.querySelectorAll("[data-option-variant-key]").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const [groupId, itemId] = String(chip.dataset.optionVariantKey || "").split(":").map(Number);
+          const details = getCachedProductScopedOptionDetails(groupId);
+          const setting = getOptionSettingDraft(groupId, details)?.get(itemId);
+          if (!setting) return;
+          setting.variant_override_enabled = true;
+          setting.default_variant_group_id = Number(chip.dataset.optionVariantGroup);
+          setting.default_variant_value_index = Number(chip.dataset.optionVariantIndex);
+          dirtyOptionSettingGroups.add(groupId);
+          chip.parentElement?.querySelectorAll(".option-product-variant").forEach((button) => {
+            button.classList.toggle("is-active", button === chip);
+          });
+        });
+      });
+      if (includeRemove) {
+        container.querySelectorAll("[data-product-option-item-remove]").forEach((button) => {
+          button.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            const [groupId, itemId] = String(button.dataset.productOptionItemRemove || "").split(":").map(Number);
+            if (groupId > 0 && itemId > 0) await hideProductOptionItem(groupId, itemId);
+          });
+        });
+      }
+    }
+
     async function renderOptionAccordion() {
       if (!ui.optionAccordion) return;
+      const orderRank = new Map(draft.optionGroupOrder.map((id, index) => [id, index]));
       const selected = Array.from(draft.optionGroups)
         .map((id) => state.optionGroups.find((g) => Number(g.id) === Number(id)))
         .filter(Boolean)
-        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+        .sort((a, b) => {
+          if (draft.optionOrderCustomized) {
+            const aRank = orderRank.get(Number(a.id));
+            const bRank = orderRank.get(Number(b.id));
+            if (aRank != null || bRank != null) return (aRank ?? Infinity) - (bRank ?? Infinity);
+          }
+          return (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id;
+        });
+      draft.optionGroupOrder = selected.map((group) => Number(group.id));
 
       if (!selected.length) {
         ui.optionAccordion.innerHTML = `<div class="empty-hint">Опции не выбраны...</div>`;
+        ui.optionOrderResetBtn?.classList.add("hidden");
         return;
       }
 
       ui.optionAccordion.innerHTML = selected.map((g) => {
         const details = getCachedProductScopedOptionDetails(g.id);
+        const settingDraft = details && isEdit && product?.id ? getOptionSettingDraft(g.id, details) : null;
         const limitsLabel = formatOptionLimits(g.min_select, g.max_select);
-        const itemsHtml = details ? renderProductScopedOptionItemsSummary(details.items || [], { removable: Boolean(isEdit && product && product.id), groupId: g.id }) : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u044b.</div>`;
+        const itemsHtml = details ? renderProductScopedOptionItemsSummary(details.items || [], {
+          groupId: g.id,
+          settingDraft,
+          allowVariants: Boolean(g.allow_variants),
+        }) : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u044b.</div>`;
         const actionsHtml = isView
           ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
           : `
+            <span class="option-order-buttons">
+              <button class="btn btn-icon btn-sm" type="button" data-option-move-up="${g.id}" title="Выше" aria-label="Переместить ${escapeHtml(g.title || "опцию")} выше" onclick="event.stopPropagation();">
+                <i class="fas fa-chevron-up"></i>
+              </button>
+              <button class="btn btn-icon btn-sm" type="button" data-option-move-down="${g.id}" title="Ниже" aria-label="Переместить ${escapeHtml(g.title || "опцию")} ниже" onclick="event.stopPropagation();">
+                <i class="fas fa-chevron-down"></i>
+              </button>
+            </span>
             <button class="btn btn-icon btn-sm" type="button" data-option-edit="${g.id}" title="Изменить" onclick="event.stopPropagation();">
               <i class="fas fa-pen"></i>
             </button>
@@ -18449,6 +18971,26 @@ const isViewMode = state.comboPanel.mode === "view";
       }).join("");
 
       bindAccordionContainer(ui.optionAccordion);
+      if (!isView) {
+        ui.optionAccordion.querySelectorAll("[data-option-move-up], [data-option-move-down]").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            const row = button.closest(".acc-item[data-option-group]");
+            const other = button.hasAttribute("data-option-move-up")
+              ? row?.previousElementSibling : row?.nextElementSibling;
+            if (!row || !other?.matches(".acc-item[data-option-group]")) return;
+            if (button.hasAttribute("data-option-move-up")) row.parentElement.insertBefore(row, other);
+            else row.parentElement.insertBefore(other, row);
+            draft.optionGroupOrder = [...ui.optionAccordion.querySelectorAll(".acc-item[data-option-group]")]
+              .map((item) => Number(item.dataset.optionGroup));
+            draft.optionOrderCustomized = true;
+            draft.optionOrderDirty = true;
+            draft.optionOrderReset = false;
+            syncOptionOrderControls();
+          });
+        });
+      }
+      syncOptionOrderControls();
 
       if (!isView) {
         if (isEdit && product && product.id) {
@@ -18461,8 +19003,8 @@ const isViewMode = state.comboPanel.mode === "view";
             addBtn.className = "btn btn-icon btn-sm";
             addBtn.type = "button";
             addBtn.dataset.optionItemsPickerOpen = String(groupId);
-            addBtn.title = "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c/\u0441\u043a\u0440\u044b\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u044b";
-            addBtn.setAttribute("aria-label", "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c/\u0441\u043a\u0440\u044b\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u044b");
+            addBtn.title = "Настройки опции";
+            addBtn.setAttribute("aria-label", "Настройки опции");
             addBtn.innerHTML = '<i class="fas fa-plus"></i>';
             addBtn.addEventListener("click", async (e) => {
               e.stopPropagation();
@@ -18519,36 +19061,6 @@ const isViewMode = state.comboPanel.mode === "view";
           });
         });
 
-        if (isEdit && product && product.id) {
-          ui.optionAccordion.querySelectorAll("[data-product-option-item-remove]").forEach((btn) => {
-            btn.addEventListener("click", async (e) => {
-              e.stopPropagation();
-              const [groupIdRaw, itemIdRaw] = String(btn.dataset.productOptionItemRemove || "").split(":");
-              const groupId = Number(groupIdRaw);
-              const itemId = Number(itemIdRaw);
-              if (!Number.isFinite(groupId) || groupId <= 0) return;
-              if (!Number.isFinite(itemId) || itemId <= 0) return;
-              try {
-                const details = getCachedProductScopedOptionDetails(groupId)
-                  || await ensureOptionGroupDetails(groupId, { productId: product.id });
-                const currentExcluded = new Set(
-                  Array.isArray(details?.product_scope?.excluded_item_ids)
-                    ? details.product_scope.excluded_item_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
-                    : []
-                );
-                currentExcluded.add(itemId);
-                await apiSetProductOptionItemExclusions(product.id, groupId, Array.from(currentExcluded));
-                clearCachedProductScopedOptionDetails(groupId);
-                const refreshedDetails = await ensureOptionGroupDetails(groupId, { productId: product.id });
-                if (refreshedDetails) setCachedProductScopedOptionDetails(groupId, refreshedDetails);
-                await renderOptionAccordion();
-              } catch (error) {
-                console.error("Failed to exclude option item for product", error);
-                alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0441\u043a\u0440\u044b\u0442\u0438\u0438 \u043f\u0443\u043d\u043a\u0442\u0430 \u043e\u043f\u0446\u0438\u0438");
-              }
-            });
-          });
-        }
       }
 
       ui.optionAccordion.querySelectorAll(".acc-item").forEach((item) => {
@@ -18558,14 +19070,21 @@ const isViewMode = state.comboPanel.mode === "view";
         const panel = item.querySelector("[data-acc-panel]");
         if (!trigger || !panel) return;
         trigger.addEventListener("click", async () => {
-          if (getCachedProductScopedOptionDetails(groupId)) return;
+          if (getCachedProductScopedOptionDetails(groupId) &&
+              !getCachedProductScopedOptionDetails(groupId).passport_snapshot) return;
           const details = await ensureOptionGroupDetails(groupId, { productId: product?.id || null });
           if (details) setCachedProductScopedOptionDetails(groupId, details);
           const inner = panel.querySelector(".acc-panel-inner");
           if (inner) {
             inner.innerHTML = `
-              ${renderProductScopedOptionItemsSummary(details?.items || [], { removable: Boolean(isEdit && product && product.id), groupId })}
+              ${renderProductScopedOptionItemsSummary(details?.items || [], {
+                removable: Boolean(isEdit && product && product.id), groupId,
+                editable: Boolean(isEdit && product?.id),
+                settingDraft: isEdit && product?.id ? getOptionSettingDraft(groupId, details) : null,
+                allowVariants: Boolean(state.optionGroups.find((group) => Number(group.id) === groupId)?.allow_variants),
+              })}
             `;
+            bindOptionSettingControls(inner, { includeRemove: true });
           }
           refreshOpenAccordions();
         });
@@ -23697,6 +24216,14 @@ const isViewMode = state.comboPanel.mode === "view";
     if (optionGroupSelectionInput) {
       optionGroupSelectionInput.addEventListener("change", () => {
         syncOptionDraftGroupFromForm();
+        if (getOptionGroupSelectionType() === "single" && state.optionDraft?.items) {
+          let firstSelected = false;
+          state.optionDraft.items.forEach((item) => {
+            if (!item.default_selected) return;
+            if (firstSelected) item.default_selected = 0;
+            else firstSelected = true;
+          });
+        }
         updateOptionGroupSelectionUi();
         // show qty controls immediately for selection type switch
         renderOptionItems(getOptionItemsSource());
@@ -25191,6 +25718,12 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
+    document.addEventListener("error", (event) => {
+      const photo = event.target;
+      if (photo instanceof HTMLImageElement && photo.closest(".option-product-photo")) {
+        photo.parentElement.textContent = "Нет фото";
+      }
+    }, true);
     connectProductsStockSocket();
     bindAccordionContainer(productsAccordion);
     bindAccordionContainer(optionGroupInfo);
@@ -25201,6 +25734,17 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     if (comboInfo) {
       bindAccordionContainer(comboInfo);
+    }
+
+    if (optionPickerSearchToggle && optionPickerSearch) {
+      optionPickerSearchToggle.addEventListener("click", () => {
+        const isOpen = optionLevelPicker?.classList.toggle("is-search-open");
+        if (isOpen) optionPickerSearch.focus();
+        else if (optionPickerSearch.value) {
+          optionPickerSearch.value = "";
+          optionPickerSearch.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
     }
     bindEvents();
 

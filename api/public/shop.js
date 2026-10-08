@@ -2485,6 +2485,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       readPublicTableStamp('prod_option_assignments', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_option_items', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_item_exclusions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_item_product_settings', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_variant_assignments', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_variant_groups', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_variant_discount_tiers', 'tenant_id=?', [tenantId]),
@@ -2515,6 +2517,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       optionAssignmentsStamp,
       optionGroupsStamp,
       optionItemsStamp,
+      optionItemExclusionsStamp,
+      optionItemSettingsStamp,
       variantAssignmentsStamp,
       variantGroupsStamp,
       variantDiscountTiersStamp,
@@ -2538,6 +2542,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       readPublicTableStamp('prod_option_assignments', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_option_items', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_item_exclusions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_item_product_settings', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_variant_assignments', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_variant_groups', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_variant_discount_tiers', 'tenant_id=?', [tenantId]),
@@ -2563,6 +2569,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       optionAssignmentsStamp,
       optionGroupsStamp,
       optionItemsStamp,
+      optionItemExclusionsStamp,
+      optionItemSettingsStamp,
       variantAssignmentsStamp,
       variantGroupsStamp,
       variantDiscountTiersStamp,
@@ -2580,6 +2588,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       optionAssignmentsStamp,
       optionGroupsStamp,
       optionItemsStamp,
+      optionItemExclusionsStamp,
+      optionItemSettingsStamp,
       variantAssignmentsStamp,
       variantGroupsStamp,
       variantDiscountTiersStamp,
@@ -2606,6 +2616,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         optionAssignmentsStamp,
         optionGroupsStamp,
         optionItemsStamp,
+        optionItemExclusionsStamp,
+        optionItemSettingsStamp,
       ]),
     };
   }
@@ -2618,6 +2630,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       readPublicTableStamp('prod_option_assignments', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_option_items', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_item_exclusions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_item_product_settings', 'tenant_id=?', [tenantId]),
     ]);
     return buildMobileCatalogRevision(parts);
   }
@@ -2632,6 +2646,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       readPublicTableStamp('prod_option_assignments', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_option_items', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_item_exclusions', 'tenant_id=?', [tenantId]),
+      readPublicTableStamp('prod_option_item_product_settings', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('mkt_discounts', 'tenant_id=? AND store_id=?', [tenantId, storeId]),
       readPublicTableStamp('mkt_discount_products', 'tenant_id=?', [tenantId]),
       readPublicTableStamp('prod_combos', 'tenant_id=?', [tenantId]),
@@ -4505,10 +4521,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
 
   function getOptionItemDefaultVariantIndex(optionItem) {
     const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
-    const variantGroup = variants[0];
+    const configuredGroupId = Number(optionItem?.effective_default_variant_group_id || 0);
+    const variantGroup = variants.find((group) => Number(group.id || group.variant_group_id) === configuredGroupId) || variants[0];
     const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
     if (!values.length) return null;
-    const rawIndex = variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 0;
+    const rawIndex = optionItem?.effective_default_variant_value_index != null
+      ? Number(optionItem.effective_default_variant_value_index)
+      : (variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 0);
     if (!Number.isFinite(rawIndex) || rawIndex < 0 || rawIndex >= values.length) return 0;
     return rawIndex;
   }
@@ -4518,7 +4537,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     if (!Number.isFinite(basePrice)) return 0;
 
     const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
-    const variantGroup = variants[0];
+    const configuredGroupId = Number(optionItem?.effective_default_variant_group_id || 0);
+    const variantGroup = variants.find((group) => Number(group.id || group.variant_group_id) === configuredGroupId) || variants[0];
     const defaultVariantIndex = getOptionItemDefaultVariantIndex(optionItem);
     if (!variantGroup || !Number.isFinite(Number(defaultVariantIndex))) {
       return roundPrice(basePrice);
@@ -4530,7 +4550,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     if (targetProduct) {
       const variantUnitPrice = await computeDisplayPriceForProduct(
         targetProduct,
-        variantGroup,
+        { ...variantGroup, default_value_index: defaultVariantIndex },
         getConversionFactor,
         roundPrice
       );
@@ -4572,9 +4592,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     const title = str(optionItem?.title || optionItem?.name || '').trim();
     if (!title) return '';
     const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
-    const variantGroup = variants[0];
+    const configuredGroupId = Number(optionItem?.effective_default_variant_group_id || 0);
+    const variantGroup = variants.find((group) => Number(group.id || group.variant_group_id) === configuredGroupId) || variants[0];
     const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
-    const rawIdx = variantGroup?.default_value_index != null ? Number(variantGroup.default_value_index) : 0;
+    const rawIdx = getOptionItemDefaultVariantIndex(optionItem);
     const idx = Number.isFinite(rawIdx) && rawIdx >= 0 && rawIdx < values.length ? rawIdx : 0;
     if (variantGroup && values.length) {
       const variantLabel = [str(values[idx] ?? '').trim(), str(variantGroup.unit_short_title || '').trim()]
@@ -4731,7 +4752,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
          AND a.assign_id IN (${placeholders})
          AND a.is_active = 1
          AND g.is_active = 1
-       ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+       ORDER BY a.assign_id ASC, (a.product_display_order IS NULL) ASC, a.product_display_order ASC, g.sort_order ASC, g.id ASC`,
       [tenantId, ...productIds]
     );
     const optionAssignmentsByProductId = new Map();
@@ -4755,6 +4776,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       productIds,
       Array.from(optionGroupIds)
     );
+    const optionItemSettingsByScope = new Map();
+    if (optionGroupIds.size) {
+      const [settingRows] = await db.query(
+        `SELECT product_id, group_id, option_item_id, default_selected,
+                variant_override_enabled, default_variant_group_id, default_variant_value_index
+         FROM prod_option_item_product_settings
+         WHERE tenant_id=? AND product_id IN (${placeholders})
+           AND group_id IN (${Array.from(optionGroupIds).map(() => '?').join(',')})`,
+        [tenantId, ...productIds, ...optionGroupIds]
+      );
+      settingRows.forEach((setting) => {
+        optionItemSettingsByScope.set(`${setting.product_id}:${setting.group_id}:${setting.option_item_id}`, setting);
+      });
+    }
 
     const optionGroupDetailsById = new Map();
     if (optionGroupIds.size > 0) {
@@ -4774,6 +4809,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
            i.target_product_id,
            i.price_mode,
            i.price_value,
+           i.default_selected,
+           i.default_variant_group_id,
+           i.default_variant_value_index,
            p.price AS product_price,
            p.base_unit_id AS product_base_unit_id,
            p.base_qty AS product_base_qty,
@@ -4877,6 +4915,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
             ? Number(optionItemRow.price_value || 0)
             : Number(optionItemRow.product_price || 0),
           qty_min: Number(optionItemRow.qty_min ?? 1),
+          default_selected: Number(optionItemRow.default_selected || 0) === 1,
+          default_variant_group_id: optionItemRow.default_variant_group_id,
+          default_variant_value_index: optionItemRow.default_variant_value_index,
           product_unit_short_title: optionItemRow.product_unit_short_title || 'шт',
           variants: optionVariantsByProductId.get(targetProductId) || [],
           target_product: {
@@ -4950,17 +4991,40 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         const groupMeta = details.group || {};
         const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, pid, groupId);
         const items = (Array.isArray(details.items) ? details.items : [])
-          .filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
+          .filter((item) => !excludedItemIds.has(Number(item?.id || 0)))
+          .map((item) => {
+            const setting = optionItemSettingsByScope.get(`${pid}:${groupId}:${item.id}`);
+            return {
+              ...item,
+              effective_default_selected: setting?.default_selected == null
+                ? item.default_selected : Number(setting.default_selected) === 1,
+              effective_default_variant_group_id: setting?.variant_override_enabled
+                ? setting.default_variant_group_id : item.default_variant_group_id,
+              effective_default_variant_value_index: setting?.variant_override_enabled
+                ? setting.default_variant_value_index : item.default_variant_value_index,
+            };
+          });
         if (!items.length) continue;
         const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
         const minSelect = Number(groupMeta.min_select ?? assignment.min_select ?? 0);
         const requiredSingle = selectionType === 'single' && (Number(groupMeta.is_required || 0) === 1 || minSelect > 0);
-        if (!requiredSingle) continue;
-        const defaultItem = items[0];
-        const defaultOptionPrice = await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice);
-        displayPrice += defaultOptionPrice;
-        const line = formatCatalogDefaultOptionLine(defaultItem, 1);
-        if (line) catalogDefaultLines.push(line);
+        const configured = items.filter((item) => item.effective_default_selected);
+        const selected = selectionType === 'single'
+          ? (configured.length ? configured.slice(0, 1) : (requiredSingle ? items.slice(0, 1) : []))
+          : configured.slice();
+        if (selectionType !== 'single') {
+          for (const item of items) {
+            if (selected.length >= Math.max(0, minSelect)) break;
+            if (!selected.includes(item)) selected.push(item);
+          }
+        }
+        for (const defaultItem of selected) {
+          const qty = Math.max(1, Number(defaultItem.qty_min || 1));
+          const defaultOptionPrice = await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice);
+          displayPrice += defaultOptionPrice * qty;
+          const line = formatCatalogDefaultOptionLine(defaultItem, qty);
+          if (line) catalogDefaultLines.push(line);
+        }
       }
       row.display_price = roundPrice(displayPrice);
       const promoDiscountPercent = Math.max(0, Math.min(99.99, Number(row.promo_discount_percent || 0)));
@@ -5474,6 +5538,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         o.customer_id,
         o.customer_name,
         o.customer_phone,
+        c.photo AS customer_photo,
+        o.pickup_store_id,
+        ps.name AS pickup_store_name,
+        ps.address AS pickup_store_address,
         o.promo_code,
         o.address,
         o.comment,
@@ -5494,6 +5562,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         o.status_id,
 
         s.code AS statusCode,
+        s.is_final AS status_is_final,
         COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS statusTitle,
 
         p.code AS paymentCode,
@@ -5505,7 +5574,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         t.code AS timeOptionCode,
         t.title AS timeOptionTitle,
 
-        ca.comment AS address_comment_from_cust
+        o.address_comment AS address_comment_snapshot
       FROM order_orders o
       LEFT JOIN order_statuses s
         ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -5515,8 +5584,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
       LEFT JOIN order_time_options t
         ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
-      LEFT JOIN cust_customer_addresses ca
-        ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
+      LEFT JOIN cust_customers c
+        ON c.tenant_id=o.tenant_id AND c.id=o.customer_id
+      LEFT JOIN ten_stores ps
+        ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
       WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
       LIMIT 1
       `,
@@ -5562,10 +5633,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       customer_id: r.customer_id,
       customer_name: r.customer_name,
       customer_phone: r.customer_phone,
+      customer_photo: r.customer_photo || null,
+      pickup_store_id: r.pickup_store_id || null,
+      pickup_store_name: r.pickup_store_name || null,
+      pickup_store_address: r.pickup_store_address || null,
       promo_code: publicDiscountText(r.promo_code) || null,
       address: r.address,
       comment: r.comment,
-      address_comment: (r.address_comment && String(r.address_comment).trim()) ? r.address_comment : (r.address_comment_from_cust && String(r.address_comment_from_cust).trim()) ? r.address_comment_from_cust : null,
+      address_comment: r.address_comment_snapshot || null,
       cutlery_qty: r.cutlery_qty,
       change_from: r.change_from,
       total_price: totalPrice,
@@ -5583,6 +5658,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       status_id: r.status_id,
 
       status_code: r.statusCode ?? null,
+      status_is_final: Number(r.status_is_final || 0),
       status_title: r.statusTitle ?? null,
 
       payment_code: r.paymentCode ?? null,
@@ -8978,10 +9054,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
+           DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
+           t.code AS time_option_code, t.title AS time_option_title,
+           ps.address AS pickup_store_address,
            COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code,
            CASE WHEN COALESCE(s.is_final, 0) = 1
                   OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
                 THEN 1 ELSE 0 END AS status_is_final,
+           m.code AS method_code, m.title AS method_title,
            p.title AS payment_title, p.code AS payment_code,
            ca.street AS deliveryAddressStreet,
            ca.house AS deliveryAddressHouse,
@@ -8989,8 +9069,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          FROM order_orders o
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+         LEFT JOIN order_delivery_types m
+           ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
          LEFT JOIN order_payments p
            ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+         LEFT JOIN order_time_options t
+           ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+         LEFT JOIN ten_stores ps
+           ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
          LEFT JOIN cust_customer_addresses ca
            ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
@@ -9019,12 +9105,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           public_id: r.public_id || null,
           created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
           address: r.address || null,
+          scheduled_at: r.scheduled_at || null,
+          time_option_code: r.time_option_code || null,
+          time_option_title: r.time_option_title || null,
+          pickup_store_address: r.pickup_store_address || null,
           delivery_address_street: r.deliveryAddressStreet || null,
           delivery_address_house: r.deliveryAddressHouse || null,
           delivery_address_apartment: r.deliveryAddressApartment || null,
           total_price: Number(r.total_price || 0),
           status_title: r.status_title || null,
           status_code: r.status_code || null,
+          method_code: r.method_code || null,
+          method_title: r.method_title || null,
           status_is_final: r.status_is_final ? Number(r.status_is_final) : 0,
           payment_title: r.payment_title || null,
           payment_code: r.payment_code || null,
@@ -15070,6 +15162,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          a.group_id,
          a.priority,
          a.sort_order,
+         a.product_display_order,
          a.is_active,
          a.selection_type AS assignment_selection_type,
          a.min_select AS assignment_min_select,
@@ -15087,7 +15180,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          AND a.assign_id IN (${placeholders})
          AND a.is_active=1
          AND g.is_active=1
-       ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+       ORDER BY a.assign_id ASC, (a.product_display_order IS NULL) ASC, a.product_display_order ASC, g.sort_order ASC, g.id ASC`,
       [tenantId, ...ids]
     );
 
@@ -15109,6 +15202,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
         priority: Number(r.priority || 0),
         sort_order: Number(r.sort_order || 0),
+        product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
       });
     });
     ids.forEach((pid) => {
@@ -15256,8 +15350,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     const optionGroupIds = Array.from(new Set(Object.values(assignments).flat().map((row) => Number(row.group_id)).filter((id) => id > 0)));
     const optionGroupsById = {};
+    const optionSettingsByScope = new Map();
+    const optionItemExclusionsByScope = optionGroupIds.length
+      ? await loadOptionItemExclusionsMap(tenantId, ids, optionGroupIds)
+      : new Map();
     if (optionGroupIds.length) {
       const groupPlaceholders = optionGroupIds.map(() => '?').join(',');
+      const [optionSettingRows] = await db.query(
+        `SELECT product_id, group_id, option_item_id, default_selected,
+                variant_override_enabled, default_variant_group_id, default_variant_value_index
+         FROM prod_option_item_product_settings
+         WHERE tenant_id=? AND product_id IN (${placeholders}) AND group_id IN (${groupPlaceholders})`,
+        [tenantId, ...ids, ...optionGroupIds]
+      );
+      optionSettingRows.forEach((row) => {
+        optionSettingsByScope.set(`${row.product_id}:${row.group_id}:${row.option_item_id}`, row);
+      });
       const [groupRows] = await db.query(
         `SELECT *
          FROM prod_option_groups
@@ -15277,6 +15385,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            i.qty_max,
            i.is_active,
            i.sort_order,
+           i.default_selected,
+           i.default_variant_group_id,
+           i.default_variant_value_index,
            p.name AS product_name,
            p.price AS product_price,
            p.base_unit_id AS product_base_unit_id,
@@ -15365,6 +15476,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             unit_short_title: str(va.unit_short_title || ""),
             values: variantData.values,
             default_value_index: variantData.default_value_index,
+            visible_value_indexes: variantData.visible_value_indexes,
             discount_tiers: variantData.discount_tiers,
           });
         }
@@ -15404,6 +15516,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           is_active: Number(item.is_active || 0) === 1,
           sort_order: Number(item.sort_order || 0),
           variants: optionVariantsByProductId.get(productId) || [],
+          default_selected: Number(item.default_selected || 0) === 1,
+          default_variant_group_id: item.default_variant_group_id == null ? null : Number(item.default_variant_group_id),
+          default_variant_value_index: item.default_variant_value_index == null ? null : Number(item.default_variant_value_index),
         });
       });
 
@@ -15469,7 +15584,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       productAssignments.forEach((assignment) => {
         const groupId = Number(assignment?.group_id || 0);
         const details = optionGroupsById[String(groupId)] || optionGroupsById[groupId] || null;
-        const activeItems = (Array.isArray(details?.items) ? details.items : []).filter((item) => Number(item?.is_active || 0) === 1);
+        const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, pid, groupId);
+        const configuredItems = (Array.isArray(details?.items) ? details.items : [])
+          .filter((item) => Number(item?.is_active || 0) === 1)
+          .map((item) => {
+            const own = optionSettingsByScope.get(`${pid}:${groupId}:${item.id}`);
+            return {
+              ...item,
+              default_source: own?.default_selected == null ? 'group' : 'product',
+              effective_default_selected: own?.default_selected == null
+                ? Boolean(item.default_selected)
+                : Number(own.default_selected) === 1,
+              effective_default_variant_group_id: own?.variant_override_enabled
+                ? (own.default_variant_group_id == null ? null : Number(own.default_variant_group_id))
+                : item.default_variant_group_id,
+              effective_default_variant_value_index: own?.variant_override_enabled
+                ? (own.default_variant_value_index == null ? null : Number(own.default_variant_value_index))
+                : item.default_variant_value_index,
+              variant_override_enabled: Boolean(own?.variant_override_enabled),
+              has_explicit_default: Boolean(item.default_selected) || own?.default_selected != null,
+            };
+          });
+        const activeItems = configuredItems.filter((item) => !excludedItemIds.has(Number(item.id)));
         if (!details || !activeItems.length) return;
         groups.push({
           id: groupId,
@@ -15481,6 +15617,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           is_required: (details.group?.selection_type || assignment.selection_type || "single") === "single"
             ? (Number(details.group?.is_required ?? 1) === 1)
             : false,
+          has_explicit_default: configuredItems.some((item) => item.has_explicit_default),
           items: activeItems,
         });
       });
@@ -15532,11 +15669,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
           };
           const itemVariants = Array.isArray(item?.variants) ? item.variants : [];
-          const firstItemVariantGroup = itemVariants.length ? itemVariants[0] : null;
+          const configuredVariantGroupId = Number(item?.effective_default_variant_group_id || 0);
+          const firstItemVariantGroup = item?.variant_override_enabled && !configuredVariantGroupId
+            ? null
+            : (itemVariants.find((variant) =>
+                Number(variant.id || variant.variant_group_id) === configuredVariantGroupId
+              ) || itemVariants[0] || null);
           const itemVariantValues = Array.isArray(firstItemVariantGroup?.values) ? firstItemVariantGroup.values : [];
           if (firstItemVariantGroup && itemVariantValues.length) {
             const rawVariantIdx = firstItemVariantGroup.default_value_index != null ? Number(firstItemVariantGroup.default_value_index) : 0;
-            const safeVariantIdx = Number.isFinite(rawVariantIdx) && rawVariantIdx >= 0 && rawVariantIdx < itemVariantValues.length ? rawVariantIdx : 0;
+            const visibleIndexes = Array.isArray(firstItemVariantGroup.visible_value_indexes)
+              ? firstItemVariantGroup.visible_value_indexes
+              : itemVariantValues.map((_, index) => index);
+            const configuredIndex = item?.effective_default_variant_value_index;
+            const configuredVisibleIndex = configuredIndex == null
+              ? -1
+              : visibleIndexes.indexOf(Number(configuredIndex));
+            const safeVariantIdx = configuredVisibleIndex >= 0
+              ? configuredVisibleIndex
+              : (Number.isFinite(rawVariantIdx) && rawVariantIdx >= 0 && rawVariantIdx < itemVariantValues.length ? rawVariantIdx : 0);
             const variantUnitPriceForOption = getSimpleVariantPrice(
               Number(out.price || 0),
               Number(item.product_base_qty || 1) || 1,
@@ -15555,6 +15706,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
           selectedOptionItems.push(out);
         };
+
+        if (group.has_explicit_default) {
+          const configured = items.filter((item) => item.effective_default_selected);
+          const selected = selectionType === 'single' ? configured.slice(0, 1) : configured;
+          selected.forEach((item) => addDefaultOptionItem(item, item.qty_min));
+          if (selectionType === 'single') {
+            if (!selected.length && requiredSingle) addDefaultOptionItem(items[0], 1);
+            return;
+          }
+          const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
+          let selectedCount = selected.length;
+          for (const item of items) {
+            if (selectedCount >= requiredCount) break;
+            if (selected.includes(item)) continue;
+            addDefaultOptionItem(item, item.qty_min);
+            selectedCount += 1;
+          }
+          return;
+        }
 
         if (selectionType === 'single') {
           if (requiredSingle) addDefaultOptionItem(items[0], 1);
@@ -16829,6 +16999,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                a.group_id,
                a.priority,
                a.sort_order,
+               a.product_display_order,
                a.is_active,
                a.selection_type AS assignment_selection_type,
                a.min_select AS assignment_min_select,
@@ -16846,7 +17017,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                AND a.assign_id IN (${placeholders})
                AND a.is_active=1
                AND g.is_active=1
-             ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+             ORDER BY a.assign_id ASC, (a.product_display_order IS NULL) ASC, a.product_display_order ASC, g.sort_order ASC, g.id ASC`,
             [tenantId, ...sortedIds]
           );
 
@@ -16868,6 +17039,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
               priority: Number(r.priority || 0),
               sort_order: Number(r.sort_order || 0),
+              product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
             });
           });
           const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
@@ -16917,6 +17089,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                a.group_id,
                a.priority,
                a.sort_order,
+               a.product_display_order,
                a.is_active,
                a.selection_type AS assignment_selection_type,
                a.min_select AS assignment_min_select,
@@ -16934,7 +17107,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                AND a.assign_id IN (${placeholders})
                AND a.is_active=1
                AND g.is_active=1
-             ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+             ORDER BY a.assign_id ASC, (a.product_display_order IS NULL) ASC, a.product_display_order ASC, g.sort_order ASC, g.id ASC`,
             [tenantId, ...sortedIds]
           );
 
@@ -16956,6 +17129,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
               priority: Number(r.priority || 0),
               sort_order: Number(r.sort_order || 0),
+              product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
             });
           });
           sortedIds.forEach((pid) => {
@@ -17442,6 +17616,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           unit_short_title: str(v.unit_short_title || ''),
           values: variantData.values,
           default_value_index: variantData.default_value_index,
+          visible_value_indexes: variantData.visible_value_indexes,
           discount_tiers: variantData.discount_tiers,
         });
       }
@@ -17453,6 +17628,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            a.group_id,
            a.priority,
            a.sort_order,
+           a.product_display_order,
            a.is_active,
            a.selection_type AS assignment_selection_type,
            a.min_select AS assignment_min_select,
@@ -17471,7 +17647,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            AND a.assign_id IN (${ids.map(() => '?').join(',')})
            AND a.is_active=1
            AND g.is_active=1
-         ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+         ORDER BY a.assign_id ASC, (a.product_display_order IS NULL) ASC, a.product_display_order ASC, g.sort_order ASC, g.id ASC`,
         [tenantId, ...ids]
       );
 
@@ -17492,6 +17668,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
           priority: Number(r.priority || 0),
           sort_order: Number(r.sort_order || 0),
+          product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
         });
         optionGroupIds.add(Number(r.group_id));
       }
@@ -17500,6 +17677,20 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ids,
         Array.from(optionGroupIds)
       );
+      const optionItemSettingsByScope = new Map();
+      if (optionGroupIds.size) {
+        const [settingRows] = await db.query(
+          `SELECT product_id, group_id, option_item_id, default_selected,
+                  variant_override_enabled, default_variant_group_id, default_variant_value_index
+           FROM prod_option_item_product_settings
+           WHERE tenant_id=? AND product_id IN (${ids.map(() => '?').join(',')})
+             AND group_id IN (${Array.from(optionGroupIds).map(() => '?').join(',')})`,
+          [tenantId, ...ids, ...optionGroupIds]
+        );
+        settingRows.forEach((row) => {
+          optionItemSettingsByScope.set(`${row.product_id}:${row.group_id}:${row.option_item_id}`, row);
+        });
+      }
 
       const optionGroupDetailsById = new Map();
       if (optionGroupIds.size > 0) {
@@ -17523,6 +17714,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              i.qty_max,
              i.is_active,
              i.sort_order,
+             i.default_selected,
+             i.default_variant_group_id,
+             i.default_variant_value_index,
              p.name AS product_name,
              p.price AS product_price,
              p.base_qty AS product_base_qty,
@@ -17606,6 +17800,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               unit_short_title: str(v.unit_short_title || ''),
               values: variantData.values,
               default_value_index: variantData.default_value_index,
+              visible_value_indexes: variantData.visible_value_indexes,
               discount_tiers: variantData.discount_tiers,
             });
           }
@@ -17632,6 +17827,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             qty_min: Number(item.qty_min ?? 1),
             qty_max: Number(item.qty_max ?? 1),
             is_active: Number(item.is_active || 0) === 1,
+            default_selected: Number(item.default_selected || 0) === 1,
+            default_variant_group_id: item.default_variant_group_id,
+            default_variant_value_index: item.default_variant_value_index,
             product_photos_json: safeJsonArray(item.product_photos_json),
             variants,
           });
@@ -17699,9 +17897,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (!details) return;
           const groupMeta = details.group || {};
           const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, Number(pid), groupId);
-          const items = (Array.isArray(details.items) ? details.items : [])
+          const configuredItems = (Array.isArray(details.items) ? details.items : [])
             .filter((item) => Number(item?.is_active ?? 1) === 1)
-            .filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
+            .map((item) => {
+              const own = optionItemSettingsByScope.get(`${pid}:${groupId}:${item.id}`);
+              return {
+                ...item,
+                effective_default_selected: own?.default_selected == null
+                  ? Boolean(item.default_selected) : Number(own.default_selected) === 1,
+                effective_default_variant_group_id: own?.variant_override_enabled
+                  ? own.default_variant_group_id : item.default_variant_group_id,
+                effective_default_variant_value_index: own?.variant_override_enabled
+                  ? own.default_variant_value_index : item.default_variant_value_index,
+                variant_override_enabled: Boolean(own?.variant_override_enabled),
+                has_explicit_default: Boolean(item.default_selected) || own?.default_selected != null,
+              };
+            });
+          const items = configuredItems.filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
           if (!items.length) return;
 
           const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
@@ -17723,15 +17935,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             };
 
             const itemVariants = Array.isArray(item?.variants) ? item.variants : [];
-            const firstItemVariantGroup = itemVariants.length ? itemVariants[0] : null;
+            const configuredVariantGroupId = Number(item?.effective_default_variant_group_id || 0);
+            const firstItemVariantGroup = item?.variant_override_enabled && !configuredVariantGroupId
+              ? null
+              : (itemVariants.find((variant) => Number(variant.id) === configuredVariantGroupId) || itemVariants[0] || null);
             const itemVariantValues = Array.isArray(firstItemVariantGroup?.values) ? firstItemVariantGroup.values : [];
             if (firstItemVariantGroup && itemVariantValues.length > 0) {
               const rawVariantIdx = firstItemVariantGroup.default_value_index != null
                 ? Number(firstItemVariantGroup.default_value_index)
                 : 0;
-              const safeVariantIdx = Number.isFinite(rawVariantIdx) && rawVariantIdx >= 0 && rawVariantIdx < itemVariantValues.length
-                ? rawVariantIdx
-                : 0;
+              const visibleIndexes = Array.isArray(firstItemVariantGroup.visible_value_indexes)
+                ? firstItemVariantGroup.visible_value_indexes : itemVariantValues.map((_, index) => index);
+              const configuredIndex = item?.effective_default_variant_value_index;
+              const configuredVisibleIndex = configuredIndex == null ? -1 : visibleIndexes.indexOf(Number(configuredIndex));
+              const safeVariantIdx = configuredVisibleIndex >= 0 ? configuredVisibleIndex
+                : (Number.isFinite(rawVariantIdx) && rawVariantIdx >= 0 && rawVariantIdx < itemVariantValues.length ? rawVariantIdx : 0);
               const variantUnitPriceForOption = getSimpleVariantPrice(
                 Number(out.price || 0),
                 Number(item.product_base_qty || 1) || 1,
@@ -17753,6 +17971,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
             selectedOptionItems.push(out);
           };
+
+          if (configuredItems.some((item) => item.has_explicit_default)) {
+            const selected = items.filter((item) => item.effective_default_selected);
+            const defaults = selectionType === 'single' ? selected.slice(0, 1) : selected;
+            defaults.forEach((item) => addDefaultOptionItem(item, item.qty_min));
+            if (selectionType === 'single') {
+              if (!defaults.length && requiredSingle) addDefaultOptionItem(items[0], 1);
+              return;
+            }
+            const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
+            let selectedCount = defaults.length;
+            for (const item of items) {
+              if (selectedCount >= requiredCount) break;
+              if (defaults.includes(item)) continue;
+              addDefaultOptionItem(item, item.qty_min);
+              selectedCount += 1;
+            }
+            return;
+          }
 
           if (selectionType === 'single') {
             if (requiredSingle) addDefaultOptionItem(items[0], 1);
@@ -17839,7 +18076,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           const sourceItem = [...optionGroupDetailsById.values()]
             .flatMap((details) => details?.items || [])
             .find((candidate) => Number(candidate.id) === Number(item.id));
-          const variantGroup = sourceItem?.variants?.[0] || null;
+          const variantGroup = sourceItem?.variants?.find((variant) =>
+            Number(variant.id) === Number(item.variant_group_id)
+          ) || null;
           const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
           const configuredIndex = Number(item.variant_value_index);
           const configuredValue = parseVariantValueNumber(values[configuredIndex]);
@@ -18079,12 +18318,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }),
           ...entry.option_items.map((option) => {
             const quantity = Math.max(1, Number(option.qty || option.quantity || 1));
-            const label = str(option.variant_label || option.title || option.name || '').trim();
-            return `${quantity} шт ${label}`.trim();
+            const title = str(option.title || option.name || '').trim();
+            const variantLabel = str(option.variant_label || '').trim();
+            return variantLabel ? `${variantLabel} ${title}` : (quantity > 1 ? `${quantity} шт ${title}` : title);
           }),
         ].filter(Boolean);
         entry.display_price = Number(entry.variant_unit_price || product.price || 0)
-          + Number(entry.ingredient_price_diff || 0);
+          + Number(entry.ingredient_price_diff || 0)
+          + entry.option_items.reduce((sum, option) => sum + Number(option.price || 0) * Math.max(1, Number(option.qty || 1)), 0);
       }
 
       const productBlockRows = await loadPublicProductBlockRows(tenantId, ids);
@@ -18115,6 +18356,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           entry.variant_label = '';
           entry.variant_unit_price = 0;
         }
+        const product = productsById.get(Number(pid));
+        entry.display_price = Number(entry.variant_unit_price || product?.price || 0)
+          + Number(entry.ingredient_price_diff || 0)
+          + entry.option_items.reduce((sum, option) => sum + Number(option.price || 0) * Math.max(1, Number(option.qty || 1)), 0);
         entry.catalog_default_lines = [
           ...entry.ingredients.map((ingredient) => {
             const quantity = Number(ingredient.quantity || 0);
@@ -18122,8 +18367,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }),
           ...entry.option_items.map((option) => {
             const quantity = Math.max(1, Number(option.qty || option.quantity || 1));
-            const label = str(option.variant_label || option.title || option.name || '').trim();
-            return `${quantity} шт ${label}`.trim();
+            const title = str(option.title || option.name || '').trim();
+            const variantLabel = str(option.variant_label || '').trim();
+            return variantLabel ? `${variantLabel} ${title}` : (quantity > 1 ? `${quantity} шт ${title}` : title);
           }),
         ].filter(Boolean);
         result[pid] = entry;
@@ -18186,6 +18432,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                a.group_id,
                a.priority,
                a.sort_order,
+               a.product_display_order,
                a.is_active,
                a.selection_type AS assignment_selection_type,
                a.min_select AS assignment_min_select,
@@ -18203,7 +18450,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                AND a.assign_id=?
                AND a.is_active=1
                AND g.is_active=1
-             ORDER BY a.sort_order ASC, a.id ASC`,
+             ORDER BY (a.product_display_order IS NULL) ASC, a.product_display_order ASC, g.sort_order ASC, g.id ASC`,
             [tenantId, productId]
           );
 
@@ -18219,6 +18466,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
             priority: Number(r.priority || 0),
             sort_order: Number(r.sort_order || 0),
+            product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
           }));
 
           return { ok: true, data: assignments };
@@ -23288,7 +23536,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return normalizedRewardIds.filter((rewardId) => conflictingRewardIds.has(rewardId));
   }
 
-  router.post('/orders', async (req, res) => {
+  // HTTP retries and WebSocket commands share the same submission lock and handler.
+  const orderSubmissionJobs = new Map();
+  async function submitOrder(req, res) {
+    const submissionId = String(req.headers['idempotency-key'] || '').trim().toLowerCase();
+    const key = submissionId ? `${helpers.getTenantId(req)}:${helpers.getStoreId(req)}:${submissionId}` : null;
+    if (!key) return createOrder(req, res);
+    const previous = orderSubmissionJobs.get(key);
+    let release;
+    const current = new Promise((resolve) => { release = resolve; });
+    orderSubmissionJobs.set(key, current);
+    try {
+      if (previous) await previous;
+      return await createOrder(req, res);
+    } finally {
+      release();
+      if (orderSubmissionJobs.get(key) === current) orderSubmissionJobs.delete(key);
+    }
+  }
+  router.post('/orders', submitOrder);
+  router.submitOrder = submitOrder;
+
+  async function createOrder(req, res) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
@@ -25658,7 +25927,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
-  });
+  }
 
 
   // ------------------------------
@@ -25828,5 +26097,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     settleReferralRewards: (params = {}) => settleReferralFirstPurchaseRewards(params?.queryable || db, params || {}),
   });
 
+  // Share the exact HTTP session validation with the customer WebSocket.
+  router.authenticateCustomer = (tenantId, token) => getCustomerByToken(tenantId, token, { refreshSession: false });
   return router;
 };

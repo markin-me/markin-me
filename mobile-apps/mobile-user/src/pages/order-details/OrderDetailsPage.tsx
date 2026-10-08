@@ -276,6 +276,7 @@ export function OrderDetailsPage() {
           setOrder(cachedOrder);
           setLoading(false);
         }
+        if (cachedOrder && 'customer_name' in cachedOrder) return;
         const nextOrder = await fetchCustomerOrder(token, orderId);
         if (isActive && !isSameCachedValue(nextOrder, cachedOrder)) setOrder(nextOrder);
       } catch {
@@ -532,7 +533,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   content: {
-    padding: theme.spacing.lg,
+    paddingVertical: theme.spacing.lg,
+    paddingHorizontal: 0,
     paddingBottom: 110,
   },
   discountBreakdownLabel: {
@@ -581,6 +583,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   header: {
+    paddingHorizontal: theme.spacing.lg,
     alignItems: 'center',
     flexDirection: 'row',
     marginBottom: theme.spacing.lg,
@@ -596,6 +599,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   infoBlock: {
+    paddingHorizontal: theme.spacing.lg,
     gap: theme.spacing.md,
     marginTop: theme.spacing.md,
   },
@@ -684,6 +688,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   orderHeader: {
+    paddingHorizontal: theme.spacing.lg,
     alignItems: 'center',
     borderBottomColor: theme.colors.border,
     borderBottomWidth: 1,
@@ -697,6 +702,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   progressBlock: {
+    paddingHorizontal: theme.spacing.lg,
     gap: theme.spacing.sm,
     marginTop: theme.spacing.md,
   },
@@ -752,6 +758,7 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.lg,
   },
   sectionTitle: {
+    paddingHorizontal: theme.spacing.lg,
     color: theme.colors.text,
     fontSize: 14,
     fontWeight: '900',

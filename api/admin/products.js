@@ -1785,6 +1785,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
             optionGroupsStamp,
             optionItemsStamp,
             optionItemExclusionsStamp,
+            optionItemSettingsStamp,
             combosStamp,
             comboSetBlocksStamp,
             comboBlocksStamp,
@@ -1813,6 +1814,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
             readTableStamp("prod_option_groups", "tenant_id=?", [tenantId]),
             readTableStamp("prod_option_items", "tenant_id=?", [tenantId]),
             readTableStamp("prod_option_item_exclusions", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_option_item_product_settings", "tenant_id=?", [tenantId]),
             readTableStamp("prod_combos", "tenant_id=?", [tenantId]),
             readTableStamp("prod_combo_set_blocks", "tenant_id=?", [tenantId]),
             readTableStamp("prod_combo_blocks", "tenant_id=?", [tenantId]),
@@ -1847,6 +1849,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
                 optionGroupsStamp,
                 optionItemsStamp,
                 optionItemExclusionsStamp,
+                optionItemSettingsStamp,
                 combosStamp,
                 comboSetBlocksStamp,
                 comboBlocksStamp,
@@ -3240,6 +3243,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         .map((item) => Number(item.target_product_id))
         .filter((productId) => Number.isFinite(productId) && productId > 0);
       const itemCategoryMap = new Map();
+      const itemVariantMap = new Map();
       if (itemProductIds.length) {
         const [categoryRows] = await db.query(
           `SELECT product_id, category_id
@@ -3255,9 +3259,43 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
           if (!itemCategoryMap.has(productId)) itemCategoryMap.set(productId, []);
           itemCategoryMap.get(productId).push(categoryId);
         });
+        const [variantRows] = await db.query(
+          `SELECT va.product_id, va.variant_group_id, va.default_value_index AS assignment_default_value_index,
+                  vg.title, vg.\`values\` AS variant_values, vg.default_value_index AS group_default_value_index,
+                  u.short_title AS unit_short_title
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.tenant_id=va.tenant_id AND vg.id=va.variant_group_id
+           LEFT JOIN prod_units u ON u.tenant_id=vg.tenant_id AND u.id=vg.unit_id
+           WHERE va.tenant_id=? AND va.is_active=1 AND vg.is_active=1
+             AND va.product_id IN (${itemProductIds.map(() => '?').join(',')})
+           ORDER BY va.sort_order ASC, va.id ASC`,
+          [tenantId, ...itemProductIds]
+        );
+        (Array.isArray(variantRows) ? variantRows : []).forEach((row) => {
+          const productId = Number(row.product_id);
+          if (!itemVariantMap.has(productId)) itemVariantMap.set(productId, []);
+          itemVariantMap.get(productId).push({
+            group_id: Number(row.variant_group_id),
+            title: row.title,
+            values: helpers.safeJsonArray(row.variant_values),
+            unit_short_title: row.unit_short_title || '',
+            default_value_index: row.assignment_default_value_index ?? row.group_default_value_index,
+          });
+        });
       }
       let excludedItemIds = new Set();
+      const productSettingMap = new Map();
       if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
+        const [settingRows] = await db.query(
+          `SELECT option_item_id, default_selected, variant_override_enabled,
+                  default_variant_group_id, default_variant_value_index
+           FROM prod_option_item_product_settings
+           WHERE tenant_id=? AND product_id=? AND group_id=?`,
+          [tenantId, scopedProductId, id]
+        );
+        (Array.isArray(settingRows) ? settingRows : []).forEach((row) => {
+          productSettingMap.set(Number(row.option_item_id), row);
+        });
         try {
           const [excludedRows] = await db.query(
             `SELECT option_item_id
@@ -3278,7 +3316,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       }
 
       const [assignments] = await db.query(
-        `SELECT a.*, p.name AS product_name
+        `SELECT a.*, p.name AS product_name, p.photos_json AS product_photos_json
          FROM prod_option_assignments a
          JOIN prod_products p ON p.tenant_id=a.tenant_id AND p.id=a.assign_id
          WHERE a.tenant_id=? AND a.group_id=? AND a.assign_type='product'
@@ -3288,8 +3326,24 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       const normalizedItems = items.map((item) => ({
         ...item,
+        product_photos_json: helpers.safeJsonArray(item.product_photos_json),
         category_ids: itemCategoryMap.get(Number(item.target_product_id)) || [],
+        available_variants: itemVariantMap.get(Number(item.target_product_id)) || [],
         is_excluded_for_product: excludedItemIds.has(Number(item.id)),
+        default_source: productSettingMap.get(Number(item.id))?.default_selected == null ? 'group' : 'product',
+        effective_default_selected: excludedItemIds.has(Number(item.id))
+          ? false
+          : Boolean(productSettingMap.get(Number(item.id))?.default_selected ?? item.default_selected),
+        effective_default_variant_group_id: productSettingMap.get(Number(item.id))?.variant_override_enabled
+          ? productSettingMap.get(Number(item.id)).default_variant_group_id
+          : item.default_variant_group_id,
+        effective_default_variant_value_index: productSettingMap.get(Number(item.id))?.variant_override_enabled
+          ? productSettingMap.get(Number(item.id)).default_variant_value_index
+          : item.default_variant_value_index,
+        product_default_selected: productSettingMap.get(Number(item.id))?.default_selected ?? null,
+        product_variant_override_enabled: Boolean(productSettingMap.get(Number(item.id))?.variant_override_enabled),
+        product_default_variant_group_id: productSettingMap.get(Number(item.id))?.default_variant_group_id ?? null,
+        product_default_variant_value_index: productSettingMap.get(Number(item.id))?.default_variant_value_index ?? null,
       }));
       const visibleItemIds = normalizedItems
         .filter((item) => item.is_excluded_for_product !== true)
@@ -3330,6 +3384,10 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
   const minSelect = helpers.numOrNull(group.min_select) ?? 0;
   const maxSelect = helpers.numOrNull(group.max_select);
+  if (!Number.isInteger(minSelect) || minSelect < 0 ||
+      (maxSelect != null && (!Number.isInteger(maxSelect) || maxSelect < minSelect))) {
+    return res.status(400).json({ ok: false, error: 'INVALID_GROUP_LIMITS' });
+  }
   const isActive = helpers.toBool(group.is_active, true) ? 1 : 0;
 
   // ✅ is_required только для single
@@ -3348,6 +3406,57 @@ router.post('/admin/options/group-bundle', async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+
+    const targetIds = items.map((item) => Number(item.target_product_id));
+    const assignIds = assignments.map((assignment) => Number(assignment.assign_id));
+    const allProductIds = [...new Set([...targetIds, ...assignIds])];
+    if (allProductIds.some((id) => !Number.isInteger(id) || id <= 0) ||
+        new Set(targetIds).size !== targetIds.length ||
+        new Set(assignIds).size !== assignIds.length) throw new Error('INVALID_PRODUCT_IDS');
+    if (allProductIds.length) {
+      const [productRows] = await conn.query(
+        `SELECT id FROM prod_products WHERE tenant_id=? AND id IN (${allProductIds.map(() => '?').join(',')})`,
+        [tenantId, ...allProductIds]
+      );
+      if (productRows.length !== allProductIds.length) throw new Error('INVALID_PRODUCT_IDS');
+    }
+    const selectedCount = items.filter((item) => helpers.toBool(item.default_selected, false)).length;
+    if ((selectionType === 'single' && selectedCount > 1) ||
+        (selectionType === 'multiple' && maxSelect != null && selectedCount > maxSelect)) {
+      throw new Error('INVALID_DEFAULT_COUNT');
+    }
+    const variantGroupIds = [...new Set(items.map((item) => Number(item.default_variant_group_id))
+      .filter((id) => Number.isInteger(id) && id > 0))];
+    const allowedVariants = new Map();
+    if (targetIds.length && variantGroupIds.length) {
+      const [variantRows] = await conn.query(
+        `SELECT va.product_id, va.variant_group_id, vg.\`values\` AS variant_values
+         FROM prod_variant_assignments va
+         JOIN prod_variant_groups vg ON vg.tenant_id=va.tenant_id AND vg.id=va.variant_group_id
+         WHERE va.tenant_id=? AND va.is_active=1 AND vg.is_active=1
+           AND va.product_id IN (${targetIds.map(() => '?').join(',')})
+           AND va.variant_group_id IN (${variantGroupIds.map(() => '?').join(',')})`,
+        [tenantId, ...targetIds, ...variantGroupIds]
+      );
+      variantRows.forEach((row) => allowedVariants.set(
+        `${row.product_id}:${row.variant_group_id}`, helpers.safeJsonArray(row.variant_values)
+      ));
+    }
+    for (const item of items) {
+      const qtyMin = helpers.numOrNull(item.qty_min) ?? 1;
+      const qtyMax = helpers.numOrNull(item.qty_max) ?? 1;
+      if (!Number.isInteger(qtyMin) || !Number.isInteger(qtyMax) || qtyMin < 1 || qtyMax < qtyMin) {
+        throw new Error('INVALID_ITEM_LIMITS');
+      }
+      const variantGroupId = item.default_variant_group_id == null ? null : Number(item.default_variant_group_id);
+      const variantIndex = item.default_variant_value_index == null ? null : Number(item.default_variant_value_index);
+      if ((variantGroupId == null) !== (variantIndex == null)) throw new Error('INVALID_DEFAULT_VARIANT');
+      if (variantGroupId != null) {
+        const values = allowedVariants.get(`${Number(item.target_product_id)}:${variantGroupId}`);
+        if (!allowVariants || !values || !Number.isInteger(variantIndex) ||
+            variantIndex < 0 || variantIndex >= values.length) throw new Error('INVALID_DEFAULT_VARIANT');
+      }
+    }
 
     const [result] = await conn.query(
       `INSERT INTO prod_option_groups
@@ -3381,13 +3490,17 @@ router.post('/admin/options/group-bundle', async (req, res) => {
           helpers.numOrNull(item.qty_min) ?? 1,
           helpers.numOrNull(item.qty_max) ?? 1,
           1,
-          helpers.numOrNull(item.sort_order) ?? idx * 10
+          helpers.numOrNull(item.sort_order) ?? idx * 10,
+          helpers.toBool(item.default_selected, false) ? 1 : 0,
+          item.default_variant_group_id == null ? null : Number(item.default_variant_group_id),
+          item.default_variant_value_index == null ? null : Number(item.default_variant_value_index)
         ];
       });
 
       await conn.query(
         `INSERT INTO prod_option_items
-         (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
+         (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order,
+          default_selected, default_variant_group_id, default_variant_value_index)
          VALUES ?`,
         [values]
       );
@@ -3422,8 +3535,8 @@ router.post('/admin/options/group-bundle', async (req, res) => {
     await conn.rollback();
     console.error(e);
 
-    if (String(e?.message) === 'PRICE_VALUE_REQUIRED') {
-      return res.status(400).json({ ok: false, error: 'PRICE_VALUE_REQUIRED' });
+    if (/^(INVALID_|PRICE_VALUE_REQUIRED)/.test(String(e?.message))) {
+      return res.status(400).json({ ok: false, error: e.message });
     }
 
     res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -3545,6 +3658,193 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   }
 });
 
+  router.put('/admin/options/groups/:id', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const groupId = Number(req.params.id);
+    const groupInput = req.body?.group;
+    const items = req.body?.items;
+    const assignments = req.body?.assignments;
+    if (!Number.isInteger(groupId) || groupId <= 0 || !groupInput ||
+        !Array.isArray(items) || !Array.isArray(assignments)) {
+      return res.status(400).json({ ok: false, error: 'INVALID_GROUP_DRAFT' });
+    }
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [[currentGroup]] = await conn.query(
+        'SELECT id FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
+        [tenantId, groupId]
+      );
+      if (!currentGroup) {
+        await conn.rollback();
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+      const title = helpers.strOrNull(groupInput.title);
+      const selectionType = groupInput.selection_type === 'multiple' ? 'multiple' : 'single';
+      const minSelect = helpers.numOrNull(groupInput.min_select) ?? 0;
+      const maxSelect = helpers.numOrNull(groupInput.max_select);
+      const allowVariants = helpers.toBool(groupInput.allow_variants, false) ? 1 : 0;
+      if (!title || !Number.isInteger(minSelect) || minSelect < 0 ||
+          (maxSelect != null && (!Number.isInteger(maxSelect) || maxSelect < minSelect))) {
+        throw new Error('INVALID_GROUP_LIMITS');
+      }
+      const targetIds = items.map((item) => Number(item.target_product_id));
+      const assignedIds = assignments.map((assignment) => Number(assignment.assign_id));
+      const allProductIds = [...new Set([...targetIds, ...assignedIds])];
+      if (allProductIds.some((id) => !Number.isInteger(id) || id <= 0) ||
+          new Set(targetIds).size !== targetIds.length ||
+          new Set(assignedIds).size !== assignedIds.length) {
+        throw new Error('INVALID_PRODUCT_IDS');
+      }
+      if (allProductIds.length) {
+        const [productRows] = await conn.query(
+          `SELECT id FROM prod_products WHERE tenant_id=? AND id IN (${allProductIds.map(() => '?').join(',')})`,
+          [tenantId, ...allProductIds]
+        );
+        if (productRows.length !== allProductIds.length) throw new Error('INVALID_PRODUCT_IDS');
+      }
+      const selectedCount = items.filter((item) => helpers.toBool(item.default_selected, false)).length;
+      if ((selectionType === 'single' && selectedCount > 1) ||
+          (selectionType === 'multiple' && maxSelect != null && selectedCount > maxSelect)) {
+        throw new Error('INVALID_DEFAULT_COUNT');
+      }
+      const requestedVariantGroups = [...new Set(items
+        .map((item) => Number(item.default_variant_group_id))
+        .filter((id) => Number.isInteger(id) && id > 0))];
+      const allowedVariants = new Map();
+      if (requestedVariantGroups.length && targetIds.length) {
+        const [variantRows] = await conn.query(
+          `SELECT va.product_id, va.variant_group_id, vg.\`values\` AS variant_values
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.tenant_id=va.tenant_id AND vg.id=va.variant_group_id
+           WHERE va.tenant_id=? AND va.is_active=1 AND vg.is_active=1
+             AND va.product_id IN (${targetIds.map(() => '?').join(',')})
+             AND va.variant_group_id IN (${requestedVariantGroups.map(() => '?').join(',')})`,
+          [tenantId, ...targetIds, ...requestedVariantGroups]
+        );
+        variantRows.forEach((row) => {
+          allowedVariants.set(`${row.product_id}:${row.variant_group_id}`, helpers.safeJsonArray(row.variant_values));
+        });
+      }
+      for (const item of items) {
+        const min = helpers.numOrNull(item.qty_min) ?? 1;
+        const max = helpers.numOrNull(item.qty_max) ?? 1;
+        if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || max < min) {
+          throw new Error('INVALID_ITEM_LIMITS');
+        }
+        if (item.price_mode === 'fixed' && helpers.numOrNull(item.price_value) == null) {
+          throw new Error('PRICE_VALUE_REQUIRED');
+        }
+        const variantGroupId = item.default_variant_group_id == null ? null : Number(item.default_variant_group_id);
+        const variantIndex = item.default_variant_value_index == null ? null : Number(item.default_variant_value_index);
+        if ((variantGroupId == null) !== (variantIndex == null)) throw new Error('INVALID_DEFAULT_VARIANT');
+        if (variantGroupId != null) {
+          const values = allowedVariants.get(`${Number(item.target_product_id)}:${variantGroupId}`);
+          if (!allowVariants || !values || !Number.isInteger(variantIndex) ||
+              variantIndex < 0 || variantIndex >= values.length) {
+            throw new Error('INVALID_DEFAULT_VARIANT');
+          }
+        }
+      }
+      await conn.query(
+        `UPDATE prod_option_groups
+         SET title=?, selection_type=?, min_select=?, max_select=?, is_active=?, is_required=?,
+             allow_variants=?, out_of_stock_action=?, sort_order=?
+         WHERE tenant_id=? AND id=?`,
+        [title, selectionType, minSelect, maxSelect,
+          helpers.toBool(groupInput.is_active, true) ? 1 : 0,
+          selectionType === 'single' && helpers.toBool(groupInput.is_required, true) ? 1 : 0,
+          allowVariants, helpers.numOrNull(groupInput.out_of_stock_action) ?? 1,
+          helpers.numOrNull(groupInput.sort_order) ?? 0, tenantId, groupId]
+      );
+      const [oldItems] = await conn.query(
+        "SELECT id, target_product_id FROM prod_option_items WHERE tenant_id=? AND group_id=? AND target_type='product' FOR UPDATE",
+        [tenantId, groupId]
+      );
+      const oldItemByProduct = new Map(oldItems.map((row) => [Number(row.target_product_id), Number(row.id)]));
+      for (const [index, item] of items.entries()) {
+        const productId = Number(item.target_product_id);
+        const priceMode = item.price_mode === 'fixed' ? 'fixed' : 'from_target';
+        const values = [priceMode, priceMode === 'fixed' ? Number(item.price_value) : 0,
+          helpers.numOrNull(item.qty_min) ?? 1, helpers.numOrNull(item.qty_max) ?? 1,
+          helpers.toBool(item.default_selected, false) ? 1 : 0,
+          item.default_variant_group_id == null ? null : Number(item.default_variant_group_id),
+          item.default_variant_value_index == null ? null : Number(item.default_variant_value_index),
+          helpers.numOrNull(item.sort_order) ?? index * 10];
+        const oldId = oldItemByProduct.get(productId);
+        if (oldId) {
+          await conn.query(
+            `UPDATE prod_option_items SET price_mode=?, price_value=?, qty_min=?, qty_max=?,
+               default_selected=?, default_variant_group_id=?, default_variant_value_index=?, sort_order=?
+             WHERE tenant_id=? AND id=?`,
+            [...values, tenantId, oldId]
+          );
+          oldItemByProduct.delete(productId);
+        } else {
+          await conn.query(
+            `INSERT INTO prod_option_items
+             (tenant_id, group_id, target_type, target_product_id, price_mode, price_value,
+              qty_min, qty_max, default_selected, default_variant_group_id,
+              default_variant_value_index, sort_order, is_active)
+             VALUES (?, ?, 'product', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            [tenantId, groupId, productId, ...values]
+          );
+        }
+      }
+      if (oldItemByProduct.size) {
+        const removedIds = [...oldItemByProduct.values()];
+        await conn.query(
+          `DELETE FROM prod_option_items WHERE tenant_id=? AND group_id=? AND id IN (${removedIds.map(() => '?').join(',')})`,
+          [tenantId, groupId, ...removedIds]
+        );
+      }
+      const [oldAssignments] = await conn.query(
+        "SELECT id, assign_id FROM prod_option_assignments WHERE tenant_id=? AND group_id=? AND assign_type='product' FOR UPDATE",
+        [tenantId, groupId]
+      );
+      const oldAssignmentByProduct = new Map(oldAssignments.map((row) => [Number(row.assign_id), Number(row.id)]));
+      for (const [index, assignment] of assignments.entries()) {
+        const productId = Number(assignment.assign_id);
+        const values = [helpers.numOrNull(assignment.priority) ?? 0,
+          helpers.numOrNull(assignment.sort_order) ?? index * 10,
+          helpers.numOrNull(assignment.out_of_stock_action) ?? 1];
+        const oldId = oldAssignmentByProduct.get(productId);
+        if (oldId) {
+          await conn.query(
+            'UPDATE prod_option_assignments SET priority=?, sort_order=?, out_of_stock_action=?, is_active=1 WHERE tenant_id=? AND id=?',
+            [...values, tenantId, oldId]
+          );
+          oldAssignmentByProduct.delete(productId);
+        } else {
+          await conn.query(
+            `INSERT INTO prod_option_assignments
+             (tenant_id, group_id, assign_type, assign_id, priority, sort_order, out_of_stock_action, is_active)
+             VALUES (?,?,'product',?,?,?,?,1)`,
+            [tenantId, groupId, productId, ...values]
+          );
+        }
+      }
+      if (oldAssignmentByProduct.size) {
+        const removedIds = [...oldAssignmentByProduct.values()];
+        await conn.query(
+          `DELETE FROM prod_option_assignments WHERE tenant_id=? AND group_id=? AND id IN (${removedIds.map(() => '?').join(',')})`,
+          [tenantId, groupId, ...removedIds]
+        );
+      }
+      await conn.commit();
+      return res.json({ ok: true });
+    } catch (error) {
+      await conn.rollback();
+      if (/^(INVALID_|PRICE_VALUE_REQUIRED)/.test(String(error?.message))) {
+        return res.status(400).json({ ok: false, error: error.message });
+      }
+      console.error(error);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
   async function tableExists(conn, tableName) {
     const [[row]] = await conn.query(
       `SELECT COUNT(*) AS cnt
@@ -3574,6 +3874,14 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       }
 
       // Каскадное удаление всех связей опции
+      await conn.query(
+        'DELETE FROM prod_option_item_product_settings WHERE tenant_id=? AND group_id=?',
+        [tenantId, id]
+      );
+      await conn.query(
+        'DELETE FROM prod_option_item_exclusions WHERE tenant_id=? AND group_id=?',
+        [tenantId, id]
+      );
       // Удаляем items
       await conn.query(
         'DELETE FROM prod_option_items WHERE tenant_id=? AND group_id=?',
@@ -4817,7 +5125,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const [rows] = await db.query(
-        `SELECT id, title, code, sort_order
+        `SELECT id, parent_id, title, code, icon, sort_order
          FROM prod_categories
          WHERE tenant_id=? AND is_active=1
          ORDER BY sort_order ASC, id ASC`,
@@ -4834,6 +5142,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const categoryId = helpers.numOrNull(req.query.category_id);
+      const categoryTreeId = helpers.numOrNull(req.query.category_tree_id);
       const categoryIds = String(req.query.category_ids || '')
         .split(',')
         .map(Number)
@@ -4880,7 +5189,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const params = [];
       let sql =
-        `SELECT p.id, p.name, p.price, p.old_price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active,
+        `SELECT DISTINCT p.id, p.name, p.price, p.old_price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active,
            (SELECT 1 FROM prod_variant_assignments va
             INNER JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
             WHERE va.tenant_id = p.tenant_id AND va.product_id = p.id AND va.is_active = 1 AND vg.is_active = 1 LIMIT 1) AS has_variants,
@@ -4892,7 +5201,14 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
               AND oa.is_active=1 AND og.is_active=1 LIMIT 1) AS has_options
          FROM prod_products p`;
 
-      if (categoryId) {
+      if (categoryTreeId) {
+        sql += ` JOIN prod_product_categories pc
+                 ON pc.tenant_id=p.tenant_id AND pc.product_id=p.id
+                 AND pc.category_id IN (
+                   SELECT id FROM prod_categories WHERE tenant_id=? AND (id=? OR parent_id=?)
+                 )`;
+        params.push(tenantId, categoryTreeId, categoryTreeId);
+      } else if (categoryId) {
         sql += ` JOIN prod_product_categories pc
                  ON pc.tenant_id=p.tenant_id AND pc.product_id=p.id AND pc.category_id=?`;
         params.push(categoryId);
@@ -4906,7 +5222,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         params.push(`%${q}%`);
       }
 
-      sql += ` ORDER BY p.name ASC, p.id ASC LIMIT 200`;
+      const offset = Number(req.query.offset || 0);
+      if (!Number.isSafeInteger(offset) || offset < 0) {
+        return res.status(400).json({ ok: false, error: 'INVALID_OFFSET' });
+      }
+      sql += ` ORDER BY p.name ASC, p.id ASC LIMIT 200 OFFSET ?`;
+      params.push(offset);
 
       const [rows] = await db.query(sql, params);
       
@@ -4916,6 +5237,34 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         r.has_variants = r.has_variants != null ? 1 : 0;
         r.has_changeable_composition = r.has_changeable_composition != null ? 1 : 0;
         r.has_options = r.has_options != null ? 1 : 0;
+      }
+
+      if (req.query.include_option_variants === '1' && rows.length) {
+        const productIds = rows.map((row) => Number(row.id));
+        const [variantRows] = await db.query(
+          `SELECT va.product_id, va.variant_group_id, va.default_value_index AS assignment_default_value_index,
+                  vg.\`values\` AS variant_values, vg.default_value_index AS group_default_value_index,
+                  u.short_title AS unit_short_title
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.tenant_id=va.tenant_id AND vg.id=va.variant_group_id
+           LEFT JOIN prod_units u ON u.tenant_id=vg.tenant_id AND u.id=vg.unit_id
+           WHERE va.tenant_id=? AND va.is_active=1 AND vg.is_active=1
+             AND va.product_id IN (${productIds.map(() => '?').join(',')})
+           ORDER BY va.product_id ASC, va.sort_order ASC, va.id ASC`,
+          [tenantId, ...productIds]
+        );
+        const variantsByProduct = new Map();
+        variantRows.forEach((row) => {
+          const productId = Number(row.product_id);
+          if (!variantsByProduct.has(productId)) variantsByProduct.set(productId, []);
+          variantsByProduct.get(productId).push({
+            group_id: Number(row.variant_group_id),
+            values: helpers.safeJsonArray(row.variant_values),
+            unit_short_title: row.unit_short_title || '',
+            default_value_index: row.assignment_default_value_index ?? row.group_default_value_index,
+          });
+        });
+        rows.forEach((row) => { row.available_variants = variantsByProduct.get(Number(row.id)) || []; });
       }
       
       res.json({ ok: true, data: rows });
@@ -5331,14 +5680,58 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!Number.isFinite(productId) || productId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const [rows] = await db.query(
-        `SELECT a.id AS assignment_id, a.group_id, a.priority, a.sort_order, a.is_active, a.out_of_stock_action,
-                g.title, g.selection_type, g.min_select, g.max_select
+        `SELECT a.id AS assignment_id, a.group_id, a.priority, a.sort_order, a.product_display_order, a.is_active, a.out_of_stock_action,
+                g.title, g.selection_type, g.min_select, g.max_select, g.sort_order AS group_sort_order
          FROM prod_option_assignments a
          JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
          WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=?
-         ORDER BY a.sort_order ASC, a.id ASC`,
+         ORDER BY (a.product_display_order IS NULL) ASC, a.product_display_order ASC, g.sort_order ASC, g.id ASC`,
         [tenantId, productId]
       );
+
+      if (rows.length) {
+        const groupIds = rows.map((row) => Number(row.group_id));
+        const [defaultRows] = await db.query(
+          `SELECT i.group_id, i.id AS option_item_id, i.default_selected AS group_default_selected,
+                  i.default_variant_group_id AS group_default_variant_group_id,
+                  i.default_variant_value_index AS group_default_variant_value_index,
+                  s.default_selected AS product_default_selected,
+                  s.variant_override_enabled, s.default_variant_group_id AS product_default_variant_group_id,
+                  s.default_variant_value_index AS product_default_variant_value_index,
+                  x.id AS exclusion_id
+           FROM prod_option_items i
+           LEFT JOIN prod_option_item_product_settings s
+             ON s.tenant_id=i.tenant_id AND s.group_id=i.group_id
+            AND s.option_item_id=i.id AND s.product_id=?
+           LEFT JOIN prod_option_item_exclusions x
+             ON x.tenant_id=i.tenant_id AND x.group_id=i.group_id
+            AND x.option_item_id=i.id AND x.product_id=?
+           WHERE i.tenant_id=? AND i.group_id IN (${groupIds.map(() => '?').join(',')})
+             AND i.target_type='product'
+           ORDER BY i.group_id, i.sort_order, i.id`,
+          [productId, productId, tenantId, ...groupIds]
+        );
+        const defaultsByGroup = new Map();
+        defaultRows.forEach((item) => {
+          const groupId = Number(item.group_id);
+          if (!defaultsByGroup.has(groupId)) defaultsByGroup.set(groupId, []);
+          defaultsByGroup.get(groupId).push({
+            option_item_id: Number(item.option_item_id),
+            group_default_selected: Boolean(item.group_default_selected),
+            product_default_selected: item.product_default_selected == null
+              ? null : Boolean(item.product_default_selected),
+            default_source: item.product_default_selected == null ? 'group' : 'product',
+            effective_default_selected: !item.exclusion_id &&
+              Boolean(item.product_default_selected ?? item.group_default_selected),
+            group_default_variant_group_id: item.group_default_variant_group_id,
+            group_default_variant_value_index: item.group_default_variant_value_index,
+            product_variant_override_enabled: Boolean(item.variant_override_enabled),
+            product_default_variant_group_id: item.product_default_variant_group_id,
+            product_default_variant_value_index: item.product_default_variant_value_index,
+          });
+        });
+        rows.forEach((row) => { row.item_defaults = defaultsByGroup.get(Number(row.group_id)) || []; });
+      }
 
       res.json({ ok: true, data: rows });
     } catch (e) {
@@ -5406,6 +5799,55 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     }
   });
 
+  router.put('/admin/products/:id/option-assignments/order', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const productId = Number(req.params.id);
+    const reset = req.body?.reset === true;
+    const groupIds = req.body?.group_ids;
+    if (!Number.isInteger(productId) || productId <= 0 ||
+        (!reset && (!Array.isArray(groupIds) || groupIds.some((id) => !Number.isInteger(id) || id <= 0) ||
+          new Set(groupIds).size !== groupIds.length))) {
+      return res.status(400).json({ ok: false, error: 'INVALID_OPTION_ORDER' });
+    }
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows] = await conn.query(
+        `SELECT id, group_id FROM prod_option_assignments
+         WHERE tenant_id=? AND assign_type='product' AND assign_id=? AND is_active=1 FOR UPDATE`,
+        [tenantId, productId]
+      );
+      if (!reset && (rows.length !== groupIds.length ||
+          rows.some((row) => !groupIds.includes(Number(row.group_id))))) {
+        await conn.rollback();
+        return res.status(400).json({ ok: false, error: 'INVALID_OPTION_ORDER' });
+      }
+      if (reset) {
+        await conn.query(
+          `UPDATE prod_option_assignments SET product_display_order=NULL
+           WHERE tenant_id=? AND assign_type='product' AND assign_id=? AND is_active=1`,
+          [tenantId, productId]
+        );
+      } else {
+        const rowByGroupId = new Map(rows.map((row) => [Number(row.group_id), Number(row.id)]));
+        for (const [index, groupId] of groupIds.entries()) {
+          await conn.query(
+            'UPDATE prod_option_assignments SET product_display_order=? WHERE tenant_id=? AND id=?',
+            [(index + 1) * 10, tenantId, rowByGroupId.get(groupId)]
+          );
+        }
+      }
+      await conn.commit();
+      res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
   async function disableProductAssignment(req, res) {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -5447,6 +5889,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         .map((itemId) => Number(itemId))
         .filter((itemId) => Number.isFinite(itemId) && itemId > 0)
     ));
+    const itemSettings = Array.isArray(req.body?.item_settings) ? req.body.item_settings : null;
 
     const conn = await db.getConnection();
     try {
@@ -5455,7 +5898,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const [assignmentRows] = await conn.query(
         `SELECT id
          FROM prod_option_assignments
-         WHERE tenant_id=? AND assign_type='product' AND assign_id=? AND group_id=?
+         WHERE tenant_id=? AND assign_type='product' AND assign_id=? AND group_id=? AND is_active=1
          LIMIT 1`,
         [tenantId, productId, groupId]
       );
@@ -5464,8 +5907,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_FOUND' });
       }
 
+      const [[group]] = await conn.query(
+        'SELECT selection_type, max_select, allow_variants FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, groupId]
+      );
       const [groupItemRows] = await conn.query(
-        `SELECT id
+        `SELECT id, target_product_id, default_selected
          FROM prod_option_items
          WHERE tenant_id=? AND group_id=? AND target_type='product'`,
         [tenantId, groupId]
@@ -5481,6 +5928,71 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'INVALID_ITEM_IDS', item_ids: invalidItemIds });
       }
 
+      if (itemSettings) {
+        const itemById = new Map(groupItemRows.map((row) => [Number(row.id), row]));
+        const settingIds = itemSettings.map((setting) => Number(setting.option_item_id));
+        if (new Set(settingIds).size !== settingIds.length ||
+            settingIds.some((itemId) => !itemById.has(itemId))) {
+          await conn.rollback();
+          return res.status(400).json({ ok: false, error: 'INVALID_ITEM_IDS' });
+        }
+        const settingsById = new Map(itemSettings.map((setting) => [Number(setting.option_item_id), setting]));
+        const selectedCount = groupItemRows.filter((item) => {
+          if (excludedItemIds.includes(Number(item.id))) return false;
+          const own = settingsById.get(Number(item.id))?.default_selected;
+          return own == null ? Boolean(item.default_selected) : helpers.toBool(own, false);
+        }).length;
+        if ((group?.selection_type === 'single' && selectedCount > 1) ||
+            (group?.selection_type === 'multiple' && group.max_select != null && selectedCount > Number(group.max_select))) {
+          await conn.rollback();
+          return res.status(400).json({ ok: false, error: 'INVALID_DEFAULT_COUNT' });
+        }
+        const variantGroupIds = [...new Set(itemSettings.map((setting) => Number(setting.default_variant_group_id))
+          .filter((id) => Number.isInteger(id) && id > 0))];
+        const allowedVariants = new Map();
+        if (variantGroupIds.length) {
+          const productIds = [...new Set(groupItemRows.map((item) => Number(item.target_product_id)))];
+          const [variantRows] = await conn.query(
+            `SELECT va.product_id, va.variant_group_id, vg.\`values\` AS variant_values
+             FROM prod_variant_assignments va
+             JOIN prod_variant_groups vg ON vg.tenant_id=va.tenant_id AND vg.id=va.variant_group_id
+             WHERE va.tenant_id=? AND va.is_active=1 AND vg.is_active=1
+               AND va.product_id IN (${productIds.map(() => '?').join(',')})
+               AND va.variant_group_id IN (${variantGroupIds.map(() => '?').join(',')})`,
+            [tenantId, ...productIds, ...variantGroupIds]
+          );
+          variantRows.forEach((row) => allowedVariants.set(
+            `${row.product_id}:${row.variant_group_id}`, helpers.safeJsonArray(row.variant_values)
+          ));
+        }
+        for (const setting of itemSettings) {
+          if (setting.default_selected != null && ![0, 1, false, true].includes(setting.default_selected)) {
+            await conn.rollback();
+            return res.status(400).json({ ok: false, error: 'INVALID_DEFAULT_SELECTED' });
+          }
+          const hasVariantOverride = helpers.toBool(setting.variant_override_enabled, false);
+          const variantGroupId = setting.default_variant_group_id == null ? null : Number(setting.default_variant_group_id);
+          const variantIndex = setting.default_variant_value_index == null ? null : Number(setting.default_variant_value_index);
+          if (!hasVariantOverride && (variantGroupId != null || variantIndex != null)) {
+            await conn.rollback();
+            return res.status(400).json({ ok: false, error: 'INVALID_DEFAULT_VARIANT' });
+          }
+          if ((variantGroupId == null) !== (variantIndex == null)) {
+            await conn.rollback();
+            return res.status(400).json({ ok: false, error: 'INVALID_DEFAULT_VARIANT' });
+          }
+          if (variantGroupId != null) {
+            const targetProductId = Number(itemById.get(Number(setting.option_item_id)).target_product_id);
+            const values = allowedVariants.get(`${targetProductId}:${variantGroupId}`);
+            if (!group?.allow_variants || !values || !Number.isInteger(variantIndex) ||
+                variantIndex < 0 || variantIndex >= values.length) {
+              await conn.rollback();
+              return res.status(400).json({ ok: false, error: 'INVALID_DEFAULT_VARIANT' });
+            }
+          }
+        }
+      }
+
       await conn.query(
         `DELETE FROM prod_option_item_exclusions
          WHERE tenant_id=? AND product_id=? AND group_id=?`,
@@ -5494,6 +6006,31 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
            VALUES ${excludedItemIds.map(() => '(?,?,?,?)').join(',')}`,
           excludedItemIds.flatMap((itemId) => [tenantId, productId, groupId, itemId])
         );
+      }
+
+      if (itemSettings) {
+        await conn.query(
+          'DELETE FROM prod_option_item_product_settings WHERE tenant_id=? AND product_id=? AND group_id=?',
+          [tenantId, productId, groupId]
+        );
+        const savedSettings = itemSettings.filter((setting) =>
+          setting.default_selected != null || helpers.toBool(setting.variant_override_enabled, false)
+        );
+        if (savedSettings.length) {
+          await conn.query(
+            `INSERT INTO prod_option_item_product_settings
+             (tenant_id, product_id, group_id, option_item_id, default_selected,
+              variant_override_enabled, default_variant_group_id, default_variant_value_index)
+             VALUES ?`,
+            [savedSettings.map((setting) => [
+              tenantId, productId, groupId, Number(setting.option_item_id),
+              setting.default_selected == null ? null : (helpers.toBool(setting.default_selected, false) ? 1 : 0),
+              helpers.toBool(setting.variant_override_enabled, false) ? 1 : 0,
+              setting.default_variant_group_id == null ? null : Number(setting.default_variant_group_id),
+              setting.default_variant_value_index == null ? null : Number(setting.default_variant_value_index),
+            ])]
+          );
+        }
       }
 
       await conn.commit();

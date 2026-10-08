@@ -1,4 +1,5 @@
 import {
+  type ComponentProps,
   useCallback,
   useEffect,
   useMemo,
@@ -10,13 +11,11 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   ActivityIndicator,
-  Alert,
-  Animated,
   FlatList,
   Image,
-  PanResponder,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
@@ -41,19 +40,7 @@ import { Screen } from '../../shared/ui/Screen';
 import { AppText as Text } from '../../shared/ui';
 
 const PAGE_SIZE = 10;
-const SWIPE_REVEAL_WIDTH = 68;
-const MAX_ORDER_PHOTOS = 8;
-
-function formatOrderDate(value: unknown) {
-  const date = new Date(String(value || ''));
-  if (!Number.isFinite(date.getTime())) return '—';
-  return date.toLocaleString('ru-RU', {
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    month: '2-digit',
-  });
-}
+const MAX_ORDER_PHOTOS = 40;
 
 function formatMoney(value: unknown) {
   const number = Number(value || 0);
@@ -62,6 +49,9 @@ function formatMoney(value: unknown) {
 }
 
 function formatOrderAddress(order: CustomerOrder) {
+  if (String(order.method_code || '').toLowerCase() !== 'delivery') {
+    return String(order.pickup_store_address || '').trim();
+  }
   const street = String(order.delivery_address_street || order.address_street || '').trim();
   const house = String(order.delivery_address_house || order.address_house || '').trim();
   const apartment = String(order.delivery_address_apartment || order.address_apartment || '').trim();
@@ -110,120 +100,72 @@ function getOrderTotal(order: CustomerOrder) {
   return order.total_price ?? order.total ?? order.total_amount ?? 0;
 }
 
-function getOrderSignature(order: CustomerOrder) {
-  const id = Number(order.id || 0);
-  const itemsCount = Array.isArray(order.items) ? order.items.length : 0;
-  return `${id}:${order.updated_at || order.created_at || ''}:${order.status_id || ''}:${order.status_title || ''}:${getOrderTotal(order)}:${itemsCount}`;
-}
-
-function OrderCard({
-  onOpen,
-  onRepeat,
-  order,
-}: {
+function OrderCard({ onOpen, order }: {
   onOpen: (order: CustomerOrder) => void;
-  onRepeat: (order: CustomerOrder) => void;
   order: CustomerOrder;
 }) {
-  const translateX = useRef(new Animated.Value(0)).current;
-  const currentX = useRef(0);
-  const photos = useMemo(() => collectOrderPhotos(order.items), [order]);
+  const photos = useMemo(() => collectOrderPhotos(order.items), [order.items]);
   const address = formatOrderAddress(order);
-  const canSwipe = Array.isArray(order.items) && order.items.length > 0;
-
-  const closeSwipe = useCallback(() => {
-    currentX.current = 0;
-    Animated.timing(translateX, {
-      duration: 220,
-      toValue: 0,
-      useNativeDriver: true,
-    }).start();
-  }, [translateX]);
-
-  const openSwipe = useCallback(() => {
-    currentX.current = SWIPE_REVEAL_WIDTH;
-    Animated.timing(translateX, {
-      duration: 220,
-      toValue: SWIPE_REVEAL_WIDTH,
-      useNativeDriver: true,
-    }).start();
-  }, [translateX]);
-
-  const panResponder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_event, gesture) => canSwipe && Math.abs(gesture.dx) > 8 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
-    onPanResponderMove: (_event, gesture) => {
-      if (!canSwipe) return;
-      const nextX = Math.max(0, Math.min(SWIPE_REVEAL_WIDTH + 16, currentX.current + gesture.dx));
-      translateX.setValue(nextX);
-    },
-    onPanResponderRelease: (_event, gesture) => {
-      if (!canSwipe) return;
-      const nextX = Math.max(0, Math.min(SWIPE_REVEAL_WIDTH + 16, currentX.current + gesture.dx));
-      if (nextX > SWIPE_REVEAL_WIDTH * 0.45) {
-        openSwipe();
-      } else {
-        closeSwipe();
-      }
-    },
-    onPanResponderTerminate: closeSwipe,
-  }), [canSwipe, closeSwipe, openSwipe, translateX]);
-
-  const handleOpen = () => {
-    if (currentX.current > 0) {
-      closeSwipe();
-      return;
-    }
-    onOpen(order);
+  const methodCode = String(order.method_code || '').toLowerCase();
+  const delivery = methodCode === 'delivery';
+  const method = ({ delivery: 'Доставка', pickup: 'Самовывоз', dine_in: 'В зале', takeaway: 'С собой' } as Record<string, string>)[methodCode] || String(order.method_title || '');
+  const timeCode = String(order.time_option_code || '').toLowerCase();
+  const timeLabel = ({ asap: 'Быстрее', urgent: 'Быстрее', at_time: 'Ко времени', on_date: 'На дату' } as Record<string, string>)[timeCode] || String(order.time_option_title || '');
+  // Scheduled time is a store-local wall time, without a device timezone conversion.
+  const scheduled = String(order.scheduled_at || '');
+  const date = scheduled.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const time = scheduled.match(/(?:[ T]|^)(\d{2}:\d{2})/);
+  const timing = [timeLabel, date && timeCode === 'on_date' ? `${date[3]}.${date[2]}` : '', time && ['at_time', 'on_date'].includes(timeCode) ? time[1] : ''].filter(Boolean).join(' · ');
+  const rawStatus = String(order.status_code || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const stages: Record<string, string> = {
+    new: 'accepted', accepted: 'accepted', cooking: 'cooking', preparing: 'cooking',
+    ready: 'packed', packed: 'packed', on_the_way: 'courier', in_transit: 'courier',
+    courier: 'courier', delivery: 'courier', delivering: 'courier', delivered: 'completed',
+    received: 'completed', completed: 'completed', done: 'completed', delivery_done: 'completed',
+    canceled: 'cancelled', cancelled: 'cancelled',
   };
-
-  const handleRepeat = () => {
-    closeSwipe();
-    onRepeat(order);
-  };
-
+  let stage = stages[rawStatus] || rawStatus;
+  if (delivery && stage === 'packed') stage = 'cooking';
+  if (!delivery && stage === 'courier') stage = 'packed';
+  const cancelled = stage === 'cancelled';
+  const final = cancelled || stage === 'completed' || Number(order.status_is_final) === 1;
+  const route: { code: string; title: string; icon: ComponentProps<typeof Ionicons>['name'] }[] = [
+    { code: 'accepted', title: 'Принят', icon: 'checkmark' },
+    { code: 'cooking', title: 'Готовится', icon: 'flame' },
+    { code: delivery ? 'courier' : 'packed', title: delivery ? 'В пути' : 'Собран', icon: delivery ? 'car' : 'cube' },
+    { code: 'completed', title: delivery ? 'Доставлен' : methodCode === 'dine_in' ? 'Выполнен' : 'Получен', icon: 'checkmark' },
+  ];
+  const stageIndex = route.findIndex((step) => step.code === stage);
+  const statusLabel = cancelled ? 'Отменён' : route[stageIndex]?.title || getCustomerOrderStatusTitle(order);
   return (
-    <View style={styles.swipeContainer}>
-      {canSwipe ? (
-        <Pressable onPress={handleRepeat} style={styles.repeatAction}>
-          <Ionicons name="refresh" color={theme.colors.muted} size={22} />
-        </Pressable>
-      ) : null}
-      <Animated.View
-        style={[styles.swipeContent, { transform: [{ translateX }] }]}
-        {...(canSwipe ? panResponder.panHandlers : {})}
-      >
-        <Pressable onPress={handleOpen} style={styles.orderCard}>
-          <View style={styles.orderHead}>
-            <Text style={styles.orderTitle}>Заказ #{order.id || ''}</Text>
-            <Text style={styles.orderDate}>{formatOrderDate(order.created_at)}</Text>
+    <Pressable onPress={() => onOpen(order)} style={styles.orderCard}>
+      <Text style={styles.orderTitle}>#{String(order.order_number || order.public_number || order.id || '')} · {method}{timing ? ` · ${timing}` : ''}</Text>
+      {address ? <View style={styles.orderAddress}>
+        <Ionicons name="location" color={theme.colors.muted} size={13} />
+        <Text style={styles.orderAddressText}>{address}</Text>
+      </View> : null}
+      {photos.length ? <ScrollView style={styles.photosScroll} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photosRow}>
+        {photos.map((src, index) => <View key={`${src}-${index}`} style={styles.photoWrap}>
+          <Image source={{ uri: src }} style={styles.photo} />
+        </View>)}
+      </ScrollView> : null}
+      {!final ? <View style={styles.progressRoute} accessibilityLabel={statusLabel}>
+        {route.map((step, index) => <View key={step.code} style={styles.progressStep}>
+          {index > 0 ? <View style={[styles.progressLine, styles.progressLineLeft]} /> : null}
+          {index < route.length - 1 ? <View style={[styles.progressLine, styles.progressLineRight]} /> : null}
+          <View style={[styles.progressNode, index === stageIndex && styles.progressNodeCurrent, index < stageIndex && styles.progressNodeCompleted]}>
+            <Ionicons name={index < stageIndex ? 'checkmark' : step.icon} size={17} color={index === stageIndex ? theme.colors.primaryText : theme.colors.muted} />
           </View>
-
-          <View style={[styles.orderAddress, !address ? styles.orderAddressEmpty : null]}>
-            <Ionicons name="location" color={theme.colors.muted} size={13} />
-            <Text numberOfLines={1} style={styles.orderAddressText}>{address || ' '}</Text>
-          </View>
-
-          {photos.length ? (
-            <View style={styles.photosRow}>
-              {photos.map((src, index) => (
-                <View key={`${src}-${index}`} style={styles.photoWrap}>
-                  <Image source={{ uri: src }} style={styles.photo} />
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          <View style={styles.orderActions}>
-            <View style={[styles.orderPill, styles.statusPill]}>
-              <Text numberOfLines={1} style={styles.statusText}>{getCustomerOrderStatusTitle(order) || '—'}</Text>
-            </View>
-            <View style={[styles.orderPill, styles.pricePill]}>
-              <Text numberOfLines={1} style={styles.priceText}>{formatMoney(getOrderTotal(order))}</Text>
-            </View>
-          </View>
-        </Pressable>
-      </Animated.View>
-    </View>
+        </View>)}
+      </View> : null}
+      <View style={styles.orderActions}>
+        {final ? <View style={styles.finalStatus}>
+          <Ionicons name={cancelled ? 'close-circle' : 'checkmark-circle'} size={19} color={cancelled ? theme.colors.danger : '#16a34a'} />
+          <Text style={[styles.statusText, { color: cancelled ? theme.colors.danger : '#16a34a' }]}>{statusLabel}</Text>
+        </View> : null}
+        <View style={[styles.orderPill, styles.pricePill]}><Text style={styles.priceText}>{formatMoney(getOrderTotal(order))}</Text></View>
+      </View>
+    </Pressable>
   );
 }
 
@@ -278,7 +220,7 @@ export function OrdersPage() {
     if (!Number.isFinite(nextCompletedCount)) setCompletedCount(nextCompleted.data.length);
   }, [updateSummary]);
 
-  const loadOrders = useCallback(async (nextToken: string, options: { reset: boolean }) => {
+  const loadOrders = useCallback(async (nextToken: string, options: { reset: boolean; preferCache?: boolean }) => {
     if (!nextToken || tokenRef.current !== nextToken) return;
     if (options.reset) {
       setErrorText('');
@@ -296,6 +238,7 @@ export function OrdersPage() {
         setLoading(false);
         setRefreshing(false);
       }
+      if (options.preferCache && cachedActivePayload && cachedCompletedPayload) return;
       let networkFailed = false;
       await Promise.all([
         fetchCustomerOrders(nextToken, { limit: PAGE_SIZE, offset: 0, statusIsFinal: 0 }).catch(() => {
@@ -330,7 +273,7 @@ export function OrdersPage() {
       tokenRef.current = nextToken;
       setToken(nextToken);
       if (nextToken) {
-        void loadOrders(nextToken, { reset: true });
+        void loadOrders(nextToken, { reset: true, preferCache: true });
       } else {
         applyCachedOrders(null, null);
         setLoading(false);
@@ -355,8 +298,8 @@ export function OrdersPage() {
       if (isActive && (activePayload || completedPayload)) {
         applyCachedOrders(activePayload, completedPayload);
       }
+      if (isActive && (!activePayload || !completedPayload)) void loadOrders(token, { reset: true, preferCache: true });
     });
-    void loadOrders(token, { reset: false });
     return () => {
       isActive = false;
     };
@@ -439,10 +382,6 @@ export function OrdersPage() {
     navigation.navigate(routes.orderDetails, { orderId });
   }, [navigation]);
 
-  const repeatOrder = useCallback((_order: CustomerOrder) => {
-    Alert.alert('Повтор заказа', 'Повтор заказа будет доступен после подключения корзины.');
-  }, []);
-
   const header = (
     <View>
       <Text style={styles.screenTitle}>Мои заказы</Text>
@@ -451,7 +390,7 @@ export function OrdersPage() {
       {activeOrders.length ? (
         <View style={styles.sectionList}>
           {activeOrders.map((order) => (
-            <OrderCard key={`${order.id || ''}-${getOrderSignature(order)}`} onOpen={openOrder} onRepeat={repeatOrder} order={order} />
+            <OrderCard key={String(order.id || '')} onOpen={openOrder} order={order} />
           ))}
           {activeHasMore ? (
             <Pressable disabled={loadingMoreActive} onPress={loadMoreActive} style={styles.moreButton}>
@@ -496,14 +435,14 @@ export function OrdersPage() {
       <FlatList
         contentContainerStyle={styles.content}
         data={completedOrders}
-        keyExtractor={(item) => `${item.id || ''}-${getOrderSignature(item)}`}
+        keyExtractor={(item) => String(item.id || '')}
         ListEmptyComponent={<Text style={styles.emptyText}>Завершенных заказов пока нет.</Text>}
         ListFooterComponent={loadingMore ? <ActivityIndicator color={theme.colors.accent} style={styles.footerLoader} /> : null}
         ListHeaderComponent={header}
         onEndReached={loadMoreCompleted}
         onEndReachedThreshold={0.35}
         refreshControl={<RefreshControl refreshing={refreshing} tintColor={theme.colors.accent} onRefresh={refreshOrders} />}
-        renderItem={({ item }) => <OrderCard onOpen={openOrder} onRepeat={repeatOrder} order={item} />}
+        renderItem={({ item }) => <OrderCard onOpen={openOrder} order={item} />}
         showsVerticalScrollIndicator={false}
       />
     </Screen>
@@ -520,13 +459,23 @@ function OrdersSectionHeader({ count, title }: { count: number; title: string })
 }
 
 const styles = StyleSheet.create({
+  progressRoute: { flexDirection: 'row', marginVertical: 8 },
+  progressStep: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  progressLine: { position: 'absolute', top: 16, height: 2, backgroundColor: theme.colors.border, width: '50%' },
+  progressLineLeft: { left: 0 },
+  progressLineRight: { right: 0 },
+  progressNode: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.card, alignItems: 'center', justifyContent: 'center' },
+  progressNodeCurrent: { backgroundColor: theme.colors.accent, borderColor: theme.colors.accent },
+  progressNodeCompleted: { opacity: 0.5 },
+  finalStatus: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 5 },
   center: {
     alignItems: 'center',
     flex: 1,
     justifyContent: 'center',
   },
   content: {
-    padding: theme.spacing.lg,
+    paddingVertical: theme.spacing.lg,
+    paddingHorizontal: 0,
     paddingBottom: theme.spacing.xl,
   },
   emptyText: {
@@ -571,9 +520,7 @@ const styles = StyleSheet.create({
     gap: 5,
     minHeight: 15,
   },
-  orderAddressEmpty: {
-    opacity: 0,
-  },
+
   orderAddressText: {
     color: theme.colors.text,
     flex: 1,
@@ -590,23 +537,14 @@ const styles = StyleSheet.create({
     minHeight: 136,
     overflow: 'hidden',
     padding: theme.spacing.md,
+    marginBottom: theme.spacing.md,
     shadowColor: '#141d30',
     shadowOffset: { height: 14, width: 0 },
     shadowOpacity: 0.16,
     shadowRadius: 28,
   },
-  orderDate: {
-    color: theme.colors.muted,
-    flexShrink: 0,
-    fontSize: 13,
-    lineHeight: 15,
-  },
-  orderHead: {
-    alignItems: 'baseline',
-    flexDirection: 'row',
-    gap: theme.spacing.sm,
-    justifyContent: 'space-between',
-  },
+
+
   orderPill: {
     alignItems: 'center',
     borderRadius: theme.radius.pill,
@@ -622,15 +560,15 @@ const styles = StyleSheet.create({
   },
   orderTitle: {
     color: theme.colors.text,
-    flex: 1,
     fontSize: 15,
     fontWeight: '900',
-    lineHeight: 18,
+    lineHeight: 21,
   },
   photo: {
     height: '100%',
     width: '100%',
   },
+  photosScroll: { flexGrow: 0, height: 48 },
   photosRow: {
     flexDirection: 'row',
     gap: 5,
@@ -659,17 +597,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     lineHeight: 15,
   },
-  repeatAction: {
-    alignItems: 'center',
-    bottom: 0,
-    justifyContent: 'center',
-    left: 0,
-    position: 'absolute',
-    top: 0,
-    width: SWIPE_REVEAL_WIDTH,
-    zIndex: 1,
-  },
+
   screenTitle: {
+    paddingHorizontal: theme.spacing.lg,
     color: theme.colors.text,
     fontSize: 24,
     fontWeight: '900',
@@ -696,30 +626,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
-  statusPill: {
-    backgroundColor: theme.colors.mutedBackground,
-    borderColor: theme.colors.border,
-  },
+
   statusText: {
     color: theme.colors.text,
     fontSize: 13,
     fontWeight: '900',
     lineHeight: 15,
   },
-  swipeContainer: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: 14,
-    marginBottom: theme.spacing.md,
-    overflow: 'hidden',
-    shadowColor: '#0f172a',
-    shadowOffset: { height: 8, width: 0 },
-    shadowOpacity: 0.06,
-    shadowRadius: 22,
-  },
-  swipeContent: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: 14,
-    position: 'relative',
-    zIndex: 2,
-  },
+
+
 });

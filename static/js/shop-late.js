@@ -5507,9 +5507,19 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   const isReadOnlyView = readOnly === true;
   const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
   const productId = Number(product?.id || 0);
-  const effectiveDefaultConfig = !editingItem && !prefillItem && typeof getProductPassport === "function"
+  let effectiveDefaultConfig = !editingItem && !prefillItem && typeof getProductPassport === "function"
     ? getProductPassport(productId)?.defaultConfig
     : null;
+  if (!editingItem && !prefillItem && !effectiveDefaultConfig && productId > 0) {
+    try {
+      const response = await apiJson('/api/public/products/batch/default-cart-config', {
+        method: 'POST', body: { ids: [productId] },
+      });
+      effectiveDefaultConfig = response?.data?.[productId] || null;
+    } catch (error) {
+      console.error('Failed to load product default option configuration', error);
+    }
+  }
   const seedItem =
     editingItem && typeof editingItem === "object"
       ? editingItem
@@ -29310,6 +29320,218 @@ function renderSheetAddressList() {
     };
   }
 
+  const shopOrderSnapshots = new Map();
+  const shopOrderDetailsLoaded = new Set();
+  const shopOrdersListCache = new Map();
+  const shopOrderScopeKey = () => `${getCustomerToken()}:${getActiveStoreId()}`;
+  let shopOrdersCacheScope = "";
+  function ensureShopOrdersCacheScope() {
+    const scope = shopOrderScopeKey();
+    if (shopOrdersCacheScope === scope) return;
+    shopOrdersCacheScope = scope;
+    shopOrdersListCache.clear();
+    shopOrderDetailsLoaded.clear();
+    shopOrderSnapshots.clear();
+  }
+
+  let shopOrderScopeGeneration = 0;
+  const shopOrderRequestScopeKey = () => `${shopOrderScopeKey()}:${shopOrderScopeGeneration}`;
+
+  function getShopOrderTiming(order) {
+    const timeCode = String(order?.time_option_code || "").toLowerCase();
+    const timeLabel = ({ asap: "Быстрее", urgent: "Быстрее", at_time: "Ко времени", on_date: "На дату" })[timeCode] || String(order?.time_option_title || "");
+    // scheduled_at is already a store-local wall time, never convert it via the device timezone.
+    const scheduled = String(order?.scheduled_at || "");
+    const date = scheduled.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const time = scheduled.match(/(?:[ T]|^)(\d{2}:\d{2})/);
+    return [timeLabel, date && timeCode === "on_date" ? `${date[3]}.${date[2]}` : "", time && ["at_time", "on_date"].includes(timeCode) ? time[1] : ""].filter(Boolean).join(" · ");
+  }
+  window.getShopOrderTiming = getShopOrderTiming;
+
+  // One model for the existing profile and active-order detail shells.
+  function deriveCustomerOrderView(order) {
+    const progress = window.deriveCustomerOrderProgress(order);
+    const { methodCode, delivery, method, stage, isFinal, isCancelled, steps } = progress;
+    const timing = getShopOrderTiming(order);
+    const paymentCode = String(order?.payment_code || "").toLowerCase();
+    const payment = paymentCode === "online" && Number(order?.is_paid) === 1 ? "Оплачено онлайн" : paymentCode === "cash" ? "Наличными" : String(order?.payment_title || "");
+    const summary = buildCanonicalOrderSummaryData(order);
+    const deliveryRows = [["Способ получения", method], [delivery ? "Когда доставить" : "Когда получить", timing]];
+    if (delivery && order?.address) deliveryRows.push(["Адрес", String(order.address)]);
+    if (!delivery) {
+      const point = [order?.pickup_store_name, order?.pickup_store_address].filter(Boolean).join(" · ");
+      if (point) deliveryRows.push(["Точка получения", point]);
+      if (order?.table_number) deliveryRows.push(["Стол", String(order.table_number)]);
+    }
+    if (order?.address_comment && String(order.address_comment).trim()) deliveryRows.push(["Комментарий к адресу", String(order.address_comment).trim()]);
+    if (Number(order?.cutlery_qty) > 0) deliveryRows.push(["Приборы", `${Number(order.cutlery_qty)} шт.`]);
+    const customer = { name: String(order?.customer_name || ""), phone: String(order?.customer_phone || ""), photo: String(order?.customer_photo || "") };
+    const items = sortRepeatOrderItemsForDisplay(Array.isArray(order?.items) ? order.items : []);
+    const paymentRows = [["Способ оплаты", payment], ["Сумма товаров", money(summary.subtotalBeforeDiscounts)], ["Скидка", money(summary.discountAmount)], ["Доставка", money(summary.deliveryCost)]];
+    return {
+      id: Number(order?.id), number: String(order?.order_number || order?.public_number || order?.id || ""),
+      method, timing, steps, stage, isFinal, isCancelled,
+      statusLabel: progress.statusLabel,
+      progressKey: progress.progressKey, comment: String(order?.comment || "").trim(), items,
+      itemsSignature: JSON.stringify([items, order?.discount_amount]),
+      deliveryRows, deliverySignature: JSON.stringify(deliveryRows),
+      customer, customerSignature: JSON.stringify(customer), payment, paymentRows,
+      paymentSignature: JSON.stringify([paymentRows, summary.orderTotal, summary.breakdown, summary.orderDiscountTitles]),
+      summary, totalsSignature: JSON.stringify(summary),
+    };
+  }
+
+  function shopOrderDetailsTitle(view) { return `Заказ #${view.number}`; }
+
+  function renderShopOrderPairs(rows) {
+    return rows.filter(([, value]) => String(value || "").trim()).map(([label, value]) => `<div class="shop-order-info-row"><span class="shop-order-info-label">${escapeHtml(label)}</span><span class="shop-order-info-value">${escapeHtml(value)}</span></div>`).join("");
+  }
+  function renderShopOrderCustomer(view) {
+    return `<span class="shop-order-customer__avatar">${view.customer.photo ? `<img src="${escapeHtml(view.customer.photo)}" alt="" loading="lazy">` : '<i class="fas fa-user" aria-hidden="true"></i>'}</span><div><strong>${escapeHtml(view.customer.name)}</strong><div class="muted">${escapeHtml(view.customer.phone)}</div></div>`;
+  }
+  function renderShopOrderComment(comment) {
+    return `<i class="far fa-comment" aria-hidden="true"></i><div><strong>Комментарий к заказу</strong><p>${escapeHtml(comment)}</p></div>`;
+  }
+  function renderOrderDiscountDetails(summary, rowClass = "shop-order-summary-row", labelClass = "shop-order-summary-label", valueClass = "shop-order-summary-value") {
+    let html = "";
+      const hasBreakdown = summary.breakdown.length > 0 || summary.orderDiscountTitles.length > 0;
+      html += `<div class="${rowClass} shop-order-summary-discount">`;
+      if (hasBreakdown) {
+        html += `<span class="shop-order-summary-discount-label-wrap">`;
+        html += `<span class="${labelClass}">Скидка</span>`;
+        html += `<button type="button" class="shop-order-summary-discount-info-btn" data-order-discount-toggle aria-label="Показать расшифровку скидки" aria-expanded="false"><i class="fas fa-info"></i></button>`;
+        html += `</span>`;
+      } else {
+        html += `<span class="${labelClass}">Скидка</span>`;
+      }
+      html += `<span class="${valueClass} shop-checkout-discount-value">-${money(summary.discountAmount)}</span>`;
+      html += `</div>`;
+
+      if (hasBreakdown) {
+        html += `<div class="shop-order-summary-discount-breakdown" data-order-discount-breakdown aria-hidden="true">`;
+        summary.breakdown.forEach((entry) => {
+          html += `<div class="shop-order-summary-discount-breakdown-row">`;
+          html += `<span class="shop-order-summary-discount-breakdown-label">${escapeHtml(formatOrderDiscountBreakdownTitle(entry))}</span>`;
+          html += `<span class="shop-order-summary-discount-breakdown-value">-${money(entry.amount)}</span>`;
+          html += `</div>`;
+        });
+        if (false && summary.orderDiscountTitles.length > 0) {
+          html += `<div class="shop-order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(summary.orderDiscountTitles.join(", "))}</div>`;
+        }
+        html += `</div>`;
+      }
+    return html;
+  }
+
+  function renderShopOrderPayment(view) {
+    return `${view.paymentRows.map((row) => row[0] === "Скидка" && view.summary.discountAmount > 0 ? renderOrderDiscountDetails(view.summary, "shop-order-info-row", "shop-order-info-label", "shop-order-info-value") : renderShopOrderPairs([row])).join("")}<div class="shop-order-payment__total"><strong>ИТОГО</strong><strong data-order-total>${money(view.summary.orderTotal)}</strong></div>`;
+  }
+  function renderShopOrderStep(step, index) {
+    return `<div class="shop-order-progress__step is-${step.state}" data-order-progress-step="${index}" ${step.state === "current" ? 'aria-current="step"' : ""}><span class="shop-order-progress__node"><i class="fas ${step.state === "completed" ? "fa-check" : step.icon}" aria-hidden="true"></i></span><span data-order-step-label>${escapeHtml(step.title)}</span></div>`;
+  }
+  window.renderShopOrderStep = renderShopOrderStep;
+
+  function renderShopOrderAccordion(key, title, icon, subtitle, amount, content, open = false) {
+    const bodyId = `shop-order-${key}-${renderShopOrderAccordion.orderId}`;
+    return `<section class="shop-order-details-section shop-order-accordion${open ? " is-open" : ""}" data-order-section="${key}"><button class="shop-order-accordion__button" type="button" aria-expanded="${open}" aria-controls="${bodyId}"><span class="shop-order-accordion__icon"><i class="fas ${icon}" aria-hidden="true"></i></span><span class="shop-order-accordion__titles"><strong>${title}</strong><span data-order-section-subtitle>${escapeHtml(subtitle)}</span></span><strong data-order-section-summary>${escapeHtml(amount)}</strong><i class="fas fa-chevron-down shop-order-accordion__chevron" aria-hidden="true"></i></button><div class="shop-order-accordion__body" id="${bodyId}" ${open ? "" : "inert"}><div class="shop-order-accordion__clip"><div class="shop-order-accordion__content" data-order-${key}>${content}</div></div></div></section>`;
+  }
+  function renderShopOrderDetails(order) {
+    const view = deriveCustomerOrderView(order);
+    shopOrderSnapshots.set(view.id, order);
+    shopOrderDetailsLoaded.add(view.id);
+    renderShopOrderAccordion.orderId = `${view.id}-${++renderShopOrderDetails.sequence}`;
+    return `<div class="shop-order-details shop-order-details--variant-a" data-order-details-id="${view.id}"><section class="shop-order-progress" data-order-progress><div class="shop-order-progress__head"><strong data-order-method>${escapeHtml(view.method)}</strong><span data-order-timing>${escapeHtml(view.timing)}</span></div><div class="shop-order-progress__route">${view.steps.map(renderShopOrderStep).join("")}</div><span class="shop-order-progress__announcement" role="status" data-order-status-announcement>${escapeHtml(view.statusLabel)}</span></section>${view.comment ? `<section class="shop-order-comment" data-order-comment>${renderShopOrderComment(view.comment)}</section>` : ""}${renderShopOrderAccordion("products", "Товары", "fa-bag-shopping", `${view.items.length} позиций`, money(view.summary.subtotalBeforeDiscounts - view.summary.discountAmount), `<div class="shop-cart-items">${renderSharedReadonlyOrderItemsHtml(view.items, order)}</div>`, true)}${renderShopOrderAccordion("delivery", "Детали получения", "fa-location-dot", view.method, "", renderShopOrderPairs(view.deliveryRows))}<section class="shop-order-customer" data-order-customer>${renderShopOrderCustomer(view)}</section>${renderShopOrderAccordion("payment", "Оплата и суммы", "fa-wallet", view.payment, money(view.summary.orderTotal), renderShopOrderPayment(view))}</div>`;
+  }
+  renderShopOrderDetails.sequence = 0;
+
+  function bindShopOrderAccordions(root) {
+    bindOrderSummaryDiscountToggles(root);
+    root.closest(".app-modal")?.classList.add("shop-order-modal");
+    root.querySelectorAll(".shop-order-accordion__button").forEach((button) => {
+      button.onclick = () => {
+        const section = button.closest(".shop-order-accordion");
+        const open = section.classList.toggle("is-open");
+        button.setAttribute("aria-expanded", String(open));
+        section.querySelector(".shop-order-accordion__body").toggleAttribute("inert", !open);
+      };
+    });
+  }
+
+  function patchShopOrderDetails(previousOrder, order) {
+    const previous = deriveCustomerOrderView(previousOrder);
+    const next = deriveCustomerOrderView(order);
+    shopOrderSnapshots.set(next.id, order);
+    document.querySelectorAll(`[data-order-details-id="${next.id}"]`).forEach((root) => {
+      const text = (selector, value) => { const node = root.querySelector(selector); if (node && node.textContent !== value) node.textContent = value; };
+      if (previous.progressKey !== next.progressKey) {
+        next.steps.forEach((step, index) => {
+          if (JSON.stringify(previous.steps[index]) === JSON.stringify(step)) return;
+          const node = root.querySelector(`[data-order-progress-step="${index}"]`);
+          if (!node) return;
+          node.className = `shop-order-progress__step is-${step.state}`;
+          if (step.state === "current") node.setAttribute("aria-current", "step"); else node.removeAttribute("aria-current");
+          node.querySelector("i").className = `fas ${step.state === "completed" ? "fa-check" : step.icon}`;
+          node.querySelector("[data-order-step-label]").textContent = step.title;
+          if (!root.closest(".hidden")) {
+            node.classList.add("is-changing");
+            if (node.__shopStatusAnimationEnd) node.removeEventListener("animationend", node.__shopStatusAnimationEnd);
+            node.__shopStatusAnimationEnd = (event) => {
+              if (step.state === "current" && event.animationName === "shopOrderStatusIn") return;
+              node.classList.remove("is-changing");
+              node.removeEventListener("animationend", node.__shopStatusAnimationEnd);
+              node.__shopStatusAnimationEnd = null;
+            };
+            node.addEventListener("animationend", node.__shopStatusAnimationEnd);
+          }
+        });
+        text("[data-order-status-announcement]", next.statusLabel);
+      }
+      if (previous.method !== next.method) text("[data-order-method]", next.method);
+      if (previous.timing !== next.timing) text("[data-order-timing]", next.timing);
+      if (previous.comment !== next.comment) {
+        let node = root.querySelector("[data-order-comment]");
+        if (!next.comment) node?.remove();
+        else if (node) node.querySelector("p").textContent = next.comment;
+        else {
+          node = document.createElement("section");
+          node.className = "shop-order-comment";
+          node.setAttribute("data-order-comment", "");
+          node.innerHTML = renderShopOrderComment(next.comment);
+          root.querySelector("[data-order-progress]").after(node);
+        }
+      }
+      if (previous.deliverySignature !== next.deliverySignature) {
+        root.querySelector("[data-order-delivery]").innerHTML = renderShopOrderPairs(next.deliveryRows);
+        text('[data-order-section="delivery"] [data-order-section-subtitle]', next.method);
+      }
+      if (previous.customerSignature !== next.customerSignature) root.querySelector("[data-order-customer]").innerHTML = renderShopOrderCustomer(next);
+      if (previous.paymentSignature !== next.paymentSignature) {
+        const paymentRoot = root.querySelector("[data-order-payment]");
+        const discountOpen = paymentRoot.querySelector("[data-order-discount-toggle]")?.getAttribute("aria-expanded") === "true";
+        paymentRoot.innerHTML = renderShopOrderPayment(next);
+        bindOrderSummaryDiscountToggles(paymentRoot);
+        if (discountOpen) {
+          paymentRoot.querySelector("[data-order-discount-toggle]")?.setAttribute("aria-expanded", "true");
+          const breakdown = paymentRoot.querySelector("[data-order-discount-breakdown]");
+          breakdown?.classList.add("is-open");
+          breakdown?.setAttribute("aria-hidden", "false");
+        }
+        text('[data-order-section="payment"] [data-order-section-subtitle]', next.payment);
+        text('[data-order-section="payment"] [data-order-section-summary]', money(next.summary.orderTotal));
+      }
+      if (previous.itemsSignature !== next.itemsSignature) {
+        root.querySelector("[data-order-products] .shop-cart-items").innerHTML = renderSharedReadonlyOrderItemsHtml(next.items, order);
+        text('[data-order-section="products"] [data-order-section-subtitle]', `${next.items.length} позиций`);
+        text('[data-order-section="products"] [data-order-section-summary]', money(next.summary.subtotalBeforeDiscounts - next.summary.discountAmount));
+        if (root.__shopBindItems) root.__shopBindItems(order);
+      }
+      if (previous.totalsSignature !== next.totalsSignature && !root.closest(".hidden")) {
+        if (elMobileOrderTotalValue) elMobileOrderTotalValue.textContent = money(next.summary.orderTotal);
+        if (elOrderDetailsTotalValue) elOrderDetailsTotalValue.textContent = money(next.summary.orderTotal);
+      }
+    });
+  }
+
   function renderOrderSummaryBlock(order) {
     const summary = buildCanonicalOrderSummaryData(order);
     const hasDiscount = summary.discountAmount > 0;
@@ -29343,32 +29565,7 @@ function renderSheetAddressList() {
       html += `<span class="shop-order-summary-value">${money(summary.subtotalBeforeDiscounts)}</span>`;
       html += `</div>`;
 
-      const hasBreakdown = summary.breakdown.length > 0 || summary.orderDiscountTitles.length > 0;
-      html += `<div class="shop-order-summary-row shop-order-summary-discount">`;
-      if (hasBreakdown) {
-        html += `<span class="shop-order-summary-discount-label-wrap">`;
-        html += `<span class="shop-order-summary-label">Скидка</span>`;
-        html += `<button type="button" class="shop-order-summary-discount-info-btn" data-order-discount-toggle aria-label="Показать расшифровку скидки" aria-expanded="false"><i class="fas fa-info"></i></button>`;
-        html += `</span>`;
-      } else {
-        html += `<span class="shop-order-summary-label">Скидка</span>`;
-      }
-      html += `<span class="shop-order-summary-value shop-checkout-discount-value">-${money(summary.discountAmount)}</span>`;
-      html += `</div>`;
-
-      if (hasBreakdown) {
-        html += `<div class="shop-order-summary-discount-breakdown" data-order-discount-breakdown aria-hidden="true">`;
-        summary.breakdown.forEach((entry) => {
-          html += `<div class="shop-order-summary-discount-breakdown-row">`;
-          html += `<span class="shop-order-summary-discount-breakdown-label">${escapeHtml(formatOrderDiscountBreakdownTitle(entry))}</span>`;
-          html += `<span class="shop-order-summary-discount-breakdown-value">-${money(entry.amount)}</span>`;
-          html += `</div>`;
-        });
-        if (false && summary.orderDiscountTitles.length > 0) {
-          html += `<div class="shop-order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(summary.orderDiscountTitles.join(", "))}</div>`;
-        }
-        html += `</div>`;
-      }
+      html += renderOrderDiscountDetails(summary);
     }
 
     const promoCode = str(order?.promo_code || "").trim();
@@ -29406,7 +29603,7 @@ function renderSheetAddressList() {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const summary = btn.closest(".shop-order-summary");
+        const summary = btn.closest(".shop-order-summary, [data-order-payment]");
         const breakdown = summary ? summary.querySelector("[data-order-discount-breakdown]") : null;
         if (!breakdown) return;
         const willOpen = !breakdown.classList.contains("is-open");
@@ -29473,7 +29670,6 @@ function renderSheetAddressList() {
     }
     mountMobileOrderDetailsPageFooter();
     const summary = buildCanonicalOrderSummaryData(order);
-    const repeatItems = Array.isArray(order?.items) ? order.items : [];
     if (elMobileOrderTotalValue) {
       elMobileOrderTotalValue.textContent = money(summary.orderTotal || 0);
     }
@@ -29489,6 +29685,7 @@ function renderSheetAddressList() {
           elMobileOrderRepeatBtn.classList.add("is-expanded");
           return;
         }
+        const repeatItems = shopOrderSnapshots.get(Number(order.id))?.items || order.items || [];
         if (!repeatItems.length) {
           showToast("\u0412 \u0437\u0430\u043a\u0430\u0437\u0435 \u043d\u0435\u0442 \u0442\u043e\u0432\u0430\u0440\u043e\u0432");
           return;
@@ -29526,6 +29723,19 @@ function renderSheetAddressList() {
 
   function bindDesktopOrderDetailsFooter(order) {
     if (window.matchMedia("(max-width: 768px)").matches) return;
+    const modal = window.AppModal?.isOpen?.() ? window.AppModal.body?.closest(".app-modal") : null;
+    if (modal && elOrderDetailsFooterActions) {
+      if (!elOrderDetailsFooterActions.__shopOriginalParent) {
+        elOrderDetailsFooterActions.__shopOriginalParent = elOrderDetailsFooterActions.parentElement;
+        elOrderDetailsFooterActions.__shopOriginalNextSibling = elOrderDetailsFooterActions.nextSibling;
+      }
+      if (previous.totalsSignature !== next.totalsSignature) {
+        text('[data-order-section="products"] [data-order-section-summary]', money(next.summary.subtotalBeforeDiscounts - next.summary.discountAmount));
+      }
+      modal.insertBefore(elOrderDetailsFooterActions, modal.querySelector(".app-modal-footer"));
+      modal.classList.add("shop-order-modal");
+      elOrderDetailsFooterActions.classList.add("shop-order-modal-footer");
+    }
     const summary = buildCanonicalOrderSummaryData(order);
     if (elOrderDetailsTotalValue) {
       elOrderDetailsTotalValue.textContent = money(summary.orderTotal || 0);
@@ -29543,7 +29753,7 @@ function renderSheetAddressList() {
           elOrderDetailsRepeatBtn.classList.add("is-expanded");
           return;
         }
-        const items = Array.isArray(order?.items) ? order.items : [];
+        const items = shopOrderSnapshots.get(Number(order.id))?.items || order.items || [];
         if (!items.length) {
           showToast("\u0412 \u0437\u0430\u043a\u0430\u0437\u0435 \u043d\u0435\u0442 \u0442\u043e\u0432\u0430\u0440\u043e\u0432");
           return;
@@ -29567,10 +29777,18 @@ function renderSheetAddressList() {
       elOrderDetailsRepeatBtn.classList.remove("is-expanded");
     };
     document.addEventListener("pointerdown", window.__shopDesktopOrderRepeatOutsideHandler, true);
-    setCartFooterMode("order-details");
+    setCartFooterMode(modal ? "hidden" : "order-details");
+    if (modal) elOrderDetailsFooterActions?.classList.remove("hidden");
   }
 
   function resetOrderDetailsTransientUi() {
+    const footer = elOrderDetailsFooterActions;
+    if (footer?.__shopOriginalParent && footer.parentElement !== footer.__shopOriginalParent) {
+      const next = footer.__shopOriginalNextSibling;
+      footer.__shopOriginalParent.insertBefore(footer, next?.parentNode === footer.__shopOriginalParent ? next : null);
+    }
+    footer?.classList.remove("shop-order-modal-footer");
+    document.querySelector(".app-modal.shop-order-modal")?.classList.remove("shop-order-modal");
     hideMobileOrderDetailsActions();
 
     if (elMobileAddToCartBtn && mobileProductActionsState?.onAddToCart) {
@@ -31659,6 +31877,7 @@ function renderSheetAddressList() {
 
       const openItem = async () => {
         try {
+          if (row.closest(".shop-order-details--variant-a")) resetOrderDetailsTransientUi();
           await openOrderItemForRepeat(orderItem, { onBack });
         } catch (e) {
           console.warn("Failed to open order item details:", e);
@@ -31785,6 +32004,7 @@ function renderSheetAddressList() {
   }
 
   function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false, returnToProfile = false } = {}) {
+    ensureShopOrdersCacheScope();
     host.innerHTML = "";
 
     const wrap = document.createElement("div");
@@ -33649,9 +33869,12 @@ function renderSheetAddressList() {
     let currentOrdersView = "list"; // "list" | "details"
     let currentOrderId = null;
 
-    async function loadOrderDetails(orderId) {
+    async function loadOrderDetails(orderId, { force = false } = {}) {
+      if (!force && shopOrderDetailsLoaded.has(Number(orderId))) return shopOrderSnapshots.get(Number(orderId));
+      const requestScope = shopOrderRequestScopeKey();
       try {
         const json = await apiJson(`/api/public/me/orders/${orderId}`);
+        if (requestScope !== shopOrderRequestScopeKey()) return null;
         const order = json.data || null;
         return order;
       } catch (e) {
@@ -33661,68 +33884,23 @@ function renderSheetAddressList() {
     }
 
     async function refreshOrderDetailsStatus(orderId) {
-      const safeOrderId = Number(orderId || 0);
-      if (!(safeOrderId > 0)) return;
-      const detailView = ordersDetailsHost.querySelector(
-        `.shop-profile-order-details-view[data-order-id="${safeOrderId}"]:not(.hidden)`
-      );
-      if (!detailView) return;
-      const order = await loadOrderDetails(safeOrderId);
-      if (!order) return;
-
-      const header = detailView.querySelector(".shop-order-details-header");
-      if (header) {
-        let status = header.querySelector(".shop-order-details-status");
-        const title = String(order.status_title || "").trim();
-        if (title) {
-          if (!status) {
-            status = document.createElement("div");
-            status.className = "shop-order-details-status";
-            header.appendChild(status);
-          }
-          status.textContent = title;
-        } else if (status) {
-          status.remove();
-        }
-      }
-
-      const progress = Array.isArray(order.customer_progress) ? order.customer_progress : [];
-      let progressView = detailView.querySelector(".shop-order-customer-progress");
-      if (!progress.length) {
-        progressView?.remove();
-      } else {
-        if (!progressView) {
-          progressView = document.createElement("div");
-          progressView.className = "shop-order-customer-progress";
-          const detailsRoot = detailView.querySelector(".shop-order-details");
-          const headerNode = detailsRoot?.querySelector(".shop-order-details-header");
-          if (detailsRoot && headerNode) detailsRoot.insertBefore(progressView, headerNode.nextSibling);
-        }
-        progressView.replaceChildren(...progress.map((step) => {
-          const row = document.createElement("div");
-          row.className = "shop-order-customer-progress__step";
-          if (step?.completed) row.classList.add("is-completed");
-          const marker = document.createElement("span");
-          marker.className = "shop-order-customer-progress__marker";
-          const label = document.createElement("span");
-          label.textContent = String(step?.title || "");
-          row.append(marker, label);
-          return row;
-        }));
-      }
+      const order = await loadOrderDetails(orderId, { force: true });
+      const previous = shopOrderSnapshots.get(Number(orderId));
+      if (order && previous) patchShopOrderDetails(previous, order);
     }
 
     async function refreshProfileOrderRowStatus(orderId) {
       const safeOrderId = Number(orderId || 0);
       if (!(safeOrderId > 0)) return;
-      const order = await loadOrderDetails(safeOrderId);
+      const order = await loadOrderDetails(safeOrderId, { force: true });
       if (!order) return;
       const rows = ordersList.querySelectorAll(
         `.shop-profile-order-summary-card[data-order-id="${safeOrderId}"]`
       );
       rows.forEach((row) => {
+        window.patchProfileOrderProgress(row, order);
         const status = row.querySelector(".shop-order-summary-card__status");
-        if (status) status.textContent = String(order.status_title || "—");
+        if (status && !row.querySelector("[data-order-list-footer]")) status.textContent = window.deriveCustomerOrderProgress(order).statusLabel;
       });
     }
 
@@ -33762,7 +33940,7 @@ function renderSheetAddressList() {
         ordersPage._shopOrderDetailsExitToHome = shouldExitToHome;
         document.body.classList.add("shop-orders-details-active");
         const pageTitle = ordersPage.querySelector(".shop-orders-page-header h1");
-        if (pageTitle) pageTitle.textContent = "Детали заказа";
+        if (pageTitle) pageTitle.textContent = shopOrderDetailsTitle({ number: orderId });
         const pageBack = ordersPage.querySelector("[data-orders-page-back]");
         if (pageBack) {
           pageBack.onclick = () => {
@@ -33803,109 +33981,24 @@ function renderSheetAddressList() {
       ordersDetailsHost.classList.remove("hidden");
       
       // Заменяем содержимое ordersPanel на детали заказа
-      detailView.innerHTML = `<div class="muted">Загрузка…</div>`;
+      if (!shopOrderDetailsLoaded.has(Number(orderId))) detailView.innerHTML = `<div class="muted">Загрузка…</div>`;
       
       const order = await loadOrderDetails(orderId);
+      if (Number(currentOrderId) !== Number(orderId) || currentOrdersView !== "details") return;
+      if (detailView.closest(".hidden") || (isModalOrderDetails
+        && (!window.AppModal?.isOpen?.() || !window.AppModal.body?.contains(detailView)))) return;
       if (!order) {
         detailView.innerHTML = `<div class="muted">Не удалось загрузить детали заказа</div>`;
         return;
       }
 
-      let html = `<div class="shop-order-details">`;
-      
-      // Заголовок с номером и статусом
-      html += `<div class="shop-order-details-header">`;
-      html += `<div class="shop-order-details-title">Заказ #${order.id}</div>`;
-      if (order.status_title) {
-        html += `<div class="shop-order-details-status">${escapeHtml(order.status_title)}</div>`;
+      detailView.innerHTML = renderShopOrderDetails(order);
+      bindShopOrderAccordions(detailView);
+      const view = deriveCustomerOrderView(order);
+      if (ordersPage) {
+        const pageTitle = ordersPage.querySelector(".shop-orders-page-header h1");
+        if (pageTitle) pageTitle.textContent = shopOrderDetailsTitle(view);
       }
-      html += `</div>`;
-
-      const customerProgress = Array.isArray(order.customer_progress) ? order.customer_progress : [];
-      if (customerProgress.length) {
-        html += `<div class="shop-order-customer-progress">`;
-        customerProgress.forEach((step) => {
-          html += `<div class="shop-order-customer-progress__step${step.completed ? " is-completed" : ""}">`;
-          html += `<span class="shop-order-customer-progress__marker"></span>`;
-          html += `<span>${escapeHtml(step.title || "")}</span>`;
-          html += `</div>`;
-        });
-        html += `</div>`;
-      }
-      
-      // Информация о заказе
-      html += `<div class="shop-order-details-info">`;
-      html += `<div class="shop-order-info-row">`;
-      html += `<div class="shop-order-info-label">Дата и время</div>`;
-      html += `<div class="shop-order-info-value">${new Date(order.created_at).toLocaleString("ru-RU")}</div>`;
-      html += `</div>`;
-      
-      if (order.method_title) {
-        html += `<div class="shop-order-info-row">`;
-        html += `<div class="shop-order-info-label">Способ доставки</div>`;
-        html += `<div class="shop-order-info-value">${escapeHtml(order.method_title)}</div>`;
-        html += `</div>`;
-      }
-      
-      if (order.time_option_title) {
-        html += `<div class="shop-order-info-row">`;
-        html += `<div class="shop-order-info-label">Время доставки</div>`;
-        html += `<div class="shop-order-info-value">${escapeHtml(order.time_option_title)}</div>`;
-        html += `</div>`;
-      }
-      
-      if (order.scheduled_at) {
-        html += `<div class="shop-order-info-row">`;
-        html += `<div class="shop-order-info-label">Запланировано на</div>`;
-        html += `<div class="shop-order-info-value">${new Date(order.scheduled_at).toLocaleString("ru-RU")}</div>`;
-        html += `</div>`;
-      }
-      html += `</div>`;
-      
-      // Адрес доставки
-      if (order.address) {
-        html += `<div class="shop-order-details-section">`;
-        html += `<div class="shop-order-section-title">Адрес доставки</div>`;
-        html += `<div class="shop-order-address">${escapeHtml(order.address)}</div>`;
-        html += `</div>`;
-      }
-      
-      // Товары (используем формат корзины)
-      if (order.items && Array.isArray(order.items) && order.items.length > 0) {
-        const orderItemsForDisplay = sortRepeatOrderItemsForDisplay(order.items);
-        html += `<div class="shop-order-details-section">`;
-        html += `<div class="shop-order-section-title">Товары</div>`;
-        html += `<div class="shop-cart-items">`;
-        html += renderSharedReadonlyOrderItemsHtml(orderItemsForDisplay, order);
-        html += `</div>`;
-        html += `</div>`;
-      }
-      
-      // Дополнительная информация
-      if (order.cutlery_qty && Number(order.cutlery_qty) > 0) {
-        html += `<div class="shop-order-details-section">`;
-        html += `<div class="shop-order-info-row">`;
-        html += `<div class="shop-order-info-label">Приборы</div>`;
-        html += `<div class="shop-order-info-value">${order.cutlery_qty} шт.</div>`;
-        html += `</div>`;
-        html += `</div>`;
-      }
-      
-      // Комментарий
-      if (order.comment) {
-        html += `<div class="shop-order-details-section">`;
-        html += `<div class="shop-order-section-title">Комментарий</div>`;
-        html += `<div class="shop-order-comment">${escapeHtml(order.comment)}</div>`;
-        html += `</div>`;
-      }
-      
-      // Суммы (единый блок как в активных заказах)
-      html += renderOrderSummaryBlock(order);
-      
-      html += `</div>`;
-      
-      detailView.innerHTML = html;
-      bindOrderSummaryDiscountToggles(detailView);
       const reopenProfileOrderDetails = () => {
         const isMobileProfile = window.matchMedia("(max-width: 768px)").matches;
         if (!isMobileProfile) {
@@ -33924,38 +34017,19 @@ function renderSheetAddressList() {
           }
         }, 0);
       };
-      bindRepeatOrderItemRows(
-        detailView,
-        sortRepeatOrderItemsForDisplay(order.items),
-        { onBack: reopenProfileOrderDetails, enableSwipeActions: true }
-      );
-      if (shouldExitToHome) {
-        showMobileOrderHomeAction(() => {
-          if (window.history.state?.shopOrderDetails === true) {
-            window.history.back();
-            return;
-          }
-          ordersPage?._shopOrdersClosePage?.();
-        });
-      } else {
-        showMobileOrderDetailsActions(order);
-      }
+      const bindItems = (snapshot) => bindRepeatOrderItemRows(detailView, sortRepeatOrderItemsForDisplay(snapshot.items), { onBack: reopenProfileOrderDetails, enableSwipeActions: false });
+      detailView.querySelector("[data-order-details-id]").__shopBindItems = bindItems;
+      bindItems(order);
+      showMobileOrderDetailsActions(order);
       
       // Проверяем, открыто ли модальное окно
       const isModal = isModalOrderDetails;
-      
-      // Добавляем пустое поле 200px внизу для скролла в модальном окне
-      if (isModal) {
-        const spacer = document.createElement("div");
-        spacer.style.height = "200px";
-        detailView.appendChild(spacer);
-      }
-      
+
       if (isModal) {
         // Модальное окно: используем setSheetHeaderMode
         const titleEl = document.querySelector(".app-modal-title") || document.querySelector(".modal-title") || document.querySelector("[data-modal-title]");
         if (titleEl) {
-          titleEl.textContent = "Детали заказа";
+          titleEl.textContent = shopOrderDetailsTitle(view);
           titleEl.classList.remove("hidden");
         }
         
@@ -33969,10 +34043,12 @@ function renderSheetAddressList() {
         setSheetHeaderMode("order", {
           onBack: () => showOrdersList()
         });
+        if (titleEl) titleEl.textContent = shopOrderDetailsTitle(view);
+        bindDesktopOrderDetailsFooter(order);
       } else {
         // Десктоп: используем setCartHeader
         setCartHeader({ 
-          title: "Детали заказа", 
+          title: shopOrderDetailsTitle(view),
           showAddressChip: false, 
           showProfileActions: false, 
           showBack: true 
@@ -34118,61 +34194,13 @@ function renderSheetAddressList() {
       row.className = "shop-profile-card shop-order-summary-card shop-profile-order-summary-card";
       row.dataset.orderId = String(Number(o?.id || 0));
       row.style.cursor = "pointer";
-      row.innerHTML = window.buildShopOrderSummaryCardInnerHtml(o, { maxPhotos: 8 });
+      row.innerHTML = window.buildShopOrderSummaryCardInnerHtml(o, { maxPhotos: 40, context: "orders" });
 
       row.addEventListener("click", () => {
         showOrderDetails(o.id);
       });
 
-      const isMobile = window.matchMedia("(max-width: 768px)").matches;
-      const canRepeat = isMobile && Array.isArray(o?.items) && o.items.length > 0;
-      if (!canRepeat) return row;
-
-      const swipeContainer = document.createElement("div");
-      swipeContainer.className = "shop-favorite-swipe-container shop-order-repeat-swipe-container shop-profile-order-swipe-container";
-
-      const repeatAction = document.createElement("button");
-      repeatAction.type = "button";
-      repeatAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--add";
-      repeatAction.setAttribute("aria-label", "\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u0437\u0430\u043a\u0430\u0437");
-      repeatAction.innerHTML = '<i class="fas fa-rotate-right"></i>';
-      swipeContainer.appendChild(repeatAction);
-
-      const content = document.createElement("div");
-      content.className = "shop-favorite-swipe-content";
-      swipeContainer.appendChild(content);
-      content.appendChild(row);
-
-      const repeatOrder = async () => {
-        if (repeatAction.disabled) return false;
-        repeatAction.disabled = true;
-        try {
-          return await repeatOrderItemsToCart(Array.isArray(o?.items) ? o.items : []);
-        } finally {
-          repeatAction.disabled = false;
-        }
-      };
-
-      repeatAction.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        await repeatOrder();
-        const closeFn = swipeContainer.__orderSwipeClose;
-        if (typeof closeFn === "function") closeFn(true);
-      });
-
-      initRepeatOrderSwipeRow(swipeContainer, content, {
-        onAddToCart: repeatOrder,
-        onAddToFavorites: null,
-        allowAddToCart: true,
-        allowAddToFavorites: false,
-        getCurrentSwiped: () => currentProfileOrderSwipedContainer,
-        setCurrentSwiped: (next) => {
-          currentProfileOrderSwipedContainer = next || null;
-        },
-      });
-
-      return swipeContainer;
+      return row;
     }
 
     function applyOrdersSummary(summary) {
@@ -34237,6 +34265,9 @@ function renderSheetAddressList() {
       if (!reset && !state.hasMore) return;
       if (sectionKey === "completed" && ordersCompletedSection.collapsed) return;
 
+      const requestScope = shopOrderRequestScopeKey();
+      const cacheKey = `${shopOrderScopeKey()}:${sectionKey}`;
+      const cached = reset ? shopOrdersListCache.get(cacheKey) : null;
       state.loading = true;
       if (reset) {
         section.items.replaceChildren();
@@ -34246,13 +34277,18 @@ function renderSheetAddressList() {
         }
         setOrdersSectionAnchorVisible(section, false);
       }
-      setOrdersSectionLoading(section, true);
+      setOrdersSectionLoading(section, !cached);
 
       try {
-        const json = await apiJson(
+        const json = cached || await apiJson(
           `/api/public/me/orders?limit=${PROFILE_ORDERS_PAGE_SIZE}&offset=${state.offset}&status_is_final=${state.statusFinal}`
         );
+        if (requestScope !== shopOrderRequestScopeKey()) return;
         const list = Array.isArray(json?.data) ? json.data : [];
+        if (!cached) {
+          const previous = reset ? null : shopOrdersListCache.get(cacheKey);
+          shopOrdersListCache.set(cacheKey, { ...json, data: [...(previous?.data || []), ...list] });
+        }
         if (reset) {
           const bucket = sectionKey === "completed" ? ordersRowCache.completed : ordersRowCache.active;
           const actualIds = new Set(
@@ -34281,7 +34317,8 @@ function renderSheetAddressList() {
           section.items.appendChild(getCachedOrderRow(sectionKey, o));
         });
 
-        state.offset += list.length;
+        state.offset = cached && Number.isFinite(Number(paging?.next_offset)) && paging?.next_offset != null
+          ? Number(paging.next_offset) : state.offset + list.length;
         state.hasMore = hasMore;
         state.initialized = true;
 
@@ -42027,7 +42064,7 @@ function setBottomNavActive(tab) {
       };
 
       try {
-        const res = await apiJson("/api/public/orders", { method: "POST", body: payload });
+        const res = await window.submitShopOrder(payload);
 
         if (res.data && res.data.duplicate && res.data.needConfirmation && res.data.existingOrder) {
           setCheckoutSubmitting(false);
@@ -42040,7 +42077,7 @@ function setBottomNavActive(tab) {
               btnNewAgain.textContent = "Отправляем…";
             }
             try {
-              const res2 = await apiJson("/api/public/orders", { method: "POST", body: payload });
+              const res2 = await window.submitShopOrder(payload);
               if (res2.data && res2.data.id && res2.data.public_id) {
                 localStorage.setItem(LAST_ORDER_KEY, String(res2.data.public_id));
                 await syncBenefitsAfterSuccessfulOrder();
@@ -42712,86 +42749,214 @@ function initShopLate() {
       // Глобальная переменная для хранения активных заказов
       window._activeOrders = [];
       let activeOrdersBadgeLoading = false;
+      let activeOrdersBadgePendingOptions = null;
+      let activeOrdersBadgeController = null;
       let activeOrdersBadgeLastSyncAt = 0;
-      let activeOrdersEventSource = null;
+      // Customer WebSocket lifecycle and targeted order reconciliation.
       const ACTIVE_ORDERS_BADGE_MIN_REFRESH_MS = 4000;
+      let orderSocket = null;
+      let orderSocketScope = "";
+      const orderRefreshJobs = new Map();
+      const orderEventCursors = new Map();
+      const orderStateVersions = new Map();
+      const currentOrderScope = shopOrderRequestScopeKey;
 
-      const closeActiveOrdersEventSource = () => {
-        if (activeOrdersEventSource) activeOrdersEventSource.close();
-        activeOrdersEventSource = null;
+      const closeOrderSocket = () => {
+        if (orderSocket) orderSocket();
+        orderSocket = null;
       };
-      const syncActiveOrdersEventSource = (activeOrders) => {
-        const token = getCustomerToken();
-        if (!token || !Array.isArray(activeOrders) || !activeOrders.length || typeof window.EventSource !== "function") {
-          closeActiveOrdersEventSource();
-          return;
-        }
-        if (activeOrdersEventSource) return;
-        const url = new URL("/api/public/changes/stream", window.location.origin);
-        const tenantMeta = document.querySelector('meta[name="tenant_id"]');
-        url.searchParams.set("tenant_id", String(tenantMeta?.content || "1"));
-        url.searchParams.set("store_id", String(getActiveStoreId() || "1"));
-        url.searchParams.set("customer_token", token);
-        const source = new EventSource(url.toString());
-        activeOrdersEventSource = source;
-        source.addEventListener("order.updated", (event) => {
-          if (activeOrdersEventSource !== source) return;
-          window.__shopOrdersNavBadgeRead = false;
-          const isOpenOrdersList = sheetNavigationState?.type === "activeOrders"
-            && sheetNavigationState?.screen === "list";
-          const isOpenProfileOrdersList = sheetNavigationState?.type === "profile"
-            && [null, "orders", "ordersList"].includes(sheetNavigationState?.screen);
-          Promise.resolve(updateActiveOrdersBadge({ force: true })).then(() => {
-            const ordersBadge = document.getElementById("shopNavOrdersBadge");
-            if (ordersBadge) ordersBadge.classList.remove("hidden");
-            if (isOpenOrdersList && typeof renderActiveOrdersListContent === "function") {
-              renderActiveOrdersListContent(window._activeOrders || []);
-            }
-          });
-          let order = null;
-          try { order = JSON.parse(String(event?.data || "")); } catch {}
-          const updatedOrderId = Number(order?.id || 0);
-          const openedOrderId = Number(sheetNavigationState?.data?.orderId || 0);
-          const visibleOrderDetails = updatedOrderId > 0
-            ? document.querySelector(`.shop-active-order-details[data-order-id="${updatedOrderId}"]:not(.hidden)`)
-            : null;
-          const isProfileOrderDetailsOpen = updatedOrderId > 0
-            && updatedOrderId === openedOrderId
-            && sheetNavigationState?.type === "profile"
-            && sheetNavigationState?.screen === "orderDetails";
-          if (isOpenProfileOrdersList && updatedOrderId > 0) {
-            const profileContext = window._profileContext;
-            if (profileContext && typeof profileContext.refreshProfileOrderRowStatus === "function") {
-              void profileContext.refreshProfileOrderRowStatus(updatedOrderId);
-            }
-          }
-          if (
-            updatedOrderId > 0
-            && (
-              (updatedOrderId === openedOrderId
-                && sheetNavigationState?.type === "activeOrders"
-                && sheetNavigationState?.screen === "details")
-              || visibleOrderDetails
-              || isProfileOrderDetailsOpen
-            )
-          ) {
-            if (isProfileOrderDetailsOpen) {
-              const profileContext = window._profileContext;
-              if (profileContext && typeof profileContext.refreshOrderDetailsStatus === "function") {
-                void profileContext.refreshOrderDetailsStatus(updatedOrderId);
-              }
-            } else {
-              void showActiveOrderDetails(updatedOrderId);
-            }
-          }
-        });
-        source.addEventListener("error", () => {
-          if (activeOrdersEventSource !== source) return;
-          closeActiveOrdersEventSource();
-        });
-      };
+      const syncActiveOrdersEventSource = () => syncOrderSocket();
       window.syncShopActiveOrdersEventSource = syncActiveOrdersEventSource;
-    
+
+      function syncOrderCounts() {
+        const orders = window._activeOrders || [];
+        const count = orders.length;
+        [elActiveOrdersBadge, elActiveOrdersBadgeMobile, elActiveOrdersSheetCollapsed].filter(Boolean).forEach((badge) => {
+          const mobile = window.matchMedia("(max-width: 768px)").matches;
+          const show = count > 0 && (badge === elActiveOrdersBadge
+            || (badge === elActiveOrdersSheetCollapsed && mobile && isShopPage()
+              && document.querySelector('.shop-nav-btn.is-active')?.dataset.tab === "menu"
+              && !window.AppModal?.isOpen?.() && elMobileProductActions?.classList.contains("hidden")));
+          badge.classList.toggle("hidden", !show);
+          const countEl = badge.querySelector(".shop-active-orders-count");
+          const countText = count > 1 ? ` +${count}` : "";
+          if (countEl && countEl.textContent !== countText) countEl.textContent = countText;
+          const textEl = badge.querySelector(".shop-active-orders-text");
+          const label = count === 1 ? `Активный заказ • ${window.deriveCustomerOrderProgress(orders[0]).statusLabel}` : "Активный заказ";
+          if (textEl && textEl.textContent !== label) textEl.textContent = label;
+        });
+        const navBadge = document.getElementById("shopNavOrdersBadge");
+        if (navBadge) navBadge.classList.toggle("hidden", !count || window.__shopOrdersNavBadgeRead === true || document.querySelector(".shop-nav-btn.is-active")?.dataset.tab === "orders");
+      }
+
+      function applyOrderSnapshot(incomingOrder, summaryOnly = false) {
+        const order = { ...shopOrderSnapshots.get(Number(incomingOrder.id)), ...incomingOrder };
+        const id = Number(order.id);
+        if (!summaryOnly) orderStateVersions.set(id, (orderStateVersions.get(id) || 0) + 1);
+        const previous = shopOrderSnapshots.get(id) || (window._activeOrders || []).find((entry) => Number(entry.id) === id);
+        const view = deriveCustomerOrderView(order);
+        const scope = shopOrderScopeKey();
+        const activeCache = shopOrdersListCache.get(`${scope}:active`);
+        const completedCache = shopOrdersListCache.get(`${scope}:completed`);
+        const wasActive = activeCache?.data.some((entry) => Number(entry.id) === id);
+        const wasCompleted = completedCache?.data.some((entry) => Number(entry.id) === id);
+        [activeCache, completedCache].filter(Boolean).forEach((cache) => {
+          cache.data = cache.data.map((entry) => Number(entry.id) === id ? { ...entry, ...order } : entry);
+          if (view.isFinal && wasActive && !wasCompleted && cache.summary) {
+            cache.summary = { ...cache.summary, active_count: Math.max(0, Number(cache.summary.active_count || 0) - 1), completed_count: Number(cache.summary.completed_count || 0) + 1 };
+          }
+        });
+        if (view.isFinal && wasActive) {
+          activeCache.data = activeCache.data.filter((entry) => Number(entry.id) !== id);
+          if (completedCache && !wasCompleted) completedCache.data.unshift(order);
+        } else if (!view.isFinal && activeCache && !wasActive) {
+          activeCache.data.unshift(order);
+          [activeCache, completedCache].filter(Boolean).forEach((cache) => {
+            if (cache.summary) cache.summary = { ...cache.summary, active_count: Number(cache.summary.active_count || 0) + 1 };
+          });
+        }
+
+        const active = window._activeOrders || [];
+        const index = active.findIndex((entry) => Number(entry.id) === id);
+        if (view.isFinal) {
+          if (index >= 0) active.splice(index, 1);
+        } else if (index >= 0) active[index] = { ...active[index], ...order };
+        else active.push(order);
+        window._activeOrders = active;
+        window._savedActiveOrdersForBack = [...active];
+        // Merge canonical state before touching any DOM.
+        if (!summaryOnly) {
+          if (previous) patchShopOrderDetails(previous, order);
+          else shopOrderSnapshots.set(id, order);
+        }
+        document.querySelectorAll(`[data-order-id="${id}"]`).forEach((card) => {
+          window.patchProfileOrderProgress(card, order);
+          const status = card.querySelector(".shop-order-summary-card__status");
+          if (status && !card.querySelector("[data-order-list-footer]") && status.textContent !== view.statusLabel) status.textContent = view.statusLabel;
+          const price = card.querySelector(".shop-order-summary-card__price");
+          if (price && price.textContent !== money(order.total_price)) price.textContent = money(order.total_price);
+          if (!view.isFinal || !card.matches(".shop-home-active-order-card, .shop-active-order-card")) return;
+          const remove = () => {
+            card.remove();
+            document.querySelectorAll("[data-home-active-orders]").forEach((host) => {
+              if (!host.querySelector("[data-home-active-order-id]")) host.classList.add("hidden");
+            });
+            const promo = document.getElementById("shopCatalogPromoBlock");
+            if (promo && !promo.querySelector("[data-home-active-order-id], .shop-catalog-bonus-card")) promo.classList.add("hidden");
+            if (activeOrdersListView && !activeOrdersListView.querySelector(".shop-active-order-card")) {
+              activeOrdersListView.classList.add("hidden");
+              // Details remain open even when the last active order finishes.
+              if (sheetNavigationState?.screen === "list") activeOrdersEmptyView?.classList.remove("hidden");
+            }
+          };
+          if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) remove();
+          else if (!card.classList.contains("shop-order-card-leaving")) {
+            card.classList.add("shop-order-card-leaving");
+            card.addEventListener("animationend", remove, { once: true });
+            setTimeout(remove, 250);
+          }
+        });
+        syncOrderCounts();
+        // New membership is structural; ordinary status changes never rebuild these lists.
+        if (!view.isFinal && index < 0) {
+          window.renderShopHomeActiveOrdersBlock?.();
+          if (sheetNavigationState?.type === "activeOrders" && sheetNavigationState?.screen === "list") renderActiveOrdersListContent(active);
+        }
+      }
+
+      function refreshOrderSnapshot(id) {
+        if (!(id > 0)) return Promise.resolve();
+        const scope = currentOrderScope();
+        const key = `${scope}:${id}`;
+        const pending = orderRefreshJobs.get(key);
+        if (pending) { pending.again = true; return pending.promise; }
+        const job = { again: false, promise: null, controller: new AbortController() };
+        job.promise = (async () => {
+          do {
+            job.again = false;
+            try {
+              const json = await apiJson(`/api/public/me/orders/${id}`, { signal: job.controller.signal });
+              if (scope !== currentOrderScope()) return;
+              if (json.data && !job.again) applyOrderSnapshot(json.data);
+            } catch (error) {
+              if (error.name === "AbortError" || scope !== currentOrderScope()) return;
+              console.warn("Order snapshot refresh failed:", error);
+              if (error.httpStatus === 401) closeOrderSocket();
+            }
+          } while (job.again && scope === currentOrderScope());
+        })().finally(() => { if (orderRefreshJobs.get(key) === job) orderRefreshJobs.delete(key); });
+        orderRefreshJobs.set(key, job);
+        return job.promise;
+      }
+
+      async function reconcileOrderSocket() {
+        const scope = currentOrderScope();
+        await window.updateActiveOrdersBadge({ force: true, reconcile: true });
+        if (scope !== currentOrderScope()) return;
+        const ids = new Set(Array.from(document.querySelectorAll("[data-order-details-id]"))
+          .filter((root) => !root.closest(".hidden") && root.getClientRects().length)
+          .map((root) => Number(root.dataset.orderDetailsId)));
+        await Promise.all(Array.from(ids, refreshOrderSnapshot));
+      }
+
+      function syncOrderSocket() {
+        const token = getCustomerToken();
+        const scope = shopOrderScopeKey();
+        if (scope !== orderSocketScope) {
+          const wasScoped = Boolean(orderSocketScope);
+          closeOrderSocket();
+          orderSocketScope = scope;
+          shopOrderScopeGeneration += 1;
+          orderEventCursors.clear();
+          orderStateVersions.clear();
+          if (wasScoped) {
+            activeOrdersBadgeController?.abort();
+            orderRefreshJobs.forEach((job) => job.controller.abort());
+            orderRefreshJobs.clear();
+            shopOrderSnapshots.clear();
+            shopOrderDetailsLoaded.clear();
+            shopOrdersListCache.clear();
+            window._activeOrders = [];
+            window._savedActiveOrdersForBack = [];
+          }
+        }
+        window.shopRealtime.sync();
+        if (!token) { closeOrderSocket(); return; }
+        if (orderSocket) return;
+        orderSocket = window.shopRealtime.subscribe((message) => {
+          if (scope !== shopOrderScopeKey()) return;
+          if (message.type === "customer.ready") {
+            orderEventCursors.clear();
+            void reconcileOrderSocket();
+          } else if (message.type === "order.updated") {
+            const id = Number(message.order_id);
+            const cursor = Number(message.cursor);
+            if (!(id > 0) || cursor <= (orderEventCursors.get(id) || 0)) return;
+            orderEventCursors.set(id, cursor);
+            window.__shopOrdersNavBadgeRead = false;
+            void refreshOrderSnapshot(id);
+          } else if (message.type === "customer.expired") {
+            closeOrderSocket();
+          }
+        });
+      }
+      window.addEventListener("shop:customer-profile-changed", () => {
+        const changed = shopOrderScopeKey() !== orderSocketScope;
+        syncOrderSocket();
+        if (changed) void window.updateActiveOrdersBadge({ force: true });
+      });
+      window.addEventListener("tenantStoreChanged", () => {
+        syncOrderSocket();
+        void window.updateActiveOrdersBadge({ force: true });
+      });
+      window.addEventListener("storage", (event) => {
+        if (event.key === "activeStoreId" || event.key === CUSTOMER_TOKEN_KEY) {
+          syncOrderSocket();
+          void window.updateActiveOrdersBadge({ force: true });
+        }
+      });
+      syncOrderSocket();
+
       // Активные заказы: обновление бейджа и обработчик клика
       window.updateActiveOrdersBadge = async function updateActiveOrdersBadge(opts = {}) {
         const badges = [elActiveOrdersBadge, elActiveOrdersBadgeMobile, elActiveOrdersSheetCollapsed].filter(Boolean);
@@ -42844,11 +43009,17 @@ function initShopLate() {
         }
 
         const forceRefresh = Boolean(opts && opts.force === true);
-        if (activeOrdersBadgeLoading) return;
+        const requestScope = currentOrderScope();
+        const requestVersions = new Map(orderStateVersions);
+        if (activeOrdersBadgeLoading) {
+          if (forceRefresh) activeOrdersBadgePendingOptions = opts;
+          return;
+        }
         if (!forceRefresh && Date.now() - activeOrdersBadgeLastSyncAt < ACTIVE_ORDERS_BADGE_MIN_REFRESH_MS) {
           return;
         }
         activeOrdersBadgeLoading = true;
+        activeOrdersBadgeController = new AbortController();
       
         try {
           const token = getCustomerToken();
@@ -42863,13 +43034,26 @@ function initShopLate() {
             return;
           }
 
-          const json = await apiJson("/api/public/me/orders?limit=20");
-          const orders = Array.isArray(json.data) ? json.data : [];
+          const json = await apiJson("/api/public/me/orders?status_is_final=0&limit=200", { signal: activeOrdersBadgeController.signal });
+          if (requestScope !== currentOrderScope()) return;
+          const orders = (Array.isArray(json.data) ? json.data : []).map((order) => {
+            const id = Number(order.id);
+            return orderStateVersions.get(id) !== requestVersions.get(id) && shopOrderSnapshots.has(id)
+              ? { ...order, ...shopOrderSnapshots.get(id) } : order;
+          });
+          if (opts.reconcile) {
+            const previousIds = (window._activeOrders || []).map((order) => Number(order.id));
+            orders.forEach((order) => applyOrderSnapshot(order, true));
+            const currentIds = new Set(orders.map((order) => Number(order.id)));
+            await Promise.all(previousIds.filter((id) => !currentIds.has(id)).map(refreshOrderSnapshot));
+            activeOrdersBadgeLastSyncAt = Date.now();
+            return;
+          }
         
           // Считаем активные заказы: все заказы с нефинальными статусами
           // Активными считаем заказы, у которых статус не является финальным (is_final !== 1)
           const activeOrders = orders.filter(order => {
-            const isFinal = Number(order.status_is_final || 0) === 1;
+            const isFinal = window.deriveCustomerOrderProgress(order).isFinal;
             return !isFinal;
           });
 
@@ -42896,7 +43080,7 @@ function initShopLate() {
               // Для мобильного приоткрытого bottom sheet: если заказ один, показываем статус
               if (elActiveOrdersSheetCollapsed && badge === elActiveOrdersSheetCollapsed && count === 1) {
                 const order = activeOrders[0];
-                const statusTitle = order.status_title || "";
+                const statusTitle = window.deriveCustomerOrderProgress(order).statusLabel;
                 if (textEl) {
                   textEl.textContent = statusTitle ? `Активный заказ • ${statusTitle}` : "Активный заказ";
                 }
@@ -42906,7 +43090,7 @@ function initShopLate() {
               } else if (elActiveOrdersBadgeMobile && badge === elActiveOrdersBadgeMobile && count === 1) {
                 // Для старого мобильного бейджа: если заказ один, показываем статус
                 const order = activeOrders[0];
-                const statusTitle = order.status_title || "";
+                const statusTitle = window.deriveCustomerOrderProgress(order).statusLabel;
                 if (textEl) {
                   textEl.textContent = statusTitle ? `Активный заказ • ${statusTitle}` : "Активный заказ";
                 }
@@ -42950,6 +43134,9 @@ function initShopLate() {
             }
           }
         } catch (e) {
+          if (e.name === "AbortError" || requestScope !== currentOrderScope()) return;
+          console.warn("Active orders refresh failed:", e);
+          if (opts.reconcile && e.httpStatus !== 401) return;
           // Если ошибка (не авторизован и т.д.), скрываем бейджи
           badges.forEach(badge => badge.classList.add("hidden"));
           window._activeOrders = [];
@@ -42959,6 +43146,12 @@ function initShopLate() {
           }
         } finally {
           activeOrdersBadgeLoading = false;
+          activeOrdersBadgeController = null;
+          if (activeOrdersBadgePendingOptions) {
+            const pendingOptions = activeOrdersBadgePendingOptions;
+            activeOrdersBadgePendingOptions = null;
+            void window.updateActiveOrdersBadge(pendingOptions);
+          }
           if (typeof queueMobileUiStateSync === "function") {
             queueMobileUiStateSync("updateActiveOrdersBadge.finally");
           } else if (typeof window.queueShopMobileUiStateSync === "function") {
@@ -42968,7 +43161,6 @@ function initShopLate() {
       }
 
       const activeOrdersRowCache = new Map();
-      const activeOrdersDetailsCache = new Map();
       let activeOrdersSheetWrap = null;
       let activeOrdersListView = null;
       let activeOrdersDetailsHost = null;
@@ -42977,6 +43169,7 @@ function initShopLate() {
       const activeOrderDetailsSheetBodyClass = "shop-active-order-details-sheet-body";
 
       function setActiveOrderDetailsSheetBodyState(active) {
+        if (!active) resetOrderDetailsTransientUi();
         const body = window.AppModal?.body;
         if (!body) return;
         body.classList.toggle(activeOrderDetailsSheetBodyClass, !!active);
@@ -43036,6 +43229,7 @@ function initShopLate() {
       function buildActiveOrderListRow(order) {
         const card = document.createElement("div");
         card.className = "shop-active-order-card";
+        card.dataset.orderId = String(order.id);
         card.style.cursor = "pointer";
         card.style.padding = "16px";
         card.style.borderBottom = "1px solid var(--color-border, #e5e5e5)";
@@ -43053,7 +43247,8 @@ function initShopLate() {
         const status = document.createElement("div");
         status.style.color = "var(--shop-buy, #f97316)";
         status.style.fontSize = "14px";
-        status.textContent = order.status_title || "";
+        status.className = "shop-order-summary-card__status";
+        status.textContent = deriveCustomerOrderView(order).statusLabel;
 
         header.appendChild(orderNum);
         header.appendChild(status);
@@ -43306,8 +43501,10 @@ function initShopLate() {
     
       // Показать детали активного заказа
       async function showActiveOrderDetails(orderId) {
+        ensureShopOrdersCacheScope();
         if (!window.AppModal) return;
         const requestedOrderId = Number(orderId || 0);
+        const requestScope = shopOrderRequestScopeKey();
         if (requestedOrderId > 0) {
           // Детали могут открываться напрямую (из push), до загрузки списка заказов.
           // В этом случае список ещё пуст и обычный syncActiveOrdersEventSource не
@@ -43321,7 +43518,7 @@ function initShopLate() {
         shell.listView.classList.add("hidden");
         shell.emptyView.classList.add("hidden");
         shell.detailsHost.classList.remove("hidden");
-        setActiveOrdersDetailsMessage("Загрузка…");
+        if (!shopOrderDetailsLoaded.has(Number(orderId))) setActiveOrdersDetailsMessage("Загрузка…");
       
         // Сохраняем список активных заказов в глобальную переменную для использования при возврате
         const activeOrders = window._activeOrders || [];
@@ -43343,11 +43540,11 @@ function initShopLate() {
       
         setAppModalMode("shop");
         if (window.AppModal.isOpen && window.AppModal.isOpen()) {
-          window.AppModal.setTitle("Детали заказа");
+          window.AppModal.setTitle(shopOrderDetailsTitle({ number: orderId }));
           window.AppModal.setContent(shell.wrap);
         } else {
           window.AppModal.open({
-            title: "Детали заказа",
+            title: shopOrderDetailsTitle({ number: orderId }),
             content: shell.wrap,
             onClose: () => {
               sheetNavigationState.type = null;
@@ -43435,7 +43632,13 @@ function initShopLate() {
       
         // Загружаем детали заказа
         try {
-          const json = await apiJson(`/api/public/me/orders/${orderId}`);
+          const json = shopOrderDetailsLoaded.has(Number(orderId))
+            ? { data: shopOrderSnapshots.get(Number(orderId)) }
+            : await apiJson(`/api/public/me/orders/${orderId}`);
+          if (requestScope !== shopOrderRequestScopeKey()
+            || sheetNavigationState?.type !== "activeOrders"
+            || sheetNavigationState?.screen !== "details"
+            || Number(sheetNavigationState?.data?.orderId) !== requestedOrderId) return;
           const order = json.data || null;
           let detailView = shell.detailsHost.querySelector(`.shop-active-order-details[data-order-id="${Number(orderId)}"]`);
           if (!detailView) {
@@ -43452,118 +43655,22 @@ function initShopLate() {
             return;
           }
         
-          let html = `<div class="shop-order-details">`;
-        
-          // Заголовок с номером и статусом (кнопка "Назад" теперь в хедере)
-          html += `<div class="shop-order-details-header">`;
-          html += `<div class="shop-order-details-title">Заказ #${order.id}</div>`;
-          if (order.status_title) {
-            html += `<div class="shop-order-details-status">${escapeHtml(order.status_title)}</div>`;
-          }
-          html += `</div>`;
-        
-          // Информация о заказе
-          html += `<div class="shop-order-details-info">`;
-          html += `<div class="shop-order-info-row">`;
-          html += `<div class="shop-order-info-label">Дата и время</div>`;
-          html += `<div class="shop-order-info-value">${new Date(order.created_at).toLocaleString("ru-RU")}</div>`;
-          html += `</div>`;
-        
-          if (order.method_title) {
-            html += `<div class="shop-order-info-row">`;
-            html += `<div class="shop-order-info-label">Способ доставки</div>`;
-            html += `<div class="shop-order-info-value">${escapeHtml(order.method_title)}</div>`;
-            html += `</div>`;
-          }
-        
-          if (order.time_option_title) {
-            html += `<div class="shop-order-info-row">`;
-            html += `<div class="shop-order-info-label">Время доставки</div>`;
-            html += `<div class="shop-order-info-value">${escapeHtml(order.time_option_title)}</div>`;
-            html += `</div>`;
-          }
-        
-          if (order.scheduled_at) {
-            html += `<div class="shop-order-info-row">`;
-            html += `<div class="shop-order-info-label">Запланировано на</div>`;
-            html += `<div class="shop-order-info-value">${new Date(order.scheduled_at).toLocaleString("ru-RU")}</div>`;
-            html += `</div>`;
-          }
-          html += `</div>`;
-        
-          // Адрес доставки
-          if (order.address) {
-            html += `<div class="shop-order-details-section">`;
-            html += `<div class="shop-order-section-title">Адрес доставки</div>`;
-            html += `<div class="shop-order-address">${escapeHtml(order.address)}</div>`;
-            html += `</div>`;
-          }
-        
-          // Товары
-          if (order.items && Array.isArray(order.items) && order.items.length > 0) {
-            const orderItemsForDisplay = sortRepeatOrderItemsForDisplay(order.items);
-            html += `<div class="shop-order-details-section">`;
-            html += `<div class="shop-order-section-title">Товары</div>`;
-            html += `<div class="shop-cart-items">`;
-            html += renderSharedReadonlyOrderItemsHtml(orderItemsForDisplay, order);
-            html += `</div>`;
-            html += `</div>`;
-          }
-        
-          // Дополнительная информация
-          if (order.cutlery_qty && Number(order.cutlery_qty) > 0) {
-            html += `<div class="shop-order-details-section">`;
-            html += `<div class="shop-order-info-row">`;
-            html += `<div class="shop-order-info-label">Приборы</div>`;
-            html += `<div class="shop-order-info-value">${order.cutlery_qty} шт.</div>`;
-            html += `</div>`;
-            html += `</div>`;
-          }
-        
-          // Комментарий
-          if (order.comment) {
-            html += `<div class="shop-order-details-section">`;
-            html += `<div class="shop-order-section-title">Комментарий</div>`;
-            html += `<div class="shop-order-comment">${escapeHtml(order.comment)}</div>`;
-            html += `</div>`;
-          }
-        
-          // Суммы (единый блок как в истории заказов)
-          html += renderOrderSummaryBlock(order);
-        
-          // Пустое поле 200px внизу для скролла
-          html += `<div style="height: 200px;"></div>`;
-        
-          html += `</div>`;
-        
-          const detailSig = `${Number(order?.id || 0)}:${str(order?.updated_at || order?.created_at || "")}:${Number(order?.total_price || 0)}:${Array.isArray(order?.items) ? order.items.length : 0}`;
-          const cachedDetail = activeOrdersDetailsCache.get(Number(order?.id || 0));
-          if (cachedDetail && cachedDetail.sig === detailSig && cachedDetail.node) {
-            detailView.replaceChildren(cachedDetail.node);
-          } else {
-            const holder = document.createElement("div");
-            holder.innerHTML = html;
-            const node = holder.firstElementChild || holder;
-            detailView.replaceChildren(node);
-            activeOrdersDetailsCache.set(Number(order?.id || 0), { sig: detailSig, node: node.cloneNode(true) });
-          }
-          bindOrderSummaryDiscountToggles(detailView);
+          detailView.innerHTML = renderShopOrderDetails(order);
+          bindShopOrderAccordions(detailView);
+          window.AppModal.setTitle(shopOrderDetailsTitle(deriveCustomerOrderView(order)));
           const reopenActiveOrderDetails = () => {
             void showActiveOrderDetails(orderId);
           };
-          bindRepeatOrderItemRows(
-            detailView,
-            sortRepeatOrderItemsForDisplay(order.items),
-            { onBack: reopenActiveOrderDetails, enableSwipeActions: true }
-          );
-          if (window._shopReturnToCatalogTopAfterOrderDetailsClose === true) {
-            showMobileOrderHomeAction(() => closeShopSheetIfOpen());
-          } else {
-            showMobileOrderDetailsActions(order);
-          }
+          const bindItems = (snapshot) => bindRepeatOrderItemRows(detailView, sortRepeatOrderItemsForDisplay(snapshot.items), { onBack: reopenActiveOrderDetails, enableSwipeActions: false });
+          detailView.querySelector("[data-order-details-id]").__shopBindItems = bindItems;
+          bindItems(order);
+          bindDesktopOrderDetailsFooter(order);
+          showMobileOrderDetailsActions(order);
         
           // Кнопка "Назад" уже настроена в хедере выше
         } catch (e) {
+          if (requestScope !== shopOrderRequestScopeKey()
+            || Number(sheetNavigationState?.data?.orderId) !== requestedOrderId) return;
           console.error("Failed to load order details:", e);
           setActiveOrdersDetailsMessage("Не удалось загрузить детали заказа");
         }
@@ -43615,14 +43722,14 @@ function initShopLate() {
         elActiveOrdersSheetCollapsed.addEventListener("click", handleActiveOrdersBadgeClick);
       }
 
-      // Обновляем бейдж при загрузке и периодически
+      // Initial HTTP load; later updates arrive over the customer WebSocket.
       if (elActiveOrdersBadge || elActiveOrdersBadgeMobile) {
         updateActiveOrdersBadge();
-        // Обновляем каждые 30 секунд
+        // Retire the previous periodic order refresh.
         if (window.__shopActiveOrdersBadgeInterval) {
           clearInterval(window.__shopActiveOrdersBadgeInterval);
         }
-        window.__shopActiveOrdersBadgeInterval = setInterval(updateActiveOrdersBadge, 30000);
+        window.__shopActiveOrdersBadgeInterval = null;
       
         // Обновляем при возврате на страницу
         if (typeof window.__shopActiveOrdersVisibilityHandler === "function") {
@@ -43630,7 +43737,8 @@ function initShopLate() {
         }
         window.__shopActiveOrdersVisibilityHandler = () => {
           if (!document.hidden) {
-            updateActiveOrdersBadge();
+            syncOrderSocket();
+            if (getCustomerToken()) void reconcileOrderSocket();
           }
         };
         document.addEventListener("visibilitychange", window.__shopActiveOrdersVisibilityHandler);
@@ -43765,9 +43873,11 @@ window.__getSharedProductListSummaries = async function getSharedProductListSumm
     const lines = [
       ...(Array.isArray(config?.ingredients) ? config.ingredients.map(formatIngredientLineForOrder) : []),
       ...(Array.isArray(config?.option_items) ? config.option_items.map((option) => {
-        if (str(option?.variant_label || "").trim()) return formatOptionLineForOrder(option);
+        const title = str(option?.title || option?.name || "").trim();
+        const variantLabel = str(option?.variant_label || "").trim();
+        if (variantLabel) return `${variantLabel} ${title}`;
         const qty = Math.max(1, Number(option?.qty || option?.quantity || 1));
-        return `${qty} шт ${str(option?.title || option?.name || "").trim()}`.trim();
+        return qty > 1 ? `${qty} шт ${title}` : title;
       }) : []),
     ].map((line) => str(line || "").trim()).filter(Boolean);
     const price = Number(await calculateDefaultPrice(product)) || 0;
@@ -43814,5 +43924,3 @@ window.__mountSharedProductDetails = async function mountSharedProductDetails(op
   });
   return { productId, product };
 };
-
-
