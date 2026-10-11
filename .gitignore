@@ -7,6 +7,8 @@ yarn-error.log*
 db-tools/
 migrations/*
 !migrations/005-add-team-rbac.sql
+!migrations/006-add-employee-documents.sql
+!migrations/007-add-navigation-permissions.sql
 a1186497_test.sql
 shop-1.localhost-1774347949861.log
 shop-2.localhost.har

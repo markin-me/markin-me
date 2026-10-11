@@ -19,6 +19,8 @@
             <% if (item.desktopId) { %>id="<%= item.desktopId %>"<% } %>
             class="nav-item <%= item.desktopLinkClasses || '' %> <%= item.key === activePage ? 'active-nav' : '' %>"
             data-nav-key="<%= item.key %>"
+            data-permission-keys="<%= (item.permissionKeys || []).join(',') %>"
+            data-permission-toggle-keys="<%= (item.toggleKeys || []).join(',') %>"
             data-sidebar-tooltip="<%= item.label %>"
             aria-label="<%= item.ariaLabel || item.label %>"
           >

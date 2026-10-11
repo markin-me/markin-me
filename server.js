@@ -1947,7 +1947,34 @@ app.post('/api/max/webhook', (req, res) => {
 const publicShopRouter = makePublicShopRouter({ db, helpers, ordersEvents, presenceService });
 app.use('/api/public', publicShopRouter);
 app.use('/api/print', makePrintApiRouter({ db, helpers }));
-app.use('/api/chat-temp', makeChatTempRouter());
+
+function isCustomerChatRequest(req) {
+  const actor = String(
+    req.query?.chat_actor || req.query?.actor
+    || req.body?.chat_actor || req.body?.actor
+    || req.headers['x-chat-actor'] || req.headers['x-chat-role'] || ''
+  ).trim().toLowerCase();
+  return ['in', 'customer', 'client'].includes(actor)
+    || (!actor && Boolean(String(req.headers['x-customer-token'] || '').trim()));
+}
+
+function requireChatPermission(req, res, next) {
+  if (isCustomerChatRequest(req)) return next();
+  return authMiddleware(req, res, () => {
+    const permissionKey = ['GET', 'HEAD'].includes(String(req.method || '').toUpperCase())
+      ? 'chat.view'
+      : 'chat.manage';
+    return requirePermission(permissionKey)(req, res, (error) => {
+      if (error) return next(error);
+      const currentTenantId = Number(req.user?.tenantId || 0);
+      req.headers['x-tenant-id'] = String(currentTenantId);
+      if (req.query) req.query.tenant_id = String(currentTenantId);
+      return next();
+    });
+  });
+}
+
+app.use('/api/chat-temp', requireChatPermission, makeChatTempRouter());
 
 // ------------------------------
 // API: Admin (требуют авторизации)
@@ -1958,7 +1985,7 @@ function resolveAdminPermission(req) {
   const isRead = method === 'GET' || method === 'HEAD';
   if (route.startsWith('/team')) return null;
   if (route.startsWith('/orders')) {
-    if (route.includes('/cash-')) return 'finance.view';
+    if (route.includes('/cash-')) return isRead ? 'finance.view' : 'finance.manage';
     if (isRead) return 'orders.view';
     if (route.includes('/refund')) return 'orders.refund';
     if (route.includes('/status') || route.endsWith('/paid')) return 'orders.status';
@@ -1976,7 +2003,8 @@ function resolveAdminPermission(req) {
       || route.startsWith('/auto-add') || route.startsWith('/units') || route.startsWith('/unit-conversions')) {
     return isRead ? 'products.view' : 'products.edit';
   }
-  if (route.startsWith('/analytics')) return 'finance.view';
+  if (route.startsWith('/analytics/expense-documents') && isRead) return 'finance.cost';
+  if (route.startsWith('/analytics')) return isRead ? 'finance.view' : 'finance.manage';
   if (route.startsWith('/tenant') || route.startsWith('/system')) {
     return isRead ? 'settings.view' : 'settings.manage';
   }

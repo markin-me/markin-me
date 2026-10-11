@@ -174,8 +174,8 @@
   );
   const adminChatHref = '/dashboard/chat?v=' + encodeURIComponent(serviceWorkerVersion || appVersion || '');
   const adminNavItems = [
-    { key: 'cash', href: '/dashboard/cash', icon: 'fa-cash-register', label: 'Касса', ariaLabel: 'Касса' },
-    { key: 'products', href: '/dashboard/products', icon: 'fa-box', label: 'Товары', ariaLabel: 'Товары' },
+    { key: 'cash', href: '/dashboard/cash', icon: 'fa-cash-register', label: 'Касса', ariaLabel: 'Касса', permissionKeys: ['finance.view', 'finance.cost', 'finance.manage'], toggleKeys: ['finance.view'] },
+    { key: 'products', href: '/dashboard/products', icon: 'fa-box', label: 'Товары', ariaLabel: 'Товары', permissionKeys: ['products.view', 'products.edit', 'stock.view', 'stock.edit', 'finance.cost'], toggleKeys: ['products.view', 'stock.view'] },
     {
       key: 'orders',
       href: '/dashboard/orders',
@@ -184,12 +184,14 @@
       ariaLabel: 'Заказы',
       desktopId: 'sidebarOrdersNavLink',
       desktopLinkClasses: 'nav-item--chat nav-item--orders',
-      desktopBadgeId: 'sidebarOrdersUnreadBadge'
+      desktopBadgeId: 'sidebarOrdersUnreadBadge',
+      permissionKeys: ['orders.view', 'orders.edit', 'orders.status', 'orders.assign', 'orders.cancel', 'orders.refund'],
+      toggleKeys: ['orders.view']
     },
-    { key: 'courier-screen', href: '/dashboard/courier-screen', icon: 'fa-truck', label: 'Экран курьера', ariaLabel: 'Экран курьера' },
-    { key: 'new-order', href: '/dashboard/new-order', icon: 'fa-plus-circle', label: 'Новый заказ', ariaLabel: 'Новый заказ' },
-    { key: 'clients', href: '/dashboard/clients', icon: 'fa-bullhorn', label: 'Маркетинг', ariaLabel: 'Маркетинг' },
-    { key: 'team', href: '/dashboard/team', icon: 'fa-user-tie', label: 'Команда', ariaLabel: 'Команда' },
+    { key: 'courier-screen', href: '/dashboard/courier-screen', icon: 'fa-truck', label: 'Экран курьера', ariaLabel: 'Экран курьера', permissionKeys: ['orders.view', 'orders.status'], toggleKeys: ['orders.view'] },
+    { key: 'new-order', href: '/dashboard/new-order', icon: 'fa-plus-circle', label: 'Новый заказ', ariaLabel: 'Новый заказ', permissionKeys: ['orders.edit'], toggleKeys: ['orders.edit'] },
+    { key: 'clients', href: '/dashboard/clients', icon: 'fa-bullhorn', label: 'Маркетинг', ariaLabel: 'Маркетинг', permissionKeys: ['clients.view', 'clients.edit'], toggleKeys: ['clients.view'] },
+    { key: 'team', href: '/dashboard/team', icon: 'fa-user-tie', label: 'Команда', ariaLabel: 'Команда', permissionKeys: ['users.view', 'users.manage', 'roles.manage', 'employee_documents.manage'], toggleKeys: ['users.view'] },
     {
       key: 'chat',
       href: adminChatHref,
@@ -201,9 +203,11 @@
       desktopLinkClasses: 'nav-item--chat',
       desktopBadgeId: 'sidebarChatUnreadBadge',
       mobileId: 'mobileChatNavLink',
-      mobileBadgeId: 'mobileChatUnreadBadge'
+      mobileBadgeId: 'mobileChatUnreadBadge',
+      permissionKeys: ['chat.view', 'chat.manage'],
+      toggleKeys: ['chat.view']
     },
-    { key: 'settings', href: '/dashboard/settings', icon: 'fa-cog', label: 'Настройки', ariaLabel: 'Настройки' }
+    { key: 'settings', href: '/dashboard/settings', icon: 'fa-cog', label: 'Настройки', ariaLabel: 'Настройки', permissionKeys: ['settings.view', 'settings.manage'], toggleKeys: ['settings.view'] }
   ];
 %>
 
@@ -429,18 +433,25 @@
           var list = Array.isArray(permissions) ? permissions : [];
           var fullAccess = list.indexOf('*') !== -1;
           var keys = new Set(list.map(function (item) { return typeof item === 'string' ? item : item.key; }));
-          var navPermissions = {
-            cash: ['finance.view'], products: ['products.view'], orders: ['orders.view'],
-            'courier-screen': ['orders.view'], 'new-order': ['orders.edit'], clients: ['clients.view'],
-            team: ['users.view', 'users.manage', 'roles.manage'], chat: ['clients.view'], settings: ['settings.view']
-          };
+          var firstAllowedLink = null;
+          var activeAllowed = false;
           document.querySelectorAll('[data-nav-key]').forEach(function (link) {
-            var required = navPermissions[link.getAttribute('data-nav-key')] || [];
+            var required = String(link.getAttribute('data-permission-keys') || '').split(',').filter(Boolean);
             var visible = fullAccess || required.length === 0 || required.some(function (key) { return keys.has(key); });
+            if (link.getAttribute('data-nav-key') === 'chat' && document.body.dataset.adminChatEnabled !== '1') visible = false;
             var item = link.closest('li');
+            if (document.body.classList.contains('team-rbac-permission-mode')) {
+              if (item && (link.getAttribute('data-nav-key') !== 'chat' || document.body.dataset.adminChatEnabled === '1')) item.classList.remove('hidden');
+              return;
+            }
             if (item) item.classList.toggle('hidden', !visible);
             else link.classList.toggle('hidden', !visible);
+            if (visible && !firstAllowedLink) firstAllowedLink = link;
+            if (visible && link.getAttribute('data-nav-key') === document.body.dataset.adminActivePage) activeAllowed = true;
           });
+          if (!document.body.classList.contains('team-rbac-permission-mode') && !activeAllowed && firstAllowedLink && document.body.dataset.adminActivePage) {
+            window.location.replace(firstAllowedLink.href);
+          }
         }
 
         function renderRoleOptions(context) {
@@ -490,14 +501,18 @@
             if (!response.ok || context.ok !== true) throw new Error(context.error || 'AUTH_CONTEXT_FAILED');
             if (context.user) localStorage.setItem('user', JSON.stringify(context.user));
             if (context.tenant) localStorage.setItem('tenant', JSON.stringify(context.tenant));
+            window.AdminAccessContext = context;
             applyNavigationPermissions(context.permissions || []);
             renderRoleOptions(context);
             if (Array.isArray(context.stores)) {
               allowedStoreIds = new Set(context.stores.map(function (store) { return String(store.id); }));
               if (stores.length) applyStores();
             }
+            window.dispatchEvent(new CustomEvent('admin:access-context', { detail: context }));
+            return context;
           } catch (error) {
             console.error('Access context load failed:', error);
+            return null;
           }
         }
 
@@ -656,7 +671,7 @@
         });
 
         // Загрузить точки при открытии страницы
-        loadAccessContext();
+        window.AdminAccessContextPromise = loadAccessContext();
         loadStores();
 
         // Проверка авторизации для страниц dashboard

@@ -520,6 +520,7 @@
     activeClientId: null,
     activeClient: null,
     activeClientDataLoading: false,
+    canManageChat: false,
     activeOrders: [],
     activeOrdersSignature: "[]",
     orderStatuses: [],
@@ -645,6 +646,46 @@
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
   state.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.store?.ui?.threadPinnedBottomByClient);
   state.clientsPager = createDefaultClientsPager();
+
+  function applyChatAccessContext(context) {
+    const permissions = Array.isArray(context?.permissions) ? context.permissions : [];
+    const permissionKeys = new Set(
+      permissions
+        .map((permission) => typeof permission === "string" ? permission : permission?.key)
+        .map((key) => String(key || "").trim())
+        .filter(Boolean)
+    );
+    state.canManageChat = permissionKeys.has("*") || permissionKeys.has("chat.manage");
+    syncChatManageUi();
+  }
+
+  function syncChatManageUi() {
+    const canManage = state.canManageChat === true;
+    setComposerEnabled(canManage && !!state.activeClientId);
+    if (dom.center.input) {
+      dom.center.input.placeholder = canManage ? "Введите сообщение" : "Только просмотр";
+    }
+    if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canManage);
+    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.toggle("hidden", !canManage);
+    if (dom.center.selectionDeleteBtn) dom.center.selectionDeleteBtn.classList.toggle("hidden", !canManage);
+    $$(".chat-client-row-actions", dom.left.list).forEach((actions) => {
+      actions.classList.toggle("hidden", !canManage);
+    });
+
+    const replyAction = dom.center.contextMenu?.querySelector('[data-chat-msg-action="reply"]');
+    if (replyAction) replyAction.classList.toggle("hidden", !canManage);
+    const menuReactions = dom.center.contextMenu?.querySelector(".chat-message-menu-reactions");
+    if (menuReactions) menuReactions.classList.toggle("hidden", !canManage);
+
+    if (!canManage) {
+      hideClientContextMenu();
+      closeAllClientSwipeRows(null, { immediate: true });
+      hideMessageContextMenu();
+      hideReactionBar();
+      hideEmojiPopover();
+      closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
+    }
+  }
 
   function refreshDesktopHeaderDomRefs() {
     dom.center.headerOrder = $("#chatHeaderOrder");
@@ -1078,6 +1119,7 @@
   }
 
   function openClientSwipeRow(row) {
+    if (!state.canManageChat) return false;
     const targetRow = row && row.isConnected ? row : null;
     if (!targetRow) return false;
     const main = getClientSwipeRowMain(targetRow);
@@ -1128,6 +1170,7 @@
     };
 
     main.addEventListener("touchstart", (event) => {
+      if (!state.canManageChat) return;
       if (!isChatMobileViewport()) return;
       if (event.touches.length !== 1) return;
       const touch = event.touches[0];
@@ -1185,6 +1228,7 @@
       if (!actionBtn) return;
       event.preventDefault();
       event.stopPropagation();
+      if (!state.canManageChat) return;
       closeClientSwipeRow(row, { immediate: true });
       const action = String(actionBtn.getAttribute("data-chat-client-action-inline") || "");
       if (action === "clear") {
@@ -4626,6 +4670,8 @@
     try {
       const parsed = new URL(rawUrl, window.location.origin);
       if (tenantId) parsed.searchParams.set("tenant_id", String(tenantId));
+      const token = localStorage.getItem("authToken");
+      if (String(actorValue || "").toLowerCase() === "out" && token) parsed.searchParams.set("token", token);
       Object.entries(extraParams || {}).forEach(([key, value]) => {
         if (value === undefined || value === null || value === "") return;
         parsed.searchParams.set(String(key), String(value));
@@ -5254,6 +5300,7 @@
   }
 
   async function pushThreadTypingState(clientId, active, phrase = "", options = {}) {
+    if (!state.canManageChat) return;
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     const body = active === true
@@ -10659,7 +10706,7 @@
         </span>
         </span>
       </button>
-      <div class="chat-client-row-actions" aria-hidden="true">
+      <div class="chat-client-row-actions${state.canManageChat ? "" : " hidden"}" aria-hidden="true">
         <button type="button" class="chat-client-row-action is-clear" data-chat-client-action-inline="clear">Очистить</button>
         <button type="button" class="chat-client-row-action is-delete${canDeleteGuest ? "" : " hidden"}" data-chat-client-action-inline="delete-guest">Удалить</button>
       </div>
@@ -10718,6 +10765,10 @@
       });
       mainBtn.addEventListener("contextmenu", (event) => {
         event.preventDefault();
+        if (!state.canManageChat) {
+          hideClientContextMenu();
+          return;
+        }
         showClientContextMenu(event.clientX, event.clientY, client.id);
       });
     }
@@ -12485,15 +12536,16 @@
   }
 
   function setComposerEnabled(enabled) {
-    [dom.center.input, dom.center.attachBtn, dom.center.emojiBtn, dom.center.sendBtn].forEach((el) => {
+    const canEnable = enabled && state.canManageChat;
+    [dom.center.input, dom.center.attachInput, dom.center.attachBtn, dom.center.emojiBtn, dom.center.sendBtn].forEach((el) => {
       if (!el) return;
-      el.disabled = !enabled;
+      el.disabled = !canEnable;
     });
     [dom.center.attachPreviewCaption, dom.center.attachPreviewEmojiBtn, dom.center.attachPreviewSendBtn].forEach((el) => {
       if (!el) return;
-      el.disabled = !enabled;
+      el.disabled = !canEnable;
     });
-    if (!enabled) {
+    if (!canEnable) {
       stopLocalTypingSession(state.activeClientId, { flush: true });
       closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
     }
@@ -12506,7 +12558,9 @@
     dom.center.sendBtn.title = isEditing ? "Сохранить изменения" : "Отправить";
     dom.center.sendBtn.setAttribute("aria-label", isEditing ? "Сохранить изменения" : "Отправить");
     dom.center.sendBtn.innerHTML = isEditing ? '<i class="fas fa-check"></i>' : '<i class="fas fa-paper-plane"></i>';
-    dom.center.input.placeholder = isEditing ? "Измените сообщение" : "Введите сообщение";
+    dom.center.input.placeholder = state.canManageChat
+      ? (isEditing ? "Измените сообщение" : "Введите сообщение")
+      : "Только просмотр";
   }
 
   function cancelEditingMessage() {
@@ -12571,6 +12625,7 @@
   }
 
   function updateThreadMessage(clientId, messageId, newText) {
+    if (!state.canManageChat) return false;
     const msg = findThreadMessage(clientId, messageId);
     if (!msg || msg.direction !== "out") return false;
     msg.text = String(newText || "");
@@ -12585,6 +12640,7 @@
   }
 
   function removeThreadMessage(clientId, messageId) {
+    if (!state.canManageChat) return false;
     const thread = getThread(clientId);
     const idx = thread.findIndex((msg) => String(msg.id) === String(messageId));
     if (idx < 0) return false;
@@ -12683,6 +12739,7 @@
   }
 
   function syncHiddenMessagesForActor(clientId, messageIds) {
+    if (!state.canManageChat) return;
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     const ids = (Array.isArray(messageIds) ? messageIds : [])
@@ -12695,6 +12752,7 @@
   }
 
   function toggleThreadMessagePinned(clientId, messageId) {
+    if (!state.canManageChat) return false;
     const msg = findThreadMessage(clientId, messageId);
     if (!msg) return false;
     msg.pinned = !msg.pinned;
@@ -12707,6 +12765,7 @@
   }
 
   function setThreadMessageReaction(clientId, messageId, reaction) {
+    if (!state.canManageChat) return false;
     const msg = findThreadMessage(clientId, messageId);
     if (!msg) return false;
     if (!setMessageActorReaction(msg, CHAT_REACTION_ACTOR, reaction)) return false;
@@ -13708,6 +13767,10 @@
     menu.addEventListener("click", (event) => {
       const actionBtn = event.target.closest("[data-chat-client-action]");
       if (!actionBtn) return;
+      if (!state.canManageChat) {
+        hideClientContextMenu();
+        return;
+      }
       const action = actionBtn.getAttribute("data-chat-client-action");
       const clientId = state.contextClientId;
       hideClientContextMenu();
@@ -13840,6 +13903,7 @@
   }
 
   function deleteGuestClientChat(clientId) {
+    if (!state.canManageChat) return false;
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
     const client = findClientById(key);
@@ -13870,6 +13934,7 @@
   }
 
   function clearClientChat(clientId) {
+    if (!state.canManageChat) return false;
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
 
@@ -13940,6 +14005,7 @@
   }
 
   function showClientContextMenu(x, y, clientId) {
+    if (!state.canManageChat) return;
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     hideMessageContextMenu();
@@ -14095,6 +14161,7 @@
   }
 
   function showReactionBarForMessage(message, menuRect) {
+    if (!state.canManageChat) return;
     if (!dom.center.reactionBar) return;
     state.contextMessageId = String(message.id || "");
     const ownReaction = getMessageActorReaction(message, CHAT_REACTION_ACTOR);
@@ -14120,6 +14187,7 @@
   }
 
   function showReactionBar(messageId, anchorEl) {
+    if (!state.canManageChat) return;
     if (!state.activeClientId || !anchorEl) return;
     const message = findThreadMessage(state.activeClientId, messageId);
     if (!message) return;
@@ -14141,9 +14209,9 @@
     normalizeContextMenuReactionButtons(dom.center.contextMenu);
     setContextMenuReactionsExpanded(false);
     if (dom.center.menuPinLabel) dom.center.menuPinLabel.textContent = message.pinned ? "Открепить" : "Закрепить";
-    const canManageOwnMessage = message.direction === "out";
+    const canManageOwnMessage = state.canManageChat && message.direction === "out";
     if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canManageOwnMessage);
-    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.remove("hidden");
+    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.toggle("hidden", !state.canManageChat);
 
     if (showMobileContextScene(messageId)) {
       contextMenuAnchorPoint = null;
@@ -14171,6 +14239,7 @@
   }
 
   function startEditingMessage(messageId) {
+    if (!state.canManageChat) return;
     if (!state.activeClientId || !dom.center.input) return;
     const msg = findThreadMessage(state.activeClientId, messageId);
     if (!msg || msg.direction !== "out") return;
@@ -14181,6 +14250,7 @@
   }
 
   function deleteMessageFromContext(messageId) {
+    if (!state.canManageChat) return;
     if (!state.activeClientId) return;
     const message = findThreadMessage(state.activeClientId, messageId);
     if (!message) return;
@@ -14216,6 +14286,7 @@
   }
 
   function replyToMessageFromContext(messageId) {
+    if (!state.canManageChat) return;
     if (!state.activeClientId || !dom.center.input) return;
     setComposerReplyByMessage(messageId);
   }
@@ -14233,6 +14304,7 @@
   }
 
   function reactMessageFromContext(messageId, reaction) {
+    if (!state.canManageChat) return;
     if (!state.activeClientId) return;
     if (!setThreadMessageReaction(state.activeClientId, messageId, reaction)) return;
     renderMessages();
@@ -14280,6 +14352,7 @@
   }
 
   function toggleHeartReactionForMessage(messageId) {
+    if (!state.canManageChat) return false;
     if (!state.activeClientId) return false;
     const heartReaction = "\u{2764}\u{FE0F}";
     if (!setThreadMessageReaction(state.activeClientId, messageId, heartReaction)) return false;
@@ -14304,6 +14377,7 @@
   }
 
   function deleteSelectedMessages() {
+    if (!state.canManageChat) return;
     if (!state.activeClientId || state.selectedMessageIds.size === 0) return;
     const selectedMessages = getSelectedMessages();
     if (!selectedMessages.length) return;
@@ -15123,6 +15197,7 @@
   }
 
   function sendMessage(text, options = {}) {
+    if (!state.canManageChat) return false;
     if (!state.activeClientId) return false;
     const clean = normalizeComposerText(text);
     const attachment = isImageAttachment(options.attachment) ? options.attachment : null;
@@ -16025,6 +16100,7 @@
   }
 
   function sendPreparedImageAttachments(attachments, options = {}) {
+    if (!state.canManageChat) return 0;
     if (!state.activeClientId) return 0;
     const list = Array.isArray(attachments)
       ? attachments.filter((item) => isImageAttachment(item))
@@ -16074,6 +16150,7 @@
   }
 
   async function sendImageAttachments(files, options = {}) {
+    if (!state.canManageChat) return 0;
     if (!isChatWidgetEnabledRuntime()) return 0;
     const list = Array.isArray(files) ? files : [];
     if (!list.length) return 0;
@@ -16087,6 +16164,7 @@
   }
 
   async function openAttachPreviewFromFiles(files, options = {}) {
+    if (!state.canManageChat) return false;
     if (!isChatWidgetEnabledRuntime()) return false;
     const list = Array.isArray(files) ? files : [];
     if (!list.length) return false;
@@ -18291,6 +18369,17 @@
     ensureDesktopChatHeaderMarkup();
     initMessageAlerts();
     initComposer();
+    syncChatManageUi();
+    window.addEventListener("admin:access-context", (event) => {
+      applyChatAccessContext(event.detail);
+    });
+    if (window.AdminAccessContext) {
+      applyChatAccessContext(window.AdminAccessContext);
+    } else if (window.AdminAccessContextPromise && typeof window.AdminAccessContextPromise.then === "function") {
+      window.AdminAccessContextPromise.then((context) => {
+        if (context) applyChatAccessContext(context);
+      }).catch((error) => console.error("Chat access context load failed:", error));
+    }
     bindAdminChatZoomGuards();
     bindAdminChatThreadEdgeSpring();
     bindAdminMobileEmptyThreadTouchBlock();

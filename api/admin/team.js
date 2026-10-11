@@ -1,5 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { getPermissionGrant } = require('../middleware/auth');
 
 const VALID_ACCESS_RULES = new Set(['all', 'stores', 'own', 'assigned']);
@@ -15,7 +16,260 @@ const VALID_START_ROUTES = new Set([
   '/dashboard/settings',
 ]);
 
-module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }) {
+const DOCUMENT_SECTIONS = new Set(['identity', 'tax', 'employment', 'military', 'education']);
+const IDENTITY_TYPES = new Set(['', 'passport_rf', 'foreign_passport', 'residence_permit', 'temporary_residence', 'other']);
+const VERIFICATION_STATUSES = new Set(['unchecked', 'pending', 'verified', 'rejected']);
+const EMPLOYMENT_RECORD_TYPES = new Set(['', 'paper', 'electronic', 'first_employment', 'clarification']);
+const MILITARY_STATUSES = new Set(['unknown', 'subject', 'not_subject']);
+
+function documentError(code, field) {
+  const error = new Error(code);
+  error.code = code;
+  error.field = field;
+  return error;
+}
+
+function textValue(value, maxLength, field) {
+  const result = String(value == null ? '' : value).trim();
+  if (result.length > maxLength) throw documentError('DOCUMENT_FIELD_TOO_LONG', field);
+  return result;
+}
+
+function normalizeDigits(value) {
+  return String(value == null ? '' : value).replace(/\D/g, '');
+}
+
+function normalizeDate(value, field) {
+  const result = textValue(value, 10, field);
+  if (!result) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(result)) throw documentError('INVALID_DOCUMENT_DATE', field);
+  const date = new Date(`${result}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== result) {
+    throw documentError('INVALID_DOCUMENT_DATE', field);
+  }
+  return result;
+}
+
+function isValidSnils(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!/^[\d\s-]+$/.test(raw)) return false;
+  const digits = normalizeDigits(raw);
+  if (!/^\d{11}$/.test(digits)) return false;
+  const sum = digits.slice(0, 9).split('').reduce((total, digit, index) => total + Number(digit) * (9 - index), 0);
+  let checksum = sum < 100 ? sum : (sum === 100 || sum === 101 ? 0 : sum % 101);
+  if (checksum === 100) checksum = 0;
+  return Number(digits.slice(9)) === checksum;
+}
+
+function isValidInn(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!/^[\d\s-]+$/.test(raw)) return false;
+  const digits = normalizeDigits(raw);
+  const checksum = (coefficients) => coefficients.reduce((sum, coefficient, index) => sum + coefficient * Number(digits[index]), 0) % 11 % 10;
+  if (/^\d{10}$/.test(digits)) return checksum([2, 4, 10, 3, 5, 9, 4, 6, 8]) === Number(digits[9]);
+  if (/^\d{12}$/.test(digits)) {
+    return checksum([7, 2, 4, 10, 3, 5, 9, 4, 6, 8]) === Number(digits[10])
+      && checksum([3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8]) === Number(digits[11]);
+  }
+  return false;
+}
+
+function emptyEmployeeDocuments() {
+  return {
+    identity: { type: '', series: '', number: '', issue_date: '', issued_by: '', department_code: '', verification_status: 'unchecked' },
+    tax: { snils: '', inn: '' },
+    employment: { record_type: '', is_part_time: false, is_first_job: false },
+    military: { status: 'unknown', document_type: '', details: '', verification_status: 'unchecked' },
+    education: { required_for_position: false, level: '', organization: '', qualification: '', document_name: '', series_number: '', issue_date: '' },
+  };
+}
+
+function normalizeDocumentSection(section, source) {
+  const data = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+  if (section === 'identity') {
+    const type = textValue(data.type, 40, 'identity.type');
+    const verificationStatus = textValue(data.verification_status || 'unchecked', 20, 'identity.verification_status');
+    if (!IDENTITY_TYPES.has(type)) throw documentError('INVALID_IDENTITY_TYPE', 'identity.type');
+    if (!VERIFICATION_STATUSES.has(verificationStatus)) throw documentError('INVALID_VERIFICATION_STATUS', 'identity.verification_status');
+    let series = textValue(data.series, 30, 'identity.series');
+    let number = textValue(data.number, 50, 'identity.number');
+    let departmentCode = textValue(data.department_code, 20, 'identity.department_code');
+    if (type === 'passport_rf') {
+      if (series && !/^[\d\s-]+$/.test(series)) throw documentError('INVALID_PASSPORT_SERIES', 'identity.series');
+      if (number && !/^[\d\s-]+$/.test(number)) throw documentError('INVALID_PASSPORT_NUMBER', 'identity.number');
+      series = normalizeDigits(series);
+      number = normalizeDigits(number);
+      if (series && !/^\d{4}$/.test(series)) throw documentError('INVALID_PASSPORT_SERIES', 'identity.series');
+      if (number && !/^\d{6}$/.test(number)) throw documentError('INVALID_PASSPORT_NUMBER', 'identity.number');
+      if (departmentCode) {
+        if (!/^[\d\s-]+$/.test(departmentCode)) throw documentError('INVALID_DEPARTMENT_CODE', 'identity.department_code');
+        const digits = normalizeDigits(departmentCode);
+        if (!/^\d{6}$/.test(digits)) throw documentError('INVALID_DEPARTMENT_CODE', 'identity.department_code');
+        departmentCode = `${digits.slice(0, 3)}-${digits.slice(3)}`;
+      }
+    }
+    if (type && !number) throw documentError('IDENTITY_NUMBER_REQUIRED', 'identity.number');
+    if (type === 'passport_rf' && !series) throw documentError('PASSPORT_SERIES_REQUIRED', 'identity.series');
+    return {
+      type,
+      series,
+      number,
+      issue_date: normalizeDate(data.issue_date, 'identity.issue_date'),
+      issued_by: textValue(data.issued_by, 500, 'identity.issued_by'),
+      department_code: type === 'passport_rf' ? departmentCode : '',
+      verification_status: verificationStatus,
+    };
+  }
+  if (section === 'tax') {
+    const rawSnils = textValue(data.snils, 30, 'tax.snils');
+    const rawInn = textValue(data.inn, 30, 'tax.inn');
+    if (rawSnils && !/^[\d\s-]+$/.test(rawSnils)) throw documentError('INVALID_SNILS', 'tax.snils');
+    if (rawInn && !/^[\d\s-]+$/.test(rawInn)) throw documentError('INVALID_INN', 'tax.inn');
+    const snils = normalizeDigits(rawSnils);
+    const inn = normalizeDigits(rawInn);
+    if (snils && !isValidSnils(snils)) throw documentError('INVALID_SNILS', 'tax.snils');
+    if (inn && !isValidInn(inn)) throw documentError('INVALID_INN', 'tax.inn');
+    return { snils, inn };
+  }
+  if (section === 'employment') {
+    const recordType = textValue(data.record_type, 40, 'employment.record_type');
+    if (!EMPLOYMENT_RECORD_TYPES.has(recordType)) throw documentError('INVALID_EMPLOYMENT_RECORD_TYPE', 'employment.record_type');
+    const firstJob = data.is_first_job === true || data.is_first_job === 'true' || Number(data.is_first_job) === 1;
+    return {
+      record_type: firstJob ? 'first_employment' : recordType,
+      is_part_time: data.is_part_time === true || data.is_part_time === 'true' || Number(data.is_part_time) === 1,
+      is_first_job: firstJob,
+    };
+  }
+  if (section === 'military') {
+    const status = textValue(data.status || 'unknown', 30, 'military.status');
+    const verificationStatus = textValue(data.verification_status || 'unchecked', 20, 'military.verification_status');
+    if (!MILITARY_STATUSES.has(status)) throw documentError('INVALID_MILITARY_STATUS', 'military.status');
+    if (!VERIFICATION_STATUSES.has(verificationStatus)) throw documentError('INVALID_VERIFICATION_STATUS', 'military.verification_status');
+    const documentType = textValue(data.document_type, 120, 'military.document_type');
+    if (status === 'subject' && !documentType) throw documentError('MILITARY_DOCUMENT_TYPE_REQUIRED', 'military.document_type');
+    return {
+      status,
+      document_type: status === 'subject' ? documentType : '',
+      details: status === 'subject' ? textValue(data.details, 500, 'military.details') : '',
+      verification_status: status === 'subject' ? verificationStatus : 'unchecked',
+    };
+  }
+  if (section === 'education') {
+    const requiredForPosition = data.required_for_position === true || data.required_for_position === 'true' || Number(data.required_for_position) === 1;
+    const result = {
+      required_for_position: requiredForPosition,
+      level: textValue(data.level, 120, 'education.level'),
+      organization: textValue(data.organization, 255, 'education.organization'),
+      qualification: textValue(data.qualification, 255, 'education.qualification'),
+      document_name: textValue(data.document_name, 120, 'education.document_name'),
+      series_number: textValue(data.series_number, 100, 'education.series_number'),
+      issue_date: normalizeDate(data.issue_date, 'education.issue_date'),
+    };
+    if (requiredForPosition && (!result.level || !result.organization || !result.qualification || !result.document_name)) {
+      throw documentError('EDUCATION_REQUIRED_FIELDS', 'education');
+    }
+    return result;
+  }
+  throw documentError('INVALID_DOCUMENT_SECTION', 'section');
+}
+
+function mergeEmployeeDocumentSection(current, section, data) {
+  if (!DOCUMENT_SECTIONS.has(section)) throw documentError('INVALID_DOCUMENT_SECTION', 'section');
+  const result = { ...emptyEmployeeDocuments(), ...(current || {}) };
+  result[section] = normalizeDocumentSection(section, data);
+  return result;
+}
+
+function encryptionKey() {
+  const raw = String(process.env.EMPLOYEE_DOCUMENTS_ENCRYPTION_KEY || '').trim();
+  let key = null;
+  if (/^[a-f0-9]{64}$/i.test(raw)) key = Buffer.from(raw, 'hex');
+  else if (raw) {
+    try { key = Buffer.from(raw, 'base64'); } catch (_) { key = null; }
+  }
+  if (!key || key.length !== 32) throw documentError('DOCUMENT_ENCRYPTION_NOT_CONFIGURED');
+  return key;
+}
+
+function documentAad(tenantId, userId) {
+  return Buffer.from(`employee-documents:v1:${Number(tenantId)}:${Number(userId)}`, 'utf8');
+}
+
+function encryptEmployeeDocuments(documents, currentTenantId, userId) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  cipher.setAAD(documentAad(currentTenantId, userId));
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(documents), 'utf8'), cipher.final()]);
+  return { payload: encrypted.toString('base64'), iv, authTag: cipher.getAuthTag(), keyVersion: 1 };
+}
+
+function decryptEmployeeDocuments(row, currentTenantId, userId) {
+  if (!row) return emptyEmployeeDocuments();
+  const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(row.encryption_iv));
+  decipher.setAAD(documentAad(currentTenantId, userId));
+  decipher.setAuthTag(Buffer.from(row.encryption_tag));
+  const decoded = Buffer.concat([
+    decipher.update(Buffer.from(String(row.encrypted_payload), 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
+  const parsed = JSON.parse(decoded);
+  const result = emptyEmployeeDocuments();
+  for (const section of DOCUMENT_SECTIONS) result[section] = normalizeDocumentSection(section, parsed?.[section]);
+  return result;
+}
+
+function maskRight(value, visible = 2) {
+  const text = String(value || '');
+  if (!text) return '';
+  return `${'•'.repeat(Math.max(4, text.length - visible))}${text.slice(-visible)}`;
+}
+
+function verificationLabel(value) {
+  return ({ unchecked: 'Не проверен', pending: 'Ожидает проверки', verified: 'Проверен', rejected: 'Проверка отклонена' })[value] || 'Не проверен';
+}
+
+function employeeDocumentSummary(documents) {
+  const data = { ...emptyEmployeeDocuments(), ...(documents || {}) };
+  const identityComplete = Boolean(data.identity.type && data.identity.number && (data.identity.type !== 'passport_rf' || data.identity.series));
+  const taxComplete = Boolean(data.tax.snils);
+  const employmentComplete = Boolean(data.employment.record_type || data.employment.is_part_time);
+  const militaryComplete = data.military.status === 'not_subject' || Boolean(data.military.status === 'subject' && data.military.document_type);
+  const educationHasData = Boolean(data.education.level || data.education.organization || data.education.qualification || data.education.document_name);
+  const educationComplete = !data.education.required_for_position || Boolean(data.education.level && data.education.organization && data.education.qualification && data.education.document_name);
+  return {
+    identity: {
+      state: identityComplete ? (data.identity.verification_status === 'verified' ? 'verified' : 'review') : 'empty',
+      status: identityComplete ? verificationLabel(data.identity.verification_status) : 'Не заполнено',
+      lines: identityComplete ? [
+        ({ passport_rf: 'Паспорт РФ', foreign_passport: 'Иностранный паспорт', residence_permit: 'Вид на жительство', temporary_residence: 'Разрешение на временное проживание', other: 'Иной документ' })[data.identity.type] || 'Документ',
+        [data.identity.series ? maskRight(data.identity.series) : '', maskRight(data.identity.number)].filter(Boolean).join(' · '),
+      ] : [],
+    },
+    tax: {
+      state: taxComplete ? 'complete' : 'empty',
+      status: taxComplete ? 'Заполнено' : 'Не заполнено',
+      lines: [data.tax.snils ? `СНИЛС ${maskRight(data.tax.snils, 2)}` : '', data.tax.inn ? `ИНН ${maskRight(data.tax.inn, 3)}` : ''].filter(Boolean),
+    },
+    employment: {
+      state: data.employment.record_type === 'clarification' ? 'review' : (employmentComplete ? 'complete' : 'empty'),
+      status: data.employment.record_type === 'clarification' || !employmentComplete ? 'Требуется уточнение' : 'Заполнено',
+      lines: [({ paper: 'Бумажная трудовая книжка', electronic: 'Электронные сведения', first_employment: 'Первое трудоустройство', clarification: 'Требуется уточнение' })[data.employment.record_type] || '', data.employment.is_part_time ? 'Совместительство' : ''].filter(Boolean),
+    },
+    military: {
+      state: militaryComplete ? (data.military.status === 'subject' && data.military.verification_status !== 'verified' ? 'review' : 'complete') : 'empty',
+      status: data.military.status === 'not_subject' ? 'Не применяется' : (militaryComplete ? verificationLabel(data.military.verification_status) : 'Статус не определён'),
+      lines: [data.military.status === 'subject' ? 'Подлежит воинскому учёту' : '', data.military.document_type].filter(Boolean),
+    },
+    education: {
+      state: educationComplete && educationHasData ? 'complete' : (data.education.required_for_position ? 'empty' : 'optional'),
+      status: educationHasData ? 'Заполнено' : (data.education.required_for_position ? 'Требуется для должности' : 'По необходимости'),
+      lines: [data.education.level, data.education.qualification, data.education.document_name ? `${data.education.document_name}${data.education.series_number ? ` · ${maskRight(data.education.series_number, 3)}` : ''}` : ''].filter(Boolean),
+    },
+  };
+}
+
+function makeAdminTeamRouter({ db, helpers, requirePermission }) {
   const router = express.Router();
 
   function tenantId(req) {
@@ -44,7 +298,7 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
   async function requireAnyPermission(req, res, next) {
     try {
       if (req.user && req.user.fullAccess === true) return next();
-      for (const key of ['users.view', 'users.manage', 'roles.manage']) {
+      for (const key of ['users.view', 'users.manage', 'roles.manage', 'employee_documents.manage']) {
         if (await getPermissionGrant(req.user, key)) return next();
       }
       return teamError(res, 403, 'FORBIDDEN');
@@ -77,6 +331,24 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
 
   function actorCanAssignOwner(req) {
     return Boolean(req.user?.fullAccess || req.user?.activeRole?.is_owner);
+  }
+
+  async function loadManageablePermissionIds(queryable, req) {
+    if (actorCanAssignOwner(req)) {
+      const [rows] = await queryable.query('SELECT id FROM system_permissions');
+      return new Set(rows.map((row) => Number(row.id)));
+    }
+    const [rows] = await queryable.query(
+      `SELECT rp.permission_id, p.permission_key
+       FROM role_permissions rp
+       JOIN system_permissions p ON p.id=rp.permission_id
+       JOIN user_roles ur
+         ON ur.tenant_id=rp.tenant_id AND ur.role_id=rp.role_id AND ur.user_id=?
+       WHERE rp.tenant_id=? AND rp.role_id=?`,
+      [Number(req.user?.userId || 0), Number(req.user?.tenantId || 0), Number(req.user?.activeRoleId || 0)]
+    );
+    if (!rows.some((row) => row.permission_key === 'roles.manage')) return new Set();
+    return new Set(rows.map((row) => Number(row.permission_id)));
   }
 
   async function verifyStoreIds(queryable, currentTenantId, storeIds) {
@@ -226,11 +498,17 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
   router.get('/bootstrap', requireAnyPermission, async (req, res) => {
     try {
       const currentTenantId = tenantId(req);
-      const [users, roles, storesResult, permissionsResult] = await Promise.all([
+      const fullGrant = req.user?.fullAccess === true ? Promise.resolve({ access_rule: 'all' }) : null;
+      const [users, roles, storesResult, permissionsResult, documentsGrant, usersViewGrant, usersManageGrant, rolesGrant, manageablePermissionIds] = await Promise.all([
         loadUsers(db, currentTenantId),
         loadRoles(db, currentTenantId),
         db.query('SELECT id, name, is_active FROM ten_stores WHERE tenant_id=? ORDER BY is_active DESC, name, id', [currentTenantId]),
         db.query('SELECT id, permission_key, group_key, label, description, allowed_access_rules FROM system_permissions ORDER BY sort_order, id'),
+        fullGrant || getPermissionGrant(req.user, 'employee_documents.manage'),
+        fullGrant || getPermissionGrant(req.user, 'users.view'),
+        fullGrant || getPermissionGrant(req.user, 'users.manage'),
+        fullGrant || getPermissionGrant(req.user, 'roles.manage'),
+        loadManageablePermissionIds(db, req),
       ]);
       const stores = storesResult[0].map((store) => ({ ...store, id: Number(store.id), is_active: Number(store.is_active) === 1 }));
       const permissions = permissionsResult[0].map((permission) => ({
@@ -240,8 +518,22 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
         label: permission.label,
         description: permission.description || '',
         allowed_access_rules: String(permission.allowed_access_rules || 'all').split(',').filter(Boolean),
+        can_manage: manageablePermissionIds.has(Number(permission.id)),
       }));
-      return res.json({ ok: true, users, roles, stores, permissions, start_routes: Array.from(VALID_START_ROUTES) });
+      return res.json({
+        ok: true,
+        users,
+        roles,
+        stores,
+        permissions,
+        start_routes: Array.from(VALID_START_ROUTES),
+        capabilities: {
+          manage_employee_documents: Boolean(documentsGrant),
+          view_users: Boolean(usersViewGrant || usersManageGrant || documentsGrant),
+          manage_users: Boolean(usersManageGrant),
+          manage_roles: Boolean(rolesGrant) && permissions.some((permission) => permission.key === 'roles.manage' && permission.can_manage),
+        },
+      });
     } catch (error) {
       console.error('TEAM_BOOTSTRAP_FAILED:', error);
       return teamError(res, 500, 'DB_ERROR');
@@ -256,6 +548,93 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
     } catch (error) {
       console.error('TEAM_USER_READ_FAILED:', error);
       return teamError(res, 500, 'DB_ERROR');
+    }
+  });
+
+  async function loadDocumentRow(queryable, currentTenantId, userId) {
+    const [rows] = await queryable.query(
+      `SELECT encrypted_payload, encryption_iv, encryption_tag, encryption_key_version, updated_at
+       FROM employee_document_profiles
+       WHERE tenant_id=? AND user_id=? LIMIT 1`,
+      [currentTenantId, userId]
+    );
+    return rows[0] || null;
+  }
+
+  router.get('/users/:id/documents', requirePermission('employee_documents.manage'), async (req, res) => {
+    try {
+      const currentTenantId = tenantId(req);
+      const userId = Number(req.params.id);
+      if (!(userId > 0)) return teamError(res, 400, 'INVALID_USER');
+      const [users] = await db.query(
+        'SELECT id FROM app_users WHERE tenant_id=? AND id=? LIMIT 1',
+        [currentTenantId, userId]
+      );
+      if (!users.length) return teamError(res, 404, 'USER_NOT_FOUND');
+      const row = await loadDocumentRow(db, currentTenantId, userId);
+      const documents = decryptEmployeeDocuments(row, currentTenantId, userId);
+      const requestedSection = String(req.query.section || '').trim();
+      if (requestedSection) {
+        if (!DOCUMENT_SECTIONS.has(requestedSection)) return teamError(res, 400, 'INVALID_DOCUMENT_SECTION');
+        return res.json({ ok: true, section: requestedSection, data: documents[requestedSection] });
+      }
+      return res.json({
+        ok: true,
+        summary: employeeDocumentSummary(documents),
+        updated_at: row?.updated_at || null,
+      });
+    } catch (error) {
+      if (error.code === 'DOCUMENT_ENCRYPTION_NOT_CONFIGURED') return teamError(res, 503, error.code);
+      console.error('TEAM_DOCUMENTS_READ_FAILED:', error.code || error.name || 'ERROR');
+      return teamError(res, 500, 'DOCUMENTS_READ_FAILED');
+    }
+  });
+
+  router.put('/users/:id/documents', requirePermission('employee_documents.manage'), async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+      const currentTenantId = tenantId(req);
+      const userId = Number(req.params.id);
+      const section = String(req.body?.section || '').trim();
+      if (!(userId > 0)) return teamError(res, 400, 'INVALID_USER');
+      if (!DOCUMENT_SECTIONS.has(section)) return teamError(res, 400, 'INVALID_DOCUMENT_SECTION');
+
+      await conn.beginTransaction();
+      const [users] = await conn.query(
+        'SELECT id FROM app_users WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
+        [currentTenantId, userId]
+      );
+      if (!users.length) {
+        await conn.rollback();
+        return teamError(res, 404, 'USER_NOT_FOUND');
+      }
+      const row = await loadDocumentRow(conn, currentTenantId, userId);
+      const current = decryptEmployeeDocuments(row, currentTenantId, userId);
+      const documents = mergeEmployeeDocumentSection(current, section, req.body?.data);
+      const encrypted = encryptEmployeeDocuments(documents, currentTenantId, userId);
+      await conn.query(
+        `INSERT INTO employee_document_profiles
+          (tenant_id, user_id, encrypted_payload, encryption_iv, encryption_tag, encryption_key_version, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           encrypted_payload=VALUES(encrypted_payload), encryption_iv=VALUES(encryption_iv),
+           encryption_tag=VALUES(encryption_tag), encryption_key_version=VALUES(encryption_key_version),
+           updated_by_user_id=VALUES(updated_by_user_id), updated_at=CURRENT_TIMESTAMP`,
+        [currentTenantId, userId, encrypted.payload, encrypted.iv, encrypted.authTag, encrypted.keyVersion, Number(req.user?.userId || 0) || null]
+      );
+      await conn.commit();
+      return res.json({ ok: true, summary: employeeDocumentSummary(documents) });
+    } catch (error) {
+      try { await conn.rollback(); } catch (_) {}
+      if (String(error.code || '').startsWith('INVALID_')
+          || ['IDENTITY_NUMBER_REQUIRED', 'PASSPORT_SERIES_REQUIRED', 'MILITARY_DOCUMENT_TYPE_REQUIRED', 'EDUCATION_REQUIRED_FIELDS', 'DOCUMENT_FIELD_TOO_LONG'].includes(error.code)) {
+        return teamError(res, 400, error.code, error.field ? { field: error.field } : null);
+      }
+      if (error.code === 'DOCUMENT_ENCRYPTION_NOT_CONFIGURED') return teamError(res, 503, error.code);
+      console.error('TEAM_DOCUMENTS_UPDATE_FAILED:', error.code || error.name || 'ERROR');
+      return teamError(res, 500, 'DOCUMENTS_UPDATE_FAILED');
+    } finally {
+      conn.release();
     }
   });
 
@@ -455,29 +834,42 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
     }
   });
 
-  async function replaceRolePermissions(conn, currentTenantId, roleId, grants) {
+  async function replaceRolePermissions(conn, currentTenantId, roleId, grants, req) {
     const normalized = Array.isArray(grants) ? grants : [];
     const permissionIds = uniqueIds(normalized.map((grant) => grant.permission_id));
-    if (permissionIds.length) {
-      const [rows] = await conn.query(
-        `SELECT id, allowed_access_rules FROM system_permissions
-         WHERE id IN (${permissionIds.map(() => '?').join(',')})`,
-        permissionIds
-      );
-      if (rows.length !== permissionIds.length) return { ok: false, error: 'INVALID_PERMISSION' };
-      const byId = new Map(rows.map((row) => [Number(row.id), row]));
-      for (const grant of normalized) {
-        const permissionId = Number(grant.permission_id);
-        if (!permissionIds.includes(permissionId)) continue;
-        const accessRule = String(grant.access_rule || 'all');
-        const allowed = String(byId.get(permissionId).allowed_access_rules || 'all').split(',');
-        if (!VALID_ACCESS_RULES.has(accessRule) || !allowed.includes(accessRule)) {
-          return { ok: false, error: 'INVALID_ACCESS_RULE' };
-        }
+    const [allPermissions] = await conn.query('SELECT id, allowed_access_rules FROM system_permissions');
+    const byId = new Map(allPermissions.map((row) => [Number(row.id), row]));
+    if (permissionIds.some((permissionId) => !byId.has(permissionId))) {
+      return { ok: false, error: 'INVALID_PERMISSION' };
+    }
+    const manageablePermissionIds = await loadManageablePermissionIds(conn, req);
+    const [existingRows] = await conn.query(
+      'SELECT permission_id, access_rule FROM role_permissions WHERE tenant_id=? AND role_id=?',
+      [currentTenantId, roleId]
+    );
+    const existingById = new Map(existingRows.map((row) => [Number(row.permission_id), String(row.access_rule || 'all')]));
+    for (const grant of normalized) {
+      const permissionId = Number(grant.permission_id);
+      const accessRule = String(grant.access_rule || 'all');
+      const allowed = String(byId.get(permissionId).allowed_access_rules || 'all').split(',');
+      if (!VALID_ACCESS_RULES.has(accessRule) || !allowed.includes(accessRule)) {
+        return { ok: false, error: 'INVALID_ACCESS_RULE' };
+      }
+      if (!manageablePermissionIds.has(permissionId)
+          && (!existingById.has(permissionId) || existingById.get(permissionId) !== accessRule)) {
+        return { ok: false, error: 'PERMISSION_ESCALATION_FORBIDDEN' };
       }
     }
-    await conn.query('DELETE FROM role_permissions WHERE tenant_id=? AND role_id=?', [currentTenantId, roleId]);
+    const manageableIds = Array.from(manageablePermissionIds);
+    if (manageableIds.length) {
+      await conn.query(
+        `DELETE FROM role_permissions
+         WHERE tenant_id=? AND role_id=? AND permission_id IN (${manageableIds.map(() => '?').join(',')})`,
+        [currentTenantId, roleId, ...manageableIds]
+      );
+    }
     for (const permissionId of permissionIds) {
+      if (!manageablePermissionIds.has(permissionId)) continue;
       const grant = normalized.find((item) => Number(item.permission_id) === permissionId);
       await conn.query(
         `INSERT INTO role_permissions (tenant_id, role_id, permission_id, access_rule)
@@ -507,10 +899,10 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
         [currentTenantId, name, description, startRoute]
       );
       const roleId = Number(result.insertId);
-      const permissionsResult = await replaceRolePermissions(conn, currentTenantId, roleId, req.body.permissions);
+      const permissionsResult = await replaceRolePermissions(conn, currentTenantId, roleId, req.body.permissions, req);
       if (!permissionsResult.ok) {
         await conn.rollback();
-        return teamError(res, 400, permissionsResult.error);
+        return teamError(res, permissionsResult.error === 'PERMISSION_ESCALATION_FORBIDDEN' ? 403 : 400, permissionsResult.error);
       }
       await conn.commit();
       const roles = await loadRoles(db, currentTenantId, roleId);
@@ -556,10 +948,10 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
          WHERE tenant_id=? AND id=?`,
         [name, description, startRoute, currentTenantId, roleId]
       );
-      const permissionsResult = await replaceRolePermissions(conn, currentTenantId, roleId, req.body.permissions);
+      const permissionsResult = await replaceRolePermissions(conn, currentTenantId, roleId, req.body.permissions, req);
       if (!permissionsResult.ok) {
         await conn.rollback();
-        return teamError(res, 400, permissionsResult.error);
+        return teamError(res, permissionsResult.error === 'PERMISSION_ESCALATION_FORBIDDEN' ? 403 : 400, permissionsResult.error);
       }
       if (Number(roles[0].is_owner) === 1) {
         const [permissionCount] = await conn.query(
@@ -631,4 +1023,16 @@ module.exports = function makeAdminTeamRouter({ db, helpers, requirePermission }
   });
 
   return router;
+}
+
+module.exports = makeAdminTeamRouter;
+module.exports._test = {
+  emptyEmployeeDocuments,
+  normalizeDocumentSection,
+  mergeEmployeeDocumentSection,
+  isValidSnils,
+  isValidInn,
+  encryptEmployeeDocuments,
+  decryptEmployeeDocuments,
+  employeeDocumentSummary,
 };
