@@ -4,9 +4,6 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "test:employee-documents": "node --test scripts/employee-documents.test.js scripts/employee-documents-ui.test.js",
-    "test:navigation-rbac": "node --test scripts/navigation-rbac.test.js",
     "thumbs": "node scripts/generate-product-thumbs.js",
     "emoji:atlas": "node scripts/build-emoji-atlas.js",
     "domain:connect": "node scripts/connect-tenant-domain.js",

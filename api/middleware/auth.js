@@ -85,7 +85,6 @@ async function authMiddleware(req, res, next) {
     if (!user) return unauthorized(res, 'USER_NOT_FOUND');
     if (Number(user.is_active) !== 1) return unauthorized(res, 'USER_BLOCKED', 403);
     if (Number(user.tenant_active) !== 1) return unauthorized(res, 'TENANT_BLOCKED', 403);
-    if (Number(user.must_change_password) === 1) return unauthorized(res, 'PASSWORD_CHANGE_REQUIRED', 403);
 
     const active = await resolveActiveRole(user, decoded.activeRoleId);
     if (active.error) return unauthorized(res, active.error, 403);

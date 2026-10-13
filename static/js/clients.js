@@ -45,9 +45,15 @@
   async function apiJson(url, opts = {}) {
     const token = localStorage.getItem('authToken');
     const storeId = localStorage.getItem('activeStoreId') || '1';
+    const activeRbacNode = Array.from(document.querySelectorAll('.page-col-left [data-rbac-node].is-active'))
+      .map((item) => item.dataset.rbacNode)
+      .filter(Boolean)
+      .pop();
     const headers = {
       "x-tenant-id": String(tenantId),
       "x-store-id": storeId,
+      "x-rbac-context": "marketing",
+      ...(activeRbacNode ? { "x-rbac-node": activeRbacNode } : {}),
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
       ...(opts.headers || {}),
     };

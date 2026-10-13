@@ -45,6 +45,7 @@
     window.__APP_VERSION__ = <%- JSON.stringify(appVersion || '') %>;
     window.__APP_SERVICE_WORKER_VERSION__ = <%- JSON.stringify(serviceWorkerVersion || appVersion || '') %>;
     window.__APP_SERVICE_WORKER_URL__ = <%- JSON.stringify('/sw.js?v=' + encodeURIComponent(serviceWorkerVersion || appVersion || "")) %>;
+    window.__NAVIGATION_RBAC__ = <%- JSON.stringify(typeof navigationRbac !== 'undefined' && navigationRbac ? navigationRbac : { actionLabels: {}, nodes: [] }).replace(/</g, '\\u003c') %>;
     window.__ADMIN_ASSET_URLS__ = {
       orders: <%- JSON.stringify(assetUrl('/static/js/orders.js')) %>,
       sharedOrderPanel: <%- JSON.stringify(assetUrl('/static/js/shared-order-panel.js')) %>,
@@ -174,8 +175,8 @@
   );
   const adminChatHref = '/dashboard/chat?v=' + encodeURIComponent(serviceWorkerVersion || appVersion || '');
   const adminNavItems = [
-    { key: 'cash', href: '/dashboard/cash', icon: 'fa-cash-register', label: 'Касса', ariaLabel: 'Касса', permissionKeys: ['finance.view', 'finance.cost', 'finance.manage'], toggleKeys: ['finance.view'] },
-    { key: 'products', href: '/dashboard/products', icon: 'fa-box', label: 'Товары', ariaLabel: 'Товары', permissionKeys: ['products.view', 'products.edit', 'stock.view', 'stock.edit', 'finance.cost'], toggleKeys: ['products.view', 'stock.view'] },
+    { key: 'cash', rbacNodeId: 'cash', href: '/dashboard/cash', icon: 'fa-cash-register', label: 'Касса', ariaLabel: 'Касса', permissionKeys: ['cash.access'] },
+    { key: 'products', rbacNodeId: 'products', href: '/dashboard/products', icon: 'fa-box', label: 'Товары', ariaLabel: 'Товары', permissionKeys: ['products.access'] },
     {
       key: 'orders',
       href: '/dashboard/orders',
@@ -185,13 +186,13 @@
       desktopId: 'sidebarOrdersNavLink',
       desktopLinkClasses: 'nav-item--chat nav-item--orders',
       desktopBadgeId: 'sidebarOrdersUnreadBadge',
-      permissionKeys: ['orders.view', 'orders.edit', 'orders.status', 'orders.assign', 'orders.cancel', 'orders.refund'],
-      toggleKeys: ['orders.view']
+      rbacNodeId: 'orders',
+      permissionKeys: ['orders.access']
     },
-    { key: 'courier-screen', href: '/dashboard/courier-screen', icon: 'fa-truck', label: 'Экран курьера', ariaLabel: 'Экран курьера', permissionKeys: ['orders.view', 'orders.status'], toggleKeys: ['orders.view'] },
-    { key: 'new-order', href: '/dashboard/new-order', icon: 'fa-plus-circle', label: 'Новый заказ', ariaLabel: 'Новый заказ', permissionKeys: ['orders.edit'], toggleKeys: ['orders.edit'] },
-    { key: 'clients', href: '/dashboard/clients', icon: 'fa-bullhorn', label: 'Маркетинг', ariaLabel: 'Маркетинг', permissionKeys: ['clients.view', 'clients.edit'], toggleKeys: ['clients.view'] },
-    { key: 'team', href: '/dashboard/team', icon: 'fa-user-tie', label: 'Команда', ariaLabel: 'Команда', permissionKeys: ['users.view', 'users.manage', 'roles.manage', 'employee_documents.manage'], toggleKeys: ['users.view'] },
+    { key: 'courier-screen', rbacNodeId: 'courier', href: '/dashboard/courier-screen', icon: 'fa-truck', label: 'Экран курьера', ariaLabel: 'Экран курьера', permissionKeys: ['courier.access'] },
+    { key: 'new-order', rbacNodeId: 'new_order', href: '/dashboard/new-order', icon: 'fa-plus-circle', label: 'Новый заказ', ariaLabel: 'Новый заказ', permissionKeys: ['new_order.access'] },
+    { key: 'clients', rbacNodeId: 'marketing', href: '/dashboard/clients', icon: 'fa-bullhorn', label: 'Маркетинг', ariaLabel: 'Маркетинг', permissionKeys: ['marketing.access'] },
+    { key: 'team', rbacNodeId: 'team', href: '/dashboard/team', icon: 'fa-user-tie', label: 'Команда', ariaLabel: 'Команда', permissionKeys: ['team.access'] },
     {
       key: 'chat',
       href: adminChatHref,
@@ -204,10 +205,10 @@
       desktopBadgeId: 'sidebarChatUnreadBadge',
       mobileId: 'mobileChatNavLink',
       mobileBadgeId: 'mobileChatUnreadBadge',
-      permissionKeys: ['chat.view', 'chat.manage'],
-      toggleKeys: ['chat.view']
+      rbacNodeId: 'chat',
+      permissionKeys: ['chat.access']
     },
-    { key: 'settings', href: '/dashboard/settings', icon: 'fa-cog', label: 'Настройки', ariaLabel: 'Настройки', permissionKeys: ['settings.view', 'settings.manage'], toggleKeys: ['settings.view'] }
+    { key: 'settings', rbacNodeId: 'settings', href: '/dashboard/settings', icon: 'fa-cog', label: 'Настройки', ariaLabel: 'Настройки', permissionKeys: ['settings.access'] }
   ];
 %>
 
@@ -341,10 +342,13 @@
             var nameEl = document.getElementById('userMenuName');
             var emailEl = document.getElementById('userMenuEmail');
             var tenantEl = document.getElementById('userMenuTenant');
+            var passwordLink = document.getElementById('userMenuChangePassword');
+            if (passwordLink) passwordLink.classList.add('hidden');
             
             if (userStr && tenantStr) {
               var user = JSON.parse(userStr);
               var tenant = JSON.parse(tenantStr);
+              if (passwordLink) passwordLink.classList.toggle('hidden', !(Number(user.id) > 0));
               
               if (nameEl) nameEl.textContent = user.name || 'Пользователь';
               if (emailEl) emailEl.textContent = user.email || '';
@@ -449,6 +453,24 @@
             if (visible && !firstAllowedLink) firstAllowedLink = link;
             if (visible && link.getAttribute('data-nav-key') === document.body.dataset.adminActivePage) activeAllowed = true;
           });
+          var registryNodes = Array.isArray(window.__NAVIGATION_RBAC__ && window.__NAVIGATION_RBAC__.nodes)
+            ? window.__NAVIGATION_RBAC__.nodes : [];
+          var nodeMap = new Map(registryNodes.map(function (node) { return [node.id, node]; }));
+          var hasNodeAccess = function hasNodeAccess(node) {
+            if (!node) return false;
+            if (fullAccess || (node.accessKey && keys.has(node.accessKey))) return true;
+            return registryNodes.some(function (child) {
+              return child.parentId === node.id && hasNodeAccess(child);
+            });
+          };
+          document.querySelectorAll('.page-col-left [data-rbac-node]').forEach(function (element) {
+            var node = nodeMap.get(element.getAttribute('data-rbac-node'));
+            if (!node) return;
+            var visible = document.body.classList.contains('team-rbac-permission-mode') || hasNodeAccess(node);
+            var hasChildren = registryNodes.some(function (child) { return child.parentId === node.id; });
+            var target = hasChildren ? (element.closest('.acc-item') || element) : element;
+            target.classList.toggle('hidden', !visible);
+          });
           if (!document.body.classList.contains('team-rbac-permission-mode') && !activeAllowed && firstAllowedLink && document.body.dataset.adminActivePage) {
             window.location.replace(firstAllowedLink.href);
           }
@@ -517,6 +539,8 @@
         }
 
         // Загрузить список точек продаж
+        window.reloadAdminAccessContext = loadAccessContext;
+
         async function loadStores() {
           if (isChatPage) {
             if (storeSection) storeSection.style.display = 'none';

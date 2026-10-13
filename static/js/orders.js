@@ -181,6 +181,7 @@
     const storeId = localStorage.getItem('activeStoreId') || '1';
     const headers = {
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
+      "x-rbac-context": isCourierWorkspace ? "courier" : "orders",
       ...(opts.headers || {}),
     };
 

@@ -7,7 +7,7 @@
     <div class="products-accordion" id="productsAccordion">
 
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="products.catalog">
           <span class="stage-icon"><i class="fas fa-th-large"></i></span>
           <span class="stage-meta stage-text"><b>Товары</b><small>фильтр товаров</small></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -15,7 +15,7 @@
 
         <div class="acc-panel" data-acc-panel>
           <div class="acc-panel-inner">
-            <button class="stage-item is-dashed" type="button" id="addCategoryBtn">
+            <button class="stage-item is-dashed" type="button" id="addCategoryBtn" data-rbac-node="products.categories">
               <span class="stage-icon"><i class="fas fa-plus"></i></span>
               <span class="stage-meta stage-text"><b>Категории</b><small>управление</small></span>
               <span class="acc-spacer"></span>
@@ -27,7 +27,7 @@
       </div>
 
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="products.modifications">
           <span class="stage-icon"><i class="fas fa-puzzle-piece"></i></span>
           <span class="stage-meta stage-text"><b>Модификации</b><small>справочники</small></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -35,19 +35,19 @@
 
         <div class="acc-panel" data-acc-panel>
           <div class="acc-panel-inner">
-            <button class="stage-item" type="button" data-view="variants"><span class="stage-icon"><i class="fas fa-cubes"></i></span><span class="stage-meta stage-text"><b>Варианты товара</b><small>управление</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="options"><span class="stage-icon"><i class="fas fa-sliders-h"></i></span><span class="stage-meta stage-text"><b>Опции товара</b><small>управление</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="auto-add"><span class="stage-icon"><i class="fas fa-cart-plus"></i></span><span class="stage-meta stage-text"><b>Автодобавления</b><small>корзина</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="units"><span class="stage-icon"><i class="fas fa-ruler"></i></span><span class="stage-meta stage-text"><b>Единицы измерения</b><small>справочник</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="allergens"><span class="stage-icon"><i class="fas fa-exclamation-triangle"></i></span><span class="stage-meta stage-text"><b>Аллергены</b><small>справочник</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="diets"><span class="stage-icon"><i class="fas fa-heartbeat"></i></span><span class="stage-meta stage-text"><b>Типы диет</b><small>справочник</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="combo-blocks"><span class="stage-icon"><i class="fas fa-layer-group"></i></span><span class="stage-meta stage-text"><b>Блоки комбо</b><small>комбо-наборы</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="variants" data-rbac-node="products.variants"><span class="stage-icon"><i class="fas fa-cubes"></i></span><span class="stage-meta stage-text"><b>Варианты товара</b><small>управление</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="options" data-rbac-node="products.options"><span class="stage-icon"><i class="fas fa-sliders-h"></i></span><span class="stage-meta stage-text"><b>Опции товара</b><small>управление</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="auto-add" data-rbac-node="products.auto_add"><span class="stage-icon"><i class="fas fa-cart-plus"></i></span><span class="stage-meta stage-text"><b>Автодобавления</b><small>корзина</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="units" data-rbac-node="products.units"><span class="stage-icon"><i class="fas fa-ruler"></i></span><span class="stage-meta stage-text"><b>Единицы измерения</b><small>справочник</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="allergens" data-rbac-node="products.allergens"><span class="stage-icon"><i class="fas fa-exclamation-triangle"></i></span><span class="stage-meta stage-text"><b>Аллергены</b><small>справочник</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="diets" data-rbac-node="products.diets"><span class="stage-icon"><i class="fas fa-heartbeat"></i></span><span class="stage-meta stage-text"><b>Типы диет</b><small>справочник</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="combo-blocks" data-rbac-node="products.combo_blocks"><span class="stage-icon"><i class="fas fa-layer-group"></i></span><span class="stage-meta stage-text"><b>Блоки комбо</b><small>комбо-наборы</small></span><span class="acc-spacer"></span></button>
           </div>
         </div>
       </div>
 
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="products.stock">
           <span class="stage-icon"><i class="fas fa-warehouse"></i></span>
           <span class="stage-meta stage-text"><b>Склад</b><small>движения</small></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -55,15 +55,15 @@
 
         <div class="acc-panel" data-acc-panel>
           <div class="acc-panel-inner">
-            <button class="stage-item" type="button" data-view="stock-in"><span class="stage-icon"><i class="fas fa-plus-square"></i></span><span class="stage-meta stage-text"><b>Приход</b><small>документы</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="stock-out"><span class="stage-icon"><i class="fas fa-minus-square"></i></span><span class="stage-meta stage-text"><b>Списания</b><small>документы</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="stock-movements"><span class="stage-icon"><i class="fas fa-history"></i></span><span class="stage-meta stage-text"><b>История</b><small>лог</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="stock-in" data-rbac-node="stock.receipts"><span class="stage-icon"><i class="fas fa-plus-square"></i></span><span class="stage-meta stage-text"><b>Приход</b><small>документы</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="stock-out" data-rbac-node="stock.writeoffs"><span class="stage-icon"><i class="fas fa-minus-square"></i></span><span class="stage-meta stage-text"><b>Списания</b><small>документы</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="stock-movements" data-rbac-node="stock.history"><span class="stage-icon"><i class="fas fa-history"></i></span><span class="stage-meta stage-text"><b>История</b><small>лог</small></span><span class="acc-spacer"></span></button>
           </div>
         </div>
       </div>
 
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="products.production">
           <span class="stage-icon"><i class="fas fa-industry"></i></span>
           <span class="stage-meta stage-text"><b>Производство</b><small>процессы</small></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -71,8 +71,8 @@
 
         <div class="acc-panel" data-acc-panel>
           <div class="acc-panel-inner">
-            <button class="stage-item" type="button" data-view="production-plan"><span class="stage-icon"><i class="fas fa-clipboard-list"></i></span><span class="stage-meta stage-text"><b>План</b><small>производство</small></span><span class="acc-spacer"></span></button>
-            <button class="stage-item" type="button" data-view="production-history"><span class="stage-icon"><i class="fas fa-history"></i></span><span class="stage-meta stage-text"><b>История</b><small>лог</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="production-plan" data-rbac-node="production.plan"><span class="stage-icon"><i class="fas fa-clipboard-list"></i></span><span class="stage-meta stage-text"><b>План</b><small>производство</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="production-history" data-rbac-node="production.history"><span class="stage-icon"><i class="fas fa-history"></i></span><span class="stage-meta stage-text"><b>История</b><small>лог</small></span><span class="acc-spacer"></span></button>
           </div>
         </div>
       </div>

@@ -1,8 +1,52 @@
 const express = require('express');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
 
-module.exports = function makeAdminStockRouter({ db, helpers, ordersEvents }) {
+module.exports = function makeAdminStockRouter({ db, helpers, ordersEvents, can }) {
   const router = express.Router();
+
+  async function requireStockPermission(req, res, next) {
+    try {
+      if (typeof can !== 'function') return res.status(500).json({ ok: false, error: 'AUTHORIZATION_ERROR' });
+      const method = String(req.method || 'GET').toUpperCase();
+      const route = String(req.path || '').toLowerCase();
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const context = String(req.headers['x-rbac-context'] || '').trim().toLowerCase();
+      let type = helpers.strOrNull(req.query?.type) || helpers.strOrNull(req.body?.type);
+      const documentIdMatch = route.match(/^\/documents\/(\d+)/);
+      if (documentIdMatch) {
+        const [documents] = await db.query(
+          'SELECT type FROM prod_stock_documents WHERE tenant_id=? AND store_id=? AND id=? LIMIT 1',
+          [tenantId, storeId, Number(documentIdMatch[1])]
+        );
+        if (!documents.length) return res.status(404).json({ ok: false, error: 'DOCUMENT_NOT_FOUND' });
+        type = String(documents[0].type || '');
+      }
+
+      let permissionKey = null;
+      if ((method === 'GET' || method === 'HEAD') && (context === 'stock.history' || (!type && route === '/documents'))) {
+        permissionKey = 'stock.history.read';
+      } else {
+        const prefix = type === 'in' ? 'stock.receipts' : type === 'out' ? 'stock.writeoffs' : null;
+        if (!prefix) return res.status(403).json({ ok: false, error: 'STOCK_PERMISSION_CONTEXT_REQUIRED' });
+        if (route.endsWith('/post')) permissionKey = `${prefix}.post`;
+        else if (method === 'GET' || method === 'HEAD') permissionKey = `${prefix}.read`;
+        else if (method === 'POST' && route === '/documents') permissionKey = `${prefix}.create`;
+        else if (method === 'DELETE') permissionKey = `${prefix}.delete`;
+        else permissionKey = `${prefix}.update`;
+      }
+
+      const access = await can(req.user, permissionKey, { tenant_id: tenantId, store_id: storeId });
+      if (!access.allowed) return res.status(403).json({ ok: false, error: access.error || 'FORBIDDEN' });
+      req.permission = { key: permissionKey, accessRule: access.accessRule };
+      return next();
+    } catch (error) {
+      console.error('STOCK_PERMISSION_CHECK_FAILED:', error);
+      return res.status(500).json({ ok: false, error: 'AUTHORIZATION_ERROR' });
+    }
+  }
+
+  router.use('/documents', requireStockPermission);
 
   async function publishStockChanged(tenantId, storeId, payload = {}) {
     try {

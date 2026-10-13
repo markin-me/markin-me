@@ -521,6 +521,9 @@
     activeClient: null,
     activeClientDataLoading: false,
     canManageChat: false,
+    canCreateChat: false,
+    canUpdateChat: false,
+    canDeleteChat: false,
     activeOrders: [],
     activeOrdersSignature: "[]",
     orderStatuses: [],
@@ -655,29 +658,35 @@
         .map((key) => String(key || "").trim())
         .filter(Boolean)
     );
-    state.canManageChat = permissionKeys.has("*") || permissionKeys.has("chat.manage");
+    const fullAccess = permissionKeys.has("*");
+    state.canCreateChat = fullAccess || permissionKeys.has("chat.threads.create");
+    state.canUpdateChat = fullAccess || permissionKeys.has("chat.threads.update");
+    state.canDeleteChat = fullAccess || permissionKeys.has("chat.threads.delete");
+    state.canManageChat = state.canCreateChat || state.canUpdateChat || state.canDeleteChat;
     syncChatManageUi();
   }
 
   function syncChatManageUi() {
-    const canManage = state.canManageChat === true;
-    setComposerEnabled(canManage && !!state.activeClientId);
+    const canCreate = state.canCreateChat === true;
+    const canUpdate = state.canUpdateChat === true;
+    const canDelete = state.canDeleteChat === true;
+    setComposerEnabled(canCreate && !!state.activeClientId);
     if (dom.center.input) {
-      dom.center.input.placeholder = canManage ? "Введите сообщение" : "Только просмотр";
+      dom.center.input.placeholder = canCreate ? "Введите сообщение" : "Только просмотр";
     }
-    if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canManage);
-    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.toggle("hidden", !canManage);
-    if (dom.center.selectionDeleteBtn) dom.center.selectionDeleteBtn.classList.toggle("hidden", !canManage);
+    if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canUpdate);
+    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.toggle("hidden", !canDelete);
+    if (dom.center.selectionDeleteBtn) dom.center.selectionDeleteBtn.classList.toggle("hidden", !canDelete);
     $$(".chat-client-row-actions", dom.left.list).forEach((actions) => {
-      actions.classList.toggle("hidden", !canManage);
+      actions.classList.toggle("hidden", !canDelete);
     });
 
     const replyAction = dom.center.contextMenu?.querySelector('[data-chat-msg-action="reply"]');
-    if (replyAction) replyAction.classList.toggle("hidden", !canManage);
+    if (replyAction) replyAction.classList.toggle("hidden", !canCreate);
     const menuReactions = dom.center.contextMenu?.querySelector(".chat-message-menu-reactions");
-    if (menuReactions) menuReactions.classList.toggle("hidden", !canManage);
+    if (menuReactions) menuReactions.classList.toggle("hidden", !canUpdate);
 
-    if (!canManage) {
+    if (!state.canManageChat) {
       hideClientContextMenu();
       closeAllClientSwipeRows(null, { immediate: true });
       hideMessageContextMenu();
@@ -1119,7 +1128,7 @@
   }
 
   function openClientSwipeRow(row) {
-    if (!state.canManageChat) return false;
+    if (!state.canDeleteChat) return false;
     const targetRow = row && row.isConnected ? row : null;
     if (!targetRow) return false;
     const main = getClientSwipeRowMain(targetRow);
@@ -1170,7 +1179,7 @@
     };
 
     main.addEventListener("touchstart", (event) => {
-      if (!state.canManageChat) return;
+      if (!state.canDeleteChat) return;
       if (!isChatMobileViewport()) return;
       if (event.touches.length !== 1) return;
       const touch = event.touches[0];
@@ -1228,7 +1237,7 @@
       if (!actionBtn) return;
       event.preventDefault();
       event.stopPropagation();
-      if (!state.canManageChat) return;
+      if (!state.canDeleteChat) return;
       closeClientSwipeRow(row, { immediate: true });
       const action = String(actionBtn.getAttribute("data-chat-client-action-inline") || "");
       if (action === "clear") {
@@ -4806,6 +4815,7 @@
     const headers = {
       "x-tenant-id": String(tenantId),
       "x-store-id": storeId,
+      "x-rbac-context": "chat",
       ...(opts.body && !isFormDataBody ? { "Content-Type": "application/json" } : {}),
       ...(opts.headers || {}),
     };
@@ -5300,7 +5310,7 @@
   }
 
   async function pushThreadTypingState(clientId, active, phrase = "", options = {}) {
-    if (!state.canManageChat) return;
+    if (!state.canCreateChat) return;
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     const body = active === true
@@ -10706,7 +10716,7 @@
         </span>
         </span>
       </button>
-      <div class="chat-client-row-actions${state.canManageChat ? "" : " hidden"}" aria-hidden="true">
+      <div class="chat-client-row-actions${state.canDeleteChat ? "" : " hidden"}" aria-hidden="true">
         <button type="button" class="chat-client-row-action is-clear" data-chat-client-action-inline="clear">Очистить</button>
         <button type="button" class="chat-client-row-action is-delete${canDeleteGuest ? "" : " hidden"}" data-chat-client-action-inline="delete-guest">Удалить</button>
       </div>
@@ -10765,7 +10775,7 @@
       });
       mainBtn.addEventListener("contextmenu", (event) => {
         event.preventDefault();
-        if (!state.canManageChat) {
+        if (!state.canDeleteChat) {
           hideClientContextMenu();
           return;
         }
@@ -12536,7 +12546,7 @@
   }
 
   function setComposerEnabled(enabled) {
-    const canEnable = enabled && state.canManageChat;
+    const canEnable = enabled && (state.editingMessageId ? state.canUpdateChat : state.canCreateChat);
     [dom.center.input, dom.center.attachInput, dom.center.attachBtn, dom.center.emojiBtn, dom.center.sendBtn].forEach((el) => {
       if (!el) return;
       el.disabled = !canEnable;
@@ -12558,7 +12568,7 @@
     dom.center.sendBtn.title = isEditing ? "Сохранить изменения" : "Отправить";
     dom.center.sendBtn.setAttribute("aria-label", isEditing ? "Сохранить изменения" : "Отправить");
     dom.center.sendBtn.innerHTML = isEditing ? '<i class="fas fa-check"></i>' : '<i class="fas fa-paper-plane"></i>';
-    dom.center.input.placeholder = state.canManageChat
+    dom.center.input.placeholder = (isEditing ? state.canUpdateChat : state.canCreateChat)
       ? (isEditing ? "Измените сообщение" : "Введите сообщение")
       : "Только просмотр";
   }
@@ -12566,6 +12576,7 @@
   function cancelEditingMessage() {
     state.editingMessageId = null;
     syncComposerMode();
+    setComposerEnabled(Boolean(state.activeClientId));
   }
 
   function getMessagesWord(count) {
@@ -12625,7 +12636,7 @@
   }
 
   function updateThreadMessage(clientId, messageId, newText) {
-    if (!state.canManageChat) return false;
+    if (!state.canUpdateChat) return false;
     const msg = findThreadMessage(clientId, messageId);
     if (!msg || msg.direction !== "out") return false;
     msg.text = String(newText || "");
@@ -12640,7 +12651,7 @@
   }
 
   function removeThreadMessage(clientId, messageId) {
-    if (!state.canManageChat) return false;
+    if (!state.canDeleteChat) return false;
     const thread = getThread(clientId);
     const idx = thread.findIndex((msg) => String(msg.id) === String(messageId));
     if (idx < 0) return false;
@@ -12739,7 +12750,7 @@
   }
 
   function syncHiddenMessagesForActor(clientId, messageIds) {
-    if (!state.canManageChat) return;
+    if (!state.canUpdateChat) return;
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     const ids = (Array.isArray(messageIds) ? messageIds : [])
@@ -12752,7 +12763,7 @@
   }
 
   function toggleThreadMessagePinned(clientId, messageId) {
-    if (!state.canManageChat) return false;
+    if (!state.canUpdateChat) return false;
     const msg = findThreadMessage(clientId, messageId);
     if (!msg) return false;
     msg.pinned = !msg.pinned;
@@ -12765,7 +12776,7 @@
   }
 
   function setThreadMessageReaction(clientId, messageId, reaction) {
-    if (!state.canManageChat) return false;
+    if (!state.canUpdateChat) return false;
     const msg = findThreadMessage(clientId, messageId);
     if (!msg) return false;
     if (!setMessageActorReaction(msg, CHAT_REACTION_ACTOR, reaction)) return false;
@@ -13767,7 +13778,7 @@
     menu.addEventListener("click", (event) => {
       const actionBtn = event.target.closest("[data-chat-client-action]");
       if (!actionBtn) return;
-      if (!state.canManageChat) {
+      if (!state.canDeleteChat) {
         hideClientContextMenu();
         return;
       }
@@ -13903,7 +13914,7 @@
   }
 
   function deleteGuestClientChat(clientId) {
-    if (!state.canManageChat) return false;
+    if (!state.canDeleteChat) return false;
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
     const client = findClientById(key);
@@ -13934,7 +13945,7 @@
   }
 
   function clearClientChat(clientId) {
-    if (!state.canManageChat) return false;
+    if (!state.canDeleteChat) return false;
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
 
@@ -14005,7 +14016,7 @@
   }
 
   function showClientContextMenu(x, y, clientId) {
-    if (!state.canManageChat) return;
+    if (!state.canDeleteChat) return;
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     hideMessageContextMenu();
@@ -14161,7 +14172,7 @@
   }
 
   function showReactionBarForMessage(message, menuRect) {
-    if (!state.canManageChat) return;
+    if (!state.canUpdateChat) return;
     if (!dom.center.reactionBar) return;
     state.contextMessageId = String(message.id || "");
     const ownReaction = getMessageActorReaction(message, CHAT_REACTION_ACTOR);
@@ -14187,7 +14198,7 @@
   }
 
   function showReactionBar(messageId, anchorEl) {
-    if (!state.canManageChat) return;
+    if (!state.canUpdateChat) return;
     if (!state.activeClientId || !anchorEl) return;
     const message = findThreadMessage(state.activeClientId, messageId);
     if (!message) return;
@@ -14209,9 +14220,9 @@
     normalizeContextMenuReactionButtons(dom.center.contextMenu);
     setContextMenuReactionsExpanded(false);
     if (dom.center.menuPinLabel) dom.center.menuPinLabel.textContent = message.pinned ? "Открепить" : "Закрепить";
-    const canManageOwnMessage = state.canManageChat && message.direction === "out";
+    const canManageOwnMessage = state.canUpdateChat && message.direction === "out";
     if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canManageOwnMessage);
-    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.toggle("hidden", !state.canManageChat);
+    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.toggle("hidden", !state.canDeleteChat);
 
     if (showMobileContextScene(messageId)) {
       contextMenuAnchorPoint = null;
@@ -14239,18 +14250,19 @@
   }
 
   function startEditingMessage(messageId) {
-    if (!state.canManageChat) return;
+    if (!state.canUpdateChat) return;
     if (!state.activeClientId || !dom.center.input) return;
     const msg = findThreadMessage(state.activeClientId, messageId);
     if (!msg || msg.direction !== "out") return;
     clearComposerReply();
     state.editingMessageId = String(messageId);
+    setComposerEnabled(true);
     focusComposer(msg.text || "");
     syncComposerMode();
   }
 
   function deleteMessageFromContext(messageId) {
-    if (!state.canManageChat) return;
+    if (!state.canDeleteChat) return;
     if (!state.activeClientId) return;
     const message = findThreadMessage(state.activeClientId, messageId);
     if (!message) return;
@@ -14286,7 +14298,7 @@
   }
 
   function replyToMessageFromContext(messageId) {
-    if (!state.canManageChat) return;
+    if (!state.canCreateChat) return;
     if (!state.activeClientId || !dom.center.input) return;
     setComposerReplyByMessage(messageId);
   }
@@ -14304,7 +14316,7 @@
   }
 
   function reactMessageFromContext(messageId, reaction) {
-    if (!state.canManageChat) return;
+    if (!state.canUpdateChat) return;
     if (!state.activeClientId) return;
     if (!setThreadMessageReaction(state.activeClientId, messageId, reaction)) return;
     renderMessages();
@@ -14352,7 +14364,7 @@
   }
 
   function toggleHeartReactionForMessage(messageId) {
-    if (!state.canManageChat) return false;
+    if (!state.canUpdateChat) return false;
     if (!state.activeClientId) return false;
     const heartReaction = "\u{2764}\u{FE0F}";
     if (!setThreadMessageReaction(state.activeClientId, messageId, heartReaction)) return false;
@@ -14377,7 +14389,7 @@
   }
 
   function deleteSelectedMessages() {
-    if (!state.canManageChat) return;
+    if (!state.canDeleteChat) return;
     if (!state.activeClientId || state.selectedMessageIds.size === 0) return;
     const selectedMessages = getSelectedMessages();
     if (!selectedMessages.length) return;
@@ -15197,7 +15209,7 @@
   }
 
   function sendMessage(text, options = {}) {
-    if (!state.canManageChat) return false;
+    if (state.editingMessageId ? !state.canUpdateChat : !state.canCreateChat) return false;
     if (!state.activeClientId) return false;
     const clean = normalizeComposerText(text);
     const attachment = isImageAttachment(options.attachment) ? options.attachment : null;
@@ -16100,7 +16112,7 @@
   }
 
   function sendPreparedImageAttachments(attachments, options = {}) {
-    if (!state.canManageChat) return 0;
+    if (!state.canCreateChat) return 0;
     if (!state.activeClientId) return 0;
     const list = Array.isArray(attachments)
       ? attachments.filter((item) => isImageAttachment(item))
@@ -16150,7 +16162,7 @@
   }
 
   async function sendImageAttachments(files, options = {}) {
-    if (!state.canManageChat) return 0;
+    if (!state.canCreateChat) return 0;
     if (!isChatWidgetEnabledRuntime()) return 0;
     const list = Array.isArray(files) ? files : [];
     if (!list.length) return 0;
@@ -16164,7 +16176,7 @@
   }
 
   async function openAttachPreviewFromFiles(files, options = {}) {
-    if (!state.canManageChat) return false;
+    if (!state.canCreateChat) return false;
     if (!isChatWidgetEnabledRuntime()) return false;
     const list = Array.isArray(files) ? files : [];
     if (!list.length) return false;

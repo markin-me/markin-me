@@ -1641,6 +1641,7 @@
       "Content-Type": "application/json",
       "x-tenant-id": String(TENANT_ID),
       "x-store-id": storeId,
+      "x-rbac-context": "products",
       ...(opts?.headers || {}),
     };
 
@@ -1650,8 +1651,8 @@
     }
     
     const res = await fetch(url, {
-      headers,
       ...opts,
+      headers,
     });
     
     // Если 401 - перенаправляем на логин
@@ -24589,7 +24590,8 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   async function apiGetStockDocument(id) {
-    return api(`/api/admin/stock/documents/${id}`);
+    const context = state.mode === "stock-movements" ? "stock.history" : state.mode === "stock-in" ? "stock.receipts" : "stock.writeoffs";
+    return api(`/api/admin/stock/documents/${id}`, { headers: { "x-rbac-context": context } });
   }
 
   async function apiCreateStockDocument(payload) {

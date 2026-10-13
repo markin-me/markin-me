@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { getPermissionGrant } = require('../middleware/auth');
+const employeeIdentity = require('../helpers/employeeIdentity');
 
 const VALID_ACCESS_RULES = new Set(['all', 'stores', 'own', 'assigned']);
 const VALID_START_ROUTES = new Set([
@@ -282,10 +283,6 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       .filter((item) => Number.isInteger(item) && item > 0)));
   }
 
-  function normalizeLogin(value) {
-    return String(value || '').trim().toLowerCase();
-  }
-
   function normalizeStartRoute(value) {
     const route = String(value || '').trim();
     return VALID_START_ROUTES.has(route) ? route : null;
@@ -295,18 +292,31 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     return res.status(status).json({ ok: false, error, ...(details ? { details } : {}) });
   }
 
-  async function requireAnyPermission(req, res, next) {
-    try {
-      if (req.user && req.user.fullAccess === true) return next();
-      for (const key of ['users.view', 'users.manage', 'roles.manage', 'employee_documents.manage']) {
-        if (await getPermissionGrant(req.user, key)) return next();
+  function requireAnyPermission(permissionKeys) {
+    return async function anyPermissionMiddleware(req, res, next) {
+      try {
+        if (req.user && req.user.fullAccess === true) return next();
+        for (const key of permissionKeys) {
+          if (await getPermissionGrant(req.user, key)) return next();
+        }
+        return teamError(res, 403, 'FORBIDDEN');
+      } catch (error) {
+        console.error('TEAM_PERMISSION_CHECK_FAILED:', error);
+        return teamError(res, 500, 'AUTHORIZATION_ERROR');
       }
-      return teamError(res, 403, 'FORBIDDEN');
-    } catch (error) {
-      console.error('TEAM_PERMISSION_CHECK_FAILED:', error);
-      return teamError(res, 500, 'AUTHORIZATION_ERROR');
-    }
+    };
   }
+
+  const employeeReadPermissions = [
+    'team.employees.read', 'team.employees.create', 'team.employees.update',
+    'team.employee_documents.read', 'team.employee_documents.create', 'team.employee_documents.update',
+  ];
+  const roleReadPermissions = [
+    'team.roles.read', 'team.roles.create', 'team.roles.update', 'team.roles.delete', 'team.roles.permissions',
+  ];
+  const requireTeamBootstrap = requireAnyPermission([...employeeReadPermissions, ...roleReadPermissions]);
+  const requireEmployeeRead = requireAnyPermission(employeeReadPermissions);
+  const requireRoleRead = requireAnyPermission(roleReadPermissions);
 
   async function verifyRoleIds(queryable, currentTenantId, roleIds) {
     if (!roleIds.length) return false;
@@ -333,13 +343,18 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     return Boolean(req.user?.fullAccess || req.user?.activeRole?.is_owner);
   }
 
+  function canDelegateAccessRule(actorRule, requestedRule) {
+    if (actorRule === 'all') return true;
+    return actorRule === requestedRule;
+  }
+
   async function loadManageablePermissionIds(queryable, req) {
     if (actorCanAssignOwner(req)) {
       const [rows] = await queryable.query('SELECT id FROM system_permissions');
-      return new Set(rows.map((row) => Number(row.id)));
+      return new Map(rows.map((row) => [Number(row.id), 'all']));
     }
     const [rows] = await queryable.query(
-      `SELECT rp.permission_id, p.permission_key
+      `SELECT rp.permission_id, p.permission_key, rp.access_rule
        FROM role_permissions rp
        JOIN system_permissions p ON p.id=rp.permission_id
        JOIN user_roles ur
@@ -347,8 +362,24 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
        WHERE rp.tenant_id=? AND rp.role_id=?`,
       [Number(req.user?.userId || 0), Number(req.user?.tenantId || 0), Number(req.user?.activeRoleId || 0)]
     );
-    if (!rows.some((row) => row.permission_key === 'roles.manage')) return new Set();
-    return new Set(rows.map((row) => Number(row.permission_id)));
+    if (!rows.some((row) => row.permission_key === 'team.roles.permissions')) return new Map();
+    return new Map(rows.map((row) => [Number(row.permission_id), String(row.access_rule || 'all')]));
+  }
+
+  async function actorCanAssignRoles(queryable, req, currentTenantId, roleIds) {
+    if (actorCanAssignOwner(req)) return true;
+    const manageable = await loadManageablePermissionIds(queryable, req);
+    if (!manageable.size) return false;
+    const [grants] = await queryable.query(
+      `SELECT rp.permission_id, rp.access_rule
+       FROM role_permissions rp
+       WHERE rp.tenant_id=? AND rp.role_id IN (${roleIds.map(() => '?').join(',')})`,
+      [currentTenantId, ...roleIds]
+    );
+    return grants.every((grant) => {
+      const actorRule = manageable.get(Number(grant.permission_id));
+      return actorRule && canDelegateAccessRule(actorRule, String(grant.access_rule || 'all'));
+    });
   }
 
   async function verifyStoreIds(queryable, currentTenantId, storeIds) {
@@ -361,12 +392,22 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     return rows.length === storeIds.length;
   }
 
+  async function actorCanAssignStores(queryable, req, currentTenantId, storeIds) {
+    if (actorCanAssignOwner(req) || !storeIds.length) return true;
+    const [rows] = await queryable.query(
+      `SELECT store_id FROM user_stores
+       WHERE tenant_id=? AND user_id=? AND store_id IN (${storeIds.map(() => '?').join(',')})`,
+      [currentTenantId, Number(req.user?.userId || 0), ...storeIds]
+    );
+    return rows.length === storeIds.length;
+  }
+
   async function loadUsers(queryable, currentTenantId, onlyUserId = null) {
     const params = [currentTenantId];
     const userFilter = Number(onlyUserId) > 0 ? ' AND u.id=?' : '';
     if (userFilter) params.push(Number(onlyUserId));
     const [users] = await queryable.query(
-      `SELECT u.id, u.name, u.login, u.email, u.comment, u.is_active, u.must_change_password,
+      `SELECT u.id, u.name, u.last_name, u.first_name, u.patronymic, u.phone, u.login, u.login_local, u.photo_revision, u.email, u.comment, u.is_active, u.must_change_password,
               u.last_login_at, u.created_at
        FROM app_users u
        WHERE u.tenant_id=?${userFilter}
@@ -495,19 +536,27 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     return rows.length === 0;
   }
 
-  router.get('/bootstrap', requireAnyPermission, async (req, res) => {
+  router.get('/bootstrap', requireTeamBootstrap, async (req, res) => {
     try {
       const currentTenantId = tenantId(req);
+      const [[loginSettings]] = await db.query('SELECT login_suffix, corporate_logins_enabled FROM ten_tenants WHERE id=?', [currentTenantId]);
       const fullGrant = req.user?.fullAccess === true ? Promise.resolve({ access_rule: 'all' }) : null;
-      const [users, roles, storesResult, permissionsResult, documentsGrant, usersViewGrant, usersManageGrant, rolesGrant, manageablePermissionIds] = await Promise.all([
+      const [users, roles, storesResult, permissionsResult, documentsGrant, documentsCreateGrant, documentsUpdateGrant, usersViewGrant, usersCreateGrant, usersUpdateGrant, rolesViewGrant, rolesCreateGrant, rolesUpdateGrant, rolesDeleteGrant, rolesPermissionsGrant, manageablePermissionIds] = await Promise.all([
         loadUsers(db, currentTenantId),
         loadRoles(db, currentTenantId),
         db.query('SELECT id, name, is_active FROM ten_stores WHERE tenant_id=? ORDER BY is_active DESC, name, id', [currentTenantId]),
         db.query('SELECT id, permission_key, group_key, label, description, allowed_access_rules FROM system_permissions ORDER BY sort_order, id'),
-        fullGrant || getPermissionGrant(req.user, 'employee_documents.manage'),
-        fullGrant || getPermissionGrant(req.user, 'users.view'),
-        fullGrant || getPermissionGrant(req.user, 'users.manage'),
-        fullGrant || getPermissionGrant(req.user, 'roles.manage'),
+        fullGrant || getPermissionGrant(req.user, 'team.employee_documents.read'),
+        fullGrant || getPermissionGrant(req.user, 'team.employee_documents.create'),
+        fullGrant || getPermissionGrant(req.user, 'team.employee_documents.update'),
+        fullGrant || getPermissionGrant(req.user, 'team.employees.read'),
+        fullGrant || getPermissionGrant(req.user, 'team.employees.create'),
+        fullGrant || getPermissionGrant(req.user, 'team.employees.update'),
+        fullGrant || getPermissionGrant(req.user, 'team.roles.read'),
+        fullGrant || getPermissionGrant(req.user, 'team.roles.create'),
+        fullGrant || getPermissionGrant(req.user, 'team.roles.update'),
+        fullGrant || getPermissionGrant(req.user, 'team.roles.delete'),
+        fullGrant || getPermissionGrant(req.user, 'team.roles.permissions'),
         loadManageablePermissionIds(db, req),
       ]);
       const stores = storesResult[0].map((store) => ({ ...store, id: Number(store.id), is_active: Number(store.is_active) === 1 }));
@@ -519,19 +568,39 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         description: permission.description || '',
         allowed_access_rules: String(permission.allowed_access_rules || 'all').split(',').filter(Boolean),
         can_manage: manageablePermissionIds.has(Number(permission.id)),
+        max_access_rule: manageablePermissionIds.get(Number(permission.id)) || null,
       }));
+      const canViewUsers = Boolean(usersViewGrant || usersCreateGrant || usersUpdateGrant || documentsGrant || documentsCreateGrant || documentsUpdateGrant);
+      const canViewRoles = Boolean(rolesViewGrant || rolesCreateGrant || rolesUpdateGrant || rolesDeleteGrant || rolesPermissionsGrant);
+      const canManagePermissions = Boolean(rolesPermissionsGrant) && permissions.some((permission) => permission.key === 'team.roles.permissions' && permission.can_manage);
+      const visibleRoles = canViewRoles
+        ? roles.map((role) => ({ ...role, users: canViewUsers ? role.users : [], users_count: canViewUsers ? role.users_count : 0 }))
+        : (usersCreateGrant || usersUpdateGrant ? roles.map((role) => ({ id: role.id, name: role.name, is_owner: role.is_owner })) : []);
       return res.json({
         ok: true,
-        users,
-        roles,
-        stores,
-        permissions,
+        login_suffix: loginSettings?.login_suffix || '',
+        corporate_logins_enabled: Number(loginSettings?.corporate_logins_enabled) === 1,
+        users: canViewUsers ? users : [],
+        roles: visibleRoles,
+        stores: canViewUsers ? stores : [],
+        permissions: canManagePermissions ? permissions : [],
         start_routes: Array.from(VALID_START_ROUTES),
         capabilities: {
-          manage_employee_documents: Boolean(documentsGrant),
-          view_users: Boolean(usersViewGrant || usersManageGrant || documentsGrant),
-          manage_users: Boolean(usersManageGrant),
-          manage_roles: Boolean(rolesGrant) && permissions.some((permission) => permission.key === 'roles.manage' && permission.can_manage),
+          reset_password: Boolean(fullGrant || await getPermissionGrant(req.user, 'team.employees.reset_password')),
+          read_employee_photo: Boolean(usersViewGrant),
+          view_employee_documents: Boolean(documentsGrant),
+          manage_employee_documents: Boolean(documentsCreateGrant || documentsUpdateGrant),
+          view_users: canViewUsers,
+          create_users: Boolean(usersCreateGrant),
+          update_users: Boolean(usersUpdateGrant),
+          manage_users: Boolean(usersCreateGrant || usersUpdateGrant),
+          view_roles: canViewRoles,
+          create_roles: Boolean(rolesCreateGrant && rolesPermissionsGrant),
+          update_roles: Boolean(rolesUpdateGrant && rolesPermissionsGrant),
+          delete_roles: Boolean(rolesDeleteGrant),
+          manage_permissions: canManagePermissions,
+          manage_roles: Boolean(rolesUpdateGrant) && canManagePermissions,
+          manage_system_roles: actorCanAssignOwner(req),
         },
       });
     } catch (error) {
@@ -540,7 +609,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     }
   });
 
-  router.get('/users/:id', requireAnyPermission, async (req, res) => {
+  router.get('/users/:id', requireEmployeeRead, async (req, res) => {
     try {
       const users = await loadUsers(db, tenantId(req), Number(req.params.id));
       if (!users.length) return teamError(res, 404, 'USER_NOT_FOUND');
@@ -561,7 +630,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     return rows[0] || null;
   }
 
-  router.get('/users/:id/documents', requirePermission('employee_documents.manage'), async (req, res) => {
+  router.get('/users/:id/documents', requirePermission('team.employee_documents.read'), async (req, res) => {
     try {
       const currentTenantId = tenantId(req);
       const userId = Number(req.params.id);
@@ -590,7 +659,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     }
   });
 
-  router.put('/users/:id/documents', requirePermission('employee_documents.manage'), async (req, res) => {
+  router.put('/users/:id/documents', async (req, res) => {
     const conn = await db.getConnection();
     try {
       const currentTenantId = tenantId(req);
@@ -609,6 +678,11 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         return teamError(res, 404, 'USER_NOT_FOUND');
       }
       const row = await loadDocumentRow(conn, currentTenantId, userId);
+      const documentPermission = row ? 'team.employee_documents.update' : 'team.employee_documents.create';
+      if (!req.user?.fullAccess && !await getPermissionGrant(req.user, documentPermission)) {
+        await conn.rollback();
+        return teamError(res, 403, 'FORBIDDEN');
+      }
       const current = decryptEmployeeDocuments(row, currentTenantId, userId);
       const documents = mergeEmployeeDocumentSection(current, section, req.body?.data);
       const encrypted = encryptEmployeeDocuments(documents, currentTenantId, userId);
@@ -638,25 +712,41 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     }
   });
 
-  router.post('/users', requirePermission('users.manage'), async (req, res) => {
+  router.get('/login-suggestion', requireAnyPermission(['team.employees.create', 'team.employees.update']), async (req, res) => {
+    try {
+      return res.json({ ok: true, ...await employeeIdentity.generateAvailableLogin(db, tenantId(req), req.query.surname, Number(req.query.user_id || 0)) });
+    } catch (error) {
+      return teamError(res, error.name === 'EmployeeIdentityError' ? 400 : 500, error.name === 'EmployeeIdentityError' ? error.code : 'DB_ERROR');
+    }
+  });
+
+  router.get('/users/:id/photo', requirePermission('team.employees.read'), async (req, res) => {
+    try {
+      if (!(Number(req.params.id) > 0)) return teamError(res, 400, 'INVALID_USER');
+      const [rows] = await db.query('SELECT employee_photo FROM app_users WHERE tenant_id=? AND id=?', [tenantId(req), Number(req.params.id)]);
+      if (!rows[0]?.employee_photo) return teamError(res, 404, 'PHOTO_NOT_FOUND');
+      res.set({ 'Content-Type': 'image/webp', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'" });
+      return res.send(rows[0].employee_photo);
+    } catch { return teamError(res, 500, 'DB_ERROR'); }
+  });
+
+  router.post('/users', requirePermission('team.employees.create'), async (req, res) => {
     const conn = await db.getConnection();
     try {
       const currentTenantId = tenantId(req);
-      const name = helpers.strOrNull(req.body.name);
-      const login = normalizeLogin(req.body.login);
-      const password = helpers.strOrNull(req.body.temporary_password);
+      if (!employeeIdentity.secureTransport(req)) return teamError(res, 426, 'HTTPS_REQUIRED');
+      const profile = employeeIdentity.employeeProfile(req.body);
+      const password = employeeIdentity.validatePassword(req.body.temporary_password);
+      const photo = req.body.photo_base64 ? await employeeIdentity.encodeEmployeePhoto(req.body.photo_base64) : null;
       const comment = helpers.strOrNull(req.body.comment);
       const roleIds = uniqueIds(req.body.role_ids);
       const storeIds = uniqueIds(req.body.store_ids);
       const isActive = req.body.is_active === false || Number(req.body.is_active) === 0 ? 0 : 1;
-      if (!name) return teamError(res, 400, 'NAME_REQUIRED');
-      if (name.length > 100) return teamError(res, 400, 'NAME_TOO_LONG');
-      if (!/^[a-z0-9._-]{3,64}$/.test(login)) return teamError(res, 400, 'INVALID_LOGIN');
-      if (!password || password.length < 6) return teamError(res, 400, 'PASSWORD_TOO_SHORT');
-      if (password.length > 256) return teamError(res, 400, 'PASSWORD_TOO_LONG');
       if (!roleIds.length) return teamError(res, 400, 'ROLE_REQUIRED');
 
       await conn.beginTransaction();
+      const loginTenant = await employeeIdentity.lockLoginTenant(conn, currentTenantId);
+      const { login, local } = employeeIdentity.normalizeCorporateLogin(req.body.login, loginTenant.login_suffix);
       if (!await verifyRoleIds(conn, currentTenantId, roleIds)) {
         await conn.rollback();
         return teamError(res, 400, 'INVALID_ROLE');
@@ -665,13 +755,21 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         await conn.rollback();
         return teamError(res, 403, 'OWNER_ROLE_FORBIDDEN');
       }
+      if (!await actorCanAssignRoles(conn, req, currentTenantId, roleIds)) {
+        await conn.rollback();
+        return teamError(res, 403, 'ROLE_ESCALATION_FORBIDDEN');
+      }
       if (!await verifyStoreIds(conn, currentTenantId, storeIds)) {
         await conn.rollback();
         return teamError(res, 400, 'INVALID_STORE');
       }
+      if (!await actorCanAssignStores(conn, req, currentTenantId, storeIds)) {
+        await conn.rollback();
+        return teamError(res, 403, 'STORE_ESCALATION_FORBIDDEN');
+      }
       const [existing] = await conn.query(
-        'SELECT id FROM app_users WHERE tenant_id=? AND login=? LIMIT 1',
-        [currentTenantId, login]
+        'SELECT id FROM app_users WHERE tenant_id=? AND login_local=? LIMIT 1',
+        [currentTenantId, local]
       );
       if (existing.length) {
         await conn.rollback();
@@ -680,9 +778,9 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       const passwordHash = await bcrypt.hash(password, 10);
       const [result] = await conn.query(
         `INSERT INTO app_users
-          (tenant_id, login, email, password_hash, must_change_password, name, comment, role, is_active)
-         VALUES (?, ?, NULL, ?, 1, ?, ?, 'manager', ?)`,
-        [currentTenantId, login, passwordHash, name, comment, isActive]
+          (tenant_id, login, login_local, email, password_hash, must_change_password, name, last_name, first_name, patronymic, phone, employee_photo, photo_revision, comment, role, is_active)
+         VALUES (?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'manager', ?)`,
+        [currentTenantId, login, local, passwordHash, profile.name, profile.last_name, profile.first_name, profile.patronymic, profile.phone, photo, photo ? crypto.randomBytes(16).toString('hex') : null, comment, isActive]
       );
       const userId = Number(result.insertId);
       await replaceUserRelations(conn, currentTenantId, userId, roleIds, storeIds);
@@ -692,32 +790,40 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     } catch (error) {
       try { await conn.rollback(); } catch (_) {}
       if (error.code === 'ER_DUP_ENTRY') return teamError(res, 409, 'LOGIN_EXISTS');
-      console.error('TEAM_USER_CREATE_FAILED:', error);
+      if (error.name === 'EmployeeIdentityError') return teamError(res, 400, error.code);
+      console.error('TEAM_USER_CREATE_FAILED:', error.code || error.name);
       return teamError(res, 500, 'DB_ERROR');
     } finally {
       conn.release();
     }
   });
 
-  router.put('/users/:id', requirePermission('users.manage'), async (req, res) => {
+  router.put('/users/:id', requirePermission('team.employees.update'), async (req, res) => {
     const conn = await db.getConnection();
     try {
       const currentTenantId = tenantId(req);
       const userId = Number(req.params.id);
-      const name = helpers.strOrNull(req.body.name);
-      const login = normalizeLogin(req.body.login);
       const comment = helpers.strOrNull(req.body.comment);
       const roleIds = uniqueIds(req.body.role_ids);
       const storeIds = uniqueIds(req.body.store_ids);
       const isActive = req.body.is_active === false || Number(req.body.is_active) === 0 ? 0 : 1;
       if (!(userId > 0)) return teamError(res, 400, 'INVALID_USER');
-      if (!name) return teamError(res, 400, 'NAME_REQUIRED');
-      if (name.length > 100) return teamError(res, 400, 'NAME_TOO_LONG');
       if (!roleIds.length) return teamError(res, 400, 'ROLE_REQUIRED');
+      const passwordProvided = req.body.reset_password !== undefined && req.body.reset_password !== '';
+      let password;
+      if (passwordProvided) {
+        if (!req.user?.fullAccess && !await getPermissionGrant(req.user, 'team.employees.reset_password')) {
+          return teamError(res, 403, 'FORBIDDEN');
+        }
+        if (!employeeIdentity.secureTransport(req)) return teamError(res, 426, 'HTTPS_REQUIRED');
+        if (req.body.confirm_reset !== true) return teamError(res, 400, 'PASSWORD_RESET_CONFIRMATION_REQUIRED');
+        password = employeeIdentity.validatePassword(req.body.reset_password);
+      }
 
       await conn.beginTransaction();
+      const loginTenant = await employeeIdentity.lockLoginTenant(conn, currentTenantId);
       const [existingUsers] = await conn.query(
-        `SELECT u.id, u.email,
+        `SELECT u.id, u.email, u.name, u.last_name, u.first_name, u.patronymic, u.phone,
                 EXISTS(
                   SELECT 1 FROM user_roles ur
                   JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id
@@ -743,11 +849,18 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         await conn.rollback();
         return teamError(res, 403, 'OWNER_ROLE_FORBIDDEN');
       }
-      if (login && !/^[a-z0-9._-]{3,64}$/.test(login)) {
+      if (!await actorCanAssignRoles(conn, req, currentTenantId, roleIds)) {
         await conn.rollback();
-        return teamError(res, 400, 'INVALID_LOGIN');
+        return teamError(res, 403, 'ROLE_ESCALATION_FORBIDDEN');
       }
-      if (!login && !existingUsers[0].email) {
+      const profile = employeeIdentity.employeeProfile(req.body, existingUsers[0]);
+      const normalized = req.body.login ? employeeIdentity.normalizeCorporateLogin(req.body.login, loginTenant.login_suffix) : null;
+      const login = normalized?.login;
+      const local = normalized?.local || null;
+      const photoProvided = req.body.photo_base64 !== undefined || req.body.photo_remove === true;
+      if (req.body.photo_base64 && req.body.photo_remove === true) throw employeeIdentity.invalid('INVALID_EMPLOYEE_PHOTO');
+      const photo = req.body.photo_base64 ? await employeeIdentity.encodeEmployeePhoto(req.body.photo_base64) : null;
+      if (!login && (!existingUsers[0].email || Number(existingUsers[0].is_owner) !== 1)) {
         await conn.rollback();
         return teamError(res, 400, 'INVALID_LOGIN');
       }
@@ -755,23 +868,32 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         await conn.rollback();
         return teamError(res, 400, 'INVALID_STORE');
       }
+      if (!await actorCanAssignStores(conn, req, currentTenantId, storeIds)) {
+        await conn.rollback();
+        return teamError(res, 403, 'STORE_ESCALATION_FORBIDDEN');
+      }
       if (await wouldRemoveLastOwner(conn, currentTenantId, userId, roleIds, isActive === 1)) {
         await conn.rollback();
         return teamError(res, 409, 'LAST_OWNER_REQUIRED');
       }
       const [loginOwner] = login ? await conn.query(
-        'SELECT id FROM app_users WHERE tenant_id=? AND login=? AND id<>? LIMIT 1',
-        [currentTenantId, login, userId]
+        'SELECT id FROM app_users WHERE tenant_id=? AND login_local=? AND id<>? LIMIT 1',
+        [currentTenantId, local, userId]
       ) : [[]];
       if (loginOwner.length) {
         await conn.rollback();
         return teamError(res, 409, 'LOGIN_EXISTS');
       }
       await conn.query(
-        `UPDATE app_users SET name=?, login=?, comment=?, is_active=?
+        `UPDATE app_users SET name=?, last_name=?, first_name=?, patronymic=?, phone=?, login=?, login_local=?, comment=?, is_active=?,
+         employee_photo=IF(?, ?, employee_photo), photo_revision=IF(?, ?, photo_revision)
          WHERE tenant_id=? AND id=?`,
-        [name, login || null, comment, isActive, currentTenantId, userId]
+        [profile.name, profile.last_name, profile.first_name, profile.patronymic, profile.phone, login || null, local, comment, isActive, photoProvided, photo, photoProvided, photo ? crypto.randomBytes(16).toString('hex') : null, currentTenantId, userId]
       );
+      if (passwordProvided) {
+        const passwordHash = await bcrypt.hash(password, 10);
+        await conn.query('UPDATE app_users SET password_hash=?, must_change_password=0 WHERE tenant_id=? AND id=?', [passwordHash, currentTenantId, userId]);
+      }
       await replaceUserRelations(conn, currentTenantId, userId, roleIds, storeIds);
       await conn.commit();
       const users = await loadUsers(db, currentTenantId, userId);
@@ -779,21 +901,22 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     } catch (error) {
       try { await conn.rollback(); } catch (_) {}
       if (error.code === 'ER_DUP_ENTRY') return teamError(res, 409, 'LOGIN_EXISTS');
-      console.error('TEAM_USER_UPDATE_FAILED:', error);
+      if (error.name === 'EmployeeIdentityError') return teamError(res, 400, error.code);
+      console.error('TEAM_USER_UPDATE_FAILED:', error.code || error.name);
       return teamError(res, 500, 'DB_ERROR');
     } finally {
       conn.release();
     }
   });
 
-  router.post('/users/:id/reset-password', requirePermission('users.manage'), async (req, res) => {
+  router.post('/users/:id/reset-password', requirePermission('team.employees.reset_password'), async (req, res) => {
     try {
       const currentTenantId = tenantId(req);
       const userId = Number(req.params.id);
-      const password = helpers.strOrNull(req.body.temporary_password);
+      if (!employeeIdentity.secureTransport(req)) return teamError(res, 426, 'HTTPS_REQUIRED');
+      if (req.body.confirm_reset !== true) return teamError(res, 400, 'PASSWORD_RESET_CONFIRMATION_REQUIRED');
+      const password = employeeIdentity.validatePassword(req.body.temporary_password);
       if (!(userId > 0)) return teamError(res, 400, 'INVALID_USER');
-      if (!password || password.length < 6) return teamError(res, 400, 'PASSWORD_TOO_SHORT');
-      if (password.length > 256) return teamError(res, 400, 'PASSWORD_TOO_LONG');
       const [users] = await db.query(
         `SELECT u.id,
                 EXISTS(
@@ -811,19 +934,20 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       }
       const passwordHash = await bcrypt.hash(password, 10);
       const [result] = await db.query(
-        `UPDATE app_users SET password_hash=?, must_change_password=1
+        `UPDATE app_users SET password_hash=?, must_change_password=0
          WHERE tenant_id=? AND id=?`,
         [passwordHash, currentTenantId, userId]
       );
       if (!result.affectedRows) return teamError(res, 404, 'USER_NOT_FOUND');
       return res.json({ ok: true });
     } catch (error) {
-      console.error('TEAM_PASSWORD_RESET_FAILED:', error);
+      if (error.name === 'EmployeeIdentityError') return teamError(res, 400, error.code);
+      console.error('TEAM_PASSWORD_RESET_FAILED:', error.code || error.name);
       return teamError(res, 500, 'DB_ERROR');
     }
   });
 
-  router.get('/roles/:id', requireAnyPermission, async (req, res) => {
+  router.get('/roles/:id', requireRoleRead, async (req, res) => {
     try {
       const roles = await loadRoles(db, tenantId(req), Number(req.params.id));
       if (!roles.length) return teamError(res, 404, 'ROLE_NOT_FOUND');
@@ -855,12 +979,24 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       if (!VALID_ACCESS_RULES.has(accessRule) || !allowed.includes(accessRule)) {
         return { ok: false, error: 'INVALID_ACCESS_RULE' };
       }
+      const actorAccessRule = manageablePermissionIds.get(permissionId);
+      if (actorAccessRule && !canDelegateAccessRule(actorAccessRule, accessRule)) {
+        if (!existingById.has(permissionId) || existingById.get(permissionId) !== accessRule) {
+          return { ok: false, error: 'ACCESS_RULE_ESCALATION_FORBIDDEN' };
+        }
+      }
       if (!manageablePermissionIds.has(permissionId)
           && (!existingById.has(permissionId) || existingById.get(permissionId) !== accessRule)) {
         return { ok: false, error: 'PERMISSION_ESCALATION_FORBIDDEN' };
       }
     }
-    const manageableIds = Array.from(manageablePermissionIds);
+    const manageableIds = Array.from(manageablePermissionIds.entries())
+      .filter(([permissionId, actorAccessRule]) => (
+        !existingById.has(permissionId)
+        || canDelegateAccessRule(actorAccessRule, existingById.get(permissionId))
+      ))
+      .map(([permissionId]) => permissionId);
+    const manageableIdSet = new Set(manageableIds);
     if (manageableIds.length) {
       await conn.query(
         `DELETE FROM role_permissions
@@ -869,7 +1005,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       );
     }
     for (const permissionId of permissionIds) {
-      if (!manageablePermissionIds.has(permissionId)) continue;
+      if (!manageableIdSet.has(permissionId)) continue;
       const grant = normalized.find((item) => Number(item.permission_id) === permissionId);
       await conn.query(
         `INSERT INTO role_permissions (tenant_id, role_id, permission_id, access_rule)
@@ -880,7 +1016,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     return { ok: true };
   }
 
-  router.post('/roles', requirePermission('roles.manage'), async (req, res) => {
+  router.post('/roles', requirePermission('team.roles.create'), requirePermission('team.roles.permissions'), async (req, res) => {
     const conn = await db.getConnection();
     try {
       const currentTenantId = tenantId(req);
@@ -902,7 +1038,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       const permissionsResult = await replaceRolePermissions(conn, currentTenantId, roleId, req.body.permissions, req);
       if (!permissionsResult.ok) {
         await conn.rollback();
-        return teamError(res, permissionsResult.error === 'PERMISSION_ESCALATION_FORBIDDEN' ? 403 : 400, permissionsResult.error);
+        return teamError(res, permissionsResult.error.endsWith('_ESCALATION_FORBIDDEN') ? 403 : 400, permissionsResult.error);
       }
       await conn.commit();
       const roles = await loadRoles(db, currentTenantId, roleId);
@@ -917,7 +1053,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     }
   });
 
-  router.put('/roles/:id', requirePermission('roles.manage'), async (req, res) => {
+  router.put('/roles/:id', requirePermission('team.roles.update'), requirePermission('team.roles.permissions'), async (req, res) => {
     const conn = await db.getConnection();
     try {
       const currentTenantId = tenantId(req);
@@ -932,7 +1068,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       if (!startRoute) return teamError(res, 400, 'INVALID_START_ROUTE');
       await conn.beginTransaction();
       const [roles] = await conn.query(
-        'SELECT id, is_owner FROM tenant_roles WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
+        'SELECT id, is_system, is_owner FROM tenant_roles WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
         [currentTenantId, roleId]
       );
       if (!roles.length) {
@@ -943,6 +1079,10 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         await conn.rollback();
         return teamError(res, 403, 'OWNER_ROLE_FORBIDDEN');
       }
+      if (Number(roles[0].is_system) === 1 && !actorCanAssignOwner(req)) {
+        await conn.rollback();
+        return teamError(res, 403, 'SYSTEM_ROLE_PROTECTED');
+      }
       await conn.query(
         `UPDATE tenant_roles SET name=?, description=?, start_route=?
          WHERE tenant_id=? AND id=?`,
@@ -951,7 +1091,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       const permissionsResult = await replaceRolePermissions(conn, currentTenantId, roleId, req.body.permissions, req);
       if (!permissionsResult.ok) {
         await conn.rollback();
-        return teamError(res, permissionsResult.error === 'PERMISSION_ESCALATION_FORBIDDEN' ? 403 : 400, permissionsResult.error);
+        return teamError(res, permissionsResult.error.endsWith('_ESCALATION_FORBIDDEN') ? 403 : 400, permissionsResult.error);
       }
       if (Number(roles[0].is_owner) === 1) {
         const [permissionCount] = await conn.query(
@@ -982,7 +1122,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     }
   });
 
-  router.delete('/roles/:id', requirePermission('roles.manage'), async (req, res) => {
+  router.delete('/roles/:id', requirePermission('team.roles.delete'), async (req, res) => {
     const conn = await db.getConnection();
     try {
       const currentTenantId = tenantId(req);

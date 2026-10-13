@@ -73,11 +73,18 @@ const makeAdminTeamRouter = require('./api/admin/team');
 const makePublicShopRouter = require('./api/public/shop');
 const makePrintApiRouter = require('./api/print');
 const makeChatTempRouter = require('./api/chatTemp');
+const {
+  BASE_ACTION_LABELS,
+  NAVIGATION_RBAC_NODES,
+  resolveAdminPermission: resolveNavigationAdminPermission,
+} = require('./api/navigationRbac');
 
 // middleware
 const { authMiddleware, requirePermission, userHasStore, can } = require('./api/middleware/auth');
 
 const app = express();
+// Only trusted reverse proxies may supply client IP/protocol for login limits and HTTPS checks.
+app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '2';
 const APP_CACHE_VERSION = String(TELEGRAM_APP_VERSION || '1.9.23').trim() || '1.9.23';
 const STATIC_ASSET_VERSION = String(
@@ -719,6 +726,10 @@ app.locals.assetUrl = function assetUrl(src) {
 };
 app.locals.appVersion = APP_CACHE_VERSION;
 app.locals.serviceWorkerVersion = SERVICE_WORKER_VERSION;
+app.locals.navigationRbac = {
+  actionLabels: BASE_ACTION_LABELS,
+  nodes: NAVIGATION_RBAC_NODES,
+};
 
 function toManifestPathname(rawPath) {
   const fallback = '/';
@@ -1961,9 +1972,21 @@ function isCustomerChatRequest(req) {
 function requireChatPermission(req, res, next) {
   if (isCustomerChatRequest(req)) return next();
   return authMiddleware(req, res, () => {
-    const permissionKey = ['GET', 'HEAD'].includes(String(req.method || '').toUpperCase())
-      ? 'chat.view'
-      : 'chat.manage';
+    const method = String(req.method || '').toUpperCase();
+    const route = String(req.path || '').toLowerCase();
+    const isChatStateUpdate = method === 'POST' && (
+      route === '/thread/merge'
+      || route.endsWith('/typing')
+      || route.endsWith('/messages/read')
+      || route === '/push/unsubscribe'
+    );
+    const permissionKey = ['GET', 'HEAD'].includes(method)
+      ? 'chat.threads.read'
+      : method === 'DELETE'
+        ? 'chat.threads.delete'
+        : method === 'POST' && !isChatStateUpdate
+          ? 'chat.threads.create'
+          : 'chat.threads.update';
     return requirePermission(permissionKey)(req, res, (error) => {
       if (error) return next(error);
       const currentTenantId = Number(req.user?.tenantId || 0);
@@ -1980,48 +2003,33 @@ app.use('/api/chat-temp', requireChatPermission, makeChatTempRouter());
 // API: Admin (требуют авторизации)
 // ------------------------------
 function resolveAdminPermission(req) {
-  const route = String(req.path || '').toLowerCase();
-  const method = String(req.method || 'GET').toUpperCase();
-  const isRead = method === 'GET' || method === 'HEAD';
-  if (route.startsWith('/team')) return null;
-  if (route.startsWith('/orders')) {
-    if (route.includes('/cash-')) return isRead ? 'finance.view' : 'finance.manage';
-    if (isRead) return 'orders.view';
-    if (route.includes('/refund')) return 'orders.refund';
-    if (route.includes('/status') || route.endsWith('/paid')) return 'orders.status';
-    if (route.includes('/assign')) return 'orders.assign';
-    if (method === 'DELETE') return 'orders.cancel';
-    return 'orders.edit';
-  }
-  if (route.startsWith('/stock')) return isRead ? 'stock.view' : 'stock.edit';
-  if (route.startsWith('/clients') || route.startsWith('/bonus') || route.startsWith('/subscriptions')
-      || route.startsWith('/discounts') || route.startsWith('/important-messages')) {
-    return isRead ? 'clients.view' : 'clients.edit';
-  }
-  if (route.startsWith('/catalog') || route.startsWith('/products') || route.startsWith('/options')
-      || route.startsWith('/variants') || route.startsWith('/combos') || route.startsWith('/combo-blocks')
-      || route.startsWith('/auto-add') || route.startsWith('/units') || route.startsWith('/unit-conversions')) {
-    return isRead ? 'products.view' : 'products.edit';
-  }
-  if (route.startsWith('/analytics/expense-documents') && isRead) return 'finance.cost';
-  if (route.startsWith('/analytics')) return isRead ? 'finance.view' : 'finance.manage';
-  if (route.startsWith('/tenant') || route.startsWith('/system')) {
-    return isRead ? 'settings.view' : 'settings.manage';
-  }
-  if (route.startsWith('/presence')) return 'clients.view';
-  return null;
+  return resolveNavigationAdminPermission({
+    path: req.path,
+    method: req.method,
+    headers: req.headers,
+    query: req.query,
+    body: req.body,
+  });
 }
 
 async function requireAdminPermission(req, res, next) {
   const permissionKey = resolveAdminPermission(req);
-  if (!permissionKey) return next();
+  if (!permissionKey) {
+    const route = String(req.path || '').toLowerCase();
+    if (route.startsWith('/team') || route.startsWith('/stock')
+        || route === '/tenant/current-time' || route === '/tenant/password') return next();
+    return res.status(403).json({ ok: false, error: 'PERMISSION_MAPPING_REQUIRED' });
+  }
   return requirePermission(permissionKey)(req, res, async (error) => {
     try {
       if (error) return next(error);
+      req.rbacContext = String(req.headers['x-rbac-context'] || '').trim().toLowerCase();
       const accessRule = String(req.permission && req.permission.accessRule || 'all');
       const route = String(req.path || '').toLowerCase();
+      const method = String(req.method || '').toUpperCase();
+      const isSharedTenantRead = method === 'GET' && (route === '/tenant' || route === '/tenant/map-provider-config');
       if ((accessRule === 'assigned' || accessRule === 'own')
-          && !route.startsWith('/orders') && !route.startsWith('/clients')) {
+          && !route.startsWith('/orders') && !route.startsWith('/clients') && !isSharedTenantRead) {
         return res.status(403).json({ ok: false, error: 'RESOURCE_SCOPE_UNSUPPORTED' });
       }
       if ((accessRule === 'assigned' || accessRule === 'own')
@@ -2129,7 +2137,7 @@ app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
 });
 
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers, presenceService }));
-app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers }));
+app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers, can }));
 app.use('/api/admin/subscriptions', authMiddleware, makeAdminSubscriptionsRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
 app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessagesRouter({
@@ -2139,8 +2147,8 @@ app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessa
   sendPushToSubscriptions: makeChatTempRouter.sendPushToSubscriptions,
 }));
 app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents, can }));
-app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));
-app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents }));
+app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers, can }));
+app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents, can }));
 app.use('/api/admin/team', authMiddleware, makeAdminTeamRouter({ db, helpers, requirePermission }));
 
 app.post('/api/admin/analytics/receipts/recognize', authMiddleware, async (req, res) => {
@@ -2408,8 +2416,14 @@ function requireProductApiPermission(req, res, next) {
     || route.startsWith('/upload/product')
     || route.startsWith('/upload/category');
   if (!isProductRoute) return next();
-  const method = String(req.method || 'GET').toUpperCase();
-  const permissionKey = method === 'GET' || method === 'HEAD' ? 'products.view' : 'products.edit';
+  const permissionKey = resolveNavigationAdminPermission({
+    path: route,
+    method: req.method,
+    headers: req.headers,
+    query: req.query,
+    body: req.body,
+  });
+  if (!permissionKey) return res.status(403).json({ ok: false, error: 'PERMISSION_MAPPING_REQUIRED' });
   return requirePermission(permissionKey)(req, res, async (error) => {
     try {
       if (error) return next(error);

@@ -118,6 +118,7 @@
       var token = localStorage.getItem('authToken');
       var storeId = localStorage.getItem('activeStoreId') || '1';
       var headers = {};
+      headers['x-rbac-context'] = 'cash';
       var body = opts.body;
       if (body != null) headers['Content-Type'] = 'application/json';
       if (opts.headers) {

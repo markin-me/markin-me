@@ -877,6 +877,13 @@
 
       <div class="info-card settings-right-panel hidden" id="settingsBrandPanel">
         <div class="settings-site-form">
+          <section class="settings-site-field" id="corporateLoginSuffixSettings">
+            <label class="field-label" for="corporateLoginSuffix">СУФФИКС ЛОГИНОВ СОТРУДНИКОВ</label>
+            <input class="control" id="corporateLoginSuffix" maxlength="48" autocomplete="off" autocapitalize="off" placeholder="romashka">
+            <div class="team-password-tools"><button class="btn" type="button" id="corporateLoginSuffixGenerate">Генерировать</button><button class="btn btn-primary" type="button" id="corporateLoginSuffixSave">Сохранить суффикс</button></div>
+            <div class="field-hint">Латинские буквы, цифры и дефис. Переименование компании не меняет суффикс. Его сохранение изменит логины сотрудников после подтверждения.</div>
+            <div class="field-hint" id="corporateLoginSuffixNotice" role="status" aria-live="polite"></div>
+          </section>
           <div class="settings-site-field">
             <label class="field-label">НАЗВАНИЕ БРЕНДА</label>
             <input class="control" type="text" placeholder="Название бренда" data-tenant-input="name" data-brand-input="name" />

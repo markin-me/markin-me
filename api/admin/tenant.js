@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
+const employeeIdentity = require('../helpers/employeeIdentity');
 const dns = require('dns').promises;
 const http = require('http');
 const https = require('https');
@@ -44,7 +45,7 @@ const {
   sanitizeDeliveryPriceTiers,
 } = require('../../data/delivery-price-tiers');
 
-module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
+module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can }) {
   const router = express.Router();
   const devPwaTunnelStatePath = path.resolve(__dirname, '../../tmp/dev-pwa-tunnel.json');
   const DEV_PWA_TUNNEL_VALIDATE_CACHE_MS = 30_000;
@@ -54,6 +55,95 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     value: null
   };
   const subdomainRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  const tenantFieldPermissions = Object.freeze({
+    timezone: 'settings.company.update',
+    name: 'settings.company.update',
+    email: 'settings.company.update',
+    phone: 'settings.company.update',
+    logo_light_url: 'settings.company.update',
+    logo_dark_url: 'settings.company.update',
+    favicon_light_url: 'settings.company.update',
+    favicon_dark_url: 'settings.company.update',
+    apple_touch_icon_url: 'settings.company.update',
+    android_icon_url: 'settings.company.update',
+    site_name: 'settings.site.update',
+    site_description: 'settings.site.update',
+    pwa_qr_badge_text: 'settings.site.update',
+    site_menu_items: 'settings.site.update',
+    subdomain: 'settings.site.domains',
+    custom_domain: 'settings.site.domains',
+    price_rounding_mode: 'settings.system.update',
+    price_rounding_precision: 'settings.system.update',
+    order_stock_deduct_mode: 'settings.system.update',
+    order_stock_deduct_status_id: 'settings.system.update',
+    sound_new_order_url: 'settings.system.update',
+    sound_order_cancelled_url: 'settings.system.update',
+    sound_new_message_url: 'settings.system.update',
+    img_webp_quality: 'settings.system.update',
+    img_thumb_quality: 'settings.system.update',
+    img_thumb_width: 'settings.system.update',
+    img_main_width: 'settings.system.update',
+    img_webp_aggressive: 'settings.system.update',
+    img_delete_original: 'settings.system.update',
+    telegram_bot_username: 'settings.system.integrations',
+    telegram_bot_token: 'settings.system.integrations',
+    max_bot_id: 'settings.system.integrations',
+    max_bot_token: 'settings.system.integrations',
+    max_mini_app_enabled: 'settings.system.integrations',
+    max_login_enabled: 'settings.system.integrations',
+    tg_mini_app_enabled: 'settings.system.integrations',
+    tg_login_enabled: 'settings.system.integrations',
+    chat_welcome_message: 'settings.chat.update',
+    chat_welcome_enabled: 'settings.chat.update',
+    chat_assistant_name: 'settings.chat.update',
+    chat_operator_name: 'settings.chat.update',
+    chat_assistant_gender: 'settings.chat.update',
+    chat_widget_enabled: 'settings.chat.update',
+    chat_client_push_enabled: 'settings.chat.update',
+    chat_guest_thread_ttl_days: 'settings.chat.update',
+    chat_thread_ttl_days: 'settings.chat.update',
+    chat_quick_questions_json: 'settings.chat.update',
+    chat_quick_questions_enabled: 'settings.chat.update',
+    important_messages_enabled: 'marketing.broadcasts.update',
+  });
+  const tenantAssetPermissions = Object.freeze({
+    logo_light_url: 'settings.company.update',
+    logo_dark_url: 'settings.company.update',
+    favicon_light_url: 'settings.company.update',
+    favicon_dark_url: 'settings.company.update',
+    apple_touch_icon_url: 'settings.company.update',
+    android_icon_url: 'settings.company.update',
+    site_menu_item_icon: 'settings.site.update',
+    bonus_modal_image: 'marketing.bonus_settings.update',
+    important_message_image: 'marketing.broadcasts.update',
+    subscription_storefront_image: 'marketing.subscription_info.update',
+    subscription_storefront_button_icon: 'marketing.subscription_info.update',
+    subscription_info_slide_image: 'marketing.subscription_info.update',
+  });
+  const tenantSoundPermissions = Object.freeze({
+    sound_new_order_url: 'settings.system.update',
+    sound_order_cancelled_url: 'settings.system.update',
+    sound_new_message_url: 'settings.system.update',
+    print_sound_new_order_url: 'settings.print_templates.update',
+    print_sound_new_message_url: 'settings.print_templates.update',
+  });
+
+  async function requireTenantPermissions(req, res, permissionKeys) {
+    if (typeof can !== 'function') {
+      res.status(500).json({ ok: false, error: 'AUTHORIZATION_ERROR' });
+      return false;
+    }
+    const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+    const keys = Array.from(new Set((permissionKeys || []).filter(Boolean)));
+    for (const permissionKey of keys) {
+      const access = await can(req.user, permissionKey, { tenant_id: tenantId });
+      if (!access.allowed) {
+        res.status(403).json({ ok: false, error: access.error || 'FORBIDDEN' });
+        return false;
+      }
+    }
+    return true;
+  }
   const tenantChatColumns = [
     {
       name: 'chat_welcome_message',
@@ -1013,6 +1103,15 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
       custom_domain: primaryDomain ? (primaryDomain.domain || primaryDomain.domain_ascii) : null,
       custom_domain_ascii: primaryDomain ? primaryDomain.domain_ascii : null
     };
+    delete nextTenant.password_hash;
+    delete nextTenant.map_provider_accounts_json;
+    const integrationAccess = typeof can === 'function'
+      ? await can(req.user, 'settings.system.integrations', { tenant_id: Number(tenant.id) })
+      : { allowed: false };
+    if (!integrationAccess.allowed) {
+      delete nextTenant.telegram_bot_token;
+      delete nextTenant.max_bot_token;
+    }
     const siteMenuItems = serializeSiteMenuItems(nextTenant.site_menu_items_json);
     delete nextTenant.site_menu_items_json;
     const forwardedProto = req.headers['x-forwarded-proto'];
@@ -1695,8 +1794,11 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   function serializeTenantForClient(tenant, extra = {}) {
     if (!tenant || typeof tenant !== 'object') return null;
     const source = { ...tenant };
+    delete source.password_hash;
     delete source.map_provider_accounts_json;
     delete source.site_menu_items_json;
+    delete source.telegram_bot_token;
+    delete source.max_bot_token;
     return { ...source, ...extra };
   }
 
@@ -3174,6 +3276,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
       }
+      if (!await requireTenantPermissions(req, res, [tenantAssetPermissions[field]])) {
+        if (file?.path) {
+          await removeTenantUploadFile(file.path).catch((cleanupError) => {
+            console.error('TENANT_UPLOAD_PERMISSION_CLEANUP_FAILED:', cleanupError);
+          });
+        }
+        return;
+      }
 
       const originalPath = file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), file.filename);
       let conversionOptions;
@@ -3283,6 +3393,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
       }
+      if (!await requireTenantPermissions(req, res, [tenantSoundPermissions[field]])) {
+        if (file?.path) {
+          await removeTenantUploadFile(file.path).catch((cleanupError) => {
+            console.error('TENANT_SOUND_PERMISSION_CLEANUP_FAILED:', cleanupError);
+          });
+        }
+        return;
+      }
       const tenantField = field === 'print_sound_new_order_url'
         ? 'sound_new_order_url'
         : field === 'print_sound_new_message_url'
@@ -3312,6 +3430,30 @@ async function fetchStoreWithHours(tenantId, storeId) {
    * GET /api/admin/tenant
    * Р’РѕР·РІСЂР°С‰Р°РµС‚ РљРѕРјРїР°РЅРёСЏ (tenant) РґР»СЏ С‚РµРєСѓС‰РµРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
    */
+  router.get('/login-suffix', async (req, res) => {
+    if (!await requireTenantPermissions(req, res, ['settings.company.read'])) return;
+    const tenantId = Number(req.user?.tenantId || 0);
+    try {
+      const [[tenant]] = await db.query('SELECT name, login_suffix, corporate_logins_enabled FROM ten_tenants WHERE id=?', [tenantId]);
+      if (!tenant) return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      const access = await can(req.user, 'settings.company.login_suffix');
+      const generated = employeeIdentity.transliterate(req.query.name ?? tenant.name).slice(0, 48).replace(/-+$/g, '');
+      return res.json({ ok: true, suffix: tenant.login_suffix, enabled: Number(tenant.corporate_logins_enabled) === 1, generated, can_change: access.allowed === true });
+    } catch { return res.status(500).json({ ok: false, error: 'DB_ERROR' }); }
+  });
+
+  router.put('/login-suffix', async (req, res) => {
+    if (!await requireTenantPermissions(req, res, ['settings.company.login_suffix'])) return;
+    try {
+      const suffix = await employeeIdentity.changeLoginSuffix(db, Number(req.user?.tenantId || 0), req.body.suffix, req.body.expected_suffix, req.body.confirmed);
+      return res.json({ ok: true, suffix, enabled: true });
+    } catch (error) {
+      const known = error.name === 'EmployeeIdentityError';
+      const conflict = ['LOGIN_SUFFIX_EXISTS', 'LOGIN_SUFFIX_CHANGED'].includes(error.code);
+      return res.status(known ? (conflict ? 409 : 400) : 500).json({ ok: false, error: known ? error.code : 'DB_ERROR' });
+    }
+  });
+
   router.get('/', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -3753,6 +3895,13 @@ async function fetchStoreWithHours(tenantId, storeId) {
   router.put('/', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const requestedFields = Object.keys(req.body || {});
+      const unsupportedFields = requestedFields.filter((field) => !tenantFieldPermissions[field]);
+      if (unsupportedFields.length) {
+        return res.status(400).json({ ok: false, error: 'TENANT_FIELD_UNSUPPORTED', fields: unsupportedFields });
+      }
+      const requiredPermissions = requestedFields.map((field) => tenantFieldPermissions[field]);
+      if (!await requireTenantPermissions(req, res, requiredPermissions)) return;
       const timezone = helpers.strOrNull(req.body.timezone);
       const name = req.body.name !== undefined ? helpers.strOrNull(req.body.name) : undefined;
       const email = req.body.email !== undefined ? helpers.strOrNull(req.body.email) : undefined;

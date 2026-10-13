@@ -88,7 +88,19 @@ function getAuthHeaders(additionalHeaders = {}) {
  * При ошибке 401 перенаправляет на страницу логина
  */
 async function authFetch(url, options = {}) {
-  const headers = getAuthHeaders(options.headers || {});
+  const contextualHeaders = {};
+  if (typeof document !== 'undefined' && document.body?.dataset?.adminActivePage === 'settings'
+      && String(url || '').startsWith('/api/admin/')) {
+    const section = String(document.body.getAttribute('data-settings-section') || 'tenant');
+    const sectionNodes = {
+      tenant: 'settings.company', stores: 'settings.stores', delivery: 'settings.delivery',
+      site: 'settings.site', chats: 'settings.chat', api: 'settings.api',
+      'print-templates': 'settings.print_templates', 'production-zones': 'settings.production_zones',
+      system: 'settings.system',
+    };
+    contextualHeaders['x-rbac-node'] = sectionNodes[section] || 'settings.company';
+  }
+  const headers = getAuthHeaders({ ...contextualHeaders, ...(options.headers || {}) });
   
   const response = await fetch(url, {
     ...options,

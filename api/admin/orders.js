@@ -58,7 +58,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         [tenantId, storeId, id]
       );
       if (!rows.length) return next();
-      const permissionKey = String(req.permission?.key || "orders.view");
+      const permissionKey = String(req.permission?.key || "orders.list.read");
+      if (req.rbacContext === "courier" && permissionKey.startsWith("courier.")) {
+        const assignedUserId = Number(rows[0].assigned_user_id || 0);
+        if (assignedUserId === 0 || assignedUserId === Number(req.user?.userId || 0)) {
+          req.orderAccessResource = rows[0];
+          return next();
+        }
+        return res.status(403).json({ ok: false, error: "RESOURCE_FORBIDDEN" });
+      }
       const access = await can(req.user, permissionKey, rows[0]);
       if (!access.allowed) {
         return res.status(403).json({ ok: false, error: access.error || "RESOURCE_FORBIDDEN" });
@@ -2200,8 +2208,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
            )`
         : "";
       const statusAccessRule = String(req.permission?.accessRule || "all");
-      const joinAccess = statusAccessRule === "assigned"
-        ? "AND o.assigned_user_id = ?"
+      const joinAccess = req.rbacContext === "courier"
+        ? "AND (o.assigned_user_id IS NULL OR o.assigned_user_id = ?)"
+        : statusAccessRule === "assigned"
+          ? "AND o.assigned_user_id = ?"
         : statusAccessRule === "own"
           ? "AND o.created_by_user_id = ?"
           : "";
@@ -2278,7 +2288,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const params = [tenantId, storeId];
 
       const accessRule = String(req.permission?.accessRule || "all");
-      if (accessRule === "assigned") {
+      if (req.rbacContext === "courier") {
+        where += ` AND (o.assigned_user_id IS NULL OR o.assigned_user_id=?)`;
+        params.push(Number(req.user?.userId || 0));
+      } else if (accessRule === "assigned") {
         where += ` AND o.assigned_user_id=?`;
         params.push(Number(req.user?.userId || 0));
       } else if (accessRule === "own") {
@@ -2577,7 +2590,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const cursorState = ordersEvents.inspectCursor(tenantId, storeId, since);
       const cursor = Number(cursorState.currentCursor || 0);
       const accessRule = String(req.permission?.accessRule || "all");
-      if (accessRule === "assigned" || accessRule === "own") {
+      if (req.rbacContext === "courier" || accessRule === "assigned" || accessRule === "own") {
         return res.json({
           ok: true,
           data: [],
@@ -2684,8 +2697,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const accessRule = String(req.permission?.accessRule || "all");
-      const scopeSql = accessRule === "assigned"
-        ? " AND o.assigned_user_id=?"
+      const scopeSql = req.rbacContext === "courier"
+        ? " AND (o.assigned_user_id IS NULL OR o.assigned_user_id=?)"
+        : accessRule === "assigned"
+          ? " AND o.assigned_user_id=?"
         : accessRule === "own"
           ? " AND o.created_by_user_id=?"
           : "";

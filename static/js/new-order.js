@@ -17277,6 +17277,7 @@
     const storeId = localStorage.getItem("activeStoreId") || "1";
     const headers = {
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
+      "x-rbac-context": "new-order",
       ...(opts.headers || {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       "x-store-id": storeId,

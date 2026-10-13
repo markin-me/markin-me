@@ -1,4 +1,54 @@
 (() => {
+  function initCorporateLoginSuffix() {
+    const input = document.getElementById('corporateLoginSuffix');
+    const generate = document.getElementById('corporateLoginSuffixGenerate');
+    const save = document.getElementById('corporateLoginSuffixSave');
+    const notice = document.getElementById('corporateLoginSuffixNotice');
+    if (!input || !generate || !save || !notice) return;
+    let savedSuffix = '';
+    let canChange = false;
+    const errors = { LOGIN_SUFFIX_EXISTS: 'Этот суффикс уже занят другой компанией.', INVALID_LOGIN_SUFFIX: 'Допустимы 1–48 латинских букв, цифр и дефис; первый и последний символ — буква или цифра.', LOGIN_SUFFIX_CHANGED: 'Суффикс уже изменён другим администратором. Обновите страницу.', FORBIDDEN: 'Нет права на смену суффикса логинов.' };
+    const showError = (error) => { notice.textContent = errors[error.message] || 'Не удалось сохранить суффикс.'; };
+    const requestSuffix = async (url, options) => {
+      const response = await authFetch(url, options || {});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'DB_ERROR');
+      return data;
+    };
+    input.disabled = generate.disabled = save.disabled = true;
+    requestSuffix('/api/admin/tenant/login-suffix').then(data => {
+      savedSuffix = data.suffix;
+      input.value = data.suffix || '';
+      canChange = data.can_change;
+      input.disabled = generate.disabled = save.disabled = !canChange;
+      notice.textContent = !canChange ? 'Изменение доступно только с отдельным правом «Смена суффикса логинов».'
+        : data.enabled ? 'Сотрудники входят по полному логину.' : 'Переход подготовлен. Подтвердите сохранение, чтобы перейти на полные логины.';
+    }).catch(showError);
+    generate.addEventListener('click', async () => {
+      const name = document.querySelector('#settingsBrandPanel [data-brand-input="name"]')?.value || '';
+      try {
+        const data = await requestSuffix(`/api/admin/tenant/login-suffix?name=${encodeURIComponent(name)}`);
+        if (!data.generated) { notice.textContent = 'Название не удалось транслитерировать. Введите суффикс вручную.'; return; }
+        input.value = data.generated;
+      } catch (error) { showError(error); }
+    });
+    save.addEventListener('click', () => {
+      if (!canChange) return;
+      if (!window.AppModal) { notice.textContent = 'Компонент подтверждения недоступен.'; return; }
+      const suffix = input.value;
+      window.AppModal.open({ title: 'Изменить логины сотрудников?', content: '<p>Локальные части логинов сохранятся, а суффикс изменится у всех сотрудников. Старые логины перестанут работать. Сообщите сотрудникам новые логины. Вход владельца по email и действующие сессии сохранятся.</p>', cancelText: 'Отмена', saveText: 'Подтвердить', onSave: async () => {
+        save.disabled = true;
+        try {
+          const data = await requestSuffix('/api/admin/tenant/login-suffix', { method: 'PUT', body: JSON.stringify({ suffix, expected_suffix: savedSuffix, confirmed: true }) });
+          savedSuffix = data.suffix;
+          input.value = data.suffix;
+          notice.textContent = `Суффикс сохранён: @${data.suffix}. Логины сотрудников обновлены.`;
+          return true;
+        } catch (error) { showError(error); return false; }
+        finally { save.disabled = false; }
+      } });
+    });
+  }
 
   function initSettingsPresenceCounts() {
     const siteCount = document.getElementById("settingsPresenceSiteCount");
@@ -4768,6 +4818,16 @@
 
 
 
+  function currentSettingsRbacNode() {
+    const section = String(document.body.getAttribute("data-settings-section") || "tenant");
+    return ({
+      tenant: "settings.company", stores: "settings.stores", delivery: "settings.delivery",
+      site: "settings.site", chats: "settings.chat", api: "settings.api",
+      "print-templates": "settings.print_templates", "production-zones": "settings.production_zones",
+      system: "settings.system",
+    })[section] || "settings.company";
+  }
+
   async function uploadTenantAsset(field, file) {
 
 
@@ -4800,7 +4860,7 @@
 
 
 
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "x-rbac-node": currentSettingsRbacNode() },
 
 
 
@@ -4860,7 +4920,7 @@
 
 
 
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "x-rbac-node": currentSettingsRbacNode() },
 
 
 
@@ -6204,6 +6264,7 @@
 
 
   document.addEventListener("DOMContentLoaded", () => {
+    initCorporateLoginSuffix();
 
 
 
@@ -47175,7 +47236,7 @@
 
 
 
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "x-rbac-node": currentSettingsRbacNode() },
 
 
 

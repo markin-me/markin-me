@@ -10,6 +10,12 @@ const db = require('./db');
 
 async function runMigration(filePath) {
   try {
+    if (path.extname(filePath) === '.js') {
+      await require(filePath)(db);
+      await db.end();
+      console.log('Migration complete:', path.basename(filePath));
+      return;
+    }
     console.log(`\n📋 Выполнение миграции: ${filePath}`);
 
     // Читаем SQL файл

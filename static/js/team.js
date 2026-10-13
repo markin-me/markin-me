@@ -14,17 +14,20 @@
     sectionButtons: Array.from(document.querySelectorAll('[data-team-section]')),
     sidebar: document.getElementById('app-sidebar'),
     leftColumn: document.querySelector('.page-col-left'),
+    centerColumn: document.querySelector('.page-col-center'),
   };
   if (!dom.list || !dom.create || !dom.tabs || !dom.editor) return;
 
   const state = {
     section: 'users',
     users: [],
+    userPhotos: new Map(),
     roles: [],
     stores: [],
     permissions: [],
     startRoutes: [],
-    capabilities: { manage_employee_documents: false, view_users: false, manage_users: false, manage_roles: false },
+    loginSuffix: '',
+    capabilities: { view_employee_documents: false, manage_employee_documents: false, view_users: false, create_users: false, update_users: false, manage_users: false, view_roles: false, create_roles: false, update_roles: false, delete_roles: false, manage_permissions: false, manage_roles: false, manage_system_roles: false },
     tabs: [],
     activeKey: '',
     draftSequence: 0,
@@ -34,7 +37,9 @@
       active: false,
       roleKey: '',
       selectedNavKey: '',
+      selectedNodeId: '',
       originalLeftNodes: [],
+      originalCenter: null,
       sidebarVisibility: new Map(),
       sidebarCollapsed: '0',
       loadSequence: 0,
@@ -58,6 +63,21 @@
     '/dashboard/team': 'Команда',
     '/dashboard/settings': 'Настройки',
   };
+  const navigationRbac = window.__NAVIGATION_RBAC__ && typeof window.__NAVIGATION_RBAC__ === 'object'
+    ? window.__NAVIGATION_RBAC__
+    : { actionLabels: {}, nodes: [] };
+  const rbacNodes = Array.isArray(navigationRbac.nodes) ? navigationRbac.nodes : [];
+  const rbacPermissionKeys = new Set(rbacNodes.flatMap((node) => [
+    node.accessKey, ...Object.values(node.actions || {}), ...(node.specialActions || []).map((action) => action.key),
+  ]).filter(Boolean));
+  const rbacPermissionIds = new Set();
+  const rbacNodeById = new Map(rbacNodes.map((node) => [node.id, node]));
+  const rbacChildrenByParent = new Map();
+  rbacNodes.forEach((node) => {
+    const parentId = node.parentId || '';
+    if (!rbacChildrenByParent.has(parentId)) rbacChildrenByParent.set(parentId, []);
+    rbacChildrenByParent.get(parentId).push(node);
+  });
   const documentSections = [
     { key: 'identity', title: 'Удостоверение личности', icon: 'fa-id-card' },
     { key: 'tax', title: 'СНИЛС и ИНН', icon: 'fa-address-card' },
@@ -101,6 +121,16 @@
   }
 
   function errorLabel(error) {
+    const identityErrors = {
+      EMPLOYEE_NAME_REQUIRED: 'Укажите фамилию и имя сотрудника.', INVALID_EMPLOYEE_NAME: 'Проверьте ФИО: до 80 символов в каждом поле, без управляющих символов.',
+      INVALID_EMPLOYEE_PHONE: 'Телефон должен начинаться с + и кода страны и содержать 7–15 цифр.',
+      INVALID_EMPLOYEE_PHOTO: 'Фотография повреждена или имеет недопустимый формат или размер.',
+      LOGIN_SUFFIX_MISMATCH: 'В логине указан суффикс другой компании.', SURNAME_FOR_LOGIN_REQUIRED: 'Введите фамилию, которую можно транслитерировать.',
+      CORPORATE_LOGIN_MIGRATION_REQUIRED: 'Сначала необходимо применить миграцию корпоративных логинов.',
+      PASSWORD_TOO_SHORT: 'Пароль должен содержать минимум 12 символов.', PASSWORD_TOO_LONG: 'Пароль не должен превышать 72 байта.',
+      PASSWORD_TOO_WEAK: 'Добавьте латинские буквы обоих регистров и цифры.', HTTPS_REQUIRED: 'Операция доступна только по HTTPS.',
+    };
+    if (identityErrors[error]) return identityErrors[error];
     return ({
       LOGIN_EXISTS: 'Этот логин уже занят внутри компании.',
       ROLE_NAME_EXISTS: 'Роль с таким названием уже существует.',
@@ -115,6 +145,9 @@
       INVALID_START_ROUTE: 'Выберите стартовый раздел.',
       FORBIDDEN: 'Недостаточно прав для этого действия.',
       PERMISSION_ESCALATION_FORBIDDEN: 'Нельзя назначить право, которого нет у вашей активной роли.',
+      ACCESS_RULE_ESCALATION_FORBIDDEN: 'Нельзя назначить более широкую область доступа, чем у вашей активной роли.',
+      ROLE_ESCALATION_FORBIDDEN: 'Нельзя назначить сотруднику роль с более широкими полномочиями.',
+      STORE_ESCALATION_FORBIDDEN: 'Нельзя назначить сотруднику филиал за пределами вашего доступа.',
       DOCUMENT_ENCRYPTION_NOT_CONFIGURED: 'Хранилище документов не настроено: задайте ключ шифрования на сервере.',
       INVALID_PASSPORT_SERIES: 'Серия паспорта РФ должна содержать 4 цифры.',
       INVALID_PASSPORT_NUMBER: 'Номер паспорта РФ должен содержать 6 цифр.',
@@ -146,13 +179,19 @@
   function normalizeUserDraft(user) {
     return {
       name: user?.name || '',
-      login: user?.login || '',
+      last_name: user?.last_name || '',
+      first_name: user?.first_name || '',
+      patronymic: user?.patronymic || '',
+      phone: user?.phone || '',
+      login: user?.login_local || (user?.login || '').split('@')[0],
+      photo_change: '',
       email: user?.email || '',
       comment: user?.comment || '',
       is_active: user ? Boolean(user.is_active) : true,
       role_ids: Array.isArray(user?.roles) ? user.roles.map((role) => Number(role.id)) : [],
       store_ids: Array.isArray(user?.stores) ? user.stores.map((store) => Number(store.id)) : [],
       temporary_password: '',
+      reset_password: '',
     };
   }
 
@@ -190,8 +229,10 @@
       draft,
       snapshot: clone(draft),
       meta: entity ? clone(entity) : null,
+      assignmentSections: { roles: false, stores: false, start_route: false },
     };
     if (type === 'user') {
+      tab.photo = { data: null, previewUrl: '', loaded: false, loading: false };
       tab.documents = {
         loaded: isNew,
         loading: false,
@@ -261,7 +302,7 @@
     dom.icon.className = state.section === 'users' ? 'fas fa-users' : 'fas fa-user-shield';
     dom.create.title = state.section === 'users' ? 'Создать сотрудника' : 'Создать роль';
     dom.create.setAttribute('aria-label', dom.create.title);
-    const canCreate = state.section === 'users' ? state.capabilities.manage_users : state.capabilities.manage_roles;
+    const canCreate = state.section === 'users' ? state.capabilities.create_users : state.capabilities.create_roles;
     dom.create.classList.toggle('hidden', !canCreate);
     dom.create.disabled = !canCreate;
     renderList();
@@ -269,18 +310,19 @@
 
   function applyTeamCapabilities() {
     dom.sectionButtons.forEach((button) => {
-      const allowed = button.dataset.teamSection === 'roles' ? state.capabilities.manage_roles : state.capabilities.view_users;
+      const allowed = button.dataset.teamSection === 'roles' ? state.capabilities.view_roles : state.capabilities.view_users;
       button.classList.toggle('hidden', !allowed);
       button.disabled = !allowed;
     });
-    if (state.section === 'users' && !state.capabilities.view_users && state.capabilities.manage_roles) setSection('roles');
-    if (state.section === 'roles' && !state.capabilities.manage_roles && state.capabilities.view_users) setSection('users');
-    const canCreate = state.section === 'users' ? state.capabilities.manage_users : state.capabilities.manage_roles;
+    if (state.section === 'users' && !state.capabilities.view_users && state.capabilities.view_roles) setSection('roles');
+    if (state.section === 'roles' && !state.capabilities.view_roles && state.capabilities.view_users) setSection('users');
+    const canCreate = state.section === 'users' ? state.capabilities.create_users : state.capabilities.create_roles;
     dom.create.classList.toggle('hidden', !canCreate);
     dom.create.disabled = !canCreate;
   }
 
   function renderList() {
+    if (state.permissionMode.active) return;
     const rows = state.section === 'users' ? state.users : state.roles;
     if (!rows.length) {
       dom.list.innerHTML = `<div class="team-list-state muted">${state.section === 'users' ? 'Сотрудников пока нет.' : 'Ролей пока нет.'}</div>`;
@@ -291,7 +333,7 @@
         const roles = (item.roles || []).map((role) => role.name).join(', ') || 'Роли не назначены';
         return `
           <button class="order-row team-entity-row" type="button" data-team-open="user" data-team-id="${Number(item.id)}">
-            <div class="product-avatar"><i class="fas fa-user"></i></div>
+            <div class="product-avatar team-user-avatar" data-team-user-avatar="${Number(item.id)}"><img class="product-avatar-img hidden" alt="Фото сотрудника"><i class="fas fa-user" aria-hidden="true"></i></div>
             <div class="order-col team-entity-copy">
               <div class="product-title">${escapeHtml(item.name || 'Без имени')}</div>
               <div class="muted">${escapeHtml(item.login || item.email || 'Без логина')} · ${escapeHtml(roles)}</div>
@@ -304,11 +346,52 @@
           <div class="product-avatar"><i class="fas fa-user-shield"></i></div>
           <div class="order-col team-entity-copy">
             <div class="product-title">${escapeHtml(item.name)}</div>
-            <div class="muted">${Number(item.users_count || 0)} сотрудников · ${Number(item.permissions?.length || 0)} прав</div>
+            <div class="muted">${Number(item.users_count || 0)} сотрудников · ${(item.permissions || []).filter((permission) => rbacPermissionKeys.has(permission.key)).length} прав</div>
           </div>
-          <div class="order-col">${item.is_system ? '<span class="badge">Системная</span>' : '<span class="badge">Своя</span>'}</div>
+          ${item.is_system ? '<div class="order-col"><span class="badge">Системная</span></div>' : ''}
         </button>`;
     }).join('');
+    if (state.section === 'users') state.users.forEach((user) => syncUserListPhoto(user.id));
+  }
+
+  async function syncUserListPhoto(userId) {
+    const id = Number(userId);
+    const avatar = dom.list.querySelector(`[data-team-user-avatar="${id}"]`);
+    if (!avatar) return;
+    const user = state.users.find((item) => Number(item.id) === id);
+    const tab = state.tabs.find((item) => item.type === 'user' && Number(item.id) === id);
+    const revision = state.capabilities.read_employee_photo ? user?.photo_revision : null;
+    let cached = state.userPhotos.get(id);
+    if (cached && cached.revision !== revision) {
+      if (cached.url) URL.revokeObjectURL(cached.url);
+      state.userPhotos.delete(id);
+      cached = null;
+    }
+    const change = tab?.draft.photo_change;
+    const url = change === 'remove' ? '' : change === 'replace'
+      ? tab.photo.previewUrl : cached?.url || '';
+    const image = avatar.querySelector('img');
+    if (url) image.src = url;
+    else image.removeAttribute('src');
+    image.classList.toggle('hidden', !url);
+    avatar.querySelector('i').classList.toggle('hidden', Boolean(url));
+    avatar.classList.toggle('product-avatar--image', Boolean(url));
+    avatar.title = cached?.error && !change ? 'Не удалось загрузить фото сотрудника.' : '';
+    if (change || !revision || cached) return;
+    cached = { revision, url: '', error: false };
+    state.userPhotos.set(id, cached);
+    try {
+      const response = await authFetch(`/api/admin/team/users/${id}/photo`);
+      if (!response.ok) throw new Error('PHOTO_LOAD_FAILED');
+      const blob = await response.blob();
+      if (state.userPhotos.get(id) !== cached) return;
+      cached.url = URL.createObjectURL(blob);
+    } catch {
+      cached.error = true;
+      console.warn('Не удалось загрузить фото сотрудника в списке.');
+    } finally {
+      if (state.userPhotos.get(id) === cached) syncUserListPhoto(id);
+    }
   }
 
   function checkboxList(items, selectedIds, name, icon) {
@@ -395,7 +478,7 @@
     if (tab.isNew) {
       return `<section class="team-form-section team-documents-section"><div class="settings-list-header"><div><div class="settings-list-title">Документы</div><div class="settings-list-subtitle">Сначала создайте карточку сотрудника</div></div></div></section>`;
     }
-    if (!state.capabilities.manage_employee_documents) {
+    if (!state.capabilities.view_employee_documents) {
       return `<section class="team-form-section team-documents-section"><div class="settings-list-header"><div><div class="settings-list-title">Документы</div><div class="settings-list-subtitle">Доступны только пользователям с правом «Кадровые документы»</div></div></div></section>`;
     }
     if (documents.loading && !documents.loaded) {
@@ -420,13 +503,103 @@
               ${isOpen ? `<div class="team-document-body">
                 ${isEditing ? renderDocumentEditor(item.key, documents.draft) : `
                   <div class="team-document-summary">${summary.lines?.length ? summary.lines.map((line) => `<div>${escapeHtml(line)}</div>`).join('') : '<div class="muted">Сведения пока не заполнены.</div>'}</div>
-                  <button class="btn team-document-edit" type="button" data-team-document-edit="${item.key}">Редактировать</button>`}
+                  ${state.capabilities.manage_employee_documents ? `<button class="btn team-document-edit" type="button" data-team-document-edit="${item.key}">Редактировать</button>` : ''}`}
                 ${isEditing ? `<div class="team-document-actions"><button class="btn btn-primary" type="button" data-team-document-save="${item.key}">Сохранить</button><button class="btn" type="button" data-team-document-cancel>Отмена</button></div>` : ''}
               </div>` : ''}
             </article>`;
           }).join('')}
         </div>
       </section>`;
+  }
+
+  function renderPasswordField(name, value, required) {
+    return `<div class="team-password-row">
+      <div class="control-with-action team-password-control">
+        <input class="control" type="password" name="${name}" value="${escapeHtml(value)}" ${required ? 'required' : ''} minlength="12" maxlength="72" autocomplete="new-password">
+        <button class="control-inline-btn" type="button" data-team-password-show="${name}" title="Показать пароль" aria-label="Показать пароль" aria-pressed="false"><i class="fas fa-eye" aria-hidden="true"></i></button>
+        <button class="control-inline-btn" type="button" data-team-password-copy="${name}" title="Скопировать пароль" aria-label="Скопировать пароль"><i class="fas fa-copy" aria-hidden="true"></i></button>
+      </div>
+      <button class="btn" type="button" data-team-generate-password="${name}">Генерировать</button>
+    </div>`;
+  }
+
+  function clearEmployeePhoto(tab) {
+    if (!tab?.photo) return;
+    if (tab.photo.previewUrl) URL.revokeObjectURL(tab.photo.previewUrl);
+    tab.photo = { data: null, previewUrl: '', loaded: false, loading: false };
+  }
+
+  function updateEmployeePhotoPreview(tab) {
+    syncUserListPhoto(tab.id);
+    if (tab.key !== state.activeKey) return;
+    const image = dom.editor.querySelector('[data-team-photo-preview]');
+    if (!image) return;
+    if (tab.photo.previewUrl) image.src = tab.photo.previewUrl;
+    else image.removeAttribute('src');
+    image.classList.toggle('hidden', !tab.photo.previewUrl);
+    dom.editor.querySelector('[data-team-photo-placeholder]')?.classList.toggle('hidden', Boolean(tab.photo.previewUrl));
+    dom.editor.querySelector('[data-team-photo-remove]')?.classList.toggle('hidden', !tab.photo.previewUrl);
+    const uploadButton = dom.editor.querySelector('[data-team-photo-upload]');
+    if (uploadButton) {
+      const label = tab.photo.previewUrl ? 'Заменить фото' : 'Загрузить фото';
+      uploadButton.title = label;
+      uploadButton.setAttribute('aria-label', label);
+    }
+  }
+
+  async function loadEmployeePhoto(tab) {
+    if (!state.capabilities.read_employee_photo || !tab.photo || tab.isNew || tab.photo.loaded || tab.photo.loading || !tab.meta?.photo_revision) return;
+    const photoState = tab.photo;
+    photoState.loading = true;
+    try {
+      const response = await authFetch(`/api/admin/team/users/${tab.id}/photo`);
+      if (!response.ok) throw new Error('PHOTO_LOAD_FAILED');
+      const blob = await response.blob();
+      if (tab.photo !== photoState) return;
+      photoState.previewUrl = URL.createObjectURL(blob);
+      updateEmployeePhotoPreview(tab);
+    } catch { if (tab.key === state.activeKey) showNotice('Не удалось загрузить фото сотрудника.', 'error'); }
+    finally { photoState.loaded = true; photoState.loading = false; }
+  }
+
+  async function selectEmployeePhoto(file) {
+    const tab = activeTab();
+    if (!file || tab?.type !== 'user') return;
+    if (file.size > 5 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      return showNotice('Выберите JPEG, PNG или WebP размером до 5 МБ.', 'error');
+    }
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      if (tab.key !== state.activeKey) return;
+      clearEmployeePhoto(tab);
+      tab.photo.data = data;
+      tab.photo.previewUrl = URL.createObjectURL(file);
+      tab.photo.loaded = true;
+      tab.draft.photo_change = 'replace';
+      readActiveDraft();
+      updateEmployeePhotoPreview(tab);
+    } catch { showNotice('Не удалось прочитать фотографию.', 'error'); }
+  }
+
+  async function generateEmployeeLogin() {
+    const tab = activeTab();
+    const form = document.getElementById('teamActiveForm');
+    const surname = form?.elements.last_name?.value.trim();
+    if (!surname) return showNotice('Введите фамилию сотрудника.', 'error');
+    try {
+      const result = await request(`/api/admin/team/login-suggestion?surname=${encodeURIComponent(surname)}&user_id=${Number(tab.id || 0)}`);
+      if (tab.key !== state.activeKey) return;
+      form.elements.login.value = result.local;
+      state.loginSuffix = result.suffix;
+      form.querySelector('.team-login-control span').textContent = `@${result.suffix}`;
+      form.querySelector('.team-login-control span').title = `@${result.suffix}`;
+      readActiveDraft();
+    } catch (error) { showNotice(errorLabel(error.code), 'error'); }
   }
 
   function renderUserEditor(tab) {
@@ -437,20 +610,40 @@
         <div class="team-editor-scroll no-scrollbar">
           <section class="team-form-section">
             <div class="settings-list-header"><div><div class="settings-list-title">Основная информация</div><div class="settings-list-subtitle">Учётная запись сотрудника</div></div></div>
-            <div class="settings-site-field"><label class="field-label">ИМЯ</label><input class="control" name="name" value="${escapeHtml(draft.name)}" required></div>
-            <div class="settings-site-field"><label class="field-label">ЛОГИН</label><input class="control" name="login" value="${escapeHtml(draft.login)}" ${loginRequired ? 'required' : ''} autocomplete="off" autocapitalize="off" spellcheck="false"><div class="field-hint">Уникален внутри компании. Для повторяющихся логинов при входе указывается компания.</div></div>
-            ${tab.isNew ? `<div class="settings-site-field"><label class="field-label">ВРЕМЕННЫЙ ПАРОЛЬ</label><div class="team-password-row"><input class="control" type="text" name="temporary_password" value="${escapeHtml(draft.temporary_password)}" required minlength="6" autocomplete="off"><button class="btn" type="button" data-team-generate-password>Сгенерировать</button></div><div class="field-hint">После первого входа сотрудник обязан заменить пароль.</div></div>` : ''}
+            <input type="hidden" name="name" value="${escapeHtml(draft.name)}">
+            <div class="team-photo-field">
+              <div class="important-message-preview-media team-photo-preview">
+                <img class="important-message-preview-media-img${tab.photo?.previewUrl ? '' : ' hidden'}" data-team-photo-preview ${tab.photo?.previewUrl ? `src="${escapeHtml(tab.photo.previewUrl)}"` : ''} alt="Фото сотрудника">
+                <div class="important-message-preview-media-fallback${tab.photo?.previewUrl ? ' hidden' : ''}" data-team-photo-placeholder><i class="fas fa-user" aria-hidden="true"></i></div>
+                <button class="important-message-preview-media-actions" type="button" data-team-photo-upload title="${tab.photo?.previewUrl ? 'Заменить фото' : 'Загрузить фото'}" aria-label="${tab.photo?.previewUrl ? 'Заменить фото' : 'Загрузить фото'}"><span class="important-message-preview-media-upload"><i class="fas fa-download" aria-hidden="true"></i></span></button>
+                <button class="important-message-preview-media-remove${tab.photo?.previewUrl ? '' : ' hidden'}" type="button" data-team-photo-remove title="Удалить фото" aria-label="Удалить фото"><i class="fas fa-times" aria-hidden="true"></i></button>
+              </div>
+              <input type="file" class="hidden" data-team-photo-file accept="image/jpeg,image/png,image/webp">
+            </div>
+            <div class="team-document-grid">
+              <label class="settings-site-field"><span class="field-label">ФАМИЛИЯ</span><input class="control" name="last_name" value="${escapeHtml(draft.last_name)}" ${tab.isNew ? 'required' : ''} maxlength="80" autocomplete="family-name"></label>
+              <label class="settings-site-field"><span class="field-label">ИМЯ</span><input class="control" name="first_name" value="${escapeHtml(draft.first_name)}" ${tab.isNew ? 'required' : ''} maxlength="80" autocomplete="given-name"></label>
+            </div>
+            ${!tab.isNew && !draft.first_name && !draft.last_name ? `<div class="field-hint">Сохранённое имя: ${escapeHtml(draft.name)}. Оно останется без изменений, пока не заполнены фамилия и имя.</div>` : ''}
+            <label class="settings-site-field"><span class="field-label">ОТЧЕСТВО</span><input class="control" name="patronymic" value="${escapeHtml(draft.patronymic)}" maxlength="80" autocomplete="additional-name"></label>
+            <label class="settings-site-field"><span class="field-label">ТЕЛЕФОН</span><input class="control" type="tel" name="phone" value="${escapeHtml(draft.phone)}" placeholder="+7 999 123-45-67" autocomplete="tel"></label>
+            <label class="settings-site-field"><span class="field-label">ЛОГИН</span><div class="team-login-row"><div class="team-login-control"><input class="control" name="login" value="${escapeHtml(draft.login)}" ${loginRequired ? 'required' : ''} autocomplete="off" autocapitalize="off" spellcheck="false"><span title="@${escapeHtml(state.loginSuffix)}">@${escapeHtml(state.loginSuffix)}</span></div><button class="btn" type="button" data-team-generate-login>Генерировать</button></div></label>
+            ${tab.isNew ? `<div class="settings-site-field"><label class="field-label">ПАРОЛЬ</label>${renderPasswordField('temporary_password', draft.temporary_password, true)}</div>` : ''}
+            ${!tab.isNew && state.capabilities.reset_password ? `<div class="settings-site-field"><label class="field-label">НОВЫЙ ПАРОЛЬ</label>${renderPasswordField('reset_password', draft.reset_password, false)}</div>` : ''}
             <label class="switch"><input class="switch-input" type="checkbox" name="is_active" ${draft.is_active ? 'checked' : ''}><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Активен</span></label>
             <div class="settings-site-field"><label class="field-label">КОММЕНТАРИЙ</label><textarea class="control team-textarea" name="comment" rows="3">${escapeHtml(draft.comment)}</textarea></div>
           </section>
           <section class="team-form-section">
-            <div class="settings-list-header"><div><div class="settings-list-title">Роли и доступ</div><div class="settings-list-subtitle">В рабочей сессии активна только одна роль</div></div></div>
-            <div class="team-choice-grid">${checkboxList(state.roles, draft.role_ids, 'role_ids', 'fa-user-shield')}</div>
-            <div class="settings-list-header team-subsection-title"><div><div class="settings-list-title">Филиалы</div></div></div>
-            <div class="team-choice-grid">${checkboxList(state.stores, draft.store_ids, 'store_ids', 'fa-store')}</div>
+            <details class="team-assignment-accordion" data-team-assignment-section="roles" ${tab.assignmentSections.roles ? 'open' : ''}>
+              <summary class="team-assignment-toggle"><span class="settings-list-title">Назначенные роли</span><i class="fas fa-chevron-down team-document-chevron" aria-hidden="true"></i></summary>
+              <div class="team-choice-grid">${checkboxList(state.roles, draft.role_ids, 'role_ids', 'fa-user-shield')}</div>
+            </details>
+            <details class="team-assignment-accordion" data-team-assignment-section="stores" ${tab.assignmentSections.stores ? 'open' : ''}>
+              <summary class="team-assignment-toggle"><span class="settings-list-title">Филиалы</span><i class="fas fa-chevron-down team-document-chevron" aria-hidden="true"></i></summary>
+              <div class="team-choice-grid">${checkboxList(state.stores, draft.store_ids, 'store_ids', 'fa-store')}</div>
+            </details>
           </section>
           ${renderUserDocuments(tab)}
-          ${!tab.isNew ? `<section class="team-form-section"><div class="settings-list-header"><div><div class="settings-list-title">Безопасность</div><div class="settings-list-subtitle">Новый временный пароль потребует смены при входе</div></div></div><div class="team-password-row"><input class="control" type="text" name="reset_password" minlength="6" placeholder="Новый временный пароль" autocomplete="off"><button class="btn" type="button" data-team-reset-password>Сбросить пароль</button></div></section>` : ''}
         </div>
         <div class="team-form-notice hidden"></div>
         <div class="team-editor-footer"><button class="btn btn-primary" type="submit">${tab.isNew ? 'Создать сотрудника' : 'Сохранить'}</button><button class="btn" type="button" data-team-reset-form>Отменить изменения</button></div>
@@ -458,19 +651,30 @@
   }
 
   function enabledPermissionCount(tab) {
-    return tab.draft.permissions.filter((grant) => grant.enabled).length;
+    return tab.draft.permissions.filter((grant) => grant.enabled && rbacPermissionIds.has(Number(grant.permission_id))).length;
+  }
+
+  function shouldSaveRolePermission(tab, grant) {
+    if (!grant.enabled) return false;
+    if (rbacPermissionIds.has(Number(grant.permission_id)) || tab.meta?.is_owner) return true;
+    const permission = state.permissions.find((item) => Number(item.id) === Number(grant.permission_id));
+    return !canManagePermissionGrant(permission, grant);
+  }
+
+  function canSaveRole(tab) {
+    return Boolean(tab?.isNew ? state.capabilities.create_roles : state.capabilities.update_roles);
   }
 
   function renderPermissionModeControl(tab) {
     const isActive = state.permissionMode.active && state.permissionMode.roleKey === tab.key;
-    const locked = Boolean(tab.meta?.is_owner);
-    const unavailable = !state.capabilities.manage_roles;
+    const locked = Boolean(tab.meta?.is_owner || (tab.meta?.is_system && !state.capabilities.manage_system_roles));
+    const unavailable = !state.capabilities.manage_permissions || !canSaveRole(tab);
     return `<div class="team-permission-mode-card ${isActive ? 'is-active' : ''}">
       <div class="team-permission-mode-copy">
         <strong>${isActive ? 'Настройка выполняется в навигации' : 'Настройка прав'}</strong>
-        <span>${enabledPermissionCount(tab)} из ${state.permissions.length} прав включено${locked ? ' · роль владельца защищена' : ''}${unavailable ? ' · нет права управления ролями' : ''}</span>
+        <span><span data-team-permission-count>${enabledPermissionCount(tab)} из ${rbacPermissionIds.size} прав включено</span>${locked ? ' · системная роль защищена' : ''}${unavailable ? ' · нет права управления ролями' : ''}</span>
       </div>
-      <button class="btn ${isActive ? 'btn-primary' : ''}" type="button" data-team-permission-mode ${unavailable ? 'disabled' : ''}>${isActive ? 'Завершить настройку' : 'Настроить права'}</button>
+      <button class="btn ${isActive ? 'btn-primary' : ''}" type="button" data-team-permission-mode ${unavailable || locked ? 'disabled' : ''}>${isActive ? 'Завершить настройку' : 'Настроить права'}</button>
     </div>`;
   }
 
@@ -478,6 +682,7 @@
     const draft = tab.draft;
     const roleUsers = tab.meta?.users || [];
     const selectedRouteLabel = routeLabels[draft.start_route] || draft.start_route;
+    const canSave = canSaveRole(tab);
     return `
       <form class="team-editor-form" id="teamActiveForm" autocomplete="off">
         <div class="team-editor-scroll no-scrollbar">
@@ -485,44 +690,63 @@
             <div class="settings-list-header"><div><div class="settings-list-title">Основная информация</div><div class="settings-list-subtitle">Название не используется в проверках доступа</div></div></div>
             <div class="settings-site-field"><label class="field-label">НАЗВАНИЕ</label><input class="control" name="name" value="${escapeHtml(draft.name)}" required></div>
             <div class="settings-site-field"><label class="field-label">ОПИСАНИЕ</label><textarea class="control team-textarea" name="description" rows="3">${escapeHtml(draft.description)}</textarea></div>
-            <div class="settings-site-field">
-              <label class="field-label">СТАРТОВЫЙ РАЗДЕЛ</label>
-              <div class="custom-select team-start-route-select" data-team-start-route-select>
-                <input type="hidden" name="start_route" value="${escapeHtml(draft.start_route)}">
-                <button class="custom-select-trigger control" type="button" data-team-start-route-toggle aria-haspopup="listbox" aria-expanded="false">
-                  <span class="custom-select-value">${escapeHtml(selectedRouteLabel)}</span>
-                  <i class="fas fa-chevron-down custom-select-arrow" aria-hidden="true"></i>
-                </button>
-                <div class="custom-select-dropdown team-start-route-dropdown hidden" role="listbox">
-                  ${state.startRoutes.map((route) => `<button class="custom-select-option ${draft.start_route === route ? 'is-selected' : ''}" type="button" role="option" aria-selected="${draft.start_route === route ? 'true' : 'false'}" data-team-start-route-option="${escapeHtml(route)}">${escapeHtml(routeLabels[route] || route)}</button>`).join('')}
-                </div>
+            <details class="team-assignment-accordion" data-team-assignment-section="start_route" ${tab.assignmentSections.start_route ? 'open' : ''}>
+              <summary class="team-assignment-toggle"><span class="team-choice-copy"><strong class="settings-list-title">Стартовый раздел</strong><small data-team-start-route-label>${escapeHtml(selectedRouteLabel)}</small></span><i class="fas fa-chevron-down team-document-chevron" aria-hidden="true"></i></summary>
+              <input type="hidden" name="start_route" value="${escapeHtml(draft.start_route)}">
+              <div class="team-choice-grid">
+                ${state.startRoutes.map((route) => `<label class="team-choice-row"><input type="radio" name="start_route_choice" value="${escapeHtml(route)}" ${draft.start_route === route ? 'checked' : ''}><span class="team-choice-copy"><strong>${escapeHtml(routeLabels[route] || route)}</strong></span></label>`).join('')}
               </div>
-            </div>
+            </details>
           </section>
           <section class="team-form-section">
-            <div class="settings-list-header"><div><div class="settings-list-title">Права и доступы</div><div class="settings-list-subtitle">Настройка выполняется на основном сайдбаре и в левой колонке</div></div></div>
+            <div class="settings-list-header"><div><div class="settings-list-title">Права и доступы</div><div class="settings-list-subtitle">Выбор раздела — в навигации, настройка действий — в средней колонке</div></div></div>
             ${renderPermissionModeControl(tab)}
           </section>
           ${!tab.isNew ? `<section class="team-form-section"><div class="settings-list-header"><div><div class="settings-list-title">Сотрудники с этой ролью</div></div></div><div class="team-role-users">${roleUsers.length ? roleUsers.map((user) => `<button type="button" class="team-role-user" data-team-role-user="${Number(user.id)}"><i class="fas fa-user"></i><span>${escapeHtml(user.name || user.login || 'Сотрудник')}</span></button>`).join('') : '<div class="muted">Роль пока никому не назначена.</div>'}</div></section>` : ''}
         </div>
         <div class="team-form-notice hidden"></div>
-        <div class="team-editor-footer"><button class="btn btn-primary" type="submit">${tab.isNew ? 'Создать роль' : 'Сохранить'}</button><button class="btn" type="button" data-team-reset-form>Отменить изменения</button>${!tab.isNew && !tab.meta?.is_system ? '<button class="btn team-delete-btn" type="button" data-team-delete-role>Удалить роль</button>' : ''}</div>
+        <div class="team-editor-footer"><button class="btn btn-primary" type="submit" ${canSave ? '' : 'disabled'}>${tab.isNew ? 'Создать роль' : 'Сохранить'}</button><button class="btn" type="button" data-team-reset-form>Отменить изменения</button>${!tab.isNew && !tab.meta?.is_system && state.capabilities.delete_roles ? '<button class="btn team-delete-btn" type="button" data-team-delete-role>Удалить роль</button>' : ''}</div>
       </form>`;
   }
 
-  function renderEditor() {
+  function renderEditor(options = {}) {
     const tab = activeTab();
     if (!tab) {
       dom.editor.innerHTML = '<div class="info-card team-empty-state"><div class="info-title">Выберите сотрудника или роль</div><div class="info-text">Открытые карточки появятся здесь отдельными рабочими вкладками.</div></div>';
       return;
     }
+    if (options.documentsOnly && tab.type === 'user') {
+      const documents = dom.editor.querySelector('.team-documents-section');
+      if (!documents) return;
+      const scroll = dom.editor.querySelector('.team-editor-scroll');
+      const scrollTop = scroll?.scrollTop || 0;
+      const focused = documents.contains(document.activeElement) ? document.activeElement : null;
+      const name = focused?.name;
+      const selectionStart = focused?.selectionStart;
+      const selectionEnd = focused?.selectionEnd;
+      documents.outerHTML = renderUserDocuments(tab);
+      const control = name ? dom.editor.querySelector('#teamActiveForm')?.elements[name] : null;
+      if (control) {
+        control.focus({ preventScroll: true });
+        if (typeof selectionStart === 'number' && typeof selectionEnd === 'number') {
+          control.setSelectionRange(selectionStart, selectionEnd);
+        }
+      }
+      if (scroll) scroll.scrollTop = scrollTop;
+      return;
+    }
     dom.editor.innerHTML = tab.type === 'user' ? renderUserEditor(tab) : renderRoleEditor(tab);
+    if (tab.type === 'user') {
+      syncUserListPhoto(tab.id);
+      loadEmployeePhoto(tab);
+    }
+    syncPermissionModeControls();
   }
 
   async function loadDocumentSummary(tab) {
-    if (!tab || tab.type !== 'user' || tab.isNew || tab.documents.loading || !state.capabilities.manage_employee_documents) return;
+    if (!tab || tab.type !== 'user' || tab.isNew || tab.documents.loading || !state.capabilities.view_employee_documents) return;
     tab.documents.loading = true;
-    if (tab.key === state.activeKey) renderEditor();
+    if (tab.key === state.activeKey) renderEditor({ documentsOnly: true });
     try {
       const result = await request(`/api/admin/team/users/${tab.id}/documents`);
       tab.documents.summary = result.summary || null;
@@ -532,7 +756,7 @@
       tab.documents.error = errorLabel(error.code);
     } finally {
       tab.documents.loading = false;
-      if (tab.key === state.activeKey) renderEditor();
+      if (tab.key === state.activeKey) renderEditor({ documentsOnly: true });
     }
   }
 
@@ -580,12 +804,19 @@
       };
     }
     tab.documents.dirty = JSON.stringify(tab.documents.draft) !== JSON.stringify(tab.documents.snapshot);
-    renderTabs();
+    syncDocumentTabIndicator(tab);
+  }
+
+  function syncDocumentTabIndicator(tab) {
+    if (tab.key !== state.activeKey) return;
+    const title = dom.tabs.querySelector('.product-tab.is-active .product-tab-title');
+    const text = `${tab.title}${tabHasUnsaved(tab) ? ' •' : ''}`;
+    if (title && title.textContent !== text) title.textContent = text;
   }
 
   async function editDocumentSection(section) {
     const tab = activeTab();
-    if (!tab || tab.type !== 'user' || tab.isNew || !state.capabilities.manage_employee_documents) return;
+    if (!tab || tab.type !== 'user' || tab.isNew || !state.capabilities.view_employee_documents || !state.capabilities.manage_employee_documents) return;
     tab.documents.error = '';
     try {
       const result = await request(`/api/admin/team/users/${tab.id}/documents?section=${encodeURIComponent(section)}`);
@@ -594,10 +825,10 @@
       tab.documents.draft = clone(result.data || {});
       tab.documents.snapshot = clone(result.data || {});
       tab.documents.dirty = false;
-      renderEditor();
+      if (tab.key === state.activeKey) renderEditor({ documentsOnly: true });
     } catch (error) {
       tab.documents.error = errorLabel(error.code);
-      renderEditor();
+      if (tab.key === state.activeKey) renderEditor({ documentsOnly: true });
     }
   }
 
@@ -616,8 +847,8 @@
     const applyToggle = () => {
       if (tab.documents.editingSection) discardDocumentChanges(tab);
       tab.documents.openSection = tab.documents.openSection === section ? null : section;
-      renderTabs();
-      renderEditor();
+      syncDocumentTabIndicator(tab);
+      renderEditor({ documentsOnly: true });
     };
     readDocumentDraft();
     if (tab.documents.dirty) return openUnsavedDialog(applyToggle);
@@ -628,8 +859,8 @@
     const tab = activeTab();
     if (!tab?.documents) return;
     discardDocumentChanges(tab);
-    renderTabs();
-    renderEditor();
+    syncDocumentTabIndicator(tab);
+    renderEditor({ documentsOnly: true });
   }
 
   async function saveDocumentSection(section) {
@@ -654,11 +885,11 @@
       tab.documents.summary = result.summary || tab.documents.summary;
       tab.documents.loaded = true;
       discardDocumentChanges(tab);
-      renderTabs();
-      renderEditor();
+      syncDocumentTabIndicator(tab);
+      if (tab.key === state.activeKey) renderEditor({ documentsOnly: true });
     } catch (error) {
       tab.documents.error = errorLabel(error.code);
-      renderEditor();
+      if (tab.key === state.activeKey) renderEditor({ documentsOnly: true });
     }
   }
 
@@ -670,10 +901,15 @@
       tab.draft = {
         ...tab.draft,
         name: form.elements.name.value.trim(),
+        last_name: form.elements.last_name.value.trim(),
+        first_name: form.elements.first_name.value.trim(),
+        patronymic: form.elements.patronymic.value.trim(),
+        phone: form.elements.phone.value.trim(),
         login: form.elements.login.value.trim(),
         comment: form.elements.comment.value.trim(),
         is_active: Boolean(form.elements.is_active.checked),
         temporary_password: form.elements.temporary_password?.value || '',
+        reset_password: form.elements.reset_password?.value || '',
         role_ids: Array.from(form.querySelectorAll('input[name="role_ids"]:checked')).map((input) => Number(input.value)),
         store_ids: Array.from(form.querySelectorAll('input[name="store_ids"]:checked')).map((input) => Number(input.value)),
       };
@@ -699,10 +935,44 @@
     return tab.draft.permissions.find((grant) => Number(grant.permission_id) === Number(permission.id)) || null;
   }
 
+  function canManagePermissionGrant(permission, grant) {
+    if (!permission || permission.can_manage === false) return false;
+    if (!grant?.enabled || permission.max_access_rule === 'all') return true;
+    return !permission.max_access_rule || grant.access_rule === permission.max_access_rule;
+  }
+
   function permissionKeysState(tab, keys) {
     const grants = keys.map((key) => permissionGrant(tab, key)).filter(Boolean);
     const enabled = grants.filter((grant) => grant.enabled).length;
     return { checked: grants.length > 0 && enabled === grants.length, indeterminate: enabled > 0 && enabled < grants.length };
+  }
+
+  function nodeOwnBaseKeys(node) {
+    if (!node) return [];
+    return [node.accessKey, ...Object.values(node.actions || {})].filter((key) => permissionByKey(key));
+  }
+
+  function nodeBranchPermissionKeys(nodeId, includeSpecial = false) {
+    const keys = [];
+    const visit = (id) => {
+      const current = rbacNodeById.get(id);
+      if (!current) return;
+      keys.push(...nodeOwnBaseKeys(current));
+      if (includeSpecial) keys.push(...(current.specialActions || []).map((action) => action.key));
+      (rbacChildrenByParent.get(id) || []).forEach((child) => visit(child.id));
+    };
+    visit(nodeId);
+    return Array.from(new Set(keys));
+  }
+
+  function nodeAncestorAccessKeys(nodeId) {
+    const keys = [];
+    let current = rbacNodeById.get(nodeId);
+    while (current) {
+      if (current.accessKey && permissionByKey(current.accessKey)) keys.push(current.accessKey);
+      current = current.parentId ? rbacNodeById.get(current.parentId) : null;
+    }
+    return keys;
   }
 
   function updateRoleDirty(tab) {
@@ -715,32 +985,58 @@
     keys.forEach((key) => {
       const permission = permissionByKey(key);
       const grant = permissionGrant(tab, key);
-      if (!permission || !grant || permission.can_manage === false) return;
+      if (!permission || !grant || !canManagePermissionGrant(permission, grant)) return;
+      if (enabled && permission.max_access_rule && permission.max_access_rule !== 'all'
+          && grant.access_rule !== permission.max_access_rule) {
+        grant.access_rule = permission.max_access_rule;
+      }
       grant.enabled = Boolean(enabled);
     });
     updateRoleDirty(tab);
     syncPermissionModeControls();
   }
 
+  function setNodePermissionsEnabled(tab, nodeId, enabled) {
+    const node = rbacNodeById.get(nodeId);
+    const clearSpecial = !enabled && node && !node.parentId;
+    setPermissionsEnabled(tab, nodeBranchPermissionKeys(nodeId, clearSpecial), enabled);
+  }
+
+  function setSinglePermissionEnabled(tab, nodeId, key, enabled) {
+    const keys = enabled ? [key, ...nodeAncestorAccessKeys(nodeId)] : [key];
+    setPermissionsEnabled(tab, Array.from(new Set(keys)), enabled);
+  }
+
   function syncPermissionCheckbox(input, tab) {
-    const keys = String(input.dataset.permissionKeys || '').split(',').filter(Boolean);
-    const toggleKeys = String(input.dataset.permissionToggleKeys || input.dataset.permissionKeys || '').split(',').filter(Boolean);
+    const nodeId = input.dataset.rbacNodeId || '';
+    const keys = nodeId ? nodeBranchPermissionKeys(nodeId) : String(input.dataset.permissionKeys || '').split(',').filter(Boolean);
+    const toggleKeys = keys;
     const value = permissionKeysState(tab, keys);
     input.checked = value.checked;
     input.indeterminate = value.indeterminate;
-    input.disabled = Boolean(tab.meta?.is_owner) || !toggleKeys.some((key) => permissionByKey(key)?.can_manage !== false);
+    const manageableCount = toggleKeys.filter((key) => {
+      const permission = permissionByKey(key);
+      return canManagePermissionGrant(permission, permissionGrant(tab, key));
+    }).length;
+    input.disabled = Boolean(tab.meta?.is_owner) || manageableCount === 0;
+    input.title = manageableCount < toggleKeys.length
+      ? 'Часть прав недоступна для изменения и будет сохранена без изменений'
+      : '';
   }
 
   function syncPermissionModeControls() {
     const tab = activeTab();
     if (!state.permissionMode.active || !tab || tab.key !== state.permissionMode.roleKey) return;
-    document.querySelectorAll('.team-rbac-permission-input[data-permission-keys]').forEach((input) => syncPermissionCheckbox(input, tab));
+    const counter = dom.editor.querySelector('[data-team-permission-count]');
+    if (counter) counter.textContent = `${enabledPermissionCount(tab)} из ${rbacPermissionIds.size} прав включено`;
+    document.querySelectorAll('.team-rbac-permission-input[data-rbac-node-id]').forEach((input) => syncPermissionCheckbox(input, tab));
     document.querySelectorAll('[data-rbac-permission-key]').forEach((input) => {
       const permission = permissionByKey(input.dataset.rbacPermissionKey);
       const grant = permissionGrant(tab, input.dataset.rbacPermissionKey);
       input.checked = Boolean(grant?.enabled);
-      input.disabled = Boolean(tab.meta?.is_owner) || permission?.can_manage === false;
+      input.disabled = Boolean(tab.meta?.is_owner) || !canManagePermissionGrant(permission, grant);
       const row = input.closest('.team-rbac-action-row');
+      row?.classList.toggle('is-locked', input.disabled);
       const select = row?.querySelector('[data-rbac-access-rule]');
       if (select) {
         select.value = grant?.access_rule || 'all';
@@ -755,10 +1051,22 @@
     state.permissionMode.originalLeftNodes = [];
   }
 
+  function restorePermissionModeCenterColumn() {
+    const original = state.permissionMode.originalCenter;
+    if (!original) return;
+    dom.list.replaceChildren(...original.nodes);
+    dom.list.className = original.className;
+    dom.title.textContent = original.title;
+    dom.icon.className = original.icon;
+    dom.create.classList.toggle('hidden', original.createHidden);
+    state.permissionMode.originalCenter = null;
+  }
+
   function exitPermissionMode(options = {}) {
     if (!state.permissionMode.active) return;
     state.permissionMode.loadSequence += 1;
     restorePermissionModeLeftColumn();
+    restorePermissionModeCenterColumn();
     document.querySelectorAll('.team-rbac-sidebar-row').forEach((row) => {
       const link = row.querySelector('[data-nav-key]');
       if (link && row.parentNode) row.parentNode.insertBefore(link, row);
@@ -772,12 +1080,9 @@
     state.permissionMode.active = false;
     state.permissionMode.roleKey = '';
     state.permissionMode.selectedNavKey = '';
+    state.permissionMode.selectedNodeId = '';
+    dom.sidebar?.querySelectorAll('.is-permission-selected').forEach((link) => link.classList.remove('is-permission-selected'));
     if (options.render !== false) renderEditor();
-  }
-
-  function sidebarPermissionKeys(link, toggleOnly = false) {
-    const attribute = toggleOnly ? 'permissionToggleKeys' : 'permissionKeys';
-    return String(link.dataset[attribute] || '').split(',').filter((key) => permissionByKey(key));
   }
 
   function installSidebarPermissionControls(tab) {
@@ -795,8 +1100,7 @@
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.className = 'team-rbac-permission-input';
-      input.dataset.permissionKeys = sidebarPermissionKeys(link).join(',');
-      input.dataset.permissionToggleKeys = sidebarPermissionKeys(link, true).join(',');
+      input.dataset.rbacNodeId = link.dataset.rbacNode || '';
       input.dataset.permissionNavKey = link.dataset.navKey;
       label.appendChild(input);
       item.insertBefore(row, link);
@@ -806,87 +1110,102 @@
   }
 
   function permissionTargets(navKey, root) {
-    const result = [];
-    const add = (node, keys) => {
-      if (node && keys.some((key) => permissionByKey(key))) result.push({ node, keys: keys.filter((key) => permissionByKey(key)) });
-    };
-    if (navKey === 'cash') {
-      root.querySelectorAll('[data-cash-section]').forEach((node) => add(node, node.dataset.cashSection === 'expenses'
-        ? ['finance.view', 'finance.cost', 'finance.manage'] : ['finance.view', 'finance.manage']));
-    } else if (navKey === 'products') {
-      root.querySelectorAll('.acc-item').forEach((item, index) => {
-        const keys = index === 2 ? ['stock.view', 'stock.edit', 'finance.cost'] : ['products.view', 'products.edit', 'finance.cost'];
-        item.querySelectorAll('button').forEach((node) => add(node, keys));
-      });
-    } else if (navKey === 'clients') {
-      root.querySelectorAll('button.stage-item').forEach((node) => add(node, ['clients.view', 'clients.edit']));
-    } else if (navKey === 'team') {
-      add(root.querySelector('[data-team-section="users"]'), ['users.view', 'users.manage', 'employee_documents.manage']);
-      add(root.querySelector('[data-team-section="roles"]'), ['roles.manage']);
-    } else if (navKey === 'settings') {
-      root.querySelectorAll('[data-settings-section]').forEach((node) => add(node, ['settings.view', 'settings.manage']));
-    } else {
-      const header = root.querySelector('.panel-header');
-      const keys = {
-        orders: ['orders.view', 'orders.edit', 'orders.status', 'orders.assign', 'orders.cancel', 'orders.refund'],
-        'courier-screen': ['orders.view', 'orders.status'],
-        'new-order': ['orders.edit'],
-        chat: ['chat.view', 'chat.manage'],
-      }[navKey] || [];
-      add(header, keys);
-    }
-    return result;
+    return Array.from(root.querySelectorAll('[data-rbac-node]')).map((element) => ({
+      element,
+      node: rbacNodeById.get(element.dataset.rbacNode),
+    })).filter((target) => target.node && target.node.navKey === navKey);
   }
 
-  function renderLeftPermissionActions(target) {
+  function renderCenterPermissionActions(nodeId) {
     const tab = activeTab();
-    if (!tab) return;
-    dom.leftColumn.querySelectorAll('.team-rbac-action-panel').forEach((panel) => panel.remove());
+    const node = rbacNodeById.get(nodeId);
+    if (!state.permissionMode.active || !tab || !node) return;
+    if (state.permissionMode.selectedNodeId === nodeId && dom.list.querySelector('.team-rbac-action-panel')) {
+      syncPermissionModeControls();
+      return;
+    }
+    state.permissionMode.selectedNodeId = nodeId;
     dom.leftColumn.querySelectorAll('.is-rbac-selected').forEach((node) => node.classList.remove('is-rbac-selected'));
-    target.classList.add('is-rbac-selected');
-    const keys = String(target.dataset.rbacPermissionKeys || '').split(',').filter(Boolean);
+    permissionTargets(node.navKey, dom.leftColumn).forEach(({ element, node: targetNode }) => {
+      element.classList.toggle('is-rbac-selected', targetNode.id === nodeId);
+    });
+    dom.title.textContent = node.label;
+    dom.icon.className = 'fas fa-user-shield';
+    const entries = [];
+    Object.entries(node.actions || {}).forEach(([action, key]) => entries.push({
+      key,
+      label: navigationRbac.actionLabels?.[action] || action,
+      special: false,
+    }));
+    (node.specialActions || []).forEach((item) => entries.push({ ...item, special: true }));
     const panel = document.createElement('div');
     panel.className = 'team-rbac-action-panel';
-    panel.innerHTML = keys.map((key) => {
-      const permission = permissionByKey(key);
-      const grant = permissionGrant(tab, key);
+    panel.dataset.rbacSelectedNode = node.id;
+    const renderAction = (entry) => {
+      const permission = permissionByKey(entry.key);
+      const grant = permissionGrant(tab, entry.key);
       if (!permission || !grant) return '';
       const rules = permission.allowed_access_rules || ['all'];
-      const disabled = tab.meta?.is_owner || permission.can_manage === false;
-      return `<div class="team-rbac-action-row">
-        <label><input type="checkbox" data-rbac-permission-key="${escapeHtml(key)}" ${grant.enabled ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${escapeHtml(permission.label)}</span></label>
-        ${rules.length > 1 ? `<select class="control" data-rbac-access-rule="${escapeHtml(key)}" ${disabled || !grant.enabled ? 'disabled' : ''}>${rules.map((rule) => `<option value="${escapeHtml(rule)}" ${grant.access_rule === rule ? 'selected' : ''}>${escapeHtml(accessLabels[rule] || rule)}</option>`).join('')}</select>` : ''}
-        ${permission.can_manage === false ? '<small>Недоступно: этого права нет у вашей активной роли</small>' : ''}
+      const assignableRules = permission.max_access_rule === 'all'
+        ? rules
+        : rules.filter((rule) => rule === permission.max_access_rule);
+      const disabled = tab.meta?.is_owner || !canManagePermissionGrant(permission, grant);
+      return `<div class="team-rbac-action-row ${entry.special ? 'is-special' : ''} ${disabled ? 'is-locked' : ''}">
+        <label><input type="checkbox" data-rbac-permission-key="${escapeHtml(entry.key)}" data-rbac-node-action="${escapeHtml(node.id)}" ${grant.enabled ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${escapeHtml(entry.label)}</span></label>
+        ${rules.length > 1 ? `<select class="control" data-rbac-access-rule="${escapeHtml(entry.key)}" ${disabled || !grant.enabled ? 'disabled' : ''}>${rules.map((rule) => `<option value="${escapeHtml(rule)}" ${grant.access_rule === rule ? 'selected' : ''} ${assignableRules.includes(rule) || rule === grant.access_rule ? '' : 'disabled'}>${escapeHtml(accessLabels[rule] || rule)}</option>`).join('')}</select>` : ''}
+        ${disabled ? `<small>${tab.meta?.is_owner ? 'Полномочия владельца защищены' : 'Недоступно: право или его область выше полномочий активной роли'}</small>` : ''}
       </div>`;
-    }).join('');
-    const holder = target.closest('.team-rbac-left-row') || target;
-    holder.insertAdjacentElement('afterend', panel);
+    };
+    const baseRows = entries.filter((entry) => !entry.special).map(renderAction).join('');
+    const specialRows = entries.filter((entry) => entry.special).map(renderAction).join('');
+    const parent = node.parentId ? rbacNodeById.get(node.parentId) : null;
+    panel.innerHTML = `
+      <div class="team-rbac-node-context muted">${escapeHtml(parent ? `${parent.label} → ${node.label}` : node.label)}</div>
+      ${baseRows ? `<section class="team-rbac-action-group"><h2 class="team-rbac-actions-title">Базовые разрешения</h2>${baseRows}</section>` : ''}
+      ${specialRows ? `<section class="team-rbac-action-group"><h2 class="team-rbac-actions-title">Дополнительные разрешения</h2>${specialRows}</section>` : ''}
+      ${!baseRows && !specialRows ? `<div class="muted team-rbac-empty-state">${(rbacChildrenByParent.get(node.id) || []).length ? 'Выберите подраздел в левой колонке для настройки действий.' : 'У этого подраздела нет отдельных разрешений действий. Доступ настраивается галочкой в левой колонке.'}</div>` : ''}
+      <div class="team-rbac-mobile-return"><button class="btn" type="button" data-rbac-return-editor>К карточке роли</button></div>`;
+    dom.list.replaceChildren(panel);
     syncPermissionModeControls();
   }
 
   function decoratePermissionLeftColumn(navKey) {
     const tab = activeTab();
     if (!tab || !dom.leftColumn) return;
+    if (navKey === 'chat') dom.leftColumn.querySelector('.chat-clients-search')?.remove();
     const targets = permissionTargets(navKey, dom.leftColumn);
-    targets.forEach(({ node, keys }) => {
-      node.classList.add('team-rbac-left-target');
-      node.dataset.rbacPermissionKeys = keys.join(',');
+    targets.forEach(({ element: sourceElement, node }) => {
+      let element = sourceElement;
+      if (element.matches('.panel-header')) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'stage-item';
+        button.dataset.rbacNode = node.id;
+        const title = element.querySelector('.panel-title');
+        if (title) {
+          title.textContent = node.label;
+          button.appendChild(title);
+        } else {
+          button.textContent = node.label;
+        }
+        element.replaceWith(button);
+        element = button;
+      }
+      element.classList.add('team-rbac-left-target');
       const label = document.createElement('label');
       label.className = 'team-rbac-checkbox-label team-rbac-left-checkbox';
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.className = 'team-rbac-permission-input';
-      input.dataset.permissionKeys = keys.join(',');
-      input.dataset.permissionToggleKeys = (keys.filter((key) => key.endsWith('.view')).length
-        ? keys.filter((key) => key.endsWith('.view')) : keys.slice(0, 1)).join(',');
+      input.dataset.rbacNodeId = node.id;
       label.appendChild(input);
-      if (node.matches('button')) {
+      if (element.matches('button')) {
         const row = document.createElement('div');
         row.className = 'team-rbac-left-row';
-        node.parentNode.insertBefore(row, node);
-        row.append(label, node);
+        element.parentNode.insertBefore(row, element);
+        row.append(label, element);
       } else {
-        node.prepend(label);
+        element.prepend(label);
       }
       syncPermissionCheckbox(input, tab);
     });
@@ -894,8 +1213,7 @@
     returnBar.className = 'team-rbac-mobile-return';
     returnBar.innerHTML = '<button class="btn" type="button" data-rbac-return-editor><i class="fas fa-arrow-left" aria-hidden="true"></i> К карточке роли</button>';
     dom.leftColumn.prepend(returnBar);
-    const first = targets[0]?.node;
-    if (first) renderLeftPermissionActions(first);
+    if (targets.length === 1) renderCenterPermissionActions(targets[0].node.id);
   }
 
   async function selectPermissionNavigation(navKey) {
@@ -903,6 +1221,8 @@
     const link = dom.sidebar?.querySelector(`[data-nav-key="${navKey}"]`);
     if (!link) return;
     state.permissionMode.selectedNavKey = navKey;
+    state.permissionMode.selectedNodeId = '';
+    renderCenterPermissionActions(link.dataset.rbacNode);
     dom.sidebar.querySelectorAll('[data-nav-key]').forEach((item) => item.classList.toggle('is-permission-selected', item === link));
     const loadSequence = ++state.permissionMode.loadSequence;
     dom.leftColumn.innerHTML = '<div class="panel"><div class="panel-body"><div class="muted">Загрузка раздела…</div></div></div>';
@@ -923,11 +1243,22 @@
 
   function enterPermissionMode() {
     const tab = activeTab();
-    if (!tab || tab.type !== 'role' || !state.capabilities.manage_roles || !dom.sidebar || !dom.leftColumn) return;
+    if (!tab || tab.type !== 'role' || !state.capabilities.manage_permissions || !canSaveRole(tab) || !dom.sidebar || !dom.leftColumn || !dom.centerColumn?.contains(dom.list)) return;
+    if (tab.meta?.is_owner || (tab.meta?.is_system && !state.capabilities.manage_system_roles)) return;
     if (state.permissionMode.active) exitPermissionMode({ render: false });
     state.permissionMode.active = true;
     state.permissionMode.roleKey = tab.key;
     state.permissionMode.originalLeftNodes = Array.from(dom.leftColumn.childNodes);
+    state.permissionMode.originalCenter = {
+      nodes: Array.from(dom.list.childNodes),
+      className: dom.list.className,
+      title: dom.title.textContent,
+      icon: dom.icon.className,
+      createHidden: dom.create.classList.contains('hidden'),
+    };
+    dom.list.classList.remove('orders-list');
+    dom.list.classList.add('team-rbac-actions-host');
+    dom.create.classList.add('hidden');
     state.permissionMode.sidebarCollapsed = document.documentElement.getAttribute('data-sidebar-collapsed') === '1' ? '1' : '0';
     document.documentElement.setAttribute('data-sidebar-collapsed', '0');
     dom.sidebar.classList.remove('is-collapsed');
@@ -970,7 +1301,7 @@
     else state.roles.sort((a, b) => Number(b.is_owner) - Number(a.is_owner) || String(a.name).localeCompare(String(b.name), 'ru'));
   }
 
-  async function saveActiveTab(event) {
+  async function saveActiveTab(event, confirmedPassword = null) {
     event.preventDefault();
     readActiveDraft();
     const tab = activeTab();
@@ -981,7 +1312,22 @@
     documentControls.forEach((control) => { control.disabled = true; });
     const formIsValid = form.reportValidity();
     documentControls.forEach((control) => { control.disabled = false; });
-    if (!formIsValid) return;
+    if (!formIsValid) return false;
+    if (tab.type === 'user' && !tab.isNew && tab.draft.reset_password && tab.draft.reset_password !== confirmedPassword) {
+      if (!window.AppModal) { showNotice('Компонент подтверждения недоступен.', 'error'); return false; }
+      if (window.AppModal.isOpen?.()) return false;
+      const password = tab.draft.reset_password;
+      window.AppModal.open({
+        title: 'Сохранить новый пароль?',
+        content: '<p>Данные карточки и новый пароль будут сохранены. Старый пароль перестанет работать.</p>',
+        cancelText: 'Отмена', saveText: 'Сохранить',
+        onSave: () => {
+          if (activeTab() !== tab || !dom.editor.contains(form)) return false;
+          return saveActiveTab(event, password);
+        },
+      });
+      return false;
+    }
     const submit = form.querySelector('[type="submit"]');
     submit.disabled = true;
     showNotice('', '');
@@ -989,12 +1335,19 @@
       if (tab.type === 'user') {
         const body = {
           name: tab.draft.name,
+          last_name: tab.draft.last_name,
+          first_name: tab.draft.first_name,
+          patronymic: tab.draft.patronymic,
+          phone: tab.draft.phone,
+          ...(tab.draft.photo_change === 'replace' ? { photo_base64: tab.photo.data } : {}),
+          ...(tab.draft.photo_change === 'remove' ? { photo_remove: true } : {}),
           login: tab.draft.login,
           comment: tab.draft.comment || null,
           is_active: tab.draft.is_active,
           role_ids: tab.draft.role_ids,
           store_ids: tab.draft.store_ids,
           ...(tab.isNew ? { temporary_password: tab.draft.temporary_password } : {}),
+          ...(!tab.isNew && tab.draft.reset_password ? { reset_password: tab.draft.reset_password, confirm_reset: true } : {}),
         };
         const result = await request(tab.isNew ? '/api/admin/team/users' : `/api/admin/team/users/${tab.id}`, {
           method: tab.isNew ? 'POST' : 'PUT', body: JSON.stringify(body),
@@ -1006,13 +1359,15 @@
         tab.isNew = false;
         tab.meta = clone(result.user);
         tab.draft = normalizeUserDraft(result.user);
+        if (result.user.login?.includes('@')) state.loginSuffix = result.user.login.split('@')[1];
+        clearEmployeePhoto(tab);
         if (!tab.documents.summary) tab.documents.loaded = false;
       } else {
         const body = {
           name: tab.draft.name,
           description: tab.draft.description || null,
           start_route: tab.draft.start_route,
-          permissions: tab.draft.permissions.filter((grant) => grant.enabled).map((grant) => ({ permission_id: grant.permission_id, access_rule: grant.access_rule })),
+          permissions: tab.draft.permissions.filter((grant) => shouldSaveRolePermission(tab, grant)).map((grant) => ({ permission_id: grant.permission_id, access_rule: grant.access_rule })),
         };
         const result = await request(tab.isNew ? '/api/admin/team/roles' : `/api/admin/team/roles/${tab.id}`, {
           method: tab.isNew ? 'POST' : 'PUT', body: JSON.stringify(body),
@@ -1024,6 +1379,9 @@
         tab.isNew = false;
         tab.meta = clone(result.role);
         tab.draft = normalizeRoleDraft(result.role);
+        if (typeof window.reloadAdminAccessContext === 'function') {
+          await window.reloadAdminAccessContext();
+        }
       }
       tab.snapshot = clone(tab.draft);
       tab.dirty = false;
@@ -1034,8 +1392,11 @@
       renderEditor();
       showNotice('Сохранено.', 'success');
       if (tab.type === 'user' && !tab.documents.loaded) loadDocumentSummary(tab);
+      return true;
     } catch (error) {
       showNotice(errorLabel(error.code), 'error');
+      if (confirmedPassword !== null) window.AppModal?.setFooterNotice?.(errorLabel(error.code));
+      return false;
     } finally {
       const currentSubmit = document.querySelector('#teamActiveForm [type="submit"]');
       if (currentSubmit) currentSubmit.disabled = false;
@@ -1047,7 +1408,10 @@
     const index = state.tabs.findIndex((tab) => tab.key === key);
     if (index < 0) return;
     const wasActive = state.activeKey === key;
+    clearEmployeePhoto(state.tabs[index]);
+    const closedUserId = state.tabs[index].type === 'user' ? state.tabs[index].id : null;
     state.tabs.splice(index, 1);
+    if (closedUserId) syncUserListPhoto(closedUserId);
     if (wasActive) {
       const neighbor = state.tabs[index] || state.tabs[index - 1] || null;
       state.activeKey = neighbor ? neighbor.key : '';
@@ -1101,6 +1465,7 @@
     if (!tabHasUnsaved(tab)) return setSection(nextSection);
     openUnsavedDialog(() => {
       tab.draft = clone(tab.snapshot);
+      clearEmployeePhoto(tab);
       tab.dirty = false;
       discardDocumentChanges(tab);
       setSection(nextSection);
@@ -1137,33 +1502,18 @@
 
   function generatePassword() {
     const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-    const bytes = new Uint32Array(12);
-    window.crypto.getRandomValues(bytes);
-    return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('');
-  }
-
-  async function resetPassword() {
-    const tab = activeTab();
-    const form = document.getElementById('teamActiveForm');
-    const input = form?.elements.reset_password;
-    if (!tab || tab.type !== 'user' || tab.isNew || !input) return;
-    const password = input.value;
-    if (password.length < 6) {
-      input.focus();
-      return showNotice('Введите временный пароль минимум из 6 символов.', 'error');
-    }
-    try {
-      await request(`/api/admin/team/users/${tab.id}/reset-password`, { method: 'POST', body: JSON.stringify({ temporary_password: password }) });
-      input.value = '';
-      showNotice('Временный пароль установлен. При следующем входе сотрудник должен его сменить.', 'success');
-    } catch (error) {
-      showNotice(errorLabel(error.code), 'error');
+    for (;;) {
+      const bytes = new Uint8Array(64);
+      window.crypto.getRandomValues(bytes);
+      const password = Array.from(bytes).filter(value => value < Math.floor(256 / alphabet.length) * alphabet.length)
+        .slice(0, 18).map(value => alphabet[value % alphabet.length]).join('');
+      if (password.length === 18 && /[A-Z]/.test(password) && /[a-z]/.test(password) && /[0-9]/.test(password)) return password;
     }
   }
 
   async function deleteRole() {
     const tab = activeTab();
-    if (!tab || tab.type !== 'role' || tab.isNew) return;
+    if (!tab || tab.type !== 'role' || tab.isNew || !state.capabilities.delete_roles) return;
     const execute = async function () {
       try {
         await request(`/api/admin/team/roles/${tab.id}`, { method: 'DELETE' });
@@ -1192,8 +1542,13 @@
       state.roles = result.roles || [];
       state.stores = result.stores || [];
       state.permissions = result.permissions || [];
+      rbacPermissionIds.clear();
+      state.permissions.forEach((permission) => {
+        if (rbacPermissionKeys.has(permission.key)) rbacPermissionIds.add(Number(permission.id));
+      });
       state.startRoutes = result.start_routes || [];
-      state.capabilities = result.capabilities || { manage_employee_documents: false, view_users: false, manage_users: false, manage_roles: false };
+      state.loginSuffix = result.login_suffix || '';
+      state.capabilities = result.capabilities || { view_employee_documents: false, manage_employee_documents: false, view_users: false, create_users: false, update_users: false, manage_users: false, view_roles: false, create_roles: false, update_roles: false, delete_roles: false, manage_permissions: false, manage_roles: false, manage_system_roles: false };
       applyTeamCapabilities();
       renderList();
     } catch (error) {
@@ -1227,21 +1582,66 @@
   dom.editor.addEventListener('submit', (event) => {
     if (event.target.id === 'teamActiveForm') saveActiveTab(event);
   });
+  dom.editor.addEventListener('toggle', (event) => {
+    const section = event.target.dataset.teamAssignmentSection;
+    const tab = activeTab();
+    if (section && tab && dom.editor.contains(event.target)) {
+      tab.assignmentSections[section] = event.target.open;
+    }
+  }, true);
   dom.editor.addEventListener('input', (event) => {
     if (event.target.closest('[data-team-document-editor]')) readDocumentDraft();
     else readActiveDraft();
   });
   dom.editor.addEventListener('change', (event) => {
+    if (event.target.matches('[data-team-photo-file]')) { selectEmployeePhoto(event.target.files?.[0]); return; }
+    if (event.target.name === 'start_route_choice') {
+      const form = event.target.form;
+      form.elements.start_route.value = event.target.value;
+      form.querySelector('[data-team-start-route-label]').textContent = routeLabels[event.target.value] || event.target.value;
+    }
+    if (event.target.name === 'login' && event.target.value.includes('@')) {
+      const [local, suffix, extra] = event.target.value.trim().toLowerCase().split('@');
+      if (suffix !== state.loginSuffix || extra !== undefined) return showNotice('Нельзя использовать суффикс другой компании.', 'error');
+      event.target.value = local;
+    }
     if (event.target.closest('[data-team-document-editor]')) {
       readDocumentDraft();
       if (['document_identity_type', 'document_military_status', 'document_education_required_for_position', 'document_employment_is_first_job'].includes(event.target.name)) {
-        renderEditor();
+        renderEditor({ documentsOnly: true });
       }
       return;
     }
     readActiveDraft();
   });
   dom.editor.addEventListener('click', (event) => {
+    if (event.target.closest('[data-team-photo-upload]')) { dom.editor.querySelector('[data-team-photo-file]')?.click(); return; }
+    if (event.target.closest('[data-team-photo-remove]')) {
+      const tab = activeTab();
+      clearEmployeePhoto(tab);
+      tab.photo.loaded = true;
+      tab.draft.photo_change = 'remove';
+      readActiveDraft(); updateEmployeePhotoPreview(tab); return;
+    }
+    if (event.target.closest('[data-team-generate-login]')) { generateEmployeeLogin(); return; }
+    const passwordAction = event.target.closest('[data-team-password-show], [data-team-password-copy]');
+    if (passwordAction) {
+      const name = passwordAction.dataset.teamPasswordShow || passwordAction.dataset.teamPasswordCopy;
+      const input = document.getElementById('teamActiveForm')?.elements[name];
+      if (input && passwordAction.hasAttribute('data-team-password-show')) {
+        input.type = input.type === 'password' ? 'text' : 'password';
+        const visible = input.type === 'text';
+        const icon = passwordAction.querySelector('i');
+        icon.classList.toggle('fa-eye', !visible);
+        icon.classList.toggle('fa-eye-slash', visible);
+        const label = visible ? 'Скрыть пароль' : 'Показать пароль';
+        passwordAction.title = label;
+        passwordAction.setAttribute('aria-label', label);
+        passwordAction.setAttribute('aria-pressed', String(visible));
+      }
+      else if (input) navigator.clipboard.writeText(input.value).then(() => showNotice('Пароль скопирован.')).catch(() => showNotice('Не удалось скопировать пароль.', 'error'));
+      return;
+    }
     if (event.target.closest('[data-team-permission-mode]')) {
       if (state.permissionMode.active) exitPermissionMode();
       else enterPermissionMode();
@@ -1266,51 +1666,14 @@
       cancelDocumentEdit();
       return;
     }
-    const routeOption = event.target.closest('[data-team-start-route-option]');
-    if (routeOption) {
-      const select = routeOption.closest('[data-team-start-route-select]');
-      const input = select?.querySelector('input[name="start_route"]');
-      const value = select?.querySelector('.custom-select-value');
-      const dropdown = select?.querySelector('.team-start-route-dropdown');
-      const toggle = select?.querySelector('[data-team-start-route-toggle]');
-      const route = routeOption.dataset.teamStartRouteOption;
-      if (input) input.value = route;
-      if (value) value.textContent = routeLabels[route] || route;
-      select?.querySelectorAll('[data-team-start-route-option]').forEach((option) => {
-        const selected = option === routeOption;
-        option.classList.toggle('is-selected', selected);
-        option.setAttribute('aria-selected', selected ? 'true' : 'false');
-      });
-      select?.classList.remove('is-open');
-      dropdown?.classList.add('hidden');
-      toggle?.setAttribute('aria-expanded', 'false');
-      input?.dispatchEvent(new Event('change', { bubbles: true }));
-      return;
-    }
-    const routeToggle = event.target.closest('[data-team-start-route-toggle]');
-    if (routeToggle) {
-      const select = routeToggle.closest('[data-team-start-route-select]');
-      const dropdown = select?.querySelector('.team-start-route-dropdown');
-      const willOpen = dropdown?.classList.contains('hidden');
-      select?.classList.toggle('is-open', Boolean(willOpen));
-      dropdown?.classList.toggle('hidden', !willOpen);
-      routeToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
-      return;
-    }
-    const openedRouteSelect = dom.editor.querySelector('[data-team-start-route-select].is-open');
-    if (openedRouteSelect) {
-      openedRouteSelect.classList.remove('is-open');
-      openedRouteSelect.querySelector('.team-start-route-dropdown')?.classList.add('hidden');
-      openedRouteSelect.querySelector('[data-team-start-route-toggle]')?.setAttribute('aria-expanded', 'false');
-    }
     if (event.target.closest('[data-team-generate-password]')) {
-      const input = document.querySelector('#teamActiveForm [name="temporary_password"]');
+      const name = event.target.closest('[data-team-generate-password]').dataset.teamGeneratePassword || 'temporary_password';
+      const input = document.getElementById('teamActiveForm')?.elements[name];
       if (input) { input.value = generatePassword(); input.dispatchEvent(new Event('input', { bubbles: true })); }
     }
-    if (event.target.closest('[data-team-reset-password]')) resetPassword();
     if (event.target.closest('[data-team-reset-form]')) {
       const tab = activeTab();
-      if (tab) { tab.draft = clone(tab.snapshot); tab.dirty = false; renderTabs(); renderEditor(); syncPermissionModeControls(); }
+      if (tab) { tab.draft = clone(tab.snapshot); clearEmployeePhoto(tab); tab.dirty = false; renderTabs(); renderEditor(); syncPermissionModeControls(); }
     }
     if (event.target.closest('[data-team-delete-role]')) deleteRole();
     const roleUser = event.target.closest('[data-team-role-user]');
@@ -1328,6 +1691,10 @@
       window.__adminSidebarApi?.close?.();
       window.__adminMobilePages?.back?.();
       window.__adminMobilePages?.back?.();
+      if (state.permissionMode.active && state.permissionMode.selectedNavKey === link.dataset.navKey
+          && permissionTargets(link.dataset.navKey, dom.leftColumn).length === 1) {
+        window.__adminMobilePages?.openCenter?.(rbacNodeById.get(state.permissionMode.selectedNodeId)?.label);
+      }
     });
   }, true);
 
@@ -1335,8 +1702,7 @@
     const input = event.target.closest('.team-rbac-permission-input[data-permission-nav-key]');
     if (!state.permissionMode.active || !input) return;
     const tab = activeTab();
-    const link = dom.sidebar.querySelector(`[data-nav-key="${input.dataset.permissionNavKey}"]`);
-    setPermissionsEnabled(tab, String(input.dataset.permissionToggleKeys || '').split(',').filter(Boolean), input.checked);
+    setNodePermissionsEnabled(tab, input.dataset.rbacNodeId, input.checked);
   });
 
   dom.leftColumn?.addEventListener('click', (event) => {
@@ -1359,27 +1725,43 @@
       target.classList.toggle('is-open', open);
       panel.style.maxHeight = open ? `${panel.scrollHeight}px` : '0px';
     }
-    renderLeftPermissionActions(target);
+    renderCenterPermissionActions(target.dataset.rbacNode);
+    window.__adminMobilePages?.openCenter?.(rbacNodeById.get(target.dataset.rbacNode)?.label);
   }, true);
 
   dom.leftColumn?.addEventListener('change', (event) => {
     if (!state.permissionMode.active) return;
     const tab = activeTab();
-    const groupInput = event.target.closest('.team-rbac-permission-input[data-permission-keys]');
+    const groupInput = event.target.closest('.team-rbac-permission-input[data-rbac-node-id]');
     if (groupInput) {
-      setPermissionsEnabled(tab, String(groupInput.dataset.permissionToggleKeys || groupInput.dataset.permissionKeys || '').split(',').filter(Boolean), groupInput.checked);
-      return;
+      setNodePermissionsEnabled(tab, groupInput.dataset.rbacNodeId, groupInput.checked);
     }
+  });
+
+  dom.centerColumn?.addEventListener('click', (event) => {
+    if (!state.permissionMode.active || !event.target.closest('[data-rbac-return-editor]')) return;
+    event.preventDefault();
+    window.__adminMobilePages?.openRight?.('Роль и права');
+  });
+
+  dom.centerColumn?.addEventListener('change', (event) => {
+    if (!state.permissionMode.active) return;
+    const tab = activeTab();
     const permissionInput = event.target.closest('[data-rbac-permission-key]');
     if (permissionInput) {
-      setPermissionsEnabled(tab, [permissionInput.dataset.rbacPermissionKey], permissionInput.checked);
+      const actionNode = rbacNodeById.get(permissionInput.dataset.rbacNodeAction);
+      if (actionNode?.accessKey === permissionInput.dataset.rbacPermissionKey) {
+        setNodePermissionsEnabled(tab, actionNode.id, permissionInput.checked);
+      } else {
+        setSinglePermissionEnabled(tab, permissionInput.dataset.rbacNodeAction, permissionInput.dataset.rbacPermissionKey, permissionInput.checked);
+      }
       return;
     }
     const accessSelect = event.target.closest('[data-rbac-access-rule]');
     if (accessSelect) {
       const grant = permissionGrant(tab, accessSelect.dataset.rbacAccessRule);
       const permission = permissionByKey(accessSelect.dataset.rbacAccessRule);
-      if (grant && permission?.can_manage !== false && !tab.meta?.is_owner) {
+      if (grant && canManagePermissionGrant(permission, grant) && !tab.meta?.is_owner) {
         grant.access_rule = accessSelect.value;
         updateRoleDirty(tab);
       }

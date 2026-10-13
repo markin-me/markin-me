@@ -164,9 +164,9 @@
         .password-match-indicator.error i::before {
             content: "\f00d";
         }
-        .auth-hint { margin: -7px 0 14px; color: var(--color-text-muted, #4b5563); font-size: 13px; line-height: 1.4; }
         .auth-stage { display: none; }
         .auth-stage.is-active { display: block; }
+        .auth-password-cancel { display: block; margin-top: 12px; text-align: center; color: var(--color-text-muted, #4b5563); }
         .auth-stage-copy { margin: -12px 0 20px; color: var(--color-text-muted, #4b5563); text-align: center; line-height: 1.5; }
         .auth-role-list { display: grid; gap: 10px; }
         .auth-role-card { width: 100%; text-align: left; padding: 14px; border: 1px solid var(--color-border, #e5e7eb); border-radius: var(--radius-md, 12px); background: var(--color-surface-2, #f3f4f6); color: var(--color-text, #1f2937); cursor: pointer; }
@@ -211,9 +211,7 @@
             </form>
         <% } else { %>
             <form id="loginForm">
-                <input type="text" name="login" placeholder="Email или логин" class="auth-input" required autocomplete="username" autocapitalize="off">
-                <input type="text" name="tenant_slug" placeholder="Компания (для входа по логину)" class="auth-input" autocomplete="organization" autocapitalize="off">
-                <div class="auth-hint">Компания — адрес из ссылки магазина. Поле можно не заполнять, если такой логин встречается только в одной компании.</div>
+                <input type="text" name="login" placeholder="Логин сотрудника@компания или email владельца" class="auth-input" required autocomplete="username" autocapitalize="off">
                 <div class="password-field-wrapper">
                     <input type="password" name="password" id="loginPasswordInput" placeholder="Пароль" class="auth-input" required>
                     <button type="button" class="password-toggle" data-target="loginPasswordInput" aria-label="Показать пароль">
@@ -223,12 +221,14 @@
                 <button type="submit" class="auth-button">Войти</button>
             </form>
             <div class="auth-stage" id="passwordChangeStage">
-                <div class="auth-stage-copy">Это первый вход с временным паролем. Задайте постоянный пароль, чтобы продолжить.</div>
+                <div class="auth-stage-copy">Смена пароля добровольная. Введите текущий пароль и задайте новый.</div>
                 <form id="passwordChangeForm">
-                    <div class="password-field-wrapper"><input type="password" name="new_password" id="newPasswordInput" placeholder="Новый пароль" class="auth-input" required minlength="6"><button type="button" class="password-toggle" data-target="newPasswordInput" aria-label="Показать пароль"><i class="fas fa-eye"></i></button></div>
-                    <div class="password-field-wrapper"><input type="password" name="new_password_confirm" id="newPasswordConfirmInput" placeholder="Повторите новый пароль" class="auth-input" required minlength="6"><button type="button" class="password-toggle" data-target="newPasswordConfirmInput" aria-label="Показать пароль"><i class="fas fa-eye"></i></button></div>
+                    <div class="password-field-wrapper"><input type="password" name="current_password" id="currentPasswordInput" placeholder="Текущий пароль" class="auth-input" required autocomplete="current-password"><button type="button" class="password-toggle" data-target="currentPasswordInput" aria-label="Показать пароль"><i class="fas fa-eye"></i></button></div>
+                    <div class="password-field-wrapper"><input type="password" name="new_password" id="newPasswordInput" placeholder="От 12 символов: A–Z, a–z и цифры" class="auth-input" required minlength="12" maxlength="72"><button type="button" class="password-toggle" data-target="newPasswordInput" aria-label="Показать пароль"><i class="fas fa-eye"></i></button></div>
+                    <div class="password-field-wrapper"><input type="password" name="new_password_confirm" id="newPasswordConfirmInput" placeholder="Повторите новый пароль" class="auth-input" required minlength="12" maxlength="72"><button type="button" class="password-toggle" data-target="newPasswordConfirmInput" aria-label="Показать пароль"><i class="fas fa-eye"></i></button></div>
                     <button type="submit" class="auth-button">Сменить пароль</button>
                 </form>
+                <a class="auth-password-cancel" href="/login">Отмена — вернуться в CRM</a>
             </div>
             <div class="auth-stage" id="roleSelectionStage">
                 <div class="auth-stage-copy">У вас назначено несколько ролей. Выберите, в каком режиме продолжить работу.</div>
@@ -247,6 +247,7 @@
 
     <script>
         const mode = '<%= mode %>';
+        let requestedPasswordChange = mode === 'login' && new URLSearchParams(window.location.search).get('change-password') === '1';
         const form = document.getElementById(mode === 'register' ? 'registerForm' : 'loginForm');
         const errorMsg = document.getElementById('errorMsg');
         const successMsg = document.getElementById('successMsg');
@@ -256,7 +257,14 @@
         function showError(text) { errorMsg.textContent = text; errorMsg.classList.add('show'); successMsg.classList.remove('show'); }
         function showSuccess(text) { successMsg.textContent = text; successMsg.classList.add('show'); errorMsg.classList.remove('show'); }
         function errorText(code) {
-            return ({ EMAIL_EXISTS:'Этот email уже зарегистрирован', SLUG_EXISTS:'Этот URL-адрес уже занят', INVALID_EMAIL:'Неверный формат email', PASSWORD_TOO_SHORT:'Пароль должен быть минимум 6 символов', INVALID_CREDENTIALS:'Неверный логин или пароль', USER_BLOCKED:'Аккаунт заблокирован', TENANT_BLOCKED:'Магазин заблокирован', LOGIN_PASSWORD_REQUIRED:'Заполните логин и пароль', TENANT_REQUIRED:'Такой логин есть в нескольких компаниях. Укажите компанию.', ROLE_NOT_ASSIGNED:'Пользователю не назначена роль.' })[code] || code || 'Ошибка';
+            if (document.getElementById('passwordChangeStage')?.classList.contains('is-active') && code === 'PASSWORD_TOO_SHORT') return 'Новый пароль должен содержать минимум 12 символов.';
+            if (code === 'PASSWORD_TOO_WEAK') return 'Добавьте латинские буквы обоих регистров и цифры.';
+            if (code === 'PASSWORD_TOO_LONG') return 'Пароль не должен превышать 72 байта.';
+            const passwordErrors = { CURRENT_PASSWORD_REQUIRED:'Введите текущий пароль.', CURRENT_PASSWORD_INVALID:'Текущий пароль указан неверно.', PASSWORD_CHANGE_CONFLICT:'Пароль уже изменён. Войдите с актуальным паролем и повторите операцию.', PASSWORD_CHANGE_NOT_ALLOWED:'Для смены пароля войдите в учётную запись сотрудника.', PASSWORD_CHANGE_ERROR:'Не удалось изменить пароль.', INVALID_TOKEN:'Сессия истекла. Войдите снова.' };
+            if (passwordErrors[code]) return passwordErrors[code];
+            const corporateErrors = { LOGIN_RATE_LIMITED:'Слишком много попыток входа. Попробуйте позже.', HTTPS_REQUIRED:'Вход доступен только по защищённому соединению HTTPS.' };
+            if (corporateErrors[code]) return corporateErrors[code];
+            return ({ EMAIL_EXISTS:'Этот email уже зарегистрирован', SLUG_EXISTS:'Этот URL-адрес уже занят', INVALID_EMAIL:'Неверный формат email', PASSWORD_TOO_SHORT:'Пароль должен быть минимум 6 символов', INVALID_CREDENTIALS:'Неверный логин или пароль', USER_BLOCKED:'Аккаунт заблокирован', TENANT_BLOCKED:'Магазин заблокирован', LOGIN_PASSWORD_REQUIRED:'Заполните логин и пароль', ROLE_NOT_ASSIGNED:'Пользователю не назначена роль.' })[code] || code || 'Ошибка';
         }
         function saveAuth(result) {
             if (result.token) localStorage.setItem('authToken', result.token);
@@ -273,7 +281,10 @@
         }
         function continueAuth(result) {
             saveAuth(result);
-            if (result.next === 'change-password') return showStage('passwordChangeStage', 'Смените пароль');
+            if (requestedPasswordChange && Number(result.user?.id) > 0) {
+                requestedPasswordChange = false;
+                return showStage('passwordChangeStage', 'Сменить пароль');
+            }
             if (result.next === 'select-role') return showRoleSelection(result.roles || []);
             showSuccess('Вход выполнен. Перенаправление...');
             setTimeout(() => { window.location.href = result.redirect || '/dashboard/products'; }, 300);
@@ -303,7 +314,6 @@
             const data = Object.fromEntries(new FormData(form));
             if (mode === 'register' && data.password !== data.password_confirm) return showError('Пароли не совпадают');
             delete data.password_confirm;
-            if (!data.tenant_slug) delete data.tenant_slug;
             try {
                 const response = await fetch(mode === 'register' ? '/api/auth/register' : '/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
                 const result = await response.json();
@@ -318,7 +328,7 @@
             const data = Object.fromEntries(new FormData(passwordChangeForm));
             if (data.new_password !== data.new_password_confirm) return showError('Пароли не совпадают');
             try {
-                const response = await fetch('/api/auth/change-password', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+localStorage.getItem('authToken')}, body:JSON.stringify({new_password:data.new_password}) });
+                const response = await fetch('/api/auth/change-password', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+localStorage.getItem('authToken')}, body:JSON.stringify({current_password:data.current_password, new_password:data.new_password}) });
                 const result = await response.json();
                 if (!response.ok || !result.ok) return showError(errorText(result.error));
                 continueAuth(result);
@@ -343,17 +353,20 @@
                     let tokenPayload = token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
                     while (tokenPayload.length % 4) tokenPayload += '=';
                     const payload = JSON.parse(atob(tokenPayload));
-                    if (payload.authStage === 'password-change') showStage('passwordChangeStage', 'Смените пароль');
+                    if (requestedPasswordChange && Number(payload.userId) > 0) {
+                        requestedPasswordChange = false;
+                        showStage('passwordChangeStage', 'Сменить пароль');
+                    }
                     else if (payload.authStage === 'role-selection') fetch('/api/auth/me', {headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).then(result=>result.ok ? showRoleSelection(result.roles || []) : null);
                     else fetch('/api/auth/me', {headers:{'Authorization':'Bearer '+token}})
                         .then(async response => ({response, result:await response.json().catch(()=>({}))}))
                         .then(({response, result}) => {
                             if (response.ok && result.ok) {
+                                if (!result.active_role && result.roles?.length > 1) return showRoleSelection(result.roles);
                                 window.location.href = result.active_role?.start_route || '/dashboard/products';
                                 return;
                             }
                             localStorage.removeItem('authToken');
-                            if (result.error === 'PASSWORD_CHANGE_REQUIRED') showError('Войдите временным паролем и задайте новый.');
                         })
                         .catch(() => {});
                 } catch (_) { localStorage.removeItem('authToken'); }

@@ -27,7 +27,15 @@
     try { tenantId = Number(JSON.parse(localStorage.getItem('tenant') || '{}').id || 0); } catch (_) {}
     const storeId = Number(localStorage.getItem('activeStoreId') || 1);
     const token = String(localStorage.getItem('authToken') || '').trim();
-    return { tenantId, storeId: storeId > 0 ? storeId : 1, token };
+    const activePage = String(document.body?.dataset?.adminActivePage || '');
+    const rbacNode = activePage === 'chat'
+      ? 'chat.threads'
+      : activePage === 'clients'
+        ? 'marketing.clients'
+        : activePage === 'settings'
+          ? 'settings.company'
+          : '';
+    return { tenantId, storeId: storeId > 0 ? storeId : 1, token, rbacNode };
   }
 
   function notify(change) {
@@ -70,8 +78,8 @@
 
   function connect() {
     const scope = getScope();
-    const nextScopeKey = `${scope.tenantId}:${scope.storeId}:${scope.token}`;
-    if (!scope.tenantId || !scope.storeId || !scope.token) {
+    const nextScopeKey = `${scope.tenantId}:${scope.storeId}:${scope.rbacNode}:${scope.token}`;
+    if (!scope.tenantId || !scope.storeId || !scope.token || !scope.rbacNode) {
       if (source || scopeKey || hasSnapshot || clients.size) {
         disconnect();
         scopeKey = '';
@@ -90,7 +98,7 @@
     hasSnapshot = false;
     notify({ type: 'reset', clientId: null, state: null, counts: { ...counts } });
     const currentGeneration = generation;
-    const url = `/api/admin/presence/stream?store_id=${encodeURIComponent(scope.storeId)}&token=${encodeURIComponent(scope.token)}`;
+    const url = `/api/admin/presence/stream?store_id=${encodeURIComponent(scope.storeId)}&rbac_node=${encodeURIComponent(scope.rbacNode)}&token=${encodeURIComponent(scope.token)}`;
     const nextSource = new EventSource(url);
     source = nextSource;
     nextSource.addEventListener('presence', function (event) {

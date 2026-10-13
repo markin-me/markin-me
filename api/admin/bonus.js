@@ -1135,6 +1135,77 @@ async function saveConfig(db, tenantId, payload) {
   }
 }
 
+function sameConfigValue(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function normalizedConfigParts(config = {}) {
+  const settings = normalizeSettings(config.settings || {});
+  const levels = normalizeBonusLevels(config.levels || []);
+  const referralLevels = normalizeReferralLevels(config.referral_levels || config.referralLevels || []);
+  const categoryGroups = normalizeCategoryGroups(config.category_groups || config.categoryGroups || []);
+  const modalSettings = normalizeBonusModalSettings(config.modal_settings || config.modalSettings || []);
+  const settingsByPermission = {
+    'marketing.bonus_base.update': {
+      bonus_program_enabled: settings.bonus_program_enabled,
+      bonus_program_name_base: settings.bonus_program_name_base,
+      bonus_program_logo_base: settings.bonus_program_logo_base,
+    },
+    'marketing.bonus_paid.update': {
+      bonus_program_name_paid: settings.bonus_program_name_paid,
+      bonus_program_logo_paid: settings.bonus_program_logo_paid,
+    },
+    'marketing.referrals.update': {
+      referral_program_enabled: settings.referral_program_enabled,
+      referral_registration_reward: settings.referral_registration_reward,
+      referral_first_purchase_reward: settings.referral_first_purchase_reward,
+      referral_card_main_color: settings.referral_card_main_color,
+      referral_card_base_color: settings.referral_card_base_color,
+      referral_card_content_color: settings.referral_card_content_color,
+      referral_card_button_color: settings.referral_card_button_color,
+      referral_card_qr_enabled: settings.referral_card_qr_enabled,
+      referral_card_title_background_enabled: settings.referral_card_title_background_enabled,
+      referral_card_title_background_color: settings.referral_card_title_background_color,
+      referral_card_title_background_opacity: settings.referral_card_title_background_opacity,
+    },
+    'marketing.bonus_settings.update': {
+      bonus_point_amount: settings.bonus_point_amount,
+      bonus_ruble_amount: settings.bonus_ruble_amount,
+      bonus_point_rate: settings.bonus_point_rate,
+      allow_redeem_and_accrue: settings.allow_redeem_and_accrue,
+      bonus_coin_name: settings.bonus_coin_name,
+      bonus_coin_logo: settings.bonus_coin_logo,
+    },
+  };
+  return {
+    settingsByPermission,
+    baseLevels: levels.filter((level) => level.access_type !== 'paid'),
+    paidLevels: levels.filter((level) => level.access_type === 'paid'),
+    referralLevels,
+    categoryGroups,
+    modalSettings,
+  };
+}
+
+function changedBonusConfigPermissions(currentConfig, nextPayload) {
+  const current = normalizedConfigParts(currentConfig);
+  const next = normalizedConfigParts(nextPayload);
+  const changed = new Set();
+  Object.keys(next.settingsByPermission).forEach((permissionKey) => {
+    if (!sameConfigValue(current.settingsByPermission[permissionKey], next.settingsByPermission[permissionKey])) {
+      changed.add(permissionKey);
+    }
+  });
+  if (!sameConfigValue(current.baseLevels, next.baseLevels)) changed.add('marketing.bonus_base.update');
+  if (!sameConfigValue(current.paidLevels, next.paidLevels)) changed.add('marketing.bonus_paid.update');
+  if (!sameConfigValue(current.referralLevels, next.referralLevels)) changed.add('marketing.referrals.update');
+  if (!sameConfigValue(current.categoryGroups, next.categoryGroups)
+      || !sameConfigValue(current.modalSettings, next.modalSettings)) {
+    changed.add('marketing.bonus_settings.update');
+  }
+  return Array.from(changed);
+}
+
 function toMysqlDateTime(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) return null;
@@ -1500,7 +1571,7 @@ async function buildCustomerBonusCard({ db, tenantId, customerId }) {
   };
 }
 
-module.exports = function makeAdminBonusRouter({ db, helpers }) {
+module.exports = function makeAdminBonusRouter({ db, helpers, can }) {
   const router = express.Router();
 
   router.post('/customers/:customerId/join', async (req, res) => {
@@ -1667,6 +1738,14 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
   router.put('/config', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const current = await loadConfig(db, tenantId);
+      const requiredPermissions = changedBonusConfigPermissions(current, req.body || {});
+      for (const permissionKey of requiredPermissions) {
+        const grant = await can(req.user, permissionKey);
+        if (!grant.allowed) {
+          return res.status(403).json({ ok: false, error: grant.error || 'FORBIDDEN' });
+        }
+      }
       await saveConfig(db, tenantId, req.body || {});
       const data = await loadConfig(db, tenantId);
       return res.json({ ok: true, ...data });
@@ -1684,3 +1763,4 @@ module.exports = function makeAdminBonusRouter({ db, helpers }) {
 };
 
 module.exports.buildCustomerBonusCard = buildCustomerBonusCard;
+module.exports.changedBonusConfigPermissions = changedBonusConfigPermissions;

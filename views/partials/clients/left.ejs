@@ -7,7 +7,7 @@
     <div class="clients-accordion" id="clientsAccordion">
       <!-- Аккордеон Клиенты -->
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="marketing.clients">
           <span class="stage-icon"><i class="fas fa-users"></i></span>
           <span class="stage-meta stage-text"><b>Клиенты</b></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -19,7 +19,7 @@
 
           <!-- Кнопка "Выборки" для открытия списка кастомных фильтров -->
           <div class="acc-panel-inner">
-            <button class="stage-item is-dashed" type="button" id="openFilterCategoriesBtn">
+            <button class="stage-item is-dashed" type="button" id="openFilterCategoriesBtn" data-rbac-node="marketing.segments">
               <span class="stage-icon"><i class="fas fa-plus"></i></span>
               <span class="stage-meta stage-text"><b>Выборки</b></span>
               <span class="acc-spacer"></span>
@@ -30,7 +30,7 @@
 
       <!-- Аккордеон Скидки -->
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="marketing.discounts">
           <span class="stage-icon"><i class="fas fa-percentage"></i></span>
           <span class="stage-meta stage-text"><b>Скидки</b></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -43,7 +43,7 @@
       </div>
 
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="marketing.banners">
           <span class="stage-icon"><i class="fas fa-images"></i></span>
           <span class="stage-meta stage-text"><b>Баннеры</b></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -55,7 +55,7 @@
       </div>
 
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="marketing.bonus">
           <span class="stage-icon"><i class="fas fa-gift"></i></span>
           <span class="stage-meta stage-text"><b>Бонусы</b></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -63,23 +63,23 @@
 
         <div class="acc-panel" data-acc-panel style="max-height:0;">
           <div class="acc-panel-inner">
-            <button class="stage-item" type="button" id="bonusCardsBtn">
+            <button class="stage-item" type="button" id="bonusCardsBtn" data-rbac-node="marketing.bonus_base">
               <span class="stage-meta stage-text"><b>Базовый тариф</b></span>
               <span class="acc-spacer"></span>
             </button>
-            <button class="stage-item" type="button" id="bonusPaidTariffBtn">
+            <button class="stage-item" type="button" id="bonusPaidTariffBtn" data-rbac-node="marketing.bonus_paid">
               <span class="stage-meta stage-text"><b>Платный тариф</b></span>
               <span class="acc-spacer"></span>
             </button>
-            <button class="stage-item" type="button" id="bonusReferralsBtn">
+            <button class="stage-item" type="button" id="bonusReferralsBtn" data-rbac-node="marketing.referrals">
               <span class="stage-meta stage-text"><b>Рефералы</b></span>
               <span class="acc-spacer"></span>
             </button>
-            <button class="stage-item" type="button" id="bonusProgramsBtn">
+            <button class="stage-item" type="button" id="bonusProgramsBtn" data-rbac-node="marketing.bonus_programs">
               <span class="stage-meta stage-text"><b>Бонусы</b></span>
               <span class="acc-spacer"></span>
             </button>
-            <button class="stage-item" type="button" id="bonusSettingsNavBtn">
+            <button class="stage-item" type="button" id="bonusSettingsNavBtn" data-rbac-node="marketing.bonus_settings">
               <span class="stage-meta stage-text"><b>Настройки</b></span>
               <span class="acc-spacer"></span>
             </button>
@@ -88,7 +88,7 @@
       </div>
 
       <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger data-rbac-node="marketing.subscriptions">
           <span class="stage-icon"><i class="fas fa-calendar-check"></i></span>
           <span class="stage-meta stage-text"><b>Подписка</b></span>
           <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
@@ -96,15 +96,15 @@
 
         <div class="acc-panel" data-acc-panel style="max-height:0;">
           <div class="acc-panel-inner">
-            <button class="stage-item" type="button" id="subscriptionHistoryBtn">
+            <button class="stage-item" type="button" id="subscriptionHistoryBtn" data-rbac-node="marketing.subscription_history">
               <span class="stage-meta stage-text"><b>История подписок</b></span>
               <span class="acc-spacer"></span>
             </button>
-            <button class="stage-item" type="button" id="subscriptionSettingsBtn">
+            <button class="stage-item" type="button" id="subscriptionSettingsBtn" data-rbac-node="marketing.subscription_plans">
               <span class="stage-meta stage-text"><b>Настройка подписки</b></span>
               <span class="acc-spacer"></span>
             </button>
-            <button class="stage-item" type="button" id="subscriptionInfoBtn">
+            <button class="stage-item" type="button" id="subscriptionInfoBtn" data-rbac-node="marketing.subscription_info">
               <span class="stage-meta stage-text"><b>Информация</b></span>
               <span class="acc-spacer"></span>
             </button>
@@ -113,7 +113,7 @@
       </div>
 
       <div class="acc-item">
-        <button class="stage-item" type="button" id="importantMessagesBtn">
+        <button class="stage-item" type="button" id="importantMessagesBtn" data-rbac-node="marketing.broadcasts">
           <span class="stage-icon"><i class="fas fa-bullhorn"></i></span>
           <span class="stage-meta stage-text"><b style="white-space:nowrap;">Promo рассылки</b></span>
           <span class="acc-spacer"></span>
