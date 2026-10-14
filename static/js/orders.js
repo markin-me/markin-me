@@ -649,6 +649,7 @@
         enableClientLink: true,
         treatOrderCommentAsAddressComment: isCourierWorkspace,
         helpers: {
+          apiJson,
           money,
           formatDateTime,
           formatDateTimeNumeric,
@@ -682,6 +683,7 @@
         enableClientLink: true,
         treatOrderCommentAsAddressComment: isCourierWorkspace,
         helpers: {
+          apiJson,
           money,
           formatDateTime,
           formatDateTimeNumeric,
@@ -6387,7 +6389,9 @@
     const isCash = paymentCode.includes("cash");
     const isFullyRefunded = isOrderFullyRefunded(order);
     const paymentIconHtml = renderOrderPaymentIcon(order);
-    const paymentStatusText = isFullyRefunded ? "Возврат" : (isPaidOrder(order) ? "Оплачено" : "Не оплачено");
+    const paymentStatusText = order.paymentSummary && window.SharedOrderPayment
+      ? window.SharedOrderPayment.stateTitle(order.paymentSummary)
+      : isFullyRefunded ? "Возврат" : (isPaidOrder(order) ? "Оплачено" : "Не оплачено");
     const paymentStateClass = isFullyRefunded
       ? "order-payment-refund"
       : (isPaidOrder(order) ? "order-payment-paid" : "order-payment-unpaid");

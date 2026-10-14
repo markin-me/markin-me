@@ -51,6 +51,7 @@ const {
 const { searchSystemMapGeocoder, searchSystemAddressSuggest } = require('./data/map-geocoder');
 const { searchLocalAddressSuggest } = require('./data/local-address-index');
 const presenceService = require('./services/presence');
+const { createPaymentServiceClient } = require('./data/payment-service-client');
 const {
   isAddressServiceConfigured,
   suggestCities: suggestAddressServiceCities,
@@ -68,6 +69,7 @@ const makeAdminImportantMessagesRouter = require('./api/admin/importantMessages'
 const makeAdminOrdersRouter = require('./api/admin/orders');
 const makeAdminProductsRouter = require('./api/admin/products');
 const makeAdminTenantRouter = require('./api/admin/tenant');
+const makePaymentConnectionsRouter = require('./api/admin/paymentConnections');
 const makeAdminStockRouter = require('./api/admin/stock');
 const makeAdminTeamRouter = require('./api/admin/team');
 const makePublicShopRouter = require('./api/public/shop');
@@ -85,6 +87,8 @@ const { authMiddleware, requirePermission, userHasStore, can, isUserSessionActiv
 const app = express();
 // Only trusted reverse proxies may supply client IP/protocol for login limits and HTTPS checks.
 app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
+app.use('/internal/v1/payment-events',require('./api/paymentEvents')());
+app.set('paymentServiceClient', createPaymentServiceClient());
 const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '2';
 const APP_CACHE_VERSION = String(TELEGRAM_APP_VERSION || '1.9.23').trim() || '1.9.23';
 const STATIC_ASSET_VERSION = String(
@@ -1955,7 +1959,9 @@ app.post('/api/max/webhook', (req, res) => {
 // ------------------------------
 // API: Public (публичные роуты должны быть ПЕРЕД админскими)
 // ------------------------------
-const publicShopRouter = makePublicShopRouter({ db, helpers, ordersEvents, presenceService });
+const publicShopRouter = makePublicShopRouter({ db, helpers, ordersEvents, presenceService, paymentServiceClient: app.get('paymentServiceClient') });
+app.set('synchronizeOrderOnlinePayment',publicShopRouter.synchronizeOnlinePayment);
+publicShopRouter.startPaymentReleaseWorker();
 app.use('/api/public', publicShopRouter);
 app.use('/api/print', makePrintApiRouter({ db, helpers }));
 
@@ -2147,8 +2153,11 @@ app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessa
   ensurePushSubscriptionsTable: makeChatTempRouter.ensurePushSubscriptionsTable,
   sendPushToSubscriptions: makeChatTempRouter.sendPushToSubscriptions,
 }));
-app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents, can }));
+const adminOrdersRouter=makeAdminOrdersRouter({db,helpers,ordersEvents,can});
+publicShopRouter.setAbandonedCleanup(()=>adminOrdersRouter.cleanupAbandoned(app.get('paymentServiceClient')));
+app.use('/api/admin/orders', authMiddleware, adminOrdersRouter);
 app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers, can }));
+app.use('/api/admin/payment-connections', authMiddleware, makePaymentConnectionsRouter({ db }));
 app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents, can }));
 app.use('/api/admin/team', authMiddleware, makeAdminTeamRouter({ db, helpers, requirePermission }));
 
@@ -3137,4 +3146,3 @@ server.on('error', (err) => {
   }
   process.exit(1);
 });
-

@@ -31580,6 +31580,11 @@ body.page-kso .shop-products-panel{
 .app-modal.shop-order-modal .app-modal-body { background: var(--color-surface); }
 .shop-order-modal-footer { flex-shrink: 0; padding: 12px 16px; margin: 0; border-top: 1px solid var(--color-border); background: var(--color-white, #fff); }
 .shop-order-modal-footer #shopOrderDetailsTotalBtn { border-radius: 999px; background: var(--shop-buy, #f97316); box-shadow: 0 10px 22px rgba(249,115,22,.18); }
+.shop-order-payment-status { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; font-weight: 600; }
+.shop-order-payment-status.is-paid { color: #15803d; background: #dcfce7; }
+.shop-order-payment-status.is-unpaid { color: #9a3412; background: #ffedd5; }
+.shop-order-payment-actions { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+#shopOrderDetailsTotalBtn.is-order-paid, #shopMobileOrderTotalBtn.is-order-paid { background: #16a34a; color: #fff; opacity: 1; box-shadow: none; }
 .shop-order-card-leaving { pointer-events: none; animation: shopOrderCardOut 200ms ease both; }
 @keyframes shopOrderScaleIn { from { transform: scale(.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes shopOrderSlideIn { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }

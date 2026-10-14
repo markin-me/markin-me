@@ -94,7 +94,7 @@ async function authFetch(url, options = {}) {
     const section = String(document.body.getAttribute('data-settings-section') || 'tenant');
     const sectionNodes = {
       tenant: 'settings.company', stores: 'settings.stores', delivery: 'settings.delivery',
-      site: 'settings.site', chats: 'settings.chat', api: 'settings.api',
+      site: 'settings.site', chats: 'settings.chat', api: 'settings.api', payments: 'settings.payments',
       'print-templates': 'settings.print_templates', 'production-zones': 'settings.production_zones',
       system: 'settings.system',
     };

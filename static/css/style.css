@@ -6581,6 +6581,12 @@ body.page-orders .order-id-select-hit{cursor:inherit;}
   justify-content:center;
 }
 .settings-card{border:1px solid var(--color-border)}
+#settingsPaymentPanel .settings-site-field{display:grid;gap:6px;min-width:0}
+#settingsPaymentPanel .settings-payment-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+#settingsPaymentPanel .settings-panel-scroll{scrollbar-width:none}
+#settingsPaymentConnections .order-col{min-width:0}
+#settingsPaymentConnections .muted{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:480px){#settingsPaymentPanel .settings-payment-grid{grid-template-columns:1fr}}
 .settings-home-card{
   width:100%;
   min-width:0;

@@ -313,6 +313,7 @@
       return order.refundable_items.map(function (item) {
         return {
           source_item_index: Number(item && item.source_item_index || 0),
+          fiscal_exact_units:item?.fiscal_exact_units===true,
           title: String(item && (item.title || item.name || item.product_name) || 'Позиция').trim() || 'Позиция',
           original_qty: Number(item && item.original_qty || 0) || 0,
           refunded_qty: Number(item && item.refunded_qty || 0) || 0,
@@ -350,6 +351,11 @@
     var remainingLineTotal = roundMoney(item && item.remaining_line_total || 0);
     var originalLineTotal = roundMoney(item && item.original_line_total || 0);
     if (!(numericQty > 0) || !(remainingQty > 0) || !(originalQty > 0)) return 0;
+    if(item.fiscal_exact_units) {
+      var cents=Math.round(originalLineTotal*100),unit=Math.floor(cents/originalQty),low=originalQty-(cents%originalQty),already=originalQty-remainingQty;
+      var prefix=function(count){return unit*Math.min(count,low)+(unit+1)*Math.max(0,count-low);};
+      return (prefix(already+Math.min(numericQty,remainingQty))-prefix(already))/100;
+    }
     if (numericQty >= remainingQty) return remainingLineTotal;
     var proportional = roundMoney((originalLineTotal * numericQty) / originalQty);
     return proportional > remainingLineTotal ? remainingLineTotal : proportional;
@@ -688,6 +694,8 @@
     if (code === 'BAD_CHANGE_FROM') return 'Сумма от клиента должна быть больше суммы заказа';
     if (code === 'BAD_IS_PAID') return 'Не удалось подтвердить оплату';
     if (code === 'NOT_FOUND') return 'Заказ не найден';
+    if(code==='ONLINE_PAYMENT_MANAGED_BY_GATEWAY')return 'Онлайн-оплата подтверждается платёжным сервисом. Используйте проверку статуса в карточке заказа.';
+    if(code==='ONLINE_REFUND_REQUIRES_PAYMENT_SERVICE')return 'Возврат онлайн-оплаты будет доступен через платёжный сервис после подключения возвратов.';
     return code || 'Не удалось принять оплату';
   }
 
@@ -881,7 +889,10 @@
 
   function createRefundModalController(options) {
     var order = options && options.order ? options.order : null;
+    var gateway = Number(order && order.online_payment_required) === 1;
+    var refundRequestKey = gateway ? crypto.randomUUID() : null;
     var paymentMethods = Array.isArray(options && options.paymentMethods) ? options.paymentMethods : [];
+    if(gateway)paymentMethods=paymentMethods.filter(function(item){return item.code==='online';});
     var money = typeof (options && options.money) === 'function'
       ? options.money
       : function (value) { return String(roundMoney(value || 0)) + ' ₽'; };
@@ -904,7 +915,8 @@
     var host = document.createElement('div');
     var currentError = '';
     var draft = {
-      paymentCode: availableCodes.indexOf(defaultPaymentCode) !== -1 ? defaultPaymentCode : (availableCodes[0] || defaultPaymentCode || 'cash'),
+      paymentCode: gateway?'online':availableCodes.indexOf(defaultPaymentCode) !== -1 ? defaultPaymentCode : (availableCodes[0] || defaultPaymentCode || 'cash'),
+      receiptEmail:'',
       comment: '',
       selectedByIndex: {},
     };
@@ -1034,6 +1046,7 @@
             '<textarea class="control cash-refund-textarea" rows="3" placeholder="Например: клиент отказался от позиции" data-refund-comment>' + escapeHtml(draft.comment) + '</textarea>' +
           '</label>' +
         '</div>' +
+        (gateway ? '<label class="cash-payment-input-card">Email для чека возврата<input class="control" type="email" maxlength="254" value="'+escapeHtml(draft.receiptEmail)+'" data-refund-email></label><label><input type="checkbox" data-refund-confirm> Подтверждаю возврат денег через ЮKassa</label>' : '') +
         '<div class="cash-modal-error hidden" data-cash-payment-error></div>';
       setError(currentError);
     }
@@ -1079,6 +1092,8 @@
     });
 
     host.addEventListener('input', function (event) {
+      var emailField=event.target && event.target.closest('[data-refund-email]');
+      if(emailField){draft.receiptEmail=emailField.value;return;}
       var commentField = event.target && event.target.closest('[data-refund-comment]');
       if (!commentField) return;
       draft.comment = String(commentField.value || '');
@@ -1090,6 +1105,10 @@
     return {
       host: host,
       getPayload: function () {
+        if (gateway && !host.querySelector('[data-refund-confirm]')?.checked) {
+          setError('Подтвердите возврат денег через ЮKassa');
+          return null;
+        }
         var items = refundableItems.map(function (item) {
           var qty = getSelectedQty(item);
           if (!(qty > 0)) return null;
@@ -1108,6 +1127,7 @@
         }
         setError('');
         return {
+          ...(gateway ? {confirmed:true,refund_request_key:refundRequestKey,receipt_email:String(host.querySelector('[data-refund-email]')?.value || '').trim() || null} : {}),
           payment_code: String(draft.paymentCode || '').trim(),
           comment: String(draft.comment || '').trim() || null,
           items: items,
@@ -1242,7 +1262,7 @@
 
     return latestOrderPromise.then(function (latestOrder) {
       var resolvedOrder = latestOrder || order || null;
-      var paid = isPaidOrderFn(resolvedOrder);
+      var paid = isPaidOrderFn(resolvedOrder) || (Number(resolvedOrder && resolvedOrder.online_payment_required) === 1 && Number(resolvedOrder && resolvedOrder.paymentSummary && resolvedOrder.paymentSummary.paidAmount) > 0);
       var refundState = getRefundState(resolvedOrder);
       var refundableTotal = roundMoney(resolvedOrder && resolvedOrder.refundable_total != null ? resolvedOrder.refundable_total : 0);
       var mode = paid ? 'refund' : 'payment';
@@ -1367,6 +1387,12 @@
   }
 
   window.SharedOrderPayment = {
+    stateTitle: function(summary) {
+      if(summary?.amountMismatch)return 'Сумма заказа отличается от оплаты';
+      if(summary?.anomalies?.length)return 'Требуется проверка оплаты';
+      if(summary?.source==='manual' && summary.state==='paid')return 'Оплачено вручную';
+      return ({unpaid:'Не оплачено',created:'Подготавливаем оплату',pending:'Платёж обрабатывается',waiting_for_confirmation:'Ожидает оплаты',paid:'Оплачено онлайн',failed:'Оплата не прошла',cancelled:'Оплата не завершена',partially_refunded:'Частичный возврат',refunded:'Возвращено',not_required:'Оплата не требуется'})[summary?.state] || 'Ожидает оплаты';
+    },
     open: open,
     getRefundState: getRefundState,
     getRefundStateTitle: getRefundStateTitle,

@@ -56,6 +56,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can
   };
   const subdomainRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
   const tenantFieldPermissions = Object.freeze({
+    online_receipt_config: 'settings.payments.manage',
     timezone: 'settings.company.update',
     name: 'settings.company.update',
     email: 'settings.company.update',
@@ -3901,7 +3902,21 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.status(400).json({ ok: false, error: 'TENANT_FIELD_UNSUPPORTED', fields: unsupportedFields });
       }
       const requiredPermissions = requestedFields.map((field) => tenantFieldPermissions[field]);
+      if (requestedFields.includes('online_receipt_config')) requiredPermissions.push('settings.payments.access');
       if (!await requireTenantPermissions(req, res, requiredPermissions)) return;
+      if(Object.prototype.hasOwnProperty.call(req.body,'online_receipt_config')) {
+        if(Object.keys(req.body).length!==1)return res.status(400).json({ok:false,error:'INVALID_RECEIPT_CONFIG'});
+        const cfg=req.body.online_receipt_config;
+        if(cfg!==null && (typeof cfg!=='object' || Array.isArray(cfg) || cfg.provider!=='yookassa'
+          || Object.keys(cfg).some(key=>!['provider','taxSystemCode','vatCode','deliveryVatCode','paymentMode','paymentSubject'].includes(key))
+          || !Number.isInteger(cfg.taxSystemCode) || ![1,2,3,5,6].includes(cfg.taxSystemCode)
+          || !Number.isInteger(cfg.vatCode) || cfg.vatCode<1 || cfg.vatCode>12
+          || !Number.isInteger(cfg.deliveryVatCode) || cfg.deliveryVatCode<1 || cfg.deliveryVatCode>12
+          || !['full_prepayment','full_payment'].includes(cfg.paymentMode)
+          || !['commodity','service'].includes(cfg.paymentSubject)))return res.status(400).json({ok:false,error:'INVALID_RECEIPT_CONFIG'});
+        await db.query("UPDATE ten_tenants SET online_receipt_config=? WHERE id=?",[cfg===null?null:JSON.stringify(cfg),tenantId]);
+        return res.json({ok:true,online_receipt_config:cfg});
+      }
       const timezone = helpers.strOrNull(req.body.timezone);
       const name = req.body.name !== undefined ? helpers.strOrNull(req.body.name) : undefined;
       const email = req.body.email !== undefined ? helpers.strOrNull(req.body.email) : undefined;
@@ -4804,6 +4819,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
     }
   });
 
+  async function hasOperationalOnlineRoute(req,tenantId) {
+    const [stores]=await db.query("SELECT id FROM ten_stores WHERE tenant_id=? AND is_active=1",[tenantId]);
+    const results=await Promise.all(stores.map(async store=>{
+      try{return (await req.app.get('paymentServiceClient').checkoutAvailability({tenantId,storeId:store.id})).available===true;}
+      catch(error){if(error.code?.startsWith('PAYMENT_'))return false;throw error;}
+    }));
+    return results.some(Boolean);
+  }
   router.get('/order-payments', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -4816,7 +4839,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
          ORDER BY sort ASC, id ASC`,
         [tenantId]
       );
-      res.json({ ok: true, items: rows || [] });
+      const canEnableOnline=rows.some(row=>row.code==='online') ? await hasOperationalOnlineRoute(req,tenantId) : false;
+      res.json({ ok: true, items: (rows || []).map(row=>row.code==='online'?{...row,can_enable_online:canEnableOnline}:row) });
     } catch (err) {
       console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ СЃРїРѕСЃРѕР±РѕРІ РѕРїР»Р°С‚С‹:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -4881,6 +4905,11 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const title = req.body.title !== undefined ? helpers.strOrNull(req.body.title) : undefined;
       const icon = cfg.hasIcon !== false && req.body.icon !== undefined ? helpers.strOrNull(req.body.icon) : undefined;
       const isActive = req.body.is_active !== undefined ? (helpers.toBool(req.body.is_active, true) ? 1 : 0) : undefined;
+      if(type==='order-payments' && isActive===1){
+        const [methods]=await db.query("SELECT code FROM order_payments WHERE tenant_id=? AND store_id=1 AND id=?",[tenantId,id]);
+        if(methods[0]?.code==='online' && !(await hasOperationalOnlineRoute(req,tenantId)))
+          return res.status(409).json({ok:false,error:'ONLINE_PAYMENT_NOT_AVAILABLE'});
+      }
       const isFinal = cfg.hasFinal && req.body.is_final !== undefined ? (helpers.toBool(req.body.is_final, false) ? 1 : 0) : undefined;
       const defaultField = cfg.defaultField;
       const isDefault = defaultField && req.body[defaultField] !== undefined

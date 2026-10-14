@@ -17,6 +17,43 @@
         <div class="info-text">Откройте нужный раздел слева, чтобы увидеть настройки.</div>
       </div>
 
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPaymentPanel">
+        <div class="settings-panel-scroll hidden" id="settingsPaymentProviderCatalog"><div class="info-title">Новое подключение</div><p class="muted">Выберите платёжный сервис</p><div id="settingsPaymentProviderOptions"></div></div>
+        <form class="settings-site-form settings-panel-scroll" id="settingsPaymentForm" autocomplete="off">
+          <div class="info-title">Платёжное подключение</div>
+          <label class="settings-site-field hidden">Провайдер<select class="control" name="provider" required></select></label>
+          <div class="info-title">Подключение</div>
+          <label class="settings-site-field">Название<input class="control" name="name" maxlength="150" required /></label>
+          <label class="settings-site-field">Филиалы<select class="control" name="scope"><option value="all">Все филиалы</option><option value="selected">Выбранные филиалы</option></select></label>
+          <div id="settingsPaymentStores"></div>
+          <div class="info-title">Доступ ЮKassa</div>
+          <div class="settings-payment-grid">
+          <label class="settings-site-field">Режим<select class="control" name="environment"><option value="test">Тестовый</option><option value="live">Боевой</option></select></label>
+          <label class="settings-site-field">Shop ID<input class="control" name="shopId" inputmode="numeric" pattern="[1-9][0-9]{0,31}" required /></label>
+          </div>
+          <label class="settings-site-field">Secret Key<input class="control" name="secretKey" type="password" maxlength="512" autocomplete="new-password" /><span class="muted" id="settingsPaymentSecretStatus"></span></label>
+          <div><button type="button" class="control" id="settingsPaymentSecretShow">Показать ключ</button> <button type="button" class="control" id="settingsPaymentSecretCopy" disabled>Скопировать</button><input class="control hidden" id="settingsPaymentSecretRevealed" readonly autocomplete="off" aria-label="Сохранённый Secret Key" /></div>
+          <label class="switch"><input class="switch-input" name="enabled" type="checkbox" /><span class="switch-ui"></span><span class="switch-text">Подключение включено</span></label>
+          <p class="muted" id="settingsPaymentVerification">Не проверено</p>
+          <button class="btn btn-secondary" id="settingsPaymentVerify" type="button" disabled title="Сначала сохраните подключение">Проверить подключение</button>
+          <p class="muted" id="settingsPaymentVerifiedAt"></p>
+          <div id="settingsPaymentCapabilities"></div>
+          <section id="settingsPaymentWebhook">
+            <div class="info-title">HTTP-уведомления</div>
+            <p class="muted">В личном кабинете ЮKassa откройте «Интеграция → HTTP-уведомления», укажите адрес ниже и выберите три события.</p>
+            <label class="settings-site-field">Адрес уведомлений<input class="control" id="settingsPaymentWebhookUrl" readonly aria-label="Адрес HTTP-уведомлений ЮKassa" /></label>
+            <div><button type="button" class="control" id="settingsPaymentWebhookCopy" disabled>Скопировать адрес</button> <button type="button" class="control" id="settingsPaymentWebhookRefresh">Обновить информацию</button></div>
+            <p class="muted" id="settingsPaymentWebhookStatus"></p>
+            <ul><li>payment.succeeded</li><li>payment.canceled</li><li>payment.waiting_for_capture</li></ul>
+            <p class="muted" id="settingsPaymentWebhookLast"></p>
+            <p class="muted">Проверка реквизитов подключения не проверяет настройку уведомлений в ЮKassa.</p>
+          </section>
+          <p class="muted" id="settingsPaymentHistory"></p>
+          <p class="muted">Подключение не включает способ «Онлайн» в существующих способах оплаты.</p>
+          <p role="alert" id="settingsPaymentError"></p>
+        </form>
+        <div class="panel-footer"><div class="stores-form-actions settings-footer-actions"><button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsPaymentCancel">Отмена</button><button class="settings-footer-btn settings-footer-btn--save" type="submit" form="settingsPaymentForm" id="settingsPaymentSave">Сохранить</button><button class="settings-footer-btn settings-footer-btn--delete" type="button" id="settingsPaymentArchive">Архивировать</button></div></div>
+      </div>
       <div class="info-card hidden" id="settingsStoreEmpty">
         <div class="info-title">Филиалы</div>
         <div class="info-text">Выберите точку слева, чтобы посмотреть и изменить её данные.</div>
@@ -1919,6 +1956,31 @@
           </div>
         </div>
         <div class="settings-list" data-settings-list="order-payments"></div>
+
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsOnlineReceiptsPanel">
+        <form class="settings-site-form" id="settingsOnlineReceiptForm">
+          <h3>Чеки онлайн-оплаты</h3>
+          <p class="muted">Общие параметры компании для чеков онлайн-оплаты. Настройки хранятся отдельно от платёжных подключений.</p>
+          <label class="settings-site-field">Формирование чеков
+            <select class="control" data-receipt-input="provider"><option value="">Не настроено</option><option value="yookassa">Через ЮKassa</option></select>
+          </label>
+          <label class="settings-site-field">Система налогообложения
+            <select class="control" data-receipt-input="taxSystemCode"><option value="">Выберите</option><option value="1">Общая система</option><option value="2">УСН — доходы</option><option value="3">УСН — доходы минус расходы</option><option value="5">ЕСХН</option><option value="6">Патент</option></select>
+          </label>
+          <label class="settings-site-field">НДС товаров <select class="control" data-receipt-input="vatCode"></select></label>
+          <label class="settings-site-field">НДС доставки <select class="control" data-receipt-input="deliveryVatCode"></select></label>
+          <label class="settings-site-field">Признак способа расчёта
+            <select class="control" data-receipt-input="paymentMode"><option value="">Выберите</option><option value="full_prepayment">Полная предоплата</option><option value="full_payment">Полный расчёт</option></select>
+          </label>
+          <label class="settings-site-field">Предмет расчёта товаров
+            <select class="control" data-receipt-input="paymentSubject"><option value="">Выберите</option><option value="commodity">Товар</option><option value="service">Услуга</option></select>
+          </label>
+          <p class="muted">Для каталога с разными ставками НДС необходимы налоговые параметры по позициям. Общая ставка не заменяет их. Live-оплата включается после проверки интеграции.</p>
+          <p role="status" data-receipt-status></p>
+          <button type="submit" class="btn btn-primary">Сохранить настройки чеков</button>
+        </form>
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsOrderDeliveryPanel">

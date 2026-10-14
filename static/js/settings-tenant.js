@@ -5141,6 +5141,12 @@
 
 
       const tenant = data.tenant;
+      const receiptForm=document.getElementById("settingsOnlineReceiptForm");
+      if(receiptForm && receiptForm.dataset.dirty!=="1") {
+        const raw=tenant.online_receipt_config;
+        const config=typeof raw==='string' ? JSON.parse(raw) : raw || {};
+        receiptForm.querySelectorAll('[data-receipt-input]').forEach(input=>{input.value=config[input.dataset.receiptInput] ?? '';});
+      }
 
 
 
@@ -6263,7 +6269,7 @@
 
 
 
-  document.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener("DOMContentLoaded", async () => {
     initCorporateLoginSuffix();
 
 
@@ -6285,6 +6291,345 @@
 
 
     const settingsApiAddBtn = document.getElementById("settingsApiAddBtn");
+    const paymentSettings = { ready: false, providers: [], items: [], drafts: new Map(), permissions: { read: false, manage: false } };
+    const paymentForm = document.getElementById("settingsPaymentForm");
+    const paymentAccess = window.AdminAccessContext || await window.AdminAccessContextPromise;
+    if (!paymentAccess || paymentAccess.ok !== true) {
+      console.error("SETTINGS_ACCESS_CONTEXT_FAILED");
+      return;
+    }
+    const paymentKeys = new Set((paymentAccess.permissions || []).map(item => typeof item === "string" ? item : item.key));
+    const paymentFullAccess = paymentKeys.has("*");
+    const paymentSectionAccess = paymentFullAccess || paymentKeys.has("settings.payments.access");
+    const paymentNav = document.querySelector('[data-settings-section="payments"]');
+    if (paymentNav) paymentNav.classList.toggle("hidden", !paymentSectionAccess);
+    paymentSettings.permissions.manage = paymentSectionAccess && (paymentFullAccess || paymentKeys.has("settings.payments.manage"));
+    paymentSettings.permissions.read = paymentSectionAccess && (paymentFullAccess || paymentKeys.has("settings.payments.read"));
+
+    async function paymentRequest(path = "", method = "GET", body) {
+      const scope = getSettingsTenantScope();
+      const response = await authFetch(`/api/admin/payment-connections${path}`, {
+        method, cache: "no-store", ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error?.code || result.error || "PAYMENT_SERVICE_UNAVAILABLE");
+      if (scope !== getSettingsTenantScope()) throw new Error("PAYMENT_SCOPE_CHANGED");
+      if (Object.prototype.hasOwnProperty.call(result, "permissions")) {
+        if (!result.permissions || typeof result.permissions.read !== "boolean" || typeof result.permissions.manage !== "boolean") {
+          throw new Error("PAYMENT_SERVICE_INVALID_RESPONSE");
+        }
+        paymentSettings.permissions = result.permissions;
+      }
+      return result.data;
+    }
+    async function loadPaymentSettings() {
+      const scope = getSettingsTenantScope();
+      const [providers, items] = await Promise.all([paymentRequest("/providers"), paymentRequest()]);
+      if (!storesState.loaded) await loadStores();
+      if (!storesState.loaded) throw new Error("LOAD_STORES_FAILED");
+      if (scope !== getSettingsTenantScope()) return;
+      if (!Array.isArray(providers) || !providers.length || !Array.isArray(items)) throw new Error("PAYMENT_SERVICE_INVALID_RESPONSE");
+      paymentSettings.providers = providers;
+      paymentSettings.items = items;
+      paymentSettings.ready = true;
+      renderPaymentConnections();
+      syncSettingsCenterHeading(document.body.getAttribute("data-settings-section"));
+    }
+    async function openPaymentOperations() {
+      const scope=getSettingsTenantScope(),content=document.createElement("div");
+      const status=document.createElement("div"),refresh=document.createElement("button");
+      refresh.type="button";refresh.className="btn";refresh.textContent="Обновить диагностику";
+      content.append(status,refresh);
+      async function load() {
+        refresh.disabled=true;status.textContent="Загрузка диагностики…";
+        try {
+          const data=await paymentRequest("/operations/status");
+          if(scope!==getSettingsTenantScope())return;
+          status.replaceChildren();
+          const title=document.createElement("p");title.textContent=data.readiness==='READY'?'Готовность к live подтверждена настройкой допуска и текущей диагностикой.':`Готовность к live: заблокирована. ${(data.blockers || []).join(', ')}`;status.append(title);
+          const flags=document.createElement("p");flags.textContent=`Новые оплаты: ${data.flags.newPayments ? "включены" : "выключены"}. Webhook: ${data.flags.webhook ? "включён" : "выключен"}. Outbox: ${data.flags.outbox ? "включён" : "выключен"}.`;status.append(flags);
+          const alerts=document.createElement("p");alerts.textContent=data.alerts.length ? `Требует внимания: ${data.alerts.join(", ")}` : "Технических предупреждений в этом снимке нет.";status.append(alerts);
+          for(const item of data.attention) {
+            const row=document.createElement("p");row.textContent=`Заказ ${item.order_id}, платёж ${item.id}, ${item.environment}: ${item.errorCode || "manual_review"}`;
+            const retry=document.createElement("button");retry.type="button";retry.className="btn";retry.textContent="Проверить у провайдера";
+            retry.addEventListener("click",async()=>{
+              if(scope!==getSettingsTenantScope())return;
+              retry.disabled=true;
+              try{await paymentRequest(`/operations/payments/${item.id}/refresh`,"POST",{storeId:String(item.store_id)});await load();}
+              catch(error){row.textContent=paymentErrorText(error.message);}
+              finally{retry.disabled=false;}
+            });row.append(retry);status.append(row);
+          }
+          for(const item of data.duplicates) {
+            const row=document.createElement("p");row.textContent=`Заказ ${item.order_id}: успешных оплат ${item.successfulPayments} (${item.environment}). Требуется ручная проверка.`;status.append(row);
+          }
+          for(const item of data.refundAttention || []) {
+            const row=document.createElement('p');row.textContent=`Заказ ${item.order_id}, возврат ${item.id} (${item.environment}): ${item.status}, ${item.errorCode || item.origin}, чек ${item.receiptRegistration || 'не требуется'}.`;status.append(row);
+          }
+          for(const item of data.incidents || []) {
+            const row=document.createElement('p');row.textContent=`${item.queue} #${item.id}: ${item.errorCode || 'dead'}. `;
+            const confirm=document.createElement('input');confirm.type='checkbox';
+            const label=document.createElement('label');label.append(confirm,document.createTextNode('Подтверждаю повторную обработку'));
+            const replay=document.createElement('button');replay.type='button';replay.className='btn';replay.textContent='Повторить доставку';replay.disabled=true;
+            confirm.addEventListener('change',()=>{replay.disabled=!confirm.checked;});
+            replay.addEventListener('click',async()=>{
+              if(!confirm.checked || scope!==getSettingsTenantScope())return;
+              replay.disabled=true;
+              try{await paymentRequest('/operations/replay','POST',{queue:item.queue,id:String(item.id),confirmed:true});await load();}
+              catch(error){row.textContent=paymentErrorText(error.message);}
+            });row.append(label,replay);status.append(row);
+          }
+          const importTitle=document.createElement('p');importTitle.textContent='Сверить внешний возврат по идентификатору ЮKassa. Сумма и статус будут получены у провайдера.';
+          const storeId=document.createElement('input'),paymentId=document.createElement('input'),refundId=document.createElement('input');
+          [storeId,paymentId,refundId].forEach(input=>{input.className='control';input.type='text';});
+          storeId.placeholder='ID филиала';paymentId.placeholder='Внутренний Payment ID';refundId.placeholder='Refund ID из ЮKassa';refundId.maxLength=128;
+          const importConfirm=document.createElement('input');importConfirm.type='checkbox';const importLabel=document.createElement('label');importLabel.append(importConfirm,document.createTextNode('Подтверждаю сверку возврата'));
+          const importButton=document.createElement('button');importButton.type='button';importButton.className='btn';importButton.textContent='Проверить возврат';importButton.disabled=true;
+          importConfirm.addEventListener('change',()=>{importButton.disabled=!importConfirm.checked;});
+          const importError=document.createElement('p');
+          importButton.addEventListener('click',async()=>{
+            if(!importConfirm.checked || scope!==getSettingsTenantScope())return;importButton.disabled=true;
+            try{await paymentRequest('/operations/refunds/import','POST',{storeId:storeId.value.trim(),paymentId:paymentId.value.trim(),providerRefundId:refundId.value.trim(),confirmed:true});await load();}
+            catch(error){importError.textContent=paymentErrorText(error.message);importButton.disabled=false;}
+          });status.append(importTitle,storeId,paymentId,refundId,importLabel,importButton,importError);
+          const date=document.createElement("p");date.className="muted";date.textContent=`Снимок: ${data.asOf}. Агрегаты платежей — за последние 24 часа; обновление не чаще 30 секунд.`;status.append(date);
+        }catch(error){status.textContent=paymentErrorText(error.message);}
+        finally{refresh.disabled=false;}
+      }
+      refresh.addEventListener("click",load);
+      window.AppModal.open({title:"Диагностика платежей",content,saveText:"Закрыть",onSave:()=>true});
+      await load();
+    }
+    function renderPaymentConnections() {
+      const host = document.getElementById("settingsPaymentConnections");
+      if (!host) return;
+      host.replaceChildren();
+      if(paymentSettings.permissions.manage) {
+        const support=document.createElement("button");support.type="button";support.className="settings-home-card settings-card";
+        support.textContent="Диагностика платежей";support.addEventListener("click",openPaymentOperations);host.append(support);
+      }
+      if (!paymentSettings.items.length) {
+        const empty = document.createElement("p"); empty.className = "empty-state";
+        empty.textContent = "Платёжных подключений пока нет"; host.append(empty); return;
+      }
+      paymentSettings.items.forEach(item => {
+        const card = document.createElement("button"); card.type = "button"; card.className = "settings-home-card settings-card";
+        const logo = document.createElement("div"); logo.className = "product-avatar"; logo.textContent = "ЮK";
+        const main = document.createElement("div"); main.className = "order-col";
+        const title = document.createElement("div"); title.className = "product-title"; title.textContent = item.name;
+        const meta = document.createElement("div"); meta.className = "muted";
+        const branches = item.scope.type === "all" ? "Все филиалы" : item.scope.storeIds.map(id => storesState.items.find(store => String(store.id) === id)?.name || `Филиал ${id}`).join(", ");
+        meta.textContent = `${paymentSettings.providers.find(provider => provider.id === item.provider)?.title || item.provider} · ${branches} · ${item.environment === "test" ? "Тестовый" : "Боевой"}`;
+        const status = document.createElement("span"); status.className = "badge"; status.textContent = item.enabled ? "Включено" : "Выключено";
+        main.append(title, meta); card.append(logo, main, status);
+        card.addEventListener("click", () => openPaymentDraft(item.id)); host.append(card);
+      });
+    }
+    async function openPaymentDraft(id) {
+      const existing = id && `payment-${id}`;
+      if (existing && paymentSettings.drafts.has(existing)) { ensureTab(existing, paymentSettings.drafts.get(existing).value.name); return; }
+      if (!id && !paymentSettings.permissions.manage) return;
+      if (!id && !paymentSettings.ready) { showPaymentMessage("PAYMENT_SERVICE_NOT_READY"); return; }
+      let value;
+      try {
+        value = id ? await paymentRequest(`/${id}`) : { provider: null, name: "", environment: "test", configuration: { shopId: "" }, scope: { type: "all", storeIds: [] }, enabled: false, credentials: { secretKeyConfigured: false }, revision: 1 };
+      } catch (error) { showPaymentMessage(error.message); return; }
+      const tabId = existing || `payment-draft-${crypto.randomUUID()}`;
+      if (paymentSettings.drafts.has(tabId)) { ensureTab(tabId, paymentSettings.drafts.get(tabId).value.name); return; }
+      paymentSettings.drafts.set(tabId, { value, secret: "", dirty: false, busy: false, error: "" });
+      ensureTab(tabId, value.name || "Новое подключение");
+      if(value.id)void loadPaymentWebhookInfo(tabId);
+    }
+    function showPaymentMessage(message) {
+      const host = document.createElement("p"); host.textContent = paymentErrorText(message);
+      window.AppModal.open({ title: "Платежи", content: host, saveText: "Закрыть", onSave: () => true });
+    }
+    function paymentErrorText(code) {
+      const messages = { PAYMENT_CONNECTION_STORE_CONFLICT: "В этих филиалах уже включено подключение провайдера в выбранном режиме.", PAYMENT_CONNECTION_VERSION_CONFLICT: "Подключение изменено другим пользователем. Закройте вкладку и откройте заново, чтобы получить актуальную версию.", PAYMENT_CONNECTION_HISTORY_LOCKED: "Режим и Shop ID нельзя менять после появления платежей.", PAYMENT_CREDENTIALS_KEY_UNAVAILABLE: "На сервере не настроен ключ шифрования credentials.", PAYMENT_INPUT_INVALID: "Проверьте поля подключения.", PAYMENT_SERVICE_NOT_READY: "Payment Service не готов. Проверьте подключение к БД и миграции.", PAYMENT_SERVICE_TIMEOUT: "Ответ не получен. Проверьте список подключений перед повторным сохранением." };
+      Object.assign(messages, {
+        PAYMENT_PROVIDER_AUTH_FAILED: "Не удалось подтвердить подключение. Проверьте Shop ID и Secret Key.",
+        PAYMENT_PROVIDER_ACCESS_DENIED: "ЮKassa не разрешила доступ к настройкам магазина. Проверьте доступность магазина и права подключения.",
+        PAYMENT_PROVIDER_IDENTITY_MISMATCH: "Shop ID или тестовый/боевой режим не соответствует данным магазина ЮKassa.",
+        PAYMENT_PROVIDER_TIMEOUT: "ЮKassa не ответила вовремя. Это не означает, что ключ неверный.",
+        PAYMENT_PROVIDER_UNAVAILABLE: "ЮKassa временно недоступна. Повторите проверку позже.",
+        PAYMENT_PROVIDER_INVALID_RESPONSE: "ЮKassa вернула неожиданный ответ. Проверка не подтверждена.",
+        PAYMENT_OPERATION_IN_PROGRESS: "Проверка этого подключения уже выполняется.",
+        PAYMENT_PROVIDER_RATE_LIMITED: "ЮKassa ограничила частоту запросов. Повторите позже.",
+      });
+      return messages[code] || `Не удалось выполнить операцию (${code}).`;
+    }
+    function renderPaymentDraft(tabId) {
+      const draft = paymentSettings.drafts.get(tabId); if (!draft || !paymentForm) return;
+      const value = draft.value, fields = paymentForm.elements;
+      const catalog = document.getElementById("settingsPaymentProviderCatalog");
+      catalog.classList.toggle("hidden", !!value.provider); paymentForm.classList.toggle("hidden", !value.provider);
+      document.getElementById("settingsPaymentSave").closest(".panel-footer").classList.toggle("hidden", !value.provider);
+      if (!value.provider) {
+        const host = document.getElementById("settingsPaymentProviderOptions"); host.replaceChildren();
+        paymentSettings.providers.forEach(provider => {
+          const button = document.createElement("button"); button.type = "button"; button.className = "settings-home-card settings-card"; button.textContent = provider.title;
+          button.addEventListener("click", () => { value.provider = provider.id; value.name = `${provider.title} · Новое подключение`; draft.dirty = true; renderPaymentDraft(tabId); }); host.append(button);
+        }); return;
+      }
+      fields.provider.replaceChildren(...paymentSettings.providers.map(provider => new Option(provider.title, provider.id)));
+      fields.provider.value = value.provider; fields.name.value = value.name;
+      fields.environment.value = value.environment; fields.shopId.value = value.configuration.shopId;
+      const revealed = document.getElementById("settingsPaymentSecretRevealed"); revealed.value = ""; revealed.classList.add("hidden");
+      document.getElementById("settingsPaymentSecretCopy").disabled = true;
+      document.getElementById("settingsPaymentSecretShow").disabled = draft.busy || !value.id || !value.credentials.secretKeyConfigured || value.credentials.secretKeyViewAllowed===false || !paymentSettings.permissions.manage;
+      fields.secretKey.value = draft.secret; fields.secretKey.required = !value.credentials.secretKeyConfigured;
+      fields.enabled.checked = value.enabled; fields.scope.value = value.scope.type;
+      const host = document.getElementById("settingsPaymentStores"); host.replaceChildren();
+      host.classList.toggle("hidden", value.scope.type === "all");
+      storesState.items.forEach(store => {
+        const label = document.createElement("label"); label.className = "settings-site-field";
+        const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.name = "storeId"; checkbox.value = String(store.id);
+        checkbox.checked = value.scope.storeIds.includes(String(store.id)); label.append(checkbox, document.createTextNode(` ${store.name}`)); host.append(label);
+      });
+      paymentForm.querySelectorAll("input,select").forEach(field => { field.disabled = draft.busy || !paymentSettings.permissions.manage; });
+      fields.provider.disabled ||= !!value.id;
+      fields.environment.disabled ||= value.hasHistory; fields.shopId.disabled ||= value.hasHistory;
+      document.getElementById("settingsPaymentSecretStatus").textContent = value.credentials.secretKeyConfigured ? "Ключ сохранён. Пустое поле сохраняет текущий ключ." : "Ключ ещё не сохранён";
+      document.getElementById("settingsPaymentVerification").textContent = ({ not_checked: "Не проверено", verified: "Проверено", failed: "Ошибка проверки", stale: "Требуется повторная проверка" })[value.verificationStatus] || "Не проверено";
+      const verify = document.getElementById("settingsPaymentVerify");
+      verify.disabled = draft.busy || draft.dirty || !value.id || !paymentSettings.permissions.manage;
+      verify.textContent = draft.verifying ? "Проверяем…" : "Проверить подключение";
+      verify.title = draft.dirty || !value.id ? "Сначала сохраните подключение" : "Проверить сохранённые реквизиты без создания платежа";
+      document.getElementById("settingsPaymentVerifiedAt").textContent = value.lastCheckedAt ? `Последняя проверка: ${value.lastCheckedAt}` : "";
+      renderPaymentWebhookInfo(tabId);
+      const capabilities = document.getElementById("settingsPaymentCapabilities"); capabilities.replaceChildren();
+      if (value.providerCapabilities) {
+        const title = document.createElement("div"); title.className = "info-title"; title.textContent = "Доступные способы"; capabilities.append(title);
+        const names = { bank_card: "Банковские карты", yoo_money: "ЮMoney", sbp: "СБП", sberbank: "SberPay" };
+        value.providerCapabilities.paymentMethods.forEach(method => { const row = document.createElement("p"); row.textContent = names[method] || method; capabilities.append(row); });
+      }
+      document.getElementById("settingsPaymentHistory").textContent = value.hasHistory ? "Есть история платежей: режим и Shop ID заблокированы." : "";
+      document.getElementById("settingsPaymentError").textContent = draft.error;
+      const save = document.getElementById("settingsPaymentSave"), archive = document.getElementById("settingsPaymentArchive");
+      save.disabled = draft.busy || !paymentSettings.permissions.manage; save.textContent = draft.busy ? "Сохранение…" : "Сохранить";
+      archive.disabled = draft.busy; archive.classList.toggle("hidden", !value.id || !paymentSettings.permissions.manage);
+    }
+    function renderPaymentWebhookInfo(tabId){
+      const draft=paymentSettings.drafts.get(tabId);if(!draft || activeRightTabId!==tabId)return;
+      const field=document.getElementById('settingsPaymentWebhookUrl'),info=draft.webhookInfo;
+      field.value=info?.url || '';field.disabled=false;
+      field.placeholder='Публичный HTTPS-адрес ещё не задан';
+      document.getElementById('settingsPaymentWebhookCopy').disabled=!info?.url || draft.webhookLoading;
+      document.getElementById('settingsPaymentWebhookRefresh').disabled=!draft.value.id || draft.webhookLoading;
+      document.getElementById('settingsPaymentWebhookStatus').textContent=draft.webhookError || (draft.webhookLoading?'Загружаем информацию…':
+        !draft.value.id?'Сначала сохраните подключение.':!info?'Нажмите «Обновить информацию».':!info.url?'Запустите временный HTTPS-туннель и обновите информацию.':
+        !info.receiverEnabled?'Приём HTTP-уведомлений отключён.':info.temporary?'Временный адрес для тестов. После перезапуска туннеля укажите новый адрес в ЮKassa.':'Адрес приёма уведомлений. Настройте его в личном кабинете ЮKassa.');
+      document.getElementById('settingsPaymentWebhookLast').textContent=info?.lastProcessedAt?`Последнее обработанное уведомление (UTC): ${info.lastProcessedAt}`:'Обработанных уведомлений ещё нет.';
+    }
+    async function loadPaymentWebhookInfo(tabId){
+      const draft=paymentSettings.drafts.get(tabId);if(!draft?.value.id || draft.webhookLoading)return;
+      draft.webhookLoading=true;draft.webhookError='';renderPaymentWebhookInfo(tabId);
+      try{draft.webhookInfo=await paymentRequest(`/${draft.value.id}/webhook`);}
+      catch(error){draft.webhookError=paymentErrorText(error.message);}
+      finally{draft.webhookLoading=false;if(paymentSettings.drafts.get(tabId)===draft)renderPaymentWebhookInfo(tabId);}
+    }
+    function capturePaymentDraft() {
+      const draft = paymentSettings.drafts.get(activeRightTabId); if (!draft || draft.busy) return;
+      const fields = paymentForm.elements, value = draft.value;
+      value.name = fields.name.value; value.environment = fields.environment.value; value.configuration.shopId = fields.shopId.value;
+      value.enabled = fields.enabled.checked; value.scope = { type: fields.scope.value, storeIds: fields.scope.value === "all" ? [] : Array.from(paymentForm.querySelectorAll('[name="storeId"]:checked'), field => field.value) };
+      draft.secret = fields.secretKey.value; draft.dirty = true;
+      document.getElementById("settingsPaymentVerify").disabled = true;
+      document.getElementById("settingsPaymentStores").classList.toggle("hidden", value.scope.type === "all");
+    }
+    function removePaymentTab(tabId) {
+      const active = activeRightTabId === tabId;
+      paymentSettings.drafts.delete(tabId); rightTabs.querySelector(`[data-right-tab="${tabId}"]`)?.remove();
+      if (!rightTabs.children.length) { rightTabs.classList.add("hidden"); rightHeader?.classList.add("hidden"); }
+      if (active) setActiveRightTab(rightTabs.querySelector("[data-right-tab]")?.getAttribute("data-right-tab") || "");
+    }
+    function closePaymentTab(tabId) {
+      const draft = paymentSettings.drafts.get(tabId); if (!draft || draft.busy) return;
+      if (!draft.dirty) { removePaymentTab(tabId); return; }
+      const host = document.createElement("p"); host.textContent = "Закрыть вкладку и потерять несохранённые изменения?";
+      window.AppModal.open({ title: "Несохранённые изменения", content: host, saveText: "Закрыть без сохранения", cancelText: "Отмена", onSave: () => { removePaymentTab(tabId); return true; } });
+    }
+    if (paymentForm) {
+      document.getElementById('settingsPaymentWebhookRefresh').addEventListener('click',()=>void loadPaymentWebhookInfo(activeRightTabId));
+      document.getElementById('settingsPaymentWebhookCopy').addEventListener('click',async()=>{
+        const url=document.getElementById('settingsPaymentWebhookUrl').value;if(!url)return;
+        try{await navigator.clipboard.writeText(url);if(typeof window.showToast==='function')window.showToast('Адрес уведомлений скопирован');}
+        catch{document.getElementById('settingsPaymentWebhookStatus').textContent='Не удалось скопировать адрес. Выделите его и скопируйте вручную.';}
+      });
+      document.getElementById("settingsPaymentVerify").addEventListener("click", async () => {
+        const tabId = activeRightTabId, draft = paymentSettings.drafts.get(tabId);
+        if (!draft?.value.id || draft.busy || draft.dirty || !paymentSettings.permissions.manage) return;
+        draft.busy = true; draft.verifying = true; draft.error = ""; renderPaymentDraft(tabId);
+        try {
+          const result = await paymentRequest(`/${draft.value.id}/verify`, "POST", { revision: draft.value.revision });
+          draft.value = result.connection;
+          const index = paymentSettings.items.findIndex(item => item.id === result.connection.id);
+          if (index >= 0) paymentSettings.items[index] = result.connection;
+          draft.error = result.ok ? "" : paymentErrorText(result.code);
+          renderPaymentConnections();
+          if (typeof window.showToast === "function") window.showToast(result.ok ? "Подключение проверено" : draft.error);
+        } catch (error) { draft.error = paymentErrorText(error.message); }
+        finally { draft.busy = false; draft.verifying = false; if (activeRightTabId === tabId) renderPaymentDraft(tabId); }
+      });
+      document.getElementById("settingsPaymentCancel").addEventListener("click", () => closePaymentTab(activeRightTabId));
+      document.getElementById("settingsPaymentSecretShow").addEventListener("click", async () => {
+        const tabId = activeRightTabId, draft = paymentSettings.drafts.get(tabId);
+        if (!draft || draft.busy || !draft.value.id || !paymentSettings.permissions.manage) return;
+        const button = document.getElementById("settingsPaymentSecretShow"); button.disabled = true;
+        try {
+          const result = await paymentRequest(`/${draft.value.id}/secret`, "POST", {});
+          if (activeRightTabId !== tabId || paymentSettings.drafts.get(tabId) !== draft) return;
+          const field = document.getElementById("settingsPaymentSecretRevealed"); field.value = result.secretKey; field.classList.remove("hidden");
+          document.getElementById("settingsPaymentSecretCopy").disabled = false;
+        } catch(error) { if (activeRightTabId === tabId) document.getElementById("settingsPaymentError").textContent = paymentErrorText(error.message); }
+        finally { if (activeRightTabId === tabId) button.disabled = false; }
+      });
+      document.getElementById("settingsPaymentSecretCopy").addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(document.getElementById("settingsPaymentSecretRevealed").value); }
+        catch(error) { document.getElementById("settingsPaymentError").textContent = "Не удалось скопировать ключ. Выделите его и скопируйте вручную."; }
+      });
+      paymentForm.addEventListener("input", capturePaymentDraft);
+      paymentForm.addEventListener("change", capturePaymentDraft);
+      paymentForm.addEventListener("submit", async event => {
+        event.preventDefault(); const tabId = activeRightTabId, draft = paymentSettings.drafts.get(tabId);
+        if (!draft || draft.busy || !paymentSettings.permissions.manage || !paymentForm.reportValidity()) return;
+        const value = draft.value;
+        if (value.scope.type === "selected" && !value.scope.storeIds.length) { draft.error = "Выберите хотя бы один филиал."; renderPaymentDraft(tabId); return; }
+        const body = { provider: value.provider, name: value.name.trim(), environment: value.environment, configuration: value.configuration, scope: value.scope, enabled: value.enabled, ...(value.id ? { revision: value.revision } : {}), ...(draft.secret ? { credentials: { secretKey: draft.secret } } : {}) };
+        draft.busy = true; draft.error = ""; renderPaymentDraft(tabId);
+        try {
+          const saved = await paymentRequest(value.id ? `/${value.id}` : "", value.id ? "PATCH" : "POST", body);
+          draft.value = saved; draft.secret = ""; draft.dirty = false;
+          draft.webhookInfo=null;
+          const newId = `payment-${saved.id}`;
+          if (newId !== tabId) {
+            const tab = rightTabs.querySelector(`[data-right-tab="${tabId}"]`);
+            tab.setAttribute("data-right-tab", newId); tab.querySelector(".product-tab-title").textContent = saved.name;
+            paymentSettings.drafts.delete(tabId); paymentSettings.drafts.set(newId, draft);
+            if (activeRightTabId === tabId) activeRightTabId = newId;
+          } else rightTabs.querySelector(`[data-right-tab="${tabId}"] .product-tab-title`).textContent = saved.name;
+          const index = paymentSettings.items.findIndex(item => item.id === saved.id);
+          if (index < 0) paymentSettings.items.push(saved); else paymentSettings.items[index] = saved;
+          paymentSettings.items.sort((a,b) => Number(b.enabled)-Number(a.enabled) || a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name) || Number(a.id)-Number(b.id));
+          renderPaymentConnections();
+          void loadPaymentWebhookInfo(newId);
+        } catch (error) { draft.error = paymentErrorText(error.message); }
+        finally { draft.busy = false; if (paymentSettings.drafts.get(activeRightTabId) === draft) renderPaymentDraft(activeRightTabId); }
+      });
+      document.getElementById("settingsPaymentArchive").addEventListener("click", () => {
+        const tabId = activeRightTabId, draft = paymentSettings.drafts.get(tabId);
+        if (!draft?.value.id || draft.busy || !paymentSettings.permissions.manage) return;
+        const host = document.createElement("p"); host.textContent = "Архивировать подключение? История платежей сохранится. Несохранённые изменения будут потеряны.";
+        window.AppModal.open({ title: "Архивация подключения", content: host, saveText: "Архивировать", cancelText: "Отмена", onSave: async () => {
+          if (draft.busy) return false; draft.busy = true; renderPaymentDraft(tabId);
+          try { await paymentRequest(`/${draft.value.id}/archive`, "POST", { revision: draft.value.revision }); paymentSettings.items = paymentSettings.items.filter(item => item.id !== draft.value.id); removePaymentTab(tabId); renderPaymentConnections(); return true; }
+          catch (error) { draft.error = paymentErrorText(error.message); return false; }
+          finally { draft.busy = false; if (activeRightTabId === tabId) renderPaymentDraft(tabId); }
+        } });
+      });
+      window.addEventListener("beforeunload", event => { if (Array.from(paymentSettings.drafts.values()).some(draft => draft.dirty)) { event.preventDefault(); event.returnValue = ""; } });
+    }
 
 
 
@@ -6782,7 +7127,7 @@
 
 
 
-        settingsAddOrderBtn.classList.toggle("hidden", section === "site" || section === "system" || isChats || isApi || isPrintTemplates);
+        settingsAddOrderBtn.classList.toggle("hidden", section === "tenant" || section === "payments" || section === "site" || section === "system" || isChats || isApi || isPrintTemplates);
 
 
 
@@ -6887,6 +7232,9 @@
 
 
     function syncSettingsSectionPanels(section) {
+      if (settingsApiAddBtn) settingsApiAddBtn.classList.toggle("hidden", section !== "payments" || !paymentSettings.permissions.manage);
+      const paymentsPanel = document.getElementById("settingsPaymentsPanel");
+      if (paymentsPanel) paymentsPanel.classList.toggle("hidden", section !== "payments");
 
 
 
@@ -6918,7 +7266,7 @@
 
 
 
-      const hideTenantCards = isStores || isSite || isSystem || isDelivery || isApi || isPrintTemplates || isProductionZones;
+      const hideTenantCards = section === "payments" || isStores || isSite || isSystem || isDelivery || isApi || isPrintTemplates || isProductionZones;
 
 
 
@@ -7031,7 +7379,14 @@
 
 
       if (settingsApiAddBtn) {
-        settingsApiAddBtn.classList.toggle("hidden", section !== "api");
+        settingsApiAddBtn.classList.toggle("hidden", section !== "payments" || !paymentSettings.permissions.manage);
+        settingsApiAddBtn.title = section === "payments" ? "Добавить подключение" : "Добавить API";
+        settingsApiAddBtn.setAttribute("aria-label", settingsApiAddBtn.title);
+        if (section === "payments") {
+          if (settingsCenterTitle) settingsCenterTitle.textContent = "Платежи";
+          if (settingsCenterIcon) settingsCenterIcon.className = "fas fa-credit-card";
+        }
+        settingsApiAddBtn.disabled = section === "payments" && !paymentSettings.ready;
       }
 
 
@@ -7081,6 +7436,10 @@
 
 
     function syncSettingsCenterHeadingVisual(section) {
+      if (section === "payments") {
+        if (settingsCenterTitle) settingsCenterTitle.textContent = "Платежи";
+        if (settingsCenterSubtitle) settingsCenterSubtitle.textContent = "";
+      }
 
 
 
@@ -7243,7 +7602,7 @@
     const settingsSectionKeys = new Set(
       Array.from(settingsSectionButtons)
         .map((button) => String(button.getAttribute("data-settings-section") || "").trim())
-        .filter(Boolean)
+        .filter(section => !!section && (section !== "payments" || paymentSettings.permissions.read))
     );
 
     function getSettingsSectionFromLocation() {
@@ -7461,7 +7820,7 @@
 
 
 
-        if (isChats || isApi || isPrintTemplates || isProductionZones) {
+        if (section === "payments" || isChats || isApi || isPrintTemplates || isProductionZones) {
 
 
 
@@ -7518,6 +7877,14 @@
 
 
         // Section data is loaded by the shared one-time lifecycle below.
+        if (section === "payments") {
+          const paymentTab = rightTabs?.querySelector('[data-right-tab^="payment-"]');
+          if (paymentTab) {
+            rightHeader?.classList.remove("hidden"); rightTabs.classList.remove("hidden");
+            setActiveRightTab(paymentTab.getAttribute("data-right-tab"));
+          } else setActiveRightTab("");
+          return;
+        }
 
 
 
@@ -7646,6 +8013,8 @@
 
 
 
+    const onlineReceiptsCard = document.getElementById("settingsOnlineReceiptsCard");
+    const onlineReceiptsPanel = document.getElementById("settingsOnlineReceiptsPanel");
     const orderPaymentsCard = document.getElementById("settingsOrderPaymentsCard");
 
 
@@ -20303,6 +20672,9 @@
 
 
     function setActiveRightTab(tabId) {
+      const paymentPanel = document.getElementById("settingsPaymentPanel");
+      if (paymentPanel) paymentPanel.classList.toggle("hidden", !paymentSettings.drafts.has(tabId));
+      if (paymentSettings.drafts.has(tabId)) renderPaymentDraft(tabId);
 
       if (isPrintApiTabId(activeRightTabId)) {
         persistActivePrintApiTabState();
@@ -20383,6 +20755,7 @@
 
 
 
+      if (onlineReceiptsPanel) onlineReceiptsPanel.classList.toggle("hidden", tabId !== "online-receipts");
       if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
 
 
@@ -20725,7 +21098,7 @@
 
 
 
-          setActiveRightTab(tabId);
+          setActiveRightTab(tab.getAttribute("data-right-tab") || tabId);
 
 
 
@@ -20743,6 +21116,8 @@
 
           e.stopPropagation();
 
+          const paymentTabId = tab.getAttribute("data-right-tab");
+          if (paymentSettings.drafts.has(paymentTabId)) { closePaymentTab(paymentTabId); return; }
           const wasActive = activeRightTabId === tabId;
 
 
@@ -20817,6 +21192,7 @@
 
 
 
+          if (tabId === "online-receipts" && onlineReceiptsCard) onlineReceiptsCard.classList.remove("is-active");
           if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
 
 
@@ -21038,6 +21414,7 @@
 
 
 
+      if (tabId === "online-receipts" && onlineReceiptsCard) onlineReceiptsCard.classList.add("is-active");
       if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.add("is-active");
 
 
@@ -27245,10 +27622,41 @@
 
 
 
+    if (onlineReceiptsCard) {
+      onlineReceiptsCard.addEventListener("click", () => ensureTab("online-receipts", "Чеки онлайн-оплаты"));
+    }
+    {
+      const receiptForm=document.getElementById("settingsOnlineReceiptForm");
+      if(receiptForm && !receiptForm.dataset.bound) {
+        receiptForm.dataset.bound="1";
+        receiptForm.querySelectorAll('input,select,button[type="submit"]').forEach(input=>{input.disabled=!paymentSettings.permissions.manage;});
+        const vatOptions=[["","Выберите"],[1,"Без НДС"],[2,"0%"],[3,"10%"],[4,"20%"],[5,"10/110"],[6,"20/120"],[7,"5%"],[8,"7%"],[9,"5/105"],[10,"7/107"],[11,"22%"],[12,"22/122"]];
+        ['vatCode','deliveryVatCode'].forEach(key=>{
+          const input=receiptForm.querySelector(`[data-receipt-input="${key}"]`);
+          vatOptions.forEach(([value,label])=>input.add(new Option(label,String(value))));
+        });
+        receiptForm.addEventListener('change',()=>{receiptForm.dataset.dirty='1';receiptForm.querySelector('[data-receipt-status]').textContent='Есть несохранённые изменения';});
+        receiptForm.addEventListener('submit',async event=>{
+          event.preventDefault();const button=receiptForm.querySelector('button[type="submit"]'),status=receiptForm.querySelector('[data-receipt-status]');
+          if(button.disabled)return;
+          const inputs=Object.fromEntries([...receiptForm.querySelectorAll('[data-receipt-input]')].map(input=>[input.dataset.receiptInput,input.value]));
+          if(inputs.provider && Object.values(inputs).some(value=>!value)){status.textContent='Заполните все параметры чеков';return;}
+          const config=inputs.provider ? {...inputs,taxSystemCode:Number(inputs.taxSystemCode),vatCode:Number(inputs.vatCode),deliveryVatCode:Number(inputs.deliveryVatCode)} : null;
+          button.disabled=true;
+          try {
+            const result=await updateTenantFields({online_receipt_config:config});
+            if(!result?.ok)throw new Error(result?.error || 'SAVE_FAILED');
+            receiptForm.dataset.dirty='0';status.textContent='Настройки чеков сохранены';await loadTenantProfile();
+          }catch(error){status.textContent=error.message==='FORBIDDEN' ? 'Нет права на управление платежами' : 'Не удалось сохранить настройки чеков';}
+          finally{button.disabled=!paymentSettings.permissions.manage;}
+        });
+      }
+
+
+
+    }
+
     if (orderPaymentsCard) {
-
-
-
       orderPaymentsCard.addEventListener("click", () => {
 
 
@@ -27781,6 +28189,7 @@
     if (settingsApiAddBtn) {
 
       settingsApiAddBtn.addEventListener("click", () => {
+        if (document.body.getAttribute("data-settings-section") === "payments") { openPaymentDraft(); return; }
         startCreatePrintApi();
       });
 
@@ -48026,6 +48435,11 @@
 
 
 
+      if (type === 'order-payments' && item.code === 'online' && !item.can_enable_online && Number(item.is_active) !== 1) {
+        activeSwitch.querySelector('input').disabled = true;
+        activeSwitch.title = "Сначала настройте и проверьте подключение в разделе «Платежи».";
+        const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = activeSwitch.title; switches.appendChild(hint);
+      }
       switches.appendChild(activeSwitch);
 
 
@@ -63733,6 +64147,7 @@
     }
 
     function getSettingsSectionPanel(section) {
+      if (section === "payments") return document.getElementById("settingsPaymentsPanel");
       if (section === "stores") return storesPanel;
       if (section === "delivery") return deliveryPanel;
       if (section === "site") return siteSectionPanel;
@@ -63744,6 +64159,10 @@
     }
 
     function renderSettingsSectionStatus(section, status) {
+      if (section === "payments") {
+        paymentSettings.ready = status === "ready";
+        if (document.body.getAttribute("data-settings-section") === "payments") syncSettingsCenterHeading(section);
+      }
       const panel = getSettingsSectionPanel(section);
       if (!panel) return;
       panel.setAttribute("aria-busy", status === "loading" ? "true" : "false");
@@ -63775,6 +64194,7 @@
     }
 
     const settingsSectionInitializers = {
+      payments: loadPaymentSettings,
       tenant: ensureSharedTenantProfile,
       site: ensureSharedTenantProfile,
       chats: async () => {

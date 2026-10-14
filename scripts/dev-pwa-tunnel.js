@@ -1,11 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const http = require('http');
+const {isIP}=require('net');
 const { spawn } = require('child_process');
 const localtunnel = require('localtunnel');
 
 const DEFAULT_PORT = 3000;
-const stateFilePath = path.resolve(__dirname, '..', 'tmp', 'dev-pwa-tunnel.json');
+const paymentWebhookMode=process.argv.includes('--payment-webhook');
+const stateFilePath = path.resolve(__dirname, '..', 'tmp', paymentWebhookMode?'dev-payment-webhook-tunnel.json':'dev-pwa-tunnel.json');
 const cloudflaredDirPath = path.resolve(__dirname, '..', 'tmp', 'cloudflared');
 const cloudflaredBinaryPath = path.join(cloudflaredDirPath, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
 const cloudflaredDownloadUrl = process.platform === 'win32' && process.arch === 'x64'
@@ -154,6 +157,7 @@ async function ensureCloudflaredBinary() {
 }
 
 let activeTunnel = null;
+let webhookProxy=null;
 let isShuttingDown = false;
 
 async function shutdown(exitCode) {
@@ -161,6 +165,7 @@ async function shutdown(exitCode) {
   isShuttingDown = true;
 
   clearStateFile();
+  if(webhookProxy)webhookProxy.close();
 
   if (activeTunnel) {
     if (typeof activeTunnel.close === 'function') {
@@ -182,10 +187,13 @@ async function startCloudflaredTunnel({ port, localHost }) {
   const binaryPath = await ensureCloudflaredBinary();
   const localUrl = `http://${localHost}:${port}`;
   const args = ['tunnel', '--url', localUrl, '--no-autoupdate'];
+  if(paymentWebhookMode)args.push('--protocol','http2');
   const child = spawn(binaryPath, args, {
     cwd: path.dirname(binaryPath),
+    ...(paymentWebhookMode?{windowsHide:true}:{}),
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  if(paymentWebhookMode)activeTunnel={child,close(){child.kill();}};
 
   let resolved = false;
   const urlPattern = /(https:\/\/[-a-z0-9.]+trycloudflare\.com)/i;
@@ -303,6 +311,8 @@ async function startLocaltunnelTunnel({ port, localHost }) {
 }
 
 async function startPreferredTunnel({ provider, port, localHost }) {
+  // The payment route must never fall back to a provider with different IP forwarding semantics.
+  if(paymentWebhookMode)return startCloudflaredTunnel({port,localHost});
   if (provider === 'localtunnel') {
     return startLocaltunnelTunnel({ port, localHost });
   }
@@ -316,6 +326,43 @@ async function startPreferredTunnel({ provider, port, localHost }) {
 }
 
 async function main() {
+  if(paymentWebhookMode){
+    const serviceEnv=require('dotenv').parse(fs.readFileSync(path.resolve(__dirname,'../services/payment-service/.env')));
+    if(serviceEnv.PAYMENT_CHECKOUT_ENVIRONMENT!=='test' || serviceEnv.PAYMENT_WEBHOOKS_ENABLED!=='1')
+      throw new Error('Payment webhook tunnel requires enabled webhooks and test environment.');
+    const servicePort=Number(serviceEnv.PAYMENT_SERVICE_PORT || 3500);
+    const proxyPort=Number(readArgValue('--port') || 3501);
+    if(!Number.isInteger(servicePort) || servicePort<1 || servicePort>65535 || !Number.isInteger(proxyPort)
+      || proxyPort<1 || proxyPort>65535 || proxyPort===3000 || proxyPort===servicePort)throw new Error('Invalid webhook ports.');
+    webhookProxy=http.createServer((req,res)=>{
+      if(req.method!=='POST' || req.url!=='/webhooks/yookassa'){res.writeHead(404);return res.end();}
+      const source=req.headers['cf-connecting-ip'];
+      if(typeof source!=='string' || !isIP(source)){res.writeHead(403);return res.end();}
+      if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')){res.writeHead(415);return res.end();}
+      let size=0,oversized=false;const chunks=[];
+      req.on('data',chunk=>{size+=chunk.length;if(size>32768){if(!oversized){oversized=true;res.writeHead(413);res.end();}return;}chunks.push(chunk);});
+      req.on('error',()=>{if(!res.headersSent){res.writeHead(400);res.end();}});
+      req.on('end',()=>{
+        if(oversized || req.aborted)return;
+        const upstream=http.request({hostname:'127.0.0.1',port:servicePort,path:'/webhooks/yookassa',method:'POST',
+          timeout:10000,headers:{'content-type':'application/json','content-length':size,'x-forwarded-for':source}},response=>{
+          res.writeHead(response.statusCode,{'content-type':'application/json','cache-control':'no-store'});response.pipe(res);
+          response.on('error',()=>res.destroy());
+        });
+        upstream.on('timeout',()=>upstream.destroy());
+        upstream.on('error',()=>{if(!res.headersSent){res.writeHead(503);res.end();}else res.destroy();});
+        upstream.end(Buffer.concat(chunks));
+      });
+    });
+    webhookProxy.requestTimeout=15000;webhookProxy.headersTimeout=10000;
+    await new Promise((resolve,reject)=>{webhookProxy.once('error',reject);webhookProxy.listen(proxyPort,'127.0.0.1',resolve);});
+    webhookProxy.on('error',()=>void shutdown(1));
+    const tunnel=await startPreferredTunnel({provider:'cloudflared',port:proxyPort,localHost:'127.0.0.1'});
+    writeStateFile(tunnel);
+    console.log(`[payment-webhook-tunnel] URL: ${tunnel.public_url}/webhooks/yookassa`);
+    console.log('[payment-webhook-tunnel] Only POST /webhooks/yookassa is public. Keep this process running; Ctrl+C stops it.');
+    await waitForever();return;
+  }
   const port = resolvePort();
   const localHost = resolveLocalHost();
   const provider = resolveProviderPreference();
@@ -353,6 +400,7 @@ process.on('unhandledRejection', (error) => {
 
 main().catch((error) => {
   console.error('[dev-pwa-tunnel] failed to start:', error && error.stack ? error.stack : error);
+  if(paymentWebhookMode){void shutdown(1);return;}
   clearStateFile();
   process.exit(1);
 });

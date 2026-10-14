@@ -271,4 +271,14 @@ module.exports = {
   revokeUserStreams,
   loadLegacyOwner,
   isUserSessionActive,
+  async paymentPermissions(user) {
+    const resource = { tenant_id: user?.tenantId };
+    const access = await can(user, 'settings.payments.access', resource);
+    if (!access.allowed) return { read: false, manage: false };
+    const [read, manage] = await Promise.all([
+      can(user, 'settings.payments.read', resource),
+      can(user, 'settings.payments.manage', resource),
+    ]);
+    return { read: read.allowed, manage: manage.allowed };
+  },
 };

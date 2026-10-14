@@ -3717,6 +3717,7 @@
         clientInfoWrap,
         enableClientLink: true,
         helpers: {
+          apiJson,
           money,
           formatDateTimeNumeric,
           formatDateTime: formatDateTimeNumeric,

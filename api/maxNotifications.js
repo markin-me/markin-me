@@ -2,7 +2,7 @@ const { getEffectiveMaxBotConfig } = require('../data/system-settings');
 const { sendMaxMessage } = require('./maxIntegration');
 const { formatOrderMessage } = require('./telegramNotifications');
 
-async function sendNewOrderMaxNotification(tenantId, storeId, orderPayload, { db, botToken } = {}) {
+async function sendNewOrderMaxNotification(tenantId, storeId, orderPayload, { db, botToken, strictErrors=false } = {}) {
   const resolvedToken = String(botToken || getEffectiveMaxBotConfig().max_bot_token || '').trim();
   if (!resolvedToken) return;
 
@@ -38,12 +38,15 @@ async function sendNewOrderMaxNotification(tenantId, storeId, orderPayload, { db
 
   for (const maxUserId of userIds) {
     try {
-      await sendMaxMessage({
+      const result=await sendMaxMessage({
         botToken: resolvedToken,
         maxUserId,
         text,
+        ...(strictErrors?{signal:AbortSignal.timeout(10000)}:{}),
       });
+      if(strictErrors && !result.ok)throw Object.assign(new Error(),{code:'ORDER_PAYMENT_MAX_NOT_CONFIGURED'});
     } catch (err) {
+      if(strictErrors)throw Object.assign(new Error(),{code:'ORDER_PAYMENT_MAX_UNCERTAIN'});
       console.error('MAX sendNewOrderNotification:', err.message || err);
     }
   }

@@ -110,6 +110,9 @@ const NAVIGATION_RBAC_NODES = Object.freeze([
     { key: 'settings.site.domains', label: 'Управление доменами и сертификатами' },
   ]),
   node('settings.chat', 'settings', 'settings', 'Чат поддержки', 'settings.chat.access', { read: 'settings.chat.read', update: 'settings.chat.update' }),
+  node('settings.payments', 'settings', 'settings', 'Платежи', 'settings.payments.access', { read: 'settings.payments.read' }, [
+    { key: 'settings.payments.manage', label: 'Управление платежами и подключениями' },
+  ]),
   node('settings.api', 'settings', 'settings', 'API', 'settings.api.access', { read: 'settings.api.read', create: 'settings.api.create', update: 'settings.api.update' }, [
     { key: 'settings.api.regenerate', label: 'Регенерация API-ключей' },
   ]),
@@ -145,6 +148,10 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
   const byAction = (nodeId, overrideAction = action) => permissionForNodeAction(nodeId, overrideAction) || 'rbac.action_not_supported';
 
   if (route.startsWith('/team')) return null;
+  if (route === '/payment-connections' || route.startsWith('/payment-connections/')) {
+    return route.startsWith('/payment-connections/operations') || action !== 'read'
+      ? 'settings.payments.manage' : 'settings.payments.read';
+  }
   if (route.startsWith('/orders')) {
     if (route.includes('/cash-summary') || route.includes('/cash-day')) return byAction('cash.journal', 'read');
     if (context === 'new-order' && (route === '/orders/statuses' || route === '/orders/benefits/preview')) return 'new_order.create';
@@ -153,9 +160,12 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
       if (String(method || '').toUpperCase() === 'PUT' && /^\/orders\/[^/]+\/status$/.test(route)) return 'courier.orders.update';
       return 'courier.unsupported';
     }
+    if (/^\/orders\/[^/]+\/payment\/refresh$/.test(route) && String(method).toUpperCase() === 'POST') {
+      return context === 'cash' ? 'cash.journal.read' : 'orders.list.read';
+    }
+    if (route.includes('/refund')) return 'orders.refund';
     if (context === 'cash') return byAction('cash.journal');
     if (route === '/orders/benefits/preview') return 'orders.list.read';
-    if (route.includes('/refund')) return 'orders.refund';
     if (route.includes('/assignee')) return 'orders.assign';
     if (action === 'update' && (/\/status$/.test(route) || route.endsWith('/paid'))) return 'orders.status';
     if (action === 'delete') return 'orders.cancel';
@@ -275,6 +285,9 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     return 'settings.system.integrations';
   }
   if (route.startsWith('/tenant')) {
+    if (route === '/tenant' && Object.prototype.hasOwnProperty.call(body, 'online_receipt_config') && action !== 'read') {
+      return 'settings.payments.manage';
+    }
     if (route === '/tenant/login-suffix') return action === 'read' ? 'settings.company.read' : 'settings.company.login_suffix';
     const settingsNode = String(headers['x-rbac-node'] || '').trim();
     if (route === '/tenant' && action === 'read') {
