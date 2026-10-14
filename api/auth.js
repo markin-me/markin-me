@@ -371,7 +371,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         return res.status(403).json({ ok: false, error: 'ROLE_SWITCH_NOT_ALLOWED' });
       }
       const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
+        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.last_name, u.first_name, u.patronymic, u.photo_revision, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
                 t.name AS tenant_name, t.slug AS tenant_slug, t.is_active AS tenant_active
          FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id
          WHERE u.id=? AND u.tenant_id=? LIMIT 1`,

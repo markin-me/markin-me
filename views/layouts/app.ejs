@@ -154,7 +154,7 @@
     })();
   </script>
 
-  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20261002-option-order-v1') %>" />
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20261014-sidebar-profile-role-v1') %>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
@@ -543,6 +543,15 @@
         function renderRoleOptions(context) {
           var roles = Array.isArray(context && context.roles) ? context.roles : [];
           var activeRole = context && context.active_role;
+          var sidebarRole = document.getElementById('adminProfileRole');
+          if (sidebarRole) {
+            var isLegacyOwner = !Number(context && context.user && context.user.id)
+              && Array.isArray(context && context.permissions) && context.permissions.includes('*');
+            var sidebarRoleName = activeRole ? activeRole.name : isLegacyOwner ? 'Владелец' : 'Роль не выбрана';
+            sidebarRole.textContent = sidebarRoleName;
+            sidebarRole.title = sidebarRoleName;
+            sidebarRole.classList.remove('hidden');
+          }
           if (!roleSection || !roleDropdown || roles.length < 2) {
             if (roleSection) roleSection.classList.add('hidden');
             if (roleDivider) roleDivider.classList.add('hidden');
@@ -571,6 +580,10 @@
                 localStorage.setItem('authToken', result.token);
                 localStorage.setItem('user', JSON.stringify(result.user));
                 localStorage.setItem('tenant', JSON.stringify(result.tenant));
+                updateUserInfo();
+                renderProfilePhoto(result.user);
+                renderRoleOptions(result);
+                roleDropdown.classList.add('hidden');
                 window.location.href = result.redirect || '/dashboard/products';
               } catch (error) {
                 console.error('Role switch failed:', error);
@@ -581,9 +594,11 @@
         }
 
         async function loadAccessContext() {
+          var requestToken = localStorage.getItem('authToken');
           try {
             var response = await authFetch('/api/auth/me');
             var context = await response.json();
+            if (localStorage.getItem('authToken') !== requestToken) return null;
             if (!response.ok || context.ok !== true) throw new Error(context.error || 'AUTH_CONTEXT_FAILED');
             if (context.user) localStorage.setItem('user', JSON.stringify(context.user));
             if (context.tenant) localStorage.setItem('tenant', JSON.stringify(context.tenant));
