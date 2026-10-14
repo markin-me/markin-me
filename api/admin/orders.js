@@ -3,6 +3,10 @@ const express = require("express");
 const crypto = require("crypto");
 const productPassportSnapshots = require("../../services/product-passport-snapshots");
 const { sendOrderToPrintBot, enqueueSingleLabelPrintJob } = require("../printPush");
+const {isOrderEligibleForFulfillment} = require("../helpers/orderFulfillment");
+const {getOrderPaymentSummary}=require('../helpers/orderPaymentSummary');
+const {createOrderOnlinePayment}=require('../../data/order-online-payment');
+const {paymentPermissions}=require('../middleware/auth');
 const {
   applyStockDeductionForOrderItems,
   checkStockAvailabilityForOrderItems,
@@ -1614,6 +1618,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         r.id AS refund_id,
         r.order_id,
         r.payment_id,
+        r.financial_state,r.financial_error_code,r.financial_attempt,
         r.payment_code,
         r.payment_title,
         r.payment_icon,
@@ -1655,6 +1660,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           id: refundId,
           order_id: orderId,
           payment_id: Number(row?.payment_id || 0) || null,
+          financial_state:row.financial_state,financial_error_code:row.financial_error_code,financial_attempt:Number(row.financial_attempt),
           payment_code: row?.payment_code || null,
           payment_title: row?.payment_title || null,
           payment_icon: row?.payment_icon || null,
@@ -1856,6 +1862,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.delivery_type_id,
         o.payment_id,
         o.is_paid,
+        o.payment_projection, o.payment_satisfied_at, o.manual_paid_at, o.online_payment_total, o.online_payment_required, o.online_payment_status,
         o.time_option_id,
         o.status_id,
         o.pickup_store_id,
@@ -1992,6 +1999,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       delivery_type_id: r.delivery_type_id,
       payment_id: r.payment_id,
       is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
+      paymentSummary:adminPaymentSummary(r,storeTimezone),
+      fulfillment_eligible:isOrderEligibleForFulfillment(r),
+      online_payment_required:Number(r.online_payment_required || 0),
+      online_payment_status:r.online_payment_status || null,
       time_option_id: r.time_option_id,
       status_id: r.status_id,
       delivery_address_id: r.delivery_address_id ?? null,
@@ -2129,7 +2140,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const [rows] = await db.query(`
         SELECT o.id, o.store_id, o.public_id, DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
           o.customer_id, o.customer_name, o.customer_phone, o.address, o.comment, o.address_comment,
-          o.total_price, o.payment_id, o.is_paid, o.status_id, o.delivery_type_id, o.delivery_address_id,
+          o.total_price, o.payment_id, o.is_paid,
+        o.payment_projection, o.payment_satisfied_at, o.manual_paid_at, o.online_payment_total, o.online_payment_required, o.online_payment_status, o.status_id, o.delivery_type_id, o.delivery_address_id,
           o.pickup_store_id, s.code AS status_code, s.title AS status_title, s.color AS status_color,
           p.code AS payment_code, p.title AS payment_title, p.icon AS payment_icon,
           m.code AS method_code, m.title AS method_title, t.code AS time_option_code, t.title AS time_option_title,
@@ -2283,6 +2295,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
             o.delivery_type_id,
             o.payment_id,
             o.is_paid,
+        o.payment_projection, o.payment_satisfied_at, o.manual_paid_at, o.online_payment_total, o.online_payment_required, o.online_payment_status,
             o.time_option_id,
             o.status_id,
             o.delivery_address_id,
@@ -2329,6 +2342,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           created_at: helpers.utcToStoreDateTime(row.created_at, storeTimezone),
           total_price: Number(row.total_price || 0),
           is_paid: Number(row.is_paid || 0) === 1 ? 1 : 0,
+          paymentSummary:adminPaymentSummary(row,storeTimezone),
+          fulfillment_eligible:isOrderEligibleForFulfillment(row),
           delivery_address_id: row.delivery_address_id ?? null,
           pickup_store_id: row.pickup_store_id ?? null,
           delivery_zone_name: helpers.strOrNull(row.delivery_zone_name),
@@ -2370,6 +2385,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.delivery_type_id,
           o.payment_id,
           o.is_paid,
+        o.payment_projection, o.payment_satisfied_at, o.manual_paid_at, o.online_payment_total, o.online_payment_required, o.online_payment_status,
           o.time_option_id,
           o.status_id,
           o.delivery_address_id,
@@ -2468,6 +2484,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           discounts_json: discountsJson,
           benefits_meta: benefitsMeta,
           is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
+      paymentSummary:adminPaymentSummary(r,storeTimezone),
+      fulfillment_eligible:isOrderEligibleForFulfillment(r),
           delivery_address_id: r.delivery_address_id ?? null,
 
           status_code: r.statusCode ?? null,
@@ -2739,6 +2757,48 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // order details
   // ---------------------------
   // GET /api/admin/orders/:id
+  async function paymentOrder(req) {
+    const tenantId=helpers.getTenantId(req),storeId=helpers.getStoreId(req),id=Number(req.params.id);
+    if(!Number.isInteger(id) || id<1)throw Object.assign(new Error('BAD_ID'),{status:400});
+    const [rows]=await db.query(`SELECT o.*,s.code AS status_code,s.is_final FROM order_orders o
+      LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id
+      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1`,[tenantId,storeId,id]);
+    if(!rows.length)throw Object.assign(new Error('NOT_FOUND'),{status:404});
+    return rows[0];
+  }
+  function adminPaymentSummary(order,timezone) {
+    const summary=getOrderPaymentSummary(order);
+    if(summary.paidAt)summary.paidAt=helpers.utcToStoreDateTime(summary.paidAt,timezone);
+    return summary;
+  }
+  router.get('/:id/payment',async(req,res)=>{
+    try {
+      const order=await paymentOrder(req);
+      const [actors]=await db.query('SELECT role FROM app_users WHERE tenant_id=? AND id=? AND is_active=1',[order.tenant_id,req.user.userId]);
+      const detailsAllowed=paymentPermissions(actors[0]).read;
+      const timezone=await getStoreTimezone(order.tenant_id,order.store_id);
+      const summary=adminPaymentSummary(order,timezone);
+      let attempts=[],refunds=[],detailsUnavailable=false;
+      if(detailsAllowed && Number(order.online_payment_required)) {
+        try {const snapshot=await createOrderOnlinePayment({db,client:req.app.get('paymentServiceClient')}).snapshot(order);attempts=snapshot.attempts;refunds=snapshot.refunds;}
+        catch(error){detailsUnavailable=true;console.warn(JSON.stringify({operation:'order.payment.history',orderId:order.id,code:error.code || 'PAYMENT_INTERNAL_ERROR'}));}
+      }
+      attempts=attempts.map(attempt=>({...attempt,createdAt:helpers.utcToStoreDateTime(attempt.createdAt,timezone),paidAt:attempt.paidAt?helpers.utcToStoreDateTime(attempt.paidAt,timezone):null}));
+      res.set('cache-control','no-store').json({ok:true,data:{summary,attempts,refunds,detailsAllowed,refundManageAllowed:paymentPermissions(actors[0]).manage,detailsUnavailable}});
+    }catch(error){res.status(error.status || 500).json({ok:false,error:error.status?error.message:'PAYMENT_INTERNAL_ERROR'});}
+  });
+  router.post('/:id/payment/refresh',async(req,res)=>{
+    try {
+      const order=await paymentOrder(req);
+      if(!Number(order.online_payment_required))return res.status(409).json({ok:false,error:'ONLINE_PAYMENT_NOT_AVAILABLE'});
+      const bridge=createOrderOnlinePayment({db,client:req.app.get('paymentServiceClient')});
+      await bridge.claimRefresh(order);
+      const payment=await bridge.state(order);
+      await req.app.get('synchronizeOrderOnlinePayment')(order,payment);
+      const current=await paymentOrder(req);
+      res.set('cache-control','no-store').json({ok:true,data:{summary:adminPaymentSummary(current,await getStoreTimezone(current.tenant_id,current.store_id))}});
+    }catch(error){res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'});}
+  });
   router.get("/:id", async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -2808,7 +2868,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         `SELECT o.id,
                 o.total_price,
                 o.change_from,
-                o.payment_id,
+                o.payment_id, o.online_payment_required, o.online_payment_status, o.payment_projection, o.manual_paid_at,
                 p.code AS payment_code
            FROM order_orders o
       LEFT JOIN order_payments p
@@ -2829,6 +2889,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const existing = existingRows[0] || {};
+      if(Number(existing.online_payment_required)) {
+        await conn.rollback();transactionStarted=false;conn.release();conn=null;
+        return res.status(409).json({ok:false,error:'ONLINE_PAYMENT_MANAGED_BY_GATEWAY'});
+      }
       let nextPaymentId = Number(existing.payment_id || 0) > 0 ? Number(existing.payment_id) : null;
       let effectivePaymentCode = String(existing.payment_code || "").trim().toLowerCase();
 
@@ -2893,6 +2957,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1`,
         [isPaidRaw, nextPaymentId, nextChangeFrom, tenantId, storeId, id]
       );
+      await conn.query('UPDATE order_orders SET manual_paid_at=IF(?,UTC_TIMESTAMP(6),NULL),manual_paid_by=IF(?,?,NULL) WHERE tenant_id=? AND store_id=? AND id=?',
+        [isPaidRaw,isPaidRaw,req.user.userId,tenantId,storeId,id]);
+      await conn.query("INSERT INTO order_payment_audit (tenant_id,store_id,order_id,actor_user_id,type,amount,created_at) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(6))",
+        [tenantId,storeId,id,req.user.userId,isPaidRaw?'manual_paid':'manual_unpaid',existing.total_price]);
       if (!Number(result?.affectedRows || 0)) {
         await conn.rollback();
         transactionStarted = false;
@@ -2936,6 +3004,46 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // create refund
   // ---------------------------
   // POST /api/admin/orders/:id/refunds
+  router.post('/:id/refunds/:refundId/retry',async(req,res)=>{
+    const tenantId=helpers.getTenantId(req),storeId=helpers.getStoreId(req),id=Number(req.params.id),refundId=Number(req.params.refundId),value=req.body;
+    const email=String(value?.receipt_email || '').trim(),key=String(value?.retry_key || ''),attempt=Number(value?.expected_attempt);
+    const retryHash=crypto.createHash('sha256').update(JSON.stringify({email,attempt})).digest('hex');
+    if(!req.is('application/json') || !Number.isInteger(id) || id<1 || !Number.isInteger(refundId) || refundId<1
+      || !value || value.confirmed!==true || !Number.isInteger(attempt) || attempt<1 || !/^[a-zA-Z0-9_-]{1,64}$/.test(key)
+      || (email && (email.length>254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))
+      || Object.keys(value).some(name=>!['confirmed','receipt_email','retry_key','expected_attempt'].includes(name)))return res.status(400).json({ok:false,error:'PAYMENT_INPUT_INVALID'});
+    let conn;
+    try {
+      const [actors]=await db.query('SELECT role FROM app_users WHERE tenant_id=? AND id=? AND is_active=1',[tenantId,req.user.userId]);
+      if(!paymentPermissions(actors[0]).manage)return res.status(403).json({ok:false,error:'FORBIDDEN'});
+      const [saved]=await db.query('SELECT retry_idempotency_key,retry_payload_hash,financial_attempt FROM order_refunds WHERE tenant_id=? AND store_id=? AND order_id=? AND id=?',[tenantId,storeId,id,refundId]);
+      if(saved[0]?.retry_idempotency_key===key) {
+        if(saved[0].retry_payload_hash!==retryHash || Number(saved[0].financial_attempt)!==attempt+1)return res.status(409).json({ok:false,error:'PAYMENT_IDEMPOTENCY_CONFLICT'});
+        return res.json({ok:true,data:await fetchOrderPayload(tenantId,storeId,id)});
+      }
+      const [orders]=await db.query('SELECT * FROM order_orders WHERE tenant_id=? AND store_id=? AND id=? AND online_payment_required=1',[tenantId,storeId,id]);
+      if(!orders.length)return res.status(404).json({ok:false,error:'NOT_FOUND'});
+      const bridge=createOrderOnlinePayment({db,client:req.app.get('paymentServiceClient')}),snapshot=await bridge.snapshot(orders[0]);
+      if(snapshot.anomalies?.length || snapshot.attempts?.some(p=>p.operations?.some(op=>['reserved','uncertain'].includes(op.status))))return res.status(409).json({ok:false,error:'PAYMENT_PROVIDER_RECOVERY_REQUIRED'});
+      const refunds=(snapshot.refunds || []).filter(r=>String(r.orderReturnId)===String(refundId));
+      if(refunds.some(r=>!['failed','cancelled'].includes(r.status)))return res.status(409).json({ok:false,error:'PAYMENT_INVALID_STATE'});
+      conn=await db.getConnection();await conn.beginTransaction();
+      const [rows]=await conn.query('SELECT * FROM order_refunds WHERE tenant_id=? AND store_id=? AND order_id=? AND id=? FOR UPDATE',[tenantId,storeId,id,refundId]);
+      const row=rows[0];
+      if(!row)throw Object.assign(new Error(),{code:'PAYMENT_NOT_FOUND',status:404});
+      if(row.retry_idempotency_key===key && row.retry_payload_hash===retryHash && Number(row.financial_attempt)===attempt+1) {await conn.commit();conn.release();conn=null;return res.json({ok:true,data:await fetchOrderPayload(tenantId,storeId,id)});}
+      if(row.financial_state!=='failed' || Number(row.financial_attempt)!==attempt)throw Object.assign(new Error(),{code:'PAYMENT_INVALID_STATE',status:409});
+      await conn.query(`UPDATE order_refunds SET financial_state='queued',financial_attempt=financial_attempt+1,financial_error_code=NULL,
+        retry_idempotency_key=?,retry_payload_hash=?,receipt_email=?,dispatch_after=UTC_TIMESTAMP(6),dispatch_lease_token=NULL,dispatch_lease_until=NULL WHERE tenant_id=? AND store_id=? AND id=?`,[key,retryHash,email || row.receipt_email,tenantId,storeId,refundId]);
+      await conn.query(`INSERT INTO order_payment_audit (tenant_id,store_id,order_id,actor_user_id,type,amount,created_at)
+        VALUES (?,?,?,?,'gateway_refund_retry',?,UTC_TIMESTAMP(6))`,[tenantId,storeId,id,req.user.userId,row.total_amount]);
+      await conn.commit();conn.release();conn=null;
+      await bridge.dispatchRefund(refundId,tenantId,storeId);
+      const payload=await fetchOrderPayload(tenantId,storeId,id);if(payload)ordersEvents?.publish(tenantId,storeId,'order.updated',payload);
+      res.json({ok:true,data:payload});
+    }catch(error){if(conn)await conn.rollback();res.status(error.status || 500).json({ok:false,error:/^PAYMENT_[A-Z_]+$/.test(error.code || '')?error.code:'PAYMENT_INTERNAL_ERROR'});}
+    finally{conn?.release();}
+  });
   router.post("/:id/refunds", async (req, res) => {
     const conn = await db.getConnection();
     let transactionStarted = false;
@@ -2975,7 +3083,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.items,
           o.total_price,
           o.delivery_cost,
-          o.is_paid
+          o.is_paid, o.online_payment_required,o.payment_id,o.payment_projection
         FROM order_orders o
         WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
         LIMIT 1
@@ -2991,6 +3099,28 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const orderRow = orderRows[0] || {};
+      const gateway=Number(orderRow.online_payment_required)===1;
+      const refundKey=String(req.body?.refund_request_key || req.get("Idempotency-Key") || "");
+      const fingerprint=crypto.createHash("sha256").update(JSON.stringify({items:itemsInput,comment,email:req.body?.receipt_email || null})).digest("hex");
+      if(gateway) {
+        const email=String(req.body?.receipt_email || '').trim();
+        if(comment && comment.length>255) {
+          await conn.rollback();transactionStarted=false;safeRelease();return res.status(400).json({ok:false,error:'PAYMENT_INPUT_INVALID'});
+        }
+        if(email && (email.length>254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+          await conn.rollback();transactionStarted=false;safeRelease();return res.status(400).json({ok:false,error:'PAYMENT_RECEIPT_CONTACT_REQUIRED'});
+        }
+        const [actors]=await conn.query("SELECT role FROM app_users WHERE tenant_id=? AND id=? AND is_active=1",[tenantId,req.user.userId]);
+        if(!paymentPermissions(actors[0]).manage || req.body?.confirmed!==true || !/^[a-zA-Z0-9_-]{1,64}$/.test(refundKey) || paymentCode!=="online") {
+          await conn.rollback();transactionStarted=false;safeRelease();return res.status(403).json({ok:false,error:"PAYMENT_REFUND_CONFIRMATION_REQUIRED"});
+        }
+        const [prior]=await conn.query("SELECT id,order_id,payload_hash FROM order_refunds WHERE tenant_id=? AND store_id=? AND idempotency_key=?",[tenantId,storeId,refundKey]);
+        if(prior.length) {
+          await conn.rollback();transactionStarted=false;safeRelease();
+          if(prior[0].payload_hash!==fingerprint || Number(prior[0].order_id)!==id)return res.status(409).json({ok:false,error:"PAYMENT_IDEMPOTENCY_CONFLICT"});
+          return res.json({ok:true,data:await fetchOrderPayload(tenantId,storeId,id)});
+        }
+      }
       let items = [];
       try {
         const parsed = orderRow.items ? JSON.parse(orderRow.items) : [];
@@ -3001,10 +3131,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         `
         SELECT id, code, title, icon
         FROM order_payments
-        WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1
+        WHERE tenant_id=? AND store_id=? AND code=? AND (is_active=1 OR ?=1)
         LIMIT 1
         `,
-        [tenantId, storeId, paymentCode]
+        [tenantId, gateway?1:storeId, paymentCode,gateway?1:0]
       );
       if (!paymentRows.length) {
         await conn.rollback();
@@ -3015,11 +3145,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       const refundMap = await fetchRefundRecordsMap(conn, tenantId, storeId, [id]);
       const orderForRefund = {
+        online_payment_required:gateway?1:0,
         id,
         items,
         total_price: roundMoney(orderRow.total_price || 0),
         delivery_cost: roundMoney(orderRow.delivery_cost || 0),
-        is_paid: Number(orderRow.is_paid || 0) === 1 ? 1 : 0,
+        is_paid:gateway && Number((typeof orderRow.payment_projection==="string"?JSON.parse(orderRow.payment_projection):orderRow.payment_projection)?.paidAmount)>0?1:(Number(orderRow.is_paid || 0)===1?1:0),
       };
       const refundPlan = buildOrderRefundState(orderForRefund, refundMap.get(id) || []);
       const plannedRefund = buildRefundPlan(orderForRefund, refundMap.get(id) || [], itemsInput);
@@ -3081,6 +3212,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         throw new Error("REFUND_INSERT_FAILED");
       }
 
+      if(gateway)await conn.query(`UPDATE order_refunds SET financial_state='queued',idempotency_key=?,payload_hash=?,receipt_email=?,dispatch_after=UTC_TIMESTAMP(6)
+        WHERE tenant_id=? AND store_id=? AND id=?`,[refundKey,fingerprint,req.body?.receipt_email || null,tenantId,storeId,refundId]);
       if (Array.isArray(plannedRefund.items) && plannedRefund.items.length) {
         const placeholders = plannedRefund.items.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
         const params = [];
@@ -3119,6 +3252,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       transactionStarted = false;
       safeRelease();
 
+      if(gateway)await createOrderOnlinePayment({db,client:req.app.get('paymentServiceClient')}).dispatchRefund(refundId,tenantId,storeId);
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (!payload) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
@@ -3147,6 +3281,98 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // change status
   // ---------------------------
   // PUT /api/admin/orders/:id/status
+  async function releaseCanceledOrderResources(conn,tenantId,orderRow) {
+    await releaseOrderBonusReserve(conn,{tenantId,orderId:orderRow.id,customerId:Number(orderRow.customer_id || 0) || null});
+        let orderItems = [];
+        try {
+          const parsed = orderRow.items ? JSON.parse(orderRow.items) : [];
+          if (Array.isArray(parsed)) orderItems = parsed;
+        } catch {
+          orderItems = [];
+        }
+        const rewardCustomerId = Number(orderRow?.customer_id || 0);
+        const giftRewardIds = Array.from(
+          new Set(
+            orderItems
+              .map((item) => Number(item?.gift_reward_id || 0))
+              .filter((rewardId) => Number.isInteger(rewardId) && rewardId > 0)
+          )
+        );
+        if (rewardCustomerId > 0 && giftRewardIds.length) {
+          await conn.query(
+            `UPDATE mkt_discount_rewards
+                SET status='available', used_at=NULL, updated_at=NOW()
+              WHERE tenant_id=?
+                AND customer_id=?
+                AND reward_type='gift'
+                AND status='used'
+                AND id IN (?)`,
+            [tenantId, rewardCustomerId, giftRewardIds]
+          );
+        }
+        const canceledBenefitsMeta = parseOrderBenefitsMetaJson(orderRow?.benefits_meta_json);
+        const canceledRewardPromoId = canceledBenefitsMeta?.selected_promo_source === "reward_promo"
+          ? (Number(canceledBenefitsMeta?.selected_promo_reward_id || 0) || null)
+          : null;
+        if (rewardCustomerId > 0 && canceledRewardPromoId) {
+          await conn.query(
+            `UPDATE mkt_discount_rewards
+                SET status='available', used_at=NULL, updated_at=NOW()
+              WHERE tenant_id=?
+                AND customer_id=?
+                AND reward_type='promo_code'
+                AND status='used'
+                AND id=?`,
+            [tenantId, rewardCustomerId, canceledRewardPromoId]
+          );
+        }
+        if(Number(orderRow.online_payment_required) && rewardCustomerId>0 && canceledBenefitsMeta.selected_discount_source==='reward_discount') {
+          const rewardId=Number(canceledBenefitsMeta.selected_discount_id);
+          if(Number.isInteger(rewardId) && rewardId>0)await conn.query("UPDATE mkt_discount_rewards SET status='available',used_at=NULL,updated_at=NOW() WHERE tenant_id=? AND customer_id=? AND reward_type='discount' AND status='used' AND id=?",[tenantId,rewardCustomerId,rewardId]);
+        }
+  }
+
+  router.cleanupAbandoned=async(client)=>{
+    if(process.env.PAYMENT_ABANDONED_CLEANUP_ENABLED!=='1')return;
+    const hours=Number(process.env.PAYMENT_ABANDONED_ORDER_HOURS || 72);
+    if(!Number.isInteger(hours) || hours<1 || hours>720)throw Object.assign(new Error(),{code:'PAYMENT_CLEANUP_CONFIG_INVALID'});
+    const [candidates]=await db.query(`SELECT o.tenant_id,o.store_id,o.id FROM order_orders o
+      JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id
+      WHERE o.online_payment_required=1 AND o.is_paid=0 AND o.payment_abandoned_at IS NULL AND o.is_active=1
+      AND o.payment_satisfied_at IS NULL AND o.stock_deducted_at IS NULL AND s.code='new'
+      AND o.created_at<DATE_SUB(UTC_TIMESTAMP(6),INTERVAL ? HOUR)
+      AND (o.payment_cleanup_after IS NULL OR o.payment_cleanup_after<=UTC_TIMESTAMP(6)) ORDER BY o.id LIMIT 10`,[hours]);
+    for(const candidate of candidates) {
+      const {tenant_id:tenantId,store_id:storeId,id}=candidate;let conn;
+      try {
+        const closed=await client.closeAbandoned({tenantId,storeId,idempotencyKey:`abandoned:${id}`},{orderId:String(id)});
+        if(closed?.closed!==true)throw Object.assign(new Error(),{code:'PAYMENT_SERVICE_INVALID_RESPONSE'});
+        conn=await db.getConnection();await conn.beginTransaction();
+        const [rows]=await conn.query(`SELECT o.* FROM order_orders o JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id
+          WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_paid=0 AND o.online_payment_required=1
+          AND o.stock_deducted_at IS NULL AND o.payment_satisfied_at IS NULL AND o.payment_abandoned_at IS NULL AND s.code='new' FOR UPDATE`,[tenantId,storeId,id]);
+        if(!rows.length){await conn.rollback();conn.release();conn=null;continue;}
+        const order=rows[0],projection=order.payment_projection?(typeof order.payment_projection==='string'?JSON.parse(order.payment_projection):order.payment_projection):null;
+        if(projection?.paidAmount || projection?.anomalies?.length)throw Object.assign(new Error(),{code:'PAYMENT_PROVIDER_RECOVERY_REQUIRED'});
+        const [statuses]=await conn.query("SELECT id FROM order_statuses WHERE tenant_id=? AND store_id=? AND is_active=1 AND code IN ('canceled','cancelled') ORDER BY id LIMIT 1",[tenantId,storeId]);
+        if(!statuses.length)throw Object.assign(new Error(),{code:'PAYMENT_CLEANUP_CANCEL_STATUS_REQUIRED'});
+        const statusId=statuses[0].id;
+        await conn.query('UPDATE order_orders SET status_id=?,payment_abandoned_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND store_id=? AND id=?',[statusId,tenantId,storeId,id]);
+        await releaseCanceledOrderResources(conn,tenantId,order);
+        await syncDeliveredOrderDiscountUsage(conn,{tenantId,storeId,orderId:id,statusId,customerId:order.customer_id,discountsJson:order.discounts_json,orderPromoCode:order.promo_code,benefitsMetaRaw:order.benefits_meta_json});
+        await syncDeliveredOrderRewardPromoUsage(conn,{tenantId,storeId,statusId,customerId:order.customer_id,benefitsMetaRaw:order.benefits_meta_json});
+        await conn.query(`INSERT INTO order_payment_audit (tenant_id,store_id,order_id,actor_user_id,type,amount,created_at) VALUES (?,?,?,NULL,'gateway_abandoned',?,UTC_TIMESTAMP(6))`,[tenantId,storeId,id,order.total_price]);
+        await conn.commit();conn.release();conn=null;
+        const payload=await fetchOrderPayload(tenantId,storeId,id);if(payload)ordersEvents?.publish(tenantId,storeId,'order.updated',payload);
+        console.info(JSON.stringify({operation:'order.payment.abandoned',tenantId,storeId,orderId:id,result:'resources_released'}));
+      }catch(error) {
+        if(conn)await conn.rollback();
+        await db.query('UPDATE order_orders SET payment_cleanup_after=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 1 HOUR) WHERE tenant_id=? AND store_id=? AND id=? AND payment_abandoned_at IS NULL',[tenantId,storeId,id]);
+        console.warn(JSON.stringify({operation:'order.payment.abandoned',tenantId,storeId,orderId:id,result:'held',causeCode:/^[A-Z][A-Z0-9_]{0,79}$/.test(error.code || '')?error.code:'PAYMENT_CLEANUP_FAILED'}));
+      }finally{conn?.release();}
+    }
+  };
+
   router.put("/:id/status", async (req, res) => {
     const conn = await db.getConnection();
     let transactionStarted = false;
@@ -3211,7 +3437,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const [orderRows] = await conn.query(
-        `SELECT id, public_id, customer_id, promo_code, items, discounts_json, ${hasBenefitsMetaColumn ? "benefits_meta_json," : "NULL AS benefits_meta_json,"} status_id, stock_deducted_at, stock_document_id
+        `SELECT id, tenant_id, store_id, total_price, payment_projection, public_id, customer_id, promo_code, items, discounts_json, ${hasBenefitsMetaColumn ? "benefits_meta_json," : "NULL AS benefits_meta_json,"} status_id, stock_deducted_at, stock_document_id, online_payment_required, online_payment_status
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1
@@ -3226,6 +3452,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const orderRow = orderRows[0];
+      if(Number(orderRow.online_payment_required) && ['canceled','cancelled'].includes(String(statusRows[0]?.code))) {
+        const bridge=createOrderOnlinePayment({db,client:req.app.get('paymentServiceClient')});
+        const financial=await bridge.snapshot(orderRow);
+        if(financial.activePayment) {
+          await conn.rollback();transactionStarted=false;safeRelease();
+          return res.status(409).json({ok:false,error:'ORDER_HAS_ACTIVE_ONLINE_PAYMENT'});
+        }
+      }
+      if (!isOrderEligibleForFulfillment(orderRow) && !["canceled","cancelled","new"].includes(String(statusRows[0]?.code))) {
+        await conn.rollback();transactionStarted=false;safeRelease();
+        return res.status(409).json({ok:false,error:"ORDER_AWAITING_ONLINE_PAYMENT"});
+      }
       const currentStatusId = Number(orderRow?.status_id || 0);
       let currentStatusCode = "";
       let currentStatusIsFinal = false;
@@ -3280,6 +3518,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       let stockDocumentId = orderRow.stock_document_id != null ? Number(orderRow.stock_document_id) : null;
       let stockChangedProductIds = [];
       const shouldDeductNow =
+        isOrderEligibleForFulfillment(orderRow) &&
         deductMode === "on_status" &&
         !stockDeductedAt &&
         deductStatusId != null &&
@@ -3334,11 +3573,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       );
 
       if (isCanceledTarget) {
-        await releaseOrderBonusReserve(conn, {
-          tenantId,
-          orderId: id,
-          customerId: Number(orderRow?.customer_id || 0) || null,
-        });
+        await releaseCanceledOrderResources(conn,tenantId,orderRow);
       } else if (isSuccessfulFinalTarget) {
         await settleOrderBonus(conn, {
           tenantId,
@@ -3355,52 +3590,6 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           discountsJson: orderRow?.discounts_json || null,
           benefitsMetaRaw: orderRow?.benefits_meta_json || null,
         });
-      }
-
-      if (isCanceledTarget) {
-        let orderItems = [];
-        try {
-          const parsed = orderRow.items ? JSON.parse(orderRow.items) : [];
-          if (Array.isArray(parsed)) orderItems = parsed;
-        } catch {
-          orderItems = [];
-        }
-        const rewardCustomerId = Number(orderRow?.customer_id || 0);
-        const giftRewardIds = Array.from(
-          new Set(
-            orderItems
-              .map((item) => Number(item?.gift_reward_id || 0))
-              .filter((rewardId) => Number.isInteger(rewardId) && rewardId > 0)
-          )
-        );
-        if (rewardCustomerId > 0 && giftRewardIds.length) {
-          await conn.query(
-            `UPDATE mkt_discount_rewards
-                SET status='available', used_at=NULL, updated_at=NOW()
-              WHERE tenant_id=?
-                AND customer_id=?
-                AND reward_type='gift'
-                AND status='used'
-                AND id IN (?)`,
-            [tenantId, rewardCustomerId, giftRewardIds]
-          );
-        }
-        const canceledBenefitsMeta = parseOrderBenefitsMetaJson(orderRow?.benefits_meta_json);
-        const canceledRewardPromoId = canceledBenefitsMeta?.selected_promo_source === "reward_promo"
-          ? (Number(canceledBenefitsMeta?.selected_promo_reward_id || 0) || null)
-          : null;
-        if (rewardCustomerId > 0 && canceledRewardPromoId) {
-          await conn.query(
-            `UPDATE mkt_discount_rewards
-                SET status='available', used_at=NULL, updated_at=NOW()
-              WHERE tenant_id=?
-                AND customer_id=?
-                AND reward_type='promo_code'
-                AND status='used'
-                AND id=?`,
-            [tenantId, rewardCustomerId, canceledRewardPromoId]
-          );
-        }
       }
 
       await accrueOrderBenefitsIfAvailable({
@@ -3574,7 +3763,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [existingRows] = await db.query(
-        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, status_id,
+        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, status_id, online_payment_required, online_payment_status,
                 ${hasBenefitsMetaColumn ? "benefits_meta_json," : ""}
                 items,
                 stock_deducted_at
@@ -3587,6 +3776,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
       const existing = existingRows[0] || {};
+      if (Number(existing.online_payment_required)) return res.status(409).json({ok:false,error:"ONLINE_ORDER_EDIT_LOCKED"});
       let previousItems = [];
       try {
         const parsedExistingItems = existing?.items ? JSON.parse(existing.items) : [];

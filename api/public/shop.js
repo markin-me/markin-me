@@ -60,10 +60,215 @@ const {
   registerOrderBenefitsAccrualProvider,
 } = require('../../services/order-benefits-accrual-provider');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
+const {createOrderOnlinePayment,paymentError} = require('../../data/order-online-payment');
+const {isOrderEligibleForFulfillment} = require('../helpers/orderFulfillment');
+const {buildOnlineItemPrices} = require('../helpers/orderOnlinePricing');
+const {getOrderPaymentSummary,storedProjection,clientPaymentSummary}=require('../helpers/orderPaymentSummary');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 
-module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, presenceService }) {
+module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, presenceService, paymentServiceClient }) {
   const router = express.Router();
+  const onlinePayments = createOrderOnlinePayment({db,client:paymentServiceClient});
+  // Reuse the release actions below; this worker only resumes durable pending work.
+  let releaseWorkerStarted=false;
+  let abandonedCleanup=null;
+  router.setAbandonedCleanup=work=>{abandonedCleanup=work;};
+  router.startPaymentReleaseWorker=()=>{
+    if(releaseWorkerStarted || process.env.PAYMENT_ORDER_RELEASE_WORKER_ENABLED!=='1')return;
+    releaseWorkerStarted=true;
+    const tick=async()=>{
+      try{
+        await db.query("UPDATE order_payment_release_effects SET status='uncertain',error_code='ORDER_PAYMENT_EFFECT_INTERRUPTED',updated_at=UTC_TIMESTAMP(6) WHERE status='sending' AND updated_at<DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 120 SECOND)");
+        await onlinePayments.dispatchRefunds();
+        if(abandonedCleanup)await abandonedCleanup();
+        const [pending]=await db.query("SELECT DISTINCT tenant_id,store_id,order_id AS id FROM order_payment_release_effects WHERE status='pending' ORDER BY order_id LIMIT 10");
+        for(const order of pending){
+          const payload=await fetchOrderPayload(order.tenant_id,order.store_id,order.id);
+          if(payload && isOrderEligibleForFulfillment(payload))await deliverPaymentReleaseEffects(order,payload);
+        }
+      }catch(error){console.error(JSON.stringify({operation:'order.payment.release.worker',result:'retry',causeCode:/^[A-Z][A-Z0-9_]{0,79}$/.test(error.code || '')?error.code:'ORDER_PAYMENT_RELEASE_FAILED'}));}
+      finally{const timer=setTimeout(tick,5000);timer.unref();}
+    };
+    const timer=setTimeout(tick,5000);timer.unref();
+  };
+  async function synchronizeOnlinePayment(order,payment,deliveryEvent=null) {
+    const applied=await applyOnlinePayment(order,payment,deliveryEvent);
+    // The event ACK acknowledges the committed Order transaction, not external notification delivery.
+    if(deliveryEvent && process.env.PAYMENT_ORDER_RELEASE_WORKER_ENABLED==='1')return;
+    const payload=applied || await fetchOrderPayload(order.tenant_id,order.store_id,order.id);
+    if(payload && isOrderEligibleForFulfillment(payload))await deliverPaymentReleaseEffects(order,payload);
+  }
+  async function applyOnlinePayment(order,payment,deliveryEvent=null,offlineMethod=null) {
+    const snapshot=await onlinePayments.snapshot(order);
+    const {attempts,...projection}=snapshot;
+    if(deliveryEvent && (!attempts.some(attempt=>attempt.id===deliveryEvent.paymentId)
+      || !Number.isSafeInteger(projection.paymentVersions?.[deliveryEvent.paymentId])
+      || projection.paymentVersions[deliveryEvent.paymentId]<deliveryEvent.paymentVersion))throw paymentError('PAYMENT_EVENT_SNAPSHOT_MISMATCH',409);
+    const conn=await db.getConnection();let stockChanged=[];
+    try {
+      await conn.beginTransaction();
+      const [rows]=await conn.query("SELECT o.*,s.code AS status_code FROM order_orders o LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id WHERE o.tenant_id=? AND o.store_id=? AND o.id=? FOR UPDATE",[order.tenant_id,order.store_id,order.id]);
+      const current=rows[0];
+      if (!current) throw paymentError('ORDER_NOT_FOUND',404);
+      if(!Number(current.online_payment_required))throw paymentError('PAYMENT_EVENT_ORDER_MISMATCH',409);
+      if(offlineMethod) {
+        if(current.status_code!=='new' || current.is_paid || current.stock_deducted_at || current.payment_satisfied_at || projection.paidAmount || projection.activePayment || projection.attentionRequired || projection.anomalies?.length)throw paymentError('PAYMENT_INVALID_STATE',409);
+        const [methods]=await conn.query("SELECT id FROM order_payments WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1 FOR UPDATE",[order.tenant_id,order.store_id,offlineMethod]);
+        if(methods.length!==1)throw paymentError('PAYMENT_INPUT_INVALID',400);
+        await conn.query('UPDATE order_orders SET payment_id=?,online_payment_required=0 WHERE tenant_id=? AND store_id=? AND id=?',[methods[0].id,order.tenant_id,order.store_id,order.id]);
+        current.online_payment_required=0;
+        current.payment_code=offlineMethod;
+      }
+      if(deliveryEvent){
+        const [received]=await conn.query('SELECT * FROM order_payment_received_events WHERE event_id=? FOR UPDATE',[deliveryEvent.eventId]);
+        if(received.length){
+          const saved=received[0];
+          if(String(saved.tenant_id)!==deliveryEvent.tenantId || String(saved.store_id)!==deliveryEvent.storeId
+            || String(saved.order_id)!==deliveryEvent.orderId || String(saved.payment_id)!==deliveryEvent.paymentId
+            || Number(saved.payment_version)!==deliveryEvent.paymentVersion)throw paymentError('PAYMENT_IDEMPOTENCY_CONFLICT',409);
+          await conn.commit();return;
+        }
+        await conn.query(`INSERT INTO order_payment_received_events
+          (event_id,tenant_id,store_id,order_id,payment_id,payment_version,created_at) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(6))`,
+        [deliveryEvent.eventId,deliveryEvent.tenantId,deliveryEvent.storeId,deliveryEvent.orderId,deliveryEvent.paymentId,deliveryEvent.paymentVersion]);
+      }
+      const previous=storedProjection(current);
+      if(Object.entries(previous?.paymentVersions || {}).some(([id,version])=>Number(projection.paymentVersions?.[id] || 0)<Number(version))) {await conn.commit();return;}
+      if(previous?.paidAmount && !projection.paidAmount) {await conn.commit();return;}
+      if(previous?.updatedAt && projection.updatedAt && String(previous.updatedAt)>String(projection.updatedAt)) {await conn.commit();return;}
+      const refundGroups=new Map();
+      for(const refund of snapshot.refunds || [])if(refund.orderReturnId){const group=refundGroups.get(refund.orderReturnId) || [];group.push(refund);refundGroups.set(refund.orderReturnId,group);}
+      for(const [returnId,refunds] of refundGroups) {
+        const latest=refunds[refunds.length-1],state=refunds.some(r=>r.status==='succeeded')?'succeeded':['failed','cancelled'].includes(latest.status)?'failed':latest.recoveryState==='manual_review'?'manual_review':'processing';
+        await conn.query("UPDATE order_refunds SET financial_state=?,financial_error_code=? WHERE tenant_id=? AND store_id=? AND order_id=? AND id=? AND financial_state<>'manual' AND financial_attempt=?",
+          [state,latest.errorCode || null,order.tenant_id,order.store_id,order.id,returnId,latest.businessAttempt]);
+      }
+      const summary=getOrderPaymentSummary(current,projection);
+      // Stage 3.1 may have applied paid before this marker existed: do not replay its effects.
+      const alreadyApplied=summary.paymentSatisfied && current.online_payment_status==='paid';
+      const firstSatisfied=(summary.paymentSatisfied || Boolean(offlineMethod)) && summary.fulfillmentEligible && !current.payment_satisfied_at && !alreadyApplied;
+      if(alreadyApplied && !current.payment_satisfied_at)await conn.query('UPDATE order_orders SET payment_satisfied_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND store_id=? AND id=?',
+        [order.tenant_id,order.store_id,order.id]);
+      await conn.query("UPDATE order_orders SET payment_projection=?,online_payment_status=?,is_paid=? WHERE tenant_id=? AND store_id=? AND id=?",
+        [JSON.stringify(projection),summary.paymentSatisfied?'paid':'pending',summary.paymentSatisfied?1:0,order.tenant_id,order.store_id,order.id]);
+      if (!firstSatisfied) {await conn.commit();}
+      else {
+      const [settings]=await conn.query("SELECT order_stock_deduct_mode FROM ten_tenants WHERE id=?",[order.tenant_id]);
+      let stock=null;
+      if (String(settings[0]?.order_stock_deduct_mode || 'on_create')==='on_create' && !current.stock_deducted_at && !['canceled','cancelled'].includes(current.status_code)) {
+        stock=await applyStockDeductionForOrderItems({db:conn,tenantId:order.tenant_id,storeId:order.store_id,
+          items:typeof current.items==='string'?JSON.parse(current.items):current.items,publicId:current.public_id,createdBy:null});
+        stockChanged=(stock?.deductions || []).map(item=>Number(item.productId)).filter(Boolean);
+      }
+      await conn.query("UPDATE order_orders SET payment_satisfied_at=UTC_TIMESTAMP(6),stock_deducted_at=COALESCE(stock_deducted_at,?),stock_document_id=COALESCE(stock_document_id,?) WHERE tenant_id=? AND store_id=? AND id=?",
+        [stock?.stockDeductedAt || null,stock?.stockDocumentId || null,order.tenant_id,order.store_id,order.id]);
+      await accrueOrderBenefitProgress({conn,tenantId:order.tenant_id,storeId:order.store_id,orderId:order.id});
+      await syncCustomerOrderMetrics(conn,order.tenant_id,current.customer_id);
+      await conn.query(`INSERT INTO order_payment_release_effects (tenant_id,store_id,order_id,effect,created_at,updated_at)
+        VALUES (?,?,?,'print',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),(?,?,?,'telegram',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+        (?,?,?,'max',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),(?,?,?,'push',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))`,
+      Array(4).fill([order.tenant_id,order.store_id,order.id]).flat());
+      await conn.commit();
+      }
+    } catch(error){await conn.rollback();throw error;}finally{conn.release();}
+    if(stockChanged.length)await publishStockChanged(order.tenant_id,order.store_id,{source:'order.payment',order_id:order.id,product_ids:stockChanged});
+    const payload=await fetchOrderPayload(order.tenant_id,order.store_id,order.id);
+    if(payload) {
+      ordersEvents?.publish(order.tenant_id,order.store_id,'order.updated',payload);
+    }
+    return payload;
+  }
+  // Admin and customer refresh use the same application flow and durable release marker.
+  router.synchronizeOnlinePayment=synchronizeOnlinePayment;
+  async function deliverPaymentReleaseEffects(order,payload){
+    const botToken=getEffectiveTelegramBotConfig().telegram_bot_token;
+    const actions={print:()=>sendOrderToPrintBot({db,order:payload,tenantId:order.tenant_id,storeId:order.store_id,strictErrors:true}),
+      telegram:()=>botToken?sendNewOrderNotification(order.tenant_id,order.store_id,payload,{db,botToken,strictErrors:true}):null,
+      max:()=>sendNewOrderMaxNotification(order.tenant_id,order.store_id,payload,{db,strictErrors:true}),
+      push:()=>typeof makeChatTempRouter.sendOrderStatusPush==='function'?makeChatTempRouter.sendOrderStatusPush(order.tenant_id,order.store_id,payload,{strictErrors:true}):null};
+    for(const [effect,send] of Object.entries(actions)){
+      const ids=[order.tenant_id,order.store_id,order.id,effect];
+      const [claim]=await db.query("UPDATE order_payment_release_effects SET status='sending',updated_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND store_id=? AND order_id=? AND effect=? AND status='pending'",ids);
+      if(!claim.affectedRows)continue;
+      try{await send();await db.query("UPDATE order_payment_release_effects SET status='done',updated_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND store_id=? AND order_id=? AND effect=? AND status='sending'",ids);}
+      catch(error){
+        const code=/^[A-Z][A-Z0-9_]{0,79}$/.test(error.code || '')?error.code:'ORDER_PAYMENT_EFFECT_UNCERTAIN';
+        await db.query("UPDATE order_payment_release_effects SET status='uncertain',error_code=?,updated_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND store_id=? AND order_id=? AND effect=? AND status='sending'",[code,...ids]);
+        console.error(JSON.stringify({operation:'order.payment.effect',tenantId:order.tenant_id,orderId:order.id,effect,result:'uncertain',causeCode:code}));
+      }
+    }
+  }
+  async function onlineAvailability(tenantId,storeId) {
+    try { return await onlinePayments.availability(tenantId,storeId); }
+    catch(error) {
+      if (!error.code?.startsWith('PAYMENT_')) throw error;
+      return {available:false,code:error.code};
+    }
+  }
+  router.get('/checkout/payment-availability',async(req,res)=>{
+    try {
+      const tenantId=helpers.getTenantId(req),storeId=Number(req.query.store_id || helpers.getStoreId(req));
+      res.set('cache-control','no-store').json({ok:true,data:await onlineAvailability(tenantId,storeId)});
+    } catch(error) { res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'}); }
+  });
+  async function authorizeOnlineOrder(req) {
+    const tenantId=helpers.getTenantId(req),order=await onlinePayments.load(tenantId,req.params.publicId);
+    const token=str(req.headers['x-customer-token']);
+    if (token) {
+      const customer=await getCustomerByToken(tenantId,token);
+      if (!customer || Number(customer.id)!==Number(order.customer_id)) throw paymentError('ORDER_NOT_FOUND',404);
+    } else {
+      const accessToken=String(req.headers['x-order-payment-token'] || '');
+      if (!order.submission_id || accessToken!==String(order.submission_id)) throw paymentError('ORDER_NOT_FOUND',404);
+    }
+    return order;
+  }
+  router.post('/orders/:publicId/pay',async(req,res)=>{
+    try {
+      if (!req.body || Object.keys(req.body).length) throw paymentError('PAYMENT_INPUT_INVALID',400);
+      const key=String(req.headers['idempotency-key'] || '');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) throw paymentError('PAYMENT_INPUT_INVALID',400);
+      const order=await authorizeOnlineOrder(req);
+      const payment=await onlinePayments.pay(order,key);await synchronizeOnlinePayment(order,payment);
+      const current=await onlinePayments.load(order.tenant_id,order.public_id);
+      res.set('cache-control','no-store').json({ok:true,data:{payment,paymentSummary:clientPaymentSummary(current)}});
+    } catch(error) { res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'}); }
+  });
+  router.get('/orders/:publicId/payment-methods',async(req,res)=>{
+    try {
+      const order=await authorizeOnlineOrder(req);
+      const [methods]=await db.query("SELECT code,title FROM order_payments WHERE tenant_id=? AND store_id=? AND code IN ('cash','card') AND is_active=1 ORDER BY sort,id",[order.tenant_id,order.store_id]);
+      res.set('cache-control','no-store').json({ok:true,data:methods});
+    }catch(error){res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'});}
+  });
+  router.post('/orders/:publicId/payment-method',async(req,res)=>{
+    try {
+      if(!req.body || Object.keys(req.body).some(key=>!['method','confirmed'].includes(key)) || !['cash','card'].includes(req.body.method) || req.body.confirmed!==true)throw paymentError('PAYMENT_INPUT_INVALID',400);
+      const order=await authorizeOnlineOrder(req);
+      if(!Number(order.online_payment_required)) {
+        if(order.payment_code!==req.body.method)throw paymentError('PAYMENT_INVALID_STATE',409);
+      } else {
+        const [methods]=await db.query("SELECT id FROM order_payments WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1",[order.tenant_id,order.store_id,req.body.method]);
+        if(methods.length!==1)throw paymentError('PAYMENT_INPUT_INVALID',400);
+        await onlinePayments.claimRefresh(order);
+        await paymentServiceClient.closeForMethodChange({tenantId:order.tenant_id,storeId:order.store_id},{orderId:String(order.id)});
+        const payload=await applyOnlinePayment(order,null,null,req.body.method);
+        if(payload && isOrderEligibleForFulfillment(payload))await deliverPaymentReleaseEffects(order,payload);
+      }
+      const current=await onlinePayments.load(order.tenant_id,order.public_id);
+      res.set('cache-control','no-store').json({ok:true,data:{paymentSummary:clientPaymentSummary(current),payment_code:current.payment_code,payment_title:current.payment_code==='cash'?'Наличными':'Картой при получении'}});
+    }catch(error){res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'});}
+  });
+  router.get('/orders/:publicId/payment',async(req,res)=>{
+    try {
+      const order=await authorizeOnlineOrder(req);
+      await onlinePayments.claimRefresh(order);
+      const payment=await onlinePayments.state(order);
+      await synchronizeOnlinePayment(order,payment);
+      const current=await onlinePayments.load(order.tenant_id,order.public_id);
+      res.set('cache-control','no-store').json({ok:true,data:{payment,paymentSummary:clientPaymentSummary(current),order:{id:Number(order.id),public_id:order.public_id}}});
+    } catch(error) { res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'}); }
+  });
   const PUBLIC_BONUS_MODAL_DEFAULTS = [
     { key: 'join', title: '\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u043a \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435', description: '', image_url: null, is_enabled: 1, sort_order: 0 },
     { key: 'level-up', title: '\u041f\u043e\u0432\u044b\u0448\u0435\u043d\u0438\u0435 \u0443\u0440\u043e\u0432\u043d\u044f', description: '', image_url: null, is_enabled: 1, sort_order: 1 },
@@ -5558,6 +5763,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         o.delivery_type_id,
         o.payment_id,
         o.is_paid,
+        o.payment_projection, o.payment_satisfied_at, o.manual_paid_at, o.online_payment_total,
+        o.online_payment_required,
+        o.online_payment_status,
         o.time_option_id,
         o.status_id,
 
@@ -5654,6 +5862,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       delivery_type_id: r.delivery_type_id,
       payment_id: r.payment_id,
       is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
+      online_payment_required:Number(r.online_payment_required || 0),
+      online_payment_status:r.online_payment_status || null,
+      paymentSummary:clientPaymentSummary({...r,status_code:r.statusCode}),
+      fulfillment_eligible:isOrderEligibleForFulfillment(r),
       time_option_id: r.time_option_id,
       status_id: r.status_id,
 
@@ -8924,6 +9136,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
+           o.is_paid,o.online_payment_required,o.online_payment_status,o.online_payment_total,o.payment_projection,o.manual_paid_at,
            COALESCE(NULLIF(TRIM(s.customer_progress_title), ''), s.title) AS status_title, s.code AS status_code,
            CASE WHEN COALESCE(s.is_final, 0) = 1
                   OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
@@ -8974,6 +9187,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           status_title: r.status_title || null,
           status_code: r.status_code || null,
           status_is_final: r.status_is_final ? Number(r.status_is_final) : 0,
+          paymentSummary:clientPaymentSummary(r),
           payment_title: r.payment_title || null,
           payment_code: r.payment_code || null,
           items,
@@ -9054,6 +9268,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            o.id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
+           o.is_paid,o.online_payment_required,o.online_payment_status,o.online_payment_total,o.payment_projection,o.manual_paid_at,
            DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
            t.code AS time_option_code, t.title AS time_option_title,
            ps.address AS pickup_store_address,
@@ -9118,6 +9333,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           method_code: r.method_code || null,
           method_title: r.method_title || null,
           status_is_final: r.status_is_final ? Number(r.status_is_final) : 0,
+          paymentSummary:clientPaymentSummary(r),
           payment_title: r.payment_title || null,
           payment_code: r.payment_code || null,
           items,
@@ -19173,7 +19389,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const [payments] = await db.query(
         `SELECT id, code, title, icon, sort
          FROM order_payments
-         WHERE tenant_id=? AND store_id=? AND is_active=1
+         WHERE tenant_id=? AND is_active=1 AND ((store_id=? AND code<>'online') OR (store_id=1 AND code='online'))
          ORDER BY sort ASC, id ASC`,
         [tenantId, storeId]
       );
@@ -23566,6 +23782,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (submissionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(submissionId)) {
         return res.status(400).json({ ok: false, error: 'BAD_IDEMPOTENCY_KEY' });
       }
+      let isOnline = String(req.body.payment_code || '').trim() === 'online';
+      if (isOnline && !submissionId) return res.status(400).json({ok:false,error:'BAD_IDEMPOTENCY_KEY'});
       const submissionFingerprint = submissionId ? buildOrderSubmissionFingerprint(req.body) : null;
       if (submissionId) {
         const existingSubmission = await findOrderSubmission(tenantId, storeId, submissionId);
@@ -23576,6 +23794,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           return res.json({
             ok: true,
             data: { id: Number(existingSubmission.id), public_id: existingSubmission.public_id },
+            ...(await onlinePayments.result(tenantId,existingSubmission.public_id,submissionId)),
             idempotent_replay: true,
           });
         }
@@ -23619,7 +23838,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       // map code -> id
       const paymentId = await pickIdByCodeOrFirstActive({
         tenantId,
-        storeId,
+        storeId:isOnline ? 1 : storeId,
         table: 'order_payments',
         code: paymentCode,
       });
@@ -23638,6 +23857,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         code: timeOptionCode,
       });
 
+      const [paymentRows]=await db.query("SELECT code,is_active FROM order_payments WHERE tenant_id=? AND id=?",[tenantId,paymentId]);
+      if (isOnline && (paymentRows[0]?.code!=='online' || Number(paymentRows[0]?.is_active)!==1)) return res.status(409).json({ok:false,error:'ONLINE_PAYMENT_NOT_AVAILABLE'});
+      if(paymentRows[0]?.code==='online') {
+        if(paymentCode!=='online')return res.status(409).json({ok:false,error:'ONLINE_PAYMENT_SELECTION_REQUIRED'});
+        isOnline=true;
+        if(!submissionId)return res.status(400).json({ok:false,error:'BAD_IDEMPOTENCY_KEY'});
+      }
       if (!paymentId) return res.status(500).json({ ok: false, error: 'NO_PAYMENTS' });
       if (!deliveryTypeId) return res.status(500).json({ ok: false, error: 'NO_METHODS' });
       if (!timeOptionId) return res.status(500).json({ ok: false, error: 'NO_TIME_OPTIONS' });
@@ -23809,12 +24035,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return freeQty;
       }
 
+      const onlinePrices = isOnline ? await buildOnlineItemPrices({db,tenantId,storeId,customerId,items,roundPrice,variantPrice:computeDisplayPriceForProduct,conversion:getConversionFactorMap(tenantId,db),availability:buildPublicProductAvailabilityMap}) : null;
+      if(isOnline) for(const item of items) {
+        for(const key of ['price','line_total','old_line_total','original_line_total','bonus_redeem_line_amount','bonusRedeemLineAmount','benefits_excluded_line_total','discount_excluded_line_total','category_ids','checkout_category_ids','combo_category_id','sections','discount'])delete item[key];
+        if(item.type==='combo'){item.combo_title=onlinePrices.get(item).name;item.combo_category_id=onlinePrices.get(item).categoryId;}
+      }
       let nonAutoItemsTotal = 0;
       for (const it of items) {
         if (it.type === 'combo') {
           const lineTotalFromRequest = Number(it.line_total);
-          if (Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0) {
-            nonAutoItemsTotal += roundPrice(lineTotalFromRequest);
+          if (isOnline || (Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0)) {
+            nonAutoItemsTotal += isOnline ? onlinePrices.get(it).lineTotal : roundPrice(lineTotalFromRequest);
           }
           continue;
         }
@@ -23823,9 +24054,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (!p) continue;
         if (autoRulesByProduct.has(pid)) continue;
         const qty = Math.max(1, Number(it.qty || it.quantity || 1));
-        const basePrice = Number(p.price || 0);
+        const basePrice = onlinePrices ? onlinePrices.get(it).unitPrice : Number(p.price || 0);
         const lineTotalFromRequest = Number(it.line_total);
-        const useLineTotalFromRequest = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
+        const useLineTotalFromRequest = !isOnline && Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
         const lineTotalRaw = useLineTotalFromRequest ? lineTotalFromRequest : basePrice * qty;
         const lineTotal = roundPrice(lineTotalRaw);
         nonAutoItemsTotal += lineTotal;
@@ -23937,7 +24168,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const selectedPromoSource = normalizeCheckoutPromoSource(req.body.selected_promo_source)
         || (promoCode ? 'promo_code' : null);
       const selectedPromoRewardId = normalizeSelectedDiscountId(req.body.selected_promo_reward_id);
-      const useClientPricingSnapshotRequested = (
+      const useClientPricingSnapshotRequested = !isOnline && (
         req.body.use_client_pricing_snapshot === true
         || req.body.use_client_pricing_snapshot === 'true'
         || Number(req.body.use_client_pricing_snapshot || 0) === 1
@@ -24189,7 +24420,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (it.type === 'combo') {
           const qty = Math.max(1, Number(it.qty || it.quantity || 1));
           const lineTotalFromRequest = Number(it.line_total);
-          const lineTotal = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0
+          const lineTotal = isOnline ? onlinePrices.get(it).lineTotal : Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0
             ? roundPrice(lineTotalFromRequest)
             : roundPrice(0);
           total = roundPrice(total + lineTotal);
@@ -24258,13 +24489,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const p = byId.get(pid);
         if (!p) continue;
 
-        const basePrice = Number(p.price || 0);
+        const basePrice = onlinePrices ? onlinePrices.get(it).unitPrice : Number(p.price || 0);
         const oldPrice = Number(p.old_price || 0);
 
         // Р вЂ™Р С’Р вЂ“Р СњР С›: Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С line_total Р С‘Р В· Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В° (РЎС“Р В¶Р Вµ Р С—Р С•РЎРѓРЎвЂЎР С‘РЎвЂљР В°Р Р… Р Р…Р В° РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР Вµ)
         // Р СњР Вµ Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР С‘РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С РЎвЂ Р ВµР Р…РЎС“ Р В·Р В°Р Р…Р С•Р Р†Р С•, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С‘Р В·Р В±Р ВµР В¶Р В°РЎвЂљРЎРЉ Р Т‘Р Р†Р С•Р в„–Р Р…Р С•Р С–Р С• Р С—Р С•Р Т‘РЎРѓРЎвЂЎР ВµРЎвЂљР В° Р В±Р В°Р В·Р С•Р Р†Р С•Р в„– РЎвЂ Р ВµР Р…РЎвЂ№
         const lineTotalFromRequest = Number(it.line_total);
-        const useLineTotalFromRequest = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
+        const useLineTotalFromRequest = !isOnline && Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
 
         // Р С›Р В±РЎР‚Р В°Р В±Р В°РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С Р С•Р С—РЎвЂ Р С‘Р С‘ (РЎвЂљР С•Р В»РЎРЉР С”Р С• Р Т‘Р В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ РЎРѓР С•РЎРѓРЎвЂљР В°Р Р†Р В°, Р Р…Р Вµ Р Т‘Р В»РЎРЏ Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР ВµРЎвЂљР В° РЎвЂ Р ВµР Р…РЎвЂ№)
         const options = [];
@@ -24646,7 +24877,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         // Р вЂўРЎРѓР В»Р С‘ line_total Р С—Р ВµРЎР‚Р ВµР Т‘Р В°Р Р… РЎРѓ РЎвЂћРЎР‚Р С•Р Р…РЎвЂљР В° - Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р ВµР С–Р С• Р С”Р В°Р С” Р ВµРЎРѓРЎвЂљРЎРЉ (РЎРѓР С”Р С‘Р Т‘Р С”Р В° РЎС“Р В¶Р Вµ Р С—РЎР‚Р С‘Р СР ВµР Р…Р ВµР Р…Р В°)
         // Р ВР Р…Р В°РЎвЂЎР Вµ - Р Р†РЎвЂ№РЎвЂЎР С‘РЎвЂљР В°Р ВµР С РЎРѓР С”Р С‘Р Т‘Р С”РЎС“
-        const lineTotalAfterDiscount = useLineTotalFromRequest ? lineTotal : roundPrice(lineTotal - itemDiscountAmount);
+        const lineTotalAfterDiscount = isOnline && onlinePrices.get(it).gift ? 0 : useLineTotalFromRequest ? lineTotal : roundPrice(lineTotal - itemDiscountAmount);
         total = roundPrice(total + lineTotalAfterDiscount);
 
         // Р СџР С•Р В»РЎС“РЎвЂЎР В°Р ВµР С РЎвЂћР С•РЎвЂљР С• РЎвЂљР С•Р Р†Р В°РЎР‚Р В° Р Т‘Р В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ Р Р† Р В·Р В°Р С”Р В°Р В·Р Вµ
@@ -25545,6 +25776,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       // Timezone РЎвЂћР С‘Р В»Р С‘Р В°Р В»Р В°, Р С” Р С”Р С•РЎвЂљР С•РЎР‚Р С•Р СРЎС“ Р С—РЎР‚Р С‘Р Р†РЎРЏР В·Р В°Р Р… Р В·Р В°Р С”Р В°Р В· (orderStoreId)
+      if (isOnline) {
+        if (!Number.isFinite(total) || total < 0 || total>99999999.99) return res.status(422).json({ok:false,error:'PAYMENT_AMOUNT_MISMATCH'});
+        if (String(methodCode)!=='delivery') {
+          const pickup=Number(req.body.pickup_store_id);
+          const [stores]=await db.query("SELECT id FROM ten_stores WHERE tenant_id=? AND id=? AND is_active=1",[tenantId,pickup]);
+          if(!stores.length) return res.status(422).json({ok:false,error:'BAD_PICKUP_STORE'});
+          orderStoreId=pickup;
+        }
+        if(total>0) {
+          const available=await onlineAvailability(tenantId,orderStoreId);
+          if(!available.available)return res.status(409).json({ok:false,error:'ONLINE_PAYMENT_NOT_AVAILABLE'});
+          await onlinePayments.returnUrl(tenantId,crypto.randomUUID());
+          await onlinePayments.receipt({tenant_id:tenantId,customer_phone:customerPhone,items:normItems,delivery_cost:deliveryCost},total.toFixed(2));
+        }
+      }
       const storeTimezone = await getStoreTimezone(tenantId, orderStoreId);
 
       // Р С’Р Т‘РЎР‚Р ВµРЎРѓ Р С‘ РЎвЂљР С•РЎвЂЎР С”Р В° РЎРѓР В°Р СР С•Р Р†РЎвЂ№Р Р†Р С•Р В·Р В° Р Р…РЎС“Р В¶Р Р…РЎвЂ№ Р Т‘Р В»РЎРЏ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚Р С”Р С‘ Р Т‘РЎС“Р В±Р В»РЎРЏ (РЎвЂЎР С‘РЎвЂљР В°Р ВµР С Р Т‘Р С• Р Р…Р ВµРЎвЂ)
@@ -25642,7 +25888,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       try {
         await conn.beginTransaction();
 
-        if (stockDeductMode === 'on_create') {
+        if (stockDeductMode === 'on_create' && (!isOnline || total===0)) {
           const deductionResult = await applyStockDeductionForOrderItems({
             db: conn,
             tenantId,
@@ -25716,6 +25962,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           orderDiscountAmount,
           discountsJson,
         ];
+        if (isOnline) {
+          orderInsertColumns.push('online_payment_required','online_payment_status','online_payment_total');
+          orderInsertParams.push(1,total===0 ? 'not_required' : 'pending',total.toFixed(2));
+        }
         if (submissionId) {
           orderInsertColumns.push('submission_scope_store_id', 'submission_id', 'submission_fingerprint');
           orderInsertParams.push(storeId, submissionId, submissionFingerprint);
@@ -25798,7 +26048,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           );
         }
 
-        await accrueOrderBenefitProgress({
+        if (!isOnline || total===0) await accrueOrderBenefitProgress({
           conn,
           tenantId,
           storeId: orderStoreId,
@@ -25820,6 +26070,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           return res.json({
             ok: true,
             data: { id: Number(existingSubmission.id), public_id: existingSubmission.public_id },
+            ...(await onlinePayments.result(tenantId,existingSubmission.public_id,submissionId)),
             idempotent_replay: true,
           });
         }
@@ -25865,7 +26116,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       let payloadForPostActions = null;
       try {
         payloadForPostActions = await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
-        if (payloadForPostActions) {
+        if (payloadForPostActions && isOrderEligibleForFulfillment(payloadForPostActions)) {
           const pushed = await sendOrderToPrintBot({ db, order: payloadForPostActions, tenantId, storeId: orderStoreId });
           if (!pushed) {
             console.warn("Print enqueue returned false (public/shop order create)", {
@@ -25874,7 +26125,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               storeId: Number(orderStoreId),
             });
           }
-        } else {
+        } else if (!payloadForPostActions) {
           console.warn("Print enqueue skipped: fetchOrderPayload returned null (public/shop order create)", {
             orderId: Number(orderId),
             tenantId: Number(tenantId),
@@ -25890,7 +26141,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         });
       }
 
-      res.json({ ok: true, data: { id: orderId, public_id: publicId, stock_levels: authoritativeStockLevels } });
+      const paymentResult=isOnline ? await onlinePayments.result(tenantId,publicId,submissionId) : {};
+      if(isOnline && total>0) {
+        try {
+          await synchronizeOnlinePayment(await onlinePayments.load(tenantId,publicId),paymentResult.payment);
+          // Projection refresh publishes its own update; creation notifications remain held until paid.
+          payloadForPostActions=await fetchOrderPayload(tenantId,orderStoreId,orderId,{storeTimezone});
+        }catch(error){
+          console.error(JSON.stringify({operation:'order.payment.projection',tenantId,orderId,code:error.code || error.name}));
+          paymentResult.projectionError='PAYMENT_STATE_UPDATE_FAILED';
+        }
+      }
+      res.json({ ok: true, data: { id: orderId, public_id: publicId, total_price:total, stock_levels: authoritativeStockLevels },...paymentResult });
 
       // Heavy post-actions run in background, response is already sent.
       setImmediate(async () => {
@@ -25901,6 +26163,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (ordersEvents && typeof ordersEvents.publish === 'function') {
               ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
             }
+          }
+          if (payload && isOrderEligibleForFulfillment(payload) && (!Number(payload.online_payment_required) || Number(payload.total_price)===0)) {
             if (typeof makeChatTempRouter.sendOrderStatusPush === 'function') {
               makeChatTempRouter.sendOrderStatusPush(tenantId, orderStoreId, payload).catch((err) => {
                 console.error('Order creation push failed:', err && err.message ? err.message : err);
@@ -25925,7 +26189,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       return;
     } catch (e) {
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      res.status(e.status || 500).json({ ok: false, error: e.code && (['BAD_ITEMS','OUT_OF_STOCK'].includes(e.code) || e.code.startsWith('PAYMENT_')) ? e.code : 'DB_ERROR' });
     }
   }
 

@@ -858,7 +858,8 @@ async function resolveTenantPushCompanyTitle(tenantId) {
   return title;
 }
 
-async function sendPushToSubscriptions(subscriptions, payload) {
+async function sendPushToSubscriptions(subscriptions, payload, {strictErrors=false}={}) {
+  let deliveryUncertain=false;
   const rows = Array.isArray(subscriptions) ? subscriptions : [];
   if (!rows.length) return;
   const body = JSON.stringify(payload || {});
@@ -902,7 +903,7 @@ async function sendPushToSubscriptions(subscriptions, payload) {
       await webPush.sendNotification(
         { endpoint, keys: { p256dh, auth } },
         body,
-        { TTL: 120, urgency: "high" }
+        { TTL: 120, urgency: "high",...(strictErrors?{timeout:10000}:{}) }
       );
     } catch (err) {
       const statusCode = Number(err && (err.statusCode || err.status_code) || 0);
@@ -910,7 +911,8 @@ async function sendPushToSubscriptions(subscriptions, payload) {
         invalidIds.push(id);
       }
       if (statusCode !== 404 && statusCode !== 410) {
-        console.error("web-push send failed:", err && err.message ? err.message : err);
+        deliveryUncertain=true;
+        if(!strictErrors)console.error("web-push send failed:", err && err.message ? err.message : err);
       }
     }
   }
@@ -931,6 +933,7 @@ async function sendPushToSubscriptions(subscriptions, payload) {
         // eslint-disable-next-line no-await-in-loop
         const response = await fetch(EXPO_PUSH_ENDPOINT, {
           method: "POST",
+          ...(strictErrors?{signal:AbortSignal.timeout(10000)}:{}),
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
@@ -939,7 +942,8 @@ async function sendPushToSubscriptions(subscriptions, payload) {
         });
         const responseText = await response.text().catch(() => "");
         if (!response.ok) {
-          console.error("expo push send failed:", response.status, responseText);
+          deliveryUncertain=true;
+          if(!strictErrors)console.error("expo push send failed:", response.status, responseText);
           continue;
         }
         let responseJson = null;
@@ -949,6 +953,7 @@ async function sendPushToSubscriptions(subscriptions, payload) {
         const tickets = Array.isArray(responseJson?.data)
           ? responseJson.data
           : (responseJson?.data ? [responseJson.data] : []);
+        if(strictErrors && tickets.length!==chunk.length)deliveryUncertain=true;
         tickets.forEach((ticket, ticketIndex) => {
           const status = String(ticket?.status || "").toLowerCase();
           if (status !== "error") return;
@@ -959,14 +964,16 @@ async function sendPushToSubscriptions(subscriptions, payload) {
           if (errorCode === "DeviceNotRegistered" && rowId > 0) {
             invalidIds.push(rowId);
           }
-          console.error("expo push ticket error:", {
+          if(errorCode!=='DeviceNotRegistered')deliveryUncertain=true;
+          if(!strictErrors)console.error("expo push ticket error:", {
             error: errorCode || "UNKNOWN",
             message: String(ticket?.message || ""),
             subscription_id: rowId,
           });
         });
       } catch (err) {
-        console.error("expo push send failed:", err && err.message ? err.message : err);
+        deliveryUncertain=true;
+        if(!strictErrors)console.error("expo push send failed:", err && err.message ? err.message : err);
       }
     }
   }
@@ -975,6 +982,7 @@ async function sendPushToSubscriptions(subscriptions, payload) {
   if (idsToDelete.length) {
     await deletePushSubscriptionsByIds(idsToDelete).catch(() => {});
   }
+  if(strictErrors && deliveryUncertain)throw Object.assign(new Error(),{code:'ORDER_PAYMENT_PUSH_UNCERTAIN'});
 }
 
 function normalizePushPreferences(raw, statuses) {
@@ -1011,7 +1019,7 @@ async function listOrderStatuses(tenantId, storeId) {
   return Array.isArray(rows) ? rows.map((row) => ({ id: Number(row.id), code: String(row.code || ""), title: getCustomerOrderStatusTitle(row.title, row.code) })).filter((row) => row.id > 0 && row.title) : [];
 }
 
-async function sendOrderStatusPush(tenantId, storeId, order) {
+async function sendOrderStatusPush(tenantId, storeId, order, options={}) {
   await ensurePushSubscriptionsTable();
   const customerId = Number(order?.customer_id || 0);
   const statusId = Number(order?.status_id || 0);
@@ -1044,7 +1052,7 @@ async function sendOrderStatusPush(tenantId, storeId, order) {
   }, {
     title: `\u0412\u0430\u0448 \u0437\u0430\u043a\u0430\u0437 \u2116${orderNumber} ${statusText}.`,
     body: "",
-  }));
+  }),options);
 }
 
 async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, message) {

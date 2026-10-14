@@ -546,6 +546,7 @@
       var comment = String(refund && refund.comment || "").trim();
       var actor = String(refund && refund.created_by_name || "").trim();
       var paymentTitle = String(refund && (refund.payment_title || refund.payment_code) || "").trim() || "\u0412\u043e\u0437\u0432\u0440\u0430\u0442";
+      var financialTitle=({queued:'Возврат ожидает отправки',processing:'Возврат обрабатывается',succeeded:'Деньги возвращены',failed:'Возврат не выполнен',manual_review:'Возврат требует проверки'})[refund.financial_state] || '';
       return (
         '<div class="order-refund-history-item">' +
           '<div class="order-refund-history-item-top">' +
@@ -553,7 +554,7 @@
             '<span>' + escapeHtml(formatDateTimeNumeric(refund && refund.created_at) || "\u2014") + '</span>' +
           '</div>' +
           '<div class="order-refund-history-item-meta">' +
-            escapeHtml([paymentTitle, money(refund && refund.total_amount || 0), actor].filter(Boolean).join(" · ")) +
+            escapeHtml([paymentTitle, money(refund && refund.total_amount || 0), actor,financialTitle,refund.financial_error_code].filter(Boolean).join(" · ")) +
           '</div>' +
           '<div class="order-refund-history-item-lines">' +
             itemsHtml +
@@ -740,6 +741,7 @@
       clientName: queryAll(root, '[data-info="client-name"]'),
       clientPhone: queryAll(root, '[data-info="client-phone"]'),
       payMethod: queryAll(root, '[data-info="payment-method"]'),
+      onlinePaymentSummary: queryAll(root, '[data-info="online-payment-summary"]'),
       payIcon: queryAll(root, '[data-info="payment-icon"]'),
       changeFrom: queryAll(root, '[data-info="change-from"]'),
       changeAmount: queryAll(root, '[data-info="change-amount"]'),
@@ -872,8 +874,99 @@
       return { visible: false, amount: 0, type: "", blocked: false };
     }
 
+    function renderPaymentSummary(order,generation) {
+      var money=typeof helpers.money==='function'?helpers.money:function(value){return String(value);};
+      infoEls.onlinePaymentSummary.forEach(function(host) {
+        var signature=JSON.stringify([order?.id,order?.paymentSummary,order?.status_code]);
+        if(host.dataset.paymentSummaryKey===signature)return;
+        host.dataset.paymentSummaryKey=signature;
+        var isCurrent=function(){return host.isConnected && host.dataset.paymentSummaryKey===signature;};
+        host.replaceChildren();
+        if(!order?.paymentSummary) {host.classList.add('hidden');return;}
+        host.classList.remove('hidden');
+        var summary=order.paymentSummary;
+        var title=document.createElement('strong');title.textContent='Оплата';host.append(title);
+        var status=document.createElement('p');
+        var stateTitle=function(value){return window.SharedOrderPayment?.stateTitle(value) || value.state;};
+        status.textContent=stateTitle(summary);host.append(status);
+        if(summary.attentionRequired){var attention=document.createElement('p');attention.textContent='Статус синхронизации: требуется проверка';host.append(attention);}
+        var amounts=document.createElement('p');
+        amounts.textContent=money(summary.amount/100)+' · '+(summary.method==='online'?'Онлайн':order.payment_title || '');host.append(amounts);
+        if(summary.paidAmount) {var paid=document.createElement('p');paid.textContent='Оплачено: '+money(summary.paidAmount/100);host.append(paid);}
+        if(summary.refundedAmount) {var refunded=document.createElement('p');refunded.textContent='Возвращено: '+money(summary.refundedAmount/100);host.append(refunded);}
+        if(summary.pendingRefundAmount){var pending=document.createElement('p');pending.textContent='Возврат в обработке: '+money(summary.pendingRefundAmount/100);host.append(pending);}
+        if(summary.paidAt) {var date=document.createElement('p');date.textContent=typeof helpers.formatDateTime==='function'?helpers.formatDateTime(summary.paidAt):String(summary.paidAt);host.append(date);}
+        if(['cancelled','canceled'].includes(order.status_code) && summary.paidAmount>summary.refundedAmount) {
+          var warning=document.createElement('p');warning.textContent='Заказ отменён. Возврат оплаты не завершён.';host.append(warning);
+        }
+        if(!summary.required || typeof helpers.apiJson!=='function')return;
+        var refresh=document.createElement('button');refresh.type='button';refresh.className='control';refresh.textContent='Обновить статус';host.append(refresh);
+        refresh.onclick=async function() {
+          if(refresh.disabled)return;refresh.disabled=true;
+          try {
+            var result=await helpers.apiJson('/api/admin/orders/'+order.id+'/payment/refresh',{method:'POST',body:{}});
+            if(!isCurrent())return;
+            order.paymentSummary=result.data.summary;renderPaymentSummary(order,generation);
+          }catch(error){if(isCurrent())status.textContent='Не удалось проверить оплату. Попробуйте позже.';}
+          finally{refresh.disabled=false;}
+        };
+        var history=document.createElement('details'),caption=document.createElement('summary'),body=document.createElement('div');
+        caption.textContent='История попыток';history.append(caption,body);host.append(history);
+        var loaded=false;
+        history.ontoggle=async function() {
+          if(!history.open || loaded)return;loaded=true;body.textContent='Загрузка…';
+          try {
+            var result=await helpers.apiJson('/api/admin/orders/'+order.id+'/payment');
+            if(!isCurrent() || !history.isConnected)return;
+            body.replaceChildren();
+            if(!result.data.detailsAllowed){body.textContent='Нет доступа к подробностям оплаты';return;}
+            if(result.data.detailsUnavailable){loaded=false;body.textContent='История временно недоступна. Состояние заказа сохранено.';return;}
+            (result.data.attempts || []).forEach(function(attempt){
+              var row=document.createElement('p');
+              var date=typeof helpers.formatDateTime==='function'?helpers.formatDateTime(attempt.createdAt):attempt.createdAt;
+              row.textContent='#'+attempt.id+' · '+stateTitle({state:attempt.state})+' · '+money(attempt.amount)+' · '+(attempt.provider==='yookassa'?'ЮKassa':attempt.provider)+' · '+(attempt.connectionName || '')+' · '+date;
+              body.append(row);
+              if(attempt.reconciliation){
+                var diagnostic=document.createElement('p'),sync=attempt.reconciliation;
+                diagnostic.textContent='Provider Payment ID: '+(attempt.providerPaymentId || '—')+' · Проверок: '+sync.attempts+
+                  ' · Последняя: '+(sync.lastCheckedAt || '—')+' · Следующая: '+(sync.nextCheckAt || '—')+
+                  (sync.state==='manual_review'?' · Требуется проверка':'')+(sync.errorCode?' · '+sync.errorCode:'');
+                body.append(diagnostic);
+                (attempt.operations || []).forEach(function(operation){
+                  var operationLine=document.createElement('p');operationLine.textContent='Операция #'+operation.id+' · '+operation.operation+
+                    ' · '+operation.status+' · Повторов восстановления: '+operation.attempts+(operation.errorCode?' · '+operation.errorCode:'');body.append(operationLine);
+                });
+              }
+            });
+            (result.data.refunds || []).forEach(function(refund){
+              var row=document.createElement('p');row.textContent='Возврат #'+refund.id+' · '+money(refund.amount)+' · '+({created:'Ожидает отправки',pending:'Обрабатывается',succeeded:'Деньги возвращены',failed:'Не выполнен',cancelled:'Отменён'})[refund.status]+
+                ' · Чек: '+(({pending:'формируется',succeeded:'зарегистрирован',canceled:'ошибка регистрации'})[refund.receiptRegistration || ''] || 'не требуется')+
+                (refund.origin==='provider_external'?' · Внешний возврат, требуется сверка':'')+(refund.errorCode?' · '+refund.errorCode:'');
+              body.append(row);
+            });
+            if(result.data.refundManageAllowed)(order.refunds || []).filter(function(refund){return refund.financial_state==='failed';}).forEach(function(refund){
+              var retry=document.createElement('button');retry.type='button';retry.className='control';retry.textContent='Повторить возврат #'+refund.id;
+              retry.onclick=function(){
+                if(!isCurrent() || !window.AppModal)return;
+                var content=document.createElement('div'),email=document.createElement('input'),confirm=document.createElement('input'),label=document.createElement('label'),message=document.createElement('p');
+                email.type='email';email.maxLength=254;email.className='control';email.placeholder='Email для чека возврата';confirm.type='checkbox';label.append(confirm,document.createTextNode('Подтверждаю повторный возврат денег'));content.append(email,label,message);
+                var retryKey=crypto.randomUUID();
+                window.AppModal.open({title:'Повтор возврата #'+refund.id,content:content,saveText:'Повторить возврат',onSave:async function(){
+                  if(!confirm.checked){message.textContent='Подтвердите возврат';return false;}
+                  try{var updated=await helpers.apiJson('/api/admin/orders/'+order.id+'/refunds/'+refund.id+'/retry',{method:'POST',body:{confirmed:true,expected_attempt:refund.financial_attempt,retry_key:retryKey,receipt_email:email.value.trim() || null}});
+                    if(isCurrent())setOrder(updated.data);return true;
+                  }catch(error){message.textContent=error.message || 'Не удалось повторить возврат';return false;}
+                }});
+              };body.append(retry);
+            });
+            if(!body.childNodes.length)body.textContent='Попыток оплаты пока нет';
+          }catch(error){loaded=false;if(isCurrent())body.textContent='Не удалось загрузить историю оплаты';}
+        };
+      });
+    }
     function setOrder(order) {
       var currentCatalogRenderGeneration = ++catalogRenderGeneration;
+      renderPaymentSummary(order,currentCatalogRenderGeneration);
       bindDiscountToggles();
 
       if (!order) {

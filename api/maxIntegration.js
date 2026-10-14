@@ -43,7 +43,7 @@ async function getTenantMaxBotToken(db, tenantId) {
   return token || null;
 }
 
-async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPayload }) {
+async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPayload, signal }) {
   const token = String(botToken || '').trim() || (db ? await getTenantMaxBotToken(db, tenantId) : null);
   const apiBase = String(process.env.MAX_API_BASE_URL || '').trim().replace(/\/+$/, '');
   if (!token || !apiBase || !maxUserId || !text) return { ok: false, skipped: true };
@@ -60,6 +60,7 @@ async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPa
   const sendOnce = async (payload) => {
     const res = await fetch(`${apiBase}/messages?user_id=${userQuery}`, {
       method: 'POST',
+      ...(signal?{signal}:{}),
       headers: {
         'Content-Type': 'application/json',
         Authorization: token,

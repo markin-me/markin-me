@@ -114,6 +114,7 @@ function normalizeRefundRecords(refunds) {
         : itemsTotal + deliveryAmount
     );
     return {
+      financial_state:refund?.financial_state || "manual",financial_error_code:refund?.financial_error_code || null,financial_attempt:Number(refund?.financial_attempt || 1),
       id: Number(refund?.id || 0) || null,
       order_id: Number(refund?.order_id || 0) || null,
       payment_id: Number(refund?.payment_id || 0) || null,
@@ -247,6 +248,12 @@ function buildOrderRefundState(order, refunds) {
     orderItems.map((item) => getItemLineTotal(item))
   );
 
+  if(Number(order?.online_payment_required)) {
+    const bases=orderItems.map(item=>BigInt(toCents(getItemLineTotal(item)))),sum=bases.reduce((a,b)=>a+b,0n);
+    const payable=BigInt(toCents(originalItemsPayableTotal));let cumulative=0n,allocated=0n;
+    bases.forEach((base,index)=>{cumulative+=base;const target=sum?payable*cumulative/sum:0n;
+      orderLevelDiscountAllocations[index]=Number(base-(target-allocated))/100;allocated=target;});
+  }
   const refundableItems = [];
   const remainingItems = [];
 
@@ -278,6 +285,7 @@ function buildOrderRefundState(order, refunds) {
       : 0;
 
     refundableItems.push({
+      fiscal_exact_units:Number(order?.online_payment_required)===1,
       source_item_index: index,
       title: getItemTitle(item),
       original_qty: originalQty,
@@ -315,9 +323,11 @@ function buildOrderRefundState(order, refunds) {
   const netPaidTotal = Number(order?.is_paid || 0) === 1
     ? Math.max(0, roundMoney(orderTotal - refundedTotal))
     : 0;
-  const refundState = refundedTotal <= 0
+  const confirmedRefunds=Number(order?.online_payment_required)?normalizedRefunds.filter(r=>r.financial_state==='succeeded'):normalizedRefunds;
+  const confirmedTotal=roundMoney(confirmedRefunds.reduce((sum,r)=>sum+r.total_amount,0));
+  const refundState = confirmedTotal <= 0
     ? "none"
-    : refundableTotal <= 0
+    : confirmedTotal>=orderTotal
       ? "full"
       : "partial";
   const remainingItemsTotal = roundMoney(
@@ -338,12 +348,13 @@ function buildOrderRefundState(order, refunds) {
   return {
     refunds: normalizedRefunds,
     refunds_count: normalizedRefunds.length,
-    refunded_items_total: refundedItemsTotal,
-    refunded_delivery_total: refundedDeliveryTotal,
-    refunded_total: refundedTotal,
+    refunded_items_total:roundMoney(confirmedRefunds.reduce((sum,r)=>sum+r.items_total,0)),
+    refunded_delivery_total:roundMoney(confirmedRefunds.reduce((sum,r)=>sum+r.delivery_amount,0)),
+    refunded_total:confirmedTotal,
+    refund_pending_total:Number(order?.online_payment_required)?roundMoney(normalizedRefunds.filter(r=>["queued","processing","manual_review"].includes(r.financial_state)).reduce((sum,r)=>sum+r.total_amount,0)):0,
     refundable_total: refundableTotal,
     delivery_refundable_total: deliveryRefundableTotal,
-    net_paid_total: netPaidTotal,
+    net_paid_total:Number(order?.online_payment_required)?Math.max(0,roundMoney(orderTotal-confirmedTotal)):netPaidTotal,
     refund_state: refundState,
     refund_state_title: getRefundStateTitle(refundState),
     refundable_items: refundableItems,
@@ -358,7 +369,33 @@ function buildOrderRefundState(order, refunds) {
   };
 }
 
+function buildOnlineRefundPlan(order,refunds,requestedItems) {
+  const state=buildOrderRefundState(order,refunds),byIndex=new Map(state.refundable_items.map(item=>[item.source_item_index,item])),selected=new Map();
+  if(Number(order.is_paid)!==1)return {ok:false,error:"ORDER_NOT_PAID"};
+  for(const input of requestedItems) {
+    const index=Number(input.source_item_index),qty=Number(input.qty);
+    if(!Number.isInteger(index) || !Number.isInteger(qty) || qty<1)return {ok:false,error:"BAD_REFUND_ITEMS"};
+    selected.set(index,(selected.get(index) || 0)+qty);
+  }
+  let total=0n;const items=[];
+  for(const [index,qty] of selected) {
+    const source=byIndex.get(index);if(!source || qty>source.remaining_qty)return {ok:false,error:"OVER_REFUND"};
+    const originalQty=Number(source.original_qty),already=originalQty-Number(source.remaining_qty),line=BigInt(toCents(source.original_line_total));
+    if(!Number.isInteger(originalQty) || originalQty<1)return {ok:false,error:"BAD_REFUND_ITEMS"};
+    const unit=line/BigInt(originalQty),low=originalQty-Number(line%BigInt(originalQty));
+    const prefix=count=>unit*BigInt(Math.min(count,low))+(unit+1n)*BigInt(Math.max(0,count-low));
+    const amount=prefix(already+qty)-prefix(already);total+=amount;
+    items.push({source_item_index:index,refunded_qty:qty,unit_price:Number(amount/BigInt(qty))/100,line_amount:Number(amount)/100,item_snapshot:source.item_snapshot});
+  }
+  const full=state.refundable_items.every(item=>(selected.get(item.source_item_index) || 0)===item.remaining_qty);
+  const delivery=full?BigInt(toCents(state.delivery_refundable_total)):0n;
+  if(total+delivery<100n || total+delivery>BigInt(toCents(state.refundable_total)))return {ok:false,error:"NOT_REFUNDABLE"};
+  const remainder=BigInt(toCents(state.refundable_total))-total-delivery;
+  if(remainder>0n && remainder<100n)return {ok:false,error:'PAYMENT_AMOUNT_INVALID'};
+  return {ok:true,items,items_total:Number(total)/100,delivery_amount:Number(delivery)/100,total_amount:Number(total+delivery)/100,is_full:full?1:0};
+}
 function buildRefundPlan(order, refunds, requestedItems) {
+  if(Number(order?.online_payment_required))return buildOnlineRefundPlan(order,refunds,requestedItems);
   const refundState = buildOrderRefundState(order, refunds);
   if (Number(order?.is_paid || 0) !== 1) {
     return { ok: false, error: "ORDER_NOT_PAID", refundState };

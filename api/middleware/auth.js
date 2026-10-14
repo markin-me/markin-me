@@ -89,5 +89,8 @@ function optionalAuthMiddleware(req, res, next) {
 
 module.exports = {
   authMiddleware,
-  optionalAuthMiddleware
+  optionalAuthMiddleware,
+  paymentPermissions(user) {
+    return { read: ['owner','admin','manager'].includes(user?.role), manage: ['owner','admin'].includes(user?.role) };
+  }
 };

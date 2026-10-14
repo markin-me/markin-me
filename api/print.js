@@ -3109,7 +3109,8 @@ function makePrintApiRouter({ db, helpers }) {
           ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
         LEFT JOIN ten_stores ps
           ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
-        WHERE o.tenant_id=? AND o.store_id=? AND o.status_id=? AND o.is_active=1${dateCondition}
+        WHERE o.tenant_id=? AND o.store_id=? AND o.status_id=? AND o.is_active=1
+          AND (o.online_payment_required=0 OR o.online_payment_status IN ('paid','not_required'))${dateCondition}
         ORDER BY o.created_at ASC, o.id ASC
         LIMIT ?
         `,

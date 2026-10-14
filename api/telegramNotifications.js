@@ -4,7 +4,7 @@
  */
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 
-async function sendNewOrderNotification(tenantId, storeId, orderPayload, { db, botToken }) {
+async function sendNewOrderNotification(tenantId, storeId, orderPayload, { db, botToken, strictErrors=false }) {
   if (!botToken || typeof botToken !== 'string' || botToken.trim() === '') return;
 
   // 1. Получаем chat_id из привязок на уровне филиала (ten_store_telegram)
@@ -41,12 +41,18 @@ async function sendNewOrderNotification(tenantId, storeId, orderPayload, { db, b
 
   for (const chatId of chatIds) {
     try {
-      await fetch(`${apiBase}/sendMessage`, {
+      const response=await fetch(`${apiBase}/sendMessage`, {
         method: 'POST',
+        ...(strictErrors?{signal:AbortSignal.timeout(10000)}:{}),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, text })
       });
+      if(strictErrors){
+        const result=await response.json();
+        if(!response.ok || result.ok!==true)throw Object.assign(new Error(),{code:'ORDER_PAYMENT_TELEGRAM_REJECTED'});
+      }
     } catch (err) {
+      if(strictErrors)throw Object.assign(new Error(),{code:'ORDER_PAYMENT_TELEGRAM_UNCERTAIN'});
       console.error('Telegram sendNewOrderNotification:', err.message);
     }
   }

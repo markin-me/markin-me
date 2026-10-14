@@ -1,6 +1,7 @@
 ﻿const http = require("http");
 const https = require("https");
 const { URL } = require("url");
+const {isOrderEligibleForFulfillment} = require("./helpers/orderFulfillment");
 
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || "https://markin-me.ru").replace(/\/+$/, "");
 const LOCAL_CRM_BASE_URL = `http://127.0.0.1:${Number(process.env.PORT || 3000)}`;
@@ -587,7 +588,12 @@ async function enqueueSingleLabelPrintJob(db, { tenantId, storeId, tokenId, orde
   });
 }
 
-async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipReasons }) {
+async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipReasons, strictErrors=false }) {
+  const gateOrderId=Number(order?.id || order?.order_id || order?.orderId);
+  if(gateOrderId>0){
+    const [gate]=await db.query("SELECT total_price,payment_projection,online_payment_required,online_payment_status FROM order_orders WHERE tenant_id=? AND store_id=? AND id=?",[tenantId,storeId,gateOrderId]);
+    if(!gate.length || !isOrderEligibleForFulfillment(gate[0]))return false;
+  }
   const mutedReasons = new Set(
     Array.isArray(silentSkipReasons)
       ? silentSkipReasons.map((reason) => String(reason || "").trim()).filter(Boolean)
@@ -595,6 +601,8 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
   );
   const orderIdDebug = Number(order?.id || order?.order_id || order?.orderId || 0);
   const fail = (reason, extra = {}) => {
+    if(strictErrors && !['PRINT_TOKEN_NOT_FOUND','PRINT_RECEIPT_ROUTE_NOT_FOUND','ORDER_STATUS_NOT_NEW'].includes(reason))
+      throw Object.assign(new Error(),{code:`ORDER_PAYMENT_PRINT_${reason}`});
     try {
       if (!mutedReasons.has(String(reason || "").trim())) {
         console.warn("Print enqueue skipped:", {
@@ -680,6 +688,7 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
       },
     });
   } catch (labelErr) {
+    if(strictErrors)throw Object.assign(new Error(),{code:'ORDER_PAYMENT_LABELS_UNCERTAIN'});
     console.error("Label enqueue failed:", {
       orderId: orderIdDebug || null,
       tenantId: resolvedTenantId,

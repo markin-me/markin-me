@@ -29349,12 +29349,19 @@ function renderSheetAddressList() {
   window.getShopOrderTiming = getShopOrderTiming;
 
   // One model for the existing profile and active-order detail shells.
+  function shopPaymentStateTitle(summary) {
+    if(summary.amountMismatch)return 'Сумма заказа изменилась. Требуется проверка оплаты.';
+    if(summary.anomalies?.length)return 'Требуется проверка оплаты';
+    if(summary.source==='manual' && summary.state==='paid')return 'Оплачено вручную';
+    return ({unpaid:'Не оплачено',created:'Подготавливаем оплату',pending:'Платёж обрабатывается',waiting_for_confirmation:'Ожидает оплаты',paid:'Оплачено онлайн',failed:'Оплата не прошла',cancelled:'Оплата не завершена',partially_refunded:'Частичный возврат',refunded:'Возвращено',not_required:'Оплата не требуется'})[summary.state] || 'Ожидает оплаты';
+  }
   function deriveCustomerOrderView(order) {
     const progress = window.deriveCustomerOrderProgress(order);
     const { methodCode, delivery, method, stage, isFinal, isCancelled, steps } = progress;
     const timing = getShopOrderTiming(order);
     const paymentCode = String(order?.payment_code || "").toLowerCase();
-    const payment = paymentCode === "online" && Number(order?.is_paid) === 1 ? "Оплачено онлайн" : paymentCode === "cash" ? "Наличными" : String(order?.payment_title || "");
+    const payment = order?.paymentSummary?.required ? shopPaymentStateTitle(order.paymentSummary)
+      : paymentCode === "online" && Number(order?.is_paid) === 1 ? "Оплачено онлайн" : paymentCode === "cash" ? "Наличными" : String(order?.payment_title || "");
     const summary = buildCanonicalOrderSummaryData(order);
     const deliveryRows = [["Способ получения", method], [delivery ? "Когда доставить" : "Когда получить", timing]];
     if (delivery && order?.address) deliveryRows.push(["Адрес", String(order.address)]);
@@ -29376,7 +29383,8 @@ function renderSheetAddressList() {
       itemsSignature: JSON.stringify([items, order?.discount_amount]),
       deliveryRows, deliverySignature: JSON.stringify(deliveryRows),
       customer, customerSignature: JSON.stringify(customer), payment, paymentRows,
-      paymentSignature: JSON.stringify([paymentRows, summary.orderTotal, summary.breakdown, summary.orderDiscountTitles]),
+      paymentSummary:order.paymentSummary,publicId:order.public_id,
+      paymentSignature: JSON.stringify([paymentRows, summary.orderTotal, summary.breakdown, summary.orderDiscountTitles,order.paymentSummary]),
       summary, totalsSignature: JSON.stringify(summary),
     };
   }
@@ -29424,7 +29432,11 @@ function renderSheetAddressList() {
   }
 
   function renderShopOrderPayment(view) {
-    return `${view.paymentRows.map((row) => row[0] === "Скидка" && view.summary.discountAmount > 0 ? renderOrderDiscountDetails(view.summary, "shop-order-info-row", "shop-order-info-label", "shop-order-info-value") : renderShopOrderPairs([row])).join("")}<div class="shop-order-payment__total"><strong>ИТОГО</strong><strong data-order-total>${money(view.summary.orderTotal)}</strong></div>`;
+    const payment=view.paymentSummary;
+    const refunds=(payment?.refunds || []).map(refund=>`<p role="status">${escapeHtml(refund.attentionRequired?'Возврат требует проверки':({created:'Возврат ожидает отправки',pending:'Возврат обрабатывается',succeeded:'Деньги возвращены',failed:'Возврат не выполнен',cancelled:'Возврат отменён'})[refund.state] || 'Статус возврата уточняется')}: ${money(refund.amount)}${refund.receiptRegistration==='pending'?' · Чек формируется':refund.receiptRegistration==='succeeded'?' · Чек зарегистрирован':refund.receiptRegistration==='canceled'?' · Требуется проверка чека':''}</p>`).join('');
+    const paid=payment?.required && payment.state==='paid' && payment.paymentSatisfied;
+    const state=payment ? `<p role="status" class="shop-order-payment-status ${paid?'is-paid':'is-unpaid'}"><i class="fas ${paid?'fa-check':'fa-clock'}" aria-hidden="true"></i> ${escapeHtml(paid?'Оплачено онлайн':payment.required && !payment.paidAmount?'Не оплачено онлайн':shopPaymentStateTitle(payment))}</p>${payment.paidAmount?renderShopOrderPairs([['Оплачено',money(payment.paidAmount/100)]]):''}${payment.refundedAmount?renderShopOrderPairs([['Возвращено',money(payment.refundedAmount/100)]]):''}${view.isCancelled && payment.paidAmount>payment.refundedAmount?'<p>Возврат оплаты не завершён</p>':''}${payment.required && !paid && !view.isCancelled?`<div class="shop-order-payment-actions"><button type="button" class="control" data-shop-order-payment="${escapeHtml(view.publicId)}">${payment.canPay?'Повторить онлайн-оплату':'Проверить оплату'}</button>${!payment.paidAmount?`<button type="button" class="control" data-shop-order-change-payment="${escapeHtml(view.publicId)}">Сменить оплату</button>`:''}</div>`:''}`:'';
+    return `${state}${refunds}${view.paymentRows.map((row) => row[0] === "Скидка" && view.summary.discountAmount > 0 ? renderOrderDiscountDetails(view.summary, "shop-order-info-row", "shop-order-info-label", "shop-order-info-value") : renderShopOrderPairs([row])).join("")}<div class="shop-order-payment__total"><strong>ИТОГО</strong><strong data-order-total>${money(view.summary.orderTotal)}</strong></div>`;
   }
   function renderShopOrderStep(step, index) {
     return `<div class="shop-order-progress__step is-${step.state}" data-order-progress-step="${index}" ${step.state === "current" ? 'aria-current="step"' : ""}><span class="shop-order-progress__node"><i class="fas ${step.state === "completed" ? "fa-check" : step.icon}" aria-hidden="true"></i></span><span data-order-step-label>${escapeHtml(step.title)}</span></div>`;
@@ -29445,6 +29457,7 @@ function renderSheetAddressList() {
   renderShopOrderDetails.sequence = 0;
 
   function bindShopOrderAccordions(root) {
+    bindShopOrderPaymentActions(root);
     bindOrderSummaryDiscountToggles(root);
     root.closest(".app-modal")?.classList.add("shop-order-modal");
     root.querySelectorAll(".shop-order-accordion__button").forEach((button) => {
@@ -29455,6 +29468,57 @@ function renderSheetAddressList() {
         section.querySelector(".shop-order-accordion__body").toggleAttribute("inert", !open);
       };
     });
+  }
+  function bindShopOrderPaymentActions(root) {
+    root.querySelectorAll('[data-shop-order-payment]').forEach(button=>{
+      button.onclick=()=>showShopPaymentReturn(button.dataset.shopOrderPayment,true);
+    });
+    root.querySelectorAll('[data-shop-order-change-payment]').forEach(button=>{
+      button.onclick=()=>showShopOrderChangePayment(button.dataset.shopOrderChangePayment);
+    });
+  }
+
+  function updateShopOrderPaymentFooter(order) {
+    const view=deriveCustomerOrderView(order),payment=view.paymentSummary;
+    const paid=Boolean(payment?.paymentSatisfied && payment.state==='paid');
+    [elMobileOrderTotalBtn,elOrderDetailsTotalBtn].forEach(button=>{
+      if(!button)return;
+      button.classList.toggle('is-order-paid',paid);
+      const value=button.querySelector('span');
+      if(value)value.textContent=`${paid?'✓ Оплачено · ':payment?.required && payment.canPay?'Оплатить онлайн · ':''}${money(view.summary.orderTotal)}`;
+      button.onclick=payment?.required && !paid && !view.isCancelled?()=>showShopPaymentReturn(view.publicId,true):null;
+      button.disabled=Boolean(paid || !payment?.required || view.isCancelled);
+    });
+  }
+
+  async function showShopOrderChangePayment(publicId) {
+    if(!window.AppModal || !/^[0-9a-f-]{36}$/i.test(String(publicId)))return;
+    const scope=shopOrderRequestScopeKey(),content=document.createElement('div');
+    const message=document.createElement('p'),select=document.createElement('select'),confirm=document.createElement('button');
+    select.className=confirm.className='control';confirm.type='button';confirm.textContent='Подтвердить смену оплаты';confirm.disabled=true;
+    message.textContent='Загружаем способы оплаты…';content.append(message,select,confirm);
+    setAppModalMode('shop');window.AppModal.open({title:'Сменить оплату',content});
+    const headers={},token=localStorage.getItem(`shop-payment:${buildDeliveryCacheScope().tenant_id}:${publicId}`);
+    if(token)headers['x-order-payment-token']=token;
+    const current=()=>content.isConnected && scope===shopOrderRequestScopeKey();
+    try {
+      const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment-methods`,{headers});
+      if(!current())return;
+      for(const method of result.data){const option=document.createElement('option');option.value=method.code;option.textContent=method.code==='cash'?'Наличными при получении':'Картой при получении';select.append(option);}
+      message.textContent=result.data.length?'Смена доступна, если онлайн-платёж не создан либо окончательно отменён. Незавершённая оплата блокирует смену.':'Нет доступных способов оплаты при получении.';
+      confirm.disabled=!result.data.length;
+    }catch(error){if(current())message.textContent='Не удалось загрузить способы оплаты. Попробуйте позже.';}
+    confirm.onclick=async()=>{
+      if(confirm.disabled || !current())return;confirm.disabled=true;select.disabled=true;
+      try {
+        const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment-method`,{method:'POST',headers,body:{method:select.value,confirmed:true}});
+        if(!current())return;
+        const cached=[...shopOrderSnapshots.values()].find(order=>order.public_id===publicId);
+        if(cached){const updated={...cached,...result.data,is_paid:0,online_payment_required:0};patchShopOrderDetails(cached,updated);}
+        shopOrdersListCache.clear();shopOrderDetailsLoaded.clear();
+        message.textContent=`Способ оплаты изменён: ${select.options[select.selectedIndex].textContent}.`;
+      }catch(error){if(current()){message.textContent=error.message==='PAYMENT_PROVIDER_RECOVERY_REQUIRED'?'Онлайн-платёж ещё не завершён или требует проверки. Завершите либо отмените его на странице оплаты и проверьте статус.':error.message==='PAYMENT_REFRESH_RATE_LIMITED'?'Подождите несколько секунд и повторите.':'Не удалось сменить оплату. Заказ сохранён; проверьте статус онлайн-платежа.';confirm.disabled=false;select.disabled=false;}}
+    };
   }
 
   function patchShopOrderDetails(previousOrder, order) {
@@ -29509,6 +29573,7 @@ function renderSheetAddressList() {
         const paymentRoot = root.querySelector("[data-order-payment]");
         const discountOpen = paymentRoot.querySelector("[data-order-discount-toggle]")?.getAttribute("aria-expanded") === "true";
         paymentRoot.innerHTML = renderShopOrderPayment(next);
+        bindShopOrderPaymentActions(paymentRoot);
         bindOrderSummaryDiscountToggles(paymentRoot);
         if (discountOpen) {
           paymentRoot.querySelector("[data-order-discount-toggle]")?.setAttribute("aria-expanded", "true");
@@ -29529,6 +29594,7 @@ function renderSheetAddressList() {
         if (elMobileOrderTotalValue) elMobileOrderTotalValue.textContent = money(next.summary.orderTotal);
         if (elOrderDetailsTotalValue) elOrderDetailsTotalValue.textContent = money(next.summary.orderTotal);
       }
+      if ((previous.paymentSignature !== next.paymentSignature || previous.totalsSignature !== next.totalsSignature) && !root.closest('.hidden')) updateShopOrderPaymentFooter(order);
     });
   }
 
@@ -29674,45 +29740,10 @@ function renderSheetAddressList() {
       elMobileOrderTotalValue.textContent = money(summary.orderTotal || 0);
     }
     if (elMobileOrderRepeatBtn) {
-      elMobileOrderRepeatBtn.classList.remove("hidden");
-      elMobileOrderRepeatBtn.classList.remove("is-expanded");
-      elMobileOrderRepeatBtn.onclick = async (event) => {
-        if (event) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        if (!elMobileOrderRepeatBtn.classList.contains("is-expanded")) {
-          elMobileOrderRepeatBtn.classList.add("is-expanded");
-          return;
-        }
-        const repeatItems = shopOrderSnapshots.get(Number(order.id))?.items || order.items || [];
-        if (!repeatItems.length) {
-          showToast("\u0412 \u0437\u0430\u043a\u0430\u0437\u0435 \u043d\u0435\u0442 \u0442\u043e\u0432\u0430\u0440\u043e\u0432");
-          return;
-        }
-        if (elMobileOrderRepeatBtn.disabled) return;
-        elMobileOrderRepeatBtn.disabled = true;
-        try {
-          await repeatOrderItemsToCart(repeatItems);
-        } finally {
-          elMobileOrderRepeatBtn.disabled = false;
-        }
-      };
-
-      if (window.__shopOrderRepeatOutsideHandler) {
-        document.removeEventListener("pointerdown", window.__shopOrderRepeatOutsideHandler, true);
-      }
-      window.__shopOrderRepeatOutsideHandler = (event) => {
-        if (!elMobileOrderRepeatBtn || !event) return;
-        const target = event.target;
-        if (target instanceof Node && elMobileOrderRepeatBtn.contains(target)) return;
-        elMobileOrderRepeatBtn.classList.remove("is-expanded");
-      };
-      document.addEventListener("pointerdown", window.__shopOrderRepeatOutsideHandler, true);
+      elMobileOrderRepeatBtn.classList.add("hidden");
+      elMobileOrderRepeatBtn.onclick = null;
     }
-    if (elMobileOrderTotalBtn) {
-      elMobileOrderTotalBtn.onclick = () => {};
-    }
+    updateShopOrderPaymentFooter(order);
     elMobileOrderDetailsActions.classList.remove("hidden");
     if (typeof queueMobileUiStateSync === "function") {
       queueMobileUiStateSync("showMobileOrderDetailsActions");
@@ -29729,9 +29760,6 @@ function renderSheetAddressList() {
         elOrderDetailsFooterActions.__shopOriginalParent = elOrderDetailsFooterActions.parentElement;
         elOrderDetailsFooterActions.__shopOriginalNextSibling = elOrderDetailsFooterActions.nextSibling;
       }
-      if (previous.totalsSignature !== next.totalsSignature) {
-        text('[data-order-section="products"] [data-order-section-summary]', money(next.summary.subtotalBeforeDiscounts - next.summary.discountAmount));
-      }
       modal.insertBefore(elOrderDetailsFooterActions, modal.querySelector(".app-modal-footer"));
       modal.classList.add("shop-order-modal");
       elOrderDetailsFooterActions.classList.add("shop-order-modal-footer");
@@ -29740,43 +29768,11 @@ function renderSheetAddressList() {
     if (elOrderDetailsTotalValue) {
       elOrderDetailsTotalValue.textContent = money(summary.orderTotal || 0);
     }
-    if (elOrderDetailsTotalBtn) {
-      elOrderDetailsTotalBtn.onclick = () => {};
-    }
     if (elOrderDetailsRepeatBtn) {
-      elOrderDetailsRepeatBtn.onclick = async (event) => {
-        if (event) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        if (!elOrderDetailsRepeatBtn.classList.contains("is-expanded")) {
-          elOrderDetailsRepeatBtn.classList.add("is-expanded");
-          return;
-        }
-        const items = shopOrderSnapshots.get(Number(order.id))?.items || order.items || [];
-        if (!items.length) {
-          showToast("\u0412 \u0437\u0430\u043a\u0430\u0437\u0435 \u043d\u0435\u0442 \u0442\u043e\u0432\u0430\u0440\u043e\u0432");
-          return;
-        }
-        if (elOrderDetailsRepeatBtn.disabled) return;
-        elOrderDetailsRepeatBtn.disabled = true;
-        try {
-          await repeatOrderItemsToCart(items);
-        } finally {
-          elOrderDetailsRepeatBtn.disabled = false;
-        }
-      };
+      elOrderDetailsRepeatBtn.classList.add("hidden");
+      elOrderDetailsRepeatBtn.onclick = null;
     }
-    if (window.__shopDesktopOrderRepeatOutsideHandler) {
-      document.removeEventListener("pointerdown", window.__shopDesktopOrderRepeatOutsideHandler, true);
-    }
-    window.__shopDesktopOrderRepeatOutsideHandler = (event) => {
-      if (!elOrderDetailsRepeatBtn || !event) return;
-      const target = event.target;
-      if (target instanceof Node && elOrderDetailsRepeatBtn.contains(target)) return;
-      elOrderDetailsRepeatBtn.classList.remove("is-expanded");
-    };
-    document.addEventListener("pointerdown", window.__shopDesktopOrderRepeatOutsideHandler, true);
+    updateShopOrderPaymentFooter(order);
     setCartFooterMode(modal ? "hidden" : "order-details");
     if (modal) elOrderDetailsFooterActions?.classList.remove("hidden");
   }
@@ -37910,6 +37906,62 @@ function setBottomNavActive(tab) {
     return slots;
   }
 
+  async function showShopPaymentReturn(publicId,continuePayment=false) {
+    if(!/^[0-9a-f-]{36}$/i.test(String(publicId)) || !window.AppModal)return;
+    const scope=shopOrderRequestScopeKey(),content=document.createElement("div");
+    const message=document.createElement("p"),refresh=document.createElement("button"),pay=document.createElement("button");
+    refresh.type=pay.type="button";refresh.className=pay.className="control";
+    refresh.textContent="Проверить статус";pay.textContent="Перейти к оплате";pay.hidden=true;
+    content.append(message,refresh,pay);message.textContent="Проверяем состояние оплаты…";
+    setAppModalMode("shop");window.AppModal.open({title:"Оплата заказа",content});
+    let busy=false,current=null,attempt=null;
+    const accessKey=`shop-payment:${buildDeliveryCacheScope().tenant_id}:${publicId}`;
+    const paymentHeaders={};
+    const accessToken=localStorage.getItem(accessKey);
+    if(accessToken)paymentHeaders['x-order-payment-token']=accessToken;
+    const isCurrent=()=>scope===shopOrderRequestScopeKey() && content.isConnected;
+    const update=async()=>{
+      if(busy || !isCurrent())return;busy=true;refresh.disabled=pay.disabled=true;
+      try {
+        const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment`,{headers:paymentHeaders});
+        if(!isCurrent())return;current=result.data.payment;
+        const paid=current.status==="paid" || current.status==="not_required";
+        message.textContent=paid ? "Оплата подтверждена." : ["cancelled","failed"].includes(current.status) ? "Оплата не завершена. Можно попробовать снова." : "Оплата ещё не подтверждена. Можно продолжить оплату или проверить статус позже.";
+        pay.hidden=result.data.paymentSummary ? !result.data.paymentSummary.canPay : paid;
+        if(result.data.paymentSummary)message.textContent=shopPaymentStateTitle(result.data.paymentSummary);
+        shopOrdersListCache.clear();
+        shopOrderDetailsLoaded.clear();
+        const cached=[...shopOrderSnapshots.values()].find(order=>order.public_id===publicId);
+        if(cached && result.data.paymentSummary) {
+          const updated={...cached,paymentSummary:result.data.paymentSummary,is_paid:result.data.paymentSummary.paymentSatisfied?1:0};
+          shopOrderSnapshots.set(Number(cached.id),updated);patchShopOrderDetails(cached,updated);
+        }
+        if(["cancelled","failed"].includes(current.status))attempt=null;
+      } catch(error) {if(isCurrent())message.textContent="Не удалось проверить оплату. Заказ сохранён. Попробуйте позже.";}
+      finally{busy=false;if(isCurrent())refresh.disabled=pay.disabled=false;}
+    };
+    refresh.onclick=update;
+    pay.onclick=async()=>{
+      if(busy || !isCurrent())return;busy=true;refresh.disabled=pay.disabled=true;
+      attempt=attempt || crypto.randomUUID();
+      try {
+        const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/pay`,{method:"POST",body:{},headers:{...paymentHeaders,"Idempotency-Key":attempt}});
+        if(!isCurrent())return;
+        const action=result.data.payment?.action;
+        if(action?.type==="redirect") {
+          const url=new URL(action.url);if(url.protocol!=="https:" || url.username || url.password)throw new Error("PAYMENT_INVALID_ACTION");
+          window.location.assign(url.href);
+        } else {
+          const paid=["paid","not_required"].includes(result.data.payment?.status);
+          pay.hidden=result.data.paymentSummary ? !result.data.paymentSummary.canPay : paid;
+          message.textContent=paid ? "Оплата подтверждена." : "Платёж обрабатывается. Проверьте статус позже.";
+        }
+      }catch(error){if(isCurrent())message.textContent="Не удалось перейти к оплате. Заказ сохранён. Попробуйте позже.";}
+      finally{busy=false;if(isCurrent())refresh.disabled=pay.disabled=false;}
+    };
+    await update();
+    if(continuePayment && isCurrent() && current && !pay.hidden && !pay.disabled)await pay.onclick();
+  }
   async function openCheckoutView({ container, onBack, onShowBenefits, hasAddressEditor, isSheet, actions, onEditAddress, onEditPickup }) {
     __forceHideCheckoutDeliveryProgress = false;
     if (!container) return;
@@ -38943,6 +38995,7 @@ function setBottomNavActive(tab) {
         saveCheckoutDraft(draft);
       }
       refreshCheckoutTimeAvailability();
+      void refreshOnlinePaymentAvailability();
       if (typeof updateHeaderAddressWidget === "function") updateHeaderAddressWidget();
       if (typeof updateAddressChip === "function") updateAddressChip();
     };
@@ -40239,6 +40292,7 @@ function setBottomNavActive(tab) {
     let currentPayableTotal = getPayableTotalForMethod(methodSelect.getValue());
 
     const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
+    let onlineAvailable = false, onlineAvailabilitySequence = 0;
     const payDefault = str(draft?.payment_code || "").trim();
     function getPaymentOptionIconElement(code, iconRaw) {
       const fallbackIcons = {
@@ -40279,6 +40333,7 @@ function setBottomNavActive(tab) {
         title: payment.title || payment.code || "",
         icon: getPaymentOptionIconElement(payment.code, payment.icon),
         onClick: () => {
+          if (payment.code === "online" && !onlineAvailable) return;
           if (payment.code === "cash") {
             openCashChangeSelectionSheet();
             return;
@@ -40291,9 +40346,31 @@ function setBottomNavActive(tab) {
       card.dataset.baseTitle = payment.title || payment.code || "";
       paymentCards.set(payment.code, card);
       paymentCardsGrid.appendChild(card);
+      if (payment.code === "online") {card.disabled = true;card.classList.add("hidden");}
     });
     if (!isMobileCheckout) bindCheckoutHorizontalWheelScroll(paymentCardsGrid);
     paymentSection.root.appendChild(paymentCardsGrid);
+    async function refreshOnlinePaymentAvailability() {
+      const sequence=++onlineAvailabilitySequence;
+      onlineAvailable=false;
+      const card=paymentCards.get("online");if(!card)return;
+      card.disabled=true;
+      const method=methodSelect.getValue();
+      const store=method==="delivery" ? Number(deliveryQuote?.delivery_store_id || getActiveStoreId()) : Number(selectedPickupStoreId || getActiveStoreId());
+      try {
+        const response=await apiJson(`/api/public/checkout/payment-availability?store_id=${encodeURIComponent(store)}`);
+        if(!isCheckoutViewCurrent() || sequence!==onlineAvailabilitySequence)return;
+        onlineAvailable=response.data?.available===true;
+      } catch(error) {
+        if(!isCheckoutViewCurrent() || sequence!==onlineAvailabilitySequence)return;
+        onlineAvailable=false;
+      }
+      card.disabled=!onlineAvailable;card.classList.toggle("hidden",!onlineAvailable);
+      if(!onlineAvailable && paySelect.getValue()==="online") {
+        paySelect.setValue("",false);syncPaymentCards();
+        saveCheckoutDraft({...loadCheckoutDraft(),payment_code:null});
+      }
+    }
     checkoutMainSection.appendChild(paymentSection.root);
 
     const commentSection = document.createElement("section");
@@ -41204,6 +41281,7 @@ function setBottomNavActive(tab) {
       deliveryQuote = needsDeliveryQuote ? (nextDeliveryQuote || deliveryQuote) : null;
       deliveryRules = buildCheckoutDeliveryRules(deliveryQuote);
       updateDeliveryPricing();
+      void refreshOnlinePaymentAvailability();
     }
 
     function refreshChangeVisibility() {
@@ -41979,6 +42057,10 @@ function setBottomNavActive(tab) {
         showCheckoutToast("Выберите способ оплаты");
         return;
       }
+      if (payload.payment_code==="online" && !onlineAvailable) {
+        await refreshOnlinePaymentAvailability();
+        alert("Онлайн-оплата недоступна. Выберите способ оплаты.");return;
+      }
       if (false && !payload.payment_code) {
         alert("Выберите способ оплаты");
         markPaymentInvalidState();
@@ -42053,6 +42135,7 @@ function setBottomNavActive(tab) {
           case "BONUS_BALANCE_NOT_ENOUGH":
             return "Недостаточно бонусов для списания.";
           default:
+            if(String(err?.message || '').startsWith('PAYMENT_') || String(err?.message || '').startsWith('ONLINE_PAYMENT_')) return "Онлайн-оплата сейчас недоступна. Проверьте способ оплаты и попробуйте позже.";
             return "Ошибка оформления заказа: " + (err?.message || "UNKNOWN");
         }
       };
@@ -42061,6 +42144,20 @@ function setBottomNavActive(tab) {
         try {
           await fetchMeSafe({ force: true });
         } catch (_) {}
+      };
+      const handleOnlineOrder = async response => {
+        if(payload.payment_code!=="online")return false;
+        if(response.paymentAccessToken)localStorage.setItem(`shop-payment:${buildDeliveryCacheScope().tenant_id}:${response.data.public_id}`,response.paymentAccessToken);
+        const payment=response.payment || response.data?.payment;
+        const action=payment?.action;
+        if(action?.type==="redirect") {
+          const url=new URL(action.url);
+          if(url.protocol!=="https:" || url.username || url.password)throw new Error("PAYMENT_INVALID_ACTION");
+          window.location.assign(url.href);return true;
+        }
+        if(payment?.status==="paid" || payment?.status==="not_required")return false;
+        await showShopPaymentReturn(response.data.public_id);
+        return true;
       };
 
       try {
@@ -42084,7 +42181,8 @@ function setBottomNavActive(tab) {
                 clearCartAll({ restoreGiftRewards: false });
                 saveCheckoutDraft({});
                 setCheckoutSubmitting(false);
-                await showOrderSuccess(res2.data.id, res2.data.public_id, orderTotalWithDelivery);
+                if(await handleOnlineOrder(res2))return;
+                await showOrderSuccess(res2.data.id, res2.data.public_id, Number(res2.data.total_price ?? orderTotalWithDelivery));
               } else {
                 alert("Не удалось создать заказ.");
                 if (btnNewAgain) {
@@ -42115,7 +42213,8 @@ function setBottomNavActive(tab) {
           saveCheckoutDraft({});
           if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }
           setCheckoutSubmitting(false);
-          await showOrderSuccess(res.data.id, res.data.public_id, orderTotalWithDelivery);
+          if(await handleOnlineOrder(res))return;
+          await showOrderSuccess(res.data.id, res.data.public_id, Number(res.data.total_price ?? orderTotalWithDelivery));
         } else {
           setCheckoutSubmitting(false);
           setCheckoutSubmitLabel();
@@ -42217,12 +42316,16 @@ function setBottomNavActive(tab) {
 
 function initShopLate() {
   try {
+    const paymentReturnId=new URL(window.location.href).searchParams.get("payment_order");
     setActiveNav("menu");
     syncHeaderProfilePhoto(getCustomerCache());
     if (getCustomerToken()) {
       Promise.resolve(fetchMeSafe())
         .then((customer) => syncHeaderProfilePhoto(customer))
-        .catch(() => {});
+        .catch(() => {})
+        .finally(()=>{if(paymentReturnId)void showShopPaymentReturn(paymentReturnId);});
+    } else if(paymentReturnId) {
+      void showShopPaymentReturn(paymentReturnId);
     }
     Promise.resolve(maybePromptCustomerNameCompletionAfterSocialLogin()).catch((e) => {
       console.warn("maybePromptCustomerNameCompletionAfterSocialLogin failed:", e);
