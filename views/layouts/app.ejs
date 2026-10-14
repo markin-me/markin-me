@@ -333,6 +333,58 @@
         
         if (!btn || !menuWrapper || !dropdown) return;
 
+        var profilePhotoState = null;
+        var profilePhotoImages = [document.getElementById('shopHeaderProfileImg'), document.getElementById('adminUserMenuPhoto')].filter(Boolean);
+        var profilePhotoIcons = [btn.querySelector('.shop-header-profile-fallback'), dropdown.querySelector('.user-menu-avatar i')].filter(Boolean);
+
+        function showProfilePhoto(url) {
+          profilePhotoImages.forEach(function (image) {
+            if (url) image.src = url;
+            else image.removeAttribute('src');
+            image.classList.toggle('hidden', !url);
+          });
+          profilePhotoIcons.forEach(function (icon) { icon.classList.toggle('hidden', Boolean(url)); });
+        }
+
+        async function renderProfilePhoto(user) {
+          var revision = user && user.photo_revision;
+          var key = JSON.stringify([user && user.tenant_id, user && user.id, user && user.email, revision]);
+          if (profilePhotoState && profilePhotoState.key === key && !profilePhotoState.error) return;
+          if (profilePhotoState && profilePhotoState.url) URL.revokeObjectURL(profilePhotoState.url);
+          var photo = { key: key, url: '', error: false };
+          profilePhotoState = photo;
+          showProfilePhoto('');
+          btn.removeAttribute('title');
+          if (!revision) return;
+          try {
+            var response = await authFetch('/api/auth/me/photo');
+            if (!response.ok) throw new Error('PROFILE_PHOTO_LOAD_FAILED');
+            var blob = await response.blob();
+            if (profilePhotoState !== photo) return;
+            photo.url = URL.createObjectURL(blob);
+            showProfilePhoto(photo.url);
+          } catch (error) {
+            if (profilePhotoState !== photo) return;
+            photo.error = true;
+            btn.title = 'Не удалось загрузить фото сотрудника';
+            console.warn('Не удалось загрузить фото профиля:', error.message);
+          }
+        }
+
+        window.updateAdminProfilePhoto = function (revision, profile) {
+          return Promise.resolve(window.AdminAccessContext || window.AdminAccessContextPromise).then(function (context) {
+            if (!context || !context.user) throw new Error('AUTH_CONTEXT_UNAVAILABLE');
+            context.user.photo_revision = revision || null;
+            if (profile) {
+              ['name', 'last_name', 'first_name', 'patronymic'].forEach(function (field) { context.user[field] = profile[field]; });
+              if (context.user.profile_name) context.user.profile_name = profile.name;
+            }
+            localStorage.setItem('user', JSON.stringify(context.user));
+            updateUserInfo();
+            return renderProfilePhoto(context.user);
+          }).catch(function (error) { console.warn('Не удалось обновить фото профиля:', error.message); });
+        };
+
         // Функция для обновления информации о пользователе
         function updateUserInfo() {
           try {
@@ -350,7 +402,19 @@
               var tenant = JSON.parse(tenantStr);
               if (passwordLink) passwordLink.classList.toggle('hidden', !(Number(user.id) > 0));
               
-              if (nameEl) nameEl.textContent = user.name || 'Пользователь';
+              var fullName = String(user.profile_name || user.name || '').trim();
+              var nameParts = fullName.split(/\s+/);
+              var surname = user.last_name || nameParts[0] || '';
+              var firstName = user.first_name || nameParts[1] || '';
+              var patronymic = user.patronymic || nameParts[2] || '';
+              var shortName = (Number(user.id) > 0 || user.profile_name || user.last_name)
+                ? [surname, (firstName ? Array.from(firstName)[0] + '.' : '') + (patronymic ? Array.from(patronymic)[0] + '.' : '')].filter(Boolean).join(' ')
+                : fullName;
+              var profileName = document.getElementById('adminProfileName');
+              if (profileName) profileName.textContent = shortName || 'Профиль';
+              btn.setAttribute('aria-label', fullName ? 'Профиль: ' + fullName : 'Профиль');
+              btn.setAttribute('data-sidebar-tooltip', fullName || 'Профиль');
+              if (nameEl) nameEl.textContent = fullName || 'Пользователь';
               if (emailEl) emailEl.textContent = user.email || '';
               if (tenantEl) tenantEl.textContent = tenant.name || 'Магазин';
             } else {
@@ -524,6 +588,8 @@
             if (context.user) localStorage.setItem('user', JSON.stringify(context.user));
             if (context.tenant) localStorage.setItem('tenant', JSON.stringify(context.tenant));
             window.AdminAccessContext = context;
+            updateUserInfo();
+            renderProfilePhoto(context.user);
             applyNavigationPermissions(context.permissions || []);
             renderRoleOptions(context);
             if (Array.isArray(context.stores)) {

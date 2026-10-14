@@ -57,6 +57,7 @@
     assigned: 'Только назначенные',
   };
   const employeeStatusLabels = { active: 'Активен', blocked: 'Заблокирован', archived: 'Уволен' };
+  const employeeStatusOrder = { active: 0, blocked: 1, archived: 2 };
   const routeLabels = {
     '/dashboard/cash': 'Касса',
     '/dashboard/products': 'Товары',
@@ -149,6 +150,8 @@
       EMPLOYEE_HAS_OPEN_ORDERS: 'У сотрудника есть незавершённые назначенные заказы. Завершите или переназначьте их перед увольнением.',
       OWNER_REQUIRES_FULL_ACCESS: 'Для роли владельца должны быть включены все права.',
       OWNER_ROLE_FORBIDDEN: 'Назначать роль владельца может только владелец компании.',
+      OWNER_STATUS_CHANGE_FORBIDDEN: 'Нельзя блокировать, удалять или ограничивать другого владельца.',
+      OWNER_ACCESS_CHANGE_FORBIDDEN: 'Нельзя блокировать, удалять или ограничивать другого владельца.',
       SYSTEM_ROLE_PROTECTED: 'Системную роль удалить нельзя.',
       ROLE_HAS_USERS: 'Сначала снимите эту роль со всех сотрудников.',
       INVALID_LOGIN: 'Логин: 3–64 символа, латинские буквы, цифры, точка, дефис или подчёркивание.',
@@ -341,7 +344,11 @@
       button.setAttribute('aria-pressed', String(selected));
     });
     if (state.permissionMode.active) return;
-    const rows = state.section === 'users' ? state.users.filter((user) => user.employee_status === state.userStatus) : state.roles;
+    const rows = state.section === 'users'
+      ? state.userStatus === 'all'
+        ? [...state.users].sort((a, b) => employeeStatusOrder[a.employee_status] - employeeStatusOrder[b.employee_status])
+        : state.users.filter((user) => user.employee_status === state.userStatus)
+      : state.roles;
     if (!rows.length) {
       dom.list.innerHTML = `<div class="team-list-state muted">${state.section === 'users' ? 'Сотрудников пока нет.' : 'Ролей пока нет.'}</div>`;
       return;
@@ -350,14 +357,18 @@
       if (state.section === 'users') {
         const roles = (item.roles || []).map((role) => role.name).join(', ') || 'Роли не назначены';
         return `
-          <button class="order-row team-entity-row" type="button" data-team-open="user" data-team-id="${Number(item.id)}">
+          <div class="order-row team-entity-row team-employee-list-row" data-team-open="user" data-team-id="${Number(item.id)}">
+            <button class="team-employee-open" type="button" aria-label="${escapeHtml(`Открыть карточку: ${item.name || 'Сотрудник'}`)}">
             <div class="product-avatar team-user-avatar" data-team-user-avatar="${Number(item.id)}"><img class="product-avatar-img hidden" alt="Фото сотрудника"><i class="fas fa-user" aria-hidden="true"></i></div>
             <div class="order-col team-entity-copy">
               <div class="product-title">${escapeHtml(item.name || 'Без имени')}</div>
               <div class="muted">${escapeHtml(item.login || item.email || 'Без логина')} · ${escapeHtml(roles)}</div>
+              <div class="muted">${escapeHtml(item.phone || 'Телефон не указан')}</div>
             </div>
-            <div class="order-col"><span class="badge ${item.employee_status === 'active' ? '' : 'is-muted'}">${employeeStatusLabels[item.employee_status]}</span></div>
-          </button>`;
+            <div class="order-col team-employee-badge"><span class="badge ${item.employee_status === 'active' ? '' : 'is-muted'}">${employeeStatusLabels[item.employee_status]}</span></div>
+            </button>
+            <div class="team-status-actions team-list-status-actions">${renderEmployeeStatusActions(item, true)}</div>
+          </div>`;
       }
       return `
         <button class="order-row team-entity-row" type="button" data-team-open="role" data-team-id="${Number(item.id)}">
@@ -412,11 +423,12 @@
     }
   }
 
-  function checkboxList(items, selectedIds, name, icon) {
+  function checkboxList(items, selectedIds, name, icon, lockedIds = []) {
     const selected = new Set((selectedIds || []).map(Number));
+    const locked = new Set(lockedIds.map(Number));
     return items.map((item) => `
       <label class="team-choice-row">
-        <input type="checkbox" name="${name}" value="${Number(item.id)}" ${selected.has(Number(item.id)) ? 'checked' : ''}>
+        <input type="checkbox" name="${name}" value="${Number(item.id)}" ${selected.has(Number(item.id)) ? 'checked' : ''} ${locked.has(Number(item.id)) ? 'disabled title="Полномочия владельца защищены"' : ''}>
         <span class="team-choice-icon"><i class="fas ${icon}"></i></span>
         <span class="team-choice-copy"><strong>${escapeHtml(item.name)}</strong>${item.description ? `<small>${escapeHtml(item.description)}</small>` : ''}</span>
       </label>
@@ -633,49 +645,56 @@
   function renderEmployeeStatus(tab) {
     if (tab.isNew) return '';
     const status = tab.meta.employee_status;
+    return `<div class="team-employee-status"><span class="badge ${status === 'active' ? '' : 'is-muted'}">${employeeStatusLabels[status]}</span></div>`;
+  }
+
+  function renderEmployeeStatusActions(user, iconsOnly = false) {
+    const status = user.employee_status;
     const actions = status === 'archived' ? [['active', 'Восстановить']]
       : status === 'blocked' ? [['active', 'Разблокировать'], ['archived', 'Уволить']]
         : [['blocked', 'Заблокировать'], ['archived', 'Уволить']];
-    const isOwner = (tab.meta.roles || []).some((role) => role.is_owner);
-    const isSelf = Number(tab.id) === state.actorUserId
-      || (!state.actorUserId && tab.meta.email && tab.meta.email.toLowerCase() === state.actorEmail.toLowerCase());
-    const otherOwner = state.users.some((user) => Number(user.id) !== Number(tab.id) && user.employee_status === 'active' && (user.roles || []).some((role) => role.is_owner));
-    return `<div class="team-employee-status"><span class="badge ${status === 'active' ? '' : 'is-muted'}">${employeeStatusLabels[status]}</span>
-      <div class="team-status-actions">${actions.map(([nextStatus, label]) => {
-        const reason = !state.capabilities.update_users ? 'Недостаточно прав'
-          : isOwner && !state.capabilities.manage_owner_status ? 'Управлять владельцами может только владелец компании'
-            : nextStatus !== 'active' && isSelf ? 'Нельзя заблокировать или уволить себя'
-              : nextStatus !== 'active' && isOwner && !otherOwner ? 'Нельзя оставить компанию без активного владельца' : '';
-        return `<button class="btn" type="button" data-team-change-status="${nextStatus}" ${reason ? 'disabled' : ''} title="${escapeHtml(reason || label)}">${label}</button>`;
-      }).join('')}</div></div>`;
+    const isOwner = user.is_owner === true;
+    const isSelf = Number(user.id) === state.actorUserId
+      || (!state.actorUserId && user.email && user.email.toLowerCase() === state.actorEmail.toLowerCase());
+    return actions.map(([nextStatus, label]) => {
+        const reason = isOwner ? 'Учётная запись владельца защищена от изменения статуса'
+          : !state.capabilities.update_users ? 'Недостаточно прав'
+            : nextStatus !== 'active' && isSelf ? 'Нельзя заблокировать или уволить себя' : '';
+        const icon = nextStatus === 'archived' ? 'fa-ban' : nextStatus === 'blocked' ? 'fa-lock' : status === 'archived' ? 'fa-undo' : 'fa-unlock';
+        return `<button class="${iconsOnly ? 'icon-btn btn-xs' : 'btn'}" type="button" data-team-change-status="${nextStatus}" data-team-user-id="${Number(user.id)}" ${reason ? 'disabled' : ''} title="${escapeHtml(reason || label)}" aria-label="${escapeHtml(`${label}: ${user.name || 'Сотрудник'}`)}">${iconsOnly ? `<i class="fas ${icon}" aria-hidden="true"></i>` : label}</button>`;
+      }).join('');
   }
 
-  function requestEmployeeStatusChange(nextStatus) {
+  function requestEmployeeStatusChange(nextStatus, userId = null) {
     readActiveDraft();
     readDocumentDraft();
-    const tab = activeTab();
-    if (!tab || tab.type !== 'user' || tab.isNew || !state.capabilities.update_users) return;
+    const tab = userId == null ? activeTab() : state.tabs.find((item) => item.type === 'user' && Number(item.id) === Number(userId));
+    const user = userId == null ? tab?.meta : state.users.find((item) => Number(item.id) === Number(userId));
+    if (!user || (tab && (tab.type !== 'user' || tab.isNew)) || !state.capabilities.update_users) return;
+    if (user.is_owner === true) return showNotice(errorLabel('OWNER_STATUS_CHANGE_FORBIDDEN'), 'error');
     if (tabHasUnsaved(tab)) return showNotice('Сначала сохраните или отмените изменения карточки и документов.', 'error');
     if (!window.AppModal) return showNotice('Компонент подтверждения недоступен.', 'error');
-    const currentStatus = tab.meta.employee_status;
+    const currentStatus = user.employee_status;
     const label = nextStatus === 'archived' ? 'Уволить' : nextStatus === 'blocked' ? 'Заблокировать' : currentStatus === 'archived' ? 'Восстановить' : 'Разблокировать';
     const text = nextStatus === 'archived' ? 'Доступ к CRM будет закрыт. Аккаунт, логин, роли и история работы сохранятся в архиве.'
       : nextStatus === 'blocked' ? 'Доступ к CRM прекратится, в том числе для открытых сессий. Данные и роли сохранятся.'
         : 'Сохранятся прежние роли и данные. Для доступа сотруднику потребуется войти заново.';
     const modal = document.getElementById('appModal');
     modal?.classList.add('team-unsaved-modal');
-    window.AppModal.open({ title: `${label} сотрудника?`, content: `<div class="team-unsaved-message"><p>${text}</p></div>`, cancelText: 'Отмена', saveText: label,
+    window.AppModal.open({ title: `${label} сотрудника?`, content: `<div class="team-unsaved-message"><p><strong>${escapeHtml(user.name || 'Сотрудник')}</strong></p><p>${text}</p></div>`, cancelText: 'Отмена', saveText: label,
       onClose: () => modal?.classList.remove('team-unsaved-modal'), onSave: async () => {
       try {
-        const result = await request(`/api/admin/team/users/${tab.id}/status`, { method: 'PUT', body: JSON.stringify({ status: nextStatus, expected_status: currentStatus, confirmed: true }) });
+        const result = await request(`/api/admin/team/users/${user.id}/status`, { method: 'PUT', body: JSON.stringify({ status: nextStatus, expected_status: currentStatus, confirmed: true }) });
         replaceEntity('user', result.user);
-        tab.meta = clone(result.user);
-        tab.draft = normalizeUserDraft(result.user);
-        tab.snapshot = clone(tab.draft);
-        tab.dirty = false;
+        if (tab) {
+          tab.meta = clone(result.user);
+          tab.draft = normalizeUserDraft(result.user);
+          tab.snapshot = clone(tab.draft);
+          tab.dirty = false;
+        }
         renderList();
-        renderTabs();
-        if (tab.key === state.activeKey) { renderEditor(); showNotice('Статус сотрудника изменён.', 'success'); }
+        if (tab) renderTabs();
+        if (tab?.key === state.activeKey) { renderEditor(); showNotice('Статус сотрудника изменён.', 'success'); }
         return true;
       } catch (error) {
         showNotice(errorLabel(error.code), 'error');
@@ -688,6 +707,12 @@
   function renderUserEditor(tab) {
     const draft = tab.draft;
     const loginRequired = tab.isNew || !draft.email || Boolean(draft.login);
+    const protectedOwner = !tab.isNew && tab.meta.is_owner === true;
+    const isSelf = Number(tab.id) === state.actorUserId
+      || (!state.actorUserId && tab.meta.email && tab.meta.email.toLowerCase() === state.actorEmail.toLowerCase());
+    const ownerCredentialsLocked = protectedOwner && !isSelf;
+    const lockedRoleIds = protectedOwner
+      ? (tab.meta.roles || []).filter((role) => role.is_owner).map((role) => Number(role.id)) : [];
     return `
       <form class="team-editor-form" id="teamActiveForm" autocomplete="off">
         <div class="team-editor-scroll no-scrollbar">
@@ -702,6 +727,7 @@
                 <button class="important-message-preview-media-remove${tab.photo?.previewUrl ? '' : ' hidden'}" type="button" data-team-photo-remove title="Удалить фото" aria-label="Удалить фото"><i class="fas fa-times" aria-hidden="true"></i></button>
               </div>
               <input type="file" class="hidden" data-team-photo-file accept="image/jpeg,image/png,image/webp">
+              ${!tab.isNew ? `<div class="team-status-actions team-photo-status-actions">${renderEmployeeStatusActions(tab.meta)}</div>` : ''}
             </div>
             <div class="team-document-grid">
               <label class="settings-site-field"><span class="field-label">ФАМИЛИЯ</span><input class="control" name="last_name" value="${escapeHtml(draft.last_name)}" ${tab.isNew ? 'required' : ''} maxlength="80" autocomplete="family-name"></label>
@@ -710,20 +736,20 @@
             ${!tab.isNew && !draft.first_name && !draft.last_name ? `<div class="field-hint">Сохранённое имя: ${escapeHtml(draft.name)}. Оно останется без изменений, пока не заполнены фамилия и имя.</div>` : ''}
             <label class="settings-site-field"><span class="field-label">ОТЧЕСТВО</span><input class="control" name="patronymic" value="${escapeHtml(draft.patronymic)}" maxlength="80" autocomplete="additional-name"></label>
             <label class="settings-site-field"><span class="field-label">ТЕЛЕФОН</span><input class="control" type="tel" name="phone" value="${escapeHtml(draft.phone)}" placeholder="+7 999 123-45-67" autocomplete="tel"></label>
-            <label class="settings-site-field"><span class="field-label">ЛОГИН</span><div class="team-login-row"><div class="team-login-control"><input class="control" name="login" value="${escapeHtml(draft.login)}" ${loginRequired ? 'required' : ''} autocomplete="off" autocapitalize="off" spellcheck="false"><span title="@${escapeHtml(state.loginSuffix)}">@${escapeHtml(state.loginSuffix)}</span></div><button class="btn" type="button" data-team-generate-login>Генерировать</button></div></label>
+            <label class="settings-site-field"><span class="field-label">ЛОГИН</span><div class="team-login-row"><div class="team-login-control"><input class="control" name="login" value="${escapeHtml(draft.login)}" ${loginRequired ? 'required' : ''} ${ownerCredentialsLocked ? 'readonly title="Учётные данные другого владельца защищены"' : ''} autocomplete="off" autocapitalize="off" spellcheck="false"><span title="@${escapeHtml(state.loginSuffix)}">@${escapeHtml(state.loginSuffix)}</span></div><button class="btn" type="button" data-team-generate-login ${ownerCredentialsLocked ? 'disabled' : ''}>Генерировать</button></div></label>
             ${tab.isNew ? `<div class="settings-site-field"><label class="field-label">ПАРОЛЬ</label>${renderPasswordField('temporary_password', draft.temporary_password, true)}</div>` : ''}
-            ${!tab.isNew && state.capabilities.reset_password ? `<div class="settings-site-field"><label class="field-label">НОВЫЙ ПАРОЛЬ</label>${renderPasswordField('reset_password', draft.reset_password, false)}</div>` : ''}
+            ${!tab.isNew && state.capabilities.reset_password && !ownerCredentialsLocked ? `<div class="settings-site-field"><label class="field-label">НОВЫЙ ПАРОЛЬ</label>${renderPasswordField('reset_password', draft.reset_password, false)}</div>` : ''}
             ${renderEmployeeStatus(tab)}
             <div class="settings-site-field"><label class="field-label">КОММЕНТАРИЙ</label><textarea class="control team-textarea" name="comment" rows="3">${escapeHtml(draft.comment)}</textarea></div>
           </section>
           <section class="team-form-section">
             <details class="team-assignment-accordion" data-team-assignment-section="roles" ${tab.assignmentSections.roles ? 'open' : ''}>
               <summary class="team-assignment-toggle"><span class="settings-list-title">Назначенные роли</span><i class="fas fa-chevron-down team-document-chevron" aria-hidden="true"></i></summary>
-              <div class="team-choice-grid">${checkboxList(state.roles, draft.role_ids, 'role_ids', 'fa-user-shield')}</div>
+              <div class="team-choice-grid">${checkboxList(state.roles, draft.role_ids, 'role_ids', 'fa-user-shield', lockedRoleIds)}</div>
             </details>
             <details class="team-assignment-accordion" data-team-assignment-section="stores" ${tab.assignmentSections.stores ? 'open' : ''}>
               <summary class="team-assignment-toggle"><span class="settings-list-title">Филиалы</span><i class="fas fa-chevron-down team-document-chevron" aria-hidden="true"></i></summary>
-              <div class="team-choice-grid">${checkboxList(state.stores, draft.store_ids, 'store_ids', 'fa-store')}</div>
+              <div class="team-choice-grid">${checkboxList(state.stores, draft.store_ids, 'store_ids', 'fa-store', ownerCredentialsLocked ? state.stores.map((store) => Number(store.id)) : [])}</div>
             </details>
           </section>
           ${renderUserDocuments(tab)}
@@ -1444,6 +1470,9 @@
         tab.isNew = false;
         tab.meta = clone(result.user);
         tab.draft = normalizeUserDraft(result.user);
+        if (Number(result.user.id) === state.actorUserId && typeof window.updateAdminProfilePhoto === 'function') {
+          window.updateAdminProfilePhoto(result.user.photo_revision, result.user);
+        }
         if (result.user.login?.includes('@')) state.loginSuffix = result.user.login.split('@')[1];
         clearEmployeePhoto(tab);
         if (!tab.documents.summary) tab.documents.loaded = false;
@@ -1652,6 +1681,12 @@
     renderList();
   });
   dom.list.addEventListener('click', (event) => {
+    const statusButton = event.target.closest('[data-team-change-status]');
+    if (statusButton) {
+      event.stopPropagation();
+      if (!statusButton.disabled) requestEmployeeStatusChange(statusButton.dataset.teamChangeStatus, Number(statusButton.dataset.teamUserId));
+      return;
+    }
     const button = event.target.closest('[data-team-open]');
     if (button) openEntity(button.dataset.teamOpen, Number(button.dataset.teamId));
   });
@@ -1710,7 +1745,7 @@
   });
   dom.editor.addEventListener('click', (event) => {
     const statusButton = event.target.closest('[data-team-change-status]');
-    if (statusButton && !statusButton.disabled) { requestEmployeeStatusChange(statusButton.dataset.teamChangeStatus); return; }
+    if (statusButton && !statusButton.disabled) { requestEmployeeStatusChange(statusButton.dataset.teamChangeStatus, Number(statusButton.dataset.teamUserId)); return; }
     if (event.target.closest('[data-team-photo-upload]')) { dom.editor.querySelector('[data-team-photo-file]')?.click(); return; }
     if (event.target.closest('[data-team-photo-remove]')) {
       const tab = activeTab();

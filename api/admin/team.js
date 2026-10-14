@@ -409,7 +409,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     if (userFilter) params.push(Number(onlyUserId));
     const [users] = await queryable.query(
       `SELECT u.id, u.name, u.last_name, u.first_name, u.patronymic, u.phone, u.login, u.login_local, u.photo_revision, u.email, u.comment, u.is_active, u.employee_status, u.must_change_password,
-              u.last_login_at, u.created_at
+              u.last_login_at, u.created_at, ${employeeIdentity.OWNER_ACCOUNT_SQL} AS is_owner
        FROM app_users u
        WHERE u.tenant_id=?${userFilter}
        ORDER BY u.is_active DESC, u.name, u.id`,
@@ -438,6 +438,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       ...user,
       id: Number(user.id),
       is_active: Number(user.is_active) === 1,
+      is_owner: Number(user.is_owner) === 1,
       must_change_password: Number(user.must_change_password) === 1,
       roles: roles.filter((role) => Number(role.user_id) === Number(user.id)).map((role) => ({
         id: Number(role.id), name: role.name, is_owner: Number(role.is_owner) === 1,
@@ -500,14 +501,18 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     }));
   }
 
-  async function replaceUserRelations(conn, currentTenantId, userId, roleIds, storeIds) {
-    await conn.query('DELETE FROM user_roles WHERE tenant_id=? AND user_id=?', [currentTenantId, userId]);
+  async function replaceUserRelations(conn, currentTenantId, userId, roleIds, storeIds, options = {}) {
+    const protectedRoleIds = new Set(options.protectedRoleIds || []);
+    const keepRolesSql = protectedRoleIds.size ? ` AND role_id NOT IN (${[...protectedRoleIds].map(() => '?').join(',')})` : '';
+    await conn.query(`DELETE FROM user_roles WHERE tenant_id=? AND user_id=?${keepRolesSql}`, [currentTenantId, userId, ...protectedRoleIds]);
     for (const roleId of roleIds) {
+      if (protectedRoleIds.has(roleId)) continue;
       await conn.query(
         'INSERT INTO user_roles (tenant_id, user_id, role_id) VALUES (?, ?, ?)',
         [currentTenantId, userId, roleId]
       );
     }
+    if (options.replaceStores === false) return;
     await conn.query('DELETE FROM user_stores WHERE tenant_id=? AND user_id=?', [currentTenantId, userId]);
     for (const storeId of storeIds) {
       await conn.query(
@@ -515,26 +520,6 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         [currentTenantId, userId, storeId]
       );
     }
-  }
-
-  async function wouldRemoveLastOwner(conn, currentTenantId, userId, nextRoleIds, nextActive) {
-    const [ownerRoles] = await conn.query(
-      'SELECT id FROM tenant_roles WHERE tenant_id=? AND is_owner=1',
-      [currentTenantId]
-    );
-    const ownerIds = new Set(ownerRoles.map((role) => Number(role.id)));
-    const retainsOwner = nextActive && nextRoleIds.some((roleId) => ownerIds.has(roleId));
-    if (retainsOwner) return false;
-    const [rows] = await conn.query(
-      `SELECT DISTINCT ur.user_id
-       FROM user_roles ur
-       JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.is_owner=1
-       JOIN app_users u ON u.tenant_id=ur.tenant_id AND u.id=ur.user_id AND u.is_active=1 AND u.employee_status='active'
-       WHERE ur.tenant_id=? AND ur.user_id<>?
-       FOR UPDATE`,
-      [currentTenantId, userId]
-    );
-    return rows.length === 0;
   }
 
   router.get('/bootstrap', requireTeamBootstrap, async (req, res) => {
@@ -580,7 +565,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       return res.json({
         ok: true,
         login_suffix: loginSettings?.login_suffix || '',
-        current_user_id: Number(req.user?.userId || 0),
+        current_user_id: Number(req.user?.userId || req.user?.sessionUserId || 0),
         current_user_email: req.user?.email || '',
         corporate_logins_enabled: Number(loginSettings?.corporate_logins_enabled) === 1,
         users: canViewUsers ? users : [],
@@ -589,7 +574,6 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         permissions: canManagePermissions ? permissions : [],
         start_routes: Array.from(VALID_START_ROUTES),
         capabilities: {
-          manage_owner_status: actorCanAssignOwner(req),
           reset_password: Boolean(fullGrant || await getPermissionGrant(req.user, 'team.employees.reset_password')),
           read_employee_photo: Boolean(usersViewGrant),
           view_employee_documents: Boolean(documentsGrant),
@@ -727,10 +711,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
   router.get('/users/:id/photo', requirePermission('team.employees.read'), async (req, res) => {
     try {
       if (!(Number(req.params.id) > 0)) return teamError(res, 400, 'INVALID_USER');
-      const [rows] = await db.query('SELECT employee_photo FROM app_users WHERE tenant_id=? AND id=?', [tenantId(req), Number(req.params.id)]);
-      if (!rows[0]?.employee_photo) return teamError(res, 404, 'PHOTO_NOT_FOUND');
-      res.set({ 'Content-Type': 'image/webp', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'" });
-      return res.send(rows[0].employee_photo);
+      return await employeeIdentity.sendEmployeePhoto(db, res, tenantId(req), Number(req.params.id));
     } catch { return teamError(res, 500, 'DB_ERROR'); }
   });
 
@@ -744,22 +725,19 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       if (req.body.confirmed !== true) return teamError(res, 400, 'EMPLOYEE_STATUS_CONFIRMATION_REQUIRED');
       await conn.beginTransaction();
       await employeeIdentity.lockLoginTenant(conn, currentTenantId);
-      const [rows] = await conn.query(`SELECT u.id, u.email, u.employee_status,
-        (u.role='owner' OR EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.is_owner=1 WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)) AS is_owner
+      const [rows] = await conn.query(`SELECT u.id, u.tenant_id, u.email, u.employee_status,
+        ${employeeIdentity.OWNER_ACCOUNT_SQL} AS is_owner
         FROM app_users u WHERE u.tenant_id=? AND u.id=? LIMIT 1 FOR UPDATE`, [currentTenantId, userId]);
       if (!rows.length) { await conn.rollback(); return teamError(res, 404, 'USER_NOT_FOUND'); }
       const user = rows[0];
+      const ownerError = employeeIdentity.ownerAccountChangeError(user, req.user, { statusChange: true });
+      if (ownerError) { await conn.rollback(); return teamError(res, 403, ownerError); }
       if (user.employee_status !== req.body.expected_status) { await conn.rollback(); return teamError(res, 409, 'EMPLOYEE_STATUS_CHANGED'); }
       if (nextStatus === user.employee_status || (user.employee_status === 'archived' && nextStatus !== 'active')) {
         await conn.rollback(); return teamError(res, 400, 'INVALID_EMPLOYEE_STATUS');
       }
-      const isSelf = Number(req.user?.userId) === userId
-        || (req.user?.fullAccess && user.email && String(user.email).toLowerCase() === String(req.user.email || '').toLowerCase());
+      const isSelf = employeeIdentity.isOwnAccount(req.user, user);
       if (nextStatus !== 'active' && isSelf) { await conn.rollback(); return teamError(res, 403, 'SELF_STATUS_CHANGE_FORBIDDEN'); }
-      if (Number(user.is_owner) === 1 && !actorCanAssignOwner(req)) { await conn.rollback(); return teamError(res, 403, 'OWNER_ROLE_FORBIDDEN'); }
-      if (nextStatus !== 'active' && Number(user.is_owner) === 1 && await wouldRemoveLastOwner(conn, currentTenantId, userId, [], false)) {
-        await conn.rollback(); return teamError(res, 409, 'LAST_OWNER_REQUIRED');
-      }
       if (nextStatus === 'active') {
         const [assignedRoles] = await conn.query('SELECT role_id FROM user_roles WHERE tenant_id=? AND user_id=?', [currentTenantId, userId]);
         const roleIds = uniqueIds(assignedRoles.map((role) => role.role_id));
@@ -867,7 +845,6 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       const storeIds = uniqueIds(req.body.store_ids);
       const requestedIsActive = req.body.is_active === undefined ? null : (req.body.is_active === false || Number(req.body.is_active) === 0 ? 0 : 1);
       if (!(userId > 0)) return teamError(res, 400, 'INVALID_USER');
-      if (!roleIds.length) return teamError(res, 400, 'ROLE_REQUIRED');
       const passwordProvided = req.body.reset_password !== undefined && req.body.reset_password !== '';
       let password;
       if (passwordProvided) {
@@ -882,12 +859,8 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       await conn.beginTransaction();
       const loginTenant = await employeeIdentity.lockLoginTenant(conn, currentTenantId);
       const [existingUsers] = await conn.query(
-        `SELECT u.id, u.email, u.name, u.last_name, u.first_name, u.patronymic, u.phone, u.is_active, u.employee_status,
-                EXISTS(
-                  SELECT 1 FROM user_roles ur
-                  JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id
-                  WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id AND r.is_owner=1
-                ) AS is_owner
+        `SELECT u.id, u.tenant_id, u.email, u.role, u.login, u.login_local, u.name, u.last_name, u.first_name, u.patronymic, u.phone, u.is_active, u.employee_status,
+                ${employeeIdentity.OWNER_ACCOUNT_SQL} AS is_owner
          FROM app_users u
          WHERE u.tenant_id=? AND u.id=? LIMIT 1 FOR UPDATE`,
         [currentTenantId, userId]
@@ -896,31 +869,61 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         await conn.rollback();
         return teamError(res, 404, 'USER_NOT_FOUND');
       }
-      const isActive = Number(existingUsers[0].is_active);
-      if ((requestedIsActive !== null && requestedIsActive !== isActive)
-          || (req.body.employee_status !== undefined && req.body.employee_status !== existingUsers[0].employee_status)) {
+      const existing = existingUsers[0];
+      const [assignedRoles] = await conn.query(`SELECT r.id, r.is_owner FROM user_roles ur
+        JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id
+        WHERE ur.tenant_id=? AND ur.user_id=? FOR UPDATE`, [currentTenantId, userId]);
+      const [assignedStores] = await conn.query('SELECT store_id FROM user_stores WHERE tenant_id=? AND user_id=? FOR UPDATE', [currentTenantId, userId]);
+      existing.role_ids = assignedRoles.map((role) => Number(role.id));
+      existing.owner_role_ids = assignedRoles.filter((role) => Number(role.is_owner) === 1).map((role) => Number(role.id));
+      existing.store_ids = assignedStores.map((store) => Number(store.store_id));
+      const rolesUnchanged = employeeIdentity.sameIds(roleIds, existing.role_ids);
+      const storesUnchanged = employeeIdentity.sameIds(storeIds, existing.store_ids);
+      const isActive = Number(existing.is_active);
+      const statusChange = (requestedIsActive !== null && requestedIsActive !== isActive)
+        || (req.body.employee_status !== undefined && req.body.employee_status !== existing.employee_status);
+      const normalized = req.body.login === undefined
+        ? { login: existing.login, local: existing.login_local }
+        : (req.body.login ? employeeIdentity.normalizeCorporateLogin(req.body.login, loginTenant.login_suffix) : null);
+      const login = normalized?.login;
+      const local = normalized?.local || null;
+      const ownerError = employeeIdentity.ownerAccountChangeError(existing, req.user, {
+        statusChange, roleIds, storeIds, login: login || null, passwordChange: passwordProvided,
+      });
+      if (ownerError) { await conn.rollback(); return teamError(res, 403, ownerError); }
+      if (!roleIds.length && !(Number(existing.is_owner) === 1 && existing.role === 'owner')) {
+        await conn.rollback(); return teamError(res, 400, 'ROLE_REQUIRED');
+      }
+      if (statusChange) {
         await conn.rollback(); return teamError(res, 409, 'EMPLOYEE_STATUS_ACTION_REQUIRED');
       }
-      if (Number(existingUsers[0].is_owner) === 1 && !actorCanAssignOwner(req)) {
-        await conn.rollback();
-        return teamError(res, 403, 'OWNER_ROLE_FORBIDDEN');
+      if (Number(existing.is_owner) === 1 && !employeeIdentity.isOwnAccount(req.user, existing) && !actorCanAssignOwner(req)) {
+        const [actors] = await conn.query(`SELECT ${employeeIdentity.OWNER_ACCOUNT_SQL} AS is_owner
+          FROM app_users u WHERE u.tenant_id=? AND u.id=? LIMIT 1 FOR UPDATE`,
+        [currentTenantId, Number(req.user?.userId || req.user?.sessionUserId || 0)]);
+        // Actual ownership permits this workflow; delegation still uses the active role below.
+        if (rolesUnchanged || Number(actors[0]?.is_owner) !== 1) {
+          await conn.rollback(); return teamError(res, 403, 'OWNER_ROLE_FORBIDDEN');
+        }
       }
-      if (!await verifyRoleIds(conn, currentTenantId, roleIds)) {
+      const keepOwnerRoles = Number(existing.is_owner) === 1 && rolesUnchanged;
+      if (!keepOwnerRoles && roleIds.length && !await verifyRoleIds(conn, currentTenantId, roleIds)) {
         await conn.rollback();
         return teamError(res, 400, 'INVALID_ROLE');
       }
-      if (await includesOwnerRole(conn, currentTenantId, roleIds) && !actorCanAssignOwner(req)) {
+      const rolesToDelegate = Number(existing.is_owner) === 1
+        ? [...roleIds.filter((id) => !existing.role_ids.includes(id)), ...existing.role_ids.filter((id) => !roleIds.includes(id))]
+        : roleIds;
+      const addedRoles = roleIds.filter((id) => !existing.role_ids.includes(id));
+      if (await includesOwnerRole(conn, currentTenantId, addedRoles) && !actorCanAssignOwner(req)) {
         await conn.rollback();
         return teamError(res, 403, 'OWNER_ROLE_FORBIDDEN');
       }
-      if (!await actorCanAssignRoles(conn, req, currentTenantId, roleIds)) {
+      if (!keepOwnerRoles && rolesToDelegate.length && !await actorCanAssignRoles(conn, req, currentTenantId, rolesToDelegate)) {
         await conn.rollback();
         return teamError(res, 403, 'ROLE_ESCALATION_FORBIDDEN');
       }
       const profile = employeeIdentity.employeeProfile(req.body, existingUsers[0]);
-      const normalized = req.body.login ? employeeIdentity.normalizeCorporateLogin(req.body.login, loginTenant.login_suffix) : null;
-      const login = normalized?.login;
-      const local = normalized?.local || null;
       const photoProvided = req.body.photo_base64 !== undefined || req.body.photo_remove === true;
       if (req.body.photo_base64 && req.body.photo_remove === true) throw employeeIdentity.invalid('INVALID_EMPLOYEE_PHOTO');
       const photo = req.body.photo_base64 ? await employeeIdentity.encodeEmployeePhoto(req.body.photo_base64) : null;
@@ -932,13 +935,9 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         await conn.rollback();
         return teamError(res, 400, 'INVALID_STORE');
       }
-      if (!await actorCanAssignStores(conn, req, currentTenantId, storeIds)) {
+      if (!(Number(existing.is_owner) === 1 && storesUnchanged) && !await actorCanAssignStores(conn, req, currentTenantId, storeIds)) {
         await conn.rollback();
         return teamError(res, 403, 'STORE_ESCALATION_FORBIDDEN');
-      }
-      if (await wouldRemoveLastOwner(conn, currentTenantId, userId, roleIds, isActive === 1)) {
-        await conn.rollback();
-        return teamError(res, 409, 'LAST_OWNER_REQUIRED');
       }
       const [loginOwner] = login ? await conn.query(
         'SELECT id FROM app_users WHERE tenant_id=? AND login_local=? AND id<>? LIMIT 1',
@@ -958,7 +957,10 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         const passwordHash = await bcrypt.hash(password, 10);
         await conn.query('UPDATE app_users SET password_hash=?, must_change_password=0 WHERE tenant_id=? AND id=?', [passwordHash, currentTenantId, userId]);
       }
-      await replaceUserRelations(conn, currentTenantId, userId, roleIds, storeIds);
+      if (!(Number(existing.is_owner) === 1 && rolesUnchanged && storesUnchanged)) {
+        await replaceUserRelations(conn, currentTenantId, userId, roleIds, storeIds,
+          Number(existing.is_owner) === 1 ? { protectedRoleIds: existing.owner_role_ids, replaceStores: !storesUnchanged } : {});
+      }
       await conn.commit();
       const users = await loadUsers(db, currentTenantId, userId);
       return res.json({ ok: true, user: users[0] });
@@ -974,6 +976,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
   });
 
   router.post('/users/:id/reset-password', requirePermission('team.employees.reset_password'), async (req, res) => {
+    const conn = await db.getConnection();
     try {
       const currentTenantId = tenantId(req);
       const userId = Number(req.params.id);
@@ -981,34 +984,33 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       if (req.body.confirm_reset !== true) return teamError(res, 400, 'PASSWORD_RESET_CONFIRMATION_REQUIRED');
       const password = employeeIdentity.validatePassword(req.body.temporary_password);
       if (!(userId > 0)) return teamError(res, 400, 'INVALID_USER');
-      const [users] = await db.query(
-        `SELECT u.id,
-                EXISTS(
-                  SELECT 1 FROM user_roles ur
-                  JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id
-                  WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id AND r.is_owner=1
-                ) AS is_owner
+      await conn.beginTransaction();
+      await employeeIdentity.lockLoginTenant(conn, currentTenantId);
+      const [users] = await conn.query(
+        `SELECT u.id, u.tenant_id, u.email,
+                ${employeeIdentity.OWNER_ACCOUNT_SQL} AS is_owner
          FROM app_users u
-         WHERE u.tenant_id=? AND u.id=? LIMIT 1`,
+         WHERE u.tenant_id=? AND u.id=? LIMIT 1 FOR UPDATE`,
         [currentTenantId, userId]
       );
-      if (!users.length) return teamError(res, 404, 'USER_NOT_FOUND');
-      if (Number(users[0].is_owner) === 1 && !actorCanAssignOwner(req)) {
-        return teamError(res, 403, 'OWNER_ROLE_FORBIDDEN');
-      }
+      if (!users.length) { await conn.rollback(); return teamError(res, 404, 'USER_NOT_FOUND'); }
+      const ownerError = employeeIdentity.ownerAccountChangeError(users[0], req.user, { passwordChange: true });
+      if (ownerError) { await conn.rollback(); return teamError(res, 403, ownerError); }
       const passwordHash = await bcrypt.hash(password, 10);
-      const [result] = await db.query(
+      const [result] = await conn.query(
         `UPDATE app_users SET password_hash=?, must_change_password=0
          WHERE tenant_id=? AND id=?`,
         [passwordHash, currentTenantId, userId]
       );
-      if (!result.affectedRows) return teamError(res, 404, 'USER_NOT_FOUND');
+      if (!result.affectedRows) { await conn.rollback(); return teamError(res, 404, 'USER_NOT_FOUND'); }
+      await conn.commit();
       return res.json({ ok: true });
     } catch (error) {
+      try { await conn.rollback(); } catch (_) {}
       if (error.name === 'EmployeeIdentityError') return teamError(res, 400, error.code);
       console.error('TEAM_PASSWORD_RESET_FAILED:', error.code || error.name);
       return teamError(res, 500, 'DB_ERROR');
-    }
+    } finally { conn.release(); }
   });
 
   router.get('/roles/:id', requireRoleRead, async (req, res) => {

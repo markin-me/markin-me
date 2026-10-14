@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const employeeIdentity = require('./helpers/employeeIdentity');
-const { loadLegacyOwner } = require('./middleware/auth');
+const { loadLegacyOwner, authMiddleware } = require('./middleware/auth');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
@@ -60,6 +60,10 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       email: user.email || null,
       login: user.login || null,
       name: user.name,
+      last_name: user.last_name || null,
+      first_name: user.first_name || null,
+      patronymic: user.patronymic || null,
+      photo_revision: user.photo_revision || null,
       role: user.role,
       tenant_id: Number(user.tenant_id),
       active_role_id: activeRoleId ? Number(activeRoleId) : null,
@@ -400,6 +404,17 @@ module.exports = function makeAuthRouter({ db, helpers }) {
     }
   });
 
+  router.get('/me/photo', authMiddleware, async (req, res) => {
+    try {
+      const userId = Number(req.user.userId || req.user.sessionUserId || 0);
+      if (!(userId > 0)) return res.status(404).json({ ok: false, error: 'PHOTO_NOT_FOUND' });
+      return await employeeIdentity.sendEmployeePhoto(db, res, Number(req.user.tenantId), userId);
+    } catch (error) {
+      console.error('AUTH_PROFILE_PHOTO_FAILED:', error.code || error.name);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/me', async (req, res) => {
     try {
       const token = readRequestToken(req);
@@ -415,10 +430,10 @@ module.exports = function makeAuthRouter({ db, helpers }) {
           if (Number(decoded.authVersion || 0) !== Number(legacyOwner.auth_version)) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
         }
         const [stores] = await db.query('SELECT id, name FROM ten_stores WHERE tenant_id=? AND is_active=1 ORDER BY name, id', [tenant.id]);
-        return res.json({ ok: true, user: { id: null, email: tenant.email, name: `${tenant.name} (Магазин)`, tenant_id: Number(tenant.id) }, tenant: { id: Number(tenant.id), name: tenant.name, slug: tenant.slug }, roles: [], permissions: ['*'], stores });
+        return res.json({ ok: true, user: { id: null, email: tenant.email, name: `${tenant.name} (Магазин)`, profile_name: legacyOwner?.name || null, last_name: legacyOwner?.last_name || null, first_name: legacyOwner?.first_name || null, patronymic: legacyOwner?.patronymic || null, photo_revision: legacyOwner?.photo_revision || null, tenant_id: Number(tenant.id) }, tenant: { id: Number(tenant.id), name: tenant.name, slug: tenant.slug }, roles: [], permissions: ['*'], stores });
       }
       const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
+        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.last_name, u.first_name, u.patronymic, u.photo_revision, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
                 t.name AS tenant_name, t.slug AS tenant_slug
          FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id
          WHERE u.id=? AND u.tenant_id=? AND u.is_active=1 AND t.is_active=1 LIMIT 1`,

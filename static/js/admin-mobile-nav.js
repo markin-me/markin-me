@@ -102,7 +102,7 @@
     if (accountMenu && accountMenu.parentNode !== sidebarAccount) {
       accountMenu.parentNode.insertBefore(accountOrigin, accountMenu);
       const profileButton = accountMenu.querySelector("#shopProfileBtn");
-      if (profileButton) profileButton.setAttribute("data-sidebar-tooltip", "Профиль");
+      if (profileButton && !profileButton.hasAttribute("data-sidebar-tooltip")) profileButton.setAttribute("data-sidebar-tooltip", "Профиль");
       sidebarAccount.appendChild(accountMenu);
     }
   }

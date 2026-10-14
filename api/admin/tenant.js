@@ -3445,12 +3445,12 @@ async function fetchStoreWithHours(tenantId, storeId) {
   router.put('/login-suffix', async (req, res) => {
     if (!await requireTenantPermissions(req, res, ['settings.company.login_suffix'])) return;
     try {
-      const suffix = await employeeIdentity.changeLoginSuffix(db, Number(req.user?.tenantId || 0), req.body.suffix, req.body.expected_suffix, req.body.confirmed);
+      const suffix = await employeeIdentity.changeLoginSuffix(db, Number(req.user?.tenantId || 0), req.body.suffix, req.body.expected_suffix, req.body.confirmed, req.user);
       return res.json({ ok: true, suffix, enabled: true });
     } catch (error) {
       const known = error.name === 'EmployeeIdentityError';
       const conflict = ['LOGIN_SUFFIX_EXISTS', 'LOGIN_SUFFIX_CHANGED'].includes(error.code);
-      return res.status(known ? (conflict ? 409 : 400) : 500).json({ ok: false, error: known ? error.code : 'DB_ERROR' });
+      return res.status(known ? (error.code === 'OWNER_ACCESS_CHANGE_FORBIDDEN' ? 403 : conflict ? 409 : 400) : 500).json({ ok: false, error: known ? error.code : 'DB_ERROR' });
     }
   });
 
@@ -4150,6 +4150,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const nextName = name !== undefined ? name : current.name;
       const nextEmail = email !== undefined ? email : current.email;
       const nextPhone = phone !== undefined ? phone : current.phone;
+      const changesTenantEmail = nextEmail !== current.email;
+      if (changesTenantEmail && !await employeeIdentity.canChangeTenantCredential(db, req.user, tenantId, current.email)) {
+        return res.status(403).json({ ok: false, error: 'OWNER_ACCESS_CHANGE_FORBIDDEN' });
+      }
 
       const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
       const nextImgWebpQuality = imgWebpQuality !== undefined ? clamp(imgWebpQuality ?? 82, 1, 100) : (current.img_webp_quality ?? 82);
@@ -4224,10 +4228,13 @@ async function fetchStoreWithHours(tenantId, storeId) {
         ? collectSiteMenuIconUrls(nextSiteMenuItemsJson)
         : null;
 
-      await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextImportantMessagesEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
+      const [tenantUpdate] = await db.query(
+        'UPDATE ten_tenants SET name=?, email=IF(?, ?, email), phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=? AND (NOT ? OR email <=> ?)',
+        [nextName, changesTenantEmail, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextImportantMessagesEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId, changesTenantEmail, current.email]
       );
+      if (changesTenantEmail && !tenantUpdate.affectedRows) {
+        return res.status(409).json({ ok: false, error: 'TENANT_CREDENTIAL_CHANGED' });
+      }
 
       if (previousSiteMenuIconUrls && nextSiteMenuIconUrls) {
         for (const url of previousSiteMenuIconUrls) {
@@ -6455,11 +6462,17 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.status(400).json({ ok: false, error: 'PASSWORD_MISMATCH' });
       }
 
+      const [[credential]] = await db.query('SELECT email FROM ten_tenants WHERE id=?', [tenantId]);
+      if (!credential || !await employeeIdentity.canChangeTenantCredential(db, req.user, tenantId, credential.email)) {
+        return res.status(403).json({ ok: false, error: 'OWNER_ACCESS_CHANGE_FORBIDDEN' });
+      }
+
       const hash = await bcrypt.hash(password, 10);
-      await db.query(
-        'UPDATE ten_tenants SET password_hash=? WHERE id=?',
-        [hash, tenantId]
+      const [passwordUpdate] = await db.query(
+        'UPDATE ten_tenants SET password_hash=? WHERE id=? AND email <=> ?',
+        [hash, tenantId, credential.email]
       );
+      if (!passwordUpdate.affectedRows) return res.status(409).json({ ok: false, error: 'TENANT_CREDENTIAL_CHANGED' });
 
       res.json({ ok: true });
     } catch (err) {

@@ -532,6 +532,10 @@ body[data-admin-active-page] > header{
   flex: 1;
   min-width: 0;
 }
+.admin-profile-name{display:none}
+.admin-sidebar-account .admin-profile-name{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body[data-admin-active-page] .shop-header-profile-img{width:24px;height:24px;flex:0 0 24px;border-radius:50%;object-fit:cover}
+.admin-user-profile-img{width:100%;height:100%;border-radius:50%;object-fit:cover}
 
 .user-menu-name {
   font-weight: 600;
@@ -2422,7 +2426,6 @@ body.page-home .page-col-right .panel{
   }
 
   .admin-sidebar-account > #theme-toggle::after{content:"Сменить тему"}
-  .admin-sidebar-account .header-profile-wrapper > #shopProfileBtn::after{content:"Профиль"}
   .admin-sidebar-account .user-menu-wrapper,
   .admin-sidebar-account .header-profile-wrapper{width:100%}
   .admin-sidebar-account .user-menu-dropdown{
@@ -2479,7 +2482,7 @@ body.page-home .page-col-right .panel{
   }
 
   html[data-sidebar-collapsed="1"] .admin-sidebar-account > #theme-toggle::after,
-  html[data-sidebar-collapsed="1"] .admin-sidebar-account .header-profile-wrapper > #shopProfileBtn::after{
+  html[data-sidebar-collapsed="1"] .admin-sidebar-account .admin-profile-name{
     display:none;
   }
 
@@ -34008,7 +34011,6 @@ body.page-new-order .page-col-left > .panel:not(#cashierQueuePanel){
   }
 
   .admin-sidebar-account > #theme-toggle::after{content:"Сменить тему"}
-  .admin-sidebar-account .header-profile-wrapper > #shopProfileBtn::after{content:"Профиль"}
   .admin-sidebar-account .user-menu-wrapper,
   .admin-sidebar-account .header-profile-wrapper{width:100%}
   .admin-sidebar-account .user-menu-dropdown{left:0;right:auto;bottom:52px;top:auto}
@@ -35053,6 +35055,11 @@ body.page-home[data-admin-active-page="team"] .team-center-stack{
 .team-user-avatar{overflow:hidden}
 .team-user-avatar .product-avatar-img{object-fit:cover}
 .team-entity-row{width:100%;text-align:left;cursor:pointer;grid-template-columns:auto minmax(0,1fr) auto}
+.team-employee-list-row{grid-template-columns:minmax(0,1fr) auto}
+.team-employee-open{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;min-width:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;border-radius:8px}
+.team-employee-open:focus-visible{outline:2px solid var(--color-primary);outline-offset:3px}
+.team-list-status-actions{flex-wrap:nowrap}
+@media(max-width:600px){.team-employee-open{grid-template-columns:auto minmax(0,1fr)}.team-employee-badge{grid-column:2}}
 .team-entity-copy{min-width:0;flex:1 1 auto}
 .team-entity-copy .product-title,
 .team-entity-copy .muted{overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere}
@@ -35087,7 +35094,9 @@ body.page-home[data-admin-active-page="team"] .team-center-stack{
 .team-login-control{display:flex;align-items:center;gap:8px;min-width:0;width:100%}
 .team-login-control .control{flex:1 1 0;min-width:0;width:0}
 .team-login-control > span{flex:0 1 auto;min-width:0;max-width:60%;color:var(--color-text-muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.team-photo-field{display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:10px}
+.team-photo-field{display:flex;justify-content:flex-start;align-items:flex-start;gap:16px}
+.team-photo-status-actions{flex:1;min-width:0;flex-direction:column;flex-wrap:nowrap;align-items:flex-start}
+.team-photo-status-actions .btn{max-width:100%;white-space:normal}
 .team-photo-preview{flex:0 0 auto}
 .team-photo-preview .important-message-preview-media-actions{border:0;background:var(--color-surface)}
 .team-photo-preview .important-message-preview-media-remove{background:var(--color-surface)}

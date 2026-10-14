@@ -57,7 +57,7 @@ async function loadVerifiedUser(decoded) {
 }
 
 async function loadLegacyOwner(queryable, tenantId, email) {
-  const [rows] = await queryable.query(`SELECT u.id, u.employee_status, u.is_active, u.auth_version,
+  const [rows] = await queryable.query(`SELECT u.id, u.employee_status, u.is_active, u.auth_version, u.name, u.last_name, u.first_name, u.patronymic, u.photo_revision,
     EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.is_owner=1 WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id) AS is_owner
     FROM app_users u WHERE u.tenant_id=? AND u.email=? LIMIT 2`, [tenantId, email]);
   if (rows.length > 1) {

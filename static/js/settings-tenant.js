@@ -7,7 +7,7 @@
     if (!input || !generate || !save || !notice) return;
     let savedSuffix = '';
     let canChange = false;
-    const errors = { LOGIN_SUFFIX_EXISTS: 'Этот суффикс уже занят другой компанией.', INVALID_LOGIN_SUFFIX: 'Допустимы 1–48 латинских букв, цифр и дефис; первый и последний символ — буква или цифра.', LOGIN_SUFFIX_CHANGED: 'Суффикс уже изменён другим администратором. Обновите страницу.', FORBIDDEN: 'Нет права на смену суффикса логинов.' };
+    const errors = { LOGIN_SUFFIX_EXISTS: 'Этот суффикс уже занят другой компанией.', INVALID_LOGIN_SUFFIX: 'Допустимы 1–48 латинских букв, цифр и дефис; первый и последний символ — буква или цифра.', LOGIN_SUFFIX_CHANGED: 'Суффикс уже изменён другим администратором. Обновите страницу.', OWNER_ACCESS_CHANGE_FORBIDDEN: 'Нельзя изменить логины других владельцев компании.', FORBIDDEN: 'Нет права на смену суффикса логинов.' };
     const showError = (error) => { notice.textContent = errors[error.message] || 'Не удалось сохранить суффикс.'; };
     const requestSuffix = async (url, options) => {
       const response = await authFetch(url, options || {});

@@ -2,8 +2,48 @@
 
 const sharp = require('sharp');
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+// The target account is protected independently of its current active role.
+const OWNER_ACCOUNT_SQL = `(u.role='owner' OR EXISTS(
+  SELECT 1 FROM user_roles ur JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id
+  WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id AND r.is_owner=1
+))`;
 const transliteration = Object.freeze({ а:'a', б:'b', в:'v', г:'g', д:'d', е:'e', ё:'e', ж:'zh', з:'z', и:'i', й:'y', к:'k', л:'l', м:'m', н:'n', о:'o', п:'p', р:'r', с:'s', т:'t', у:'u', ф:'f', х:'kh', ц:'ts', ч:'ch', ш:'sh', щ:'shch', ъ:'', ы:'y', ь:'', э:'e', ю:'yu', я:'ya' });
 function invalid(code) { const error = new Error(code); error.name = 'EmployeeIdentityError'; error.code = code; return error; }
+function isOwnAccount(actor, account) {
+  if (Number(actor?.tenantId) !== Number(account?.tenant_id)) return false;
+  const actorId = Number(actor?.userId || actor?.sessionUserId || 0);
+  if (actorId > 0) return actorId === Number(account.id);
+  return Boolean(actor?.fullAccess && account.email && actor.email
+    && String(actor.email).toLowerCase() === String(account.email).toLowerCase());
+}
+function sameIds(first, second) {
+  const ids = new Set((first || []).map(Number));
+  const other = new Set((second || []).map(Number));
+  return ids.size === other.size && [...ids].every((id) => other.has(id));
+}
+function ownerAccountChangeError(account, actor, changes) {
+  if (Number(account.is_owner) !== 1) return null;
+  if (changes.statusChange) return 'OWNER_STATUS_CHANGE_FORBIDDEN';
+  const own = isOwnAccount(actor, account);
+  if (changes.roleIds && (account.owner_role_ids || []).some((id) => !changes.roleIds.includes(Number(id)))) {
+    return 'OWNER_ACCESS_CHANGE_FORBIDDEN';
+  }
+  if (!own && (changes.passwordChange
+      || (changes.login !== undefined && (changes.login || null) !== (account.login || null))
+      || (changes.storeIds && !sameIds(account.store_ids, changes.storeIds)))) return 'OWNER_ACCESS_CHANGE_FORBIDDEN';
+  return null;
+}
+function isOwnTenantCredential(actor, tenantId, email) {
+  return Boolean(Number(actor?.tenantId) === Number(tenantId) && email && actor?.email
+    && String(actor.email).toLowerCase() === String(email).toLowerCase());
+}
+async function canChangeTenantCredential(queryable, actor, tenantId, email) {
+  if (!isOwnTenantCredential(actor, tenantId, email)) return false;
+  const [accounts] = await queryable.query(`SELECT u.id, u.tenant_id, u.email, ${OWNER_ACCOUNT_SQL} AS is_owner
+    FROM app_users u WHERE u.tenant_id=? AND u.email=? LIMIT 2`, [tenantId, email]);
+  if (!accounts.length) return Boolean(actor.fullAccess && !Number(actor.userId || actor.sessionUserId || 0));
+  return accounts.length === 1 && Number(accounts[0].is_owner) === 1 && isOwnAccount(actor, accounts[0]);
+}
 function secureTransport(req) {
   if (process.env.NODE_ENV !== 'production' || req.secure === true) return true;
   const localProxy = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket?.remoteAddress);
@@ -75,6 +115,12 @@ async function encodeEmployeePhoto(base64) {
     return await image.rotate().resize(512, 512, { fit: 'cover', withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
   } catch { throw invalid('INVALID_EMPLOYEE_PHOTO'); }
 }
+async function sendEmployeePhoto(queryable, res, tenantId, userId) {
+  const [rows] = await queryable.query('SELECT employee_photo FROM app_users WHERE tenant_id=? AND id=?', [tenantId, userId]);
+  if (!rows[0]?.employee_photo) return res.status(404).json({ ok: false, error: 'PHOTO_NOT_FOUND' });
+  res.set({ 'Content-Type': 'image/webp', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'" });
+  return res.send(rows[0].employee_photo);
+}
 async function lockLoginTenant(conn, tenantId) {
   const [rows] = await conn.query('SELECT login_suffix, corporate_logins_enabled FROM ten_tenants WHERE id=? FOR UPDATE', [tenantId]);
   if (!rows.length) throw invalid('TENANT_NOT_FOUND');
@@ -93,7 +139,7 @@ async function generateAvailableLogin(db, tenantId, surname, userId = 0) {
   }
   throw invalid('LOGIN_GENERATION_EXHAUSTED');
 }
-async function changeLoginSuffix(db, tenantId, value, expectedSuffix, confirmed) {
+async function changeLoginSuffix(db, tenantId, value, expectedSuffix, confirmed, actor) {
   const suffix = normalizeSuffix(value);
   if (confirmed !== true) throw invalid('LOGIN_SUFFIX_CONFIRMATION_REQUIRED');
   const conn = await db.getConnection();
@@ -101,6 +147,11 @@ async function changeLoginSuffix(db, tenantId, value, expectedSuffix, confirmed)
     await conn.beginTransaction();
     const current = await lockLoginTenant(conn, tenantId);
     if (current.login_suffix !== expectedSuffix) throw invalid('LOGIN_SUFFIX_CHANGED');
+    if (suffix !== current.login_suffix) {
+      const [owners] = await conn.query(`SELECT u.id, u.tenant_id, u.email FROM app_users u
+        WHERE u.tenant_id=? AND u.login_local IS NOT NULL AND ${OWNER_ACCOUNT_SQL} FOR UPDATE`, [tenantId]);
+      if (owners.some((owner) => !isOwnAccount(actor, owner))) throw invalid('OWNER_ACCESS_CHANGE_FORBIDDEN');
+    }
     const [missing] = await conn.query('SELECT id FROM app_users WHERE tenant_id=? AND login IS NOT NULL AND login_local IS NULL LIMIT 1', [tenantId]);
     if (missing.length) throw invalid('CORPORATE_LOGIN_MIGRATION_REQUIRED');
     await conn.query('UPDATE ten_tenants SET login_suffix=?, corporate_logins_enabled=1 WHERE id=?', [suffix, tenantId]);
@@ -115,4 +166,4 @@ async function changeLoginSuffix(db, tenantId, value, expectedSuffix, confirmed)
     throw error;
   } finally { conn.release(); }
 }
-module.exports = { invalid, secureTransport, transliterate, normalizeSuffix, normalizeCorporateLogin, normalizePhone, validatePassword, employeeProfile, encodeEmployeePhoto, lockLoginTenant, generateAvailableLogin, changeLoginSuffix };
+module.exports = { invalid, OWNER_ACCOUNT_SQL, isOwnAccount, sameIds, ownerAccountChangeError, isOwnTenantCredential, canChangeTenantCredential, secureTransport, transliterate, normalizeSuffix, normalizeCorporateLogin, normalizePhone, validatePassword, employeeProfile, encodeEmployeePhoto, sendEmployeePhoto, lockLoginTenant, generateAvailableLogin, changeLoginSuffix };
