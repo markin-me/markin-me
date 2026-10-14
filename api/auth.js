@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const employeeIdentity = require('./helpers/employeeIdentity');
+const { loadLegacyOwner } = require('./middleware/auth');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
@@ -34,6 +35,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       activeRoleId: options.activeRoleId || null,
       loginType: options.loginType || 'user',
       authStage: options.authStage || 'active',
+      authVersion: Number(user.auth_version || 0),
     }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
   }
 
@@ -252,7 +254,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         identityFilter = `(u.email=? AND (u.role='owner' OR EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id AND r.is_owner=1)))`;
       }
       const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.password_hash, u.must_change_password,
+        `SELECT u.id, u.tenant_id, u.email, u.login, u.password_hash, u.must_change_password, u.employee_status, u.auth_version,
                 u.name, u.role, u.is_active, t.name AS tenant_name, t.slug AS tenant_slug,
                 t.is_active AS tenant_active
          FROM app_users u
@@ -270,7 +272,8 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         if (!await bcrypt.compare(password, user.password_hash)) {
           return res.status(401).json({ ok: false, error: 'INVALID_CREDENTIALS' });
         }
-        if (Number(user.is_active) !== 1) return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
+        if (user.employee_status === 'archived') return res.status(403).json({ ok: false, error: 'USER_ARCHIVED' });
+        if (user.employee_status !== 'active' || Number(user.is_active) !== 1) return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
         if (Number(user.tenant_active) !== 1) return res.status(403).json({ ok: false, error: 'TENANT_BLOCKED' });
         await db.query('UPDATE app_users SET last_login_at=NOW() WHERE id=? AND tenant_id=?', [user.id, user.tenant_id]);
         const tenant = { id: Number(user.tenant_id), name: user.tenant_name, slug: user.tenant_slug };
@@ -289,7 +292,9 @@ module.exports = function makeAuthRouter({ db, helpers }) {
           || !await bcrypt.compare(password, tenant.password_hash)) {
         return res.status(401).json({ ok: false, error: 'INVALID_CREDENTIALS' });
       }
-      const tokenUser = { id: null, tenant_id: tenant.tenant_id, email: tenant.email, login: null, name: `${tenant.tenant_name} (Магазин)`, role: 'owner' };
+      const legacyOwner = await loadLegacyOwner(db, tenant.tenant_id, tenant.email);
+      if (legacyOwner && (legacyOwner.employee_status !== 'active' || Number(legacyOwner.is_active) !== 1 || Number(legacyOwner.is_owner) !== 1)) return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
+      const tokenUser = { id: null, tenant_id: tenant.tenant_id, email: tenant.email, login: null, name: `${tenant.tenant_name} (Магазин)`, role: 'owner', auth_version: Number(legacyOwner?.auth_version || 0) };
       return res.json({
         ok: true,
         next: 'dashboard',
@@ -318,23 +323,24 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         return res.status(403).json({ ok: false, error: 'PASSWORD_CHANGE_NOT_ALLOWED' });
       }
       const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.role, u.is_active,
+        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.role, u.is_active, u.employee_status, u.auth_version,
                 u.password_hash, u.must_change_password, t.name AS tenant_name, t.slug AS tenant_slug, t.is_active AS tenant_active
          FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id
          WHERE u.id=? AND u.tenant_id=? LIMIT 1`,
         [decoded.userId, decoded.tenantId]
       );
       const user = users[0];
-      if (!user || Number(user.is_active) !== 1 || Number(user.tenant_active) !== 1) {
+      if (!user || user.employee_status !== 'active' || Number(user.is_active) !== 1 || Number(user.tenant_active) !== 1) {
         return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
       }
+      if (Number(decoded.authVersion || 0) !== Number(user.auth_version)) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
       if (!await bcrypt.compare(currentPassword, user.password_hash)) {
         return res.status(400).json({ ok: false, error: 'CURRENT_PASSWORD_INVALID' });
       }
       const passwordHash = await bcrypt.hash(newPassword, 10);
       const [updated] = await db.query(
-        'UPDATE app_users SET password_hash=?, must_change_password=0 WHERE id=? AND tenant_id=? AND password_hash=? AND is_active=1',
-        [passwordHash, user.id, user.tenant_id, user.password_hash]
+        "UPDATE app_users SET password_hash=?, must_change_password=0 WHERE id=? AND tenant_id=? AND password_hash=? AND is_active=1 AND employee_status='active' AND auth_version=?",
+        [passwordHash, user.id, user.tenant_id, user.password_hash, user.auth_version]
       );
       if (!updated.affectedRows) return res.status(409).json({ ok: false, error: 'PASSWORD_CHANGE_CONFLICT' });
       user.must_change_password = 0;
@@ -361,16 +367,17 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         return res.status(403).json({ ok: false, error: 'ROLE_SWITCH_NOT_ALLOWED' });
       }
       const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.role, u.is_active, u.must_change_password,
+        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
                 t.name AS tenant_name, t.slug AS tenant_slug, t.is_active AS tenant_active
          FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id
          WHERE u.id=? AND u.tenant_id=? LIMIT 1`,
         [decoded.userId, decoded.tenantId]
       );
       const user = users[0];
-      if (!user || Number(user.is_active) !== 1 || Number(user.tenant_active) !== 1) {
+      if (!user || user.employee_status !== 'active' || Number(user.is_active) !== 1 || Number(user.tenant_active) !== 1) {
         return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
       }
+      if (Number(decoded.authVersion || 0) !== Number(user.auth_version)) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
       const roles = await loadUserRoles(db, user.tenant_id, user.id);
       const selected = roles.find((role) => Number(role.id) === roleId);
       if (!selected) return res.status(403).json({ ok: false, error: 'ROLE_NOT_ASSIGNED' });
@@ -402,11 +409,16 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         const [tenants] = await db.query('SELECT id, name, slug, email FROM ten_tenants WHERE id=? AND is_active=1 LIMIT 1', [decoded.tenantId]);
         const tenant = tenants[0];
         if (!tenant) return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+        const legacyOwner = await loadLegacyOwner(db, tenant.id, tenant.email);
+        if (legacyOwner) {
+          if (legacyOwner.employee_status !== 'active' || Number(legacyOwner.is_active) !== 1 || Number(legacyOwner.is_owner) !== 1) return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
+          if (Number(decoded.authVersion || 0) !== Number(legacyOwner.auth_version)) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
+        }
         const [stores] = await db.query('SELECT id, name FROM ten_stores WHERE tenant_id=? AND is_active=1 ORDER BY name, id', [tenant.id]);
         return res.json({ ok: true, user: { id: null, email: tenant.email, name: `${tenant.name} (Магазин)`, tenant_id: Number(tenant.id) }, tenant: { id: Number(tenant.id), name: tenant.name, slug: tenant.slug }, roles: [], permissions: ['*'], stores });
       }
       const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.role, u.is_active, u.must_change_password,
+        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
                 t.name AS tenant_name, t.slug AS tenant_slug
          FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id
          WHERE u.id=? AND u.tenant_id=? AND u.is_active=1 AND t.is_active=1 LIMIT 1`,
@@ -414,6 +426,8 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       );
       const user = users[0];
       if (!user) return res.status(404).json({ ok: false, error: 'USER_NOT_FOUND' });
+      if (user.employee_status !== 'active') return res.status(403).json({ ok: false, error: user.employee_status === 'archived' ? 'USER_ARCHIVED' : 'USER_BLOCKED' });
+      if (Number(decoded.authVersion || 0) !== Number(user.auth_version)) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
       const roles = await loadUserRoles(db, user.tenant_id, user.id);
       const activeRole = roles.find((role) => Number(role.id) === Number(decoded.activeRoleId))
         || (roles.length === 1 ? roles[0] : null);

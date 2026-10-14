@@ -11,6 +11,7 @@ migrations/*
 !migrations/007-add-navigation-permissions.sql
 !migrations/008-add-granular-navigation-rbac.sql
 !migrations/009-employee-corporate-logins.js
+!migrations/010-employee-lifecycle.js
 a1186497_test.sql
 shop-1.localhost-1774347949861.log
 shop-2.localhost.har

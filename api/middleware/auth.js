@@ -2,6 +2,30 @@ const jwt = require('jsonwebtoken');
 const db = require('../../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const userResponses = new Map();
+
+function revokeUserStreams(tenantId, userId) {
+  const responses = userResponses.get(`${Number(tenantId)}:${Number(userId)}`);
+  if (!responses) return;
+  for (const res of responses) {
+    if (String(res.getHeader('Content-Type') || '').startsWith('text/event-stream')) res.end();
+  }
+}
+
+function trackUserResponse(user, res) {
+  const key = `${user.tenantId}:${user.userId}`;
+  const responses = userResponses.get(key) || new Set();
+  responses.add(res);
+  userResponses.set(key, responses);
+  const cleanup = () => {
+    responses.delete(res);
+    if (!responses.size && userResponses.get(key) === responses) userResponses.delete(key);
+    res.removeListener('finish', cleanup);
+    res.removeListener('close', cleanup);
+  };
+  res.once('finish', cleanup);
+  res.once('close', cleanup);
+}
 
 function readToken(req) {
   const authHeader = req.headers.authorization;
@@ -21,7 +45,7 @@ async function loadVerifiedUser(decoded) {
   if (!(userId > 0) || !(tenantId > 0)) return null;
 
   const [users] = await db.query(
-    `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.is_active, u.must_change_password,
+    `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
             t.is_active AS tenant_active
      FROM app_users u
      JOIN ten_tenants t ON t.id=u.tenant_id
@@ -30,6 +54,30 @@ async function loadVerifiedUser(decoded) {
     [userId, tenantId]
   );
   return users[0] || null;
+}
+
+async function loadLegacyOwner(queryable, tenantId, email) {
+  const [rows] = await queryable.query(`SELECT u.id, u.employee_status, u.is_active, u.auth_version,
+    EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id AND r.is_owner=1 WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id) AS is_owner
+    FROM app_users u WHERE u.tenant_id=? AND u.email=? LIMIT 2`, [tenantId, email]);
+  if (rows.length > 1) {
+    const error = new Error('AMBIGUOUS_OWNER_ACCOUNT');
+    error.code = 'AMBIGUOUS_OWNER_ACCOUNT';
+    throw error;
+  }
+  return rows[0] || null;
+}
+
+async function isUserSessionActive(user) {
+  const userId = Number(user?.sessionUserId || user?.userId || 0);
+  if (!(userId > 0)) {
+    if (!user?.fullAccess) return false;
+    const [rows] = await db.query('SELECT id FROM ten_tenants WHERE id=? AND is_active=1 LIMIT 1', [user.tenantId]);
+    return rows.length === 1;
+  }
+  const current = await loadVerifiedUser({ userId, tenantId: user.tenantId });
+  return Boolean(current && current.employee_status === 'active' && Number(current.is_active) === 1
+    && Number(current.tenant_active) === 1 && Number(current.auth_version) === Number(user.authVersion || 0));
 }
 
 async function resolveActiveRole(user, requestedRoleId) {
@@ -69,6 +117,11 @@ async function authMiddleware(req, res, next) {
       );
       const tenant = tenants[0];
       if (!tenant || Number(tenant.is_active) !== 1) return unauthorized(res, 'TENANT_BLOCKED', 403);
+      const legacyOwner = await loadLegacyOwner(db, tenantId, tenant.email);
+      if (legacyOwner) {
+        if (legacyOwner.employee_status !== 'active' || Number(legacyOwner.is_active) !== 1 || Number(legacyOwner.is_owner) !== 1) return unauthorized(res, 'USER_BLOCKED', 403);
+        if (Number(decoded.authVersion || 0) !== Number(legacyOwner.auth_version)) return unauthorized(res, 'SESSION_REVOKED');
+      }
       req.user = {
         userId: null,
         tenantId,
@@ -76,15 +129,21 @@ async function authMiddleware(req, res, next) {
         activeRoleId: null,
         principalType: 'tenant',
         fullAccess: true,
+        sessionUserId: Number(legacyOwner?.id || 0),
+        authVersion: Number(legacyOwner?.auth_version || 0),
       };
       req._authVerified = true;
+      if (legacyOwner) trackUserResponse({ tenantId, userId: Number(legacyOwner.id) }, res);
       return next();
     }
 
     const user = await loadVerifiedUser(decoded);
     if (!user) return unauthorized(res, 'USER_NOT_FOUND');
+    if (user.employee_status === 'archived') return unauthorized(res, 'USER_ARCHIVED', 403);
+    if (user.employee_status !== 'active') return unauthorized(res, 'USER_BLOCKED', 403);
     if (Number(user.is_active) !== 1) return unauthorized(res, 'USER_BLOCKED', 403);
     if (Number(user.tenant_active) !== 1) return unauthorized(res, 'TENANT_BLOCKED', 403);
+    if (Number(decoded.authVersion || 0) !== Number(user.auth_version)) return unauthorized(res, 'SESSION_REVOKED');
 
     const active = await resolveActiveRole(user, decoded.activeRoleId);
     if (active.error) return unauthorized(res, active.error, 403);
@@ -99,8 +158,10 @@ async function authMiddleware(req, res, next) {
       activeRole: active.role,
       principalType: 'user',
       fullAccess: false,
+      authVersion: Number(user.auth_version),
     };
     req._authVerified = true;
+    trackUserResponse(req.user, res);
     next();
   } catch (error) {
     if (error.name === 'JsonWebTokenError') return unauthorized(res, 'INVALID_TOKEN');
@@ -207,4 +268,7 @@ module.exports = {
   getPermissionGrant,
   userHasStore,
   can,
+  revokeUserStreams,
+  loadLegacyOwner,
+  isUserSessionActive,
 };

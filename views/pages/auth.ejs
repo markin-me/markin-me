@@ -262,6 +262,8 @@
             if (code === 'PASSWORD_TOO_LONG') return 'Пароль не должен превышать 72 байта.';
             const passwordErrors = { CURRENT_PASSWORD_REQUIRED:'Введите текущий пароль.', CURRENT_PASSWORD_INVALID:'Текущий пароль указан неверно.', PASSWORD_CHANGE_CONFLICT:'Пароль уже изменён. Войдите с актуальным паролем и повторите операцию.', PASSWORD_CHANGE_NOT_ALLOWED:'Для смены пароля войдите в учётную запись сотрудника.', PASSWORD_CHANGE_ERROR:'Не удалось изменить пароль.', INVALID_TOKEN:'Сессия истекла. Войдите снова.' };
             if (passwordErrors[code]) return passwordErrors[code];
+            if (code === 'USER_ARCHIVED') return 'Сотрудник уволен. Обратитесь к владельцу компании.';
+            if (code === 'SESSION_REVOKED') return 'Доступ этой сессии прекращён. Войдите снова.';
             const corporateErrors = { LOGIN_RATE_LIMITED:'Слишком много попыток входа. Попробуйте позже.', HTTPS_REQUIRED:'Вход доступен только по защищённому соединению HTTPS.' };
             if (corporateErrors[code]) return corporateErrors[code];
             return ({ EMAIL_EXISTS:'Этот email уже зарегистрирован', SLUG_EXISTS:'Этот URL-адрес уже занят', INVALID_EMAIL:'Неверный формат email', PASSWORD_TOO_SHORT:'Пароль должен быть минимум 6 символов', INVALID_CREDENTIALS:'Неверный логин или пароль', USER_BLOCKED:'Аккаунт заблокирован', TENANT_BLOCKED:'Магазин заблокирован', LOGIN_PASSWORD_REQUIRED:'Заполните логин и пароль', ROLE_NOT_ASSIGNED:'Пользователю не назначена роль.' })[code] || code || 'Ошибка';

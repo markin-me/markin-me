@@ -115,6 +115,13 @@ async function authFetch(url, options = {}) {
     logout();
     throw new Error('UNAUTHORIZED');
   }
+  if (response.status === 403) {
+    const payload = await response.clone().json().catch(() => null);
+    if (payload && ['USER_BLOCKED', 'USER_ARCHIVED'].includes(payload.error)) {
+      logout();
+      throw new Error(payload.error);
+    }
+  }
 
   return response;
 }

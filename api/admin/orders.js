@@ -3229,41 +3229,50 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
   // ---------------------------
   // PUT /api/admin/orders/:id/assignee
   router.put("/:id/assignee", async (req, res) => {
+    const conn = await db.getConnection();
+    let transactionStarted = false;
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       const assignedUserId = Number(req.body?.user_id || 0);
       if (!(id > 0)) return res.status(400).json({ ok: false, error: "BAD_ID" });
+      await conn.beginTransaction();
+      transactionStarted = true;
+      const [tenants] = await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE', [tenantId]);
+      if (!tenants.length) { await conn.rollback(); transactionStarted = false; return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' }); }
 
       if (assignedUserId > 0) {
-        const [users] = await db.query(
+        const [users] = await conn.query(
           `SELECT u.id
            FROM app_users u
            JOIN user_stores us
              ON us.tenant_id=u.tenant_id AND us.user_id=u.id AND us.store_id=?
-           WHERE u.tenant_id=? AND u.id=? AND u.is_active=1
-           LIMIT 1`,
+           WHERE u.tenant_id=? AND u.id=? AND u.is_active=1 AND u.employee_status='active'
+           LIMIT 1 FOR UPDATE`,
           [storeId, tenantId, assignedUserId]
         );
-        if (!users.length) return res.status(400).json({ ok: false, error: "INVALID_ASSIGNEE" });
+        if (!users.length) { await conn.rollback(); transactionStarted = false; return res.status(400).json({ ok: false, error: "INVALID_ASSIGNEE" }); }
       }
 
-      const [result] = await db.query(
+      const [result] = await conn.query(
         `UPDATE order_orders SET assigned_user_id=?
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1`,
         [assignedUserId > 0 ? assignedUserId : null, tenantId, storeId, id]
       );
-      if (!result.affectedRows) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      if (!result.affectedRows) { await conn.rollback(); transactionStarted = false; return res.status(404).json({ ok: false, error: "NOT_FOUND" }); }
+      await conn.commit();
+      transactionStarted = false;
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (payload && ordersEvents && typeof ordersEvents.publish === "function") {
         ordersEvents.publish(tenantId, storeId, "order.updated", payload);
       }
       return res.json({ ok: true, data: payload });
     } catch (error) {
+      if (transactionStarted) await conn.rollback();
       console.error(error);
       return res.status(500).json({ ok: false, error: "DB_ERROR" });
-    }
+    } finally { conn.release(); }
   });
 
   // ---------------------------

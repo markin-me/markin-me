@@ -5,6 +5,7 @@ const fs = require('fs');
 const multer = require('multer');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const catalogSync = require('../../services/catalog-sync');
+const { isUserSessionActive } = require('../middleware/auth');
 
 module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, buildAdminFullProductPassports }) {
   const router = express.Router();
@@ -1733,16 +1734,23 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
+    let streamWrites = Promise.resolve();
     const write = (event, data) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      streamWrites = streamWrites.then(async () => {
+        if (res.destroyed || res.writableEnded) return;
+        if (!await isUserSessionActive(req.user)) return res.end();
+        if (res.destroyed || res.writableEnded) return;
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      }).catch((error) => { console.error('CATALOG_STREAM_SESSION_FAILED:', error.code || error.name); res.end(); });
     };
     write('snapshot', { revision: currentRevision });
     const unsubscribe = catalogSync.subscribe(tenantId, storeId, (change) => write('change', change));
-    const keepalive = setInterval(() => res.write(': keepalive\n\n'), 25000);
+    const keepalive = setInterval(() => { if (!res.destroyed && !res.writableEnded) res.write(': keepalive\n\n'); }, 25000);
     const cleanup = () => { clearInterval(keepalive); unsubscribe(); };
     req.once('close', cleanup);
     req.once('aborted', cleanup);
+    res.once('close', cleanup);
   });
 
   router.get('/prod_categories', async (req, res) => {

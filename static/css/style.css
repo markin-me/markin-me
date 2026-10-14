@@ -35046,6 +35046,10 @@ body.page-home[data-admin-active-page="team"] .team-center-stack{
   height:100%;
 }
 .team-entity-list{display:flex;flex-direction:column;gap:8px}
+.team-user-filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.team-user-filters .btn.is-active{border-color:var(--color-primary);background:var(--primary-10);color:var(--color-primary)}
+.team-employee-status{display:grid;justify-items:start;gap:8px}
+.team-status-actions{display:flex;flex-wrap:wrap;gap:8px}
 .team-user-avatar{overflow:hidden}
 .team-user-avatar .product-avatar-img{object-fit:cover}
 .team-entity-row{width:100%;text-align:left;cursor:pointer;grid-template-columns:auto minmax(0,1fr) auto}

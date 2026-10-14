@@ -34,7 +34,9 @@ function normalizePhone(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
   if (!/^[+0-9 ().-]+$/.test(raw)) throw invalid('INVALID_EMPLOYEE_PHONE');
-  const phone = raw.replace(/[ ().-]/g, '');
+  let phone = raw.replace(/[ ().-]/g, '');
+  if (/^[0-9]{10}$/.test(phone)) phone = `+7${phone}`;
+  else if (/^[78][0-9]{10}$/.test(phone)) phone = `+7${phone.slice(1)}`;
   if (!/^\+[1-9][0-9]{6,14}$/.test(phone)) throw invalid('INVALID_EMPLOYEE_PHONE');
   return phone;
 }

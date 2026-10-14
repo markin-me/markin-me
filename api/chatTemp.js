@@ -6,6 +6,7 @@ const multer = require("multer");
 const sharp = require("sharp");
 const webPush = require("web-push");
 const db = require("../db");
+const { isUserSessionActive } = require('./middleware/auth');
 
 const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
 const MAX_MESSAGES_PER_THREAD = 1000;
@@ -2002,11 +2003,17 @@ function createSseSubscriber(res, eventName, buildPayload) {
     heartbeatTimer: 0,
   };
 
-  subscriber.send = (payload) => writeSseEvent(
-    res,
-    subscriber.eventName,
-    typeof buildPayload === "function" ? buildPayload(payload) : (payload || {})
-  );
+  let streamWrites = Promise.resolve();
+  subscriber.send = (payload) => {
+    if (res.destroyed || res.writableEnded) return false;
+    const data = typeof buildPayload === "function" ? buildPayload(payload) : (payload || {});
+    streamWrites = streamWrites.then(async () => {
+      if (res.destroyed || res.writableEnded) return;
+      if (res.locals.employeeStreamUser && !await isUserSessionActive(res.locals.employeeStreamUser)) return res.end();
+      if (!writeSseEvent(res, subscriber.eventName, data)) res.end();
+    }).catch((error) => { console.error('CHAT_STREAM_SESSION_FAILED:', error.code || error.name); res.end(); });
+    return true;
+  };
 
   return subscriber;
 }
@@ -2034,6 +2041,7 @@ function stopSseHeartbeat(subscriber) {
 }
 
 function initializeSseResponse(req, res) {
+  res.locals.employeeStreamUser = req.user || null;
   res.status(200);
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");

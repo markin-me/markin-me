@@ -80,7 +80,7 @@ const {
 } = require('./api/navigationRbac');
 
 // middleware
-const { authMiddleware, requirePermission, userHasStore, can } = require('./api/middleware/auth');
+const { authMiddleware, requirePermission, userHasStore, can, isUserSessionActive } = require('./api/middleware/auth');
 
 const app = express();
 // Only trusted reverse proxies may supply client IP/protocol for login limits and HTTPS checks.
@@ -2078,14 +2078,15 @@ app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
     identifiedOnlineClients: Number(counts?.identifiedClients || 0),
     chatActiveClients: Number(counts?.chatClients || 0),
   });
+  let streamWrites = Promise.resolve();
   const writeEvent = (payload) => {
     if (res.destroyed || res.writableEnded) return false;
-    try {
-      res.write(`event: presence\ndata: ${JSON.stringify(payload)}\n\n`);
-      return true;
-    } catch (_) {
-      return false;
-    }
+    streamWrites = streamWrites.then(async () => {
+      if (res.destroyed || res.writableEnded) return;
+      if (!await isUserSessionActive(req.user)) return res.end();
+      if (!res.destroyed && !res.writableEnded) res.write(`event: presence\ndata: ${JSON.stringify(payload)}\n\n`);
+    }).catch((error) => { console.error('PRESENCE_STREAM_SESSION_FAILED:', error.code || error.name); res.end(); });
+    return true;
   };
 
   res.status(200);
