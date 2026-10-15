@@ -113,8 +113,14 @@
     var tabsState = { tabs: [], activeKey: null };
     var fullOrdersById = new Map();
 
-    function apiJson(url, opts) {
+    async function apiJson(url, opts) {
       opts = opts || {};
+      var repository = window.AdminLocalRepository;
+      var readAccess = repository && repository.isActive() ? repository.capture() : null;
+      if (!opts.method || String(opts.method).toUpperCase() === 'GET') {
+        if (!repository || !await repository.ready()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
+        readAccess = repository.capture();
+      }
       var token = localStorage.getItem('authToken');
       var storeId = localStorage.getItem('activeStoreId') || '1';
       var headers = {};
@@ -135,7 +141,9 @@
         signal: opts.signal,
         body: body == null ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)),
       }).then(function (res) {
+        if (token !== localStorage.getItem('authToken') || (readAccess && !readAccess.isCurrent())) throw new Error('LOCAL_SCOPE_CHANGED');
         if (res.status === 401) {
+          if (repository) repository.reset({ forget: true, reason: 'server-refusal' });
           localStorage.removeItem('authToken');
           localStorage.removeItem('user');
           localStorage.removeItem('tenant');
@@ -143,6 +151,9 @@
           throw new Error('UNAUTHORIZED');
         }
         return res.json().catch(function () { return null; }).then(function (json) {
+          if (readAccess && (!readAccess.isCurrent() || storeId !== (localStorage.getItem('activeStoreId') || '1'))) throw new Error('LOCAL_SCOPE_CHANGED');
+          if (res.status === 403 && repository && (['USER_BLOCKED', 'USER_ARCHIVED', 'TENANT_BLOCKED', 'ACTIVE_ROLE_INVALID', 'ROLE_NOT_ASSIGNED'].includes(json && json.error)
+            || (readAccess && String(url).indexOf('/api/admin/orders') === 0))) repository.reset({ forget: true, reason: 'server-refusal' });
           if (!res.ok || !json || json.ok !== true) throw new Error((json && json.error) || ('API_ERROR_' + String(res.status || 0)));
           return json;
         });
@@ -172,10 +183,17 @@
       return Math.round(numeric * 100) / 100;
     }
 
+    var cashAccessNamespace = null;
     function cashWorkspaceScope() {
-      return window.AdminPersistentCache && typeof window.AdminPersistentCache.scope === 'function'
-        ? window.AdminPersistentCache.scope({ domain: CASH_WORKSPACE_DOMAIN, version: CASH_WORKSPACE_VERSION })
-        : null;
+      var repository = window.AdminLocalRepository;
+      if (!repository || !repository.isActive()) return null;
+      var accessNamespace = repository.create({ domain: 'cash:access', version: 1 }).namespace;
+      if (cashAccessNamespace && cashAccessNamespace !== accessNamespace) return null;
+      cashAccessNamespace = accessNamespace;
+      var storeId = String(localStorage.getItem('activeStoreId') || '1');
+      return repository.create({ domain: CASH_WORKSPACE_DOMAIN, version: CASH_WORKSPACE_VERSION,
+        dimensions: { organizationalUnit: { type: 'store', id: storeId } },
+        guard: function () { return storeId === String(localStorage.getItem('activeStoreId') || '1'); } });
     }
 
     function cashSyncContext() {
@@ -185,8 +203,8 @@
 
     function isCurrentCashContext(context) {
       var current = cashWorkspaceScope();
-      return Boolean(context && context.generation === cashSyncGeneration
-        && (!current || current.namespace === context.namespace));
+      return Boolean(context && context.cache && context.cache.isCurrent() && context.generation === cashSyncGeneration
+        && current && current.namespace === context.namespace);
     }
 
     function currentCashQuery() {
@@ -2901,7 +2919,7 @@
             setCashPassportState(id, 'unknown');
             return fullOrder;
           }
-          void passport.write(fullOrder, { authoritative: true }).then(function (saved) {
+          void passport.write(fullOrder, { authoritative: true, accessContext: 'cash' }).then(function (saved) {
             setCashPassportState(id, saved ? 'saved' : 'unknown');
           }).catch(function (err) {
             setCashPassportState(id, 'unknown');
@@ -2914,7 +2932,7 @@
       if (cachedRuntime && isFullOrder(cachedRuntime)) return Promise.resolve(cachedRuntime);
       if (!passport || typeof passport.read !== 'function') return loadFromNetwork();
       setCashPassportState(id, 'checking');
-      return passport.read(id, { allowStale: true }).then(function (entry) {
+      return passport.read(id, { allowStale: true, accessContext: 'cash' }).then(function (entry) {
         if (entry && entry.order) {
           fullOrdersById.set(id, Object.assign({}, entry.order));
           setCashPassportState(id, entry.stale ? 'stale' : 'saved');
@@ -2923,7 +2941,7 @@
             void apiJson('/api/admin/orders/' + String(id)).then(function (json) {
               var freshOrder = json && json.data || null;
               if (!passport.isFull(freshOrder)) return;
-              return passport.write(freshOrder, { authoritative: true }).then(function (saved) {
+              return passport.write(freshOrder, { authoritative: true, accessContext: 'cash' }).then(function (saved) {
                 fullOrdersById.set(id, Object.assign({}, freshOrder));
                 setCashPassportState(id, saved ? 'saved' : 'unknown');
                 updateOrderInState(freshOrder);
@@ -2960,7 +2978,7 @@
         cashPassportChecksInFlight.add(key);
         cashPassportCacheStates.set(key, 'checking');
         queued = true;
-        passport.read(id, { allowStale: true }).then(function (entry) {
+        passport.read(id, { allowStale: true, accessContext: 'cash' }).then(function (entry) {
           cashPassportCacheStates.set(key, entry ? (entry.stale ? 'stale' : 'saved') : 'missing');
         }).catch(function () {
           cashPassportCacheStates.set(key, 'unknown');
@@ -3038,7 +3056,7 @@
       if (!orderMatchesActiveDateRange(order)) return removeOrderFromState(orderId);
       updateOrderInState(order);
       var passport = window.AdminPersistentCache && window.AdminPersistentCache.orderPassport;
-      if (passport) void passport.merge(order).then(function (saved) {
+      if (passport) void passport.merge(order, { accessContext: 'cash' }).then(function (saved) {
         if (saved) setCashPassportState(orderId, 'saved');
       }).catch(function (err) { console.error('cash shared passport merge error:', err); });
       if (state.currentSection === 'orders') {
@@ -3063,7 +3081,7 @@
       if (!applyOrderChange(order)) return Promise.resolve();
       var passport = window.AdminPersistentCache && window.AdminPersistentCache.orderPassport;
       if (passport && passport.isFull(order)) {
-        void passport.write(order, { authoritative: true }).then(function (saved) {
+        void passport.write(order, { authoritative: true, accessContext: 'cash' }).then(function (saved) {
           if (saved) setCashPassportState(getOrderId(order), 'saved');
         }).catch(function (err) { console.error('cash shared passport write error:', err); });
       }
@@ -3778,6 +3796,7 @@
     }
 
     function startWaitLoop() {
+      if (!cashWorkspaceScope()) return;
       if (navigator.onLine === false) return;
       if (document.visibilityState && document.visibilityState !== 'visible') return;
       var token = ++state.waitLoopToken;
@@ -3824,6 +3843,7 @@
     }
 
     function renderAll() {
+      if (!cashWorkspaceScope()) return;
       syncTabsWithLatestOrders();
       renderSummaryCards();
       renderSidebarSummary();
@@ -3892,6 +3912,8 @@
 
     async function bootstrapCashWorkspace(options) {
       options = options || {};
+      if (window.AdminAccessContextPromise) await window.AdminAccessContextPromise;
+      if (!window.AdminLocalRepository || !await window.AdminLocalRepository.ready()) return;
       var context = cashSyncContext();
       resetDateStateToToday();
       ensureDateStateInitialized();
@@ -4384,9 +4406,28 @@
       refreshCashConnectionBanner();
     });
 
-    window.addEventListener('online', function () {
+    window.addEventListener('online', async function () {
+      if (!window.AdminLocalRepository || !await window.AdminLocalRepository.ready()) return;
       cashRefreshFailed = false;
       void refreshCashWorkspace(cashSyncContext());
+    });
+
+    window.addEventListener('admin:local-context-changed', function (event) {
+      if (event.detail && event.detail.state === 'active') return;
+      stopWaitLoop();
+      fullOrdersById.clear();
+      cashPassportCacheStates.clear();
+      if (event.detail && event.detail.state === 'revoked') {
+        state.orders = [];
+        state.dayRows = {};
+        state.clientsCache.clear();
+        tabsState.tabs = [];
+      }
+    });
+    window.addEventListener('pageshow', async function (event) {
+      if (!event.persisted) return;
+      if (window.AdminAccessContextPromise) await window.AdminAccessContextPromise;
+      if (cashInitialRestoreComplete && cashWorkspaceScope() && navigator.onLine !== false) void refreshCashWorkspace(cashSyncContext());
     });
 
     void bootstrapCashWorkspace();

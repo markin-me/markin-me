@@ -1,18 +1,21 @@
 const jwt = require('jsonwebtoken');
 const db = require('../../db');
+const browserSession = require('../helpers/browserSession');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const userResponses = new Map();
 
-function revokeUserStreams(tenantId, userId) {
+function revokeUserStreams(tenantId, userId, maxAuthVersion = Infinity) {
   const responses = userResponses.get(`${Number(tenantId)}:${Number(userId)}`);
   if (!responses) return;
   for (const res of responses) {
+    if (Number(res._trackedAuthVersion || 0) > maxAuthVersion) continue;
     if (String(res.getHeader('Content-Type') || '').startsWith('text/event-stream')) res.end();
   }
 }
 
 function trackUserResponse(user, res) {
+  res._trackedAuthVersion = Number(user.authVersion || 0);
   const key = `${user.tenantId}:${user.userId}`;
   const responses = userResponses.get(key) || new Set();
   responses.add(res);
@@ -28,14 +31,18 @@ function trackUserResponse(user, res) {
 }
 
 function readToken(req) {
+  if (req._htmlAuthorization) return req.cookies?.[browserSession.COOKIE_NAME] || null;
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) return authHeader.substring(7);
-  if (req.cookies && req.cookies.token) return req.cookies.token;
-  if (req.query && req.query.token) return req.query.token;
+  if (['GET', 'HEAD'].includes(req.method) && req.query && req.query.token) return req.query.token;
   return null;
 }
 
 function unauthorized(res, error, status = 401) {
+  if (res.locals?.adminHtml) {
+    if (status === 401) return res.redirect(303, '/login?connect-browser=1&next=' + encodeURIComponent(res.locals.adminReturnPath));
+    return res.status(status).render('pages/auth', { mode: 'login', pageAccessError: 'Доступ запрещён. Проверьте статус учётной записи и выбранную роль.' });
+  }
   return res.status(status).json({ ok: false, error });
 }
 
@@ -45,8 +52,9 @@ async function loadVerifiedUser(decoded) {
   if (!(userId > 0) || !(tenantId > 0)) return null;
 
   const [users] = await db.query(
-    `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
-            t.is_active AS tenant_active
+    `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.last_name, u.first_name, u.patronymic, u.photo_revision, u.role,
+            u.is_active, u.employee_status, u.auth_version, u.must_change_password,
+            t.is_active AS tenant_active, t.name AS tenant_name, t.slug AS tenant_slug
      FROM app_users u
      JOIN ten_tenants t ON t.id=u.tenant_id
      WHERE u.id=? AND u.tenant_id=?
@@ -82,7 +90,7 @@ async function isUserSessionActive(user) {
 
 async function resolveActiveRole(user, requestedRoleId) {
   const [roles] = await db.query(
-    `SELECT r.id, r.name, r.start_route, r.is_owner
+    `SELECT r.id, r.name, r.description, r.start_route, r.is_owner
      FROM user_roles ur
      JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id
      WHERE ur.tenant_id=? AND ur.user_id=?
@@ -107,12 +115,13 @@ async function authMiddleware(req, res, next) {
     if (!token) return unauthorized(res, 'NO_TOKEN');
 
     const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.authStage && decoded.authStage !== 'active') return unauthorized(res, 'ROLE_SELECTION_REQUIRED', 403);
     const tenantId = Number(decoded.tenantId || 0);
     if (!(tenantId > 0)) return unauthorized(res, 'INVALID_TOKEN');
 
     if (!decoded.userId && (decoded.loginType === 'tenant' || decoded.role === 'owner')) {
       const [tenants] = await db.query(
-        'SELECT id, email, name, is_active FROM ten_tenants WHERE id=? LIMIT 1',
+        'SELECT id, email, name, slug, is_active FROM ten_tenants WHERE id=? LIMIT 1',
         [tenantId]
       );
       const tenant = tenants[0];
@@ -133,7 +142,8 @@ async function authMiddleware(req, res, next) {
         authVersion: Number(legacyOwner?.auth_version || 0),
       };
       req._authVerified = true;
-      if (legacyOwner) trackUserResponse({ tenantId, userId: Number(legacyOwner.id) }, res);
+      req._authRecord = { decoded, tenant, legacyOwner };
+      if (legacyOwner) trackUserResponse({ tenantId, userId: Number(legacyOwner.id), authVersion: Number(legacyOwner.auth_version || 0) }, res);
       return next();
     }
 
@@ -161,6 +171,7 @@ async function authMiddleware(req, res, next) {
       authVersion: Number(user.auth_version),
     };
     req._authVerified = true;
+    req._authRecord = { decoded, user, roles: active.roles };
     trackUserResponse(req.user, res);
     next();
   } catch (error) {

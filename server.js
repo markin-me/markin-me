@@ -83,6 +83,8 @@ const {
 
 // middleware
 const { authMiddleware, requirePermission, userHasStore, can, isUserSessionActive } = require('./api/middleware/auth');
+const { loadAccessContext } = require('./api/helpers/adminAccessContext');
+const browserSession = require('./api/helpers/browserSession');
 
 const app = express();
 // Only trusted reverse proxies may supply client IP/protocol for login limits and HTTPS checks.
@@ -1324,42 +1326,36 @@ const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/js/shared-order-payment.js?v=20260831-mobile-payment-screen-v3'),
   app.locals.assetUrl('/static/js/shared-order-items.js?v=20260329a'),
   app.locals.assetUrl('/static/js/courier-screen.js?v=20260907-orderpass-capabilities-v1'),
-  app.locals.assetUrl('/static/js/admin-persistent-cache.js?v=20260912-pwa9-v1'),
+  app.locals.assetUrl('/static/js/admin-persistent-cache.js?v=20261014-local-core-v1'),
+  app.locals.assetUrl('/static/js/admin-local-repository.js?v=20261014-local-core-v1'),
   app.locals.assetUrl('/static/js/admin-catalog.js?v=20260925-stock-realtime-v2'),
-  app.locals.assetUrl('/static/js/admin-reference-cache.js?v=20260912-pwa8-v1'),
+  app.locals.assetUrl('/static/js/admin-reference-cache.js?v=20261014-local-core-v1'),
   app.locals.assetUrl('/static/js/orders.js')
 ];
 const serviceWorkerScript = `
 var SW_VERSION = ${JSON.stringify(SERVICE_WORKER_VERSION)};
 var STATIC_CACHE = 'admin-static-' + SW_VERSION;
-var PAGE_CACHE = 'admin-pages-' + SW_VERSION;
-var OWNED_CACHE_PREFIXES = ['admin-static-', 'admin-pages-'];
+var SHELL_CACHE = 'admin-shell-v2-' + SW_VERSION;
+var OWNED_CACHE_PREFIXES = ['admin-static-', 'admin-pages-', 'admin-shell-v2-', 'html-courier-screen-'];
 var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
 var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
 var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
 var COURIER_SHELL_PATH = '/dashboard/courier-screen';
+var NEUTRAL_SHELL_PATH = '/pwa/neutral/courier';
 
 function shouldCacheStaticResponse(response) {
-  return !!response && (response.ok || response.type === 'opaque');
+  return !!response && response.ok && !response.redirected
+    && String(response.headers.get('content-type') || '').toLowerCase().indexOf('text/html') === -1;
 }
 
 function shouldCacheCourierShell(response) {
   if (!response || response.status !== 200 || response.redirected || response.type !== 'basic') return false;
   var contentType = String(response.headers.get('content-type') || '').toLowerCase();
   if (contentType.indexOf('text/html') === -1) return false;
+  if (response.headers.get('X-PWA-Neutral-Shell') !== '1') return false;
   try {
     var responseUrl = new URL(response.url);
-    return responseUrl.origin === self.location.origin && responseUrl.pathname === COURIER_SHELL_PATH;
-  } catch (err) {
-    return false;
-  }
-}
-
-function shouldCacheDashboardPage(response) {
-  if (!response || response.status !== 200 || response.redirected || response.type !== 'basic') return false;
-  try {
-    var responseUrl = new URL(response.url);
-    return responseUrl.origin === self.location.origin && responseUrl.pathname.indexOf('/dashboard') === 0;
+    return responseUrl.origin === self.location.origin && responseUrl.pathname === NEUTRAL_SHELL_PATH;
   } catch (err) {
     return false;
   }
@@ -1390,6 +1386,7 @@ async function pruneChatImageCache(cache) {
 
 async function putChatImageIntoCache(cache, request, response) {
   if (!cache || !request || !response || !response.ok) return;
+  if (String(response.headers.get('content-type') || '').toLowerCase().indexOf('text/html') !== -1) return;
   try {
     await cache.put(request, response.clone());
     await pruneChatImageCache(cache);
@@ -1404,7 +1401,8 @@ async function handleChatImageFetch(request) {
   } catch (err) {
     cached = null;
   }
-  if (cached) return cached;
+  if (cached && String(cached.headers.get('content-type') || '').toLowerCase().indexOf('text/html') === -1) return cached;
+  if (cached) await cache.delete(request);
 
   var response = await fetch(request);
   if (response && response.ok) {
@@ -1422,10 +1420,10 @@ async function cacheStaticAssets() {
 
 async function warmCourierShell() {
   try {
-    var response = await fetch(COURIER_SHELL_PATH, { credentials: 'same-origin' });
+    var response = await fetch(NEUTRAL_SHELL_PATH, { credentials: 'omit', cache: 'no-store' });
     if (shouldCacheCourierShell(response)) {
-      var cache = await caches.open(PAGE_CACHE);
-      await cache.put(COURIER_SHELL_PATH, response.clone());
+      var cache = await caches.open(SHELL_CACHE);
+      await cache.put(NEUTRAL_SHELL_PATH, response.clone());
     }
   } catch (err) {
     return null;
@@ -1436,7 +1434,8 @@ async function warmCourierShell() {
 async function cacheFirst(request) {
   var cache = await caches.open(STATIC_CACHE);
   var cached = await cache.match(request);
-  if (cached) return cached;
+  if (cached && shouldCacheStaticResponse(cached)) return cached;
+  if (cached) await cache.delete(request);
 
   var response = await fetch(request);
   if (shouldCacheStaticResponse(response)) {
@@ -1445,59 +1444,19 @@ async function cacheFirst(request) {
   return response;
 }
 
-async function fetchAndCacheCourierShell(request) {
-  var cache = await caches.open(PAGE_CACHE);
-  var response = await fetch(request);
-  if (shouldCacheCourierShell(response)) {
-    cache.put(COURIER_SHELL_PATH, response.clone()).catch(function () {});
-  }
-  return response;
-}
-
-async function fetchAndCacheDashboardPage(request) {
-  var cache = await caches.open(PAGE_CACHE);
-  var response = await fetch(request);
-  if (shouldCacheDashboardPage(response)) {
-    cache.put(request, response.clone()).catch(function () {});
-  }
-  return response;
-}
-
-async function networkFirstDashboardPage(request) {
+async function privateNavigation(request, url) {
   try {
-    return await fetchAndCacheDashboardPage(request);
+    // Never read/write personalized HTML in Cache Storage or the HTTP cache.
+    return await fetch(request, { cache: 'no-store' });
   } catch (err) {
-    var cache = await caches.open(PAGE_CACHE);
-    var cached = await cache.match(request) || await cache.match(request.url);
-    if (cached) return cached;
-    throw err;
+    if (url.pathname === COURIER_SHELL_PATH) {
+      var cache = await caches.open(SHELL_CACHE);
+      var shell = await cache.match(NEUTRAL_SHELL_PATH);
+      if (shell && shell.headers.get('X-PWA-Neutral-Shell') === '1') return shell;
+    }
+    return new Response('<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Нет соединения</title><main><h1>Нет соединения</h1><p>Подключитесь к сети, чтобы проверить доступ. Личные данные не отображаются.</p><a href="/login">Войти</a></main></html>',
+      { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
   }
-}
-
-async function staleWhileRevalidateDashboardPage(request, event) {
-  var cache = await caches.open(PAGE_CACHE);
-  var cached = await cache.match(request) || await cache.match(request.url);
-  var networkPromise = fetchAndCacheDashboardPage(request);
-
-  if (event && typeof event.waitUntil === 'function') {
-    event.waitUntil(networkPromise.catch(function () {}));
-  }
-
-  if (cached) return cached;
-  return networkPromise;
-}
-
-async function courierShellWhileRevalidate(request, event) {
-  var cache = await caches.open(PAGE_CACHE);
-  var cached = await cache.match(COURIER_SHELL_PATH);
-  var networkPromise = fetchAndCacheCourierShell(request);
-
-  if (event && typeof event.waitUntil === 'function') {
-    event.waitUntil(networkPromise.catch(function () {}));
-  }
-
-  if (cached) return cached;
-  return networkPromise;
 }
 
 self.addEventListener('install', function (event) {
@@ -1512,16 +1471,28 @@ self.addEventListener('install', function (event) {
 });
 
 self.addEventListener('activate', function (event) {
+  var upgradingUnsafePages = false;
   event.waitUntil(
     caches.keys().then(function (keys) {
+      upgradingUnsafePages = keys.some(function (key) { return /^(admin-pages-|html-courier-screen-)/.test(key); });
       return Promise.all(
         keys.map(function (key) {
-          if (key === STATIC_CACHE || key === PAGE_CACHE) return Promise.resolve();
+          if (key === STATIC_CACHE || key === SHELL_CACHE) return Promise.resolve();
           return isOwnedCacheName(key) ? caches.delete(key) : Promise.resolve();
         })
       );
     }).then(function () {
       return self.clients.claim();
+    }).then(function () {
+      if (!upgradingUnsafePages) return;
+      // Old documents do not contain the context gate. Replace them once on this security upgrade.
+      return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clients) {
+        return Promise.all(clients.map(function (client) {
+          var url = new URL(client.url);
+          if (url.origin !== self.location.origin || url.pathname.indexOf('/dashboard') !== 0) return;
+          return client.navigate(client.url).catch(function () { console.warn('Admin security upgrade navigation failed'); });
+        }));
+      });
     })
   );
 });
@@ -1550,24 +1521,20 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
+  if (url.pathname === '/sw.js') {
+    event.respondWith(fetch(request, { cache: 'no-store' }));
+    return;
+  }
+
   if (
     url.pathname.indexOf('/static/') === 0
-    || url.pathname === '/sw.js'
   ) {
     event.respondWith(cacheFirst(request));
     return;
   }
 
-  if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
-    if (url.pathname === COURIER_SHELL_PATH) {
-      event.respondWith(courierShellWhileRevalidate(request, event));
-      return;
-    }
-    if (url.pathname === '/dashboard/chat') {
-      event.respondWith(networkFirstDashboardPage(request));
-      return;
-    }
-    event.respondWith(staleWhileRevalidateDashboardPage(request, event));
+  if (request.mode === 'navigate' && (url.pathname.indexOf('/dashboard') === 0 || url.pathname === '/login' || url.pathname === '/register')) {
+    event.respondWith(privateNavigation(request, url));
     return;
   }
 });
@@ -1756,6 +1723,13 @@ app.get('/sw.js', (req, res) => {
   res.send(serviceWorkerScript);
 });
 
+// Public, data-free domain shell. Authentication/context gates still run before local reads.
+app.get('/pwa/neutral/courier', (req, res) => {
+  res.setHeader('X-PWA-Neutral-Shell', '1');
+  res.setHeader('Cache-Control', 'no-store');
+  res.render('pages/courier-screen', { tenant: null, currentPath: '/dashboard/courier-screen' });
+});
+
 app.get('/.well-known/tenant-domain-check', async (req, res) => {
   try {
     const hostAscii = getRequestRoutingHost(req);
@@ -1830,6 +1804,10 @@ app.use(async (req, res, next) => {
   return next();
 });
 
+app.use(['/dashboard', '/login', '/register', '/api/admin'], (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  next();
+});
 app.get('/', (req, res) => res.render('pages/saas'));
 
 app.get('/login', (req, res) => {
@@ -1903,7 +1881,31 @@ app.get('/max-app', (req, res) => {
   return renderShop(req, res);
 });
 
-// Защищённые страницы (проверка авторизации на клиенте через JS)
+// All administrative HTML is authorized before rendering; APIs remain Bearer-authenticated.
+app.use('/dashboard', browserSession.requireTransport, (req, res, next) => {
+  if (!['GET', 'HEAD'].includes(req.method)) return res.sendStatus(405);
+  req._htmlAuthorization = true;
+  res.locals.adminHtml = true;
+  const returnUrl = new URL(req.originalUrl, 'https://local.invalid');
+  for (const key of ['token', 'authToken', 'refresh_token']) returnUrl.searchParams.delete(key);
+  res.locals.adminReturnPath = returnUrl.pathname + returnUrl.search;
+  return authMiddleware(req, res, async () => {
+    try {
+      const navKey = req.path.replace(/^\//, '').replace(/\/$/, '');
+      const node = NAVIGATION_RBAC_NODES.find(item => item.parentId === null && item.navKey === navKey);
+      if (!node?.accessKey) return res.sendStatus(404);
+      const context = await loadAccessContext(db, req._authRecord.decoded, req._authRecord);
+      if (!context.local_context || (!context.permissions.includes('*') && !context.permissions.some(item => item.key === node.accessKey))) {
+        return res.status(403).render('pages/auth', { mode: 'login', pageAccessError: 'У выбранной роли нет доступа к этому разделу.' });
+      }
+      res.locals.serverAccessContext = { ...context, token_binding: browserSession.tokenBinding(req.cookies[browserSession.COOKIE_NAME]) };
+      return next();
+    } catch (error) {
+      console.error('HTML_AUTHORIZATION_FAILED:', error.code || error.name);
+      return res.status(error.status || 500).render('pages/auth', { mode: 'login', pageAccessError: 'Не удалось проверить доступ к странице. Повторите попытку позже.' });
+    }
+  });
+});
 app.get('/dashboard/cash', (req, res) => res.render('pages/cash'));
 app.get('/dashboard/products', (req, res) => res.render('pages/products'));
 app.get('/dashboard/orders', (req, res) => res.render('pages/orders'));

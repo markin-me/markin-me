@@ -2,13 +2,26 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const employeeIdentity = require('./helpers/employeeIdentity');
-const { loadLegacyOwner, authMiddleware } = require('./middleware/auth');
+const { loadLegacyOwner, authMiddleware, revokeUserStreams } = require('./middleware/auth');
+const { publicRole, publicUser, loadUserRoles, loadAccessContext } = require('./helpers/adminAccessContext');
+const browserSession = require('./helpers/browserSession');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
 
 module.exports = function makeAuthRouter({ db, helpers }) {
   const router = express.Router();
+  router.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store, private'); next(); });
+  router.use((req, res, next) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) ? browserSession.sameOrigin(req, res, next) : next());
+  // Every JWT issued by the existing login/registration/role/password flow uses the same cookie.
+  router.use((req, res, next) => {
+    const json = res.json;
+    res.json = function (body) {
+      if (body?.ok && body.token) browserSession.issue(req, res, body.token);
+      return json.call(this, body);
+    };
+    next();
+  });
   const loginAttempts = new Map();
   router.use(['/login', '/change-password'], (req, res, next) => {
     if (!employeeIdentity.secureTransport(req)) return res.status(426).json({ ok: false, error: 'HTTPS_REQUIRED' });
@@ -42,44 +55,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
   function readRequestToken(req) {
     const header = String(req.headers.authorization || '');
     if (header.startsWith('Bearer ')) return header.slice(7);
-    return req.cookies?.token || req.body?.token || null;
-  }
-
-  function publicRole(role) {
-    return {
-      id: Number(role.id),
-      name: role.name,
-      description: role.description || '',
-      start_route: role.start_route,
-    };
-  }
-
-  function publicUser(user, activeRoleId = null) {
-    return {
-      id: user.id ? Number(user.id) : null,
-      email: user.email || null,
-      login: user.login || null,
-      name: user.name,
-      last_name: user.last_name || null,
-      first_name: user.first_name || null,
-      patronymic: user.patronymic || null,
-      photo_revision: user.photo_revision || null,
-      role: user.role,
-      tenant_id: Number(user.tenant_id),
-      active_role_id: activeRoleId ? Number(activeRoleId) : null,
-    };
-  }
-
-  async function loadUserRoles(queryable, tenantId, userId) {
-    const [roles] = await queryable.query(
-      `SELECT r.id, r.name, r.description, r.start_route, r.is_owner
-       FROM user_roles ur
-       JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id
-       WHERE ur.tenant_id=? AND ur.user_id=?
-       ORDER BY r.is_owner DESC, r.name, r.id`,
-      [tenantId, userId]
-    );
-    return roles;
+    return null;
   }
 
   async function ensureOwnerRole(queryable, tenantId, userId) {
@@ -404,6 +380,49 @@ module.exports = function makeAuthRouter({ db, helpers }) {
     }
   });
 
+  router.post('/browser-session', authMiddleware, async (req, res) => {
+    try {
+      const token = readRequestToken(req);
+      const context = await loadAccessContext(db, req._authRecord.decoded, req._authRecord);
+      if (!context.local_context) return res.status(403).json({ ok: false, error: 'ACTIVE_ROLE_INVALID' });
+      browserSession.issue(req, res, token);
+      return res.json({ ...context, token_binding: browserSession.tokenBinding(token) });
+    } catch (error) {
+      console.error('BROWSER_SESSION_FAILED:', error.code || error.name);
+      return res.status(error.status || 500).json({ ok: false, error: error.code || 'BROWSER_SESSION_FAILED' });
+    }
+  });
+
+  router.post('/logout', async (req, res) => {
+    const token = readRequestToken(req);
+    if (!token) return res.status(401).json({ ok: false, error: 'NO_TOKEN' });
+    try {
+      browserSession.clear(req, res);
+      let decoded;
+      try { decoded = jwt.verify(token, JWT_SECRET); }
+      catch (error) {
+        if (['TokenExpiredError', 'JsonWebTokenError', 'NotBeforeError'].includes(error.name)) return res.json({ ok: true, revocation: 'already-invalid' });
+        throw error;
+      }
+      let userId = Number(decoded.userId || 0);
+      if (!userId) {
+        const [tenants] = await db.query('SELECT email FROM ten_tenants WHERE id=? LIMIT 1', [decoded.tenantId]);
+        const owner = tenants[0] && await loadLegacyOwner(db, decoded.tenantId, tenants[0].email);
+        userId = Number(owner?.id || 0);
+      }
+      if (userId > 0) {
+        // Idempotent retry: an old logout must not increment a newer auth_version again.
+        const [updated] = await db.query('UPDATE app_users SET auth_version=auth_version+1 WHERE tenant_id=? AND id=? AND auth_version=?',
+          [decoded.tenantId, userId, Number(decoded.authVersion || 0)]);
+        if (Number(updated.affectedRows) > 0) revokeUserStreams(decoded.tenantId, userId, Number(decoded.authVersion || 0));
+      }
+      return res.json({ ok: true, revocation: userId > 0 ? 'all-user-sessions' : 'legacy-expiry-only' });
+    } catch (error) {
+      console.error('BROWSER_LOGOUT_FAILED:', error.code || error.name);
+      return res.status(500).json({ ok: false, error: 'BROWSER_LOGOUT_FAILED' });
+    }
+  });
+
   router.get('/me/photo', authMiddleware, async (req, res) => {
     try {
       const userId = Number(req.user.userId || req.user.sessionUserId || 0);
@@ -420,61 +439,12 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       const token = readRequestToken(req);
       if (!token) return res.status(401).json({ ok: false, error: 'NO_TOKEN' });
       const decoded = jwt.verify(token, JWT_SECRET);
-      if (!decoded.userId && (decoded.loginType === 'tenant' || decoded.role === 'owner')) {
-        const [tenants] = await db.query('SELECT id, name, slug, email FROM ten_tenants WHERE id=? AND is_active=1 LIMIT 1', [decoded.tenantId]);
-        const tenant = tenants[0];
-        if (!tenant) return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
-        const legacyOwner = await loadLegacyOwner(db, tenant.id, tenant.email);
-        if (legacyOwner) {
-          if (legacyOwner.employee_status !== 'active' || Number(legacyOwner.is_active) !== 1 || Number(legacyOwner.is_owner) !== 1) return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
-          if (Number(decoded.authVersion || 0) !== Number(legacyOwner.auth_version)) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
-        }
-        const [stores] = await db.query('SELECT id, name FROM ten_stores WHERE tenant_id=? AND is_active=1 ORDER BY name, id', [tenant.id]);
-        return res.json({ ok: true, user: { id: null, email: tenant.email, name: `${tenant.name} (Магазин)`, profile_name: legacyOwner?.name || null, last_name: legacyOwner?.last_name || null, first_name: legacyOwner?.first_name || null, patronymic: legacyOwner?.patronymic || null, photo_revision: legacyOwner?.photo_revision || null, tenant_id: Number(tenant.id) }, tenant: { id: Number(tenant.id), name: tenant.name, slug: tenant.slug }, roles: [], permissions: ['*'], stores });
-      }
-      const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.last_name, u.first_name, u.patronymic, u.photo_revision, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
-                t.name AS tenant_name, t.slug AS tenant_slug
-         FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id
-         WHERE u.id=? AND u.tenant_id=? AND u.is_active=1 AND t.is_active=1 LIMIT 1`,
-        [decoded.userId, decoded.tenantId]
-      );
-      const user = users[0];
-      if (!user) return res.status(404).json({ ok: false, error: 'USER_NOT_FOUND' });
-      if (user.employee_status !== 'active') return res.status(403).json({ ok: false, error: user.employee_status === 'archived' ? 'USER_ARCHIVED' : 'USER_BLOCKED' });
-      if (Number(decoded.authVersion || 0) !== Number(user.auth_version)) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
-      const roles = await loadUserRoles(db, user.tenant_id, user.id);
-      const activeRole = roles.find((role) => Number(role.id) === Number(decoded.activeRoleId))
-        || (roles.length === 1 ? roles[0] : null);
-      const [permissionRows] = activeRole ? await db.query(
-        `SELECT p.permission_key, rp.access_rule
-         FROM role_permissions rp
-         JOIN system_permissions p ON p.id=rp.permission_id
-         WHERE rp.tenant_id=? AND rp.role_id=?
-         ORDER BY p.sort_order, p.id`,
-        [user.tenant_id, activeRole.id]
-      ) : [[]];
-      const [stores] = await db.query(
-        `SELECT s.id, s.name
-         FROM user_stores us
-         JOIN ten_stores s ON s.tenant_id=us.tenant_id AND s.id=us.store_id
-         WHERE us.tenant_id=? AND us.user_id=? AND s.is_active=1
-         ORDER BY s.name, s.id`,
-        [user.tenant_id, user.id]
-      );
-      return res.json({
-        ok: true,
-        user: publicUser(user, activeRole && activeRole.id),
-        tenant: { id: Number(user.tenant_id), name: user.tenant_name, slug: user.tenant_slug },
-        roles: roles.map(publicRole),
-        active_role: activeRole ? publicRole(activeRole) : null,
-        permissions: permissionRows.map((permission) => ({ key: permission.permission_key, access_rule: permission.access_rule })),
-        stores,
-      });
+      return res.json(await loadAccessContext(db, decoded));
     } catch (error) {
       if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
         return res.status(401).json({ ok: false, error: 'INVALID_TOKEN' });
       }
+      if (error.status) return res.status(error.status).json({ ok: false, error: error.code });
       console.error('Ошибка получения данных пользователя:', error);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }

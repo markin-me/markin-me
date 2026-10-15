@@ -77,6 +77,7 @@
       let syncInterval = null;
       let currentTimezone = window.state.storeTimezone || "+0";
       let offsetMs = 0;
+      let referenceDisplayKey = null;
 
       async function fetchTimeAndUpdate() {
         try {
@@ -108,6 +109,21 @@
 
         if (element) {
           element.textContent = timeStr + " " + tzStr;
+          const reference = window.AdminReferenceCache?.getReferenceState('store-time');
+          const local = reference?.source === 'local' || navigator.onLine === false;
+          const referenceKey = reference?.lastSyncedAt ? `${reference.lastSyncedAt}:${local}:${reference.stale}` : '';
+          if (referenceKey !== referenceDisplayKey) {
+            referenceDisplayKey = referenceKey;
+            if (reference?.lastSyncedAt) {
+              element.dataset.localSource = local ? 'local' : 'server';
+              element.title = (local ? 'Локальные данные. ' : 'Данные сервера. ')
+                + 'Последняя синхронизация: ' + new Date(reference.lastSyncedAt).toLocaleString()
+                + (local || reference.stale ? '. Данные могут быть устаревшими.' : '');
+            } else {
+              delete element.dataset.localSource;
+              element.removeAttribute('title');
+            }
+          }
         }
 
         if (onTick) {

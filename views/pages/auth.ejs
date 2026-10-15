@@ -245,13 +245,18 @@
         </div>
     </div>
 
+    <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
+    <script src="<%= assetUrl('/static/js/admin-persistent-cache.js') %>"></script>
+    <script src="<%= assetUrl('/static/js/admin-local-repository.js') %>"></script>
     <script>
         const mode = '<%= mode %>';
+        const pageAccessError = <%- JSON.stringify(typeof pageAccessError === 'string' ? pageAccessError : '').replace(/</g, '\\u003c') %>;
         let requestedPasswordChange = mode === 'login' && new URLSearchParams(window.location.search).get('change-password') === '1';
         const form = document.getElementById(mode === 'register' ? 'registerForm' : 'loginForm');
         const errorMsg = document.getElementById('errorMsg');
         const successMsg = document.getElementById('successMsg');
         const authTitle = document.querySelector('.auth-container h2');
+        if (pageAccessError) window.AdminLocalRepository.reset({forget:true,reason:'server-refusal'});
         const authSwitch = document.querySelector('.auth-switch');
 
         function showError(text) { errorMsg.textContent = text; errorMsg.classList.add('show'); successMsg.classList.remove('show'); }
@@ -269,6 +274,8 @@
             return ({ EMAIL_EXISTS:'Этот email уже зарегистрирован', SLUG_EXISTS:'Этот URL-адрес уже занят', INVALID_EMAIL:'Неверный формат email', PASSWORD_TOO_SHORT:'Пароль должен быть минимум 6 символов', INVALID_CREDENTIALS:'Неверный логин или пароль', USER_BLOCKED:'Аккаунт заблокирован', TENANT_BLOCKED:'Магазин заблокирован', LOGIN_PASSWORD_REQUIRED:'Заполните логин и пароль', ROLE_NOT_ASSIGNED:'Пользователю не назначена роль.' })[code] || code || 'Ошибка';
         }
         function saveAuth(result) {
+            if (localStorage.getItem('admin:logout-pending:v1')) throw new Error('Завершите выход из предыдущей сессии');
+            if (result.token && localStorage.getItem('authToken') !== result.token && window.AdminLocalRepository) window.AdminLocalRepository.reset({forget:true});
             if (result.token) localStorage.setItem('authToken', result.token);
             if (result.user) localStorage.setItem('user', JSON.stringify(result.user));
             if (result.tenant) localStorage.setItem('tenant', JSON.stringify(result.tenant));
@@ -317,8 +324,16 @@
             if (mode === 'register' && data.password !== data.password_confirm) return showError('Пароли не совпадают');
             delete data.password_confirm;
             try {
+                if (!await finishBrowserLogout()) return showError('Подключитесь к сети, чтобы завершить предыдущий выход');
+                sessionStorage.removeItem('admin:browser-session-attempt');
+                if (getAuthToken()) {
+                  window.AdminLocalRepository.reset({forget:true,reason:'identity-change'});
+                  localStorage.removeItem('authToken'); localStorage.removeItem('user'); localStorage.removeItem('tenant');
+                }
+                const authState = captureAuthState();
                 const response = await fetch(mode === 'register' ? '/api/auth/register' : '/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
                 const result = await response.json();
+                if (!authState.isCurrent()) return;
                 if (!response.ok || !result.ok) return showError(errorText(result.error));
                 continueAuth(result);
             } catch (error) { console.error(error); showError('Ошибка соединения с сервером'); }
@@ -330,8 +345,10 @@
             const data = Object.fromEntries(new FormData(passwordChangeForm));
             if (data.new_password !== data.new_password_confirm) return showError('Пароли не совпадают');
             try {
+                const authState = captureAuthState();
                 const response = await fetch('/api/auth/change-password', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+localStorage.getItem('authToken')}, body:JSON.stringify({current_password:data.current_password, new_password:data.new_password}) });
                 const result = await response.json();
+                if (!authState.isCurrent()) return;
                 if (!response.ok || !result.ok) return showError(errorText(result.error));
                 continueAuth(result);
             } catch (error) { console.error(error); showError('Ошибка соединения с сервером'); }
@@ -341,15 +358,18 @@
         if (roleList) roleList.addEventListener('click', async event => {
             const card = event.target.closest('[data-role-id]'); if (!card) return;
             try {
+                const authState = captureAuthState();
                 const response = await fetch('/api/auth/active-role', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+localStorage.getItem('authToken')}, body:JSON.stringify({role_id:Number(card.dataset.roleId)}) });
                 const result = await response.json();
+                if (!authState.isCurrent()) return;
                 if (!response.ok || !result.ok) return showError(errorText(result.error));
                 continueAuth({...result, next:'dashboard'});
             } catch (error) { console.error(error); showError('Ошибка соединения с сервером'); }
         });
 
-        if (mode === 'login') {
-            const token = localStorage.getItem('authToken');
+        if (pageAccessError) showError(pageAccessError);
+        if (mode === 'login' && !pageAccessError && !localStorage.getItem('admin:logout-pending:v1')) {
+            const token = getAuthToken();
             if (token) {
                 try {
                     let tokenPayload = token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
@@ -359,18 +379,41 @@
                         requestedPasswordChange = false;
                         showStage('passwordChangeStage', 'Сменить пароль');
                     }
-                    else if (payload.authStage === 'role-selection') fetch('/api/auth/me', {headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).then(result=>result.ok ? showRoleSelection(result.roles || []) : null);
-                    else fetch('/api/auth/me', {headers:{'Authorization':'Bearer '+token}})
+                    else if (payload.authStage === 'role-selection') {
+                      const roleAccess = captureAuthState();
+                      fetch('/api/auth/me', {headers:{'Authorization':'Bearer '+token}}).then(r=>r.json()).then(result=> {
+                        if (!roleAccess.isCurrent()) return;
+                        if (result.ok) showRoleSelection(result.roles || []);
+                        else { window.AdminLocalRepository.reset({forget:true,reason:'server-refusal'}); showError(errorText(result.error)); }
+                      }).catch(error => showError('Ошибка проверки сессии: ' + error.message));
+                    }
+                    else {
+                      const nextParam = new URLSearchParams(window.location.search).get('next');
+                      const next = nextParam && /^\/dashboard\/[a-z-]+(?:\?|$)/.test(nextParam) && !nextParam.includes('\\') ? nextParam : null;
+                      const attempt = JSON.parse(sessionStorage.getItem('admin:browser-session-attempt') || 'null');
+                      if (attempt && Date.now() - attempt.at < 30000 && attempt.next === next) {
+                        showError('Не удалось подключить браузерную сессию. Проверьте разрешение cookie и повторите вход.');
+                      } else {
+                      sessionStorage.setItem('admin:browser-session-attempt', JSON.stringify({at:Date.now(),next}));
+                      const browserAccess = captureAuthState();
+                      fetch('/api/auth/browser-session', {method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:'{}'})
                         .then(async response => ({response, result:await response.json().catch(()=>({}))}))
                         .then(({response, result}) => {
+                            if (getAuthToken() !== token || !browserAccess.isCurrent()) return;
                             if (response.ok && result.ok) {
                                 if (!result.active_role && result.roles?.length > 1) return showRoleSelection(result.roles);
-                                window.location.href = result.active_role?.start_route || '/dashboard/products';
+                                window.location.href = next || result.active_role?.start_route || '/dashboard/products';
                                 return;
                             }
-                            localStorage.removeItem('authToken');
+                            if (response.status === 401 || response.status === 403) {
+                              window.AdminLocalRepository.reset({forget:true,reason:'server-refusal'});
+                              localStorage.removeItem('authToken');
+                            }
+                            showError(errorText(result.error));
                         })
-                        .catch(() => {});
+                        .catch(error => showError('Не удалось подключить браузерную сессию: ' + error.message));
+                      }
+                    }
                 } catch (_) { localStorage.removeItem('authToken'); }
             }
         }

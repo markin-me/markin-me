@@ -13,7 +13,6 @@
   const ORDER_PASSPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const ORDER_PASSPORT_MAX = 200;
   const MAINTENANCE_BATCH_SIZE = 50;
-  const LEGACY_DETAIL_BATCH_SIZE = 25;
   const MAINTENANCE_INTERVAL_MS = 12 * 60 * 60 * 1000;
   const EXPIRED_RETENTION_GRACE_MS = 24 * 60 * 60 * 1000;
   const PRODUCT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -52,6 +51,12 @@
   }
 
   function resolveScope(options = {}) {
+    // Explicit namespaces support principal/role/domain scopes without imposing a store.
+    // Authorization and scope lifecycle belong to the caller, not this storage primitive.
+    if (options.storageNamespace !== undefined) {
+      if (typeof options.storageNamespace !== 'string' || !options.storageNamespace) throw new Error('INVALID_STORAGE_NAMESPACE');
+      return { complete: true, namespace: options.storageNamespace, domain: options.domain, version: options.version || 1 };
+    }
     const identity = currentIdentity();
     const userId = options.userId ?? identity.userId;
     const tenantId = options.tenantId ?? identity.tenantId;
@@ -71,7 +76,8 @@
   }
 
   function entryIsStale(entry, now = Date.now()) {
-    const expiresAt = entry && typeof entry.expiresAt === "number" ? entry.expiresAt : null;
+    const deadline = entry?.retainStale ? (entry.staleAt ?? entry.expiresAt) : entry?.expiresAt;
+    const expiresAt = typeof deadline === "number" ? deadline : null;
     return Number.isFinite(expiresAt) && expiresAt <= now;
   }
 
@@ -138,7 +144,10 @@
   }
 
   const readEntry = (key) => requestOperation("readonly", (store) => store.get(key));
-  const deleteEntry = (key) => requestOperation("readwrite", (store) => store.delete(key));
+  const deleteEntry = (key, options = {}) => requestOperation("readwrite", (store) => {
+    if (options.guard && !options.guard()) throw new Error('LOCAL_SCOPE_CHANGED');
+    return store.delete(key);
+  });
 
   function requestMany(mode, operations) {
     return openDb().then((db) => new Promise((resolve, reject) => {
@@ -158,7 +167,11 @@
           request.onsuccess = () => { results[index] = request.result; };
           request.onerror = () => fail(request.error || new Error("INDEXEDDB_OPERATION_FAILED"));
         });
-      } catch (error) { fail(error); return; }
+      } catch (error) {
+        if (transaction) transaction.abort();
+        fail(error);
+        return;
+      }
       transaction.oncomplete = () => {
         if (settled) return;
         settled = true;
@@ -177,15 +190,20 @@
       || message.includes("quota") || Number(error.code) === 22 || Number(error.code) === 1014;
   }
 
-  function putEntry(key, namespace, data, version, ttlMs) {
+  function putEntry(key, namespace, data, version, ttlMs, options = {}) {
     const now = Date.now();
     const ttl = Number(ttlMs);
-    return requestOperation("readwrite", (store) => store.put({
-      key, namespace, schemaVersion: SCHEMA_VERSION, version,
-      createdAt: now, updatedAt: now,
-      expiresAt: Number.isFinite(ttl) && ttl > 0 ? now + ttl : null,
-      data,
-    }));
+    const deadline = Number.isFinite(ttl) && ttl > 0 ? now + ttl : null;
+    return requestOperation("readwrite", (store) => {
+      if (options.guard && !options.guard()) throw new Error('LOCAL_SCOPE_CHANGED');
+      return store.put({
+        key, namespace, schemaVersion: SCHEMA_VERSION, version,
+        createdAt: now, updatedAt: now,
+        expiresAt: options.retainStale ? null : deadline,
+        data,
+        ...(options.retainStale ? { retainStale: true, staleAt: deadline } : {}),
+      });
+    });
   }
 
   function makeEntry(key, namespace, data, version, ttlMs, now = Date.now()) {
@@ -198,30 +216,34 @@
     };
   }
 
-  async function writeEntry(key, namespace, data, version, ttlMs) {
+  async function writeEntry(key, namespace, data, version, ttlMs, options = {}) {
     try {
-      return await putEntry(key, namespace, data, version, ttlMs);
+      return await putEntry(key, namespace, data, version, ttlMs, options);
     } catch (error) {
       if (!isQuotaError(error)) throw error;
       console.warn("Persistent cache quota exceeded; running bounded safe cleanup");
       await cleanup({ reason: "quota", force: true }).catch((cleanupError) => {
         console.warn("Persistent cache quota cleanup failed", cleanupError);
       });
-      return putEntry(key, namespace, data, version, ttlMs);
+      return putEntry(key, namespace, data, version, ttlMs, options);
     }
   }
 
-  function namespaceCursor(namespace, indexName, direction, handler) {
+  function namespaceCursor(namespace, indexName, direction, handler, options = {}) {
     return openDb().then((db) => new Promise((resolve, reject) => {
       let transaction;
       try {
+        if (options.guard && !options.guard()) throw new Error('LOCAL_SCOPE_CHANGED');
         transaction = db.transaction(STORE_NAME, "readwrite");
         const index = transaction.objectStore(STORE_NAME).index(indexName);
         const range = indexName === "namespace_updatedAt"
           ? window.IDBKeyRange.bound([namespace, 0], [namespace, Number.MAX_SAFE_INTEGER])
           : window.IDBKeyRange.only(namespace);
         const request = index.openCursor(range, direction);
-        request.onsuccess = () => handler(request.result);
+        request.onsuccess = () => {
+          if (options.guard && !options.guard()) { transaction.abort(); return; }
+          handler(request.result);
+        };
         request.onerror = () => reject(request.error || new Error("INDEXEDDB_CURSOR_FAILED"));
       } catch (error) { reject(error); return; }
       transaction.oncomplete = () => resolve();
@@ -230,26 +252,26 @@
     }));
   }
 
-  function clearNamespace(namespace) {
+  function clearNamespace(namespace, options = {}) {
     return namespaceCursor(namespace, "namespace", "next", (cursor) => {
       if (!cursor) return;
       cursor.delete();
       cursor.continue();
-    });
+    }, options);
   }
 
-  function pruneNamespace(namespace, maxEntries, keyPrefix = null) {
+  function pruneNamespace(namespace, maxEntries, keyPrefix = null, options = {}) {
     const keepLatest = Math.max(0, Math.trunc(Number(maxEntries) || 0));
     const now = Date.now();
     let kept = 0;
     return namespaceCursor(namespace, "namespace_updatedAt", "prev", (cursor) => {
       if (!cursor) return;
       if (!keyPrefix || String(cursor.value.key).startsWith(keyPrefix)) {
-        if (entryIsStale(cursor.value, now) || kept >= keepLatest) cursor.delete();
+        if ((!cursor.value.retainStale && entryIsStale(cursor.value, now)) || kept >= keepLatest) cursor.delete();
         else kept += 1;
       }
       cursor.continue();
-    });
+    }, options);
   }
 
   function domainFromNamespace(namespace) {
@@ -288,7 +310,9 @@
   function cleanupExpired(now, limit) {
     const cutoff = now - EXPIRED_RETENTION_GRACE_MS;
     return cursorCleanup("expiresAt", window.IDBKeyRange.upperBound(cutoff), "next", limit, (entry) => {
-      return domainFromNamespace(entry?.namespace) !== NON_EVICTABLE_DOMAIN;
+      const domain = domainFromNamespace(entry?.namespace);
+      const legacyOrders = domain?.startsWith('orders:') || (domain === 'legacy' && String(entry?.key).includes('orders:'));
+      return !entry?.retainStale && !legacyOrders && domain !== NON_EVICTABLE_DOMAIN;
     });
   }
 
@@ -297,50 +321,6 @@
       return domainFromNamespace(entry?.namespace) === "products"
         && Number(entry?.updatedAt || 0) <= now - PRODUCT_RETENTION_MS;
     });
-  }
-
-  function collectNamespaceEntries(namespace, limit) {
-    return openDb().then((db) => new Promise((resolve, reject) => {
-      const entries = [];
-      let transaction;
-      try {
-        transaction = db.transaction(STORE_NAME, "readonly");
-        const index = transaction.objectStore(STORE_NAME).index("namespace");
-        const request = index.openCursor(window.IDBKeyRange.only(namespace), "next");
-        request.onsuccess = () => {
-          const cursor = request.result;
-          if (!cursor || entries.length >= limit) return;
-          entries.push(cursor.value);
-          cursor.continue();
-        };
-        request.onerror = () => reject(request.error || new Error("INDEXEDDB_LEGACY_CURSOR_FAILED"));
-      } catch (error) { reject(error); return; }
-      transaction.oncomplete = () => resolve(entries);
-      transaction.onerror = () => reject(transaction.error || new Error("INDEXEDDB_LEGACY_SCAN_FAILED"));
-      transaction.onabort = () => reject(transaction.error || new Error("INDEXEDDB_LEGACY_SCAN_ABORTED"));
-    }));
-  }
-
-  async function cleanupLegacyDetails(limit) {
-    const shared = orderPassportScope();
-    if (!shared.complete) return { visited: 0, deleted: 0 };
-    let visited = 0;
-    let deleted = 0;
-    for (const domain of ["orders:detail:courier", "orders:detail:orders"]) {
-      if (visited >= limit) break;
-      const legacy = createScope({ domain, version: 1 });
-      const entries = await collectNamespaceEntries(legacy.namespace, limit - visited);
-      for (const entry of entries) {
-        visited += 1;
-        const orderId = String(entry.key || "").slice(`${legacy.namespace}:`.length);
-        const canonical = await shared.getEntry(orderId, { allowStale: true });
-        if (canonical?.data?.detailCompleteness === "full" && isFullOrderPassport(canonical.data.order)) {
-          await deleteEntry(entry.key);
-          deleted += 1;
-        }
-      }
-    }
-    return { visited, deleted };
   }
 
   function cleanup(options = {}) {
@@ -357,7 +337,8 @@
       const products = remaining > 0
         ? await cleanupOldProducts(now, remaining)
         : { visited: 0, deleted: 0 };
-      const legacy = await cleanupLegacyDetails(LEGACY_DETAIL_BATCH_SIZE);
+      // Unscoped detail records are kept, never promoted/deleted on the basis of a new access view.
+      const legacy = { visited: 0, deleted: 0 };
       try { window.localStorage.setItem(MAINTENANCE_STORAGE_KEY, String(Date.now())); } catch (_) {}
       return { skipped: false, expired, products, legacy };
     })().finally(() => { maintenancePromise = null; });
@@ -372,6 +353,7 @@
 
   function createScope(options = {}) {
     const resolved = resolveScope(options);
+    const writeOptions = { guard: options.guard, retainStale: options.retainStale === true };
     const scopedKey = (key) => resolved.complete
       ? `${resolved.namespace}:${normalizePart(key) || "_"}`
       : null;
@@ -385,7 +367,7 @@
         const stale = entryIsStale(entry);
         if (stale && !options.allowStale) return null;
         return { data: entry.data, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
-          expiresAt: entry.expiresAt, schemaVersion: entry.schemaVersion, stale };
+          expiresAt: entry.staleAt ?? entry.expiresAt, schemaVersion: entry.schemaVersion, stale };
       },
       async get(key) { const entry = await this.getEntry(key); return entry ? entry.data : null; },
       async getMany(keys, options = {}) {
@@ -400,7 +382,7 @@
           if (entryIsStale(entry, now) && !options.allowStale) return;
           result.set(requested[index], options.entries === true ? {
             data: entry.data, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
-            expiresAt: entry.expiresAt, schemaVersion: entry.schemaVersion,
+            expiresAt: entry.staleAt ?? entry.expiresAt, schemaVersion: entry.schemaVersion,
             stale: entryIsStale(entry, now),
           } : entry.data);
         });
@@ -409,7 +391,9 @@
       set(key, data, options = {}) {
         const storageKey = scopedKey(key);
         if (!storageKey) return Promise.resolve(false);
-        return writeEntry(storageKey, resolved.namespace, data, resolved.version, options.ttlMs).then(() => true);
+        const guardedWrite = { ...writeOptions, guard: () => (!writeOptions.guard || writeOptions.guard())
+          && (!options.guard || options.guard()) };
+        return writeEntry(storageKey, resolved.namespace, data, resolved.version, options.ttlMs, guardedWrite).then(() => true);
       },
       async setMany(entries, options = {}) {
         const requested = entries instanceof Map ? [...entries.entries()] : (Array.isArray(entries) ? entries : []);
@@ -418,7 +402,17 @@
         const records = requested.map(([key, data]) => makeEntry(
           scopedKey(key), resolved.namespace, data, resolved.version, options.ttlMs, now
         ));
-        const write = () => requestMany("readwrite", records.map((entry) => (store) => store.put(entry)));
+        if (writeOptions.retainStale) records.forEach(entry => {
+          entry.retainStale = true;
+          entry.staleAt = entry.expiresAt;
+          entry.expiresAt = null;
+        });
+        const write = () => requestMany("readwrite", records.map((entry, index) => (store) => {
+          if (index === 0 && ((writeOptions.guard && !writeOptions.guard()) || (options.guard && !options.guard()))) {
+            throw new Error('LOCAL_SCOPE_CHANGED');
+          }
+          return store.put(entry);
+        }));
         try { await write(); }
         catch (error) {
           if (!isQuotaError(error)) throw error;
@@ -430,15 +424,18 @@
         }
         return true;
       },
-      remove(key) { const storageKey = scopedKey(key); return storageKey ? deleteEntry(storageKey) : Promise.resolve(false); },
+      remove(key) { const storageKey = scopedKey(key); return storageKey ? deleteEntry(storageKey, writeOptions) : Promise.resolve(false); },
       async removeMany(keys) {
         const storageKeys = (Array.isArray(keys) ? keys : []).map(scopedKey).filter(Boolean);
         if (!resolved.complete || !storageKeys.length) return false;
-        await requestMany("readwrite", storageKeys.map((key) => (store) => store.delete(key)));
+        await requestMany("readwrite", storageKeys.map((key, index) => (store) => {
+          if (index === 0 && writeOptions.guard && !writeOptions.guard()) throw new Error('LOCAL_SCOPE_CHANGED');
+          return store.delete(key);
+        }));
         return true;
       },
-      clear() { return resolved.complete ? clearNamespace(resolved.namespace) : Promise.resolve(false); },
-      prune(maxEntries) { return resolved.complete ? pruneNamespace(resolved.namespace, maxEntries) : Promise.resolve(false); },
+      clear() { return resolved.complete ? clearNamespace(resolved.namespace, writeOptions) : Promise.resolve(false); },
+      prune(maxEntries) { return resolved.complete ? pruneNamespace(resolved.namespace, maxEntries, null, writeOptions) : Promise.resolve(false); },
     };
   }
 
@@ -533,19 +530,18 @@
   }
 
   function orderPassportScope(options = {}) {
-    return createScope({
-      domain: ORDER_PASSPORT_DOMAIN,
-      version: ORDER_PASSPORT_VERSION,
-      userId: options.userId,
-      tenantId: options.tenantId,
-      storeId: options.storeId,
-    });
+    const repository = window.AdminLocalRepository;
+    if (!repository?.isActive()) return null;
+    const storeId = String(options.storeId ?? window.localStorage.getItem('activeStoreId') ?? '1');
+    return repository.create({ domain: ORDER_PASSPORT_DOMAIN, version: ORDER_PASSPORT_VERSION,
+      dimensions: { organizationalUnit: { type: 'store', id: storeId }, accessContext: options.accessContext || 'orders' },
+      guard: () => storeId === String(window.localStorage.getItem('activeStoreId') || '1') });
   }
 
   async function readOrderPassport(orderId, options = {}) {
     const id = Number(orderId || 0);
     const cache = options.cache || orderPassportScope(options);
-    if (!(id > 0) || !cache.complete) return null;
+    if (!(id > 0) || !cache?.complete) return null;
     const entry = await cache.getEntry(String(id), { allowStale: options.allowStale !== false });
     if (!entry || entry.data?.detailCompleteness !== "full" || !isFullOrderPassport(entry.data.order)) return null;
     return { order: entry.data.order, stale: entry.stale === true, updatedAt: entry.updatedAt };
@@ -553,12 +549,12 @@
 
   async function writeOrderPassport(order, options = {}) {
     const cache = options.cache || orderPassportScope(options);
-    if (!options.authoritative || !cache.complete || !isFullOrderPassport(order)) return false;
+    if (!options.authoritative || !cache?.complete || !isFullOrderPassport(order)) return false;
     await cache.set(String(order.id), {
       cachedAt: Date.now(),
       detailCompleteness: "full",
       order: { ...order },
-    }, { ttlMs: ORDER_PASSPORT_TTL_MS });
+    }, { ttlMs: ORDER_PASSPORT_TTL_MS, lastSyncedAt: Date.now() });
     await cache.prune(ORDER_PASSPORT_MAX);
     return true;
   }
@@ -594,7 +590,7 @@
   async function mergeOrderPassport(orderPatch, options = {}) {
     const id = Number(orderPatch?.id || 0);
     const cache = options.cache || orderPassportScope(options);
-    if (!(id > 0) || !cache.complete) return false;
+    if (!(id > 0) || !cache?.complete) return false;
     const cached = await readOrderPassport(id, { cache, allowStale: true });
     if (!cached?.order) return false;
     return writeOrderPassport(mergeOrderPassportPatch(cached.order, orderPatch), {

@@ -1,4 +1,8 @@
-﻿(function () {
+﻿(async function () {
+  const localRepository = window.AdminLocalRepository;
+  if (!localRepository || !await localRepository.ready()) return;
+  if (window.AdminAccessContextPromise) await window.AdminAccessContextPromise;
+  if (!localRepository.isActive()) return;
   if (typeof window !== "undefined" && window.__ordersPageInitialized) return;
   if (typeof window !== "undefined") {
     window.__ordersPageInitialized = true;
@@ -118,6 +122,19 @@
   const courierDeliveredStatusId = toStatusId(rawWorkspaceConfig.courierDeliveredStatusId);
   const courierCanceledStatusIds = toStatusIdSet(rawWorkspaceConfig.courierCanceledStatusIds);
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
+  const initialAccessNamespace = localRepository.create({ domain: 'orders:workspace-access', version: 1 }).namespace;
+  let ordersLastSyncedAt = null;
+  function workspaceAccessIsCurrent() {
+    return localRepository.isActive()
+      && localRepository.create({ domain: 'orders:workspace-access', version: 1 }).namespace === initialAccessNamespace;
+  }
+  function localOrderScope(domain) {
+    if (!workspaceAccessIsCurrent()) return null;
+    const storeId = String(localStorage.getItem('activeStoreId') || '1');
+    return localRepository.create({ domain, version: 1,
+      dimensions: { organizationalUnit: { type: 'store', id: storeId }, accessContext: isCourierWorkspace ? 'courier' : 'orders' },
+      guard: () => workspaceAccessIsCurrent() && String(localStorage.getItem('activeStoreId') || '1') === storeId });
+  }
   const ORDER_BROWSER_ALERTS_ENABLED = false;
   const ORDER_UPDATED_EVENT = "dashboard:order-updated";
   const canonicalAdminAssetUrls = window.__ADMIN_ASSET_URLS__ && typeof window.__ADMIN_ASSET_URLS__ === "object"
@@ -176,6 +193,9 @@
   }
 
   async function apiJson(url, opts = {}) {
+    const requestAccess = localRepository.capture();
+    const readAccess = (!opts.method || String(opts.method).toUpperCase() === 'GET') ? requestAccess : null;
+    if (readAccess && (!readAccess.isCurrent() || !workspaceAccessIsCurrent())) throw new Error('LOCAL_SCOPE_CHANGED');
     // Получаем токен и store_id из localStorage
     const token = localStorage.getItem('authToken');
     const storeId = localStorage.getItem('activeStoreId') || '1';
@@ -208,16 +228,23 @@
     }
     
     const json = await res.json().catch(() => null);
+    if (readAccess && (!readAccess.isCurrent() || token !== localStorage.getItem('authToken')
+      || storeId !== (localStorage.getItem('activeStoreId') || '1'))) throw new Error('LOCAL_SCOPE_CHANGED');
     if (res.status === 401) {
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('user');
-      localStorage.removeItem('tenant');
-      window.location.href = '/login';
+      if (requestAccess.isCurrent()) {
+        localRepository.reset({ forget: true, reason: 'server-refusal' });
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('user');
+        localStorage.removeItem('tenant');
+        window.location.href = '/login';
+      }
       const authError = new Error(json?.error || 'UNAUTHORIZED');
       authError.status = 401;
       authError.code = String(json?.error || 'UNAUTHORIZED');
       throw authError;
     }
+    if (res.status === 403 && requestAccess.isCurrent() && (['USER_BLOCKED', 'USER_ARCHIVED', 'TENANT_BLOCKED', 'ACTIVE_ROLE_INVALID', 'ROLE_NOT_ASSIGNED'].includes(json?.error)
+      || (readAccess && String(url).startsWith('/api/admin/orders')))) localRepository.reset({ forget: true, reason: 'server-refusal' });
 
     if (!json || json.ok !== true) {
       const apiError = new Error(json?.error || `API_ERROR (${res.status})`);
@@ -226,14 +253,13 @@
       apiError.retryAfter = String(res.headers.get("Retry-After") || "").trim() || null;
       throw apiError;
     }
+    if (readAccess && String(url).startsWith('/api/admin/orders')) ordersLastSyncedAt = Date.now();
     return json;
   }
 
   const ORDER_DETAILS_CACHE_DOMAIN = "orders:detail:shared";
-  const ORDER_DETAILS_CACHE_VERSION = 1;
   const ORDER_DETAILS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   const ORDER_DETAILS_CACHE_MAX = 200;
-  const LEGACY_ORDER_DETAILS_CACHE_DOMAINS = ["orders:detail:courier", "orders:detail:orders"];
   const COURIER_DETAIL_PREWARM_LIMIT = 40;
   const COURIER_DETAIL_PREWARM_CONCURRENCY = 3;
   const orderDetailsRevalidation = new Map();
@@ -245,26 +271,10 @@
   const courierPassportCacheStates = new Map();
   const courierDetailPrewarmWaiters = [];
   let courierDetailPrewarmActiveCount = 0;
-  const orderDetailsCacheKey = (id, scope = ordersCacheScope) => `orders:detail:v1:${scope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${id}`;
   const isFullOrder = (order) => Boolean(order && Array.isArray(order.items) && Number(order.store_id || order.storeId || 0) > 0);
 
   function orderDetailsPersistentScope() {
-    if (window.AdminPersistentCache?.orderPassport?.scope) {
-      return window.AdminPersistentCache.orderPassport.scope();
-    }
-    if (!window.AdminPersistentCache?.scope) return null;
-    return window.AdminPersistentCache.scope({
-      domain: ORDER_DETAILS_CACHE_DOMAIN,
-      version: ORDER_DETAILS_CACHE_VERSION,
-    });
-  }
-
-  function legacyOrderDetailsPersistentScopes() {
-    if (!window.AdminPersistentCache?.scope) return [];
-    return LEGACY_ORDER_DETAILS_CACHE_DOMAINS.map((domain) => window.AdminPersistentCache.scope({
-      domain,
-      version: 1,
-    })).filter((cache) => cache?.complete);
+    return localOrderScope(ORDER_DETAILS_CACHE_DOMAIN);
   }
 
   function orderDetailsContext(id, cache = orderDetailsPersistentScope()) {
@@ -276,7 +286,7 @@
   }
 
   function isCurrentOrderDetailsContext(context) {
-    return Boolean(context?.cache?.complete
+    return Boolean(context?.cache?.isCurrent()
       && orderDetailsPersistentScope()?.namespace === context.cache.namespace);
   }
 
@@ -307,41 +317,6 @@
     return `<span class="courier-order-cache-indicator courier-order-cache-indicator--${state}" data-courier-passport-cache-state aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"></span>`;
   }
 
-  async function migrateLegacyFullOrder(id, order, cache) {
-    const context = orderDetailsContext(id, cache);
-    return queueOrderDetailsOperation(context, async () => {
-      const existing = await cache.getEntry(String(id), { allowStale: true });
-      if (existing?.data?.detailCompleteness === "full" && isFullOrder(existing.data.order)) return true;
-      return writeCachedFullOrder(order, { cache, authoritative: true });
-    });
-  }
-
-  async function readLegacyFullOrderEntry(id) {
-    const candidates = [];
-    for (const legacyCache of legacyOrderDetailsPersistentScopes()) {
-      const entry = await legacyCache.getEntry(String(id), { allowStale: true });
-      if (entry?.data?.detailCompleteness === "full" && isFullOrder(entry.data.order)) {
-        candidates.push({
-          order: entry.data.order,
-          stale: entry.stale === true,
-          updatedAt: Number(entry.updatedAt || entry.data.cachedAt || 0),
-        });
-      }
-    }
-    for (const scope of ["courier", "orders"]) {
-      const cached = await window.AdminPersistentCache.read(orderDetailsCacheKey(id, scope));
-      if (cached?.detailCompleteness === "full" && isFullOrder(cached.order)) {
-        candidates.push({
-          order: cached.order,
-          stale: Date.now() - Number(cached.cachedAt || 0) > ORDER_DETAILS_CACHE_MAX_AGE_MS,
-          updatedAt: Number(cached.cachedAt || 0),
-        });
-      }
-    }
-    candidates.sort((left, right) => right.updatedAt - left.updatedAt);
-    return candidates[0] || null;
-  }
-
   async function readCachedFullOrderEntry(id, { allowStale = true, cache = orderDetailsPersistentScope() } = {}) {
     if (!window.AdminPersistentCache) return null;
     try {
@@ -360,15 +335,7 @@
           return entryStale && !allowStale ? null : { order: cachedOrder, stale: entryStale };
         }
       }
-      if (!cache?.complete) return null;
-      const legacy = await readLegacyFullOrderEntry(id);
-      if (!legacy?.order) return null;
-      authoritativeFullOrderRuntimeKeys.add(`${cache.namespace}:${Number(id)}`);
-      setCourierPassportCacheState(id, legacy.stale ? "stale" : "saved", orderDetailsContext(id, cache));
-      void migrateLegacyFullOrder(id, legacy.order, cache).catch((err) => {
-        console.error("Legacy order detail cache migration failed:", err);
-      });
-      return legacy.stale && !allowStale ? null : legacy;
+      return null;
     } catch (err) {
       console.error("Order detail IndexedDB read failed:", err);
       return null;
@@ -1344,7 +1311,8 @@
   }
 
   function getCourierStatusQueueState(orderId) {
-    if (!isCourierWorkspace) return null;
+    if (!isCourierWorkspace || !workspaceAccessIsCurrent()
+      || !state.orders.some(order => Number(order.id) === Number(orderId))) return null;
     const items = courierOfflineState.queue.filter((item) => (
       item?.type === "status" && Number(item?.orderId || 0) === Number(orderId || 0)
     ));
@@ -1356,6 +1324,12 @@
       return { mode: "sending", label: "Отправляем…" };
     }
     return { mode: "queued", label: "В очереди" };
+  }
+
+  function hasPendingCourierPayment(order) {
+    return isCourierWorkspace && workspaceAccessIsCurrent()
+      && state.orders.some(base => Number(base.id) === Number(order?.id))
+      && courierOfflineState.queue.some(item => item.type === 'payment' && Number(item.orderId) === Number(order?.id));
   }
 
   function buildCourierActionButtonHtml(order) {
@@ -2070,6 +2044,7 @@
   }
 
   function renderOrderTabs() {
+    if (!workspaceAccessIsCurrent()) return;
     if (sharedOrderPanel) {
       sharedOrderPanel.renderTabs({
         headers: orderTabsHeaders,
@@ -2757,7 +2732,8 @@
   }
 
   function ordersCacheKey() {
-    return `orders_bootstrap_v${ORDERS_CACHE_VERSION}_a${appVersion}_m${ordersCacheScope}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+    const scope = ordersPersistentScope();
+    return scope ? `${scope.namespace}:workspace-bootstrap:v${ORDERS_CACHE_VERSION}:a${appVersion}` : null;
   }
 
   function isLikelyNetworkError(err) {
@@ -3107,31 +3083,18 @@
     courierOfflineState.shadowOrders = nextShadowOrders;
   }
 
-  function getCourierShadowOrder(orderId) {
-    if (!isCourierWorkspace) return null;
-    return courierOfflineState.shadowOrders.get(Number(orderId || 0)) || null;
-  }
-
   function overlayCourierShadowOrder(order) {
-    if (!order || !isCourierWorkspace) return order;
-    if (courierOptimisticOverlaySuspended > 0) return order;
-    const shadow = getCourierShadowOrder(order.id);
-    return shadow ? { ...order, ...shadow } : order;
+    // Pending/sending/error indicators are rendered separately from the queue.
+    // A stored optimisticOrder is not evidence of access and must never replace a base record.
+    return workspaceAccessIsCurrent() ? order : null;
   }
 
   function applyCourierShadowOrdersToState() {
-    if (!isCourierWorkspace || courierOptimisticOverlaySuspended > 0 || !courierOfflineState.shadowOrders.size) return;
-    const existingIds = new Set();
-    state.orders = (Array.isArray(state.orders) ? state.orders : []).map((order) => {
-      const orderId = Number(order?.id || 0);
-      if (orderId > 0) existingIds.add(orderId);
-      return overlayCourierShadowOrder(order);
-    });
-    courierOfflineState.shadowOrders.forEach((order, orderId) => {
-      if (existingIds.has(Number(orderId || 0))) return;
-      if (!order || typeof order !== "object") return;
-      state.orders.unshift({ ...order });
-    });
+    // Restore operations unchanged, but never manufacture visible entities from their snapshots.
+    if (!workspaceAccessIsCurrent()) return;
+    refreshCourierOrderQueueButtons((state.orders || []).map(order => order.id));
+    const active = state.orders.find(order => Number(order.id) === Number(state.activeOrderId));
+    if (active) syncOrderPaymentFooter(active);
   }
 
   async function hydrateCourierOfflineStateFromStorage() {
@@ -3405,7 +3368,9 @@
 
   function readOrdersBootstrapCache() {
     try {
-      const raw = localStorage.getItem(ordersCacheKey());
+      const key = ordersCacheKey();
+      if (!key) return null;
+      const raw = localStorage.getItem(key);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       const ts = Number(parsed?.ts || 0);
@@ -3544,6 +3509,8 @@
   }
 
   function persistOrdersCacheNow() {
+    const key = ordersCacheKey();
+    if (!key) return;
     const mountedTab = tabsState.tabs.find((tab) => tab.key === mountedCheckoutTabKey) || null;
     if (mountedTab) captureCheckoutSessionForTab(mountedTab);
     const cachedDate = state.date.start && state.date.end
@@ -3567,7 +3534,7 @@
     };
 
     try {
-      localStorage.setItem(ordersCacheKey(), JSON.stringify(payload));
+      localStorage.setItem(key, JSON.stringify(payload));
     } catch {}
   }
 
@@ -4528,6 +4495,7 @@
   }
 
   function getOrderPaymentActionLabel(order) {
+    if (hasPendingCourierPayment(order)) return 'В очереди';
     if (!order || !Number(order?.id || 0)) return "\u041f\u0440\u0438\u043d\u044f\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0443";
     if (!isPaidOrder(order)) return "\u041f\u0440\u0438\u043d\u044f\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0443";
     if (isOrderFullyRefunded(order)) return "\u0412\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u043e";
@@ -4707,7 +4675,7 @@
     const label = getOrderPaymentActionLabel(order);
     orderInfoPaymentButtons.forEach((button) => {
       if (!button) return;
-      button.disabled = !capabilities.payment || !hasOrder || isOrderFullyRefunded(order);
+      button.disabled = !capabilities.payment || !hasOrder || isOrderFullyRefunded(order) || hasPendingCourierPayment(order);
       const labelEl = button.querySelector("span");
       if (labelEl) labelEl.textContent = label;
       else button.textContent = label;
@@ -4785,18 +4753,8 @@
     activeColumn.appendChild(modal);
   }
 
-  function ordersPersistentCacheKey() {
-    const dateKey = state.date.start && state.date.end
-      ? `${toDateKey(state.date.start)}_${toDateKey(state.date.end)}` : "default";
-    return `orders:list:v1:${ordersCacheScope}:t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}:${dateKey}`;
-  }
-
   function ordersPersistentScope() {
-    if (!window.AdminPersistentCache?.scope) return null;
-    return window.AdminPersistentCache.scope({
-      domain: `orders:list:${ordersCacheScope}`,
-      version: 1,
-    });
+    return localOrderScope(`orders:list:${ordersCacheScope}`);
   }
 
   function ordersPersistentEntryKey() {
@@ -4833,14 +4791,11 @@
       if (cache?.complete) {
         const entry = await cache.getEntry(ordersPersistentEntryKey(), { allowStale: true });
         if (entry?.data && isOrdersSnapshotQueryCompatible(entry.data)) {
+          ordersLastSyncedAt = entry.lastSyncedAt ?? null;
           return { ...entry.data, stale: entry.stale === true };
         }
       }
-      if (!isCourierWorkspace) return null;
-      const legacyData = await window.AdminPersistentCache?.read(ordersPersistentCacheKey());
-      return legacyData && Number(legacyData.ts || 0) > 0
-        ? { ...legacyData, stale: Date.now() - Number(legacyData.ts) > ORDERS_PERSISTENT_CACHE_MAX_AGE_MS }
-        : null;
+      return null;
     } catch (err) {
       console.error("Orders IndexedDB read failed:", err);
       return null;
@@ -4848,6 +4803,7 @@
   }
 
   function restorePersistentOrdersSnapshot(snapshot) {
+    if (!workspaceAccessIsCurrent()) return false;
     if (!Array.isArray(snapshot?.orders)) return false;
     state.orders = snapshot.orders.filter(shouldKeepOrderInState);
     if (Array.isArray(snapshot.statuses)) {
@@ -4867,7 +4823,7 @@
   }
 
   function persistOrdersListCache() {
-    if (!window.AdminPersistentCache) return Promise.resolve(false);
+    if (!workspaceAccessIsCurrent()) return Promise.resolve(false);
     const data = {
       ts: Date.now(),
       orders: state.orders.map((order) => ({ ...order })),
@@ -4881,9 +4837,8 @@
     const ttlMs = isCourierWorkspace
       ? ORDERS_PERSISTENT_CACHE_MAX_AGE_MS
       : ORDERS_WORKSPACE_CACHE_MAX_AGE_MS;
-    const writePromise = cache?.complete
-      ? cache.set(ordersPersistentEntryKey(), data, { ttlMs })
-      : window.AdminPersistentCache.write(ordersPersistentCacheKey(), data);
+    if (!cache?.complete) return Promise.resolve(false);
+    const writePromise = cache.set(ordersPersistentEntryKey(), data, { ttlMs, lastSyncedAt: ordersLastSyncedAt });
     return writePromise.then(() => {
       if (isCourierWorkspace) {
         courierCachedSnapshotVisible = true;
@@ -4908,6 +4863,7 @@
   }
 
   async function openOrderPaymentDialog(order) {
+    if (!workspaceAccessIsCurrent() || hasPendingCourierPayment(order)) return;
     if (!getActiveOrderCapabilities().payment) return;
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
@@ -5635,6 +5591,7 @@
   }
 
   function setInfo(order) {
+    if (!workspaceAccessIsCurrent()) return;
     syncOrderPaymentFooter(order);
     if (sharedOrderInfoRenderers.length) {
       hideClientSurfaces();
@@ -6389,7 +6346,7 @@
     const isCash = paymentCode.includes("cash");
     const isFullyRefunded = isOrderFullyRefunded(order);
     const paymentIconHtml = renderOrderPaymentIcon(order);
-    const paymentStatusText = order.paymentSummary && window.SharedOrderPayment
+    const paymentStatusText = hasPendingCourierPayment(order) ? 'В очереди' : order.paymentSummary && window.SharedOrderPayment
       ? window.SharedOrderPayment.stateTitle(order.paymentSummary)
       : isFullyRefunded ? "Возврат" : (isPaidOrder(order) ? "Оплачено" : "Не оплачено");
     const paymentStateClass = isFullyRefunded
@@ -6596,6 +6553,7 @@
   }
 
   function renderOrders() {
+    if (!workspaceAccessIsCurrent()) return;
     if (!elOrdersList) return;
     elOrdersList.innerHTML = "";
 
@@ -7122,6 +7080,7 @@
   }
 
   function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false, persistList = true } = {}) {
+    if (!workspaceAccessIsCurrent()) return;
     if (!order || !order.id) return;
     const detailContext = orderDetailsContext(order.id);
     orderDetailsMutationGeneration.set(
@@ -7378,6 +7337,7 @@
 
   function isCurrentCourierSyncContext(context) {
     return Boolean(context?.namespace
+      && context.ordersCache?.isCurrent()
       && context.generation === courierSyncGeneration
       && ordersPersistentScope()?.namespace === context.ordersCache?.namespace
       && (!isCourierWorkspace || courierOutboxScope()?.namespace === context.namespace));
@@ -7555,6 +7515,7 @@
   }
 
   function startOrdersPolling() {
+    if (!workspaceAccessIsCurrent()) return;
     if (ordersLongPollActive) return;
     if (isCourierWorkspace && courierOfflineState.reconciling) return;
     if (document.visibilityState && document.visibilityState !== "visible") return;
@@ -7623,6 +7584,7 @@
   }
 
   async function resumeOrdersRealtime() {
+    if (!workspaceAccessIsCurrent()) return;
     if (document.visibilityState && document.visibilityState !== "visible") return;
     if (isCourierWorkspace) {
       await reconcileCourierAfterReconnect({ reason: "visible" });
@@ -8870,12 +8832,15 @@
 
   async function init() {
     try {
+      const restoreAccess = localRepository.capture();
       const cachedBootstrap = readOrdersBootstrapCache();
       await hydrateCourierOfflineStateFromStorage();
+      if (!restoreAccess.isCurrent()) return;
       hydrateOrdersFromCache(cachedBootstrap);
       resetDateStateToToday();
       ensureDateStateInitialized();
       const persistentOrders = await readPersistentOrdersCache();
+      if (!restoreAccess.isCurrent()) return;
       restorePersistentOrdersSnapshot(persistentOrders);
       applyCourierShadowOrdersToState();
       ordersInitialRestoreComplete = true;
@@ -9009,7 +8974,8 @@
       setCourierOnlineState(false);
     });
 
-    window.addEventListener("online", () => {
+    window.addEventListener("online", async () => {
+      if (!await localRepository.ready() || !workspaceAccessIsCurrent()) return;
       courierOfflineState.refreshError = "";
       setCourierOnlineState(true);
       reconcileCourierAfterReconnect({ reason: "online" }).catch(console.error);
@@ -9020,7 +8986,8 @@
       stopOrdersPolling();
       refreshCourierConnectionBanner();
     });
-    window.addEventListener("online", () => {
+    window.addEventListener("online", async () => {
+      if (!await localRepository.ready() || !workspaceAccessIsCurrent()) return;
       ordersRefreshFailed = false;
       refreshCourierConnectionBanner();
       void resumeOrdersRealtime();
@@ -9029,6 +8996,25 @@
 
   window.addEventListener("beforeunload", () => {
     stopOrdersPolling();
+  });
+  window.addEventListener('admin:local-context-changed', event => {
+    if (event.detail?.state === 'active') return;
+    stopOrdersPolling();
+    orderDetailsRevalidation.clear();
+    authoritativeFullOrderRuntimeKeys.clear();
+    if (event.detail?.state === 'revoked') {
+      state.orders = [];
+      state.clientsCache.clear();
+      tabsState.tabs = [];
+      tabsState.activeKey = null;
+    }
+  });
+  window.addEventListener('pageshow', async event => {
+    if (!event.persisted) return;
+    if (window.AdminAccessContextPromise) await window.AdminAccessContextPromise;
+    if (ordersInitialRestoreComplete && workspaceAccessIsCurrent() && navigator.onLine !== false && !ordersLongPollActive) {
+      void resumeOrdersRealtime();
+    }
   });
   // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
@@ -9059,13 +9045,16 @@
     setOrdersCheckoutLayoutEnabled(false);
     closeSheet();
     let restoredStoreQueryKey = "";
+    const restoreAccess = localRepository.capture();
     hydrateCourierOfflineStateFromStorage()
       .then(async () => {
+        if (!restoreAccess.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
         const cachedBootstrap = readOrdersBootstrapCache();
         hydrateOrdersFromCache(cachedBootstrap);
         resetDateStateToToday();
         ensureDateStateInitialized();
         const persistentOrders = await readPersistentOrdersCache();
+        if (!restoreAccess.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
         restorePersistentOrdersSnapshot(persistentOrders);
         restoredStoreQueryKey = currentOrdersQueryKey();
         applyCourierShadowOrdersToState();
