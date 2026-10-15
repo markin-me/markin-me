@@ -20,6 +20,9 @@
     html[data-local-access="denied"] #adminLocalAccessChecking,
     html[data-local-access="unavailable"] #adminLocalAccessChecking { display: none; }
   </style>
+  <% if (typeof neutralShell !== 'undefined' && neutralShell === true) { %>
+    <script>window.__ADMIN_NEUTRAL_SHELL__ = true;</script>
+  <% } %>
   <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-persistent-cache.js?v=20261014-local-core-v1') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-local-repository.js?v=20261014-local-core-v1') %>"></script>
@@ -291,13 +294,25 @@
   data-app-version="<%= appVersion || '' %>"
 >
   <main id="adminLocalAccessState" role="status" aria-live="polite">
+    <% if (typeof neutralShell !== 'undefined' && neutralShell === true) { %>
+      <p id="adminLocalAccessChecking">Личные данные скрыты до подтверждения локального доступа.</p>
+    <% } else { %>
     <p id="adminLocalAccessChecking">Загрузка…</p>
+    <% } %>
     <div id="adminLocalAccessFailure">
       <h1>Доступ к приложению</h1>
       <p id="adminLocalAccessMessage"></p>
       <button type="button" onclick="window.location.reload()">Повторить проверку</button>
       <a href="/login">Войти</a>
     </div>
+    <% if (typeof neutralShell !== 'undefined' && neutralShell === true) { %>
+      <p>Нейтральная оболочка. Без подтверждённого контекста личные данные недоступны.</p>
+      <nav aria-label="Офлайн-навигация">
+        <% Object.entries(adminDashboardTitles).forEach(function ([route, title]) { %>
+          <p><a href="<%= route %>"><%= title %></a></p>
+        <% }) %>
+      </nav>
+    <% } %>
   </main>
   <%- include('../partials/header', { appActivePage: appActivePage, adminNavItems: adminNavItems }) %>
 
@@ -350,6 +365,7 @@
   <!-- ✅ Модалка -->
   <script src="<%= assetUrl('/static/js/appModal.js') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-benefits-modal.js') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-offline-navigation.js') %>"></script>
   <script>
     (function () {
       if ('serviceWorker' in navigator) {
@@ -934,7 +950,7 @@
         // Проверка авторизации для страниц dashboard
         if (window.location.pathname.startsWith('/dashboard/')) {
           var token = localStorage.getItem('authToken');
-          if (!token) {
+          if (!token && !window.__ADMIN_NEUTRAL_SHELL__) {
             window.location.href = '/login';
           }
         }

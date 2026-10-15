@@ -137,6 +137,10 @@
 
           <div class="user-menu-actions">
             <% if (isAdminHeader) { %>
+              <div class="user-menu-section">
+                <button type="button" class="user-menu-store-btn" id="adminOfflinePrepare" disabled>Подготовить офлайн-навигацию</button>
+                <p id="adminOfflineStatus" role="status" aria-live="polite">Офлайн-навигация не проверена.</p>
+              </div>
               <a class="user-menu-btn hidden" id="userMenuChangePassword" href="/login?change-password=1">
                 <i class="fas fa-key" aria-hidden="true"></i>
                 <span>Сменить пароль</span>

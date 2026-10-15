@@ -792,9 +792,7 @@ function normalizeManifestTitle(rawTitle, fallback = '') {
   return String(fallback || '').replace(/\s+/g, ' ').trim();
 }
 
-function getAdminManifestPageTitle(startPath, fallbackTitle = '') {
-  const pathname = normalizeManifestStartPath(startPath, { appType: 'admin' });
-  const defaults = {
+const adminDashboardTitles = {
     '/dashboard/cash': 'Касса',
     '/dashboard/products': 'Товары',
     '/dashboard/orders': 'Заказы',
@@ -804,8 +802,12 @@ function getAdminManifestPageTitle(startPath, fallbackTitle = '') {
     '/dashboard/chat': 'Чаты',
     '/dashboard/team': 'Команда',
     '/dashboard/settings': 'Настройки',
-  };
-  return normalizeManifestTitle(fallbackTitle, defaults[pathname] || 'Админка');
+};
+app.locals.adminDashboardTitles = adminDashboardTitles;
+
+function getAdminManifestPageTitle(startPath, fallbackTitle = '') {
+  const pathname = normalizeManifestStartPath(startPath, { appType: 'admin' });
+  return normalizeManifestTitle(fallbackTitle, adminDashboardTitles[pathname] || 'Админка');
 }
 
 function buildAdminManifestId(tenantId, startPath) {
@@ -1313,11 +1315,13 @@ app.get('/manifest.json', async (req, res) => {
 
 // Service Worker для PWA (Android / установка на домашний экран)
 const serviceWorkerPrecacheUrls = [
-  app.locals.assetUrl('/static/css/style.css?v=20260925-stock-inline-v2'),
+  app.locals.assetUrl('/static/css/style.css?v=20261014-sidebar-profile-role-v1'),
   app.locals.assetUrl('/static/js/auth.js'),
   app.locals.assetUrl('/static/js/current-time.js'),
   app.locals.assetUrl('/static/js/theme.js'),
   app.locals.assetUrl('/static/js/sidebar.js'),
+  app.locals.assetUrl('/static/js/admin-presence.js'),
+  app.locals.assetUrl('/static/js/admin-offline-navigation.js'),
   app.locals.assetUrl('/static/js/admin-mobile-nav.js?v=20260902-mobile-chat-pages-v2'),
   app.locals.assetUrl('/static/js/chat-sidebar-badge.js?v=20260410a'),
   app.locals.assetUrl('/static/js/appModal.js'),
@@ -1342,20 +1346,27 @@ var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
 var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
 var COURIER_SHELL_PATH = '/dashboard/courier-screen';
 var NEUTRAL_SHELL_PATH = '/pwa/neutral/courier';
+var NAVIGATION_SHELL_PATH = '/pwa/neutral/navigation';
+var DASHBOARD_PATHS = ${JSON.stringify(Object.keys(adminDashboardTitles))};
+var navigationPreparation = null;
+
+function normalizeDashboardPath(pathname) {
+  return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+}
 
 function shouldCacheStaticResponse(response) {
   return !!response && response.ok && !response.redirected
     && String(response.headers.get('content-type') || '').toLowerCase().indexOf('text/html') === -1;
 }
 
-function shouldCacheCourierShell(response) {
+function shouldCacheNeutralShell(response, pathname) {
   if (!response || response.status !== 200 || response.redirected || response.type !== 'basic') return false;
   var contentType = String(response.headers.get('content-type') || '').toLowerCase();
   if (contentType.indexOf('text/html') === -1) return false;
   if (response.headers.get('X-PWA-Neutral-Shell') !== '1') return false;
   try {
     var responseUrl = new URL(response.url);
-    return responseUrl.origin === self.location.origin && responseUrl.pathname === NEUTRAL_SHELL_PATH;
+    return responseUrl.origin === self.location.origin && responseUrl.pathname === pathname;
   } catch (err) {
     return false;
   }
@@ -1411,25 +1422,76 @@ async function handleChatImageFetch(request) {
   return response;
 }
 
+async function savePreparedResource(cache, url, options, validate) {
+  var abort = new AbortController();
+  var timeout = setTimeout(function () { abort.abort(); }, 15000);
+  try {
+    var response = await fetch(url, Object.assign({}, options, { signal: abort.signal }));
+    if (!validate(response)) throw new Error('OFFLINE_RESOURCE_REJECTED');
+    await cache.put(url, response);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function cacheStaticAssets() {
   var cache = await caches.open(STATIC_CACHE);
-  await Promise.all(PRECACHE_URLS.map(function (url) {
-    return cache.add(url);
+  await Promise.all(PRECACHE_URLS.map(async function (url) {
+    if (shouldCacheStaticResponse(await cache.match(url))) return;
+    await savePreparedResource(cache, url, { credentials: 'omit', cache: 'reload' }, shouldCacheStaticResponse);
   }));
+}
+
+async function warmNeutralShell(pathname) {
+  var cache = await caches.open(SHELL_CACHE);
+  var cached = await cache.match(pathname);
+  if (cached && cached.ok && cached.headers.get('X-PWA-Neutral-Shell') === '1') return;
+  await savePreparedResource(cache, pathname, { credentials: 'omit', cache: 'no-store' }, function (response) {
+    return shouldCacheNeutralShell(response, pathname);
+  });
 }
 
 async function warmCourierShell() {
   try {
-    var response = await fetch(NEUTRAL_SHELL_PATH, { credentials: 'omit', cache: 'no-store' });
-    if (shouldCacheCourierShell(response)) {
-      var cache = await caches.open(SHELL_CACHE);
-      await cache.put(NEUTRAL_SHELL_PATH, response.clone());
-    }
+    await warmNeutralShell(NEUTRAL_SHELL_PATH);
   } catch (err) {
     return null;
   }
   return null;
 }
+
+async function prepareOfflineNavigation() {
+  if (navigationPreparation) return navigationPreparation;
+  navigationPreparation = (async function () {
+    await Promise.all([cacheStaticAssets(), warmNeutralShell(NEUTRAL_SHELL_PATH), warmNeutralShell(NAVIGATION_SHELL_PATH)]);
+    var resources = await caches.open(STATIC_CACHE);
+    var shells = await caches.open(SHELL_CACHE);
+    var saved = await Promise.all(PRECACHE_URLS.map(async function (url) {
+      return shouldCacheStaticResponse(await resources.match(url));
+    }));
+    var courier = await shells.match(NEUTRAL_SHELL_PATH);
+    var navigation = await shells.match(NAVIGATION_SHELL_PATH);
+    if (saved.some(function (ok) { return !ok; }) || courier?.headers.get('X-PWA-Neutral-Shell') !== '1'
+        || navigation?.headers.get('X-PWA-Neutral-Shell') !== '1') throw new Error('OFFLINE_RESOURCES_INCOMPLETE');
+  })();
+  try { await navigationPreparation; } finally { navigationPreparation = null; }
+}
+
+self.addEventListener('message', function (event) {
+  if (event.data?.type !== 'PREPARE_OFFLINE_NAVIGATION' || !event.ports?.[0]) return;
+  var port = event.ports[0];
+  event.waitUntil((async function () {
+    try {
+      var source = new URL(event.source.url);
+      if (source.origin !== self.location.origin || DASHBOARD_PATHS.indexOf(normalizeDashboardPath(source.pathname)) === -1) throw new Error('INVALID_NAVIGATION_CLIENT');
+      // These are public resources only, never a proof of identity or local access.
+      await prepareOfflineNavigation();
+      port.postMessage({ ok: true, version: SW_VERSION });
+    } catch (err) {
+      port.postMessage({ ok: false, version: SW_VERSION, error: 'OFFLINE_PREPARATION_FAILED' });
+    }
+  })());
+});
 
 async function cacheFirst(request) {
   var cache = await caches.open(STATIC_CACHE);
@@ -1449,12 +1511,21 @@ async function privateNavigation(request, url) {
     // Never read/write personalized HTML in Cache Storage or the HTTP cache.
     return await fetch(request, { cache: 'no-store' });
   } catch (err) {
-    if (url.pathname === COURIER_SHELL_PATH) {
+    try {
       var cache = await caches.open(SHELL_CACHE);
-      var shell = await cache.match(NEUTRAL_SHELL_PATH);
-      if (shell && shell.headers.get('X-PWA-Neutral-Shell') === '1') return shell;
+      var pathname = normalizeDashboardPath(url.pathname);
+      if (pathname === COURIER_SHELL_PATH) {
+        var shell = await cache.match(NEUTRAL_SHELL_PATH);
+        if (shell && shell.headers.get('X-PWA-Neutral-Shell') === '1') return shell;
+      }
+      if (DASHBOARD_PATHS.indexOf(pathname) !== -1) {
+        var navigation = await cache.match(NAVIGATION_SHELL_PATH);
+        if (navigation && navigation.headers.get('X-PWA-Neutral-Shell') === '1') return navigation;
+      }
+    } catch (cacheError) {
+      console.warn('OFFLINE_NAVIGATION_CACHE_UNAVAILABLE');
     }
-    return new Response('<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Нет соединения</title><main><h1>Нет соединения</h1><p>Подключитесь к сети, чтобы проверить доступ. Личные данные не отображаются.</p><a href="/login">Войти</a></main></html>',
+    return new Response('<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Нет соединения</title><main><h1>Нет соединения</h1><p>Ресурсы офлайн-навигации не подготовлены или недоступны. Подключитесь к сети, чтобы проверить доступ. Личные данные не отображаются.</p><button onclick="location.reload()">Повторить</button><a href="/login">Войти</a></main></html>',
       { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
   }
 }
@@ -1463,7 +1534,8 @@ self.addEventListener('install', function (event) {
   event.waitUntil(
     Promise.all([
       cacheStaticAssets(),
-      warmCourierShell().catch(function () {})
+      warmCourierShell().catch(function () {}),
+      warmNeutralShell(NAVIGATION_SHELL_PATH).catch(function () {})
     ]).then(function () {
       return self.skipWaiting();
     })
@@ -1727,7 +1799,14 @@ app.get('/sw.js', (req, res) => {
 app.get('/pwa/neutral/courier', (req, res) => {
   res.setHeader('X-PWA-Neutral-Shell', '1');
   res.setHeader('Cache-Control', 'no-store');
-  res.render('pages/courier-screen', { tenant: null, currentPath: '/dashboard/courier-screen' });
+  res.render('pages/courier-screen', { tenant: null, currentPath: '/dashboard/courier-screen', neutralShell: true });
+});
+
+// A public navigation document, not a cached authenticated dashboard or session.
+app.get('/pwa/neutral/navigation', (req, res) => {
+  res.setHeader('X-PWA-Neutral-Shell', '1');
+  res.setHeader('Cache-Control', 'no-store');
+  res.render('pages/offline-navigation');
 });
 
 app.get('/.well-known/tenant-domain-check', async (req, res) => {

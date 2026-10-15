@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Приложение — офлайн</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f6f7f9; color: #243042; font: 16px/1.5 system-ui, sans-serif; }
+    .shell { display: flex; gap: 16px; max-width: 1100px; margin: auto; padding: 16px; min-height: 100vh; }
+    nav, main { background: white; border: 1px solid #dce1e8; border-radius: 14px; padding: 20px; }
+    nav { flex: 0 0 220px; }
+    main { flex: 1; min-width: 0; }
+    nav a { display: block; padding: 9px 12px; border-radius: 8px; color: inherit; text-decoration: none; }
+    nav a[aria-current="page"] { background: #fff0e5; color: #a54400; }
+    h1 { margin-top: 0; }
+    button, .login { display: inline-block; border: 1px solid #dce1e8; border-radius: 8px; padding: 10px 14px; background: white; color: inherit; font: inherit; cursor: pointer; }
+    @media (max-width: 600px) { .shell { flex-direction: column; } nav { flex-basis: auto; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav aria-label="Разделы приложения">
+      <% Object.entries(adminDashboardTitles).forEach(function ([route, title]) { %>
+        <a href="<%= route %>"><%= title %></a>
+      <% }) %>
+    </nav>
+    <main>
+      <h1 id="sectionTitle">Приложение</h1>
+      <p id="connectionState" role="status">Нет соединения с сервером. Открыта нейтральная офлайн-оболочка.</p>
+      <p>Можно переходить между разделами, перезагружать страницу и открывать ссылки в новой вкладке.</p>
+      <p>В этой оболочке нет личных данных и рабочих операций. Открытие раздела не подтверждает авторизацию и не означает, что его данные сохранены локально.</p>
+      <button type="button" id="retryNavigation">Открыть с сервера</button>
+      <a class="login" href="/login">Войти онлайн</a>
+      <noscript><p>Навигация по ссылкам доступна без JavaScript.</p></noscript>
+    </main>
+  </div>
+  <script>
+    (function () {
+      var links = document.querySelectorAll('nav a');
+      Array.prototype.forEach.call(links, function (link) {
+        if (new URL(link.href).pathname !== window.location.pathname.replace(/\/$/, '')) return;
+        link.setAttribute('aria-current', 'page');
+        document.getElementById('sectionTitle').textContent = link.textContent;
+        document.title = link.textContent + ' — офлайн';
+      });
+      document.getElementById('retryNavigation').addEventListener('click', function () { window.location.reload(); });
+      window.addEventListener('online', function () {
+        document.getElementById('connectionState').textContent = 'Сеть появилась. Нажмите «Открыть с сервера» для проверки доступа и загрузки раздела.';
+      });
+      window.addEventListener('offline', function () {
+        document.getElementById('connectionState').textContent = 'Нет соединения с сервером. Открыта нейтральная офлайн-оболочка.';
+      });
+    })();
+  </script>
+</body>
+</html>

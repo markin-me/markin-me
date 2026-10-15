@@ -230,7 +230,9 @@ function checkAuthOnPageLoad() {
   
   const isProtected = protectedPaths.some(path => currentPath.startsWith(path));
   
-  if (isProtected && !isAuthenticated()) {
+  // A public, data-free courier shell must retain navigation even without a local session.
+  // Its private interface remains gated by AdminLocalRepository, never by this flag.
+  if (isProtected && !isAuthenticated() && !window.__ADMIN_NEUTRAL_SHELL__) {
     window.location.href = '/login';
   }
 }

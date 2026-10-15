@@ -7,11 +7,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
 const orders = fs.readFileSync(path.join(__dirname, '../static/js/orders.js'), 'utf8');
+const dashboardPaths = ['/dashboard/cash', '/dashboard/products', '/dashboard/orders', '/dashboard/courier-screen',
+  '/dashboard/new-order', '/dashboard/clients', '/dashboard/chat', '/dashboard/team', '/dashboard/settings'];
 const marker = 'const serviceWorkerScript = `';
 const template = server.slice(server.indexOf(marker) + marker.length, server.indexOf("`;\napp.get('/sw.js'") > 0
   ? server.indexOf("`;\napp.get('/sw.js'") : server.indexOf("`;\r\napp.get('/sw.js'"));
 const worker = vm.runInNewContext('`' + template
   .replace('${JSON.stringify(SERVICE_WORKER_VERSION)}', '"test-v2"')
+  .replace('${JSON.stringify(Object.keys(adminDashboardTitles))}', JSON.stringify(dashboardPaths))
   .replace('${JSON.stringify(serviceWorkerPrecacheUrls)}', '["https://app.test/static/app.js"]') + '`');
 
 function response(body, url, headers = {}) {
@@ -30,7 +33,10 @@ function environment() {
       const entries = records.get(name);
       const key = request => typeof request === 'string' ? request : request.url;
       return { async match(request) { return entries.get(key(request))?.clone(); },
-        async put(request, value) { entries.set(key(request), value); },
+        async put(request, value) {
+          if (env.quotaExceeded) throw Object.assign(new Error('Storage full'), { name: 'QuotaExceededError' });
+          entries.set(key(request), value);
+        },
         async keys() { return [...entries.keys()]; }, async delete(request) { return entries.delete(key(request)); },
         async add(url) { entries.set(url, await env.fetch(url)); } };
     },
@@ -43,10 +49,14 @@ function environment() {
       return response('<html data-local-access="pending">Neutral shell</html>', url,
         { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1' });
     }
+    if (new URL(url).pathname === '/pwa/neutral/navigation') {
+      return response('<html>Public navigation, no private data</html>', url,
+        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1' });
+    }
     if (new URL(url).pathname.startsWith('/static/')) return response('static', url, { 'Content-Type': 'application/javascript' });
     return response('<html>personalized online</html>', url, { 'Content-Type': 'text/html' });
   };
-  const sandbox = vm.createContext({ URL, Response, Promise, caches, fetch: (...args) => env.fetch(...args),
+  const sandbox = vm.createContext({ URL, Response, Promise, AbortController, setTimeout, clearTimeout, caches, fetch: (...args) => env.fetch(...args),
     self: { location: { origin: 'https://app.test' }, addEventListener: (type, handler) => listeners.set(type, handler),
       skipWaiting: async () => {}, clients: { claim: async () => {}, matchAll: async () => env.clients } } });
   vm.runInContext(worker, sandbox);
@@ -55,6 +65,13 @@ function environment() {
     let result; listeners.get('fetch')({ request: { url: 'https://app.test' + pathname, method: 'GET', mode },
       respondWith: value => { result = value; } });
     return result === undefined ? null : await result;
+  };
+  env.prepare = async (source = '/dashboard/orders') => {
+    let pending, result;
+    listeners.get('message')({ data: { type: 'PREPARE_OFFLINE_NAVIGATION' }, source: { url: 'https://app.test' + source },
+      ports: [{ postMessage: value => { result = value; } }], waitUntil: value => { pending = value; } });
+    await pending;
+    return result;
   };
   return env;
 }
@@ -70,7 +87,7 @@ test('old personalized pages are ignored for all private navigation URLs', async
   env.records.set('admin-pages-old', new Map([['https://app.test/dashboard/orders', new Response('OWNER SECRET')]]));
   env.failNetwork = true;
   for (const url of ['/dashboard/orders', '/dashboard/orders?role=manager', '/dashboard/team', '/login']) {
-    const result = await env.request(url); assert.equal(result.status, 503);
+    const result = await env.request(url); assert.equal(result.status, url === '/login' ? 503 : 200);
     assert.equal((await result.text()).includes('OWNER SECRET'), false);
   }
 });
@@ -81,6 +98,64 @@ test('courier offline navigation uses only the marked neutral shell', async () =
   const result = await env.request('/dashboard/courier-screen?view=another');
   assert.equal(result.headers.get('X-PWA-Neutral-Shell'), '1');
   assert.match(await result.text(), /data-local-access="pending"/);
+});
+
+test('all nine prepared routes can open offline, including reloads and query variants', async () => {
+  const env = environment(); await env.lifecycle('install');
+  assert.equal((await env.prepare()).ok, true);
+  env.failNetwork = true;
+  for (const route of dashboardPaths) {
+    for (const url of [route, route, route + '/', route + '?v=old&view=another']) {
+      const result = await env.request(url);
+      assert.equal(result.status, 200, url);
+      assert.equal(result.headers.get('X-PWA-Neutral-Shell'), '1');
+      assert.doesNotMatch(await result.text(), /personalized online|OWNER SECRET/);
+    }
+  }
+});
+
+test('preparation is single-flight and repeated checks reuse the saved public resources', async () => {
+  const env = environment();
+  const results = await Promise.all([env.prepare(), env.prepare()]);
+  assert.equal(results.every(result => result.ok === true), true);
+  assert.equal(env.requests.filter(item => item.url.endsWith('/pwa/neutral/navigation')).length, 1);
+  const requests = env.requests.length;
+  env.failNetwork = true;
+  assert.equal((await env.prepare()).ok, true);
+  assert.equal(env.requests.length, requests);
+});
+
+test('missing resources and quota errors never report ready or replace online HTML', async () => {
+  const env = environment(); env.quotaExceeded = true;
+  assert.equal((await env.prepare()).ok, false);
+  assert.match(await (await env.request('/dashboard/team')).text(), /personalized online/);
+  env.failNetwork = true;
+  const unavailable = await env.request('/dashboard/team');
+  assert.equal(unavailable.status, 503);
+  assert.match(await unavailable.text(), /не подготовлены или недоступны/);
+});
+
+test('after storage is cleared the worker returns an explicit safe fallback, not old private HTML', async () => {
+  const env = environment(); await env.lifecycle('install');
+  env.records.clear(); env.failNetwork = true;
+  const result = await env.request('/dashboard/products');
+  assert.equal(result.status, 503);
+  assert.match(await result.text(), /не подготовлены или недоступны/);
+});
+
+test('preparation checks client route and keeps the public shell free of session restoration', async () => {
+  const env = environment();
+  assert.equal((await env.prepare('/login')).ok, false);
+  assert.equal(env.requests.length, 0);
+  const neutral = fs.readFileSync(path.join(__dirname, '../views/pages/offline-navigation.ejs'), 'utf8');
+  assert.doesNotMatch(neutral, /localStorage|sessionStorage|indexedDB|authToken|fetch\(|AdminLocalRepository|serverAccessContext/);
+  assert.match(neutral, /Object\.entries\(adminDashboardTitles\)/);
+  assert.match(neutral, /<a href="<%= route %>">/);
+  const prepare = fs.readFileSync(path.join(__dirname, '../static/js/admin-offline-navigation.js'), 'utf8');
+  assert.match(prepare, /if \(pending \|\| !core\.isActive\(\)\) return/);
+  assert.match(prepare, /ticket === attempt && access\.isCurrent\(\)/);
+  assert.match(prepare, /event\.data\.version !== window\.__APP_SERVICE_WORKER_VERSION__/);
+  assert.match(prepare, /admin:local-context-changed/);
 });
 
 test('activation removes unsafe HTML caches and preserves unrelated image caches', async () => {
@@ -177,5 +252,7 @@ test('the neutral shell remains gated when there is no admissible local confirma
   assert.match(layout, /window\.AdminServerContextPromise = confirmServerAccessContext/);
   assert.match(layout, /window\.AdminAccessContextPromise = loadAccessContext\(true\)/);
   assert.match(layout, /repository\.isActive\(\)/);
-  assert.match(server, /res\.render\('pages\/courier-screen', \{ tenant: null, currentPath: '\/dashboard\/courier-screen' \}\)/);
+  assert.match(server, /res\.render\('pages\/courier-screen', \{ tenant: null, currentPath: '\/dashboard\/courier-screen', neutralShell: true \}\)/);
+  assert.match(layout, /if \(typeof neutralShell !== 'undefined' && neutralShell === true\)/);
+  assert.match(layout, /<nav aria-label="Офлайн-навигация">/);
 });
