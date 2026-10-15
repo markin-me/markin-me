@@ -23,6 +23,9 @@
   <% if (typeof neutralShell !== 'undefined' && neutralShell === true) { %>
     <script>window.__ADMIN_NEUTRAL_SHELL__ = true;</script>
   <% } %>
+  <% if (typeof productsShell !== 'undefined' && productsShell === true) { %>
+    <script>window.__ADMIN_PRODUCTS_SHELL__ = true;</script>
+  <% } %>
   <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-persistent-cache.js?v=20261014-local-core-v1') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-local-repository.js?v=20261014-local-core-v1') %>"></script>
@@ -223,7 +226,7 @@
   </script>
 
   <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20261014-sidebar-profile-role-v1') %>" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" <% if (typeof productsShell !== 'undefined' && productsShell === true) { %>media="print" onload="this.media='all'"<% } %> />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
       <link rel="stylesheet" href="<%= assetUrl(src) %>" />
@@ -712,6 +715,35 @@
           window.showConfirmedAdminInterface();
           return context;
         }
+        async function restoreAccessContext(requestToken, ticket) {
+          var repository = window.AdminLocalRepository;
+          var confirmation = await repository.restore(requestToken, ticket);
+          if (!confirmation || !repository.isActive()) return null;
+          var restored = Object.assign({}, confirmation.metadata, {
+            ok: true, local_context: confirmation.local_context, offline: true
+          });
+          applyAllowedStoreContext(restored);
+          if (window.__ADMIN_PRODUCTS_SHELL__) {
+            var grants = Array.isArray(restored.permissions) ? restored.permissions : [];
+            var fullAccess = grants.includes('*');
+            var pageAccess = fullAccess || grants.some(function (grant) { return grant.key === 'products.access'; });
+            var read = grants.find(function (grant) { return grant.key === 'products.catalog.read'; });
+            var storeId = Number(localStorage.getItem('activeStoreId') || 0);
+            var readable = fullAccess || read && (read.access_rule === 'all' || read.access_rule === 'stores'
+              && (restored.stores || []).some(function (store) { return Number(store.id) === storeId; }));
+            if (!pageAccess || !readable || !(storeId > 0)) {
+              document.documentElement.setAttribute('data-local-access', 'denied');
+              document.getElementById('adminLocalAccessMessage').textContent = 'Нет подтверждённого доступа к сохранённым товарам выбранного филиала.';
+              return null;
+            }
+          }
+          window.AdminAccessContext = restored;
+          applyNavigationPermissions(restored.permissions || []);
+          renderRoleOptions(restored);
+          window.dispatchEvent(new CustomEvent('admin:access-context', { detail: restored }));
+          window.showConfirmedAdminInterface();
+          return restored;
+        }
         function loadAccessContext(useServerBootstrap) {
           if (useServerBootstrap === true && window.AdminServerContextPromise) {
             return window.AdminServerContextPromise.then(function (context) {
@@ -728,6 +760,14 @@
           var responseStatus = null;
           var promise = (async function () {
           try {
+            // Only SW's failed dashboard navigation uses this public document at the
+            // dashboard URL. Restore the existing tab proof, never infer access from HTML.
+            if (useServerBootstrap === true && window.__ADMIN_PRODUCTS_SHELL__
+                && window.location.pathname.replace(/\/$/, '') === '/dashboard/products') {
+              var local = await restoreAccessContext(requestToken, ticket);
+              if (!local && !repository.isActive()) repository.reset({ forget: true, broadcast: false, reason: 'offline-unavailable' });
+              return local;
+            }
             var response = await authFetch('/api/auth/me', { cache: 'no-store' });
             responseReceived = true;
             responseStatus = response.status;
@@ -756,19 +796,8 @@
             if (requestAccess && !requestAccess.isCurrent()) return null;
             if (repository && !responseReceived && error instanceof TypeError && localStorage.getItem('authToken') === requestToken) {
               try {
-                var confirmation = await repository.restore(requestToken, ticket);
-                if (confirmation && repository.isActive()) {
-                  var restored = Object.assign({}, confirmation.metadata, {
-                    ok: true, local_context: confirmation.local_context, offline: true
-                  });
-                  window.AdminAccessContext = restored;
-                  applyNavigationPermissions(restored.permissions || []);
-                  renderRoleOptions(restored);
-                  applyAllowedStoreContext(restored);
-                  window.dispatchEvent(new CustomEvent('admin:access-context', { detail: restored }));
-                  window.showConfirmedAdminInterface();
-                  return restored;
-                }
+                var restored = await restoreAccessContext(requestToken, ticket);
+                if (restored) return restored;
               } catch (restoreError) { console.error('Local context restore failed:', restoreError); }
             }
             if (repository && localStorage.getItem('authToken') === requestToken && error.message !== 'LOCAL_SCOPE_CHANGED') {

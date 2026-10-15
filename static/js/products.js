@@ -101,7 +101,7 @@
   }
 
   function connectProductsStockSocket() {
-    if (!catalogPageContext?.isCurrent()) return;
+    if (!catalogPageContext?.isCurrent() || productsOfflineRead()) return;
     const access = window.AdminLocalRepository.capture();
     const storeId = Number(localStorage.getItem("activeStoreId") || localStorage.getItem("store_id") || PRODUCT_CACHE_SCOPE.storeId || 1);
     if (typeof WebSocket !== "function" || !(storeId > 0)) return;
@@ -1091,7 +1091,7 @@
     const id = Number(categoryId || 0);
     const isAll = !(id > 0) || id === Number(state.allCategoryId || 0);
     const included = isAll ? null : new Set(window.CatalogRepository.getDescendantCategoryIds(id));
-    return window.CatalogRepository.getAllProducts()
+    let rows = window.CatalogRepository.getAllProducts()
       .filter((product) => !included || getCatalogProductCategoryIds(product).some((categoryId) => included.has(categoryId)))
       .sort((left, right) => {
         const leftSort = Number(left?.link_sort_order);
@@ -1100,14 +1100,23 @@
         const safeRight = Number.isFinite(rightSort) ? rightSort : Number.MAX_SAFE_INTEGER;
         return (safeLeft - safeRight) || (Number(left?.id || 0) - Number(right?.id || 0));
       });
+    if (!rows.length && productsLocalListOnly()) {
+      const saved = new Map();
+      state.productsByCategoryCache.forEach((entry, key) => {
+        if (!String(key).startsWith(`${id}::`)) return;
+        (entry?.products || []).forEach(product => saved.set(Number(product.id), product));
+      });
+      rows = [...saved.values()];
+    }
+    return rows;
   }
 
   function applyCatalogLocalWindow(categoryId = state.currentCategoryId, options = {}) {
     if (!window.CatalogRepository) return false;
     if (options.applyCategories !== false) {
       const localCategories = window.CatalogRepository.getAllCategories();
-      if (localCategories.length) {
-        state.categories = localCategories;
+      if (localCategories.length) state.categories = localCategories;
+      if (state.categories.length) {
         state.allCategoryId = (state.categories.find((category) => category.code === "all") || {}).id || null;
         if (!state.currentCategoryId) {
           state.currentCategoryId = state.allCategoryId || state.categories[0]?.id || null;
@@ -1115,18 +1124,20 @@
       }
     }
     const id = Number(categoryId || state.currentCategoryId || 0);
-    const localRows = getCatalogProductsForCategory(id);
-    if (!localRows.length) {
+    let localRows = getCatalogProductsForCategory(id);
+    const offline = productsLocalListOnly();
+    if (offline) localRows = filterProductsCollection(localRows);
+    if (!localRows.length && !offline) {
       renderProductsCatalogStatus();
       return false;
     }
     state.products = localRows.slice(0, PRODUCTS_PAGE_LIMIT);
-    state.productsOffset = 0;
+    state.productsOffset = offline ? state.products.length : 0;
     const coverage = getProductsCatalogCoverage(id);
-    state.productsTotal = coverage.total != null && Number.isFinite(Number(coverage.total))
+    state.productsTotal = offline ? localRows.length : coverage.total != null && Number.isFinite(Number(coverage.total))
       ? Number(coverage.total)
       : localRows.length;
-    state.productsHasMore = true;
+    state.productsHasMore = offline ? state.productsOffset < localRows.length : true;
     state.productsLoading = false;
     state.catalogBootstrapVisible = true;
     renderProductsList();
@@ -1465,7 +1476,10 @@
 
   function filterProductsCollection(items) {
     const filters = normalizeProductsToolbarFilters("products", state.productsToolbar?.products?.filters);
+    const localQuery = productsLocalListOnly()
+      ? normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || '').toLowerCase() : '';
     return (Array.isArray(items) ? items : []).filter((product) => {
+      if (localQuery && ![product?.name, product?.sku].some(value => String(value || '').toLowerCase().includes(localQuery))) return false;
       const isActive = Number(product?.is_active || 0) === 1;
       const isVisible = Number(product?.site_visibility || 0) === 1;
       const activeAllowed = isActive ? filters.active : filters.inactive;
@@ -1670,9 +1684,18 @@
 
   // ---------------- API ----------------
 
+  function productsOfflineRead() {
+    return navigator.onLine === false || window.AdminAccessContext?.offline === true;
+  }
+
+  function productsLocalListOnly() {
+    return productsOfflineRead() || state.catalogConnectionState === 'offline';
+  }
+
   async function api(url, opts) {
     const access = window.AdminLocalRepository.capture();
     if (!catalogPageContext?.isCurrent() || !access.isCurrent()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
+    if (productsOfflineRead()) throw new Error('Для этого действия требуется соединение с сервером.');
     // Получаем токен и store_id из localStorage
     const token = localStorage.getItem('authToken');
     const storeId = localStorage.getItem('activeStoreId') || '1';
@@ -2319,7 +2342,8 @@
 
   function applyProductsToolbarLocalFilters() {
     if (state.mode === "products") {
-      renderProductsList();
+      if (productsLocalListOnly()) applyCatalogLocalWindow(state.currentCategoryId, { applyCategories: false });
+      else renderProductsList();
     } else if (state.mode === "options") {
       renderAllOptionGroupsLists();
     } else if (state.mode === "variants") {
@@ -2407,9 +2431,10 @@
       productsToolbarSearchTimer = null;
     }
     if (state.mode !== "products") return;
+    const access = window.AdminLocalRepository.capture();
     productsToolbarSearchTimer = setTimeout(() => {
       productsToolbarSearchTimer = null;
-      if (state.mode !== "products") return;
+      if (state.mode !== "products" || !access.isCurrent()) return;
       refreshProductsOnly(true).catch(console.error);
     }, PRODUCTS_TOOLBAR_SEARCH_DEBOUNCE_MS);
   }
@@ -2959,15 +2984,17 @@
 
   function appendNextCompleteCatalogPage() {
     const query = normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || "");
-    if (query || !window.CatalogRepository) return false;
-    const localRows = getCatalogProductsForCategory(state.currentCategoryId);
+    const offline = productsLocalListOnly();
+    if ((query && !offline) || !window.CatalogRepository) return false;
+    const savedRows = getCatalogProductsForCategory(state.currentCategoryId);
+    const localRows = offline ? filterProductsCollection(savedRows) : savedRows;
     const coverage = window.CatalogRepository.getCoverage({
       categoryId: Number(state.currentCategoryId) === Number(state.allCategoryId)
         ? null
         : state.currentCategoryId,
     });
-    const total = Number(coverage.total);
-    if (!Number.isFinite(total) || total < 0 || coverage.knownProducts < total || localRows.length < total) return false;
+    const total = offline ? localRows.length : Number(coverage.total);
+    if (!Number.isFinite(total) || total < 0 || (!offline && (coverage.knownProducts < total || localRows.length < total))) return false;
     const offset = Math.max(0, Number(state.productsOffset || 0));
     const page = localRows.slice(offset, offset + PRODUCTS_PAGE_LIMIT);
     if (!page.length) {
@@ -2986,6 +3013,10 @@
 
   async function loadMoreProducts(options = {}) {
     if (state.productsLoading || !state.productsHasMore) return;
+    if (productsLocalListOnly()) {
+      appendNextCompleteCatalogPage();
+      return;
+    }
     const cid = state.currentCategoryId;
     if (!cid) return;
     if (options.allowLocal !== false && appendNextCompleteCatalogPage()) return;
@@ -7188,8 +7219,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!productsEmptyHint) return;
     const combos = shouldHideProductCombos() ? [] : (state.combosInCategory ?? []);
     const empty = filterProductsCollection(state.products).length === 0 && combos.length === 0;
-    if (empty && state.catalogConnectionState === "offline" && getProductsCatalogCoverage().knownProducts === 0) {
-      productsEmptyHint.innerHTML = "Каталог ещё не сохранён на устройстве.<br>Подключитесь к интернету, чтобы загрузить товары.";
+    if (empty && normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || '')) {
+      productsEmptyHint.textContent = 'По вашему запросу ничего не найдено.';
+    } else if (empty && productsLocalListOnly() && !state.products.length) {
+      productsEmptyHint.textContent = 'Нет сохранённых товаров для просмотра без интернета.';
     } else {
       productsEmptyHint.textContent = "Пока нет товаров...";
     }
@@ -14133,6 +14166,11 @@ const isViewMode = state.comboPanel.mode === "view";
 
   async function openProductByIdTask(productId, { forceReload = false } = {}) {
     if (!Number.isFinite(Number(productId))) return;
+    if (!catalogPageContext?.isCurrent()) return;
+    const access = window.AdminLocalRepository.capture();
+    const storeId = localStorage.getItem('activeStoreId') || '1';
+    const isCurrent = () => access.isCurrent() && catalogPageContext?.isCurrent()
+      && storeId === (localStorage.getItem('activeStoreId') || '1');
     const id = Number(productId);
     if (!(state.productOpenInflight instanceof Map)) state.productOpenInflight = new Map();
     const inflightKey = `${id}:${forceReload ? 1 : 0}`;
@@ -14159,7 +14197,17 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     const cachedDetails = !forceReload ? getCachedProductDetails(id) : null;
     const repository = window.CatalogRepository || null;
-    const runtimePassport = !forceReload && repository ? getEditorReadyProductPassport(id) : null;
+    let runtimePassport = !forceReload && repository ? getEditorReadyProductPassport(id) : null;
+    if (productsLocalListOnly() && !runtimePassport) {
+      await repository?.loadPassports([id]);
+      if (!isCurrent()) return;
+      runtimePassport = getEditorReadyProductPassport(id);
+      if (!runtimePassport) {
+        showDetailsEmpty();
+        showToast('Карточка товара не сохранена для просмотра без интернета.');
+        return;
+      }
+    }
     let p = (runtimePassport ? getEditorPassportProduct(runtimePassport) : null)
       || repository?.getProduct(id)
       || state.products.find((x) => Number(x.id) === id)
@@ -14180,6 +14228,7 @@ const isViewMode = state.comboPanel.mode === "view";
         advancedReadyPromise,
       });
       await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+      if (!isCurrent()) { releaseAdvancedHydration(false); return; }
       applyEditorPassportToProductsState(id, runtimePassport);
       releaseAdvancedHydration(runtimePassport);
       return;
@@ -14196,6 +14245,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
     if (!forceReload && repository) {
       await repository.loadPassports([id]);
+      if (!isCurrent()) { releaseAdvancedHydration(false); return; }
       const localPassport = getEditorReadyProductPassport(id);
       if (localPassport) {
         applyEditorPassportToProductsState(id, localPassport);
@@ -14204,14 +14254,14 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
 
-    if (!navigator.onLine) {
+    if (productsOfflineRead()) {
       releaseAdvancedHydration(false);
       showToast("Полные данные товара не сохранены на устройстве.");
       return;
     }
     releaseAdvancedHydration(null);
     })().finally(() => {
-      state.productOpenInflight.delete(inflightKey);
+      if (state.productOpenInflight.get(inflightKey) === task) state.productOpenInflight.delete(inflightKey);
     });
     state.productOpenInflight.set(inflightKey, task);
     return task;
@@ -22698,9 +22748,9 @@ const isViewMode = state.comboPanel.mode === "view";
   // ---------------- Refresh ----------------
 
   async function refreshProductsOnly(forceReload = false) {
-    const localApplied = !normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || "")
+    const localApplied = (productsLocalListOnly() || !normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || ""))
       && applyCatalogLocalWindow(state.currentCategoryId, { applyCategories: false });
-    if (!navigator.onLine) {
+    if (productsLocalListOnly()) {
       setProductsCatalogConnectionState("offline");
       return;
     }
@@ -25763,11 +25813,18 @@ const isViewMode = state.comboPanel.mode === "view";
     }
   }
 
-  document.addEventListener("DOMContentLoaded", async () => {
-    await window.AdminAccessContextPromise;
+  let productsPageStarting = false;
+  let productsPageStarted = false;
+  async function initializeProductsPage() {
+    if (productsPageStarting || productsPageStarted) return;
+    productsPageStarting = true;
+    try {
+    const context = await window.AdminAccessContextPromise;
+    if (!context || context.ok !== true) return;
     if (!await window.AdminLocalRepository.ready()) return;
     if (!bindCatalogPageContext()) return;
     if (!await window.CatalogRepository.init(getProductsCatalogRepositoryOptions())) return;
+    productsPageStarted = true;
     document.addEventListener("error", (event) => {
       const photo = event.target;
       if (photo instanceof HTMLImageElement && photo.closest(".option-product-photo")) {
@@ -25798,17 +25855,17 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     bindEvents();
 
-    const onlineProductsStartupPromise = navigator.onLine
-      ? refreshAll().then(() => true).catch(() => false)
-      : Promise.resolve(false);
+    const startupAccess = window.AdminLocalRepository.capture();
     if (window.CatalogRepository) {
       await window.CatalogRepository.init(getProductsCatalogRepositoryOptions());
       await Promise.all([
         window.CatalogRepository.loadCategories(),
         window.CatalogRepository.loadProducts(),
       ]);
+      await hydrateProductsPersistentCache();
+      if (!startupAccess.isCurrent() || !catalogPageContext?.isCurrent()) return;
       syncProductsCatalogDownloadJob();
-      if (!state.categories.length && !state.products.length) {
+      if (!state.products.length) {
         applyCatalogLocalWindow(null, { applyCategories: true });
         renderCategoriesNav();
         enterProductsMode(state.currentCategoryId);
@@ -25875,30 +25932,55 @@ const isViewMode = state.comboPanel.mode === "view";
         renderProductsCatalogStatus();
       });
     }
-    setProductsCatalogConnectionState(navigator.onLine ? "syncing" : "offline");
+    setProductsCatalogConnectionState(productsOfflineRead() ? "offline" : "syncing");
     const localEditorReferences = window.CatalogRepository?.getEditorReferences?.() || null;
     const localUnits = Object.values(localEditorReferences?.units || {});
     const localConversions = Array.isArray(localEditorReferences?.unitConversions) ? localEditorReferences.unitConversions : [];
     if (localUnits.length) state.units = localUnits;
     if (localConversions.length) state.unitConversions = localConversions;
-    if (navigator.onLine && (!localUnits.length || !localConversions.length)) {
+    if (!productsOfflineRead() && (!localUnits.length || !localConversions.length)) {
       void (async () => {
         if (!localUnits.length) await loadUnitsManagement();
         if (!localConversions.length) await loadUnitConversions();
       })().catch(() => null);
     }
-    const onlineProductsLoaded = await onlineProductsStartupPromise;
-    if (navigator.onLine && !onlineProductsLoaded) setProductsCatalogConnectionState("offline");
     enterProductsMode(state.currentCategoryId);
-    if (window.CatalogRepository) await window.CatalogRepository.startSync();
+    if (!productsOfflineRead()) {
+      void refreshAll().catch(error => {
+        if (startupAccess.isCurrent()) {
+          setProductsCatalogConnectionState('offline');
+          console.warn('PRODUCTS_REFRESH_FAILED:', error.message);
+        }
+      });
+      if (window.CatalogRepository) void window.CatalogRepository.startSync();
+    }
     schedulePersistProductsCache(0);
 
     // ✅ гарантированно "до конца"
     requestAnimationFrame(refreshOpenAccordions);
+    } catch (error) {
+      console.error('PRODUCTS_INITIALIZATION_FAILED:', error);
+      if (catalogPageContext?.isCurrent() && productsEmptyHint) {
+        productsEmptyHint.textContent = 'Не удалось загрузить сохранённые товары. Подключитесь к сети и откройте раздел повторно.';
+        productsEmptyHint.style.display = 'block';
+      }
+    } finally {
+      productsPageStarting = false;
+    }
+  }
+  document.addEventListener('DOMContentLoaded', () => { void initializeProductsPage(); });
+  window.addEventListener('admin:access-context', () => {
+    if (document.readyState !== 'loading') void initializeProductsPage();
+    if (productsPageStarted && !productsStockSocket && !productsOfflineRead()) connectProductsStockSocket();
   });
 
   window.addEventListener("offline", () => {
     setProductsCatalogConnectionState("offline");
+    if (productsStockReconnectTimer) clearTimeout(productsStockReconnectTimer);
+    productsStockReconnectTimer = null;
+    const socket = productsStockSocket;
+    productsStockSocket = null;
+    socket?.close();
   });
   window.addEventListener("online", () => {
     setProductsCatalogConnectionState("syncing");

@@ -193,6 +193,46 @@ test('domain and data format version have independent namespaces', async () => {
   assert.equal(await env.repository({ domain: 'other' }).get('item'), null);
   assert.equal(await env.repository({ version: 2 }).get('item'), null);
 });
+test('products shell restores a confirmed tab without an obligatory auth request', async () => {
+  const env = environment(); const login = session();
+  login.data.metadata = { permissions: [{ key: 'products.access', access_rule: 'all' },
+    { key: 'products.catalog.read', access_rule: 'stores' }], stores: [{ id: 1 }] };
+  env.window.localStorage.setItem('activeStoreId', '1');
+  await env.confirm(login);
+  env.window.__ADMIN_PRODUCTS_SHELL__ = true;
+  env.window.location.pathname = '/dashboard/products';
+  env.window.navigator.onLine = false;
+  let requests = 0;
+  const ui = env.layout(async () => { requests++; throw new TypeError('Offline'); });
+  const context = await ui.load(true);
+  assert.equal(requests, 0); assert.equal(context.offline, true);
+  assert.equal(ui.state(), 'active');
+  assert.equal(context.local_context.accessViewId, login.data.local_context.accessViewId);
+});
+
+test('products shell refuses a role without read access but does not revoke other domains', async () => {
+  const env = environment(); const login = session();
+  login.data.metadata = { permissions: [{ key: 'products.access', access_rule: 'all' }], stores: [{ id: 1 }] };
+  env.window.localStorage.setItem('activeStoreId', '1'); await env.confirm(login);
+  env.window.__ADMIN_PRODUCTS_SHELL__ = true;
+  env.window.location.pathname = '/dashboard/products/';
+  const ui = env.layout(async () => { throw new Error('Network must not authorize offline data'); });
+  assert.equal(await ui.load(true), null); assert.equal(ui.state(), 'denied');
+  assert.equal(env.core.isActive(), true);
+  assert.match(ui.message.textContent, /Нет подтверждённого доступа/);
+});
+
+test('independent products tab cannot unlock with a shared JWT and Cache Storage alone', async () => {
+  const first = environment(); const login = session(); await first.confirm(login);
+  const reopened = environment({ localStorage: first.window.localStorage, entries: first.entries });
+  reopened.window.__ADMIN_PRODUCTS_SHELL__ = true;
+  reopened.window.location.pathname = '/dashboard/products';
+  const ui = reopened.layout(async () => { throw new Error('No offline network'); });
+  assert.equal(await ui.load(true), null);
+  assert.equal(ui.state(), 'unavailable'); assert.equal(reopened.core.isActive(), false);
+  assert.equal(first.core.isActive(), true);
+});
+
 test('offline reload restores only this confirmed browser session', async () => {
   const env = environment(); const login = session(); await env.confirm(login);
   await env.repository().set('item', 'saved', { lastSyncedAt: 100 });

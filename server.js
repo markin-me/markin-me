@@ -1333,6 +1333,7 @@ const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/js/admin-persistent-cache.js?v=20261014-local-core-v1'),
   app.locals.assetUrl('/static/js/admin-local-repository.js?v=20261014-local-core-v1'),
   app.locals.assetUrl('/static/js/admin-catalog.js?v=20260925-stock-realtime-v2'),
+  app.locals.assetUrl('/static/js/products.js?v=20261002-option-order-v1'),
   app.locals.assetUrl('/static/js/admin-reference-cache.js?v=20261014-local-core-v1'),
   app.locals.assetUrl('/static/js/orders.js')
 ];
@@ -1347,6 +1348,17 @@ var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
 var COURIER_SHELL_PATH = '/dashboard/courier-screen';
 var NEUTRAL_SHELL_PATH = '/pwa/neutral/courier';
 var NAVIGATION_SHELL_PATH = '/pwa/neutral/navigation';
+var PRODUCTS_SHELL_PATH = '/pwa/neutral/products';
+var PRODUCTS_REQUIRED_URLS = PRECACHE_URLS.filter(function (url) {
+  return url.indexOf('/static/js/orders.js') === -1 && url.indexOf('/static/js/courier-screen.js') === -1
+    && url.indexOf('/static/js/shared-order-') === -1;
+});
+var PUBLIC_FONT_URLS = [
+  'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css',
+  'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/webfonts/fa-solid-900.woff2',
+  'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/webfonts/fa-regular-400.woff2',
+  'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/webfonts/fa-brands-400.woff2'
+];
 var DASHBOARD_PATHS = ${JSON.stringify(Object.keys(adminDashboardTitles))};
 var navigationPreparation = null;
 
@@ -1460,10 +1472,30 @@ async function warmCourierShell() {
   return null;
 }
 
+async function warmPublicFonts() {
+  var cache = await caches.open(STATIC_CACHE);
+  await Promise.all(PUBLIC_FONT_URLS.map(async function (url) {
+    if (shouldCacheStaticResponse(await cache.match(url))) return;
+    await savePreparedResource(cache, url, { credentials: 'omit', mode: 'cors' }, shouldCacheStaticResponse);
+  }));
+}
+
+async function productsShellReady(cache) {
+  var shell = await cache.match(PRODUCTS_SHELL_PATH);
+  if (!shell || shell.headers.get('X-PWA-Neutral-Shell') !== '1') return null;
+  var resources = await caches.open(STATIC_CACHE);
+  var saved = await Promise.all(PRODUCTS_REQUIRED_URLS.map(async function (url) {
+    return shouldCacheStaticResponse(await resources.match(url));
+  }));
+  return saved.every(Boolean) ? shell : null;
+}
+
 async function prepareOfflineNavigation() {
   if (navigationPreparation) return navigationPreparation;
   navigationPreparation = (async function () {
-    await Promise.all([cacheStaticAssets(), warmNeutralShell(NEUTRAL_SHELL_PATH), warmNeutralShell(NAVIGATION_SHELL_PATH)]);
+    await Promise.all([cacheStaticAssets(), warmNeutralShell(NEUTRAL_SHELL_PATH), warmNeutralShell(NAVIGATION_SHELL_PATH),
+      warmNeutralShell(PRODUCTS_SHELL_PATH),
+      warmPublicFonts().catch(function () { console.warn('OFFLINE_PUBLIC_FONTS_UNAVAILABLE'); })]);
     var resources = await caches.open(STATIC_CACHE);
     var shells = await caches.open(SHELL_CACHE);
     var saved = await Promise.all(PRECACHE_URLS.map(async function (url) {
@@ -1472,7 +1504,8 @@ async function prepareOfflineNavigation() {
     var courier = await shells.match(NEUTRAL_SHELL_PATH);
     var navigation = await shells.match(NAVIGATION_SHELL_PATH);
     if (saved.some(function (ok) { return !ok; }) || courier?.headers.get('X-PWA-Neutral-Shell') !== '1'
-        || navigation?.headers.get('X-PWA-Neutral-Shell') !== '1') throw new Error('OFFLINE_RESOURCES_INCOMPLETE');
+        || navigation?.headers.get('X-PWA-Neutral-Shell') !== '1'
+        || !await productsShellReady(shells)) throw new Error('OFFLINE_RESOURCES_INCOMPLETE');
   })();
   try { await navigationPreparation; } finally { navigationPreparation = null; }
 }
@@ -1514,6 +1547,10 @@ async function privateNavigation(request, url) {
     try {
       var cache = await caches.open(SHELL_CACHE);
       var pathname = normalizeDashboardPath(url.pathname);
+      if (pathname === '/dashboard/products') {
+        var products = await productsShellReady(cache);
+        if (products) return products;
+      }
       if (pathname === COURIER_SHELL_PATH) {
         var shell = await cache.match(NEUTRAL_SHELL_PATH);
         if (shell && shell.headers.get('X-PWA-Neutral-Shell') === '1') return shell;
@@ -1535,6 +1572,7 @@ self.addEventListener('install', function (event) {
     Promise.all([
       cacheStaticAssets(),
       warmCourierShell().catch(function () {}),
+      warmNeutralShell(PRODUCTS_SHELL_PATH).catch(function () {}),
       warmNeutralShell(NAVIGATION_SHELL_PATH).catch(function () {})
     ]).then(function () {
       return self.skipWaiting();
@@ -1585,6 +1623,10 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
+  if (PUBLIC_FONT_URLS.indexOf(url.href) !== -1) {
+    event.respondWith(cacheFirst(request));
+    return;
+  }
   if (url.origin !== self.location.origin) return;
   if (url.pathname.indexOf('/api/') === 0) return;
 
@@ -1807,6 +1849,13 @@ app.get('/pwa/neutral/navigation', (req, res) => {
   res.setHeader('X-PWA-Neutral-Shell', '1');
   res.setHeader('Cache-Control', 'no-store');
   res.render('pages/offline-navigation');
+});
+
+app.get('/pwa/neutral/products', (req, res) => {
+  res.setHeader('X-PWA-Neutral-Shell', '1');
+  res.setHeader('Cache-Control', 'no-store');
+  res.render('pages/products', { tenant: null, serverAccessContext: null, currentPath: '/dashboard/products',
+    neutralShell: true, productsShell: true });
 });
 
 app.get('/.well-known/tenant-domain-check', async (req, res) => {

@@ -7,6 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
 const orders = fs.readFileSync(path.join(__dirname, '../static/js/orders.js'), 'utf8');
+const products = fs.readFileSync(path.join(__dirname, '../static/js/products.js'), 'utf8');
 const dashboardPaths = ['/dashboard/cash', '/dashboard/products', '/dashboard/orders', '/dashboard/courier-screen',
   '/dashboard/new-order', '/dashboard/clients', '/dashboard/chat', '/dashboard/team', '/dashboard/settings'];
 const marker = 'const serviceWorkerScript = `';
@@ -52,6 +53,13 @@ function environment() {
     if (new URL(url).pathname === '/pwa/neutral/navigation') {
       return response('<html>Public navigation, no private data</html>', url,
         { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1' });
+    }
+    if (new URL(url).pathname === '/pwa/neutral/products') {
+      return response('<html data-local-access="pending"><div id="productsList"></div></html>', url,
+        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1' });
+    }
+    if (new URL(url).hostname === 'cdn.jsdelivr.net') {
+      return response('public font asset', url, { 'Content-Type': url.endsWith('.css') ? 'text/css' : 'font/woff2' });
     }
     if (new URL(url).pathname.startsWith('/static/')) return response('static', url, { 'Content-Type': 'application/javascript' });
     return response('<html>personalized online</html>', url, { 'Content-Type': 'text/html' });
@@ -112,6 +120,31 @@ test('all nine prepared routes can open offline, including reloads and query var
       assert.doesNotMatch(await result.text(), /personalized online|OWNER SECRET/);
     }
   }
+});
+
+test('prepared products navigation returns the actual gated products document, never cached account HTML', async () => {
+  const env = environment(); await env.prepare(); env.failNetwork = true;
+  env.records.set('admin-pages-old', new Map([['https://app.test/dashboard/products', new Response('OWNER SECRET')]]));
+  for (const route of ['/dashboard/products', '/dashboard/products/', '/dashboard/products?q=private']) {
+    const body = await (await env.request(route)).text();
+    assert.match(body, /data-local-access="pending"/);
+    assert.match(body, /id="productsList"/);
+    assert.doesNotMatch(body, /OWNER SECRET|Public navigation/);
+  }
+  assert.match(server, /res\.render\('pages\/products', \{ tenant: null, serverAccessContext: null,[\s\S]*?neutralShell: true, productsShell: true/);
+  const page = fs.readFileSync(path.join(__dirname, '../views/pages/products.ejs'), 'utf8');
+  assert.match(page, /leftPartial: '\.\.\/partials\/products\/left'/);
+  assert.match(page, /centerPartial: '\.\.\/partials\/products\/center'/);
+  assert.match(page, /rightPartial: '\.\.\/partials\/products\/info'/);
+});
+
+test('a missing critical resource prevents serving a broken products document', async () => {
+  const env = environment(); await env.prepare();
+  const assets = env.records.get('admin-static-test-v2');
+  assets.delete('https://app.test/static/app.js'); env.failNetwork = true;
+  const body = await (await env.request('/dashboard/products')).text();
+  assert.match(body, /Public navigation/);
+  assert.doesNotMatch(body, /id="productsList"/);
 });
 
 test('preparation is single-flight and repeated checks reuse the saved public resources', async () => {
@@ -176,17 +209,70 @@ test('online private HTML and HTTP authorization refusals are never cached or re
   for (const status of [401, 403]) {
     env.fetch = async () => new Response('denied', { status });
     assert.equal((await env.request('/dashboard/courier-screen')).status, status);
+    assert.equal((await env.request('/dashboard/products')).status, status);
   }
   for (const entries of env.records.values()) assert.equal(entries.has('https://app.test/dashboard/orders'), false);
 });
 
-function functionSource(name) {
-  const start = orders.indexOf('  function ' + name + '(');
+function functionSource(name, source = orders) {
+  const start = source.indexOf('  function ' + name + '(');
   assert.ok(start >= 0, name);
   const next = /\n  (?:async )?function /g; next.lastIndex = start + 12;
-  const end = next.exec(orders)?.index ?? orders.length;
-  return orders.slice(start, end);
+  const end = next.exec(source)?.index ?? source.length;
+  return source.slice(start, end);
 }
+
+test('offline product lists include all saved rows even with partial coverage and search by SKU locally', () => {
+  const rows = Array.from({ length: 120 }, (_, index) => ({ id: index + 1, name: 'Товар ' + index, sku: 'sku-' + index,
+    is_active: 1, site_visibility: 1, fulfillment_mode: 'stock', stock_qty: 1 }));
+  const state = { catalogConnectionState: 'offline', categories: [], currentCategoryId: null, allCategoryId: null,
+    products: [], productsToolbar: { products: { query: '' } }, productsByCategoryCache: new Map() };
+  const filters = { active: true, inactive: true, visible: true, hidden: true, fulfillment_stock: true,
+    fulfillment_made_to_order: true, in_stock: true, ended: true };
+  const sandbox = vm.createContext({ state, navigator: { onLine: false }, PRODUCTS_PAGE_LIMIT: 80,
+    window: { AdminAccessContext: { offline: true }, CatalogRepository: { getAllProducts: () => rows,
+      getAllCategories: () => [{ id: 1, code: 'all' }], getDescendantCategoryIds: id => [id],
+      getCoverage: () => ({ knownProducts: 120, total: 5000 }) } },
+    renderProductsList() {}, renderProductsCatalogStatus() {}, getProductsCatalogCoverage: () => ({ total: 5000 }),
+    appendProductRowsToList() {},
+    normalizeProductsToolbarQuery: value => String(value).trim(), normalizeProductsToolbarFilters: () => filters,
+    normalizeProductFulfillmentMode: value => value });
+  for (const name of ['productsOfflineRead', 'productsLocalListOnly', 'getCatalogProductCategoryIds',
+    'getCatalogProductsForCategory', 'applyCatalogLocalWindow', 'filterProductsCollection', 'isFiniteProductStockValue',
+    'appendNextCompleteCatalogPage']) {
+    vm.runInContext(functionSource(name, products), sandbox);
+  }
+  sandbox.applyCatalogLocalWindow();
+  assert.equal(state.products.length, 80);
+  assert.equal(state.productsLoading, false); assert.equal(state.productsHasMore, true);
+  sandbox.appendNextCompleteCatalogPage();
+  assert.equal(state.products.length, 120); assert.equal(state.productsHasMore, false);
+  state.productsToolbar.products.query = 'SKU-119';
+  sandbox.applyCatalogLocalWindow();
+  assert.equal(sandbox.filterProductsCollection(state.products)[0].id, 120);
+  state.productsToolbar.products.query = 'missing';
+  assert.equal(sandbox.filterProductsCollection(state.products).length, 0);
+  state.productsByCategoryCache.set('1::previous-search', { products: [rows[0]] });
+  rows.length = 0;
+  state.productsToolbar.products.query = '';
+  sandbox.applyCatalogLocalWindow();
+  assert.equal(state.products.length, 1);
+  assert.equal(state.products[0].id, 1);
+});
+
+test('automatic preparation has no profile UI and products restore only an existing tab confirmation', () => {
+  const header = fs.readFileSync(path.join(__dirname, '../views/partials/header.ejs'), 'utf8');
+  const preparation = fs.readFileSync(path.join(__dirname, '../static/js/admin-offline-navigation.js'), 'utf8');
+  const layout = fs.readFileSync(path.join(__dirname, '../views/layouts/app.ejs'), 'utf8');
+  assert.doesNotMatch(header + preparation, /adminOfflinePrepare|adminOfflineStatus|Подготовить офлайн|Офлайн-навигация готова|status\.textContent/);
+  assert.match(preparation, /if \(core\.isActive\(\)\) void prepare\(\)/);
+  assert.match(layout, /await repository\.restore\(requestToken, ticket\)/);
+  assert.match(layout, /grant\.key === 'products\.access'/);
+  assert.match(layout, /grant\.key === 'products\.catalog\.read'/);
+  assert.match(layout, /read\.access_rule === 'stores'[\s\S]*?Number\(store\.id\) === storeId/);
+  assert.match(products, /const context = await window\.AdminAccessContextPromise;\s*if \(!context \|\| context\.ok !== true\) return/);
+  assert.match(products, /if \(productsLocalListOnly\(\) && !runtimePassport\) \{[\s\S]*?await repository\?\.loadPassports\(\[id\]\);\s*if \(!isCurrent\(\)\) return/);
+});
 function projection(allowed = true, bases = []) {
   const queue = [{ id: 'unchanged-id', orderId: 7, type: 'status', state: 'pending', sequence: 1,
     request: { method: 'PUT', body: { status_id: 4 } }, optimisticOrder: { id: 7, customer_name: 'OWNER SECRET', customer_phone: 'PRIVATE', status_id: 4 } }];
