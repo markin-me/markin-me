@@ -492,6 +492,11 @@
         <div class="toolbar-title">
           <i class="fas fa-users" id="teamCenterIcon"></i>
           <span id="teamCenterTitle">Сотрудники</span>
+          <span id="teamConnectionStatus" class="courier-connection-banner team-connection-status hidden" role="status" aria-live="polite" aria-atomic="true">
+            <span class="courier-connection-banner__indicator" aria-hidden="true"></span>
+            <span class="courier-connection-banner__text"></span>
+            <button type="button" class="courier-connection-banner__retry hidden" aria-label="Повторить обновление сотрудников" title="Повторить"><span aria-hidden="true">↻</span></button>
+          </span>
         </div>
         <div class="toolbar-right">
           <button class="btn btn-icon btn-primary" id="teamCreateBtn" type="button" title="Создать сотрудника" aria-label="Создать сотрудника">

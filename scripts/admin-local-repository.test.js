@@ -83,6 +83,54 @@ function environment({ entries = new Map(), localStorage = storage(), sessionSto
     logout() { return sandbox.logout(); },
     finishLogout() { return sandbox.finishBrowserLogout(); },
     setFetcher(fetcher) { sandbox.fetch = fetcher; },
+    team(fetcher, { canRead = true } = {}) {
+      const teamSource = fs.readFileSync(path.join(__dirname, '../static/js/team.js'), 'utf8');
+      const element = () => {
+        const classes = new Set();
+        return { innerHTML: '', textContent: '', title: '', disabled: false, firstElementChild: null,
+          classList: { add(name) { classes.add(name); }, contains(name) { return classes.has(name); },
+            toggle(name, on) { if (on) classes.add(name); else classes.delete(name); } },
+          addEventListener(type, callback) { this[type] = callback; },
+          contains() { return false; }, querySelectorAll() { return []; } };
+      };
+      sandbox.dom = { list: element(), editor: element(), tabs: element(), tabsHeader: element(), create: element() };
+      sandbox.localStatus = element();
+      sandbox.statusText = element(); sandbox.statusRetry = element();
+      const statusHistory = []; let statusValue = '';
+      Object.defineProperty(sandbox.statusText, 'textContent', { get: () => statusValue,
+        set(value) { statusValue = value; statusHistory.push(value); } });
+      const timers = new Map(); let timerId = 0;
+      window.setTimeout = (callback, delay) => { timers.set(++timerId, { callback, delay }); return timerId; };
+      window.clearTimeout = id => timers.delete(id);
+      sandbox.navigator = window.navigator;
+      sandbox.authFetch = fetcher;
+      sandbox.rbacPermissionIds = new Set(); sandbox.rbacPermissionKeys = new Set();
+      const displays = [];
+      Object.assign(sandbox, { renderList() { displays.push(copy(sandbox.window.TeamFixture.state.users)); },
+        renderTabs() {}, renderEditor() {}, applyTeamCapabilities() {}, exitPermissionMode() {}, clearEmployeePhoto() {} });
+      window.AdminAccessContext = { permissions: canRead ? [{ key: 'team.employees.read', access_rule: 'all' }] : [] };
+      window.AdminAccessContextPromise = Promise.resolve(window.AdminAccessContext);
+      const names = ['employeeSnapshot', 'canReadLocalUsers', 'canUseServer', 'renderConnectionStatus',
+        'cancelStatusOperation', 'setConnectionStatus', 'beginStatusOperation', 'persistEmployeeSnapshot',
+        'suspendEditor', 'resumeEditor', 'request', 'loadBootstrap', 'loadTeamData', 'clearTeamContext', 'tabHasUnsaved',
+        'activeTab', 'clone', 'escapeHtml', 'replaceEntity', 'normalizeUserDraft', 'renderUserEditor', 'saveActiveTab'];
+      const functions = names.map(name => {
+        const match = teamSource.match(new RegExp('^  (?:async )?function ' + name + '\\([\\s\\S]*?^  \\}', 'm'));
+        assert.ok(match, name); return match[0];
+      }).join('\n');
+      const declarations = teamSource.slice(teamSource.indexOf('  const state = {'), teamSource.indexOf('  const localStatus ='));
+      vm.runInContext(declarations + '\nconst suspendedControls = new Map();\nconst employeeStatusLabels = {active:"Активен",blocked:"Заблокирован",archived:"Уволен"};\n'
+        + functions + '\nwindow.TeamFixture = { state, loadBootstrap, employeeSnapshot, persistEmployeeSnapshot, replaceEntity, request, renderUserEditor, saveActiveTab, renderConnectionStatus };', sandbox);
+      const events = teamSource.slice(teamSource.indexOf("  window.addEventListener('admin:local-context-changed'"),
+        teamSource.indexOf('  dom.sectionButtons.forEach((button) => button.addEventListener'));
+      vm.runInContext(events, sandbox);
+      return Object.assign(window.TeamFixture, { displays, status: sandbox.statusText, statusRoot: sandbox.localStatus,
+        retry: sandbox.statusRetry, statusHistory, timers, dom: sandbox.dom,
+        runStatusTimers() {
+          for (const [id, timer] of [...timers]) if (timer.delay === 650) { timers.delete(id); timer.callback(); }
+        },
+        fetcher(value) { sandbox.authFetch = value; } });
+    },
     layout(fetcher) {
       const attributes = new Map([['data-local-access', 'pending']]);
       const message = { textContent: '' };
@@ -604,4 +652,299 @@ test('an old tab checks shared revocation on focus even before queued storage ev
   other.core.reset({forget:true,reason:'logout'});
   env.window.dispatchEvent({type:'focus'});
   assert.equal(ui.state(),'denied'); assert.equal(env.core.isActive(),false);
+});
+
+// PR3: use the real universal context and the real team loader; no server/DB/browser.
+function teamEmployee(overrides = {}) {
+  return { id: 7, name: 'Сотрудник А', employee_status: 'active', is_owner: false,
+    roles: [{ id: 3, name: 'Менеджер', is_owner: false }], stores: [{ id: 2, name: 'Подразделение' }],
+    phone: 'not-for-local-storage', email: 'not-for-local-storage', comment: 'private-comment',
+    login: 'private-login', photo_revision: 'private-photo', documents: { passport: 'private-document' },
+    password_hash: 'private-hash', temporary_password: 'private-password', token: 'private-token', ...overrides };
+}
+function teamResponse(users = [teamEmployee()]) {
+  return { ok: true, users, roles: [], stores: [], permissions: [], start_routes: [],
+    capabilities: { view_users: true, create_users: true, update_users: true } };
+}
+function teamHttp(payload, status = 200) {
+  return { ok: status >= 200 && status < 300, status, async json() { return payload; } };
+}
+function teamDeferred() {
+  let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve };
+}
+async function savedTeam() {
+  const env = environment(); await env.confirm(session());
+  const team = env.team(async () => teamHttp(teamResponse()));
+  await team.loadBootstrap(); return { env, team };
+}
+
+test('team first online load saves only its explicit projection, not bootstrap or secrets', async () => {
+  const { env, team } = await savedTeam();
+  assert.equal(team.state.source, 'network'); assert.equal(team.state.onlineReady, true);
+  assert.equal(env.entries.size, 1);
+  const entry = await env.repository({ domain: 'team:employees' }).getEntry('employees');
+  assert.deepEqual(Object.keys(entry.data.users[0]).sort(), ['employee_status', 'id', 'is_owner', 'name', 'roles', 'stores']);
+  assert.deepEqual(Object.keys(entry.data.users[0].roles[0]).sort(), ['id', 'is_owner', 'name']);
+  assert.deepEqual(Object.keys(entry.data.users[0].stores[0]).sort(), ['id', 'name']);
+  assert.doesNotMatch(JSON.stringify([...env.entries.values()]), /private-|not-for-local-storage/);
+  assert.ok(entry.lastSyncedAt);
+});
+
+test('team repeat online opening renders local data before a slow request, single-flight', async () => {
+  const { env } = await savedTeam();
+  const reopened = environment({ entries: env.entries, localStorage: env.window.localStorage, sessionStorage: env.window.sessionStorage });
+  const loginToken = env.window.localStorage.getItem('authToken');
+  await reopened.core.restore(loginToken, reopened.core.beginConfirmation());
+  const gate = teamDeferred(); const started = teamDeferred(); let requests = 0;
+  const team = reopened.team(async () => { requests++; started.resolve(); return gate.promise; });
+  const first = team.loadBootstrap(); const second = team.loadBootstrap(); await started.promise;
+  assert.equal(team.state.source, 'local'); assert.equal(team.displays[0][0].name, 'Сотрудник А');
+  assert.equal(team.state.onlineReady, false); assert.equal(requests, 1);
+  gate.resolve(teamHttp(teamResponse([teamEmployee({ name: 'Обновлённое имя' })])));
+  await Promise.all([first, second]);
+  assert.equal(team.state.users[0].name, 'Обновлённое имя'); assert.equal(reopened.entries.size, 1);
+});
+
+test('team offline opening uses stale snapshot and renders an incomplete read-only card', async () => {
+  const { env, team } = await savedTeam();
+  team.state.source = ''; team.state.fullUserIds.clear(); env.window.navigator.onLine = false;
+  team.fetcher(() => { throw new Error('Must not request while offline'); });
+  env.timeOffset = 6 * 60 * 1000;
+  for (const entry of env.entries.values()) entry.expiresAt = Date.now() - 1;
+  await team.loadBootstrap();
+  assert.equal(team.state.source, 'local'); assert.equal(team.state.onlineReady, false);
+  assert.equal(team.status.textContent, 'Офлайн · сохранённые данные');
+  assert.match(team.statusRoot.title, /Последняя синхронизация/);
+  const html = team.renderUserEditor({ localOnly: true, meta: team.state.users[0] });
+  assert.match(html, /только просмотр/); assert.doesNotMatch(html, /<form|<input|private-/);
+  assert.equal(await team.saveActiveTab({ preventDefault() {} }), false);
+});
+
+test('team offline without a snapshot shows explicit absence rather than an empty server list', async () => {
+  const env = environment(); await env.confirm(session()); env.window.navigator.onLine = false;
+  const team = env.team(() => { throw new Error('No offline requests'); }); await team.loadBootstrap();
+  assert.equal(team.state.users.length, 0); assert.match(team.state.listMessage, /Сохранённых данных пока нет/);
+});
+
+test('team HTTP 500 preserves the allowed local snapshot and reports refresh failure', async () => {
+  const { env, team } = await savedTeam(); team.state.source = ''; team.state.fullUserIds.clear();
+  team.fetcher(async () => teamHttp({ ok: false, error: 'DB_ERROR' }, 500)); await team.loadBootstrap();
+  assert.equal(team.state.users[0].name, 'Сотрудник А'); assert.equal(env.entries.size, 1);
+  assert.equal(team.state.onlineReady, false); assert.equal(team.status.textContent, 'Не удалось обновить');
+  assert.match(team.statusRoot.title, /HTTP 500/);
+});
+
+for (const status of [401, 403]) {
+  test('team server refusal ' + status + ' revokes context and hides the snapshot', async () => {
+    const { env, team } = await savedTeam(); team.state.source = '';
+    team.fetcher(async () => teamHttp({ ok: false, error: 'FORBIDDEN' }, status)); await team.loadBootstrap();
+    assert.equal(env.core.isActive(), false); assert.equal(team.state.users.length, 0);
+    assert.equal(team.dom.editor.innerHTML, ''); assert.equal(env.entries.size, 1);
+    assert.equal(team.state.connection.mode, 'idle'); assert.equal(team.status.textContent, '');
+    assert.equal(team.retry.classList.contains('hidden'), true);
+  });
+}
+
+for (const [name, change] of [['tenant', { tenantId: 2 }], ['principal', { userId: 20 }], ['active role', { roleId: 200 }], ['access view', { view: 'b' }]]) {
+  test('team ' + name + ' never imports a previous scope snapshot', async () => {
+    const { env, team } = await savedTeam(); await env.confirm(session(change));
+    env.window.navigator.onLine = false; await team.loadBootstrap();
+    assert.equal(team.state.users.length, 0); assert.equal(env.entries.size, 1);
+  });
+}
+
+test('team without employees.read cannot use a previously saved local record', async () => {
+  const { env, team } = await savedTeam(); env.window.navigator.onLine = false;
+  env.window.AdminAccessContext.permissions = [];
+  team.state.source = ''; team.state.users = [];
+  await team.loadBootstrap(); assert.equal(team.state.users.length, 0);
+});
+
+for (const reason of ['logout', 'remote-context', 'remote-identity']) {
+  test('team immediately hides data on ' + reason + ' and late HTTP cannot revive it', async () => {
+    const { env, team } = await savedTeam();
+    const gate = teamDeferred(); const started = teamDeferred();
+    team.fetcher(async () => { started.resolve(); return gate.promise; });
+    const task = team.loadBootstrap(); await started.promise;
+    env.core.reset({ forget: true, reason });
+    gate.resolve(teamHttp(teamResponse())); await task;
+    assert.equal(team.state.users.length, 0); assert.equal(team.state.tabs.length, 0);
+    assert.equal(team.dom.editor.innerHTML, ''); assert.equal(env.entries.size, 1);
+  });
+}
+
+test('team pending IndexedDB read cannot display or write data after logout', async () => {
+  const { env, team } = await savedTeam(); team.state.source = '';
+  const gate = teamDeferred(); env.readGate = gate.promise;
+  const task = team.loadBootstrap(); await Promise.resolve(); await Promise.resolve();
+  env.core.reset({ forget: true, reason: 'logout' }); gate.resolve(); await task;
+  assert.equal(team.state.users.length, 0); assert.equal(team.state.source, ''); assert.equal(env.entries.size, 1);
+});
+
+test('team receives logout from another tab without deleting pending domain data', async () => {
+  const { env, team } = await savedTeam();
+  env.entries.set('legacy:courier:unconfirmed', { data: { operationId: 'pending-operation' } });
+  const other = environment({ localStorage: env.window.localStorage });
+  other.core.reset({ forget: true, reason: 'logout' });
+  env.window.dispatchEvent({ type: 'storage', key: 'admin:local-access:v1' });
+  assert.equal(team.state.users.length, 0); assert.equal(team.dom.editor.innerHTML, '');
+  assert.equal(env.entries.get('legacy:courier:unconfirmed').data.operationId, 'pending-operation');
+});
+
+test('team confirmed online mutation updates snapshot, drafts never enter storage', async () => {
+  const { env, team } = await savedTeam();
+  team.state.tabs.push({ type: 'user', id: 7, dirty: true, draft: { name: 'Unsaved draft' } });
+  team.replaceEntity('user', teamEmployee({ name: 'Server-confirmed name' })); await team.persistEmployeeSnapshot();
+  const entry = await env.repository({ domain: 'team:employees' }).getEntry('employees');
+  assert.equal(entry.data.users[0].name, 'Server-confirmed name'); assert.equal(team.state.tabs[0].draft.name, 'Unsaved draft');
+  assert.equal(env.entries.size, 1);
+});
+
+test('team local write error is visible and does not discard the online result', async () => {
+  const env = environment(); await env.confirm(session()); env.failWrite = true;
+  const team = env.team(async () => teamHttp(teamResponse())); await team.loadBootstrap();
+  assert.equal(team.state.users[0].name, 'Сотрудник А'); assert.equal(team.status.textContent, 'Не удалось сохранить');
+  assert.match(team.statusRoot.title, /не сохранены/);
+  assert.equal(env.entries.size, 0);
+});
+
+test('team refresh preserves an unsaved online tab and does not persist its draft', async () => {
+  const { env, team } = await savedTeam();
+  team.state.tabs.push({ type: 'user', id: 7, dirty: true, draft: { name: 'Unsaved draft' } });
+  team.fetcher(async () => teamHttp(teamResponse([teamEmployee({ name: 'Fresh server name' })])));
+  await team.loadBootstrap();
+  assert.equal(team.state.tabs[0].draft.name, 'Unsaved draft');
+  assert.equal((await env.repository({ domain: 'team:employees' }).get('employees')).users[0].name, 'Fresh server name');
+});
+
+test('team failed online mutation never replaces the confirmed local record', async () => {
+  const { env, team } = await savedTeam();
+  team.fetcher(async () => teamHttp({ ok: false, error: 'DB_ERROR' }, 500));
+  await assert.rejects(team.request('/api/admin/team/users/7', { method: 'PUT', body: '{}' }), /DB_ERROR/);
+  assert.equal((await env.repository({ domain: 'team:employees' }).get('employees')).users[0].name, 'Сотрудник А');
+});
+
+for (const change of [{ roleId: 200 }, { view: 'b' }]) {
+  test('team late network reply cannot reappear after role/access view replacement ' + JSON.stringify(change), async () => {
+    const { env, team } = await savedTeam(); const gate = teamDeferred(); const started = teamDeferred();
+    team.fetcher(async () => { started.resolve(); return gate.promise; });
+    const task = team.loadBootstrap(); await started.promise;
+    await env.confirm(session(change)); env.window.navigator.onLine = false;
+    await team.loadBootstrap(); gate.resolve(teamHttp(teamResponse())); await task;
+    assert.equal(team.state.users.length, 0); assert.equal(env.entries.size, 1);
+  });
+}
+
+test('team has no own storage/outbox protocol and blocks mutations from incomplete cards', () => {
+  const teamSource = fs.readFileSync(path.join(__dirname, '../static/js/team.js'), 'utf8');
+  assert.doesNotMatch(teamSource, /indexedDB\.open|localStorage\.setItem|orders:outbox|optimisticOrder|courierOutbox/);
+  assert.match(teamSource, /domain: 'team:employees', version: 1/);
+  assert.match(teamSource, /if \(!canUseServer\(\) \|\| activeTab\(\)\?\.localOnly\) return false/);
+  assert.match(teamSource, /if \(tab\?\.localOnly \|\| !canUseServer\(\)\) return/);
+});
+
+test('team fast cached opening has no warning or syncing flash', async () => {
+  const { team } = await savedTeam();
+  team.state.source = ''; team.state.fullUserIds.clear();
+  team.statusHistory.length = 0;
+  await team.loadBootstrap();
+  assert.ok(team.displays.some(users => users[0]?.name === 'Сотрудник А'));
+  assert.equal(team.state.connection.mode, 'idle');
+  assert.equal(team.statusRoot.classList.contains('hidden'), true);
+  assert.equal(team.statusHistory.filter(Boolean).length, 0);
+  assert.equal([...team.timers.values()].filter(timer => timer.delay === 650).length, 0);
+});
+
+test('team slow cached opening delays only its compact indicator, never data or request', async () => {
+  const { team } = await savedTeam(); team.state.source = '';
+  const gate = teamDeferred(); const started = teamDeferred();
+  team.fetcher(async () => { started.resolve(); return gate.promise; });
+  const task = team.loadBootstrap(); await started.promise;
+  assert.equal(team.state.source, 'local'); assert.equal(team.state.users[0].name, 'Сотрудник А');
+  assert.equal(team.status.textContent, '');
+  const rendersBeforeTimer = team.displays.length;
+  team.runStatusTimers();
+  assert.equal(team.status.textContent, 'Обновляем…');
+  assert.equal(team.statusRoot.classList.contains('courier-connection-banner--syncing'), true);
+  assert.equal(team.displays.length, rendersBeforeTimer);
+  gate.resolve(teamHttp(teamResponse())); await task;
+  assert.equal(team.state.connection.mode, 'idle'); assert.equal(team.status.textContent, '');
+});
+
+test('team reconnect success clears the offline status without an online success banner', async () => {
+  const { env, team } = await savedTeam();
+  env.window.navigator.onLine = false; env.window.dispatchEvent({ type: 'offline' });
+  assert.equal(team.status.textContent, 'Офлайн · сохранённые данные');
+  env.window.navigator.onLine = true; team.statusHistory.length = 0;
+  await team.loadBootstrap();
+  assert.equal(team.state.connection.mode, 'idle');
+  assert.equal(team.statusHistory.filter(Boolean).length, 0);
+});
+
+test('team HTTP error offers a scoped retry; success clears the error', async () => {
+  const { team } = await savedTeam();
+  team.fetcher(async () => teamHttp({ ok: false, error: 'DB_ERROR' }, 500));
+  await team.loadBootstrap(); assert.equal(team.state.connection.retry, true);
+  assert.equal(team.retry.classList.contains('hidden'), false);
+  const gate = teamDeferred(); const started = teamDeferred();
+  team.fetcher(async () => { started.resolve(); return gate.promise; });
+  team.retry.click(); await started.promise;
+  const pending = team.state.bootstrapPending.promise;
+  gate.resolve(teamHttp(teamResponse())); await pending;
+  assert.equal(team.state.connection.mode, 'idle'); assert.equal(team.state.users.length, 1);
+});
+
+test('team network failure keeps the saved list and shows a noncritical retry status', async () => {
+  const { team } = await savedTeam(); team.state.source = '';
+  team.fetcher(async () => { throw new TypeError('Failed to fetch'); });
+  await team.loadBootstrap();
+  assert.equal(team.state.users[0].name, 'Сотрудник А');
+  assert.equal(team.state.connection.mode, 'error'); assert.equal(team.state.connection.retry, true);
+  assert.equal(team.status.textContent, 'Не удалось обновить');
+});
+
+test('team filter changes neither reschedule nor flash the current connection status', async () => {
+  const { env, team } = await savedTeam();
+  env.window.navigator.onLine = false; env.window.dispatchEvent({ type: 'offline' });
+  const history = team.statusHistory.length;
+  team.state.userStatus = 'all'; team.renderConnectionStatus();
+  team.state.userStatus = 'blocked'; team.renderConnectionStatus();
+  assert.equal(team.statusHistory.length, history);
+  assert.equal(team.status.textContent, 'Офлайн · сохранённые данные');
+});
+
+for (const reason of ['logout', 'remote-context']) {
+  test('team late indicator callback cannot revive status after ' + reason, async () => {
+    const { env, team } = await savedTeam(); const gate = teamDeferred(); const started = teamDeferred();
+    team.fetcher(async () => { started.resolve(); return gate.promise; });
+    const task = team.loadBootstrap(); await started.promise;
+    const callback = [...team.timers.values()].find(timer => timer.delay === 650).callback;
+    env.core.reset({ forget: true, reason });
+    callback(); gate.resolve(teamHttp(teamResponse())); await task;
+    assert.equal(team.status.textContent, ''); assert.equal(team.state.connection.mode, 'idle');
+    assert.equal(team.statusRoot.classList.contains('hidden'), true); assert.equal(team.state.users.length, 0);
+  });
+}
+
+test('team pagehide cancels indicators and late page results even after pageshow', async () => {
+  const { env, team } = await savedTeam(); const gate = teamDeferred(); const started = teamDeferred();
+  team.fetcher(async () => { started.resolve(); return gate.promise; });
+  const task = team.loadBootstrap(); await started.promise;
+  const callback = [...team.timers.values()].find(timer => timer.delay === 650).callback;
+  env.window.dispatchEvent({ type: 'pagehide' }); env.window.dispatchEvent({ type: 'pageshow' });
+  callback(); gate.resolve(teamHttp(teamResponse([teamEmployee({ name: 'Late result' })]))); await task;
+  assert.equal(team.status.textContent, ''); assert.equal(team.state.users[0].name, 'Сотрудник А');
+});
+
+test('team status reuses connection styling in the header, with no list banner or technical caption', () => {
+  const teamSource = fs.readFileSync(path.join(__dirname, '../static/js/team.js'), 'utf8');
+  const center = fs.readFileSync(path.join(__dirname, '../views/partials/home/center.ejs'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../static/css/style.css'), 'utf8');
+  assert.doesNotMatch(teamSource, /Контакты доступны с сервера|dom\.list\.before|showLocalStatus/);
+  assert.match(center, /id="teamCenterTitle"[\s\S]*?id="teamConnectionStatus"[\s\S]*?class="toolbar-right"/);
+  assert.match(center, /id="teamConnectionStatus"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(center, /courier-connection-banner__retry/);
+  assert.match(css, /\.team-connection-status\{flex:1;min-width:0;max-width:240px\}/);
+  assert.match(css, /\.team-employee-contact\{min-height:1lh\}/);
+  assert.match(css, /\.courier-connection-banner__text\{[^}]*text-overflow:ellipsis;[^}]*white-space:nowrap;/);
 });

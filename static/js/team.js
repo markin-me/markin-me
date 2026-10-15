@@ -37,6 +37,20 @@
     draftSequence: 0,
     unsavedDialogOpen: false,
     allowPageLeave: false,
+    repository: null,
+    namespace: '',
+    fullUserIds: new Set(),
+    onlineReady: false,
+    source: '',
+    lastSyncedAt: null,
+    dataRevision: 0,
+    bootstrapPending: null,
+    listMessage: '',
+    connection: { mode: 'idle', text: '', retry: false, detail: '' },
+    statusTimer: null,
+    statusOperation: null,
+    pageHidden: false,
+    pageGeneration: 0,
     permissionMode: {
       active: false,
       roleKey: '',
@@ -49,6 +63,112 @@
       loadSequence: 0,
     },
   };
+
+  const localStatus = document.getElementById('teamConnectionStatus');
+  const statusText = localStatus?.querySelector('.courier-connection-banner__text');
+  const statusRetry = localStatus?.querySelector('.courier-connection-banner__retry');
+  const suspendedControls = new Map();
+
+  function suspendEditor() {
+    dom.editor.querySelectorAll('input, select, textarea, button').forEach((control) => {
+      if (!suspendedControls.has(control)) suspendedControls.set(control, control.disabled);
+      control.disabled = true;
+    });
+  }
+
+  function resumeEditor() {
+    suspendedControls.forEach((disabled, control) => { if (dom.editor.contains(control)) control.disabled = disabled; });
+    suspendedControls.clear();
+  }
+
+  function canReadLocalUsers() {
+    const permissions = window.AdminAccessContext?.permissions || [];
+    return permissions.some((grant) => grant === '*' || (grant.key === 'team.employees.read' && grant.access_rule === 'all'));
+  }
+
+  // Explicit projection on BOTH write and read; never persist the bootstrap model.
+  function employeeSnapshot(users) {
+    if (!Array.isArray(users)) throw new Error('INVALID_EMPLOYEE_SNAPSHOT');
+    const named = (item) => {
+      if (!Number.isSafeInteger(item?.id) || item.id <= 0 || typeof item.name !== 'string') throw new Error('INVALID_EMPLOYEE_SNAPSHOT');
+      return { id: item.id, name: item.name };
+    };
+    return users.map((user) => {
+      if (!['active', 'blocked', 'archived'].includes(user?.employee_status)
+        || typeof user.is_owner !== 'boolean' || !Array.isArray(user.roles) || !Array.isArray(user.stores)) throw new Error('INVALID_EMPLOYEE_SNAPSHOT');
+      return { ...named(user), employee_status: user.employee_status, is_owner: user.is_owner,
+        roles: user.roles.map((role) => ({ ...named(role), is_owner: role.is_owner === true })),
+        stores: user.stores.map(named) };
+    });
+  }
+
+  function canUseServer() {
+    return state.repository?.isCurrent() && state.onlineReady && navigator.onLine !== false;
+  }
+
+  function renderConnectionStatus() {
+    if (!localStatus) return;
+    const connection = state.connection;
+    const visible = !state.pageHidden && state.repository?.isCurrent() && state.section === 'users'
+      && !state.permissionMode.active && connection.mode !== 'idle';
+    localStatus.classList.toggle('hidden', !visible);
+    for (const mode of ['offline', 'syncing', 'online', 'error']) {
+      localStatus.classList.toggle(`courier-connection-banner--${mode}`, visible && connection.mode === mode);
+    }
+    const text = visible ? connection.text : '';
+    if (statusText && statusText.textContent !== text) statusText.textContent = text;
+    localStatus.title = visible ? [connection.text, connection.detail, state.lastSyncedAt
+      ? 'Последняя синхронизация: ' + new Date(state.lastSyncedAt).toLocaleString() : ''].filter(Boolean).join('. ') : '';
+    statusRetry?.classList.toggle('hidden', !visible || !connection.retry);
+  }
+
+  function cancelStatusOperation() {
+    if (state.statusTimer !== null) window.clearTimeout(state.statusTimer);
+    state.statusTimer = null;
+    state.statusOperation = null;
+  }
+
+  function setConnectionStatus(mode = 'idle', text = '', { retry = false, detail = '' } = {}) {
+    cancelStatusOperation();
+    state.connection = { mode, text, retry, detail };
+    renderConnectionStatus();
+  }
+
+  function beginStatusOperation(repository, isCurrent) {
+    cancelStatusOperation();
+    const operation = {};
+    state.statusOperation = operation;
+    // Delay ONLY this optional indicator. Cached data and the request are immediate.
+    state.statusTimer = window.setTimeout(() => {
+      if (state.statusOperation !== operation || state.pageHidden || !repository.isCurrent() || !isCurrent()) return;
+      state.statusTimer = null;
+      state.connection = { mode: 'syncing', text: 'Обновляем…', retry: false, detail: '' };
+      renderConnectionStatus();
+    }, 650);
+    return operation;
+  }
+
+  async function persistEmployeeSnapshot() {
+    const repository = state.repository;
+    if (!repository?.isCurrent() || !canReadLocalUsers()) return;
+    const revision = state.dataRevision;
+    const pageGeneration = state.pageGeneration;
+    const lastSyncedAt = Date.now();
+    try {
+      const value = { formatVersion: 1, users: employeeSnapshot(state.users) };
+      await repository.set('employees', value, { ttlMs: 5 * 60 * 1000, lastSyncedAt,
+        guard: () => revision === state.dataRevision && canReadLocalUsers() });
+      if (repository.isCurrent() && revision === state.dataRevision) {
+        state.lastSyncedAt = lastSyncedAt;
+        if (!state.pageHidden && state.pageGeneration === pageGeneration) renderConnectionStatus();
+      }
+    } catch (error) {
+      if (!state.pageHidden && state.pageGeneration === pageGeneration && repository.isCurrent() && revision === state.dataRevision) {
+        console.error('TEAM_LOCAL_WRITE_FAILED:', error.message);
+        setConnectionStatus('error', 'Не удалось сохранить', { detail: 'Данные получены с сервера, но не сохранены на устройстве. Локальное чтение может быть недоступно.' });
+      }
+    }
+  }
 
   const accessLabels = {
     all: 'Все',
@@ -159,6 +279,7 @@
       ROLE_REQUIRED: 'Назначьте сотруднику хотя бы одну роль.',
       INVALID_START_ROUTE: 'Выберите стартовый раздел.',
       FORBIDDEN: 'Недостаточно прав для этого действия.',
+      TEAM_ONLINE_REQUIRED: 'Для изменения данных требуется подключение и актуальная серверная карточка.',
       PERMISSION_ESCALATION_FORBIDDEN: 'Нельзя назначить право, которого нет у вашей активной роли.',
       ACCESS_RULE_ESCALATION_FORBIDDEN: 'Нельзя назначить более широкую область доступа, чем у вашей активной роли.',
       ROLE_ESCALATION_FORBIDDEN: 'Нельзя назначить сотруднику роль с более широкими полномочиями.',
@@ -181,11 +302,21 @@
   }
 
   async function request(url, options) {
+    const access = window.AdminLocalRepository?.capture();
+    if (!access?.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
+    if (options?.method && String(options.method).toUpperCase() !== 'GET' && !canUseServer()) {
+      throw Object.assign(new Error('TEAM_ONLINE_REQUIRED'), { code: 'TEAM_ONLINE_REQUIRED' });
+    }
     const response = await authFetch(url, options || {});
     const payload = await response.json().catch(() => ({}));
+    if (!access.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
     if (!response.ok || payload.ok !== true) {
       const error = new Error(payload.error || `HTTP_${response.status}`);
       error.code = payload.error || 'REQUEST_FAILED';
+      error.status = response.status;
+      if ([401, 403].includes(response.status) && (!options?.method || options.method === 'GET')) {
+        window.AdminLocalRepository.reset({ forget: true, reason: 'server-refusal' });
+      }
       throw error;
     }
     return payload;
@@ -244,6 +375,7 @@
       draft,
       snapshot: clone(draft),
       meta: entity ? clone(entity) : null,
+      localOnly: type === 'user' && Boolean(entity) && !state.fullUserIds.has(Number(entity.id)),
       assignmentSections: { roles: false, stores: false, start_route: false },
     };
     if (type === 'user') {
@@ -264,6 +396,7 @@
   }
 
   function openEntity(type, id) {
+    if (!state.repository?.isCurrent()) return;
     const key = tabKey(type, Number(id));
     if (state.permissionMode.active && state.permissionMode.roleKey !== key) exitPermissionMode({ render: false });
     const existing = state.tabs.find((tab) => tab.key === key);
@@ -286,6 +419,7 @@
   }
 
   function openCreateTab() {
+    if (!canUseServer()) return;
     if (state.permissionMode.active) exitPermissionMode({ render: false });
     const type = state.section === 'users' ? 'user' : 'role';
     const tab = makeTab(type, null);
@@ -296,6 +430,7 @@
   }
 
   function renderTabs() {
+    if (!state.repository?.isCurrent()) { dom.tabs.innerHTML = ''; return; }
     dom.tabsHeader.classList.toggle('hidden', state.tabs.length === 0);
     dom.tabs.innerHTML = state.tabs.map((tab) => `
       <div class="product-tab ${tab.key === state.activeKey ? 'is-active' : ''}" role="tab"
@@ -319,7 +454,8 @@
     dom.create.setAttribute('aria-label', dom.create.title);
     const canCreate = state.section === 'users' ? state.capabilities.create_users : state.capabilities.create_roles;
     dom.create.classList.toggle('hidden', !canCreate);
-    dom.create.disabled = !canCreate;
+    dom.create.disabled = !canCreate || !canUseServer();
+    renderConnectionStatus();
     renderList();
   }
 
@@ -333,10 +469,11 @@
     if (state.section === 'roles' && !state.capabilities.view_roles && state.capabilities.view_users) setSection('users');
     const canCreate = state.section === 'users' ? state.capabilities.create_users : state.capabilities.create_roles;
     dom.create.classList.toggle('hidden', !canCreate);
-    dom.create.disabled = !canCreate;
+    dom.create.disabled = !canCreate || !canUseServer();
   }
 
   function renderList() {
+    if (!state.repository?.isCurrent()) { dom.list.innerHTML = ''; return; }
     dom.userFilters?.classList.toggle('hidden', state.section !== 'users' || state.permissionMode.active);
     dom.userFilters?.querySelectorAll('[data-team-user-status]').forEach((button) => {
       const selected = button.dataset.teamUserStatus === state.userStatus;
@@ -350,7 +487,7 @@
         : state.users.filter((user) => user.employee_status === state.userStatus)
       : state.roles;
     if (!rows.length) {
-      dom.list.innerHTML = `<div class="team-list-state muted">${state.section === 'users' ? 'Сотрудников пока нет.' : 'Ролей пока нет.'}</div>`;
+      dom.list.innerHTML = `<div class="team-list-state ${!state.source && state.connection.mode === 'error' ? 'team-list-error' : 'muted'}">${escapeHtml(state.listMessage || (state.section === 'users' ? 'Сотрудников пока нет.' : 'Ролей пока нет.'))}</div>`;
       return;
     }
     dom.list.innerHTML = rows.map((item) => {
@@ -362,8 +499,8 @@
             <div class="product-avatar team-user-avatar" data-team-user-avatar="${Number(item.id)}"><img class="product-avatar-img hidden" alt="Фото сотрудника"><i class="fas fa-user" aria-hidden="true"></i></div>
             <div class="order-col team-entity-copy">
               <div class="product-title">${escapeHtml(item.name || 'Без имени')}</div>
-              <div class="muted">${escapeHtml(item.login || item.email || 'Без логина')} · ${escapeHtml(roles)}</div>
-              <div class="muted">${escapeHtml(item.phone || 'Телефон не указан')}</div>
+              <div class="muted">${escapeHtml(state.fullUserIds.has(item.id) ? (item.login || item.email || 'Без логина') + ' · ' + roles : roles)}</div>
+              <div class="muted team-employee-contact">${state.fullUserIds.has(item.id) ? escapeHtml(item.phone || 'Телефон не указан') : ''}</div>
             </div>
             <div class="order-col team-employee-badge"><span class="badge ${item.employee_status === 'active' ? '' : 'is-muted'}">${employeeStatusLabels[item.employee_status]}</span></div>
             </button>
@@ -384,6 +521,8 @@
   }
 
   async function syncUserListPhoto(userId) {
+    if (!canUseServer() || !state.fullUserIds.has(Number(userId))) return;
+    const access = window.AdminLocalRepository.capture();
     const id = Number(userId);
     const avatar = dom.list.querySelector(`[data-team-user-avatar="${id}"]`);
     if (!avatar) return;
@@ -413,7 +552,7 @@
       const response = await authFetch(`/api/admin/team/users/${id}/photo`);
       if (!response.ok) throw new Error('PHOTO_LOAD_FAILED');
       const blob = await response.blob();
-      if (state.userPhotos.get(id) !== cached) return;
+      if (!access.isCurrent() || state.userPhotos.get(id) !== cached) return;
       cached.url = URL.createObjectURL(blob);
     } catch {
       cached.error = true;
@@ -588,6 +727,8 @@
   }
 
   async function loadEmployeePhoto(tab) {
+    if (tab.localOnly || !canUseServer()) return;
+    const access = window.AdminLocalRepository.capture();
     if (!state.capabilities.read_employee_photo || !tab.photo || tab.isNew || tab.photo.loaded || tab.photo.loading || !tab.meta?.photo_revision) return;
     const photoState = tab.photo;
     photoState.loading = true;
@@ -595,7 +736,7 @@
       const response = await authFetch(`/api/admin/team/users/${tab.id}/photo`);
       if (!response.ok) throw new Error('PHOTO_LOAD_FAILED');
       const blob = await response.blob();
-      if (tab.photo !== photoState) return;
+      if (!access.isCurrent() || tab.photo !== photoState) return;
       photoState.previewUrl = URL.createObjectURL(blob);
       updateEmployeePhotoPreview(tab);
     } catch { if (tab.key === state.activeKey) showNotice('Не удалось загрузить фото сотрудника.', 'error'); }
@@ -604,7 +745,8 @@
 
   async function selectEmployeePhoto(file) {
     const tab = activeTab();
-    if (!file || tab?.type !== 'user') return;
+    if (!file || tab?.type !== 'user' || !canUseServer() || tab.localOnly) return;
+    const access = window.AdminLocalRepository.capture();
     if (file.size > 5 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
       return showNotice('Выберите JPEG, PNG или WebP размером до 5 МБ.', 'error');
     }
@@ -615,7 +757,7 @@
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
-      if (tab.key !== state.activeKey) return;
+      if (!access.isCurrent() || tab.key !== state.activeKey) return;
       clearEmployeePhoto(tab);
       tab.photo.data = data;
       tab.photo.previewUrl = URL.createObjectURL(file);
@@ -657,7 +799,8 @@
     const isSelf = Number(user.id) === state.actorUserId
       || (!state.actorUserId && user.email && user.email.toLowerCase() === state.actorEmail.toLowerCase());
     return actions.map(([nextStatus, label]) => {
-        const reason = isOwner ? 'Учётная запись владельца защищена от изменения статуса'
+        const reason = !canUseServer() || !state.fullUserIds.has(Number(user.id)) ? 'Действие требует актуальных серверных данных'
+          : isOwner ? 'Учётная запись владельца защищена от изменения статуса'
           : !state.capabilities.update_users ? 'Недостаточно прав'
             : nextStatus !== 'active' && isSelf ? 'Нельзя заблокировать или уволить себя' : '';
         const icon = nextStatus === 'archived' ? 'fa-ban' : nextStatus === 'blocked' ? 'fa-lock' : status === 'archived' ? 'fa-undo' : 'fa-unlock';
@@ -666,11 +809,13 @@
   }
 
   function requestEmployeeStatusChange(nextStatus, userId = null) {
+    if (!canUseServer()) return;
     readActiveDraft();
     readDocumentDraft();
     const tab = userId == null ? activeTab() : state.tabs.find((item) => item.type === 'user' && Number(item.id) === Number(userId));
     const user = userId == null ? tab?.meta : state.users.find((item) => Number(item.id) === Number(userId));
     if (!user || (tab && (tab.type !== 'user' || tab.isNew)) || !state.capabilities.update_users) return;
+    if (!state.fullUserIds.has(Number(user.id))) return;
     if (user.is_owner === true) return showNotice(errorLabel('OWNER_STATUS_CHANGE_FORBIDDEN'), 'error');
     if (tabHasUnsaved(tab)) return showNotice('Сначала сохраните или отмените изменения карточки и документов.', 'error');
     if (!window.AppModal) return showNotice('Компонент подтверждения недоступен.', 'error');
@@ -705,6 +850,17 @@
   }
 
   function renderUserEditor(tab) {
+    if (tab.localOnly) {
+      return `<div class="team-editor-scroll no-scrollbar"><section class="team-form-section">
+        <div class="settings-list-title">${escapeHtml(tab.meta.name)}</div>
+        <div class="team-list-state muted">Локальная карточка — только просмотр. Контакты, учётные данные, фотографии и документы доступны после загрузки с сервера.</div>
+        <div class="badge">${escapeHtml(employeeStatusLabels[tab.meta.employee_status])}</div>
+        <div class="settings-list-title">Назначенные роли</div>
+        <div>${escapeHtml(tab.meta.roles.map((role) => role.name).join(', ') || 'Роли не назначены')}</div>
+        <div class="settings-list-title">Филиалы</div>
+        <div>${escapeHtml(tab.meta.stores.map((store) => store.name).join(', ') || 'Не назначены')}</div>
+      </section></div>`;
+    }
     const draft = tab.draft;
     const loginRequired = tab.isNew || !draft.email || Boolean(draft.login);
     const protectedOwner = !tab.isNew && tab.meta.is_owner === true;
@@ -819,6 +975,7 @@
   }
 
   function renderEditor(options = {}) {
+    if (!state.repository?.isCurrent()) { dom.editor.innerHTML = ''; return; }
     const tab = activeTab();
     if (!tab) {
       dom.editor.innerHTML = '<div class="info-card team-empty-state"><div class="info-title">Выберите сотрудника или роль</div><div class="info-text">Открытые карточки появятся здесь отдельными рабочими вкладками.</div></div>';
@@ -845,6 +1002,8 @@
       return;
     }
     dom.editor.innerHTML = tab.type === 'user' ? renderUserEditor(tab) : renderRoleEditor(tab);
+    suspendedControls.clear();
+    if (!canUseServer()) suspendEditor();
     if (tab.type === 'user') {
       syncUserListPhoto(tab.id);
       loadEmployeePhoto(tab);
@@ -853,6 +1012,8 @@
   }
 
   async function loadDocumentSummary(tab) {
+    if (tab?.localOnly || !canUseServer()) return;
+    const access = window.AdminLocalRepository.capture();
     if (!tab || tab.type !== 'user' || tab.isNew || tab.documents.loading || !state.capabilities.view_employee_documents) return;
     tab.documents.loading = true;
     if (tab.key === state.activeKey) renderEditor({ documentsOnly: true });
@@ -865,7 +1026,7 @@
       tab.documents.error = errorLabel(error.code);
     } finally {
       tab.documents.loading = false;
-      if (tab.key === state.activeKey) renderEditor({ documentsOnly: true });
+      if (access.isCurrent() && tab.key === state.activeKey) renderEditor({ documentsOnly: true });
     }
   }
 
@@ -973,6 +1134,7 @@
   }
 
   async function saveDocumentSection(section) {
+    if (!canUseServer() || activeTab()?.localOnly) return;
     const tab = activeTab();
     if (!tab || tab.type !== 'user' || tab.isNew || tab.documents.editingSection !== section) return;
     readDocumentDraft();
@@ -1187,6 +1349,7 @@
     dom.sidebar?.classList.toggle('is-collapsed', state.permissionMode.sidebarCollapsed === '1');
     document.body.classList.remove('team-rbac-permission-mode');
     state.permissionMode.active = false;
+    renderConnectionStatus();
     dom.userFilters?.classList.toggle('hidden', state.section !== 'users');
     state.permissionMode.roleKey = '';
     state.permissionMode.selectedNavKey = '';
@@ -1357,6 +1520,7 @@
     if (tab.meta?.is_owner || (tab.meta?.is_system && !state.capabilities.manage_system_roles)) return;
     if (state.permissionMode.active) exitPermissionMode({ render: false });
     state.permissionMode.active = true;
+    renderConnectionStatus();
     dom.userFilters?.classList.add('hidden');
     state.permissionMode.roleKey = tab.key;
     state.permissionMode.originalLeftNodes = Array.from(dom.leftColumn.childNodes);
@@ -1384,6 +1548,8 @@
   }
 
   function replaceEntity(type, entity) {
+    state.dataRevision += 1;
+    if (type === 'user') state.fullUserIds.add(Number(entity.id));
     const list = type === 'user' ? state.users : state.roles;
     const index = list.findIndex((item) => Number(item.id) === Number(entity.id));
     if (index >= 0) list[index] = entity;
@@ -1410,10 +1576,12 @@
     });
     if (type === 'user') state.users.sort((a, b) => String(a.name).localeCompare(String(b.name), 'ru'));
     else state.roles.sort((a, b) => Number(b.is_owner) - Number(a.is_owner) || String(a.name).localeCompare(String(b.name), 'ru'));
+    void persistEmployeeSnapshot();
   }
 
   async function saveActiveTab(event, confirmedPassword = null) {
     event.preventDefault();
+    if (!canUseServer() || activeTab()?.localOnly) return false;
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     normalizeEmployeePhoneInput(form.elements.phone);
@@ -1495,6 +1663,7 @@
         tab.draft = normalizeRoleDraft(result.role);
         if (typeof window.reloadAdminAccessContext === 'function') {
           await window.reloadAdminAccessContext();
+          if (!state.repository?.isCurrent() || !state.tabs.includes(tab)) return true;
         }
       }
       tab.snapshot = clone(tab.draft);
@@ -1513,7 +1682,7 @@
       return false;
     } finally {
       const currentSubmit = document.querySelector('#teamActiveForm [type="submit"]');
-      if (currentSubmit) currentSubmit.disabled = false;
+      if (currentSubmit && canUseServer()) currentSubmit.disabled = false;
     }
   }
 
@@ -1626,6 +1795,7 @@
   }
 
   async function deleteRole() {
+    if (!canUseServer()) return;
     const tab = activeTab();
     if (!tab || tab.type !== 'role' || tab.isNew || !state.capabilities.delete_roles) return;
     const execute = async function () {
@@ -1650,9 +1820,62 @@
   }
 
   async function loadBootstrap() {
+    const core = window.AdminLocalRepository;
+    const context = await window.AdminAccessContextPromise;
+    if (!context || !core || !await core.ready() || !core.isActive()) return;
+    const repository = core.create({ domain: 'team:employees', version: 1 });
+    if (state.bootstrapPending?.namespace === repository.namespace && state.bootstrapPending.repository.isCurrent()) return state.bootstrapPending.promise;
+    if (state.namespace && state.namespace !== repository.namespace) clearTeamContext();
+    state.repository = repository;
+    state.namespace = repository.namespace;
+    const task = loadTeamData(repository);
+    state.bootstrapPending = { namespace: repository.namespace, repository, promise: task };
+    try { return await task; }
+    finally { if (state.bootstrapPending?.promise === task) state.bootstrapPending = null; }
+  }
+
+  async function loadTeamData(repository) {
+    let revision = state.dataRevision;
+    const pageGeneration = state.pageGeneration;
+    const isCurrent = () => !state.pageHidden && state.pageGeneration === pageGeneration
+      && repository.isCurrent() && state.repository === repository && state.dataRevision === revision;
+    if (!state.source && canReadLocalUsers()) {
+      try {
+        const entry = await repository.getEntry('employees', { allowStale: true });
+        if (!isCurrent()) return;
+        if (entry) {
+          if (entry.data?.formatVersion !== 1) throw new Error('INVALID_EMPLOYEE_SNAPSHOT');
+          state.users = employeeSnapshot(entry.data.users);
+          state.source = 'local';
+          state.lastSyncedAt = entry.lastSyncedAt;
+          state.capabilities.view_users = true;
+          applyTeamCapabilities();
+          renderList();
+          renderConnectionStatus();
+        }
+      } catch (error) {
+        if (!isCurrent()) return;
+        console.error('TEAM_LOCAL_READ_FAILED:', error.message);
+        setConnectionStatus('error', 'Локальные данные недоступны', { detail: 'Не удалось прочитать данные на устройстве. Выполняется загрузка с сервера.' });
+      }
+    }
+    if (!isCurrent()) return;
+    if (navigator.onLine === false) {
+      state.onlineReady = false;
+      state.listMessage = state.source ? '' : 'Нет подключения. Сохранённых данных пока нет';
+      setConnectionStatus(state.source ? 'offline' : 'idle', state.source ? 'Офлайн · сохранённые данные' : '');
+      applyTeamCapabilities(); renderList();
+      if (!tabHasUnsaved(activeTab()) || !dom.editor.firstElementChild) renderEditor();
+      else suspendEditor();
+      return;
+    }
+    if (!state.source) { state.listMessage = 'Загрузка данных…'; renderList(); }
+    const operation = beginStatusOperation(repository, isCurrent);
     try {
       const result = await request('/api/admin/team/bootstrap');
+      if (!isCurrent()) return;
       state.users = result.users || [];
+      state.fullUserIds = new Set(state.users.map((user) => Number(user.id)));
       state.actorUserId = Number(result.current_user_id || 0);
       state.actorEmail = result.current_user_email || '';
       state.roles = result.roles || [];
@@ -1665,12 +1888,92 @@
       state.startRoutes = result.start_routes || [];
       state.loginSuffix = result.login_suffix || '';
       state.capabilities = result.capabilities || { view_employee_documents: false, manage_employee_documents: false, view_users: false, create_users: false, update_users: false, manage_users: false, view_roles: false, create_roles: false, update_roles: false, delete_roles: false, manage_permissions: false, manage_roles: false, manage_system_roles: false };
+      state.source = 'network';
+      state.onlineReady = true;
+      state.listMessage = '';
+      state.dataRevision += 1;
+      revision = state.dataRevision;
+      // Replace only clean tabs. Never overwrite unsaved online edits during refresh.
+      state.tabs.forEach((tab) => {
+        if (tab.type !== 'user' || tab.isNew || tabHasUnsaved(tab)) return;
+        const user = state.users.find((item) => Number(item.id) === Number(tab.id));
+        if (!user) return;
+        tab.meta = clone(user);
+        tab.title = user.name;
+        tab.localOnly = false;
+        tab.draft = normalizeUserDraft(user);
+        tab.snapshot = clone(tab.draft);
+      });
       applyTeamCapabilities();
       renderList();
+      renderTabs();
+      if (!tabHasUnsaved(activeTab()) || !dom.editor.firstElementChild) renderEditor();
+      else resumeEditor();
+      setConnectionStatus(navigator.onLine === false ? 'offline' : 'idle', navigator.onLine === false ? 'Офлайн · сохранённые данные' : '');
+      await persistEmployeeSnapshot();
     } catch (error) {
-      dom.list.innerHTML = `<div class="team-list-state team-list-error">${escapeHtml(errorLabel(error.code))}</div>`;
+      if (!isCurrent()) return;
+      state.onlineReady = false;
+      state.listMessage = state.source ? '' : 'Не удалось загрузить сотрудников. Сохранённых данных пока нет';
+      setConnectionStatus('error', 'Не удалось обновить', { retry: true,
+        detail: error.status ? 'Ошибка сервера: HTTP ' + error.status : 'Не удалось связаться с сервером' });
+      applyTeamCapabilities(); renderList();
+      // Disable controls in place, preserving drafts, focus and form values.
+      suspendEditor();
+    } finally {
+      if (state.statusOperation === operation) setConnectionStatus();
     }
   }
+
+  function clearTeamContext() {
+    setConnectionStatus();
+    if (window.AppModal?.isOpen?.()) window.AppModal.close();
+    if (state.permissionMode.active) exitPermissionMode({ render: false });
+    state.tabs.forEach(clearEmployeePhoto);
+    state.userPhotos.forEach((photo) => { if (photo.url) URL.revokeObjectURL(photo.url); });
+    state.userPhotos.clear();
+    state.users = []; state.roles = []; state.stores = []; state.permissions = []; state.startRoutes = [];
+    state.tabs = []; state.activeKey = ''; state.fullUserIds.clear();
+    Object.keys(state.capabilities).forEach((key) => { state.capabilities[key] = false; });
+    state.actorUserId = 0; state.actorEmail = ''; state.loginSuffix = '';
+    state.repository = null; state.namespace = ''; state.source = ''; state.lastSyncedAt = null;
+    state.onlineReady = false; state.bootstrapPending = null; state.dataRevision += 1;
+    suspendedControls.clear();
+    rbacPermissionIds.clear();
+    state.listMessage = '';
+    dom.list.innerHTML = ''; dom.editor.innerHTML = ''; dom.tabs.innerHTML = '';
+    dom.tabsHeader.classList.add('hidden'); dom.create.disabled = true;
+    renderConnectionStatus();
+  }
+
+  window.addEventListener('admin:local-context-changed', (event) => {
+    if (event.detail?.state === 'active') return;
+    setConnectionStatus();
+    state.onlineReady = false;
+    if (event.detail?.state === 'revoked') clearTeamContext();
+    else {
+      // Pending revalidation may preserve drafts, but must not expose old data.
+      if (window.AppModal?.isOpen?.()) window.AppModal.close();
+      if (state.permissionMode.active) exitPermissionMode({ render: false });
+      dom.list.innerHTML = ''; dom.editor.innerHTML = ''; dom.tabs.innerHTML = '';
+      dom.create.disabled = true;
+    }
+  });
+  window.addEventListener('admin:access-context', () => { void loadBootstrap(); });
+  window.addEventListener('online', () => { void loadBootstrap(); });
+  window.addEventListener('offline', () => {
+    if (!state.repository?.isCurrent() || state.pageHidden) return;
+    state.onlineReady = false;
+    state.listMessage = state.source ? '' : 'Нет подключения. Сохранённых данных пока нет';
+    setConnectionStatus(state.source ? 'offline' : 'idle', state.source ? 'Офлайн · сохранённые данные' : '');
+    applyTeamCapabilities(); renderList();
+    suspendEditor();
+  });
+  statusRetry?.addEventListener('click', () => {
+    if (state.repository?.isCurrent() && !state.pageHidden && state.connection.retry) void loadBootstrap();
+  });
+  window.addEventListener('pagehide', () => { state.pageHidden = true; state.pageGeneration += 1; setConnectionStatus(); });
+  window.addEventListener('pageshow', () => { state.pageHidden = false; });
 
   dom.sectionButtons.forEach((button) => button.addEventListener('click', () => requestSectionChange(button.dataset.teamSection)));
   dom.create.addEventListener('click', openCreateTab);
