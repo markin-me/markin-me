@@ -218,6 +218,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
   if (route.startsWith('/upload/category')) return 'products.categories.create';
   if (route.startsWith('/upload/product')) return 'products.catalog.create';
   if (/^\/catalog\/(product-targets|product-summaries|product-passports)/.test(route)) return 'products.catalog.read';
+  if (/^\/catalog\/(manifest|changes|stream)\/?$/.test(route)) return 'products.catalog.read';
   if (route.startsWith('/catalog/combos')) return 'products.combo_blocks.read';
   if (route.startsWith('/catalog/categories') || route.startsWith('/prod_categories')) return byAction('products.categories');
   if (/^\/products\/[^/]+\/variants/.test(route)) return byAction('products.variants');

@@ -1,4 +1,25 @@
 (function () {
+  let catalogPageContext = null;
+  let catalogPageNamespace = null;
+  function bindCatalogPageContext() {
+    const core = window.AdminLocalRepository;
+    if (!core?.isActive()) return false;
+    const next = core.create({ domain: 'admin:catalog:consumer', version: 1 });
+    if (catalogPageNamespace && catalogPageNamespace !== next.namespace) {
+      catalogPageContext = null;
+      clearCatalogPageState();
+      return false;
+    }
+    catalogPageNamespace = next.namespace;
+    catalogPageContext = next;
+    return true;
+  }
+  window.addEventListener('admin:local-context-changed', (event) => {
+    if (event.detail?.state === 'active') {
+      if (bindCatalogPageContext() && productsStockSocket) connectProductsStockSocket();
+    }
+    else catalogPageContext = null;
+  });
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
@@ -63,6 +84,9 @@
   }
 
   function queueRemoteStockChanges(ids) {
+    if (!catalogPageContext?.isCurrent()) return;
+    const access = window.AdminLocalRepository.capture();
+    const storeId = localStorage.getItem('activeStoreId');
     (Array.isArray(ids) ? ids : []).forEach((value) => {
       const id = Number(value || 0);
       if (id > 0) pendingRemoteStockIds.add(id);
@@ -70,12 +94,15 @@
     if (!pendingRemoteStockIds.size) return;
     if (pendingRemoteStockTimer) clearTimeout(pendingRemoteStockTimer);
     pendingRemoteStockTimer = setTimeout(() => {
+      if (!access.isCurrent() || storeId !== localStorage.getItem('activeStoreId')) return;
       pendingRemoteStockTimer = null;
       void flushRemoteStockChanges();
     }, 50);
   }
 
   function connectProductsStockSocket() {
+    if (!catalogPageContext?.isCurrent()) return;
+    const access = window.AdminLocalRepository.capture();
     const storeId = Number(localStorage.getItem("activeStoreId") || localStorage.getItem("store_id") || PRODUCT_CACHE_SCOPE.storeId || 1);
     if (typeof WebSocket !== "function" || !(storeId > 0)) return;
     try { productsStockSocket?.close(); } catch {}
@@ -83,11 +110,11 @@
     const socket = new WebSocket(`${protocol}//${location.host}/api/stock-ws?tenant_id=${encodeURIComponent(TENANT_ID)}&store_id=${encodeURIComponent(storeId)}`);
     productsStockSocket = socket;
     socket.addEventListener("open", () => {
-      if (productsStockSocket !== socket) return;
+      if (productsStockSocket !== socket || !access.isCurrent()) return;
       queueRemoteStockChanges(state.products.map((product) => product?.id));
     });
     socket.addEventListener("message", (event) => {
-      if (productsStockSocket !== socket) return;
+      if (productsStockSocket !== socket || !access.isCurrent()) return;
       try {
         const payload = JSON.parse(String(event.data || ""));
         if (payload.type === "stock.resync") queueRemoteStockChanges(state.products.map((product) => product?.id));
@@ -99,7 +126,7 @@
       } catch (_) {}
     });
     socket.addEventListener("close", () => {
-      if (productsStockSocket !== socket) return;
+      if (productsStockSocket !== socket || !access.isCurrent()) return;
       productsStockSocket = null;
       if (productsStockReconnectTimer) clearTimeout(productsStockReconnectTimer);
       productsStockReconnectTimer = setTimeout(connectProductsStockSocket, 1500);
@@ -928,22 +955,28 @@
   let editorUnitConversionsLoaded = false;
 
   function schedulePersistProductsCache(delay = 180) {
-    if (!window.AdminPersistentCache) return;
+    if (!window.AdminPersistentCache || !catalogPageContext?.isCurrent()) return;
+    const access = window.AdminLocalRepository.capture();
+    const storeId = localStorage.getItem('activeStoreId') || '1';
     if (schedulePersistProductsCache.timer) clearTimeout(schedulePersistProductsCache.timer);
     schedulePersistProductsCache.timer = setTimeout(() => {
+      if (!catalogPageContext?.isCurrent() || !access.isCurrent() || storeId !== (localStorage.getItem('activeStoreId') || '1')) return;
       const categories = Array.isArray(state.categories) ? state.categories : [];
       const byCategory = {};
       if (state.productsByCategoryCache instanceof Map) {
         state.productsByCategoryCache.forEach((value, key) => { byCategory[String(key)] = value; });
       }
-      window.AdminPersistentCache.writeProductCatalog(PRODUCT_CACHE_SCOPE, { categories, byCategory });
+      void window.AdminPersistentCache.writeProductCatalog({ storeId }, { categories, byCategory });
     }, Math.max(0, Number(delay || 0)));
   }
 
   async function hydrateProductsPersistentCache() {
     if (!window.AdminPersistentCache) return;
+    const access = window.AdminLocalRepository.capture();
+    const storeId = localStorage.getItem('activeStoreId') || '1';
     if (window.CatalogRepository) await window.CatalogRepository.init(getProductsCatalogRepositoryOptions());
-    const cached = await window.AdminPersistentCache.readProductCatalog(PRODUCT_CACHE_SCOPE).catch(() => null);
+    const cached = await window.AdminPersistentCache.readProductCatalog({ storeId }).catch(() => null);
+    if (!access.isCurrent() || storeId !== (localStorage.getItem('activeStoreId') || '1')) throw new Error('LOCAL_SCOPE_CHANGED');
     if (!cached || typeof cached !== "object") return;
     if (Array.isArray(cached.categories) && !state.categories.length) state.categories = cached.categories;
     if (cached.byCategory && typeof cached.byCategory === "object") {
@@ -1171,6 +1204,8 @@
 
   function getProductsCatalogRepositoryOptions() {
     return {
+      guard: () => Boolean(catalogPageContext?.isCurrent()),
+      rbacContext: 'products',
       loader: loadProductsCatalogPassports,
       request: (url, options) => api(url, options),
       metadataLoader: refreshProductsCatalogSyncMetadata,
@@ -1476,6 +1511,7 @@
   }
 
   function getCachedProductDetails(productId) {
+    if (!catalogPageContext?.isCurrent()) return null;
     if (!(state.productDetailsCache instanceof Map)) {
       state.productDetailsCache = new Map();
       return null;
@@ -1519,6 +1555,7 @@
   }
 
   function getCachedProductView(productId) {
+    if (!catalogPageContext?.isCurrent()) return null;
     if (!(state.productViewCache instanceof Map)) {
       state.productViewCache = new Map();
       return null;
@@ -1634,6 +1671,8 @@
   // ---------------- API ----------------
 
   async function api(url, opts) {
+    const access = window.AdminLocalRepository.capture();
+    if (!catalogPageContext?.isCurrent() || !access.isCurrent()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     // Получаем токен и store_id из localStorage
     const token = localStorage.getItem('authToken');
     const storeId = localStorage.getItem('activeStoreId') || '1';
@@ -1654,9 +1693,12 @@
       ...opts,
       headers,
     });
+    if (!access.isCurrent() || token !== localStorage.getItem('authToken')
+        || storeId !== (localStorage.getItem('activeStoreId') || '1')) throw new Error('LOCAL_SCOPE_CHANGED');
     
     // Если 401 - перенаправляем на логин
     if (res.status === 401) {
+      window.CatalogRepository.checkAccessResponse(401, null);
       localStorage.removeItem('authToken');
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
@@ -1665,6 +1707,12 @@
     }
     
     const data = await res.json().catch(() => null);
+    if (!access.isCurrent() || storeId !== (localStorage.getItem('activeStoreId') || '1')) throw new Error('LOCAL_SCOPE_CHANGED');
+    const catalogRead = (!opts?.method || opts.method === 'GET')
+      && /^\/api\/(admin\/catalog\/(?:product-targets|product-summaries|product-passports|manifest|changes|stream)(?:\?|$)|prod_products(?:\?|$)|admin\/products\/\d+(?:\?|$))/.test(String(url));
+    const passportRead = String(url).split('?')[0] === '/api/admin/catalog/product-passports';
+    window.CatalogRepository.checkAccessResponse(res.status, data,
+      catalogRead || passportRead ? 'products.catalog.read' : null);
     if (!res.ok || !data || data.ok === false) {
       throw new Error((data && data.error) || `HTTP_${res.status}`);
     }
@@ -25720,6 +25768,10 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
+    await window.AdminAccessContextPromise;
+    if (!await window.AdminLocalRepository.ready()) return;
+    if (!bindCatalogPageContext()) return;
+    if (!await window.CatalogRepository.init(getProductsCatalogRepositoryOptions())) return;
     document.addEventListener("error", (event) => {
       const photo = event.target;
       if (photo instanceof HTMLImageElement && photo.closest(".option-product-photo")) {
@@ -25766,6 +25818,8 @@ const isViewMode = state.comboPanel.mode === "view";
         enterProductsMode(state.currentCategoryId);
       }
       unsubscribeProductsCatalog = window.CatalogRepository.subscribe((event) => {
+        if (!catalogPageContext?.isCurrent()) return;
+        if (!event?.isCurrent?.()) return;
         const repositoryState = event?.syncState?.state;
         if (event?.type === "download-job") syncProductsCatalogDownloadJob();
         if (repositoryState) {
@@ -25856,7 +25910,7 @@ const isViewMode = state.comboPanel.mode === "view";
   });
 
   // Слушать изменение Филиалы
-  document.addEventListener('tenantStoreChanged', async () => {
+  async function handleProductsStoreChange() {
     connectProductsStockSocket();
     closeProductsCatalogMenu();
     productsRequestToken += 1;
@@ -25864,6 +25918,22 @@ const isViewMode = state.comboPanel.mode === "view";
     state.categories = [];
     state.currentCategoryId = null;
     state.allCategoryId = null;
+    state.productsByCategoryCache.clear();
+    state.productDetailsCache.clear();
+    state.productViewCache.clear();
+    state.comboSetDetailsCache.clear();
+    state.comboRowPhotosCache.clear();
+    state.productRowVariantsCache.clear();
+    editingProducts.clear();
+    editingCategories.clear();
+    categoryViewStates.clear();
+    navigationStack.length = 0;
+    currentNavigationState = null;
+    tabsState.tabs = []; tabsState.activeKey = null;
+    state.selectedProductId = null;
+    if (productInfoBody) productInfoBody.innerHTML = '';
+    renderTabs();
+    renderProductsList();
     state.catalogBootstrapVisible = false;
     setProductsCatalogConnectionState(navigator.onLine ? "syncing" : "offline");
     if (window.CatalogRepository) {
@@ -25881,6 +25951,10 @@ const isViewMode = state.comboPanel.mode === "view";
       catch (_) { setProductsCatalogConnectionState("offline"); }
     }
     if (window.CatalogRepository) await window.CatalogRepository.startSync();
+  }
+  document.addEventListener('tenantStoreChanged', handleProductsStoreChange);
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'activeStoreId') void handleProductsStoreChange();
   });
   window.addEventListener("pagehide", () => {
     try { productsStockSocket?.close(); } catch {}
@@ -25889,5 +25963,26 @@ const isViewMode = state.comboPanel.mode === "view";
     closeProductsCatalogMenu();
     unsubscribeProductsCatalog?.();
     unsubscribeProductsCatalog = null;
+  });
+  function clearCatalogPageState() {
+    try { productsStockSocket?.close(); } catch {}
+    productsStockSocket = null;
+    if (productsStockReconnectTimer) clearTimeout(productsStockReconnectTimer);
+    if (pendingRemoteStockTimer) clearTimeout(pendingRemoteStockTimer);
+    pendingRemoteStockIds.clear();
+    if (schedulePersistProductsCache.timer) clearTimeout(schedulePersistProductsCache.timer);
+    productsRequestToken += 1;
+    state.products = []; state.categories = [];
+    Object.values(state).forEach(value => { if (value instanceof Map || value instanceof Set) value.clear(); });
+    editingProducts.clear(); editingCategories.clear(); categoryViewStates.clear();
+    editingOptions.clear(); editingVariants.clear(); editingCombos.clear(); editingAutoAdds.clear();
+    navigationStack.length = 0; currentNavigationState = null;
+    tabsState.tabs = []; tabsState.activeKey = null;
+    if (productInfoBody) productInfoBody.innerHTML = '';
+    if (productsList) productsList.innerHTML = '';
+    renderTabs();
+  }
+  window.addEventListener('admin:local-context-changed', (event) => {
+    if (event.detail?.state === 'revoked') clearCatalogPageState();
   });
 })();

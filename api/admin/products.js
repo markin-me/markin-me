@@ -1676,7 +1676,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
   router.get('/admin/catalog/manifest', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = Number(req.query?.store_id || helpers.getStoreId(req));
+      const storeId = req.catalogStoreId;
       if (!(await hasCatalogStoreScope(tenantId, storeId))) {
         return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
       }
@@ -1691,7 +1691,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
   router.get('/admin/catalog/changes', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = Number(req.query?.store_id || helpers.getStoreId(req));
+      const storeId = req.catalogStoreId;
       if (!(await hasCatalogStoreScope(tenantId, storeId))) {
         return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
       }
@@ -1718,7 +1718,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
   router.get('/admin/catalog/stream', async (req, res) => {
     const tenantId = helpers.getTenantId(req);
-    const storeId = Number(req.query?.store_id || 0);
+    const storeId = req.catalogStoreId;
     let currentRevision;
     try {
       if (!(storeId > 0) || !(await hasCatalogStoreScope(tenantId, storeId))) {

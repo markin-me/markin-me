@@ -2035,6 +2035,17 @@ async function requireAdminPermission(req, res, next) {
       const accessRule = String(req.permission && req.permission.accessRule || 'all');
       const route = String(req.path || '').toLowerCase();
       const method = String(req.method || '').toUpperCase();
+      if (/^\/catalog\/(manifest|changes|stream)\/?$/.test(route)) {
+        const headerStore = req.headers['x-store-id'];
+        const queryStore = req.query?.store_id;
+        const supplied = [headerStore, queryStore].filter(value => value !== undefined);
+        if (supplied.some(value => !Number.isSafeInteger(Number(value)) || Number(value) <= 0)
+            || (headerStore !== undefined && queryStore !== undefined && Number(headerStore) !== Number(queryStore))) {
+          return res.status(400).json({ ok: false, error: 'CATALOG_STORE_SCOPE_CONFLICT' });
+        }
+        req.catalogStoreId = Number(headerStore || queryStore
+          || (accessRule === 'stores' && req.user.fullAccess !== true ? 0 : helpers.getStoreId(req)));
+      }
       const isSharedTenantRead = method === 'GET' && (route === '/tenant' || route === '/tenant/map-provider-config');
       if ((accessRule === 'assigned' || accessRule === 'own')
           && !route.startsWith('/orders') && !route.startsWith('/clients') && !isSharedTenantRead) {
@@ -2045,7 +2056,7 @@ async function requireAdminPermission(req, res, next) {
         return res.status(403).json({ ok: false, error: 'RESOURCE_SCOPE_UNSUPPORTED' });
       }
       if (accessRule !== 'stores' || req.user.fullAccess === true) return next();
-      const storeId = Number(req.headers['x-store-id'] || req.query?.store_id || req.body?.store_id || 0);
+      const storeId = req.catalogStoreId ?? Number(req.headers['x-store-id'] || req.query?.store_id || req.body?.store_id || 0);
       if (!(storeId > 0) || !await userHasStore(req.user, storeId)) {
         return res.status(403).json({ ok: false, error: 'STORE_FORBIDDEN' });
       }

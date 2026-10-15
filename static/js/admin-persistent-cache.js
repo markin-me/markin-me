@@ -469,37 +469,49 @@
   }
 
   function productScope(options = {}) {
-    return createScope({ domain: "products", version: 1,
-      userId: options.userId, tenantId: options.tenantId, storeId: options.storeId });
+    const repository = window.AdminLocalRepository;
+    if (!repository?.isActive()) return null;
+    const storeId = String(options.storeId || currentIdentity().storeId || '');
+    return repository.create({ domain: 'products', version: 2,
+      dimensions: storeId ? { organizationalUnit: { type: 'store', id: storeId } } : {},
+      guard: () => String(currentIdentity().storeId || '') === storeId });
   }
 
   async function readProductCatalog(options) {
     const cache = productScope(options);
-    if (!cache.complete) return null;
+    if (!cache?.isCurrent()) return null;
     if (productRam.has(cache.namespace)) return productRam.get(cache.namespace);
-    const data = await cache.get("catalog");
+    const data = await cache.get("catalog", { allowStale: true });
+    if (!cache.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
     if (data && typeof data === "object") productRam.set(cache.namespace, data);
     return data && typeof data === "object" ? data : null;
   }
 
   async function writeProductCatalog(options, data) {
     const cache = productScope(options);
-    if (!cache.complete) return false;
+    if (!cache?.isCurrent()) return false;
     const previous = productRam.get(cache.namespace) || await cache.get("catalog").catch(() => null) || {};
+    if (!cache.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
     const next = { ...previous, ...(data && typeof data === "object" ? data : {}) };
-    productRam.set(cache.namespace, next);
-    try { await cache.set("catalog", next, { ttlMs: PRODUCT_RETENTION_MS }); return true; }
+    try {
+      await cache.set("catalog", next, { ttlMs: PRODUCT_RETENTION_MS });
+      if (!cache.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
+      productRam.set(cache.namespace, next);
+      return true;
+    }
     catch (error) { console.warn("Product cache write failed", error); return false; }
   }
 
   function loadProductCatalog(options, loader, loadOptions = {}) {
     const cache = productScope(options);
-    if (!cache.complete) return Promise.resolve().then(loader);
+    if (!cache?.isCurrent()) return Promise.reject(new Error('LOCAL_CONTEXT_UNAVAILABLE'));
     const pendingKey = `${cache.namespace}:${String(loadOptions.segment || "catalog")}`;
     if (productPending.has(pendingKey)) return productPending.get(pendingKey);
     const generation = productGenerations.get(cache.namespace) || 0;
     const promise = Promise.resolve().then(loader).then(async (data) => {
+      if (!cache.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
       if ((productGenerations.get(cache.namespace) || 0) === generation) await writeProductCatalog(options, data);
+      if (!cache.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
       return data;
     }).finally(() => {
       if (productPending.get(pendingKey) === promise) productPending.delete(pendingKey);
@@ -510,7 +522,7 @@
 
   function invalidateProductCatalog(options) {
     const cache = productScope(options);
-    if (!cache.complete) return Promise.resolve(false);
+    if (!cache?.isCurrent()) return Promise.resolve(false);
     productGenerations.set(cache.namespace, (productGenerations.get(cache.namespace) || 0) + 1);
     productRam.delete(cache.namespace);
     Array.from(productPending.keys()).filter((key) => key.startsWith(`${cache.namespace}:`))

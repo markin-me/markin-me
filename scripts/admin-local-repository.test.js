@@ -948,3 +948,69 @@ test('team status reuses connection styling in the header, with no list banner o
   assert.match(css, /\.team-employee-contact\{min-height:1lh\}/);
   assert.match(css, /\.courier-connection-banner__text\{[^}]*text-overflow:ellipsis;[^}]*white-space:nowrap;/);
 });
+
+// Static contracts for PR1. These inspect source only; browser/race scenarios still
+// require manual verification. Do not run tests without permission (AGENTS.md).
+const catalogSource = fs.readFileSync(path.join(__dirname, '../static/js/admin-catalog.js'), 'utf8');
+const productCacheSource = fs.readFileSync(path.join(__dirname, '../static/js/admin-persistent-cache.js'), 'utf8');
+const productsSource = fs.readFileSync(path.join(__dirname, '../static/js/products.js'), 'utf8');
+const newOrderSource = fs.readFileSync(path.join(__dirname, '../static/js/new-order.js'), 'utf8');
+
+test('catalog uses confirmed role/view/revocation scopes, not the legacy identity namespace', () => {
+  const scopeSource = catalogSource.slice(catalogSource.indexOf('  function currentScope()'), catalogSource.indexOf('  function deferred()'));
+  assert.match(scopeSource, /AdminLocalRepository/);
+  assert.match(scopeSource, /repository\?\.isActive\(\)/);
+  assert.match(scopeSource, /repository\.create\(\{ domain: DOMAIN, version: VERSION/);
+  assert.match(scopeSource, /organizationalUnit: \{ type: 'store', id: storeId \}/);
+  assert.match(scopeSource, /candidate === scope && candidate\.isCurrent\(\) && generation === scopeGeneration/);
+  assert.match(scopeSource, /configuredGuard/);
+  assert.doesNotMatch(catalogSource, /previousReadScope|seedLegacy|migratePreviousRepository|readProductCatalog/);
+});
+
+test('shared product cache has a confirmed scope and checks delayed IndexedDB results', () => {
+  const cacheSource = productCacheSource.slice(productCacheSource.indexOf('  function productScope('), productCacheSource.indexOf('  function resetRuntimeScope('));
+  assert.match(cacheSource, /repository\.create\(\{ domain: 'products', version: 2/);
+  assert.doesNotMatch(cacheSource, /createScope\(\{ domain: "products"/);
+  assert.match(cacheSource, /await cache\.get\("catalog", \{ allowStale: true \}\);\s*if \(!cache\.isCurrent\(\)\)/);
+  assert.match(cacheSource, /await cache\.set\("catalog", next,[\s\S]*?if \(!cache\.isCurrent\(\)\)/);
+});
+
+test('catalog binds mutation tokens, checkpoints, SSE and scheduled work to their generation', () => {
+  assert.match(catalogSource, /previous,\s*scope, scopeGeneration/);
+  assert.match(catalogSource, /scopeIsCurrent\(token\?\.scope, token\?\.scopeGeneration\)/);
+  assert.match(catalogSource, /saveCheckpoint\(serverRevision, targetScope, generation\)/);
+  assert.match(catalogSource, /const chunk = await reader\.read\(\);\s*if \(source !== syncSource \|\| !scopeIsCurrent\(targetScope, generation\)\)/);
+  assert.match(catalogSource, /if \(reconcilePromise !== task\) return/);
+  assert.match(catalogSource, /isCurrent: \(\) => scopeIsCurrent\(targetScope, generation\)/);
+  assert.match(catalogSource, /admin:local-context-changed/);
+  assert.match(catalogSource, /event\.key === 'activeStoreId'/);
+});
+
+test('catalog consumers reject previous identities, HTTP responses and deferred UI callbacks', () => {
+  for (const consumer of [productsSource, newOrderSource]) {
+    assert.match(consumer, /catalogPageNamespace && catalogPageNamespace !== next\.namespace/);
+    assert.match(consumer, /AdminLocalRepository\.capture\(\)/);
+    assert.match(consumer, /token !== localStorage\.getItem\('authToken'\)/);
+    assert.match(consumer, /clear.*CatalogPage|clearCatalogPageState/);
+    assert.match(consumer, /event\.detail\?\.state === 'revoked'/);
+    assert.match(consumer, /guard: \(\) => Boolean\(catalogPageContext\?\.isCurrent\(\)\)/);
+  }
+  assert.match(newOrderSource, /catalogRepositoryFrame = scheduleFrame\(\(\) => \{\s*if \(!event\.isCurrent\(\)\) return/);
+  assert.match(productsSource, /if \(!event\?\.isCurrent\?\.\(\)\) return/);
+  assert.match(newOrderSource, /function newOrderCacheScopeKey\(\) \{\s*return window\.CatalogRepository\?\.getScope\(\)\?\.namespace/);
+});
+
+test('catalog feeds use the store validated by middleware, without a query override', () => {
+  const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  const api = fs.readFileSync(path.join(__dirname, '../api/admin/products.js'), 'utf8');
+  const permissions = fs.readFileSync(path.join(__dirname, '../api/navigationRbac.js'), 'utf8');
+  assert.match(server, /Number\(headerStore\) !== Number\(queryStore\)/);
+  assert.match(server, /CATALOG_STORE_SCOPE_CONFLICT/);
+  assert.match(server, /const storeId = req\.catalogStoreId \?\?/);
+  for (const endpoint of ['manifest', 'changes', 'stream']) {
+    const handler = api.slice(api.indexOf("router.get('/admin/catalog/" + endpoint + "'"));
+    assert.match(handler.slice(0, 450), /const storeId = req\.catalogStoreId/);
+  }
+  assert.match(permissions, /\(manifest\|changes\|stream\)/);
+  assert.match(catalogSource, /'x-rbac-context': configuredRbacContext/);
+});

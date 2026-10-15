@@ -3,7 +3,6 @@
 
   const DOMAIN = "admin-catalog";
   const VERSION = 4;
-  const MIGRATION_VERSION = 4;
   const RECORD_TTL_MS = 30 * 24 * 60 * 60 * 1000;
   const PRELOAD_BATCH_SIZE = 25;
   const PRELOAD_PROCESSING_CHUNK_SIZE = 5;
@@ -47,7 +46,6 @@
   let coverageTargets = {};
   let coverageTargetMetadata = {};
   let scope = null;
-  let previousReadScope = null;
   let scopeGeneration = 0;
   let initPromise = null;
   let persistTimer = null;
@@ -56,6 +54,8 @@
   let configuredLoader = null;
   let configuredRequest = null;
   let configuredMetadataLoader = null;
+  let configuredRbacContext = 'products';
+  let configuredGuard = null;
   let syncSource = null;
   let syncReconnectTimer = null;
   let syncState = "idle";
@@ -294,6 +294,7 @@
   }
 
   function upsertComboBundle(raw, options = {}) {
+    assertScope();
     const combo = normalizeCombo(raw?.combo || raw);
     if (!combo) return null;
     const blocks = Array.isArray(raw?.blocks) ? raw.blocks : [];
@@ -321,6 +322,7 @@
   }
 
   function upsertComboBlock(raw, options = {}) {
+    assertScope();
     const block = normalizeComboBlock(raw);
     if (!block) return null;
     comboBlocksById.set(block.id, block);
@@ -368,12 +370,31 @@
   }
 
   function currentScope() {
-    return window.AdminPersistentCache?.createScope({ domain: DOMAIN, version: VERSION }) || null;
+    const repository = window.AdminLocalRepository;
+    if (!repository?.isActive()) return null;
+    const storeId = String(window.localStorage.getItem('activeStoreId') || '');
+    if (!(Number(storeId) > 0)) return null;
+    return Object.freeze({ ...repository.create({ domain: DOMAIN, version: VERSION,
+      dimensions: { organizationalUnit: { type: 'store', id: storeId } },
+      guard: () => String(window.localStorage.getItem('activeStoreId') || '') === storeId }), storeId });
   }
 
   function scopeIsCurrent(candidate, generation) {
-    const active = currentScope();
-    return Boolean(candidate?.complete && active?.namespace === candidate.namespace && generation === scopeGeneration);
+    return Boolean(candidate && candidate === scope && candidate.isCurrent() && generation === scopeGeneration
+      && (!configuredGuard || configuredGuard()));
+  }
+
+  function assertScope(targetScope = scope, generation = scopeGeneration) {
+    if (!scopeIsCurrent(targetScope, generation)) throw new Error('LOCAL_SCOPE_CHANGED');
+  }
+
+  function checkAccessResponse(status, payload, permissionKey) {
+    const grants = window.AdminAccessContext?.permissions || [];
+    const previouslyAllowed = permissionKey && grants.some(grant => grant === '*' || grant.key === permissionKey);
+    const revoked = ['USER_BLOCKED', 'USER_ARCHIVED', 'TENANT_BLOCKED', 'ACTIVE_ROLE_INVALID', 'ROLE_NOT_ASSIGNED'];
+    if (status === 401 || (status === 403 && (previouslyAllowed || revoked.includes(payload?.error)))) {
+      window.AdminLocalRepository.reset({ forget: true, reason: 'server-refusal' });
+    }
   }
 
   function deferred() {
@@ -461,16 +482,6 @@
     if (!targetScope?.complete || !requested.length) return new Map();
     if (options.priority === true) {
       const rows = await targetScope.getMany(requested);
-      if (previousReadScope?.complete && previousReadScope.namespace !== targetScope.namespace
-        && scopeIsCurrent(targetScope, generation)) {
-        const missing = requested.filter((key) => rows.get(key) == null);
-        if (missing.length) {
-          const previousRows = await previousReadScope.getMany(missing);
-          missing.forEach((key) => {
-            if (previousRows.get(key) != null) rows.set(key, previousRows.get(key));
-          });
-        }
-      }
       return scopeIsCurrent(targetScope, generation) ? rows : new Map();
     }
     const waits = [];
@@ -490,16 +501,6 @@
     if (fresh.length) {
       (async () => {
         const rows = await targetScope.getMany(fresh.map((item) => item.key));
-        if (previousReadScope?.complete && previousReadScope.namespace !== targetScope.namespace
-          && scopeIsCurrent(targetScope, generation)) {
-          const missing = fresh.map((item) => item.key).filter((key) => rows.get(key) == null);
-          if (missing.length) {
-            const previousRows = await previousReadScope.getMany(missing);
-            missing.forEach((key) => {
-              if (previousRows.get(key) != null) rows.set(key, previousRows.get(key));
-            });
-          }
-        }
         fresh.forEach((item) => item.deferred.resolve(
           scopeIsCurrent(targetScope, generation) ? (rows.get(item.key) ?? null) : null
         ));
@@ -513,13 +514,21 @@
   }
 
   function notify(type, ids) {
-    const event = { type, ids: uniqueIds(ids), syncState: getSyncState() };
+    if (type !== 'context-reset' && !scopeIsCurrent(scope, scopeGeneration)) return;
+    const targetScope = scope; const generation = scopeGeneration;
+    const event = { type, ids: uniqueIds(ids), syncState: getSyncState(),
+      isCurrent: () => scopeIsCurrent(targetScope, generation) };
     listeners.forEach((listener) => { try { listener(event); } catch (_) {} });
   }
 
   function schedulePersist() {
-    if (!scope?.complete || persistTimer) return;
-    persistTimer = window.setTimeout(() => { persistTimer = null; void flushPersistence(); }, 180);
+    if (!scopeIsCurrent(scope, scopeGeneration) || persistTimer) return;
+    const targetScope = scope; const generation = scopeGeneration;
+    persistTimer = window.setTimeout(() => {
+      if (!scopeIsCurrent(targetScope, generation)) return;
+      persistTimer = null;
+      void flushPersistence();
+    }, 180);
   }
 
   async function persistQueuedRecords() {
@@ -616,8 +625,11 @@
   }
 
   async function flushPersistence() {
+    const targetScope = scope; const generation = scopeGeneration;
+    if (!scopeIsCurrent(targetScope, generation)) return false;
     if (persistPromise) {
       await persistPromise;
+      if (!scopeIsCurrent(targetScope, generation)) return false;
       const hasPersistableProducts = [...dirtyProducts].some((id) => !(pendingMutationFields.get(id)?.size));
       const hasPersistablePassports = [...dirtyPassports].some((id) => !(pendingMutationFields.get(id)?.size));
       if (hasPersistableProducts || dirtyCategories.size || hasPersistablePassports || removedProductIds.size || dirtyCombos.size || dirtyComboBlocks.size || dirtyComboRelations.size || metadataDirty || editorReferencesDirty) {
@@ -633,6 +645,7 @@
   }
 
   function upsertProduct(raw, options = {}) {
+    assertScope();
     const incoming = normalizeProduct(raw, options);
     if (!incoming) return null;
     const previous = productsById.get(incoming.id);
@@ -657,6 +670,7 @@
   }
 
   function patchProductRuntime(productId, fields = {}, options = {}) {
+    assertScope();
     const id = normalizeId(productId);
     const product = id ? productsById.get(id) : null;
     if (!id || !product) return false;
@@ -683,6 +697,7 @@
   }
 
   function patchProductOptimistic(productId, fields) {
+    assertScope();
     const id = normalizeId(productId);
     if (!id || !productsById.has(id)) return null;
     const version = (mutationVersions.get(id) || 0) + 1;
@@ -709,6 +724,7 @@
       version,
       fields: Object.keys(previous),
       previous,
+      scope, scopeGeneration,
       foregroundToken: beginForegroundWork(),
     };
     patchProductRuntime(id, fields);
@@ -716,6 +732,7 @@
   }
 
   function commitProductPatch(token, authoritativeFields = null) {
+    if (!scopeIsCurrent(token?.scope, token?.scopeGeneration)) return false;
     if (token?.foregroundToken != null) endForegroundWork(token.foregroundToken);
     const id = normalizeId(token?.id);
     if (!id) return false;
@@ -759,6 +776,7 @@
   }
 
   function rollbackProductPatch(token) {
+    if (!scopeIsCurrent(token?.scope, token?.scopeGeneration)) return false;
     if (token?.foregroundToken != null) endForegroundWork(token.foregroundToken);
     const id = normalizeId(token?.id);
     if (!id || !productsById.has(id)) return false;
@@ -866,6 +884,7 @@
   }
 
   function upsertPassports(payload, options = {}) {
+    assertScope();
     const source = payload instanceof Map
       ? [...payload.values()]
       : (Array.isArray(payload) ? payload : Object.values(payload && typeof payload === "object" ? payload : {}));
@@ -909,6 +928,7 @@
   }
 
   function markProductSummary(raw, options = {}) {
+    assertScope();
     const incoming = normalizeProduct(raw, { ...options, completeness: "summary" });
     if (!incoming) return null;
     const existing = productsById.get(incoming.id) || {};
@@ -928,6 +948,7 @@
   }
 
   function upsertCategory(raw, options = {}) {
+    assertScope();
     const incoming = normalizeCategory(raw);
     if (!incoming) return null;
     const merged = { ...(categoriesById.get(incoming.id) || {}) };
@@ -950,6 +971,8 @@
   }
 
   async function replaceCategories(rows) {
+    const targetScope = scope; const generation = scopeGeneration;
+    assertScope(targetScope, generation);
     const incoming = new Map();
     (Array.isArray(rows) ? rows : []).forEach((row) => {
       const normalized = normalizeCategory(row);
@@ -960,34 +983,38 @@
     incoming.forEach((row, id) => { categoriesById.set(id, row); dirtyCategories.add(id); });
     manifest.categoryIds = [...incoming.keys()];
     if (scope?.complete && removed.length) {
-      await scope.removeMany(removed.map((id) => `category:${id}`)).catch(() => null);
+      await targetScope.removeMany(removed.map((id) => `category:${id}`)).catch(() => null);
     }
+    assertScope(targetScope, generation);
     schedulePersist();
     notify("categories", [...incoming.keys()]);
     return [...incoming.values()];
   }
 
-  function getProduct(id) { return productsById.get(normalizeId(id)) || null; }
-  function getProducts(ids) { return uniqueIds(ids).map((id) => productsById.get(id)).filter(Boolean); }
+  function getProduct(id) { return scopeIsCurrent(scope, scopeGeneration) ? productsById.get(normalizeId(id)) || null : null; }
+  function getProducts(ids) { return scopeIsCurrent(scope, scopeGeneration) ? uniqueIds(ids).map((id) => productsById.get(id)).filter(Boolean) : []; }
   function getProductsForCategory(categoryId) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return [];
     const ids = productIdsByCategoryId.get(normalizeId(categoryId));
     return ids ? [...ids].map((id) => productsById.get(id)).filter(Boolean) : [];
   }
-  function getCategory(id) { return categoriesById.get(normalizeId(id)) || null; }
-  function getAllProducts() { return [...productsById.values()]; }
-  function getAllCategories() { return [...categoriesById.values()]; }
+  function getCategory(id) { return scopeIsCurrent(scope, scopeGeneration) ? categoriesById.get(normalizeId(id)) || null : null; }
+  function getAllProducts() { return scopeIsCurrent(scope, scopeGeneration) ? [...productsById.values()] : []; }
+  function getAllCategories() { return scopeIsCurrent(scope, scopeGeneration) ? [...categoriesById.values()] : []; }
   function isProductPersistedOrderReady(id) {
-    return durableOrderReadyProductIds.has(normalizeId(id));
+    return scopeIsCurrent(scope, scopeGeneration) && durableOrderReadyProductIds.has(normalizeId(id));
   }
   function isProductPersistedEditorReady(id) {
-    return durableEditorReadyProductIds.has(normalizeId(id));
+    return scopeIsCurrent(scope, scopeGeneration) && durableEditorReadyProductIds.has(normalizeId(id));
   }
-  function getProductPassport(id) { return materializePassport(passportsByProductId.get(normalizeId(id)) || null); }
+  function getProductPassport(id) { return scopeIsCurrent(scope, scopeGeneration) ? materializePassport(passportsByProductId.get(normalizeId(id)) || null) : null; }
   function getEditorReferences() {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return { units: {}, unitConversions: [] };
     return { units: editorReferences.units, unitConversions: editorReferences.unitConversions };
   }
 
   function getDescendantCategoryIds(categoryId) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return [];
     const rootId = normalizeId(categoryId);
     if (!rootId) return [];
     const result = [];
@@ -1006,6 +1033,7 @@
   }
 
   function getRootCategoryId(categoryId) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return null;
     let id = normalizeId(categoryId);
     const seen = new Set();
     while (id && !seen.has(id)) {
@@ -1019,6 +1047,7 @@
   }
 
   function getCoverage(options = {}) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return { knownProducts: 0, orderReadyProducts: 0, editorReadyProducts: 0, total: null };
     const categoryId = normalizeId(options.categoryId);
     const coverageKey = categoryId ? `category:${categoryId}` : "global";
     const targetIds = Array.isArray(coverageTargets[coverageKey]) ? uniqueIds(coverageTargets[coverageKey]) : null;
@@ -1044,6 +1073,7 @@
   }
 
   function removeProduct(id) {
+    assertScope();
     const productId = normalizeId(id);
     if (!productId) return false;
     const previous = productsById.get(productId);
@@ -1079,8 +1109,11 @@
   }
 
   async function clearSavedProducts() {
+    const access = window.AdminLocalRepository.capture();
     await cancelDownloadJob();
+    if (!access.isCurrent()) return false;
     await init();
+    if (!access.isCurrent()) return false;
     const targetScope = scope;
     const generation = scopeGeneration;
     if (!targetScope?.complete) return false;
@@ -1146,7 +1179,9 @@
   }
 
   async function catalogRequest(url, options = {}) {
-    const headers = { ...(options.headers || {}) };
+    const targetScope = scope; const generation = scopeGeneration;
+    assertScope(targetScope, generation);
+    const headers = { 'x-rbac-context': configuredRbacContext, ...(options.headers || {}) };
     const token = localStorage.getItem("authToken");
     if (token) headers.Authorization = `Bearer ${token}`;
     const storeId = Number(localStorage.getItem("activeStoreId") || localStorage.getItem("store_id") || 0);
@@ -1154,6 +1189,8 @@
     if (options.body != null && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
     const response = await fetch(url, { ...options, headers });
     const payload = await response.json().catch(() => null);
+    assertScope(targetScope, generation);
+    checkAccessResponse(response.status, payload, configuredRbacContext === 'new-order' ? 'new_order.create' : 'products.catalog.read');
     if (!response.ok || !payload || payload.ok === false) throw new Error(payload?.error || `HTTP_${response.status}`);
     return payload;
   }
@@ -1166,20 +1203,23 @@
   }
 
   function publicDownloadJob() {
-    if (!downloadJob) return null;
+    if (!scopeIsCurrent(scope, scopeGeneration) || !downloadJob) return null;
     const targetIds = uniqueIds(downloadJob.targetIds);
     const completed = targetIds.filter((id) => durableEditorReadyProductIds.has(id)).length;
     return { ...downloadJob, targetIds: targetIds.slice(), completed, total: targetIds.length };
   }
 
   async function persistDownloadJob() {
-    if (!scope?.complete) return false;
+    const targetScope = scope; const generation = scopeGeneration;
+    if (!scopeIsCurrent(targetScope, generation)) return false;
     if (!downloadJob) {
-      await scope.remove("meta:download-job");
+      await targetScope.remove("meta:download-job");
+      assertScope(targetScope, generation);
       return true;
     }
     downloadJob.updatedAt = Date.now();
-    await scope.set("meta:download-job", downloadJob, { ttlMs: RECORD_TTL_MS });
+    await targetScope.set("meta:download-job", downloadJob, { ttlMs: RECORD_TTL_MS });
+    assertScope(targetScope, generation);
     return true;
   }
 
@@ -1198,13 +1238,14 @@
     try {
       await persistDownloadJob();
     } catch (_) {
+      if (!scopeIsCurrent(targetScope, scopeRunGeneration)) return false;
       downloadJob.state = "error";
       downloadJob.error = "storage";
       notifyDownloadJob();
       return false;
     }
     notifyDownloadJob();
-    downloadJobPromise = (async () => {
+    const task = (async () => {
       while (downloadJob && jobRunGeneration === downloadJobGeneration && scopeIsCurrent(targetScope, scopeRunGeneration)) {
         if (!(await waitForDownloadTurn())) return false;
         if (!downloadJob || jobRunGeneration !== downloadJobGeneration || !scopeIsCurrent(targetScope, scopeRunGeneration)) return false;
@@ -1234,25 +1275,28 @@
       else if (Array.isArray(downloadJob.comboCategoryCodes) && downloadJob.comboCategoryCodes.length) {
         await ensureCombosForCategoryCodes(downloadJob.comboCategoryCodes, { requiredCompleteness: "editor-ready", awaitPersistence: true, background: true });
       }
+      if (!scopeIsCurrent(targetScope, scopeRunGeneration) || jobRunGeneration !== downloadJobGeneration) return false;
       downloadJob.state = "complete";
       downloadJob.error = null;
       await persistDownloadJob();
       notifyDownloadJob();
       return true;
     })().catch(async (error) => {
-      if (downloadJob && jobRunGeneration === downloadJobGeneration) {
+      if (scopeIsCurrent(targetScope, scopeRunGeneration) && downloadJob && jobRunGeneration === downloadJobGeneration) {
         downloadJob.state = navigator.onLine ? "error" : "paused";
         downloadJob.error = error?.storage === true ? "storage" : String(error?.message || "CATALOG_PRELOAD_FAILED");
         await persistDownloadJob().catch(() => false);
         notifyDownloadJob();
       }
       return false;
-    }).finally(() => { downloadJobPromise = null; });
+    }).finally(() => { if (downloadJobPromise === task) downloadJobPromise = null; });
+    downloadJobPromise = task;
     return downloadJobPromise;
   }
 
   async function startDownloadJob(options = {}) {
-    await init();
+    if (!await init()) return false;
+    const targetScope = scope; const generation = scopeGeneration;
     const targetIds = uniqueIds(options.targetIds);
     if (!targetIds.length) return false;
     downloadJobGeneration += 1;
@@ -1270,28 +1314,33 @@
     try {
       await persistDownloadJob();
     } catch (_) {
+      if (!scopeIsCurrent(targetScope, generation)) return false;
       downloadJob.state = "error";
       downloadJob.error = "storage";
       notifyDownloadJob();
       return false;
     }
+    if (!scopeIsCurrent(targetScope, generation)) return false;
     notifyDownloadJob();
     return runDownloadJob();
   }
 
   async function resumeDownloadJob() {
-    await init();
+    if (!await init()) return false;
     if (!downloadJob || downloadJob.state === "complete") return false;
     return runDownloadJob();
   }
 
   async function cancelDownloadJob() {
+    const targetScope = scope; const generation = scopeGeneration;
+    if (!scopeIsCurrent(targetScope, generation)) return false;
     const activePromise = downloadJobPromise;
     downloadJobGeneration += 1;
     downloadJob = null;
     cancelDownloadSchedule(false);
     notifyDownloadJob();
     if (activePromise) await activePromise.catch(() => false);
+    if (!scopeIsCurrent(targetScope, generation)) return false;
     if (scope?.complete) await persistDownloadJob().catch(() => false);
     return true;
   }
@@ -1299,6 +1348,7 @@
   function getDownloadJob() { return publicDownloadJob(); }
 
   function setCoverageTotal(total, options = {}) {
+    assertScope();
     const value = Number(total);
     if (!Number.isFinite(value) || value < 0) return false;
     const categoryId = normalizeId(options.categoryId);
@@ -1310,6 +1360,7 @@
   }
 
   function setCoverageTarget(ids, options = {}) {
+    assertScope();
     const targetIds = uniqueIds(ids);
     const categoryId = normalizeId(options.categoryId);
     const key = categoryId ? `category:${categoryId}` : "global";
@@ -1326,6 +1377,7 @@
   }
 
   function getTrackedCoverageCategoryIds() {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return [];
     return Object.keys(coverageTargets)
       .map((key) => key.match(/^category:(\d+)$/)?.[1])
       .map(Number)
@@ -1333,6 +1385,7 @@
   }
 
   function getCoverageTargetIds(options = {}) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return [];
     const categoryId = normalizeId(options.categoryId);
     const key = categoryId ? `category:${categoryId}` : "global";
     return Array.isArray(coverageTargets[key]) ? uniqueIds(coverageTargets[key]) : null;
@@ -1398,31 +1451,37 @@
   }
 
   async function loadProducts(ids = manifest.productIds) {
-    await init();
+    if (!await init()) return new Map();
+    const targetScope = scope; const generation = scopeGeneration;
     const requested = uniqueIds(ids);
     await readPersistentProducts(requested.filter((id) => !productsById.has(id)), scope, scopeGeneration);
+    assertScope(targetScope, generation);
     return new Map(requested.map((id) => [id, productsById.get(id) || null]));
   }
 
   async function loadPassports(ids = manifest.passportIds) {
-    await init();
+    if (!await init()) return new Map();
+    const targetScope = scope; const generation = scopeGeneration;
     const requested = uniqueIds(ids);
     if (uniqueIds(manifest.editorPassportIds).some((id) => requested.includes(id))) await loadEditorReferences({ priority: true });
+    assertScope(targetScope, generation);
     await readPersistentPassports(
       requested.filter((id) => !passportsByProductId.has(id)),
-      scope,
-      scopeGeneration,
+      targetScope,
+      generation,
       { priority: true }
     );
+    assertScope(targetScope, generation);
     return new Map(requested.map((id) => [id, getProductPassport(id)]));
   }
 
   async function loadEditorReferences(options = {}) {
-    await init();
+    if (!await init()) return getEditorReferences();
     if (editorReferencesLoaded || !scope?.complete) return getEditorReferences();
     const targetScope = scope;
     const generation = scopeGeneration;
     const records = await loadPersistentRecords(["reference:editor"], targetScope, generation, options);
+    assertScope(targetScope, generation);
     const saved = records.get("reference:editor");
     if (saved && typeof saved === "object" && scopeIsCurrent(targetScope, generation)) {
       editorReferences = { ...editorReferences, ...saved };
@@ -1430,22 +1489,23 @@
       await targetScope.set("reference-index:editor", { schemaVersion: "product-editor-v1" }, { ttlMs: RECORD_TTL_MS }).catch(() => false);
     }
     if (scopeIsCurrent(targetScope, generation)) editorReferencesLoaded = true;
+    assertScope(targetScope, generation);
     return getEditorReferences();
   }
 
   async function loadCategories(ids = manifest.categoryIds) {
-    await init();
+    if (!await init()) return [];
+    const targetScope = scope; const generation = scopeGeneration;
     const requested = uniqueIds(ids);
     const missing = requested.filter((id) => !categoriesById.has(id));
     if (missing.length && scope?.complete) {
-      const targetScope = scope;
-      const generation = scopeGeneration;
       const records = await loadPersistentRecords(missing.map((id) => `category:${id}`), targetScope, generation);
       if (scopeIsCurrent(targetScope, generation)) missing.forEach((id) => {
         const row = records.get(`category:${id}`);
         if (normalizeId(row?.id) === id) categoriesById.set(id, row);
       });
     }
+    assertScope(targetScope, generation);
     return requested.map((id) => categoriesById.get(id)).filter(Boolean);
   }
 
@@ -1458,7 +1518,7 @@
   }
 
   async function ensureProducts(ids, options = {}) {
-    await init();
+    if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const targetScope = scope;
     const generation = scopeGeneration;
@@ -1468,13 +1528,16 @@
       || (options.priority !== false && options.background !== true && foregroundTokens.size > 0);
     const missingRuntime = requested.filter((id) => !productsById.has(id));
     if (missingRuntime.length && targetScope?.complete) await readPersistentProducts(missingRuntime, targetScope, generation);
+    assertScope(targetScope, generation);
     if (requiredOrderReady && targetScope?.complete) {
       const missingPassports = requested.filter((id) => !passportsByProductId.has(id)
         && (manifest.passportIds || []).some((value) => Number(value) === id));
       if (missingPassports.length) await readPersistentPassports(missingPassports, targetScope, generation);
+      assertScope(targetScope, generation);
       if (requiredEditorReady && !editorReferencesLoaded
         && uniqueIds(manifest.editorPassportIds).some((id) => requested.includes(id))) {
         await loadEditorReferences();
+        assertScope(targetScope, generation);
       }
     }
     const missing = requested.filter((id) => {
@@ -1529,9 +1592,11 @@
               const changedIds = [];
               await yieldMainThread();
               for (let offset = 0; offset < passportRows.length; offset += PRELOAD_PROCESSING_CHUNK_SIZE) {
+                assertScope(targetScope, generation);
                 changedIds.push(...upsertPassports(passportRows.slice(offset, offset + PRELOAD_PROCESSING_CHUNK_SIZE), { notify: false }).map((row) => row.id));
                 if (offset + PRELOAD_PROCESSING_CHUNK_SIZE < passportRows.length) await yieldMainThread();
               }
+              assertScope(targetScope, generation);
               if (changedIds.length) notify("products", changedIds);
             } else {
               upsertPassports(protectedPayload);
@@ -1556,18 +1621,21 @@
       waits.push(request);
     }
     if (waits.length) await Promise.all([...new Set(waits)]);
+    assertScope(targetScope, generation);
     if (upgradeAfterWait.length) {
       await ensureProducts(upgradeAfterWait, { ...options, requiredCompleteness: requiredEditorReady ? "editor-ready" : "order-ready" });
+      assertScope(targetScope, generation);
     }
     const result = new Map();
     requested.forEach((id) => result.set(id, productsById.get(id) || null));
     return result;
   }
 
-  function getComboBlock(id) { return comboBlocksById.get(normalizeId(id)) || null; }
-  function getAllComboBlocks() { return [...comboBlocksById.values()]; }
-  function getAllCombos() { return [...combosById.values()]; }
+  function getComboBlock(id) { return scopeIsCurrent(scope, scopeGeneration) ? comboBlocksById.get(normalizeId(id)) || null : null; }
+  function getAllComboBlocks() { return scopeIsCurrent(scope, scopeGeneration) ? [...comboBlocksById.values()] : []; }
+  function getAllCombos() { return scopeIsCurrent(scope, scopeGeneration) ? [...combosById.values()] : []; }
   function getAffectedComboIds(productIds) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return [];
     const affected = new Set();
     uniqueIds(productIds).forEach((productId) => {
       (comboIdsByProductId.get(productId) || []).forEach((comboId) => affected.add(comboId));
@@ -1576,6 +1644,7 @@
   }
 
   function getAffectedComboIdsForBlocks(blockIds) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return [];
     const affected = new Set();
     uniqueIds(blockIds).forEach((blockId) => {
       (comboIdsByBlockId.get(blockId) || []).forEach((comboId) => affected.add(comboId));
@@ -1590,6 +1659,7 @@
   }
 
   function isComboReady(comboId, options = {}) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return false;
     const id = normalizeId(comboId);
     if (!id || !combosById.has(id) || !comboRelationsById.has(id)) return false;
     const relations = comboRelationsById.get(id) || [];
@@ -1621,6 +1691,7 @@
   }
 
   function getCombo(comboId) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return null;
     const id = normalizeId(comboId);
     const combo = combosById.get(id);
     if (!combo) return null;
@@ -1671,6 +1742,8 @@
   }
 
   async function removeCombo(comboId) {
+    const targetScope = scope; const generation = scopeGeneration;
+    assertScope(targetScope, generation);
     const id = normalizeId(comboId);
     if (!id) return false;
     combosById.delete(id);
@@ -1682,13 +1755,16 @@
     rebuildComboIndexes();
     notify("combos", [id]);
     if (!scope?.complete) return true;
-    await scope.removeMany([`combo:${id}`, `combo-relations:${id}`]);
+    await targetScope.removeMany([`combo:${id}`, `combo-relations:${id}`]);
+    assertScope(targetScope, generation);
     metadataDirty = true;
     schedulePersist();
     return true;
   }
 
   async function removeComboBlock(blockId) {
+    const targetScope = scope; const generation = scopeGeneration;
+    assertScope(targetScope, generation);
     const id = normalizeId(blockId);
     if (!id) return false;
     const affectedComboIds = [...(comboIdsByBlockId.get(id) || [])];
@@ -1704,14 +1780,15 @@
     rebuildComboIndexes();
     notify("combo-blocks", [id]);
     if (affectedComboIds.length) notify("combos", affectedComboIds);
-    if (scope?.complete) await scope.remove(`combo-block:${id}`).catch(() => null);
+    if (targetScope?.complete) await targetScope.remove(`combo-block:${id}`).catch(() => null);
+    assertScope(targetScope, generation);
     metadataDirty = true;
     schedulePersist();
     return true;
   }
 
   async function ensureCombos(ids, options = {}) {
-    await init();
+    if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const requiredCompleteness = options.requiredCompleteness === "editor-ready" ? "editor-ready" : "order-ready";
     const targetScope = scope;
@@ -1746,6 +1823,7 @@
         }
       }
     }
+    assertScope(targetScope, generation);
     const missing = requested.filter((id) => options.force === true || !combosById.has(id) || !comboRelationsById.has(id));
     const waits = missing.filter((id) => pendingByComboId.has(id)).map((id) => pendingByComboId.get(id));
     const fresh = missing.filter((id) => !pendingByComboId.has(id));
@@ -1762,6 +1840,7 @@
       waits.push(request);
     }
     if (waits.length) await Promise.all([...new Set(waits)]);
+    assertScope(targetScope, generation);
     const componentIds = uniqueIds(requested.flatMap(comboComponentIds));
     if (options.requiredCompleteness !== "definition" && componentIds.length) {
       await ensureProducts(componentIds, {
@@ -1769,13 +1848,15 @@
         awaitPersistence: options.awaitPersistence === true,
         background: options.background === true,
       });
+      assertScope(targetScope, generation);
     }
     if (options.awaitPersistence === true) await flushPersistence();
+    assertScope(targetScope, generation);
     return new Map(requested.map((id) => [id, getCombo(id)]));
   }
 
   async function ensureComboBlocks(ids, options = {}) {
-    await init();
+    if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const targetScope = scope;
     const generation = scopeGeneration;
@@ -1787,56 +1868,70 @@
         if (normalizeId(block?.id) === id) comboBlocksById.set(id, block);
       });
     }
+    assertScope(targetScope, generation);
     const missing = requested.filter((id) => options.force === true || !comboBlocksById.has(id));
     if (!missing.length || typeof configuredRequest !== "function") {
       return new Map(requested.map((id) => [id, getComboBlock(id)]));
     }
     const response = await configuredRequest(`/api/admin/catalog/combos?block_ids=${missing.join(",")}`);
+    assertScope(targetScope, generation);
     (Array.isArray(response?.blocks) ? response.blocks : []).forEach((block) => upsertComboBlock(block, { notify: false }));
     upsertComboBundles(Array.isArray(response?.data) ? response.data : []);
     if (options.awaitPersistence === true) await flushPersistence();
+    assertScope(targetScope, generation);
     notify("combo-blocks", requested);
     return new Map(requested.map((id) => [id, getComboBlock(id)]));
   }
 
   async function ensureAllCombos(options = {}) {
-    await init();
+    if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
+    const targetScope = scope; const generation = scopeGeneration;
     if (!getAllCombos().length && options.force !== true && uniqueIds(manifest.comboIds).length) {
       await ensureCombos(manifest.comboIds, options);
+      assertScope(targetScope, generation);
     }
     if (getAllCombos().length && options.force !== true) {
       await ensureCombos(getAllCombos().map((row) => row.id), options);
+      assertScope(targetScope, generation);
       return getAllCombos();
     }
     if (typeof configuredRequest !== "function") return [];
     const response = await configuredRequest("/api/admin/catalog/combos");
+    assertScope(targetScope, generation);
     const bundles = Array.isArray(response?.data) ? response.data : [];
     if (options.force === true) {
       const nextComboIds = new Set(uniqueIds(bundles.map((row) => row?.combo?.id ?? row?.id)));
       const nextBlockIds = new Set(uniqueIds((response?.blocks || []).map((row) => row?.id)));
-      for (const id of [...combosById.keys()]) if (!nextComboIds.has(id)) await removeCombo(id);
-      for (const id of [...comboBlocksById.keys()]) if (!nextBlockIds.has(id)) await removeComboBlock(id);
+      for (const id of [...combosById.keys()]) if (!nextComboIds.has(id)) { assertScope(targetScope, generation); await removeCombo(id); }
+      assertScope(targetScope, generation);
+      for (const id of [...comboBlocksById.keys()]) if (!nextBlockIds.has(id)) { assertScope(targetScope, generation); await removeComboBlock(id); }
+      assertScope(targetScope, generation);
     }
     (Array.isArray(response?.blocks) ? response.blocks : []).forEach((block) => upsertComboBlock(block, { notify: false }));
     upsertComboBundles(bundles);
     await ensureCombos(bundles.map((row) => row?.combo?.id ?? row?.id), options);
+    assertScope(targetScope, generation);
     return getAllCombos();
   }
 
   async function ensureCombosForCategoryCodes(values, options = {}) {
-    await init();
+    if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
+    const targetScope = scope; const generation = scopeGeneration;
     const codes = [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
     if (!codes.length || typeof configuredRequest !== "function") return [];
     const localIds = getAllCombos().filter((combo) => codes.includes(String(combo.category_code || "").trim())).map((combo) => combo.id);
     if (localIds.length && options.force !== true) {
       await ensureCombos(localIds, options);
+      assertScope(targetScope, generation);
       return localIds.map((id) => getCombo(id)).filter(Boolean);
     }
     const response = await configuredRequest(`/api/admin/catalog/combos?category_codes=${encodeURIComponent(codes.join(","))}`);
+    assertScope(targetScope, generation);
     const bundles = Array.isArray(response?.data) ? response.data : [];
     upsertComboBundles(bundles);
     const ids = bundles.map((row) => row?.combo?.id ?? row?.id);
     await ensureCombos(ids, options);
+    assertScope(targetScope, generation);
     return ids.map((id) => getCombo(id)).filter(Boolean);
   }
 
@@ -1845,6 +1940,7 @@
     try { return BigInt(revision(left)) > BigInt(revision(right)); } catch (_) { return false; }
   }
   function getSyncState() {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return { state: 'idle', runtimeRevision: '0', durableRevision: '0', lastReconciledAt: 0 };
     return {
       state: syncState,
       runtimeRevision: revision(manifest.serverRevision),
@@ -1853,8 +1949,9 @@
     };
   }
   function setSyncState(value) { syncState = value; notify("sync", []); }
-  async function saveCheckpoint(value) {
-    const targetScope = scope; const generation = scopeGeneration; const next = revision(value);
+  async function saveCheckpoint(value, targetScope = scope, generation = scopeGeneration) {
+    assertScope(targetScope, generation);
+    const next = revision(value);
     const nextManifest = { ...manifest, serverRevision: next, durableRevision: next, lastReconciledAt: Date.now(), updatedAt: Date.now() };
     await targetScope.set("meta:manifest", nextManifest, { ttlMs: RECORD_TTL_MS });
     if (!scopeIsCurrent(targetScope, generation)) return false;
@@ -1867,15 +1964,19 @@
       setSyncState("syncing");
       const storeId = Number(targetScope.storeId);
       const remote = await configuredRequest(`/api/admin/catalog/manifest?store_id=${storeId}`);
+      assertScope(targetScope, generation);
       const serverRevision = revision(remote?.data?.revision);
       manifest.serverRevision = serverRevision;
       let cursor = revision(manifest.durableRevision);
       if (!revisionGreater(serverRevision, cursor)) {
-        await saveCheckpoint(cursor); setSyncState("online"); return true;
+        const saved = await saveCheckpoint(cursor, targetScope, generation);
+        if (!saved) return false;
+        setSyncState("online"); return true;
       }
       const changes = new Map(); let hasMore = true; let fullRecovery = false;
       while (hasMore) {
         const response = await configuredRequest(`/api/admin/catalog/changes?store_id=${storeId}&since=${cursor}&limit=500`);
+        assertScope(targetScope, generation);
         const data = response?.data || {};
         if (data.reset_required === true) { fullRecovery = true; hasMore = false; break; }
         (Array.isArray(data.changes) ? data.changes : []).forEach((change) => {
@@ -1928,10 +2029,12 @@
         const referenceSourceId = [...durableEditorReadyProductIds][0];
         if (referenceSourceId) refresh.push(referenceSourceId);
       }
-      for (const productId of uniqueIds(deletes)) await removeProduct(productId);
-      for (const comboId of uniqueIds(deleteCombos)) await removeCombo(comboId);
-      for (const blockId of uniqueIds(deleteComboBlocks)) await removeComboBlock(blockId);
+      for (const productId of uniqueIds(deletes)) { assertScope(targetScope, generation); await removeProduct(productId); }
+      for (const comboId of uniqueIds(deleteCombos)) { assertScope(targetScope, generation); await removeCombo(comboId); }
+      for (const blockId of uniqueIds(deleteComboBlocks)) { assertScope(targetScope, generation); await removeComboBlock(blockId); }
+      assertScope(targetScope, generation);
       if (refreshComboBlocks.length) await ensureComboBlocks(refreshComboBlocks, { awaitPersistence: true });
+      assertScope(targetScope, generation);
       const refreshIds = uniqueIds(refresh).filter((id) => !deletes.includes(id));
       const refreshEditorIds = refreshIds.filter((id) => durableEditorReadyProductIds.has(id));
       const refreshOrderOnlyIds = refreshIds.filter((id) => !refreshEditorIds.includes(id));
@@ -1939,6 +2042,7 @@
         for (let offset = 0; offset < ids.length; offset += 80) {
           const batch = ids.slice(offset, offset + 80);
           await ensureProducts(batch, { requiredCompleteness, force: true, awaitPersistence: true });
+          assertScope(targetScope, generation);
           const incomplete = requiredCompleteness === "editor-ready"
             ? batch.some((id) => !durableEditorReadyProductIds.has(id))
             : batch.some((id) => !durableOrderReadyProductIds.has(id));
@@ -1947,17 +2051,20 @@
       }
       if (refreshAllCombos) await ensureAllCombos({ requiredCompleteness: "editor-ready", force: true, awaitPersistence: true });
       else if (refreshCombos.length) await ensureCombos(refreshCombos, { requiredCompleteness: "editor-ready", force: true, awaitPersistence: true });
+      assertScope(targetScope, generation);
       if ((metadataChanged || targetChanged) && typeof configuredMetadataLoader === "function") {
         await configuredMetadataLoader({ categories: metadataChanged, targets: targetChanged });
       }
       if (!scopeIsCurrent(targetScope, generation)) return false;
       await flushPersistence();
-      if (!(await saveCheckpoint(serverRevision))) return false;
+      assertScope(targetScope, generation);
+      if (!(await saveCheckpoint(serverRevision, targetScope, generation))) return false;
       if (inventoryChanges.length || fullRecovery) notify("inventory", uniqueIds(inventoryChanges));
       setSyncState("online"); return true;
   }
   async function reconcile(options = {}) {
-    await init();
+    const access = window.AdminLocalRepository.capture();
+    if (!await init() || !access.isCurrent()) return false;
     const target = revision(options.targetRevision);
     if (revisionGreater(target, reconcileTargetRevision)) reconcileTargetRevision = target;
     if (reconcilePromise) {
@@ -1965,7 +2072,7 @@
       return reconcilePromise;
     }
     const targetScope = scope; const generation = scopeGeneration;
-    reconcilePromise = (async () => {
+    const task = (async () => {
       let result = false;
       let continuations = 0;
       do {
@@ -1978,15 +2085,24 @@
         reconcileTargetRevision = revision(manifest.durableRevision);
       }
       return result;
-    })().catch(() => { setSyncState(navigator.onLine ? "stale" : "offline"); return false; })
+    })().catch((error) => {
+      if (scopeIsCurrent(targetScope, generation)) {
+        console.error('CATALOG_RECONCILE_FAILED:', error);
+        setSyncState(navigator.onLine ? "stale" : "offline");
+      }
+      return false;
+    })
       .finally(() => {
+        if (reconcilePromise !== task) return;
         reconcilePromise = null;
         reconcileAgain = false;
         scheduleDownloadTurn();
       });
+    reconcilePromise = task;
     return reconcilePromise;
   }
   function requestReconcile(options = {}) {
+    if (!scopeIsCurrent(scope, scopeGeneration)) return Promise.resolve(false);
     const target = revision(options.targetRevision);
     if (revisionGreater(target, reconcileTargetRevision)) reconcileTargetRevision = target;
     const hasKnownChange = revisionGreater(reconcileTargetRevision, manifest.durableRevision);
@@ -2000,7 +2116,9 @@
     }
     syncTimerForce = syncTimerForce || force;
     if (!syncTimer) {
+      const targetScope = scope; const generation = scopeGeneration;
       syncTimer = window.setTimeout(() => {
+        if (!scopeIsCurrent(targetScope, generation)) return;
         syncTimer = null;
         const runForce = syncTimerForce;
         syncTimerForce = false;
@@ -2014,8 +2132,9 @@
     const delay = Math.min(SSE_RECONNECT_MAX_MS, SSE_RECONNECT_BASE_MS * (2 ** syncReconnectAttempts));
     syncReconnectAttempts += 1;
     syncReconnectTimer = window.setTimeout(() => {
+      if (generation !== scopeGeneration) return;
       syncReconnectTimer = null;
-      if (generation === scopeGeneration) void startSync();
+      void startSync();
     }, delay);
   }
   function stopSync() {
@@ -2028,7 +2147,8 @@
     syncTimerForce = false;
   }
   async function startSync() {
-    await init();
+    const access = window.AdminLocalRepository.capture();
+    if (!await init() || !access.isCurrent()) return false;
     if (!scope?.complete || typeof configuredRequest !== "function") return false;
     if (!navigator.onLine || typeof window.fetch !== "function" || typeof window.AbortController !== "function") { setSyncState(navigator.onLine ? "stale" : "offline"); return false; }
     if (syncSource) return true;
@@ -2036,10 +2156,11 @@
     syncReconnectTimer = null;
     setSyncState("syncing");
     const generation = scopeGeneration;
+    const targetScope = scope;
     const source = new AbortController();
     syncSource = source;
     const onRevision = (data, eventName) => {
-      if (source !== syncSource || generation !== scopeGeneration) return;
+      if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;
       try {
         const payload = JSON.parse(data || "{}");
         const eventRevision = revision(payload.revision);
@@ -2047,7 +2168,11 @@
         if (revisionGreater(eventRevision, manifest.durableRevision)) {
           void requestReconcile({ reason: "sse", targetRevision: eventRevision });
         } else if (eventName === "snapshot") {
-          void saveCheckpoint(manifest.durableRevision).then((saved) => { if (saved) setSyncState("online"); });
+          void saveCheckpoint(manifest.durableRevision, targetScope, generation).then((saved) => {
+            if (saved && scopeIsCurrent(targetScope, generation)) setSyncState("online");
+          }).catch(error => {
+            if (scopeIsCurrent(targetScope, generation)) console.error('CATALOG_CHECKPOINT_FAILED:', error);
+          });
         } else {
           setSyncState("online");
         }
@@ -2057,27 +2182,32 @@
       let shouldReconnect = true;
       try {
         const token = String(window.localStorage?.getItem("authToken") || "").trim();
-        const response = await fetch(`/api/admin/catalog/stream?store_id=${Number(scope.storeId)}`, {
+        const response = await fetch(`/api/admin/catalog/stream?store_id=${Number(targetScope.storeId)}`, {
           method: "GET",
           headers: {
             Accept: "text/event-stream",
+            'x-rbac-context': configuredRbacContext,
+            'x-store-id': String(targetScope.storeId),
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           credentials: "same-origin",
           cache: "no-store",
           signal: source.signal,
         });
+        if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) { await response.body?.cancel(); return; }
         if (!response.ok || !response.body) {
+          checkAccessResponse(response.status, null, configuredRbacContext === 'new-order' ? 'new_order.create' : 'products.catalog.read');
           shouldReconnect = response.status !== 401 && response.status !== 403;
           throw new Error(`CATALOG_STREAM_HTTP_${response.status}`);
         }
-        if (source !== syncSource || generation !== scopeGeneration) return;
+        if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;
         syncReconnectAttempts = 0;
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
-        while (source === syncSource && generation === scopeGeneration) {
+        while (source === syncSource && scopeIsCurrent(targetScope, generation)) {
           const chunk = await reader.read();
+          if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) { await reader.cancel(); return; }
           buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done }).replace(/\r\n/g, "\n");
           let boundary = buffer.indexOf("\n\n");
           while (boundary >= 0) {
@@ -2093,7 +2223,7 @@
       } catch (error) {
         if (error?.name === "AbortError") return;
       }
-      if (source !== syncSource || generation !== scopeGeneration) return;
+      if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;
       syncSource = null;
       setSyncState(navigator.onLine ? "stale" : "offline");
       if (shouldReconnect) scheduleReconnect(generation);
@@ -2119,90 +2249,6 @@
       });
     }
     return true;
-  }
-
-  function collectLegacySeed(legacy) {
-    const seed = { summaries: [], orderReady: [], categories: [] };
-    if (!legacy || typeof legacy !== "object") return seed;
-    if (Array.isArray(legacy.categories)) seed.categories.push(...legacy.categories);
-    if (legacy.byCategory && typeof legacy.byCategory === "object") {
-      Object.keys(legacy.byCategory).forEach((key) => {
-        const categoryId = normalizeId(String(key).split("::")[0]);
-        const rows = Array.isArray(legacy.byCategory[key]?.products) ? legacy.byCategory[key].products : [];
-        rows.forEach((product) => seed.summaries.push({ product, categoryId }));
-      });
-    }
-    const bootstrap = legacy.newOrderBootstrap;
-    if (bootstrap && typeof bootstrap === "object") {
-      if (Array.isArray(bootstrap.categories)) seed.categories.push(...bootstrap.categories);
-      if (Array.isArray(bootstrap.productCategories)) seed.categories.push(...bootstrap.productCategories);
-      const byCategory = bootstrap.categoryProductsById;
-      if (byCategory && typeof byCategory === "object") {
-        Object.keys(byCategory).forEach((key) => {
-          const categoryId = normalizeId(key);
-          const rows = Array.isArray(byCategory[key]?.source) ? byCategory[key].source : [];
-          rows.forEach((product) => seed.orderReady.push({ product, categoryId }));
-        });
-      }
-    }
-    return seed;
-  }
-
-  async function seedLegacy(targetScope, generation) {
-    const legacy = await window.AdminPersistentCache.readProductCatalog({}).catch(() => null);
-    if (!scopeIsCurrent(targetScope, generation)) return false;
-    const seed = collectLegacySeed(legacy);
-    upsertCategories(seed.categories, { notify: false });
-    seed.summaries.forEach(({ product, categoryId }) => upsertProduct(product, {
-      categoryId, completeness: "summary", notify: false,
-    }));
-    seed.orderReady.forEach(({ product, categoryId }) => upsertProduct(product, {
-      categoryId, completeness: "summary", notify: false,
-    }));
-    await flushPersistence();
-    if (!scopeIsCurrent(targetScope, generation)) return false;
-    manifest.migrationVersion = MIGRATION_VERSION;
-    manifest.updatedAt = Date.now();
-    try {
-      await targetScope.set("meta:manifest", manifest, { ttlMs: RECORD_TTL_MS });
-      return scopeIsCurrent(targetScope, generation);
-    } catch (_) { return false; }
-  }
-
-  async function migratePreviousRepository(targetScope, generation) {
-    const previousScope = window.AdminPersistentCache?.createScope({ domain: DOMAIN, version: 3 });
-    if (!previousScope?.complete || previousScope.namespace === targetScope.namespace) return false;
-    const previousManifest = await previousScope.get("meta:manifest").catch(() => null);
-    if (!scopeIsCurrent(targetScope, generation) || !previousManifest) return false;
-    const productIds = uniqueIds(previousManifest.productIds);
-    const categoryIds = uniqueIds(previousManifest.categoryIds);
-    const passportIds = uniqueIds(previousManifest.passportIds);
-    const keys = [
-      ...productIds.map((id) => `product:${id}`),
-      ...categoryIds.map((id) => `category:${id}`),
-      ...passportIds.map((id) => `passport:${id}`),
-      "reference:editor",
-    ];
-    const records = await previousScope.getMany(keys).catch(() => new Map());
-    const products = productIds.map((id) => records.get(`product:${id}`));
-    const categories = categoryIds.map((id) => records.get(`category:${id}`));
-    const passports = passportIds.map((id) => records.get(`passport:${id}`));
-    const previousEditorReferences = records.get("reference:editor");
-    if (!scopeIsCurrent(targetScope, generation)) return false;
-    upsertCategories(categories.filter(Boolean), { notify: false });
-    upsertProducts(products.filter(Boolean), { notify: false });
-    upsertPassports(passports.filter(Boolean), { notify: false });
-    if (previousEditorReferences && typeof previousEditorReferences === "object") {
-      editorReferences = { ...editorReferences, ...previousEditorReferences };
-      editorReferencesLoaded = true;
-      editorReferencesDirty = true;
-    }
-    coverageTotals = { ...(previousManifest.coverageTotals || {}) };
-    coverageTargets = { ...(previousManifest.coverageTargets || {}) };
-    coverageTargetMetadata = { ...(previousManifest.coverageTargetMetadata || {}) };
-    metadataDirty = true;
-    await flushPersistence();
-    return scopeIsCurrent(targetScope, generation);
   }
 
   async function verifyManifestPassports(targetScope, generation, declaredPassportIds, declaredEditorPassportIds) {
@@ -2277,18 +2323,6 @@
     const metadata = await targetScope.getMany(["meta:manifest", "meta:download-job"]).catch(() => new Map());
     if (!scopeIsCurrent(targetScope, generation)) return;
     let saved = metadata.get("meta:manifest");
-    previousReadScope = null;
-    if (!saved || typeof saved !== "object") {
-      const previousScope = window.AdminPersistentCache?.createScope({ domain: DOMAIN, version: 3 });
-      const previousManifest = previousScope?.complete
-        ? await previousScope.get("meta:manifest").catch(() => null)
-        : null;
-      if (!scopeIsCurrent(targetScope, generation)) return;
-      if (previousManifest && typeof previousManifest === "object") {
-        previousReadScope = previousScope;
-        saved = previousManifest;
-      }
-    }
     manifest = saved && typeof saved === "object" ? { ...emptyManifest(), ...saved } : emptyManifest();
     const savedDownloadJob = metadata.get("meta:download-job");
     downloadJob = savedDownloadJob && typeof savedDownloadJob === "object" ? savedDownloadJob : null;
@@ -2304,14 +2338,20 @@
     });
   }
 
-  function init(options = {}) {
+  async function init(options = {}) {
+    const core = window.AdminLocalRepository;
+    const access = core?.isActive() ? core.capture() : null;
+    if (!core || !await core.ready() || (access && !access.isCurrent())) return false;
     if (typeof options.loader === "function") configuredLoader = options.loader;
     if (typeof options.request === "function") configuredRequest = options.request;
     if (typeof options.metadataLoader === "function") configuredMetadataLoader = options.metadataLoader;
+    if (typeof options.guard === 'function') configuredGuard = options.guard;
+    if (configuredGuard && !configuredGuard()) return false;
+    if (options.rbacContext === 'products' || options.rbacContext === 'new-order') configuredRbacContext = options.rbacContext;
     if (typeof configuredRequest !== "function") configuredRequest = catalogRequest;
     const nextScope = currentScope();
     if (!nextScope?.complete) return Promise.resolve(false);
-    if (scope?.namespace === nextScope.namespace && initPromise) return initPromise;
+    if (scope?.namespace === nextScope.namespace && scope.isCurrent() && initPromise) return initPromise;
     clearRuntime();
     scope = nextScope;
     const generation = scopeGeneration;
@@ -2364,7 +2404,6 @@
     metadataDirty = false;
     manifest = emptyManifest();
     scope = null;
-    previousReadScope = null;
     initPromise = null;
     if (persistTimer) window.clearTimeout(persistTimer);
     persistTimer = null;
@@ -2386,9 +2425,11 @@
   }
 
   function getScope() {
-    const active = scope || currentScope();
+    const active = scopeIsCurrent(scope, scopeGeneration) ? scope : null;
+    const context = window.AdminAccessContext?.local_context;
     return active ? {
-      complete: active.complete, userId: active.userId, tenantId: active.tenantId,
+      complete: active.complete, userId: context?.principal?.type === 'user' ? Number(context.principal.id) : null,
+      tenantId: context?.tenantId,
       storeId: active.storeId, domain: active.domain, version: active.version, namespace: active.namespace,
     } : null;
   }
@@ -2404,6 +2445,7 @@
     getCombo, getComboForOrder, getAllCombos, getAffectedComboIds, getAffectedComboIdsForBlocks, getComboBlock, getAllComboBlocks, upsertComboBlock, upsertComboBundle, upsertComboBundles, removeCombo, removeComboBlock, ensureComboBlocks,
     ensureCombos, ensureAllCombos, ensureCombosForCategoryCodes, isComboReady,
     startSync, stopSync, reconcile, getSyncState,
+    checkAccessResponse,
     normalizeProduct, normalizeCategory, normalizeCombo, normalizeComboBlock,
   };
 
@@ -2414,6 +2456,14 @@
   });
   window.addEventListener("pagehide", () => { downloadPageActive = false; cancelDownloadSchedule(false); });
   window.addEventListener("pageshow", () => { downloadPageActive = true; scheduleDownloadTurn(); void resumeDownloadJob(); });
-  document.addEventListener("tenantStoreChanged", () => { clearRuntime(); void init(); });
+  document.addEventListener("tenantStoreChanged", () => { clearRuntime(); notify('context-reset', []); void init(); });
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'activeStoreId') { clearRuntime(); notify('context-reset', []); void init(); }
+  });
+  window.addEventListener('admin:local-context-changed', (event) => {
+    if (event.detail?.state === 'active') { void init(); return; }
+    clearRuntime();
+    notify('context-reset', []);
+  });
   void init();
 })(window);
