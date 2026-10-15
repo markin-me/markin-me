@@ -388,11 +388,11 @@
     if (!scopeIsCurrent(targetScope, generation)) throw new Error('LOCAL_SCOPE_CHANGED');
   }
 
-  function checkAccessResponse(status, payload, permissionKey) {
-    const grants = window.AdminAccessContext?.permissions || [];
-    const previouslyAllowed = permissionKey && grants.some(grant => grant === '*' || grant.key === permissionKey);
-    const revoked = ['USER_BLOCKED', 'USER_ARCHIVED', 'TENANT_BLOCKED', 'ACTIVE_ROLE_INVALID', 'ROLE_NOT_ASSIGNED'];
-    if (status === 401 || (status === 403 && (previouslyAllowed || revoked.includes(payload?.error)))) {
+  function checkAccessResponse(status, payload) {
+    // A resource/permission denial does not revoke the identity or unrelated domains.
+    // Only authentication failures and explicit session-wide refusals invalidate the proof.
+    const revoked = ['USER_BLOCKED', 'USER_ARCHIVED', 'TENANT_BLOCKED', 'ACTIVE_ROLE_INVALID', 'ROLE_NOT_ASSIGNED', 'ROLE_SELECTION_REQUIRED'];
+    if (status === 401 || (status === 403 && revoked.includes(payload?.error))) {
       window.AdminLocalRepository.reset({ forget: true, reason: 'server-refusal' });
     }
   }
@@ -1190,7 +1190,7 @@
     const response = await fetch(url, { ...options, headers });
     const payload = await response.json().catch(() => null);
     assertScope(targetScope, generation);
-    checkAccessResponse(response.status, payload, configuredRbacContext === 'new-order' ? 'new_order.create' : 'products.catalog.read');
+    checkAccessResponse(response.status, payload);
     if (!response.ok || !payload || payload.ok === false) throw new Error(payload?.error || `HTTP_${response.status}`);
     return payload;
   }
@@ -2196,8 +2196,12 @@
         });
         if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) { await response.body?.cancel(); return; }
         if (!response.ok || !response.body) {
-          checkAccessResponse(response.status, null, configuredRbacContext === 'new-order' ? 'new_order.create' : 'products.catalog.read');
           shouldReconnect = response.status !== 401 && response.status !== 403;
+          // Middleware may return a JSON refusal before the stream starts. An empty
+          // or non-JSON 403 is not evidence that the entire local session was revoked.
+          const payload = response.status === 403 ? await response.json().catch(() => null) : null;
+          if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;
+          checkAccessResponse(response.status, payload);
           throw new Error(`CATALOG_STREAM_HTTP_${response.status}`);
         }
         if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;

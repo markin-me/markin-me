@@ -17321,8 +17321,7 @@
     const data = await res.json().catch(() => null);
     if (!access.isCurrent() || token !== localStorage.getItem('authToken')
         || storeId !== (localStorage.getItem('activeStoreId') || '1')) throw new Error('LOCAL_SCOPE_CHANGED');
-    window.CatalogRepository.checkAccessResponse(res.status, data,
-      /^\/api\/(admin\/catalog\/|new-order\/)/.test(String(url)) ? 'new_order.create' : null);
+    window.CatalogRepository.checkAccessResponse(res.status, data);
     if (!res.ok || !data || data.ok !== true) {
       const error = new Error(data?.error || `API_ERROR_${res.status}`);
       error.httpStatus = res.status;

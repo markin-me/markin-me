@@ -1014,3 +1014,44 @@ test('catalog feeds use the store validated by middleware, without a query overr
   assert.match(permissions, /\(manifest\|changes\|stream\)/);
   assert.match(catalogSource, /'x-rbac-context': configuredRbacContext/);
 });
+
+// PR1.1: source contracts only, not a substitute for HTTP/browser scenarios.
+test('catalog resets the whole context only on 401 or an explicit session-wide 403', () => {
+  const refusal = catalogSource.slice(catalogSource.indexOf('  function checkAccessResponse('), catalogSource.indexOf('  function deferred()'));
+  const codes = [...refusal.match(/const revoked = \[([^\]]+)\]/)[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
+  assert.deepEqual(codes, ['USER_BLOCKED', 'USER_ARCHIVED', 'TENANT_BLOCKED', 'ACTIVE_ROLE_INVALID', 'ROLE_NOT_ASSIGNED', 'ROLE_SELECTION_REQUIRED']);
+  assert.match(refusal, /if \(status === 401 \|\| \(status === 403 && revoked\.includes\(payload\?\.error\)\)\) \{\s*window\.AdminLocalRepository\.reset\(\{ forget: true, reason: 'server-refusal' \}\);\s*\}/);
+  assert.equal((refusal.match(/\.reset\(/g) || []).length, 1);
+  assert.doesNotMatch(refusal, /AdminAccessContext|permissions|previouslyAllowed|permissionKey/);
+  for (const code of ['FORBIDDEN', 'STORE_FORBIDDEN', 'RESOURCE_FORBIDDEN', 'RESOURCE_SCOPE_UNSUPPORTED', 'PERMISSION_MAPPING_REQUIRED', 'TENANT_MISMATCH']) {
+    assert.equal(codes.includes(code), false, code + ' must not invalidate unrelated domains');
+  }
+});
+
+test('catalog HTTP consumers propagate a denied response without treating it as successful data', () => {
+  const request = catalogSource.slice(catalogSource.indexOf('  async function catalogRequest('), catalogSource.indexOf('  async function loadEditorPassports('));
+  assert.match(request, /assertScope\(targetScope, generation\);\s*checkAccessResponse\(response\.status, payload\);\s*if \(!response\.ok \|\| !payload \|\| payload\.ok === false\) throw new Error/);
+  const productsApi = productsSource.slice(productsSource.indexOf('  async function api(url, opts)'), productsSource.indexOf('  function patchCachedProductStock('));
+  const newOrderApi = newOrderSource.slice(newOrderSource.indexOf('  async function apiJson('), newOrderSource.indexOf('  function loadNewOrderCatalogPassports('));
+  for (const consumer of [productsApi, newOrderApi]) {
+    assert.match(consumer, /if \(!access\.isCurrent\(\)[\s\S]*?throw new Error\('LOCAL_SCOPE_CHANGED'\);\s*window\.CatalogRepository\.checkAccessResponse\(res\.status, data\);\s*if \(!res\.ok \|\| !data \|\| data\.ok [!=]==? (?:true|false)\) \{[\s\S]*?throw /);
+  }
+  assert.match(newOrderApi, /"x-rbac-context": "new-order"/);
+});
+
+test('catalog SSE stops automatic reconnect on denial and guards delayed error payloads', () => {
+  const stream = catalogSource.slice(catalogSource.indexOf('  async function startSync()'), catalogSource.indexOf('  async function verifyManifestPassports('));
+  assert.match(stream, /if \(!response\.ok \|\| !response\.body\) \{\s*shouldReconnect = response\.status !== 401 && response\.status !== 403;/);
+  assert.match(stream, /const payload = response\.status === 403 \? await response\.json\(\)\.catch\(\(\) => null\) : null;\s*if \(source !== syncSource \|\| !scopeIsCurrent\(targetScope, generation\)\) return;\s*checkAccessResponse\(response\.status, payload\);\s*throw new Error/);
+  assert.match(stream, /if \(source !== syncSource \|\| !scopeIsCurrent\(targetScope, generation\)\) return;\s*syncSource = null;[\s\S]*?if \(shouldReconnect\) scheduleReconnect\(generation\);/);
+  assert.match(stream, /window\.addEventListener\("online", \(\) => \{\s*void startSync\(\);\s*void requestReconcile\(\{ reason: "online", force: true \}\);/);
+  assert.match(stream, /'x-rbac-context': configuredRbacContext/);
+});
+
+test('catalog persistence already cancels the timer and rejects an old scope callback', () => {
+  const schedule = catalogSource.slice(catalogSource.indexOf('  function schedulePersist()'), catalogSource.indexOf('  async function persistQueuedRecords()'));
+  const clear = catalogSource.slice(catalogSource.indexOf('  function clearRuntime()'), catalogSource.indexOf('  function subscribe('));
+  assert.match(schedule, /const targetScope = scope; const generation = scopeGeneration;\s*persistTimer = window\.setTimeout\(\(\) => \{\s*if \(!scopeIsCurrent\(targetScope, generation\)\) return;\s*persistTimer = null;\s*void flushPersistence\(\);/);
+  assert.match(clear, /scopeGeneration \+= 1/);
+  assert.match(clear, /if \(persistTimer\) window\.clearTimeout\(persistTimer\);\s*persistTimer = null;/);
+});

@@ -1708,11 +1708,7 @@
     
     const data = await res.json().catch(() => null);
     if (!access.isCurrent() || storeId !== (localStorage.getItem('activeStoreId') || '1')) throw new Error('LOCAL_SCOPE_CHANGED');
-    const catalogRead = (!opts?.method || opts.method === 'GET')
-      && /^\/api\/(admin\/catalog\/(?:product-targets|product-summaries|product-passports|manifest|changes|stream)(?:\?|$)|prod_products(?:\?|$)|admin\/products\/\d+(?:\?|$))/.test(String(url));
-    const passportRead = String(url).split('?')[0] === '/api/admin/catalog/product-passports';
-    window.CatalogRepository.checkAccessResponse(res.status, data,
-      catalogRead || passportRead ? 'products.catalog.read' : null);
+    window.CatalogRepository.checkAccessResponse(res.status, data);
     if (!res.ok || !data || data.ok === false) {
       throw new Error((data && data.error) || `HTTP_${res.status}`);
     }
