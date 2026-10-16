@@ -220,7 +220,7 @@
     try {
       return await putEntry(key, namespace, data, version, ttlMs, options);
     } catch (error) {
-      if (!isQuotaError(error)) throw error;
+      if (options.noQuotaCleanup || !isQuotaError(error)) throw error;
       console.warn("Persistent cache quota exceeded; running bounded safe cleanup");
       await cleanup({ reason: "quota", force: true }).catch((cleanupError) => {
         console.warn("Persistent cache quota cleanup failed", cleanupError);
@@ -392,7 +392,7 @@
         const storageKey = scopedKey(key);
         if (!storageKey) return Promise.resolve(false);
         const guardedWrite = { ...writeOptions, guard: () => (!writeOptions.guard || writeOptions.guard())
-          && (!options.guard || options.guard()) };
+          && (!options.guard || options.guard()), noQuotaCleanup: options.noQuotaCleanup === true };
         return writeEntry(storageKey, resolved.namespace, data, resolved.version, options.ttlMs, guardedWrite).then(() => true);
       },
       async setMany(entries, options = {}) {
@@ -415,6 +415,7 @@
         }));
         try { await write(); }
         catch (error) {
+          if (options.noQuotaCleanup) throw error;
           if (!isQuotaError(error)) throw error;
           console.warn("Persistent cache quota exceeded; running bounded safe cleanup");
           await cleanup({ reason: "quota", force: true }).catch((cleanupError) => {

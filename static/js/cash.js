@@ -114,6 +114,7 @@
     var fullOrdersById = new Map();
 
     async function apiJson(url, opts) {
+      if (isAdminOfflineRead()) throw new TypeError('Для этого действия требуется соединение с сервером.');
       opts = opts || {};
       var repository = window.AdminLocalRepository;
       var readAccess = repository && repository.isActive() ? repository.capture() : null;
@@ -3797,13 +3798,13 @@
 
     function startWaitLoop() {
       if (!cashWorkspaceScope()) return;
-      if (navigator.onLine === false) return;
+      if (isAdminOfflineRead()) return;
       if (document.visibilityState && document.visibilityState !== 'visible') return;
       var token = ++state.waitLoopToken;
       (async function runWaitLoop() {
         if (!(Number(state.eventsCursor || 0) > 0)) await bootstrapEventsCursor();
         while (token === state.waitLoopToken) {
-          if (navigator.onLine === false) return;
+          if (isAdminOfflineRead()) return;
           try {
             var data = await waitForOrderChanges();
             var cursor = Number(data && data.cursor || 0);
@@ -3865,7 +3866,7 @@
 
     async function refreshCashWorkspace(context, options) {
       options = options || {};
-      if (!isCurrentCashContext(context) || navigator.onLine === false) {
+      if (!isCurrentCashContext(context) || isAdminOfflineRead()) {
         refreshCashConnectionBanner();
         return false;
       }
@@ -3912,7 +3913,7 @@
 
     async function bootstrapCashWorkspace(options) {
       options = options || {};
-      if (window.AdminAccessContextPromise) await window.AdminAccessContextPromise;
+      if (window.AdminAccessContextPromise && !(await window.AdminAccessContextPromise)?.ok) return;
       if (!window.AdminLocalRepository || !await window.AdminLocalRepository.ready()) return;
       var context = cashSyncContext();
       resetDateStateToToday();
@@ -4406,7 +4407,8 @@
       refreshCashConnectionBanner();
     });
 
-    window.addEventListener('online', async function () {
+    window.addEventListener('admin:access-context', async function (event) {
+      if (!event.detail?.ok || event.detail.offline || !cashInitialRestoreComplete) return;
       if (!window.AdminLocalRepository || !await window.AdminLocalRepository.ready()) return;
       cashRefreshFailed = false;
       void refreshCashWorkspace(cashSyncContext());
@@ -4426,7 +4428,7 @@
     });
     window.addEventListener('pageshow', async function (event) {
       if (!event.persisted) return;
-      if (window.AdminAccessContextPromise) await window.AdminAccessContextPromise;
+      if (window.AdminAccessContextPromise && !(await window.AdminAccessContextPromise)?.ok) return;
       if (cashInitialRestoreComplete && cashWorkspaceScope() && navigator.onLine !== false) void refreshCashWorkspace(cashSyncContext());
     });
 

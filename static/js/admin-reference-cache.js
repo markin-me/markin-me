@@ -53,6 +53,7 @@
       });
     }
     const task = Promise.resolve().then(options.load).then(async (raw) => {
+      options.idleContext?.assertCurrent();
       if (startedRuntimeGeneration !== runtimeGeneration || startedToken !== window.localStorage.getItem('authToken')) {
         throw new Error('LOCAL_SCOPE_CHANGED');
       }
@@ -67,7 +68,11 @@
       if (scope && currentScope && currentScope.namespace === scope.namespace
         && generation === (generations.get(key) || 0) && startedRuntimeGeneration === runtimeGeneration) {
         const lastSyncedAt = Date.now();
-        await scope.set("value", data, { ttlMs: definitions[name].ttlMs, lastSyncedAt,
+        if (options.idleContext) {
+          await options.idleContext.commit(scope, [['value', data], ['meta:refresh', {
+            lastSyncedAt, complete: false, kind: 'observed-reference', cursor: null,
+          }]], { ttlMs: definitions[name].ttlMs });
+        } else await scope.set("value", data, { ttlMs: definitions[name].ttlMs, lastSyncedAt,
           guard: () => generation === (generations.get(key) || 0) && startedRuntimeGeneration === runtimeGeneration });
         if (!scope.isCurrent() || generation !== (generations.get(key) || 0) || startedRuntimeGeneration !== runtimeGeneration) {
           throw new Error('LOCAL_SCOPE_CHANGED');
@@ -105,10 +110,19 @@
     }
     if (entry) {
       recordState(name, scope, entry, 'local');
-      if (entry.stale && window.navigator.onLine !== false) {
-        loadNetwork(name, options, scope, entry.data).catch(error => {
-          console.error('ADMIN_REFERENCE_REFRESH_FAILED:', name, error);
-        });
+      if (entry.stale && name === 'store-time' && window.AdminIdleHydration?.supported) {
+        void window.AdminIdleHydration.enqueue('reference:' + name, context => {
+          if (pending.has(key)) return null;
+          return loadNetwork(name, {
+          ...options, idleContext: context,
+          load: async () => {
+            const response = await context.requestJSON('/api/admin/tenant/current-time');
+            if (!response?.ok || !response.data) throw new Error('INVALID_STORE_TIME');
+            return { storeTimezone: String(response.data.storeTimezone || '+0'),
+              storeTimestamp: Number(response.data.storeTimestamp || 0), fetchedAt: Date.now() };
+          },
+        }, scope, entry.data);
+        }, { priority: 1, guard: () => scope.isCurrent() });
       }
       return entry.data;
     }

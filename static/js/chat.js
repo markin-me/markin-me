@@ -1,10 +1,22 @@
 ﻿
-(function () {
+(async function () {
+  const accessContext = await window.AdminAccessContextPromise;
+  const localRepository = window.AdminLocalRepository;
+  if (!accessContext?.ok || !localRepository || !await localRepository.ready()) return;
+  const scopeStoreId = String(localStorage.getItem("activeStoreId") || "1");
+  const createChatScope = () => localRepository.create({
+    domain: "chat", version: 1,
+    dimensions: { organizationalUnit: { type: "store", id: scopeStoreId } },
+    guard: () => String(localStorage.getItem("activeStoreId") || "1") === scopeStoreId,
+  });
+  let chatScope = createChatScope();
+  if (!chatScope.complete) return;
+  const chatNamespace = chatScope.namespace;
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const getSharedOrderPanel = () => window.SharedOrderPanel || null;
 
-  const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
+  const CHAT_STORAGE_KEY = "dashboard:client-chat:v1:" + chatNamespace;
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${getTenantId()}`;
   const CHAT_ATTACHMENT_DRAFT_DB_NAME = "markin-me-chat-attachment-drafts";
   const CHAT_ATTACHMENT_DRAFT_DB_VERSION = 1;
@@ -3580,21 +3592,21 @@
   }
 
   function getChatPersistentCacheScopes() {
-    const cacheApi = window.AdminPersistentCache;
-    if (!cacheApi || typeof cacheApi.createScope !== "function") return null;
-    const summaries = cacheApi.createScope({
+    if (!chatScope?.isCurrent()) return null;
+    const summaries = localRepository.create({
       domain: CHAT_SUMMARIES_CACHE_DOMAIN,
       version: CHAT_PERSISTENT_CACHE_VERSION,
+      dimensions: { organizationalUnit: { type: "store", id: scopeStoreId } },
+      guard: () => chatScope?.isCurrent() === true,
     });
-    const threads = cacheApi.createScope({
+    const threads = localRepository.create({
       domain: CHAT_THREADS_CACHE_DOMAIN,
       version: CHAT_PERSISTENT_CACHE_VERSION,
+      dimensions: { organizationalUnit: { type: "store", id: scopeStoreId } },
+      guard: () => chatScope?.isCurrent() === true,
     });
     if (!summaries.complete || !threads.complete) return null;
-    if (String(summaries.userId) !== String(threads.userId)
-      || String(summaries.tenantId) !== String(threads.tenantId)
-      || String(summaries.storeId) !== String(threads.storeId)) return null;
-    return { summaries, threads, identityKey: `${summaries.userId}:${summaries.tenantId}:${summaries.storeId}` };
+    return { summaries, threads, identityKey: summaries.namespace + "|" + threads.namespace };
   }
 
   function resetChatPersistentCacheContext() {
@@ -3617,6 +3629,8 @@
       state.clientsLoadInFlight = null;
       resetClientsPager();
     }
+    state.persistentSummariesScope = scopes?.summaries || null;
+    state.persistentThreadsScope = scopes?.threads || null;
     return { changed, generation: state.bootstrapGeneration, scopes };
   }
 
@@ -4139,31 +4153,21 @@
   }
 
   function getTenantId() {
-    const meta = document.querySelector('meta[name="tenant_id"]');
-    if (meta && meta.content) {
-      const n = Number(meta.content);
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-    try {
-      const raw = localStorage.getItem("tenant");
-      if (raw) {
-        const tenant = JSON.parse(raw);
-        const id = Number(tenant && tenant.id);
-        if (Number.isFinite(id) && id > 0) return Math.trunc(id);
-      }
-    } catch {}
-    return 1;
+    return accessContext.local_context.tenantId;
   }
 
   function getSharedClientDetailsCacheKey() {
-    return `dashboard:clients:details:v1:${getTenantId()}`;
+    const namespace = window.__clientsDashboardApi?.getCacheNamespace();
+    return namespace ? `dashboard:clients:details:v1:${getTenantId()}:${namespace}` : "";
   }
 
   function getSharedOrderDetailsCacheKey() {
-    return `dashboard:orders:details:v1:${getTenantId()}`;
+    const namespace = window.__clientsDashboardApi?.getCacheNamespace();
+    return namespace ? `dashboard:orders:details:v1:${getTenantId()}:${namespace}` : "";
   }
 
   function readSharedOrderDetailsCache() {
+    if (!chatScope?.isCurrent() || !getSharedOrderDetailsCacheKey()) return {};
     try {
       const raw = localStorage.getItem(getSharedOrderDetailsCacheKey());
       if (!raw) return {};
@@ -4187,6 +4191,7 @@
   }
 
   function setSharedOrderDetails(order) {
+    if (!chatScope?.isCurrent() || !getSharedOrderDetailsCacheKey()) return;
     const id = Number(order?.id || 0);
     if (!Number.isFinite(id) || id <= 0) return;
     const cache = readSharedOrderDetailsCache();
@@ -4207,6 +4212,7 @@
   }
 
   function getSharedClientDetailsFromLocalStorage(clientId) {
+    if (!chatScope?.isCurrent() || !getSharedClientDetailsCacheKey()) return null;
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return null;
     try {
@@ -4231,6 +4237,7 @@
   }
 
   function setSharedClientDetailsToLocalStorage(clientId, payload = {}) {
+    if (!chatScope?.isCurrent() || !getSharedClientDetailsCacheKey()) return false;
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return false;
     const key = String(id);
@@ -4421,10 +4428,9 @@
   }
 
   function buildAttachPreviewDraftKey(clientId = state.activeClientId) {
-    const tenantId = getTenantId();
     const key = normalizeClientIdKey(clientId);
-    if (!tenantId || !key) return "";
-    return `dashboard:${tenantId}:${key}`;
+    if (!chatScope?.isCurrent() || !key) return "";
+    return `dashboard:${chatNamespace}:${key}`;
   }
 
   function clearAttachPreviewDraftPersistTimer() {
@@ -4800,6 +4806,7 @@
   }
 
   async function apiJson(url, opts = {}) {
+    if (!chatScope?.isCurrent()) throw new Error("LOCAL_SCOPE_CHANGED");
     if (!isChatWidgetEnabledRuntime()) {
       throw createChatDisabledAbortError();
     }
@@ -4839,7 +4846,7 @@
     }
 
     try {
-      const res = await fetch(requestUrl, {
+      const res = await authFetch(requestUrl, {
         method: opts.method || "GET",
         headers,
         cache: opts.cache || "default",
@@ -7141,6 +7148,7 @@
   }
 
   function startRemoteSyncLoops() {
+    if (!chatScope?.isCurrent() || isAdminOfflineRead()) return;
     if (!isChatWidgetEnabledRuntime()) return;
     state.isRealtimePaused = false;
 
@@ -7343,6 +7351,7 @@
   }
 
   function resumeRealtimeSync() {
+    if (!chatScope?.isCurrent() || isAdminOfflineRead()) return;
     if (!isChatWidgetEnabledRuntime()) return;
     startRemoteSyncLoops();
     ensureActiveOrdersPollTimer();
@@ -7361,6 +7370,7 @@
           composerDraftByClient: {},
         },
       };
+      if (!chatScope?.isCurrent()) return defaults;
       const raw = localStorage.getItem(CHAT_STORAGE_KEY);
       if (!raw) return defaults;
       const parsed = JSON.parse(raw);
@@ -7590,6 +7600,7 @@
   }
 
   function saveStore() {
+    if (!chatScope?.isCurrent()) return;
     try {
       syncUiStateIntoStore();
       // Persist only lightweight UI/cache state.
@@ -17931,7 +17942,15 @@
           };
         });
       if (generation !== state.bootstrapGeneration || queryGeneration !== state.clientsQueryGeneration) return false;
-      if (remoteFailed) return false;
+      if (remoteFailed) {
+        activePager.hasMore = false;
+        applyClientFilter();
+        if (!state.clients.length && dom.left.empty) {
+          dom.left.empty.textContent = 'Нет сохранённых чатов для просмотра без соединения.';
+          dom.left.empty.classList.remove('hidden');
+        }
+        return false;
+      }
 
       const remoteRows = Array.isArray(remotePage?.rows) ? remotePage.rows : [];
       const remoteHasMoreFlag = remotePage?.hasMore === true;
@@ -17983,6 +18002,7 @@
   }
 
   function maybeLoadMoreClientsByScroll() {
+    if (!chatScope?.isCurrent() || isAdminOfflineRead()) return;
     if (!dom.left.list) return;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     const pager = ensureClientsPager();
@@ -17993,6 +18013,7 @@
   }
 
   function maybePrefillClientsViewport() {
+    if (!chatScope?.isCurrent() || isAdminOfflineRead()) return;
     if (!dom.left.list) return;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     if (state.clientsViewportPrefillDone) return;
@@ -18384,6 +18405,9 @@
     syncChatManageUi();
     window.addEventListener("admin:access-context", (event) => {
       applyChatAccessContext(event.detail);
+      if (event.detail?.ok && !event.detail.offline && chatScope?.isCurrent()) {
+        syncChatWidgetEnabledFromTenant({ reload: true, resume: true });
+      }
     });
     if (window.AdminAccessContext) {
       applyChatAccessContext(window.AdminAccessContext);
@@ -18608,6 +18632,31 @@
 
   }
 
+  window.addEventListener("admin:local-context-changed", (event) => {
+    if (event.detail?.state !== "active") {
+      chatScope = null;
+      pauseRealtimeSync({ flushTyping: false });
+      activeApiAbortControllers.forEach((controller) => controller.abort());
+      return;
+    }
+    const next = createChatScope();
+    chatScope = next.complete && next.namespace === chatNamespace ? next : null;
+    if (chatScope) {
+      resetChatPersistentCacheContext();
+      resumeRealtimeSync();
+    }
+  });
+  const invalidateStoreScope = () => {
+    if (String(localStorage.getItem("activeStoreId") || "1") === scopeStoreId) return;
+    chatScope = null;
+    document.documentElement.setAttribute("data-local-access", "pending");
+    window.location.reload();
+  };
+  document.addEventListener("tenantStoreChanged", invalidateStoreScope);
+  window.addEventListener("storage", (event) => {
+    if (event.key === "activeStoreId") invalidateStoreScope();
+  });
+  window.addEventListener("offline", () => pauseRealtimeSync({ flushTyping: false }));
   init();
 })();
 

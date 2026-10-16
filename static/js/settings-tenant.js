@@ -5117,13 +5117,26 @@
   }
 
   async function loadTenantProfile() {
-
-
-
     try {
-
-
-
+      const local = window.AdminLocalRepository.create({ domain: 'settings:profile', version: 1 });
+      if (isAdminOfflineRead()) {
+        const safe = await local.get('safe-profile', { allowStale: true });
+        if (!safe) throw new Error('SETTINGS_LOCAL_PROFILE_MISSING');
+        document.querySelectorAll('[data-tenant-field], [data-tenant-input]').forEach(element => {
+          const key = element.getAttribute('data-tenant-field') || element.getAttribute('data-tenant-input');
+          if (!Object.prototype.hasOwnProperty.call(safe, key)) return;
+          if (element.hasAttribute('data-tenant-input')) element.value = safe[key] ?? '';
+          else element.textContent = formatValue(key, safe[key]);
+        });
+        fillTimezoneSelect(safe.timezone, 'tenantTimezoneSelect');
+        fillTimezoneSelect(safe.timezone, 'brandTimezoneSelect');
+        return { ...safe, offline_partial: true };
+      }
+      // Reserve locally in parallel with HTTP. Neither persistence nor its failure
+      // holds up the server response or rendering of the working page.
+      const writer = local.bufferWrite('safe-profile').catch(error => {
+        console.error('SETTINGS_BUFFER_RESERVATION_FAILED:', error.name); return null;
+      });
       const res = await authFetch("/api/admin/tenant");
 
 
@@ -5141,6 +5154,9 @@
 
 
       const tenant = data.tenant;
+      const safeProfile = Object.fromEntries(['name', 'site_name', 'timezone'].filter(key => key in tenant)
+        .map(key => [key, typeof tenant[key] === 'string' ? tenant[key].slice(0, 256) : null]));
+      void writer.then(ticket => ticket?.commit(safeProfile)).catch(error => console.error('SETTINGS_BUFFER_WRITE_FAILED:', error.name));
       const receiptForm=document.getElementById("settingsOnlineReceiptForm");
       if(receiptForm && receiptForm.dataset.dirty!=="1") {
         const raw=tenant.online_receipt_config;
@@ -6270,6 +6286,11 @@
 
 
   document.addEventListener("DOMContentLoaded", async () => {
+    const paymentAccess = window.AdminAccessContext || await window.AdminAccessContextPromise;
+    if (!paymentAccess || paymentAccess.ok !== true) {
+      console.error("SETTINGS_ACCESS_CONTEXT_FAILED");
+      return;
+    }
     initCorporateLoginSuffix();
 
 
@@ -6293,11 +6314,6 @@
     const settingsApiAddBtn = document.getElementById("settingsApiAddBtn");
     const paymentSettings = { ready: false, providers: [], items: [], drafts: new Map(), permissions: { read: false, manage: false } };
     const paymentForm = document.getElementById("settingsPaymentForm");
-    const paymentAccess = window.AdminAccessContext || await window.AdminAccessContextPromise;
-    if (!paymentAccess || paymentAccess.ok !== true) {
-      console.error("SETTINGS_ACCESS_CONTEXT_FAILED");
-      return;
-    }
     const paymentKeys = new Set((paymentAccess.permissions || []).map(item => typeof item === "string" ? item : item.key));
     const paymentFullAccess = paymentKeys.has("*");
     const paymentSectionAccess = paymentFullAccess || paymentKeys.has("settings.payments.access");
@@ -64176,7 +64192,7 @@
       statusNode.setAttribute("data-settings-section-status", section);
       statusNode.innerHTML = status === "loading"
         ? "<p>Загрузка...</p>"
-        : `<p>Не удалось загрузить раздел.</p><button class="btn btn-secondary" type="button" data-settings-section-retry="${section}">Повторить</button>`;
+        : `<p>${status === 'partial' ? 'Без соединения доступны только сохранённые название и часовой пояс. Остальные настройки требуют сервера.' : isAdminOfflineRead() ? 'Нет сохранённых настроек для просмотра без соединения. Изменения требуют сервера.' : 'Не удалось загрузить раздел.'}</p><button class="btn btn-secondary" type="button" data-settings-section-retry="${section}">Повторить</button>`;
       const body = panel.querySelector(".panel-body") || panel;
       if (!existing) body.prepend(statusNode);
     }
@@ -64234,7 +64250,7 @@
         lifecycle = { status: "not_initialized", promise: null, scope, generation: 0 };
         settingsSectionLifecycle.set(sectionKey, lifecycle);
       }
-      if (options.retry && lifecycle.status === "error") {
+      if (options.retry && ['error', 'partial'].includes(lifecycle.status)) {
         lifecycle.status = "not_initialized";
         lifecycle.promise = null;
       }
@@ -64250,9 +64266,9 @@
         .then(initializer)
         .then(() => {
           if (lifecycle.generation !== generation || lifecycle.scope !== getSettingsTenantScope()) return false;
-          lifecycle.status = "ready";
+          lifecycle.status = isAdminOfflineRead() && ['tenant', 'site', 'chats'].includes(sectionKey) ? 'partial' : 'ready';
           lifecycle.promise = null;
-          renderSettingsSectionStatus(sectionKey, "ready");
+          renderSettingsSectionStatus(sectionKey, lifecycle.status);
           return true;
         })
         .catch((error) => {
@@ -64265,6 +64281,14 @@
         });
       return lifecycle.promise;
     }
+
+    window.addEventListener('admin:access-context', (event) => {
+      if (event.detail?.ok && !event.detail.offline) {
+        const section = String(document.body.getAttribute('data-settings-section') || 'tenant');
+        if (settingsSectionLifecycle.get(section)?.status === 'partial') sharedTenantProfilePromise = null;
+        if (['error', 'partial'].includes(settingsSectionLifecycle.get(section)?.status)) void ensureSettingsSection(section, { retry: true });
+      }
+    });
 
     settingsSectionButtons.forEach((button) => {
       button.addEventListener("click", () => {

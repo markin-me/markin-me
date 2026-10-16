@@ -1,30 +1,43 @@
-(function () {
+(async function () {
+  const accessContext = await window.AdminAccessContextPromise;
+  const core = window.AdminLocalRepository;
+  if (!accessContext || accessContext.ok !== true || !core || !await core.ready()) return;
+  const scopeStoreId = String(localStorage.getItem('activeStoreId') || '1');
+  const accessMode = document.body.dataset.adminActivePage === 'chat' ? 'chat' : 'marketing';
+  const createClientScope = () => core.create({ domain: 'clients', version: 1,
+    dimensions: { organizationalUnit: { type: 'store', id: scopeStoreId }, accessContext: accessMode },
+    guard: () => scopeStoreId === String(localStorage.getItem('activeStoreId') || '1') });
+  let clientScope = createClientScope();
+  const clientNamespace = clientScope.namespace;
+  window.addEventListener('admin:local-context-changed', event => {
+    if (event.detail?.state !== 'active') { clientScope = null; return; }
+    const next = createClientScope();
+    clientScope = next.namespace === clientNamespace ? next : null;
+  });
+  function switchClientStore() {
+    if (scopeStoreId === String(localStorage.getItem('activeStoreId') || '1')) return;
+    clientScope = null;
+    document.documentElement.setAttribute('data-local-access', 'pending');
+    window.location.reload();
+  }
+  document.addEventListener('tenantStoreChanged', switchClientStore);
+  window.addEventListener('storage', event => { if (event.key === 'activeStoreId') switchClientStore(); });
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
   function getTenantId() {
-    const meta = document.querySelector('meta[name="tenant_id"]');
-    if (meta && meta.content) {
-      const n = Number(meta.content);
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-    try {
-      const u = new URL(window.location.href);
-      const q = Number(u.searchParams.get("tenant_id"));
-      if (Number.isFinite(q) && q > 0) return q;
-    } catch {}
-    return 1;
+    return accessContext.local_context.tenantId;
   }
   const tenantId = getTenantId();
-  const CLIENT_DETAILS_CACHE_KEY = `dashboard:clients:details:v1:${tenantId}`;
+  const CLIENT_DETAILS_CACHE_KEY = `dashboard:clients:details:v1:${tenantId}:${clientNamespace}`;
   const CLIENT_DETAILS_CACHE_TTL_MS = 10 * 60 * 1000;
   const CLIENT_DETAILS_CACHE_MAX_CLIENTS = 120;
-  const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}`;
+  const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}:${clientNamespace}`;
   const SHARED_ORDER_DETAILS_CACHE_TTL_MS = 15 * 60 * 1000;
   const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
   const CHAT_MOBILE_VIEW_STORAGE_KEY = `dashboard:chat:mobile:view:v1:${tenantId}`;
-  const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}`;
+  const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}:${clientNamespace}`;
   const BONUS_HISTORY_PAGE_SIZE = 50;
   const BONUS_LEVEL_FLIP_ANIMATION_MS = 560;
   const CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION = 1;
@@ -43,6 +56,7 @@
   }
 
   async function apiJson(url, opts = {}) {
+    if (!clientScope?.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
     const token = localStorage.getItem('authToken');
     const storeId = localStorage.getItem('activeStoreId') || '1';
     const activeRbacNode = Array.from(document.querySelectorAll('.page-col-left [data-rbac-node].is-active'))
@@ -52,7 +66,7 @@
     const headers = {
       "x-tenant-id": String(tenantId),
       "x-store-id": storeId,
-      "x-rbac-context": "marketing",
+      "x-rbac-context": accessMode,
       ...(activeRbacNode ? { "x-rbac-node": activeRbacNode } : {}),
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
       ...(opts.headers || {}),
@@ -60,7 +74,7 @@
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    const res = await fetch(url, {
+    const res = await authFetch(url, {
       method: opts.method || "GET",
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -93,6 +107,7 @@
   }
 
   function readSharedOrderDetailsCache() {
+    if (!clientScope?.isCurrent()) return {};
     try {
       const raw = localStorage.getItem(SHARED_ORDER_DETAILS_CACHE_KEY);
       if (!raw) return {};
@@ -116,6 +131,7 @@
   }
 
   function setSharedOrderDetails(order) {
+    if (!clientScope?.isCurrent()) return;
     const id = Number(order?.id || 0);
     if (!Number.isFinite(id) || id <= 0) return;
     const cache = readSharedOrderDetailsCache();
@@ -309,7 +325,7 @@
     files.forEach((file) => fd.append('images', file));
     const headers = { 'x-tenant-id': String(tenantId) };
     if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch('/api/upload/product-images', {
+    const res = await authFetch('/api/upload/product-images', {
       method: 'POST',
       headers,
       body: fd,
@@ -508,6 +524,7 @@
   }
 
   function readBannerStorage() {
+    if (!clientScope?.isCurrent()) return null;
     try {
       const raw = localStorage.getItem(MARKETING_BANNERS_STORAGE_KEY);
       if (!raw) {
@@ -526,6 +543,7 @@
   }
 
   function persistBannerStorage() {
+    if (!clientScope?.isCurrent()) return;
     try {
       const drafts = sanitizeBannerDrafts(state.bannersDrafts);
       const placements = sanitizeBannerPlacements(state.bannerPlacements, drafts);
@@ -1114,11 +1132,12 @@
   }
 
   async function uploadTenantAsset(field, file) {
+    if (!clientScope?.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
     const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
     const form = new FormData();
     form.append('file', file);
     form.append('field', field);
-    const res = await fetch('/api/admin/tenant/upload', {
+    const res = await authFetch('/api/admin/tenant/upload', {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
@@ -3041,7 +3060,6 @@
   let importantProductPickerRequestSeq = 0;
   const subscriptionCatalogProductsByCategory = new Map();
   const SUBSCRIPTION_CATALOG_PAGE_SIZE = 8;
-  const clientOrderMetricsRequests = new Map();
   let customFilterCountsRequestToken = 0;
   let filterDraftCountPreview = null;
   let filterDraftCountRequestToken = 0;
@@ -3172,58 +3190,18 @@
     refreshCustomFilterCountsFromClientList();
   }
 
-  async function ensureClientOrderMetrics(clientId, options = {}) {
-    const id = Number(clientId || 0);
-    if (!Number.isFinite(id) || id <= 0) return null;
-    if (clientOrderMetricsRequests.has(id)) {
-      return clientOrderMetricsRequests.get(id);
-    }
-
-    const request = (async () => {
-      const cached = getCachedClientDetails(id);
-      if (!options.force && cached && Array.isArray(cached.orders) && cached.orders.length) {
-        const metrics = computeClientMetricsFromOrders(cached.orders);
-        updateClientRowMetrics(id, metrics);
-        return metrics;
-      }
-
-      const json = await fetchClientOrdersShared(id);
-      const rows = Array.isArray(json?.data) ? json.data : [];
-      const metrics = computeClientMetricsFromOrders(rows);
-      setCachedClientDetails(id, { orders: rows });
-      updateClientRowMetrics(id, metrics);
-      return metrics;
-    })()
-      .catch((err) => {
-        console.error(err);
-        return null;
-      })
-      .finally(() => {
-        clientOrderMetricsRequests.delete(id);
-      });
-
-    clientOrderMetricsRequests.set(id, request);
-    return request;
-  }
-
   function reconcileClientListOrderMetrics(items) {
     const rows = Array.isArray(items) ? items : [];
     if (!rows.length) return;
     const candidates = rows.filter((row) => Number(row?.id || 0) > 0 && Number(row?.total_orders || 0) <= 0);
     if (!candidates.length) return;
 
-    const limit = state.q ? 20 : 8;
-    const run = async () => {
-      for (const row of candidates.slice(0, limit)) {
-        await ensureClientOrderMetrics(row.id);
-      }
-    };
-
-    if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(() => { run().catch(console.error); }, { timeout: 1200 });
-      return;
+    // Keep list totals from its working response. Do not fetch whole histories
+    // speculatively just to replace zero totals while the user is scrolling.
+    for (const row of candidates) {
+      const cached = getCachedClientDetails(row.id);
+      if (cached?.orders?.length) updateClientRowMetrics(row.id, computeClientMetricsFromOrders(cached.orders));
     }
-    window.setTimeout(() => { run().catch(console.error); }, 60);
   }
 
   function getRelativeDateFilterValue(rawValue) {
@@ -3455,6 +3433,7 @@
   }
 
   function loadClientDetailsCache() {
+    if (!clientScope?.isCurrent()) return new Map();
     try {
       const raw = localStorage.getItem(CLIENT_DETAILS_CACHE_KEY);
       if (!raw) return new Map();
@@ -3468,7 +3447,7 @@
         const item = entries[key] && typeof entries[key] === "object" ? entries[key] : null;
         if (!item) return;
         const updatedAt = Number(item.updatedAt || 0);
-        if (!updatedAt || (now - updatedAt) > CLIENT_DETAILS_CACHE_TTL_MS) return;
+        if (!updatedAt || (!isAdminOfflineRead() && (now - updatedAt) > CLIENT_DETAILS_CACHE_TTL_MS)) return;
         const cachedClient = sanitizeCachedClientForDetails(item.client, id);
         if (!cachedClient) return;
         out.set(String(id), {
@@ -3490,6 +3469,7 @@
   }
 
   function saveClientDetailsCache() {
+    if (!clientScope?.isCurrent()) return;
     try {
       const rows = Array.from(state.clientDetailsCache.entries())
         .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
@@ -3513,12 +3493,13 @@
   }
 
   function getCachedClientDetails(clientId) {
+    if (!clientScope?.isCurrent()) return null;
     const key = String(Number(clientId || 0) || "");
     if (!key) return null;
     const entry = state.clientDetailsCache.get(key);
     if (!entry || typeof entry !== "object") return null;
     const updatedAt = Number(entry.updatedAt || 0);
-    if (!updatedAt || (Date.now() - updatedAt) > CLIENT_DETAILS_CACHE_TTL_MS) {
+    if (!updatedAt || (!isAdminOfflineRead() && (Date.now() - updatedAt) > CLIENT_DETAILS_CACHE_TTL_MS)) {
       state.clientDetailsCache.delete(key);
       return null;
     }
@@ -3536,6 +3517,7 @@
   }
 
   function setCachedClientDetails(clientId, patch = {}) {
+    if (!clientScope?.isCurrent()) return;
     const key = String(Number(clientId || 0) || "");
     if (!key) return;
     const prev = getCachedClientDetails(key) || {
@@ -3587,9 +3569,9 @@
   }
 
   async function hydrateClientCache(clientId) {
-    if (!window.AdminPersistentCache) return null;
+    if (!clientScope?.isCurrent()) return null;
     try {
-      const data = await window.AdminPersistentCache.read(clientCacheKey(clientId));
+      const data = await clientScope.get(clientCacheKey(clientId));
       if (data && typeof data === 'object') {
         setCachedClientDetails(clientId, data);
         return getCachedClientDetails(clientId);
@@ -3599,8 +3581,8 @@
   }
 
   function persistClientCache(clientId, data) {
-    if (!window.AdminPersistentCache) return;
-    void window.AdminPersistentCache.write(clientCacheKey(clientId), data).catch((err) => console.warn('Client cache write failed:', err));
+    if (!clientScope?.isCurrent()) return;
+    void clientScope.set(clientCacheKey(clientId), data).catch((err) => console.warn('Client cache write failed:', err));
   }
 
   function normalizeDiscountProductConfigMode(value) {
@@ -4821,11 +4803,11 @@
   }
 
   async function readPersistentClientBenefitsSnapshot(customerId) {
-    if (!window.AdminPersistentCache) return null;
+    if (!clientScope?.isCurrent()) return null;
     const scope = getClientBenefitsSnapshotScope(customerId);
     const key = getClientBenefitsSnapshotPersistentKey(customerId);
     try {
-      const record = await window.AdminPersistentCache.read(key);
+      const record = await clientScope.get(key);
       const fetchedAt = Number(record?.fetchedAt || 0);
       const age = Date.now() - fetchedAt;
       const valid = Number(record?.version || 0) === CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION
@@ -4837,7 +4819,7 @@
         && age <= CLIENT_BENEFITS_SNAPSHOT_HARD_EXPIRY_MS
         && isValidClientBenefitsSnapshot(record?.data, scope);
       if (!valid) {
-        if (record) void window.AdminPersistentCache.remove(key).catch(() => {});
+        if (record) void clientScope.remove(key).catch(() => {});
         return null;
       }
       return { snapshot: record.data, stale: age > CLIENT_BENEFITS_SNAPSHOT_FRESH_MS };
@@ -4848,12 +4830,11 @@
   }
 
   async function persistClientBenefitsSnapshot(customerId, snapshot) {
-    if (!window.AdminPersistentCache) return;
+    if (!clientScope?.isCurrent()) return;
     const scope = getClientBenefitsSnapshotScope(customerId);
     const key = getClientBenefitsSnapshotPersistentKey(customerId);
-    const prefix = `benefits-snapshot:v${CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION}:t${scope.tenantId}:s${scope.storeId}:`;
     try {
-      await window.AdminPersistentCache.write(key, {
+      await clientScope.set(key, {
         version: CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION,
         tenantId: scope.tenantId,
         storeId: scope.storeId,
@@ -4861,7 +4842,7 @@
         fetchedAt: Date.now(),
         data: snapshot,
       });
-      void window.AdminPersistentCache.prunePrefix(prefix, CLIENT_BENEFITS_SNAPSHOT_CACHE_MAX).catch(() => {});
+      void clientScope.prune(512).catch(error => console.warn('Client cache prune failed:', error));
     } catch (error) {
       console.warn("Client benefits cache write failed:", error);
     }
@@ -4901,8 +4882,8 @@
     state.clientBenefitsSnapshotGenerationByCustomer.set(slot, (state.clientBenefitsSnapshotGenerationByCustomer.get(slot) || 0) + 1);
     state.clientBenefitsSnapshotByCustomer.delete(slot);
     state.clientBenefitsSnapshotRequestByCustomer.delete(slot);
-    if (!window.AdminPersistentCache) return Promise.resolve();
-    return window.AdminPersistentCache.remove(getClientBenefitsSnapshotPersistentKey(id)).catch((error) => {
+    if (!clientScope?.isCurrent()) return Promise.resolve();
+    return clientScope.remove(getClientBenefitsSnapshotPersistentKey(id)).catch((error) => {
       console.warn("Client benefits cache invalidation failed:", error);
     });
   }
@@ -27562,23 +27543,25 @@
 
   async function readClientsListCache() {
     if (isPresenceSensitiveClientsList()) return null;
-    if (!window.AdminPersistentCache) return null;
-    try { return await window.AdminPersistentCache.read(clientsListCacheKey()); }
+    if (!clientScope?.isCurrent()) return null;
+    try { return await clientScope.get(clientsListCacheKey()); }
     catch (err) { console.warn('Clients list cache read failed:', err); return null; }
   }
 
   function writeClientsListCache() {
     if (isPresenceSensitiveClientsList()) return;
-    if (!window.AdminPersistentCache) return;
+    if (!clientScope?.isCurrent()) return;
     const data = { query: clientsListCacheKey(), rows: state.clients, offset: state.clientsOffset, total: state.clientsTotal, hasMore: state.clientsHasMore };
-    void window.AdminPersistentCache.write(clientsListCacheKey(), data)
-      .then(() => window.AdminPersistentCache.prunePrefix(CLIENTS_LIST_CACHE_PREFIX, CLIENTS_LIST_CACHE_MAX_QUERIES))
+    const cache = clientScope;
+    void cache.set(clientsListCacheKey(), data)
+      .then(() => cache.prune(512))
       .catch((err) => console.warn('Clients list cache write failed:', err));
   }
 
   async function loadMoreClients() {
     if (state.clientsLoading) return;
     if (!state.clientsHasMore) return;
+    if (isAdminOfflineRead()) { state.clientsHasMore = false; return; }
 
     state.clientsLoading = true;
     const token = clientsRequestToken;
@@ -27599,6 +27582,9 @@
       appendClients(append);
       writeClientsListCache();
       refreshCustomFilterCountsFromClientList();
+    } catch (error) {
+      if (token === clientsRequestToken) state.clientsHasMore = false;
+      throw error;
     } finally {
       if (token === clientsRequestToken) {
         state.clientsLoading = false;
@@ -27627,11 +27613,13 @@
   async function loadClients() {
     clientsRequestToken += 1;
     const requestToken = clientsRequestToken;
+    const access = core.capture();
     const totalsPromise = loadTotals(requestToken).catch((err) => {
       if (requestToken === clientsRequestToken) console.error(err);
     });
     state.clientsLoading = false;
     const cached = await readClientsListCache();
+    if (!access.isCurrent() || requestToken !== clientsRequestToken || !clientScope?.isCurrent()) return;
     const cachedRows = Array.isArray(cached?.rows) ? cached.rows : [];
     state.clients = cachedRows;
     state.clientsOffset = Number(cached?.offset || cachedRows.length || 0);
@@ -27642,6 +27630,7 @@
     refreshCustomFilterCountsFromClientList();
 
     renderFilters();
+    if (isAdminOfflineRead()) { state.clientsHasMore = false; return; }
     const cachedOffset = state.clientsOffset;
     if (cachedRows.length) {
       state.clientsOffset = 0;
@@ -31325,6 +31314,11 @@
     });
   loadDiscounts().catch(console.error);
   scheduleCompanyChatWarmup();
+  window.addEventListener('admin:access-context', (event) => {
+    if (event.detail?.ok && !event.detail.offline && clientScope?.isCurrent()) {
+      void loadClients().catch(console.error);
+    }
+  });
 
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен (clients):', event.detail.store);
@@ -31334,6 +31328,7 @@
   });
   }
   window.__clientsDashboardApi = {
+    getCacheNamespace() { return clientScope?.isCurrent() ? clientNamespace : null; },
     openClientPassport(id, context = {}) {
       return openClientPassport(id, context);
     },

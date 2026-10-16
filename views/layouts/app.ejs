@@ -26,9 +26,13 @@
   <% if (typeof productsShell !== 'undefined' && productsShell === true) { %>
     <script>window.__ADMIN_PRODUCTS_SHELL__ = true;</script>
   <% } %>
+  <% if (typeof dashboardShell !== 'undefined' && dashboardShell === true) { %>
+    <script>window.__ADMIN_DASHBOARD_SHELL__ = true;</script>
+  <% } %>
   <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-persistent-cache.js?v=20261014-local-core-v1') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-local-repository.js?v=20261014-local-core-v1') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-idle-hydration.js') %>"></script>
   <script>
     (function () {
       var visibleScope = null;
@@ -723,6 +727,17 @@
             ok: true, local_context: confirmation.local_context, offline: true
           });
           applyAllowedStoreContext(restored);
+          if (window.__ADMIN_DASHBOARD_SHELL__) {
+            var keys = (restored.permissions || []).map(function (grant) { return typeof grant === 'string' ? grant : grant.key; });
+            var page = (window.__NAVIGATION_RBAC__.nodes || []).find(function (node) {
+              return node.parentId === null && node.navKey === document.body.dataset.adminActivePage;
+            });
+            if (!page || (!keys.includes('*') && !keys.includes(page.accessKey))) {
+              document.documentElement.setAttribute('data-local-access', 'denied');
+              document.getElementById('adminLocalAccessMessage').textContent = 'Нет подтверждённого доступа к этому разделу.';
+              return null;
+            }
+          }
           if (window.__ADMIN_PRODUCTS_SHELL__) {
             var grants = Array.isArray(restored.permissions) ? restored.permissions : [];
             var fullAccess = grants.includes('*');
@@ -762,8 +777,9 @@
           try {
             // Only SW's failed dashboard navigation uses this public document at the
             // dashboard URL. Restore the existing tab proof, never infer access from HTML.
-            if (useServerBootstrap === true && window.__ADMIN_PRODUCTS_SHELL__
-                && window.location.pathname.replace(/\/$/, '') === '/dashboard/products') {
+            if (useServerBootstrap === true && (window.__ADMIN_DASHBOARD_SHELL__
+                && window.location.pathname.replace(/\/$/, '') === '/dashboard/' + document.body.dataset.adminActivePage
+                || window.__ADMIN_PRODUCTS_SHELL__ && window.location.pathname.replace(/\/$/, '') === '/dashboard/products')) {
               var local = await restoreAccessContext(requestToken, ticket);
               if (!local && !repository.isActive()) repository.reset({ forget: true, broadcast: false, reason: 'offline-unavailable' });
               return local;
@@ -973,7 +989,21 @@
 
         // Загрузить точки при открытии страницы
         window.AdminAccessContextPromise = loadAccessContext(true);
-        window.addEventListener('online', function () { window.AdminAccessContextPromise = loadAccessContext(); });
+        window.addEventListener('online', function () {
+          var coldShell = window.__ADMIN_DASHBOARD_SHELL__ && !window.AdminLocalRepository.isActive();
+          window.AdminAccessContextPromise = loadAccessContext();
+          if (coldShell) window.AdminAccessContextPromise.then(function (context) {
+            if (context && window.AdminLocalRepository.isActive()) window.location.reload();
+          });
+        });
+        // A backend can recover without a browser "online" event (e.g. a proxy outage).
+        // Revalidate on returning to the application; do not add a polling loop.
+        window.addEventListener('focus', function () {
+          if (navigator.onLine !== false && window.AdminAccessContext?.offline === true
+              && window.AdminLocalRepository.isActive()) {
+            window.AdminAccessContextPromise = loadAccessContext();
+          }
+        });
         loadStores();
 
         // Проверка авторизации для страниц dashboard

@@ -104,6 +104,7 @@ function environment({ entries = new Map(), localStorage = storage(), sessionSto
       window.clearTimeout = id => timers.delete(id);
       sandbox.navigator = window.navigator;
       sandbox.authFetch = fetcher;
+      vm.runInContext(authSource.match(/^function isAdminOfflineRead\(\) \{[\s\S]*?^\}/m)[0], sandbox);
       sandbox.rbacPermissionIds = new Set(); sandbox.rbacPermissionKeys = new Set();
       const displays = [];
       Object.assign(sandbox, { renderList() { displays.push(copy(sandbox.window.TeamFixture.state.users)); },
@@ -131,7 +132,8 @@ function environment({ entries = new Map(), localStorage = storage(), sessionSto
         },
         fetcher(value) { sandbox.authFetch = value; } });
     },
-    layout(fetcher) {
+    layout(fetcher, { page = '' } = {}) {
+      sandbox.document.body.dataset.adminActivePage = page;
       const attributes = new Map([['data-local-access', 'pending']]);
       const message = { textContent: '' };
       env.runtimeResets = 0; env.reloads = 0;
@@ -161,6 +163,35 @@ function environment({ entries = new Map(), localStorage = storage(), sessionSto
 
 test('unconfirmed context cannot open a repository', () => {
   assert.throws(() => environment().repository(), /LOCAL_CONTEXT_UNAVAILABLE/);
+});
+
+test('buffered working responses cannot overwrite a newer browser-local request', async () => {
+  const env = environment(); await env.confirm(session());
+  const tails = new Map();
+  env.window.navigator.locks = { request(name, callback) {
+    const next = (tails.get(name) || Promise.resolve()).then(() => callback({ name }));
+    tails.set(name, next.catch(() => {})); return next;
+  } };
+  const repository = env.repository({ domain: 'settings:profile' });
+  const older = await repository.bufferWrite('safe-profile');
+  const newer = await repository.bufferWrite('safe-profile');
+  assert.equal(await newer.commit({ name: 'newer' }), true);
+  assert.equal(await older.commit({ name: 'late old response' }), false);
+  assert.equal((await repository.get('safe-profile')).name, 'newer');
+  const checkpoint = await repository.get('meta:buffer:safe-profile');
+  assert.equal(checkpoint.confirmedSequence, checkpoint.requestSequence);
+  assert.equal(checkpoint.complete, false);
+  assert.equal(checkpoint.serverVersion, null);
+});
+
+test('buffered write fails closed without locks or after context revocation', async () => {
+  const env = environment(); await env.confirm(session());
+  const repository = env.repository();
+  assert.equal(await repository.bufferWrite('item'), null);
+  env.window.navigator.locks = { request: (_, callback) => Promise.resolve().then(callback) };
+  const writer = await repository.bufferWrite('item');
+  env.core.reset({ forget: true });
+  await assert.rejects(writer.commit('old'), /LOCAL_SCOPE_CHANGED/);
 });
 test('tenant-wide domain needs no store and reuses one record', async () => {
   const env = environment(); await env.confirm(session());
@@ -208,6 +239,36 @@ test('products shell restores a confirmed tab without an obligatory auth request
   assert.equal(requests, 0); assert.equal(context.offline, true);
   assert.equal(ui.state(), 'active');
   assert.equal(context.local_context.accessViewId, login.data.local_context.accessViewId);
+});
+
+test('every dashboard shell restores only its confirmed section grant without an API dependency', async () => {
+  const roots = { cash: 'cash.access', products: 'products.access', orders: 'orders.access',
+    'courier-screen': 'courier.access', 'new-order': 'new_order.access', clients: 'marketing.access',
+    chat: 'chat.access', team: 'team.access', settings: 'settings.access' };
+  for (const [page, accessKey] of Object.entries(roots)) {
+    const env = environment(), login = session();
+    login.data.metadata = { permissions: [{ key: accessKey }], stores: [{ id: 1 }] };
+    await env.confirm(login);
+    env.window.__ADMIN_DASHBOARD_SHELL__ = true;
+    env.window.__NAVIGATION_RBAC__ = { nodes: [{ parentId: null, navKey: page, accessKey }] };
+    env.window.location.pathname = '/dashboard/' + page + '/';
+    let calls = 0;
+    const ui = env.layout(async () => { calls++; throw new TypeError('Backend unreachable'); }, { page });
+    assert.equal((await ui.load(true)).offline, true, page);
+    assert.equal(ui.state(), 'active', page);
+    assert.equal(calls, 0, page);
+  }
+});
+
+test('a public dashboard shell cannot grant a section missing from the confirmed permissions', async () => {
+  const env = environment(); await env.confirm(session());
+  env.window.__ADMIN_DASHBOARD_SHELL__ = true;
+  env.window.__NAVIGATION_RBAC__ = { nodes: [{ parentId: null, navKey: 'settings', accessKey: 'settings.access' }] };
+  env.window.location.pathname = '/dashboard/settings';
+  const ui = env.layout(async () => { throw new Error('No request expected'); }, { page: 'settings' });
+  assert.equal(await ui.load(true), null);
+  assert.equal(ui.state(), 'denied');
+  assert.equal(env.core.isActive(), true);
 });
 
 test('products shell refuses a role without read access but does not revoke other domains', async () => {

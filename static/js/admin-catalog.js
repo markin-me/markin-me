@@ -77,6 +77,7 @@
   let foregroundQuietUntil = 0;
   let downloadPageActive = true;
   const foregroundTokens = new Set();
+  const foregroundIdleOperations = new Map();
 
   function emptyManifest() {
     return {
@@ -457,12 +458,16 @@
   function beginForegroundWork() {
     const token = ++foregroundSequence;
     foregroundTokens.add(token);
+    const endIdleOperation = window.AdminIdleHydration?.beginOperation();
+    if (endIdleOperation) foregroundIdleOperations.set(token, endIdleOperation);
     cancelDownloadSchedule();
     return token;
   }
 
   function endForegroundWork(token) {
     if (!foregroundTokens.delete(token)) return false;
+    foregroundIdleOperations.get(token)?.();
+    foregroundIdleOperations.delete(token);
     foregroundQuietUntil = Math.max(foregroundQuietUntil, Date.now() + PRELOAD_QUIET_WINDOW_MS);
     scheduleDownloadTurn();
     return true;
@@ -531,7 +536,7 @@
     }, 180);
   }
 
-  async function persistQueuedRecords() {
+  async function persistQueuedRecords(idleContext) {
     const targetScope = scope;
     const generation = scopeGeneration;
     if (!targetScope?.complete) return false;
@@ -588,7 +593,12 @@
         ["reference-index:editor", { schemaVersion: "product-editor-v1" }]
       );
       if (entries.length || hadMetadataChanges) entries.push(["meta:manifest", nextManifest]);
-      if (entries.length) await targetScope.setMany(entries, { ttlMs: RECORD_TTL_MS });
+      idleContext?.assertCurrent();
+      if (entries.length) await targetScope.setMany(entries, { ttlMs: RECORD_TTL_MS,
+        noQuotaCleanup: Boolean(idleContext), guard: () => {
+          if (!idleContext) return true;
+          try { idleContext.assertCurrent(); return true; } catch (_) { return false; }
+        } });
       if (productIdsToRemove.length) {
         await targetScope.removeMany(productIdsToRemove.flatMap((id) => [`product:${id}`, `passport:${id}`, `passport-index:${id}`]));
       }
@@ -624,7 +634,8 @@
     }
   }
 
-  async function flushPersistence() {
+  async function flushPersistence(idleContext) {
+    idleContext?.assertCurrent();
     const targetScope = scope; const generation = scopeGeneration;
     if (!scopeIsCurrent(targetScope, generation)) return false;
     if (persistPromise) {
@@ -633,11 +644,11 @@
       const hasPersistableProducts = [...dirtyProducts].some((id) => !(pendingMutationFields.get(id)?.size));
       const hasPersistablePassports = [...dirtyPassports].some((id) => !(pendingMutationFields.get(id)?.size));
       if (hasPersistableProducts || dirtyCategories.size || hasPersistablePassports || removedProductIds.size || dirtyCombos.size || dirtyComboBlocks.size || dirtyComboRelations.size || metadataDirty || editorReferencesDirty) {
-        return flushPersistence();
+        return flushPersistence(idleContext);
       }
       return true;
     }
-    const currentPersistPromise = persistQueuedRecords().finally(() => {
+    const currentPersistPromise = persistQueuedRecords(idleContext).finally(() => {
       if (persistPromise === currentPersistPromise) persistPromise = null;
     });
     persistPromise = currentPersistPromise;
@@ -666,6 +677,13 @@
       if (record) ids.push(record.id);
     });
     if (ids.length && options.notify !== false) notify("products", ids);
+    if (ids.length && window.AdminIdleHydration?.supported) {
+      const missingCards = ids.filter(id => !isEditorReadyPassport(passportsByProductId.get(id)));
+      if (missingCards.length) void ensureProducts(missingCards, { background: true,
+        requiredCompleteness: 'editor-ready', awaitPersistence: true }).catch(error => {
+        console.warn('CATALOG_IDLE_BUFFER_PAUSED:', error.message);
+      });
+    }
     return ids.map((id) => productsById.get(id));
   }
 
@@ -1518,6 +1536,27 @@
   }
 
   async function ensureProducts(ids, options = {}) {
+    if (options.background === true && !options.idleContext) {
+      const scheduler = window.AdminIdleHydration;
+      if (!scheduler?.supported) return [];
+      const requested = uniqueIds(ids);
+      // Each scheduled portion owns its one HTTP request through parsing and persistence.
+      for (let offset = 0; offset < requested.length; offset += scheduler.config.maxRecords) {
+        const batch = requested.slice(offset, offset + scheduler.config.maxRecords);
+        const result = await scheduler.enqueue('catalog:cards:' + batch.join(','), async context => {
+          const rows = await ensureProducts(batch, { ...options, idleContext: context,
+            loader: values => context.requestJSON('/api/admin/catalog/product-passports', {
+              method: 'POST', headers: { 'x-rbac-context': configuredRbacContext }, body: JSON.stringify({ ids: values }),
+              recordCount: payload => Object.keys(payload?.data || {}).length,
+            }) });
+          context.assertCurrent();
+          return rows;
+        });
+        if (!result.ok) throw new Error('CATALOG_IDLE_PORTION_NOT_SAVED');
+      }
+      return requested.map(id => productsById.get(id)).filter(Boolean);
+    }
+    options.idleContext?.assertCurrent();
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const targetScope = scope;
@@ -1549,16 +1588,19 @@
       const passport = passportsByProductId.get(id);
       return !(requiredEditorReady ? isEditorReadyPassport(passport) : isOrderReadyPassport(passport));
     });
-    const pendingIds = missing.filter((id) => pendingByProductId.has(id) && !priority);
+    const canJoin = id => pendingByProductId.has(id) && !priority
+      && (options.background === true || pendingByProductId.get(id).background !== true);
+    const pendingIds = missing.filter(canJoin);
     const waits = pendingIds.map((id) => pendingByProductId.get(id).promise);
     const upgradeAfterWait = requiredOrderReady
       ? pendingIds.filter((id) => pendingByProductId.get(id).requiredCompleteness !== (requiredEditorReady ? "editor-ready" : "order-ready"))
       : [];
-    const fresh = missing.filter((id) => priority || !pendingByProductId.has(id));
+    const fresh = missing.filter(id => !canJoin(id));
     const loader = typeof options.loader === "function" ? options.loader : configuredLoader;
     if (fresh.length && typeof loader === "function") {
       const requestMutationVersions = new Map(fresh.map((id) => [id, mutationVersions.get(id) || 0]));
       const request = Promise.resolve().then(() => loader(fresh)).then(async (payload) => {
+        options.idleContext?.assertCurrent();
         if (scopeIsCurrent(targetScope, generation)) {
           if (requiredOrderReady) {
             const passportPayload = payload?.data && typeof payload.data === "object" ? payload.data : payload;
@@ -1592,6 +1634,7 @@
               const changedIds = [];
               await yieldMainThread();
               for (let offset = 0; offset < passportRows.length; offset += PRELOAD_PROCESSING_CHUNK_SIZE) {
+                options.idleContext?.assertCurrent();
                 assertScope(targetScope, generation);
                 changedIds.push(...upsertPassports(passportRows.slice(offset, offset + PRELOAD_PROCESSING_CHUNK_SIZE), { notify: false }).map((row) => row.id));
                 if (offset + PRELOAD_PROCESSING_CHUNK_SIZE < passportRows.length) await yieldMainThread();
@@ -1601,7 +1644,12 @@
             } else {
               upsertPassports(protectedPayload);
             }
-            if (options.awaitPersistence === true) await flushPersistence();
+            options.idleContext?.assertCurrent();
+            if (options.awaitPersistence === true) {
+              const saved = await flushPersistence(options.idleContext);
+              options.idleContext?.assertCurrent();
+              if (options.idleContext && !saved) throw new Error('LOCAL_WRITE_NOT_SAVED');
+            }
           } else {
             upsertProducts(loaderRows(payload, fresh), {
               completeness: options.completeness || "summary",
@@ -1616,6 +1664,7 @@
       });
       fresh.forEach((id) => pendingByProductId.set(id, {
         promise: request,
+        background: options.background === true,
         requiredCompleteness: requiredEditorReady ? "editor-ready" : (requiredOrderReady ? "order-ready" : "summary"),
       }));
       waits.push(request);
@@ -1788,6 +1837,7 @@
   }
 
   async function ensureCombos(ids, options = {}) {
+    if (options.background === true) throw new Error('BACKGROUND_COMBOS_REQUIRE_BOUNDED_SOURCE');
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const requiredCompleteness = options.requiredCompleteness === "editor-ready" ? "editor-ready" : "order-ready";
@@ -1856,6 +1906,7 @@
   }
 
   async function ensureComboBlocks(ids, options = {}) {
+    if (options.background === true) throw new Error('BACKGROUND_COMBOS_REQUIRE_BOUNDED_SOURCE');
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const targetScope = scope;
@@ -1884,6 +1935,7 @@
   }
 
   async function ensureAllCombos(options = {}) {
+    if (options.background === true) throw new Error('BACKGROUND_COMBOS_REQUIRE_BOUNDED_SOURCE');
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const targetScope = scope; const generation = scopeGeneration;
     if (!getAllCombos().length && options.force !== true && uniqueIds(manifest.comboIds).length) {
@@ -1915,6 +1967,7 @@
   }
 
   async function ensureCombosForCategoryCodes(values, options = {}) {
+    if (options.background === true) throw new Error('BACKGROUND_COMBOS_REQUIRE_BOUNDED_SOURCE');
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const targetScope = scope; const generation = scopeGeneration;
     const codes = [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
@@ -2419,6 +2472,8 @@
     downloadJob = null;
     downloadJobPromise = null;
     foregroundTokens.clear();
+    foregroundIdleOperations.forEach(end => end());
+    foregroundIdleOperations.clear();
     foregroundQuietUntil = 0;
   }
 

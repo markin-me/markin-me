@@ -8,6 +8,10 @@
 function getAuthToken() {
   return localStorage.getItem('admin:logout-pending:v1') ? null : localStorage.getItem('authToken');
 }
+// Connectivity/read mode is not an authorization grant. The server still checks each operation.
+function isAdminOfflineRead() {
+  return window.navigator?.onLine === false || window.AdminAccessContext?.offline === true;
+}
 function captureAuthState() {
   const token = getAuthToken();
   const control = localStorage.getItem('admin:local-access:v1');
@@ -170,10 +174,14 @@ function getAuthHeaders(additionalHeaders = {}) {
  * При ошибке 401 перенаправляет на страницу логина
  */
 async function authFetch(url, options = {}) {
+  if (isAdminOfflineRead() && String(url).startsWith('/api/') && !String(url).startsWith('/api/auth/')) {
+    throw new TypeError('Для этого действия требуется соединение с сервером.');
+  }
   if (String(url).startsWith('/api/admin/') && (!options.method || String(options.method).toUpperCase() === 'GET')
     && window.AdminLocalRepository && !await window.AdminLocalRepository.ready()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
   const requestToken = getAuthToken();
   const requestAccess = window.AdminLocalRepository?.capture({ requireActive: false });
+  const requestStore = localStorage.getItem('activeStoreId');
   const contextualHeaders = {};
   if (typeof document !== 'undefined' && document.body?.dataset?.adminActivePage === 'settings'
       && String(url || '').startsWith('/api/admin/')) {
@@ -187,6 +195,10 @@ async function authFetch(url, options = {}) {
     contextualHeaders['x-rbac-node'] = sectionNodes[section] || 'settings.company';
   }
   const headers = getAuthHeaders({ ...contextualHeaders, ...(options.headers || {}) });
+  if (typeof FormData !== 'undefined' && options.body instanceof FormData
+      && !Object.keys(options.headers || {}).some((key) => key.toLowerCase() === 'content-type')) {
+    delete headers['Content-Type'];
+  }
   
   const response = await fetch(url, {
     ...options,
@@ -196,7 +208,8 @@ async function authFetch(url, options = {}) {
     }
   });
 
-  if (requestToken !== getAuthToken() || (requestAccess && !requestAccess.isCurrent())) {
+  if (requestToken !== getAuthToken() || requestStore !== localStorage.getItem('activeStoreId')
+      || (requestAccess && !requestAccess.isCurrent())) {
     throw new Error('LOCAL_SCOPE_CHANGED');
   }
 
@@ -217,6 +230,15 @@ async function authFetch(url, options = {}) {
     }
   }
 
+  // Consumers parse JSON asynchronously too: a completed HTTP header must not let
+  // a late body from a revoked scope reach a settings/profile renderer.
+  const readJson = response.json.bind(response);
+  response.json = async function () {
+    const data = await readJson();
+    if (requestToken !== getAuthToken() || requestStore !== localStorage.getItem('activeStoreId')
+        || (requestAccess && !requestAccess.isCurrent())) throw new Error('LOCAL_SCOPE_CHANGED');
+    return data;
+  };
   return response;
 }
 

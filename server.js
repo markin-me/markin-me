@@ -804,6 +804,14 @@ const adminDashboardTitles = {
     '/dashboard/settings': 'Настройки',
 };
 app.locals.adminDashboardTitles = adminDashboardTitles;
+const adminDashboardViews = {
+  cash: 'cash', products: 'products', orders: 'orders', 'courier-screen': 'courier-screen',
+  'new-order': 'new-order', clients: 'clients', chat: 'chat', team: 'home', settings: 'home',
+};
+const adminShellRoutes = Object.keys(adminDashboardViews).map(section => ({
+  route: '/dashboard/' + section,
+  shell: '/pwa/neutral/' + (section === 'courier-screen' ? 'courier' : section),
+}));
 
 function getAdminManifestPageTitle(startPath, fallbackTitle = '') {
   const pathname = normalizeManifestStartPath(startPath, { appType: 'admin' });
@@ -1345,20 +1353,20 @@ var OWNED_CACHE_PREFIXES = ['admin-static-', 'admin-pages-', 'admin-shell-v2-', 
 var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
 var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
 var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
-var COURIER_SHELL_PATH = '/dashboard/courier-screen';
 var NEUTRAL_SHELL_PATH = '/pwa/neutral/courier';
 var NAVIGATION_SHELL_PATH = '/pwa/neutral/navigation';
-var PRODUCTS_SHELL_PATH = '/pwa/neutral/products';
-var PRODUCTS_REQUIRED_URLS = PRECACHE_URLS.filter(function (url) {
-  return url.indexOf('/static/js/orders.js') === -1 && url.indexOf('/static/js/courier-screen.js') === -1
-    && url.indexOf('/static/js/shared-order-') === -1;
-});
+var SHELL_ROUTES = ${JSON.stringify(adminShellRoutes)};
+var resourceLoads = new Map();
 var PUBLIC_FONT_URLS = [
   'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css',
   'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/webfonts/fa-solid-900.woff2',
   'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/webfonts/fa-regular-400.woff2',
   'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/webfonts/fa-brands-400.woff2'
 ];
+var PUBLIC_LIBRARY_URLS = PUBLIC_FONT_URLS.concat([
+  'https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.css',
+  'https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.umd.js'
+]);
 var DASHBOARD_PATHS = ${JSON.stringify(Object.keys(adminDashboardTitles))};
 var navigationPreparation = null;
 
@@ -1446,21 +1454,41 @@ async function savePreparedResource(cache, url, options, validate) {
   }
 }
 
-async function cacheStaticAssets() {
+function shellResourceUrls(response) {
+  var urls = JSON.parse(response.headers.get('X-PWA-Resources') || 'null');
+  if (!Array.isArray(urls) || !urls.length) throw new Error('OFFLINE_RESOURCE_MANIFEST_REQUIRED');
+  return urls.map(function (value) {
+    var url = new URL(value, self.location.origin);
+    if (!(url.origin === self.location.origin && url.pathname.indexOf('/static/') === 0)
+        && PUBLIC_LIBRARY_URLS.indexOf(url.href) === -1) throw new Error('OFFLINE_RESOURCE_SCOPE_INVALID');
+    return url.href;
+  });
+}
+
+async function cacheStaticAssets(urls) {
   var cache = await caches.open(STATIC_CACHE);
-  await Promise.all(PRECACHE_URLS.map(async function (url) {
+  await Promise.all((urls || PRECACHE_URLS).map(async function (value) {
+    var url = new URL(value, self.location.origin).href;
     if (shouldCacheStaticResponse(await cache.match(url))) return;
-    await savePreparedResource(cache, url, { credentials: 'omit', cache: 'reload' }, shouldCacheStaticResponse);
+    if (!resourceLoads.has(url)) {
+      var load = savePreparedResource(cache, url, { credentials: 'omit', cache: 'reload', mode: 'cors' }, shouldCacheStaticResponse);
+      resourceLoads.set(url, load);
+      load.finally(function () { if (resourceLoads.get(url) === load) resourceLoads.delete(url); }).catch(function () {});
+    }
+    await resourceLoads.get(url);
   }));
 }
 
 async function warmNeutralShell(pathname) {
   var cache = await caches.open(SHELL_CACHE);
   var cached = await cache.match(pathname);
-  if (cached && cached.ok && cached.headers.get('X-PWA-Neutral-Shell') === '1') return;
-  await savePreparedResource(cache, pathname, { credentials: 'omit', cache: 'no-store' }, function (response) {
-    return shouldCacheNeutralShell(response, pathname);
-  });
+  if (!cached || !cached.ok || cached.headers.get('X-PWA-Neutral-Shell') !== '1') {
+    await savePreparedResource(cache, pathname, { credentials: 'omit', cache: 'no-store' }, function (response) {
+      return shouldCacheNeutralShell(response, pathname);
+    });
+    cached = await cache.match(pathname);
+  }
+  if (pathname !== NAVIGATION_SHELL_PATH) await cacheStaticAssets(shellResourceUrls(cached));
 }
 
 async function warmCourierShell() {
@@ -1473,18 +1501,14 @@ async function warmCourierShell() {
 }
 
 async function warmPublicFonts() {
-  var cache = await caches.open(STATIC_CACHE);
-  await Promise.all(PUBLIC_FONT_URLS.map(async function (url) {
-    if (shouldCacheStaticResponse(await cache.match(url))) return;
-    await savePreparedResource(cache, url, { credentials: 'omit', mode: 'cors' }, shouldCacheStaticResponse);
-  }));
+  await cacheStaticAssets(PUBLIC_FONT_URLS);
 }
 
-async function productsShellReady(cache) {
-  var shell = await cache.match(PRODUCTS_SHELL_PATH);
+async function dashboardShellReady(cache, pathname) {
+  var shell = await cache.match(pathname);
   if (!shell || shell.headers.get('X-PWA-Neutral-Shell') !== '1') return null;
   var resources = await caches.open(STATIC_CACHE);
-  var saved = await Promise.all(PRODUCTS_REQUIRED_URLS.map(async function (url) {
+  var saved = await Promise.all(shellResourceUrls(shell).map(async function (url) {
     return shouldCacheStaticResponse(await resources.match(url));
   }));
   return saved.every(Boolean) ? shell : null;
@@ -1493,19 +1517,18 @@ async function productsShellReady(cache) {
 async function prepareOfflineNavigation() {
   if (navigationPreparation) return navigationPreparation;
   navigationPreparation = (async function () {
-    await Promise.all([cacheStaticAssets(), warmNeutralShell(NEUTRAL_SHELL_PATH), warmNeutralShell(NAVIGATION_SHELL_PATH),
-      warmNeutralShell(PRODUCTS_SHELL_PATH),
+    await Promise.all([cacheStaticAssets(), warmNeutralShell(NAVIGATION_SHELL_PATH),
+      ...SHELL_ROUTES.map(function (entry) { return warmNeutralShell(entry.shell); }),
       warmPublicFonts().catch(function () { console.warn('OFFLINE_PUBLIC_FONTS_UNAVAILABLE'); })]);
     var resources = await caches.open(STATIC_CACHE);
     var shells = await caches.open(SHELL_CACHE);
     var saved = await Promise.all(PRECACHE_URLS.map(async function (url) {
       return shouldCacheStaticResponse(await resources.match(url));
     }));
-    var courier = await shells.match(NEUTRAL_SHELL_PATH);
     var navigation = await shells.match(NAVIGATION_SHELL_PATH);
-    if (saved.some(function (ok) { return !ok; }) || courier?.headers.get('X-PWA-Neutral-Shell') !== '1'
-        || navigation?.headers.get('X-PWA-Neutral-Shell') !== '1'
-        || !await productsShellReady(shells)) throw new Error('OFFLINE_RESOURCES_INCOMPLETE');
+    var prepared = await Promise.all(SHELL_ROUTES.map(function (entry) { return dashboardShellReady(shells, entry.shell); }));
+    if (saved.some(function (ok) { return !ok; }) || prepared.some(function (shell) { return !shell; })
+        || navigation?.headers.get('X-PWA-Neutral-Shell') !== '1') throw new Error('OFFLINE_RESOURCES_INCOMPLETE');
   })();
   try { await navigationPreparation; } finally { navigationPreparation = null; }
 }
@@ -1542,18 +1565,19 @@ async function cacheFirst(request) {
 async function privateNavigation(request, url) {
   try {
     // Never read/write personalized HTML in Cache Storage or the HTTP cache.
-    return await fetch(request, { cache: 'no-store' });
+    var online = await fetch(request, { cache: 'no-store' });
+    if ([502, 503, 504].indexOf(online.status) === -1) return online;
+    // A proxy can answer while the application is unreachable. This is not an
+    // authorization refusal; the public shell still has to validate its tab proof.
+    throw new Error('APPLICATION_UNAVAILABLE');
   } catch (err) {
     try {
       var cache = await caches.open(SHELL_CACHE);
       var pathname = normalizeDashboardPath(url.pathname);
-      if (pathname === '/dashboard/products') {
-        var products = await productsShellReady(cache);
-        if (products) return products;
-      }
-      if (pathname === COURIER_SHELL_PATH) {
-        var shell = await cache.match(NEUTRAL_SHELL_PATH);
-        if (shell && shell.headers.get('X-PWA-Neutral-Shell') === '1') return shell;
+      var entry = SHELL_ROUTES.find(function (item) { return item.route === pathname; });
+      if (entry) {
+        var shell = await dashboardShellReady(cache, entry.shell);
+        if (shell) return shell;
       }
       if (DASHBOARD_PATHS.indexOf(pathname) !== -1) {
         var navigation = await cache.match(NAVIGATION_SHELL_PATH);
@@ -1572,7 +1596,9 @@ self.addEventListener('install', function (event) {
     Promise.all([
       cacheStaticAssets(),
       warmCourierShell().catch(function () {}),
-      warmNeutralShell(PRODUCTS_SHELL_PATH).catch(function () {}),
+      ...SHELL_ROUTES.filter(function (entry) { return entry.shell !== NEUTRAL_SHELL_PATH; }).map(function (entry) {
+        return warmNeutralShell(entry.shell).catch(function () {});
+      }),
       warmNeutralShell(NAVIGATION_SHELL_PATH).catch(function () {})
     ]).then(function () {
       return self.skipWaiting();
@@ -1623,7 +1649,7 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
-  if (PUBLIC_FONT_URLS.indexOf(url.href) !== -1) {
+  if (PUBLIC_LIBRARY_URLS.indexOf(url.href) !== -1) {
     event.respondWith(cacheFirst(request));
     return;
   }
@@ -1837,13 +1863,6 @@ app.get('/sw.js', (req, res) => {
   res.send(serviceWorkerScript);
 });
 
-// Public, data-free domain shell. Authentication/context gates still run before local reads.
-app.get('/pwa/neutral/courier', (req, res) => {
-  res.setHeader('X-PWA-Neutral-Shell', '1');
-  res.setHeader('Cache-Control', 'no-store');
-  res.render('pages/courier-screen', { tenant: null, currentPath: '/dashboard/courier-screen', neutralShell: true });
-});
-
 // A public navigation document, not a cached authenticated dashboard or session.
 app.get('/pwa/neutral/navigation', (req, res) => {
   res.setHeader('X-PWA-Neutral-Shell', '1');
@@ -1851,11 +1870,34 @@ app.get('/pwa/neutral/navigation', (req, res) => {
   res.render('pages/offline-navigation');
 });
 
-app.get('/pwa/neutral/products', (req, res) => {
-  res.setHeader('X-PWA-Neutral-Shell', '1');
-  res.setHeader('Cache-Control', 'no-store');
-  res.render('pages/products', { tenant: null, serverAccessContext: null, currentPath: '/dashboard/products',
-    neutralShell: true, productsShell: true });
+// The same EJS pages, without account data. This route never authorizes private reads.
+app.get('/pwa/neutral/:section', (req, res, next) => {
+  const section = req.params.section === 'courier' ? 'courier-screen' : req.params.section;
+  const view = Object.prototype.hasOwnProperty.call(adminDashboardViews, section) && adminDashboardViews[section];
+  if (!view) return res.sendStatus(404);
+  res.render('pages/' + view, { tenant: null, serverAccessContext: null, currentPath: '/dashboard/' + section,
+    activePage: section, neutralShell: true, dashboardShell: true, productsShell: section === 'products',
+    telegramBotUsername: null, systemMaxBotId: null }, (error, html) => {
+    if (error) return next(error);
+    // Derive exact versioned dependencies from the real page, not a second list of bundles.
+    const resources = [...html.matchAll(/<(?:script|link)\b[^>]*(?:src|href)="([^"]+)"[^>]*>/gi)]
+      .map(match => match[1].replace(/&amp;/g, '&'))
+      .filter(url => url.startsWith('/static/') || url.startsWith('https://cdn.jsdelivr.net/npm/@fortawesome/')
+        || url.startsWith('https://unpkg.com/@geoman-io/'));
+    const runtimeAssets = /window\.__ADMIN_ASSET_URLS__ = \{([\s\S]*?)\};/.exec(html)?.[1] || '';
+    for (const match of runtimeAssets.matchAll(/:\s*("\/static\/[^"\r\n]+")/g)) resources.push(JSON.parse(match[1]));
+    // The icon stylesheet references these fonts indirectly, not as HTML tags.
+    for (const font of ['fa-solid-900', 'fa-regular-400', 'fa-brands-400']) {
+      resources.push('https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/webfonts/' + font + '.woff2');
+    }
+    if (section === 'new-order') resources.push('/static/css/shop.css');
+    if (section === 'chat') resources.push('/static/assets/chat-wallpaper-desktop.webp?v=20260320b',
+      '/static/assets/chat-wallpaper-mobile.webp?v=20260320d', '/static/assets/emoji/apple-people-atlas.webp?v=1');
+    res.setHeader('X-PWA-Neutral-Shell', '1');
+    res.setHeader('X-PWA-Resources', JSON.stringify([...new Set(resources)]));
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('html').send(html);
+  });
 });
 
 app.get('/.well-known/tenant-domain-check', async (req, res) => {

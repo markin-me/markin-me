@@ -16,6 +16,8 @@ const template = server.slice(server.indexOf(marker) + marker.length, server.ind
 const worker = vm.runInNewContext('`' + template
   .replace('${JSON.stringify(SERVICE_WORKER_VERSION)}', '"test-v2"')
   .replace('${JSON.stringify(Object.keys(adminDashboardTitles))}', JSON.stringify(dashboardPaths))
+  .replace('${JSON.stringify(adminShellRoutes)}', JSON.stringify(dashboardPaths.map(route => ({ route,
+    shell: '/pwa/neutral/' + (route.endsWith('/courier-screen') ? 'courier' : route.split('/').pop()) }))))
   .replace('${JSON.stringify(serviceWorkerPrecacheUrls)}', '["https://app.test/static/app.js"]') + '`');
 
 function response(body, url, headers = {}) {
@@ -46,17 +48,15 @@ function environment() {
     const url = typeof request === 'string' ? new URL(request, 'https://app.test').href : request.url;
     env.requests.push({ url, options });
     if (env.failNetwork) throw new TypeError('Failed to fetch');
-    if (new URL(url).pathname === '/pwa/neutral/courier') {
-      return response('<html data-local-access="pending">Neutral shell</html>', url,
-        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1' });
-    }
     if (new URL(url).pathname === '/pwa/neutral/navigation') {
       return response('<html>Public navigation, no private data</html>', url,
         { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1' });
     }
-    if (new URL(url).pathname === '/pwa/neutral/products') {
-      return response('<html data-local-access="pending"><div id="productsList"></div></html>', url,
-        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1' });
+    if (new URL(url).pathname.startsWith('/pwa/neutral/')) {
+      const section = new URL(url).pathname.split('/').pop();
+      return response(`<html data-local-access="pending" data-section="${section}"><div id="${section}List"></div></html>`, url,
+        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1',
+          'X-PWA-Resources': JSON.stringify(['/static/app.js', '/static/' + section + '.js']) });
     }
     if (new URL(url).hostname === 'cdn.jsdelivr.net') {
       return response('public font asset', url, { 'Content-Type': url.endsWith('.css') ? 'text/css' : 'font/woff2' });
@@ -117,7 +117,10 @@ test('all nine prepared routes can open offline, including reloads and query var
       const result = await env.request(url);
       assert.equal(result.status, 200, url);
       assert.equal(result.headers.get('X-PWA-Neutral-Shell'), '1');
-      assert.doesNotMatch(await result.text(), /personalized online|OWNER SECRET/);
+      const body = await result.text();
+      const section = route.endsWith('/courier-screen') ? 'courier' : route.split('/').pop();
+      assert.ok(body.includes(`data-section="${section}"`), url);
+      assert.doesNotMatch(body, /personalized online|OWNER SECRET|Public navigation/);
     }
   }
 });
@@ -131,7 +134,8 @@ test('prepared products navigation returns the actual gated products document, n
     assert.match(body, /id="productsList"/);
     assert.doesNotMatch(body, /OWNER SECRET|Public navigation/);
   }
-  assert.match(server, /res\.render\('pages\/products', \{ tenant: null, serverAccessContext: null,[\s\S]*?neutralShell: true, productsShell: true/);
+  assert.match(server, /products: 'products'/);
+  assert.match(server, /res\.render\('pages\/' \+ view, \{ tenant: null, serverAccessContext: null/);
   const page = fs.readFileSync(path.join(__dirname, '../views/pages/products.ejs'), 'utf8');
   assert.match(page, /leftPartial: '\.\.\/partials\/products\/left'/);
   assert.match(page, /centerPartial: '\.\.\/partials\/products\/center'/);
@@ -145,6 +149,27 @@ test('a missing critical resource prevents serving a broken products document', 
   const body = await (await env.request('/dashboard/products')).text();
   assert.match(body, /Public navigation/);
   assert.doesNotMatch(body, /id="productsList"/);
+});
+
+test('critical resources are checked per section rather than accepting any cached HTML', async () => {
+  const env = environment(); await env.prepare();
+  env.records.get('admin-static-test-v2').delete('https://app.test/static/team.js');
+  env.failNetwork = true;
+  assert.match(await (await env.request('/dashboard/team')).text(), /Public navigation/);
+  assert.match(await (await env.request('/dashboard/chat')).text(), /data-section="chat"/);
+  assert.equal((await env.prepare()).ok, false);
+});
+
+test('a proxy outage uses the public shell but authorization refusals and application errors do not', async () => {
+  const env = environment(); await env.prepare();
+  for (const status of [502, 503, 504]) {
+    env.fetch = async () => new Response('backend unavailable', { status });
+    assert.match(await (await env.request('/dashboard/settings')).text(), /data-section="settings"/);
+  }
+  for (const status of [401, 403, 500]) {
+    env.fetch = async () => new Response('refused or application error', { status });
+    assert.equal((await env.request('/dashboard/settings')).status, status);
+  }
 });
 
 test('preparation is single-flight and repeated checks reuse the saved public resources', async () => {
@@ -338,7 +363,7 @@ test('the neutral shell remains gated when there is no admissible local confirma
   assert.match(layout, /window\.AdminServerContextPromise = confirmServerAccessContext/);
   assert.match(layout, /window\.AdminAccessContextPromise = loadAccessContext\(true\)/);
   assert.match(layout, /repository\.isActive\(\)/);
-  assert.match(server, /res\.render\('pages\/courier-screen', \{ tenant: null, currentPath: '\/dashboard\/courier-screen', neutralShell: true \}\)/);
+  assert.match(server, /'courier-screen': 'courier-screen'/);
   assert.match(layout, /if \(typeof neutralShell !== 'undefined' && neutralShell === true\)/);
   assert.match(layout, /<nav aria-label="Офлайн-навигация">/);
 });

@@ -187,7 +187,6 @@
   const NEW_ORDER_CLIENT_CACHE_VERSION = 4;
   const NEW_ORDER_MANIFEST_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const NEW_ORDER_MANIFEST_FRESH_MS = 15 * 1000;
-  const NEW_ORDER_IDLE_FALLBACK_DELAY_MS = 1500;
   const NEW_ORDER_RUNTIME_CLIENT_CACHE_LIMIT = 20;
   let startupInventoryPromise = null;
 
@@ -366,7 +365,6 @@
   let manifestRequestPromise = null;
   let manifestLastSuccessAt = 0;
   let manifestLastSuccessScope = "";
-  let idleWarmupGeneration = 0;
 
   function queueRenderRightOrderTabs() {
     if (rightOrderTabsRerenderQueued) return;
@@ -17306,6 +17304,7 @@
   }
 
   async function apiJson(url, opts = {}) {
+    if (isAdminOfflineRead()) throw new TypeError('Для этого действия требуется соединение с сервером.');
     const access = window.AdminLocalRepository.capture();
     if (!catalogPageContext?.isCurrent() || !access.isCurrent()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const token = localStorage.getItem("authToken");
@@ -21973,21 +21972,6 @@
     return promise;
   }
 
-  function scheduleNewOrderIdleWarmup() {
-    const generation = ++idleWarmupGeneration;
-    const scopeKey = newOrderCacheScopeKey();
-    const run = () => {
-      if (generation !== idleWarmupGeneration || newOrderCacheScopeKey() !== scopeKey) return;
-      if (state.rightDeliverySettingsReady || state.rightDeliverySettingsPromise) return;
-      void ensureRightDeliverySettingsLoaded().catch(() => {});
-    };
-    if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(run, { timeout: 4000 });
-    } else {
-      setTimeout(run, NEW_ORDER_IDLE_FALLBACK_DELAY_MS);
-    }
-  }
-
   let inventoryRequestGeneration = 0;
   const effectiveStockRequestGenerationByProductId = new Map();
 
@@ -23798,7 +23782,6 @@
       if (inventoryPromise) {
         void inventoryPromise.then(() => reconcileDurableDraftInventory());
       }
-      scheduleNewOrderIdleWarmup();
       return;
     }
     const freshManifest = await fetchNewOrderManifest();
@@ -23841,11 +23824,10 @@
     renderCategories();
     await renderActiveCategoryContent();
     schedulePersistBootstrapSnapshot(0);
-    scheduleNewOrderIdleWarmup();
   }
 
   async function load() {
-    await window.AdminAccessContextPromise;
+    if (!(await window.AdminAccessContextPromise)?.ok) return;
     if (!await window.AdminLocalRepository.ready()) return;
     if (!bindCatalogPageContext()) return;
     ensureNewOrderStockSocket();
@@ -23876,7 +23858,7 @@
       const bootstrapSnapshot = await readSharedProductBootstrap();
       const activeSession = checkoutSessionRevision > 0 ? captureCheckoutSession() : null;
       let hydrated = hydrateStateFromBootstrapSnapshot(bootstrapSnapshot);
-      if (!hydrated && !navigator.onLine && window.CatalogRepository) {
+      if (!hydrated && isAdminOfflineRead() && window.CatalogRepository) {
         await window.CatalogRepository.loadPassports();
         repositoryReady = hydrateNewOrderFromCatalogRepository() || repositoryReady;
         hydrated = repositoryReady;
@@ -23889,7 +23871,7 @@
       } else if (hydrated) {
         renderCachedStartupContent();
       }
-      if (navigator.onLine) {
+      if (!isAdminOfflineRead()) {
         let inventoryPromise;
         inventoryPromise = refreshNewOrderInventory().finally(() => {
           if (startupInventoryPromise === inventoryPromise) startupInventoryPromise = null;
@@ -23897,7 +23879,7 @@
         startupInventoryPromise = inventoryPromise;
       }
 
-      await ensureTenantPriceRoundingSettings();
+      if (!isAdminOfflineRead()) await ensureTenantPriceRoundingSettings();
       const hasLocalProducts = Boolean(window.CatalogRepository?.getAllProducts().length)
         || [...state.categoryProductsCache.values()].some((payload) => Array.isArray(payload?.source) && payload.source.length > 0);
       const needsBootstrap = (
@@ -23908,7 +23890,7 @@
         || !state.rightPaymentTypes.length
         || !state.rightTimeOptions.length
       );
-      const bootstrapped = navigator.onLine && needsBootstrap
+      const bootstrapped = !isAdminOfflineRead() && needsBootstrap
         ? await loadNewOrderBootstrapFromApi()
         : false;
       if (bootstrapped && !hasLocalProducts) {
@@ -23921,7 +23903,7 @@
       if (!activeSession && bootstrapped) {
         renderCachedStartupContent();
       }
-      if (hydrated && (!Array.isArray(state.unitConversions) || !state.unitConversions.length)) {
+      if (!isAdminOfflineRead() && hydrated && (!Array.isArray(state.unitConversions) || !state.unitConversions.length)) {
         await loadUnitConversions();
       }
       if (durableDraft && !activeSession) {
@@ -23932,7 +23914,7 @@
 
     try {
       const startup = await bootstrapDataReadyPromise;
-      await refreshNewOrderData(startup);
+      if (!isAdminOfflineRead()) await refreshNewOrderData(startup);
     } catch (e) {
       const offlineCatalogEmpty = !navigator.onLine
         && (!window.CatalogRepository || window.CatalogRepository.getAllProducts().length === 0);
@@ -24161,7 +24143,7 @@
   function clearNewOrderCatalogPage() {
     if (bootstrapPersistTimer) clearTimeout(bootstrapPersistTimer);
     bootstrapPersistTimer = null;
-    idleWarmupGeneration += 1; inventoryRequestGeneration += 1;
+    inventoryRequestGeneration += 1;
     closeNewOrderStockSocket();
     clearNewOrderProductCaches();
     state.categories = []; state.productCategories = []; state.currentProducts = [];
@@ -24177,7 +24159,6 @@
   }, { once: true });
   function handleNewOrderStoreChange() {
     closeNewOrderStockSocket();
-    idleWarmupGeneration += 1;
     inventoryRequestGeneration += 1;
     state.inventoryByProductId.clear();
     state.effectiveStockConfigByProductId.clear();

@@ -217,6 +217,38 @@
         if (!saved) throw new Error('LOCAL_WRITE_NOT_SAVED');
         return true;
       },
+      async bufferWrite(key) {
+        // A browser-local request sequence, NOT a server revision or proof of completeness.
+        // Allocate before starting HTTP; commit only if no newer request reserved the key.
+        assertCurrent();
+        const locks = window.navigator?.locks;
+        if (!locks?.request) return null;
+        const metadataKey = 'meta:buffer:' + key;
+        const lockKey = 'admin:buffer:' + namespace + ':' + key;
+        const repository = this;
+        const sequence = await locks.request(lockKey, async () => {
+          assertCurrent();
+          const metadata = await repository.get(metadataKey, { allowStale: true });
+          const next = Number(metadata?.requestSequence || 0) + 1;
+          if (!Number.isSafeInteger(next)) throw new Error('LOCAL_SEQUENCE_EXHAUSTED');
+          await repository.set(metadataKey, { ...metadata, requestSequence: next }, { noQuotaCleanup: true });
+          return next;
+        });
+        return Object.freeze({
+          async commit(value) {
+            return locks.request(lockKey, async () => {
+              assertCurrent();
+              const metadata = await repository.get(metadataKey, { allowStale: true });
+              if (metadata?.requestSequence !== sequence) return false;
+              const lastSyncedAt = Date.now();
+              await repository.setMany([[key, value], [metadataKey, { requestSequence: sequence,
+                confirmedSequence: sequence, lastSyncedAt, serverVersion: null, complete: false }]],
+              { noQuotaCleanup: true, lastSyncedAt });
+              return true;
+            });
+          },
+        });
+      },
       async remove(key) { assertCurrent(); await cache.remove(key); assertCurrent(); },
       async removeMany(keys) { assertCurrent(); await cache.removeMany(keys); assertCurrent(); },
       async invalidate() { assertCurrent(); await cache.clear(); assertCurrent(); },

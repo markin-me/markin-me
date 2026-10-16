@@ -1,7 +1,7 @@
 ﻿(async function () {
   const localRepository = window.AdminLocalRepository;
   if (!localRepository || !await localRepository.ready()) return;
-  if (window.AdminAccessContextPromise) await window.AdminAccessContextPromise;
+  if (window.AdminAccessContextPromise && !(await window.AdminAccessContextPromise)?.ok) return;
   if (!localRepository.isActive()) return;
   if (typeof window !== "undefined" && window.__ordersPageInitialized) return;
   if (typeof window !== "undefined") {
@@ -269,8 +269,6 @@
   const courierDetailPrewarmInFlight = new Set();
   const authoritativeFullOrderRuntimeKeys = new Set();
   const courierPassportCacheStates = new Map();
-  const courierDetailPrewarmWaiters = [];
-  let courierDetailPrewarmActiveCount = 0;
   const isFullOrder = (order) => Boolean(order && Array.isArray(order.items) && Number(order.store_id || order.storeId || 0) > 0);
 
   function orderDetailsPersistentScope() {
@@ -2270,26 +2268,6 @@
       .slice(0, COURIER_DETAIL_PREWARM_LIMIT);
   }
 
-  function acquireCourierDetailPrewarmSlot(highPriority = false) {
-    if (courierDetailPrewarmActiveCount < COURIER_DETAIL_PREWARM_CONCURRENCY) {
-      courierDetailPrewarmActiveCount += 1;
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      if (highPriority) courierDetailPrewarmWaiters.unshift(resolve);
-      else courierDetailPrewarmWaiters.push(resolve);
-    });
-  }
-
-  function releaseCourierDetailPrewarmSlot() {
-    const next = courierDetailPrewarmWaiters.shift();
-    if (next) {
-      next();
-      return;
-    }
-    courierDetailPrewarmActiveCount = Math.max(0, courierDetailPrewarmActiveCount - 1);
-  }
-
   async function prewarmCourierOrderDetail(order, { highPriority = false } = {}) {
     const id = Number(order?.id || 0);
     const context = orderDetailsContext(id);
@@ -2303,18 +2281,26 @@
         authoritativeFullOrderRuntimeKeys.delete(context.runtimeKey);
         setCourierPassportCacheState(id, "missing", context);
       }
-      if (navigator.onLine === false) return;
-      await acquireCourierDetailPrewarmSlot(highPriority);
-      if (navigator.onLine === false) {
-        releaseCourierDetailPrewarmSlot();
-        return;
-      }
-      try {
-        setCourierPassportCacheState(id, "saving", context);
-        await revalidateCachedFullOrder(id, { updateState: false, context });
-      } finally {
-        releaseCourierDetailPrewarmSlot();
-      }
+      const scheduler = window.AdminIdleHydration;
+      if (!scheduler?.supported) return;
+      await scheduler.enqueue('courier:card:' + id, async idle => {
+        const version = orderDetailsMutationGeneration.get(context.runtimeKey) || 0;
+        const json = await idle.requestJSON(`/api/admin/orders/${id}`, { headers: { 'x-rbac-context': 'courier' } });
+        if (json?.ok !== true || !isFullOrder(json.data)) throw new Error('INVALID_ORDER_PASSPORT');
+        return queueOrderDetailsOperation(context, async () => {
+          idle.assertCurrent();
+          if (!isCurrentOrderDetailsContext(context) || version !== (orderDetailsMutationGeneration.get(context.runtimeKey) || 0)) {
+            throw new Error('LOCAL_SCOPE_CHANGED');
+          }
+          const syncedAt = Date.now();
+          await idle.commit(context.cache, [
+            [String(id), { cachedAt: syncedAt, detailCompleteness: 'full', order: json.data }],
+            ['meta:idle:' + id, { cursor: null, recordId: id, lastSyncedAt: syncedAt, complete: false, kind: 'observed-card' }],
+          ], { ttlMs: ORDER_DETAILS_CACHE_MAX_AGE_MS });
+          authoritativeFullOrderRuntimeKeys.add(context.runtimeKey);
+          setCourierPassportCacheState(id, 'saved', context);
+        });
+      }, { priority: highPriority ? 4 : 10, guard: () => isCurrentOrderDetailsContext(context) });
     } finally {
       courierDetailPrewarmInFlight.delete(context.runtimeKey);
     }

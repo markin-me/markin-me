@@ -103,7 +103,7 @@
   }
 
   function canUseServer() {
-    return state.repository?.isCurrent() && state.onlineReady && navigator.onLine !== false;
+    return state.repository?.isCurrent() && state.onlineReady && !isAdminOfflineRead();
   }
 
   function renderConnectionStatus() {
@@ -1860,7 +1860,7 @@
       }
     }
     if (!isCurrent()) return;
-    if (navigator.onLine === false) {
+    if (isAdminOfflineRead()) {
       state.onlineReady = false;
       state.listMessage = state.source ? '' : 'Нет подключения. Сохранённых данных пока нет';
       setConnectionStatus(state.source ? 'offline' : 'idle', state.source ? 'Офлайн · сохранённые данные' : '');
