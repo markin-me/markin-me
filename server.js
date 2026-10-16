@@ -1366,7 +1366,7 @@ var PUBLIC_FONT_URLS = [
 ];
 var PUBLIC_LIBRARY_URLS = PUBLIC_FONT_URLS.concat([
   'https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.css',
-  'https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.umd.js'
+  'https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.js'
 ]);
 var DASHBOARD_PATHS = ${JSON.stringify(Object.keys(adminDashboardTitles))};
 var preparationOperation = null;
