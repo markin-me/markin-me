@@ -8919,12 +8919,6 @@
         console.error(err);
       }
 
-      if (isCourierWorkspace && sharedOrderPayment?.warmCache && courierOfflineState.online) {
-        sharedOrderPayment.warmCache(apiJson, state.orders[0] || null).catch((err) => {
-          console.error("courier payment methods warmup error:", err);
-        });
-      }
-
       if (isCourierWorkspace) refreshCourierConnectionBanner();
 
       if (!isCourierWorkspace) {
@@ -9079,9 +9073,6 @@
       .then(() => {
         renderOrderTabs();
         if (isCourierWorkspace) void prewarmCourierOrderDetails();
-        if (isCourierWorkspace && sharedOrderPayment?.warmCache && courierOfflineState.online) {
-          return sharedOrderPayment.warmCache(apiJson, state.orders[0] || null).catch(() => null);
-        }
         return null;
       })
       .then(() => {

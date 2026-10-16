@@ -24441,7 +24441,6 @@
       const selectedIds = getSubscriptionPickerSelectedIds();
       if (result.items.length) {
         list.insertAdjacentHTML('beforeend', result.items.map((product) => subscriptionPickerProductCardHtml(product)).join(''));
-        warmSubscriptionProductDetails(result.items);
       }
       if (result.entry?.hasMore) {
         list.insertAdjacentHTML('beforeend', '<div class="subscription-picker-load-sentinel" data-subscription-picker-load-more aria-hidden="true"></div>');
@@ -24454,14 +24453,6 @@
     });
     picker.productLazyObserver = observer;
     observer.observe(sentinel);
-  }
-
-  function warmSubscriptionProductDetails(products) {
-    const productIds = (Array.isArray(products) ? products : [])
-      .map((product) => Number(product?.id || 0))
-      .filter((id) => id > 0);
-    if (!productIds.length) return;
-    window.SharedProductDetails?.prefetch?.(productIds).catch(console.error);
   }
 
   async function openSubscriptionItemPickerV2(dayIndex, slotIndex) {
@@ -24567,7 +24558,6 @@
           loadDiscountPickerUnitConversions(),
         ]).catch(console.error);
         const productsResult = await productsPromise;
-        warmSubscriptionProductDetails(productsResult?.items || []);
         renderSubscriptionItemPickerProductsV2(shell, category, frame.footerEl);
         return;
       }
@@ -24584,7 +24574,6 @@
           loadDiscountPickerUnitConversions(),
         ]).catch(console.error);
         const productsResult = await productsPromise;
-        warmSubscriptionProductDetails(productsResult?.items || []);
         renderSubscriptionItemPickerProductsV2(shell, rootCategory, frame.footerEl);
         return;
       }
@@ -25763,8 +25752,6 @@
 
   let companyChatStylesheetPromise = null;
   let companyChatRuntimePromise = null;
-  let companyChatRuntimePreloadStarted = false;
-  let companyChatWarmupScheduled = false;
   const COMPANY_CHAT_STYLESHEET_URL = "/static/css/shop.css?v=20260812-important-messages";
   const COMPANY_CHAT_RUNTIME_URL = "/static/js/shop-company-chat.js?admin_mode=2&typing_hotfix=14&v=20260813-order-card-public-status";
   function ensureCompanyChatStylesheetLoaded() {
@@ -25810,36 +25797,6 @@
       document.body.appendChild(script);
     });
     return companyChatRuntimePromise;
-  }
-
-  function preloadCompanyChatRuntimeAsset() {
-    if (companyChatRuntimePreloadStarted) return;
-    companyChatRuntimePreloadStarted = true;
-    const existing = document.querySelector('link[data-shop-company-chat-runtime-preload="1"]');
-    if (existing && String(existing.getAttribute("href") || "") === COMPANY_CHAT_RUNTIME_URL) return;
-    if (existing && existing.parentNode) {
-      existing.parentNode.removeChild(existing);
-    }
-    const link = document.createElement("link");
-    link.rel = "preload";
-    link.as = "script";
-    link.href = COMPANY_CHAT_RUNTIME_URL;
-    link.dataset.shopCompanyChatRuntimePreload = "1";
-    document.head.appendChild(link);
-  }
-
-  function scheduleCompanyChatWarmup() {
-    if (companyChatWarmupScheduled) return;
-    companyChatWarmupScheduled = true;
-    const warmup = () => {
-      ensureCompanyChatStylesheetLoaded().catch(() => {});
-      preloadCompanyChatRuntimeAsset();
-    };
-    if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(warmup, { timeout: 1200 });
-      return;
-    }
-    window.setTimeout(warmup, 500);
   }
 
   function renderClients() {
@@ -31313,7 +31270,6 @@
       clearClientOpenRequestFromUrl();
     });
   loadDiscounts().catch(console.error);
-  scheduleCompanyChatWarmup();
   window.addEventListener('admin:access-context', (event) => {
     if (event.detail?.ok && !event.detail.offline && clientScope?.isCurrent()) {
       void loadClients().catch(console.error);

@@ -1173,43 +1173,16 @@
   }
 
   async function discoverProductsCatalogTarget(context) {
-    const response = await api("/api/admin/catalog/product-targets", {
-      method: "POST",
-      body: JSON.stringify({ category_ids: context.categoryIds }),
-    });
-    const data = response?.data && typeof response.data === "object" ? response.data : null;
-    const productIds = [...new Set((Array.isArray(data?.product_ids) ? data.product_ids : [])
-      .map(Number)
-      .filter((id) => Number.isFinite(id) && id > 0))];
-    const repositoryScope = window.CatalogRepository?.getScope();
-    if (!data || Number(data.total) !== productIds.length
-      || Number(data.tenant_id) !== Number(repositoryScope?.tenantId)
-      || Number(data.store_id) !== Number(repositoryScope?.storeId)) {
-      throw new Error("CATALOG_TARGET_SCOPE_MISMATCH");
-    }
-    window.CatalogRepository.setCoverageTarget(productIds, { categoryId: context.categoryId });
+    const productIds = await window.CatalogRepository.discoverOfflineTarget(context.categoryIds);
+    if (!catalogPageContext?.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
+    window.CatalogRepository.setCoverageTarget(productIds, { categoryId: context.categoryId, source: 'keyset-observed' });
     return productIds;
   }
 
   async function refreshProductsCatalogSyncMetadata(options = {}) {
     if (options.categories) await loadCategories();
-    const globalTarget = await discoverProductsCatalogTarget({ categoryId: null, categoryIds: [], label: "Все товары" });
-    const globalSet = new Set(globalTarget);
-    const removed = window.CatalogRepository.getAllProducts()
-      .map((product) => Number(product?.id || 0))
-      .filter((id) => id > 0 && !globalSet.has(id));
-    for (const productId of removed) await window.CatalogRepository.removeProduct(productId);
-    const context = getProductsCatalogBulkContext();
-    const categoryIds = new Set(window.CatalogRepository.getTrackedCoverageCategoryIds());
-    if (context.categoryId) categoryIds.add(context.categoryId);
-    for (const categoryId of categoryIds) {
-      await discoverProductsCatalogTarget({
-        categoryId,
-        categoryIds: window.CatalogRepository.getDescendantCategoryIds(categoryId),
-        label: "Категория",
-      });
-    }
     if (options.categories) renderCategoriesNav();
+    if (options.targets && state.mode === 'products') await refreshProductsOnly(true);
     renderProductsCatalogStatus();
   }
 
@@ -1220,6 +1193,10 @@
       loader: loadProductsCatalogPassports,
       request: (url, options) => api(url, options),
       metadataLoader: refreshProductsCatalogSyncMetadata,
+      workingSet: () => ({ productIds: [...(state.mode === 'products' ? state.products : []).map(row => row.id), state.selectedProductId,
+        ...tabsState.tabs.filter(tab => tab.type === 'product').map(tab => tab.id)],
+        comboIds: [...(state.mode === 'products' ? state.combosInCategory || [] : []).map(row => row.id), state.comboSetPanel?.comboId],
+        blockIds: state.mode === 'combo-blocks' ? state.comboBlocks.map(row => row.id) : [state.selectedComboBlockId] }),
     };
   }
 
@@ -1761,6 +1738,8 @@
   }
 
   async function apiUploadImages(files) {
+    const endOperation = window.AdminIdleHydration?.beginOperation();
+    try {
     const token = localStorage.getItem('authToken');
     const fd = new FormData();
     files.forEach((f) => fd.append("images", f));
@@ -1783,9 +1762,12 @@
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
     return { urls: data.urls || [], sizes: data.sizes || [] };
+    } finally { endOperation?.(); }
   }
 
   async function apiUploadCategoryIcon(file) {
+    const endOperation = window.AdminIdleHydration?.beginOperation();
+    try {
     const token = localStorage.getItem('authToken');
     const fd = new FormData();
     fd.append("icon", file);
@@ -1808,6 +1790,7 @@
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
     return data.url || "";
+    } finally { endOperation?.(); }
   }
 
   async function apiGetOptionGroups() {
@@ -1989,14 +1972,14 @@
   }
 
   async function apiGetComboBlocks() {
-    if (window.CatalogRepository) {
-      await window.CatalogRepository.ensureAllCombos({ requiredCompleteness: "definition" });
+    if (productsOfflineRead() && window.CatalogRepository) {
+      await window.CatalogRepository.loadSavedComboBlocks();
       const rows = window.CatalogRepository.getAllComboBlocks().map((block) => ({
         id: block.id, title: block.title, sort_order: block.sortOrder,
         min_select: block.minSelect, max_select: block.maxSelect,
         products_count: block.products.length,
       }));
-      if (rows.length) return { ok: true, data: rows };
+      return { ok: true, data: rows };
     }
     return api("/api/admin/combo-blocks");
   }
@@ -2004,11 +1987,14 @@
     if (window.CatalogRepository) {
       let block = window.CatalogRepository.getComboBlock(id);
       if (!block) {
-        await window.CatalogRepository.ensureAllCombos({ requiredCompleteness: "definition" });
+        await window.CatalogRepository.ensureComboBlocks([id]);
         block = window.CatalogRepository.getComboBlock(id);
       }
       if (block?.products?.length) {
-        await window.CatalogRepository.ensureProducts(block.products.map((row) => row.productId), { requiredCompleteness: "editor-ready" });
+        for (let offset = 0; offset < block.products.length; offset += 25) {
+          await window.CatalogRepository.ensureProducts(block.products.slice(offset, offset + 25).map(row => row.productId),
+            { requiredCompleteness: 'editor-ready' });
+        }
       }
       if (block) return { ok: true, data: {
         id: block.id, title: block.title, sort_order: block.sortOrder,
@@ -2030,12 +2016,13 @@
   }
   async function apiPostComboBlock(payload) {
     const response = await api("/api/admin/combo-blocks", { method: "POST", body: JSON.stringify(payload) });
-    if (window.CatalogRepository) await window.CatalogRepository.ensureAllCombos({ requiredCompleteness: "editor-ready", force: true });
+    const id = Number(response.id || response.data?.id || 0);
+    if (window.CatalogRepository && id > 0) await window.CatalogRepository.ensureComboBlocks([id], { force: true });
     return response;
   }
   async function apiPatchComboBlock(id, payload) {
     const response = await api(`/api/admin/combo-blocks/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
-    if (window.CatalogRepository) await window.CatalogRepository.ensureAllCombos({ requiredCompleteness: "editor-ready", force: true });
+    if (window.CatalogRepository) await window.CatalogRepository.ensureComboBlocks([id], { force: true });
     return response;
   }
   async function apiDeleteComboBlock(id) {
@@ -2050,9 +2037,10 @@
     return api(`/api/admin/combo-blocks/product-flags?ids=${ids.join(",")}`);
   }
 
-  async function apiGetCombos() {
+  async function apiGetCombos(categoryCode = null) {
     if (window.CatalogRepository) {
-      await window.CatalogRepository.ensureAllCombos({ requiredCompleteness: "definition" });
+      if (categoryCode) await window.CatalogRepository.ensureCombosForCategoryCodes([categoryCode], { requiredCompleteness: 'definition' });
+      else await window.CatalogRepository.ensureAllCombos({ requiredCompleteness: "definition" });
       const rows = window.CatalogRepository.getAllCombos();
       if (rows.length) return { ok: true, data: rows };
     }
@@ -2957,7 +2945,7 @@
         ? String(cat.code).trim()
         : null;
     try {
-      const combosRes = await apiGetCombos();
+      const combosRes = await apiGetCombos(categoryCode);
       const allCombos = Array.isArray(combosRes?.data) ? combosRes.data : [];
       if (categoryCode) {
         state.combosInCategory = allCombos.filter((c) => String(c.category_code || "").trim() === categoryCode);
@@ -25938,12 +25926,6 @@ const isViewMode = state.comboPanel.mode === "view";
     const localConversions = Array.isArray(localEditorReferences?.unitConversions) ? localEditorReferences.unitConversions : [];
     if (localUnits.length) state.units = localUnits;
     if (localConversions.length) state.unitConversions = localConversions;
-    if (!productsOfflineRead() && (!localUnits.length || !localConversions.length)) {
-      void (async () => {
-        if (!localUnits.length) await loadUnitsManagement();
-        if (!localConversions.length) await loadUnitConversions();
-      })().catch(() => null);
-    }
     enterProductsMode(state.currentCategoryId);
     if (!productsOfflineRead()) {
       void refreshAll().catch(error => {

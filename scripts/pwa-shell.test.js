@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { MessageChannel } = require('node:worker_threads');
 const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
 const orders = fs.readFileSync(path.join(__dirname, '../static/js/orders.js'), 'utf8');
 const products = fs.readFileSync(path.join(__dirname, '../static/js/products.js'), 'utf8');
@@ -50,22 +51,24 @@ function environment() {
     if (env.failNetwork) throw new TypeError('Failed to fetch');
     if (new URL(url).pathname === '/pwa/neutral/navigation') {
       return response('<html>Public navigation, no private data</html>', url,
-        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1' });
+        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1', 'X-PWA-Version': 'test-v2' });
     }
     if (new URL(url).pathname.startsWith('/pwa/neutral/')) {
       const section = new URL(url).pathname.split('/').pop();
       return response(`<html data-local-access="pending" data-section="${section}"><div id="${section}List"></div></html>`, url,
-        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1',
+        { 'Content-Type': 'text/html', 'X-PWA-Neutral-Shell': '1', 'X-PWA-Version': 'test-v2',
           'X-PWA-Resources': JSON.stringify(['/static/app.js', '/static/' + section + '.js']) });
     }
     if (new URL(url).hostname === 'cdn.jsdelivr.net') {
       return response('public font asset', url, { 'Content-Type': url.endsWith('.css') ? 'text/css' : 'font/woff2' });
     }
-    if (new URL(url).pathname.startsWith('/static/')) return response('static', url, { 'Content-Type': 'application/javascript' });
+    if (new URL(url).pathname.startsWith('/static/')) return response('static', url,
+      { 'Content-Type': 'application/javascript', 'X-PWA-Version': 'test-v2' });
     return response('<html>personalized online</html>', url, { 'Content-Type': 'text/html' });
   };
-  const sandbox = vm.createContext({ URL, Response, Promise, AbortController, setTimeout, clearTimeout, caches, fetch: (...args) => env.fetch(...args),
-    self: { location: { origin: 'https://app.test' }, addEventListener: (type, handler) => listeners.set(type, handler),
+  const sandbox = vm.createContext({ URL, Response, Headers, Blob, DOMException, Promise, AbortController, setTimeout, clearTimeout, caches, fetch: (...args) => env.fetch(...args),
+    self: { navigator: { locks: { request: async (name, options, callback) => callback({ name }) } },
+      location: { origin: 'https://app.test' }, addEventListener: (type, handler) => listeners.set(type, handler),
       skipWaiting: async () => {}, clients: { claim: async () => {}, matchAll: async () => env.clients } } });
   vm.runInContext(worker, sandbox);
   env.lifecycle = async type => { let pending; listeners.get(type)({ waitUntil: value => { pending = value; } }); await pending; };
@@ -74,20 +77,137 @@ function environment() {
       respondWith: value => { result = value; } });
     return result === undefined ? null : await result;
   };
-  env.prepare = async (source = '/dashboard/orders') => {
+  env.plan = async (source = '/dashboard/orders', version = 'test-v2') => {
     let pending, result;
-    listeners.get('message')({ data: { type: 'PREPARE_OFFLINE_NAVIGATION' }, source: { url: 'https://app.test' + source },
-      ports: [{ postMessage: value => { result = value; } }], waitUntil: value => { pending = value; } });
+    listeners.get('message')({ data: { type: 'OFFLINE_RESOURCE_PLAN', version }, source: { url: 'https://app.test' + source },
+      ports: [{ postMessage: value => { result = value; }, close() {} }], waitUntil: value => { pending = value; } });
     await pending;
     return result;
+  };
+  let operation = 0, preparation;
+  env.prepareResource = async (url, options = {}) => {
+    const operationId = 'resource-' + (++operation), channel = new MessageChannel();
+    let pending;
+    const result = new Promise(resolve => {
+      channel.port1.onmessage = async event => {
+        const message = event.data;
+        if (message.type === 'REQUEST' || message.type === 'COMMIT_REQUIRED') {
+          await options.beforePermit?.(message.type);
+          channel.port1.postMessage({ type: options.cancelAt === message.type ? 'CANCEL'
+            : message.type === 'REQUEST' ? 'FETCH' : 'COMMIT', operationId });
+        } else resolve(message);
+      };
+      listeners.get('message')({ data: { type: 'PREPARE_OFFLINE_RESOURCE', version: options.version || 'test-v2',
+        operationId, url, maxBytes: options.maxBytes, timeoutMs: options.timeoutMs },
+        source: { url: 'https://app.test/dashboard/orders' }, ports: [channel.port2],
+        waitUntil: value => { pending = value; } });
+    });
+    try { const message = await result; await pending; return message; }
+    finally { channel.port1.close(); channel.port2.close(); }
+  };
+  // Test driver models separate scheduler turns; it is not production bulk preparation.
+  env.prepare = (source = '/dashboard/orders') => {
+    if (preparation) return preparation;
+    preparation = (async () => {
+      const plan = await env.plan(source);
+      if (!plan.ok) return plan;
+      const urls = [...plan.urls], seen = new Set();
+      for (const url of urls) {
+        if (seen.has(url)) continue;
+        seen.add(url);
+        const result = await env.prepareResource(url);
+        if (!result.ok) return result;
+        urls.push(...result.dependencies);
+      }
+      return { ok: true };
+    })().finally(() => { preparation = null; });
+    return preparation;
   };
   return env;
 }
 
 test('static assets remain available offline and private APIs are not intercepted', async () => {
-  const env = environment(); await env.lifecycle('install'); env.failNetwork = true;
+  const env = environment(); await env.lifecycle('install');
+  await env.request('/static/app.js', 'cors'); env.failNetwork = true;
   assert.equal(await (await env.request('/static/app.js', 'cors')).text(), 'static');
   assert.equal(await env.request('/api/admin/orders', 'cors'), null);
+});
+
+test('installation fetches only the essential standalone fallback; planning never fetches', async () => {
+  const env = environment(); await env.lifecycle('install');
+  assert.deepEqual(env.requests.map(item => new URL(item.url).pathname), ['/pwa/neutral/navigation']);
+  const count = env.requests.length;
+  const plan = await env.plan();
+  assert.equal(plan.ok, true); assert.ok(plan.urls.length > 9);
+  assert.equal(env.requests.length, count);
+});
+
+test('one resource command fetches no dependencies and reuses a completed cache entry', async () => {
+  const env = environment();
+  const first = await env.prepareResource('/pwa/neutral/products');
+  assert.equal(first.ok, true); assert.equal(first.dependencies.length, 2);
+  assert.equal(env.requests.length, 1);
+  const count = env.requests.length;
+  assert.equal((await env.prepareResource('/pwa/neutral/products')).ok, true);
+  assert.equal(env.requests.length, count);
+  assert.equal(env.requests[0].options.redirect, 'error');
+  assert.equal(env.requests[0].options.credentials, 'omit');
+});
+
+test('cancel before fetch issues no HTTP, and cancel at the write boundary saves no resource', async () => {
+  const env = environment();
+  assert.equal((await env.prepareResource('/pwa/neutral/products', { cancelAt: 'REQUEST' })).ok, false);
+  assert.equal(env.requests.length, 0);
+  const result = await env.prepareResource('/pwa/neutral/products', { cancelAt: 'COMMIT_REQUIRED' });
+  assert.equal(result.ok, false); assert.equal(result.name, 'AbortError');
+  assert.equal(env.requests.length, 1);
+  assert.equal(env.records.get('admin-shell-v2-test-v2').has('https://app.test/pwa/neutral/products'), false);
+  assert.ok((await env.plan()).urls.includes('https://app.test/pwa/neutral/products'));
+});
+
+test('oversized resource is not a checkpoint and is persistently blocked for this SW version', async () => {
+  const env = environment();
+  env.fetch = async (url, options) => {
+    env.requests.push({ url, options });
+    return response('x'.repeat(2048), url, { 'Content-Type': 'application/javascript', 'X-PWA-Version': 'test-v2' });
+  };
+  const result = await env.prepareResource('/static/app.js', { maxBytes: 1024 });
+  assert.equal(result.ok, false); assert.match(result.error, /TOO_LARGE/);
+  const assets = env.records.get('admin-static-test-v2');
+  assert.equal(assets.has('https://app.test/static/app.js'), false);
+  assert.equal((await env.prepareResource('/static/app.js')).error, 'OFFLINE_RESOURCE_BLOCKED');
+  assert.equal(env.requests.length, 1);
+});
+
+test('private URLs and a different worker version cannot start resource preparation', async () => {
+  const env = environment();
+  for (const url of ['/api/admin/orders', '/dashboard/orders', 'https://other.test/static/app.js']) {
+    assert.equal((await env.prepareResource(url)).ok, false);
+  }
+  assert.equal((await env.prepareResource('/static/app.js', { version: 'old-version' })).ok, false);
+  assert.equal(env.requests.length, 0);
+});
+
+test('a response from a different deployment is never saved into this worker cache', async () => {
+  const env = environment();
+  env.fetch = async url => response('new deployment', url,
+    { 'Content-Type': 'application/javascript', 'X-PWA-Version': 'different-version' });
+  assert.equal((await env.prepareResource('/static/app.js')).ok, false);
+  assert.equal(env.records.get('admin-static-test-v2').has('https://app.test/static/app.js'), false);
+});
+
+test('concurrent resource commands never start a second fetch', async () => {
+  const env = environment();
+  let entered, resume;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { resume = resolve; });
+  const first = env.prepareResource('/static/app.js', { beforePermit: async phase => {
+    if (phase === 'COMMIT_REQUIRED') { entered(); await held; }
+  } });
+  await ready;
+  const second = await env.prepareResource('/pwa/neutral/orders');
+  assert.equal(second.error, 'OFFLINE_RESOURCE_BUSY'); assert.equal(env.requests.length, 1);
+  resume(); assert.equal((await first).ok, true);
 });
 
 test('old personalized pages are ignored for all private navigation URLs', async () => {
@@ -101,7 +221,7 @@ test('old personalized pages are ignored for all private navigation URLs', async
 });
 
 test('courier offline navigation uses only the marked neutral shell', async () => {
-  const env = environment(); await env.lifecycle('install'); env.failNetwork = true;
+  const env = environment(); await env.lifecycle('install'); await env.prepare(); env.failNetwork = true;
   env.records.set('admin-pages-old', new Map([['/dashboard/courier-screen', new Response('USER A OWNER SECRET')]]));
   const result = await env.request('/dashboard/courier-screen?view=another');
   assert.equal(result.headers.get('X-PWA-Neutral-Shell'), '1');
@@ -359,7 +479,8 @@ test('the neutral shell remains gated when there is no admissible local confirma
   assert.match(layout, /#adminLocalAccessFailure \{ display: none; \}/);
   assert.match(layout, /html\[data-local-access="denied"\] #adminLocalAccessFailure/);
   assert.match(layout, /html\[data-local-access="unavailable"\] #adminLocalAccessFailure/);
-  assert.match(layout, /<p id="adminLocalAccessChecking">Загрузка…<\/p>/);
+  assert.doesNotMatch(layout, /id="adminLocalAccessChecking"/);
+  assert.doesNotMatch(layout, /Личные данные скрыты до подтверждения локального доступа/);
   assert.match(layout, /window\.AdminServerContextPromise = confirmServerAccessContext/);
   assert.match(layout, /window\.AdminAccessContextPromise = loadAccessContext\(true\)/);
   assert.match(layout, /repository\.isActive\(\)/);

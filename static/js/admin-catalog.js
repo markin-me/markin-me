@@ -5,7 +5,6 @@
   const VERSION = 4;
   const RECORD_TTL_MS = 30 * 24 * 60 * 60 * 1000;
   const PRELOAD_BATCH_SIZE = 25;
-  const PRELOAD_PROCESSING_CHUNK_SIZE = 5;
   const PRELOAD_QUIET_WINDOW_MS = 180;
   const PRELOAD_IDLE_TIMEOUT_MS = 500;
   const RECONCILE_FRESHNESS_MS = 25000;
@@ -54,6 +53,12 @@
   let configuredLoader = null;
   let configuredRequest = null;
   let configuredMetadataLoader = null;
+  let configuredWorkingSet = null;
+  let workingCursor = '0';
+  let workingReconciledAt = 0;
+  let workingWriteSequence = 0;
+  let offlineWritesAllowed = true;
+  let offlineGeneration = 0;
   let configuredRbacContext = 'products';
   let configuredGuard = null;
   let syncSource = null;
@@ -296,6 +301,7 @@
 
   function upsertComboBundle(raw, options = {}) {
     assertScope();
+    noteWorkingChange();
     const combo = normalizeCombo(raw?.combo || raw);
     if (!combo) return null;
     const blocks = Array.isArray(raw?.blocks) ? raw.blocks : [];
@@ -324,6 +330,7 @@
 
   function upsertComboBlock(raw, options = {}) {
     assertScope();
+    noteWorkingChange();
     const block = normalizeComboBlock(raw);
     if (!block) return null;
     comboBlocksById.set(block.id, block);
@@ -387,6 +394,41 @@
 
   function assertScope(targetScope = scope, generation = scopeGeneration) {
     if (!scopeIsCurrent(targetScope, generation)) throw new Error('LOCAL_SCOPE_CHANGED');
+  }
+
+  function writeFenceKey(targetScope = scope) { return 'admin:catalog-write:v1:' + targetScope.namespace; }
+  function noteWorkingChange() {
+    if (!scope) return;
+    try { window.localStorage.setItem(writeFenceKey(), window.crypto.randomUUID()); }
+    catch (error) { offlineWritesAllowed = false; console.error('CATALOG_WRITE_FENCE_UNAVAILABLE:', error.message); }
+    workingWriteSequence += 1;
+  }
+  function catalogWrite(targetScope, work, requireLock = false) {
+    const locks = window.navigator?.locks;
+    if (!locks?.request) {
+      if (requireLock) throw new Error('CATALOG_OFFLINE_COORDINATION_UNAVAILABLE');
+      return work();
+    }
+    let entered = false;
+    const failed = error => {
+      if (entered) throw error;
+      offlineWritesAllowed = false;
+      if (requireLock) throw error;
+      return work(); // A lock API failure disables extras, not working persistence.
+    };
+    try {
+      return Promise.resolve(locks.request('admin:catalog-write:' + targetScope.namespace, () => {
+        entered = true; return work();
+      })).catch(failed);
+    } catch (error) { return failed(error); }
+  }
+  function workingSet() {
+    const value = typeof configuredWorkingSet === 'function' ? configuredWorkingSet() : {};
+    const comboIds = uniqueIds(value?.comboIds);
+    const blockIds = uniqueIds([...(value?.blockIds || []), ...comboIds.flatMap(id =>
+      (comboRelationsById.get(id) || []).map(row => row.blockId))]);
+    return { productIds: uniqueIds([...(value?.productIds || []), ...comboIds.flatMap(comboComponentIds),
+      ...blockIds.flatMap(id => (comboBlocksById.get(id)?.products || []).map(row => row.productId))]), comboIds, blockIds };
   }
 
   function checkAccessResponse(status, payload) {
@@ -536,7 +578,7 @@
     }, 180);
   }
 
-  async function persistQueuedRecords(idleContext) {
+  async function persistQueuedRecords() {
     const targetScope = scope;
     const generation = scopeGeneration;
     if (!targetScope?.complete) return false;
@@ -593,12 +635,7 @@
         ["reference-index:editor", { schemaVersion: "product-editor-v1" }]
       );
       if (entries.length || hadMetadataChanges) entries.push(["meta:manifest", nextManifest]);
-      idleContext?.assertCurrent();
-      if (entries.length) await targetScope.setMany(entries, { ttlMs: RECORD_TTL_MS,
-        noQuotaCleanup: Boolean(idleContext), guard: () => {
-          if (!idleContext) return true;
-          try { idleContext.assertCurrent(); return true; } catch (_) { return false; }
-        } });
+      if (entries.length) await targetScope.setMany(entries, { ttlMs: RECORD_TTL_MS });
       if (productIdsToRemove.length) {
         await targetScope.removeMany(productIdsToRemove.flatMap((id) => [`product:${id}`, `passport:${id}`, `passport-index:${id}`]));
       }
@@ -634,8 +671,7 @@
     }
   }
 
-  async function flushPersistence(idleContext) {
-    idleContext?.assertCurrent();
+  async function flushPersistence() {
     const targetScope = scope; const generation = scopeGeneration;
     if (!scopeIsCurrent(targetScope, generation)) return false;
     if (persistPromise) {
@@ -644,11 +680,14 @@
       const hasPersistableProducts = [...dirtyProducts].some((id) => !(pendingMutationFields.get(id)?.size));
       const hasPersistablePassports = [...dirtyPassports].some((id) => !(pendingMutationFields.get(id)?.size));
       if (hasPersistableProducts || dirtyCategories.size || hasPersistablePassports || removedProductIds.size || dirtyCombos.size || dirtyComboBlocks.size || dirtyComboRelations.size || metadataDirty || editorReferencesDirty) {
-        return flushPersistence(idleContext);
+        return flushPersistence();
       }
       return true;
     }
-    const currentPersistPromise = persistQueuedRecords(idleContext).finally(() => {
+    const currentPersistPromise = catalogWrite(targetScope, () => {
+      assertScope(targetScope, generation);
+      return persistQueuedRecords();
+    }).finally(() => {
       if (persistPromise === currentPersistPromise) persistPromise = null;
     });
     persistPromise = currentPersistPromise;
@@ -657,6 +696,7 @@
 
   function upsertProduct(raw, options = {}) {
     assertScope();
+    noteWorkingChange();
     const incoming = normalizeProduct(raw, options);
     if (!incoming) return null;
     const previous = productsById.get(incoming.id);
@@ -689,6 +729,7 @@
 
   function patchProductRuntime(productId, fields = {}, options = {}) {
     assertScope();
+    noteWorkingChange();
     const id = normalizeId(productId);
     const product = id ? productsById.get(id) : null;
     if (!id || !product) return false;
@@ -865,18 +906,17 @@
     );
   }
 
-  function normalizeEditorReferences(passport) {
+  function normalizeEditorReferences(passport, references = editorReferences, publish = true) {
     if (!passport?.editor || typeof passport.editor !== "object") return passport;
-    if (passport.units && typeof passport.units === "object") editorReferences.units = { ...passport.units };
+    if (passport.units && typeof passport.units === "object") references.units = { ...passport.units };
     if (Array.isArray(passport.unitConversions)) {
-      editorReferences.unitConversions = passport.unitConversions.slice();
+      references.unitConversions = passport.unitConversions.slice();
     }
-    editorReferences.relatedProductUnitLinks = {
-      ...editorReferences.relatedProductUnitLinks,
+    references.relatedProductUnitLinks = {
+      ...references.relatedProductUnitLinks,
       ...(passport.editor.relatedProductUnitLinks || {}),
     };
-    editorReferencesDirty = true;
-    editorReferencesLoaded = true;
+    if (publish) { editorReferencesDirty = true; editorReferencesLoaded = true; }
     const normalized = { ...passport, editor: { ...passport.editor, references_normalized: true } };
     delete normalized.units;
     delete normalized.unitConversions;
@@ -903,6 +943,7 @@
 
   function upsertPassports(payload, options = {}) {
     assertScope();
+    noteWorkingChange();
     const source = payload instanceof Map
       ? [...payload.values()]
       : (Array.isArray(payload) ? payload : Object.values(payload && typeof payload === "object" ? payload : {}));
@@ -947,6 +988,7 @@
 
   function markProductSummary(raw, options = {}) {
     assertScope();
+    noteWorkingChange();
     const incoming = normalizeProduct(raw, { ...options, completeness: "summary" });
     if (!incoming) return null;
     const existing = productsById.get(incoming.id) || {};
@@ -967,6 +1009,7 @@
 
   function upsertCategory(raw, options = {}) {
     assertScope();
+    noteWorkingChange();
     const incoming = normalizeCategory(raw);
     if (!incoming) return null;
     const merged = { ...(categoriesById.get(incoming.id) || {}) };
@@ -991,6 +1034,7 @@
   async function replaceCategories(rows) {
     const targetScope = scope; const generation = scopeGeneration;
     assertScope(targetScope, generation);
+    noteWorkingChange();
     const incoming = new Map();
     (Array.isArray(rows) ? rows : []).forEach((row) => {
       const normalized = normalizeCategory(row);
@@ -1084,7 +1128,8 @@
       knownProducts: durableIncludedIds.length,
       orderReadyProducts: durableIncludedIds.filter((id) => durableOrderReadyProductIds.has(id)).length,
       editorReadyProducts: durableIncludedIds.filter((id) => durableEditorReadyProductIds.has(id)).length,
-      total: Number.isFinite(Number(total)) ? Number(total) : null,
+      total: coverageTargetMetadata[coverageKey]?.source === 'keyset-observed' ? null
+        : total != null && Number.isFinite(Number(total)) ? Number(total) : null,
       targetSource: coverageTargetMetadata[coverageKey]?.source || null,
       targetCachedAt: Number(coverageTargetMetadata[coverageKey]?.cachedAt || 0) || null,
     };
@@ -1092,6 +1137,7 @@
 
   function removeProduct(id) {
     assertScope();
+    noteWorkingChange();
     const productId = normalizeId(id);
     if (!productId) return false;
     const previous = productsById.get(productId);
@@ -1135,6 +1181,8 @@
     const targetScope = scope;
     const generation = scopeGeneration;
     if (!targetScope?.complete) return false;
+    offlineGeneration += 1;
+    noteWorkingChange();
     stopSync();
     if (reconcilePromise) await reconcilePromise;
     await flushPersistence();
@@ -1156,6 +1204,7 @@
       ...productIds.flatMap((id) => [`product:${id}`, `passport:${id}`, `passport-index:${id}`]),
       "reference:editor",
       "reference-index:editor",
+      "meta:offline:state",
       ...comboIds.map((id) => `combo:${id}`),
       ...comboBlockIds.map((id) => `combo-block:${id}`),
       ...comboRelationIds.map((id) => `combo-relations:${id}`),
@@ -1256,12 +1305,13 @@
     try {
       await persistDownloadJob();
     } catch (_) {
-      if (!scopeIsCurrent(targetScope, scopeRunGeneration)) return false;
+      if (!scopeIsCurrent(targetScope, scopeRunGeneration) || !downloadJob || jobRunGeneration !== downloadJobGeneration) return false;
       downloadJob.state = "error";
       downloadJob.error = "storage";
       notifyDownloadJob();
       return false;
     }
+    if (!downloadJob || jobRunGeneration !== downloadJobGeneration || !scopeIsCurrent(targetScope, scopeRunGeneration)) return false;
     notifyDownloadJob();
     const task = (async () => {
       while (downloadJob && jobRunGeneration === downloadJobGeneration && scopeIsCurrent(targetScope, scopeRunGeneration)) {
@@ -1276,6 +1326,8 @@
           loader: loadEditorPassports,
           awaitPersistence: true,
           background: true,
+          taskKey: 'download:' + jobRunGeneration,
+          guard: () => jobRunGeneration === downloadJobGeneration,
         });
         if (!scopeIsCurrent(targetScope, scopeRunGeneration) || jobRunGeneration !== downloadJobGeneration) return false;
         if (batch.some((id) => !durableEditorReadyProductIds.has(id))) {
@@ -1289,9 +1341,11 @@
       if (!downloadJob || jobRunGeneration !== downloadJobGeneration) return false;
       if (!(await waitForDownloadTurn())) return false;
       if (!downloadJob || jobRunGeneration !== downloadJobGeneration || !scopeIsCurrent(targetScope, scopeRunGeneration)) return false;
-      if (downloadJob.comboMode === "all") await ensureAllCombos({ requiredCompleteness: "editor-ready", awaitPersistence: true, background: true });
+      const comboOptions = { requiredCompleteness: 'editor-ready', awaitPersistence: true, background: true,
+        taskKey: 'download:' + jobRunGeneration, guard: () => jobRunGeneration === downloadJobGeneration };
+      if (downloadJob.comboMode === "all") await ensureAllCombos(comboOptions);
       else if (Array.isArray(downloadJob.comboCategoryCodes) && downloadJob.comboCategoryCodes.length) {
-        await ensureCombosForCategoryCodes(downloadJob.comboCategoryCodes, { requiredCompleteness: "editor-ready", awaitPersistence: true, background: true });
+        await ensureCombosForCategoryCodes(downloadJob.comboCategoryCodes, comboOptions);
       }
       if (!scopeIsCurrent(targetScope, scopeRunGeneration) || jobRunGeneration !== downloadJobGeneration) return false;
       downloadJob.state = "complete";
@@ -1355,9 +1409,10 @@
     const activePromise = downloadJobPromise;
     downloadJobGeneration += 1;
     downloadJob = null;
+    downloadJobPromise = null;
     cancelDownloadSchedule(false);
     notifyDownloadJob();
-    if (activePromise) await activePromise.catch(() => false);
+    if (activePromise) void activePromise.catch(error => console.error('CATALOG_CANCELLED_JOB_FAILED:', error));
     if (!scopeIsCurrent(targetScope, generation)) return false;
     if (scope?.complete) await persistDownloadJob().catch(() => false);
     return true;
@@ -1406,6 +1461,7 @@
     if (!scopeIsCurrent(scope, scopeGeneration)) return [];
     const categoryId = normalizeId(options.categoryId);
     const key = categoryId ? `category:${categoryId}` : "global";
+    if (coverageTargetMetadata[key]?.source === 'keyset-observed') return null;
     return Array.isArray(coverageTargets[key]) ? uniqueIds(coverageTargets[key]) : null;
   }
 
@@ -1535,33 +1591,253 @@
     return ids.map((id) => data[id] ?? data[String(id)]).filter(Boolean);
   }
 
-  async function ensureProducts(ids, options = {}) {
-    if (options.background === true && !options.idleContext) {
-      const scheduler = window.AdminIdleHydration;
-      if (!scheduler?.supported) return [];
-      const requested = uniqueIds(ids);
-      // Each scheduled portion owns its one HTTP request through parsing and persistence.
-      for (let offset = 0; offset < requested.length; offset += scheduler.config.maxRecords) {
-        const batch = requested.slice(offset, offset + scheduler.config.maxRecords);
-        const result = await scheduler.enqueue('catalog:cards:' + batch.join(','), async context => {
-          const rows = await ensureProducts(batch, { ...options, idleContext: context,
-            loader: values => context.requestJSON('/api/admin/catalog/product-passports', {
-              method: 'POST', headers: { 'x-rbac-context': configuredRbacContext }, body: JSON.stringify({ ids: values }),
-              recordCount: payload => Object.keys(payload?.data || {}).length,
-            }) });
-          context.assertCurrent();
-          return rows;
-        });
-        if (!result.ok) throw new Error('CATALOG_IDLE_PORTION_NOT_SAVED');
+  function offlineState(saved) {
+    return { productIds: [], passportIds: [], editorPassportIds: [], comboIds: [], comboBlockIds: [],
+      checkpoints: {}, scans: {}, ...(saved || {}), complete: false, snapshotConsistent: false };
+  }
+
+  async function offlinePortion(context, targetScope, generation, fetchPortion, stagePortion, checkpoint) {
+    context.assertCurrent(); assertScope(targetScope, generation);
+    if (!offlineWritesAllowed || !window.navigator?.locks?.request) throw new Error('CATALOG_OFFLINE_COORDINATION_UNAVAILABLE');
+    const fence = window.localStorage.getItem(writeFenceKey(targetScope));
+    const sequence = workingWriteSequence;
+    const rbacContext = configuredRbacContext;
+    const assertUnchanged = () => {
+      context.assertCurrent(); assertScope(targetScope, generation);
+      if (!offlineWritesAllowed || sequence !== workingWriteSequence || rbacContext !== configuredRbacContext
+          || fence !== window.localStorage.getItem(writeFenceKey(targetScope))) {
+        throw new DOMException('Working catalog changed', 'AbortError');
       }
-      return requested.map(id => productsById.get(id)).filter(Boolean);
+    };
+    const payload = await fetchPortion();
+    assertUnchanged();
+    // No upsert*, notify, dirty set or persistence timer before this transaction.
+    return catalogWrite(targetScope, async () => {
+      assertUnchanged();
+      const stored = await targetScope.getMany(['meta:offline:state', 'reference:editor'], { allowStale: true });
+      const saved = offlineState(stored.get('meta:offline:state'));
+      assertUnchanged();
+      const stage = stagePortion(payload, stored.get('reference:editor'), saved);
+      const next = { ...saved, updatedAt: Date.now(), checkpoints: { ...saved.checkpoints }, scans: { ...saved.scans } };
+      for (const key of ['productIds', 'passportIds', 'editorPassportIds', 'comboIds', 'comboBlockIds']) {
+        next[key] = uniqueIds([...(saved[key] || []), ...(stage[key] || [])]);
+      }
+      if (checkpoint.scan) next.scans[checkpoint.key] = stage.cursor;
+      else {
+        next.checkpoints[checkpoint.key] = { ids: stage.productIds || stage.comboIds || [],
+          confirmedAt: Date.now(), version: checkpoint.version || null };
+        const keys = Object.keys(next.checkpoints);
+        for (const key of keys.slice(0, Math.max(0, keys.length - 128))) delete next.checkpoints[key];
+      }
+      try {
+        await context.commit(targetScope, [...stage.entries, ['meta:offline:state', next]], {
+          ttlMs: RECORD_TTL_MS, recordCount: stage.recordCount, guard: () => { assertUnchanged(); return true; },
+        });
+      } catch (error) { assertUnchanged(); throw error; }
+      // A committed transaction cannot be rolled back. If access/activity changed
+      // after commit, retain its scoped records but do not publish into this page.
+      assertUnchanged();
+      stage.publish();
+      for (const key of ['productIds', 'passportIds', 'editorPassportIds', 'comboIds', 'comboBlockIds']) {
+        manifest[key] = uniqueIds([...(manifest[key] || []), ...(stage[key] || [])]);
+      }
+      manifest.comboRelationIds = uniqueIds([...(manifest.comboRelationIds || []), ...(stage.comboIds || [])]);
+      notify('persisted', stage.productIds || []);
+      return stage.cursor || true;
+    }, true);
+  }
+
+  function stageOfflinePassports(payload, ids, savedReferences) {
+    const rows = loaderRows(payload, ids);
+    if (rows.length !== ids.length || rows.some((row, index) => !isEditorReadyPassport(row)
+        || Number(row.product?.id) !== ids[index] || pendingMutationFields.get(ids[index])?.size)) {
+      throw new Error('CATALOG_INCOMPLETE_PORTION');
     }
-    options.idleContext?.assertCurrent();
+    const references = stableValue({ ...editorReferences, ...(savedReferences || {}), relatedProductUnitLinks: {
+      ...editorReferences.relatedProductUnitLinks, ...(savedReferences?.relatedProductUnitLinks || {}),
+    } });
+    const staged = rows.map(raw => {
+      const passport = stableValue(raw), id = Number(passport.product.id);
+      const current = productsById.get(id);
+      if (current && Object.prototype.hasOwnProperty.call(current, 'stock_qty')) {
+        passport.product.stock_qty = current.stock_qty;
+        passport.stock = { ...passport.stock, stock_qty: current.stock_qty, qty: current.stock_qty, is_unlimited: current.stock_qty == null };
+        passport.availability = { ...passport.availability, stock_qty: current.stock_qty,
+          is_available: current.stock_qty == null || Number(current.stock_qty) > 0 };
+      }
+      const normalized = normalizeEditorReferences(passport, references, false);
+      const product = mergeRecord(current, normalizeProduct(passport.product, { completeness: 'editor-ready' }),
+        { authoritativeFields: Object.keys(passport.product) });
+      product.passportRevision = passport.revision?.revision || passport.revision?.updated_at || null;
+      product.orderReadySnapshotKey = `passport:${id}`;
+      return { id, product, passport: normalized };
+    });
+    return { productIds: ids, passportIds: ids, editorPassportIds: ids, recordCount: ids.length,
+      entries: [...staged.flatMap(row => [[`product:${row.id}`, row.product], [`passport:${row.id}`, row.passport],
+        [`passport-index:${row.id}`, { ...passportIndexRecord(row.id, row.passport), editorReady: true }]]),
+        ['reference:editor', references], ['reference-index:editor', { schemaVersion: 'product-editor-v1' }]],
+      publish() {
+        editorReferences = references; editorReferencesLoaded = true; editorReferencesPersisted = true;
+        staged.forEach(row => {
+          const previous = productsById.get(row.id);
+          productsById.set(row.id, row.product); passportsByProductId.set(row.id, row.passport);
+          updateProductCategoryIndex(row.id, previous?.categoryIds, row.product.categoryIds);
+          durableOrderReadyProductIds.add(row.id); durableEditorReadyProductIds.add(row.id);
+        });
+      } };
+  }
+
+  async function hydrateOfflineProducts(ids, options) {
+    if (!await init() || !window.AdminIdleHydration?.supported) throw new Error('CATALOG_IDLE_UNAVAILABLE');
+    const targetScope = scope, generation = scopeGeneration;
+    const extraGeneration = offlineGeneration;
+    const requestContext = configuredRbacContext;
+    const requested = uniqueIds(ids).sort((a, b) => a - b);
+    const size = Math.min(7, window.AdminIdleHydration.config.maxRecords);
+    for (let offset = 0; offset < requested.length; offset += size) {
+      assertScope(targetScope, generation);
+      const batch = requested.slice(offset, offset + size);
+      const key = 'passports:' + batch.join(',');
+      const result = await window.AdminIdleHydration.enqueue('catalog:' + requestContext + ':' + key + ':' + (options.taskKey || options.targetRevision || ''), async context => {
+        const missing = batch.filter(id => options.force === true || !durableEditorReadyProductIds.has(id));
+        if (!missing.length) return true;
+        return offlinePortion(context, targetScope, generation,
+          () => context.requestJSON('/api/admin/catalog/product-passports', { method: 'POST',
+            headers: { 'x-rbac-context': requestContext }, body: JSON.stringify({ ids: missing, offline_extra: true }),
+            recordCount: payload => Object.keys(payload?.data || {}).length }),
+          (payload, references) => stageOfflinePassports(payload, missing, references), { key, version: options.targetRevision });
+      }, { guard: () => scopeIsCurrent(targetScope, generation) && extraGeneration === offlineGeneration
+        && requestContext === configuredRbacContext && (!options.guard || options.guard()) });
+      if (!result.ok) throw new Error('CATALOG_IDLE_PORTION_NOT_SAVED:' + result.reason);
+    }
+    return new Map(requested.map(id => [id, productsById.get(id) || null]));
+  }
+
+  function stageOfflineCombos(payload, cursor) {
+    if (!Array.isArray(payload?.data) || !payload.page || typeof payload.page.has_more !== 'boolean') {
+      throw new Error('CATALOG_INCOMPLETE_PORTION');
+    }
+    const combos = [], blocks = new Map(), relations = new Map();
+    payload.data.forEach(bundle => {
+      const combo = normalizeCombo(bundle.combo);
+      if (!combo) throw new Error('CATALOG_INCOMPLETE_PORTION');
+      combos.push(combo);
+      (bundle.blocks || []).forEach(raw => {
+        const block = normalizeComboBlock(raw);
+        if (!block) throw new Error('CATALOG_INCOMPLETE_PORTION');
+        blocks.set(block.id, block);
+      });
+      relations.set(combo.id, (bundle.relations || []).map((row, index) => ({ id: normalizeId(row.id),
+        comboId: combo.id, blockId: normalizeId(row.block_id), sortOrder: Number(row.sort_order ?? index) || 0 })));
+      if (relations.get(combo.id).some(row => !blocks.has(row.blockId))) throw new Error('CATALOG_INCOMPLETE_PORTION');
+    });
+    const next = Number(payload.page.next_cursor);
+    if (!Number.isSafeInteger(next) || next < cursor || (payload.page.has_more && next <= cursor)) {
+      throw new Error('CATALOG_CURSOR_STALLED');
+    }
+    return { comboIds: combos.map(row => row.id), comboBlockIds: [...blocks.keys()], recordCount: combos.length,
+      cursor: { afterId: next, hasMore: payload.page.has_more, scannedAt: Date.now(), complete: false,
+        productIds: uniqueIds([...blocks.values()].flatMap(block => block.products.map(row => row.productId))) },
+      entries: [...combos.flatMap(row => [[`combo:${row.id}`, row], [`combo-relations:${row.id}`, relations.get(row.id)]]),
+        ...[...blocks].map(([id, row]) => [`combo-block:${id}`, row])],
+      publish() {
+        combos.forEach(row => { combosById.set(row.id, row); comboRelationsById.set(row.id, relations.get(row.id)); });
+        blocks.forEach((row, id) => comboBlocksById.set(id, row)); rebuildComboIndexes();
+      } };
+  }
+
+  async function hydrateOfflineCombos(ids, options = {}, codes = []) {
+    if (!await init() || !window.AdminIdleHydration?.supported) throw new Error('CATALOG_IDLE_UNAVAILABLE');
+    const targetScope = scope, generation = scopeGeneration;
+    const extraGeneration = offlineGeneration;
+    const requestContext = configuredRbacContext;
+    const requested = ids === null ? null : uniqueIds(ids).sort((a, b) => a - b);
+    const jobs = requested === null ? [null] : requested;
+    for (const id of jobs) {
+      const key = 'combos:' + (id || codes.slice().sort().join(',') || 'all');
+      const saved = offlineState(await targetScope.get('meta:offline:state', { allowStale: true }));
+      assertScope(targetScope, generation);
+      // Resume the last committed definition's dependencies before advancing its
+      // scan cursor. Each passport still gets its own idle HTTP turn.
+      await hydrateOfflineProducts(saved.scans[key]?.productIds || [], { ...options, force: false });
+      let restart = options.force === true, more = true;
+      while (more) {
+        assertScope(targetScope, generation);
+        const result = await window.AdminIdleHydration.enqueue('catalog:' + requestContext + ':' + key + ':' + (options.taskKey || ''), async context => {
+          const state = offlineState(await targetScope.get('meta:offline:state', { allowStale: true }));
+          context.assertCurrent();
+          const prior = state.scans[key];
+          if (!restart && prior?.hasMore === false) return prior;
+          const after = restart ? 0 : Number(prior?.afterId || 0);
+          const query = new URLSearchParams({ page: '1', limit: '1', after_id: String(after) });
+          if (id) query.set('ids', String(id));
+          if (codes.length) query.set('category_codes', codes.join(','));
+          return offlinePortion(context, targetScope, generation,
+            () => context.requestJSON('/api/admin/catalog/combos?' + query, { headers: { 'x-rbac-context': requestContext },
+              recordCount: payload => payload?.data?.length ?? -1 }),
+            payload => {
+              if (id && (payload?.data?.length !== 1 || Number(payload.data[0].combo?.id) !== id)) {
+                throw new Error('CATALOG_INCOMPLETE_PORTION');
+              }
+              return stageOfflineCombos(payload, after);
+            }, { key, scan: true });
+        }, { guard: () => scopeIsCurrent(targetScope, generation) && extraGeneration === offlineGeneration
+          && requestContext === configuredRbacContext && (!options.guard || options.guard()) });
+        if (!result.ok) throw new Error('CATALOG_IDLE_PORTION_NOT_SAVED:' + result.reason);
+        await hydrateOfflineProducts(result.value?.productIds || [], { ...options, force: false });
+        restart = false; more = result.value?.hasMore === true;
+      }
+    }
+    return getAllCombos().filter(row => !requested || requested.includes(row.id));
+  }
+
+  async function discoverOfflineTarget(categoryIds = []) {
+    if (!await init() || !window.AdminIdleHydration?.supported) throw new Error('CATALOG_IDLE_UNAVAILABLE');
+    const categories = uniqueIds(categoryIds).sort((a, b) => a - b);
+    const targetScope = scope, generation = scopeGeneration, key = 'targets:' + categories.join(',');
+    const extraGeneration = offlineGeneration;
+    const requestContext = configuredRbacContext;
+    let more = true, observed = [];
+    while (more) {
+      const result = await window.AdminIdleHydration.enqueue('catalog:' + requestContext + ':' + key, async context => {
+        const saved = offlineState(await targetScope.get('meta:offline:state', { allowStale: true }));
+        context.assertCurrent(); assertScope(targetScope, generation);
+        const prior = saved.scans[key];
+        const after = prior?.hasMore === true ? Number(prior.afterId) : 0;
+        return offlinePortion(context, targetScope, generation,
+          () => context.requestJSON('/api/admin/catalog/product-targets', { method: 'POST',
+            headers: { 'x-rbac-context': requestContext },
+            body: JSON.stringify({ page: true, category_ids: categories, after_id: after, limit: context.config.maxRecords }),
+            recordCount: payload => payload?.data?.product_ids?.length ?? -1 }),
+          (payload, references, state) => {
+            const data = payload?.data, ids = data?.product_ids;
+            if (!Array.isArray(ids) || typeof data.has_more !== 'boolean'
+                || Number(data.tenant_id) !== Number(window.AdminAccessContext?.local_context?.tenantId)
+                || Number(data.store_id) !== Number(targetScope.storeId)
+                || ids.some((id, index) => !Number.isSafeInteger(id) || id <= (index ? ids[index - 1] : after))
+                || Number(data.next_cursor) !== (ids.at(-1) ?? after) || (data.has_more && !ids.length)) {
+              throw new Error('CATALOG_INCOMPLETE_PORTION');
+            }
+            const base = after ? state.scans[key]?.ids || [] : [];
+            return { entries: [], recordCount: ids.length, cursor: { ids: uniqueIds([...base, ...ids]),
+              afterId: Number(data.next_cursor), hasMore: data.has_more, complete: false, snapshotConsistent: false }, publish() {} };
+          }, { key, scan: true });
+      }, { guard: () => scopeIsCurrent(targetScope, generation) && extraGeneration === offlineGeneration
+        && requestContext === configuredRbacContext });
+      if (!result.ok) throw new Error('CATALOG_IDLE_PORTION_NOT_SAVED:' + result.reason);
+      observed = result.value.ids; more = result.value.hasMore;
+    }
+    return observed;
+  }
+
+  async function ensureProducts(ids, options = {}) {
+    if (options.background === true) return hydrateOfflineProducts(ids, options);
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const targetScope = scope;
     const generation = scopeGeneration;
     const requiredEditorReady = options.requiredCompleteness === "editor-ready";
+    noteWorkingChange();
     const requiredOrderReady = requiredEditorReady || options.requiredCompleteness === "order-ready";
     const priority = options.priority === true
       || (options.priority !== false && options.background !== true && foregroundTokens.size > 0);
@@ -1600,7 +1876,6 @@
     if (fresh.length && typeof loader === "function") {
       const requestMutationVersions = new Map(fresh.map((id) => [id, mutationVersions.get(id) || 0]));
       const request = Promise.resolve().then(() => loader(fresh)).then(async (payload) => {
-        options.idleContext?.assertCurrent();
         if (scopeIsCurrent(targetScope, generation)) {
           if (requiredOrderReady) {
             const passportPayload = payload?.data && typeof payload.data === "object" ? payload.data : payload;
@@ -1629,26 +1904,9 @@
               }
               protectedPayload[id] = passport;
             });
-            const passportRows = Object.values(protectedPayload);
-            if (options.background === true && passportRows.length > PRELOAD_PROCESSING_CHUNK_SIZE) {
-              const changedIds = [];
-              await yieldMainThread();
-              for (let offset = 0; offset < passportRows.length; offset += PRELOAD_PROCESSING_CHUNK_SIZE) {
-                options.idleContext?.assertCurrent();
-                assertScope(targetScope, generation);
-                changedIds.push(...upsertPassports(passportRows.slice(offset, offset + PRELOAD_PROCESSING_CHUNK_SIZE), { notify: false }).map((row) => row.id));
-                if (offset + PRELOAD_PROCESSING_CHUNK_SIZE < passportRows.length) await yieldMainThread();
-              }
-              assertScope(targetScope, generation);
-              if (changedIds.length) notify("products", changedIds);
-            } else {
-              upsertPassports(protectedPayload);
-            }
-            options.idleContext?.assertCurrent();
+            upsertPassports(protectedPayload);
             if (options.awaitPersistence === true) {
-              const saved = await flushPersistence(options.idleContext);
-              options.idleContext?.assertCurrent();
-              if (options.idleContext && !saved) throw new Error('LOCAL_WRITE_NOT_SAVED');
+              if (!await flushPersistence()) throw new Error('LOCAL_WRITE_NOT_SAVED');
             }
           } else {
             upsertProducts(loaderRows(payload, fresh), {
@@ -1793,6 +2051,7 @@
   async function removeCombo(comboId) {
     const targetScope = scope; const generation = scopeGeneration;
     assertScope(targetScope, generation);
+    noteWorkingChange();
     const id = normalizeId(comboId);
     if (!id) return false;
     combosById.delete(id);
@@ -1814,6 +2073,7 @@
   async function removeComboBlock(blockId) {
     const targetScope = scope; const generation = scopeGeneration;
     assertScope(targetScope, generation);
+    noteWorkingChange();
     const id = normalizeId(blockId);
     if (!id) return false;
     const affectedComboIds = [...(comboIdsByBlockId.get(id) || [])];
@@ -1837,7 +2097,7 @@
   }
 
   async function ensureCombos(ids, options = {}) {
-    if (options.background === true) throw new Error('BACKGROUND_COMBOS_REQUIRE_BOUNDED_SOURCE');
+    if (options.background === true) return hydrateOfflineCombos(ids, options);
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const requiredCompleteness = options.requiredCompleteness === "editor-ready" ? "editor-ready" : "order-ready";
@@ -1893,7 +2153,7 @@
     assertScope(targetScope, generation);
     const componentIds = uniqueIds(requested.flatMap(comboComponentIds));
     if (options.requiredCompleteness !== "definition" && componentIds.length) {
-      await ensureProducts(componentIds, {
+      for (let offset = 0; offset < componentIds.length; offset += 25) await ensureProducts(componentIds.slice(offset, offset + 25), {
         requiredCompleteness,
         awaitPersistence: options.awaitPersistence === true,
         background: options.background === true,
@@ -1905,8 +2165,19 @@
     return new Map(requested.map((id) => [id, getCombo(id)]));
   }
 
+  async function loadSavedComboBlocks() {
+    if (!await init()) return [];
+    const targetScope = scope, generation = scopeGeneration;
+    const ids = uniqueIds(manifest.comboBlockIds);
+    const rows = await loadPersistentRecords(ids.map(id => `combo-block:${id}`), targetScope, generation);
+    assertScope(targetScope, generation);
+    ids.forEach(id => { const row = rows.get(`combo-block:${id}`); if (Number(row?.id) === id) comboBlocksById.set(id, row); });
+    rebuildComboIndexes();
+    return getAllComboBlocks();
+  }
+
   async function ensureComboBlocks(ids, options = {}) {
-    if (options.background === true) throw new Error('BACKGROUND_COMBOS_REQUIRE_BOUNDED_SOURCE');
+    if (options.background === true) throw new Error('CATALOG_OFFLINE_BLOCKS_REQUIRE_COMBO_PORTION');
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const requested = uniqueIds(ids);
     const targetScope = scope;
@@ -1924,7 +2195,7 @@
     if (!missing.length || typeof configuredRequest !== "function") {
       return new Map(requested.map((id) => [id, getComboBlock(id)]));
     }
-    const response = await configuredRequest(`/api/admin/catalog/combos?block_ids=${missing.join(",")}`);
+    const response = await configuredRequest(`/api/admin/catalog/combos?block_ids=${missing.join(",")}&definitions_only=blocks`);
     assertScope(targetScope, generation);
     (Array.isArray(response?.blocks) ? response.blocks : []).forEach((block) => upsertComboBlock(block, { notify: false }));
     upsertComboBundles(Array.isArray(response?.data) ? response.data : []);
@@ -1935,7 +2206,7 @@
   }
 
   async function ensureAllCombos(options = {}) {
-    if (options.background === true) throw new Error('BACKGROUND_COMBOS_REQUIRE_BOUNDED_SOURCE');
+    if (options.background === true) return hydrateOfflineCombos(null, options);
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const targetScope = scope; const generation = scopeGeneration;
     if (!getAllCombos().length && options.force !== true && uniqueIds(manifest.comboIds).length) {
@@ -1967,7 +2238,8 @@
   }
 
   async function ensureCombosForCategoryCodes(values, options = {}) {
-    if (options.background === true) throw new Error('BACKGROUND_COMBOS_REQUIRE_BOUNDED_SOURCE');
+    if (options.background === true) return hydrateOfflineCombos(null, options,
+      [...new Set((values || []).map(String).filter(Boolean))]);
     if (!await init()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     const targetScope = scope; const generation = scopeGeneration;
     const codes = [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
@@ -1996,124 +2268,117 @@
     if (!scopeIsCurrent(scope, scopeGeneration)) return { state: 'idle', runtimeRevision: '0', durableRevision: '0', lastReconciledAt: 0 };
     return {
       state: syncState,
-      runtimeRevision: revision(manifest.serverRevision),
+      runtimeRevision: workingCursor,
       durableRevision: revision(manifest.durableRevision),
-      lastReconciledAt: Number(manifest.lastReconciledAt || 0),
+      lastReconciledAt: workingReconciledAt,
+      workingSetOnly: true, offlineComplete: false,
     };
   }
   function setSyncState(value) { syncState = value; notify("sync", []); }
-  async function saveCheckpoint(value, targetScope = scope, generation = scopeGeneration) {
+  async function saveWorkingCursor(value, targetScope = scope, generation = scopeGeneration) {
     assertScope(targetScope, generation);
-    const next = revision(value);
-    const nextManifest = { ...manifest, serverRevision: next, durableRevision: next, lastReconciledAt: Date.now(), updatedAt: Date.now() };
-    await targetScope.set("meta:manifest", nextManifest, { ttlMs: RECORD_TTL_MS });
-    if (!scopeIsCurrent(targetScope, generation)) return false;
-    manifest = nextManifest; return true;
+    workingCursor = revision(value);
+    workingReconciledAt = Date.now();
+    return true;
   }
   async function reconcilePass(targetScope, generation) {
-      if (!targetScope?.complete || typeof configuredRequest !== "function" || !navigator.onLine) {
-        setSyncState("offline"); return false;
-      }
-      setSyncState("syncing");
-      const storeId = Number(targetScope.storeId);
-      const remote = await configuredRequest(`/api/admin/catalog/manifest?store_id=${storeId}`);
-      assertScope(targetScope, generation);
-      const serverRevision = revision(remote?.data?.revision);
-      manifest.serverRevision = serverRevision;
-      let cursor = revision(manifest.durableRevision);
-      if (!revisionGreater(serverRevision, cursor)) {
-        const saved = await saveCheckpoint(cursor, targetScope, generation);
-        if (!saved) return false;
-        setSyncState("online"); return true;
-      }
-      const changes = new Map(); let hasMore = true; let fullRecovery = false;
-      while (hasMore) {
-        const response = await configuredRequest(`/api/admin/catalog/changes?store_id=${storeId}&since=${cursor}&limit=500`);
-        assertScope(targetScope, generation);
-        const data = response?.data || {};
-        if (data.reset_required === true) { fullRecovery = true; hasMore = false; break; }
-        (Array.isArray(data.changes) ? data.changes : []).forEach((change) => {
-          changes.set(`${change.entity_type}:${change.entity_id ?? "all"}`, change);
-        });
-        const next = revision(data.next_revision);
-        if (next === cursor && data.has_more) throw new Error("CATALOG_RECOVERY_CURSOR_STALLED");
-        cursor = next; hasMore = data.has_more === true;
-      }
-      if (!scopeIsCurrent(targetScope, generation)) return false;
-      const deletes = []; const refresh = fullRecovery ? [...durableOrderReadyProductIds] : [];
-      const refreshCombos = [];
-      const refreshComboBlocks = [];
-      const deleteCombos = [];
-      const deleteComboBlocks = [];
-      const inventoryChanges = [];
-      let refreshAllCombos = fullRecovery;
-      let metadataChanged = fullRecovery; let targetChanged = fullRecovery; let referenceChanged = fullRecovery;
-      changes.forEach((change) => {
-        if (change.entity_type === "category") metadataChanged = true;
-        if (change.entity_type === "reference") referenceChanged = true;
-        if (change.entity_type === "product" && change.operation !== "stock") targetChanged = true;
-        if (change.entity_type === "combo") {
-          const comboId = Number(change.entity_id || 0);
-          if (change.operation === "delete" && comboId > 0) deleteCombos.push(comboId);
-          else if (comboId > 0) refreshCombos.push(comboId);
-          else refreshAllCombos = true;
-          return;
-        }
-        if (change.entity_type === "combo-block") {
-          const blockId = Number(change.entity_id || 0);
-          if (change.operation === "delete" && blockId > 0) deleteComboBlocks.push(blockId);
-          else if (blockId > 0) refreshComboBlocks.push(blockId);
-          else refreshAllCombos = true;
-          return;
-        }
-        if (change.entity_type === "inventory") {
-          if (Number(change.entity_id) > 0) inventoryChanges.push(Number(change.entity_id));
-          return;
-        }
-        if (change.entity_type !== "product" || !(Number(change.entity_id) > 0)) return;
-        if (change.operation === "stock") inventoryChanges.push(Number(change.entity_id));
-        if (change.operation === "delete") deletes.push(Number(change.entity_id));
-        else if (durableOrderReadyProductIds.has(Number(change.entity_id))) refresh.push(Number(change.entity_id));
-      });
-      if (referenceChanged) {
-        editorReferences = { units: {}, unitConversions: [], relatedProductUnitLinks: {} };
-        editorReferencesLoaded = false;
-        editorReferencesDirty = true;
-        const referenceSourceId = [...durableEditorReadyProductIds][0];
-        if (referenceSourceId) refresh.push(referenceSourceId);
-      }
-      for (const productId of uniqueIds(deletes)) { assertScope(targetScope, generation); await removeProduct(productId); }
-      for (const comboId of uniqueIds(deleteCombos)) { assertScope(targetScope, generation); await removeCombo(comboId); }
-      for (const blockId of uniqueIds(deleteComboBlocks)) { assertScope(targetScope, generation); await removeComboBlock(blockId); }
-      assertScope(targetScope, generation);
-      if (refreshComboBlocks.length) await ensureComboBlocks(refreshComboBlocks, { awaitPersistence: true });
-      assertScope(targetScope, generation);
-      const refreshIds = uniqueIds(refresh).filter((id) => !deletes.includes(id));
-      const refreshEditorIds = refreshIds.filter((id) => durableEditorReadyProductIds.has(id));
-      const refreshOrderOnlyIds = refreshIds.filter((id) => !refreshEditorIds.includes(id));
-      for (const [ids, requiredCompleteness] of [[refreshEditorIds, "editor-ready"], [refreshOrderOnlyIds, "order-ready"]]) {
-        for (let offset = 0; offset < ids.length; offset += 80) {
-          const batch = ids.slice(offset, offset + 80);
-          await ensureProducts(batch, { requiredCompleteness, force: true, awaitPersistence: true });
-          assertScope(targetScope, generation);
-          const incomplete = requiredCompleteness === "editor-ready"
-            ? batch.some((id) => !durableEditorReadyProductIds.has(id))
-            : batch.some((id) => !durableOrderReadyProductIds.has(id));
-          if (incomplete) throw new Error("CATALOG_RECOVERY_PERSIST_FAILED");
-        }
-      }
-      if (refreshAllCombos) await ensureAllCombos({ requiredCompleteness: "editor-ready", force: true, awaitPersistence: true });
-      else if (refreshCombos.length) await ensureCombos(refreshCombos, { requiredCompleteness: "editor-ready", force: true, awaitPersistence: true });
-      assertScope(targetScope, generation);
-      if ((metadataChanged || targetChanged) && typeof configuredMetadataLoader === "function") {
-        await configuredMetadataLoader({ categories: metadataChanged, targets: targetChanged });
-      }
-      if (!scopeIsCurrent(targetScope, generation)) return false;
-      await flushPersistence();
-      assertScope(targetScope, generation);
-      if (!(await saveCheckpoint(serverRevision, targetScope, generation))) return false;
-      if (inventoryChanges.length || fullRecovery) notify("inventory", uniqueIds(inventoryChanges));
+    if (!targetScope?.complete || typeof configuredRequest !== "function" || !navigator.onLine) {
+      setSyncState("offline"); return false;
+    }
+    setSyncState("syncing");
+    const live = workingSet();
+    const liveProducts = new Set(live.productIds), liveCombos = new Set(live.comboIds), liveBlocks = new Set(live.blockIds);
+    const remote = await configuredRequest(`/api/admin/catalog/manifest?store_id=${Number(targetScope.storeId)}`);
+    assertScope(targetScope, generation);
+    const serverRevision = revision(remote?.data?.revision);
+    if (revisionGreater(serverRevision, reconcileTargetRevision)) reconcileTargetRevision = serverRevision;
+    if (!revisionGreater(serverRevision, workingCursor)) {
+      await saveWorkingCursor(workingCursor, targetScope, generation);
       setSyncState("online"); return true;
+    }
+    // A new document refreshes its working set rather than replaying the entire
+    // historical log. This is NOT a snapshot proof for the offline catalogue.
+    let recovery = workingCursor === '0';
+    let cursor = recovery ? serverRevision : workingCursor, hasMore = !recovery;
+    const changes = new Map();
+    for (let page = 0; hasMore && page < 3; page++) {
+      const response = await configuredRequest(`/api/admin/catalog/changes?store_id=${Number(targetScope.storeId)}&since=${cursor}&limit=100`);
+      assertScope(targetScope, generation);
+      const data = response?.data || {};
+      if (data.reset_required === true) { recovery = true; cursor = serverRevision; break; }
+      for (const change of data.changes || []) changes.set(`${change.entity_type}:${change.entity_id ?? "all"}`, change);
+      const next = revision(data.next_revision);
+      if (next === cursor && data.has_more) throw new Error("CATALOG_RECOVERY_CURSOR_STALLED");
+      cursor = next; hasMore = data.has_more === true;
+    }
+    if (!recovery && !changes.size && !hasMore && cursor === workingCursor) {
+      throw new Error('CATALOG_WORKING_CURSOR_STALLED');
+    }
+    let metadata = recovery, references = recovery;
+    const refresh = new Set(recovery ? live.productIds : []), extra = new Set();
+    const combos = new Set(recovery ? live.comboIds : []), blocks = new Set(recovery ? live.blockIds : []);
+    const extraCombos = new Set(), inventory = new Set();
+    if (recovery) for (const id of manifest.passportIds || []) if (!liveProducts.has(Number(id))) extra.add(Number(id));
+    for (const change of changes.values()) {
+      const id = Number(change.entity_id || 0);
+      if (change.entity_type === 'category') metadata = true;
+      if (change.entity_type === 'reference') references = true;
+      if (change.entity_type === 'inventory' || change.operation === 'stock') {
+        if (liveProducts.has(id)) inventory.add(id);
+      }
+      if (change.entity_type === 'product') {
+        if (change.operation === 'delete' && id > 0) { await removeProduct(id); continue; }
+        if (change.operation !== 'stock') metadata = true;
+        if (liveProducts.has(id)) refresh.add(id);
+        else if (durableOrderReadyProductIds.has(id)) extra.add(id);
+      }
+      if (change.entity_type === 'combo') {
+        if (change.operation === 'delete' && id > 0) { await removeCombo(id); continue; }
+        if (liveCombos.has(id)) combos.add(id);
+        else if (combosById.has(id)) extraCombos.add(id);
+        if (!(id > 0)) { live.comboIds.forEach(value => combos.add(value)); metadata = true; }
+      }
+      if (change.entity_type === 'combo-block') {
+        if (change.operation === 'delete' && id > 0) { await removeComboBlock(id); continue; }
+        if (liveBlocks.has(id)) blocks.add(id);
+        for (const comboId of getAffectedComboIdsForBlocks([id])) {
+          if (liveCombos.has(comboId)) combos.add(comboId); else extraCombos.add(comboId);
+        }
+      }
+    }
+    assertScope(targetScope, generation);
+    if (references) live.productIds.forEach(id => refresh.add(id));
+    // Only the explicit working set can issue immediate passport/combination reads.
+    const currentProducts = new Set(workingSet().productIds);
+    const ids = [...refresh].filter(id => currentProducts.has(id) && !removedProductIds.has(id));
+    for (let offset = 0; offset < ids.length; offset += 25) {
+      await ensureProducts(ids.slice(offset, offset + 25), { requiredCompleteness: configuredRbacContext === 'products'
+        ? 'editor-ready' : 'order-ready', force: true, awaitPersistence: true });
+      assertScope(targetScope, generation);
+    }
+    const current = workingSet();
+    const blockIds = [...blocks].filter(id => current.blockIds.includes(id));
+    const comboIds = [...combos].filter(id => current.comboIds.includes(id));
+    for (let offset = 0; offset < blockIds.length; offset += 25) {
+      await ensureComboBlocks(blockIds.slice(offset, offset + 25), { force: true, awaitPersistence: true });
+    }
+    for (let offset = 0; offset < comboIds.length; offset += 25) {
+      await ensureCombos(comboIds.slice(offset, offset + 25), { force: true, awaitPersistence: true });
+    }
+    assertScope(targetScope, generation);
+    if ((metadata || references) && typeof configuredMetadataLoader === 'function') {
+      await configuredMetadataLoader({ categories: metadata, targets: metadata, workingSet: true });
+    }
+    assertScope(targetScope, generation);
+    await flushPersistence();
+    await saveWorkingCursor(cursor, targetScope, generation);
+    // These are independent tasks. Realtime never awaits offline hydration.
+    if (extra.size) void ensureProducts([...extra], { background: true, force: true, targetRevision: cursor })
+      .catch(error => console.warn('CATALOG_IDLE_BUFFER_PAUSED:', error.message));
+    if (extraCombos.size) void ensureCombos([...extraCombos], { background: true, force: true })
+      .catch(error => console.warn('CATALOG_IDLE_BUFFER_PAUSED:', error.message));
+    if (inventory.size || recovery) notify("inventory", [...inventory]);
+    setSyncState("online"); return true;
   }
   async function reconcile(options = {}) {
     const access = window.AdminLocalRepository.capture();
@@ -2121,24 +2386,27 @@
     const target = revision(options.targetRevision);
     if (revisionGreater(target, reconcileTargetRevision)) reconcileTargetRevision = target;
     if (reconcilePromise) {
-      if (revisionGreater(reconcileTargetRevision, manifest.durableRevision)) reconcileAgain = true;
+      if (revisionGreater(reconcileTargetRevision, workingCursor)) reconcileAgain = true;
       return reconcilePromise;
     }
     const targetScope = scope; const generation = scopeGeneration;
+    let successfulPass = false;
     const task = (async () => {
       let result = false;
       let continuations = 0;
       do {
         reconcileAgain = false;
         result = await reconcilePass(targetScope, generation);
+        successfulPass = result === true;
         if (!result || !scopeIsCurrent(targetScope, generation)) return result;
         continuations += 1;
-      } while ((reconcileAgain || revisionGreater(reconcileTargetRevision, manifest.durableRevision)) && continuations < 3);
-      if (!revisionGreater(reconcileTargetRevision, manifest.durableRevision)) {
-        reconcileTargetRevision = revision(manifest.durableRevision);
+      } while ((reconcileAgain || revisionGreater(reconcileTargetRevision, workingCursor)) && continuations < 3);
+      if (!revisionGreater(reconcileTargetRevision, workingCursor)) {
+        reconcileTargetRevision = workingCursor;
       }
       return result;
     })().catch((error) => {
+      successfulPass = false;
       if (scopeIsCurrent(targetScope, generation)) {
         console.error('CATALOG_RECONCILE_FAILED:', error);
         setSyncState(navigator.onLine ? "stale" : "offline");
@@ -2150,6 +2418,9 @@
         reconcilePromise = null;
         reconcileAgain = false;
         scheduleDownloadTurn();
+        if (successfulPass && scopeIsCurrent(targetScope, generation) && revisionGreater(reconcileTargetRevision, workingCursor)) {
+          void requestReconcile({ reason: 'working-continuation' });
+        }
       });
     reconcilePromise = task;
     return reconcilePromise;
@@ -2158,9 +2429,9 @@
     if (!scopeIsCurrent(scope, scopeGeneration)) return Promise.resolve(false);
     const target = revision(options.targetRevision);
     if (revisionGreater(target, reconcileTargetRevision)) reconcileTargetRevision = target;
-    const hasKnownChange = revisionGreater(reconcileTargetRevision, manifest.durableRevision);
+    const hasKnownChange = revisionGreater(reconcileTargetRevision, workingCursor);
     const force = options.force === true;
-    if (!force && !hasKnownChange && Date.now() - Number(manifest.lastReconciledAt || 0) < RECONCILE_FRESHNESS_MS) {
+    if (!force && !hasKnownChange && Date.now() - workingReconciledAt < RECONCILE_FRESHNESS_MS) {
       return reconcilePromise || Promise.resolve(true);
     }
     if (reconcilePromise) {
@@ -2218,10 +2489,10 @@
         const payload = JSON.parse(data || "{}");
         const eventRevision = revision(payload.revision);
         syncReconnectAttempts = 0;
-        if (revisionGreater(eventRevision, manifest.durableRevision)) {
+        if (revisionGreater(eventRevision, workingCursor)) {
           void requestReconcile({ reason: "sse", targetRevision: eventRevision });
         } else if (eventName === "snapshot") {
-          void saveCheckpoint(manifest.durableRevision, targetScope, generation).then((saved) => {
+          void saveWorkingCursor(workingCursor, targetScope, generation).then((saved) => {
             if (saved && scopeIsCurrent(targetScope, generation)) setSyncState("online");
           }).catch(error => {
             if (scopeIsCurrent(targetScope, generation)) console.error('CATALOG_CHECKPOINT_FAILED:', error);
@@ -2377,10 +2648,15 @@
   }
 
   async function hydrate(targetScope, generation) {
-    const metadata = await targetScope.getMany(["meta:manifest", "meta:download-job"]).catch(() => new Map());
+    const metadata = await targetScope.getMany(["meta:manifest", "meta:download-job", "meta:offline:state"]).catch(() => new Map());
     if (!scopeIsCurrent(targetScope, generation)) return;
     let saved = metadata.get("meta:manifest");
     manifest = saved && typeof saved === "object" ? { ...emptyManifest(), ...saved } : emptyManifest();
+    const extra = offlineState(metadata.get('meta:offline:state'));
+    for (const key of ['productIds', 'passportIds', 'editorPassportIds', 'comboIds', 'comboBlockIds']) {
+      manifest[key] = uniqueIds([...(manifest[key] || []), ...(extra[key] || [])]);
+    }
+    manifest.comboRelationIds = uniqueIds([...(manifest.comboRelationIds || []), ...(extra.comboIds || [])]);
     const savedDownloadJob = metadata.get("meta:download-job");
     downloadJob = savedDownloadJob && typeof savedDownloadJob === "object" ? savedDownloadJob : null;
     coverageTotals = manifest.coverageTotals && typeof manifest.coverageTotals === "object"
@@ -2402,6 +2678,7 @@
     if (typeof options.loader === "function") configuredLoader = options.loader;
     if (typeof options.request === "function") configuredRequest = options.request;
     if (typeof options.metadataLoader === "function") configuredMetadataLoader = options.metadataLoader;
+    if (typeof options.workingSet === 'function') configuredWorkingSet = options.workingSet;
     if (typeof options.guard === 'function') configuredGuard = options.guard;
     if (configuredGuard && !configuredGuard()) return false;
     if (options.rbacContext === 'products' || options.rbacContext === 'new-order') configuredRbacContext = options.rbacContext;
@@ -2467,6 +2744,7 @@
     persistPromise = null;
     reconcilePromise = null;
     reconcileTargetRevision = "0";
+    workingCursor = '0'; workingReconciledAt = 0; workingWriteSequence += 1; offlineWritesAllowed = true;
     reconcileAgain = false;
     syncReconnectAttempts = 0;
     downloadJob = null;
@@ -2497,11 +2775,11 @@
     init, getProduct, getProducts, getProductsForCategory, getAllProducts, getCategory, getAllCategories, loadProducts, loadPassports, loadCategories, loadEditorReferences,
     upsertProduct, upsertProducts, markProductSummary, patchProductOptimistic, commitProductPatch, rollbackProductPatch, patchProductAuthoritative, removeProduct, clearSavedProducts, isProductPersistedOrderReady, isProductPersistedEditorReady,
     getProductPassport, getEditorReferences, upsertPassports, isOrderReadyPassport,
-    upsertCategory, upsertCategories, replaceCategories, ensureProducts, getCoverage, setCoverageTotal, setCoverageTarget,
+    upsertCategory, upsertCategories, replaceCategories, ensureProducts, getCoverage, setCoverageTotal, setCoverageTarget, discoverOfflineTarget,
     getTrackedCoverageCategoryIds, getCoverageTargetIds, startDownloadJob, resumeDownloadJob, getDownloadJob, cancelDownloadJob,
     beginForegroundWork, endForegroundWork, withForegroundWork,
     getRootCategoryId, getDescendantCategoryIds, subscribe, getScope, clearRuntime,
-    getCombo, getComboForOrder, getAllCombos, getAffectedComboIds, getAffectedComboIdsForBlocks, getComboBlock, getAllComboBlocks, upsertComboBlock, upsertComboBundle, upsertComboBundles, removeCombo, removeComboBlock, ensureComboBlocks,
+    getCombo, getComboForOrder, getAllCombos, getAffectedComboIds, getAffectedComboIdsForBlocks, getComboBlock, getAllComboBlocks, loadSavedComboBlocks, upsertComboBlock, upsertComboBundle, upsertComboBundles, removeCombo, removeComboBlock, ensureComboBlocks,
     ensureCombos, ensureAllCombos, ensureCombosForCategoryCodes, isComboReady,
     startSync, stopSync, reconcile, getSyncState,
     checkAccessResponse,

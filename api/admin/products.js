@@ -1469,6 +1469,24 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
   // ------------------------------
   // Categories: /api/prod_categories
   // ------------------------------
+  function catalogPage(input) {
+    if (!(input?.page === true || input?.page === '1')) return null;
+    const after = Number(input.after_id ?? 0);
+    const limit = Number(input.limit ?? 25);
+    if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
+      throw Object.assign(new Error('INVALID_CATALOG_PAGE'), { status: 400 });
+    }
+    return { after, limit };
+  }
+
+  function sendCatalogPortion(res, payload) {
+    const body = JSON.stringify(payload);
+    if (Buffer.byteLength(body, 'utf8') > 256 * 1024) {
+      return res.status(413).json({ ok: false, error: 'CATALOG_PORTION_TOO_LARGE' });
+    }
+    return res.type('application/json').send(body);
+  }
+
   router.post('/admin/catalog/product-targets', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -1482,6 +1500,19 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         .filter((id) => Number.isFinite(id) && id > 0))];
       if (categoryIds.length > 100) {
         return res.status(400).json({ ok: false, error: 'TOO_MANY_CATEGORIES' });
+      }
+      const page = catalogPage(req.body);
+      if (page) {
+        const [rows] = await db.query(
+          `SELECT p.id FROM prod_products p WHERE p.tenant_id=? AND p.id>?
+           ${categoryIds.length ? 'AND EXISTS (SELECT 1 FROM prod_product_categories pc WHERE pc.tenant_id=p.tenant_id AND pc.product_id=p.id AND pc.category_id IN (?))' : ''}
+           ORDER BY p.id ASC LIMIT ?`,
+          [tenantId, page.after, ...(categoryIds.length ? [categoryIds] : []), page.limit + 1]
+        );
+        const ids = rows.slice(0, page.limit).map(row => Number(row.id));
+        return sendCatalogPortion(res, { ok: true, data: { product_ids: ids,
+          next_cursor: ids.at(-1) ?? page.after, has_more: rows.length > page.limit,
+          tenant_id: tenantId, store_id: storeId, snapshot_consistent: false } });
       }
 
       let rows;
@@ -1520,7 +1551,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       });
     } catch (e) {
       console.error(e);
-      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      return res.status(e.status || 500).json({ ok: false, error: e.status ? e.message : 'DB_ERROR' });
     }
   });
 
@@ -1562,11 +1593,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
       const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
       if (!ids.length) return res.json({ ok: true, data: {}, versions: {} });
-      if (ids.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+      const offlineExtra = req.body?.offline_extra === true;
+      if (ids.length > (offlineExtra ? 25 : 100)) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+      ids.sort((a, b) => a - b);
       if (typeof buildAdminFullProductPassports !== 'function') {
         return res.status(503).json({ ok: false, error: 'PASSPORT_BUILDER_UNAVAILABLE' });
       }
       const payload = await buildAdminFullProductPassports({ tenantId, storeId, productIds: ids });
+      if (offlineExtra) return sendCatalogPortion(res, payload);
       return res.json(payload);
     } catch (e) {
       console.error(e);
@@ -1580,6 +1614,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
   router.get('/admin/catalog/combos', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const page = catalogPage(req.query);
+      if (page && !(await hasCatalogStoreScope(tenantId, helpers.getStoreId(req)))) {
+        return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      }
       const requestedIds = [...new Set(String(req.query.ids || '').split(',')
         .map((value) => Number(value)).filter((id) => Number.isInteger(id) && id > 0))];
       const requestedBlockIds = [...new Set(String(req.query.block_ids || '').split(',')
@@ -1589,19 +1627,23 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       if (requestedIds.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY_IDS' });
       if (requestedBlockIds.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY_BLOCK_IDS' });
       if (categoryCodes.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY_CATEGORY_CODES' });
+      const blocksOnly = req.query.definitions_only === 'blocks' && requestedBlockIds.length > 0;
       const filterSql = requestedIds.length
         ? ` AND c.id IN (${requestedIds.map(() => '?').join(',')})`
         : (requestedBlockIds.length
           ? ` AND EXISTS (SELECT 1 FROM prod_combo_set_blocks requested_sb WHERE requested_sb.tenant_id=c.tenant_id AND requested_sb.combo_id=c.id AND requested_sb.block_id IN (${requestedBlockIds.map(() => '?').join(',')}))`
           : (categoryCodes.length ? ` AND c.category_code IN (${categoryCodes.map(() => '?').join(',')})` : ''));
-      const [combos] = await db.query(
+      let [combos] = await db.query(
         `SELECT c.id, c.tenant_id, c.title, c.description, c.discount_percent, c.category_code,
                 c.image_url, c.is_active, c.sort_order, c.created_at, c.updated_at
            FROM prod_combos c
-          WHERE c.tenant_id=?${filterSql}
-          ORDER BY c.sort_order ASC, c.id ASC`,
-        [tenantId, ...(requestedIds.length ? requestedIds : (requestedBlockIds.length ? requestedBlockIds : categoryCodes))]
+          WHERE c.tenant_id=?${filterSql}${blocksOnly ? ' AND 1=0' : ''}${page ? ' AND c.id>?' : ''}
+          ORDER BY ${page ? 'c.id ASC LIMIT ?' : 'c.sort_order ASC, c.id ASC'}`,
+        [tenantId, ...(requestedIds.length ? requestedIds : (requestedBlockIds.length ? requestedBlockIds : categoryCodes)),
+          ...(page ? [page.after, page.limit + 1] : [])]
       );
+      const hasMore = page && combos.length > page.limit;
+      if (page) combos = combos.slice(0, page.limit);
       const comboIds = combos.map((row) => Number(row.id)).filter((id) => id > 0);
       let relations = [];
       if (comboIds.length) {
@@ -1615,9 +1657,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         );
       }
       let blockIds = [...new Set(relations.map((row) => Number(row.block_id)).filter((id) => id > 0))];
-      blockIds.push(...requestedBlockIds);
+      if (!page) blockIds.push(...requestedBlockIds);
       blockIds = [...new Set(blockIds)];
-      if (!requestedIds.length && !categoryCodes.length) {
+      if (!page && !requestedIds.length && !categoryCodes.length && !requestedBlockIds.length) {
         const [allBlockIds] = await db.query('SELECT id FROM prod_combo_blocks WHERE tenant_id=?', [tenantId]);
         blockIds = allBlockIds.map((row) => Number(row.id)).filter((id) => id > 0);
       }
@@ -1655,7 +1697,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         if (!relationsByComboId.has(comboId)) relationsByComboId.set(comboId, []);
         relationsByComboId.get(comboId).push(row);
       });
-      res.json({
+      const payload = {
         ok: true,
         blocks: [...blockById.values()],
         data: combos.map((combo) => {
@@ -1666,10 +1708,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
             blocks: comboRelations.map((relation) => blockById.get(Number(relation.block_id))).filter(Boolean),
           };
         }),
-      });
+      };
+      if (page) return sendCatalogPortion(res, { ...payload, page: {
+        next_cursor: combos.at(-1)?.id ?? page.after, has_more: Boolean(hasMore), snapshot_consistent: false,
+      } });
+      return res.json(payload);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      res.status(e.status || 500).json({ ok: false, error: e.status ? e.message : 'DB_ERROR' });
     }
   });
 

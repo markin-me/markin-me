@@ -35,7 +35,7 @@ function browser() {
       removeItem: key => values.delete(key),
       setItem(key, value) {
         values.set(key, String(value));
-        for (const other of tabs) if (other !== env) other.emit('w:storage', { key, newValue: String(value) });
+        for (const other of tabs) if (other !== env && !other.delayStorageEvents) other.emit('w:storage', { key, newValue: String(value) });
       },
     };
     let generation = 0, authorized = true;
@@ -46,7 +46,13 @@ function browser() {
       reset() { authorized = false; generation++; emit('w:admin:local-context-changed', { detail: { state: 'revoked' } }); },
     };
     const document = { hidden: false, addEventListener: (type, listener) => on('d:' + type, listener) };
-    const window = { AdminLocalRepository: core, AdminAccessContext: { ok: true },
+    class MessageChannel {
+      constructor() {
+        this.port1 = { close() {}, postMessage: data => Promise.resolve().then(() => this.port2.onmessage?.({ data })) };
+        this.port2 = { close() {}, postMessage: data => Promise.resolve().then(() => this.port1.onmessage?.({ data })) };
+      }
+    }
+    const window = { AdminLocalRepository: core, AdminAccessContext: { ok: true }, MessageChannel,
       AdminIdleHydrationConfig: { maxBytes }, localStorage: storage,
       navigator: { onLine: true, locks: supported ? locks : undefined },
       crypto: { randomUUID: () => 'tab-' + (++tabId) }, location: { origin: 'https://app.test' },
@@ -114,6 +120,42 @@ test('long foreground operation vetoes hydration without a polling loop', async 
   await b.tick(1000); assert.equal(tab.requests.length, 1);
 });
 
+test('a new tab vetoes a late response before its storage event is delivered', async () => {
+  const b = browser(), tab = b.tab(); await flush();
+  tab.delayStorageEvents = true;
+  let respond;
+  tab.fetcher = () => new Promise(resolve => { respond = resolve; });
+  tab.scheduler.enqueue('late', async context => {
+    const payload = await context.requestJSON('/api/admin/example');
+    await context.commit(tab.repository, [['row', payload], ['checkpoint', { complete: false }]]);
+  });
+  await b.tick(60000);
+  const other = b.tab(); await flush();
+  respond(new Response('{"ok":true}')); await flush();
+  assert.equal(tab.requests[0].options.signal.aborted, true);
+  assert.equal(tab.writes.length, 0);
+  tab.scheduler.cancel(); other.scheduler.cancel();
+});
+
+test('activity cancels a pending repository transaction through the commit signal', async () => {
+  const b = browser(), tab = b.tab(), other = b.tab(); await flush();
+  let signal;
+  const repository = { setMany(entries, options) {
+    signal = options.signal;
+    return new Promise((resolve, reject) => signal.addEventListener('abort', () => {
+      reject(new DOMException('Transaction aborted', 'AbortError'));
+    }, { once: true }));
+  } };
+  tab.scheduler.enqueue('write', context => context.commit(repository,
+    [['row', 1], ['checkpoint', { complete: false }]]));
+  await b.tick(60000);
+  assert.ok(signal);
+  other.activity(); await flush();
+  assert.equal(signal.aborted, true);
+  assert.equal(tab.writes.length, 0);
+  tab.scheduler.cancel(); other.scheduler.cancel();
+});
+
 test('oversized body is rejected without a write or a successful checkpoint', async () => {
   const b = browser(), tab = b.tab(); await flush();
   tab.fetcher = async () => new Response(JSON.stringify({ data: 'x'.repeat(2048) }));
@@ -170,4 +212,76 @@ test('temporary server errors have bounded retries', async () => {
   const result = tab.scheduler.enqueue('retry', context => context.requestJSON('/api/admin/a'));
   await b.tick(60000); await b.tick(6000); await b.tick(12000);
   assert.equal((await result).ok, false); assert.equal(tab.requests.length, 3);
+});
+
+test('a domain guard is retained by atomic commit instead of being overwritten', async () => {
+  const b = browser(), tab = b.tab(); await flush();
+  const result = tab.scheduler.enqueue('domain-fence', context => context.commit(tab.repository,
+    [['passport', { id: 1 }], ['checkpoint', { complete: false }]], { recordCount: 1, guard: () => false }));
+  await b.tick(60000);
+  assert.equal((await result).ok, false);
+  assert.equal(tab.writes.length, 0);
+});
+
+function resourceWorker(tab, beforeCommit = () => {}) {
+  const events = [];
+  const worker = { postMessage(data, ports) {
+    events.push(data.type);
+    const port = ports[0], reply = message => port.postMessage({ ...message, operationId: data.operationId, version: data.version });
+    port.onmessage = event => {
+      events.push(event.data.type);
+      if (event.data.type === 'FETCH') { beforeCommit(); reply({ type: 'COMMIT_REQUIRED' }); }
+      if (event.data.type === 'COMMIT') reply({ ok: true, dependencies: [] });
+      if (event.data.type === 'CANCEL') reply({ ok: false, name: 'AbortError' });
+    };
+    reply({ type: 'REQUEST' });
+  } };
+  tab.window.navigator.serviceWorker = { controller: worker };
+  return { worker, events };
+}
+
+test('SW preparation waits for global idle and shares the one-request budget with JSON hydration', async () => {
+  const b = browser(), tab = b.tab(); await flush();
+  const transport = resourceWorker(tab);
+  const result = tab.scheduler.enqueue('resource', async context => {
+    await context.prepareResource(transport.worker, '/static/app.js', 'v1');
+    await context.requestJSON('/api/admin/must-not-run');
+  });
+  await b.tick(59999); assert.equal(transport.events.length, 0);
+  await b.tick(1);
+  assert.deepEqual(transport.events, ['PREPARE_OFFLINE_RESOURCE', 'FETCH', 'COMMIT']);
+  assert.equal((await result).ok, false); assert.equal(tab.requests.length, 0);
+});
+
+test('activity in another tab vetoes the SW commit even before its storage event arrives', async () => {
+  const b = browser(), first = b.tab(), other = b.tab(); await flush();
+  first.delayStorageEvents = true;
+  const transport = resourceWorker(first, () => other.activity());
+  const result = first.scheduler.enqueue('resource', context => context.prepareResource(transport.worker, '/static/app.js', 'v1'));
+  await b.tick(60000); await flush();
+  assert.ok(transport.events.includes('FETCH')); assert.ok(transport.events.includes('CANCEL'));
+  assert.equal(transport.events.includes('COMMIT'), false);
+  first.scheduler.cancel(); assert.equal((await result).ok, false);
+});
+
+test('revocation after SW fetch cancels the operation and cannot confirm its cache checkpoint', async () => {
+  const b = browser(), tab = b.tab(); await flush();
+  const transport = resourceWorker(tab, () => tab.core.reset());
+  const result = tab.scheduler.enqueue('resource', context => context.prepareResource(transport.worker, '/static/app.js', 'v1'));
+  await b.tick(60000); await flush();
+  assert.equal((await result).ok, false);
+  assert.ok(transport.events.includes('CANCEL')); assert.equal(transport.events.includes('COMMIT'), false);
+});
+
+test('an orphan worker I/O lock also prevents overlapping JSON hydration in another tab', async () => {
+  const b = browser(), tab = b.tab(); await flush();
+  let release;
+  const worker = tab.window.navigator.locks.request('admin:idle-resource:v1', async () => {
+    await new Promise(resolve => { release = resolve; });
+  });
+  await flush();
+  const result = tab.scheduler.enqueue('data', context => context.requestJSON('/api/admin/example'));
+  await b.tick(60000); assert.equal(tab.requests.length, 0);
+  release(); await worker; await b.tick(3000);
+  assert.equal((await result).ok, true); assert.equal(tab.requests.length, 1);
 });

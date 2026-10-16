@@ -302,6 +302,8 @@
   }
 
   async function request(url, options) {
+    const endOperation = window.AdminIdleHydration?.beginOperation();
+    try {
     const access = window.AdminLocalRepository?.capture();
     if (!access?.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
     if (options?.method && String(options.method).toUpperCase() !== 'GET' && !canUseServer()) {
@@ -320,6 +322,7 @@
       throw error;
     }
     return payload;
+    } finally { endOperation?.(); }
   }
 
   function normalizeUserDraft(user) {

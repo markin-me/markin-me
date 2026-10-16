@@ -5975,6 +5975,8 @@
   async function uploadChatImageAttachment(clientId, file) {
     const key = normalizeClientIdKey(clientId);
     if (!key || !file) return null;
+    const endOperation = window.AdminIdleHydration?.beginOperation();
+    try {
     const uploadFile = await convertImageFileToWebpForChatUpload(file);
     const fd = new FormData();
     fd.append("client_id", String(key));
@@ -5989,6 +5991,7 @@
     });
     const attachment = json?.data?.attachment;
     return isImageAttachment(attachment) ? attachment : null;
+    } finally { endOperation?.(); }
   }
 
   async function waitThreadRemoteUpdate(

@@ -149,22 +149,35 @@
     return store.delete(key);
   });
 
-  function requestMany(mode, operations) {
+  function requestMany(mode, operations, options = {}) {
     return openDb().then((db) => new Promise((resolve, reject) => {
       let transaction;
       let settled = false;
+      const assertCurrent = () => {
+        if (options.signal?.aborted) throw new DOMException('Local write interrupted', 'AbortError');
+        if (options.guard && !options.guard()) throw new Error('LOCAL_SCOPE_CHANGED');
+      };
+      const onAbort = () => { try { transaction?.abort(); } catch (_) {} };
+      const detach = () => options.signal?.removeEventListener('abort', onAbort);
       const results = new Array(operations.length);
       const fail = (error) => {
         if (settled) return;
         settled = true;
+        detach();
         reject(error);
       };
       try {
+        assertCurrent();
         transaction = db.transaction(STORE_NAME, mode);
+        options.signal?.addEventListener('abort', onAbort, { once: true });
         const store = transaction.objectStore(STORE_NAME);
         operations.forEach((operation, index) => {
+          assertCurrent();
           const request = operation(store);
-          request.onsuccess = () => { results[index] = request.result; };
+          request.onsuccess = () => {
+            try { assertCurrent(); results[index] = request.result; }
+            catch (error) { onAbort(); fail(error); }
+          };
           request.onerror = () => fail(request.error || new Error("INDEXEDDB_OPERATION_FAILED"));
         });
       } catch (error) {
@@ -175,6 +188,7 @@
       transaction.oncomplete = () => {
         if (settled) return;
         settled = true;
+        detach();
         resolve(results);
       };
       transaction.onerror = () => fail(transaction.error || new Error("INDEXEDDB_TRANSACTION_FAILED"));
@@ -412,7 +426,8 @@
             throw new Error('LOCAL_SCOPE_CHANGED');
           }
           return store.put(entry);
-        }));
+        }), { signal: options.signal, guard: () => (!writeOptions.guard || writeOptions.guard())
+          && (!options.guard || options.guard()) });
         try { await write(); }
         catch (error) {
           if (options.noQuotaCleanup) throw error;

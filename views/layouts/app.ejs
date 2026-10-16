@@ -17,8 +17,6 @@
     #adminLocalAccessFailure { display: none; }
     html[data-local-access="denied"] #adminLocalAccessFailure,
     html[data-local-access="unavailable"] #adminLocalAccessFailure { display: block; }
-    html[data-local-access="denied"] #adminLocalAccessChecking,
-    html[data-local-access="unavailable"] #adminLocalAccessChecking { display: none; }
   </style>
   <% if (typeof neutralShell !== 'undefined' && neutralShell === true) { %>
     <script>window.__ADMIN_NEUTRAL_SHELL__ = true;</script>
@@ -301,25 +299,19 @@
   data-app-version="<%= appVersion || '' %>"
 >
   <main id="adminLocalAccessState" role="status" aria-live="polite">
-    <% if (typeof neutralShell !== 'undefined' && neutralShell === true) { %>
-      <p id="adminLocalAccessChecking">Личные данные скрыты до подтверждения локального доступа.</p>
-    <% } else { %>
-    <p id="adminLocalAccessChecking">Загрузка…</p>
-    <% } %>
     <div id="adminLocalAccessFailure">
       <h1>Доступ к приложению</h1>
       <p id="adminLocalAccessMessage"></p>
       <button type="button" onclick="window.location.reload()">Повторить проверку</button>
       <a href="/login">Войти</a>
-    </div>
     <% if (typeof neutralShell !== 'undefined' && neutralShell === true) { %>
-      <p>Нейтральная оболочка. Без подтверждённого контекста личные данные недоступны.</p>
       <nav aria-label="Офлайн-навигация">
         <% Object.entries(adminDashboardTitles).forEach(function ([route, title]) { %>
           <p><a href="<%= route %>"><%= title %></a></p>
         <% }) %>
       </nav>
     <% } %>
+    </div>
   </main>
   <%- include('../partials/header', { appActivePage: appActivePage, adminNavItems: adminNavItems }) %>
 

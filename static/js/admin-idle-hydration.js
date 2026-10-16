@@ -12,6 +12,8 @@
     pauseMs: Math.max(2000, setting('pauseMs', 3000)),
     timeoutMs: Math.min(15000, Math.max(1000, setting('timeoutMs', 8000))),
     maxBytes: Math.min(512 * 1024, Math.max(1024, setting('maxBytes', 256 * 1024))),
+    // Public JS bundles are larger than JSON data portions. Still one request/turn.
+    resourceMaxBytes: Math.min(4 * 1024 * 1024, Math.max(1024, setting('resourceMaxBytes', 4 * 1024 * 1024))),
     maxRecords: Math.min(25, Math.max(1, Math.floor(setting('maxRecords', 25)))),
     maxTasks: Math.min(128, Math.max(1, Math.floor(setting('maxTasks', 128)))),
     maxRetries: Math.min(2, Math.max(0, Math.floor(setting('maxRetries', 2)))),
@@ -60,20 +62,33 @@
       dimensions: { organizationalUnit: { type: 'store', id: window.localStorage.getItem('activeStoreId') || null } } }).namespace;
   }
   function eligible() {
-    return enabled && live && coordinationReady && !stopped && !frozen && !pointerHeld && !touchHeld && !storagePaused && !document.hidden
+    return enabled && live && coordinationReady && !stopped && !frozen && !operations.size && !pointerHeld && !touchHeld && !storagePaused && !document.hidden
       && !authPaused && window.navigator.onLine !== false && window.AdminAccessContext?.ok === true
       && !window.AdminAccessContext.offline && core?.isActive();
   }
+  function refreshTabs() {
+    // Storage events/BroadcastChannel are asynchronous. Inspect shared state at
+    // the request/commit boundary as well, including tabs not announced yet.
+    for (let i = 0; i < window.localStorage.length; i++) knowTab(window.localStorage.key(i));
+    if (!enabled) throw new Error('IDLE_COORDINATION_UNAVAILABLE');
+  }
   async function idleUntil() {
+    refreshTabs();
     const state = await locks.query();
     const living = new Set(state.held.map(lock => lock.name));
+    // A terminated client may have released the scheduler lock while its SW is
+    // still aborting I/O. Do not overlap even a JSON portion with that request.
+    if (living.has('admin:idle-resource:v1')) return Date.now() + config.pauseMs;
     let until = Math.max(quietUntil, nextTurn);
     for (const key of tabKeys) {
       // A live tab holds its lifetime lock. Frozen busy tabs remain a veto;
       // crashed/closed tabs cannot leave permanent busy markers behind.
       const record = JSON.parse(window.localStorage.getItem(key));
       if (!record) { tabKeys.delete(key); continue; }
-      if (!Number.isFinite(record.quietUntil)) throw new Error('IDLE_COORDINATION_INVALID');
+      if (!Number.isFinite(record.quietUntil) || typeof record.busy !== 'boolean') throw new Error('IDLE_COORDINATION_INVALID');
+      if (key !== tabKey && !living.has(key) && record.quietUntil <= Date.now()) {
+        tabKeys.delete(key); window.localStorage.removeItem(key); continue;
+      }
       if (record.busy && living.has(key)) return Infinity;
       until = Math.max(until, record.quietUntil);
     }
@@ -113,12 +128,17 @@
         const controller = new AbortController();
         active = { controller, task };
         const assertCurrent = () => {
+          refreshTabs();
           if (controller.signal.aborted || !eligible() || !access.isCurrent() || task.scope !== scopeKey()
               || quietUntil > Date.now() || (task.guard && !task.guard())) {
+            controller.abort();
             throw new DOMException('Hydration interrupted', 'AbortError');
           }
           for (const key of tabKeys) {
-            if (JSON.parse(window.localStorage.getItem(key))?.quietUntil > Date.now()) {
+            const record = JSON.parse(window.localStorage.getItem(key));
+            if (record && (!Number.isFinite(record.quietUntil) || typeof record.busy !== 'boolean'
+                || record.busy || record.quietUntil > Date.now())) {
+              controller.abort();
               throw new DOMException('Activity in another tab', 'AbortError');
             }
           }
@@ -127,15 +147,73 @@
         const deadline = window.setTimeout(() => controller.abort('timeout'), config.timeoutMs);
         const context = {
           signal: controller.signal, config, assertCurrent,
+          async prepareResource(worker, url, version, options = {}) {
+            assertCurrent();
+            if (++requests > 1) throw new Error('HYDRATION_ONE_REQUEST_PER_TURN');
+            const operationId = window.crypto.randomUUID();
+            return new Promise((resolve, reject) => {
+              const channel = new window.MessageChannel();
+              let settled = false, cancelDeadline;
+              const finish = (error, value) => {
+                if (settled) return;
+                settled = true;
+                window.clearTimeout(cancelDeadline);
+                controller.signal.removeEventListener('abort', cancelResource);
+                options.signal?.removeEventListener('abort', revoke);
+                channel.port1.close();
+                if (error) reject(error); else resolve(value);
+              };
+              const cancelResource = () => {
+                channel.port1.postMessage({ type: 'CANCEL', operationId });
+                // Do not release the origin lock until SW acknowledges cancellation.
+                // A lost worker/port disables further background work in this tab.
+                cancelDeadline = window.setTimeout(() => {
+                  enabled = false;
+                  cancel('resource-worker-unresponsive');
+                  finish(new Error('RESOURCE_WORKER_UNRESPONSIVE'));
+                }, 2000);
+              };
+              const revoke = () => controller.abort();
+              channel.port1.onmessage = event => {
+                const message = event.data;
+                if (message?.operationId !== operationId || message.version !== version) {
+                  controller.abort(); return;
+                }
+                if (message.type === 'REQUEST' || message.type === 'COMMIT_REQUIRED') {
+                  try {
+                    assertCurrent();
+                    if (window.navigator.serviceWorker.controller !== worker) throw new Error('RESOURCE_WORKER_CHANGED');
+                    channel.port1.postMessage({ type: message.type === 'REQUEST' ? 'FETCH' : 'COMMIT', operationId });
+                  } catch (_) { controller.abort(); }
+                  return;
+                }
+                if (controller.signal.aborted) return finish(new DOMException('Resource preparation interrupted', 'AbortError'));
+                if (!message.ok) {
+                  const error = new Error(message.error || 'RESOURCE_PREPARATION_FAILED');
+                  error.name = message.name || 'Error'; error.status = message.status;
+                  return finish(error);
+                }
+                try { assertCurrent(); finish(null, message); } catch (error) { finish(error); }
+              };
+              controller.signal.addEventListener('abort', cancelResource, { once: true });
+              options.signal?.addEventListener('abort', revoke, { once: true });
+              try {
+                if (options.signal?.aborted) controller.abort();
+                assertCurrent();
+                worker.postMessage({ type: 'PREPARE_OFFLINE_RESOURCE', operationId, version, url,
+                  maxBytes: config.resourceMaxBytes, timeoutMs: config.timeoutMs }, [channel.port2]);
+              } catch (error) { finish(error); }
+            });
+          },
           async requestJSON(url, options = {}) {
             assertCurrent();
             if (++requests > 1) throw new Error('HYDRATION_ONE_REQUEST_PER_TURN');
             const target = new URL(url, window.location.origin);
             if (target.origin !== window.location.origin || !target.pathname.startsWith('/api/')) throw new Error('HYDRATION_URL_INVALID');
             const { recordCount, ...fetchOptions } = options;
-            const response = await window.fetch(target.href, { ...fetchOptions, cache: 'no-store', signal: controller.signal,
+            const response = await window.fetch(target.href, { ...fetchOptions, redirect: 'error', cache: 'no-store', signal: controller.signal,
               headers: { ...getAuthHeaders(), 'x-store-id': window.localStorage.getItem('activeStoreId') || '', ...(options.headers || {}) } });
-            assertCurrent();
+            try { assertCurrent(); } catch (error) { await response.body?.cancel(); throw error; }
             if ([401, 403].includes(response.status)) {
               authPaused = true;
               const error = new Error('HYDRATION_ACCESS_DENIED'); error.status = response.status;
@@ -170,9 +248,11 @@
           },
           async commit(repository, entries, options = {}) {
             assertCurrent();
-            if (entries.length > config.maxRecords + 1) throw new Error('HYDRATION_BATCH_LIMIT');
-            await repository.setMany(entries, { ...options, lastSyncedAt: Date.now(), noQuotaCleanup: true, guard: () => {
-              try { assertCurrent(); return true; } catch (_) { return false; }
+            const { recordCount = entries.length - 1, guard, ...writeOptions } = options;
+            if (!Number.isInteger(recordCount) || recordCount < 0 || recordCount > config.maxRecords
+                || entries.length > config.maxRecords * 4 + 4) throw new Error('HYDRATION_BATCH_LIMIT');
+            await repository.setMany(entries, { ...writeOptions, signal: controller.signal, lastSyncedAt: Date.now(), noQuotaCleanup: true, guard: () => {
+              try { assertCurrent(); return !guard || guard(); } catch (_) { return false; }
             } });
             assertCurrent();
           },
@@ -245,7 +325,7 @@
       coordinationReady = true; schedule();
     }).catch(() => { enabled = false; cancel('coordination-unavailable'); });
   } catch (_) { enabled = false; return; }
-  for (const name of ['keydown', 'input', 'change', 'submit', 'wheel']) {
+  for (const name of ['keydown', 'click', 'input', 'change', 'submit', 'wheel']) {
     document.addEventListener(name, event => {
       if (event.isTrusted) { lastGestureAt = Date.now(); activity(); }
     }, { capture: true, passive: true });
@@ -282,6 +362,8 @@
   window.addEventListener('offline', () => { abort(); schedule(); });
   window.addEventListener('online', () => schedule());
   document.addEventListener('visibilitychange', () => { if (document.hidden) abort(); schedule(); });
+  window.addEventListener('popstate', activity);
+  window.addEventListener('hashchange', activity);
   document.addEventListener('freeze', () => { frozen = true; abort(); });
   document.addEventListener('resume', () => { frozen = false; schedule(); });
   window.addEventListener('pagehide', () => { stopped = true; cancel('pagehide'); releaseLifetime?.(); });

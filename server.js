@@ -606,6 +606,7 @@ if (compression) {
 // Статика: долгий кэш для изображений, короткий/по умолчанию — для остального
 app.use('/static', express.static(path.join(__dirname, 'static'), {
   setHeaders(res, filePath) {
+    res.setHeader('X-PWA-Version', SERVICE_WORKER_VERSION);
     const isImage = /\.(avif|gif|jpe?g|png|webp|svg|ico)$/i.test(filePath);
     const isVersionedStaticAsset = /\.(?:js|mjs|css|map|woff2?|ttf|otf|eot)$/i.test(filePath);
     if (isImage || isVersionedStaticAsset) {
@@ -620,7 +621,9 @@ app.use('/static', express.static(path.join(__dirname, 'static'), {
   }
 }));
 
-app.use('/static/vendor/jsqr', express.static(path.join(__dirname, 'node_modules', 'jsqr', 'dist')));
+app.use('/static/vendor/jsqr', express.static(path.join(__dirname, 'node_modules', 'jsqr', 'dist'), {
+  setHeaders(res) { res.setHeader('X-PWA-Version', SERVICE_WORKER_VERSION); }
+}));
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
   setHeaders(res) {
@@ -1353,10 +1356,8 @@ var OWNED_CACHE_PREFIXES = ['admin-static-', 'admin-pages-', 'admin-shell-v2-', 
 var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
 var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
 var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
-var NEUTRAL_SHELL_PATH = '/pwa/neutral/courier';
 var NAVIGATION_SHELL_PATH = '/pwa/neutral/navigation';
 var SHELL_ROUTES = ${JSON.stringify(adminShellRoutes)};
-var resourceLoads = new Map();
 var PUBLIC_FONT_URLS = [
   'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css',
   'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/webfonts/fa-solid-900.woff2',
@@ -1368,7 +1369,7 @@ var PUBLIC_LIBRARY_URLS = PUBLIC_FONT_URLS.concat([
   'https://unpkg.com/@geoman-io/leaflet-geoman-free@2.19.2/dist/leaflet-geoman.umd.js'
 ]);
 var DASHBOARD_PATHS = ${JSON.stringify(Object.keys(adminDashboardTitles))};
-var navigationPreparation = null;
+var preparationOperation = null;
 
 function normalizeDashboardPath(pathname) {
   return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
@@ -1376,6 +1377,7 @@ function normalizeDashboardPath(pathname) {
 
 function shouldCacheStaticResponse(response) {
   return !!response && response.ok && !response.redirected
+    && (!response.headers.get('X-PWA-Version') || response.headers.get('X-PWA-Version') === SW_VERSION)
     && String(response.headers.get('content-type') || '').toLowerCase().indexOf('text/html') === -1;
 }
 
@@ -1384,6 +1386,7 @@ function shouldCacheNeutralShell(response, pathname) {
   var contentType = String(response.headers.get('content-type') || '').toLowerCase();
   if (contentType.indexOf('text/html') === -1) return false;
   if (response.headers.get('X-PWA-Neutral-Shell') !== '1') return false;
+  if (response.headers.get('X-PWA-Version') !== SW_VERSION) return false;
   try {
     var responseUrl = new URL(response.url);
     return responseUrl.origin === self.location.origin && responseUrl.pathname === pathname;
@@ -1442,21 +1445,39 @@ async function handleChatImageFetch(request) {
   return response;
 }
 
-async function savePreparedResource(cache, url, options, validate) {
-  var abort = new AbortController();
-  var timeout = setTimeout(function () { abort.abort(); }, 15000);
-  try {
-    var response = await fetch(url, Object.assign({}, options, { signal: abort.signal }));
-    if (!validate(response)) throw new Error('OFFLINE_RESOURCE_REJECTED');
-    await cache.put(url, response);
-  } finally {
-    clearTimeout(timeout);
+// Only public, allowlisted resources. No cookies, bearer tokens, or redirects.
+async function fetchPreparedResource(url, signal, maxBytes, validate) {
+  var response = await fetch(url, { credentials: 'omit', cache: 'no-store', mode: 'cors', redirect: 'error', signal: signal });
+  if (!response.ok) {
+    await response.body?.cancel();
+    var error = new Error('OFFLINE_RESOURCE_HTTP'); error.status = response.status; throw error;
   }
+  var ownResource = new URL(url, self.location.origin).origin === self.location.origin;
+  if (response.status !== 200 || (ownResource && response.headers.get('X-PWA-Version') !== SW_VERSION)
+      || !validate(response) || Number(response.headers.get('Content-Length') || 0) > maxBytes || !response.body?.getReader) {
+    await response.body?.cancel(); throw new Error('OFFLINE_RESOURCE_REJECTED_OR_TOO_LARGE');
+  }
+  var reader = response.body.getReader(), chunks = [], bytes = 0;
+  try {
+    while (true) {
+      var chunk = await reader.read();
+      if (signal.aborted) throw new DOMException('Resource cancelled', 'AbortError');
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > maxBytes) throw new Error('OFFLINE_RESOURCE_TOO_LARGE');
+      chunks.push(chunk.value);
+    }
+  } catch (error) { await reader.cancel().catch(function () {}); throw error; }
+  if (!bytes) throw new Error('OFFLINE_RESOURCE_REJECTED_OR_TOO_LARGE');
+  var headers = new Headers(response.headers);
+  // fetch exposes decoded bytes, not the original compressed wire representation.
+  headers.delete('Content-Encoding'); headers.delete('Content-Length');
+  return new Response(new Blob(chunks), { status: 200, headers: headers });
 }
 
 function shellResourceUrls(response) {
   var urls = JSON.parse(response.headers.get('X-PWA-Resources') || 'null');
-  if (!Array.isArray(urls) || !urls.length) throw new Error('OFFLINE_RESOURCE_MANIFEST_REQUIRED');
+  if (!Array.isArray(urls) || !urls.length || urls.length > 256) throw new Error('OFFLINE_RESOURCE_MANIFEST_REQUIRED');
   return urls.map(function (value) {
     var url = new URL(value, self.location.origin);
     if (!(url.origin === self.location.origin && url.pathname.indexOf('/static/') === 0)
@@ -1465,48 +1486,46 @@ function shellResourceUrls(response) {
   });
 }
 
-async function cacheStaticAssets(urls) {
-  var cache = await caches.open(STATIC_CACHE);
-  await Promise.all((urls || PRECACHE_URLS).map(async function (value) {
-    var url = new URL(value, self.location.origin).href;
-    if (shouldCacheStaticResponse(await cache.match(url))) return;
-    if (!resourceLoads.has(url)) {
-      var load = savePreparedResource(cache, url, { credentials: 'omit', cache: 'reload', mode: 'cors' }, shouldCacheStaticResponse);
-      resourceLoads.set(url, load);
-      load.finally(function () { if (resourceLoads.get(url) === load) resourceLoads.delete(url); }).catch(function () {});
+function publicShellPath(url) {
+  return url.origin === self.location.origin && !url.search && (url.pathname === NAVIGATION_SHELL_PATH
+    || SHELL_ROUTES.some(function (entry) { return entry.shell === url.pathname; }));
+}
+function savedResourceValid(response, shell) {
+  if (!shell) return shouldCacheStaticResponse(response);
+  if (!response || response.status !== 200 || response.headers.get('X-PWA-Neutral-Shell') !== '1'
+      || response.headers.get('X-PWA-Version') !== SW_VERSION
+      || String(response.headers.get('content-type') || '').indexOf('text/html') === -1) return false;
+  return true;
+}
+function resourceBlockKey(url) {
+  return new URL('/pwa/neutral/resource-blocked?resource=' + encodeURIComponent(url), self.location.origin).href;
+}
+// Cache contents are the durable checkpoint. Planning does no network I/O.
+async function offlineResourcePlan(currentPath) {
+  var current = SHELL_ROUTES.find(function (entry) { return entry.route === currentPath; });
+  var urls = new Set((current ? [current.shell] : []).concat(PRECACHE_URLS, PUBLIC_FONT_URLS, [NAVIGATION_SHELL_PATH],
+    SHELL_ROUTES.map(function (entry) { return entry.shell; })).map(function (url) { return new URL(url, self.location.origin).href; }));
+  var shells = await caches.open(SHELL_CACHE), resources = await caches.open(STATIC_CACHE);
+  var invalidShells = new Set();
+  for (var entry of SHELL_ROUTES) {
+    var saved = await shells.match(entry.shell);
+    if (savedResourceValid(saved, true)) {
+      try { shellResourceUrls(saved).forEach(function (url) { urls.add(url); }); }
+      catch (_) { invalidShells.add(new URL(entry.shell, self.location.origin).href); }
     }
-    await resourceLoads.get(url);
-  }));
-}
-
-async function warmNeutralShell(pathname) {
-  var cache = await caches.open(SHELL_CACHE);
-  var cached = await cache.match(pathname);
-  if (!cached || !cached.ok || cached.headers.get('X-PWA-Neutral-Shell') !== '1') {
-    await savePreparedResource(cache, pathname, { credentials: 'omit', cache: 'no-store' }, function (response) {
-      return shouldCacheNeutralShell(response, pathname);
-    });
-    cached = await cache.match(pathname);
   }
-  if (pathname !== NAVIGATION_SHELL_PATH) await cacheStaticAssets(shellResourceUrls(cached));
-}
-
-async function warmCourierShell() {
-  try {
-    await warmNeutralShell(NEUTRAL_SHELL_PATH);
-  } catch (err) {
-    return null;
+  var missing = [];
+  for (var url of urls) {
+    var shell = publicShellPath(new URL(url));
+    if (!(await resources.match(resourceBlockKey(url)))
+        && (invalidShells.has(url) || !savedResourceValid(await (shell ? shells : resources).match(url), shell))) missing.push(url);
   }
-  return null;
-}
-
-async function warmPublicFonts() {
-  await cacheStaticAssets(PUBLIC_FONT_URLS);
+  return { allowed: urls, missing: missing };
 }
 
 async function dashboardShellReady(cache, pathname) {
   var shell = await cache.match(pathname);
-  if (!shell || shell.headers.get('X-PWA-Neutral-Shell') !== '1') return null;
+  if (!savedResourceValid(shell, true)) return null;
   var resources = await caches.open(STATIC_CACHE);
   var saved = await Promise.all(shellResourceUrls(shell).map(async function (url) {
     return shouldCacheStaticResponse(await resources.match(url));
@@ -1514,37 +1533,106 @@ async function dashboardShellReady(cache, pathname) {
   return saved.every(Boolean) ? shell : null;
 }
 
-async function prepareOfflineNavigation() {
-  if (navigationPreparation) return navigationPreparation;
-  navigationPreparation = (async function () {
-    await Promise.all([cacheStaticAssets(), warmNeutralShell(NAVIGATION_SHELL_PATH),
-      ...SHELL_ROUTES.map(function (entry) { return warmNeutralShell(entry.shell); }),
-      warmPublicFonts().catch(function () { console.warn('OFFLINE_PUBLIC_FONTS_UNAVAILABLE'); })]);
-    var resources = await caches.open(STATIC_CACHE);
-    var shells = await caches.open(SHELL_CACHE);
-    var saved = await Promise.all(PRECACHE_URLS.map(async function (url) {
-      return shouldCacheStaticResponse(await resources.match(url));
-    }));
-    var navigation = await shells.match(NAVIGATION_SHELL_PATH);
-    var prepared = await Promise.all(SHELL_ROUTES.map(function (entry) { return dashboardShellReady(shells, entry.shell); }));
-    if (saved.some(function (ok) { return !ok; }) || prepared.some(function (shell) { return !shell; })
-        || navigation?.headers.get('X-PWA-Neutral-Shell') !== '1') throw new Error('OFFLINE_RESOURCES_INCOMPLETE');
-  })();
-  try { await navigationPreparation; } finally { navigationPreparation = null; }
-}
-
 self.addEventListener('message', function (event) {
-  if (event.data?.type !== 'PREPARE_OFFLINE_NAVIGATION' || !event.ports?.[0]) return;
-  var port = event.ports[0];
-  event.waitUntil((async function () {
+  var data = event.data;
+  if (!['OFFLINE_RESOURCE_PLAN', 'PREPARE_OFFLINE_RESOURCE'].includes(data?.type) || !event.ports?.[0]) return;
+  var port = event.ports[0], operation = null, timer, timedOut = false;
+  function reply(message) { port.postMessage(Object.assign({ version: SW_VERSION, operationId: data.operationId }, message)); }
+  // Install cancellation before any asynchronous cache lookup or fetch.
+  if (data.type === 'PREPARE_OFFLINE_RESOURCE') {
+    if (preparationOperation) { reply({ ok: false, error: 'OFFLINE_RESOURCE_BUSY', status: 503 }); port.close(); return; }
+    operation = { id: data.operationId, controller: new AbortController(), permit: null };
+    preparationOperation = operation;
+    port.onmessage = function (message) {
+      if (message.data?.operationId !== operation.id) return;
+      if (message.data.type === 'CANCEL') operation.controller.abort();
+      else if (operation.permit && message.data.type === operation.permit.type) operation.permit.resolve();
+    };
+    port.start();
+    timer = setTimeout(function () { timedOut = true; operation.controller.abort(); }, Math.min(15000, Math.max(1000, Number(data.timeoutMs) || 8000)));
+  }
+  async function run() {
     try {
       var source = new URL(event.source.url);
       if (source.origin !== self.location.origin || DASHBOARD_PATHS.indexOf(normalizeDashboardPath(source.pathname)) === -1) throw new Error('INVALID_NAVIGATION_CLIENT');
-      // These are public resources only, never a proof of identity or local access.
-      await prepareOfflineNavigation();
-      port.postMessage({ ok: true, version: SW_VERSION });
+      if (data.version !== SW_VERSION) throw new Error('OFFLINE_WORKER_VERSION_CHANGED');
+      var plan = await offlineResourcePlan(normalizeDashboardPath(source.pathname));
+      if (data.type === 'OFFLINE_RESOURCE_PLAN') {
+        reply({ ok: true, urls: plan.missing, supported: !!self.navigator?.locks?.request }); return;
+      }
+      var signal = operation.controller.signal;
+      function assertCurrent() {
+        if (signal.aborted || preparationOperation !== operation) throw new DOMException('Resource cancelled', 'AbortError');
+      }
+      async function permission(type, expected) {
+        assertCurrent();
+        await new Promise(function (resolve, reject) {
+          var aborted = function () { reject(new DOMException('Resource cancelled', 'AbortError')); };
+          operation.permit = { type: expected, resolve: function () { signal.removeEventListener('abort', aborted); resolve(); } };
+          signal.addEventListener('abort', aborted, { once: true });
+          reply({ type: type });
+        });
+        operation.permit = null;
+        assertCurrent();
+      }
+      var url = new URL(data.url, self.location.origin);
+      if (!plan.allowed.has(url.href) || typeof operation.id !== 'string' || operation.id.length > 100) throw new Error('OFFLINE_RESOURCE_NOT_ALLOWED');
+      var shell = publicShellPath(url);
+      var cache = await caches.open(shell ? SHELL_CACHE : STATIC_CACHE);
+      var response = await cache.match(url.href);
+      if (await (await caches.open(STATIC_CACHE)).match(resourceBlockKey(url.href))) throw new Error('OFFLINE_RESOURCE_BLOCKED');
+      if (shell && url.pathname !== NAVIGATION_SHELL_PATH && savedResourceValid(response, true)) {
+        try { shellResourceUrls(response); } catch (_) { response = null; }
+      }
+      if (!savedResourceValid(response, shell)) {
+        // Fresh permission from the current scheduler turn before BOTH boundaries.
+        await permission('REQUEST', 'FETCH');
+        try {
+          response = await fetchPreparedResource(url.href, signal,
+            Math.min(4 * 1024 * 1024, Math.max(1024, Number(data.maxBytes) || 4 * 1024 * 1024)),
+            shell ? function (value) { return shouldCacheNeutralShell(value, url.pathname); } : shouldCacheStaticResponse);
+        } catch (error) {
+          assertCurrent();
+          if (/OFFLINE_RESOURCE_(TOO_LARGE|REJECTED_OR_TOO_LARGE)/.test(error.message)) {
+            // Persist a version-local refusal, not a successful resource/checkpoint.
+            await (await caches.open(STATIC_CACHE)).put(resourceBlockKey(url.href), new Response('resource-blocked'));
+          }
+          throw error;
+        }
+        assertCurrent();
+        if (shell && url.pathname !== NAVIGATION_SHELL_PATH) shellResourceUrls(response);
+        await permission('COMMIT_REQUIRED', 'COMMIT');
+        assertCurrent();
+        await cache.put(url.href, response);
+        // CacheStorage has no transaction abort. A completed public put remains
+        // a valid resource even if cancellation arrives during/after the write.
+        assertCurrent();
+      }
+      assertCurrent();
+      reply({ ok: true, dependencies: shell && url.pathname !== NAVIGATION_SHELL_PATH ? shellResourceUrls(response) : [] });
     } catch (err) {
-      port.postMessage({ ok: false, version: SW_VERSION, error: 'OFFLINE_PREPARATION_FAILED' });
+      reply({ ok: false, error: timedOut ? 'OFFLINE_RESOURCE_TIMEOUT' : err.message,
+        name: timedOut ? 'TimeoutError' : err.name, status: timedOut ? 504 : err.status });
+    } finally {
+      clearTimeout(timer);
+      if (operation && preparationOperation === operation) preparationOperation = null;
+      port.close();
+    }
+  }
+  // Also serialize across old/new worker versions if a client disappears while
+  // its worker is still alive. This is an I/O mutex, not another idle scheduler.
+  event.waitUntil((async function () {
+    if (!operation) return run();
+    try {
+      if (!self.navigator?.locks?.request) throw new Error('OFFLINE_RESOURCE_LOCK_UNAVAILABLE');
+      await self.navigator.locks.request('admin:idle-resource:v1', { ifAvailable: true }, async function (lock) {
+        if (!lock) throw new Error('OFFLINE_RESOURCE_BUSY');
+        await run();
+      });
+    } catch (error) {
+      clearTimeout(timer);
+      if (preparationOperation === operation) preparationOperation = null;
+      reply({ ok: false, error: error.message, status: error.message === 'OFFLINE_RESOURCE_BUSY' ? 503 : undefined }); port.close();
     }
   })());
 });
@@ -1581,7 +1669,7 @@ async function privateNavigation(request, url) {
       }
       if (DASHBOARD_PATHS.indexOf(pathname) !== -1) {
         var navigation = await cache.match(NAVIGATION_SHELL_PATH);
-        if (navigation && navigation.headers.get('X-PWA-Neutral-Shell') === '1') return navigation;
+        if (savedResourceValid(navigation, true)) return navigation;
       }
     } catch (cacheError) {
       console.warn('OFFLINE_NAVIGATION_CACHE_UNAVAILABLE');
@@ -1592,18 +1680,21 @@ async function privateNavigation(request, url) {
 }
 
 self.addEventListener('install', function (event) {
-  event.waitUntil(
-    Promise.all([
-      cacheStaticAssets(),
-      warmCourierShell().catch(function () {}),
-      ...SHELL_ROUTES.filter(function (entry) { return entry.shell !== NEUTRAL_SHELL_PATH; }).map(function (entry) {
-        return warmNeutralShell(entry.shell).catch(function () {});
-      }),
-      warmNeutralShell(NAVIGATION_SHELL_PATH).catch(function () {})
-    ]).then(function () {
-      return self.skipWaiting();
-    })
-  );
+  // The self-contained emergency document is the only essential installation fetch.
+  event.waitUntil((async function () {
+    var controller = new AbortController();
+    var timeout = setTimeout(function () { controller.abort(); }, 8000);
+    try {
+      var cache = await caches.open(SHELL_CACHE);
+      if (!savedResourceValid(await cache.match(NAVIGATION_SHELL_PATH), true)) {
+        var response = await fetchPreparedResource(NAVIGATION_SHELL_PATH, controller.signal, 128 * 1024,
+          function (value) { return shouldCacheNeutralShell(value, NAVIGATION_SHELL_PATH); });
+        if (!controller.signal.aborted) await cache.put(NAVIGATION_SHELL_PATH, response);
+      }
+    } catch (error) { console.warn('OFFLINE_FALLBACK_PREPARATION_FAILED'); }
+    finally { clearTimeout(timeout); }
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', function (event) {
@@ -1866,6 +1957,7 @@ app.get('/sw.js', (req, res) => {
 // A public navigation document, not a cached authenticated dashboard or session.
 app.get('/pwa/neutral/navigation', (req, res) => {
   res.setHeader('X-PWA-Neutral-Shell', '1');
+  res.setHeader('X-PWA-Version', SERVICE_WORKER_VERSION);
   res.setHeader('Cache-Control', 'no-store');
   res.render('pages/offline-navigation');
 });
@@ -1894,6 +1986,7 @@ app.get('/pwa/neutral/:section', (req, res, next) => {
     if (section === 'chat') resources.push('/static/assets/chat-wallpaper-desktop.webp?v=20260320b',
       '/static/assets/chat-wallpaper-mobile.webp?v=20260320d', '/static/assets/emoji/apple-people-atlas.webp?v=1');
     res.setHeader('X-PWA-Neutral-Shell', '1');
+    res.setHeader('X-PWA-Version', SERVICE_WORKER_VERSION);
     res.setHeader('X-PWA-Resources', JSON.stringify([...new Set(resources)]));
     res.setHeader('Cache-Control', 'no-store');
     res.type('html').send(html);

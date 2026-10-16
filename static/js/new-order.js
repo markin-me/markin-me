@@ -17241,12 +17241,6 @@
       });
       renderCheckoutEditorContent();
       const loaded = await preloadAllCategoryProducts(missingIds);
-      if (loaded && window.CatalogRepository) {
-        const roots = [...new Set(missingIds.map((categoryId) => (
-          window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId)
-        )))];
-        roots.forEach((rootId) => { void discoverNewOrderCatalogTarget(rootId).catch(() => null); });
-      }
       missingIds.forEach((categoryId) => {
         const cid = Number(categoryId || 0);
         state.checkoutCategoryLoading.delete(cid);
@@ -17344,6 +17338,13 @@
       loader: loadNewOrderCatalogPassports,
       request: (url, options) => apiJson(url, options),
       metadataLoader: refreshNewOrderCatalogMetadata,
+      workingSet: () => {
+        const rows = [...state.currentProducts, ...state.rightOrders.flatMap(order => order.form?.cartItems || [])];
+        const isCombo = row => row?.type === 'combo' || Number(row?.is_combo || 0) === 1;
+        return { productIds: rows.filter(row => !isCombo(row)).map(row => row.product_id || row.id),
+          comboIds: [...rows.filter(isCombo).map(row => row.combo_id || row.id), state.comboModal?.comboId],
+          blockIds: (state.comboModal?.combo?.blocks || []).map(row => row.id || row.block_id) };
+      },
     };
   }
 
@@ -17561,33 +17562,15 @@
     return ids;
   }
 
-  async function discoverNewOrderCatalogTarget(categoryId) {
-    const cid = Number(categoryId || 0);
-    const categoryIds = cid > 0 ? window.CatalogRepository.getDescendantCategoryIds(cid) : [];
-    const json = await apiJson("/api/admin/catalog/product-targets", {
-      method: "POST",
-      body: JSON.stringify({ category_ids: categoryIds }),
-    });
-    const data = json?.data && typeof json.data === "object" ? json.data : null;
-    const ids = [...new Set((Array.isArray(data?.product_ids) ? data.product_ids : []).map(Number).filter((id) => id > 0))];
-    const scope = window.CatalogRepository.getScope();
-    if (!data || Number(data.total) !== ids.length || Number(data.tenant_id) !== Number(scope?.tenantId) || Number(data.store_id) !== Number(scope?.storeId)) {
-      throw new Error("CATALOG_TARGET_SCOPE_MISMATCH");
-    }
-    window.CatalogRepository.setCoverageTarget(ids, { categoryId: cid > 0 ? cid : null });
-    return ids;
-  }
-
   async function refreshNewOrderCatalogMetadata(options = {}) {
     if (options.categories) {
       await loadCategoriesFromApi();
       await window.CatalogRepository.replaceCategories(state.productCategories);
     }
-    const tracked = new Set(window.CatalogRepository.getTrackedCoverageCategoryIds());
     const activeId = getActiveProductCategoryId();
-    if (activeId > 0) tracked.add(window.CatalogRepository.getRootCategoryId(activeId));
-    for (const categoryId of tracked) await discoverNewOrderCatalogTarget(categoryId);
-    hydrateNewOrderFromCatalogRepository({ categoryIds: [...tracked] });
+    const categoryIds = activeId > 0 ? getProductCategoryLoadIds(activeId) : [];
+    if (options.targets && categoryIds.length) await preloadAllCategoryProducts(categoryIds);
+    hydrateNewOrderFromCatalogRepository({ categoryIds });
     ensureValidActiveCategory();
     renderCategories();
     await renderActiveCategoryContent();
@@ -17603,9 +17586,6 @@
     if (!hasCompleteRuntimeSet && navigator.onLine) {
       const loaded = await preloadAllCategoryProducts(categoryIds.length ? categoryIds : [rootId]);
       if (!loaded) throw new Error("NEW_ORDER_WORKING_SET_FAILED");
-      if (!Array.isArray(targetIds)) {
-        void discoverNewOrderCatalogTarget(rootId).catch(() => null);
-      }
     }
     hydrateNewOrderFromCatalogRepository({ categoryIds });
     return categoryIds.some((id) => state.categoryProductsCache.has(Number(id)));
