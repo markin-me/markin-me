@@ -21,7 +21,7 @@ function createProviderOperations(db, config, core, connections, registry) {
     validateResult(payment,result);
     return core.transitionPayment({...input,status:result.status,providerPaymentId:result.providerPaymentId,
       ...(result.status === "paid" ? {capturedAmount:result.capturedAmount} : {}),
-      ...(result.confirmation ? {confirmationUrl:result.confirmation.url} : {}),
+      ...(result.confirmation ? {confirmation:result.confirmation,...(result.confirmation.type==='redirect'?{confirmationUrl:result.confirmation.url}:{})} : {}),
       expectedVersion:payment.version,source:input.source || "provider",rawMetadata:result.rawMetadata,
       metadata:{...result.rawMetadata,...input.webhookMetadata,...(input.recoveryOperationId?{recovery_operation_id:String(input.recoveryOperationId)}:{})}});
   }
@@ -68,6 +68,7 @@ function createProviderOperations(db, config, core, connections, registry) {
     } else testOnly(ctx);
     const payload={paymentId:String(payment.id),operation,amount:payment.amount,currency:payment.currency,
       ...(operation === "create" ? {returnUrl:d.returnUrl(options.checkout ? options.returnUrl : config.providerTestReturnUrl,Boolean(options.checkout && config.checkoutAllowLocalReturn && ctx.environment==='test')),capture:options.capture,
+        ...(options.confirmationType!==undefined ? {confirmationType:options.confirmationType} : {}),
         ...(options.checkout ? {description:options.description,receipt:options.receipt ?? null} : {})} : {}),
       ...(operation === "refund" ? {amount:d.amount(options.amount),currency:d.currency(options.currency),reason:options.reason ?? null,orderReturnId:options.orderReturnId ?? null,actorUserId:options.actorUserId ?? null,receipt:options.receipt ?? null} : {})};
     if (operation === "create") {

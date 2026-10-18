@@ -20,7 +20,7 @@ function paymentDto(row) {
     amount: row.amount, currency: row.currency, status: row.status,
     providerPaymentId:row.provider_payment_id,attentionRequired:row.reconciliation_state==='manual_review',
     capturedAmount: row.captured_amount, refundedAmount: row.refunded_amount,
-    confirmation: row.confirmation_url ? { type: "redirect", url: row.confirmation_url } : null,
+    confirmation: d.paymentConfirmation(row),
     createdAt: timestamp(row.created_at), updatedAt: timestamp(row.updated_at), paidAt: timestamp(row.paid_at) };
 }
 function refundDto(row) {
@@ -70,7 +70,7 @@ function createApplication(db, config) {
     connections,
     checkoutAvailability: input => checkout.availability(input),
     async checkoutPayment(input) { const row=await checkout.pay(input);return row ? paymentDto(row) : {status:"not_required",amount:"0.00",currency:input.currency,confirmation:null}; },
-    async checkoutState(input) { const row=await checkout.state(input,true);return row ? paymentDto(row) : {status:"not_started",confirmation:null}; },
+    async checkoutState(input) { const row=await checkout.state(input,input.refresh!==false);return row ? paymentDto(row) : {status:"not_started",confirmation:null}; },
     checkoutSnapshot: input => checkout.snapshot(input),
     async providerOperation(input) {
       const operation = input.operation === "refunds" ? "refund" : input.operation;

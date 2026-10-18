@@ -11,6 +11,7 @@ const REVIEW=new Set(['PAYMENT_PROVIDER_RECOVERY_EXPIRED','PAYMENT_PROVIDER_RECO
 // Scheduling owns technical metadata only. Financial writes stay in Provider Operations / Payment Core.
 function createReconciliation(db,config,core,operations,refunds) {
   let stopped=true,timer,active=Promise.resolve(),lastSuccessfulTick=null,lastErrorCode=null;
+  let lastErrorLogAt=0;
   const counters={scanned:0,attempted:0,changed:0,recovered:0,errors:0,manualReview:0,durationMs:0};
   const leaseSeconds=120;
   async function connectionClaim(payment) {
@@ -128,10 +129,17 @@ function createReconciliation(db,config,core,operations,refunds) {
     const failed=results.find(result=>result.status==='rejected');if(failed)throw failed.reason;
     if(config.refundRecoveryEnabled)await refunds.tick(()=>stopped);
     lastSuccessfulTick=new Date().toISOString();
-    console.info(JSON.stringify({operation:'payment.reconciliation.tick',scanned:rows.length,lastSuccessfulTick}));
+    if(rows.length)console.info(JSON.stringify({operation:'payment.reconciliation.tick',scanned:rows.length,lastSuccessfulTick}));
   }
   function schedule(){if(stopped)return;timer=setTimeout(()=>{
-    active=tick().then(()=>{lastErrorCode=null;}).catch(error=>{lastErrorCode=safeCode(error);console.error(JSON.stringify({operation:'payment.reconciliation.tick',result:'worker_unavailable',causeCode:lastErrorCode}));}).finally(schedule);
+    active=tick().then(()=>{lastErrorCode=null;}).catch(error=>{
+      const code=safeCode(error),now=Date.now();
+      if(code!==lastErrorCode || now-lastErrorLogAt>=60000){
+        console.error(JSON.stringify({operation:'payment.reconciliation.tick',result:'worker_unavailable',causeCode:code}));
+        lastErrorLogAt=now;
+      }
+      lastErrorCode=code;
+    }).finally(schedule);
   },config.reconcilePollMs+Math.floor(Math.random()*1000));timer.unref();}
   async function stats() {
     const [payments]=await db.query(`SELECT environment,reconciliation_state,COUNT(*) AS count,

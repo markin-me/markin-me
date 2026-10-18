@@ -325,6 +325,15 @@
     var nextStatusId = Number(config.nextStatusId || 0);
     var disabledAttr = canCycle ? "" : " disabled";
     var nextStatusAttr = canCycle && nextStatusId > 0 ? ' data-next-status-id="' + escapeHtml(nextStatusId) + '"' : "";
+    if(config.compact) {
+      var sync=config.syncState;
+      var currentCode=String(config.currentCode || '').toLowerCase();
+      var terminal=currentCode==='delivered'?'delivered':(['canceled','cancelled'].includes(currentCode)?'canceled':'');
+      var label=sync?sync.label+(canCycle?' · Следующий этап: '+nextTitle:''):(canCycle?'Перейти на следующий этап: '+nextTitle:'Финальный этап: '+currentTitle);
+      var icon=sync && sync.mode!=='saved'?(sync.mode==='syncing'?'fa-spinner fa-spin':'fa-circle-exclamation'):(terminal==='canceled'?'fa-xmark':terminal==='delivered'?'fa-check':sync?'fa-check':'fa-arrow-right');
+      return '<button class="order-stage-btn order-stage-btn--arrow'+(canCycle?'':' is-static')+(sync?' is-status-'+escapeHtml(sync.mode):'')+(terminal && (!sync || sync.mode==='saved')?' is-final-'+terminal:'')+'" type="button" data-action="order-row-status-next" data-order-id="'+escapeHtml(orderId)+'"'+nextStatusAttr+
+        ' data-stage-tooltip="'+escapeHtml(label)+'" aria-label="'+escapeHtml(label)+'"'+disabledAttr+'><i class="fas '+icon+'" aria-hidden="true"></i></button>';
+    }
     return '' +
       '<button class="order-stage-btn' + (canCycle ? '' : ' is-static') + '"' +
         ' type="button"' +
@@ -399,10 +408,96 @@
       '</div>';
   }
 
+  function renderOrderLogistics(order) {
+    var code=String(order.time_option_code || '').trim();
+    var scheduled=String(order.scheduled_at || '');
+    var date=scheduled.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    var time=scheduled.match(/[T ](\d{2}:\d{2})/);
+    var timing=code==='at_time'?(time?'К '+time[1]:'Ко времени')
+      :code==='on_date'?(date?'На '+date[3]+'.'+date[2]+(time?' к '+time[1]:''):'На дату')
+      :code==='asap' || code==='urgent'?'Быстрее':String(order.time_option_title || 'Быстрее');
+    var timingIcon=code==='on_date'?'fa-calendar-day':code==='at_time'?'fa-clock':'fa-bolt';
+    var methods={delivery:['fa-truck','Доставка'],pickup:['fa-store','Самовывоз'],takeaway:['fa-bag-shopping','С собой'],dine_in:['fa-utensils','В зале']};
+    var method=methods[order.method_code] || ['fa-location-dot',String(order.method_title || 'Не указан')];
+    function line(icon,text) {
+      return '<div class="order-logistics-line" aria-label="'+escapeHtml(text)+'">'+
+        '<i class="fas '+icon+'" aria-hidden="true"></i><span class="order-logistics-text">'+escapeHtml(text)+'</span></div>';
+    }
+    return '<div class="order-logistics">'+line(timingIcon,timing)+line(method[0],method[1])+'</div>';
+  }
+
+  var rowStageTooltip=null;
+  var rowPopoverPress=null;
+  document.addEventListener('pointerdown',function(event) {
+    var trigger=event.target.closest('[data-order-row-popover]');
+    rowPopoverPress=trigger?{trigger:trigger,open:trigger.parentElement.querySelector('[popover]').matches(':popover-open')}:null;
+  },true);
+  document.addEventListener('toggle',function(event) {
+    if(!event.target.matches?.('.order-row-popover-wrap > [popover]'))return;
+    event.target.parentElement.querySelector('[data-order-row-popover]').setAttribute('aria-expanded',event.newState==='open'?'true':'false');
+  },true);
+  function closeRowStageTooltip() {if(rowStageTooltip?.matches(':popover-open'))rowStageTooltip.hidePopover();}
+  function openRowPopover(popover,anchor) {
+    closeRowStageTooltip();
+    popover.showPopover();
+    var rect=anchor.getBoundingClientRect(),width=popover.offsetWidth,height=popover.offsetHeight;
+    popover.style.left=Math.max(12,Math.min(rect.left,window.innerWidth-width-12))+'px';
+    popover.style.top=Math.max(12,rect.bottom+height+8>window.innerHeight?rect.top-height-8:rect.bottom+8)+'px';
+  }
+  document.addEventListener('click',function(event) {
+    var trigger=event.target.closest('[data-order-row-popover]');
+    if(trigger) {
+      event.preventDefault();event.stopPropagation();
+      var popover=trigger.parentElement.querySelector('[popover]');
+      var wasOpen=popover.matches(':popover-open') || (rowPopoverPress?.trigger===trigger && rowPopoverPress.open);
+      rowPopoverPress=null;
+      if(wasOpen){if(popover.matches(':popover-open'))popover.hidePopover();}else openRowPopover(popover,trigger);
+      return;
+    }
+    if(event.target.closest('[data-row-status-options] [data-action="order-status-menu-select"]')) {
+      event.target.closest('[popover]').hidePopover();
+    }
+  },true);
+  function showRowStageTooltip(event) {
+    var trigger=event.target.closest('[data-stage-tooltip]');
+    if(!trigger || document.querySelector('.order-row-popover:popover-open'))return;
+    if(event.relatedTarget && trigger.contains(event.relatedTarget))return;
+    if(!rowStageTooltip){rowStageTooltip=document.createElement('div');rowStageTooltip.className='order-row-popover order-row-stage-tooltip';rowStageTooltip.setAttribute('popover','manual');rowStageTooltip.setAttribute('role','tooltip');document.body.append(rowStageTooltip);}
+    rowStageTooltip.textContent=trigger.dataset.stageTooltip;
+    openRowPopover(rowStageTooltip,trigger);
+  }
+  document.addEventListener('mouseover',showRowStageTooltip);
+  document.addEventListener('focusin',showRowStageTooltip);
+  document.addEventListener('mouseout',function(event){var trigger=event.target.closest('[data-stage-tooltip]');if(trigger && !trigger.contains(event.relatedTarget))closeRowStageTooltip();});
+  document.addEventListener('focusout',function(event){if(event.target.closest('[data-stage-tooltip]'))closeRowStageTooltip();});
+  document.addEventListener('keydown',function(event){
+    if(event.key!=='Escape')return;
+    var opened=document.querySelectorAll('.order-row-popover:popover-open');
+    if(!opened.length)return;
+    event.preventDefault();event.stopPropagation();
+    opened.forEach(function(node){node.hidePopover();});
+  },true);
+  document.addEventListener('click',closeRowStageTooltip);
+  window.addEventListener('resize',function(){document.querySelectorAll('.order-row-popover:popover-open').forEach(function(node){node.hidePopover();});});
+  document.addEventListener('scroll',function(event){if(!event.target.closest?.('.order-row-popover'))document.querySelectorAll('.order-row-popover:popover-open').forEach(function(node){node.hidePopover();});},true);
+
+  function renderOrderRowAssignment(config) {
+    var order=config.order,statuses=config.statuses || [];
+    var current=statuses.find(function(status){return Number(status.id)===Number(order.status_id);});
+    var icon=normalizeIconClass(current?.icon || 'fa-circle');
+    var title=order.status_title || current?.title || 'Статус';
+    var options=statuses.map(function(status){return '<button type="button" class="order-status-inline-option'+(Number(status.id)===Number(order.status_id)?' is-selected':'')+'" data-action="order-status-menu-select" data-order-id="'+escapeHtml(order.id)+'" data-status-id="'+escapeHtml(status.id)+'" role="option" aria-selected="'+(Number(status.id)===Number(order.status_id))+'">'+escapeHtml(status.title)+'</button>';}).join('');
+    var courier=order.assigned_user_name || order.courier_name || (order.assigned_user_id?'Курьер #'+order.assigned_user_id:'Не назначен');
+    return '<div class="order-col order-assignment"><div class="order-row-popover-wrap"><button type="button" class="order-row-text-action" data-order-row-popover aria-haspopup="listbox"'+(options?'':' disabled')+'><i class="'+escapeHtml(icon)+'" aria-hidden="true"></i><span>'+escapeHtml(title)+'</span></button><div class="order-row-popover" popover="auto" data-row-status-options role="listbox" aria-label="Статус заказа">'+options+'</div></div>'+
+      '<div class="order-row-popover-wrap"><button type="button" class="order-row-text-action" data-order-row-popover aria-haspopup="dialog"><i class="fas fa-user" aria-hidden="true"></i><span>'+escapeHtml(courier)+'</span></button><div class="order-row-popover" popover="auto" role="dialog" aria-label="Назначение курьера"><strong>Назначение курьера</strong><p>Будет реализовано позже.</p></div></div></div>';
+  }
+
   function buildOrderListRowInnerHtml(options) {
     var config = options && typeof options === "object" ? options : {};
     var orderId = Number(config.orderId || 0);
     var orderNumberText = String(config.orderNumberText || orderId || "—").trim() || "—";
+    var listOrderNumber=/^\d+$/.test(orderNumberText)?orderNumberText.padStart(3,'0').slice(-3):orderNumberText;
+    var orderNumberSuffixHtml=String(config.orderNumberSuffixHtml || '');
     var createdAtText = String(config.createdAtText || "").trim();
     var orderIdNumHtml = String(config.orderIdNumHtml || "").trim();
     var createdAtHtml = String(config.createdAtHtml || "").trim();
@@ -431,24 +526,25 @@
       '<div class="order-col order-id">' +
         '<' + orderIdHitTag + (showMultiSelect ? orderIdHitClass + orderIdHitAttrs : orderIdHitAttrs) + '>' +
           checkboxHtml +
-          (orderIdNumHtml || ('<div class="order-id-num">' + escapeHtml(orderNumberText) + '</div>')) +
+          (orderIdNumHtml || ('<div class="order-id-num">' + escapeHtml(listOrderNumber) + orderNumberSuffixHtml + '</div>')) +
           (createdAtHtml || ('<div class="order-id-time">' + escapeHtml(createdAtText) + '</div>')) +
         '</' + orderIdHitTag + '>' +
       '</div>' +
-      '<div class="order-col order-indicators">' + timeIconHtml + '</div>' +
       '<div class="order-col order-client">' +
         '<div class="order-client-name"><i class="fas fa-user"></i>' +
           (customerNameHtml || ('<span class="order-client-name-text">' + escapeHtml(customerName) + '</span>')) +
         '</div>' +
         customerPhoneHtml +
       '</div>' +
+      '<div class="order-routing"><div class="order-col order-indicators">' + (config.order?renderOrderLogistics(config.order):timeIconHtml) + '</div>' +
+      (config.order && config.statuses?renderOrderRowAssignment(config):'') + '</div>' +
       '<div class="order-col order-address">' +
         (addressLineHtml || ('<div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ' + escapeHtml(addressText) + '</div>')) +
         (addressCommentHtml || ('<div class="order-address-comment muted"><i class="far fa-comment"></i> ' + escapeHtml(addressCommentText) + '</div>')) +
       '</div>' +
       (useMobileControls
-        ? '<div class="order-col order-orders-mobile-controls"><div class="order-orders-mobile-status-row"><div class="order-col order-stage">' + stageHtml + '</div><div class="order-col order-total">' + paymentHtml + '</div></div></div>'
-        : '<div class="order-col order-stage">' + stageHtml + '</div><div class="order-col order-total">' + paymentHtml + '</div>');
+        ? '<div class="order-col order-orders-mobile-controls"><div class="order-orders-mobile-status-row"><div class="order-col order-total">' + paymentHtml + '</div><div class="order-col order-stage">' + stageHtml + '</div></div></div>'
+        : '<div class="order-col order-total">' + paymentHtml + '</div><div class="order-col order-stage">' + stageHtml + '</div>');
   }
 
   function getRefundState(order) {
@@ -877,7 +973,7 @@
     function renderPaymentSummary(order,generation) {
       var money=typeof helpers.money==='function'?helpers.money:function(value){return String(value);};
       infoEls.onlinePaymentSummary.forEach(function(host) {
-        var signature=JSON.stringify([order?.id,order?.paymentSummary,order?.status_code]);
+        var signature=JSON.stringify([order?.id,order?.paymentSummary,order?.status_code,order?.refunds]);
         if(host.dataset.paymentSummaryKey===signature)return;
         host.dataset.paymentSummaryKey=signature;
         var isCurrent=function(){return host.isConnected && host.dataset.paymentSummaryKey===signature;};
@@ -894,8 +990,17 @@
         amounts.textContent=money(summary.amount/100)+' · '+(summary.method==='online'?'Онлайн':order.payment_title || '');host.append(amounts);
         if(summary.paidAmount) {var paid=document.createElement('p');paid.textContent='Оплачено: '+money(summary.paidAmount/100);host.append(paid);}
         if(summary.refundedAmount) {var refunded=document.createElement('p');refunded.textContent='Возвращено: '+money(summary.refundedAmount/100);host.append(refunded);}
+        if(summary.refundedAmount) {var remaining=document.createElement('p');remaining.textContent='Осталось после возврата: '+money(Math.max(0,summary.paidAmount-summary.refundedAmount)/100);host.append(remaining);}
         if(summary.pendingRefundAmount){var pending=document.createElement('p');pending.textContent='Возврат в обработке: '+money(summary.pendingRefundAmount/100);host.append(pending);}
         if(summary.paidAt) {var date=document.createElement('p');date.textContent=typeof helpers.formatDateTime==='function'?helpers.formatDateTime(summary.paidAt):String(summary.paidAt);host.append(date);}
+        (order.refunds || []).forEach(function(refund) {
+          var row=document.createElement('p');
+          var state=refund.financial_state || 'manual';
+          var label=({manual:'Возврат выполнен',succeeded:'Деньги возвращены',queued:'Возврат ожидает отправки',processing:'Возврат обрабатывается',failed:'Возврат не выполнен',manual_review:'Возврат требует проверки'})[state] || state;
+          var date=typeof helpers.formatDateTime==='function'?helpers.formatDateTime(refund.created_at):String(refund.created_at || '');
+          row.textContent=(Number(refund.is_full)?'Полный возврат':'Частичный возврат')+' #'+refund.id+' · '+money(refund.total_amount)+' · '+label+' · '+(refund.payment_title || '')+' · '+date;
+          host.append(row);
+        });
         if(['cancelled','canceled'].includes(order.status_code) && summary.paidAmount>summary.refundedAmount) {
           var warning=document.createElement('p');warning.textContent='Заказ отменён. Возврат оплаты не завершён.';host.append(warning);
         }
@@ -1335,7 +1440,75 @@
     return { open: open, close: close, getContext: getContext };
   }
 
+  function createStatusQueue(options) {
+    var pending=new Map();
+    var mutations=new Map(),settled=new Map(),revision=0;
+    function current(entry){return pending.get(entry.id)===entry && options.scope()===entry.scope;}
+    function overlay(order) {
+      var entry=pending.get(Number(order?.id));
+      if(!entry || !current(entry)) {
+        var guard=settled.get(Number(order?.id)),mutation=mutations.get(order?.status_mutation_id);
+        if(!guard || guard.scope!==options.scope())return order;
+        if(!mutation || mutation.revision>=guard.revision){guard.order=order;return order;}
+        entry={latest:guard.order};
+      }
+      var result={...order};
+      ['status_id','status_title','status_code','status_color'].forEach(function(key){result[key]=entry.latest[key];});
+      return result;
+    }
+    async function drain(entry) {
+      var job;
+      try {
+        while(entry.jobs.length && current(entry)) {
+          job=entry.jobs.shift();
+          var confirmed=await options.save(entry.id,job.statusId,job.mutationId);
+          if(!confirmed || Number(confirmed.id)!==entry.id || Number(confirmed.status_id)!==job.statusId)throw new Error('ORDER_STATUS_RESPONSE_INVALID');
+          entry.confirmed=confirmed;
+          if(!current(entry))throw new Error('ORDER_STATUS_CONTEXT_CHANGED');
+          if(!entry.jobs.length) {
+            pending.delete(entry.id);
+            settled.set(entry.id,{scope:entry.scope,revision:job.revision,order:confirmed});
+            options.apply(confirmed,false);
+            options.onState(entry.id,'saved','Сохранено',1200);
+          }
+          job.resolve(confirmed);job=null;
+        }
+        if(entry.jobs.length)throw new Error('ORDER_STATUS_CONTEXT_CHANGED');
+      } catch(error) {
+        if(current(entry)) {
+          var restored=null;
+          try{restored=await options.recover(entry.id);}catch(recoveryError){console.error('Order status recovery failed:',recoveryError);}
+          if(current(entry)) {
+            pending.delete(entry.id);
+            if(restored && Number(restored.id)===entry.id)options.apply(restored,false);
+            options.onState(entry.id,'error',restored?'Не сохранено. Статус обновлён с сервера.':'Не сохранено. Не удалось проверить статус.',0);
+          }
+        }
+        if(job)job.reject(error);
+        entry.jobs.forEach(function(queued){queued.reject(error);});entry.jobs=[];
+      } finally {
+        if(pending.get(entry.id)===entry)pending.delete(entry.id);
+      }
+    }
+    return {overlay:overlay,enqueue:function(previous,optimistic) {
+      var id=Number(previous.id),entry=pending.get(id);
+      if(entry && !current(entry)){pending.delete(id);entry=null;}
+      if(navigator.onLine===false){options.onState(id,'error','Нужен интернет',0);return Promise.reject(new Error('ORDER_STATUS_OFFLINE'));}
+      var start=!entry;
+      if(!entry){entry={id:id,scope:options.scope(),jobs:[],latest:previous};pending.set(id,entry);}
+      entry.latest=optimistic;
+      var mutationId=crypto.randomUUID(),jobRevision=++revision;
+      mutations.set(mutationId,{revision:jobRevision});
+      var promise=new Promise(function(resolve,reject){entry.jobs.push({statusId:Number(optimistic.status_id),mutationId:mutationId,revision:jobRevision,resolve:resolve,reject:reject});});
+      options.onState(id,'syncing','Сохраняем…',0);
+      options.apply(optimistic,true);
+      if(start)void drain(entry);
+      return promise;
+    }};
+  }
+
   window.SharedOrderPanel = {
+    createStatusQueue: createStatusQueue,
     ensureAdminAsset: ensureAdminAsset,
     bindTabsWheelScroll: bindTabsWheelScroll,
     buildOrderClientPhoneHtml: buildOrderClientPhoneHtml,

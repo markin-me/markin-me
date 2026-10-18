@@ -61,7 +61,7 @@ function createCheckout(db, config, core, connections, operations,reconciliation
       currentPaymentId:selected?String(selected.id):null,successfulPaymentId:successful[0]?String(successful[0].id):null,
       paidAt:selected?.paid_at || null,updatedAt:selected?.updated_at || null,activePayment:active,anomalies,
       attentionRequired,paymentVersions:Object.fromEntries(rows.map(row=>[String(row.id),Number(row.version)])),
-      canContinue:Boolean(!attentionRequired && !successful.length && selected?.confirmation_url && ['waiting_for_confirmation','pending'].includes(selected.status)),
+      canContinue:Boolean(!attentionRequired && !successful.length && d.paymentConfirmation(selected) && ['waiting_for_confirmation','pending'].includes(selected.status)),
       refunds:refundRows.map(row=>({id:String(row.id),paymentId:String(row.payment_id),orderReturnId:row.order_return_id==null?null:String(row.order_return_id),businessAttempt:/^return:[1-9][0-9]*:[1-9][0-9]*$/.test(row.idempotency_key)?Number(row.idempotency_key.split(':')[2]):null,origin:row.origin,amount:row.amount,currency:row.currency,status:row.status,recoveryState:row.recovery_state,errorCode:row.recovery_error_code,receiptRegistration:row.receipt_registration})),
       attempts:rows.map(row=>({id:String(row.id),state:row.status,amount:row.amount,currency:row.currency,
         provider:row.provider,connectionName:connectionsById.get(row.provider_connection_id) || null,
@@ -83,7 +83,9 @@ function createCheckout(db, config, core, connections, operations,reconciliation
     const amount = d.amount(input.amount,true);
     if (input.currency !== "RUB") d.fail("PAYMENT_INPUT_INVALID");
     if (amount === "0.00") return null;
-    const current = await state(input,true);
+    let current = await state(input,false);
+    if(current && !d.paymentConfirmation(current) && ['created','pending','waiting_for_confirmation'].includes(current.status))
+      current=await state(input,true);
     if(current?.reconciliation_state==='manual_review' && !['paid','refunded','partially_refunded','cancelled','failed'].includes(current.status))d.fail('PAYMENT_PROVIDER_RECOVERY_REQUIRED');
     if (current && d.minor(current.captured_amount,true)>0n) {
       if (current.amount !== amount || current.currency !== input.currency) d.fail("PAYMENT_AMOUNT_INVALID");
@@ -91,7 +93,7 @@ function createCheckout(db, config, core, connections, operations,reconciliation
     }
     if (current && ["pending","waiting_for_confirmation"].includes(current.status)) {
       if (current.amount !== amount || current.currency !== input.currency) d.fail("PAYMENT_AMOUNT_INVALID");
-      if (current.confirmation_url) return current;
+      if (d.paymentConfirmation(current)) return current;
       d.fail("PAYMENT_OPERATION_IN_PROGRESS");
     }
     const context = await route(input);
@@ -108,6 +110,7 @@ function createCheckout(db, config, core, connections, operations,reconciliation
       typeof existing[0].payload === "string" ? JSON.parse(existing[0].payload) : existing[0].payload) : null;
     try {
       return await operations.execute(operationInput,"create",{checkout:true,capture:true,
+        confirmationType:previous ? previous.confirmationType : 'embedded',
         returnUrl:previous?.returnUrl || d.returnUrl(input.returnUrl,config.checkoutAllowLocalReturn && context.environment==='test'),
         description:previous?.description || `Order ${d.identifier(input.orderId)}`,
         receipt:previous ? previous.receipt : input.receipt});

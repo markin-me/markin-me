@@ -87,6 +87,18 @@ function confirmationUrl(value) {
   if (url.protocol !== "https:" || url.username || url.password) fail("PAYMENT_INPUT_INVALID");
   return value;
 }
+function confirmation(value) {
+  if(value==null)return null;
+  if(value.type==='redirect' && value.url)return {type:'redirect',url:confirmationUrl(value.url)};
+  if(value.type==='embedded' && typeof value.token==='string' && /^ct-[a-zA-Z0-9_-]{1,200}$/.test(value.token))
+    return {type:'embedded',token:value.token};
+  fail('PAYMENT_INPUT_INVALID');
+}
+function paymentConfirmation(row) {
+  if(!row || !['created','pending','waiting_for_confirmation'].includes(row.status))return null;
+  const data=typeof row.provider_data==='string'?JSON.parse(row.provider_data):row.provider_data;
+  return data?.confirmation ? confirmation(data.confirmation) : row.confirmation_url ? confirmation({type:'redirect',url:row.confirmation_url}) : null;
+}
 function returnUrl(value,allowLocal=false) {
   if(!allowLocal)return confirmationUrl(value);
   text(value,2048);
@@ -95,4 +107,4 @@ function returnUrl(value,allowLocal=false) {
   return value;
 }
 module.exports = { PAYMENT_TRANSITIONS, REFUND_TRANSITIONS, ERROR_CODES, PaymentError, fail,
-  identifier, minor, decimal, amount, currency, text, token, transition, metadata, confirmationUrl,returnUrl };
+  identifier, minor, decimal, amount, currency, text, token, transition, metadata, confirmationUrl,confirmation,paymentConfirmation,returnUrl };

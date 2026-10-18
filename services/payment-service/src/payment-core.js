@@ -2,6 +2,7 @@
 
 const d = require("./payment-domain");
 const {randomUUID} = require("node:crypto");
+const {isDeepStrictEqual} = require('node:util');
 
 // Passive domain module: no routes, workers, provider calls or Order writes.
 function createPaymentCore(db) {
@@ -67,11 +68,12 @@ function createPaymentCore(db) {
       const [guards]=await conn.query('SELECT closed_at FROM payment_order_guards WHERE tenant_id=? AND store_id=? AND order_id=?',[...ids,orderId]);
       if(guards[0]?.closed_at)d.fail('PAYMENT_ORDER_CLOSED');
       if(input.reuseOrderAttempt) {
-        const [orders]=await conn.query(`SELECT o.total_price,o.is_paid,o.online_payment_required,s.code AS status_code,s.is_final
+        const [orders]=await conn.query(`SELECT o.total_price,o.is_paid,o.online_payment_required,p.code AS payment_code,s.code AS status_code,s.is_final
           FROM order_orders o LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id
+          LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.id=o.payment_id
           WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1 FOR UPDATE`,[...ids,orderId]);
         const order=orders[0];
-        if(!order || !Number(order.online_payment_required) || Number(order.is_final) || ['canceled','cancelled'].includes(order.status_code))d.fail('PAYMENT_INVALID_STATE');
+        if(!order || !Number(order.online_payment_required) || order.payment_code!=='online' || ['canceled','cancelled'].includes(order.status_code))d.fail('PAYMENT_INVALID_STATE');
         if(Number(order.is_paid))d.fail('PAYMENT_ALREADY_PAID');
         if(d.amount(order.total_price)!==value)d.fail('PAYMENT_AMOUNT_INVALID');
       }
@@ -132,12 +134,18 @@ function createPaymentCore(db) {
       const captured = input.status === "paid" ? d.amount(input.capturedAmount) : payment.captured_amount;
       if (input.status !== "paid" && input.capturedAmount !== undefined) d.fail("PAYMENT_AMOUNT_INVALID");
       if (input.status === "paid" && (!externalId || captured !== payment.amount)) d.fail("PAYMENT_AMOUNT_INVALID");
-      const snapshot = input.rawMetadata === undefined ? payment.provider_data : d.metadata(input.rawMetadata);
+      const previousSnapshot=typeof payment.provider_data==='string'?JSON.parse(payment.provider_data):payment.provider_data;
+      const snapshotData=input.rawMetadata===undefined ? {...previousSnapshot} : JSON.parse(d.metadata(input.rawMetadata));
+      const confirmation=['created','pending','waiting_for_confirmation'].includes(input.status)
+        ? input.confirmation===undefined ? previousSnapshot?.confirmation : d.confirmation(input.confirmation) : null;
+      if(confirmation)snapshotData.confirmation=confirmation;
+      else delete snapshotData.confirmation;
+      const snapshot=JSON.stringify(snapshotData);
       const sameStatus = payment.status === input.status;
       const clearAttention=input.source==='reconciliation' && payment.reconciliation_state==='manual_review';
       if (sameStatus && captured !== payment.captured_amount) d.fail("PAYMENT_INVALID_STATE");
       if (!clearAttention && sameStatus && externalId === payment.provider_payment_id && url === payment.confirmation_url
-        && JSON.stringify(typeof payment.provider_data === "string" ? JSON.parse(payment.provider_data) : payment.provider_data) === JSON.stringify(snapshot == null ? null : typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot)) {
+        && isDeepStrictEqual(previousSnapshot,snapshotData)) {
         await completeProviderOperation(conn,payment,input);return payment;
       }
       if (!sameStatus) d.transition(d.PAYMENT_TRANSITIONS, payment.status, input.status);
@@ -315,8 +323,8 @@ function createPaymentCore(db) {
       const args=[...scope(input),d.identifier(input.orderId)];await orderLock(conn,input,input.orderId);
       const [orders]=await conn.query(`SELECT o.id,o.payment_abandoned_at FROM order_orders o
         JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id WHERE o.tenant_id=? AND o.store_id=? AND o.id=?
-        AND o.online_payment_required=1 AND o.is_paid=0 AND o.stock_deducted_at IS NULL AND o.payment_satisfied_at IS NULL
-        AND (s.code='new' OR o.payment_abandoned_at IS NOT NULL)
+        AND o.online_payment_required=1 AND o.is_paid=0
+        ${input.changeMethod?"AND s.code NOT IN ('canceled','cancelled')":"AND o.stock_deducted_at IS NULL AND o.payment_satisfied_at IS NULL AND (s.code='new' OR o.payment_abandoned_at IS NOT NULL)"}
         ${input.changeMethod?'':'AND o.created_at<DATE_SUB(UTC_TIMESTAMP(6),INTERVAL ? HOUR)'} FOR UPDATE`,input.changeMethod?args:[...args,input.horizonHours]);
       if(!orders.length)d.fail('PAYMENT_INVALID_STATE');
       const [payments]=await conn.query('SELECT id,status,captured_amount,reconciliation_state FROM payment_payments WHERE tenant_id=? AND store_id=? AND order_id=? FOR UPDATE',args);
@@ -325,7 +333,7 @@ function createPaymentCore(db) {
         const [ops]=await conn.query("SELECT id FROM payment_provider_operations WHERE tenant_id=? AND store_id=? AND payment_id IN (?) AND status IN ('reserved','uncertain') LIMIT 1 FOR UPDATE",[args[0],args[1],payments.map(p=>p.id)]);
         if(ops.length)d.fail('PAYMENT_PROVIDER_RECOVERY_REQUIRED');
       }
-      await conn.query('UPDATE payment_order_guards SET closed_at=COALESCE(closed_at,UTC_TIMESTAMP(6)) WHERE tenant_id=? AND store_id=? AND order_id=?',args);
+      if(!input.changeMethod)await conn.query('UPDATE payment_order_guards SET closed_at=COALESCE(closed_at,UTC_TIMESTAMP(6)) WHERE tenant_id=? AND store_id=? AND order_id=?',args);
       return {closed:true,orderId:String(input.orderId)};
     });
   }

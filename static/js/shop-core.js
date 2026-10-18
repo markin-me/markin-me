@@ -3052,9 +3052,22 @@
     `;
   }
 
+  function profileOrderPaymentStatus(order) {
+    const paid=Boolean(order?.paymentSummary?.paymentSatisfied || Number(order?.is_paid)===1);
+    const state=order?.paymentSummary?.state;
+    const full=order?.refund_state==='full' || state==='refunded';
+    const refunded=full || order?.refund_state==='partial' || state==='partially_refunded'
+      || Number(order?.refunded_total)>0 || Number(order?.paymentSummary?.refundedAmount)>0;
+    const amount=money(order?.total_price || 0);
+    const returned=money(Math.max(Number(order?.refunded_total || 0),Number(order?.paymentSummary?.refundedAmount || 0)/100));
+    return {text:refunded?(full?'Возвращено '+returned:'Возврат '+returned+' из '+amount):(paid?'Оплачен':'Не оплачен')+' · '+amount,
+      paid:paid && !refunded,refunded};
+  }
+
   function buildProfileOrderFooter(order) {
     const progress = deriveCustomerOrderProgress(order);
-    const price = `<span class="shop-order-summary-card__pill shop-order-summary-card__price">${money(order?.total_price || 0)}</span>`;
+    const payment=profileOrderPaymentStatus(order);
+    const price = `<span class="shop-order-summary-card__pill shop-order-summary-card__price${payment.paid?' is-paid':payment.refunded?' is-refunded':''}">${escapeHtml(payment.text)}</span>`;
     return progress.isFinal
       ? `<div class="shop-order-summary-card__actions is-final"><span class="shop-order-summary-card__status is-${progress.isCancelled ? "cancelled" : "success"}"><i class="fas ${progress.isCancelled ? "fa-xmark" : "fa-check"}" aria-hidden="true"></i> ${escapeHtml(progress.statusLabel)}</span>${price}</div>`
       : `<div class="shop-order-progress__route" aria-label="${escapeHtml(progress.statusLabel)}">${progress.steps.map(window.renderShopOrderStep).join("")}</div><div class="shop-order-summary-card__actions">${price}</div>`;
@@ -3062,6 +3075,14 @@
 
   window.patchProfileOrderProgress = (card, order) => {
     const footer = card.querySelector("[data-order-list-footer]");
+    const price=footer?.querySelector('.shop-order-summary-card__price');
+    if(price) {
+      const payment=profileOrderPaymentStatus(order);
+      const label=payment.text;
+      if(price.textContent!==label)price.textContent=label;
+      price.classList.toggle('is-paid',payment.paid);
+      price.classList.toggle('is-refunded',payment.refunded);
+    }
     const key = deriveCustomerOrderProgress(order).progressKey;
     if (!footer || footer.dataset.progressKey === key) return;
     footer.innerHTML = buildProfileOrderFooter(order);

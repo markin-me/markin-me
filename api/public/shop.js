@@ -81,6 +81,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         await db.query("UPDATE order_payment_release_effects SET status='uncertain',error_code='ORDER_PAYMENT_EFFECT_INTERRUPTED',updated_at=UTC_TIMESTAMP(6) WHERE status='sending' AND updated_at<DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 120 SECOND)");
         await onlinePayments.dispatchRefunds();
         if(abandonedCleanup)await abandonedCleanup();
+        const [expiredMethods]=await db.query(`SELECT o.* FROM order_orders o
+          JOIN order_payments m ON m.tenant_id=o.tenant_id AND m.id=o.payment_id
+          JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id
+          WHERE o.is_active=1 AND o.is_paid=0 AND m.code='online' AND s.code NOT IN ('canceled','cancelled')
+          AND NOT EXISTS(SELECT 1 FROM payment_payments paid WHERE paid.tenant_id=o.tenant_id AND paid.store_id=o.store_id
+            AND paid.order_id=o.id AND (paid.captured_amount>0 OR paid.reconciliation_state='manual_review'))
+          AND EXISTS(SELECT 1 FROM payment_payments p JOIN payment_events e ON e.tenant_id=p.tenant_id AND e.payment_id=p.id
+            WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.provider='yookassa'
+            AND e.new_status='cancelled' AND e.created_at<=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 10 MINUTE))
+          ORDER BY o.id LIMIT 10`);
+        for(const order of expiredMethods)await applyOnlinePayment(order,null,null,'card',null,false,true);
         const [pending]=await db.query("SELECT DISTINCT tenant_id,store_id,order_id AS id FROM order_payment_release_effects WHERE status='pending' ORDER BY order_id LIMIT 10");
         for(const order of pending){
           const payload=await fetchOrderPayload(order.tenant_id,order.store_id,order.id);
@@ -91,32 +102,50 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     };
     const timer=setTimeout(tick,5000);timer.unref();
   };
-  async function synchronizeOnlinePayment(order,payment,deliveryEvent=null) {
-    const applied=await applyOnlinePayment(order,payment,deliveryEvent);
+  async function synchronizeOnlinePayment(order,payment,deliveryEvent=null,preparationOnly=false) {
+    const applied=await applyOnlinePayment(order,payment,deliveryEvent,null,null,preparationOnly);
     // The event ACK acknowledges the committed Order transaction, not external notification delivery.
     if(deliveryEvent && process.env.PAYMENT_ORDER_RELEASE_WORKER_ENABLED==='1')return;
     const payload=applied || await fetchOrderPayload(order.tenant_id,order.store_id,order.id);
     if(payload && isOrderEligibleForFulfillment(payload))await deliverPaymentReleaseEffects(order,payload);
   }
-  async function applyOnlinePayment(order,payment,deliveryEvent=null,offlineMethod=null) {
-    const snapshot=await onlinePayments.snapshot(order);
-    const {attempts,...projection}=snapshot;
-    if(deliveryEvent && (!attempts.some(attempt=>attempt.id===deliveryEvent.paymentId)
+  async function applyOnlinePayment(order,payment,deliveryEvent=null,offlineMethod=null,changeFrom=null,preparationOnly=false,automaticMethodChange=false) {
+    const snapshot=preparationOnly || offlineMethod?null:await onlinePayments.snapshot(order);
+    const projection=snapshot?Object.fromEntries(Object.entries(snapshot).filter(([key])=>key!=='attempts')):null;
+    if(projection)projection.methodChangeDeadline=(await onlinePayments.methodChangeWindow(order)).deadline;
+    if(deliveryEvent && (!snapshot.attempts.some(attempt=>attempt.id===deliveryEvent.paymentId)
       || !Number.isSafeInteger(projection.paymentVersions?.[deliveryEvent.paymentId])
       || projection.paymentVersions[deliveryEvent.paymentId]<deliveryEvent.paymentVersion))throw paymentError('PAYMENT_EVENT_SNAPSHOT_MISMATCH',409);
     const conn=await db.getConnection();let stockChanged=[];
     try {
       await conn.beginTransaction();
-      const [rows]=await conn.query("SELECT o.*,s.code AS status_code FROM order_orders o LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id WHERE o.tenant_id=? AND o.store_id=? AND o.id=? FOR UPDATE",[order.tenant_id,order.store_id,order.id]);
+      await conn.query('INSERT INTO payment_order_guards (tenant_id,store_id,order_id) VALUES (?,?,?) ON DUPLICATE KEY UPDATE order_id=VALUES(order_id)',[order.tenant_id,order.store_id,order.id]);
+      await conn.query('SELECT order_id FROM payment_order_guards WHERE tenant_id=? AND store_id=? AND order_id=? FOR UPDATE',[order.tenant_id,order.store_id,order.id]);
+      const [rows]=await conn.query("SELECT o.*,s.code AS status_code,p.code AS payment_code FROM order_orders o LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.id=o.payment_id WHERE o.tenant_id=? AND o.store_id=? AND o.id=? FOR UPDATE",[order.tenant_id,order.store_id,order.id]);
       const current=rows[0];
       if (!current) throw paymentError('ORDER_NOT_FOUND',404);
-      if(!Number(current.online_payment_required))throw paymentError('PAYMENT_EVENT_ORDER_MISMATCH',409);
+      const wasOnline=Number(current.online_payment_required)===1;
+      const manualPaid=Boolean(current.manual_paid_at && Number(current.is_paid));
+      if(!wasOnline && !offlineMethod && !(deliveryEvent && (manualPaid || (!projection.paidAmount && !projection.activePayment))))throw paymentError('PAYMENT_EVENT_ORDER_MISMATCH',409);
       if(offlineMethod) {
-        if(current.status_code!=='new' || current.is_paid || current.stock_deducted_at || current.payment_satisfied_at || projection.paidAmount || projection.activePayment || projection.attentionRequired || projection.anomalies?.length)throw paymentError('PAYMENT_INVALID_STATE',409);
+        const window=await onlinePayments.methodChangeWindow(current,conn);
+        if(automaticMethodChange) {
+          if(!window.expired || current.payment_code!=='online' || Number(current.is_paid)) {await conn.commit();return;}
+        } else if(window.expired)throw paymentError('PAYMENT_METHOD_CHANGE_EXPIRED',409);
+        const saved=storedProjection(current);
+        if(['canceled','cancelled'].includes(current.status_code) || Number(current.is_paid) || saved?.paidAmount || saved?.anomalies?.length)throw paymentError('PAYMENT_INVALID_STATE',409);
+        const [attempts]=await conn.query("SELECT status,captured_amount,reconciliation_state FROM payment_payments WHERE tenant_id=? AND store_id=? AND order_id=? FOR UPDATE",[order.tenant_id,order.store_id,order.id]);
+        if(attempts.some(attempt=>Number(attempt.captured_amount)>0 || attempt.reconciliation_state==='manual_review')) {
+          if(automaticMethodChange){await conn.commit();return;}
+          throw paymentError('PAYMENT_PROVIDER_RECOVERY_REQUIRED',409);
+        }
+        // The selected method is durable immediately; retain gateway tracking until its active attempt finishes.
+        const tracking=attempts.some(attempt=>['created','pending','waiting_for_confirmation'].includes(attempt.status));
+        if(offlineMethod==='cash' && changeFrom!==null && changeFrom!==0 && changeFrom<Number(current.total_price))throw paymentError('PAYMENT_AMOUNT_MISMATCH',409);
         const [methods]=await conn.query("SELECT id FROM order_payments WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1 FOR UPDATE",[order.tenant_id,order.store_id,offlineMethod]);
         if(methods.length!==1)throw paymentError('PAYMENT_INPUT_INVALID',400);
-        await conn.query('UPDATE order_orders SET payment_id=?,online_payment_required=0 WHERE tenant_id=? AND store_id=? AND id=?',[methods[0].id,order.tenant_id,order.store_id,order.id]);
-        current.online_payment_required=0;
+        await conn.query('UPDATE order_orders SET payment_id=?,online_payment_required=?,change_from=? WHERE tenant_id=? AND store_id=? AND id=?',[methods[0].id,tracking?1:0,offlineMethod==='cash'?changeFrom:null,order.tenant_id,order.store_id,order.id]);
+        current.online_payment_required=tracking?1:0;
         current.payment_code=offlineMethod;
       }
       if(deliveryEvent){
@@ -133,24 +162,35 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         [deliveryEvent.eventId,deliveryEvent.tenantId,deliveryEvent.storeId,deliveryEvent.orderId,deliveryEvent.paymentId,deliveryEvent.paymentVersion]);
       }
       const previous=storedProjection(current);
-      if(Object.entries(previous?.paymentVersions || {}).some(([id,version])=>Number(projection.paymentVersions?.[id] || 0)<Number(version))) {await conn.commit();return;}
-      if(previous?.paidAmount && !projection.paidAmount) {await conn.commit();return;}
-      if(previous?.updatedAt && projection.updatedAt && String(previous.updatedAt)>String(projection.updatedAt)) {await conn.commit();return;}
+      if(!preparationOnly && !offlineMethod && Object.entries(previous?.paymentVersions || {}).some(([id,version])=>Number(projection.paymentVersions?.[id] || 0)<Number(version))) {await conn.commit();return;}
+      if(!preparationOnly && !offlineMethod && previous?.paidAmount && !projection.paidAmount) {await conn.commit();return;}
+      if(!preparationOnly && !offlineMethod && previous?.updatedAt && projection.updatedAt && String(previous.updatedAt)>String(projection.updatedAt)) {await conn.commit();return;}
+      if(!preparationOnly && !offlineMethod && wasOnline && ['cash','card'].includes(current.payment_code)) {
+        if(projection.paidAmount) {
+          const [onlineMethods]=await conn.query("SELECT id FROM order_payments WHERE tenant_id=? AND store_id=? AND code='online'",[order.tenant_id,order.store_id]);
+          if(onlineMethods.length!==1)throw paymentError('PAYMENT_INVALID_STATE',409);
+          await conn.query('UPDATE order_orders SET payment_id=?,change_from=NULL WHERE tenant_id=? AND store_id=? AND id=?',[onlineMethods[0].id,order.tenant_id,order.store_id,order.id]);
+          current.payment_code='online';
+        } else if(!projection.activePayment && !projection.attentionRequired && !projection.anomalies?.length) {
+          await conn.query('UPDATE order_orders SET online_payment_required=0 WHERE tenant_id=? AND store_id=? AND id=?',[order.tenant_id,order.store_id,order.id]);
+          current.online_payment_required=0;
+        }
+      }
       const refundGroups=new Map();
-      for(const refund of snapshot.refunds || [])if(refund.orderReturnId){const group=refundGroups.get(refund.orderReturnId) || [];group.push(refund);refundGroups.set(refund.orderReturnId,group);}
+      for(const refund of snapshot?.refunds || [])if(refund.orderReturnId){const group=refundGroups.get(refund.orderReturnId) || [];group.push(refund);refundGroups.set(refund.orderReturnId,group);}
       for(const [returnId,refunds] of refundGroups) {
         const latest=refunds[refunds.length-1],state=refunds.some(r=>r.status==='succeeded')?'succeeded':['failed','cancelled'].includes(latest.status)?'failed':latest.recoveryState==='manual_review'?'manual_review':'processing';
         await conn.query("UPDATE order_refunds SET financial_state=?,financial_error_code=? WHERE tenant_id=? AND store_id=? AND order_id=? AND id=? AND financial_state<>'manual' AND financial_attempt=?",
           [state,latest.errorCode || null,order.tenant_id,order.store_id,order.id,returnId,latest.businessAttempt]);
       }
-      const summary=getOrderPaymentSummary(current,projection);
+      const summary=preparationOnly || offlineMethod?getOrderPaymentSummary(current):getOrderPaymentSummary(current,projection);
       // Stage 3.1 may have applied paid before this marker existed: do not replay its effects.
       const alreadyApplied=summary.paymentSatisfied && current.online_payment_status==='paid';
-      const firstSatisfied=(summary.paymentSatisfied || Boolean(offlineMethod)) && summary.fulfillmentEligible && !current.payment_satisfied_at && !alreadyApplied;
+      const firstSatisfied=wasOnline && summary.fulfillmentEligible && !current.payment_satisfied_at && !alreadyApplied;
       if(alreadyApplied && !current.payment_satisfied_at)await conn.query('UPDATE order_orders SET payment_satisfied_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND store_id=? AND id=?',
         [order.tenant_id,order.store_id,order.id]);
-      await conn.query("UPDATE order_orders SET payment_projection=?,online_payment_status=?,is_paid=? WHERE tenant_id=? AND store_id=? AND id=?",
-        [JSON.stringify(projection),summary.paymentSatisfied?'paid':'pending',summary.paymentSatisfied?1:0,order.tenant_id,order.store_id,order.id]);
+      if(!preparationOnly && !offlineMethod)await conn.query("UPDATE order_orders SET payment_projection=?,online_payment_status=?,is_paid=? WHERE tenant_id=? AND store_id=? AND id=?",
+        [JSON.stringify(projection),(manualPaid?Boolean(projection.paidAmount):summary.paymentSatisfied)?'paid':'pending',summary.paymentSatisfied?1:0,order.tenant_id,order.store_id,order.id]);
       if (!firstSatisfied) {await conn.commit();}
       else {
       const [settings]=await conn.query("SELECT order_stock_deduct_mode FROM ten_tenants WHERE id=?",[order.tenant_id]);
@@ -228,7 +268,30 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (!req.body || Object.keys(req.body).length) throw paymentError('PAYMENT_INPUT_INVALID',400);
       const key=String(req.headers['idempotency-key'] || '');
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) throw paymentError('PAYMENT_INPUT_INVALID',400);
-      const order=await authorizeOnlineOrder(req);
+      let order=await authorizeOnlineOrder(req);
+      if(!Number(order.online_payment_required) || order.payment_code!=='online') {
+        const conn=await db.getConnection();
+        try {
+          await conn.beginTransaction();
+          await conn.query('INSERT INTO payment_order_guards (tenant_id,store_id,order_id) VALUES (?,?,?) ON DUPLICATE KEY UPDATE order_id=VALUES(order_id)',[order.tenant_id,order.store_id,order.id]);
+          await conn.query('SELECT order_id FROM payment_order_guards WHERE tenant_id=? AND store_id=? AND order_id=? FOR UPDATE',[order.tenant_id,order.store_id,order.id]);
+          const [rows]=await conn.query("SELECT o.*,s.code AS status_code FROM order_orders o JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1 FOR UPDATE",[order.tenant_id,order.store_id,order.id]);
+          const current=rows[0];
+          if(!current || Number(current.is_paid) || current.payment_abandoned_at || ['canceled','cancelled'].includes(current.status_code))throw paymentError('PAYMENT_INVALID_STATE',409);
+          {
+            const [active]=await conn.query("SELECT id FROM payment_payments WHERE tenant_id=? AND store_id=? AND order_id=? AND (captured_amount>0 OR reconciliation_state='manual_review') LIMIT 1 FOR UPDATE",[order.tenant_id,order.store_id,order.id]);
+            if(active.length)throw paymentError('PAYMENT_PROVIDER_RECOVERY_REQUIRED',409);
+            const [methods]=await conn.query("SELECT id FROM order_payments WHERE tenant_id=? AND store_id=? AND code='online' AND is_active=1",[order.tenant_id,order.store_id]);
+            if(methods.length!==1)throw paymentError('ONLINE_PAYMENT_NOT_AVAILABLE',409);
+            await conn.query("UPDATE order_orders SET payment_id=?,online_payment_required=1,online_payment_status='pending',online_payment_total=total_price,change_from=NULL WHERE tenant_id=? AND store_id=? AND id=?",[methods[0].id,order.tenant_id,order.store_id,order.id]);
+            await conn.query('UPDATE payment_order_guards SET closed_at=NULL WHERE tenant_id=? AND store_id=? AND order_id=?',[order.tenant_id,order.store_id,order.id]);
+          }
+          await conn.commit();
+        } catch(error){await conn.rollback();throw error;}finally{conn.release();}
+        order=await onlinePayments.load(order.tenant_id,order.public_id);
+        const changed=await fetchOrderPayload(order.tenant_id,order.store_id,order.id);
+        if(changed)ordersEvents?.publish(order.tenant_id,order.store_id,'order.updated',changed);
+      }
       const payment=await onlinePayments.pay(order,key);await synchronizeOnlinePayment(order,payment);
       const current=await onlinePayments.load(order.tenant_id,order.public_id);
       res.set('cache-control','no-store').json({ok:true,data:{payment,paymentSummary:clientPaymentSummary(current)}});
@@ -243,30 +306,28 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
   });
   router.post('/orders/:publicId/payment-method',async(req,res)=>{
     try {
-      if(!req.body || Object.keys(req.body).some(key=>!['method','confirmed'].includes(key)) || !['cash','card'].includes(req.body.method) || req.body.confirmed!==true)throw paymentError('PAYMENT_INPUT_INVALID',400);
+      if(!req.body || Object.keys(req.body).some(key=>!['method','confirmed','change_from'].includes(key)) || !['cash','card'].includes(req.body.method) || req.body.confirmed!==true)throw paymentError('PAYMENT_INPUT_INVALID',400);
+      const changeFrom=req.body.change_from==null?null:Number(req.body.change_from);
+      if(changeFrom!==null && (!Number.isSafeInteger(changeFrom) || changeFrom<0 || changeFrom>99999999))throw paymentError('PAYMENT_INPUT_INVALID',400);
       const order=await authorizeOnlineOrder(req);
-      if(!Number(order.online_payment_required)) {
-        if(order.payment_code!==req.body.method)throw paymentError('PAYMENT_INVALID_STATE',409);
-      } else {
-        const [methods]=await db.query("SELECT id FROM order_payments WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1",[order.tenant_id,order.store_id,req.body.method]);
-        if(methods.length!==1)throw paymentError('PAYMENT_INPUT_INVALID',400);
-        await onlinePayments.claimRefresh(order);
-        await paymentServiceClient.closeForMethodChange({tenantId:order.tenant_id,storeId:order.store_id},{orderId:String(order.id)});
-        const payload=await applyOnlinePayment(order,null,null,req.body.method);
-        if(payload && isOrderEligibleForFulfillment(payload))await deliverPaymentReleaseEffects(order,payload);
-      }
+      await applyOnlinePayment(order,null,null,req.body.method,changeFrom);
       const current=await onlinePayments.load(order.tenant_id,order.public_id);
-      res.set('cache-control','no-store').json({ok:true,data:{paymentSummary:clientPaymentSummary(current),payment_code:current.payment_code,payment_title:current.payment_code==='cash'?'Наличными':'Картой при получении'}});
+      res.set('cache-control','no-store').json({ok:true,data:await fetchOrderPayload(current.tenant_id,current.store_id,current.id)});
     }catch(error){res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'});}
   });
   router.get('/orders/:publicId/payment',async(req,res)=>{
     try {
       const order=await authorizeOnlineOrder(req);
-      await onlinePayments.claimRefresh(order);
-      const payment=await onlinePayments.state(order);
-      await synchronizeOnlinePayment(order,payment);
+      const refresh=req.query.details!=='1' && req.query.refresh!=='0';
+      if(refresh)await onlinePayments.claimRefresh(order);
+      const online=Number(order.online_payment_required)===1;
+      const payment=online && refresh ? await onlinePayments.state(order,{refresh})
+        : {status:clientPaymentSummary(order).state,source:online?'gateway':'manual',action:null};
+      if(online && refresh)await synchronizeOnlinePayment(order,payment);
       const current=await onlinePayments.load(order.tenant_id,order.public_id);
-      res.set('cache-control','no-store').json({ok:true,data:{payment,paymentSummary:clientPaymentSummary(current),order:{id:Number(order.id),public_id:order.public_id}}});
+      const details=req.query.details==='1' ? await fetchOrderPayload(order.tenant_id,order.store_id,Number(order.id)) : null;
+      if(req.query.details==='1' && !details)throw paymentError('ORDER_NOT_FOUND',404);
+      res.set('cache-control','no-store').json({ok:true,data:{payment,paymentSummary:clientPaymentSummary(current),order:details || {id:Number(order.id),public_id:order.public_id}}});
     } catch(error) { res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'}); }
   });
   const PUBLIC_BONUS_MODAL_DEFAULTS = [
@@ -5804,6 +5865,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
 
     if (!rows.length) return null;
     const r = rows[0];
+    await onlinePayments.attachRefundSummaries(tenantId,storeId,[r]);
 
     let items = [];
     try {
@@ -5864,6 +5926,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
       online_payment_required:Number(r.online_payment_required || 0),
       online_payment_status:r.online_payment_status || null,
+      refund_state:r.refund_state,
+      refunded_total:r.refunded_total,
       paymentSummary:clientPaymentSummary({...r,status_code:r.statusCode}),
       fulfillment_eligible:isOrderEligibleForFulfillment(r),
       time_option_id: r.time_option_id,
@@ -9168,6 +9232,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const hasMore = rows.length > limit;
       const pageRows = hasMore ? rows.slice(0, limit) : rows;
+      await onlinePayments.attachRefundSummaries(tenantId,storeId,pageRows);
       const data = pageRows.map((r) => {
         let items = [];
         try {
@@ -9187,6 +9252,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           status_title: r.status_title || null,
           status_code: r.status_code || null,
           status_is_final: r.status_is_final ? Number(r.status_is_final) : 0,
+          refund_state:r.refund_state,
+          refunded_total:r.refunded_total,
           paymentSummary:clientPaymentSummary(r),
           payment_title: r.payment_title || null,
           payment_code: r.payment_code || null,
@@ -9308,6 +9375,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const hasMore = rows.length > limit;
       const pageRows = hasMore ? rows.slice(0, limit) : rows;
+      await onlinePayments.attachRefundSummaries(tenantId,storeId,pageRows);
 
       const data = pageRows.map(r => {
         let items = [];
@@ -9333,6 +9401,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           method_code: r.method_code || null,
           method_title: r.method_title || null,
           status_is_final: r.status_is_final ? Number(r.status_is_final) : 0,
+          refund_state:r.refund_state,
+          refunded_total:r.refunded_total,
           paymentSummary:clientPaymentSummary(r),
           payment_title: r.payment_title || null,
           payment_code: r.payment_code || null,
@@ -26116,7 +26186,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       let payloadForPostActions = null;
       try {
         payloadForPostActions = await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
-        if (payloadForPostActions && isOrderEligibleForFulfillment(payloadForPostActions)) {
+        if (payloadForPostActions && !isOnline && isOrderEligibleForFulfillment(payloadForPostActions)) {
           const pushed = await sendOrderToPrintBot({ db, order: payloadForPostActions, tenantId, storeId: orderStoreId });
           if (!pushed) {
             console.warn("Print enqueue returned false (public/shop order create)", {
@@ -26141,7 +26211,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         });
       }
 
+      let preparationError=null;
+      if(isOnline && total>0) {
+        try { await synchronizeOnlinePayment(await onlinePayments.load(tenantId,publicId),null,null,true); }
+        catch(error) {
+          preparationError=error.code || 'ORDER_PREPARATION_FAILED';
+          console.error(JSON.stringify({operation:'order.preparation',tenantId,orderId,code:preparationError}));
+        }
+      }
       const paymentResult=isOnline ? await onlinePayments.result(tenantId,publicId,submissionId) : {};
+      if(preparationError)paymentResult.preparationError=preparationError;
       if(isOnline && total>0) {
         try {
           await synchronizeOnlinePayment(await onlinePayments.load(tenantId,publicId),paymentResult.payment);
@@ -26357,6 +26436,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     buildPreview: (params = {}) => buildCheckoutBenefitsPreviewData(params || {}),
   });
   registerOrderBenefitsAccrualProvider({
+    prepare: () => ensureDiscountRuntimeTables(),
     accrueOrderBenefits: (params = {}) => accrueOrderBenefitProgress(params || {}),
     settleReferralRewards: (params = {}) => settleReferralFirstPurchaseRewards(params?.queryable || db, params || {}),
   });

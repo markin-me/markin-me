@@ -281,6 +281,7 @@
   }
 
   function courierPassportStateLabel(state) {
+    if (state === "error") return "\u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u0444\u043b\u0430\u0439\u043d-\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f";
     if (state === "saved") return "Доступен офлайн";
     if (state === "saving" || state === "checking") return "Сохраняем для офлайн-доступа";
     if (state === "stale") return "Сохранённая версия требует обновления";
@@ -302,7 +303,7 @@
 
   function renderCourierPassportCacheIndicator(id) {
     const context = orderDetailsContext(id);
-    const state = courierPassportCacheStates.get(context.runtimeKey) || "unknown";
+    const state = courierPassportCacheStates.get(context.runtimeKey) || "checking";
     const label = courierPassportStateLabel(state);
     return `<span class="courier-order-cache-indicator courier-order-cache-indicator--${state}" data-courier-passport-cache-state aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"></span>`;
   }
@@ -764,6 +765,14 @@
   let checkoutTabActivationRevision = 0;
   let mountedCheckoutTabKey = null;
   const orderStatusSyncStates = new Map();
+  let orderStatusScopeRevision=0;
+  const orderStatusQueue=sharedOrderPanel.createStatusQueue({
+    scope:()=>orderStatusScopeRevision+':'+orderDetailsContext(0).runtimeKey,
+    apply:(order,localOnly)=>handleOrderEvent(order,{localOnly}),
+    onState:setOrderStatusSyncState,
+    save:async(id,statusId,mutationId)=>(await apiJson(`/api/admin/orders/${id}/status`,{method:'PUT',headers:{'Idempotency-Key':mutationId},body:{status_id:statusId}})).data,
+    recover:async id=>(await apiJson(`/api/admin/orders/${id}`)).data,
+  });
 
   const ORDERS_CACHE_VERSION = 4;
   const ORDERS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -1521,6 +1530,9 @@
     const nextIconHtml = canCycle ? renderOrderStatusIcon(nextStatus) : "";
     if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderStageCycleButtonHtml === "function") {
       return sharedOrderPanel.buildOrderStageCycleButtonHtml({
+        compact: !isCourierWorkspace,
+        syncState: isCourierWorkspace?null:orderStatusSyncStates.get(Number(order.id)),
+        currentCode: normalizeStatusCode(currentStatus),
         orderId: order.id,
         canCycle,
         currentTitle,
@@ -1570,22 +1582,7 @@
   }
 
   function renderOrderStatusControl(order) {
-    const buttonHtml = renderOrderStatusHoverCycleButton(order);
-    if (isCourierWorkspace) return buttonHtml;
-    const syncState = orderStatusSyncStates.get(Number(order?.id || 0)) || null;
-    if (!syncState) return buttonHtml;
-    const iconClass = syncState.mode === "syncing"
-      ? "fa-spinner fa-spin"
-      : (syncState.mode === "saved" ? "fa-check" : "fa-circle-exclamation");
-    return `
-      <div class="order-status-sync-control is-${escapeHtml(syncState.mode)}" data-order-status-sync-state="${escapeHtml(syncState.mode)}">
-        ${buttonHtml}
-        <span class="order-status-sync-feedback" role="status">
-          <i class="fas ${iconClass}" aria-hidden="true"></i>
-          <span>${escapeHtml(syncState.label)}</span>
-        </span>
-      </div>
-    `;
+    return renderOrderStatusHoverCycleButton(order);
   }
 
   function refreshOrderStatusSyncControl(orderId) {
@@ -2251,7 +2248,11 @@
       cache: context.cache,
     });
     if (cachedEntry?.order) {
-      const nextOrder = overlayCourierShadowOrder(cachedEntry.order);
+      if (!isCurrentOrderDetailsContext(context)) return null;
+      const currentOrder = state.orders.find((order) => Number(order?.id) === id);
+      const nextOrder = overlayCourierShadowOrder(currentOrder
+        ? mergeOrderPassportPatch(cachedEntry.order, currentOrder)
+        : cachedEntry.order);
       const idx = state.orders.findIndex((order) => Number(order?.id) === id);
       if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
       else if (shouldKeepOrderInState(nextOrder)) state.orders.unshift(nextOrder);
@@ -2323,6 +2324,7 @@
     setCourierPassportCacheState(id, "checking", context);
     try {
       const cached = await readCachedFullOrderEntry(id, { allowStale: true, cache: context.cache });
+      if (!isCurrentOrderDetailsContext(context)) return;
       if (cached && !cached.stale && !orderDetailsDirty.has(context.runtimeKey)) return;
       if (!cached) {
         authoritativeFullOrderRuntimeKeys.delete(context.runtimeKey);
@@ -2330,7 +2332,7 @@
       }
       if (navigator.onLine === false) return;
       await acquireCourierDetailPrewarmSlot(highPriority);
-      if (navigator.onLine === false) {
+      if (navigator.onLine === false || !isCurrentOrderDetailsContext(context)) {
         releaseCourierDetailPrewarmSlot();
         return;
       }
@@ -2368,43 +2370,17 @@
 
   async function inspectOrdersSharedPassportCache(orders = getOrdersForActiveStage()) {
     if (isCourierWorkspace) return;
-    const queue = (Array.isArray(orders) ? orders : [])
-      .map((order) => ({ order, context: orderDetailsContext(order?.id) }))
-      .filter(({ order, context }) => (
-        Number(order?.id) > 0
-        && context.cache?.complete
-        && !courierPassportCacheStates.has(context.runtimeKey)
-      ));
-    let nextIndex = 0;
-    const worker = async () => {
-      while (nextIndex < queue.length) {
-        const { order, context } = queue[nextIndex++];
-        if (!isCurrentOrderDetailsContext(context)) continue;
-        setCourierPassportCacheState(order.id, "checking", context);
-        try {
-          const sharedEntry = window.AdminPersistentCache.orderPassport?.read
-            ? await window.AdminPersistentCache.orderPassport.read(order.id, { cache: context.cache, allowStale: true })
-            : null;
-          const entry = sharedEntry || (!window.AdminPersistentCache.orderPassport?.read
-            ? await context.cache.getEntry(String(order.id), { allowStale: true })
-            : null);
-          if (!isCurrentOrderDetailsContext(context)) continue;
-          const hasFullPassport = Boolean(sharedEntry) || (entry?.data?.detailCompleteness === "full"
-            && isFullOrder(entry.data.order));
-          setCourierPassportCacheState(
-            order.id,
-            hasFullPassport ? ((sharedEntry?.stale === true || entry?.stale === true) ? "stale" : "saved") : "missing",
-            context
-          );
-        } catch (err) {
-          if (isCurrentOrderDetailsContext(context)) {
-            setCourierPassportCacheState(order.id, "missing", context);
-          }
-          console.warn(`Order passport cache check failed for ${Number(order.id || 0)}:`, err);
-        }
+    await Promise.all((Array.isArray(orders) ? orders : []).slice(0, 200).map(async (order) => {
+      const context = orderDetailsContext(order?.id);
+      if (!(Number(order?.id) > 0) || !context.cache?.complete
+        || courierPassportCacheStates.has(context.runtimeKey)) return;
+      try {
+        await prewarmCourierOrderDetail(order);
+      } catch (error) {
+        if (isCurrentOrderDetailsContext(context)) setCourierPassportCacheState(order.id, "error", context);
+        console.error("Order offline preparation failed:", error);
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
+    }));
   }
 
   const orderDetailsOpener = sharedOrderPanel && typeof sharedOrderPanel.createDetailsOpener === "function"
@@ -2445,6 +2421,10 @@
     if (!(id > 0)) return;
     const baseOrder = await ensureFullOrderById(id);
     if (!baseOrder) return;
+    if(isOrderEditPaymentLocked(baseOrder)) {
+      alert('Заказ оплачен или есть активный онлайн-платёж. Редактирование недоступно.');
+      return;
+    }
 
     const tab = ensureOrderTab(baseOrder, { activate: false });
     if (!tab) return;
@@ -2845,7 +2825,7 @@
       createdAt,
       updatedAt: Number(raw?.updatedAt || createdAt) || createdAt,
       attempts: Math.max(0, Number(raw?.attempts || 0) || 0),
-      state: ["failed", "blocked"].includes(String(raw?.state || "").trim().toLowerCase())
+      state: Number(raw?.lastError?.status) === 403 && raw?.state !== "blocked" ? "failed" : ["failed", "blocked"].includes(String(raw?.state || "").trim().toLowerCase())
         ? String(raw?.state || "").trim().toLowerCase()
         : "pending",
       error: raw?.error ? String(raw.error) : "",
@@ -2928,11 +2908,11 @@
       }
       courierOfflineState.transientBanner = null;
     }
-    const failedItem = courierOfflineState.queue.find((item) => item?.state === "failed") || null;
+    const failedItem = courierOfflineState.queue.find((item) => item?.state === "failed" || item?.state === "blocked") || null;
     if (failedItem) {
       return {
         mode: "error",
-        text: "Не отправлено",
+        text: `Заказ №${failedItem.orderId} · ${failedItem.type === 'payment' ? 'Приём оплаты' : 'Смена статуса'} · ${failedItem.state === 'blocked' ? 'Зависимая операция заблокирована' : Number(failedItem.lastError?.status) === 403 ? 'Нет доступа' : failedItem.error || 'Не отправлено'}`,
         retry: true,
       };
     }
@@ -3041,6 +3021,24 @@
     ordersConnectionBanners.forEach((banner) => {
       const text = $(".courier-connection-banner__text", banner);
       const retry = $('[data-action="orders-connection-retry"]', banner);
+      let cancel = $('[data-action="courier-mutation-cancel"]', banner);
+      if (isCourierWorkspace && !cancel) {
+        cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'courier-connection-banner__retry hidden';
+        cancel.dataset.action = 'courier-mutation-cancel';
+        cancel.textContent = '×';
+        cancel.title = 'Отменить неотправленную операцию';
+        cancel.setAttribute('aria-label', cancel.title);
+        cancel.addEventListener('click', cancelCourierFailedMutation);
+        banner.appendChild(cancel);
+      }
+      const failed = isCourierWorkspace && courierOfflineState.queue.find((item) => item.state === 'failed' || item.state === 'blocked');
+      if (cancel) {
+        cancel.classList.toggle('hidden', !failed);
+        cancel.dataset.mutationId = failed ? failed.id : '';
+        cancel.disabled = courierOfflineState.syncing || courierOfflineState.reconciling || navigator.onLine === false;
+      }
       banner.classList.remove(
         "courier-connection-banner--offline",
         "courier-connection-banner--syncing",
@@ -3058,6 +3056,33 @@
       if (text) text.textContent = String(bannerState.text || "").trim();
       if (retry) retry.classList.toggle("hidden", !bannerState.retry);
     });
+  }
+
+  async function cancelCourierFailedMutation(event) {
+    const mutationId = event.currentTarget.dataset.mutationId;
+    const context = courierOutboxContext();
+    const item = courierOfflineState.queue.find((row) => row.id === mutationId && ['failed', 'blocked'].includes(row.state));
+    if (!item || courierOfflineState.syncing || courierOfflineState.reconciling || navigator.onLine === false) return;
+    event.currentTarget.disabled = true;
+    try {
+      const fresh = (await apiJson(`/api/admin/orders/${item.orderId}`)).data;
+      if (!isCurrentCourierOutboxContext(context)) return;
+      if (Number(fresh?.id) !== Number(item.orderId)) throw new Error('ORDER_RESPONSE_INVALID');
+      await mutateCourierOutbox(context, (payload) => {
+        const current = payload.items.find((row) => row.id === mutationId);
+        if (!current || !['failed', 'blocked'].includes(current.state)) throw new Error('OPERATION_STATE_CHANGED');
+        return { ...payload, items: payload.items
+          .filter((row) => row.id !== mutationId)
+          .map((row) => Number(row.orderId) === Number(item.orderId) && row.sequence > item.sequence && row.state === 'pending'
+            ? { ...row, state: 'blocked', blockedBy: mutationId, updatedAt: Date.now() } : row) };
+      });
+      if (!isCurrentCourierOutboxContext(context)) return;
+      handleOrderEvent(fresh);
+      updateCourierActiveOrderInfo();
+    } catch (error) {
+      console.error('Courier operation cancellation failed:', error);
+      showCourierTransientBanner('error', 'Не удалось отменить операцию: ' + error.message, { duration: 5000 });
+    } finally { refreshCourierConnectionBanner(); }
   }
 
   function showCourierTransientBanner(mode, text, { retry = false, duration = 2500 } = {}) {
@@ -3212,7 +3237,8 @@
     if (isLikelyNetworkError(err)) return { type: "retryable", code: "NETWORK_ERROR", status: 0 };
     const status = Number(err?.status || 0);
     const code = String(err?.code || err?.message || "API_ERROR").trim() || "API_ERROR";
-    if (status === 401 || status === 403) return { type: "auth", code, status };
+    if (status === 401) return { type: "auth", code, status };
+    if (status === 403) return { type: "permanent", code, status };
     if (status === 408 || status === 425 || status === 429 || status >= 500) {
       return { type: "retryable", code, status };
     }
@@ -3277,6 +3303,7 @@
     }
 
     let processedAny = false;
+    const retriedForbidden = new Set();
     const confirmedOrders = [];
     const context = courierOutboxContext();
     if (!context.namespace) {
@@ -3297,7 +3324,24 @@
 
     try {
       while (isCurrentCourierOutboxContext(context) && courierOfflineState.online) {
-        const stored = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
+        let stored = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
+        const forbidden = force && stored.items.find((item) => item.state === "failed" && item.type === "payment"
+          && Number(item.lastError?.status) === 403 && !retriedForbidden.has(item.id));
+        if (forbidden) {
+          retriedForbidden.add(forbidden.id);
+          try {
+            const fresh = (await apiJson(`/api/admin/orders/${forbidden.orderId}`)).data;
+            if (Number(fresh?.id) === Number(forbidden.orderId)
+              && (isPaidOrder(fresh) || (canCourierAcceptPayment(fresh) && Number(forbidden.request.body?.is_paid) === 1))) {
+              await mutateCourierOutbox(context, (payload) => ({ ...payload, items: payload.items
+                .filter((item) => item.id !== forbidden.id || !isPaidOrder(fresh))
+                .map((item) => item.id === forbidden.id || (item.state === "blocked" && item.blockedBy === forbidden.id)
+                  ? { ...item, state: "pending", error: "", lastError: null, blockedBy: null, nextAttemptAt: null } : item) }));
+              if (isCurrentCourierOutboxContext(context)) handleOrderEvent(fresh);
+              stored = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
+            }
+          } catch (error) { console.error("Courier payment retry check failed:", error); }
+        }
         const current = selectNextCourierMutation(stored.items, { force });
         if (!current) break;
 
@@ -3325,6 +3369,7 @@
         } catch (err) {
           const failure = classifyCourierMutationFailure(err);
           const errorRecord = courierMutationErrorRecord(err, failure);
+          if (failure.status === 403) errorRecord.error.message = "Нет доступа к операции";
           if (failure.type === "retryable" || failure.type === "auth") {
             await mutateCourierOutbox(context, (payload) => ({
               ...payload,
@@ -3369,7 +3414,7 @@
             }),
           })).catch((persistErr) => console.error("Courier outbox update failed:", persistErr));
           if (isCurrentCourierOutboxContext(context)) {
-            courierOfflineState.syncError = failure.type === "conflict"
+            courierOfflineState.syncError = failure.status === 403 ? "Нет доступа к операции" : failure.type === "conflict"
               ? "Конфликт изменений"
               : "Есть неотправленные изменения";
             refreshCourierConnectionBanner();
@@ -4679,14 +4724,30 @@
     return fromTabs?.order || null;
   }
 
+  function isOrderEditPaymentLocked(order) {
+    return Boolean(order && (isPaidOrder(order) || Number(order.paymentSummary?.paidAmount)>0 || order.paymentSummary?.activePayment || order.paymentSummary?.attentionRequired));
+  }
+
+  function canCourierAcceptPayment(order) {
+    if (!isCourierWorkspace) return true;
+    const context = window.AdminAccessContext;
+    const permissions = (context?.permissions || []).map((item) => typeof item === 'string' ? item : item.key);
+    return Boolean(order && !isPaidOrder(order)
+      && (permissions.includes('*') || permissions.includes('courier.orders.accept_payment'))
+      && Number(context?.user?.id) > 0
+      && Number(order.assigned_user_id) === Number(context.user.id));
+  }
+
   function getActiveOrderCapabilities() {
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     const overrides = activeTab?.orderPassportContext?.capabilities;
-    if (!overrides || typeof overrides !== "object") return workspaceCapabilities;
+    const editAllowed=!isOrderEditPaymentLocked(getActiveOrder());
+    const paymentAllowed = workspaceCapabilities.payment && canCourierAcceptPayment(getActiveOrder());
+    if (!overrides || typeof overrides !== "object") return {...workspaceCapabilities,payment:paymentAllowed,edit:workspaceCapabilities.edit && editAllowed};
     return {
-      payment: overrides.payment == null ? workspaceCapabilities.payment : overrides.payment !== false,
+      payment: paymentAllowed && overrides.payment !== false,
       status: overrides.status == null ? workspaceCapabilities.status : overrides.status !== false,
-      edit: overrides.edit == null ? workspaceCapabilities.edit : overrides.edit !== false,
+      edit: editAllowed && (overrides.edit == null ? workspaceCapabilities.edit : overrides.edit !== false),
       print: overrides.print == null ? workspaceCapabilities.print : overrides.print !== false,
     };
   }
@@ -4908,7 +4969,8 @@
   }
 
   async function openOrderPaymentDialog(order) {
-    if (!getActiveOrderCapabilities().payment) return;
+    if (!workspaceCapabilities.payment || !canCourierAcceptPayment(order)) return;
+    if (!isCourierWorkspace && !getActiveOrderCapabilities().payment) return;
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
     if (isCourierWorkspace && !courierOfflineState.online && isPaidOrder(order)) {
@@ -5004,6 +5066,7 @@
       cacheOnlyPaymentMethods: !courierOfflineState.online,
       submitPayload: async ({ payload }) => {
         const liveOrder = state.orders.find((row) => Number(row?.id || 0) === orderId) || order;
+        if (!canCourierAcceptPayment(liveOrder) || Number(payload.is_paid) !== 1) throw new Error('PAYMENT_PERMISSION_DENIED');
         const optimisticOrder = buildOptimisticOrderPaymentSnapshot(liveOrder, payload);
         if (!optimisticOrder) {
           throw new Error("PAYMENT_PAYLOAD_INVALID");
@@ -5042,6 +5105,7 @@
   }
 
   function setStatusControlsDisabled(disabled) {
+    if(!isCourierWorkspace)return;
     $$('[data-action="order-status-next"]').forEach((btn) => {
       btn.disabled = disabled;
     });
@@ -5106,7 +5170,8 @@
 
     const orderIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
     const tabOrder = tabsState.tabs.find((tab) => Number(tab?.orderId || 0) === id)?.order || null;
-    const prevOrder = orderIdx >= 0 ? state.orders[orderIdx] : tabOrder;
+    const previous=orderIdx >= 0 ? state.orders[orderIdx] : tabOrder;
+    const prevOrder=isCourierWorkspace?previous:orderStatusQueue.overlay(previous);
     const prevStatusId = Number(prevOrder?.status_id || 0);
     const prevStatusMeta = getStatusMetaById(prevStatusId) || null;
     const optimisticOrder = buildOptimisticOrderStatusSnapshot(prevOrder, nextStatusId);
@@ -5137,28 +5202,7 @@
     }
 
     if (!optimisticOrder || prevStatusId === nextStatusId) return;
-    if (orderStatusSyncStates.get(id)?.mode === "syncing") return;
-    if (navigator.onLine === false) {
-      setOrderStatusSyncState(id, "error", "Нужен интернет", 2600);
-      return;
-    }
-    setOrderStatusSyncState(id, "syncing", "Сохраняем…");
-    handleOrderEvent(optimisticOrder, { localOnly: true });
-    try {
-      const json = await apiJson(request.url, {
-        method: request.method,
-        body: request.body,
-      });
-      const confirmedOrder = json?.data && typeof json.data === "object"
-        ? { ...optimisticOrder, ...json.data }
-        : optimisticOrder;
-      handleOrderEvent(confirmedOrder);
-      setOrderStatusSyncState(id, "saved", "Сохранено", 1200);
-    } catch (err) {
-      if (prevOrder) handleOrderEvent(prevOrder, { localOnly: true });
-      setOrderStatusSyncState(id, "error", "Не сохранено", 2600);
-      throw err;
-    }
+    return orderStatusQueue.enqueue(prevOrder,optimisticOrder);
   }
 
   async function cycleActiveOrderStatus() {
@@ -6046,62 +6090,9 @@
         const orderIds = getDraggingOrderIdsFromEvent(e);
         if (!orderIds.length) return;
 
-        try {
-          const targetStatusMeta = getStatusMetaById(statusId) || null;
-          const requestOrderIds = [];
-          let countersChanged = false;
-
-          for (const orderId of orderIds) {
-            const idNum = Number(orderId || 0);
-            if (!(idNum > 0)) continue;
-
-            const idx = state.orders.findIndex((row) => Number(row?.id || 0) === idNum);
-            const current = idx >= 0 ? state.orders[idx] : null;
-            if (current && Number(current?.status_id || 0) === statusId) continue;
-
-            requestOrderIds.push(idNum);
-            if (!current) continue;
-
-            const optimisticOrder = { ...current, status_id: statusId };
-            if (targetStatusMeta) {
-              if (targetStatusMeta.title != null) optimisticOrder.status_title = targetStatusMeta.title;
-              if (targetStatusMeta.code != null) optimisticOrder.status_code = targetStatusMeta.code;
-              if (targetStatusMeta.color != null) optimisticOrder.status_color = targetStatusMeta.color;
-            }
-
-            state.orders[idx] = optimisticOrder;
-            countersChanged = applyStageCountersDelta(current, optimisticOrder) || countersChanged;
-          }
-          if (!requestOrderIds.length) return;
-          rebuildOrdersStageIndex();
-
-          requestOrderIds.forEach((id) => state.selectedOrderIds.delete(Number(id)));
-
-          if (countersChanged) renderStages();
-          renderOrders();
-          if (tabsState.tabs.length) {
-            syncTabsWithLatestOrders();
-          } else if (state.activeOrderId) {
-            const activeOrder = state.orders.find((row) => Number(row?.id || 0) === Number(state.activeOrderId || 0)) || null;
-            if (activeOrder) setInfo(activeOrder);
-          }
-
-          await Promise.all(
-            requestOrderIds.map((orderId) => apiJson(`/api/admin/orders/${orderId}/status`, {
-              method: "PUT",
-              body: { status_id: statusId },
-            }))
-          );
-        } catch (err) {
-          console.error(err);
-          try {
-            await loadStatuses();
-            renderStages();
-            await loadAndRenderOrders(true);
-          } catch (syncErr) {
-            console.error(syncErr);
-          }
-        }
+        orderIds.forEach(id=>state.selectedOrderIds.delete(Number(id)));
+        const results=await Promise.allSettled(orderIds.map(id=>updateOrderStatus(id,statusId)));
+        results.forEach(result=>{if(result.status==='rejected')console.error(result.reason);});
       });
     });
   }
@@ -6317,7 +6308,7 @@
   function reconcileOrderListDom(order, { prevVisible = false, nextVisible = false } = {}) {
     if (!elOrdersList) return;
     const orderId = Number(order?.id || 0);
-    if (prevVisible && !nextVisible) {
+    if (!nextVisible) {
       removeOrderRowFromDom(orderId);
       return;
     }
@@ -6384,7 +6375,7 @@
       );
 
     const payment = String(order.payment_title || "").trim();
-    const totalText = money(getOrderDisplayTotal(order));
+    const totalText = money(Number(order.total_price || 0));
     const paymentCode = (order.payment_code || "").toLowerCase();
     const isCash = paymentCode.includes("cash");
     const isFullyRefunded = isOrderFullyRefunded(order);
@@ -6472,7 +6463,7 @@
       return;
     }
 
-    if (shouldUseOrdersMobileCardLayout()) {
+    if (shouldUseOrdersMobileCardLayout() && !sharedOrderPanel?.buildOrderListRowInnerHtml) {
       row.innerHTML = `
         <div class="order-col order-id">
           <label
@@ -6523,9 +6514,11 @@
 
     if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderListRowInnerHtml === "function") {
       row.innerHTML = sharedOrderPanel.buildOrderListRowInnerHtml({
+        order,
+        statuses: getActiveOrderCapabilities().status?getSortedStatuses().filter(status=>!isForbiddenStatusTransition(getStatusMetaById(Number(order.status_id)),status)):[],
         orderId,
         orderNumberText: String(order.id || ""),
-        orderIdNumHtml: `<div class="order-id-num">${escapeHtml(order.id)}${renderCourierPassportCacheIndicator(orderId)}</div>`,
+        orderNumberSuffixHtml: renderCourierPassportCacheIndicator(orderId),
         createdAtText: formatTime(order.created_at),
         showMultiSelect: true,
         multiSelected,
@@ -6536,6 +6529,7 @@
         addressCommentText: addressCommentDisplay,
         stageHtml: stageCycleBtnHtml,
         paymentHtml,
+        useMobileControls: shouldUseOrdersMobileCardLayout(),
       });
       row.classList.remove("is-active");
       applyOrderMultiSelectionState(row, orderId);
@@ -6628,6 +6622,10 @@
 
     filtered.forEach((o) => {
       const row = buildOrderRow(o);
+      if (isCourierWorkspace) {
+        const paymentButton = row.querySelector('.order-payment-btn');
+        if (paymentButton) paymentButton.disabled = !canCourierAcceptPayment(o);
+      }
       elOrdersList.appendChild(row);
     });
     void inspectOrdersSharedPassportCache(filtered);
@@ -6717,7 +6715,7 @@
       || (context && !isCurrentCourierSyncContext(context))) return false;
     const rows = Array.isArray(json.data) ? json.data : [];
     if (resetPagination && (!ordersPersistentCacheRestored || !state.orders.length)) {
-      state.orders = rows.filter(shouldKeepOrderInState);
+      state.orders = rows.map(order=>isCourierWorkspace?order:orderStatusQueue.overlay(order)).filter(shouldKeepOrderInState);
     } else {
       const existingIds = new Set(state.orders.map((order) => Number(order?.id || 0)));
       rows.filter(shouldKeepOrderInState).forEach((order) => {
@@ -7123,6 +7121,7 @@
 
   function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false, persistList = true } = {}) {
     if (!order || !order.id) return;
+    if(!localOnly && !isCourierWorkspace)order=orderStatusQueue.overlay(order);
     const detailContext = orderDetailsContext(order.id);
     orderDetailsMutationGeneration.set(
       detailContext.runtimeKey,
@@ -7430,7 +7429,11 @@
 
         courierOptimisticOverlaySuspended += 1;
         try {
-          const restored = await restoreCourierAuthoritativeSnapshot(context);
+          // An in-memory server cursor can equal a previous process's cursor after restart.
+          // Keep the cached list visible, but establish a fresh snapshot on workspace entry.
+          const requireSnapshot = reason === "startup" || reason === "store-switch";
+          const restored = requireSnapshot ? false : await restoreCourierAuthoritativeSnapshot(context);
+          if (!restored) ordersPersistentCacheRestored = false;
           if (!isCurrentCourierSyncContext(context)) return { ok: false, reason: "obsolete" };
           (Array.isArray(flushResult?.confirmedOrders) ? flushResult.confirmedOrders : []).forEach((order) => {
             handleOrderEvent(order, { skipStageRefresh: true, persistList: false });
@@ -8990,6 +8993,12 @@
 
   init();
 
+  window.addEventListener('admin:access-context', () => {
+    if (!isCourierWorkspace) return;
+    renderOrders();
+    syncOrderPaymentFooter(getActiveOrder());
+  });
+
   ordersConnectionBannerRetryBtns.forEach((button) => {
     button.addEventListener("click", () => {
       if (isCourierWorkspace) {
@@ -9022,6 +9031,10 @@
     });
     window.addEventListener("online", () => {
       ordersRefreshFailed = false;
+      courierPassportCacheStates.forEach((value, key) => {
+        if (["missing", "error", "stale"].includes(value)) courierPassportCacheStates.delete(key);
+      });
+      void inspectOrdersSharedPassportCache();
       refreshCourierConnectionBanner();
       void resumeOrdersRealtime();
     });
@@ -9041,6 +9054,7 @@
     authoritativeFullOrderRuntimeKeys.clear();
     courierPassportCacheStates.clear();
     orderStatusSyncStates.clear();
+    orderStatusScopeRevision++;
     state.clientsCache.clear();
     state.statuses = [];
     state.orders = [];

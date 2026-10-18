@@ -63,6 +63,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       );
       if (!rows.length) return next();
       const permissionKey = String(req.permission?.key || "orders.list.read");
+      if (req.rbacContext === "courier" && permissionKey === "courier.orders.accept_payment") {
+        if (Number(rows[0].assigned_user_id || 0) !== Number(req.user?.userId || 0)) {
+          return res.status(403).json({ ok: false, error: "RESOURCE_FORBIDDEN" });
+        }
+        const access = await can(req.user, permissionKey, rows[0]);
+        if (!access.allowed) return res.status(403).json({ ok: false, error: access.error || "RESOURCE_FORBIDDEN" });
+        req.orderAccessResource = rows[0];
+        return next();
+      }
       if (req.rbacContext === "courier" && permissionKey.startsWith("courier.")) {
         const assignedUserId = Number(rows[0].assigned_user_id || 0);
         if (assignedUserId === 0 || assignedUserId === Number(req.user?.userId || 0)) {
@@ -1740,10 +1749,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     const list = Array.isArray(orders) ? orders : [];
     if (!list.length) return list;
     const refundMap = await fetchRefundRecordsMap(executor, tenantId, storeId, list.map((order) => order?.id), opts);
-    return list.map((order) => ({
-      ...order,
-      ...buildOrderRefundState(order, refundMap.get(Number(order?.id || 0)) || []),
-    }));
+    return list.map((order) => {
+      const refund=buildOrderRefundState(order,refundMap.get(Number(order?.id || 0)) || []);
+      return {...order,...refund,paymentSummary:order.paymentSummary?{...order.paymentSummary,
+        state:refund.refund_state==='full'?'refunded':refund.refund_state==='partial'?'partially_refunded':order.paymentSummary.state,
+        refundedAmount:Math.max(order.paymentSummary.refundedAmount || 0,Math.round(refund.refunded_total*100))}:order.paymentSummary};
+    });
   }
 
   async function resolveRefundActorSnapshot(conn, tenantId, req) {
@@ -2144,12 +2155,43 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           GROUP BY s.id, s.title ORDER BY s.id`,
         baseParams
       );
+      // Money is grouped by the recorded payment/refund time, independently of the order creation date.
+      const [moneyRows]=await db.query(`SELECT m.*,o.customer_name,o.customer_phone,
+          DATE_FORMAT(o.created_at,'%Y-%m-%d %H:%i:%s') AS order_created_at
+        FROM (
+          SELECT 'income' AS entry_kind,o.id AS entry_id,o.id AS order_id,NULL AS refund_id,
+            o.manual_paid_at AS occurred_at,o.total_price AS amount,p.code AS payment_code,p.title AS payment_title
+          FROM order_orders o LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.id=o.payment_id
+          WHERE o.tenant_id=? AND o.store_id=? AND o.is_paid=1 AND o.manual_paid_at IS NOT NULL
+          UNION ALL
+          SELECT 'income',p.id,p.order_id,NULL,p.paid_at,p.captured_amount,'online','Онлайн'
+          FROM payment_payments p WHERE p.tenant_id=? AND p.store_id=? AND p.captured_amount>0 AND p.paid_at IS NOT NULL
+          UNION ALL
+          SELECT 'refund',r.id,r.order_id,r.id,r.created_at,r.total_amount,r.payment_code,r.payment_title
+          FROM order_refunds r WHERE r.tenant_id=? AND r.store_id=? AND r.financial_state='manual'
+          UNION ALL
+          SELECT 'refund',r.id,p.order_id,r.order_return_id,r.completed_at,r.amount,'online','Онлайн'
+          FROM payment_refunds r JOIN payment_payments p ON p.tenant_id=r.tenant_id AND p.id=r.payment_id
+          WHERE p.tenant_id=? AND p.store_id=? AND r.status='succeeded' AND r.completed_at IS NOT NULL
+        ) m JOIN order_orders o ON o.id=m.order_id
+        WHERE m.amount>0 ${bounds?'AND m.occurred_at>=? AND m.occurred_at<?':''}
+        ORDER BY m.occurred_at DESC,m.entry_id DESC`,
+        [tenantId,storeId,tenantId,storeId,tenantId,storeId,tenantId,storeId,
+          ...(bounds?[bounds.createdStartUtc,bounds.createdEndUtcExclusive]:[])]);
+      const [undatedRows]=await db.query(`SELECT COUNT(*) AS count FROM order_orders o
+        WHERE o.tenant_id=? AND o.store_id=? AND o.is_paid=1 AND o.manual_paid_at IS NULL
+        AND NOT EXISTS(SELECT 1 FROM payment_payments p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.captured_amount>0)`,[tenantId,storeId]);
       const summary = summaryRows[0] || {};
       res.json({ ok: true, data: {
         summary: Object.fromEntries(Object.entries(summary).map(([key, value]) => [key, Number(value || 0)])),
         stages: stageRows.map((row) => ({ status_id: Number(row.status_id || 0), title: String(row.status_title || '—'), count: Number(row.orders_count || 0), amount: Number(row.total || 0) })),
         days: dayRows.map((row) => Object.assign({}, row, Object.fromEntries(['orders_count','delivered_orders','paid_count','unpaid_count'].map((key) => [key, Number(row[key] || 0)])), { total: Number(row.total || 0), delivered_total: Number(row.delivered_total || 0) })),
         timezone: storeTimezone,
+        money_entries:moneyRows.map(row=>({...row,id:Number(row.order_id),amount:Number(row.amount),
+          created_at:helpers.utcToStoreDateTime(row.occurred_at,storeTimezone),
+          order:{id:Number(row.order_id),customer_name:row.customer_name,customer_phone:row.customer_phone,
+            created_at:helpers.utcToStoreDateTime(row.order_created_at,storeTimezone)}})),
+        money_undated_count:Number(undatedRows[0]?.count || 0),
       }});
     } catch (e) {
       console.error(e);
@@ -2195,7 +2237,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         WHERE ${where} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`,
         [...params, limit + 1, offset]);
       const hasMore = rows.length > limit;
-      res.json({ ok: true, data: rows.slice(0, limit).map((row) => ({ ...row, created_at: helpers.utcToStoreDateTime(row.created_at, timezone), total_price: Number(row.total_price || 0), is_paid: Number(row.is_paid || 0) === 1 ? 1 : 0 })), has_more: hasMore, next_offset: hasMore ? offset + limit : null });
+      const data=await attachRefundDataToOrders(db,tenantId,storeId,rows.slice(0,limit).map(row=>({...row,
+        created_at:helpers.utcToStoreDateTime(row.created_at,timezone),total_price:Number(row.total_price || 0),
+        is_paid:Number(row.is_paid || 0)===1?1:0,paymentSummary:adminPaymentSummary(row,timezone)})),{storeTimezone:timezone});
+      res.json({ ok: true, data, has_more: hasMore, next_offset: hasMore ? offset + limit : null });
     } catch (e) { console.error(e); res.status(500).json({ ok: false, error: "DB_ERROR" }); }
   });
 
@@ -2613,8 +2658,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           ok: true,
           data: [],
           cursor,
-          reset_required: cursor > Math.max(0, since),
-          reason: cursor > Math.max(0, since) ? "permission_scope" : null,
+          reset_required: cursorState.resetRequired || cursor > Math.max(0, since),
+          reason: cursorState.resetRequired ? cursorState.reason : (cursor > Math.max(0, since) ? "permission_scope" : null),
         });
       }
       if (cursorState.resetRequired) {
@@ -2922,6 +2967,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (!(isPaidRaw === 0 || isPaidRaw === 1)) {
         return res.status(400).json({ ok: false, error: "BAD_IS_PAID" });
       }
+      if (req.rbacContext === "courier" && isPaidRaw !== 1) {
+        return res.status(403).json({ ok: false, error: "COURIER_PAYMENT_REVERSAL_FORBIDDEN" });
+      }
 
       conn = await db.getConnection();
       await conn.beginTransaction();
@@ -2946,10 +2994,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           : (claim.responseBody || { ok: true, idempotency_replay: true }));
       }
 
+      await conn.query('INSERT INTO payment_order_guards (tenant_id,store_id,order_id) VALUES (?,?,?) ON DUPLICATE KEY UPDATE order_id=VALUES(order_id)',[tenantId,storeId,id]);
+      await conn.query('SELECT order_id FROM payment_order_guards WHERE tenant_id=? AND store_id=? AND order_id=? FOR UPDATE',[tenantId,storeId,id]);
       const [existingRows] = await conn.query(
         `SELECT o.id,
                 o.total_price,
                 o.change_from,
+                o.is_paid, o.assigned_user_id,
                 o.payment_id, o.online_payment_required, o.online_payment_status, o.payment_projection, o.manual_paid_at,
                 p.code AS payment_code
            FROM order_orders o
@@ -2971,7 +3022,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
 
       const existing = existingRows[0] || {};
-      if(Number(existing.online_payment_required)) {
+      if (req.rbacContext === "courier" && (Number(existing.assigned_user_id || 0) !== Number(req.user?.userId || 0) || Number(existing.is_paid) === 1)) {
+        await conn.rollback(); transactionStarted = false; conn.release(); conn = null;
+        return res.status(Number(existing.is_paid) === 1 ? 409 : 403).json({ ok: false, error: Number(existing.is_paid) === 1 ? "ORDER_ALREADY_PAID" : "RESOURCE_FORBIDDEN" });
+      }
+      const [gatewayPaid]=await conn.query('SELECT id FROM payment_payments WHERE tenant_id=? AND store_id=? AND order_id=? AND captured_amount>0 LIMIT 1 FOR UPDATE',[tenantId,storeId,id]);
+      if(gatewayPaid.length || (Number(existing.online_payment_required) && !['cash','card'].includes(existing.payment_code))) {
         await conn.rollback();transactionStarted=false;conn.release();conn=null;
         return res.status(409).json({ok:false,error:'ONLINE_PAYMENT_MANAGED_BY_GATEWAY'});
       }
@@ -3005,6 +3061,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         effectivePaymentCode = String(paymentRows[0]?.code || paymentCode).trim().toLowerCase();
       }
 
+      if(effectivePaymentCode==='online') {
+        await conn.rollback();transactionStarted=false;conn.release();conn=null;
+        return res.status(409).json({ok:false,error:'ONLINE_PAYMENT_MANAGED_BY_GATEWAY'});
+      }
+      if (req.rbacContext === "courier" && !['cash', 'card'].includes(effectivePaymentCode)) {
+        await conn.rollback(); transactionStarted = false; conn.release(); conn = null;
+        return res.status(403).json({ ok: false, error: "COURIER_PAYMENT_METHOD_FORBIDDEN" });
+      }
       const totalPrice = Number(existing.total_price || 0);
       const isCashPayment = effectivePaymentCode.includes("cash") || effectivePaymentCode.includes("нал");
       let nextChangeFrom = Number(existing.change_from || 0) > 0 ? Number(existing.change_from) : null;
@@ -3039,8 +3103,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1`,
         [isPaidRaw, nextPaymentId, nextChangeFrom, tenantId, storeId, id]
       );
-      await conn.query('UPDATE order_orders SET manual_paid_at=IF(?,UTC_TIMESTAMP(6),NULL),manual_paid_by=IF(?,?,NULL) WHERE tenant_id=? AND store_id=? AND id=?',
-        [isPaidRaw,isPaidRaw,req.user.userId,tenantId,storeId,id]);
+      await conn.query('UPDATE order_orders SET manual_paid_at=IF(?,UTC_TIMESTAMP(6),NULL),manual_paid_by=IF(?,?,NULL),online_payment_required=IF(?,0,online_payment_required) WHERE tenant_id=? AND store_id=? AND id=?',
+        [isPaidRaw,isPaidRaw,req.user.userId,isPaidRaw,tenantId,storeId,id]);
       await conn.query("INSERT INTO order_payment_audit (tenant_id,store_id,order_id,actor_user_id,type,amount,created_at) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(6))",
         [tenantId,storeId,id,req.user.userId,isPaidRaw?'manual_paid':'manual_unpaid',existing.total_price]);
       if (!Number(result?.affectedRows || 0)) {
@@ -3505,11 +3569,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
   };
 
   router.put("/:id/status", async (req, res) => {
-    const conn = await db.getConnection();
+    let conn = null;
     let transactionStarted = false;
     let connectionReleased = false;
     const safeRelease = () => {
-      if (!connectionReleased) {
+      if (conn && !connectionReleased) {
         conn.release();
         connectionReleased = true;
       }
@@ -3530,6 +3594,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         return res.status(400).json({ ok: false, error: "BAD_STATUS_ID" });
       }
 
+      const benefitsProvider = getOrderBenefitsAccrualProvider();
+      if (typeof benefitsProvider?.prepare === "function") await benefitsProvider.prepare();
+      conn = await db.getConnection();
       await conn.beginTransaction();
       transactionStarted = true;
       const claim = await claimOrderMutationIdempotency(conn, req, {
@@ -3757,6 +3824,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       });
 
       const payload = await fetchOrderPayload(tenantId, storeId, id);
+      if(payload && req.headers['idempotency-key'])payload.status_mutation_id=String(req.headers['idempotency-key']);
       if (payload) {
         if (ordersEvents && typeof ordersEvents.publish === "function") {
           ordersEvents.publish(tenantId, storeId, "order.updated", payload);
@@ -3898,7 +3966,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [existingRows] = await db.query(
-        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, status_id, online_payment_required, online_payment_status,
+        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, status_id, is_paid, online_payment_required, online_payment_status,
                 ${hasBenefitsMetaColumn ? "benefits_meta_json," : ""}
                 items,
                 stock_deducted_at
@@ -3911,7 +3979,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
       const existing = existingRows[0] || {};
-      if (Number(existing.online_payment_required)) return res.status(409).json({ok:false,error:"ONLINE_ORDER_EDIT_LOCKED"});
+      if(Number(existing.is_paid))return res.status(409).json({ok:false,error:'ORDER_ALREADY_PAID'});
+      const [financialLocks]=await db.query("SELECT id FROM payment_payments WHERE tenant_id=? AND store_id=? AND order_id=? AND (status IN ('created','pending','waiting_for_confirmation') OR captured_amount>0 OR reconciliation_state='manual_review') LIMIT 1",[tenantId,storeId,id]);
+      if(financialLocks.length)return res.status(409).json({ok:false,error:'ORDER_PAYMENT_EDIT_LOCKED'});
       let previousItems = [];
       try {
         const parsedExistingItems = existing?.items ? JSON.parse(existing.items) : [];
@@ -4905,12 +4975,25 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         storeId,
         id
       );
-      await db.query(
+      const editConnection=await db.getConnection();
+      try {
+      await editConnection.beginTransaction();
+      await editConnection.query('INSERT INTO payment_order_guards (tenant_id,store_id,order_id) VALUES (?,?,?) ON DUPLICATE KEY UPDATE order_id=VALUES(order_id)',[tenantId,storeId,id]);
+      await editConnection.query('SELECT order_id FROM payment_order_guards WHERE tenant_id=? AND store_id=? AND order_id=? FOR UPDATE',[tenantId,storeId,id]);
+      const [lockedOrders]=await editConnection.query('SELECT is_paid FROM order_orders WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 FOR UPDATE',[tenantId,storeId,id]);
+      const [lockedPayments]=await editConnection.query("SELECT id FROM payment_payments WHERE tenant_id=? AND store_id=? AND order_id=? AND (status IN ('created','pending','waiting_for_confirmation') OR captured_amount>0 OR reconciliation_state='manual_review') LIMIT 1 FOR UPDATE",[tenantId,storeId,id]);
+      if(!lockedOrders.length || Number(lockedOrders[0].is_paid) || lockedPayments.length) {
+        const error=new Error('ORDER_PAYMENT_EDIT_LOCKED');error.code='ORDER_PAYMENT_EDIT_LOCKED';throw error;
+      }
+      await editConnection.query(
         `UPDATE order_orders
          SET ${updateFields.join(",\n             ")}
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1`,
         updateParams
       );
+      await editConnection.query('UPDATE order_orders SET online_payment_required=?,online_payment_total=?,online_payment_status=? WHERE tenant_id=? AND store_id=? AND id=?',[paymentCode==='online'?1:0,paymentCode==='online'?totalPrice:null,paymentCode==='online'?'pending':null,tenantId,storeId,id]);
+      await editConnection.commit();
+      } catch(error){await editConnection.rollback();throw error;}finally{editConnection.release();}
 
       if (removedGiftRewardIds.length && previousRewardCustomerId > 0) {
         await db.query(
@@ -4989,6 +5072,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (e && (e.code === "BONUS_ACCOUNT_NOT_FOUND" || e.code === "BONUS_BALANCE_NOT_ENOUGH")) {
         return res.status(409).json({ ok: false, error: e.code });
       }
+      if(e?.code==='ORDER_PAYMENT_EDIT_LOCKED')return res.status(409).json({ok:false,error:e.code});
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });

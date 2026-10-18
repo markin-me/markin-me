@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS `mkt_subscription_storefront_settings` (
+  `id` int UNSIGNED NOT NULL AUTO_INCREMENT,
+  `tenant_id` int NOT NULL,
+  `store_id` int NOT NULL DEFAULT '1',
+  `is_active` tinyint(1) NOT NULL DEFAULT '0',
+  `aspect_ratio` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '11:5',
+  `background_color` char(7) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL DEFAULT '#f1e8ff',
+  `title` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Получайте больше выгоды',
+  `title_font_size` tinyint UNSIGNED NOT NULL DEFAULT '18',
+  `title_color` char(7) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL DEFAULT '#7651c9',
+  `description` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `description_font_size` tinyint UNSIGNED NOT NULL DEFAULT '12',
+  `description_color` char(7) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL DEFAULT '#7651c9',
+  `image_url` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `button_text` varchar(80) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Смотреть подписки',
+  `button_color` char(7) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL DEFAULT '#ffffff',
+  `button_icon_url` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_mkt_subscription_storefront_settings_tenant_store` (`tenant_id`,`store_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

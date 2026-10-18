@@ -53,6 +53,7 @@ const NAVIGATION_RBAC_NODES = Object.freeze([
   node('courier', null, 'courier-screen', 'Экран курьера', 'courier.access'),
   node('courier.orders', 'courier', 'courier-screen', 'Заказы курьера', 'courier.orders.access', { read: 'courier.orders.read' }, [
     { key: 'courier.orders.update', label: 'Изменение статуса' },
+    { key: 'courier.orders.accept_payment', label: 'Приём оплаты' },
   ]),
 
   node('new_order', null, 'new-order', 'Новый заказ', 'new_order.access'),
@@ -157,6 +158,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     if (context === 'new-order' && (route === '/orders/statuses' || route === '/orders/benefits/preview')) return 'new_order.create';
     if (context === 'courier') {
       if (action === 'read') return 'courier.orders.read';
+      if (String(method || '').toUpperCase() === 'PUT' && /^\/orders\/[^/]+\/paid$/.test(route)) return 'courier.orders.accept_payment';
       if (String(method || '').toUpperCase() === 'PUT' && /^\/orders\/[^/]+\/status$/.test(route)) return 'courier.orders.update';
       return 'courier.unsupported';
     }

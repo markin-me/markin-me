@@ -16900,6 +16900,9 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
 .shop-checkout-sending-overlay.hidden{
   display: none !important;
 }
+.shop-checkout-sending-overlay.is-payment-loading{
+  z-index:100600;
+}
 
 .shop-checkout-sending-card{
   min-width: 260px;
@@ -17386,6 +17389,18 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   border-color: var(--shop-buy);
   color: var(--shop-buy-text);
   box-shadow: 0 10px 22px rgba(255, 106, 19, 0.22);
+}
+.shop-order-summary-card__price.is-paid{
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(22, 163, 74, 0.18);
+}
+.shop-order-summary-card__price.is-refunded{
+  background: #ede9fe;
+  border-color: #ede9fe;
+  color: #6d28d9;
+  box-shadow: none;
 }
 
 .shop-profile-order-summary-card{
@@ -31578,13 +31593,45 @@ body.page-kso .shop-products-panel{
 .app-modal.shop-order-modal { border-radius: 28px; }
 .app-modal.shop-order-modal > .app-modal-footer { display: none; }
 .app-modal.shop-order-modal .app-modal-body { background: var(--color-surface); }
-.shop-order-modal-footer { flex-shrink: 0; padding: 12px 16px; margin: 0; border-top: 1px solid var(--color-border); background: var(--color-white, #fff); }
-.shop-order-modal-footer #shopOrderDetailsTotalBtn { border-radius: 999px; background: var(--shop-buy, #f97316); box-shadow: 0 10px 22px rgba(249,115,22,.18); }
+.shop-order-modal-footer { flex-shrink: 0; padding: 12px 16px; margin: 0; border-top: 1px solid var(--color-border); background: var(--color-white, #fff); box-sizing: border-box; grid-template-columns: minmax(0, 1fr); grid-template-areas: "submit"; }
+.shop-order-modal-footer #shopOrderDetailsTotalBtn { grid-area: submit; border-radius: 999px; background: var(--shop-buy, #f97316); box-shadow: 0 10px 22px rgba(249,115,22,.18); }
 .shop-order-payment-status { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; font-weight: 600; }
 .shop-order-payment-status.is-paid { color: #15803d; background: #dcfce7; }
-.shop-order-payment-status.is-unpaid { color: #9a3412; background: #ffedd5; }
-.shop-order-payment-actions { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-#shopOrderDetailsTotalBtn.is-order-paid, #shopMobileOrderTotalBtn.is-order-paid { background: #16a34a; color: #fff; opacity: 1; box-shadow: none; }
+.shop-order-payment-status.is-unpaid { color: #b91c1c; background: #fee2e2; }
+.shop-order-payment-status.is-processing { color: #854d0e; background: #fef3c7; }
+.shop-order-payment-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.shop-order-payment-badges { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.shop-order-payment-method { text-align: right; border-radius: 999px; padding: 7px 12px; background: #e0edff; color: #1d4ed8; font-size: 12px; }
+.shop-order-accordion.payment-tone-paid .shop-order-accordion__icon { color: #15803d; background: #dcfce7; }
+.shop-order-accordion.payment-tone-unpaid .shop-order-accordion__icon { color: #b91c1c; background: #fee2e2; }
+.shop-order-accordion.payment-tone-processing .shop-order-accordion__icon { color: #854d0e; background: #fef3c7; }
+.shop-order-payment-actions .shop-payment-button, .shop-payment-choice .shop-payment-button, .shop-payment-widget .shop-payment-button { min-height: 42px; height: auto; border: 0; border-radius: 999px; padding: 11px 14px; font-weight: 700; font-size: 13px; line-height: 1.3; white-space: normal; cursor: pointer; transition: background-color 160ms ease, box-shadow 160ms ease; }
+.shop-payment-button.shop-payment-button--primary { background: var(--shop-buy, #f97316); color: #fff; box-shadow: 0 4px 12px rgba(249,115,22,.16); }
+.shop-payment-button.shop-payment-button--secondary { background: #e0edff; color: #1d4ed8; }
+.shop-payment-button.shop-payment-button--confirm { background: #16a34a; color: #fff; }
+.shop-payment-button:disabled { opacity: .45; cursor: default; box-shadow: none; }
+.shop-payment-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+@media (hover: hover) {
+  .shop-payment-button:not(:disabled):hover { filter: brightness(.96); }
+}
+.shop-payment-widget-active > :not([data-shop-payment-widget]) { display: none; }
+.shop-order-details--variant-a.shop-payment-widget-active { animation: none; transform: none; }
+.shop-payment-widget { padding: 16px; min-width: 0; }
+.shop-payment-widget > .control { width: 100%; margin-top: 16px; }
+.app-modal#appModal.shop-payment-choice-modal { inset: auto; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(440px, calc(100vw - 32px)); height: auto; max-height: calc(100dvh - 32px); border-radius: 24px; z-index: 10060; }
+body.shop-payment-choice-open #appModalBackdrop { z-index: 10055; }
+.shop-payment-choice { display: grid; gap: 14px; animation: shopPaymentContentIn 180ms ease-out both; }
+.shop-payment-choice > p { margin: 0; }
+.shop-payment-choice > .control { width: 100%; }
+.shop-payment-choice .shop-checkout-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.shop-payment-choice .shop-checkout-card-option__icon { font-size: 22px; }
+.shop-payment-choice > :not(p) { animation: shopPaymentContentIn 180ms ease-out both; }
+@keyframes shopPaymentContentIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .shop-payment-choice, .shop-payment-choice > :not(p) { animation: none; }
+  .shop-payment-button { transition: none; }
+}
+#shopOrderDetailsTotalBtn.is-order-paid, #shopMobileOrderTotalBtn.is-order-paid { background: #16a34a; border-color: transparent; color: #fff; opacity: 1; box-shadow: none; }
 .shop-order-card-leaving { pointer-events: none; animation: shopOrderCardOut 200ms ease both; }
 @keyframes shopOrderScaleIn { from { transform: scale(.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes shopOrderSlideIn { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }

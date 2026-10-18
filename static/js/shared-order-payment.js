@@ -1390,6 +1390,7 @@
     stateTitle: function(summary) {
       if(summary?.amountMismatch)return 'Сумма заказа отличается от оплаты';
       if(summary?.anomalies?.length)return 'Требуется проверка оплаты';
+      if(summary?.methodChangePending)return 'Не оплачено';
       if(summary?.source==='manual' && summary.state==='paid')return 'Оплачено вручную';
       return ({unpaid:'Не оплачено',created:'Подготавливаем оплату',pending:'Платёж обрабатывается',waiting_for_confirmation:'Ожидает оплаты',paid:'Оплачено онлайн',failed:'Оплата не прошла',cancelled:'Оплата не завершена',partially_refunded:'Частичный возврат',refunded:'Возвращено',not_required:'Оплата не требуется'})[summary?.state] || 'Ожидает оплаты';
     },

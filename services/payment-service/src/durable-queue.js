@@ -9,13 +9,14 @@ function safeCode(error) {
 function createDurableQueue(db, table, work, config) {
   if (!TABLES.has(table)) throw new Error("INVALID_QUEUE");
   let stopped = true, timer, active = Promise.resolve(),lastCleanup=0,lastSuccessfulTick=null,lastErrorCode=null;
+  let lastErrorLogAt=0;
   async function tick() {
     const retention=table==='payment_webhook_inbox'?config.inboxRetentionDays:config.outboxRetentionDays;
     if(retention && Date.now()-lastCleanup>=3600000) {
       const [result]=await db.query(`DELETE FROM ${table} WHERE status='done' AND lease_token IS NULL
         AND processed_at<DATE_SUB(UTC_TIMESTAMP(6),INTERVAL ? DAY) ORDER BY id LIMIT 100`,[retention]);
       lastCleanup=Date.now();
-      console.info(JSON.stringify({operation:'payment.queue.retention',queue:table,deleted:result.affectedRows}));
+      if(result.affectedRows)console.info(JSON.stringify({operation:'payment.queue.retention',queue:table,deleted:result.affectedRows}));
     }
     const [rows] = await db.query(`SELECT * FROM ${table}
       WHERE (status='pending' AND available_at<=UTC_TIMESTAMP(6))
@@ -48,7 +49,14 @@ function createDurableQueue(db, table, work, config) {
   function schedule() {
     if (stopped) return;
     timer=setTimeout(()=>{
-      active=tick().then(()=>{lastSuccessfulTick=new Date().toISOString();lastErrorCode=null;}).catch(error=>{lastErrorCode=safeCode(error);console.error(JSON.stringify({operation:table,result:"queue_unavailable",causeCode:lastErrorCode}));}).finally(schedule);
+      active=tick().then(()=>{lastSuccessfulTick=new Date().toISOString();lastErrorCode=null;}).catch(error=>{
+        const code=safeCode(error),now=Date.now();
+        if(code!==lastErrorCode || now-lastErrorLogAt>=60000){
+          console.error(JSON.stringify({operation:table,result:"queue_unavailable",causeCode:code}));
+          lastErrorLogAt=now;
+        }
+        lastErrorCode=code;
+      }).finally(schedule);
     },config.deliveryPollMs);
     timer.unref();
   }

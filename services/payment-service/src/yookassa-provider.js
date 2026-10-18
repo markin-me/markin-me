@@ -31,10 +31,12 @@ function normalizePayment(raw, context) {
   if ((raw.status === "succeeded" && !raw.paid) || (raw.status === "canceled" && raw.paid)) invalid();
   let confirmation = null;
   if (raw.confirmation != null) {
-    if (raw.confirmation.type !== "redirect") invalid();
-    try { confirmation = { type: "redirect", url: d.confirmationUrl(raw.confirmation.confirmation_url) }; }
+    if (!['redirect','embedded'].includes(raw.confirmation.type)) invalid();
+    try { confirmation = raw.confirmation.type==='embedded'
+      ? raw.confirmation.confirmation_token ? d.confirmation({type:'embedded',token:raw.confirmation.confirmation_token}) : null
+      : d.confirmation({type:'redirect',url:raw.confirmation.confirmation_url}); }
     catch { invalid(); }
-    if (!confirmation.url) invalid();
+    if (!confirmation && raw.confirmation.type==='redirect') invalid();
   }
   const rawMetadata = { provider_status: raw.status };
   const reason = raw.cancellation_details?.reason;
@@ -137,14 +139,18 @@ function createYooKassaProvider(config, resolveCredentials) {
       if (input.currency !== "RUB" || !["card", "yoo_money"].includes(input.method) || typeof input.capture !== "boolean")
         d.fail("PAYMENT_INPUT_INVALID");
       const body = { amount: { value: d.amount(input.amount), currency: input.currency }, capture: input.capture,
-        payment_method_data: { type: input.method === "card" ? "bank_card" : "yoo_money" },
-        confirmation: { type: "redirect", return_url: d.returnUrl(input.returnUrl,config.checkoutAllowLocalReturn && input.environment==='test') },
+        ...(input.confirmationType==='embedded' ? {} : {payment_method_data: { type: input.method === "card" ? "bank_card" : "yoo_money" }}),
+        confirmation: input.confirmationType==='embedded' ? {type:'embedded'} : { type: "redirect", return_url: d.returnUrl(input.returnUrl,config.checkoutAllowLocalReturn && input.environment==='test') },
         description: input.description || `Payment ${d.identifier(input.paymentId)}`,
         metadata: { internalPaymentId: String(input.paymentId), tenantReference: String(input.tenantId),
           ...(input.orderId ? {orderReference:String(input.orderId)} : {}),...(input.storeId ? {storeReference:String(input.storeId)} : {}) } };
-      if (!body.confirmation.return_url) d.fail("PAYMENT_INPUT_INVALID");
+      if (input.confirmationType!==undefined && !['redirect','embedded'].includes(input.confirmationType))d.fail('PAYMENT_INPUT_INVALID');
+      if (body.confirmation.type==='redirect' && !body.confirmation.return_url) d.fail("PAYMENT_INPUT_INVALID");
       if (input.receipt) body.receipt = input.receipt;
-      return paymentResponse(input, "POST", "/payments", body, input.idempotencyKey);
+      const result=await paymentResponse(input, "POST", "/payments", body, input.idempotencyKey);
+      if(input.confirmationType==='embedded' && result.status==='pending' && result.confirmation?.type!=='embedded')
+        throw providerError('PAYMENT_PROVIDER_INVALID_RESPONSE',false,true);
+      return result;
     },
     getPayment: input => paymentResponse(input, "GET", `/payments/${externalId(input.providerPaymentId)}`),
     capturePayment: input => {

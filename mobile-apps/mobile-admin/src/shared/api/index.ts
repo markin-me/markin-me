@@ -38,10 +38,10 @@ async function requestData<T>(path: string, init: RequestInit = {}, token?: stri
   return (Object.prototype.hasOwnProperty.call(json, 'data') ? json.data : json) as T;
 }
 
-export async function loginAdmin(email: string, password: string) {
+export async function loginAdmin(login: string, password: string) {
   const data = await requestData<AdminSession>('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ login, password }),
   });
   await saveAdminSession(data);
   return data;

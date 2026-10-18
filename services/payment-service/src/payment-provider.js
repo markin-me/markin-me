@@ -12,7 +12,7 @@ const PROVIDER_DEFINITIONS = Object.freeze([{ id: "yookassa", title: "ЮKassa", 
  * cancelPayment({providerPaymentId, idempotencyKey})
  * refundPayment({providerPaymentId, refundId, amount, currency, idempotencyKey})
  * Payment result: {providerPaymentId, status, amount, currency, capturedAmount,
- *   confirmation: null | {type: 'redirect', url}, rawMetadata: {operation?}}
+ *   confirmation: null | {type: 'redirect', url} | {type: 'embedded', token}, rawMetadata: {operation?}}
  * Refund result: {providerRefundId, status, amount, currency, rawMetadata: {operation?}}
  * Adapters explicitly map external statuses and throw PaymentError with ERROR_CODES.
  * Timeouts are uncertain outcomes, never proof of failed/cancelled financial operations.
@@ -32,8 +32,7 @@ function paymentResult(result) {
       if(result.references[key]!==undefined)normalized.references[key]=d.identifier(result.references[key]);
   }
   if (result.confirmation != null) {
-    if (result.confirmation.type !== "redirect" || !result.confirmation.url) d.fail("PAYMENT_INPUT_INVALID");
-    normalized.confirmation = { type: "redirect", url: d.confirmationUrl(result.confirmation.url) };
+    normalized.confirmation = d.confirmation(result.confirmation);
   }
   return normalized;
 }

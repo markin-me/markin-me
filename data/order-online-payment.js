@@ -10,10 +10,32 @@ function money(value) {
 }
 function customerPayment(payment) {
   return {id:payment.id || null,status:payment.status,amount:payment.amount,currency:payment.currency,
-    source:"gateway",action:!payment.attentionRequired && ["pending","waiting_for_confirmation"].includes(payment.status) && payment.confirmation?.type === "redirect"
-      ? {type:"redirect",url:payment.confirmation.url} : null};
+    source:"gateway",action:!payment.attentionRequired && ["pending","waiting_for_confirmation"].includes(payment.status)
+      ? payment.confirmation?.type==='embedded' ? {type:'embedded',token:payment.confirmation.token}
+        : payment.confirmation?.type==='redirect' ? {type:'redirect',url:payment.confirmation.url} : null : null};
 }
 function createOrderOnlinePayment({db,client}) {
+  async function attachRefundSummaries(tenantId,storeId,orders) {
+    if(!orders.length)return;
+    const [rows]=await db.query(`SELECT order_id,SUM(total_amount) AS refunded_total,MAX(is_full) AS is_full
+      FROM order_refunds WHERE tenant_id=? AND store_id=? AND order_id IN (?)
+      AND financial_state IN ('manual','succeeded') GROUP BY order_id`,[tenantId,storeId,orders.map(order=>order.id)]);
+    const refunds=new Map(rows.map(row=>[Number(row.order_id),row]));
+    for(const order of orders) {
+      const refund=refunds.get(Number(order.id));
+      order.refunded_total=Number(refund?.refunded_total || 0);
+      order.refund_state=order.refunded_total>0?(Number(refund.is_full)?'full':'partial'):null;
+    }
+  }
+  async function methodChangeWindow(order,executor=db) {
+    const [rows]=await executor.query(`SELECT
+      DATE_FORMAT(DATE_ADD(MIN(e.created_at),INTERVAL 10 MINUTE),'%Y-%m-%dT%H:%i:%sZ') AS deadline,
+      MIN(e.created_at)<=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 10 MINUTE) AS expired
+      FROM payment_events e JOIN payment_payments p ON p.tenant_id=e.tenant_id AND p.id=e.payment_id
+      WHERE p.tenant_id=? AND p.store_id=? AND p.order_id=? AND p.provider='yookassa' AND e.new_status='cancelled'`,
+      [order.tenant_id,order.store_id,order.id]);
+    return {deadline:rows[0]?.deadline || null,expired:Boolean(rows[0]?.expired)};
+  }
   async function dispatchRefund(id,tenantId,storeId) {
     const token=randomUUID();
     const [claim]=await db.query(`UPDATE order_refunds SET dispatch_lease_token=?,dispatch_lease_until=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 120 SECOND)
@@ -55,7 +77,11 @@ function createOrderOnlinePayment({db,client}) {
       FROM order_orders o LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.id=o.payment_id
       LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.id=o.status_id
       WHERE o.tenant_id=? AND o.public_id=? AND o.is_active=1 LIMIT 1`,[tenantId,publicId]);
-    if (!rows.length) throw paymentError("ORDER_NOT_FOUND",404);return rows[0];
+    if (!rows.length) throw paymentError("ORDER_NOT_FOUND",404);
+    const window=await methodChangeWindow(rows[0]);
+    rows[0].payment_method_deadline=window.deadline;
+    await attachRefundSummaries(rows[0].tenant_id,rows[0].store_id,rows);
+    return rows[0];
   }
   async function availability(tenantId,storeId) {
     const [stores]=await db.query("SELECT id FROM ten_stores WHERE tenant_id=? AND id=? AND is_active=1",[tenantId,storeId]);
@@ -119,21 +145,21 @@ function createOrderOnlinePayment({db,client}) {
     if (Number(order.is_paid)===1 && order.online_payment_status!=="paid") throw paymentError("ORDER_ALREADY_PAID");
     if (order.online_payment_status==="paid") return {status:"paid",source:"gateway",amount,currency:"RUB",action:null};
     if (amount==="0.00") return {status:"not_required",source:"gateway",amount,currency:"RUB",action:null};
-    if (Number(order.is_final)===1 || ["canceled","cancelled"].includes(order.status_code)) throw paymentError("PAYMENT_INVALID_STATE");
+    if (["canceled","cancelled"].includes(order.status_code)) throw paymentError("PAYMENT_INVALID_STATE");
     const [methods]=await db.query("SELECT id FROM order_payments WHERE tenant_id=? AND id=? AND code='online' AND is_active=1",[order.tenant_id,order.payment_id]);
     if(!methods.length) {
       const current=await state(order);
-      if(current.status==='paid' || current.action?.type==='redirect')return current;
+      if(current.status==='paid' || ['redirect','embedded'].includes(current.action?.type))return current;
       throw paymentError("ONLINE_PAYMENT_NOT_AVAILABLE");
     }
     const payment=await client.checkoutPayment({tenantId:order.tenant_id,storeId:order.store_id,idempotencyKey:key,requestId:randomUUID()},
       {orderId:String(order.id),amount,currency:"RUB",returnUrl:await returnUrl(order.tenant_id,order.public_id),receipt:await receipt(order,amount)});
     return customerPayment(payment);
   }
-  async function state(order) {
+  async function state(order,{refresh=true}={}) {
     if (!order.online_payment_required) throw paymentError("ONLINE_PAYMENT_NOT_AVAILABLE");
     if (money(order.total_price)==="0.00") return {status:"not_required",source:"gateway",amount:"0.00",currency:"RUB",action:null};
-    const payment=await client.checkoutState({tenantId:order.tenant_id,storeId:order.store_id,idempotencyKey:`state:${order.id}`},{orderId:String(order.id)});
+    const payment=await client.checkoutState({tenantId:order.tenant_id,storeId:order.store_id,idempotencyKey:`state:${order.id}`},{orderId:String(order.id),...(refresh?{}:{refresh:false})});
     return customerPayment(payment);
   }
   async function result(tenantId,publicId,key) {
@@ -146,6 +172,6 @@ function createOrderOnlinePayment({db,client}) {
       return {paymentAccessToken:String(order.submission_id),payment:{status:"pending",source:"gateway",action:null,error:code}};
     }
   }
-  return {load,availability,pay,state,result,returnUrl,receipt,snapshot,claimRefresh,dispatchRefund,dispatchRefunds};
+  return {load,availability,pay,state,result,returnUrl,receipt,snapshot,claimRefresh,dispatchRefund,dispatchRefunds,methodChangeWindow,attachRefundSummaries};
 }
 module.exports={createOrderOnlinePayment,paymentError,money};

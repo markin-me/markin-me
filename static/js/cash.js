@@ -104,6 +104,21 @@
       date: { start: null, end: null, viewYear: null, viewMonth: null },
     };
     var cashSyncGeneration = 0;
+    var cashStatusSyncStates=new Map();
+    var cashStatusQueue=sharedOrderPanel.createStatusQueue({
+      scope:function(){var context=cashSyncContext();return context.generation+':'+context.namespace;},
+      save:async function(id,statusId,mutationId){return (await apiJson('/api/admin/orders/'+id+'/status',{method:'PUT',headers:{'Idempotency-Key':mutationId},body:{status_id:statusId}})).data;},
+      recover:async function(id){return (await apiJson('/api/admin/orders/'+id)).data;},
+      apply:function(order,localOnly){
+        if(localOnly){applyOrderChange(order);renderAll();}
+        else void reconcileCashOrderMutation(order).catch(console.error);
+      },
+      onState:function(id,mode,label,duration){
+        var marker={mode:mode,label:label},context=cashSyncContext();
+        cashStatusSyncStates.set(id,marker);renderJournal();
+        if(duration)setTimeout(function(){if(isCurrentCashContext(context) && cashStatusSyncStates.get(id)===marker){cashStatusSyncStates.delete(id);renderJournal();}},duration);
+      },
+    });
     var cashSnapshotVisible = false;
     var cashNetworkConfirmed = false;
     var cashRefreshFailed = false;
@@ -517,6 +532,9 @@
 
       if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderStageCycleButtonHtml === 'function') {
         return sharedOrderPanel.buildOrderStageCycleButtonHtml({
+          compact: true,
+          syncState: cashStatusSyncStates.get(Number(order.id)),
+          currentCode: normalizeStatusCode(currentStatus),
           orderId: order.id,
           canCycle: canCycle,
           currentTitle: currentTitle,
@@ -1533,24 +1551,7 @@
     }
 
     function getMoneyJournalEntries() {
-      return getAllActiveOrders().filter(isPaidOrder).sort(compareMoneyMoves);
-    }
-
-    function isMultiDayRange() {
-      if (!state.date.start || !state.date.end) return false;
-      return toDateKey(state.date.start) !== toDateKey(state.date.end);
-    }
-
-    function getEntryDayKey(entry) {
-      var parts = parseLocalDateParts(entry && entry.created_at);
-      if (!parts) return '';
-      return [String(parts.year || ''), String(parts.month).padStart(2, '0'), String(parts.day).padStart(2, '0')].join('-');
-    }
-
-    function formatJournalDayLabel(dayKey) {
-      var date = parseDateKey(dayKey);
-      if (!date || isNaN(date.getTime())) return String(dayKey || '');
-      return date.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', weekday: 'long' });
+      return (Array.isArray(state.periodAggregate && state.periodAggregate.money_entries)?state.periodAggregate.money_entries:[]).slice().sort(compareMoneyMoves);
     }
 
     function buildJournalDayGroups(entries) {
@@ -1567,6 +1568,16 @@
         index[dayKey].total += Number(entry && entry.total_price || 0) || 0;
       });
       return groups;
+    }
+
+    function getEntryDayKey(entry) {
+      var parts = parseLocalDateParts(entry && entry.created_at);
+      return parts ? [String(parts.year), String(parts.month).padStart(2, '0'), String(parts.day).padStart(2, '0')].join('-') : '';
+    }
+
+    function formatJournalDayLabel(dayKey) {
+      var date = parseDateKey(dayKey);
+      return date ? date.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' }) : String(dayKey || '');
     }
 
     function renderJournalDayGroups(entries) {
@@ -1993,6 +2004,7 @@
 
     function renderSummaryCards() {
       if (!summaryCardsEl) return;
+      var undatedWarning=(Number(state.periodAggregate && state.periodAggregate.money_undated_count)>0?'<p>У '+escapeHtml(String(state.periodAggregate.money_undated_count))+' оплат не сохранена дата. Они не включены в денежные итоги.</p>':'');
       summaryCardsEl.classList.toggle('cash-summary-grid--orders', state.currentSection === 'orders');
       if (state.currentSection === 'expenses') {
         summaryCardsEl.innerHTML = '<div class="cash-summary-card"><span>Учтено расходов</span><strong>' + escapeHtml(money(Number(state.expenseSummary.total_sum_kopecks || 0) / 100)) + '</strong></div><div class="cash-summary-card"><span>Документы</span><strong>' + escapeHtml(formatCount(state.expenseSummary.count || 0)) + '</strong></div>';
@@ -2001,10 +2013,12 @@
       if (state.currentSection === 'money') {
         var moneySummary = getMoneySummary();
         summaryCardsEl.innerHTML =
-          '<div class="cash-summary-card"><span>Приход</span><strong>' + escapeHtml(money(moneySummary.incomeTotal)) + '</strong></div>' +
-          '<div class="cash-summary-card"><span>Расход</span><strong>' + escapeHtml(money(moneySummary.expenseTotal)) + '</strong></div>' +
-          '<div class="cash-summary-card"><span>В кассе</span><strong>' + escapeHtml(money(moneySummary.cashInRegister)) + '</strong></div>' +
-          renderMoneyMethodCards(moneySummary);
+          '<div class="cash-summary-card"><span>Принято оплат</span><strong>' + escapeHtml(money(moneySummary.incomeTotal)) + '</strong></div>' +
+          '<div class="cash-summary-card"><span>Возвращено</span><strong>' + escapeHtml(money(moneySummary.expenseTotal)) + '</strong></div>' +
+          '<div class="cash-summary-card"><span>Итого за период</span><strong>' + escapeHtml(money(moneySummary.incomeTotal-moneySummary.expenseTotal)) + '</strong></div>' +
+          renderMoneyMethodCards(moneySummary) +
+          '<div class="cash-summary-card"><span>Изменение наличных</span><strong>'+escapeHtml(money(moneySummary.cashInRegister))+'</strong></div>'+
+          undatedWarning;
         return;
       }
       var aggregate = state.periodAggregate && state.periodAggregate.summary;
@@ -2020,14 +2034,20 @@
         deliveredOrders: 0, deliveredTotal: 0, paidOrders: 0, unpaidOrders: 0,
         cashPaidTotal: 0, cardPaidTotal: 0, onlinePaidTotal: 0
       };
+      var movements=getMoneySummary();
+      function netBucket(bucket){return movements.methodBreakdown.filter(function(method){return method.bucket===bucket;}).reduce(function(total,method){return total+method.incomeTotal-method.expenseTotal;},0);}
+      summary.cashPaidTotal=netBucket('cash');summary.cardPaidTotal=netBucket('card');summary.onlinePaidTotal=netBucket('online');
       summaryCardsEl.innerHTML =
         '<div class="cash-summary-card cash-summary-card--half"><span>Доставлены</span><strong>' + escapeHtml(formatCount(summary.deliveredOrders)) + '</strong></div>' +
         '<div class="cash-summary-card cash-summary-card--half"><span>Сумма доставленных</span><strong>' + escapeHtml(money(summary.deliveredTotal)) + '</strong></div>' +
         '<div class="cash-summary-card cash-summary-card--half"><span>Оплачены</span><strong>' + escapeHtml(formatCount(summary.paidOrders)) + '</strong></div>' +
         '<div class="cash-summary-card cash-summary-card--half"><span>Не оплачены</span><strong>' + escapeHtml(formatCount(summary.unpaidOrders)) + '</strong></div>' +
-        '<div class="cash-summary-card cash-summary-card--third"><span>Наличные</span><strong>' + escapeHtml(money(summary.cashPaidTotal)) + '</strong></div>' +
+        '<div class="cash-summary-card cash-summary-card--third"><span>Принято оплат</span><strong>'+escapeHtml(money(movements.incomeTotal))+'</strong></div>'+
+        '<div class="cash-summary-card cash-summary-card--third"><span>Возвращено</span><strong>'+escapeHtml(money(movements.expenseTotal))+'</strong></div>'+
+        '<div class="cash-summary-card cash-summary-card--third"><span>Итого за период</span><strong>'+escapeHtml(money(movements.incomeTotal-movements.expenseTotal))+'</strong></div>'+
+        '<div class="cash-summary-card cash-summary-card--third"><span>Наличные: изменение</span><strong>' + escapeHtml(money(summary.cashPaidTotal)) + '</strong></div>' +
         '<div class="cash-summary-card cash-summary-card--third"><span>Картой / QR</span><strong>' + escapeHtml(money(summary.cardPaidTotal)) + '</strong></div>' +
-        '<div class="cash-summary-card cash-summary-card--third"><span>Онлайн</span><strong>' + escapeHtml(money(summary.onlinePaidTotal)) + '</strong></div>';
+        '<div class="cash-summary-card cash-summary-card--third"><span>Онлайн</span><strong>' + escapeHtml(money(summary.onlinePaidTotal)) + '</strong></div>'+undatedWarning;
     }
 
     function renderSidebarSummary() {
@@ -2064,16 +2084,16 @@
         '<div class="cash-balance-card">' +
           '<div class="cash-balance-card-title">Деньги за период</div>' +
           '<div class="cash-balance-metrics">' +
-            '<div class="cash-balance-metric"><span>Денег в кассе</span><strong>' + escapeHtml(money(moneySummary.cashInRegister)) + '</strong></div>' +
-            '<div class="cash-balance-metric"><span>Приход</span><strong>' + escapeHtml(money(moneySummary.incomeTotal)) + '</strong></div>' +
-            '<div class="cash-balance-metric"><span>Расход</span><strong>' + escapeHtml(money(moneySummary.expenseTotal)) + '</strong></div>' +
+            '<div class="cash-balance-metric"><span>Изменение наличных за период</span><strong>' + escapeHtml(money(moneySummary.cashInRegister)) + '</strong></div>' +
+            '<div class="cash-balance-metric"><span>Принято оплат</span><strong>' + escapeHtml(money(moneySummary.incomeTotal)) + '</strong></div>' +
+            '<div class="cash-balance-metric"><span>Возвращено</span><strong>' + escapeHtml(money(moneySummary.expenseTotal)) + '</strong></div>' +
           '</div>' +
           '<div class="cash-balance-group">' +
             '<div class="cash-balance-group-title">Приход по оплатам</div>' +
             '<div class="cash-balance-metrics">' + renderMoneyBreakdownRows(moneySummary, 'incomeTotal') + '</div>' +
           '</div>' +
           '<div class="cash-balance-group">' +
-            '<div class="cash-balance-group-title">Расход по оплатам</div>' +
+            '<div class="cash-balance-group-title">Возвраты по способам оплаты</div>' +
             '<div class="cash-balance-metrics">' + renderMoneyBreakdownRows(moneySummary, 'expenseTotal') + '</div>' +
           '</div>' +
         '</div>' +
@@ -2105,15 +2125,6 @@
       }).join('');
       menus.forEach(function (menu) { menu.innerHTML = html; });
       closeInlineStatusMenus();
-    }
-
-    function setStatusControlsDisabled(disabled) {
-      if (cashRightPaneEl) {
-        cashRightPaneEl.querySelectorAll('[data-action="order-status-next"], [data-action="order-status-menu-toggle"]').forEach(function (btn) { btn.disabled = !!disabled; });
-      }
-      if (journalListEl) {
-        journalListEl.querySelectorAll('[data-action="order-row-status-next"]').forEach(function (btn) { btn.disabled = !!disabled; });
-      }
     }
 
     var cashInfoRenderer = sharedOrderPanel && cashRightPaneEl ? sharedOrderPanel.createDetailsPage({
@@ -2618,9 +2629,10 @@
         var isRefund = String(entry && entry.entry_kind || '') === 'refund';
         var moneyTitle = (isRefund ? 'Возврат по заказу #' : 'Приход по заказу #') + getOrderNumber(entryOrder || entry);
         var moneyCustomer = String(entryOrder && entryOrder.customer_name || '').trim() || 'Клиент';
-        var metaParts = [getMoneyEntryPaymentTitle(entry), isRefund ? 'Расход' : 'Приход'];
+        var metaParts = [getMoneyEntryPaymentTitle(entry), isRefund ? 'Возврат' : 'Оплата'];
+        if(isRefund && getEntryDayKey(entry)!==getEntryDayKey(entryOrder))metaParts.push('По заказу от '+formatDateTime(entryOrder && entryOrder.created_at));
         if (isRefund && String(refund && refund.comment || '').trim()) metaParts.push(String(refund.comment).trim());
-        return '<div class="cash-journal-entry cash-journal-entry--static' + (isRefund ? ' cash-journal-entry--refund' : '') + '"><div class="cash-journal-entry-icon"><i class="fas ' + (isRefund ? 'fa-rotate-left' : 'fa-arrow-down') + '"></i></div><div class="cash-journal-entry-main"><div class="cash-journal-entry-top"><strong>' + escapeHtml(moneyTitle) + '</strong><span>' + escapeHtml(formatTime(getMoneyEntryCreatedAt(entry))) + '</span></div><div class="cash-journal-entry-sub">' + escapeHtml(moneyCustomer) + '</div><div class="cash-journal-entry-meta">' + escapeHtml(metaParts.join(' · ')) + '</div></div><div class="cash-journal-entry-amount' + (isRefund ? ' is-negative' : '') + '">' + escapeHtml((isRefund ? '-' : '') + money(getMoneyEntryAmount(entry))) + '</div></div>';
+        return '<div class="cash-journal-entry cash-journal-entry--static js-order' + (isRefund ? ' cash-journal-entry--refund' : '') + '" role="button" tabindex="0" data-order-id="'+String(entry.order_id)+'"><div class="cash-journal-entry-icon"><i class="fas ' + (isRefund ? 'fa-rotate-left' : 'fa-arrow-down') + '"></i></div><div class="cash-journal-entry-main"><div class="cash-journal-entry-top"><strong>' + escapeHtml(moneyTitle) + '</strong><span>' + escapeHtml(formatDateTime(getMoneyEntryCreatedAt(entry))) + '</span></div><div class="cash-journal-entry-sub">' + escapeHtml(moneyCustomer) + '</div><div class="cash-journal-entry-meta">' + escapeHtml(metaParts.join(' · ')) + '</div></div><div class="cash-journal-entry-amount' + (isRefund ? ' is-negative' : '') + '">' + escapeHtml((isRefund ? '−' : '+') + money(getMoneyEntryAmount(entry))) + '</div></div>';
       }
       var isActive = getOrderId(order) === Number(state.activeOrderId || 0);
       var title = 'Заказ #' + getOrderNumber(order);
@@ -2658,7 +2670,7 @@
         var paymentCode = String(order && order.payment_code || '').toLowerCase();
         var isCash = paymentCode.indexOf('cash') !== -1;
         var isFullyRefunded = isOrderFullyRefunded(order);
-        var paymentStatusText = isFullyRefunded ? 'Возврат' : (isPaidOrder(order) ? 'Оплачено' : 'Не оплачено');
+        var paymentStatusText = getOrderRefundState(order)==='partial'?'Частичный возврат':isFullyRefunded?'Возврат':(isPaidOrder(order)?'Оплачено':'Не оплачено');
         var paymentStateClass = isFullyRefunded
           ? 'order-payment-refund'
           : (isPaidOrder(order) ? 'order-payment-paid' : 'order-payment-unpaid');
@@ -2668,17 +2680,19 @@
             paymentStateClass: paymentStateClass,
             paymentTitle: payment,
             paymentIconHtml: renderOrderPaymentIcon(order),
-            totalText: money(getOrderDisplayTotal(order)),
+            totalText: money(Number(order && order.total_price || 0)),
             statusText: paymentStatusText
           })
           : '';
-        var passportState = cashPassportCacheStates.get(String(orderId)) || 'unknown';
-        var passportLabels = { saved: 'Доступен офлайн', checking: 'Проверяем офлайн-доступ', saving: 'Сохраняем для офлайн-доступа', stale: 'Сохранённая версия требует обновления', missing: 'Не сохранён для офлайн-доступа', unknown: 'Состояние офлайн-доступа неизвестно' };
+        var passportState = cashPassportCacheStates.get(String(orderId)) || 'checking';
+        var passportLabels = { error: '\u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u0444\u043b\u0430\u0439\u043d-\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f', saved: 'Доступен офлайн', checking: 'Проверяем офлайн-доступ', saving: 'Сохраняем для офлайн-доступа', stale: 'Сохранённая версия требует обновления', missing: 'Не сохранён для офлайн-доступа', unknown: 'Состояние офлайн-доступа неизвестно' };
         return '<div class="order-row order-list-card js-order js-cash-order-row shared-order-summary-row ' + (isActive ? 'is-active' : '') + '" role="button" tabindex="0" data-order-id="' + String(orderId) + '">' +
           sharedOrderPanel.buildOrderListRowInnerHtml({
+            order: order,
+            statuses: getSortedStatuses(),
             orderId: orderId,
             orderNumberText: String(getOrderNumber(order)),
-            orderIdNumHtml: '<div class="order-id-num">' + escapeHtml(String(getOrderNumber(order))) + '<span class="courier-order-cache-indicator courier-order-cache-indicator--' + passportState + '" data-cash-passport-cache-state aria-label="' + escapeHtml(passportLabels[passportState] || passportLabels.unknown) + '" title="' + escapeHtml(passportLabels[passportState] || passportLabels.unknown) + '"></span></div>',
+            orderNumberSuffixHtml: '<span class="courier-order-cache-indicator courier-order-cache-indicator--' + passportState + '" data-cash-passport-cache-state aria-label="' + escapeHtml(passportLabels[passportState] || passportLabels.unknown) + '" title="' + escapeHtml(passportLabels[passportState] || passportLabels.unknown) + '"></span>',
             createdAtText: formatTime(order && order.created_at),
             showMultiSelect: false,
             multiSelected: false,
@@ -2743,7 +2757,7 @@
         journalEmptyEl.classList.toggle('hidden', hasJournalEntries);
       }
       if (loadMoreBtnEl) {
-        loadMoreBtnEl.classList.toggle('hidden', state.currentSection === 'orders' || !state.ordersHasMore || state.loading);
+        loadMoreBtnEl.classList.toggle('hidden', state.currentSection === 'orders' || state.currentSection === 'money' || !state.ordersHasMore || state.loading);
         loadMoreBtnEl.disabled = state.loading;
       }
     }
@@ -2880,12 +2894,46 @@
       cashPassportCacheStates.set(String(id), value);
       var row = journalListEl.querySelector('[data-order-id="' + String(id) + '"]');
       var indicator = row && row.querySelector('[data-cash-passport-cache-state]');
-      if (indicator) renderJournal();
+      if (indicator) {
+        indicator.className = 'courier-order-cache-indicator courier-order-cache-indicator--' + value;
+        var label = value === 'saved' ? '\u0414\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u043e\u0444\u043b\u0430\u0439\u043d' : value === 'missing' ? '\u041d\u0435 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d' : value === 'stale' ? '\u0422\u0440\u0435\u0431\u0443\u0435\u0442 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f' : value === 'error' ? '\u041e\u0448\u0438\u0431\u043a\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f' : '\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 / \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435';
+        indicator.setAttribute('title', label);
+        indicator.setAttribute('aria-label', label);
+      }
     }
 
+    var cashFullOrderLoads = new Map(), cashPassportRequests = new Map();
+    var cashPassportActive = 0, cashPassportWaiters = [];
+    function fetchCashPassport(id, context) {
+      var key = context.generation + ':' + context.namespace + ':' + id;
+      if (cashPassportRequests.has(key)) return cashPassportRequests.get(key);
+      var slot = cashPassportActive < 3
+        ? (cashPassportActive++, Promise.resolve())
+        : new Promise(function (resolve) { cashPassportWaiters.push(resolve); });
+      var promise = slot.then(function () {
+        if (!isCurrentCashContext(context) || navigator.onLine === false) throw new Error('CASH_PASSPORT_CONTEXT_CHANGED');
+        return apiJson('/api/admin/orders/' + String(id));
+      }).finally(function () {
+        var next = cashPassportWaiters.shift();
+        if (next) next(); else cashPassportActive--;
+        cashPassportRequests.delete(key);
+      });
+      cashPassportRequests.set(key, promise);
+      return promise;
+    }
     function ensureCashFullOrder(orderId) {
+      var context = cashSyncContext(), key = context.generation + ':' + context.namespace + ':' + Number(orderId);
+      if (cashFullOrderLoads.has(key)) return cashFullOrderLoads.get(key);
+      var promise = loadCashFullOrder(orderId).finally(function () { cashFullOrderLoads.delete(key); });
+      cashFullOrderLoads.set(key, promise);
+      return promise;
+    }
+
+    function loadCashFullOrder(orderId) {
+      var context = cashSyncContext();
       var id = Number(orderId || 0);
       var passport = window.AdminPersistentCache && window.AdminPersistentCache.orderPassport;
+      var cache = passport && passport.scope();
       if (!(id > 0)) return Promise.resolve(null);
       var isFullOrder = passport && typeof passport.isFull === 'function'
         ? passport.isFull
@@ -2893,53 +2941,49 @@
       function loadFromNetwork() {
         if (navigator.onLine === false) return Promise.resolve(null);
         setCashPassportState(id, 'saving');
-        return apiJson('/api/admin/orders/' + String(id)).then(function (json) {
+        return fetchCashPassport(id, context).then(async function (json) {
+          if (!isCurrentCashContext(context)) return null;
           var fullOrder = json && json.data || null;
-          if (!isFullOrder(fullOrder)) return null;
+          if (!isFullOrder(fullOrder)) throw new Error('INVALID_ORDER_PASSPORT');
           fullOrdersById.set(id, Object.assign({}, fullOrder));
           if (!passport || typeof passport.write !== 'function') {
-            setCashPassportState(id, 'unknown');
+            setCashPassportState(id, 'error');
             return fullOrder;
           }
-          void passport.write(fullOrder, { authoritative: true }).then(function (saved) {
-            setCashPassportState(id, saved ? 'saved' : 'unknown');
-          }).catch(function (err) {
-            setCashPassportState(id, 'unknown');
-            console.error('cash shared passport write error:', err);
-          });
+          var saved = await passport.write(fullOrder, { cache: cache, authoritative: true });
+          if (isCurrentCashContext(context)) setCashPassportState(id, saved ? 'saved' : 'error');
           return fullOrder;
         });
       }
-      var cachedRuntime = fullOrdersById.get(id);
-      if (cachedRuntime && isFullOrder(cachedRuntime)) return Promise.resolve(cachedRuntime);
       if (!passport || typeof passport.read !== 'function') return loadFromNetwork();
       setCashPassportState(id, 'checking');
-      return passport.read(id, { allowStale: true }).then(function (entry) {
+      return passport.read(id, { cache: cache, allowStale: true }).then(function (entry) {
+        if (!isCurrentCashContext(context)) return null;
         if (entry && entry.order) {
           fullOrdersById.set(id, Object.assign({}, entry.order));
           setCashPassportState(id, entry.stale ? 'stale' : 'saved');
           if (entry.stale && navigator.onLine !== false) {
             setCashPassportState(id, 'saving');
-            void apiJson('/api/admin/orders/' + String(id)).then(function (json) {
+            void fetchCashPassport(id, context).then(function (json) {
+              if (!isCurrentCashContext(context)) return;
               var freshOrder = json && json.data || null;
-              if (!passport.isFull(freshOrder)) return;
-              return passport.write(freshOrder, { authoritative: true }).then(function (saved) {
+              if (!passport.isFull(freshOrder)) throw new Error('INVALID_ORDER_PASSPORT');
+              return passport.write(freshOrder, { cache: cache, authoritative: true }).then(function (saved) {
+                if (!isCurrentCashContext(context)) return;
                 fullOrdersById.set(id, Object.assign({}, freshOrder));
-                setCashPassportState(id, saved ? 'saved' : 'unknown');
+                setCashPassportState(id, saved ? 'saved' : 'error');
                 updateOrderInState(freshOrder);
                 renderAll();
               });
-            }).catch(function () { setCashPassportState(id, 'stale'); });
+            }).catch(function (error) { if (isCurrentCashContext(context)) setCashPassportState(id, 'stale'); console.error('Cash passport refresh failed:', error); });
           }
           return entry.order;
         }
         setCashPassportState(id, 'missing');
         return loadFromNetwork();
       }).catch(function (err) {
-        setCashPassportState(id, navigator.onLine === false ? 'missing' : 'unknown');
-        if (navigator.onLine === false) throw err;
-        console.error('cash shared passport read error:', err);
-        return loadFromNetwork();
+        if (isCurrentCashContext(context)) setCashPassportState(id, 'error');
+        throw err;
       });
     }
 
@@ -2953,23 +2997,24 @@
           if (id > 0 && ids.indexOf(id) === -1) ids.push(id);
         });
       });
-      var queued = false;
-      ids.slice(0, 200).forEach(function (id) {
-        var key = String(id);
-        if (cashPassportCacheStates.has(key) || cashPassportChecksInFlight.has(key)) return;
-        cashPassportChecksInFlight.add(key);
-        cashPassportCacheStates.set(key, 'checking');
-        queued = true;
-        passport.read(id, { allowStale: true }).then(function (entry) {
-          cashPassportCacheStates.set(key, entry ? (entry.stale ? 'stale' : 'saved') : 'missing');
-        }).catch(function () {
-          cashPassportCacheStates.set(key, 'unknown');
-        }).finally(function () {
-          cashPassportChecksInFlight.delete(key);
-          renderJournal();
-        });
-      });
-      if (queued) renderJournal();
+      var context = cashSyncContext(), queue = ids.slice(0, 200).filter(function (id) {
+        return !cashPassportCacheStates.has(String(id)) && !cashPassportChecksInFlight.has(String(id));
+      }), next = 0;
+      queue.forEach(function (id) { cashPassportChecksInFlight.add(String(id)); setCashPassportState(id, 'checking'); });
+      async function worker() {
+        while (next < queue.length && isCurrentCashContext(context)) {
+          var id = queue[next++], key = String(id);
+          try {
+            await ensureCashFullOrder(id);
+          } catch (error) {
+            if (isCurrentCashContext(context)) setCashPassportState(id, 'error');
+            console.error('Cash offline preparation failed:', error);
+          } finally {
+            cashPassportChecksInFlight.delete(key);
+          }
+        }
+      }
+      for (var i = 0; i < Math.min(3, queue.length); i++) void worker();
     }
 
     function closeOrderTab(key) {
@@ -2986,6 +3031,7 @@
     }
 
     function updateOrderInState(order) {
+      order=cashStatusQueue.overlay(order);
       var orderId = getOrderId(order);
       if (!(orderId > 0)) return;
       var index = state.orders.findIndex(function (row) { return getOrderId(row) === orderId; });
@@ -3035,7 +3081,14 @@
     function applyOrderChange(order) {
       var orderId = getOrderId(order);
       if (!(orderId > 0)) return false;
-      if (!orderMatchesActiveDateRange(order)) return removeOrderFromState(orderId);
+      if (!orderMatchesActiveDateRange(order)) {
+        var removed=removeOrderFromState(orderId);
+        // A previous day's order can receive a payment or refund in the current period.
+        var paidAt=order && order.paymentSummary && order.paymentSummary.paidAt;
+        var paymentInRange=paidAt && orderMatchesActiveDateRange({id:orderId,created_at:paidAt});
+        var hasRefunds=Array.isArray(order.refunds) && order.refunds.length>0;
+        return Boolean(removed || paymentInRange || hasRefunds);
+      }
       updateOrderInState(order);
       var passport = window.AdminPersistentCache && window.AdminPersistentCache.orderPassport;
       if (passport) void passport.merge(order).then(function (saved) {
@@ -3278,7 +3331,7 @@
       state.loadPromise = apiJson('/api/admin/orders?' + qs.toString()).then(function (json) {
         if (!isCurrentCashContext(context)) return;
         var page = Array.isArray(json && json.data) ? json.data.slice() : [];
-        state.orders = append ? state.orders.concat(page) : page;
+        state.orders = (append ? state.orders.concat(page) : page).map(cashStatusQueue.overlay);
         state.ordersHasMore = json && json.has_more === true;
         state.ordersNextOffset = Number(json && json.next_offset || (offset + page.length));
         syncTabsWithLatestOrders();
@@ -3328,7 +3381,7 @@
         cache.hasMore = json && json.has_more === true; cache.nextOffset = Number(json && json.next_offset || offset + page.length);
         page.forEach(function (order) { updateOrderInState(order); });
         return persistCashWorkspace(context);
-      }).catch(function (err) { if (generation === state.dayRequestGeneration) cache.error = err; console.error('cash day load error:', err); }).finally(function () { cache.loading = false; renderJournal(); });
+      }).catch(function (err) { if (generation === state.dayRequestGeneration) cache.error = err; console.error('cash day load error:', err); }).finally(function () { cache.loading = false; renderJournal(); inspectCashPassportCaches(); });
     }
 
     function loadExpenseDocuments() {
@@ -3422,7 +3475,8 @@
       var currentOrderId = Number(orderId || 0);
       var nextStatusId = Number(statusId || 0);
       if (!(currentOrderId > 0) || !(nextStatusId > 0)) return Promise.resolve();
-      var previous = state.orders.find(function (row) { return getOrderId(row) === currentOrderId; }) || null;
+      var previous = cashStatusQueue.overlay(state.orders.find(function (row) { return getOrderId(row) === currentOrderId; }) || (getOrderId(getActiveOrder())===currentOrderId?getActiveOrder():null));
+      if(!previous || Number(previous.status_id)===nextStatusId)return Promise.resolve();
       var optimistic = previous ? Object.assign({}, previous) : null;
       var previousMeta = previous ? (getStatusMetaById(previous.status_id) || null) : null;
       var nextMeta = getStatusMetaById(nextStatusId);
@@ -3432,25 +3486,9 @@
         optimistic.status_title = nextMeta.title || optimistic.status_title;
         optimistic.status_code = nextMeta.code || optimistic.status_code;
         optimistic.status_color = nextMeta.color || optimistic.status_color;
-        updateOrderInState(optimistic);
-        renderAll();
+
       }
-      return apiJson('/api/admin/orders/' + String(currentOrderId) + '/status', {
-        method: 'PUT',
-        body: { status_id: nextStatusId },
-      }).then(function (json) {
-        var updatedOrder = json && json.data;
-        if (updatedOrder) return reconcileCashOrderMutation(updatedOrder);
-        return apiJson('/api/admin/orders/' + String(currentOrderId)).then(function (freshJson) {
-          return reconcileCashOrderMutation(freshJson && freshJson.data);
-        });
-      }).catch(function (err) {
-        if (previous) {
-          updateOrderInState(previous);
-          renderAll();
-        }
-        throw err;
-      });
+      return cashStatusQueue.enqueue(previous,optimistic);
     }
 
     function cycleActiveOrderStatus() {
@@ -3459,10 +3497,8 @@
       if (!(currentOrderId > 0)) return;
       var nextStatus = getNextStatusMetaForOrder(order);
       if (!nextStatus) return;
-      setStatusControlsDisabled(true);
-      updateOrderStatus(currentOrderId, nextStatus.id).catch(console.error).finally(function () {
-        setStatusControlsDisabled(false);
-      });
+
+      updateOrderStatus(currentOrderId, nextStatus.id).catch(console.error);
     }
 
     function selectActiveOrderStatus(statusId) {
@@ -3474,9 +3510,9 @@
         closeInlineStatusMenus();
         return;
       }
-      setStatusControlsDisabled(true);
+
       updateOrderStatus(currentOrderId, nextStatusId).catch(console.error).finally(function () {
-        setStatusControlsDisabled(false);
+
         closeInlineStatusMenus();
       });
     }
@@ -3852,6 +3888,9 @@
       stopWaitLoop();
       cashRefreshFailed = false;
       cashNetworkConfirmed = false;
+      cashPassportCacheStates.forEach(function (value, key) {
+        if (value === 'missing' || value === 'error' || value === 'stale' || value === 'unknown') cashPassportCacheStates.delete(key);
+      });
       refreshCashConnectionBanner();
       try {
         await loadStoreTimezone();
@@ -4061,6 +4100,13 @@
         return;
       }
       if (state.currentSection !== 'orders') return;
+      var rowStatusOption=event.target.closest('[data-row-status-options] [data-action="order-status-menu-select"]');
+      if(rowStatusOption) {
+        event.preventDefault();event.stopPropagation();
+
+        updateOrderStatus(Number(rowStatusOption.dataset.orderId),Number(rowStatusOption.dataset.statusId)).catch(console.error);
+        return;
+      }
       var stageBtn = event.target && event.target.closest('[data-action="order-row-status-next"]');
       if (stageBtn) {
         event.preventDefault();
@@ -4068,10 +4114,8 @@
         var stageOrderId = Number(stageBtn.getAttribute('data-order-id') || 0);
         var nextStatusId = Number(stageBtn.getAttribute('data-next-status-id') || 0);
         if (!(stageOrderId > 0) || !(nextStatusId > 0)) return;
-        setStatusControlsDisabled(true);
-        updateOrderStatus(stageOrderId, nextStatusId).catch(console.error).finally(function () {
-          setStatusControlsDisabled(false);
-        });
+
+        updateOrderStatus(stageOrderId, nextStatusId).catch(console.error);
         return;
       }
       var openClientBtn = event.target && event.target.closest('[data-action="open-client"]');
@@ -4320,6 +4364,7 @@
     document.addEventListener('tenantStoreChanged', function () {
       stopWaitLoop();
       cashSyncGeneration += 1;
+      cashStatusSyncStates.clear();
       state.orders = [];
       state.periodAggregate = null;
       state.dayRows = {};

@@ -136,7 +136,9 @@ function createApp(config, application, connections) {
     return application.checkoutPayment({...input,...data,idempotencyKey:key(req),requestId:req.requestId});
   });
   route("post", "/internal/v1/checkout/state", "checkout.state", (req,input) => {
-    const data=body(req,["orderId"]);return application.checkoutState({...input,...data});
+    const data=body(req,["orderId","refresh"]);
+    if(data.refresh!==undefined && typeof data.refresh!=='boolean')d.fail('PAYMENT_INPUT_INVALID');
+    return application.checkoutState({...input,...data});
   });
   route("post", "/internal/v1/checkout/snapshot", "checkout.snapshot", (req,input) => {
     const data=body(req,["orderId"]);return application.checkoutSnapshot({...input,...data});

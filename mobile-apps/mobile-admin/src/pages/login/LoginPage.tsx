@@ -10,21 +10,21 @@ type LoginPageProps = {
 };
 
 export function LoginPage({ onLogin }: LoginPageProps) {
-  const [email, setEmail] = useState('');
+  const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const submit = async () => {
-    const safeEmail = email.trim();
-    if (!safeEmail || !password) {
-      setError('Введите email и пароль');
+    const safeLogin = login.trim();
+    if (!safeLogin || !password) {
+      setError('Введите логин и пароль');
       return;
     }
     setLoading(true);
     setError('');
     try {
-      const session = await loginAdmin(safeEmail, password);
+      const session = await loginAdmin(safeLogin, password);
       onLogin(session);
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
@@ -40,12 +40,12 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         <TextInput
           allowFontScaling={false}
           autoCapitalize="none"
-          keyboardType="email-address"
-          onChangeText={setEmail}
-          placeholder="Email"
+          autoCorrect={false}
+          onChangeText={setLogin}
+          placeholder="Логин"
           placeholderTextColor="#8f8f95"
           style={styles.input}
-          value={email}
+          value={login}
         />
         <TextInput
           allowFontScaling={false}

@@ -14,29 +14,36 @@ function getOrderPaymentSummary(order, projection=storedProjection(order)) {
   const required=Number(order.online_payment_required)===1;
   const amount=minor(order.total_price);
   const cancelled=['cancelled','canceled'].includes(order.status_code || order.statusCode);
+  const orderRefundState=order.refund_state==='full'?'refunded':order.refund_state==='partial'?'partially_refunded':null;
+  const methodChangeDeadline=order.payment_method_deadline || projection?.methodChangeDeadline || null;
+  const methodChangeAllowed=!methodChangeDeadline || Date.now()<Date.parse(methodChangeDeadline);
   if(!required) {
     const paid=Number(order.is_paid)===1;
-    return {required:false,method:order.payment_code || order.paymentCode || null,state:paid?'paid':'unpaid',
-      source:paid?'manual':'none',amount,currency:'RUB',paidAmount:paid?amount:0,refundedAmount:0,
+    const duplicate=Boolean(paid && order.manual_paid_at && projection?.paidAmount);
+    return {required:false,methodChangeDeadline,canChangeMethod:methodChangeAllowed && !paid && !cancelled,method:order.payment_code || order.paymentCode || null,state:orderRefundState || (paid?'paid':'unpaid'),
+      source:paid?'manual':'none',amount,currency:'RUB',paidAmount:paid?amount:0,refundedAmount:minor(order.refunded_total || 0),
       paymentSatisfied:paid || amount===0,canPay:false,fulfillmentEligible:!cancelled,
-      paidAt:order.manual_paid_at || null,currentPaymentId:null,successfulPaymentId:null,anomalies:[]};
+      paidAt:order.manual_paid_at || null,currentPaymentId:null,successfulPaymentId:null,
+      gatewayPaidAmount:projection?.paidAmount || 0,attentionRequired:duplicate,
+      anomalies:duplicate?['PAYMENT_DUPLICATE_SUCCESS']:[]};
   }
-  const state=projection?.state || (order.online_payment_status==='paid'?'paid':amount===0?'not_required':'unpaid');
+  const state=orderRefundState || projection?.state || (order.online_payment_status==='paid'?'paid':amount===0?'not_required':'unpaid');
   const paidAmount=projection?.paidAmount ?? (order.online_payment_status==='paid'?minor(order.online_payment_total ?? order.total_price):0);
-  const refundedAmount=projection?.refundedAmount || 0;
+  const refundedAmount=Math.max(projection?.refundedAmount || 0,minor(order.refunded_total || 0));
   const anomalies=projection?.anomalies || [];
   const mismatch=Boolean(paidAmount && paidAmount!==amount);
   const satisfied=amount===0 || (paidAmount-refundedAmount>=amount && !mismatch && !anomalies.length);
   const active=projection?.activePayment ?? !['failed','cancelled','refunded','not_required'].includes(state);
-  return {required:true,method:'online',state,source:'gateway',amount,currency:'RUB',paidAmount,refundedAmount,
+  const selectedMethod=order.payment_code || order.paymentCode || 'online';
+  return {required:true,methodChangeDeadline,canChangeMethod:methodChangeAllowed && !paidAmount && !cancelled,method:paidAmount?'online':selectedMethod,methodChangePending:!paidAmount && ['cash','card'].includes(selectedMethod) && active,state,source:'gateway',amount,currency:'RUB',paidAmount,refundedAmount,
     refunds:(projection?.refunds || []).map(r=>({id:r.id,orderReturnId:r.orderReturnId,origin:r.origin,amount:r.amount,currency:r.currency,state:r.status,attentionRequired:r.recoveryState==='manual_review',receiptRegistration:r.receiptRegistration})),
     pendingRefundAmount:(projection?.refunds || []).filter(r=>['created','pending'].includes(r.status)).reduce((sum,r)=>sum+minor(r.amount),0),
     currentPaymentId:projection?.currentPaymentId || null,successfulPaymentId:projection?.successfulPaymentId || null,
     paidAt:projection?.paidAt || null,updatedAt:projection?.updatedAt || null,
     paymentSatisfied:satisfied,amountMismatch:mismatch,anomalies,activePayment:active,attentionRequired:Boolean(projection?.attentionRequired),
-    canPay:!projection?.attentionRequired && !cancelled && !Number(order.is_final || order.status_is_final || order.statusIsFinal) && !paidAmount && amount>0 &&
+    canPay:!projection?.attentionRequired && !cancelled && !paidAmount && amount>0 &&
       (!projection || ['unpaid','failed','cancelled'].includes(state) || Boolean(projection.canContinue)),
-    fulfillmentEligible:!cancelled && satisfied};
+    fulfillmentEligible:!cancelled};
 }
 function clientPaymentSummary(order) { return getOrderPaymentSummary(order); }
 module.exports={minor,storedProjection,getOrderPaymentSummary,clientPaymentSummary};

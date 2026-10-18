@@ -29352,16 +29352,27 @@ function renderSheetAddressList() {
   function shopPaymentStateTitle(summary) {
     if(summary.amountMismatch)return 'Сумма заказа изменилась. Требуется проверка оплаты.';
     if(summary.anomalies?.length)return 'Требуется проверка оплаты';
+    if(summary.methodChangePending)return summary.method==='cash'?'Наличными при получении':'Картой при получении';
     if(summary.source==='manual' && summary.state==='paid')return 'Оплачено вручную';
     return ({unpaid:'Не оплачено',created:'Подготавливаем оплату',pending:'Платёж обрабатывается',waiting_for_confirmation:'Ожидает оплаты',paid:'Оплачено онлайн',failed:'Оплата не прошла',cancelled:'Оплата не завершена',partially_refunded:'Частичный возврат',refunded:'Возвращено',not_required:'Оплата не требуется'})[summary.state] || 'Ожидает оплаты';
+  }
+  function shopOrderPaymentPresentation(order) {
+    const summary=order.paymentSummary;
+    const paid=Boolean(summary?.paymentSatisfied || Number(order.is_paid)===1);
+    const processing=Boolean(!paid && !summary?.methodChangePending && summary?.activePayment && ['created','pending'].includes(summary.state));
+    const code=summary?.source==='gateway' && summary.paidAmount?'online':String(summary?.method || order.payment_code || '');
+    const special=summary && (summary.amountMismatch || summary.anomalies?.length || ['partially_refunded','refunded'].includes(summary.state));
+    return {title:special?shopPaymentStateTitle(summary):paid?'Оплачено':processing?'Платёж обрабатывается':'Не оплачено',
+      tone:paid?'paid':processing?'processing':'unpaid',
+      method:code==='cash'?'Наличными при получении':code==='card'?'Картой при получении':code==='online'?'Онлайн':String(order.payment_title || 'Не указан')};
   }
   function deriveCustomerOrderView(order) {
     const progress = window.deriveCustomerOrderProgress(order);
     const { methodCode, delivery, method, stage, isFinal, isCancelled, steps } = progress;
     const timing = getShopOrderTiming(order);
     const paymentCode = String(order?.payment_code || "").toLowerCase();
-    const payment = order?.paymentSummary?.required ? shopPaymentStateTitle(order.paymentSummary)
-      : paymentCode === "online" && Number(order?.is_paid) === 1 ? "Оплачено онлайн" : paymentCode === "cash" ? "Наличными" : String(order?.payment_title || "");
+    const paymentPresentation=shopOrderPaymentPresentation(order);
+    const payment=paymentPresentation.method;
     const summary = buildCanonicalOrderSummaryData(order);
     const deliveryRows = [["Способ получения", method], [delivery ? "Когда доставить" : "Когда получить", timing]];
     if (delivery && order?.address) deliveryRows.push(["Адрес", String(order.address)]);
@@ -29382,7 +29393,7 @@ function renderSheetAddressList() {
       progressKey: progress.progressKey, comment: String(order?.comment || "").trim(), items,
       itemsSignature: JSON.stringify([items, order?.discount_amount]),
       deliveryRows, deliverySignature: JSON.stringify(deliveryRows),
-      customer, customerSignature: JSON.stringify(customer), payment, paymentRows,
+      customer, customerSignature: JSON.stringify(customer), payment, paymentRows, paymentPresentation,
       paymentSummary:order.paymentSummary,publicId:order.public_id,
       paymentSignature: JSON.stringify([paymentRows, summary.orderTotal, summary.breakdown, summary.orderDiscountTitles,order.paymentSummary]),
       summary, totalsSignature: JSON.stringify(summary),
@@ -29434,25 +29445,27 @@ function renderSheetAddressList() {
   function renderShopOrderPayment(view) {
     const payment=view.paymentSummary;
     const refunds=(payment?.refunds || []).map(refund=>`<p role="status">${escapeHtml(refund.attentionRequired?'Возврат требует проверки':({created:'Возврат ожидает отправки',pending:'Возврат обрабатывается',succeeded:'Деньги возвращены',failed:'Возврат не выполнен',cancelled:'Возврат отменён'})[refund.state] || 'Статус возврата уточняется')}: ${money(refund.amount)}${refund.receiptRegistration==='pending'?' · Чек формируется':refund.receiptRegistration==='succeeded'?' · Чек зарегистрирован':refund.receiptRegistration==='canceled'?' · Требуется проверка чека':''}</p>`).join('');
-    const paid=payment?.required && payment.state==='paid' && payment.paymentSatisfied;
-    const state=payment ? `<p role="status" class="shop-order-payment-status ${paid?'is-paid':'is-unpaid'}"><i class="fas ${paid?'fa-check':'fa-clock'}" aria-hidden="true"></i> ${escapeHtml(paid?'Оплачено онлайн':payment.required && !payment.paidAmount?'Не оплачено онлайн':shopPaymentStateTitle(payment))}</p>${payment.paidAmount?renderShopOrderPairs([['Оплачено',money(payment.paidAmount/100)]]):''}${payment.refundedAmount?renderShopOrderPairs([['Возвращено',money(payment.refundedAmount/100)]]):''}${view.isCancelled && payment.paidAmount>payment.refundedAmount?'<p>Возврат оплаты не завершён</p>':''}${payment.required && !paid && !view.isCancelled?`<div class="shop-order-payment-actions"><button type="button" class="control" data-shop-order-payment="${escapeHtml(view.publicId)}">${payment.canPay?'Повторить онлайн-оплату':'Проверить оплату'}</button>${!payment.paidAmount?`<button type="button" class="control" data-shop-order-change-payment="${escapeHtml(view.publicId)}">Сменить оплату</button>`:''}</div>`:''}`:'';
-    return `${state}${refunds}${view.paymentRows.map((row) => row[0] === "Скидка" && view.summary.discountAmount > 0 ? renderOrderDiscountDetails(view.summary, "shop-order-info-row", "shop-order-info-label", "shop-order-info-value") : renderShopOrderPairs([row])).join("")}<div class="shop-order-payment__total"><strong>ИТОГО</strong><strong data-order-total>${money(view.summary.orderTotal)}</strong></div>`;
+    const status=view.paymentPresentation;
+    const actions=payment && !payment.paymentSatisfied && !view.isCancelled
+      ? '<div class="shop-order-payment-actions"><button type="button" class="control shop-payment-button shop-payment-button--primary" data-shop-order-payment="'+escapeHtml(view.publicId)+'">'+(payment.canPay || !payment.required?(payment.required?'Повторить онлайн-оплату':'Оплатить онлайн'):'Проверить оплату')+'</button>'+(!payment.paidAmount && payment.canChangeMethod!==false?'<button type="button" class="control shop-payment-button shop-payment-button--secondary" data-shop-order-change-payment="'+escapeHtml(view.publicId)+'">Сменить оплату</button>':'')+'</div>':'';
+    const badges='<div class="shop-order-info-row shop-order-payment-badges"><span>Способ оплаты</span><strong class="shop-order-payment-method">'+escapeHtml(status.method)+'</strong></div>';
+    return actions+badges+(payment?.paidAmount?renderShopOrderPairs([['Оплачено',money(payment.paidAmount/100)]]):'')+(payment?.refundedAmount?renderShopOrderPairs([['Возвращено',money(payment.refundedAmount/100)],['Осталось после возврата',money(Math.max(0,payment.paidAmount-payment.refundedAmount)/100)]]):'')+(view.isCancelled && payment?.paidAmount>payment?.refundedAmount?'<p>Возврат оплаты не завершён</p>':'')+refunds+view.paymentRows.filter(row=>row[0]!=='Способ оплаты').map(row=>row[0]==='Скидка' && view.summary.discountAmount>0?renderOrderDiscountDetails(view.summary,'shop-order-info-row','shop-order-info-label','shop-order-info-value'):renderShopOrderPairs([row])).join('')+'<div class="shop-order-payment__total"><strong>ИТОГО</strong><strong data-order-total>'+money(view.summary.orderTotal)+'</strong></div>';
   }
   function renderShopOrderStep(step, index) {
     return `<div class="shop-order-progress__step is-${step.state}" data-order-progress-step="${index}" ${step.state === "current" ? 'aria-current="step"' : ""}><span class="shop-order-progress__node"><i class="fas ${step.state === "completed" ? "fa-check" : step.icon}" aria-hidden="true"></i></span><span data-order-step-label>${escapeHtml(step.title)}</span></div>`;
   }
   window.renderShopOrderStep = renderShopOrderStep;
 
-  function renderShopOrderAccordion(key, title, icon, subtitle, amount, content, open = false) {
+  function renderShopOrderAccordion(key, title, icon, subtitle, amount, content, open = false, tone = '') {
     const bodyId = `shop-order-${key}-${renderShopOrderAccordion.orderId}`;
-    return `<section class="shop-order-details-section shop-order-accordion${open ? " is-open" : ""}" data-order-section="${key}"><button class="shop-order-accordion__button" type="button" aria-expanded="${open}" aria-controls="${bodyId}"><span class="shop-order-accordion__icon"><i class="fas ${icon}" aria-hidden="true"></i></span><span class="shop-order-accordion__titles"><strong>${title}</strong><span data-order-section-subtitle>${escapeHtml(subtitle)}</span></span><strong data-order-section-summary>${escapeHtml(amount)}</strong><i class="fas fa-chevron-down shop-order-accordion__chevron" aria-hidden="true"></i></button><div class="shop-order-accordion__body" id="${bodyId}" ${open ? "" : "inert"}><div class="shop-order-accordion__clip"><div class="shop-order-accordion__content" data-order-${key}>${content}</div></div></div></section>`;
+    return `<section class="shop-order-details-section shop-order-accordion${open ? " is-open" : ""}${tone ? " payment-tone-"+tone : ""}" data-order-section="${key}"><button class="shop-order-accordion__button" type="button" aria-expanded="${open}" aria-controls="${bodyId}"><span class="shop-order-accordion__icon"><i class="fas ${icon}" aria-hidden="true"></i></span><span class="shop-order-accordion__titles"><strong data-order-section-title>${title}</strong><span data-order-section-subtitle>${escapeHtml(subtitle)}</span></span><strong data-order-section-summary>${escapeHtml(amount)}</strong><i class="fas fa-chevron-down shop-order-accordion__chevron" aria-hidden="true"></i></button><div class="shop-order-accordion__body" id="${bodyId}" ${open ? "" : "inert"}><div class="shop-order-accordion__clip"><div class="shop-order-accordion__content" data-order-${key}>${content}</div></div></div></section>`;
   }
   function renderShopOrderDetails(order) {
     const view = deriveCustomerOrderView(order);
     shopOrderSnapshots.set(view.id, order);
     shopOrderDetailsLoaded.add(view.id);
     renderShopOrderAccordion.orderId = `${view.id}-${++renderShopOrderDetails.sequence}`;
-    return `<div class="shop-order-details shop-order-details--variant-a" data-order-details-id="${view.id}"><section class="shop-order-progress" data-order-progress><div class="shop-order-progress__head"><strong data-order-method>${escapeHtml(view.method)}</strong><span data-order-timing>${escapeHtml(view.timing)}</span></div><div class="shop-order-progress__route">${view.steps.map(renderShopOrderStep).join("")}</div><span class="shop-order-progress__announcement" role="status" data-order-status-announcement>${escapeHtml(view.statusLabel)}</span></section>${view.comment ? `<section class="shop-order-comment" data-order-comment>${renderShopOrderComment(view.comment)}</section>` : ""}${renderShopOrderAccordion("products", "Товары", "fa-bag-shopping", `${view.items.length} позиций`, money(view.summary.subtotalBeforeDiscounts - view.summary.discountAmount), `<div class="shop-cart-items">${renderSharedReadonlyOrderItemsHtml(view.items, order)}</div>`, true)}${renderShopOrderAccordion("delivery", "Детали получения", "fa-location-dot", view.method, "", renderShopOrderPairs(view.deliveryRows))}<section class="shop-order-customer" data-order-customer>${renderShopOrderCustomer(view)}</section>${renderShopOrderAccordion("payment", "Оплата и суммы", "fa-wallet", view.payment, money(view.summary.orderTotal), renderShopOrderPayment(view))}</div>`;
+    return `<div class="shop-order-details shop-order-details--variant-a" data-order-details-id="${view.id}"><section class="shop-order-progress" data-order-progress><div class="shop-order-progress__head"><strong data-order-method>${escapeHtml(view.method)}</strong><span data-order-timing>${escapeHtml(view.timing)}</span></div><div class="shop-order-progress__route">${view.steps.map(renderShopOrderStep).join("")}</div><span class="shop-order-progress__announcement" role="status" data-order-status-announcement>${escapeHtml(view.statusLabel)}</span></section>${view.comment ? `<section class="shop-order-comment" data-order-comment>${renderShopOrderComment(view.comment)}</section>` : ""}${renderShopOrderAccordion("products", "Товары", "fa-bag-shopping", `${view.items.length} позиций`, money(view.summary.subtotalBeforeDiscounts - view.summary.discountAmount), `<div class="shop-cart-items">${renderSharedReadonlyOrderItemsHtml(view.items, order)}</div>`, true)}${renderShopOrderAccordion("delivery", "Детали получения", "fa-location-dot", view.method, "", renderShopOrderPairs(view.deliveryRows))}<section class="shop-order-customer" data-order-customer>${renderShopOrderCustomer(view)}</section>${renderShopOrderAccordion("payment", view.paymentPresentation.title, "fa-wallet", view.payment, money(view.summary.orderTotal), renderShopOrderPayment(view), false, view.paymentPresentation.tone)}</div>`;
   }
   renderShopOrderDetails.sequence = 0;
 
@@ -29480,45 +29493,323 @@ function renderSheetAddressList() {
 
   function updateShopOrderPaymentFooter(order) {
     const view=deriveCustomerOrderView(order),payment=view.paymentSummary;
+    const refund=payment?.state==='refunded'?'Возврат':payment?.state==='partially_refunded'?'Частичный возврат':null;
     const paid=Boolean(payment?.paymentSatisfied && payment.state==='paid');
+    const canPayOnline=Boolean(payment && !payment.paymentSatisfied && !view.isCancelled && (payment.canPay || !payment.required));
     [elMobileOrderTotalBtn,elOrderDetailsTotalBtn].forEach(button=>{
       if(!button)return;
       button.classList.toggle('is-order-paid',paid);
       const value=button.querySelector('span');
-      if(value)value.textContent=`${paid?'✓ Оплачено · ':payment?.required && payment.canPay?'Оплатить онлайн · ':''}${money(view.summary.orderTotal)}`;
-      button.onclick=payment?.required && !paid && !view.isCancelled?()=>showShopPaymentReturn(view.publicId,true):null;
-      button.disabled=Boolean(paid || !payment?.required || view.isCancelled);
+      if(value)value.textContent=`${refund?refund+' · ':paid?'✓ Оплачено · ':canPayOnline?'Оплатить онлайн · ':''}${money(view.summary.orderTotal)}`;
+      button.onclick=payment && !paid && !refund && !view.isCancelled?()=>showShopPaymentReturn(view.publicId,true):null;
+      button.disabled=Boolean(paid || refund || !payment || view.isCancelled);
     });
   }
 
-  async function showShopOrderChangePayment(publicId) {
+  function createCheckoutCardOption({ title, value = "", meta = "", icon = null, onClick = null, extraClass = "" }) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `shop-checkout-card-option${extraClass ? ` ${extraClass}` : ""}`;
+    const textWrap = document.createElement("span");
+    textWrap.className = "shop-checkout-card-option__text";
+    const titleEl = document.createElement("span");
+    titleEl.className = "shop-checkout-card-option__title";
+    titleEl.textContent = title || "";
+    textWrap.appendChild(titleEl);
+    if (value) {
+      const valueEl = document.createElement("span");
+      valueEl.className = "shop-checkout-card-option__value";
+      valueEl.textContent = value;
+      textWrap.appendChild(valueEl);
+    }
+    if (meta) {
+      const metaEl = document.createElement("span");
+      metaEl.className = "shop-checkout-card-option__meta";
+      metaEl.textContent = meta;
+      textWrap.appendChild(metaEl);
+    }
+    if (icon) {
+      const iconWrap = document.createElement("span");
+      iconWrap.className = "shop-checkout-card-option__icon";
+      iconWrap.appendChild(icon);
+      btn.appendChild(iconWrap);
+    }
+    btn.appendChild(textWrap);
+    if (typeof onClick === "function") btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  function buildCheckoutSelectionSlotButton(title, isActive, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `shop-checkout-selection-sheet__slot${isActive ? " is-active" : ""}`;
+    button.textContent = title || "";
+    if (typeof onClick === "function") button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function buildShopCashChangeOptions(body,{total,presets,selection={},onSelect}) {
+    const currentPayableTotal=total,changePresetAmounts=presets;
+    let sheetMode=selection.mode || 'none',sheetSelectedChangePreset=selection.preset || null,sheetCustomValue=selection.customValue || '';
+    const applyCashChangeSelection=next=>onSelect(next);
+    const section = document.createElement("div");
+    section.className = "shop-checkout-selection-sheet__section shop-checkout-selection-sheet__section--fixed";
+    const sectionTitle = document.createElement("div");
+    sectionTitle.className = "shop-checkout-selection-sheet__section-title";
+    sectionTitle.textContent = "Как подготовить наличные";
+    sectionTitle.textContent = "С какой суммы подготовить сдачу";
+    sectionTitle.textContent = "С какой суммы подготовить сдачу?";
+    const grid = document.createElement("div");
+    grid.className = "shop-checkout-selection-sheet__grid shop-checkout-selection-sheet__grid--single";
+    section.appendChild(sectionTitle);
+    section.appendChild(grid);
+    body.appendChild(section);
+    const customSection = document.createElement("div");
+    customSection.className = "shop-checkout-selection-sheet__section";
+    const customTitle = document.createElement("div");
+    customTitle.className = "shop-checkout-selection-sheet__section-title";
+    customTitle.textContent = "Другая сумма";
+    const customInput = document.createElement("input");
+    const minAmount = Math.ceil(currentPayableTotal) + 1;
+    const placeholder = `Больше ${Math.ceil(currentPayableTotal)}`;
+    customInput.className = "control shop-checkout-change-custom shop-checkout-selection-sheet__slot-input";
+    customInput.type = "number";
+    customInput.min = String(minAmount);
+    customInput.placeholder = placeholder;
+    customInput.size = Math.max(10, placeholder.length + 1);
+    customInput.style.width = "100%";
+    customInput.value = sheetCustomValue;
+    const customApplyBtn = document.createElement("button");
+    customApplyBtn.type = "button";
+    customApplyBtn.className = "shop-checkout-selection-sheet__slot-confirm";
+    customApplyBtn.setAttribute("aria-label", "Применить сумму сдачи");
+    customApplyBtn.innerHTML = '<i class="fas fa-check"></i>';
+    customSection.appendChild(customTitle);
+    customSection.appendChild(customInput);
+    customSection.style.display = "none";
+    body.appendChild(customSection);
+
+    const syncCustomApplyButtonState = () => {
+      const customVal = parseInt(str(customInput.value).trim(), 10);
+      customApplyBtn.disabled = !(customVal > currentPayableTotal);
+    };
+
+    const applyCurrentCustomValue = () => {
+      sheetCustomValue = str(customInput.value).trim();
+      return applyCashChangeSelection({ mode: "custom", customValue: sheetCustomValue });
+    };
+
+    customApplyBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      applyCurrentCustomValue();
+    });
+
+    const renderSheetChips = () => {
+      grid.innerHTML = "";
+      customSection.style.display = "none";
+
+      const noneBtn = buildCheckoutSelectionSlotButton("Без сдачи", sheetMode === "none", () => {
+        sheetMode = "none";
+        sheetSelectedChangePreset = null;
+        sheetCustomValue = "";
+        applyCashChangeSelection({ mode: "none" });
+      });
+      grid.appendChild(noneBtn);
+
+      changePresetAmounts.forEach((amount) => {
+        const presetBtn = buildCheckoutSelectionSlotButton(money(amount), sheetMode === "preset" && Number(sheetSelectedChangePreset) === Number(amount), () => {
+          sheetMode = "preset";
+          sheetSelectedChangePreset = amount;
+          sheetCustomValue = "";
+          applyCashChangeSelection({ mode: "preset", preset: amount });
+        });
+        grid.appendChild(presetBtn);
+      });
+
+      if (sheetMode === "custom") {
+        const customWrap = document.createElement("div");
+        customWrap.className = "shop-checkout-selection-sheet__slot shop-checkout-selection-sheet__slot--input is-active";
+        if (customInput.parentNode) customInput.parentNode.removeChild(customInput);
+        if (customApplyBtn.parentNode) customApplyBtn.parentNode.removeChild(customApplyBtn);
+        customWrap.appendChild(customInput);
+        customWrap.appendChild(customApplyBtn);
+        grid.appendChild(customWrap);
+        syncCustomApplyButtonState();
+        requestAnimationFrame(() => {
+          try {
+            customInput.focus();
+            customInput.select();
+          } catch {}
+        });
+        return;
+      }
+
+      const customBtn = buildCheckoutSelectionSlotButton("Другая сумма", sheetMode === "custom", () => {
+        sheetMode = "custom";
+        renderSheetChips();
+        requestAnimationFrame(() => {
+          try {
+            customInput.focus();
+            customInput.select();
+          } catch {}
+        });
+      });
+      grid.appendChild(customBtn);
+    };
+
+    customInput.addEventListener("input", () => {
+      sheetCustomValue = str(customInput.value).trim();
+      syncCustomApplyButtonState();
+    });
+    customInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      applyCurrentCustomValue();
+    });
+
+    renderSheetChips();
+  }
+
+  async function showShopOrderChangePayment(publicId,{warning=false}={}) {
     if(!window.AppModal || !/^[0-9a-f-]{36}$/i.test(String(publicId)))return;
     const scope=shopOrderRequestScopeKey(),content=document.createElement('div');
-    const message=document.createElement('p'),select=document.createElement('select'),confirm=document.createElement('button');
-    select.className=confirm.className='control';confirm.type='button';confirm.textContent='Подтвердить смену оплаты';confirm.disabled=true;
-    message.textContent='Загружаем способы оплаты…';content.append(message,select,confirm);
-    setAppModalMode('shop');window.AppModal.open({title:'Сменить оплату',content});
+    content.className='shop-payment-choice';
+    const message=document.createElement('p');
+    message.setAttribute('role','status');
+    message.textContent='Загружаем данные заказа…';
+    content.append(message);
+    let order=null,methods=[],selected=null,changeFrom=null,busy=false,transition=false,stage=warning?'warning':'methods';
     const headers={},token=localStorage.getItem(`shop-payment:${buildDeliveryCacheScope().tenant_id}:${publicId}`);
     if(token)headers['x-order-payment-token']=token;
-    const current=()=>content.isConnected && scope===shopOrderRequestScopeKey();
-    try {
-      const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment-methods`,{headers});
-      if(!current())return;
-      for(const method of result.data){const option=document.createElement('option');option.value=method.code;option.textContent=method.code==='cash'?'Наличными при получении':'Картой при получении';select.append(option);}
-      message.textContent=result.data.length?'Смена доступна, если онлайн-платёж не создан либо окончательно отменён. Незавершённая оплата блокирует смену.':'Нет доступных способов оплаты при получении.';
-      confirm.disabled=!result.data.length;
-    }catch(error){if(current())message.textContent='Не удалось загрузить способы оплаты. Попробуйте позже.';}
-    confirm.onclick=async()=>{
-      if(confirm.disabled || !current())return;confirm.disabled=true;select.disabled=true;
-      try {
-        const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment-method`,{method:'POST',headers,body:{method:select.value,confirmed:true}});
-        if(!current())return;
-        const cached=[...shopOrderSnapshots.values()].find(order=>order.public_id===publicId);
-        if(cached){const updated={...cached,...result.data,is_paid:0,online_payment_required:0};patchShopOrderDetails(cached,updated);}
-        shopOrdersListCache.clear();shopOrderDetailsLoaded.clear();
-        message.textContent=`Способ оплаты изменён: ${select.options[select.selectedIndex].textContent}.`;
-      }catch(error){if(current()){message.textContent=error.message==='PAYMENT_PROVIDER_RECOVERY_REQUIRED'?'Онлайн-платёж ещё не завершён или требует проверки. Завершите либо отмените его на странице оплаты и проверьте статус.':error.message==='PAYMENT_REFRESH_RATE_LIMITED'?'Подождите несколько секунд и повторите.':'Не удалось сменить оплату. Заказ сохранён; проверьте статус онлайн-платежа.';confirm.disabled=false;select.disabled=false;}}
+    if(window.AppModal.isOpen())window.AppModal.close('payment-choice-transition');
+    resetOrderDetailsTransientUi();resetShopModalHeaderUi();setAppModalMode('shop');
+    const modal=document.getElementById('appModal');
+    modal.classList.add('shop-payment-choice-modal');
+    document.body.classList.add('shop-payment-choice-open');
+    const clearStyle=()=>{
+      modal.classList.remove('shop-payment-choice-modal','shop-payment-cash-modal');
+      document.body.classList.remove('shop-payment-choice-open');
     };
+    const current=()=>!transition && window.AppModal.isOpen() && content.isConnected && scope===shopOrderRequestScopeKey();
+    const openDetails=(initialOrder=null)=>{
+      transition=true;clearStyle();window.AppModal.close('payment-choice');
+      void showShopPaymentReturn(publicId,false,null,false,initialOrder?.id?initialOrder:null);
+    };
+    window.AppModal.open({title:warning?'Заказ принят':'Способ оплаты',content,hideFooter:true,onClose:()=>{
+      clearStyle();
+      if(!transition && scope===shopOrderRequestScopeKey())void showShopPaymentReturn(publicId,false,null,false);
+    }});
+    const button=(label,action,tone='secondary')=>{
+      const node=document.createElement('button');node.type='button';node.className='control shop-payment-button shop-payment-button--'+tone;node.textContent=label;node.onclick=action;return node;
+    };
+    const repeat=()=>{
+      if(busy)return;
+      transition=true;clearStyle();window.AppModal.close('repeat-payment');
+      void showShopPaymentReturn(publicId,true);
+    };
+    const renderCash=()=>{
+      stage='cash';modal.classList.add('shop-payment-cash-modal');
+      window.AppModal.setTitle('Сдача');content.replaceChildren();
+      const body=document.createElement('div');body.className='shop-checkout-selection-sheet shop-checkout-selection-sheet--cash';
+      content.append(body);
+      const total=Number(order.total_price || 0);
+      buildShopCashChangeOptions(body,{total,presets:[500,1000,2000,5000].filter(amount=>amount>total),
+        selection:changeFrom?{mode:'custom',customValue:String(changeFrom)}:{mode:'none'},onSelect:value=>{
+          changeFrom=value.mode==='custom'?Number(value.customValue):value.mode==='preset'?Number(value.preset):null;
+          selected='cash';stage='methods';render();return true;
+        }});
+      content.append(button('Назад к способам оплаты',()=>{stage='methods';render();}));
+    };
+    const render=()=>{
+      if(!current() || !order)return;
+      modal.classList.remove('shop-payment-cash-modal');
+      content.replaceChildren(message);
+      if(stage==='warning') {
+        window.AppModal.setTitle('Заказ принят');
+        message.textContent='Заказ принят. Онлайн-оплата не завершена. Вы можете повторить оплату или сменить способ оплаты.';
+        content.append(button('Повторить онлайн-оплату',repeat,'primary'));
+        if(order.paymentSummary?.canChangeMethod!==false)content.append(button('Сменить способ оплаты',()=>{stage='methods';render();}));
+        return;
+      }
+      window.AppModal.setTitle('Способ оплаты');
+      const expired=order.paymentSummary?.canChangeMethod===false;
+      const locked=Boolean(expired || order.paymentSummary?.attentionRequired || order.paymentSummary?.paidAmount);
+      const deadline=order.paymentSummary?.methodChangeDeadline;
+      message.textContent=expired?'Время смены способа оплаты истекло. Оплатить онлайн по-прежнему можно в заказе.'
+        :locked?'Состояние оплаты изменилось. Вернитесь к заказу, чтобы проверить его.'
+        :deadline?'Выберите способ оплаты. На смену осталось '+Math.max(1,Math.ceil((Date.parse(deadline)-Date.now())/60000))+' мин.'
+        :'Выберите способ оплаты и подтвердите изменение.';
+      const cards=document.createElement('div');cards.className='shop-checkout-card-grid shop-checkout-card-grid--payments';
+      methods.forEach(method=>{
+        const cash=method.code==='cash';
+        const icon=document.createElement('i');icon.className='fas '+(cash?'fa-money-bill-wave':'fa-credit-card');icon.setAttribute('aria-hidden','true');
+        const card=createCheckoutCardOption({icon,title:cash?'Наличные':'Карта',meta:cash && selected==='cash'?(changeFrom?'Сдача с '+money(changeFrom):'Без сдачи'):'При получении',onClick:()=>{
+          if(busy)return;
+          if(cash)renderCash();else{selected='card';changeFrom=null;render();}
+        }});
+        card.classList.toggle('is-active',selected===method.code);card.disabled=busy || locked;
+        cards.append(card);
+      });
+      const confirm=button('Подтвердить смену оплаты',async()=>{
+        if(busy || locked || shopPaymentMethodChanges.has(publicId))return;
+        if(!selected) {
+          cards.classList.add('is-invalid');
+          setTimeout(()=>cards.classList.remove('is-invalid'),2600);
+          return;
+        }
+        busy=true;
+        const previousOrder=order;
+        const optimistic={...order,payment_code:selected,payment_title:methods.find(method=>method.code===selected)?.title,
+          change_from:selected==='cash'?changeFrom:null,paymentSummary:{...order.paymentSummary,method:selected,
+            methodChangePending:Boolean(order.paymentSummary.activePayment),
+            required:Boolean(order.paymentSummary.activePayment),state:order.paymentSummary.activePayment?order.paymentSummary.state:'unpaid'}};
+        const mutation=apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment-method`,{method:'POST',headers,body:{method:selected,confirmed:true,change_from:selected==='cash'?changeFrom:null}});
+        shopPaymentMethodChanges.set(publicId,mutation);
+        openDetails(optimistic);
+        try {
+          const result=await mutation;
+          if(scope!==shopOrderRequestScopeKey())return;
+          const previous=shopOrderSnapshots.get(Number(result.data.id));
+          if(previous)patchShopOrderDetails(previous,result.data);
+          shopOrdersListCache.clear();shopOrderDetailsLoaded.delete(Number(result.data.id));
+        } catch(error) {
+          if(scope===shopOrderRequestScopeKey()) {
+            const previous=shopOrderSnapshots.get(Number(previousOrder.id));
+            if(previous)patchShopOrderDetails(previous,previousOrder);
+            shopOrdersListCache.clear();shopOrderDetailsLoaded.delete(Number(previousOrder.id));
+            showToast('Не удалось сохранить способ оплаты. Проверьте заказ и повторите: '+error.message);
+          }
+        } finally {
+          if(shopPaymentMethodChanges.get(publicId)===mutation)shopPaymentMethodChanges.delete(publicId);
+        }
+      });
+      confirm.classList.replace('shop-payment-button--secondary','shop-payment-button--confirm');
+      confirm.disabled=busy || locked;
+      content.append(cards,confirm,button('Вернуться к заказу',openDetails));
+    };
+    try {
+      const [details,available]=await Promise.all([
+        apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?details=1`,{headers}),
+        apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment-methods`,{headers})
+      ]);
+      if(!current())return;
+      order={...details.data.order,paymentSummary:details.data.paymentSummary};methods=available.data;
+      if(order.paymentSummary.paymentSatisfied){openDetails();return;}
+      render();
+      const refresh=async()=>{
+        if(!current())return;
+        try {
+          const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?refresh=0`,{headers});
+          if(!current())return;
+          order.paymentSummary=result.data.paymentSummary;
+          if(order.paymentSummary.paymentSatisfied){openDetails();return;}
+          if(stage==='methods' && !busy)render();
+        } catch(error) {if(current())message.textContent='Не удалось обновить статус оплаты: '+error.message;}
+        if(current())setTimeout(refresh,15000);
+      };
+      setTimeout(refresh,15000);
+    } catch(error) {if(current())message.textContent='Не удалось загрузить способы оплаты: '+error.message;}
   }
 
   function patchShopOrderDetails(previousOrder, order) {
@@ -29581,6 +29872,10 @@ function renderSheetAddressList() {
           breakdown?.classList.add("is-open");
           breakdown?.setAttribute("aria-hidden", "false");
         }
+        text('[data-order-section="payment"] [data-order-section-title]', next.paymentPresentation.title);
+        const paymentSection=root.querySelector('[data-order-section="payment"]');
+        paymentSection.classList.remove('payment-tone-paid','payment-tone-unpaid','payment-tone-processing');
+        paymentSection.classList.add('payment-tone-'+next.paymentPresentation.tone);
         text('[data-order-section="payment"] [data-order-section-subtitle]', next.payment);
         text('[data-order-section="payment"] [data-order-section-summary]', money(next.summary.orderTotal));
       }
@@ -29729,6 +30024,10 @@ function renderSheetAddressList() {
   }
 
   function showMobileOrderDetailsActions(order) {
+    if(shopPaymentWidgetSession) {
+      elMobileOrderDetailsActions?.classList.add('hidden');
+      return;
+    }
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (!isMobile || !elMobileOrderDetailsActions) {
       hideMobileOrderDetailsActions();
@@ -29753,6 +30052,10 @@ function renderSheetAddressList() {
   }
 
   function bindDesktopOrderDetailsFooter(order) {
+    if(shopPaymentWidgetSession) {
+      elOrderDetailsFooterActions?.classList.add('hidden');
+      return;
+    }
     if (window.matchMedia("(max-width: 768px)").matches) return;
     const modal = window.AppModal?.isOpen?.() ? window.AppModal.body?.closest(".app-modal") : null;
     if (modal && elOrderDetailsFooterActions) {
@@ -29778,6 +30081,7 @@ function renderSheetAddressList() {
   }
 
   function resetOrderDetailsTransientUi() {
+    shopPaymentWidgetSession?.cleanup();
     const footer = elOrderDetailsFooterActions;
     if (footer?.__shopOriginalParent && footer.parentElement !== footer.__shopOriginalParent) {
       const next = footer.__shopOriginalNextSibling;
@@ -35239,6 +35543,11 @@ function renderSheetAddressList() {
     }
     page._shopOrdersPopHandler = (event) => {
       if (!document.body.classList.contains("shop-orders-page-active")) return;
+      if(shopPaymentWidgetSession) {
+        event.stopImmediatePropagation();
+        shopPaymentWidgetSession.finish();
+        return;
+      }
       if (document.body.classList.contains("shop-orders-details-active")) {
         event.stopImmediatePropagation();
         if (page._shopOrderDetailsExitToHome === true) {
@@ -35320,6 +35629,7 @@ function renderSheetAddressList() {
       title: ordersOnly ? "Мои заказы" : "Профиль",
       content: wrap,
       onClose: () => {
+        shopPaymentWidgetSession?.finish();
         cleanupOrdersPageState();
         clearProfileModalMenu();
         activeProfileModalPage = null;
@@ -37906,61 +38216,322 @@ function setBottomNavActive(tab) {
     return slots;
   }
 
-  async function showShopPaymentReturn(publicId,continuePayment=false) {
-    if(!/^[0-9a-f-]{36}$/i.test(String(publicId)) || !window.AppModal)return;
-    const scope=shopOrderRequestScopeKey(),content=document.createElement("div");
-    const message=document.createElement("p"),refresh=document.createElement("button"),pay=document.createElement("button");
-    refresh.type=pay.type="button";refresh.className=pay.className="control";
-    refresh.textContent="Проверить статус";pay.textContent="Перейти к оплате";pay.hidden=true;
-    content.append(message,refresh,pay);message.textContent="Проверяем состояние оплаты…";
-    setAppModalMode("shop");window.AppModal.open({title:"Оплата заказа",content});
-    let busy=false,current=null,attempt=null;
-    const accessKey=`shop-payment:${buildDeliveryCacheScope().tenant_id}:${publicId}`;
-    const paymentHeaders={};
-    const accessToken=localStorage.getItem(accessKey);
-    if(accessToken)paymentHeaders['x-order-payment-token']=accessToken;
-    const isCurrent=()=>scope===shopOrderRequestScopeKey() && content.isConnected;
-    const update=async()=>{
-      if(busy || !isCurrent())return;busy=true;refresh.disabled=pay.disabled=true;
-      try {
-        const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment`,{headers:paymentHeaders});
-        if(!isCurrent())return;current=result.data.payment;
-        const paid=current.status==="paid" || current.status==="not_required";
-        message.textContent=paid ? "Оплата подтверждена." : ["cancelled","failed"].includes(current.status) ? "Оплата не завершена. Можно попробовать снова." : "Оплата ещё не подтверждена. Можно продолжить оплату или проверить статус позже.";
-        pay.hidden=result.data.paymentSummary ? !result.data.paymentSummary.canPay : paid;
-        if(result.data.paymentSummary)message.textContent=shopPaymentStateTitle(result.data.paymentSummary);
-        shopOrdersListCache.clear();
-        shopOrderDetailsLoaded.clear();
-        const cached=[...shopOrderSnapshots.values()].find(order=>order.public_id===publicId);
-        if(cached && result.data.paymentSummary) {
-          const updated={...cached,paymentSummary:result.data.paymentSummary,is_paid:result.data.paymentSummary.paymentSatisfied?1:0};
-          shopOrderSnapshots.set(Number(cached.id),updated);patchShopOrderDetails(cached,updated);
-        }
-        if(["cancelled","failed"].includes(current.status))attempt=null;
-      } catch(error) {if(isCurrent())message.textContent="Не удалось проверить оплату. Заказ сохранён. Попробуйте позже.";}
-      finally{busy=false;if(isCurrent())refresh.disabled=pay.disabled=false;}
+  let shopPaymentWidgetSession=null;
+  const shopPaymentMethodChanges=new Map();
+  let shopPaymentLoadingSequence=0;
+
+  function ensureCheckoutSendingOverlay() {
+    let overlay=document.getElementById('shopCheckoutSendingOverlay');
+    if(overlay)return overlay;
+    overlay=document.createElement('div');
+    overlay.id='shopCheckoutSendingOverlay';
+    overlay.className='shop-checkout-sending-overlay hidden';
+    overlay.setAttribute('role','status');
+    overlay.setAttribute('aria-live','polite');
+    overlay.innerHTML='<div class="shop-checkout-sending-card"><div class="shop-checkout-sending-spinner" aria-hidden="true"></div><div class="shop-checkout-sending-text">Подождите, отправляем заказ...</div></div>';
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function setShopPaymentLoading(loading,sequence=shopPaymentLoadingSequence) {
+    if(sequence!==shopPaymentLoadingSequence)return;
+    const overlay=ensureCheckoutSendingOverlay();
+    overlay.classList.toggle('is-payment-loading',loading);
+    overlay.classList.toggle('hidden',!loading);
+    overlay.querySelector('.shop-checkout-sending-text').textContent=loading?'Загружаем оплату…':'Подождите, отправляем заказ...';
+  }
+
+  function loadShopPaymentWidget() {
+    if(window.YooMoneyCheckoutWidget)return Promise.resolve();
+    if(loadShopPaymentWidget.pending)return loadShopPaymentWidget.pending;
+    loadShopPaymentWidget.pending=new Promise((resolve,reject)=>{
+      const script=document.createElement('script');
+      script.src='https://yookassa.ru/checkout-widget/v1/checkout-widget.js';
+      script.onload=()=>window.YooMoneyCheckoutWidget ? resolve() : reject(new Error('PAYMENT_WIDGET_UNAVAILABLE'));
+      script.onerror=()=>{script.remove();reject(new Error('PAYMENT_WIDGET_UNAVAILABLE'));};
+      document.head.appendChild(script);
+    }).catch(error=>{loadShopPaymentWidget.pending=null;throw error;});
+    return loadShopPaymentWidget.pending;
+  }
+
+  async function mountShopPaymentWidget(root,publicId,action,isCurrent) {
+    if(action.type!=='embedded' || !/^ct-[a-zA-Z0-9_-]{1,200}$/.test(action.token))throw new Error('PAYMENT_INVALID_ACTION');
+    shopPaymentWidgetSession?.cleanup();
+    const isMobile=window.matchMedia('(max-width: 768px)').matches;
+    const page=isMobile ? document.getElementById('shopProfileOrdersPage') : root.closest('.app-modal');
+    if(!page)throw new Error('PAYMENT_WIDGET_HOST_UNAVAILABLE');
+    const host=document.createElement('section');
+    host.className='shop-order-details-section shop-payment-widget';
+    host.dataset.shopPaymentWidget='';
+    const message=document.createElement('p');
+    message.setAttribute('role','status');
+    message.textContent='Загружаем форму оплаты…';
+    const form=document.createElement('div');
+    form.id=`shop-payment-widget-${crypto.randomUUID()}`;
+    const back=document.createElement('button');
+    back.type='button';back.className='control shop-payment-button shop-payment-button--secondary';back.textContent='Вернуться к заказу';
+    const retry=document.createElement('button');
+    retry.type='button';retry.className='control shop-payment-button shop-payment-button--primary';retry.textContent='Загрузить форму ещё раз';retry.hidden=true;
+    host.append(message,form,retry,back);
+    root.append(host);root.classList.add('shop-payment-widget-active');
+    const scroller=isMobile ? page.querySelector('.shop-orders-page-content') : window.AppModal?.body;
+    if(scroller)scroller.scrollTop=0;
+    const footer=isMobile ? elMobileOrderDetailsActions : elOrderDetailsFooterActions;
+    const footerHidden=footer?.classList.contains('hidden');
+    footer?.classList.add('hidden');
+    const title=isMobile ? page.querySelector('.shop-orders-page-header h1') : document.getElementById('appModalTitle');
+    const originalTitle=title?.textContent;
+    if(title)title.textContent='Оплата заказа';
+    rememberShopPaymentReturn(publicId);
+    let widget=null,closed=false,failed=false,initialization=0,retryTimer=null,automaticRetries=0;
+    const cleanup=event=>{
+      if(closed)return;
+      closed=true;
+      clearTimeout(retryTimer);
+      setShopPaymentLoading(false);
+      page.removeEventListener('click',onBack,true);
+      document.removeEventListener('keydown',onKey,true);
+      window.removeEventListener('pagehide',cleanup);
+      if(event?.type!=='pagehide' && window.history.state?.shopPaymentReturn?.publicId===publicId) {
+        const nextState={...window.history.state};
+        delete nextState.shopPaymentReturn;
+        window.history.replaceState(nextState,'',window.location.href);
+      }
+      if(widget) { widget.destroy();widget=null; }
+      host.remove();root.classList.remove('shop-payment-widget-active');
+      if(footer && !footerHidden)footer.classList.remove('hidden');
+      if(title)title.textContent=originalTitle;
+      if(shopPaymentWidgetSession===session)shopPaymentWidgetSession=null;
     };
-    refresh.onclick=update;
-    pay.onclick=async()=>{
-      if(busy || !isCurrent())return;busy=true;refresh.disabled=pay.disabled=true;
-      attempt=attempt || crypto.randomUUID();
-      try {
-        const result=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/pay`,{method:"POST",body:{},headers:{...paymentHeaders,"Idempotency-Key":attempt}});
-        if(!isCurrent())return;
-        const action=result.data.payment?.action;
-        if(action?.type==="redirect") {
-          const url=new URL(action.url);if(url.protocol!=="https:" || url.username || url.password)throw new Error("PAYMENT_INVALID_ACTION");
-          window.location.assign(url.href);
-        } else {
-          const paid=["paid","not_required"].includes(result.data.payment?.status);
-          pay.hidden=result.data.paymentSummary ? !result.data.paymentSummary.canPay : paid;
-          message.textContent=paid ? "Оплата подтверждена." : "Платёж обрабатывается. Проверьте статус позже.";
-        }
-      }catch(error){if(isCurrent())message.textContent="Не удалось перейти к оплате. Заказ сохранён. Попробуйте позже.";}
-      finally{busy=false;if(isCurrent())refresh.disabled=pay.disabled=false;}
+    const finish=()=>{
+      if(closed)return;
+      const current=isCurrent();
+      cleanup();
+      if(current)void showShopPaymentReturn(publicId);
     };
-    await update();
-    if(continuePayment && isCurrent() && current && !pay.hidden && !pay.disabled)await pay.onclick();
+    const onBack=event=>{
+      if(!event.target.closest('[data-orders-page-back], #appModalCloseBtn, #appModalCancelBtn, .app-modal-back-btn, #shopProfileModalBackBtn, #shopSheetBackBtn, [aria-label="Назад"]'))return;
+      event.preventDefault();event.stopImmediatePropagation();finish();
+    };
+    const onKey=event=>{
+      if(event.key!=='Escape')return;
+      event.preventDefault();event.stopImmediatePropagation();finish();
+    };
+    const session={cleanup,finish};
+    shopPaymentWidgetSession=session;
+    back.onclick=finish;
+    page.addEventListener('click',onBack,true);
+    document.addEventListener('keydown',onKey,true);
+    window.addEventListener('pagehide',cleanup);
+    const showError=error=>{
+      if(closed || failed)return;
+      failed=true;
+      setShopPaymentLoading(false);
+      const code=typeof error==='string'?error:error?.error || error?.code || 'PAYMENT_WIDGET_UNAVAILABLE';
+      if(code==='internal_service_error' && automaticRetries<1) {
+        automaticRetries++;
+        if(!message.isConnected)host.prepend(message);
+        message.textContent='Повторно загружаем форму оплаты…';
+        form.hidden=true;
+        retryTimer=setTimeout(()=>void initialize(),1000);
+        return;
+      }
+      console.error('Payment widget initialization failed:',code);
+      if(!message.isConnected)host.prepend(message);
+      form.hidden=true;
+      retry.hidden=!['internal_service_error','PAYMENT_WIDGET_UNAVAILABLE'].includes(code);
+      message.textContent=code==='internal_service_error'
+        ? 'ЮKassa сообщила об ошибке загрузки формы. Заказ сохранён. Попробуйте загрузить форму ещё раз.'
+        : ['token_expired','invalid_token'].includes(code)
+          ? 'Форма оплаты больше недоступна. Вернитесь к заказу и повторите оплату.'
+          : 'Не удалось открыть форму оплаты. Заказ сохранён. Вернитесь к заказу и повторите оплату.';
+    };
+    const initialize=async()=>{
+      if(closed || !isCurrent())return;
+      const attempt=++initialization;
+      failed=false;retry.hidden=true;form.hidden=false;
+      if(!message.isConnected)host.prepend(message);
+      message.textContent='Загружаем форму оплаты…';
+      setShopPaymentLoading(true);
+      try {
+        if(widget) { widget.destroy();widget=null; }
+        form.replaceChildren();
+        await loadShopPaymentWidget();
+        if(closed || !isCurrent() || attempt!==initialization)return;
+        widget=new window.YooMoneyCheckoutWidget({confirmation_token:action.token,error_callback:error=>{
+          if(attempt===initialization)showError(error);
+        }});
+        widget.on('complete',()=>{if(attempt===initialization)finish();});
+        await widget.render(form.id);
+        if(!closed && attempt===initialization && !failed)message.remove();
+        if(isMobile && !closed && attempt===initialization && !failed) {
+          requestAnimationFrame(()=>{
+            if(closed || attempt!==initialization)return;
+            const frame=form.querySelector('iframe');
+            if(!frame)return;
+            const rect=frame.getBoundingClientRect();
+            const x=rect.left+rect.width/2,y=rect.top+Math.min(40,rect.height/2);
+            const target=document.elementFromPoint(x,y);
+            const describe=node=>node ? `${node.tagName}#${node.id}.${String(node.className)}` : null;
+            console.info('Payment widget mobile hit-test:',JSON.stringify({
+              frame:describe(frame),target:describe(target),reachesFrame:target===frame,
+              pointerEvents:getComputedStyle(frame).pointerEvents,inert:Boolean(frame.closest('[inert]')),
+              layers:document.elementsFromPoint(x,y).slice(0,6).map(describe)
+            }));
+          });
+        }
+      } catch(error) {
+        if(!closed && attempt===initialization) {
+          console.error('Payment widget failed to load:',error?.code || error?.name || 'PAYMENT_WIDGET_UNAVAILABLE');
+          showError({code:'PAYMENT_WIDGET_UNAVAILABLE'});
+        }
+      } finally {
+        if(!closed && attempt===initialization)setShopPaymentLoading(false);
+      }
+    };
+    retry.onclick=()=>{clearTimeout(retryTimer);automaticRetries=0;void initialize();};
+    await initialize();
+  }
+
+  function rememberShopPaymentReturn(publicId) {
+    const scope=buildDeliveryCacheScope();
+    window.history.replaceState({...window.history.state,shopPaymentReturn:{publicId,tenantId:scope.tenant_id,storeId:scope.store_id}},'',window.location.href);
+  }
+  function redirectToShopOrderPayment(publicId,url) {
+    rememberShopPaymentReturn(publicId);
+    window.location.assign(url);
+  }
+
+  async function showShopPaymentReturn(publicId,continuePayment=false,widgetAction=null,showUnpaidNotice=true,initialOrder=null) {
+    if(continuePayment && shopPaymentMethodChanges.has(publicId)) {
+      try{await shopPaymentMethodChanges.get(publicId);}catch{showToast('Смена способа оплаты не сохранена. Проверьте заказ перед оплатой.');return;}
+    }
+    if(!/^[0-9a-f-]{36}$/i.test(String(publicId)))return;
+    shopPaymentWidgetSession?.cleanup();
+    const loadingSequence=++shopPaymentLoadingSequence;
+    if(continuePayment || widgetAction)setShopPaymentLoading(true,loadingSequence);
+    ensureShopOrdersCacheScope();
+    const scope=shopOrderRequestScopeKey();
+    const run=(showShopPaymentReturn.sequence || 0)+1;
+    showShopPaymentReturn.sequence=run;
+    const headers={},token=localStorage.getItem(`shop-payment:${buildDeliveryCacheScope().tenant_id}:${publicId}`);
+    if(token)headers['x-order-payment-token']=token;
+    const isCurrent=()=>scope===shopOrderRequestScopeKey() && run===showShopPaymentReturn.sequence;
+    let root=null;
+    const notice=text=>{
+      if(!root?.isConnected)return;
+      let node=root.querySelector('[data-payment-return-status]');
+      if(!node) {
+        node=document.createElement('p');
+        node.dataset.paymentReturnStatus='';
+        node.setAttribute('role','status');
+        root.querySelector('[data-order-payment]').prepend(node);
+      }
+      node.textContent=text;
+    };
+    const apply=data=>{
+      const cached=shopOrderSnapshots.get(Number(data.order.id));
+      if(!cached)return;
+      const updated={...cached,paymentSummary:data.paymentSummary,is_paid:data.paymentSummary.paymentSatisfied?1:0};
+      patchShopOrderDetails(cached,updated);
+      shopOrdersListCache.clear();
+    };
+    try {
+      const result=initialOrder?{data:{order:initialOrder,paymentSummary:initialOrder.paymentSummary,payment:{status:initialOrder.paymentSummary.state}}}
+        :await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?details=1`,{headers});
+      if(!isCurrent())return;
+      const order=result.data.order;
+      order.paymentSummary=result.data.paymentSummary;
+      root=Array.from(document.querySelectorAll(`[data-order-details-id="${Number(order.id)}"]`)).find(node=>!node.closest('.hidden'));
+      const isMobile=window.matchMedia('(max-width: 768px)').matches;
+      if(root && sheetNavigationState?.type==='profile' && sheetNavigationState?.screen==='orderDetails' && Number(sheetNavigationState?.data?.orderId)===Number(order.id)) {
+        patchShopOrderDetails(shopOrderSnapshots.get(Number(order.id)),order);
+      } else {
+        shopOrderSnapshots.set(Number(order.id),order);
+        shopOrderDetailsLoaded.add(Number(order.id));
+        if(isMobile)closeShopSheetIfOpen();
+        const detailsContext=openProfileModal(getCustomerCache(),{initialTab:'orders',ordersOnly:true,sourceScreen:'home'});
+        if(!detailsContext?.showOrderDetails)throw new Error('ORDER_DETAILS_UNAVAILABLE');
+        await detailsContext.showOrderDetails(Number(order.id),{exitToHome:true});
+      }
+      if(!isCurrent())return;
+      root=Array.from(document.querySelectorAll(`[data-order-details-id="${Number(order.id)}"]`)).find(node=>!node.closest('.hidden'));
+      if(!root)return;
+      if(isMobile)showMobileOrderDetailsActions(order);
+      else bindDesktopOrderDetailsFooter(order);
+      const visible=()=>isCurrent() && root.isConnected && !root.closest('.hidden') && (isMobile ? document.body.classList.contains('shop-orders-details-active') : window.AppModal?.isOpen()) && sheetNavigationState?.type==='profile' && sheetNavigationState?.screen==='orderDetails' && Number(sheetNavigationState?.data?.orderId)===Number(order.id);
+      const section=root.querySelector('[data-order-section="payment"]');
+      section?.classList.add('is-open');
+      section?.querySelector('.shop-order-accordion__button')?.setAttribute('aria-expanded','true');
+      section?.querySelector('.shop-order-accordion__body')?.removeAttribute('inert');
+      if(initialOrder)return;
+      let current=result.data;
+      if(widgetAction && !current.paymentSummary.paymentSatisfied) {
+        await mountShopPaymentWidget(root,publicId,widgetAction,isCurrent);
+        return;
+      }
+      if(continuePayment && (current.paymentSummary.canPay || (!current.paymentSummary.required && !current.paymentSummary.paymentSatisfied))) {
+        notice('Переходим к оплате…');
+        const next=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/pay`,{method:'POST',body:{},headers:{...headers,'Idempotency-Key':crypto.randomUUID()}});
+        if(!visible())return;
+        const action=next.data.payment?.action;
+        if(action?.type==='embedded') {
+          await mountShopPaymentWidget(root,publicId,action,isCurrent);
+          return;
+        }
+        if(action?.type==='redirect') {
+          const url=new URL(action.url);
+          if(url.protocol!=='https:' || url.username || url.password)throw new Error('PAYMENT_INVALID_ACTION');
+          redirectToShopOrderPayment(publicId,url.href);
+          return;
+        }
+        current={...current,...next.data};
+        apply(current);
+      }
+      const started=Date.now();
+      const finished=()=>current.paymentSummary.paymentSatisfied || current.paymentSummary.methodChangePending || ['cancelled','failed'].includes(current.payment.status);
+      const update=async()=>{
+        if(!visible())return;
+        if(finished()) {
+          if(current.paymentSummary.paymentSatisfied)root.querySelector('[data-payment-return-status]')?.remove();
+          else if(!current.paymentSummary.methodChangePending)notice('Заказ получен. Онлайн-оплата не завершена. Можно повторить оплату или сменить способ оплаты.');
+          return;
+        }
+        if(Date.now()-started>=120000) { notice('Заказ получен. Подтверждение оплаты пока не получено. Проверьте оплату позже в этом заказе.');return; }
+        notice('Заказ получен. Онлайн-оплата ещё не подтверждена. Можно повторить оплату или сменить способ оплаты.');
+        try {
+          const next=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?refresh=0`,{headers});
+          if(!visible())return;
+          current=next.data;
+          apply(current);
+          if(finished()) {
+            if(current.paymentSummary.paymentSatisfied)root.querySelector('[data-payment-return-status]')?.remove();
+            else notice('Заказ получен. Онлайн-оплата не завершена. Можно повторить оплату или сменить способ оплаты.');
+          } else {
+            notice('Заказ получен. Онлайн-оплата ещё не подтверждена. Можно повторить оплату или сменить способ оплаты.');
+            setTimeout(update,15000);
+          }
+        } catch(error) {
+          if(visible()) {
+            if(['PAYMENT_OPERATION_IN_PROGRESS','PAYMENT_REFRESH_RATE_LIMITED'].includes(error.message)) {
+              notice('Заказ получен. Проверка оплаты уже выполняется. Ожидаем подтверждение…');
+              setTimeout(update,15000);
+            } else notice('Не удалось проверить оплату. Проверьте статус позже в этом заказе.');
+          }
+          console.error('Payment status refresh failed:',error);
+        }
+      };
+      await update();
+      if(showUnpaidNotice && !continuePayment && !widgetAction && current.paymentSummary.required && !current.paymentSummary.methodChangePending && !current.paymentSummary.paymentSatisfied && visible())
+        await showShopOrderChangePayment(publicId,{warning:true});
+    } catch(error) {
+      console.error('Payment return failed:',error);
+      if(!isCurrent())return;
+      if(root?.isConnected)notice('Не удалось проверить оплату. Попробуйте ещё раз в этом заказе.');
+      else showToast('Не удалось загрузить заказ после оплаты. Откройте его в разделе «Заказы».');
+    } finally {
+      setShopPaymentLoading(false,loadingSequence);
+    }
   }
   async function openCheckoutView({ container, onBack, onShowBenefits, hasAddressEditor, isSheet, actions, onEditAddress, onEditPickup }) {
     __forceHideCheckoutDeliveryProgress = false;
@@ -39150,39 +39721,6 @@ function setBottomNavActive(tab) {
       return { root: section, titleEl };
     }
 
-    function createCheckoutCardOption({ title, value = "", meta = "", icon = null, onClick = null, extraClass = "" }) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = `shop-checkout-card-option${extraClass ? ` ${extraClass}` : ""}`;
-      const textWrap = document.createElement("span");
-      textWrap.className = "shop-checkout-card-option__text";
-      const titleEl = document.createElement("span");
-      titleEl.className = "shop-checkout-card-option__title";
-      titleEl.textContent = title || "";
-      textWrap.appendChild(titleEl);
-      if (value) {
-        const valueEl = document.createElement("span");
-        valueEl.className = "shop-checkout-card-option__value";
-        valueEl.textContent = value;
-        textWrap.appendChild(valueEl);
-      }
-      if (meta) {
-        const metaEl = document.createElement("span");
-        metaEl.className = "shop-checkout-card-option__meta";
-        metaEl.textContent = meta;
-        textWrap.appendChild(metaEl);
-      }
-      if (icon) {
-        const iconWrap = document.createElement("span");
-        iconWrap.className = "shop-checkout-card-option__icon";
-        iconWrap.appendChild(icon);
-        btn.appendChild(iconWrap);
-      }
-      btn.appendChild(textWrap);
-      if (typeof onClick === "function") btn.addEventListener("click", onClick);
-      return btn;
-    }
-
     function setCheckoutCardOptionContent(card, { title = "", value = "", meta = "" } = {}) {
       if (!card) return;
       const titleEl = card.querySelector(".shop-checkout-card-option__title");
@@ -39932,15 +40470,6 @@ function setBottomNavActive(tab) {
       return date.toLocaleDateString("ru-RU", { weekday: "long" });
     }
 
-    function buildCheckoutSelectionSlotButton(title, isActive, onClick) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `shop-checkout-selection-sheet__slot${isActive ? " is-active" : ""}`;
-      button.textContent = title || "";
-      if (typeof onClick === "function") button.addEventListener("click", onClick);
-      return button;
-    }
-
     function refreshCheckoutTimeAvailability() {
       if (isKsoCheckout) {
         timeInput.value = "";
@@ -40361,6 +40890,7 @@ function setBottomNavActive(tab) {
         const response=await apiJson(`/api/public/checkout/payment-availability?store_id=${encodeURIComponent(store)}`);
         if(!isCheckoutViewCurrent() || sequence!==onlineAvailabilitySequence)return;
         onlineAvailable=response.data?.available===true;
+        if(onlineAvailable)void loadShopPaymentWidget().catch(error=>console.warn('Payment widget preload failed:',error?.name));
       } catch(error) {
         if(!isCheckoutViewCurrent() || sequence!==onlineAvailabilitySequence)return;
         onlineAvailable=false;
@@ -40675,125 +41205,7 @@ function setBottomNavActive(tab) {
         description: `Сумма заказа ${money(currentPayableTotal)}`,
         showApply: false,
         bodyClass: "shop-checkout-selection-sheet--cash",
-        bodyBuilder: (body) => {
-          const section = document.createElement("div");
-          section.className = "shop-checkout-selection-sheet__section shop-checkout-selection-sheet__section--fixed";
-          const sectionTitle = document.createElement("div");
-          sectionTitle.className = "shop-checkout-selection-sheet__section-title";
-          sectionTitle.textContent = "Как подготовить наличные";
-          sectionTitle.textContent = "С какой суммы подготовить сдачу";
-          sectionTitle.textContent = "С какой суммы подготовить сдачу?";
-          const grid = document.createElement("div");
-          grid.className = "shop-checkout-selection-sheet__grid shop-checkout-selection-sheet__grid--single";
-          section.appendChild(sectionTitle);
-          section.appendChild(grid);
-          body.appendChild(section);
-          const customSection = document.createElement("div");
-          customSection.className = "shop-checkout-selection-sheet__section";
-          const customTitle = document.createElement("div");
-          customTitle.className = "shop-checkout-selection-sheet__section-title";
-          customTitle.textContent = "Другая сумма";
-          const customInput = document.createElement("input");
-          const minAmount = Math.ceil(currentPayableTotal) + 1;
-          const placeholder = `Больше ${Math.ceil(currentPayableTotal)}`;
-          customInput.className = "control shop-checkout-change-custom shop-checkout-selection-sheet__slot-input";
-          customInput.type = "number";
-          customInput.min = String(minAmount);
-          customInput.placeholder = placeholder;
-          customInput.size = Math.max(10, placeholder.length + 1);
-          customInput.style.width = "100%";
-          customInput.value = sheetCustomValue;
-          const customApplyBtn = document.createElement("button");
-          customApplyBtn.type = "button";
-          customApplyBtn.className = "shop-checkout-selection-sheet__slot-confirm";
-          customApplyBtn.setAttribute("aria-label", "Применить сумму сдачи");
-          customApplyBtn.innerHTML = '<i class="fas fa-check"></i>';
-          customSection.appendChild(customTitle);
-          customSection.appendChild(customInput);
-          customSection.style.display = "none";
-          body.appendChild(customSection);
-
-          const syncCustomApplyButtonState = () => {
-            const customVal = parseInt(str(customInput.value).trim(), 10);
-            customApplyBtn.disabled = !(customVal > currentPayableTotal);
-          };
-
-          const applyCurrentCustomValue = () => {
-            sheetCustomValue = str(customInput.value).trim();
-            return applyCashChangeSelection({ mode: "custom", customValue: sheetCustomValue });
-          };
-
-          customApplyBtn.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            applyCurrentCustomValue();
-          });
-
-          const renderSheetChips = () => {
-            grid.innerHTML = "";
-            customSection.style.display = "none";
-
-            const noneBtn = buildCheckoutSelectionSlotButton("Без сдачи", sheetMode === "none", () => {
-              sheetMode = "none";
-              sheetSelectedChangePreset = null;
-              sheetCustomValue = "";
-              applyCashChangeSelection({ mode: "none" });
-            });
-            grid.appendChild(noneBtn);
-
-            changePresetAmounts.forEach((amount) => {
-              const presetBtn = buildCheckoutSelectionSlotButton(money(amount), sheetMode === "preset" && Number(sheetSelectedChangePreset) === Number(amount), () => {
-                sheetMode = "preset";
-                sheetSelectedChangePreset = amount;
-                sheetCustomValue = "";
-                applyCashChangeSelection({ mode: "preset", preset: amount });
-              });
-              grid.appendChild(presetBtn);
-            });
-
-            if (sheetMode === "custom") {
-              const customWrap = document.createElement("div");
-              customWrap.className = "shop-checkout-selection-sheet__slot shop-checkout-selection-sheet__slot--input is-active";
-              if (customInput.parentNode) customInput.parentNode.removeChild(customInput);
-              if (customApplyBtn.parentNode) customApplyBtn.parentNode.removeChild(customApplyBtn);
-              customWrap.appendChild(customInput);
-              customWrap.appendChild(customApplyBtn);
-              grid.appendChild(customWrap);
-              syncCustomApplyButtonState();
-              requestAnimationFrame(() => {
-                try {
-                  customInput.focus();
-                  customInput.select();
-                } catch {}
-              });
-              return;
-            }
-
-            const customBtn = buildCheckoutSelectionSlotButton("Другая сумма", sheetMode === "custom", () => {
-              sheetMode = "custom";
-              renderSheetChips();
-              requestAnimationFrame(() => {
-                try {
-                  customInput.focus();
-                  customInput.select();
-                } catch {}
-              });
-            });
-            grid.appendChild(customBtn);
-          };
-
-          customInput.addEventListener("input", () => {
-            sheetCustomValue = str(customInput.value).trim();
-            syncCustomApplyButtonState();
-          });
-          customInput.addEventListener("keydown", (event) => {
-            if (event.key !== "Enter") return;
-            event.preventDefault();
-            applyCurrentCustomValue();
-          });
-
-          renderSheetChips();
-        },
+        bodyBuilder: body=>buildShopCashChangeOptions(body,{total:currentPayableTotal,presets:changePresetAmounts,selection:{mode:sheetMode,preset:sheetSelectedChangePreset,customValue:sheetCustomValue},onSelect:applyCashChangeSelection}),
       });
     }
 
@@ -41425,27 +41837,18 @@ function setBottomNavActive(tab) {
     const resultWrap = document.createElement("div");
     resultWrap.className = "shop-order-result hidden";
     container.appendChild(resultWrap);
-    let checkoutSendingOverlay = null;
-
-    function ensureCheckoutSendingOverlay() {
-      if (checkoutSendingOverlay) return checkoutSendingOverlay;
-      const overlay = document.createElement("div");
-      overlay.className = "shop-checkout-sending-overlay hidden";
-      overlay.innerHTML = `
-        <div class="shop-checkout-sending-card">
-          <div class="shop-checkout-sending-spinner" aria-hidden="true"></div>
-          <div class="shop-checkout-sending-text">Подождите, отправляем заказ...</div>
-        </div>
-      `;
-      document.body.appendChild(overlay);
-      checkoutSendingOverlay = overlay;
-      return overlay;
-    }
     function setCheckoutSubmitting(isSubmitting) {
       if (actions?.submitBtn) actions.submitBtn.disabled = !!isSubmitting;
       if (elMobileCheckoutSubmitBtn) elMobileCheckoutSubmitBtn.disabled = !!isSubmitting;
       const overlay = ensureCheckoutSendingOverlay();
-      overlay.classList.toggle("hidden", !isSubmitting);
+      if(isSubmitting && paySelect.getValue()==='online') {
+        overlay.classList.add('is-payment-loading');
+        overlay.querySelector('.shop-checkout-sending-text').textContent='Загружаем оплату…';
+      } else if(!isSubmitting) {
+        overlay.classList.remove('is-payment-loading');
+        overlay.querySelector('.shop-checkout-sending-text').textContent='Подождите, отправляем заказ...';
+      }
+      overlay.classList.toggle("hidden", !isSubmitting && !overlay.classList.contains('is-payment-loading'));
     }
 
     function buildFinalCheckoutPricingSnapshotForSubmit() {
@@ -42150,10 +42553,14 @@ function setBottomNavActive(tab) {
         if(response.paymentAccessToken)localStorage.setItem(`shop-payment:${buildDeliveryCacheScope().tenant_id}:${response.data.public_id}`,response.paymentAccessToken);
         const payment=response.payment || response.data?.payment;
         const action=payment?.action;
+        if(action?.type==='embedded') {
+          await showShopPaymentReturn(response.data.public_id,false,action);
+          return true;
+        }
         if(action?.type==="redirect") {
           const url=new URL(action.url);
           if(url.protocol!=="https:" || url.username || url.password)throw new Error("PAYMENT_INVALID_ACTION");
-          window.location.assign(url.href);return true;
+          redirectToShopOrderPayment(response.data.public_id,url.href);return true;
         }
         if(payment?.status==="paid" || payment?.status==="not_required")return false;
         await showShopPaymentReturn(response.data.public_id);
@@ -42316,7 +42723,28 @@ function setBottomNavActive(tab) {
 
 function initShopLate() {
   try {
-    const paymentReturnId=new URL(window.location.href).searchParams.get("payment_order");
+    const paymentReturnUrl=new URL(window.location.href);
+    const takePendingPaymentReturn=()=>{
+      const pending=window.history.state?.shopPaymentReturn;
+      if(!pending)return null;
+      const nextState={...window.history.state};
+      delete nextState.shopPaymentReturn;
+      window.history.replaceState(nextState,'',window.location.href);
+      const scope=buildDeliveryCacheScope();
+      return pending.tenantId===scope.tenant_id && pending.storeId===scope.store_id ? pending.publicId : null;
+    };
+    const pendingPaymentReturnId=takePendingPaymentReturn();
+    const paymentReturnId=paymentReturnUrl.searchParams.get("payment_order") || pendingPaymentReturnId;
+    window.addEventListener('pageshow',event=>{
+      if(!event.persisted)return;
+      const publicId=takePendingPaymentReturn();
+      if(publicId)void showShopPaymentReturn(publicId);
+    });
+    if(paymentReturnId) {
+      paymentReturnUrl.searchParams.delete("payment_order");
+      paymentReturnUrl.searchParams.delete("tenant_id");
+      window.history.replaceState(window.history.state,"",paymentReturnUrl.pathname+paymentReturnUrl.search+paymentReturnUrl.hash);
+    }
     setActiveNav("menu");
     syncHeaderProfilePhoto(getCustomerCache());
     if (getCustomerToken()) {
@@ -42937,7 +43365,7 @@ function initShopLate() {
           const status = card.querySelector(".shop-order-summary-card__status");
           if (status && !card.querySelector("[data-order-list-footer]") && status.textContent !== view.statusLabel) status.textContent = view.statusLabel;
           const price = card.querySelector(".shop-order-summary-card__price");
-          if (price && price.textContent !== money(order.total_price)) price.textContent = money(order.total_price);
+          if (price && !card.querySelector('[data-order-list-footer]') && price.textContent !== money(order.total_price)) price.textContent = money(order.total_price);
           if (!view.isFinal || !card.matches(".shop-home-active-order-card, .shop-active-order-card")) return;
           const remove = () => {
             card.remove();
