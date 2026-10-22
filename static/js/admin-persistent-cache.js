@@ -384,6 +384,45 @@
           expiresAt: entry.staleAt ?? entry.expiresAt, schemaVersion: entry.schemaVersion, stale };
       },
       async get(key) { const entry = await this.getEntry(key); return entry ? entry.data : null; },
+      async scanEntries(options = {}) {
+        if (!resolved.complete) return { entries: [], cursor: null };
+        const prefix = resolved.namespace + ':';
+        const after = options.cursor;
+        if (after != null && (typeof after !== 'string' || !after.startsWith(prefix))) throw new Error('INVALID_LOCAL_CURSOR');
+        const limit = Math.min(25, Math.max(1, Math.floor(Number(options.limit) || 25)));
+        const assertCurrent = () => {
+          if (options.signal?.aborted) throw new DOMException('Local read interrupted', 'AbortError');
+          if ((writeOptions.guard && !writeOptions.guard()) || (options.guard && !options.guard())) throw new Error('LOCAL_SCOPE_CHANGED');
+        };
+        assertCurrent();
+        const db = await openDb();
+        return new Promise((resolve, reject) => {
+          const entries = []; let transaction, next = null, failure = null;
+          const abort = () => { try { transaction?.abort(); } catch (_) {} };
+          try {
+            assertCurrent();
+            transaction = db.transaction(STORE_NAME, 'readonly');
+            options.signal?.addEventListener('abort', abort, { once: true });
+            const range = window.IDBKeyRange.bound(after || prefix, prefix + '\uffff', Boolean(after), false);
+            const request = transaction.objectStore(STORE_NAME).openCursor(range);
+            request.onsuccess = () => {
+              try {
+                assertCurrent();
+                const cursor = request.result;
+                if (!cursor) return;
+                if (cursor.value.namespace !== resolved.namespace) throw new Error('LOCAL_SCOPE_CHANGED');
+                entries.push({ key: decodeURIComponent(cursor.key.slice(prefix.length)), entry: cursor.value });
+                if (entries.length === limit) { next = cursor.key; return; }
+                cursor.continue();
+              } catch (error) { failure = error; abort(); }
+            };
+            request.onerror = () => { failure = request.error; abort(); };
+          } catch (error) { options.signal?.removeEventListener('abort', abort); reject(error); return; }
+          const cleanup = () => options.signal?.removeEventListener('abort', abort);
+          transaction.oncomplete = () => { cleanup(); try { assertCurrent(); resolve({ entries, cursor: next }); } catch (error) { reject(error); } };
+          transaction.onabort = transaction.onerror = () => { cleanup(); reject(failure || transaction.error || new DOMException('Local read interrupted', 'AbortError')); };
+        });
+      },
       async getMany(keys, options = {}) {
         const requested = Array.isArray(keys) ? keys : [];
         const storageKeys = requested.map(scopedKey);
@@ -408,6 +447,58 @@
         const guardedWrite = { ...writeOptions, guard: () => (!writeOptions.guard || writeOptions.guard())
           && (!options.guard || options.guard()), noQuotaCleanup: options.noQuotaCleanup === true };
         return writeEntry(storageKey, resolved.namespace, data, resolved.version, options.ttlMs, guardedWrite).then(() => true);
+      },
+      async compareTokens(keys) {
+        const entries = await this.getMany(keys, { allowStale: true, entries: true });
+        return [...entries].map(([key, entry]) => [key, JSON.stringify(entry?.data ?? null)]);
+      },
+      async compareAndSetMany(expected, entries, options = {}) {
+        if (!resolved.complete || !Array.isArray(expected) || !expected.length || expected.length > 12
+            || !Array.isArray(entries) || !entries.length || entries.length > 12
+            || expected.some(([key, token]) => !scopedKey(key) || typeof token !== 'string')
+            || expected.reduce((sum, [, token]) => sum + token.length, 0) > 512 * 1024) throw new Error('INVALID_LOCAL_CAS');
+        const now = Date.now();
+        const records = entries.map(([key, data]) => makeEntry(scopedKey(key), resolved.namespace, data, resolved.version, options.ttlMs, now));
+        if (writeOptions.retainStale) records.forEach(entry => {
+          entry.retainStale = true; entry.staleAt = entry.expiresAt; entry.expiresAt = null;
+        });
+        const assertCurrent = () => {
+          if (options.signal?.aborted) throw new DOMException('CAS interrupted', 'AbortError');
+          if ((writeOptions.guard && !writeOptions.guard()) || (options.guard && !options.guard())) throw new Error('LOCAL_SCOPE_CHANGED');
+        };
+        assertCurrent();
+        const db = await openDb();
+        return new Promise((resolve, reject) => {
+          let tx, failure = null, remaining = expected.length;
+          const abort = () => { try { tx?.abort(); } catch (_) {} };
+          const fail = error => { failure = error; abort(); };
+          try {
+            assertCurrent(); tx = db.transaction(STORE_NAME, 'readwrite');
+            options.signal?.addEventListener('abort', abort, { once: true });
+            const store = tx.objectStore(STORE_NAME);
+            expected.forEach(([key, token]) => {
+              const request = store.get(scopedKey(key));
+              request.onsuccess = () => {
+                try {
+                  assertCurrent();
+                  const entry = request.result;
+                  const actual = entry?.schemaVersion === SCHEMA_VERSION ? entry.data : null;
+                  if (JSON.stringify(actual) !== token) throw new Error('LOCAL_CAS_MISMATCH');
+                  if (--remaining === 0) records.forEach(record => {
+                    assertCurrent();
+                    const write = store.put(record);
+                    write.onsuccess = () => { try { assertCurrent(); } catch (error) { fail(error); } };
+                    write.onerror = () => fail(write.error);
+                  });
+                } catch (error) { fail(error); }
+              };
+              request.onerror = () => fail(request.error);
+            });
+          } catch (error) { if (!tx) { reject(error); return; } fail(error); }
+          const detach = () => options.signal?.removeEventListener('abort', abort);
+          tx.oncomplete = () => { detach(); resolve(true); };
+          tx.onabort = tx.onerror = () => { detach(); reject(failure || tx.error || new Error('LOCAL_CAS_ABORTED')); };
+        }); // No quota cleanup/retry: keep the old passport and all user actions.
       },
       async setMany(entries, options = {}) {
         const requested = entries instanceof Map ? [...entries.entries()] : (Array.isArray(entries) ? entries : []);

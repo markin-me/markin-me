@@ -3,6 +3,48 @@ const mysql = require("mysql2");
 const { AsyncLocalStorage } = require("async_hooks");
 
 const requestMetricsStore = new AsyncLocalStorage();
+const preparationStore = new AsyncLocalStorage();
+
+async function preparationRead(budget, original, sql, args) {
+  const check = () => {
+    if (budget.signal?.aborted) throw Object.assign(new Error('EXPORT_ABORTED'), { code: 'EXPORT_ABORTED' });
+    if (budget.canContinue && !budget.canContinue()) throw Object.assign(new Error('EXPORT_QUEUE_BUSY'), { code: 'EXPORT_QUEUE_BUSY' });
+    if (nowMs() >= budget.deadline) throw Object.assign(new Error('EXPORT_DEADLINE'), { code: 'EXPORT_DEADLINE' });
+  };
+  check();
+  const options = typeof sql === 'string' ? { sql } : { ...sql };
+  if (!/^(SELECT|SHOW\s+COLUMNS)\b/i.test(options.sql?.trim() || '') || /;|FOR\s+(UPDATE|SHARE)|INTO\s+(OUTFILE|DUMPFILE)/i.test(options.sql)
+      || ++budget.queries > 64) throw Object.assign(new Error('EXPORT_READ_BUDGET'), { code: 'EXPORT_READ_BUDGET' });
+  options.timeout = Math.max(1, Math.min(options.timeout || 2000, 2000, Math.floor(budget.deadline - nowMs())));
+  const result = await original(options, ...args); // No automatic retry for preparation.
+  check();
+  const rows = result[0];
+  if (!Array.isArray(rows) || rows.length > 512 || (budget.rows += rows.length) > 1024) {
+    throw Object.assign(new Error('EXPORT_ROW_BUDGET'), { code: 'EXPORT_ROW_BUDGET' });
+  }
+  // Bound native JSON/arrays before serialising a mysql result. Do not build an
+  // unbounded Object.values()/JSON string merely to discover its byte size.
+  let nodes = 0, estimated = 0;
+  function bound(value, depth = 0) {
+    if (++nodes > 8192 || depth > 32) throw Object.assign(new Error('EXPORT_ROW_BUDGET'), { code: 'EXPORT_ROW_BUDGET' });
+    if (nodes % 64 === 0) check();
+    if (typeof value === 'string') {
+      if (value.length > 131072) throw Object.assign(new Error('EXPORT_ROW_BUDGET'), { code: 'EXPORT_ROW_BUDGET' });
+      estimated += Buffer.byteLength(JSON.stringify(value));
+    } else if (Buffer.isBuffer(value)) estimated += value.length * 4 + 64;
+    else if (value && typeof value === 'object' && !(value instanceof Date)) {
+      estimated += 2;
+      for (const key in value) if (Object.prototype.hasOwnProperty.call(value, key)) {
+        estimated += Buffer.byteLength(key) + 4; bound(value[key], depth + 1);
+      }
+    } else estimated += 32;
+    if (estimated + budget.bytes > 512 * 1024) throw Object.assign(new Error('EXPORT_BYTE_BUDGET'), { code: 'EXPORT_BYTE_BUDGET' });
+  }
+  bound(rows);
+  budget.bytes += Buffer.byteLength(JSON.stringify(rows));
+  if (budget.bytes > 512 * 1024) throw Object.assign(new Error('EXPORT_BYTE_BUDGET'), { code: 'EXPORT_BYTE_BUDGET' });
+  return result;
+}
 const PERF_CONSOLE_LOGS_ENABLED = String(process.env.ENABLE_PERF_LOGS || "").trim() === "1";
 const DB_CONNECTION_LIMIT = Math.max(
   1,
@@ -150,6 +192,9 @@ function wrapQueryable(target, label) {
     target.query = async function instrumentedQuery(sql, ...args) {
       const startedAt = nowMs();
       try {
+        const preparation = preparationStore.getStore();
+        if (preparation) return await preparationRead(preparation, originalQuery, sql, args)
+          .catch(error => { preparation.failed = error; throw error; });
         return await runWithPoolTransientRetry(
           () => originalQuery(sql, ...args),
           sql,
@@ -171,6 +216,9 @@ function wrapQueryable(target, label) {
     target.execute = async function instrumentedExecute(sql, ...args) {
       const startedAt = nowMs();
       try {
+        const preparation = preparationStore.getStore();
+        if (preparation) return await preparationRead(preparation, originalExecute, sql, args)
+          .catch(error => { preparation.failed = error; throw error; });
         return await runWithPoolTransientRetry(
           () => originalExecute(sql, ...args),
           sql,
@@ -222,6 +270,21 @@ promisePool.getConnection = async function instrumentedGetConnection(...args) {
 promisePool.withRequestMetrics = withRequestMetrics;
 promisePool.getCurrentRequestMetrics = getCurrentRequestMetrics;
 promisePool.createEmptyRequestMetrics = createEmptyRequestMetrics;
+promisePool.assertPreparationBudget = budget => {
+  if (budget.canContinue && !budget.canContinue()) throw Object.assign(new Error('EXPORT_QUEUE_BUSY'), { code: 'EXPORT_QUEUE_BUSY' });
+  if (preparationStore.getStore() !== budget || budget.signal?.aborted || nowMs() >= budget.deadline) {
+    throw Object.assign(new Error('EXPORT_READ_BUDGET'), { code: 'EXPORT_READ_BUDGET' });
+  }
+};
+promisePool.withPreparationBudget = async (signal, work, state = {}) => {
+  // Reuse identity across async-generator resumptions, not an expired previous
+  // stage's context. Admission serialises advances; no shared tenant/global state.
+  const budget = Object.assign(state, { signal, deadline: nowMs() + 4000, queries: 0, rows: 0, bytes: 0, failed: null });
+  const value = await preparationStore.run(budget, work);
+  if (budget.failed) throw budget.failed; // Legacy catch/fallback cannot certify a failed read.
+  if (signal?.aborted || nowMs() >= budget.deadline) throw Object.assign(new Error('EXPORT_ABORTED'), { code: 'EXPORT_ABORTED' });
+  return { value, metrics: { queries: budget.queries, rows: budget.rows, bytes: budget.bytes } };
+};
 
 pool.getConnection((err, conn) => {
   if (err) {

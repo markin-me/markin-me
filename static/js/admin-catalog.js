@@ -62,6 +62,7 @@
   let configuredRbacContext = 'products';
   let configuredGuard = null;
   let syncSource = null;
+  let syncSubscription = null;
   let syncReconnectTimer = null;
   let syncState = "idle";
   let reconcilePromise = null;
@@ -450,7 +451,7 @@
   function yieldMainThread() {
     return new Promise((resolve) => {
       const afterPaint = () => window.setTimeout(resolve, 0);
-      if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(afterPaint);
+      if (!document.hidden && typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(afterPaint);
       else afterPaint();
     });
   }
@@ -470,14 +471,14 @@
 
   function scheduleDownloadTurn() {
     if (!downloadTurnDeferred || downloadScheduleTimer || downloadIdleCallback != null) return;
-    if (foregroundTokens.size || reconcilePromise || document.hidden || !downloadPageActive) return;
+    if (foregroundTokens.size || reconcilePromise || !downloadPageActive) return;
     const generation = ++downloadScheduleGeneration;
     const run = () => {
       if (generation !== downloadScheduleGeneration) return;
       downloadScheduleTimer = null;
       downloadIdleCallback = null;
       if (!downloadTurnDeferred) return;
-      if (foregroundTokens.size || reconcilePromise || document.hidden || !downloadPageActive || Date.now() < foregroundQuietUntil) {
+      if (foregroundTokens.size || reconcilePromise || !downloadPageActive || Date.now() < foregroundQuietUntil) {
         scheduleDownloadTurn();
         return;
       }
@@ -635,6 +636,14 @@
         ["reference-index:editor", { schemaVersion: "product-editor-v1" }]
       );
       if (entries.length || hadMetadataChanges) entries.push(["meta:manifest", nextManifest]);
+      if (entries.length || productIdsToRemove.length) {
+        // Called under the catalog's shared write lock. Advance even for an
+        // identical working value (ABA), in the SAME transaction as its data.
+        const previous = await targetScope.get('meta:working-sequence', { allowStale: true });
+        const sequence = (previous?.sequence ?? 0) + 1;
+        if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error('CATALOG_WORKING_SEQUENCE_INVALID');
+        entries.push(['meta:working-sequence', { sequence }]);
+      }
       if (entries.length) await targetScope.setMany(entries, { ttlMs: RECORD_TTL_MS });
       if (productIdsToRemove.length) {
         await targetScope.removeMany(productIdsToRemove.flatMap((id) => [`product:${id}`, `passport:${id}`, `passport-index:${id}`]));
@@ -1687,7 +1696,137 @@
       } };
   }
 
+  async function beginImmutablePassport(productId, idle) {
+    if (!await init() || !Number.isSafeInteger(productId) || productId <= 0) throw new Error('IMMUTABLE_SCOPE_UNAVAILABLE');
+    if (!offlineWritesAllowed) throw new Error('IMMUTABLE_WORKING_COORDINATION_UNAVAILABLE');
+    const target = scope, generation = scopeGeneration;
+    return catalogWrite(target, async () => {
+      idle.assertCurrent(); assertScope(target, generation);
+      if (dirtyProducts.has(productId) || dirtyPassports.has(productId) || removedProductIds.has(productId)
+          || pendingMutationFields.get(productId)?.size) throw immutableWorkingConflict();
+      const fence = window.localStorage.getItem(writeFenceKey(target));
+      const expected = await target.compareTokens([`product:${productId}`, `passport:${productId}`,
+        `passport-index:${productId}`, `meta:immutable-active:${productId}`, 'meta:immutable-budget', 'meta:manifest', 'meta:working-sequence']);
+      const marker = await target.get('meta:working-sequence', { allowStale: true });
+      const workingSequence = marker?.sequence ?? 0;
+      if (!Number.isSafeInteger(workingSequence) || workingSequence < 0) throw new Error('CATALOG_WORKING_SEQUENCE_INVALID');
+      idle.assertCurrent(); assertScope(target, generation);
+      if (fence !== window.localStorage.getItem(writeFenceKey(target))) throw immutableWorkingConflict();
+      if (expected.reduce((n, [, token]) => n + token.length, 0) > 512 * 1024) throw new Error('IMMUTABLE_BASELINE_LIMIT');
+      return { productId, namespace: target.namespace, fence, expected, workingSequence };
+    }, true);
+  }
+
+  function immutableWorkingConflict() {
+    // Not a transient user abort: the durable baseline must be captured again.
+    return Object.assign(new Error('IMMUTABLE_WORKING_CONFLICT'), { name: 'CatalogWorkingConflict' });
+  }
+
+  async function activateImmutablePassport(dto, root, validation, baseline, idle, probeOnly = false) {
+    if (window.__ADMIN_CATALOG_EXPORT_POLICY__?.light?.activation !== true || !await init()) throw new Error('IMMUTABLE_ACTIVATION_DISABLED');
+    const target = scope, generation = scopeGeneration, id = root?.productId;
+    const digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', value)), x => x.toString(16).padStart(2, '0')).join('');
+    // Recover an acknowledged-or-not commit without writing again. A changed
+    // working passport does not match this receipt and is never overwritten here.
+    const alreadyActive = await catalogWrite(target, async () => {
+      idle.assertCurrent(); assertScope(target, generation);
+      if (baseline?.namespace !== target.namespace || root?.storeId !== Number(target.storeId)
+          || root?.tenantId !== window.AdminAccessContext?.local_context?.tenantId) return false;
+      const saved = await target.getMany([`meta:immutable-active:${id}`, `passport:${id}`], { allowStale: true });
+      const active = saved.get(`meta:immutable-active:${id}`), passport = saved.get(`passport:${id}`);
+      if (!active || !passport || active.snapshotId !== root.snapshotId || active.sha256 !== root.sha256) return false;
+      const matches = await digest(new TextEncoder().encode(JSON.stringify(passport))) === root.sha256;
+      idle.assertCurrent(); assertScope(target, generation); return matches;
+    }, true);
+    if (alreadyActive) return true;
+    if (probeOnly) return false;
+    const guard = () => {
+      idle.assertCurrent(); assertScope(target, generation);
+      if (!offlineWritesAllowed || baseline?.namespace !== target.namespace || baseline.productId !== id
+          || baseline.fence !== window.localStorage.getItem(writeFenceKey(target))
+          || dirtyProducts.has(id) || dirtyPassports.has(id) || removedProductIds.has(id)
+          || pendingMutationFields.get(id)?.size) throw immutableWorkingConflict();
+      return true;
+    };
+    guard();
+    // Older staging baselines did not reserve a durable working sequence.
+    // Do not promote them using only a volatile/runtime equality check.
+    if (!Number.isSafeInteger(baseline.workingSequence) || baseline.workingSequence < 0
+        || !Array.isArray(baseline.expected)
+        || baseline.expected.filter(([key]) => key === 'meta:working-sequence').length !== 1) throw new Error('IMMUTABLE_BASELINE_SEQUENCE_REQUIRED');
+    if (!isEditorReadyPassport(dto) || dto.product.id !== id || Number(dto.product.tenant_id) !== root.tenantId
+        || root.tenantId !== window.AdminAccessContext?.local_context?.tenantId
+        || root.storeId !== Number(target.storeId) || root.builderVersion !== 'legacy-shared-v1'
+        || root.sealed !== true || root.snapshotConsistent !== true
+        || root.passportComplete !== true || root.epochs?.coverage < 1 || root.expiresAt <= Date.now()
+        || validation?.snapshotId !== root.snapshotId || validation.sealed !== true || validation.fresh !== true
+        || validation.activationAllowed !== true) throw new Error('IMMUTABLE_ACTIVATION_INVALID');
+    const clock = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value)
+      && BigInt(value) <= 18446744073709551615n;
+    if (!clock(root.epochs?.catalog) || !clock(root.epochs?.store)
+        || !Number.isSafeInteger(root.epochs.coverage) || root.epochs.coverage < 1
+        || root.codec !== 'legacy-dto-json-v1' || root.projection !== 'full-product-passport-v1'
+        || !Array.isArray(root.requiredFields) || Object.keys(dto).length !== 19 || root.requiredFields.length !== 19
+        || new Set(root.requiredFields).size !== 19 || root.requiredFields.some(key => !Object.prototype.hasOwnProperty.call(dto, key))
+        || !Array.isArray(root.chunks) || root.chunks.length !== Math.ceil(root.bytes / 24576)
+        || root.chunks.some((chunk, i) => chunk.chunk !== i || chunk.part !== 'passport' || chunk.recordCount !== 1
+          || !Number.isSafeInteger(chunk.bytes) || chunk.bytes < 1 || chunk.bytes > 24576 || !/^[a-f0-9]{64}$/.test(chunk.sha256 || ''))
+        || root.chunks.reduce((sum, chunk) => sum + chunk.bytes, 0) !== root.bytes) throw new Error('IMMUTABLE_ACTIVATION_MANIFEST');
+    const bytes = new TextEncoder().encode(JSON.stringify(dto));
+    if (bytes.length !== root.bytes || bytes.length > 256 * 1024 || await digest(bytes) !== root.sha256
+        || await digest(new TextEncoder().encode(JSON.stringify(root))) !== validation.manifestHash) throw new Error('IMMUTABLE_ACTIVATION_HASH');
+    return catalogWrite(target, async () => {
+      guard();
+      // Preserve EVERY JSON value, including data/blob-looking strings. The
+      // working-cache sanitizer is not an exact immutable DTO codec.
+      const passport = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+      const product = normalizeProduct(passport.product, { completeness: 'editor-ready' });
+      product.orderReadySnapshotKey = `passport:${id}`;
+      const saved = await target.getMany(['meta:immutable-budget', `meta:immutable-active:${id}`, 'meta:manifest'], { allowStale: true });
+      guard();
+      // The runtime manifest may predate a different tab's confirmed write.
+      // Merge the durable manifest whose baseline is checked by the CAS below.
+      const durableManifest = saved.get('meta:manifest') || emptyManifest();
+      const nextManifest = { ...durableManifest, productIds: uniqueIds([...(durableManifest.productIds || []), id]),
+        passportIds: uniqueIds([...(durableManifest.passportIds || []), id]),
+        editorPassportIds: uniqueIds([...(durableManifest.editorPassportIds || []), id]) };
+      const budget = saved.get('meta:immutable-budget') || { bytes: 0, records: 0 };
+      const old = saved.get(`meta:immutable-active:${id}`);
+      if (old && (!clock(old.epochs?.catalog) || !clock(old.epochs?.store)
+          || BigInt(old.epochs.catalog) > BigInt(root.epochs.catalog) || BigInt(old.epochs.store) > BigInt(root.epochs.store)
+          || (old.epochs.catalog === root.epochs.catalog && old.epochs.store === root.epochs.store
+            && old.valuationAt > root.valuationAt))) throw new Error('IMMUTABLE_ACTIVATION_OLDER');
+      const chargedBytes = bytes.length + new TextEncoder().encode(JSON.stringify(product)).length + 2048;
+      const nextBudget = { bytes: budget.bytes - (old?.chargedBytes || 0) + chargedBytes,
+        records: budget.records + (old ? 0 : 1) };
+      if (!Number.isSafeInteger(nextBudget.bytes) || nextBudget.bytes < 0 || nextBudget.bytes > 8 * 1024 * 1024
+          || !Number.isSafeInteger(nextBudget.records) || nextBudget.records > 1024) throw new Error('IMMUTABLE_STORAGE_LIMIT');
+      try { await target.compareAndSetMany(baseline.expected, [[`product:${id}`, product], [`passport:${id}`, passport],
+        [`passport-index:${id}`, passportIndexRecord(id, passport)], ['meta:manifest', nextManifest],
+        ['meta:immutable-budget', nextBudget],
+        [`meta:immutable-active:${id}`, { snapshotId: root.snapshotId, sha256: root.sha256, epochs: root.epochs,
+          state: 'active', checkpoint: 'committed', valuationAt: root.valuationAt, chargedBytes }]],
+      { signal: idle.signal, guard, ttlMs: RECORD_TTL_MS, noQuotaCleanup: true }); }
+      catch (error) {
+        if (error.message === 'LOCAL_CAS_MISMATCH') throw immutableWorkingConflict();
+        throw error;
+      }
+      // A successful commit cannot be undone by a later cancellation.
+      guard();
+      const previous = productsById.get(id);
+      productsById.set(id, product); passportsByProductId.set(id, passport); manifest = nextManifest;
+      updateProductCategoryIndex(id, previous?.categoryIds, product.categoryIds);
+      durableOrderReadyProductIds.add(id); durableEditorReadyProductIds.add(id);
+      notify('persisted', [id]); return true; // Never added to dirty sets.
+    }, true);
+  }
+
   async function hydrateOfflineProducts(ids, options) {
+    const permissions = window.AdminAccessContext?.permissions || [];
+    if (window.__ADMIN_CATALOG_EXPORT_POLICY__?.light?.clientDownload === true && configuredRbacContext === 'products'
+        && permissions.some(grant => grant === '*' || (grant?.key === 'products.cost.read' && ['all', 'stores'].includes(grant.access_rule)))) {
+      return false; // One preparation pipeline; foreground ensureProducts is unaffected.
+    }
     if (!await init() || !window.AdminIdleHydration?.supported) throw new Error('CATALOG_IDLE_UNAVAILABLE');
     const targetScope = scope, generation = scopeGeneration;
     const extraGeneration = offlineGeneration;
@@ -2464,6 +2603,8 @@
   function stopSync() {
     if (syncSource) syncSource.abort();
     syncSource = null;
+    syncSubscription?.close();
+    syncSubscription = null;
     if (syncReconnectTimer) window.clearTimeout(syncReconnectTimer);
     syncReconnectTimer = null;
     if (syncTimer) window.clearTimeout(syncTimer);
@@ -2483,11 +2624,15 @@
     const targetScope = scope;
     const source = new AbortController();
     syncSource = source;
-    const onRevision = (data, eventName) => {
-      if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;
+    const token = String(window.localStorage?.getItem('authToken') || '').trim();
+    const rbacContext = configuredRbacContext;
+    const isCurrent = () => source === syncSource && !source.signal.aborted
+      && scopeIsCurrent(targetScope, generation) && configuredRbacContext === rbacContext
+      && String(window.localStorage?.getItem('authToken') || '').trim() === token;
+    const onRevision = (value, eventName) => {
+      if (!isCurrent()) return;
       try {
-        const payload = JSON.parse(data || "{}");
-        const eventRevision = revision(payload.revision);
+        const eventRevision = revision(value);
         syncReconnectAttempts = 0;
         if (revisionGreater(eventRevision, workingCursor)) {
           void requestReconcile({ reason: "sse", targetRevision: eventRevision });
@@ -2502,40 +2647,41 @@
         }
       } catch (_) { void requestReconcile({ reason: "sse-invalid", force: true }); }
     };
-    void (async () => {
+    const connect = async (signal, emit) => {
       let shouldReconnect = true;
+      let reader;
       try {
-        const token = String(window.localStorage?.getItem("authToken") || "").trim();
+        if (!isCurrent() || signal.aborted) return { reconnect: false };
         const response = await fetch(`/api/admin/catalog/stream?store_id=${Number(targetScope.storeId)}`, {
           method: "GET",
           headers: {
             Accept: "text/event-stream",
-            'x-rbac-context': configuredRbacContext,
+            'x-rbac-context': rbacContext,
             'x-store-id': String(targetScope.storeId),
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           credentials: "same-origin",
           cache: "no-store",
-          signal: source.signal,
+          signal,
         });
-        if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) { await response.body?.cancel(); return; }
+        if (!isCurrent() || signal.aborted) { await response.body?.cancel(); return { reconnect: false }; }
         if (!response.ok || !response.body) {
           shouldReconnect = response.status !== 401 && response.status !== 403;
           // Middleware may return a JSON refusal before the stream starts. An empty
           // or non-JSON 403 is not evidence that the entire local session was revoked.
           const payload = response.status === 403 ? await response.json().catch(() => null) : null;
-          if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;
+          if (!isCurrent() || signal.aborted) return { reconnect: false };
           checkAccessResponse(response.status, payload);
           throw new Error(`CATALOG_STREAM_HTTP_${response.status}`);
         }
-        if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;
+        if (!isCurrent() || signal.aborted) return { reconnect: false };
         syncReconnectAttempts = 0;
-        const reader = response.body.getReader();
+        reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
-        while (source === syncSource && scopeIsCurrent(targetScope, generation)) {
+        while (isCurrent() && !signal.aborted) {
           const chunk = await reader.read();
-          if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) { await reader.cancel(); return; }
+          if (!isCurrent() || signal.aborted) { await reader.cancel(); return { reconnect: false }; }
           buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done }).replace(/\r\n/g, "\n");
           let boundary = buffer.indexOf("\n\n");
           while (boundary >= 0) {
@@ -2543,18 +2689,44 @@
             buffer = buffer.slice(boundary + 2);
             const eventName = frame.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim() || "message";
             const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
-            if ((eventName === "snapshot" || eventName === "change") && data) onRevision(data, eventName);
+            if ((eventName === "snapshot" || eventName === "change") && data) {
+              try { emit(revision(JSON.parse(data).revision), eventName); }
+              catch (_) { void requestReconcile({ reason: 'sse-invalid', force: true }); }
+            }
             boundary = buffer.indexOf("\n\n");
           }
           if (chunk.done) break;
         }
       } catch (error) {
-        if (error?.name === "AbortError") return;
+        if (error?.name === "AbortError") return { reconnect: false };
+      } finally {
+        if (signal.aborted || !isCurrent()) await reader?.cancel().catch(() => {});
       }
-      if (source !== syncSource || !scopeIsCurrent(targetScope, generation)) return;
+      return { reconnect: shouldReconnect };
+    };
+    const ended = result => {
+      if (!isCurrent()) return;
       syncSource = null;
+      syncSubscription = null;
       setSyncState(navigator.onLine ? "stale" : "offline");
-      if (shouldReconnect) scheduleReconnect(generation);
+      if (result?.reconnect) scheduleReconnect(generation);
+    };
+    void (async () => {
+      let key = null;
+      try {
+        // Opaque group key includes every repository access dimension plus the
+        // exact JWT context and API permission context. No identity/token goes on BC.
+        const bytes = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(
+          JSON.stringify([targetScope.namespace, rbacContext, token])));
+        key = Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('');
+      } catch (_) { /* Missing crypto/coordination retains the original direct SSE. */ }
+      if (!isCurrent()) return;
+      if (window.AdminCatalogStream) {
+        syncSubscription = window.AdminCatalogStream.open({ key, signal: source.signal, isCurrent,
+          connect, onHint: onRevision, onEnd: ended });
+      } else {
+        void connect(source.signal, onRevision).then(ended);
+      }
     })();
     if (!syncLifecycleBound) {
       syncLifecycleBound = true;
@@ -2562,7 +2734,12 @@
         void startSync();
         void requestReconcile({ reason: "online", force: true });
       });
-      window.addEventListener("offline", () => setSyncState("offline"));
+      window.addEventListener("offline", () => { stopSync(); setSyncState("offline"); });
+      document.addEventListener('freeze', stopSync);
+      document.addEventListener('resume', () => {
+        void startSync();
+        void requestReconcile({ reason: 'resume' });
+      });
       window.addEventListener("focus", () => { void requestReconcile({ reason: "focus" }); });
       document.addEventListener("visibilitychange", () => {
         if (!document.hidden) void requestReconcile({ reason: "visibility" });
@@ -2681,7 +2858,11 @@
     if (typeof options.workingSet === 'function') configuredWorkingSet = options.workingSet;
     if (typeof options.guard === 'function') configuredGuard = options.guard;
     if (configuredGuard && !configuredGuard()) return false;
-    if (options.rbacContext === 'products' || options.rbacContext === 'new-order') configuredRbacContext = options.rbacContext;
+    if ((options.rbacContext === 'products' || options.rbacContext === 'new-order')
+        && configuredRbacContext !== options.rbacContext) {
+      stopSync();
+      configuredRbacContext = options.rbacContext;
+    }
     if (typeof configuredRequest !== "function") configuredRequest = catalogRequest;
     const nextScope = currentScope();
     if (!nextScope?.complete) return Promise.resolve(false);
@@ -2772,6 +2953,7 @@
   }
 
   window.CatalogRepository = {
+    beginImmutablePassport, activateImmutablePassport,
     init, getProduct, getProducts, getProductsForCategory, getAllProducts, getCategory, getAllCategories, loadProducts, loadPassports, loadCategories, loadEditorReferences,
     upsertProduct, upsertProducts, markProductSummary, patchProductOptimistic, commitProductPatch, rollbackProductPatch, patchProductAuthoritative, removeProduct, clearSavedProducts, isProductPersistedOrderReady, isProductPersistedEditorReady,
     getProductPassport, getEditorReferences, upsertPassports, isOrderReadyPassport,
@@ -2782,15 +2964,13 @@
     getCombo, getComboForOrder, getAllCombos, getAffectedComboIds, getAffectedComboIdsForBlocks, getComboBlock, getAllComboBlocks, loadSavedComboBlocks, upsertComboBlock, upsertComboBundle, upsertComboBundles, removeCombo, removeComboBlock, ensureComboBlocks,
     ensureCombos, ensureAllCombos, ensureCombosForCategoryCodes, isComboReady,
     startSync, stopSync, reconcile, getSyncState,
+    getStreamState: () => syncSubscription?.getState() || { mode: syncSource ? 'independent' : 'stopped' },
     checkAccessResponse,
     normalizeProduct, normalizeCategory, normalizeCombo, normalizeComboBlock,
   };
 
   window.addEventListener("online", () => { void resumeDownloadJob(); });
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) cancelDownloadSchedule();
-    else scheduleDownloadTurn();
-  });
+  document.addEventListener("visibilitychange", () => scheduleDownloadTurn());
   window.addEventListener("pagehide", () => { downloadPageActive = false; cancelDownloadSchedule(false); });
   window.addEventListener("pageshow", () => { downloadPageActive = true; scheduleDownloadTurn(); void resumeDownloadJob(); });
   document.addEventListener("tenantStoreChanged", () => { clearRuntime(); notify('context-reset', []); void init(); });

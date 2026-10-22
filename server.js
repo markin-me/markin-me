@@ -558,6 +558,8 @@ try {
 }
 
 app.use(cors());
+// Inert while immutable exports are disabled; never gates normal CRM requests.
+app.use('/api', require('./services/catalog-export-queue').trackForeground);
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 app.use(cookieParser());
@@ -735,6 +737,7 @@ app.locals.assetUrl = function assetUrl(src) {
 };
 app.locals.appVersion = APP_CACHE_VERSION;
 app.locals.serviceWorkerVersion = SERVICE_WORKER_VERSION;
+app.locals.catalogExportPolicy = require('./services/catalog-passport-exports').policy();
 app.locals.navigationRbac = {
   actionLabels: BASE_ACTION_LABELS,
   nodes: NAVIGATION_RBAC_NODES,
@@ -2691,6 +2694,7 @@ const adminProductsRouter = makeAdminProductsRouter({
   helpers,
   ordersEvents,
   buildAdminFullProductPassports: publicShopRouter.buildAdminFullProductPassports,
+  prepareAdminProductPassport: publicShopRouter.prepareAdminProductPassport,
 });
 function requireProductApiPermission(req, res, next) {
   const route = String(req.path || '').toLowerCase();

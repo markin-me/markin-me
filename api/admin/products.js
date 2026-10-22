@@ -5,9 +5,11 @@ const fs = require('fs');
 const multer = require('multer');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const catalogSync = require('../../services/catalog-sync');
+const registerCatalogSourceParts = require('./catalog-source-parts');
+const registerCatalogPassportExports = require('./catalog-passport-exports');
 const { isUserSessionActive } = require('../middleware/auth');
 
-module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, buildAdminFullProductPassports }) {
+module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, buildAdminFullProductPassports, prepareAdminProductPassport }) {
   const router = express.Router();
 
   async function publishStockChanged(tenantId, storeId, payload = {}) {
@@ -1479,13 +1481,106 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     return { after, limit };
   }
 
-  function sendCatalogPortion(res, payload) {
+  function sendCatalogPortion(res, payload, onSerialize) {
+    const started = onSerialize ? process.hrtime.bigint() : null;
     const body = JSON.stringify(payload);
-    if (Buffer.byteLength(body, 'utf8') > 256 * 1024) {
+    const bytes = Buffer.byteLength(body, 'utf8');
+    if (onSerialize) onSerialize(Number(process.hrtime.bigint() - started) / 1e6, bytes);
+    if (bytes > 256 * 1024) {
       return res.status(413).json({ ok: false, error: 'CATALOG_PORTION_TOO_LARGE' });
     }
     return res.type('application/json').send(body);
   }
+
+  registerCatalogSourceParts(router, { db, helpers, hasCatalogStoreScope });
+  registerCatalogPassportExports(router, { db, helpers, hasCatalogStoreScope, prepareAdminProductPassport });
+
+  // First part only: a live-row projection, NEVER a sealed full-passport snapshot.
+  router.get('/admin/catalog/product-passport-core', async (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    try {
+      const rawStore = req.headers['x-store-id'];
+      if (typeof rawStore !== 'string' || !/^[1-9][0-9]*$/.test(rawStore)
+          || !Number.isSafeInteger(Number(rawStore))) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CATALOG_PART_STORE' });
+      }
+      const tenantId = Number(helpers.getTenantId(req)), storeId = Number(helpers.getStoreId(req));
+      if (Number(rawStore) !== storeId) return res.status(400).json({ ok: false, error: 'CATALOG_PART_STORE_CONFLICT' });
+      if (!Number.isSafeInteger(tenantId) || tenantId <= 0
+          || !['products.catalog.read', 'new_order.create'].includes(req.permission?.key)
+          || !['all', 'stores'].includes(req.permission?.accessRule)) {
+        return res.status(403).json({ ok: false, error: 'CATALOG_PART_SCOPE_REQUIRED' });
+      }
+      const part = 'core-texts';
+      if (Object.keys(req.query).some(key => !['cursor', 'defer_large', 'retry_id'].includes(key))
+          || (req.query.defer_large !== undefined && req.query.defer_large !== '1')
+          || (req.query.retry_id !== undefined && (req.query.defer_large !== '1' || req.query.cursor !== undefined
+            || typeof req.query.retry_id !== 'string' || !/^[1-9][0-9]*$/.test(req.query.retry_id)
+            || !Number.isSafeInteger(Number(req.query.retry_id))))) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CATALOG_PART_QUERY' });
+      }
+      let afterId = 0;
+      if (req.query.cursor !== undefined) {
+        const cursor = req.query.cursor;
+        if (typeof cursor !== 'string' || cursor.length > 256 || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
+          return res.status(400).json({ ok: false, error: 'INVALID_CATALOG_PART_CURSOR' });
+        }
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+        if (!Array.isArray(decoded) || decoded.length !== 5 || decoded[0] !== 1 || decoded[1] !== part
+            || decoded[2] !== tenantId || decoded[3] !== storeId
+            || !Number.isSafeInteger(decoded[4]) || decoded[4] <= 0
+            || Buffer.from(JSON.stringify(decoded)).toString('base64url') !== cursor) {
+          return res.status(400).json({ ok: false, error: 'INVALID_CATALOG_PART_CURSOR' });
+        }
+        afterId = decoded[4];
+      }
+      const started = process.hrtime.bigint();
+      if (!(await hasCatalogStoreScope(tenantId, storeId))) {
+        return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+      }
+      // Bound transferred text BEFORE MySQL sends the row to Node. Oversized text
+      // is refused, not truncated or replaced in a candidate. No dependent tables.
+      const textBytes = ['name', 'sku', 'description_short', 'description']
+        .map(field => `OCTET_LENGTH(COALESCE(p.${field}, ''))`).join('+');
+      const textColumns = ['name', 'sku', 'description_short', 'description']
+        .map(field => `CASE WHEN (${textBytes})<=8192 THEN p.${field} ELSE NULL END AS ${field}`).join(', ');
+      const [rows] = await db.query(
+        `SELECT /*+ MAX_EXECUTION_TIME(2000) */ p.id, (${textBytes}) AS text_bytes,
+                ${textColumns}, p.is_active, p.site_visibility
+           FROM prod_products p WHERE p.tenant_id=? AND p.id${req.query.retry_id ? '=' : '>'}?
+          ORDER BY p.id ASC LIMIT 1`, [tenantId, req.query.retry_id ? Number(req.query.retry_id) : afterId]
+      );
+      const row = rows[0];
+      if (row && (!Number.isSafeInteger(Number(row.id)) || Number(row.id) <= afterId)) throw new Error('INVALID_PRODUCT_ID');
+      const oversized = row && Number(row.text_bytes) > 8192;
+      if (oversized && req.query.defer_large !== '1') {
+        return res.status(413).json({ ok: false, error: 'CATALOG_CORE_TEXT_TOO_LARGE' });
+      }
+      const data = row && !oversized ? { id: Number(row.id), name: row.name, sku: row.sku,
+        description_short: row.description_short, description: row.description,
+        is_active: row.is_active, site_visibility: row.site_visibility } : null;
+      if (data && (!Number.isSafeInteger(data.id) || data.id <= afterId)) throw new Error('INVALID_PRODUCT_ID');
+      const sourceVersion = data ? crypto.createHash('sha256')
+        .update(JSON.stringify([1, part, tenantId, storeId, data])).digest('hex') : null;
+      const cursor = row ? Buffer.from(JSON.stringify([1, part, tenantId, storeId, Number(row.id)])).toString('base64url') : null;
+      const payload = { ok: true, formatVersion: 1, part, tenantId, storeId, data, sourceVersion,
+        versionKind: 'part-content-sha256', snapshotId: null, snapshotConsistent: false,
+        passportComplete: false, cursor, scanExhausted: !row,
+        ...(req.query.defer_large === '1' ? { deferred: oversized ? {
+          productId: Number(row.id), part, reason: 'CATALOG_CORE_TEXT_TOO_LARGE', textBytes: Number(row.text_bytes),
+        } : null } : {}) };
+      const body = JSON.stringify(payload), bytes = Buffer.byteLength(body);
+      if (bytes > 64 * 1024) return res.status(413).json({ ok: false, error: 'CATALOG_CORE_RESPONSE_TOO_LARGE' });
+      res.set('X-Catalog-Part-Queries', '2');
+      res.set('X-Catalog-Part-Ms', (Number(process.hrtime.bigint() - started) / 1e6).toFixed(1));
+      res.set('X-Catalog-Part-Bytes', String(bytes));
+      return res.type('application/json').send(body);
+    } catch (error) {
+      if (error instanceof SyntaxError) return res.status(400).json({ ok: false, error: 'INVALID_CATALOG_PART_CURSOR' });
+      console.error('CATALOG_CORE_PART_FAILED:', error.code || error.name);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
 
   router.post('/admin/catalog/product-targets', async (req, res) => {
     try {
@@ -1585,11 +1680,21 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
   router.post('/admin/catalog/product-passports', async (req, res) => {
     try {
+      const stages = [];
+      // Fixed stage names and numeric timings only; no IDs, SQL or DTO contents.
+      const recordStage = ({ name, ms, queries, dbMs }) => {
+        const queryTiming = Number.isFinite(queries) && Number.isFinite(dbMs)
+          ? `;q=${queries};db=${dbMs.toFixed(1)}` : '';
+        stages.push(`${name};dur=${ms.toFixed(1)}${queryTiming}`);
+        res.set('X-Catalog-Timing', stages.join(', '));
+      };
+      const scopeStarted = process.hrtime.bigint();
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       if (!(await hasCatalogStoreScope(tenantId, storeId))) {
         return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
       }
+      recordStage({ name: 'scope', ms: Number(process.hrtime.bigint() - scopeStarted) / 1e6 });
       const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
       const ids = [...new Set(rawIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
       if (!ids.length) return res.json({ ok: true, data: {}, versions: {} });
@@ -1599,8 +1704,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       if (typeof buildAdminFullProductPassports !== 'function') {
         return res.status(503).json({ ok: false, error: 'PASSPORT_BUILDER_UNAVAILABLE' });
       }
-      const payload = await buildAdminFullProductPassports({ tenantId, storeId, productIds: ids });
-      if (offlineExtra) return sendCatalogPortion(res, payload);
+      res.set('X-Catalog-Records', String(ids.length));
+      const payload = await buildAdminFullProductPassports({ tenantId, storeId, productIds: ids, onStage: recordStage });
+      if (offlineExtra) return sendCatalogPortion(res, payload, (ms, bytes) => {
+        recordStage({ name: 'serialize', ms });
+        res.set('X-Catalog-Bytes', String(bytes));
+      });
       return res.json(payload);
     } catch (e) {
       console.error(e);

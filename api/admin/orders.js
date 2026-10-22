@@ -2279,6 +2279,89 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     }
   });
 
+  // Bounded READ projection only. Its cursor is not an ordersEvents cursor or
+  // a consistent snapshot: updates/deletions are reconciled separately in A4.3.
+  router.get('/offline-page', async (req, res) => {
+    setOrdersNoStore(res);
+    try {
+      // Validate the source before getStoreId() can replace invalid input with 1.
+      // No header keeps the existing authenticated/query/default scope contract.
+      const headerStore = req.headers['x-store-id'];
+      if (headerStore !== undefined && (typeof headerStore !== 'string'
+          || !/^[1-9][0-9]*$/.test(headerStore) || !Number.isSafeInteger(Number(headerStore)))) {
+        return res.status(400).json({ ok: false, error: 'INVALID_OFFLINE_STORE' });
+      }
+      const tenantId = Number(helpers.getTenantId(req));
+      const storeId = Number(helpers.getStoreId(req));
+      if (headerStore !== undefined && Number(headerStore) !== storeId) {
+        return res.status(400).json({ ok: false, error: 'OFFLINE_STORE_SCOPE_CONFLICT' });
+      }
+      const accessRule = String(req.permission?.accessRule || '');
+      if (!(tenantId > 0 && storeId > 0) || req.permission?.key !== 'orders.list.read'
+          || !['all', 'stores', 'assigned', 'own'].includes(accessRule)) {
+        return res.status(403).json({ ok: false, error: 'ORDER_OFFLINE_SCOPE_REQUIRED' });
+      }
+      const now = Date.now();
+      const windowEnd = req.query.window_end === undefined ? now : Number(req.query.window_end);
+      const beforeId = req.query.before_id === undefined ? null : Number(req.query.before_id);
+      const limit = req.query.limit === undefined ? 25 : Number(req.query.limit);
+      if (!Number.isSafeInteger(windowEnd) || windowEnd > now || windowEnd < now - 24 * 60 * 60 * 1000
+          || (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId <= 0))
+          || !Number.isInteger(limit) || limit < 1 || limit > 25) {
+        return res.status(400).json({ ok: false, error: 'INVALID_OFFLINE_PAGE' });
+      }
+      const where = ['o.tenant_id=?', 'o.store_id=?', 'o.is_active=1', 'o.created_at>=?', 'o.created_at<=?'];
+      // created_at is UTC; do not let mysql2 format Date parameters in Node's local timezone.
+      const utcStamp = value => new Date(value).toISOString().slice(0, 19).replace('T', ' ');
+      const params = [tenantId, storeId, utcStamp(windowEnd - 7 * 86400000), utcStamp(windowEnd)];
+      if (beforeId !== null) { where.push('o.id<?'); params.push(beforeId); }
+      if (accessRule === 'assigned' || accessRule === 'own') {
+        const userId = Number(req.user?.userId || 0);
+        if (!(userId > 0)) return res.status(403).json({ ok: false, error: 'RESOURCE_FORBIDDEN' });
+        where.push(accessRule === 'assigned' ? 'o.assigned_user_id=?' : 'o.created_by_user_id=?');
+        params.push(userId);
+      }
+      const timezone = await getStoreTimezone(tenantId, storeId);
+      const [rows] = await db.query(`SELECT /*+ MAX_EXECUTION_TIME(2000) */
+          o.id, o.store_id, o.status_id, o.total_price,
+          LEFT(o.customer_name,128) AS customer_name, LEFT(o.customer_phone,64) AS customer_phone,
+          LEFT(o.address,256) AS address,
+          DATE_FORMAT(o.created_at,'%Y-%m-%d %H:%i:%s') AS created_at,
+          DATE_FORMAT(o.scheduled_at,'%Y-%m-%d %H:%i:%s') AS scheduled_at,
+          LEFT(s.code,64) AS status_code, LEFT(s.title,128) AS status_title, LEFT(s.color,32) AS status_color,
+          LEFT(m.code,64) AS method_code, LEFT(m.title,128) AS method_title
+        FROM order_orders o
+        LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+        LEFT JOIN order_delivery_types m ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
+        WHERE ${where.join(' AND ')} ORDER BY o.id DESC LIMIT ?`, [...params, limit]);
+      const data = [];
+      let dataBytes = 2;
+      for (const row of rows) {
+        const order = { ...row, id: Number(row.id), store_id: Number(row.store_id),
+          status_id: Number(row.status_id), total_price: Number(row.total_price),
+          created_at: helpers.utcToStoreDateTime(row.created_at, timezone), offline_summary: true };
+        const bytes = Buffer.byteLength(JSON.stringify(order), 'utf8') + 1;
+        if (dataBytes + bytes > 60 * 1024) break;
+        data.push(order); dataBytes += bytes;
+      }
+      if (rows.length && !data.length) return res.status(413).json({ ok: false, error: 'ORDER_OFFLINE_PAGE_LIMIT' });
+      // A byte-limited page resumes after the LAST RETURNED row, not the last SQL row.
+      const cursor = data.length && (data.length < rows.length || rows.length === limit)
+        ? { beforeId: data[data.length - 1].id, windowEnd } : null;
+      const payload = { ok: true, formatVersion: 1, dataset: 'orders.recent-summaries', tenantId, storeId,
+        timezone, windowEnd, historyDays: 7, data, cursor, complete: false, moduleComplete: false,
+        version: crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex') };
+      const body = JSON.stringify(payload);
+      if (Buffer.byteLength(body, 'utf8') > 64 * 1024) {
+        return res.status(413).json({ ok: false, error: 'ORDER_OFFLINE_PAGE_LIMIT' });
+      }
+      return res.type('json').send(body);
+    } catch (_) {
+      console.error('ORDER_OFFLINE_PAGE_FAILED');
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // ---------------------------
   // orders list
   // ---------------------------

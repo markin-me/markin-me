@@ -18,6 +18,12 @@
     maxTasks: Math.min(128, Math.max(1, Math.floor(setting('maxTasks', 128)))),
     maxRetries: Math.min(2, Math.max(0, Math.floor(setting('maxRetries', 2)))),
   });
+  // One policy contract for data and SW resources. Only idle_only is enabled;
+  // future tenant/store policies must come from the server, not browser settings.
+  const policy = Object.freeze({
+    mode: 'idle_only', limits: config, maxConcurrentRequests: 1,
+    allowsPreparation: idleDeadline => idleDeadline <= Date.now(),
+  });
   const tabId = window.crypto?.randomUUID?.();
   const tabKey = prefix + tabId;
   const tabKeys = new Set([tabKey]);
@@ -62,7 +68,7 @@
       dimensions: { organizationalUnit: { type: 'store', id: window.localStorage.getItem('activeStoreId') || null } } }).namespace;
   }
   function eligible() {
-    return enabled && live && coordinationReady && !stopped && !frozen && !operations.size && !pointerHeld && !touchHeld && !storagePaused && !document.hidden
+    return enabled && live && coordinationReady && !stopped && !frozen && !operations.size && !pointerHeld && !touchHeld && !storagePaused
       && !authPaused && window.navigator.onLine !== false && window.AdminAccessContext?.ok === true
       && !window.AdminAccessContext.offline && core?.isActive();
   }
@@ -115,7 +121,7 @@
       await locks.request(lockName, { ifAvailable: true }, async lock => {
         if (!lock || !eligible()) { retryAt = Date.now() + config.pauseMs; return; }
         const until = await idleUntil();
-        if (until > Date.now()) { retryAt = until; return; }
+        if (!policy.allowsPreparation(until)) { retryAt = until; return; }
         const candidates = [...tasks.values()].filter(task => task.notBefore <= Date.now());
         candidates.sort((a, b) => (a.priority - (Date.now() - a.createdAt) / 10000)
           - (b.priority - (Date.now() - b.createdAt) / 10000) || a.sequence - b.sequence);
@@ -126,18 +132,25 @@
         }
         const access = core.capture();
         const controller = new AbortController();
+        const deadlineAt = Date.now() + config.timeoutMs;
         active = { controller, task };
         const assertCurrent = () => {
           refreshTabs();
+          // A hidden/frozen tab can receive its timeout callback late.
+          // Never accept a late response/write just because that timer has not run.
+          if (Date.now() >= deadlineAt) {
+            controller.abort('timeout');
+            throw new DOMException('Hydration timed out', 'AbortError');
+          }
           if (controller.signal.aborted || !eligible() || !access.isCurrent() || task.scope !== scopeKey()
-              || quietUntil > Date.now() || (task.guard && !task.guard())) {
+              || !policy.allowsPreparation(quietUntil) || (task.guard && !task.guard())) {
             controller.abort();
             throw new DOMException('Hydration interrupted', 'AbortError');
           }
           for (const key of tabKeys) {
             const record = JSON.parse(window.localStorage.getItem(key));
             if (record && (!Number.isFinite(record.quietUntil) || typeof record.busy !== 'boolean'
-                || record.busy || record.quietUntil > Date.now())) {
+                || record.busy || !policy.allowsPreparation(record.quietUntil))) {
               controller.abort();
               throw new DOMException('Activity in another tab', 'AbortError');
             }
@@ -146,10 +159,10 @@
         let requests = 0;
         const deadline = window.setTimeout(() => controller.abort('timeout'), config.timeoutMs);
         const context = {
-          signal: controller.signal, config, assertCurrent,
+          signal: controller.signal, config, policy, assertCurrent,
           async prepareResource(worker, url, version, options = {}) {
             assertCurrent();
-            if (++requests > 1) throw new Error('HYDRATION_ONE_REQUEST_PER_TURN');
+            if (++requests > policy.maxConcurrentRequests) throw new Error('HYDRATION_ONE_REQUEST_PER_TURN');
             const operationId = window.crypto.randomUUID();
             return new Promise((resolve, reject) => {
               const channel = new window.MessageChannel();
@@ -207,7 +220,7 @@
           },
           async requestJSON(url, options = {}) {
             assertCurrent();
-            if (++requests > 1) throw new Error('HYDRATION_ONE_REQUEST_PER_TURN');
+            if (++requests > policy.maxConcurrentRequests) throw new Error('HYDRATION_ONE_REQUEST_PER_TURN');
             const target = new URL(url, window.location.origin);
             if (target.origin !== window.location.origin || !target.pathname.startsWith('/api/')) throw new Error('HYDRATION_URL_INVALID');
             const { recordCount, ...fetchOptions } = options;
@@ -291,13 +304,28 @@
       sequence: ++sequence, retries: 0, createdAt: Date.now(), notBefore: 0 });
     schedule(); return promise;
   }
-  window.AdminIdleHydration = Object.freeze({ enqueue, beginOperation, config,
+  window.AdminIdleHydration = Object.freeze({ enqueue, beginOperation, config, policy,
     get supported() { return enabled; }, cancel });
   if (!enabled) return;
   function knowTab(key) {
     if (!key?.startsWith(prefix)) return;
     tabKeys.add(key);
     if (tabKeys.size > 256) { enabled = false; cancel('coordination-limit'); }
+  }
+  function observeTab(key) {
+    if (!key?.startsWith(prefix)) return;
+    knowTab(key);
+    try {
+      const record = JSON.parse(window.localStorage.getItem(key));
+      if (!record) tabKeys.delete(key);
+      else {
+        if (!Number.isFinite(record.quietUntil) || typeof record.busy !== 'boolean') throw new Error('IDLE_COORDINATION_INVALID');
+        // Notifications can be delayed, duplicated, or just release a held gesture.
+        // Shared state, not the notification or window visibility, revokes idle.
+        if (record.busy || record.quietUntil > Date.now()) abort();
+      }
+      schedule();
+    } catch (_) { enabled = false; cancel('coordination-unavailable'); }
   }
   function acquireLifetime() {
     void locks.request(tabKey, async () => {
@@ -308,7 +336,7 @@
   }
   try {
     channel = typeof window.BroadcastChannel === 'function' ? new window.BroadcastChannel('admin:idle:v1') : null;
-    if (channel) channel.onmessage = event => { knowTab(event.data?.key); abort(); schedule(); };
+    if (channel) channel.onmessage = event => observeTab(event.data?.key);
     publish();
     acquireLifetime();
     void locks.query().then(state => {
@@ -335,19 +363,22 @@
       if (!event.isTrusted) return;
       if (name.startsWith('pointer')) pointerHeld = name === 'pointerdown';
       else touchHeld = name === 'touchstart';
-      lastGestureAt = Date.now(); activity(); publish();
+      // Browser cancellation releases a gesture; it is not a new user action.
+      if (!name.endsWith('cancel')) { lastGestureAt = Date.now(); activity(); }
+      publish(); schedule();
     }, { capture: true, passive: true });
   }
   document.addEventListener('scroll', event => {
     // Programmatic scrolling caused by API rendering is not user activity.
     if (event.isTrusted && (pointerHeld || touchHeld || Date.now() - lastGestureAt < 1500)) activity();
   }, { capture: true, passive: true });
-  window.addEventListener('blur', () => { pointerHeld = false; touchHeld = false; publish(); });
+  window.addEventListener('blur', () => {
+    if (!pointerHeld && !touchHeld) return;
+    pointerHeld = false; touchHeld = false; publish(); schedule();
+  });
   window.addEventListener('storage', event => {
     if (event.key?.startsWith(prefix)) {
-      if (event.newValue === null) tabKeys.delete(event.key);
-      else { knowTab(event.key); abort(); }
-      schedule();
+      observeTab(event.key);
     }
     if (event.key === 'activeStoreId') cancel('store-changed');
   });
@@ -361,13 +392,14 @@
   document.addEventListener('tenantStoreChanged', () => cancel('store-changed'));
   window.addEventListener('offline', () => { abort(); schedule(); });
   window.addEventListener('online', () => schedule());
-  document.addEventListener('visibilitychange', () => { if (document.hidden) abort(); schedule(); });
-  window.addEventListener('popstate', activity);
-  window.addEventListener('hashchange', activity);
+  // Hidden tabs remain eligible; Chrome may throttle them without our polling.
+  document.addEventListener('visibilitychange', () => schedule());
+  window.addEventListener('popstate', event => { if (event.isTrusted) activity(); });
+  window.addEventListener('hashchange', event => { if (event.isTrusted) activity(); });
   document.addEventListener('freeze', () => { frozen = true; abort(); });
   document.addEventListener('resume', () => { frozen = false; schedule(); });
   window.addEventListener('pagehide', () => { stopped = true; cancel('pagehide'); releaseLifetime?.(); });
   window.addEventListener('pageshow', event => {
-    if (event.persisted && enabled) { stopped = false; activity(); acquireLifetime(); }
+    if (event.persisted && enabled) { stopped = false; acquireLifetime(); }
   });
 })(window);

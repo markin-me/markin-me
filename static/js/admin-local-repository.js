@@ -194,6 +194,13 @@
         return unwrap(entry);
       },
       async get(key, opts = {}) { const entry = await this.getEntry(key, opts); return entry ? entry.data : null; },
+      async scanEntries(opts = {}) {
+        assertCurrent();
+        const result = await cache.scanEntries({ ...opts, guard: () => isCurrent() && (!opts.guard || opts.guard()) });
+        assertCurrent();
+        return { cursor: result.cursor, entries: result.entries.map(({ key, entry }) => ({ key, ...unwrap({ data: entry.data,
+          createdAt: entry.createdAt, updatedAt: entry.updatedAt, expiresAt: entry.staleAt ?? entry.expiresAt }) })) };
+      },
       async getMany(keys, opts = {}) {
         assertCurrent();
         const entries = await cache.getMany(keys, { ...staleOptions(opts), entries: true });
@@ -248,6 +255,14 @@
             });
           },
         });
+      },
+      async compareTokens(keys) {
+        assertCurrent(); const result = await cache.compareTokens(keys); assertCurrent(); return result;
+      },
+      async compareAndSetMany(expected, values, opts = {}) {
+        assertCurrent();
+        const result = await cache.compareAndSetMany(expected, values.map(([key, value]) => [key, wrap(value, opts)]), opts);
+        assertCurrent(); return result;
       },
       async remove(key) { assertCurrent(); await cache.remove(key); assertCurrent(); },
       async removeMany(keys) { assertCurrent(); await cache.removeMany(keys); assertCurrent(); },

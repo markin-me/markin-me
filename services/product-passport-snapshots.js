@@ -251,6 +251,9 @@ async function scheduleInitialBackfill(db) {
 function configure({ db, builder }) {
   configuredDb = db;
   configuredBuilder = builder;
+  // The opt-in lightweight rollout is demand-driven. Keep the public snapshot
+  // reader/dirty queue intact, but do not scan all tenants at startup for it.
+  if (process.env.CATALOG_EXPORT_LIGHT === '1' && process.env.CATALOG_EXPORT_STRATEGY !== 'mysql') return;
   setTimeout(() => {
     scheduleInitialBackfill(db).catch((error) => console.error("product passport initial backfill skipped:", error));
   }, 1000).unref?.();

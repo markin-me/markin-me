@@ -1967,8 +1967,23 @@
     return api(`/api/admin/catalog/products${qs ? `?${qs}` : ""}`);
   }
 
-  async function apiGetProductionZones() {
-    return api("/api/admin/tenant/production-zones");
+  let productionZonesRequest = null;
+  function apiGetProductionZones() {
+    const access = window.AdminLocalRepository.capture();
+    const token = localStorage.getItem('authToken');
+    const storeId = localStorage.getItem('activeStoreId');
+    if (productionZonesRequest?.access.isCurrent()
+        && productionZonesRequest.token === token && productionZonesRequest.storeId === storeId) {
+      return productionZonesRequest.promise;
+    }
+    // Bulk/footer renders and the editor share only this in-flight read, not a
+    // cached result. api() still rejects responses from a superseded scope.
+    const request = { access, token, storeId, promise: null };
+    request.promise = api("/api/admin/tenant/production-zones").finally(() => {
+      if (productionZonesRequest === request) productionZonesRequest = null;
+    });
+    productionZonesRequest = request;
+    return request.promise;
   }
 
   async function apiGetComboBlocks() {

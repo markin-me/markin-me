@@ -71,11 +71,14 @@ function isPromoSimpleDiscount(discount) {
     && getSimpleDiscountVariant(discount) === 'promo_code';
 }
 
-function isDiscountActive(discount) {
+function isDiscountActive(discount, valuationAt) {
   if (!discount || !discount.is_active) return false;
   if (Number(discount?.is_deleted || 0) === 1 || discount?.is_deleted === true) return false;
 
-  const now = new Date();
+  // Optional pinned valuation for a version-bracketed offline transfer. Ordinary
+  // callers retain the original clock/timezone and all original formulas.
+  const now = valuationAt === undefined ? new Date() : new Date(valuationAt);
+  if (!Number.isFinite(now.getTime())) throw new Error('INVALID_DISCOUNT_VALUATION');
 
   if (discount.starts_at && new Date(discount.starts_at) > now) return false;
   if (discount.ends_at && new Date(discount.ends_at) < now) return false;

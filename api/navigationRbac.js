@@ -153,6 +153,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
       ? 'settings.payments.manage' : 'settings.payments.read';
   }
   if (route.startsWith('/orders')) {
+    if (route === '/orders/offline-page') return action === 'read' ? 'orders.list.read' : null;
     if (route.includes('/cash-summary') || route.includes('/cash-day')) return byAction('cash.journal', 'read');
     if (context === 'new-order' && (route === '/orders/statuses' || route === '/orders/benefits/preview')) return 'new_order.create';
     if (context === 'courier') {
@@ -203,6 +204,17 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     const bonusNode = String(headers['x-rbac-node'] || '').trim();
     const allowed = new Set(['marketing.bonus_base', 'marketing.bonus_paid', 'marketing.referrals', 'marketing.bonus_programs', 'marketing.bonus_settings']);
     return byAction(allowed.has(bonusNode) ? bonusNode : 'marketing.bonus_settings');
+  }
+  if (route === '/catalog/passport-exports' || route.startsWith('/catalog/passport-exports/')) {
+    // Export creation/publishing writes cache generations, not business products.
+    // Never inherit new_order.create or products.catalog.create for these routes.
+    return ['read', 'create'].includes(action) ? 'products.catalog.read' : null;
+  }
+  if (/^\/catalog\/product-passport-source\/[^/]+$/.test(route)) {
+    return action === 'read' ? 'products.catalog.read' : null;
+  }
+  if (route === '/catalog/product-passport-core') {
+    return action === 'read' ? (context === 'new-order' ? 'new_order.create' : 'products.catalog.read') : null;
   }
   if (context === 'new-order') {
     const newOrderCatalogRead = action === 'read' && (
@@ -286,6 +298,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     return 'settings.system.integrations';
   }
   if (route.startsWith('/tenant')) {
+    if (route === '/tenant/offline-profile') return action === 'read' ? 'settings.company.read' : null;
     if (route === '/tenant' && Object.prototype.hasOwnProperty.call(body, 'online_receipt_config') && action !== 'read') {
       return 'settings.payments.manage';
     }

@@ -31,6 +31,7 @@
   <script src="<%= assetUrl('/static/js/admin-persistent-cache.js?v=20261014-local-core-v1') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-local-repository.js?v=20261014-local-core-v1') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-idle-hydration.js') %>"></script>
+  <script>window.__ADMIN_CATALOG_EXPORT_POLICY__ = <%- JSON.stringify(typeof catalogExportPolicy !== 'undefined' ? catalogExportPolicy : { clientDownload: false }).replace(/</g, '\\u003c') %>;</script>
   <script>
     (function () {
       var visibleScope = null;
@@ -341,8 +342,11 @@
   <% } %>
 
   <!-- Скрипты -->
+  <script src="<%= assetUrl('/static/js/admin-catalog-stream.js') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-catalog.js?v=20260925-stock-realtime-v2') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-reference-cache.js?v=20261014-local-core-v1') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-orders-cache.js') %>"></script>
+  <script src="<%= assetUrl('/static/js/admin-catalog-parts.js') %>"></script>
   <script>
     if (window.AdminPersistentCache && typeof window.AdminPersistentCache.scheduleMaintenance === 'function') {
       window.AdminPersistentCache.scheduleMaintenance();

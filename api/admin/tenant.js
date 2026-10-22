@@ -129,7 +129,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can
     print_sound_new_message_url: 'settings.print_templates.update',
   });
 
-  async function requireTenantPermissions(req, res, permissionKeys) {
+  async function requireTenantPermissions(req, res, permissionKeys, resource = null) {
     if (typeof can !== 'function') {
       res.status(500).json({ ok: false, error: 'AUTHORIZATION_ERROR' });
       return false;
@@ -137,7 +137,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can
     const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
     const keys = Array.from(new Set((permissionKeys || []).filter(Boolean)));
     for (const permissionKey of keys) {
-      const access = await can(req.user, permissionKey, { tenant_id: tenantId });
+      const access = await can(req.user, permissionKey, resource || { tenant_id: tenantId });
       if (!access.allowed) {
         res.status(403).json({ ok: false, error: access.error || 'FORBIDDEN' });
         return false;
@@ -3431,6 +3431,36 @@ async function fetchStoreWithHours(tenantId, storeId) {
    * GET /api/admin/tenant
    * Р’РѕР·РІСЂР°С‰Р°РµС‚ РљРѕРјРїР°РЅРёСЏ (tenant) РґР»СЏ С‚РµРєСѓС‰РµРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
    */
+  // A bounded, non-secret singleton. Do not call buildTenantResponse here:
+  // it loads integrations/domains and is not an offline DTO.
+  router.get('/offline-profile', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const tenantId = Number(req.user?.tenantId || 0);
+      if (!Number.isSafeInteger(tenantId) || tenantId <= 0) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+      const resource = { tenant_id: tenantId, store_id: helpers.getStoreId(req) };
+      if (!await requireTenantPermissions(req, res, ['settings.company.read'], resource)) return;
+      const siteAccess = await can(req.user, 'settings.site.read', resource);
+      const [rows] = await db.query(
+        `SELECT name, timezone${siteAccess.allowed ? ', site_name' : ''}
+         FROM ten_tenants WHERE id=? LIMIT 1`, [tenantId]
+      );
+      if (!rows.length) return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      const data = Object.fromEntries(Object.keys(rows[0]).sort().map(key =>
+        [key, typeof rows[0][key] === 'string' ? rows[0][key].slice(0, 256) : null]));
+      // Content identity of this ONE row/projection, not a monotonic revision,
+      // cross-table watermark, or proof that all settings have been downloaded.
+      const version = crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
+      return res.json({ ok: true, formatVersion: 1, tenantId, data, version,
+        complete: true, moduleComplete: false, cursor: null });
+    } catch (_) {
+      console.error('SETTINGS_OFFLINE_PROFILE_FAILED');
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/login-suffix', async (req, res) => {
     if (!await requireTenantPermissions(req, res, ['settings.company.read'])) return;
     const tenantId = Number(req.user?.tenantId || 0);

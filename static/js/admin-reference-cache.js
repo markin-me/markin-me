@@ -8,6 +8,9 @@
   const generations = new Map();
   const referenceStates = new Map();
   let runtimeGeneration = 0;
+  const settingsProfileTtlMs = 15 * 60 * 1000;
+  const settingsCheckpointKey = 'meta:refresh:safe-profile';
+  let settingsPreparation = null;
   const definitions = {
     "store-time": { version: 1, ttlMs: 24 * 60 * 60 * 1000 },
     "payment-methods": { version: 1, ttlMs: 12 * 60 * 60 * 1000 },
@@ -141,6 +144,91 @@
     return scope ? scope.remove("value") : Promise.resolve(false);
   }
 
+  async function settingsProfileVersion(profile) {
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
+    const keys = Object.keys(profile).sort();
+    if (!keys.includes('name') || !keys.includes('timezone')
+        || keys.some(key => !['name', 'site_name', 'timezone'].includes(key)
+          || (profile[key] !== null && (typeof profile[key] !== 'string' || profile[key].length > 256)))) return null;
+    const bytes = new TextEncoder().encode(JSON.stringify(Object.fromEntries(keys.map(key => [key, profile[key]]))));
+    const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function getSettingsProfileState() {
+    const core = window.AdminLocalRepository;
+    if (!core?.isActive()) return { state: 'unavailable', moduleComplete: false };
+    const scope = core.create({ domain: 'settings:profile', version: 1 });
+    const entries = await scope.getMany(['safe-profile', settingsCheckpointKey], { allowStale: true });
+    const version = await settingsProfileVersion(entries.get('safe-profile'));
+    if (!scope.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
+    const checkpoint = entries.get(settingsCheckpointKey);
+    const ready = Boolean(version && checkpoint?.formatVersion === 1 && checkpoint.version === version
+      && checkpoint.complete === true && checkpoint.confirmedAt > Date.now() - settingsProfileTtlMs);
+    return { state: settingsPreparation?.namespace === scope.namespace ? 'loading' : ready ? 'ready' : version ? 'partial' : 'unavailable',
+      dataset: 'settings.safe-profile', moduleComplete: false, lastSyncedAt: checkpoint?.confirmedAt || null };
+  }
+
+  async function prepareSettingsProfile() {
+    const core = window.AdminLocalRepository, scheduler = window.AdminIdleHydration;
+    const context = window.AdminAccessContext;
+    if (!core?.isActive() || !scheduler?.supported || !context?.ok || context.offline) return;
+    // Scheduling hint only. The endpoint rechecks current server permissions.
+    if (!(context.permissions || []).some(grant => grant === '*'
+      || (grant?.key === 'settings.company.read' && ['all', 'stores'].includes(grant.access_rule)))) return;
+    const scope = core.create({ domain: 'settings:profile', version: 1 });
+    const generation = runtimeGeneration;
+    if (settingsPreparation?.namespace === scope.namespace && settingsPreparation.generation === generation) return settingsPreparation.promise;
+    const isCurrent = () => scope.isCurrent() && generation === runtimeGeneration;
+    const bufferKey = 'meta:buffer:safe-profile';
+    const task = scheduler.enqueue('settings:safe-profile', async idle => {
+      // Read INSIDE the global scheduler turn: another tab may have prepared it.
+      const saved = await scope.getMany(['safe-profile', settingsCheckpointKey, bufferKey], { allowStale: true });
+      const version = await settingsProfileVersion(saved.get('safe-profile'));
+      idle.assertCurrent();
+      const checkpoint = saved.get(settingsCheckpointKey);
+      if (version && checkpoint?.formatVersion === 1 && checkpoint.version === version && checkpoint.complete === true
+          && checkpoint.confirmedAt > Date.now() - settingsProfileTtlMs) return { saved: false, reason: 'already-current' };
+      const requestSequence = saved.get(bufferKey)?.requestSequence || 0;
+      const response = await idle.requestJSON('/api/admin/tenant/offline-profile', {
+        headers: { 'x-rbac-node': 'settings.company' }, recordCount: () => 1,
+      });
+      const responseVersion = await settingsProfileVersion(response.data);
+      idle.assertCurrent();
+      if (response.formatVersion !== 1 || response.tenantId !== context.local_context?.tenantId
+          || !responseVersion || response.version !== responseVersion || response.complete !== true
+          || response.moduleComplete !== false || response.cursor !== null) throw new Error('INVALID_SETTINGS_OFFLINE_PROFILE');
+      // Same lock/fence as the existing foreground bufferWrite('safe-profile').
+      // Never overwrite a newer working response or reserve a foreground sequence.
+      return window.navigator.locks.request('admin:buffer:' + scope.namespace + ':safe-profile', { signal: idle.signal }, async () => {
+        idle.assertCurrent();
+        const latest = await scope.get(bufferKey, { allowStale: true });
+        idle.assertCurrent();
+        if ((latest?.requestSequence || 0) !== requestSequence) return { saved: false, reason: 'working-response-changed' };
+        await idle.commit(scope, [['safe-profile', response.data], [settingsCheckpointKey, {
+          formatVersion: 1, dataset: 'settings.safe-profile', version: response.version, cursor: null,
+          confirmedAt: Date.now(), confirmedPortion: 1, complete: true, moduleComplete: false,
+        }]], { recordCount: 1, ttlMs: settingsProfileTtlMs, guard: isCurrent });
+        return { saved: true };
+      });
+    }, { priority: 1, guard: isCurrent });
+    const preparation = { namespace: scope.namespace, generation, promise: task };
+    settingsPreparation = preparation;
+    try {
+      const result = await task;
+      if (!result.ok && isCurrent() && !['context-changed', 'store-changed', 'pagehide', 'scope-changed'].includes(result.reason)) {
+        console.warn('SETTINGS_OFFLINE_PREPARATION_FAILED:', result.reason);
+      }
+    } finally {
+      if (settingsPreparation === preparation) settingsPreparation = null;
+    }
+  }
+
+  function queueSettingsProfile() {
+    // This only queues work; all HTTP and writes stay inside AdminIdleHydration.
+    void prepareSettingsProfile().catch(error => console.warn('SETTINGS_OFFLINE_PREPARATION_FAILED:', error.name));
+  }
+
   function resetRuntime() {
     runtimeGeneration += 1;
     memory.clear();
@@ -152,15 +240,21 @@
   window.addEventListener('admin:local-context-changed', resetRuntime);
   document.addEventListener('tenantStoreChanged', resetRuntime);
   window.addEventListener('storage', event => { if (event.key === 'activeStoreId') resetRuntime(); });
+  window.addEventListener('admin:access-context', queueSettingsProfile);
+  window.addEventListener('online', queueSettingsProfile);
+  document.addEventListener('tenantStoreChanged', queueSettingsProfile);
+  window.addEventListener('storage', event => { if (event.key === 'activeStoreId') queueSettingsProfile(); });
 
   window.AdminReferenceCache = {
     getOrLoadReference,
     invalidateReference,
     resetRuntime,
+    getSettingsProfileState,
     getReferenceState(name) {
       const state = referenceStates.get(name);
       return state?.scope.isCurrent() ? { lastSyncedAt: state.lastSyncedAt, stale: state.stale, source: state.source } : null;
     },
     definitions: Object.freeze(Object.assign({}, definitions)),
   };
+  queueSettingsProfile();
 })(window);

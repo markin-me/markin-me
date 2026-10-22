@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const buildPublicFullProductPassport = require('../../services/product-passport-dto');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
@@ -1771,12 +1772,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return { values, portion, portionGrams: totalGrams, incomplete };
   }
 
-  async function applyPublicProductNutrition(rows, tenantId) {
+  async function applyPublicProductNutrition(rows, tenantId, cache = new Map()) {
     const list = Array.isArray(rows) ? rows : [];
     const nutritionCache = await getPublicProductNutritionDetailsBatch(
       tenantId,
       list.filter((row) => row?.blocks_config?.nutrition !== false).map((row) => row?.id || row?.product_id),
-      new Map()
+      cache
     );
     for (const row of list) {
       const productId = Number(row?.id || row?.product_id || 0);
@@ -1847,8 +1848,21 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       .map(Number)
       .filter((id) => Number.isFinite(id) && id > 0 && !cache.has(id))));
     if (!ids.length) return cache;
-    const tree = await loadPublicNutritionTreeBatch(tenantId, ids);
+    // A loaded tree contains complete descendant subtrees, not just its roots.
+    // Reuse it lazily: do not calculate/cache every descendant unnecessarily.
+    const trees = [...new Set([...cache.values()].map(details => details?.tree).filter(Boolean))];
+    const treeById = new Map();
+    for (const id of ids) {
+      const tree = trees.find(candidate => candidate.products.has(id));
+      if (tree) treeById.set(id, tree);
+    }
+    const missing = ids.filter(id => !treeById.has(id));
+    if (missing.length) {
+      const tree = await loadPublicNutritionTreeBatch(tenantId, missing);
+      missing.forEach(id => treeById.set(id, tree));
+    }
     ids.forEach((id) => {
+      const tree = treeById.get(id);
       const result = buildPublicNutritionResult(id, tree);
       const product = tree.products.get(id) || null;
       const baseQtyGrams = product ? resolvePublicProductBaseQtyInGrams(product, tree) : null;
@@ -1934,7 +1948,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
   async function attachPublicVariantGramFactors(groupsByProductId, tenantId, cache = new Map()) {
     const map = groupsByProductId instanceof Map ? groupsByProductId : null;
     if (!map) return;
-    await getPublicProductNutritionDetailsBatch(tenantId, Array.from(map.keys()), cache);
+    const productIds = [...map].filter(([, groups]) => Array.isArray(groups) && groups.length).map(([id]) => id);
+    if (!productIds.length) return;
+    await getPublicProductNutritionDetailsBatch(tenantId, productIds, cache);
     for (const [productId, groups] of map.entries()) {
       const details = cache.get(Number(productId));
       if (!details || !Array.isArray(groups)) continue;
@@ -2928,7 +2944,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return `${Number(productId || 0)}:${Number(groupId || 0)}`;
   }
 
-  async function loadOptionItemExclusionsMap(tenantId, productIds, groupIds = []) {
+  async function loadOptionItemExclusionsMap(tenantId, productIds, groupIds = [], readCache = null) {
     const productIdsList = Array.from(new Set(
       (Array.isArray(productIds) ? productIds : [])
         .map((id) => Number(id))
@@ -2954,6 +2970,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       params.push(...groupIdsList);
     }
 
+    const cacheKey = readCache ? JSON.stringify(['option-exclusions', tenantId,
+      [...productIdsList].sort((a, b) => a - b), [...groupIdsList].sort((a, b) => a - b)]) : null;
+    if (readCache?.has(cacheKey)) return readCache.get(cacheKey);
     let rows;
     try {
       [rows] = await db.query(sql.join(' '), params);
@@ -2970,6 +2989,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (!result.has(key)) result.set(key, new Set());
       result.get(key).add(Number(row?.option_item_id || 0));
     });
+    readCache?.set(cacheKey, result);
     return result;
   }
 
@@ -2982,7 +3002,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return `${Number(productId || 0)}:${Number(groupId || 0)}`;
   }
 
-  async function loadVariantValueExclusionsMap(tenantId, productIds, groupIds = []) {
+  async function loadVariantValueExclusionsMap(tenantId, productIds, groupIds = [], readCache = null) {
     const productIdsList = Array.from(new Set(
       (Array.isArray(productIds) ? productIds : [])
         .map((id) => Number(id))
@@ -3008,6 +3028,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       params.push(...groupIdsList);
     }
 
+    const cacheKey = readCache ? JSON.stringify(['variant-exclusions', tenantId,
+      [...productIdsList].sort((a, b) => a - b), [...groupIdsList].sort((a, b) => a - b)]) : null;
+    if (readCache?.has(cacheKey)) return readCache.get(cacheKey);
     let rows;
     try {
       [rows] = await db.query(sql.join(' '), params);
@@ -3024,6 +3047,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (!result.has(key)) result.set(key, new Set());
       result.get(key).add(Number(row?.value_index));
     });
+    readCache?.set(cacheKey, result);
     return result;
   }
 
@@ -4849,7 +4873,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return roundPrice(minPrice);
   }
 
-  async function enrichProductsWithDisplayPrice(rows, tenantId, storeId) {
+  async function enrichProductsWithDisplayPrice(rows, tenantId, storeId, readCache = null) {
     if (!rows.length) return;
     const productIds = [...new Set(rows.map((r) => Number(r.id)).filter(Boolean))];
     if (!productIds.length) return;
@@ -4878,7 +4902,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     const getConversionFactor = getConversionFactorMap(tenantId, db);
 
     const placeholders = productIds.map(() => '?').join(',');
-    const [vaRows] = await db.query(
+    const variantProductIds = productIds.filter(id => (blocksConfigMap.get(id) || getDefaultProductBlocksConfig()).variants);
+    const [vaRows] = variantProductIds.length ? await db.query(
       `SELECT va.product_id, va.variant_group_id,
               COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index,
               vg.unit_id, vg.values, vg.sort_order,
@@ -4886,14 +4911,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
        FROM prod_variant_assignments va
        JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
        LEFT JOIN prod_units u ON u.id = vg.unit_id
-       WHERE va.tenant_id = ? AND va.product_id IN (${placeholders})
+       WHERE va.tenant_id = ? AND va.product_id IN (${variantProductIds.map(() => '?').join(',')})
          AND va.is_active = 1 AND vg.is_active = 1
        ORDER BY va.sort_order ASC, vg.sort_order ASC`,
-      [tenantId, ...productIds]
-    );
+      [tenantId, ...variantProductIds]
+    ) : [[]];
 
     const variantGroupIds = [...new Set(vaRows.map((r) => Number(r.variant_group_id)).filter(Boolean))];
-    const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, productIds, variantGroupIds);
+    const variantValueExclusionsByScope = variantGroupIds.length
+      ? await loadVariantValueExclusionsMap(tenantId, variantProductIds, variantGroupIds, readCache) : new Map();
     let tiersByGroup = new Map();
     if (variantGroupIds.length) {
       const tierPlaceholders = variantGroupIds.map(() => '?').join(',');
@@ -4976,11 +5002,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       });
       optionGroupIds.add(Number(row.group_id));
     }
-    const optionItemExclusionsByScope = await loadOptionItemExclusionsMap(
+    const optionItemExclusionsByScope = optionGroupIds.size ? await loadOptionItemExclusionsMap(
       tenantId,
       productIds,
-      Array.from(optionGroupIds)
-    );
+      Array.from(optionGroupIds),
+      readCache
+    ) : new Map();
     const optionItemSettingsByScope = new Map();
     if (optionGroupIds.size) {
       const [settingRows] = await db.query(
@@ -5066,7 +5093,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         const optionVariantGroupIds = Array.from(new Set(
           optionVariantRows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0)
         ));
-        const optionVariantExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, optionTargetProductIds, optionVariantGroupIds);
+        const optionVariantExclusionsByScope = optionVariantGroupIds.length
+          ? await loadVariantValueExclusionsMap(tenantId, optionTargetProductIds, optionVariantGroupIds, readCache) : new Map();
         const optionTiersByGroupId = new Map();
         if (optionVariantGroupIds.length > 0) {
           const [optionTierRows] = await db.query(
@@ -5262,7 +5290,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
    * @param {number} tenantId
    * @param {number} storeId
    */
-  async function enrichProductsWithDiscounts(rows, tenantId, storeId) {
+  async function enrichProductsWithDiscounts(rows, tenantId, storeId, valuationAt) {
     if (!rows.length) return;
 
     const productIds = rows.map(r => Number(r.id)).filter(Boolean);
@@ -5386,7 +5414,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       // Р СџРЎР‚РЎРЏР СРЎвЂ№Р Вµ РЎРѓР С”Р С‘Р Т‘Р С”Р С‘ Р Р…Р В° РЎвЂљР С•Р Р†Р В°РЎР‚
       const directDiscounts = discountsByProduct.get(pid) || [];
       for (const d of directDiscounts) {
-        if (!seenIds.has(d.id) && discountHelpers.isDiscountActive(d)) {
+        if (!seenIds.has(d.id) && discountHelpers.isDiscountActive(d, valuationAt)) {
           discounts.push(d);
           seenIds.add(d.id);
         }
@@ -5397,7 +5425,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       for (const catId of cats) {
         const catDiscounts = discountsByCategory.get(catId) || [];
         for (const d of catDiscounts) {
-          if (!seenIds.has(d.id) && discountHelpers.isDiscountActive(d)) {
+          if (!seenIds.has(d.id) && discountHelpers.isDiscountActive(d, valuationAt)) {
             discounts.push(d);
             seenIds.add(d.id);
           }
@@ -15352,7 +15380,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
-  async function buildPublicProductPassportDetails(tenantId, storeId, sortedIds) {
+  async function buildPublicProductPassportDetails(tenantId, storeId, sortedIds, nutritionCache = new Map(), options = {}) {
     const empty = { assignments: {}, ingredients: {}, variants: {}, optionGroupsByProduct: {}, defaultConfigs: {} };
     const ids = Array.isArray(sortedIds)
       ? sortedIds.map(Number).filter((id) => Number.isFinite(id) && id > 0)
@@ -15360,10 +15388,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     if (!ids.length) return empty;
 
     const placeholders = ids.map(() => '?').join(',');
-    const productBlockRows = await loadPublicProductBlockRows(tenantId, ids);
+    const seededRows = Array.isArray(options.products) ? options.products : null;
+    const productBlockRows = seededRows || await loadPublicProductBlockRows(tenantId, ids);
     const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
 
-    const [productRows] = await db.query(
+    const [productRows] = seededRows ? [seededRows] : await db.query(
       `SELECT id, name, price, base_unit_id, base_qty, unit_id
        FROM prod_products
        WHERE tenant_id=? AND id IN (${placeholders})`,
@@ -15474,7 +15503,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     const ingredients = {};
     ids.forEach((pid) => { ingredients[pid] = []; });
-    await attachPublicNutritionToIngredientRows(ingredientRows, tenantId);
+    await attachPublicNutritionToIngredientRows(ingredientRows, tenantId, nutritionCache);
     ingredientRows.forEach((r) => {
       r.ingredient_photos = safeJsonArray(r.ingredient_photos);
       const pid = Number(r.product_id);
@@ -15486,7 +15515,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!blocksConfig.ingredients) ingredients[pid] = [];
     });
 
-    const [variantRows] = await db.query(
+    const variantProductIds = ids.filter(id => (blocksConfigMap.get(id) || getDefaultProductBlocksConfig()).variants);
+    const [variantRows] = variantProductIds.length ? await db.query(
       `SELECT
          va.product_id,
          va.id AS assignment_id,
@@ -15504,14 +15534,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
        JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
        LEFT JOIN prod_units u ON u.id=vg.unit_id
        WHERE va.tenant_id=?
-         AND va.product_id IN (${placeholders})
+         AND va.product_id IN (${variantProductIds.map(() => '?').join(',')})
          AND va.is_active=1 AND vg.is_active=1
        ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
-      [tenantId, ...ids]
-    );
+      [tenantId, ...variantProductIds]
+    ) : [[]];
 
     const groupIds = Array.from(new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
-    const variantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, ids, groupIds);
+    const variantValueExclusionsByScope = groupIds.length
+      ? await loadVariantValueExclusionsMap(tenantId, variantProductIds, groupIds, options.readCache) : new Map();
     const tiersByGroupId = new Map();
     if (groupIds.length) {
       const tierPlaceholders = groupIds.map(() => '?').join(',');
@@ -15558,7 +15589,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         discount_tiers: variantData.discount_tiers,
       });
     }
-    await attachPublicVariantGramFactors(new Map(ids.map((pid) => [Number(pid), variants[pid] || []])), tenantId);
+    await attachPublicVariantGramFactors(new Map(ids.map((pid) => [Number(pid), variants[pid] || []])), tenantId, nutritionCache);
     ids.forEach((pid) => {
       const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
       if (!blocksConfig.variants) variants[pid] = [];
@@ -15568,7 +15599,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const optionGroupsById = {};
     const optionSettingsByScope = new Map();
     const optionItemExclusionsByScope = optionGroupIds.length
-      ? await loadOptionItemExclusionsMap(tenantId, ids, optionGroupIds)
+      ? await loadOptionItemExclusionsMap(tenantId, ids, optionGroupIds, options.readCache)
       : new Map();
     if (optionGroupIds.length) {
       const groupPlaceholders = optionGroupIds.map(() => '?').join(',');
@@ -15652,7 +15683,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           [tenantId, ...optionTargetProductIds]
         );
         const optionVariantGroupIds = Array.from(new Set(optionVariantRows.map((va) => Number(va.variant_group_id)).filter(Number.isFinite)));
-        const optionVariantValueExclusionsByScope = await loadVariantValueExclusionsMap(tenantId, optionTargetProductIds, optionVariantGroupIds);
+        const optionVariantValueExclusionsByScope = optionVariantGroupIds.length
+          ? await loadVariantValueExclusionsMap(tenantId, optionTargetProductIds, optionVariantGroupIds, options.readCache) : new Map();
         const optionTiersByGroupId = new Map();
         if (optionVariantGroupIds.length) {
           const optionTierPlaceholders = optionVariantGroupIds.map(() => '?').join(',');
@@ -15696,10 +15728,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             discount_tiers: variantData.discount_tiers,
           });
         }
-        await attachPublicVariantGramFactors(optionVariantsByProductId, tenantId);
+        await attachPublicVariantGramFactors(optionVariantsByProductId, tenantId, nutritionCache);
       }
 
-      await attachPublicNutritionToOptionItemRows(items, tenantId);
+      await attachPublicNutritionToOptionItemRows(items, tenantId, nutritionCache);
       const itemsByGroupId = new Map();
       items.forEach((item) => {
         const gid = Number(item.group_id || 0);
@@ -16041,7 +16073,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
        ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
       [storeId, tenantId, ...ids]
     );
-    await attachPublicNutritionToIngredientRows(ingredientRows, tenantId);
+    await attachPublicNutritionToIngredientRows(ingredientRows, tenantId, options.nutritionCache);
 
     const ingredientsByProductId = {};
     ids.forEach((id) => { ingredientsByProductId[id] = []; });
@@ -16450,89 +16482,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return map;
   }
 
-  function buildPublicFullProductPassport(product, details, support, availabilityByProductId) {
-    const productId = Number(product?.id || 0);
-    const stock = support.stockByProductId?.[productId] || {
-      product_id: productId,
-      store_id: null,
-      stock_qty: product?.stock_qty != null ? Number(product.stock_qty) : null,
-      qty: product?.stock_qty != null ? Number(product.stock_qty) : null,
-      is_unlimited: product?.stock_qty == null,
-      updated_at: null,
-    };
-    const availability = availabilityByProductId?.get(productId) || null;
-    const isAvailable = availability
-      ? availability.isAvailable !== false && availability.is_available !== false
-      : (product?.is_available === true || Number(product?.is_available || 0) === 1);
-    return {
-      product,
-      units: support.unitsById || {},
-      unitConversions: support.unitConversions || [],
-      productUnitLinks: support.productUnitLinksByProductId?.[productId] || [],
-      stock,
-      availability: availability || {
-        product_id: productId,
-        productId,
-        stock_qty: stock.stock_qty,
-        qty: stock.qty,
-        is_unlimited: stock.is_unlimited,
-        isUnlimited: stock.is_unlimited,
-        is_available: isAvailable,
-        isAvailable,
-        max_qty: stock.stock_qty == null ? null : Number(stock.stock_qty),
-        maxQty: stock.stock_qty == null ? null : Number(stock.stock_qty),
-        remaining_qty: stock.stock_qty == null ? null : Number(stock.stock_qty),
-        remainingQty: stock.stock_qty == null ? null : Number(stock.stock_qty),
-        requirements: [],
-      },
-      ingredients: support.ingredientsByProductId?.[productId] || [],
-      nestedIngredients: support.nestedIngredientsByProductId || {},
-      variants: Array.isArray(details.variants?.[productId]) ? details.variants[productId] : [],
-      options: Array.isArray(details.optionGroupsByProduct?.[productId]) ? details.optionGroupsByProduct[productId] : [],
-      optionAssignments: Array.isArray(details.assignments?.[productId]) ? details.assignments[productId] : [],
-      defaultConfig: details.defaultConfigs?.[productId] || null,
-      comboRefs: support.comboRefsByProductId?.[productId] || [],
-      editor: {
-        schema_version: 'product-editor-v1',
-        categories: (Array.isArray(product?.category_ids) ? product.category_ids : [])
-          .map((id) => ({ id: Number(id) }))
-          .filter((item) => item.id > 0),
-        discounts: support.discountsByProductId?.[productId] || [],
-        relatedProductUnitLinks: support.productUnitLinksByProductId || {},
-      },
-      benefits: {
-        discount: product?.discount || null,
-        buy_x_get_y_badge: product?.buy_x_get_y_badge || null,
-      },
-      texts: {
-        description_short: product?.description_short || null,
-        description: product?.description || null,
-        client_composition: product?.client_composition || null,
-        tech_process: product?.tech_process || null,
-        show_description_short: product?.show_description_short,
-        show_description: product?.show_description,
-        show_client_composition: product?.show_client_composition,
-        show_tech_process: product?.show_tech_process,
-      },
-      visibility: {
-        is_active: Number(product?.is_active || 0) === 1,
-        site_visibility: Number(product?.site_visibility || 0) === 1,
-        is_available: isAvailable,
-      },
-      nutrition: {
-        nutrition_per_100g: product?.nutrition_per_100g || null,
-        nutrition_per_portion: product?.nutrition_per_portion || null,
-        nutrition_portion_grams: product?.nutrition_portion_grams ?? null,
-        nutrition_incomplete: Boolean(product?.nutrition_incomplete),
-      },
-      revision: {
-        updated_at: product?.updated_at || product?.updatedAt || null,
-        revision: product?.updated_at || product?.updatedAt || null,
-        data_version: 'full-product-passport-v1',
-      },
-    };
-  }
-
   function pickPublicFields(source, fields) {
     const result = {};
     if (!source || typeof source !== 'object') return result;
@@ -16602,19 +16551,38 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     };
   }
 
-  async function buildFullProductPassportsPayload(tenantId, storeId, ids, options = {}) {
+  async function* prepareFullProductPassports(tenantId, storeId, ids, options = {}) {
+      // Per-build only: never share private editor data between requests/scopes.
+      const nutritionCache = new Map();
+      const measure = async (name, operation) => {
+        if (options.preparationBudget) db.assertPreparationBudget(options.preparationBudget);
+        if (typeof options.onStage !== 'function') return operation();
+        const started = process.hrtime.bigint();
+        const metrics = db.getCurrentRequestMetrics?.();
+        const beforeCount = Number(metrics?.dbQueryCount || 0);
+        const beforeMs = Number(metrics?.dbQueryMs || 0);
+        try {
+          return await operation();
+        } finally {
+          options.onStage({ name, ms: Number(process.hrtime.bigint() - started) / 1e6,
+            queries: Number(metrics?.dbQueryCount || 0) - beforeCount,
+            dbMs: Number(metrics?.dbQueryMs || 0) - beforeMs });
+        }
+      };
       const sortedIds = [...ids].sort((a, b) => a - b);
-      const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
       const includeInactiveHidden = options.includeInactiveHidden === true;
-      const cacheKey = makePublicCacheKey(
-        includeInactiveHidden ? 'admin-products-batch-full-passports-v1' : 'products-batch-full-passports-v2',
-        { tenantId, storeId, ids: sortedIds, productsStamp }
-      );
-      const cached = includeInactiveHidden ? null : getPublicCache(cacheKey);
+      const readCache = includeInactiveHidden ? new Map() : null;
+      let cacheKey = null;
+      if (!includeInactiveHidden) {
+        const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
+        cacheKey = makePublicCacheKey('products-batch-full-passports-v2',
+          { tenantId, storeId, ids: sortedIds, productsStamp });
+      }
+      const cached = cacheKey ? getPublicCache(cacheKey) : null;
       if (cached) return { payload: cached, cacheStatus: 'HIT' };
 
       const placeholders = ids.map(() => '?').join(',');
-      const [rows] = await db.query(
+      const [rows] = await measure('products', () => db.query(
         `SELECT p.*, s.qty AS stock_qty
          FROM prod_products p
          LEFT JOIN prod_product_stocks s
@@ -16622,43 +16590,73 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          WHERE p.tenant_id=? AND p.id IN (${placeholders})
            ${includeInactiveHidden ? '' : 'AND p.is_active=1 AND p.site_visibility=1'}`,
         [storeId, tenantId, ...ids]
-      );
+      ));
+      yield 'products';
 
+      // Capture the original DB fields before price/visibility enrichments mutate rows.
+      const detailProducts = includeInactiveHidden ? rows.map(product => ({
+        id: product.id, name: product.name, price: product.price,
+        base_unit_id: product.base_unit_id, base_qty: product.base_qty,
+        unit_id: product.unit_id, blocks_config_json: product.blocks_config_json,
+      })) : null;
       for (const p of rows) {
         p.photos = safeJsonArray(p.photos_json);
         attachProductThumbs(p);
         p.is_available = p.stock_qty == null || Number(p.stock_qty) > 0;
       }
-      await applyPublicProductAvailability(rows, tenantId, storeId);
-      await applyPublicProductBlocksToRows(rows, tenantId, storeId);
-      await applyPublicProductNutrition(rows, tenantId);
-      await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
-      await enrichProductsWithDiscounts(rows, tenantId, storeId);
-      await attachPublicProductCategoryIds(rows, tenantId);
+      await measure('availability', () => applyPublicProductAvailability(rows, tenantId, storeId));
+      yield 'availability';
+      await measure('blocks', () => applyPublicProductBlocksToRows(rows, tenantId, storeId));
+      yield 'blocks';
+      await measure('nutrition', () => applyPublicProductNutrition(rows, tenantId, nutritionCache));
+      yield 'nutrition';
+      await measure('prices', () => enrichProductsWithDisplayPrice(rows, tenantId, storeId, readCache));
+      yield 'prices';
+      await measure('discounts', () => enrichProductsWithDiscounts(rows, tenantId, storeId, options.valuationAt));
+      yield 'discounts';
+      await measure('categories', () => attachPublicProductCategoryIds(rows, tenantId));
+      yield 'categories';
 
       const rowIds = rows.map((row) => Number(row.id || 0)).filter((id) => id > 0).sort((a, b) => a - b);
-      const details = await buildPublicProductPassportDetails(tenantId, storeId, rowIds);
-      const support = await buildPublicFullProductPassportSupport(tenantId, storeId, rowIds, {
+      const details = await measure('details', () => buildPublicProductPassportDetails(tenantId, storeId, rowIds, nutritionCache,
+        { products: detailProducts, readCache }));
+      yield 'details';
+      const support = await measure('support', () => buildPublicFullProductPassportSupport(tenantId, storeId, rowIds, {
         includeEditorData: includeInactiveHidden,
-      });
-      const availabilityByProductId = await buildPublicFullProductAvailabilityMap(tenantId, storeId, rows, details);
+        nutritionCache,
+      }));
+      yield 'support';
+      const availabilityByProductId = await measure('stock', () => buildPublicFullProductAvailabilityMap(tenantId, storeId, rows, details));
+      yield 'stock';
 
       const data = {};
       const versions = {};
-      rows.forEach((product) => {
+      await measure('assemble', () => rows.forEach((product) => {
         const id = Number(product?.id || 0);
         if (!(id > 0)) return;
         const passport = buildPublicFullProductPassport(product, details, support, availabilityByProductId);
         data[String(id)] = includeInactiveHidden ? passport : sanitizePublicProductPassport(passport);
         versions[String(id)] = product.updated_at || product.updatedAt || null;
-      });
+      }));
 
       const payload = { ok: true, data, versions };
       if (!includeInactiveHidden) setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productsBatchPassports);
       return { payload, cacheStatus: 'MISS' };
   }
 
-  router.buildAdminFullProductPassports = async ({ tenantId, storeId, productIds }) => {
+  async function buildFullProductPassportsPayload(tenantId, storeId, ids, options = {}) {
+    const preparation = prepareFullProductPassports(tenantId, storeId, ids, options);
+    let step;
+    do { step = await preparation.next(); } while (!step.done);
+    return step.value;
+  }
+
+  // The same calculations, order and DTO as foreground. Only this explicit
+  // private consumer advances one stage per idle request; no formula is copied.
+  router.prepareAdminProductPassport = ({ tenantId, storeId, productId, valuationAt, onStage, preparationBudget }) =>
+    prepareFullProductPassports(tenantId, storeId, [productId], { includeInactiveHidden: true, valuationAt, onStage, preparationBudget });
+
+  router.buildAdminFullProductPassports = async ({ tenantId, storeId, productIds, onStage, valuationAt }) => {
     const ids = getPositiveIds(productIds);
     if (!ids.length) return { ok: true, data: {}, versions: {} };
     if (ids.length > 100) {
@@ -16666,7 +16664,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       error.code = 'TOO_MANY';
       throw error;
     }
-    const result = await buildFullProductPassportsPayload(tenantId, storeId, ids, { includeInactiveHidden: true });
+    const result = await buildFullProductPassportsPayload(tenantId, storeId, ids, { includeInactiveHidden: true, onStage, valuationAt });
     return result.payload;
   };
 

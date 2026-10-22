@@ -124,6 +124,7 @@
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
   const initialAccessNamespace = localRepository.create({ domain: 'orders:workspace-access', version: 1 }).namespace;
   let ordersLastSyncedAt = null;
+  let ordersPreparedPartial = false;
   function workspaceAccessIsCurrent() {
     return localRepository.isActive()
       && localRepository.create({ domain: 'orders:workspace-access', version: 1 }).namespace === initialAccessNamespace;
@@ -1483,7 +1484,8 @@
 
     const currentTitle = String(currentStatus.title || "").trim() || "\u042d\u0442\u0430\u043f";
     const isFinal = isFinalStatusMeta(currentStatus);
-    const canCycle = !isFinal && Number.isFinite(nextStatusId) && nextStatusId > 0 && nextStatusId !== Number(currentStatus?.id || 0);
+    const canCycle = !(order.offline_summary === true && !isFullOrder(order))
+      && !isFinal && Number.isFinite(nextStatusId) && nextStatusId > 0 && nextStatusId !== Number(currentStatus?.id || 0);
     const nextTitle = canCycle ? (String(nextStatus.title || "").trim() || currentTitle) : currentTitle;
     const titleText = canCycle
       ? `${currentTitle} -> ${nextTitle}`
@@ -2390,8 +2392,12 @@
           if (typeof context.onBack === "function") return context.onBack(reason);
           return null;
         },
-        onError(error) {
+        onError(error, orderId) {
           console.error("order details open error:", error);
+          if (workspaceAccessIsCurrent() && error.message === 'ORDER_DETAILS_NOT_FOUND'
+              && state.orders.some(order => Number(order.id) === Number(orderId) && order.offline_summary === true)) {
+            alert('Полная карточка этого заказа не сохранена. Для её загрузки нужен доступ к серверу.');
+          }
         },
       })
     : null;
@@ -4781,6 +4787,9 @@
           return { ...entry.data, stale: entry.stale === true };
         }
       }
+      if (!isCourierWorkspace && window.AdminOrdersCache) {
+        return await window.AdminOrdersCache.readPrepared();
+      }
       return null;
     } catch (err) {
       console.error("Orders IndexedDB read failed:", err);
@@ -4788,10 +4797,28 @@
     }
   }
 
-  function restorePersistentOrdersSnapshot(snapshot) {
+  function restorePersistentOrdersSnapshot(snapshot, { preserveDate = false } = {}) {
     if (!workspaceAccessIsCurrent()) return false;
     if (!Array.isArray(snapshot?.orders)) return false;
+    ordersPreparedPartial = !isCourierWorkspace && snapshot.partial === true;
+    if (snapshot.prepared === true) {
+      state.storeTimezone = snapshot.storeTimezone;
+      if (!preserveDate) resetDateStateToToday();
+      ordersLastSyncedAt = snapshot.confirmedAt;
+    }
     state.orders = snapshot.orders.filter(shouldKeepOrderInState);
+    if (snapshot.prepared === true) {
+      const statuses = new Map();
+      state.orders.forEach(order => {
+        if (!(Number(order.status_id) > 0)) return;
+        const status = statuses.get(order.status_id) || { id: order.status_id, code: order.status_code,
+          title: order.status_title, color: order.status_color, count: 0 };
+        status.count += 1;
+        statuses.set(order.status_id, status);
+      });
+      state.statuses = [...statuses.values()];
+      state.activeStatusId = 'all';
+    }
     if (Array.isArray(snapshot.statuses)) {
       state.statuses = snapshot.statuses.map((status) => ({ ...status }));
     }
@@ -4810,6 +4837,8 @@
 
   function persistOrdersListCache() {
     if (!workspaceAccessIsCurrent()) return Promise.resolve(false);
+    // Prepared summaries must never replace an authoritative working snapshot.
+    if (!isCourierWorkspace && ordersPreparedPartial) return Promise.resolve(true);
     const data = {
       ts: Date.now(),
       orders: state.orders.map((order) => ({ ...order })),
@@ -4824,7 +4853,10 @@
       ? ORDERS_PERSISTENT_CACHE_MAX_AGE_MS
       : ORDERS_WORKSPACE_CACHE_MAX_AGE_MS;
     if (!cache?.complete) return Promise.resolve(false);
-    const writePromise = cache.set(ordersPersistentEntryKey(), data, { ttlMs, lastSyncedAt: ordersLastSyncedAt });
+    const options = { ttlMs, lastSyncedAt: ordersLastSyncedAt };
+    const writePromise = !isCourierWorkspace && window.AdminOrdersCache
+      ? window.AdminOrdersCache.writeWorkspace(cache, ordersPersistentEntryKey(), data, options)
+      : cache.set(ordersPersistentEntryKey(), data, options);
     return writePromise.then(() => {
       if (isCourierWorkspace) {
         courierCachedSnapshotVisible = true;
@@ -4850,6 +4882,10 @@
 
   async function openOrderPaymentDialog(order) {
     if (!workspaceAccessIsCurrent() || hasPendingCourierPayment(order)) return;
+    if (order?.offline_summary === true && !isFullOrder(order)) {
+      alert('Для оплаты нужна полная карточка заказа. Откройте её при доступном сервере.');
+      return;
+    }
     if (!getActiveOrderCapabilities().payment) return;
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
@@ -6068,11 +6104,12 @@
       return;
     }
 
-    const allCount = state.statuses.reduce((acc, s) => acc + Number(s.count || 0), 0);
+    const allCount = ordersPreparedPartial ? state.orders.length
+      : state.statuses.reduce((acc, s) => acc + Number(s.count || 0), 0);
 
     elStagesList.appendChild(stageButton({
       id: "all",
-      title: "Все заказы",
+      title: ordersPreparedPartial ? "Сохранённые заказы" : "Все заказы",
       icon: "fa-layer-group",
       count: allCount,
     }));
@@ -6245,7 +6282,8 @@
   function syncOrdersListEmptyState() {
     if (!elOrdersList || !elEmptyHint) return;
     const hasRows = !!elOrdersList.querySelector(".order-row");
-    elEmptyHint.classList.toggle("hidden", hasRows);
+    elEmptyHint.classList.toggle("hidden", hasRows && !ordersPreparedPartial);
+    if (ordersPreparedPartial) elEmptyHint.textContent = 'Показана сохранённая часть заказов за выбранный период.';
   }
 
   function removeOrderRowFromDom(orderId) {
@@ -6276,12 +6314,15 @@
     row.setAttribute("data-order-id", String(order.id));
     const orderId = Number(order?.id || 0);
     const multiSelected = isOrderMultiSelected(orderId);
+    const summaryOnly = order.offline_summary === true && !isFullOrder(order);
+    row.setAttribute('draggable', isCourierWorkspace || summaryOnly ? 'false' : 'true');
 
     const timeIconHtml = sharedOrderPanel && typeof sharedOrderPanel.renderOrderTimeIcon === "function"
       ? sharedOrderPanel.renderOrderTimeIcon(order)
       : renderOrderTimeIcon(order);
     const stageCycleBtnHtml = renderOrderStatusControl(order);
-    const addressCommentDisplay = String(order.address_comment || order.comment || "Нет комментария");
+    const addressCommentDisplay = summaryOnly ? 'Комментарий не сохранён'
+      : String(order.address_comment || order.comment || "Нет комментария");
     const rawAddress = String(order.address ||
       (order.pickup_store_address
         ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
@@ -6331,14 +6372,15 @@
     const paymentCode = (order.payment_code || "").toLowerCase();
     const isCash = paymentCode.includes("cash");
     const isFullyRefunded = isOrderFullyRefunded(order);
-    const paymentIconHtml = renderOrderPaymentIcon(order);
-    const paymentStatusText = hasPendingCourierPayment(order) ? 'В очереди' : order.paymentSummary && window.SharedOrderPayment
+    const paymentIconHtml = summaryOnly ? '' : renderOrderPaymentIcon(order);
+    const paymentStatusText = summaryOnly ? 'Сведения об оплате не сохранены'
+      : hasPendingCourierPayment(order) ? 'В очереди' : order.paymentSummary && window.SharedOrderPayment
       ? window.SharedOrderPayment.stateTitle(order.paymentSummary)
       : isFullyRefunded ? "Возврат" : (isPaidOrder(order) ? "Оплачено" : "Не оплачено");
-    const paymentStateClass = isFullyRefunded
+    const paymentStateClass = summaryOnly ? '' : isFullyRefunded
       ? "order-payment-refund"
       : (isPaidOrder(order) ? "order-payment-paid" : "order-payment-unpaid");
-    const paymentTypeClass = isCash ? "order-payment-cash" : "order-payment-card";
+    const paymentTypeClass = summaryOnly ? '' : isCash ? "order-payment-cash" : "order-payment-card";
     const paymentHtml = sharedOrderPanel && typeof sharedOrderPanel.buildOrderPaymentButtonHtml === "function"
       ? sharedOrderPanel.buildOrderPaymentButtonHtml({
         paymentTypeClass,
@@ -6524,7 +6566,7 @@
       </div>
 
       <div class="order-col order-total">
-        <button class="order-payment-btn ${isCash ? "order-payment-cash" : "order-payment-card"} ${paymentStateClass}" type="button"${payment ? ` title="${escapeHtml(payment)}"` : ""}>
+        <button class="order-payment-btn ${paymentTypeClass} ${paymentStateClass}" type="button"${payment ? ` title="${escapeHtml(payment)}"` : ""}>
           <span class="order-payment-btn-icon">${paymentIconHtml}</span>
           <span class="order-payment-btn-content">
             <span class="order-payment-btn-total">${escapeHtml(totalText)}</span>
@@ -6557,7 +6599,7 @@
             ? "Нет сохранённых данных для этого периода."
             : "Загрузка заказов…";
         } else {
-          elEmptyHint.textContent = "Заказов нет";
+          elEmptyHint.textContent = ordersPreparedPartial ? 'В сохранённой части нет заказов за этот период.' : "Заказов нет";
         }
         elEmptyHint.classList.remove("hidden");
       }
@@ -6568,7 +6610,10 @@
       schedulePersistOrdersCache();
       return;
     }
-    if (elEmptyHint) elEmptyHint.classList.add("hidden");
+    if (elEmptyHint) {
+      elEmptyHint.classList.toggle('hidden', !ordersPreparedPartial);
+      if (ordersPreparedPartial) elEmptyHint.textContent = 'Показана сохранённая часть заказов за выбранный период.';
+    }
 
     filtered.forEach((o) => {
       const row = buildOrderRow(o);
@@ -6643,7 +6688,7 @@
 
   async function loadOrders({ resetPagination = true, append = false, context = null } = {}) {
     const queryGeneration = resetPagination ? ++ordersQueryGeneration : ordersQueryGeneration;
-    const keepRestoredPagination = resetPagination && ordersPersistentCacheRestored && state.orders.length > 0;
+    const keepRestoredPagination = resetPagination && ordersPersistentCacheRestored && !ordersPreparedPartial && state.orders.length > 0;
     if (resetPagination && !keepRestoredPagination) {
       state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
     }
@@ -6660,7 +6705,7 @@
     if (queryGeneration !== ordersQueryGeneration
       || (context && !isCurrentCourierSyncContext(context))) return false;
     const rows = Array.isArray(json.data) ? json.data : [];
-    if (resetPagination && (!ordersPersistentCacheRestored || !state.orders.length)) {
+    if (resetPagination && (ordersPreparedPartial || !ordersPersistentCacheRestored || !state.orders.length)) {
       state.orders = rows.filter(shouldKeepOrderInState);
     } else {
       const existingIds = new Set(state.orders.map((order) => Number(order?.id || 0)));
@@ -6672,6 +6717,7 @@
         else if (!existingIds.has(id)) state.orders.push(order);
       });
     }
+    ordersPreparedPartial = false;
     ordersPersistentCacheRestored = false;
     state.ordersPagination.hasMore = json.has_more === true || (keepRestoredPagination && state.ordersPagination.hasMore);
     if (resetPagination || append) {
@@ -6775,6 +6821,25 @@
   function applyDateFilter(closePopover = true) {
     updateDateLabel();
     schedulePersistOrdersCache(0);
+    if (!isCourierWorkspace && (navigator.onLine === false || window.AdminAccessContext?.offline)) {
+      const query = currentOrdersQueryKey(), access = ordersPersistentScope();
+      void readPersistentOrdersCache().then(snapshot => {
+        if (!access?.isCurrent() || query !== currentOrdersQueryKey()) return;
+        if (!restorePersistentOrdersSnapshot(snapshot, { preserveDate: true })) {
+          state.orders = [];
+          state.statuses = [];
+          ordersPreparedPartial = false;
+          ordersCachedSnapshotVisible = false;
+          ordersNetworkConfirmed = false;
+          ordersRefreshFailed = true;
+          rebuildOrdersStageIndex();
+        }
+        renderStages();
+        renderOrders();
+      }).catch(console.error);
+      if (closePopover) closeDatePopover();
+      return;
+    }
     if (!isCourierWorkspace) {
       ordersPersistentCacheRestored = false;
       ordersCachedSnapshotVisible = false;
@@ -7143,6 +7208,7 @@
         ...(isFullOrder(nextOrder) ? { items: nextOrder.items } : {}),
       };
       nextOrder = state.orders[idx];
+      if (!localOnly && order.offline_summary !== true) delete nextOrder.offline_summary;
     } else {
       state.orders.unshift(nextOrder);
     }
@@ -8796,6 +8862,7 @@
   }
 
   function ensureActiveStatusSelection() {
+    if (!isCourierWorkspace && ordersPreparedPartial) { state.activeStatusId = 'all'; return; }
     if (isCourierWorkspace) {
       const hasCurrent = courierBucketDefs.some((bucket) => String(bucket.id) === String(state.activeStatusId));
       if (!hasCurrent) {
