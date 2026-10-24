@@ -97,7 +97,7 @@ function beginForeground() {
 module.exports = { run, beginForeground, limits: LIMITS,
   trackForeground(req, res, next) {
     if (process.env.CATALOG_EXPORT_CAPTURE !== '1' && process.env.CATALOG_EXPORT_PUBLISHING !== '1'
-        && process.env.CATALOG_EXPORT_LIGHT !== '1') return next();
+        && process.env.CATALOG_EXPORT_LIGHT !== '1' && process.env.CATALOG_EXPORT_CRM_LIGHT !== '1') return next();
     // This middleware only counts demand; it never delays/aborts a working API.
     // SSE/long polling must not permanently hold the foreground counter.
     if (req.path === '/admin/catalog/passport-exports' || req.path.startsWith('/admin/catalog/passport-exports/')) {

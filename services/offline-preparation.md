@@ -1,4 +1,408 @@
-# A4.2: аудит, границы и первый вертикальный срез
+# CRM: Online-first + Offline Read Cache + Courier Offline Write
+
+## Courier V2: журнал диагностической приёмки 2026-10-23
+
+Только `a1186497_test`, tenant 1. Маркер: `TEST_COURIER_V2_20261023_1792736329052`.
+Изолированный HTTP origin `http://127.0.0.1:3100`, диагностический процесс 10900;
+основной процесс 3684 / порт 3000 не изменялся.
+Созданы пользователи 12 (курьер), 13 (администратор без courier grants), роли 9/10,
+связи этих пользователей с магазином 1 и своими ролями; заказы 625–628.
+Заказы имеют пустой состав, нулевую стоимость, customer_id=NULL, статус 3,
+без оплаты, бонусов и списаний. Заказ 628 назначен пользователю 13 для проверки
+запрета доступа; остальные — пользователю 12. Пароли в журнал не записываются.
+Тестовые объекты не удаляются автоматически. Миграции и catalog gates не включались.
+После точечного исправления обновления courier_source добавлены заказы 631/632
+с теми же нулевыми параметрами и delivery_type_id=4. Начальным заказам 625–628
+исправлен только тестовый delivery_type_id: 1 (в зале) → 4 (доставка).
+В тестовой роли 9 временно удалялось и восстановлено только право 97
+(courier.orders.update), для проверки отказа replay после отзыва.
+Тестовый процесс 10900 заменён процессом 15812 на том же порту 3100 для
+проверки исправления; основной 3684 не перезапускался. Глобальный .env не менялся.
+Для проверки совмещённых прав тестовой роли 9 добавлены 96 отсутствовавших
+non-courier прав `*.read`, `*.access` и `orders.status`; исходные courier grants
+сохранены как `assigned`. Пользователь 13 и роль 10 по-прежнему не имеют courier прав.
+Изменения относятся только к созданным здесь тестовым объектам.
+После второй точечной правки тестовый процесс 15812 заменён на 12088.
+Финальный диагностический процесс — 12088 / 3100, SW `2-1792750323123`;
+его версия подтверждена ответом контролирующего worker на OFFLINE_RESOURCE_PLAN.
+
+Фактические результаты (Chrome, отдельный профиль; не запуск тестовых наборов):
+
+| Критичный сценарий | Результат и свидетельство |
+| --- | --- |
+| Offline status → replay | PASS: 625, 3→4, revision 2→3; outbox confirmed |
+| Тот же action ID / другая вкладка | PASS: replay=true, revision осталась 3 |
+| Одновременный новый ID из двух вкладок | PASS: direct HTTP non_delivery для 632, ID 5c840c72-9405-40e9-bc29-e08f0834a4a8; оба 200, один replay=true, одна ledger row, revision осталась 2. Это серверная диагностика, не два независимых outbox |
+| Недоставка и повреждение | PASS: два confirmed receipt для 626; статус 3/revision 2 не изменились |
+| Конкурентный admin status | PASS: 626, старый base=2 → 409 COURIER_ORDER_CHANGED, observed revision=3; исходная команда сохранена |
+| Переназначение | PASS: 625 назначен тестовому пользователю 13 через штатный API; новая команда отклонена COURIER_ORDER_NOT_ASSIGNED, observed=null |
+| Отзыв права | PASS: replay вернул 403 при отсутствии grant 97; grant восстановлен |
+| Потеря ответа после commit | PASS с CDP-перехватом response: 627, одна квитанция, revision=3 после четырёх попыток; outbox confirmed |
+| Невалидный store | PASS: -1/0/01/1e0/text → 400; store 2 → 404; без токена → 401 |
+| Пользователь без courier grant | PASS: courier replay → 403; обычный offline status не создал PUT, заказ 628 не изменился |
+| Совмещённые права вне courier workspace | PASS: тот же пользователь 12 имеет courier.orders.update и orders.status; offline orders API не создал HTTP-записи, outbox не изменился |
+| Повтор после исправлений | PASS: 632, offline status base=1 confirmed; карточка revision=2; следующее offline damage base=2 confirmed |
+| Закрытие всех тестовых вкладок / новая вкладка offline | FAIL для автономного UI: shell 200 из SW, но sessionStorage proof отсутствует, личные данные закрыты |
+| Сохранность и продолжение после закрытия | PASS: outbox побайтно совпал, action 2b2e8f73-26f6-43a5-aa8d-a6fc3d48b566 остался pending; после online подтверждён с первой попытки, одна server receipt |
+| Team roles при refresh | PASS с задержанным bootstrap response: rolesVisible=true, disabled=false при «Обновляем» |
+| Девять offline-shell финальной версии | PASS: cash/products/orders/courier-screen/new-order/clients/chat/team/settings — 200 из SW, active=true, neutral=false; у каждой сохранённой оболочки 0 отсутствующих зависимостей |
+
+Последний пункт не означает полноту данных девяти модулей. Полные read-наборы
+не загружались, тяжёлый каталог и паспортный download не включались.
+
+Для полной навигационной offline-диагностики сеть отключалась через CDP как у
+страницы, так и у активного SW. Контрольный некешируемый fetch завершился
+TypeError: Failed to fetch. Одного navigator.onLine для такого вывода недостаточно.
+Для всех шести маркированных заказов подтверждены is_paid=0, stock_document_id=NULL,
+stock_deducted_at=NULL; связанных складских документов ORD-*, discount usage и refunds — 0.
+Catalog revisions/coverage по scopes 0/1/2 остались 0/0. Main CRM и shop на 3000
+отвечают 200; это проверка доступности, не доказательство полного checkout/payment regression PASS.
+Новые server-side фоновые задания у диагностического процесса отключены.
+
+Исправлены два клиентских дефекта: после подтверждённого replay статуса обновляется
+только изменённая рабочая карточка (без дублирующего GET онлайн-клика); при замене
+runtime карточки summary используется существующий scoped полный паспорт из IDB.
+На 632 измерено 3610,3 мс HTTP / 3604,4 мс app / 3324,1 мс DB, 25 queries,
+0,5 мс acquire. Это один нулевой тестовый заказ, не нагрузочная оценка VPS.
+
+Холодный offline-запуск заблокирован tab-scoped proof в AdminLocalRepository.restore().
+Не переносить его в localStorage и не снимать проверку: постоянное подтверждение
+офлайн-доступа требует отдельно согласованного изменения границы авторизации.
+Второй tenant, реальные финансовые сценарии и нагрузка 50 tenants — NOT TESTED.
+Финальные статические проверки: node --check для 26 JS, компиляция четырёх
+изменённых EJS и git diff --check — PASS. Наборы тестов не запускались.
+
+## Действующее решение — 2026-10-23
+
+Этот раздел заменяет прежнюю цель универсальной offline-first записи. Ниже
+сохранена история A4 без удаления подготовленного кода и пользовательских данных.
+
+- Сервер — источник истины. Девять разделов используют существующие scoped
+  read caches и настоящие offline-shell; неполные наборы остаются неполными.
+- Административные, товарные, финансовые операции и отправка чата — только
+  online. Новый заказ может сохранять локальный черновик, но не отправку.
+- Единственная очередь offline write — существующий courier outbox. Право
+  определяется operation permission и назначением, не названием роли/аккаунта.
+  Оплата/возврат/списание не становятся локальным финансовым подтверждением.
+- Для courier replay обязательны прежние tenant/store/user/RBAC проверки,
+  стабильный mutation ID, исходное состояние заказа и отсутствие last-write-wins.
+  Противоречивые события сохраняются; небезопасная операция не отправляется
+  через legacy endpoint без проверки исходного состояния.
+- Подготовка read caches сохраняет idle_only: 60 s после реального действия,
+  один bounded HTTP, deadline 8 s. Outbox/realtime не ждут idle. Скрытое окно
+  само по себе не блокирует работу.
+- Revisions-only 012 остаётся в a1186497_test, coverage=0. Writer-only hooks,
+  полный transfer/download/CAS НЕ включаются ради старого плана. Immutable
+  паспорта больше не prerequisite для ограниченного offline read cache;
+  прежние DTO/helpers не удаляются и бизнес-формулы не меняются.
+  Старый scripts/activate-catalog-writers.ps1 сохранён, но не запускался и
+  больше не является следующим шагом этого плана.
+
+### Обновлённый порядок внедрения
+
+1. Разделить offline read-only и courier write на существующих точках записи.
+2. Укрепить существующий outbox: durable intent, repeat/replay, исходное
+   состояние, явные confirmed/conflict/rejected и сохранение доказательств.
+3. Проверить безопасное server replay в существующей транзакции статуса;
+   не вводить новые статусы заказа/универсальный conflict engine.
+4. Продолжать только bounded разрешённые read-проекции девяти модулей и
+   пометку давности внутри их UI, без тяжёлого полного обхода при запуске.
+5. Отдельная активация/браузерная приёмка на разрешённых fixture-операциях;
+   SQL-записи, миграции, restart и реальные операции этим проходом запрещены.
+
+### Курьер v2 — текущий код, 013 применена в test; gate OFF, runtime не принят
+
+Текущий проход завершает существующий цикл, не включает его на работающем сервере:
+
+- Для включения нужны ОБА параметра: COURIER_OFFLINE_V2=1 и
+  COURIER_OFFLINE_V2_TENANT_ID=1. Без флага/канонического tenant ID всё OFF.
+  Tenant берётся только из проверенного req.user / decoded JWT, не из запроса.
+  local_context.courierOfflineV2 / courierEventsRead выдаются сервером с учётом
+  operation permissions и сохраняются прежним tab-proof. Gate не является RBAC.
+  Access view / namespace прежние: флаг не удаляет кеши и не переносит старый outbox.
+  Для другого tenant новых source/replay/history нет, обычный online status прежний.
+- Даже ONLINE courier status при включённом v2 сначала сохраняет intent с ID;
+  отправка немедленная, НЕ idle. Локальное enqueue не публикует новый статус.
+  Только receipt означает confirmed. После подтверждения перечитывается лишь
+  открытая карточка через существующий защищённый API, не весь список/каталог.
+  Ошибка enqueue больше не откатывает новый realtime-ответ к старому previousOrder.
+  Серверный отказ COURIER_OFFLINE_DISABLED приостанавливает очередь с pending,
+  не удаляет/отклоняет intent; повторы прекращаются до нового online access context.
+- GET /orders/:id/courier-events: on-demand история из существующего ledger,
+  индекс idx_order_mutation_idempotency_order(tenant_id,store_id,order_id), keyset
+  before, максимум 25 событий / 64 KiB / SQL timeout 4 s, Cache-Control:no-store.
+  Admin требует orders.list.read + resource-scoped orders.status; courier получает
+  только свои квитанции и проходит существующую проверку назначения/доступа.
+  В карточке admin — существующий AppModal, original action/base status/revision,
+  наблюдаемое состояние при replay и причина отказа, без force/rebase.
+  Это НЕ полный журнал всех административных изменений и не текущий snapshot.
+  Повторная проверка назначения перед выдачей GET-карточки закрывает окно между
+  router.param и чтением payload. Приватные API не попадают в SW CacheStorage.
+  Source для offline write выдаётся только после отдельной проверки update на
+  resource (read недостаточно); replay повторно проверяет rule `own` по заблокированной
+  created_by_user_id, назначение и версию. Stores проверяет существующий middleware.
+  FORBIDDEN/STORE_FORBIDDEN/TENANT_MISMATCH прекращают отправку и инвалидируют
+  локальный доступ после сохранения отказа; очередь на диске не удаляется.
+- В том же защищённом courier scope подтверждённые receipts старше 7 суток или
+  при >=100 живых записей переносятся порциями <=25 в archive:* одной CAS с pending
+  и meta:archive. Исходные ID/body/receipt сохранены. Pending/conflict/rejected/blocked
+  не архивируются и не удаляются. Архив <=8 MiB / 128 пакетов, читается по одному
+  пакету по клику. При бюджете/quota сохраняется прежняя очередь, никакой очистки.
+  Ledger на сервере не чистится от courier events: иначе теряется безопасный replay
+  после долгого offline. Срок server retention требует отдельного контракта, не cron.
+- Найден и закрыт пробел chat: offline отключает create/update/delete; queued callbacks
+  проверяют scope/online до HTTP. Исходящее сообщение ждёт HTTP, ошибка показывается
+  как неподтверждённая, не как sent/delivered; таймер прежнего online UI начинается
+  только после успеха HTTP. Нет offline message outbox/автоматического повтора.
+  Whole-thread backfill с неподтверждёнными сообщениями блокируется явной ошибкой,
+  а не переносит их при reconnect. Public message DTO не расширялся localSendState.
+- Общий существующий inline read-cache notice теперь виден offline до первого
+  чтения кеша: отсутствие данных не выдаётся за полный набор. Показывает известную
+  давность, неполноту и реальную доступность courier v2; без toast/новых баннеров.
+  Остальные read adapters/финансы/realtime/idle scheduler не переписывались.
+
+Фактические проверки этого прохода: node --check изменённых JS, EJS compile,
+UTF-8 decode и git diff --check — PASS. Read-only a1186497_test подтверждает
+013 (тип/default/точное тело trigger), scopes 0/1/2 coverage=0; gate и tenant gate
+в .env не включены. Реальные коды статусов tenant 1: new/cooking/ready/on_the_way/
+delivered/canceled (1..6), новые статусы не вводились. Сервер на порту 3000 обнаружен
+как node.exe server.js PID 3980, НЕ перезапускался; CDP-порт Chrome не обнаружен.
+Browser/runtime/CAS archive/операции курьера/оплаты/списания/витрина — NOT TESTED,
+не вывод об отсутствии регрессий. Действия на тестовом заказе, tenant gate в .env
+и один контролируемый restart требуют отдельного разрешения; 012/013 не повторять.
+
+Ограничения: gate OFF нельзя узнать в полностью отключённой вкладке до следующего
+server confirmation; сервер в любом случае отклонит replay. После полного закрытия
+PWA с потерей sessionStorage/tab-proof приватный offline cold-open НЕ разрешается;
+нужна online авторизация. Очередь на диске не удаляется. При прежнем token/view/epoch
+она возобновляется, при новом/revoked epoch автоматической перепривязки нет.
+Постоянный device grant / ослабление tab-proof этим этапом не вводятся.
+
+Сценарии приёмки ниже остаются ручными: дополнительно проверить gate OFF, tenant 2,
+отсутствие update permission, admin history с/без orders.status и пагинацию, архив
+на разрешённом fixture/изолированной диагностике, chat offline и потерю HTTP.
+Не заполнять архив изменением реальных заказов и не менять роли ради сценария.
+
+Готовы команды `status`, `non_delivery` (обязательная причина), `damage`
+(обязательный комментарий, до 2000 символов). Последние две — события курьера,
+НЕ новые статусы заказа: не меняют order.comment/status, оплату, скидки, остатки
+или возвраты. Событие, его исходная версия и наблюдаемое состояние хранятся в
+существующей order_mutation_idempotency, в той же транзакции. Все команды требуют
+реального courier.orders.update, текущего actor/role и назначения заказа.
+
+Миграция migrations/013-courier-order-revision.sql уже отдельно разрешённо применена
+ТОЛЬКО в a1186497_test: ALTER 192,1 ms, CREATE TRIGGER 142,9 ms,
+lock_wait_timeout=3 s. Определения и неизменность прочей структуры проверены.
+В этом проходе SQL-записей/DDL нет; 012/013 НЕ повторять:
+
+- order_orders.courier_revision BIGINT UNSIGNED DEFAULT 1, читается строкой (без
+  потери точности JavaScript Number); один BEFORE UPDATE trigger: OLD + 1.
+- Все найденные writers order_orders: api/admin/orders.js (оплата, manual_paid,
+  assignee, abandoned/cleanup, status, reorder, edit, soft-delete), api/public/shop.js
+  (INSERT checkout, payment recovery/projection/stock stamps), data/order-online-payment.js
+  (refresh lease). Trigger охватывает их без изменения shared helpers/формул и
+  без нового SQL-вызова в writer. В существующих INSERT колонка не задаётся.
+- Любой UPDATE, включая технический/no-op, консервативно увеличивает версию.
+  Это O(1), но НЕ доказанное отсутствие влияния на latency/binlog/redo: нужны
+  фактические замеры. Нет per-tenant генераторов, worker или MySQL-копий DTO.
+- Parent revision не покрывает независимые order_refunds writers. Для status
+  replay выполняется один индексированный CURRENT locking read refund presence
+  (FOR SHARE, не старый RR snapshot) под parent FOR UPDATE. Любой возврат =>
+  COURIER_FINANCIAL_REVIEW_REQUIRED, событие сохранено как conflict, DML доставки
+  не выполняется. Новые refund INSERT в найденном API тоже владеют parent lock;
+  независимые финансовые updates не разрешаются автоматически. Reports финансов
+  не касаются и этой дополнительной выборки не требуют.
+- Preflight перед применением: точный SELECT DATABASE()=a1186497_test на том же
+  соединении перед КАЖДЫМ DDL, InnoDB, SHOW CREATE TABLE / SHOW TRIGGERS, отсутствие
+  column/trigger, idx_order_refunds_order и отсутствие конфликтующих BEFORE UPDATE
+  triggers. INSTANT без fallback на COPY. Два DDL имеют implicit commit; при
+  частичном/неясном завершении STOP, не повторять и не удалять автоматически.
+- Hard delete/reuse ID/REPLACE не найдены в текущих бизнес-writers. Их добавление,
+  сброс revision, восстановление старого backup, обход/удаление trigger требуют
+  gate OFF и инвалидирования старых offline proofs перед повторным включением.
+  Версия не объявляется вечной между разными восстановленными экземплярами БД.
+- SQL-файл игнорируется существующими Git-правилами, но находится на диске.
+  В будущую поставку включать адресно после согласования; git add/commit не делались.
+
+`COURIER_OFFLINE_V2` по умолчанию OFF; .env не менялся, сервер не запускался.
+При ON один раз на процесс read-only проверяются engine/column/точная форма
+BEFORE UPDATE trigger. Если схема неполна, source v2 не выдаётся, команды дают
+503, обычное чтение остаётся без обращения к отсутствующей колонке. Проверка
+не применяет/не чинит DDL и не опрашивает метаданные в цикле.
+При OFF обычные online операции не читают новую колонку и работают по прежнему
+пути. Courier GET не выдаёт fingerprint-only source, replay fail-closed; новая
+очередь требует source v2 с base_revision. После проверки trigger coverage оператор
+может отдельно согласовать COURIER_OFFLINE_V2=1 и COURIER_OFFLINE_V2_TENANT_ID=1.
+Это НЕ активация catalog writer hooks/download/CAS; старая 012 не повторяется.
+
+PUT /orders/:id/courier-intent сверяет revision под FOR UPDATE; fingerprint
+остаётся дополнительным, а не единственным условием. A->B->A теперь различается
+по revision. Assignment проверяется в этой же транзакции, не только в router.param.
+Повтор completed action возвращает ТОЛЬКО сохранённую квитанцию его actor, без
+карточки/нового DML, даже после переназначения заказа. Неавторизованный snapshot
+при отказе назначения не раскрывается. Точный store header обязателен: нет fallback
+с -1/0/01/1e0/1.0 на другой магазин. Изменённый payload с тем же ID => 409.
+Первичный ответ courier command тоже содержит только receipt: переназначение
+между commit и последующим чтением не раскрывает карточку. Карточки читаются
+отдельным существующим API с RBAC, прежняя публикация realtime сохранена.
+
+При включённом tenant gate старый courier /status без intent отвергается,
+включая x-courier-online-action: ONLINE теперь тоже идёт через durable v2.
+При gate OFF обычный online /status сохранён. Совместимый header клиента оставлен
+только для старого сервера до обновления, это не grant и не обход v2. Replay
+никогда не меняет baseline. Новые callbacks
+отменяются при смене контекста; долгий HTTP ограничен 8 s. При потере ответа
+повторяется тот же ID/body; server commit, ledger receipt и status DML атомарны.
+
+UI расширяет AppModal, не создавая второй modal/controller: «Действия» показывает
+всю scoped историю, состояния pending/confirmed/conflict/rejected/blocked, тип,
+причину/комментарий, source/observed revision и статус, понятную причину отказа, ID.
+Кнопки force/apply/переписывания baseline отсутствуют даже у администратора;
+дальнейшее исправление заказа — отдельная обычная online операция с серверным RBAC.
+Несколько offline событий можно сохранить. Они не получают guessed next revision:
+если ранний status изменил версию, последующее старое действие станет конфликтом,
+а не будет причинно перебазировано автоматически. Terminal conflict блокирует
+автоотправку более поздних действий того же заказа; все исходные события сохранены.
+
+Лимиты: 200 событий в живой очереди (подтверждённая история включена), 256 Ki UTF-16 intent budget с запасом до
+512 Ki CAS-предела под receipts/errors; receipt не дублирует длинный комментарий.
+Ни capacity, ни quota, ни новая роль не удаляют старые записи. Старая namespace
+очередь сохранена отдельно, автоматической перепривязки v1 -> v2/новая сессия нет.
+Подтверждённая история архивируется по описанному выше ограниченному контракту;
+удаления архивов/старых очередей и автоматического server retention нет.
+
+### Минимальная ручная приёмка v2 — НЕ выполнялась
+
+Предусловия: проверить уже существующую 013 ТОЛЬКО в a1186497_test, trigger
+и revision; отдельное разрешение на запуск/перезапуск подтверждённого CRM с tenant gate
+v2; новый SW/клиент штатно обновлены. Только заранее проверенный оператором
+тестовый заказ с безопасными тестовыми товарами/оплатой, назначенный тестовому
+сотруднику с существующими courier read/update и административными правами.
+Не создавать fixture, не платить/списывать реальные товары и не менять роли
+без отдельного разрешения. AGENTS 27: тестовые наборы не запускать.
+
+1. Открыть карточку online: в courier_source version=2 и revision-строка N;
+   запомнить разрешённый status и запись, включить offline в DevTools.
+2. Выбрать существующий следующий статус. В «Действия» pending с ID, N и типом;
+   базовый заказ не имитирует серверное подтверждение. Закрыть/открыть PWA:
+   запись должна сохраниться. Если новая вкладка не имеет действующего tab-proof,
+   требуется штатная авторизация online — НЕ отключать защиту ради PASS.
+3. Восстановить сеть: один PUT courier-intent, receipt с тем же ID, confirmed;
+   серверное состояние соответствует разрешённому переходу, revision>N. Вторая
+   вкладка не должна повторно выполнить DML; Web Lock сериализует отправку,
+   при отсутствии Web Locks идемпотентность остаётся серверной, запись — CAS.
+4. DevTools Replay XHR того же успешного PUT (не менять ID/body и не экспортировать
+   credentials): idempotency_replay=true, тот же receipt, revision не увеличилась
+   повторно из-за этого action. Не путать с независимыми техническими writers.
+5. Потеря ответа ПОСЛЕ commit: отдельно разрешённый диагностический response-stage
+   перехват после HTTP 200; read-only проверить completed ledger, не доставить
+   ответ вкладке. После retry/reopen должен прийти тот же receipt без второго DML.
+   Просто offline ДО отправки не является доказательством этого сценария.
+6. Конфликт: после сохранения offline intent оператор разрешённо изменяет тестовый
+   заказ online. Replay => 409, event содержит source/observed версии/статусы,
+   административное изменение остаётся. Дополнительно A->B->A: несмотря на прежний
+   fingerprint, revision>N и старый intent НЕ применяется. ID/причина видны в UI.
+7. Недоставка/повреждение: в offline сохранить причину/комментарий, reopen, sync;
+   confirmed означает регистрацию сообщения, не смену статуса/оплаты/остатков.
+   Повтор того же ID не добавляет второе событие. Возврат в заказе => status
+   conflict/financial review, а не автоматическое опасное разрешение.
+8. Совмещённые права: offline запись только через courier commands. Заказы/касса/
+   каталог/клиенты/чат/настройки остаются read-only. courier.access без update не
+   даёт кнопок записи. Проверить другой store/user/tenant: отмена HTTP, закрытие
+   courier modal, отсутствие старой истории/late ack в новом контексте. Старые
+   intent не удалять и не присваивать им текущую revision при повторном входе.
+
+Первоначальный read-only preflight (до разрешённой 013) выполнен в a1186497_test / Percona 8.0.37-29, UUID совпал.
+Подтверждены InnoDB у order_orders/order_mutation_idempotency/order_refunds;
+UNIQUE uq_order_mutation_idempotency_scope(tenant_id,store_id,actor_user_id,
+operation,idempotency_key); operation VARCHAR(64), response_json LONGTEXT,
+state enum(processing,completed); idx_order_refunds_order(tenant_id,store_id,order_id).
+Тогда колонки courier_revision и triggers order_orders не было. Позднее 013
+отдельно применена, как указано выше. Gate в .env по-прежнему не включён.
+
+SQL apply 013 — PASS отдельного разрешённого шага; trigger behaviour,
+runtime idempotency, rollback, conflict/ABA,
+PWA cold-open, multi-tab, mixed permissions, UI и latency — NOT TESTED. Разрешённые
+syntax/EJS/UTF-8/diff проверки не заменяют эти сценарии. Практический статус PARTIAL
+до отдельной миграции и ручной приёмки; новых SQL-записей этим проходом не было.
+
+### Предыдущий срез v1 (история; fingerprint-only replay теперь закрыт)
+
+- Прежние shell/cache/drafts сохранены. Административные записи через authFetch
+  уже требуют сервера. Добавлены такие же запреты в orders.apiJson, прямые
+  product/settings uploads и отправку new-order. Shared/public shop не менялся.
+- Чтение бизнес-кешей через AdminLocalRepository сообщает только timestamp
+  реально прочитанной записи текущей страницы. Layout показывает inline-подпись
+  о давности и неполноте без popup и без новых HTTP. Это не время последнего
+  полного snapshot модуля; отсутствие кеша не маскируется фиктивной датой.
+- Диагностический catalog:passport-staging не используется рабочими интерфейсами.
+  Его автоматические десять source scans/retry больше не запускаются при
+  выключенном export download policy. Код и уже сохранённые части НЕ удалены.
+  Рабочий каталог, его read cache/realtime и общий idle scheduler сохранены.
+- Courier outbox переиспользует тот же IndexedDB entries и AdminLocalRepository:
+  tenant/principal/role/accessView/revocation/store/courier dimensions. Запись
+  очереди — compareAndSetMany без quota cleanup, Web Lock между вкладками и
+  bounded CAS retry (3). Sending lock независим от idle. Без Web Locks защита
+  записи остаётся CAS, повторной отправки — серверный idempotency key.
+- В каждой новой операции: crypto ID, timestamp, actor/tenant/store/order,
+  active role, исходный state fingerprint, тип status, неизменный request body.
+  Только courier.orders.update (или *) + сервером подтверждённое назначение
+  конкретному user разрешают локальное действие. courier.access недостаточно.
+  Одна неподтверждённая операция на заказ; это НЕ офлайн-цепочка переходов.
+- Очередь не проводит payment, refund, stock, paid=true. При offline status
+  базовый заказ не подменяется optimistic snapshot: отображается «В очереди».
+  Старая user/store очередь остаётся в прежнем namespace без удаления/импорта;
+  при наличии записей существующий courier banner требует проверки. В ней
+  отсутствуют надёжные source/RBAC markers, автоматически дополнять их нельзя.
+- GET /orders/:id в courier-context добавляет courier_source только для
+  назначенного actor. Replay использует PUT /:id/courier-intent на том же handler,
+  с прежним courier.orders.update, а не новую бизнес-операцию. На старом сервере
+  этот URL даёт 404 и не может молча проигнорировать проверку исходного состояния.
+  Клиент требует receipt с тем же mutation ID. При replay проверяются auth/RBAC,
+  actor/role/idempotency и назначение ещё раз под существующим FOR UPDATE.
+  Меняющееся исходное состояние => 409 и запись courier_event в существующую
+  order_mutation_idempotency, без UPDATE статуса/финансов/остатков. Подтверждение
+  пишется в той же транзакции, что существующее status DML. Public shop DTO,
+  формулы статусов/оплаты/скидок/списаний и realtime не переписаны.
+- События confirmed/conflict/rejected сохраняются локально; подтверждённые не
+  считаются ожидающими. Серверные courier_event исключены из прежнего 30-day
+  prune, чтобы старый retry не выполнил действие повторно. Локальный предел
+  200 включает историю: при заполнении отказ записи, НЕ удаление старых событий.
+  Нужна отдельная политика подтверждённого архивирования/retention перед rollout.
+- Автоматический retry — до 5 отправок, backoff/jitter до ~61 s; Retry-After
+  соблюдается. Auth/conflict/rejected автоматически не разрешаются. Ручной retry
+  не сбрасывает terminal состояние и не переписывает исходный fingerprint.
+  После подтверждения online access-context replay возобновляется без idle.
+
+### Оставшиеся границы / блокеры
+
+- Fingerprint — сравнение перечисленных полей одного order row под блокировкой,
+  а НЕ монотонная revision. ABA (изменили и вернули все поля обратно), изменения
+  зависимых таблиц и вся история между чтениями этим не доказываются. Поэтому
+  строгая полнота conflict detection и production rollout пока НЕ подтверждены.
+  Не выдавать эту реализацию за универсальное versioned reconciliation.
+- В существующем courier UI/API есть статус и оплата, но не найдены отдельные
+  операции причины недоставки/повреждения/доказательства получения денег.
+  Они НЕ подменены выдуманными статусами или order.comment. Нужны согласованные
+  доменные команды и UI для сообщения/разбора конфликта уполномоченным сотрудником.
+- Все 9 read-моделей из матрицы ниже сохранены, их полнота остаётся PARTIAL:
+  непосещённые касса/клиенты/чат/команда не стали автоматически полными наборами.
+  Видимость подтверждённых прав команды не зависит от employee refresh.
+- Runtime/browser/double-send/rollback/quota/offline PWA checks НЕ запускались.
+  AGENTS 27 запрещает тесты; сервер остановлен ранее по просьбе пользователя и
+  здесь не запускался. В БД не выполнялись даже диагностические записи.
+- Перепривязка неподтверждённых intent после revocation/смены namespace или
+  истечения offline proof НЕ автоматизирована: старые записи сохраняются,
+  но не становятся разрешёнными в новой сессии/роли по совпадению user ID.
+- До практической приёмки отдельно разрешить локальный запуск, подготовить
+  безопасные fixture-операции и проверить существующую idempotency table,
+  replay/409/CAS/restart/scope/9 shell. Для реальных бизнес-операций и любых
+  новых SQL/schema изменений потребуется отдельное разрешение.
+
+Итог перехода: PARTIAL. Дальнейшее действие — приёмка read-only/специализированного
+courier среза, НЕ writer-hooks/full-passport download/CAS из старого A4.2.5.
+
+## История A4.2: аудит, границы и первый вертикальный срез
 
 Статус: PARTIAL. Реализованы срезы `settings.safe-profile` и ограниченных сводок заказов.
 Полная гидратация девяти модулей и согласованная активация частей паспорта НЕ реализованы.
@@ -2101,7 +2505,9 @@ Read-only проверка listener: порт 3000 принадлежит PID 81
 
 ### Writer coverage: реестр известных путей и необходимые границы
 
-Все строки ниже имеют статус **NOT INTEGRATED / activation BLOCKED**. Поиск
+Исторический реестр до подключения gated hooks: строки ниже имели статус
+**NOT INTEGRATED / activation BLOCKED**. Актуальный статус — в разделе
+«Writer coverage: gated business diff» в конце документа. Поиск
 включал явный INSERT/UPDATE/DELETE по таблицам графа во всех backend JS и обход
 вызовов helpers. Это полный реестр обнаруженных путей, а не доказательство
 отсутствия внешних SQL/import/admin writers. Динамический SQL и внешние инструменты
@@ -2316,3 +2722,499 @@ Current verdict: **PARTIAL, production activation BLOCKED**, не нагрузо
 Статические проверки этого прохода: node --check шести изменённых JS — PASS;
 git diff --check — PASS с существующими LF/CRLF warnings; strict UTF-8 восьми
 затронутых файлов — PASS. Тестовые наборы и shadow comparer не запускались.
+
+### Ускоренный финиш C: исполняемые opt-in точки, 2 CPU / 2 GiB / 50 tenants
+
+В существующем catalog-snapshot-capture подготовлены (НЕ подключены к routes):
+`revisionHook(conn,scope)` для существующей Tx с проверкой IN_TRANS до clock DML;
+`createRevisionWriters(db)` для атомарных catalog/store/combined callbacks и DML
+plans до 64 шагов; конкретные вызовы исходных helpers для default categories,
+category links, discount usage и stock deduction. Clock один на scope/Tx, не на
+строку товара. Без DML с affectedRows>0 варианты откатывают clock; обычные getters не изменились.
+Новые executors не разрешают DDL/commit/pool escape; permissions остаются у caller.
+`afterCommit` выполняется после release connection для image cleanup/deferred hints;
+его ошибка помечается committed=true, а не выдаётся за rollback. Новый executor
+не даёт транзакционности filesystem: существующие deletePhotoFiles до commit
+нужно переносить только при разрешённом подключении writer, с сохранением unique URLs.
+
+`bootstrapRevisions(db,{tenantId,after})` готов: до 25 stores за вызов, missing clocks
+с coverage=0, существующие revisions/coverage сохраняются. Не вызывается автоматически.
+Для нового tenant/store готов `initializeRevisionsInTransaction(conn,{tenantId,storeIds})`:
+проверяет активную Tx, создаёт clocks после tenant INSERT на той же connection,
+coverage=0. Его тоже нужно подключить в create Tx; внешние writers не исключаются из coverage.
+
+Transfer переиспользует gram-unit/conversion Map между nutrition-деревьями только
+внутри своей lease (−2 SQL на каждое дополнительное дерево); обычный foreground
+не меняется. Pre/post revision checks сохранены: удаление pre-check могло бы
+увеличить тяжёлую работу по уже устаревшему candidate. Численные SQL/time выигрыши
+не измерены. 19 полей/manifest/chunks/resume сохранены; availability calc error не
+сертифицируется как полный DTO. CAS требует точный набор baseline tokens и связанный
+durable sequence, а не только наличие sequence-ключа. Новые runtime сценарии NOT TESTED.
+
+Практический порядок после отдельного разрешения, без нового выбора архитектуры:
+
+1. Применить ТОЛЬКО 012-catalog-revisions-only.sql в подтверждённой безопасной БД.
+2. Явно вызвать bounded bootstrap для выбранных tenant, оставив coverage=0.
+3. Подключить hooks к исходным Tx; autocommit группы перевести в подготовленные
+   callbacks/plans, seed/repair и image cleanup учесть, deferEmit сохранить до commit.
+   Новые tenant/store и stock/payment/discount-usage callers не пропускать.
+   Только после полной интеграции разрешать audited coverage; flags пока OFF.
+4. Выполнить paired shadow сложного DTO при одинаковых epochs/valuationAt,
+   сравнить все 19 полей без исключений; любое отличие блокирует активацию.
+5. Один canary tenant: LIGHT + LIGHT_DOWNLOAD, activation OFF, измерить каждый
+   stage <4 s и HTTP <8 s, SQL/pool wait/CPU/RSS и latency обычных CRM API.
+6. Разрешить canary activation и браузерно проверить CAS, рабочую гонку, abort до
+   commit, resume, quota, scope и реальное offline чтение. Не очищать user stores.
+7. Только после PASS расширять ограниченно до 50 tenants, не увеличивая global=1,
+   lease=2 или deadlines. При регрессии flags OFF, clocks/рабочие DTO сохранить.
+
+Миграция, bootstrap, подключение hooks, restart, shadow и canary в этом проходе
+НЕ выполнялись. Реальные blockers: разрешение и wiring исходных writers (включая
+image/new-tenant/store границы), затем фактическое сравнение и приёмка на заданном VPS.
+
+### Контролируемая подготовка: storefront freeze и canary gate
+
+Этот раздел заменяет старые команды включения через LIGHT. Публичные routes/DTO,
+shop.js и общие helpers в этом проходе НЕ редактировались; прежние dirty изменения
+в них сохранены. Полный activation diff пока BLOCKED, а не «готов»:
+публичные stock/payment callers тоже являются writers полного passport, но их
+инструментирование запрещено текущим storefront freeze. Подключить только CRM
+hooks и объявить coverage=1 нельзя. Готовые общие executors не доказывают wiring.
+
+Конкретные общие границы: api/public/shop.js вызывает orderStock при payment
+completion и создании заказа; admin/orders.js также вызывает тот же helper.
+recordDiscountUsage имеет conn- и pool-callers. Product CRUD/seed/repair/image
+cleanup/new-tenant/store ещё требуют включения подготовленных Tx вариантов.
+afterCommit не делает весь прежний HTTP-обработчик атомарным, не ограничивает
+длительность business Tx и не позволяет повторять сохранение после committed=true.
+SQL/source/подготовка файлов должны оставаться вне новой business Tx, когда они
+не нужны для её корректности; удаления файлов/hints — только после commit.
+Без runtime замеров «нет долгих Tx» не подтверждено. Новых deadlines на рабочие
+заказы/платежи не введено: это изменило бы бизнес-семантику.
+
+CRM-only включение теперь: CATALOG_EXPORT_CRM_LIGHT=1 и ровно один канонический
+CATALOG_EXPORT_CRM_TENANT_ID, затем LIGHT_DOWNLOAD=1; LIGHT_ACTIVATION отдельно.
+Без параметров всё OFF; старый CATALOG_EXPORT_LIGHT=1 блокирует новый CRM путь.
+Причина: старый LIGHT отключает scheduleInitialBackfill публичных snapshots.
+Новый CRM_LIGHT не читается публичным snapshot configure, поэтому этот эффект
+не включается. Queue учитывает CRM_LIGHT для приоритета foreground; API и клиент
+отказывают другим tenants. .env/окружение работающего процесса не менялись.
+Зависимость CRM builder от publicShopRouter.prepareAdminProductPassport и общей
+legacy derivation сохраняется; это не независимая реализация и не доказательство
+отсутствия storefront regression в прежних изменениях. Нужен paired shadow.
+
+Порядок активации после разрешения:
+1. Сначала завершить разрешённый writer diff, включая все общие write-границы;
+   без этого не начинать данные canary и не повышать coverage.
+2. На подтверждённой безопасной БД применить только revisions-only 012; bounded
+   bootstrap выбранного тестового tenant; coverage=0, никаких exports tables.
+3. Подключить проверенный writer diff с rollout OFF, включая create Tx и image
+   cleanup; проверить rollback/идемпотентность владельцем проекта (rule 27).
+   Coverage остаётся 0 до подтверждения ВСЕХ writer-путей; не смешивать commits.
+4. Только после этого согласованно поднять coverage для выбранного тестового
+   tenant/store и выполнить paired shadow с одной valuationAt/epochs. Все 19
+   полей и вложенные значения равны; любое отличие = FAIL. Не игнорировать поля.
+5. Один разрешённый restart, CRM_LIGHT/CRM_TENANT_ID/LIGHT_DOWNLOAD, activation OFF;
+   использовать уже существующий тестовый tenant с собственными fixture-товарами.
+   Если безопасного tenant нет — NOT TESTED/STOP, не брать данные чужого клиента.
+6. После shadow PASS включить только canary activation и выполнить browser CAS.
+7. Rollout далее — отдельное разрешение после canary; текущий gate допускает
+   ровно один tenant, не автоматическое расширение на все 50.
+
+Минимальная приёмка canary (пороговые условия, НЕ результаты измерений):
+- 3–5 существующих fixture-товаров, включая сложный; один ход = один HTTP,
+  ответ <=64 KiB, DTO <=256 KiB, source stage <4 s, весь turn/HTTP <8 s.
+- >=60 s trusted CRM активности в двух вкладках: 0 новых OFFLINE_EXTRA; после
+  >=60 s общего idle подготовка разрешена, hidden не является запретом.
+- Отмены до ответа и до IDB commit: old DTO/checkpoint побайтно прежние; затем
+  flushPersistence не записывает отменённый candidate, следующий idle возобновляет.
+- Полный sealed manifest, все hashes и scope совпадают; CAS receipt+DTO атомарны;
+  более свежая working sequence выигрывает, неполный DTO не активируется.
+- Другой tenant/store и 401/403: нет выдачи/активации чужих данных; приватных
+  responses нет в публичном CacheStorage. Нет исправлений roles/permissions ради теста.
+- Сравнить естественные read-only foreground окна до/во время canary (не менее
+  30 запросов/окно, без массовой генерации трафика). Stop при росте p95 более
+  max(100 ms, 10% baseline), pool-wait p95 более baseline+50 ms, среднем CPU>70%
+  за 2 min, свободной RAM<384 MiB, росте RSS Node>64 MiB сверх baseline или swap
+  pressure. При уже превышенных baseline порогах canary не запускать.
+- Свободный диск >=5 GiB; не создавать MySQL копии DTO. Ресурсные пороги —
+  консервативные критерии остановки, НЕ доказанная ёмкость VPS для 50 tenants.
+
+При любом FAIL: прекратить shadow/capture/download/activation и расширение
+canary, выключить CRM flags штатным разрешённым deployment; не запускать миграцию
+повторно, не поднимать coverage, не повторять committed бизнес-операцию, не
+удалять clock table, старый DTO, drafts/outbox/IDB/cache/cookies. Не откатывать
+работающие бизнес-writes/витрину. Сохранить обезличенные timings/hashes/phase/scope
+для разбора. Срочное изменение серверного окружения/restart требует отдельного
+разрешения. Немедленная остановка в каждой canary CRM-вкладке: существующий
+AdminIdleHydration.cancel('canary-stop') и удержание busy через beginOperation()
+(операторская пауза, НЕ доказательство trusted активности), либо закрытие только
+выделенных тестовых CRM-вкладок. Это не logout и не очистка пользовательских данных.
+Последний SQL, уже выполняемый MySQL, может завершиться; остановка не обещает его откат.
+
+## A4.2.5 — Writer coverage: gated business diff
+
+Код подключений подготовлен; работающий процесс, окружение и БД не менялись.
+Предыдущие запреты на shared/public stock writers сняты уточнением пользователя.
+Новая business-ветка использует существующие формулы и executors, не отдельную
+реализацию витрины. Ни один кодовый путь не повышает writer_coverage_version.
+
+| Известные writers из реестра | Подготовленный код / реальная граница |
+|---|---|
+| Product CRUD, цены, composition, dependent recalc | catalog clock + исходный DML; product+category links одной connection; create включает начальный stock и оба clocks. Recalc по товарам и inline stock остаются отдельными Tx, весь HTTP не объявляется атомарным |
+| Category CRUD/sort, lazy defaults/all-link repair | Clock внутри существующих Tx либо gated Tx только для фактической записи. Default read без missing не получает clock SQL; вложенный category helper не bump повторно |
+| Options/items/assignments/exclusions/settings, variants/tiers/assignments/exclusions | Один hook на существующий BEGIN; бывшие одиночные pool DML через businessMutation. SQL/параметры прежние |
+| Combos/block products/set blocks, units/conversions/links, ingredients | Составные DELETE/INSERT группы на одной connection; одиночные DML и clock в одной Tx |
+| Discounts create/update/delete/restore/toggle | Store clock в существующей либо gated Tx, включая target rows |
+| recordDiscountUsage | Usage INSERT, discount/promo counters и clock вместе. Conn caller сохраняет внешнюю Tx; pool caller получает отдельную usage Tx, не атомарность всего ранее сохранённого заказа. Existing/no-op usage clock не меняет; повторные usage внутри одной conn Tx переиспользуют покрытие |
+| Shared orderStock, публичные order/payment callers, admin status | Hook в общем helper после непустого deduction plan, до stock DML; используется conn caller, без nested Tx. Ошибка clock выходит в прежний rollback. Status с уже изменённым stock не bump повторно ради usage |
+| Inline stock adjustment, post stock document | Store hook в собственной существующей Tx; не post-response invalidation |
+| Tenant timezone/rounding, store PATCH | Clock только с соответствующим UPDATE; профильный credential CAS и параметры не менялись |
+| Tenant/store creation | Clock rows создаются в creation Tx, coverage=0. У нового store сохраняется прежняя отдельная запись hours; атомарность всего HTTP не заявляется |
+| Images | Уникальные upload URLs/thumb-before-publish сохранены; DB URL changes покрыты product/category/combo DML. Hard-delete cleanup выполняется ПОСЛЕ commit/release, не при откате |
+
+Gate: одновременно CATALOG_EXPORT_CRM_LIGHT=1, один канонический
+CATALOG_EXPORT_CRM_TENANT_ID, CATALOG_EXPORT_WRITER_HOOKS=1 и
+CATALOG_EXPORT_WRITERS_READY=1; legacy LIGHT и mysql strategy запрещают эту ветку.
+Все flags по умолчанию OFF. WRITERS_READY — явное deployment-подтверждение аудита,
+НЕ автоматическая запись coverage=1. DB coverage остаётся 0 до подтверждения
+интеграций/внешних writers. Transfer дополнительно требует тот же gate и
+coverage>=1: отключённые hooks нельзя обойти старым значением coverage в таблице.
+Canary одного tenant не объявляется rollout на остальные 50.
+
+В выключенном gate нет revision SELECT/UPDATE/INSERT и новых business Tx. При
+включении известный BEGIN получает один индексный UPDATE clocks, без DO 0 или
+чтения clocks. Бывший pool DML/group получает BEGIN + тот же UPDATE + COMMIT;
+нет отдельной транзакции только ради revision. Ошибка UPDATE/отсутствующая строка
+clock приводит к rollback business DML. Пул для business использует прежний
+getConnection, не 500-мс cutoff фонового capture. Полный DTO не пересобирается.
+Расчёт стоимости: +1 SQL UPDATE на покрытую Tx (одна/две PK-строки), для бывшего
+autocommit дополнительно BEGIN/COMMIT; создание — один INSERT clock rows.
+Это оценка числа round-trips, НЕ измерение latency/lock contention. Большие
+составные payloads и длительность удержания coarse clock требуют canary-замеров;
+увеличения пула/concurrency/фоновых процессов нет.
+
+Непокрытых обнаруженных application-writers текущего реестра не оставлено на
+уровне кодовых подключений. Это НЕ runtime coverage PASS: внешние SQL/imports,
+schema/lazy-DDL и изменение опубликованных файлов сторонним процессом должны
+быть запрещены или отдельно охвачены до coverage=1. Checkout/auto-add/customer
+targeting вне текущего DTO graph не получили ненужных hooks. Ранее подготовленные
+generic executors не вызываются параллельно с business hooks.
+
+Следующий разрешаемый шаг: только revisions-only 012 (не обе альтернативы),
+bounded bootstrap выбранного безопасного tenant/store с coverage=0; затем
+разрешённый deployment/restart gated writer diff, подтверждение coverage,
+paired shadow всех 19 полей и browser CAS canary по предыдущим критериям STOP.
+Не активировать transfer на одном лишь факте применения миграции. При FAIL
+остановить download/activation и расширение canary, сохранить clocks, старый
+паспорт и пользовательские хранилища; не повторять committed бизнес-операцию.
+
+Проверки этого прохода: syntax/UTF-8/diff и статическое сравнение AST. В 10 модулях
+сохранены 1204 SQL-выражения с параметрами (whitespace SQL не учитывается) и
+response-выражения относительно HEAD, включая public shop. Это не доказательство
+runtime-эквивалентности: rollback, lock contention, CRM/checkout/payment/stock и
+новая CAS до миграции/разрешённой приёмки — NOT TESTED. Тестовые наборы не запускались.
+
+## A4.2.5 — Финальная интеграционная процедура (ещё НЕ выполнена)
+
+Это последовательность для отдельного разрешения, не команды к немедленному
+исполнению. Существующий PID/порт не проверялись и не затрагивались. Новых API,
+workers или тестовой подсистемы не требуется. Команды ниже — шаблоны: пути,
+database, tenant/store и login paths утверждает оператор; значений из .env здесь нет.
+
+### Проверенный diff и порядок блокировок
+
+В inline-stock найден обратный порядок: stock FOR UPDATE -> store clock, тогда
+как posting/deduction берут clock -> stock. Hook перемещён до locking SELECT,
+после BEGIN и transactionStarted=true. При unchanged qty gated Tx откатывает
+предварительный bump; при gate OFF остаётся прежний COMMIT и нет revision SQL.
+Это устранение найденного статически deadlock cycle, не результат DB-прогона.
+Все conn callers общих stock/usage helpers сохраняют собственные rollback;
+бывшие pool-группы используют одну connection. Нельзя объявлять атомарной всю
+многошаговую HTTP-операцию или откатывать уже завершившийся COMMIT/внешний платёж.
+
+### 1. Preflight миграции и повторного применения
+
+До любых изменений: подтвердить разрешённые server UUID/database, MySQL version,
+engine/DDL ten_tenants, signed INT PK id, запас диска и отсутствие долгого DDL.
+Не импортировать server.js/db.js только ради диагностики: db.js открывает pool.
+Пример read-only SQL для оператора в уже утверждённом mysql connection:
+
+```sql
+SELECT VERSION(), DATABASE(), @@server_uuid, @@global.gtid_mode;
+SHOW CREATE TABLE ten_tenants;
+SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES
+ WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' AND ENGINE<>'InnoDB';
+SELECT TABLE_NAME FROM information_schema.TABLES
+ WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN
+ ('prod_catalog_snapshot_revisions','prod_catalog_export_budgets',
+  'prod_product_passport_exports','prod_product_passport_export_chunks');
+SELECT TRIGGER_NAME FROM information_schema.TRIGGERS
+ WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME LIKE 'catalog_export_%';
+```
+
+- Revisions-only 012 — один CREATE TABLE, PK(tenant_id,scope_store_id), FK tenant,
+  CHECK неотрицательного scope, BIGINT UNSIGNED clock и coverage DEFAULT 0.
+  PK покрывает текущие clock SELECT/UPDATE; дополнительных индексов/триггеров нет.
+- Таблицы нет, тяжёлых tables/triggers нет, типы/версия подтверждены: кандидат к DDL.
+- Таблица есть: SHOW CREATE TABLE + SHOW INDEX; только при точном совпадении
+  структуры явно SKIP уже применённого CREATE. Не выполнять его повторно,
+  не добавлять IF NOT EXISTS, скрывающий schema drift. Rows не пересоздавать.
+- Найдены heavy tables/triggers/другая структура: STOP, не применять альтернативу,
+  не DROP и не пытаться «доприменить» обе 012. Отдельное решение оператора.
+- После backup rehearsal применить только выбранный файл одной mysql-сессией с
+  `SET SESSION lock_wait_timeout=5;`, затем `source` точного абсолютного SQL path.
+  Ошибка/timeout = STOP и повторный read-only осмотр, не автоматический retry.
+  CREATE TABLE имеет implicit commit: обёртка BEGIN/ROLLBACK не отменяет DDL.
+- SQL-файл игнорируется migrations/*: до deployment оператор должен включить
+  именно revisions-only файл в проверенный release artifact и сверить SHA-256.
+  Текущая задача не меняет индекс Git/ignore rules и не формирует release.
+
+### 2. Backup/restore: обязательная репетиция ДО DDL
+
+Сейчас mysql/mysqldump/mysql_config_editor не найдены в PATH и стандартных
+проверенных каталогах MySQL. Не устанавливались. Нет утверждённого restore target
+и фактического backup artifact. Поэтому recovery rehearsal = NOT TESTED.
+
+Условия: совместимые MySQL clients; защищённые отдельные source/rehearsal login
+paths (пароль вводится интерактивно, не через аргумент/лог); backup вне repo,
+web-root и облачных публичных папок, ограниченные ACL и шифрование штатным средством.
+Для удалённого MySQL — проверяемый TLS с утверждённым CA/hostname; не передавать
+backup/credentials по незащищённой сети. Login path сам по себе TLS не гарантирует.
+Согласовать I/O окно и место по размеру БД, не помещать второй экземпляр БД на VPS
+2 GiB. Существующий проверенный backup/PITR провайдера допустим вместо нового dump.
+Нельзя считать свободные 5 GiB гарантией достаточного места под полный dump.
+
+Пример PowerShell ПОСЛЕ разрешения, с заранее проверенными абсолютными путями
+$crmDumpExe, $crmMysqlExe, $crmDumpPath и утверждённым именем $crmSourceDb:
+
+```powershell
+& $crmDumpExe --login-path=crm-a425-source --single-transaction --quick --skip-lock-tables --no-tablespaces --set-gtid-purged=OFF --hex-blob --default-character-set=utf8mb4 --routines --events --triggers "--result-file=$crmDumpPath" $crmSourceDb
+if ($LASTEXITCODE -ne 0) { throw 'BACKUP_FAILED: migration forbidden' }
+if ((Get-Item -LiteralPath $crmDumpPath).Length -eq 0) { throw 'EMPTY_BACKUP' }
+Get-FileHash -LiteralPath $crmDumpPath -Algorithm SHA256
+```
+
+Не использовать PowerShell `>` для dump: нужен native result-file. Exit 0 и SHA
+доказывают лишь завершение/целостность файла, НЕ возможность восстановления.
+Single-transaction применим к InnoDB при отсутствии конкурентного DDL на время
+dump. При non-InnoDB или невозможности запретить DDL — STOP; нужен согласованный
+consistent backup, не незаметное включение LOCK TABLES на рабочем магазине.
+GTID OFF здесь означает переносимый логический backup, не полноценный план PITR;
+для аварийного восстановления живой БД нужны отдельно проверенные binlog retention
+и recovery point. Не заменять реальный PITR устаревшим dump.
+
+Restore rehearsal: только отдельный изолированный MySQL server той же версии с
+заранее утверждённым пустым schema с тем же именем ($crmRestoreDb=$crmSourceDb).
+Не другая schema на production instance:
+dump/routines могут содержать квалифицированные ссылки/DEFINER. Event scheduler
+на rehearsal OFF, исходящие production connections/webhooks/оплаты заблокированы
+ДО импорта и запуска приложения. Проверить target UUID != source UUID.
+
+```powershell
+& $crmMysqlExe --login-path=crm-a425-rehearsal --default-character-set=utf8mb4 "--database=$crmRestoreDb"
+```
+
+В открытом mysql client: `source C:/APPROVED_PRIVATE_BACKUP/backup.sql;`
+(точный проверенный путь без пробелов, без --force). Любая ошибка импорта = FAIL.
+После импорта проверить DDL/FK/indexes, routines/triggers/views/events, целостность
+и согласованные контрольные выборки/количества из backup. Проверять все объекты
+и counts можно на изолированном restore, не массовым COUNT/CHECK на рабочей БД.
+Зафиксировать hash dump, UUID/version target, полный статус импорта, длительность
+и контрольные значения. Только успешная репетиция даёт recovery PASS.
+Сам dump не является backup Payment Service/внешнего провайдера или uploads;
+их существующий DR-план не заменяется и реальные callbacks не переигрываются.
+
+### 3. DDL -> bootstrap -> hooks -> coverage
+
+1. Отдельное разрешение, preflight и recovery PASS; применить revisions-only 012.
+2. Оператор вызывает существующий `bootstrapRevisions(db,{tenantId,after:0})`;
+   каждый вызов <=25 stores + catalog clock. Следующий after брать из успешного
+   результата, продолжать только при hasMore; число страниц ограничить заранее
+   утверждённым количеством магазинов. Не запускать циклический startup job.
+3. Повторный bootstrap сохраняет revisions и существующую coverage через
+   ON DUPLICATE KEY UPDATE revision=revision. Новые rows coverage=0. Результат
+   initializedCoverage:0 описывает новые rows, а не сброс ранее существующих.
+4. Разрешённый deployment/restart writer diff: CRM_LIGHT=1, CRM_TENANT_ID одного
+   тестового tenant, WRITER_HOOKS=1, WRITERS_READY=1; LIGHT_DOWNLOAD=0,
+   LIGHT_ACTIVATION=0, legacy LIGHT/CAPTURE/PUBLISHING/CLIENT_DOWNLOAD/ACTIVATION=0,
+   strategy не mysql. Это имена с префиксом CATALOG_EXPORT_. Coverage пока 0.
+5. Подтвердить отсутствие старых writer процессов/in-flight транзакций этого tenant.
+   После подключения hooks повторить bounded bootstrap и read-only проверку missing
+   clocks (catalog 0 и КАЖДЫЙ store). Это закрывает промежуток создания магазинов
+   между первым bootstrap и deployment. Новые store hooks инициализируют rows в Tx.
+6. Подтвердить coverage известного реестра, внешних imports/SQL/DDL и ручные sandbox
+   сценарии ниже. Отдельно разрешить promotion coverage ровно выбранных tenant/store
+   clocks, с существующими scope 0/store locks в том же порядке; не массовый UPDATE
+   всей таблицы. Schema не применяется повторно. Новый store с coverage=0 fail-closed.
+
+### 4. Интеграционная матрица (выполняет пользователь/разрешённая приёмка)
+
+Только собственный fixture-tenant и изолированные CRM+Payment Service stores,
+тестовый provider/account, новые fixture IDs/idempotency keys. Восстановленный
+реальный order ID, webhook, Outbox job или payment нельзя повторно submit/release.
+Приложение с клоном рабочей БД не запускать до блокировки production egress/jobs.
+Нет безопасных fixtures/sandbox — соответствующий сценарий NOT TESTED.
+
+Gate OFF/ON сравниваются последовательно на одинаковом fixture baseline, не
+двумя нагрузочными серверами на VPS. Тестовые наборы агент не запускает (правило 27).
+
+| Сценарий | PASS / что сравнивать |
+|---|---|
+| Gate OFF | Прежние ответы, суммы, SQL последовательности и Tx; 0 обращений к revisions. Import не запускает новые SQL/timers. Браузерных данных не чистить |
+| Каталог, варианты, ингредиенты, единицы, категории | Те же вложенные значения/цены/nutrition/defaultConfig; один clock на бизнес-Tx, rollback не меняет данные/clock. Lazy seed/repair не становятся обычным clock-read |
+| Публичная витрина/корзина | Те же public keys, visibility, итоговая сумма/округление/скидка; одинаковое поведение выбора вариантов/опций и корзины |
+| Новый fixture заказ, cash/manual | Один order, прежние суммы/права/статусы; исходный режим списания, прежние qty/stock documents. Никаких реальных заказов |
+| Online fixture payment | До оплаты прежний запрет fulfillment/списания, после sandbox подтверждения ровно прежние эффекты, amount/currency/discount/qty. Не вызывать applyOnlinePayment вручную на реальном заказе |
+| Discount usage | Прежние usage/promo counts и eligibility; existing usage не дублируется; conn rollback откатывает clock+usage, pool usage-группа атомарна отдельно от ранее сохранённого order |
+| Ошибка clock | Только sandbox scope с намеренно отсутствующим clock: business Tx не оставляет частичных order/stock/usage изменений; ошибка не маскируется успехом. Реальные clocks не удалять |
+| Lock ordering / no-op stock | Пара ручных fixture stock операций подтверждает clock -> stock; unchanged qty не продвигает clock. Нет утверждения об отсутствии всех deadlock по одному случаю |
+| Изоляция и realtime | Другой tenant/store не затронут; прежние 401/403 и SSE/order/chat updates без ожидания idle; courier outbox не меняется |
+
+Сравнение API JSON не заменяет проверку order/stock/usage rows в sandbox. Не
+повторять committed операцию по одному HTTP timeout: сначала проверить её статус
+существующим read/idempotency контрактом. Не увеличивать retries/deadlines/пул.
+При ошибке/ухудшении обычных API — FAIL/STOP canary по ресурсным порогам выше.
+
+### 5. Shadow DTO -> browser CAS одного tenant
+
+- Использовать существующие `publicShopRouter.buildAdminFullProductPassports`
+  и `prepareAdminProductPassport`, не новый public endpoint и не новую копию формул.
+  Оператору нужны approved доступ к этим уже созданным callbacks в приёмочном
+  окружении и приватный каталог артефактов; текущая HTTP API valuation override
+  не принимает. Не запускать второй server.js или router factory только ради shadow.
+- Сначала activation OFF. Для 3–5 собственных простых/сложных fixture продуктов
+  снять reference полным admin builder и candidate из sealed transfer. Pin одной
+  valuationAt из manifest, одинаковые timezone/build/code/scope/permissions.
+  Revisions+coverage до/после ОБОИХ сборок должны совпасть с manifest; переход
+  discount schedule/изменение данных = INVALID SAMPLE, не «исключить поле».
+- Проверить sealed root/hash, все chunk hashes/порядок/размер; восстановить ровно
+  исходные UTF-8 DTO bytes. Сохранять отдельно manifest, scope/epochs/time/build
+  evidence и оба JSON; ничего не публиковать/не логировать значения/токены.
+- `node scripts/compare-catalog-passport-exports.js legacy.json candidate.json`
+  сравнивает все 19 полей без excludedFields, array order и вложенные значения.
+  Любое отличие = FAIL. Этот CLI сам не доказывает время/scope capture: evidence
+  выше обязательно; одинаковые JSON из неизвестного контекста не дают shadow PASS.
+- После shadow PASS отдельно включить LIGHT_DOWNLOAD=1 при LIGHT_ACTIVATION=0;
+  штатный AdminIdleHydration: >=60 s общего trusted idle, 1 HTTP, <8 s turn,
+  <4 s source stage, <=64 KiB response. Staging/chunks/checkpoint одной IDB Tx.
+- Затем отдельно LIGHT_ACTIVATION=1: immutable-active receipt + passport/index/
+  summary/budget/manifest одной compareAndSetMany Tx, durable working sequence,
+  полный root/DTO hashes и monotone epochs. Читать сохранённые реальные данные
+  офлайн; неполный/чужой/просроченный candidate старый passport не заменяет.
+- Отдельно observed abort до ответа и до IDB commit, working response race,
+  межвкладочная trusted activity, следующий idle и hidden window. Сравнить старые
+  данные/checkpoint до/после, вызвать обычный flushPersistence и проверить отсутствие
+  поздней записи. Не называть неуловленное окно отмены PASS; не подменять isTrusted
+  или Page Visibility. Событие после успешного commit не обещает rollback.
+
+### 6. Безопасная остановка, не restore поверх живого магазина
+
+Обычный FAIL новой подготовки: остановить только canary вкладки/idle tasks,
+LIGHT_DOWNLOAD=0 и LIGHT_ACTIVATION=0 через разрешённый deployment; hooks/CRM_LIGHT
+сохранить включёнными, если они исправны, чтобы revisions продолжали учитываться.
+Старые вкладки должны получить новую policy; до этого отменить их scheduler и
+держать operator busy/закрыть только выделенные тестовые вкладки. Существующие
+lease/chunks не считать свежими после изменения writer epoch/процесса.
+
+Если ошибка именно в hooks: отдельно согласованный rollback code/gates. Тогда
+coverage для затронутого scope больше НЕ доверять; до повторного включения нужен
+coverage=0, устранение gap, свежая epoch/invalidation и новая сертификация.
+Простое повторное bootstrap не повышает revision и НЕ устраняет пропущенные writes.
+Не выключать hooks, оставляя transfer enabled; policy дополнительно блокирует это.
+
+Не удалять additive clock table, active passport, drafts/outbox/IDB/cache/cookies
+и не восстанавливать старый full dump поверх продолжающих работать заказов/оплат.
+Сам DDL не меняет бизнес-таблицы: при штатном отказе оставить clocks и остановить
+функцию достаточно; обычная витрина не требует остановки/restore. Настоящая порча
+БД — отдельный disaster recovery/PITR с остановкой writes и reconciliation внешних
+платежей; обещать zero-downtime full restore или переигрывать callbacks нельзя.
+
+Документальная сверка команды/ограничений:
+[mysqldump](https://dev.mysql.com/doc/refman/8.0/en/mysqldump.html),
+[SQL restore](https://dev.mysql.com/doc/refman/8.0/en/reloading-sql-format-dumps.html),
+[implicit DDL commit](https://dev.mysql.com/doc/refman/8.0/en/implicit-commit.html).
+Это не проверка исполнимости на целевой БД. DDL/bootstrap/backup/restore,
+sandbox payment/stock/discount scenarios, paired shadow и browser CAS этого
+прохода — NOT TESTED, до отдельных разрешений. Новая архитектура не добавлялась.
+
+## A4.2.5 — Фактическое применение revisions-only 012
+
+2026-10-22, завершено к 10:05 UTC. Отдельным явным разрешением пользователь принял
+риск отсутствия restore-rehearsal ТОЛЬКО для этой миграции и bootstrap. Предыдущий
+backup/restore NO-GO этим разрешением снят для данного шага, но recovery PASS
+не получен и не заявляется.
+
+- Единственный разрешённый target: 141.8.192.15:3306 / a1186497_test,
+  Percona Server 8.0.37-29. UUID проверен между preflight и исполнением.
+- Не импортировался db.js/server.js: отдельная connection mysql2, без pool retry,
+  multipleStatements=false, без переключения database/fallback.
+- Перед КАЖДЫМ DDL/DML на ТОЙ ЖЕ connection выполнялся SELECT DATABASE() + UUID;
+  требовалось строго a1186497_test и UUID preflight. Всего 7 guards, включая session
+  settings и границы bootstrap Tx. Запросы к другим схемам — только read-only
+  information_schema metadata. Пароли/полные grants/ошибки SQL не выводились.
+- Preflight: 1 tenant, 2 stores; объекты обеих 012 и конфликтующие constraint names
+  отсутствовали; ten_tenants.id signed INT / single-column PK / InnoDB совместим.
+  В видимых процессах не было DDL/lock conflicts. Это не утверждение о полной
+  видимости чужих DBA sessions; ожидание metadata/row locks ограничено 3 s.
+- Применён ровно исходный файл migrations/012-catalog-revisions-only.sql,
+  SHA-256 a7e833679fc256e099211882b374eb2239cee40b663a2a1fbad4d563dd2eb81b.
+  Один CREATE TABLE, подтверждённый ответ; повтор DDL не выполнялся. DDL: 327 ms.
+- Фактическая проверка: prod_catalog_snapshot_revisions / InnoDB; четыре NOT NULL
+  columns: tenant_id INT, scope_store_id INT, revision BIGINT UNSIGNED DEFAULT 0,
+  writer_coverage_version INT UNSIGNED DEFAULT 0. Единственный индекс — composite
+  PRIMARY KEY(tenant_id,scope_store_id); FK tenant_id -> a1186497_test.ten_tenants.id,
+  CHECK(scope_store_id>=0). Других новых tables/triggers/exports не создавалось.
+- Использован существующий bootstrapRevisions с guarded connection adapter:
+  одна страница, один INSERT ... ON DUPLICATE KEY UPDATE revision=revision внутри
+  BEGIN/COMMIT. До bootstrap таблица была новой; ветка сохранения ненулевых
+  существующих values в этом проходе не упражнялась и отдельно не тестировалась.
+
+| tenant_id | scope_store_id | revision | writer_coverage_version |
+|---|---|---|---|
+| 1 | 0 | 0 | 0 |
+| 1 | 1 | 0 | 0 |
+| 1 | 2 | 0 | 0 |
+
+Все ожидаемые tenant/store clocks совпали с read-only перечислением источников.
+После bootstrap heavy export tables и catalog_export_* triggers отсутствуют.
+Migration PASS, bootstrap PASS; весь исполнительный проход ~4020 ms. Это замер
+одной небольшой операции, НЕ нагрузочная оценка VPS/50 tenants. Business DML=0,
+coverage promotion=0, restart=0, hooks activation=0. Browser storage не трогался.
+
+### Подготовленное следующее включение — ещё НЕ разрешено и НЕ выполнено
+
+Следующий конкретный шаг: отдельное разрешение на однократный restart только
+заново подтверждённого CRM-процесса и изменение его deployment environment для
+writer-only canary tenant 1 (store clocks 1/2 уже готовы). До изменения проверить
+target database/UUID, активные writer instances и окружение; старый PID 8184 не
+считать подтверждённым. Следующие значения — ТОЛЬКО кандидат, .env не редактировался:
+
+```text
+CATALOG_EXPORT_STRATEGY=hybrid-transfer-v1
+CATALOG_EXPORT_CRM_LIGHT=1
+CATALOG_EXPORT_CRM_TENANT_ID=1
+CATALOG_EXPORT_WRITER_HOOKS=1
+CATALOG_EXPORT_WRITERS_READY=1
+CATALOG_EXPORT_LIGHT_DOWNLOAD=0
+CATALOG_EXPORT_LIGHT_ACTIVATION=0
+CATALOG_EXPORT_LIGHT=0
+CATALOG_EXPORT_CAPTURE=0
+CATALOG_EXPORT_PUBLISHING=0
+CATALOG_EXPORT_CLIENT_DOWNLOAD=0
+CATALOG_EXPORT_ACTIVATION=0
+```
+
+WRITERS_READY подтверждает принятие подготовленного writer diff оператором, не
+автоматический coverage=1. При coverage=0 full transfer fail-closed; массовая
+подготовка и CAS этим writer-only включением не разрешаются. Не создавать заказы,
+оплаты/stock/discount операции агентом ради этой проверки. Нужны ранее описанные
+разрешённые fixture-сценарии/наблюдение и подтверждение всех writer sources.
+
+После этого только отдельным разрешением: coverage promotion выбранного scope,
+paired shadow одного и того же полного 19-field DTO при одинаковых epochs и
+valuationAt (существующие builder callbacks + compare-catalog-passport-exports.js),
+LIGHT_DOWNLOAD=1 при LIGHT_ACTIVATION=0; затем отдельный CAS-canary после shadow PASS.
+Shadow JSON equality, browser CAS/abort/working race и performance regression checks
+в этом проходе NOT TESTED. Старый passport/outbox/drafts сохраняются при любой ошибке;
+FAIL не разрешает DROP clock table или повтор бизнес-операции. A4.3 не начинался.

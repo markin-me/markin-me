@@ -45,7 +45,7 @@
     const key = runtimeKey(name, scope);
     const generation = key ? (generations.get(key) || 0) : 0;
     const startedRuntimeGeneration = runtimeGeneration;
-    const startedToken = window.localStorage.getItem('authToken');
+    const startedToken = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     if (key && pending.has(key)) {
       return pending.get(key).then((data) => {
         if (!scope.isCurrent() || startedRuntimeGeneration !== runtimeGeneration) throw new Error('LOCAL_SCOPE_CHANGED');
@@ -57,7 +57,7 @@
     }
     const task = Promise.resolve().then(options.load).then(async (raw) => {
       options.idleContext?.assertCurrent();
-      if (startedRuntimeGeneration !== runtimeGeneration || startedToken !== window.localStorage.getItem('authToken')) {
+      if (startedRuntimeGeneration !== runtimeGeneration || startedToken !== (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'))) {
         throw new Error('LOCAL_SCOPE_CHANGED');
       }
       const data = typeof options.normalize === "function" ? options.normalize(raw) : raw;
@@ -65,7 +65,7 @@
         throw new Error(`INVALID_ADMIN_REFERENCE:${name}`);
       }
       const currentScope = await getScope(name);
-      if (startedRuntimeGeneration !== runtimeGeneration || startedToken !== window.localStorage.getItem('authToken')) {
+      if (startedRuntimeGeneration !== runtimeGeneration || startedToken !== (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'))) {
         throw new Error('LOCAL_SCOPE_CHANGED');
       }
       if (scope && currentScope && currentScope.namespace === scope.namespace

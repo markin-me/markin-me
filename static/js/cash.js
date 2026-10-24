@@ -122,7 +122,7 @@
         if (!repository || !await repository.ready()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
         readAccess = repository.capture();
       }
-      var token = localStorage.getItem('authToken');
+      var token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
       var storeId = localStorage.getItem('activeStoreId') || '1';
       var headers = {};
       headers['x-rbac-context'] = 'cash';
@@ -142,10 +142,10 @@
         signal: opts.signal,
         body: body == null ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)),
       }).then(function (res) {
-        if (token !== localStorage.getItem('authToken') || (readAccess && !readAccess.isCurrent())) throw new Error('LOCAL_SCOPE_CHANGED');
+        if (token !== (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) || (readAccess && !readAccess.isCurrent())) throw new Error('LOCAL_SCOPE_CHANGED');
         if (res.status === 401) {
           if (repository) repository.reset({ forget: true, reason: 'server-refusal' });
-          localStorage.removeItem('authToken');
+          (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
           localStorage.removeItem('user');
           localStorage.removeItem('tenant');
           window.location.href = '/login';

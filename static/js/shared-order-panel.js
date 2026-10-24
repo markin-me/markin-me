@@ -681,7 +681,7 @@
 
   async function requestOrderCatalogSummaries(ids) {
     var requestedIds = Array.isArray(ids) ? ids : [];
-    var token = window.localStorage ? localStorage.getItem("authToken") : "";
+    var token = window.localStorage ? (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) : "";
     var storeId = window.localStorage ? (localStorage.getItem("activeStoreId") || "1") : "1";
     var response = await fetch("/api/admin/catalog/product-summaries", {
       method: "POST",

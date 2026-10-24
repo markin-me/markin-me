@@ -245,7 +245,9 @@
         </div>
     </div>
 
-    <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
+    <script>window.__COURIER_OFFLINE_PUBLIC_KEY__ = <%- JSON.stringify(typeof courierOfflinePublicKey !== 'undefined' ? courierOfflinePublicKey : null).replace(/</g, '\\u003c') %>;</script>
+    <script src="<%= assetUrl('/static/js/auth.js?v=20261023-courier-unlock-v1') %>"></script>
+    <script src="<%= assetUrl('/static/js/courier-offline-vault.js') %>"></script>
     <script src="<%= assetUrl('/static/js/admin-persistent-cache.js') %>"></script>
     <script src="<%= assetUrl('/static/js/admin-local-repository.js') %>"></script>
     <script>
@@ -275,10 +277,10 @@
         }
         function saveAuth(result) {
             if (localStorage.getItem('admin:logout-pending:v1')) throw new Error('Завершите выход из предыдущей сессии');
-            if (result.token && localStorage.getItem('authToken') !== result.token && window.AdminLocalRepository) window.AdminLocalRepository.reset({forget:true});
-            if (result.token) localStorage.setItem('authToken', result.token);
-            if (result.user) localStorage.setItem('user', JSON.stringify(result.user));
-            if (result.tenant) localStorage.setItem('tenant', JSON.stringify(result.tenant));
+            if (result.token && (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) !== result.token && window.AdminLocalRepository) window.AdminLocalRepository.reset({forget:true});
+            if (result.token) setAuthToken(result.token);
+            if (result.user) setAuthLocalValue('user', JSON.stringify(result.user));
+            if (result.tenant) setAuthLocalValue('tenant', JSON.stringify(result.tenant));
         }
         function escapeHtml(value) { return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;'); }
         function showStage(id, title) {
@@ -328,7 +330,7 @@
                 sessionStorage.removeItem('admin:browser-session-attempt');
                 if (getAuthToken()) {
                   window.AdminLocalRepository.reset({forget:true,reason:'identity-change'});
-                  localStorage.removeItem('authToken'); localStorage.removeItem('user'); localStorage.removeItem('tenant');
+                  (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken')); localStorage.removeItem('user'); localStorage.removeItem('tenant');
                 }
                 const authState = captureAuthState();
                 const response = await fetch(mode === 'register' ? '/api/auth/register' : '/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
@@ -346,7 +348,7 @@
             if (data.new_password !== data.new_password_confirm) return showError('Пароли не совпадают');
             try {
                 const authState = captureAuthState();
-                const response = await fetch('/api/auth/change-password', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+localStorage.getItem('authToken')}, body:JSON.stringify({current_password:data.current_password, new_password:data.new_password}) });
+                const response = await fetch('/api/auth/change-password', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+(window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'))}, body:JSON.stringify({current_password:data.current_password, new_password:data.new_password}) });
                 const result = await response.json();
                 if (!authState.isCurrent()) return;
                 if (!response.ok || !result.ok) return showError(errorText(result.error));
@@ -359,7 +361,7 @@
             const card = event.target.closest('[data-role-id]'); if (!card) return;
             try {
                 const authState = captureAuthState();
-                const response = await fetch('/api/auth/active-role', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+localStorage.getItem('authToken')}, body:JSON.stringify({role_id:Number(card.dataset.roleId)}) });
+                const response = await fetch('/api/auth/active-role', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+(window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'))}, body:JSON.stringify({role_id:Number(card.dataset.roleId)}) });
                 const result = await response.json();
                 if (!authState.isCurrent()) return;
                 if (!response.ok || !result.ok) return showError(errorText(result.error));
@@ -407,14 +409,14 @@
                             }
                             if (response.status === 401 || response.status === 403) {
                               window.AdminLocalRepository.reset({forget:true,reason:'server-refusal'});
-                              localStorage.removeItem('authToken');
+                              (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
                             }
                             showError(errorText(result.error));
                         })
                         .catch(error => showError('Не удалось подключить браузерную сессию: ' + error.message));
                       }
                     }
-                } catch (_) { localStorage.removeItem('authToken'); }
+                } catch (_) { (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken')); }
             }
         }
     </script>

@@ -5,6 +5,8 @@ const employeeIdentity = require('./helpers/employeeIdentity');
 const { loadLegacyOwner, authMiddleware, revokeUserStreams } = require('./middleware/auth');
 const { publicRole, publicUser, loadUserRoles, loadAccessContext } = require('./helpers/adminAccessContext');
 const browserSession = require('./helpers/browserSession');
+const courierOfflineGrant = require('./helpers/courierOfflineGrant');
+const { initializeBusinessRevisions } = require('../services/catalog-snapshot-capture');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
@@ -176,6 +178,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         [shopName, finalSlug, null, email, passwordHash]
       );
       const tenantId = Number(tenantResult.insertId);
+      await initializeBusinessRevisions(conn, { tenantId });
       const generatedSubdomain = `shop-${tenantId}`;
       await conn.query('UPDATE ten_tenants SET subdomain=? WHERE id=?', [generatedSubdomain, tenantId]);
       let loginSuffix = `tenant-${tenantId}`;
@@ -390,6 +393,17 @@ module.exports = function makeAuthRouter({ db, helpers }) {
     } catch (error) {
       console.error('BROWSER_SESSION_FAILED:', error.code || error.name);
       return res.status(error.status || 500).json({ ok: false, error: error.code || 'BROWSER_SESSION_FAILED' });
+    }
+  });
+
+  router.post('/courier-offline-grant', authMiddleware, async (req, res) => {
+    try {
+      const context = await loadAccessContext(db, req._authRecord.decoded, req._authRecord);
+      return res.json({ ok: true, grant: courierOfflineGrant.issue(context,
+        browserSession.tokenBinding(readRequestToken(req)), req.body || {}, req.protocol + '://' + req.get('host')) });
+    } catch (error) {
+      console.error('COURIER_OFFLINE_GRANT:', error.code || error.message);
+      return res.status(error.status || 500).json({ ok: false, error: error.status ? error.message : 'OFFLINE_GRANT_FAILED' });
     }
   });
 

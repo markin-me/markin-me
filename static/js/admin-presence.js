@@ -26,7 +26,7 @@
     let tenantId = 0;
     try { tenantId = Number(JSON.parse(localStorage.getItem('tenant') || '{}').id || 0); } catch (_) {}
     const storeId = Number(localStorage.getItem('activeStoreId') || 1);
-    const token = String(localStorage.getItem('authToken') || '').trim();
+    const token = String((window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) || '').trim();
     const activePage = String(document.body?.dataset?.adminActivePage || '');
     const rbacNode = activePage === 'chat'
       ? 'chat.threads'

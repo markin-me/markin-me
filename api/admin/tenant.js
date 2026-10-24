@@ -10,6 +10,7 @@ const http = require('http');
 const https = require('https');
 const os = require('os');
 const { execFile } = require('child_process');
+const { businessMutation, initializeBusinessRevisions } = require('../../services/catalog-snapshot-capture');
 const { domainToASCII, domainToUnicode } = require('url');
 const chatTempRuntime = require('../chatTemp');
 const { getEffectiveTelegramBotConfig } = require('../../data/system-settings');
@@ -4273,10 +4274,18 @@ async function fetchStoreWithHours(tenantId, storeId) {
         ? collectSiteMenuIconUrls(nextSiteMenuItemsJson)
         : null;
 
-      const [tenantUpdate] = await db.query(
+      // Only passport settings invalidate catalog epochs; preserve the existing
+      // credential compare-and-set and the exact UPDATE/parameters below.
+      const passportSettingsChanged = nextTimezone !== current.timezone
+        || nextRoundingMode !== current.price_rounding_mode
+        || Number(nextRoundingPrecision) !== Number(current.price_rounding_precision);
+      const updateProfile = executor => executor.query(
         'UPDATE ten_tenants SET name=?, email=IF(?, ?, email), phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=? AND (NOT ? OR email <=> ?)',
         [nextName, changesTenantEmail, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextImportantMessagesEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId, changesTenantEmail, current.email]
       );
+      const [tenantUpdate] = await (passportSettingsChanged
+        ? businessMutation(db, { tenantId, catalog: true }, updateProfile)
+        : updateProfile(db));
       if (changesTenantEmail && !tenantUpdate.affectedRows) {
         return res.status(409).json({ ok: false, error: 'TENANT_CREDENTIAL_CHANGED' });
       }
@@ -4536,34 +4545,37 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return res.status(409).json({ ok: false, error: 'CODE_TAKEN' });
       }
 
-      await db.query(
-        'INSERT INTO ten_stores (tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active, use_global_hours, use_delivery_hours) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-        [
-          tenantId,
-          nextId,
-          code,
-          name,
-          location.data.address,
-          location.data.address_ref || null,
-          location.data.address_raw_input || address,
-          location.data.address_normalized_display || location.data.address,
-          location.data.address_street || addressStreet,
-          location.data.address_house || addressHouse,
-          location.data.address_context_locality || addressContextLocality || location.data.selected_context_locality || null,
-          location.data.city,
-          floor,
-          apartment,
-          cabinet,
-          addressComment,
-          explicitLat !== undefined ? explicitLat : location.data.lat,
-          explicitLng !== undefined ? explicitLng : location.data.lng,
-          phone,
-          timezone,
-          isActive,
-          useGlobalHours,
-          useDeliveryHours,
-        ]
-      );
+      await businessMutation(db, { tenantId, catalog: true }, async conn => {
+        await conn.query(
+          'INSERT INTO ten_stores (tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active, use_global_hours, use_delivery_hours) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          [
+            tenantId,
+            nextId,
+            code,
+            name,
+            location.data.address,
+            location.data.address_ref || null,
+            location.data.address_raw_input || address,
+            location.data.address_normalized_display || location.data.address,
+            location.data.address_street || addressStreet,
+            location.data.address_house || addressHouse,
+            location.data.address_context_locality || addressContextLocality || location.data.selected_context_locality || null,
+            location.data.city,
+            floor,
+            apartment,
+            cabinet,
+            addressComment,
+            explicitLat !== undefined ? explicitLat : location.data.lat,
+            explicitLng !== undefined ? explicitLng : location.data.lng,
+            phone,
+            timezone,
+            isActive,
+            useGlobalHours,
+            useDeliveryHours,
+          ]
+        );
+        await initializeBusinessRevisions(conn, { tenantId, storeIds: [nextId] });
+      });
 
       if (hoursPayload !== null) {
         await saveStoreHours(tenantId, nextId, hoursPayload);
@@ -4804,10 +4816,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
         if (updates.length) {
           params.push(tenantId, id);
-          await db.query(
+          await businessMutation(db, { tenantId, storeId: id }, conn => conn.query(
             `UPDATE ten_stores SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
             params
-          );
+          ));
         }
 
         if (hoursPayload !== null) {

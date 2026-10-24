@@ -365,7 +365,7 @@
       "x-tenant-id": getTenantId(),
       "x-store-id": getStoreId(),
     };
-    const token = localStorage.getItem("authToken");
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     if (token) headers.Authorization = "Bearer " + token;
     return headers;
   }
@@ -395,7 +395,7 @@
       const parsed = new URL(rawUrl, window.location.origin);
       const tenantId = getTenantId();
       if (tenantId) parsed.searchParams.set("tenant_id", String(tenantId));
-      const token = localStorage.getItem("authToken");
+      const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
       if (String(actorValue || "").toLowerCase() === "out" && token) parsed.searchParams.set("token", token);
       Object.entries(extraParams || {}).forEach(function ([key, value]) {
         if (value === undefined || value === null || value === "") return;

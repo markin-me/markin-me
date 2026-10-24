@@ -505,6 +505,7 @@
     'benefits', 'texts', 'visibility', 'nutrition', 'revision'];
   function lightEnabled(context) {
     return window.__ADMIN_CATALOG_EXPORT_POLICY__?.light?.clientDownload === true
+      && window.__ADMIN_CATALOG_EXPORT_POLICY__.light.tenantId === context?.local_context?.tenantId
       && accessContext(context) === 'products' && (context?.permissions || []).some(grant => grant === '*'
         || (grant?.key === 'products.cost.read' && ['all', 'stores'].includes(grant.access_rule)));
   }
@@ -653,6 +654,10 @@
   }
   function changed() {
     generation += 1;
+    // Diagnostic staging is not a read cache used by any interface. The hybrid
+    // read-only model must not scan ten source projections merely on page load.
+    if (window.__ADMIN_CATALOG_EXPORT_POLICY__?.clientDownload !== true
+        && !lightEnabled(window.AdminAccessContext)) return;
     if (lightEnabled(window.AdminAccessContext)) {
       void prepareLightPassports().catch(error => console.warn('CATALOG_LIGHT_PREPARATION_FAILED:', error.name));
       return; // No parallel legacy source/membership prefetch for this rollout.

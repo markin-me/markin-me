@@ -1,5 +1,6 @@
 const express = require('express');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
+const { businessRevisionHook } = require('../../services/catalog-snapshot-capture');
 
 module.exports = function makeAdminStockRouter({ db, helpers, ordersEvents, can }) {
   const router = express.Router();
@@ -732,6 +733,7 @@ module.exports = function makeAdminStockRouter({ db, helpers, ordersEvents, can 
       }
 
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, storeId });
 
       // Получаем документ
       const [docs] = await conn.query(

@@ -8,12 +8,13 @@
   const CONTROL_KEY = 'admin:local-access:v1';
   let generation = 0;
   let current = null;
+  let readCacheNotice = null;
   let confirmationEpoch = null;
   let expiryTimer = null;
   let releaseReady;
   let readyPromise = new Promise(resolve => { releaseReady = resolve; });
 
-  function token() { return window.localStorage.getItem('admin:logout-pending:v1') ? null : window.localStorage.getItem('authToken'); }
+  function token() { return window.localStorage.getItem('admin:logout-pending:v1') ? null : (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')); }
   function epoch() {
     const bytes = window.crypto.getRandomValues(new Uint8Array(16));
     return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
@@ -60,6 +61,7 @@
   function reset({ forget = false, broadcast = true, reason = 'reset' } = {}) {
     generation += 1;
     current = null;
+    readCacheNotice = null;
     if (expiryTimer !== null) window.clearTimeout(expiryTimer);
     expiryTimer = null;
     settle();
@@ -121,7 +123,8 @@
   }
   async function restore(value, ticket = generation) {
     if (!valid(ticket, value)) return null;
-    const raw = window.sessionStorage.getItem(CONFIRMATION_KEY);
+    const raw = window.CourierOfflineVault?.enabled()
+      ? JSON.stringify(window.CourierOfflineVault.proof()) : window.sessionStorage.getItem(CONFIRMATION_KEY);
     if (!raw) { settle(); return null; }
     let record;
     try { record = JSON.parse(raw); } catch (_) { throw new Error('LOCAL_CONFIRMATION_CORRUPT'); }
@@ -183,6 +186,21 @@
       if (!entry.data || entry.data.repositoryVersion !== 1) throw new Error('LOCAL_ENTRY_INVALID');
       return { ...entry, data: entry.data.value, lastSyncedAt: entry.data.lastSyncedAt };
     }
+    function reportRead(entry, key) {
+      if (!entry || /^(meta:|staging:|checkpoint)/.test(String(key))) return;
+      const domains = { cash: ['cash:workspace', 'orders:detail:shared'], products: ['admin-catalog'],
+        orders: ['orders:list:orders', 'orders:detail:shared'], 'courier-screen': ['orders:list:courier', 'orders:detail:shared'],
+        'new-order': ['admin-catalog'], clients: ['clients'], chat: ['chat', 'chat:summaries', 'chat:threads'],
+        team: ['team:employees'], settings: ['settings:profile'] };
+      if (!domains[window.document?.body?.dataset.adminActivePage]?.includes(domain)) return;
+      const timestamp = Number(entry.lastSyncedAt || entry.updatedAt || 0) || null;
+      // Conservative oldest observed cache timestamp, not a claim that the
+      // entire section is complete/fresh. No data, keys or identity in the event.
+      if (readCacheNotice && (readCacheNotice.lastSyncedAt === null
+        || timestamp !== null && timestamp >= readCacheNotice.lastSyncedAt)) return;
+      readCacheNotice = { lastSyncedAt: timestamp };
+      window.dispatchEvent(new CustomEvent('admin:read-cache', { detail: readCacheNotice }));
+    }
     const staleOptions = opts => ({ ...opts, allowStale: opts.allowStale ?? (current?.offline || window.navigator.onLine === false) });
     const wrap = (value, opts) => ({ repositoryVersion: 1, value, lastSyncedAt: opts.lastSyncedAt ?? null });
     return Object.freeze({
@@ -191,20 +209,26 @@
         assertCurrent();
         const entry = await cache.getEntry(key, staleOptions(opts));
         assertCurrent();
-        return unwrap(entry);
+        const result = unwrap(entry);
+        reportRead(result, key);
+        return result;
       },
       async get(key, opts = {}) { const entry = await this.getEntry(key, opts); return entry ? entry.data : null; },
       async scanEntries(opts = {}) {
         assertCurrent();
         const result = await cache.scanEntries({ ...opts, guard: () => isCurrent() && (!opts.guard || opts.guard()) });
         assertCurrent();
-        return { cursor: result.cursor, entries: result.entries.map(({ key, entry }) => ({ key, ...unwrap({ data: entry.data,
-          createdAt: entry.createdAt, updatedAt: entry.updatedAt, expiresAt: entry.staleAt ?? entry.expiresAt }) })) };
+        return { cursor: result.cursor, entries: result.entries.map(({ key, entry }) => {
+          const value = unwrap({ data: entry.data, createdAt: entry.createdAt, updatedAt: entry.updatedAt, expiresAt: entry.staleAt ?? entry.expiresAt });
+          reportRead(value, key);
+          return { key, ...value };
+        }) };
       },
       async getMany(keys, opts = {}) {
         assertCurrent();
         const entries = await cache.getMany(keys, { ...staleOptions(opts), entries: true });
         assertCurrent();
+        entries.forEach((entry, key) => reportRead(unwrap(entry), key));
         return new Map([...entries].map(([key, value]) => [key, opts.entries ? unwrap(value) : unwrap(value)?.data ?? null]));
       },
       async set(key, value, opts = {}) {

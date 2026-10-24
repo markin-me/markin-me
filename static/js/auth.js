@@ -5,8 +5,31 @@
 /**
  * Получить токен авторизации из localStorage
  */
+let adminRuntimeToken = null;
+const adminRuntimeProfile = new Map();
+function getAuthLocalValue(key) {
+  if (key !== 'user' || !localStorage.getItem('courier:offline-vault:v1')) return localStorage.getItem(key);
+  if (adminRuntimeProfile.has(key)) return adminRuntimeProfile.get(key);
+  return window.CourierOfflineVault?.isUnlocked() ? window.CourierOfflineVault.localGet(key) : null;
+}
+function setAuthLocalValue(key, value) {
+  if (key !== 'user' || !localStorage.getItem('courier:offline-vault:v1')) { localStorage.setItem(key, value); return; }
+  adminRuntimeProfile.set(key, value);
+  localStorage.setItem(key, '@courier-vault');
+  if (window.CourierOfflineVault?.isUnlocked()) {
+    window.CourierOfflineVault.localSet(key, value).catch(error => console.error('PRIVATE_PROFILE_SAVE_FAILED:', error.message));
+  }
+}
+function setAuthToken(value, options = {}) {
+  if (adminRuntimeToken !== (value || null)) adminRuntimeProfile.clear();
+  adminRuntimeToken = value || null;
+  if (options.memoryOnly || localStorage.getItem('courier:offline-vault:v1')) localStorage.removeItem('authToken');
+  else if (value) localStorage.setItem('authToken', value);
+  else localStorage.removeItem('authToken');
+}
 function getAuthToken() {
-  return localStorage.getItem('admin:logout-pending:v1') ? null : localStorage.getItem('authToken');
+  if (localStorage.getItem('admin:logout-pending:v1')) return null;
+  return localStorage.getItem('courier:offline-vault:v1') ? adminRuntimeToken : localStorage.getItem('authToken');
 }
 // Connectivity/read mode is not an authorization grant. The server still checks each operation.
 function isAdminOfflineRead() {
@@ -27,7 +50,11 @@ async function finishBrowserLogout() {
   if (browserLogoutRequest) return browserLogoutRequest;
   const pending = localStorage.getItem('admin:logout-pending:v1');
   let token;
-  try { token = JSON.parse(pending).token; } catch (_) { throw new Error('BROWSER_LOGOUT_STATE_INVALID'); }
+  try {
+    const parsed = JSON.parse(pending);
+    if (parsed.encrypted) return false; // The vault PIN form completes encrypted revocation, never exposes its token.
+    token = parsed.token;
+  } catch (_) { throw new Error('BROWSER_LOGOUT_STATE_INVALID'); }
   if (typeof token !== 'string' || !token) throw new Error('BROWSER_LOGOUT_STATE_INVALID');
   browserLogoutRequest = (async () => {
     const response = await fetch('/api/auth/logout', { method: 'POST', cache: 'no-store', keepalive: true,
@@ -64,8 +91,8 @@ async function confirmServerAccessContext(context) {
       && !context.stores.some(store => String(store.id) === localStorage.getItem('activeStoreId'))) {
       localStorage.setItem('activeStoreId', String(context.stores[0].id));
     }
-    if (context.user) localStorage.setItem('user', JSON.stringify(context.user));
-    if (context.tenant) localStorage.setItem('tenant', JSON.stringify(context.tenant));
+    if (context.user) setAuthLocalValue('user', JSON.stringify(context.user));
+    if (context.tenant) setAuthLocalValue('tenant', JSON.stringify(context.tenant));
     window.AdminAccessContext = context;
     document.documentElement.setAttribute('data-local-access', 'active');
     sessionStorage.removeItem('admin:browser-session-attempt');
@@ -87,7 +114,7 @@ async function confirmServerAccessContext(context) {
  * Получить данные пользователя из localStorage
  */
 function getAuthUser() {
-  const userStr = localStorage.getItem('user');
+  const userStr = getAuthLocalValue('user');
   if (!userStr) return null;
   try {
     return JSON.parse(userStr);
@@ -100,7 +127,7 @@ function getAuthUser() {
  * Получить данные магазина (tenant) из localStorage
  */
 function getAuthTenant() {
-  const tenantStr = localStorage.getItem('tenant');
+  const tenantStr = getAuthLocalValue('tenant');
   if (!tenantStr) return null;
   try {
     return JSON.parse(tenantStr);
@@ -127,7 +154,10 @@ function isAuthenticated() {
  * Выход из системы
  */
 function logout() {
-  const token = localStorage.getItem('authToken');
+  const token = getAuthToken();
+  if (window.CourierOfflineVault?.enabled()) {
+    return window.CourierOfflineVault.logout(token).catch(error => console.error('COURIER_LOGOUT_FAILED:', error.message));
+  }
   try {
     try {
       if (token && !localStorage.getItem('admin:logout-pending:v1')) {
@@ -247,6 +277,7 @@ async function authFetch(url, options = {}) {
  * Если не авторизован и находимся на защищённой странице - перенаправляем
  */
 function checkAuthOnPageLoad() {
+  if (localStorage.getItem('courier:offline-vault:v1')) return; // PIN/online-cookie bootstrap owns the encrypted profile.
   const protectedPaths = ['/dashboard/', '/api/admin/'];
   const currentPath = window.location.pathname;
   

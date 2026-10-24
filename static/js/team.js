@@ -31,6 +31,7 @@
     permissions: [],
     startRoutes: [],
     loginSuffix: '',
+    navigation: { view_users: false, view_roles: false },
     capabilities: { view_employee_documents: false, manage_employee_documents: false, view_users: false, create_users: false, update_users: false, manage_users: false, view_roles: false, create_roles: false, update_roles: false, delete_roles: false, manage_permissions: false, manage_roles: false, manage_system_roles: false },
     tabs: [],
     activeKey: '',
@@ -84,6 +85,21 @@
   function canReadLocalUsers() {
     const permissions = window.AdminAccessContext?.permissions || [];
     return permissions.some((grant) => grant === '*' || (grant.key === 'team.employees.read' && grant.access_rule === 'all'));
+  }
+
+  function applyConfirmedTeamNavigation() {
+    // Match /team/bootstrap's read capabilities, not the employee cache or its
+    // refresh status. Only the current, confirmed access context grants access.
+    const permissions = window.AdminAccessContext?.permissions || [];
+    const hasAny = (keys) => permissions.some((grant) => grant === '*' || keys.includes(grant?.key));
+    state.navigation.view_users = hasAny([
+      'team.employees.read', 'team.employees.create', 'team.employees.update',
+      'team.employee_documents.read', 'team.employee_documents.create', 'team.employee_documents.update',
+    ]);
+    state.navigation.view_roles = hasAny([
+      'team.roles.read', 'team.roles.create', 'team.roles.update', 'team.roles.delete', 'team.roles.permissions',
+    ]);
+    applyTeamCapabilities();
   }
 
   // Explicit projection on BOTH write and read; never persist the bootstrap model.
@@ -463,13 +479,16 @@
   }
 
   function applyTeamCapabilities() {
+    const current = state.repository?.isCurrent() === true;
+    const viewUsers = current && state.navigation.view_users;
+    const viewRoles = current && state.navigation.view_roles;
     dom.sectionButtons.forEach((button) => {
-      const allowed = button.dataset.teamSection === 'roles' ? state.capabilities.view_roles : state.capabilities.view_users;
+      const allowed = button.dataset.teamSection === 'roles' ? viewRoles : viewUsers;
       button.classList.toggle('hidden', !allowed);
       button.disabled = !allowed;
     });
-    if (state.section === 'users' && !state.capabilities.view_users && state.capabilities.view_roles) setSection('roles');
-    if (state.section === 'roles' && !state.capabilities.view_roles && state.capabilities.view_users) setSection('users');
+    if (state.section === 'users' && !viewUsers && viewRoles) setSection('roles');
+    if (state.section === 'roles' && !viewRoles && viewUsers) setSection('users');
     const canCreate = state.section === 'users' ? state.capabilities.create_users : state.capabilities.create_roles;
     dom.create.classList.toggle('hidden', !canCreate);
     dom.create.disabled = !canCreate || !canUseServer();
@@ -1827,10 +1846,14 @@
     const context = await window.AdminAccessContextPromise;
     if (!context || !core || !await core.ready() || !core.isActive()) return;
     const repository = core.create({ domain: 'team:employees', version: 1 });
-    if (state.bootstrapPending?.namespace === repository.namespace && state.bootstrapPending.repository.isCurrent()) return state.bootstrapPending.promise;
+    if (state.bootstrapPending?.namespace === repository.namespace && state.bootstrapPending.repository.isCurrent()) {
+      applyConfirmedTeamNavigation();
+      return state.bootstrapPending.promise;
+    }
     if (state.namespace && state.namespace !== repository.namespace) clearTeamContext();
     state.repository = repository;
     state.namespace = repository.namespace;
+    applyConfirmedTeamNavigation();
     const task = loadTeamData(repository);
     state.bootstrapPending = { namespace: repository.namespace, repository, promise: task };
     try { return await task; }
@@ -1938,6 +1961,7 @@
     state.users = []; state.roles = []; state.stores = []; state.permissions = []; state.startRoutes = [];
     state.tabs = []; state.activeKey = ''; state.fullUserIds.clear();
     Object.keys(state.capabilities).forEach((key) => { state.capabilities[key] = false; });
+    state.navigation = { view_users: false, view_roles: false };
     state.actorUserId = 0; state.actorEmail = ''; state.loginSuffix = '';
     state.repository = null; state.namespace = ''; state.source = ''; state.lastSyncedAt = null;
     state.onlineReady = false; state.bootstrapPending = null; state.dataRevision += 1;
@@ -1946,6 +1970,7 @@
     state.listMessage = '';
     dom.list.innerHTML = ''; dom.editor.innerHTML = ''; dom.tabs.innerHTML = '';
     dom.tabsHeader.classList.add('hidden'); dom.create.disabled = true;
+    applyTeamCapabilities();
     renderConnectionStatus();
   }
 
@@ -1953,6 +1978,7 @@
     if (event.detail?.state === 'active') return;
     setConnectionStatus();
     state.onlineReady = false;
+    applyTeamCapabilities();
     if (event.detail?.state === 'revoked') clearTeamContext();
     else {
       // Pending revalidation may preserve drafts, but must not expose old data.

@@ -68,6 +68,9 @@ const {getOrderPaymentSummary,storedProjection,clientPaymentSummary}=require('..
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, presenceService, paymentServiceClient }) {
+  // Keys are per-transfer nutrition Maps, never tenant/global reusable caches.
+  // Shared conversion Maps are read-only after loading and die with the lease.
+  const transferNutritionReferences = new WeakMap();
   const router = express.Router();
   const onlinePayments = createOrderOnlinePayment({db,client:paymentServiceClient});
   // Reuse the release actions below; this worker only resumes durable pending work.
@@ -1594,12 +1597,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     };
   }
 
-  async function loadPublicNutritionTreeBatch(tenantId, rootProductIds) {
+  async function loadPublicNutritionTreeBatch(tenantId, rootProductIds, references = null) {
     const products = new Map();
     const ingredientsByProductId = new Map();
     const unitLinks = new Map();
-    const unitConversions = new Map();
-    let gramUnitId = null;
+    if (references && references.tenantId !== tenantId) throw new Error('EXPORT_NUTRITION_SCOPE');
+    const unitConversions = references?.unitConversions || new Map();
+    let gramUnitId = references?.gramUnitId ?? null;
 
     const pending = new Set((Array.isArray(rootProductIds) ? rootProductIds : [rootProductIds])
       .map(Number)
@@ -1639,22 +1643,25 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         if (ingredientId > 0 && !visited.has(ingredientId)) pending.add(ingredientId);
       });
     }
-    const [gramRows] = await db.query(
-      `SELECT id FROM prod_units WHERE tenant_id=? AND code='g' LIMIT 1`,
-      [tenantId]
-    );
-    gramUnitId = Array.isArray(gramRows) && gramRows.length ? Number(gramRows[0].id) : null;
-    const [conversionRows] = await db.query(
-      `SELECT from_unit_id, to_unit_id, factor
-       FROM prod_unit_conversions
-       WHERE tenant_id=? AND is_active=1`,
-      [tenantId]
-    );
-    (Array.isArray(conversionRows) ? conversionRows : []).forEach((row) => {
-      const factor = readPublicNutritionNumber(row.factor);
-      if (factor == null) return;
-      unitConversions.set(`${Number(row.from_unit_id)}:${Number(row.to_unit_id)}`, factor);
-    });
+    if (!references?.unitConversions) {
+      const [gramRows] = await db.query(
+        `SELECT id FROM prod_units WHERE tenant_id=? AND code='g' LIMIT 1`,
+        [tenantId]
+      );
+      gramUnitId = Array.isArray(gramRows) && gramRows.length ? Number(gramRows[0].id) : null;
+      const [conversionRows] = await db.query(
+        `SELECT from_unit_id, to_unit_id, factor
+         FROM prod_unit_conversions
+         WHERE tenant_id=? AND is_active=1`,
+        [tenantId]
+      );
+      (Array.isArray(conversionRows) ? conversionRows : []).forEach((row) => {
+        const factor = readPublicNutritionNumber(row.factor);
+        if (factor == null) return;
+        unitConversions.set(`${Number(row.from_unit_id)}:${Number(row.to_unit_id)}`, factor);
+      });
+      if (references) { references.unitConversions = unitConversions; references.gramUnitId = gramUnitId; }
+    }
     const productIds = Array.from(products.keys());
     if (productIds.length) {
       const placeholders = productIds.map(() => '?').join(',');
@@ -1858,7 +1865,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     }
     const missing = ids.filter(id => !treeById.has(id));
     if (missing.length) {
-      const tree = await loadPublicNutritionTreeBatch(tenantId, missing);
+      const tree = await loadPublicNutritionTreeBatch(tenantId, missing, transferNutritionReferences.get(cache) || null);
       missing.forEach(id => treeById.set(id, tree));
     }
     ids.forEach((id) => {
@@ -16554,6 +16561,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   async function* prepareFullProductPassports(tenantId, storeId, ids, options = {}) {
       // Per-build only: never share private editor data between requests/scopes.
       const nutritionCache = new Map();
+      if (options.preparationBudget) transferNutritionReferences.set(nutritionCache, { tenantId });
       const measure = async (name, operation) => {
         if (options.preparationBudget) db.assertPreparationBudget(options.preparationBudget);
         if (typeof options.onStage !== 'function') return operation();

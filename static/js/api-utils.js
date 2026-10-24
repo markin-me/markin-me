@@ -8,7 +8,7 @@
  * Автоматически добавляет токен авторизации и ID выбранной Филиалы
  */
 function getApiHeaders() {
-  const token = localStorage.getItem('authToken');
+  const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
   const storeId = localStorage.getItem('activeStoreId') || '1';
 
   const headers = {

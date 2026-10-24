@@ -5,12 +5,15 @@ const fs = require('fs');
 const multer = require('multer');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const catalogSync = require('../../services/catalog-sync');
+const { businessRevisionHook, businessMutation, writerEnabled } = require('../../services/catalog-snapshot-capture');
 const registerCatalogSourceParts = require('./catalog-source-parts');
 const registerCatalogPassportExports = require('./catalog-passport-exports');
 const { isUserSessionActive } = require('../middleware/auth');
 
 module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, buildAdminFullProductPassports, prepareAdminProductPassport }) {
   const router = express.Router();
+  const catalogWrite = (tenantId, ...args) => businessMutation(db,
+    { tenantId, catalog: true }, conn => conn.query(...args));
 
   async function publishStockChanged(tenantId, storeId, payload = {}) {
     const changedIds = Array.isArray(payload.product_ids) ? payload.product_ids : [];
@@ -45,8 +48,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         }
       }
       if (!conn) throw new Error('DB_CONNECTION_UNAVAILABLE');
+      const revisionEnabled = writerEnabled(tenantId);
       await conn.beginTransaction();
       transactionStarted = true;
+      // Same order as document posting/order deductions: clock before stock
+      // row locks. Taking these locks in reverse order creates a deadlock cycle.
+      await businessRevisionHook(conn, { tenantId, storeId });
 
       const [rows] = await conn.query(
         `SELECT p.id, p.unit_id, p.base_unit_id, p.cost_price, p.price, s.qty AS stock_qty
@@ -68,7 +75,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const previousQty = product.stock_qty == null ? null : Number(product.stock_qty);
       const nextQty = stockQty == null ? null : Number(stockQty);
       if (previousQty === nextQty) {
-        await conn.commit();
+        if (revisionEnabled) await conn.rollback(); // No business DML; discard the preliminary bump.
+        else await conn.commit(); // Preserve the gate-OFF path.
         transactionStarted = false;
         return { changed: false, previousQty, stockQty: nextQty };
       }
@@ -2235,11 +2243,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         (await helpers.nextSortOrderForCategories(db, tenantId, 10, parentId));
 
       const [result] = hasCheckoutVisibilityColumn
-        ? await db.query(
+        ? await catalogWrite(tenantId,
           'INSERT INTO prod_categories (tenant_id, parent_id, code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?)',
           [tenantId, parentId, code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order]
         )
-        : await db.query(
+        : await catalogWrite(tenantId,
           'INSERT INTO prod_categories (tenant_id, parent_id, code, title, icon, site_visibility, is_active, cart_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?,?)',
           [tenantId, parentId, code, title, icon, site_visibility, is_active, cart_visibility, sort_order]
         );
@@ -2270,14 +2278,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const hasCheckoutVisibilityColumn = await ensureCategoryCheckoutVisibilityColumnKnown();
 
       if (hasCheckoutVisibilityColumn) {
-        await db.query(
+        await catalogWrite(tenantId,
           `UPDATE prod_categories
            SET code=?, title=?, icon=?, site_visibility=?, is_active=?, cart_visibility=?, checkout_visibility=?, sort_order=COALESCE(?, sort_order)
            WHERE tenant_id=? AND id=?`,
           [code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order, tenantId, id]
         );
       } else {
-        await db.query(
+        await catalogWrite(tenantId,
           `UPDATE prod_categories
            SET code=?, title=?, icon=?, site_visibility=?, is_active=?, cart_visibility=?, sort_order=COALESCE(?, sort_order)
            WHERE tenant_id=? AND id=?`,
@@ -2317,6 +2325,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       }
 
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
       await conn.query('DELETE FROM prod_product_categories WHERE tenant_id=? AND category_id=?', [tenantId, id]);
       await conn.query('DELETE FROM prod_checkout_constructor_block_categories WHERE tenant_id=? AND category_id=?', [tenantId, id]);
       await conn.query('DELETE FROM prod_categories WHERE tenant_id=? AND id=?', [tenantId, id]);
@@ -2380,7 +2389,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       }
 
       const clientComposition = items.join(', ');
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_products SET client_composition=? WHERE tenant_id=? AND id=?`,
         [clientComposition, tenantId, productId]
       );
@@ -2455,7 +2464,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         }
         if (updates.length) {
           params.push(tenantId, item.product_id);
-          await db.query(
+          await catalogWrite(tenantId,
             `UPDATE prod_products SET ${updates.join(", ")} WHERE tenant_id=? AND id=?`,
             params
           );
@@ -2739,17 +2748,19 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         });
 
         if (missing.length) {
-          let next = await helpers.nextSortOrderForCategory(db, tenantId, categoryId, 10);
-          for (const r of missing) {
-            await db.query(
-              `INSERT INTO prod_product_categories (tenant_id, product_id, category_id, sort_order)
+          await businessMutation(db, { tenantId, catalog: true }, async conn => {
+            let next = await helpers.nextSortOrderForCategory(conn, tenantId, categoryId, 10);
+            for (const r of missing) {
+              await conn.query(
+                `INSERT INTO prod_product_categories (tenant_id, product_id, category_id, sort_order)
                VALUES (?,?,?,?)
                ON DUPLICATE KEY UPDATE sort_order=VALUES(sort_order)`,
-              [tenantId, r.id, categoryId, next]
-            );
-            r.link_sort_order = next;
-            next += 10;
-          }
+                [tenantId, r.id, categoryId, next]
+              );
+              r.link_sort_order = next;
+              next += 10;
+            }
+          });
           rows.sort(
             (a, b) =>
               (a.link_sort_order ?? 999999) - (b.link_sort_order ?? 999999) ||
@@ -2936,31 +2947,34 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const photosArr = helpers.safeJsonArray(req.body.photos_json || req.body.photos);
       const photos_json = photosArr.length ? JSON.stringify(photosArr.slice(0, 10)) : null;
 
-      const [result] = await db.query(
-        `INSERT INTO prod_products
+      const productId = await businessMutation(db, { tenantId, catalog: true, storeId }, async conn => {
+        const [result] = await conn.query(
+          `INSERT INTO prod_products
           (tenant_id, name, sku, description_short, description, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json, is_active, site_visibility,
            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
            show_description_short, show_description, show_client_composition, show_tech_process)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [
-          tenantId, name, sku, description_short, description,
-          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
-          is_active, site_visibility,
-          nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
-          show_description_short, show_description, show_client_composition, show_tech_process
-        ]
-      );
+          [
+            tenantId, name, sku, description_short, description,
+            price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
+            is_active, site_visibility,
+            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
+            show_description_short, show_description, show_client_composition, show_tech_process
+          ]
+        );
 
-      const productId = result.insertId;
-      const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
-      await helpers.setProductCategories(db, tenantId, productId, categoryIds);
+        const productId = result.insertId;
+        const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
+        await helpers.setProductCategories(conn, tenantId, productId, categoryIds, true);
 
-      await db.query(
-        `INSERT INTO prod_product_stocks (tenant_id, store_id, product_id, qty)
+        await conn.query(
+          `INSERT INTO prod_product_stocks (tenant_id, store_id, product_id, qty)
          VALUES (?,?,?,?)
          ON DUPLICATE KEY UPDATE qty=VALUES(qty)`,
-        [tenantId, storeId, productId, stock_qty]
-      );
+          [tenantId, storeId, productId, stock_qty]
+        );
+        return productId;
+      });
 
       res.json({ ok: true, id: productId });
     } catch (e) {
@@ -3049,24 +3063,26 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         removedPhotos = oldPhotos.filter((u) => !newSet.has(u));
       }
 
-      await db.query(
-        `UPDATE prod_products
+      await businessMutation(db, { tenantId, catalog: true }, async conn => {
+        await conn.query(
+          `UPDATE prod_products
          SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, promo_enabled=?, promo_title=?, promo_discount_percent=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, production_zone_id=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
              nutrition_protein_100g=?, nutrition_fat_100g=?, nutrition_carbs_100g=?, client_composition=?, tech_process=?,
              show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?, updated_at=CURRENT_TIMESTAMP
          WHERE tenant_id=? AND id=?`,
-        [
-          name, sku, description_short, description,
-          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
-          is_active, site_visibility,
-          nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
-          show_description_short, show_description, show_client_composition, show_tech_process,
-          tenantId, id
-        ]
-      );
+          [
+            name, sku, description_short, description,
+            price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
+            is_active, site_visibility,
+            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
+            show_description_short, show_description, show_client_composition, show_tech_process,
+            tenantId, id
+          ]
+        );
 
-      const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
-      await helpers.setProductCategories(db, tenantId, id, categoryIds);
+        const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
+        await helpers.setProductCategories(conn, tenantId, id, categoryIds, true);
+      });
 
       const stockAdjustment = await applyInlineStockAdjustment(req, {
         tenantId, storeId, productId: id, stockQty: stock_qty,
@@ -3188,16 +3204,20 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       if (hasSiteVisibility) { updates.push('site_visibility=?'); params.push(site_visibility); }
       if (hasFulfillmentMode) { updates.push('fulfillment_mode=?'); params.push(fulfillment_mode); }
       if (hasProductionZoneId) { updates.push('production_zone_id=?'); params.push(production_zone_id); }
-      if (updates.length > 0) {
-        params.push(tenantId, id);
-        await db.query(
-          `UPDATE prod_products SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
-          params
-        );
-      }
-      if (hasCategoryIds) {
-        const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
-        await helpers.setProductCategories(db, tenantId, id, categoryIds);
+      if (updates.length > 0 || hasCategoryIds) {
+        await businessMutation(db, { tenantId, catalog: true }, async conn => {
+          if (updates.length > 0) {
+            params.push(tenantId, id);
+            await conn.query(
+              `UPDATE prod_products SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
+              params
+            );
+          }
+          if (hasCategoryIds) {
+            const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
+            await helpers.setProductCategories(conn, tenantId, id, categoryIds, true);
+          }
+        });
       }
       if (hasStock) {
         const adjustment = await applyInlineStockAdjustment(req, {
@@ -3235,6 +3255,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       conn = await db.getConnection();
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
 
       const [rows] = await conn.query(
         'SELECT id, photos_json FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
@@ -3246,9 +3267,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      // Удаляем файлы фото с диска
+      // Files cannot roll back with MySQL. Keep them until deletion commits.
       const photos = helpers.safeJsonArray(rows[0].photos_json);
-      if (photos.length) deletePhotoFiles(photos);
 
       // Remove this product where it is used as ingredient in other products (FK has no ON DELETE)
       await conn.query(
@@ -3268,6 +3288,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       await conn.commit();
       conn.release();
+      conn = null;
+      if (photos.length) deletePhotoFiles(photos);
       res.json({ ok: true });
     } catch (e) {
       if (conn) {
@@ -3293,6 +3315,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
       let sort = 0;
       for (const id of norm) {
         await conn.query(
@@ -3327,6 +3350,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
           await conn.beginTransaction();
+          await businessRevisionHook(conn, { tenantId, catalog: true });
           let sort = 0;
           for (const productId of norm) {
             await conn.query(
@@ -3569,6 +3593,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+    await businessRevisionHook(conn, { tenantId, catalog: true });
 
     const targetIds = items.map((item) => Number(item.target_product_id));
     const assignIds = assignments.map((assignment) => Number(assignment.assign_id));
@@ -3807,7 +3832,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     if (!fields.length) return res.json({ ok: true });
 
     values.push(tenantId, id);
-    await db.query(
+    await catalogWrite(tenantId,
       `UPDATE prod_option_groups
        SET ${fields.join(', ')}
        WHERE tenant_id=? AND id=?`,
@@ -3834,6 +3859,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
       const [[currentGroup]] = await conn.query(
         'SELECT id FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
         [tenantId, groupId]
@@ -4026,6 +4052,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
 
       const [[group]] = await conn.query(
         'SELECT id FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
@@ -4103,6 +4130,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
       const [existing] = await conn.query(
         `SELECT id, target_product_id
          FROM prod_option_items
@@ -4195,7 +4223,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!fields.length) return res.json({ ok: true });
 
       values.push(tenantId, id);
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_option_items
          SET ${fields.join(', ')}
          WHERE tenant_id=? AND id=?`,
@@ -4215,7 +4243,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
-      await db.query(
+      await catalogWrite(tenantId,
         `DELETE FROM prod_option_items
          WHERE tenant_id=? AND id=?`,
         [tenantId, id]
@@ -4254,6 +4282,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const conn = await db.getConnection();
       try {
         await conn.beginTransaction();
+        await businessRevisionHook(conn, { tenantId, catalog: true });
         const [existing] = await conn.query(
         `SELECT id, assign_id
          FROM prod_option_assignments
@@ -4303,7 +4332,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const sortOrder = helpers.numOrNull(req.body.sort_order);
       const outOfStockAction = helpers.numOrNull(req.body.out_of_stock_action);
 
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_option_assignments
          SET priority=COALESCE(?, priority),
              sort_order=COALESCE(?, sort_order),
@@ -4325,7 +4354,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
-      await db.query(
+      await catalogWrite(tenantId,
         `DELETE FROM prod_option_assignments
          WHERE tenant_id=? AND id=?`,
         [tenantId, id]
@@ -4512,6 +4541,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
 
       const defaultValueIndexRaw = group.default_value_index;
       // debug log removed
@@ -4589,7 +4619,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         default_value_index = null;
       }
 
-      await db.query(
+      await catalogWrite(tenantId,
         'UPDATE prod_variant_groups SET default_value_index=? WHERE tenant_id=? AND id=?',
         [default_value_index, tenantId, id]
       );
@@ -4666,7 +4696,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       
       // debug logs removed
       
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_variant_groups
          SET ${fields.join(', ')}
          WHERE tenant_id=? AND id=?`,
@@ -4715,7 +4745,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
-      await db.query(
+      await catalogWrite(tenantId,
         `DELETE FROM prod_variant_groups
          WHERE tenant_id=? AND id=?`,
         [tenantId, id]
@@ -4738,6 +4768,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const conn = await db.getConnection();
       try {
         await conn.beginTransaction();
+        await businessRevisionHook(conn, { tenantId, catalog: true });
 
         for (let idx = 0; idx < tiers.length; idx++) {
           const tier = tiers[idx];
@@ -4799,6 +4830,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
       const [existing] = await conn.query(
         `SELECT id, product_id
          FROM prod_variant_assignments
@@ -4864,7 +4896,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!fields.length) return res.json({ ok: true });
 
       values.push(tenantId, id);
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_variant_assignments
          SET ${fields.join(', ')}
          WHERE tenant_id=? AND id=?`,
@@ -4884,7 +4916,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
-      await db.query(
+      await catalogWrite(tenantId,
         `DELETE FROM prod_variant_assignments
          WHERE tenant_id=? AND id=?`,
         [tenantId, id]
@@ -5551,25 +5583,28 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const minSelect = Math.max(0, parseInt(helpers.numOrNull(req.body.min_select), 10) || 1);
       const maxSelect = Math.max(1, parseInt(helpers.numOrNull(req.body.max_select), 10) || 1);
       if (!title || !title.trim()) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
-      const [result] = await db.query(
-        'INSERT INTO prod_combo_blocks (tenant_id, title, sort_order, min_select, max_select) VALUES (?,?,?,?,?)',
-        [tenantId, title.trim(), sortOrder, minSelect, Math.max(minSelect, maxSelect)]
-      );
-      const blockId = result.insertId;
-      const products = Array.isArray(req.body.products) ? req.body.products : [];
-      if (products.length) {
-        let defaultSet = false;
-        for (let i = 0; i < products.length; i++) {
-          const p = products[i];
-          const productId = Number(p.product_id);
-          if (!Number.isFinite(productId) || productId <= 0) continue;
-          const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
-          await db.query(
-            'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?)',
-            [tenantId, blockId, productId, Number(p.sort_order) ?? i, isDefault]
-          );
+      const blockId = await businessMutation(db, { tenantId, catalog: true }, async conn => {
+        const [result] = await conn.query(
+          'INSERT INTO prod_combo_blocks (tenant_id, title, sort_order, min_select, max_select) VALUES (?,?,?,?,?)',
+          [tenantId, title.trim(), sortOrder, minSelect, Math.max(minSelect, maxSelect)]
+        );
+        const blockId = result.insertId;
+        const products = Array.isArray(req.body.products) ? req.body.products : [];
+        if (products.length) {
+          let defaultSet = false;
+          for (let i = 0; i < products.length; i++) {
+            const p = products[i];
+            const productId = Number(p.product_id);
+            if (!Number.isFinite(productId) || productId <= 0) continue;
+            const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
+            await conn.query(
+              'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?)',
+              [tenantId, blockId, productId, Number(p.sort_order) ?? i, isDefault]
+            );
+          }
         }
-      }
+        return blockId;
+      });
       const [[block]] = await db.query(
         'SELECT id, title, sort_order, min_select, max_select, created_at, updated_at FROM prod_combo_blocks WHERE id=? LIMIT 1',
         [blockId]
@@ -5595,33 +5630,35 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const sortOrder = helpers.numOrNull(req.body.sort_order);
       const minSelect = req.body.min_select !== undefined ? Math.max(0, parseInt(req.body.min_select, 10) || 1) : null;
       const maxSelect = req.body.max_select !== undefined ? Math.max(1, parseInt(req.body.max_select, 10) || 1) : null;
-      if (title !== null) {
-        await db.query('UPDATE prod_combo_blocks SET title=? WHERE tenant_id=? AND id=?', [title.trim(), tenantId, id]);
-      }
-      if (sortOrder !== undefined && sortOrder !== null) {
-        await db.query('UPDATE prod_combo_blocks SET sort_order=? WHERE tenant_id=? AND id=?', [sortOrder, tenantId, id]);
-      }
-      if (minSelect !== null) {
-        await db.query('UPDATE prod_combo_blocks SET min_select=? WHERE tenant_id=? AND id=?', [minSelect, tenantId, id]);
-      }
-      if (maxSelect !== null) {
-        await db.query('UPDATE prod_combo_blocks SET max_select = GREATEST(COALESCE(min_select,1), ?) WHERE tenant_id=? AND id=?', [maxSelect, tenantId, id]);
-      }
-      if (Array.isArray(req.body.products)) {
-        await db.query('DELETE FROM prod_combo_block_products WHERE tenant_id=? AND block_id=?', [tenantId, id]);
-        const products = req.body.products;
-        let defaultSet = false;
-        for (let i = 0; i < products.length; i++) {
-          const p = products[i];
-          const productId = Number(p.product_id);
-          if (!Number.isFinite(productId) || productId <= 0) continue;
-          const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
-          await db.query(
-            'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?)',
-            [tenantId, id, productId, Number(p.sort_order) ?? i, isDefault]
-          );
+      await businessMutation(db, { tenantId, catalog: true }, async conn => {
+        if (title !== null) {
+          await conn.query('UPDATE prod_combo_blocks SET title=? WHERE tenant_id=? AND id=?', [title.trim(), tenantId, id]);
         }
-      }
+        if (sortOrder !== undefined && sortOrder !== null) {
+          await conn.query('UPDATE prod_combo_blocks SET sort_order=? WHERE tenant_id=? AND id=?', [sortOrder, tenantId, id]);
+        }
+        if (minSelect !== null) {
+          await conn.query('UPDATE prod_combo_blocks SET min_select=? WHERE tenant_id=? AND id=?', [minSelect, tenantId, id]);
+        }
+        if (maxSelect !== null) {
+          await conn.query('UPDATE prod_combo_blocks SET max_select = GREATEST(COALESCE(min_select,1), ?) WHERE tenant_id=? AND id=?', [maxSelect, tenantId, id]);
+        }
+        if (Array.isArray(req.body.products)) {
+          await conn.query('DELETE FROM prod_combo_block_products WHERE tenant_id=? AND block_id=?', [tenantId, id]);
+          const products = req.body.products;
+          let defaultSet = false;
+          for (let i = 0; i < products.length; i++) {
+            const p = products[i];
+            const productId = Number(p.product_id);
+            if (!Number.isFinite(productId) || productId <= 0) continue;
+            const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
+            await conn.query(
+              'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?)',
+              [tenantId, id, productId, Number(p.sort_order) ?? i, isDefault]
+            );
+          }
+        }
+      });
       const [[block]] = await db.query(
         'SELECT id, title, sort_order, min_select, max_select, created_at, updated_at FROM prod_combo_blocks WHERE id=? LIMIT 1',
         [id]
@@ -5638,7 +5675,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
-      const [result] = await db.query('DELETE FROM prod_combo_blocks WHERE tenant_id=? AND id=?', [tenantId, id]);
+      const [result] = await catalogWrite(tenantId, 'DELETE FROM prod_combo_blocks WHERE tenant_id=? AND id=?', [tenantId, id]);
       if (result.affectedRows === 0) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       res.json({ ok: true });
     } catch (e) {
@@ -5714,21 +5751,24 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const isActive = req.body.is_active === false || req.body.is_active === '0' ? 0 : 1;
       const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
       if (!title || !title.trim()) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
-      const [result] = await db.query(
-        'INSERT INTO prod_combos (tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order) VALUES (?,?,?,?,?,?,?,?)',
-        [tenantId, title.trim(), description, discountPercent, categoryCode, imageUrl, isActive, sortOrder]
-      );
-      const comboId = result.insertId;
-      const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
-      for (let i = 0; i < blocks.length; i++) {
-        const b = blocks[i];
-        const blockId = Number(b.block_id);
-        if (!Number.isFinite(blockId) || blockId <= 0) continue;
-        await db.query(
-          'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
-          [tenantId, comboId, blockId, Number(b.sort_order) ?? i]
+      const comboId = await businessMutation(db, { tenantId, catalog: true }, async conn => {
+        const [result] = await conn.query(
+          'INSERT INTO prod_combos (tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order) VALUES (?,?,?,?,?,?,?,?)',
+          [tenantId, title.trim(), description, discountPercent, categoryCode, imageUrl, isActive, sortOrder]
         );
-      }
+        const comboId = result.insertId;
+        const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
+        for (let i = 0; i < blocks.length; i++) {
+          const b = blocks[i];
+          const blockId = Number(b.block_id);
+          if (!Number.isFinite(blockId) || blockId <= 0) continue;
+          await conn.query(
+            'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
+            [tenantId, comboId, blockId, Number(b.sort_order) ?? i]
+          );
+        }
+        return comboId;
+      });
       const [[row]] = await db.query(
         'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
         [comboId]
@@ -5763,22 +5803,24 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (imageUrl !== undefined) { updates.push('image_url=?'); params.push(imageUrl); }
       if (isActive !== null) { updates.push('is_active=?'); params.push(isActive); }
       if (sortOrder !== null) { updates.push('sort_order=?'); params.push(sortOrder); }
-      if (updates.length) {
-        params.push(tenantId, id);
-        await db.query('UPDATE prod_combos SET ' + updates.join(', ') + ' WHERE tenant_id=? AND id=?', params);
-      }
-      if (Array.isArray(req.body.blocks)) {
-        await db.query('DELETE FROM prod_combo_set_blocks WHERE tenant_id=? AND combo_id=?', [tenantId, id]);
-        for (let i = 0; i < req.body.blocks.length; i++) {
-          const b = req.body.blocks[i];
-          const blockId = Number(b.block_id);
-          if (!Number.isFinite(blockId) || blockId <= 0) continue;
-          await db.query(
-            'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
-            [tenantId, id, blockId, Number(b.sort_order) ?? i]
-          );
+      await businessMutation(db, { tenantId, catalog: true }, async conn => {
+        if (updates.length) {
+          params.push(tenantId, id);
+          await conn.query('UPDATE prod_combos SET ' + updates.join(', ') + ' WHERE tenant_id=? AND id=?', params);
         }
-      }
+        if (Array.isArray(req.body.blocks)) {
+          await conn.query('DELETE FROM prod_combo_set_blocks WHERE tenant_id=? AND combo_id=?', [tenantId, id]);
+          for (let i = 0; i < req.body.blocks.length; i++) {
+            const b = req.body.blocks[i];
+            const blockId = Number(b.block_id);
+            if (!Number.isFinite(blockId) || blockId <= 0) continue;
+            await conn.query(
+              'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
+              [tenantId, id, blockId, Number(b.sort_order) ?? i]
+            );
+          }
+        }
+      });
       const [[row]] = await db.query(
         'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
         [id]
@@ -5797,17 +5839,19 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!Number.isFinite(comboId) || comboId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [[combo]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, comboId]);
       if (!combo) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
-      await db.query('DELETE FROM prod_combo_set_blocks WHERE tenant_id=? AND combo_id=?', [tenantId, comboId]);
-      const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
-      for (let i = 0; i < blocks.length; i++) {
-        const b = blocks[i];
-        const blockId = Number(b.block_id);
-        if (!Number.isFinite(blockId) || blockId <= 0) continue;
-        await db.query(
-          'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
-          [tenantId, comboId, blockId, Number(b.sort_order) ?? i]
-        );
-      }
+      await businessMutation(db, { tenantId, catalog: true }, async conn => {
+        await conn.query('DELETE FROM prod_combo_set_blocks WHERE tenant_id=? AND combo_id=?', [tenantId, comboId]);
+        const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
+        for (let i = 0; i < blocks.length; i++) {
+          const b = blocks[i];
+          const blockId = Number(b.block_id);
+          if (!Number.isFinite(blockId) || blockId <= 0) continue;
+          await conn.query(
+            'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
+            [tenantId, comboId, blockId, Number(b.sort_order) ?? i]
+          );
+        }
+      });
       const [rows] = await db.query(
         `SELECT sb.id, sb.combo_id, sb.block_id, sb.sort_order, b.title AS block_title
          FROM prod_combo_set_blocks sb
@@ -5827,7 +5871,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
-      const [result] = await db.query('DELETE FROM prod_combos WHERE tenant_id=? AND id=?', [tenantId, id]);
+      const [result] = await catalogWrite(tenantId, 'DELETE FROM prod_combos WHERE tenant_id=? AND id=?', [tenantId, id]);
       if (result.affectedRows === 0) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       res.json({ ok: true });
     } catch (e) {
@@ -5914,6 +5958,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
       const [existing] = await conn.query(
         `SELECT id, group_id, is_active
          FROM prod_option_assignments
@@ -5975,6 +6020,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
       const [rows] = await conn.query(
         `SELECT id, group_id FROM prod_option_assignments
          WHERE tenant_id=? AND assign_type='product' AND assign_id=? AND is_active=1 FOR UPDATE`,
@@ -6019,7 +6065,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!Number.isFinite(productId) || productId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_GROUP_ID' });
 
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_option_assignments
          SET is_active=0
          WHERE tenant_id=? AND assign_type='product' AND assign_id=? AND group_id=?`,
@@ -6057,6 +6103,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
 
       const [assignmentRows] = await conn.query(
         `SELECT id
@@ -6237,6 +6284,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await businessRevisionHook(conn, { tenantId, catalog: true });
 
       const [assignmentRows] = await conn.query(
         `SELECT id, default_value_index
@@ -6485,7 +6533,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
       const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
 
-      const [result] = await db.query(
+      const [result] = await catalogWrite(tenantId,
         `INSERT INTO prod_units
          (tenant_id, code, title, short_title, sort_order, is_active)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -6513,7 +6561,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
       const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
 
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_units
          SET code=?, title=?, short_title=?, sort_order=?, is_active=?
          WHERE tenant_id=? AND id=?`,
@@ -6533,7 +6581,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_units
          SET is_active=0
          WHERE tenant_id=? AND id=?`,
@@ -6579,7 +6627,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
       }
 
-      const [result] = await db.query(
+      const [result] = await catalogWrite(tenantId,
         `INSERT INTO prod_unit_conversions
          (tenant_id, from_unit_id, to_unit_id, factor, is_active)
          VALUES (?, ?, ?, ?, 1)`,
@@ -6607,7 +6655,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
       }
 
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_unit_conversions
          SET from_unit_id=?, to_unit_id=?, factor=?, is_active=?
          WHERE tenant_id=? AND id=?`,
@@ -6628,7 +6676,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_unit_conversions
          SET is_active=0
          WHERE tenant_id=? AND id=?`,
@@ -6686,7 +6734,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       );
 
       if (existing.length) {
-        await db.query(
+        await catalogWrite(tenantId,
           `UPDATE prod_product_unit_links
            SET factor=?
            WHERE tenant_id=? AND id=?`,
@@ -6695,7 +6743,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.json({ ok: true, id: existing[0].id });
       }
 
-      const [result] = await db.query(
+      const [result] = await catalogWrite(tenantId,
         `INSERT INTO prod_product_unit_links
          (tenant_id, product_id, unit_id, base_unit_id, factor)
          VALUES (?, ?, ?, ?, ?)`,
@@ -6720,7 +6768,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'BAD_UNIT_ID' });
       }
 
-      await db.query(
+      await catalogWrite(tenantId,
         `DELETE FROM prod_product_unit_links
          WHERE tenant_id=? AND product_id=? AND unit_id=?`,
         [tenantId, productId, unitId]
@@ -6877,7 +6925,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'ALREADY_EXISTS' });
       }
 
-      const [result] = await db.query(
+      const [result] = await catalogWrite(tenantId,
         `INSERT INTO prod_product_ingredients
          (tenant_id, product_id, ingredient_id, quantity, unit_id, quantity_min, quantity_max, quantity_step, price_override, is_variable, sort_order)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -6916,7 +6964,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const isVariable = Number(req.body.is_variable) === 1 ? 1 : 0;
       const sortOrder = Number(req.body.sort_order) || 0;
 
-      await db.query(
+      await catalogWrite(tenantId,
         `UPDATE prod_product_ingredients
          SET quantity=?, unit_id=?, quantity_min=?, quantity_max=?, quantity_step=?, price_override=?, is_variable=?, sort_order=?
          WHERE tenant_id=? AND product_id=? AND ingredient_id=?`,
@@ -6942,7 +6990,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'BAD_INGREDIENT_ID' });
       }
 
-      await db.query(
+      await catalogWrite(tenantId,
         `DELETE FROM prod_product_ingredients
          WHERE tenant_id=? AND product_id=? AND ingredient_id=?`,
         [tenantId, productId, ingredientId]

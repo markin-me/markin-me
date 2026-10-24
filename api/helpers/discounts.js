@@ -2,6 +2,8 @@ function toText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+const { businessMutation } = require('../../services/catalog-snapshot-capture');
+
 function parseJsonObject(value, fallback = {}) {
   if (!value) return fallback;
   if (typeof value === 'object' && !Array.isArray(value)) return value;
@@ -413,7 +415,7 @@ async function getOrderDiscounts(db, tenantId, storeId, customerId, orderTotal, 
   });
 }
 
-async function recordDiscountUsage(db, tenantId, discountId, orderId, customerId, discountAmount, promoCodeId = null) {
+async function recordDiscountUsage(db, tenantId, discountId, orderId, customerId, discountAmount, promoCodeId = null, revisionScope = null) {
   const normalizedTenantId = Number(tenantId || 0);
   const normalizedDiscountId = Number(discountId || 0);
   const normalizedOrderId = Number(orderId || 0);
@@ -450,36 +452,42 @@ async function recordDiscountUsage(db, tenantId, discountId, orderId, customerId
     };
   }
 
-  await db.query(
-    `INSERT INTO mkt_discount_usage (tenant_id, discount_id, promo_code_id, order_id, customer_id, discount_amount)
+  // Store scope is supplied by the order caller. Legacy callers without it
+  // invalidate the tenant catalog instead, without an extra store/clock SELECT.
+  const write = async writeDb => {
+    await writeDb.query(
+      `INSERT INTO mkt_discount_usage (tenant_id, discount_id, promo_code_id, order_id, customer_id, discount_amount)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      normalizedTenantId,
-      normalizedDiscountId,
-      normalizedPromoCodeId,
-      normalizedOrderId,
-      normalizedCustomerId,
-      normalizedDiscountAmount,
-    ]
-  );
+      [
+        normalizedTenantId,
+        normalizedDiscountId,
+        normalizedPromoCodeId,
+        normalizedOrderId,
+        normalizedCustomerId,
+        normalizedDiscountAmount,
+      ]
+    );
 
-  await db.query(
-    `UPDATE mkt_discounts
+    await writeDb.query(
+      `UPDATE mkt_discounts
         SET usage_count = usage_count + 1
       WHERE id = ? AND tenant_id = ?`,
-    [normalizedDiscountId, normalizedTenantId]
-  );
+      [normalizedDiscountId, normalizedTenantId]
+    );
 
-  if (normalizedPromoCodeId) {
-    await db.query(
-      `UPDATE mkt_discount_promo_codes
+    if (normalizedPromoCodeId) {
+      await writeDb.query(
+        `UPDATE mkt_discount_promo_codes
           SET usage_count = usage_count + 1
         WHERE id = ? AND tenant_id = ?`,
-      [normalizedPromoCodeId, normalizedTenantId]
-    );
-  }
+        [normalizedPromoCodeId, normalizedTenantId]
+      );
+    }
 
-  return { recorded: true };
+    return { recorded: true };
+  };
+  return revisionScope?.revisionCovered ? write(db) : businessMutation(db, { tenantId: normalizedTenantId,
+    ...(revisionScope?.storeId ? { storeId: Number(revisionScope.storeId) } : { catalog: true }) }, write);
 }
 
 async function ensureCustomerBenefitDiscountStorage(executor) {

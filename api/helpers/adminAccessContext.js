@@ -1,6 +1,7 @@
 'use strict';
 
 const { createHash } = require('crypto');
+const courierActions = require('./courierActions');
 
 function localAccessContext(decoded, principal, permissions, stores, activeRoleId = decoded.activeRoleId, isOwner = false) {
   if ((decoded.authStage && decoded.authStage !== 'active') || !Number.isFinite(decoded.exp)) return null;
@@ -10,6 +11,10 @@ function localAccessContext(decoded, principal, permissions, stores, activeRoleI
   const identity = { tenantId: Number(decoded.tenantId), principal, activeRoleId: Number(activeRoleId || 0) || null,
     authVersion: Number(decoded.authVersion || 0) };
   return { ...identity, formatVersion: 1,
+    courierOfflineV2: principal.type === 'user' && courierActions.enabled(decoded.tenantId)
+      && grants.some(([key]) => key === '*' || key === 'courier.orders.update'),
+    courierEventsRead: courierActions.enabled(decoded.tenantId)
+      && grants.some(([key]) => key === '*' || key === 'orders.status'),
     accessViewId: createHash('sha256').update(JSON.stringify([identity, grants, resources, isOwner])).digest('hex'),
     confirmedAt: Date.now(), expiresAt: decoded.exp * 1000 };
 }

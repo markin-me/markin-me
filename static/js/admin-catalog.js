@@ -1258,7 +1258,7 @@
     const targetScope = scope; const generation = scopeGeneration;
     assertScope(targetScope, generation);
     const headers = { 'x-rbac-context': configuredRbacContext, ...(options.headers || {}) };
-    const token = localStorage.getItem("authToken");
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     if (token) headers.Authorization = `Bearer ${token}`;
     const storeId = Number(localStorage.getItem("activeStoreId") || localStorage.getItem("store_id") || 0);
     if (storeId > 0) headers["x-store-id"] = String(storeId);
@@ -1305,7 +1305,7 @@
 
   async function runDownloadJob() {
     if (downloadJobPromise) return downloadJobPromise;
-    if (!downloadJob || !scope?.complete || !navigator.onLine || !localStorage.getItem("authToken")) return false;
+    if (!downloadJob || !scope?.complete || !navigator.onLine || !(window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'))) return false;
     const targetScope = scope;
     const scopeRunGeneration = scopeGeneration;
     const jobRunGeneration = ++downloadJobGeneration;
@@ -1696,8 +1696,15 @@
       } };
   }
 
+  function immutableBaselineKeys(id) {
+    return [`product:${id}`, `passport:${id}`, `passport-index:${id}`, `meta:immutable-active:${id}`,
+      'meta:immutable-budget', 'meta:manifest', 'meta:working-sequence'];
+  }
   async function beginImmutablePassport(productId, idle) {
     if (!await init() || !Number.isSafeInteger(productId) || productId <= 0) throw new Error('IMMUTABLE_SCOPE_UNAVAILABLE');
+    if (window.__ADMIN_CATALOG_EXPORT_POLICY__?.light?.tenantId !== window.AdminAccessContext?.local_context?.tenantId) {
+      throw new Error('IMMUTABLE_ACTIVATION_DISABLED');
+    }
     if (!offlineWritesAllowed) throw new Error('IMMUTABLE_WORKING_COORDINATION_UNAVAILABLE');
     const target = scope, generation = scopeGeneration;
     return catalogWrite(target, async () => {
@@ -1705,8 +1712,7 @@
       if (dirtyProducts.has(productId) || dirtyPassports.has(productId) || removedProductIds.has(productId)
           || pendingMutationFields.get(productId)?.size) throw immutableWorkingConflict();
       const fence = window.localStorage.getItem(writeFenceKey(target));
-      const expected = await target.compareTokens([`product:${productId}`, `passport:${productId}`,
-        `passport-index:${productId}`, `meta:immutable-active:${productId}`, 'meta:immutable-budget', 'meta:manifest', 'meta:working-sequence']);
+      const expected = await target.compareTokens(immutableBaselineKeys(productId));
       const marker = await target.get('meta:working-sequence', { allowStale: true });
       const workingSequence = marker?.sequence ?? 0;
       if (!Number.isSafeInteger(workingSequence) || workingSequence < 0) throw new Error('CATALOG_WORKING_SEQUENCE_INVALID');
@@ -1723,7 +1729,9 @@
   }
 
   async function activateImmutablePassport(dto, root, validation, baseline, idle, probeOnly = false) {
-    if (window.__ADMIN_CATALOG_EXPORT_POLICY__?.light?.activation !== true || !await init()) throw new Error('IMMUTABLE_ACTIVATION_DISABLED');
+    if (window.__ADMIN_CATALOG_EXPORT_POLICY__?.light?.activation !== true
+        || window.__ADMIN_CATALOG_EXPORT_POLICY__.light.tenantId !== window.AdminAccessContext?.local_context?.tenantId
+        || !await init()) throw new Error('IMMUTABLE_ACTIVATION_DISABLED');
     const target = scope, generation = scopeGeneration, id = root?.productId;
     const digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', value)), x => x.toString(16).padStart(2, '0')).join('');
     // Recover an acknowledged-or-not commit without writing again. A changed
@@ -1753,10 +1761,14 @@
     // Do not promote them using only a volatile/runtime equality check.
     if (!Number.isSafeInteger(baseline.workingSequence) || baseline.workingSequence < 0
         || !Array.isArray(baseline.expected)
-        || baseline.expected.filter(([key]) => key === 'meta:working-sequence').length !== 1) throw new Error('IMMUTABLE_BASELINE_SEQUENCE_REQUIRED');
-    if (!isEditorReadyPassport(dto) || dto.product.id !== id || Number(dto.product.tenant_id) !== root.tenantId
+        || baseline.expected.length !== immutableBaselineKeys(id).length
+        || baseline.expected.some((row, index) => !Array.isArray(row) || row.length !== 2
+          || row[0] !== immutableBaselineKeys(id)[index] || typeof row[1] !== 'string')) throw new Error('IMMUTABLE_BASELINE_SEQUENCE_REQUIRED');
+    const sequenceToken = JSON.parse(baseline.expected.at(-1)[1]);
+    if ((sequenceToken?.value?.sequence ?? 0) !== baseline.workingSequence) throw new Error('IMMUTABLE_BASELINE_SEQUENCE_REQUIRED');
+    if (!isEditorReadyPassport(dto) || dto.availability?.error || dto.product.id !== id || Number(dto.product.tenant_id) !== root.tenantId
         || root.tenantId !== window.AdminAccessContext?.local_context?.tenantId
-        || root.storeId !== Number(target.storeId) || root.builderVersion !== 'legacy-shared-v1'
+        || root.storeId !== Number(target.storeId) || root.formatVersion !== 1 || root.builderVersion !== 'legacy-shared-v1'
         || root.sealed !== true || root.snapshotConsistent !== true
         || root.passportComplete !== true || root.epochs?.coverage < 1 || root.expiresAt <= Date.now()
         || validation?.snapshotId !== root.snapshotId || validation.sealed !== true || validation.fresh !== true
@@ -1824,6 +1836,7 @@
   async function hydrateOfflineProducts(ids, options) {
     const permissions = window.AdminAccessContext?.permissions || [];
     if (window.__ADMIN_CATALOG_EXPORT_POLICY__?.light?.clientDownload === true && configuredRbacContext === 'products'
+        && window.__ADMIN_CATALOG_EXPORT_POLICY__.light.tenantId === window.AdminAccessContext?.local_context?.tenantId
         && permissions.some(grant => grant === '*' || (grant?.key === 'products.cost.read' && ['all', 'stores'].includes(grant.access_rule)))) {
       return false; // One preparation pipeline; foreground ensureProducts is unaffected.
     }
@@ -2624,11 +2637,11 @@
     const targetScope = scope;
     const source = new AbortController();
     syncSource = source;
-    const token = String(window.localStorage?.getItem('authToken') || '').trim();
+    const token = String((window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) || '').trim();
     const rbacContext = configuredRbacContext;
     const isCurrent = () => source === syncSource && !source.signal.aborted
       && scopeIsCurrent(targetScope, generation) && configuredRbacContext === rbacContext
-      && String(window.localStorage?.getItem('authToken') || '').trim() === token;
+      && String((window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) || '').trim() === token;
     const onRevision = (value, eventName) => {
       if (!isCurrent()) return;
       try {

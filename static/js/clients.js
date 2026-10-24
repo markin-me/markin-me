@@ -57,7 +57,7 @@
 
   async function apiJson(url, opts = {}) {
     if (!clientScope?.isCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
-    const token = localStorage.getItem('authToken');
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const storeId = localStorage.getItem('activeStoreId') || '1';
     const activeRbacNode = Array.from(document.querySelectorAll('.page-col-left [data-rbac-node].is-active'))
       .map((item) => item.dataset.rbacNode)
@@ -80,7 +80,7 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     if (res.status === 401) {
-      localStorage.removeItem('authToken');
+      (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
       window.location.href = '/login';
@@ -320,7 +320,7 @@
   }
 
   async function apiUploadBannerImages(files) {
-    const token = localStorage.getItem('authToken');
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const fd = new FormData();
     files.forEach((file) => fd.append('images', file));
     const headers = { 'x-tenant-id': String(tenantId) };
@@ -331,7 +331,7 @@
       body: fd,
     });
     if (res.status === 401) {
-      localStorage.removeItem('authToken');
+      (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
       window.location.href = '/login';

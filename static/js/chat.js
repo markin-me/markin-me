@@ -671,9 +671,10 @@
         .filter(Boolean)
     );
     const fullAccess = permissionKeys.has("*");
-    state.canCreateChat = fullAccess || permissionKeys.has("chat.threads.create");
-    state.canUpdateChat = fullAccess || permissionKeys.has("chat.threads.update");
-    state.canDeleteChat = fullAccess || permissionKeys.has("chat.threads.delete");
+    const online = chatScope?.isCurrent() && !isAdminOfflineRead();
+    state.canCreateChat = online && (fullAccess || permissionKeys.has("chat.threads.create"));
+    state.canUpdateChat = online && (fullAccess || permissionKeys.has("chat.threads.update"));
+    state.canDeleteChat = online && (fullAccess || permissionKeys.has("chat.threads.delete"));
     state.canManageChat = state.canCreateChat || state.canUpdateChat || state.canDeleteChat;
     syncChatManageUi();
   }
@@ -4685,7 +4686,7 @@
     try {
       const parsed = new URL(rawUrl, window.location.origin);
       if (tenantId) parsed.searchParams.set("tenant_id", String(tenantId));
-      const token = localStorage.getItem("authToken");
+      const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
       if (String(actorValue || "").toLowerCase() === "out" && token) parsed.searchParams.set("token", token);
       Object.entries(extraParams || {}).forEach(([key, value]) => {
         if (value === undefined || value === null || value === "") return;
@@ -4812,7 +4813,7 @@
     }
 
     const tenantId = getTenantId();
-    const token = localStorage.getItem("authToken");
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const storeId = localStorage.getItem("activeStoreId") || "1";
     const isFormDataBody = (
       typeof FormData !== "undefined"
@@ -4858,7 +4859,7 @@
       });
 
       if (res.status === 401) {
-        localStorage.removeItem("authToken");
+        (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
         localStorage.removeItem("user");
         localStorage.removeItem("tenant");
         window.location.href = "/login";
@@ -5817,6 +5818,7 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     const thread = getThread(key);
+    if (thread.some(message => message.localSendState)) throw new Error('CHAT_UNCONFIRMED_MESSAGES');
     const meta = getClientMetaForSync(key);
     state.remoteSaveInFlight[key] = true;
     try {
@@ -5883,18 +5885,21 @@
     return payload;
   }
 
-  function enqueueRemoteMutation(clientId, mutator) {
+  function enqueueRemoteMutation(clientId, mutator, onError = null) {
     const key = normalizeClientIdKey(clientId);
     if (!key || typeof mutator !== "function") return Promise.resolve();
+    const access = localRepository.capture();
     const prev = state.remoteMutationQueues[key] || Promise.resolve();
     let next = null;
     next = prev
       .catch(() => {})
       .then(async () => {
+        if (!access.isCurrent() || !chatScope?.isCurrent() || isAdminOfflineRead()) throw new Error('CHAT_ONLINE_REQUIRED');
         const result = await mutator();
         return result;
       })
       .catch((err) => {
+        if (typeof onError === 'function') onError(err);
         console.error(err);
       })
       .finally(() => {
@@ -8823,6 +8828,7 @@
   }
 
   function markThreadReadByIds(clientId, messageIds) {
+    if (!chatScope?.isCurrent() || isAdminOfflineRead()) return false;
     const key = normalizeClientIdKey(clientId);
     const ids = Array.isArray(messageIds) ? messageIds.map((id) => String(id || "")).filter(Boolean) : [];
     if (!key || !ids.length) return false;
@@ -8901,13 +8907,37 @@
   }
 
   function pushMessage(clientId, message) {
+    if (!state.canCreateChat || !chatScope?.isCurrent() || isAdminOfflineRead()) return false;
+    const access = localRepository.capture();
+    message.localSendState = 'pending';
     const thread = getThread(clientId);
     ensureMessageReactions(message);
     thread.push(message);
     if (thread.length > 2000) thread.splice(0, thread.length - 2000);
     markThreadMutated(clientId);
     saveStore();
-    enqueueRemoteMutation(clientId, () => remoteCreateMessage(clientId, message));
+    enqueueRemoteMutation(clientId, async () => {
+      try {
+        await remoteCreateMessage(clientId, message);
+        if (!access.isCurrent() || !chatScope?.isCurrent()) return;
+        delete message.localSendState;
+        scheduleOutgoingDeliveryProgress(clientId, message.id);
+      } catch (error) {
+        if (access.isCurrent() && chatScope?.isCurrent()) message.localSendState = 'failed';
+        throw error;
+      } finally {
+        if (access.isCurrent() && chatScope?.isCurrent()) {
+          markThreadMutated(clientId); saveStore();
+          if (Number(state.activeClientId) === Number(clientId)) renderMessages();
+        }
+      }
+    }, () => {
+      if (access.isCurrent() && chatScope?.isCurrent() && message.localSendState === 'pending') {
+        message.localSendState = 'failed';
+        markThreadMutated(clientId); saveStore();
+        if (Number(state.activeClientId) === Number(clientId)) renderMessages();
+      }
+    });
   }
 
   function getMessageAuthorName(message) {
@@ -12808,6 +12838,7 @@
 
   function getOutgoingDeliveryStatus(message) {
     if (!message || message.direction !== "out") return "";
+    if (message.localSendState === 'pending' || message.localSendState === 'failed') return message.localSendState;
     const status = String(message.deliveryStatus || "").toLowerCase();
     if (message.readAt || message.readByClient === true || message.read === true || status === "read") return "read";
     if (message.deliveredAt || status === "delivered") return "delivered";
@@ -12823,6 +12854,8 @@
   }
 
   function getOutgoingStatusIconMarkup(status) {
+    if (status === 'pending') return '<i class="fas fa-clock" aria-hidden="true"></i>';
+    if (status === 'failed') return '<i class="fas fa-exclamation-triangle" aria-hidden="true"></i>';
     if (status === "sent") {
       return `
         <svg class="chat-message-status-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
@@ -14779,7 +14812,8 @@
         ? "Доставлено"
         : outgoingStatus === "sent"
           ? "Отправлено"
-          : "";
+          : outgoingStatus === 'pending' ? 'Ожидает ответа сервера'
+            : outgoingStatus === 'failed' ? 'Отправка не подтверждена. Автоматического повтора нет.' : '';
     const classes = [
       "chat-message",
       `chat-message--${msg.direction === "out" ? "out" : "in"}`,
@@ -15223,6 +15257,7 @@
   }
 
   function sendMessage(text, options = {}) {
+    if (!chatScope?.isCurrent() || isAdminOfflineRead()) return false;
     if (state.editingMessageId ? !state.canUpdateChat : !state.canCreateChat) return false;
     if (!state.activeClientId) return false;
     const clean = normalizeComposerText(text);
@@ -15264,7 +15299,6 @@
       readAt: "",
     });
 
-    scheduleOutgoingDeliveryProgress(state.activeClientId, newMessageId);
     clearComposerReply();
     clearComposerDraftForClient(state.activeClientId);
     hideMessageContextMenu();
@@ -16126,6 +16160,7 @@
   }
 
   function sendPreparedImageAttachments(attachments, options = {}) {
+    if (!chatScope?.isCurrent() || isAdminOfflineRead()) return 0;
     if (!state.canCreateChat) return 0;
     if (!state.activeClientId) return 0;
     const list = Array.isArray(attachments)
@@ -16160,7 +16195,6 @@
         deliveredAt: "",
         readAt: "",
       });
-      scheduleOutgoingDeliveryProgress(state.activeClientId, newMessageId);
       sent += 1;
     }
 
@@ -18638,6 +18672,7 @@
   window.addEventListener("admin:local-context-changed", (event) => {
     if (event.detail?.state !== "active") {
       chatScope = null;
+      applyChatAccessContext(window.AdminAccessContext);
       pauseRealtimeSync({ flushTyping: false });
       activeApiAbortControllers.forEach((controller) => controller.abort());
       return;
@@ -18645,6 +18680,7 @@
     const next = createChatScope();
     chatScope = next.complete && next.namespace === chatNamespace ? next : null;
     if (chatScope) {
+      applyChatAccessContext(window.AdminAccessContext);
       resetChatPersistentCacheContext();
       resumeRealtimeSync();
     }
@@ -18659,7 +18695,10 @@
   window.addEventListener("storage", (event) => {
     if (event.key === "activeStoreId") invalidateStoreScope();
   });
-  window.addEventListener("offline", () => pauseRealtimeSync({ flushTyping: false }));
+  window.addEventListener("offline", () => {
+    pauseRealtimeSync({ flushTyping: false });
+    applyChatAccessContext(window.AdminAccessContext);
+  });
   init();
 })();
 

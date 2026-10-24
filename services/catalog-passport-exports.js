@@ -17,11 +17,19 @@ const idBytes = id => {
 function policy() {
   const on = name => process.env['CATALOG_EXPORT_' + name] === '1';
   const mysql = process.env.CATALOG_EXPORT_STRATEGY === 'mysql';
+  const rawTenant = process.env.CATALOG_EXPORT_CRM_TENANT_ID || '';
+  const tenantId = /^[1-9][0-9]*$/.test(rawTenant) && Number.isSafeInteger(Number(rawTenant))
+    && Number(rawTenant) <= 2147483647 ? Number(rawTenant) : null;
+  // The legacy LIGHT flag also changes PUBLIC snapshot startup behaviour.
+  // A CRM canary must not arm that flag or spill over to other tenants.
+  const crm = !mysql && !on('LIGHT') && on('CRM_LIGHT') && tenantId !== null
+    && capture.writerEnabled(tenantId);
   return Object.freeze({ strategy: mysql ? 'mysql' : 'hybrid-transfer-v1',
     capture: mysql && on('CAPTURE'), publishing: mysql && on('PUBLISHING'),
     clientDownload: mysql && on('CLIENT_DOWNLOAD'), activation: false,
-    light: { enabled: !mysql && on('LIGHT'), clientDownload: !mysql && on('LIGHT') && on('LIGHT_DOWNLOAD'),
-      activation: !mysql && on('LIGHT') && on('LIGHT_ACTIVATION') },
+    light: { enabled: crm, tenantId: crm ? tenantId : null,
+      clientDownload: crm && on('LIGHT_DOWNLOAD'),
+      activation: crm && on('LIGHT_DOWNLOAD') && on('LIGHT_ACTIVATION') },
     requestedActivation: on('ACTIVATION'), passportReady: false,
     blocked: ['RAW_GRAPH_PARITY_UNVERIFIED', 'PURE_PASSPORT_DERIVATION_REQUIRED',
       'WRITER_COVERAGE_INCOMPLETE', 'ATOMIC_PASSPORT_ACTIVATION_REQUIRED'],
@@ -78,7 +86,8 @@ function createTransfers({ db, prepareAdminProductPassport }) {
   const admit = (scope, resource, signal, work) => queue.run({ tenantId: scope.tenantId, storeId: scope.storeId,
     scopeHash: scope.hash, resource: 'light:' + resource, signal }, work);
   function access(scope, id) {
-    if (!policy().light.enabled) throw failure('EXPORT_LIGHT_DISABLED');
+    const rollout = policy().light;
+    if (!rollout.enabled || scope.tenantId !== rollout.tenantId) throw failure('EXPORT_LIGHT_DISABLED');
     if (!scope.canCaptureCost) throw failure('EXPORT_RAW_COST_PERMISSION_REQUIRED');
     idBytes(id);
     const transfer = transfers.get(id);
@@ -107,7 +116,8 @@ function createTransfers({ db, prepareAdminProductPassport }) {
     return { ...result, chunks: batch, nextChunk: after + batch.length };
   }
   async function targets(scope, after, signal) {
-    if (!policy().light.enabled) throw failure('EXPORT_LIGHT_DISABLED');
+    const rollout = policy().light;
+    if (!rollout.enabled || scope.tenantId !== rollout.tenantId) throw failure('EXPORT_LIGHT_DISABLED');
     if (!scope.canCaptureCost) throw failure('EXPORT_RAW_COST_PERMISSION_REQUIRED');
     if (!Number.isSafeInteger(after) || after < 0) throw failure('INVALID_EXPORT_CURSOR');
     const before = await revision(db, scope, signal);
@@ -120,7 +130,8 @@ function createTransfers({ db, prepareAdminProductPassport }) {
       recordCount: ids.length, catalogComplete: false, snapshotConsistent: false };
   }
   async function start(scope, productId, signal, firstStage = false) {
-    if (!policy().light.enabled) throw failure('EXPORT_LIGHT_DISABLED');
+    const rollout = policy().light;
+    if (!rollout.enabled || scope.tenantId !== rollout.tenantId) throw failure('EXPORT_LIGHT_DISABLED');
     if (!scope.canCaptureCost) throw failure('EXPORT_RAW_COST_PERMISSION_REQUIRED');
     if (!Number.isSafeInteger(productId) || productId <= 0 || typeof prepareAdminProductPassport !== 'function'
         || typeof db.withPreparationBudget !== 'function') throw failure('INVALID_EXPORT_PRODUCT');
@@ -172,7 +183,7 @@ function createTransfers({ db, prepareAdminProductPassport }) {
         check(signal);
         if (step.done) {
           const dto = step.value?.payload?.data?.[String(transfer.productId)];
-          if (!fullDto(dto, transfer.productId, scope.tenantId)) throw failure('EXPORT_INCOMPLETE_DTO');
+          if (!fullDto(dto, transfer.productId, scope.tenantId) || dto.availability?.error) throw failure('EXPORT_INCOMPLETE_DTO');
           assertTransferDto(dto);
           const bytes = encode(dto);
           if (bytes.length > LIGHT.dtoBytes) throw failure('NEEDS_PARTITIONING');

@@ -7181,6 +7181,7 @@
   }
 
   async function submitRightOrderTask(orderId, options = {}) {
+    if (isAdminOfflineRead() || !catalogPageContext?.isCurrent()) throw new Error('Отправка заказа доступна только при подключении к серверу. Черновик не отправлен.');
     const withPayment = options?.withPayment === true;
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
@@ -17301,7 +17302,7 @@
     if (isAdminOfflineRead()) throw new TypeError('Для этого действия требуется соединение с сервером.');
     const access = window.AdminLocalRepository.capture();
     if (!catalogPageContext?.isCurrent() || !access.isCurrent()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
-    const token = localStorage.getItem("authToken");
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const storeId = localStorage.getItem("activeStoreId") || "1";
     const headers = {
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
@@ -17312,7 +17313,7 @@
     };
     const res = await fetch(url, { method: opts.method || "GET", headers, body: opts.body });
     const data = await res.json().catch(() => null);
-    if (!access.isCurrent() || token !== localStorage.getItem('authToken')
+    if (!access.isCurrent() || token !== (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'))
         || storeId !== (localStorage.getItem('activeStoreId') || '1')) throw new Error('LOCAL_SCOPE_CHANGED');
     window.CatalogRepository.checkAccessResponse(res.status, data);
     if (!res.ok || !data || data.ok !== true) {

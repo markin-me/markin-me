@@ -4829,6 +4829,7 @@
   }
 
   async function uploadTenantAsset(field, file) {
+    if (isAdminOfflineRead() || !window.AdminLocalRepository?.isActive()) throw new Error('Для загрузки файла требуется соединение с сервером.');
 
 
 
@@ -4889,6 +4890,7 @@
 
 
   async function uploadTenantSound(field, file) {
+    if (isAdminOfflineRead() || !window.AdminLocalRepository?.isActive()) throw new Error('Для загрузки файла требуется соединение с сервером.');
 
 
 
@@ -47626,6 +47628,7 @@
 
 
     async function uploadSettingsIcon(type, id, file) {
+      if (isAdminOfflineRead() || !window.AdminLocalRepository?.isActive()) throw new Error('Для загрузки файла требуется соединение с сервером.');
 
 
 

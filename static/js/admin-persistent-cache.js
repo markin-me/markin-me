@@ -27,7 +27,7 @@
   }
 
   function readJsonStorage(key) {
-    try { return JSON.parse(window.localStorage.getItem(key) || "null"); }
+    try { return JSON.parse((key === 'user' && window.getAuthLocalValue ? window.getAuthLocalValue(key) : window.localStorage.getItem(key)) || "null"); }
     catch (_) { return null; }
   }
 
@@ -143,7 +143,21 @@
     }));
   }
 
-  const readEntry = (key) => requestOperation("readonly", (store) => store.get(key));
+  async function decodeEntry(entry) {
+    if (!entry || !window.CourierOfflineVault) return entry;
+    return { ...entry, data: await window.CourierOfflineVault.decode(entry.key, entry.namespace, entry.data) };
+  }
+  async function encodeEntry(entry) {
+    if (window.CourierOfflineVault) entry.data = await window.CourierOfflineVault.encode(entry.key, entry.namespace, entry.data);
+    return entry;
+  }
+  async function casToken(data) {
+    const json = JSON.stringify(data ?? null);
+    if (data?.courierEncrypted !== 1) return json;
+    const hash = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+    return 'courier-sha256:' + Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  const readEntry = async (key) => decodeEntry(await requestOperation("readonly", (store) => store.get(key)));
   const deleteEntry = (key, options = {}) => requestOperation("readwrite", (store) => {
     if (options.guard && !options.guard()) throw new Error('LOCAL_SCOPE_CHANGED');
     return store.delete(key);
@@ -204,17 +218,18 @@
       || message.includes("quota") || Number(error.code) === 22 || Number(error.code) === 1014;
   }
 
-  function putEntry(key, namespace, data, version, ttlMs, options = {}) {
+  async function putEntry(key, namespace, data, version, ttlMs, options = {}) {
     const now = Date.now();
     const ttl = Number(ttlMs);
     const deadline = Number.isFinite(ttl) && ttl > 0 ? now + ttl : null;
+    const encoded = await encodeEntry({ key, namespace, data });
     return requestOperation("readwrite", (store) => {
       if (options.guard && !options.guard()) throw new Error('LOCAL_SCOPE_CHANGED');
       return store.put({
         key, namespace, schemaVersion: SCHEMA_VERSION, version,
         createdAt: now, updatedAt: now,
         expiresAt: options.retainStale ? null : deadline,
-        data,
+        data: encoded.data,
         ...(options.retainStale ? { retainStale: true, staleAt: deadline } : {}),
       });
     });
@@ -419,7 +434,11 @@
             request.onerror = () => { failure = request.error; abort(); };
           } catch (error) { options.signal?.removeEventListener('abort', abort); reject(error); return; }
           const cleanup = () => options.signal?.removeEventListener('abort', abort);
-          transaction.oncomplete = () => { cleanup(); try { assertCurrent(); resolve({ entries, cursor: next }); } catch (error) { reject(error); } };
+            transaction.oncomplete = () => {
+              cleanup();
+              Promise.all(entries.map(async row => ({ ...row, entry: await decodeEntry(row.entry) })))
+                .then(decoded => { assertCurrent(); resolve({ entries: decoded, cursor: next }); }).catch(reject);
+            };
           transaction.onabort = transaction.onerror = () => { cleanup(); reject(failure || transaction.error || new DOMException('Local read interrupted', 'AbortError')); };
         });
       },
@@ -428,7 +447,8 @@
         const storageKeys = requested.map(scopedKey);
         const result = new Map(requested.map((key) => [key, null]));
         if (!resolved.complete || !requested.length) return result;
-        const entries = await requestMany("readonly", storageKeys.map((key) => (store) => store.get(key)));
+        const raw = await requestMany("readonly", storageKeys.map((key) => (store) => store.get(key)));
+        const entries = await Promise.all(raw.map(decodeEntry));
         const now = Date.now();
         entries.forEach((entry, index) => {
           if (!entry || entry.schemaVersion !== SCHEMA_VERSION) return;
@@ -449,16 +469,33 @@
         return writeEntry(storageKey, resolved.namespace, data, resolved.version, options.ttlMs, guardedWrite).then(() => true);
       },
       async compareTokens(keys) {
-        const entries = await this.getMany(keys, { allowStale: true, entries: true });
-        return [...entries].map(([key, entry]) => [key, JSON.stringify(entry?.data ?? null)]);
+        // CAS compares durable ciphertext, not freshly encrypted/plaintext values.
+        const entries = await requestMany('readonly', keys.map(key => store => store.get(scopedKey(key))));
+        return Promise.all(keys.map(async (key, i) => [key, await casToken(entries[i]?.data ?? null)]));
       },
       async compareAndSetMany(expected, entries, options = {}) {
         if (!resolved.complete || !Array.isArray(expected) || !expected.length || expected.length > 12
             || !Array.isArray(entries) || !entries.length || entries.length > 12
             || expected.some(([key, token]) => !scopedKey(key) || typeof token !== 'string')
             || expected.reduce((sum, [, token]) => sum + token.length, 0) > 512 * 1024) throw new Error('INVALID_LOCAL_CAS');
+        // Hash tokens avoid reducing the existing plaintext budget by base64 overhead.
+        // Hash outside IDB; compare the EXACT preflight ciphertext again INSIDE the
+        // write transaction. There is no async crypto/transaction inactivity gap.
+        const hashed = expected.filter(([, token]) => /^courier-sha256:[a-f0-9]{64}$/.test(token));
+        const preflight = new Map();
+        if (hashed.length) {
+          const snapshots = await requestMany('readonly', hashed.map(([key]) => store => store.get(scopedKey(key))));
+          let plainUnits = expected.filter(([, token]) => !token.startsWith('courier-sha256:')).reduce((n, [, token]) => n + token.length, 0);
+          await Promise.all(snapshots.map(async (entry, index) => {
+            const data = entry?.schemaVersion === SCHEMA_VERSION ? entry.data : null;
+            if (await casToken(data) !== hashed[index][1]) throw new Error('LOCAL_CAS_MISMATCH');
+            plainUnits += JSON.stringify((await decodeEntry(entry))?.data ?? null).length;
+            preflight.set(hashed[index][0], JSON.stringify(data));
+          }));
+          if (plainUnits > 512 * 1024) throw new Error('INVALID_LOCAL_CAS');
+        }
         const now = Date.now();
-        const records = entries.map(([key, data]) => makeEntry(scopedKey(key), resolved.namespace, data, resolved.version, options.ttlMs, now));
+        const records = await Promise.all(entries.map(([key, data]) => encodeEntry(makeEntry(scopedKey(key), resolved.namespace, data, resolved.version, options.ttlMs, now))));
         if (writeOptions.retainStale) records.forEach(entry => {
           entry.retainStale = true; entry.staleAt = entry.expiresAt; entry.expiresAt = null;
         });
@@ -483,7 +520,7 @@
                   assertCurrent();
                   const entry = request.result;
                   const actual = entry?.schemaVersion === SCHEMA_VERSION ? entry.data : null;
-                  if (JSON.stringify(actual) !== token) throw new Error('LOCAL_CAS_MISMATCH');
+                  if (JSON.stringify(actual) !== (preflight.has(key) ? preflight.get(key) : token)) throw new Error('LOCAL_CAS_MISMATCH');
                   if (--remaining === 0) records.forEach(record => {
                     assertCurrent();
                     const write = store.put(record);
@@ -504,9 +541,9 @@
         const requested = entries instanceof Map ? [...entries.entries()] : (Array.isArray(entries) ? entries : []);
         if (!resolved.complete || !requested.length) return false;
         const now = Date.now();
-        const records = requested.map(([key, data]) => makeEntry(
+        const records = await Promise.all(requested.map(([key, data]) => encodeEntry(makeEntry(
           scopedKey(key), resolved.namespace, data, resolved.version, options.ttlMs, now
-        ));
+        ))));
         if (writeOptions.retainStale) records.forEach(entry => {
           entry.retainStale = true;
           entry.staleAt = entry.expiresAt;
@@ -731,7 +768,41 @@
     mergePatch: mergeOrderPassportPatch,
   };
 
-  window.AdminPersistentCache = { read, write, remove, prunePrefix, scope, createScope, cleanup,
+  async function encryptCourierEntries() {
+    const vault = window.CourierOfflineVault;
+    if (!vault?.isUnlocked()) throw new Error('OFFLINE_UNLOCK_REQUIRED');
+    const db = await openDb();
+    // Read-only inventory, encryption outside IDB transactions, bounded CAS commits.
+    const records = await requestOperation('readonly', store => store.getAll());
+    const pending = records.filter(entry => vault.privateEntry(entry.key, entry.namespace) && entry.data?.courierEncrypted !== 1);
+    for (let offset = 0; offset < pending.length; offset += 25) {
+      const batch = await Promise.all(pending.slice(offset, offset + 25).map(async original => ({
+        original, encoded: await encodeEntry({ ...original })
+      })));
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite'), store = tx.objectStore(STORE_NAME);
+        let failure;
+        for (const { original, encoded } of batch) {
+          const request = store.get(original.key);
+          request.onsuccess = () => {
+            if (!vault.isUnlocked() || JSON.stringify(request.result) !== JSON.stringify(original)) {
+              failure = new Error('PRIVATE_MIGRATION_CONCURRENT_WRITE'); tx.abort(); return;
+            }
+            store.put(encoded);
+          };
+        }
+        tx.oncomplete = resolve;
+        tx.onerror = tx.onabort = () => reject(failure || tx.error || new Error('PRIVATE_MIGRATION_ABORTED'));
+      });
+    }
+    const final = await requestOperation('readonly', store => store.getAll());
+    if (final.some(entry => vault.privateEntry(entry.key, entry.namespace) && entry.data?.courierEncrypted !== 1)) {
+      throw new Error('PRIVATE_MIGRATION_INCOMPLETE');
+    }
+    return pending.length;
+  }
+
+  window.AdminPersistentCache = { read, write, remove, prunePrefix, scope, createScope, cleanup, encryptCourierEntries,
     scheduleMaintenance, isQuotaError,
     currentIdentity, resetRuntimeScope, readProductCatalog, writeProductCatalog,
     loadProductCatalog, invalidateProductCatalog, orderPassport };

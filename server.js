@@ -13,6 +13,13 @@ const cookieParser = require('cookie-parser');
 const { URL, domainToASCII } = require('url');
 
 const db = require('./db');
+// A second local HTTP instance must not run the primary instance's jobs or
+// change external webhooks. This mode is never enabled by default.
+const diagnosticInstance = process.env.CRM_DIAGNOSTIC_INSTANCE === '1';
+if (diagnosticInstance && (process.env.DB_NAME !== 'a1186497_test'
+    || process.env.LISTEN !== '127.0.0.1:3100' || process.env.PORT !== '3100')) {
+  throw new Error('DIAGNOSTIC_INSTANCE_REQUIRES_TEST_DATABASE_AND_LOOPBACK_3100');
+}
 const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
 const { createStockWebSocketHub, createOrdersWebSocketHub } = require('./services/stock-websocket');
@@ -737,6 +744,7 @@ app.locals.assetUrl = function assetUrl(src) {
 };
 app.locals.appVersion = APP_CACHE_VERSION;
 app.locals.serviceWorkerVersion = SERVICE_WORKER_VERSION;
+app.locals.courierOfflinePublicKey = require('./api/helpers/courierOfflineGrant').publicJwk();
 app.locals.catalogExportPolicy = require('./services/catalog-passport-exports').policy();
 app.locals.navigationRbac = {
   actionLabels: BASE_ACTION_LABELS,
@@ -1330,7 +1338,8 @@ app.get('/manifest.json', async (req, res) => {
 // Service Worker для PWA (Android / установка на домашний экран)
 const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/css/style.css?v=20261014-sidebar-profile-role-v1'),
-  app.locals.assetUrl('/static/js/auth.js'),
+  app.locals.assetUrl('/static/js/auth.js?v=20261023-courier-unlock-v1'),
+  app.locals.assetUrl('/static/js/courier-offline-vault.js'),
   app.locals.assetUrl('/static/js/current-time.js'),
   app.locals.assetUrl('/static/js/theme.js'),
   app.locals.assetUrl('/static/js/sidebar.js'),
@@ -2165,6 +2174,9 @@ app.use('/dashboard', browserSession.requireTransport, (req, res, next) => {
         return res.status(403).render('pages/auth', { mode: 'login', pageAccessError: 'У выбранной роли нет доступа к этому разделу.' });
       }
       res.locals.serverAccessContext = { ...context, token_binding: browserSession.tokenBinding(req.cookies[browserSession.COOKIE_NAME]) };
+      // Private, no-store HTML only; never included in a neutral offline shell.
+      res.setHeader('Cache-Control', 'no-store, private');
+      res.locals.serverAccessToken = req.cookies[browserSession.COOKIE_NAME];
       return next();
     } catch (error) {
       console.error('HTML_AUTHORIZATION_FAILED:', error.code || error.name);
@@ -2229,7 +2241,7 @@ app.post('/api/max/webhook', (req, res) => {
 // ------------------------------
 const publicShopRouter = makePublicShopRouter({ db, helpers, ordersEvents, presenceService, paymentServiceClient: app.get('paymentServiceClient') });
 app.set('synchronizeOrderOnlinePayment',publicShopRouter.synchronizeOnlinePayment);
-publicShopRouter.startPaymentReleaseWorker();
+if (!diagnosticInstance) publicShopRouter.startPaymentReleaseWorker();
 app.use('/api/public', publicShopRouter);
 app.use('/api/print', makePrintApiRouter({ db, helpers }));
 
@@ -3398,6 +3410,10 @@ server.on('listening', () => {
     : `${listenTarget.host || '0.0.0.0'}:${listenTarget.port}`;
   console.log(`Server bind target: ${bindLabel}`);
   console.log(`Passenger mode: ${String(process.env.IN_PASSENGER || '').trim() === '1' ? 'yes' : 'no'}`);
+  if (diagnosticInstance) {
+    console.log('Diagnostic instance: startup polling, webhook sync and payment release worker disabled');
+    return;
+  }
   console.log(`🚀 Сервер запущен на ${PORT}`);
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
   syncSystemTelegramRuntime().catch((e) => console.error('Telegram runtime sync error:', e.message || e));

@@ -4,6 +4,8 @@
   return match ? Number(match[0]) : NaN;
 }
 
+const { businessRevisionHook } = require('../../services/catalog-snapshot-capture');
+
 function toPositiveNumber(value, fallback = 0) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -886,6 +888,7 @@ async function applyStockDeductionForOrderItems({
   orderId = null,
   publicId = null,
   createdBy = null,
+  revisionCovered = false,
 }) {
   const { normalizedDeductions, productsById } = await buildDeductions({
     db,
@@ -901,6 +904,9 @@ async function applyStockDeductionForOrderItems({
     };
   }
 
+  // All callers own an order/payment transaction. Never start a nested Tx;
+  // a clock failure propagates to that caller's existing rollback boundary.
+  if (!revisionCovered) await businessRevisionHook(db, { tenantId: Number(tenantId), storeId: Number(storeId) });
   await applyStockUpdates({
     db,
     tenantId,

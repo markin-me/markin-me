@@ -195,14 +195,21 @@
 
   async function apiJson(url, opts = {}) {
     const requestAccess = localRepository.capture();
+    if (!requestAccess.isCurrent() || !workspaceAccessIsCurrent()) throw new Error('LOCAL_SCOPE_CHANGED');
+    if (isAdminOfflineRead()) throw new TypeError('Для этого действия требуется соединение с сервером.');
+    const endOperation = opts.method && !['GET', 'HEAD'].includes(String(opts.method).toUpperCase())
+      ? window.AdminIdleHydration?.beginOperation() : null;
+    try {
     const readAccess = (!opts.method || String(opts.method).toUpperCase() === 'GET') ? requestAccess : null;
     if (readAccess && (!readAccess.isCurrent() || !workspaceAccessIsCurrent())) throw new Error('LOCAL_SCOPE_CHANGED');
     // Получаем токен и store_id из localStorage
-    const token = localStorage.getItem('authToken');
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const storeId = localStorage.getItem('activeStoreId') || '1';
     const headers = {
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
       "x-rbac-context": isCourierWorkspace ? "courier" : "orders",
+      ...(isCourierWorkspace && /^\/api\/admin\/orders\/[1-9][0-9]*\/status$/.test(String(url)) && !opts.body?.courier_intent
+        ? { 'x-courier-online-action': '1' } : {}),
       ...(opts.headers || {}),
     };
 
@@ -229,12 +236,12 @@
     }
     
     const json = await res.json().catch(() => null);
-    if (readAccess && (!readAccess.isCurrent() || token !== localStorage.getItem('authToken')
-      || storeId !== (localStorage.getItem('activeStoreId') || '1'))) throw new Error('LOCAL_SCOPE_CHANGED');
+    if (!requestAccess.isCurrent() || token !== (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'))
+      || storeId !== (localStorage.getItem('activeStoreId') || '1')) throw new Error('LOCAL_SCOPE_CHANGED');
     if (res.status === 401) {
       if (requestAccess.isCurrent()) {
         localRepository.reset({ forget: true, reason: 'server-refusal' });
-        localStorage.removeItem('authToken');
+        (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
         localStorage.removeItem('user');
         localStorage.removeItem('tenant');
         window.location.href = '/login';
@@ -252,10 +259,12 @@
       apiError.status = Number(res.status || 0);
       apiError.code = String(json?.error || "API_ERROR");
       apiError.retryAfter = String(res.headers.get("Retry-After") || "").trim() || null;
+      apiError.courierEvent = json?.courier_event || null;
       throw apiError;
     }
-    if (readAccess && String(url).startsWith('/api/admin/orders')) ordersLastSyncedAt = Date.now();
+    if (readAccess && String(url).startsWith('/api/admin/orders') && !/\/courier-events(?:\?|$)/.test(String(url))) ordersLastSyncedAt = Date.now();
     return json;
+    } finally { endOperation?.(); }
   }
 
   const ORDER_DETAILS_CACHE_DOMAIN = "orders:detail:shared";
@@ -744,6 +753,7 @@
   let courierCachedSnapshotVisible = false;
   const COURIER_OFFLINE_QUEUE_VERSION = 1;
   const COURIER_OUTBOX_MAX_ITEMS = 200;
+  const COURIER_OUTBOX_INTENT_BUDGET = 256 * 1024; // Reserve CAS headroom for receipts/errors.
   const COURIER_OUTBOX_ENTRY_KEY = "pending";
   const courierOutboxOperations = new Map();
   const courierOutboxProcessing = new Map();
@@ -761,6 +771,11 @@
     refreshError: "",
     transientBanner: null,
     restoredHideTimer: null,
+    retryTimer: null,
+    legacyPending: false,
+    history: [],
+    sendAbort: null,
+    v2Refused: false,
   };
 
   // -----------------------------
@@ -1316,8 +1331,9 @@
       item?.type === "status" && Number(item?.orderId || 0) === Number(orderId || 0)
     ));
     if (!items.length) return null;
-    if (items.some((item) => item.state === "failed" || item.state === "blocked")) {
-      return { mode: "error", label: "Не отправлено" };
+    if (items.some((item) => item.state === 'conflict')) return { mode: 'error', label: 'Конфликт изменений' };
+    if (items.some((item) => ["failed", "blocked", "rejected"].includes(item.state))) {
+      return { mode: "error", label: "Отклонено · нужна проверка" };
     }
     if (courierOfflineState.syncing && courierOfflineState.online) {
       return { mode: "sending", label: "Отправляем…" };
@@ -2750,31 +2766,61 @@
   }
 
   function courierOutboxScope() {
-    if (!window.AdminPersistentCache?.scope) return null;
-    return window.AdminPersistentCache.scope({
-      domain: "orders:outbox:courier",
-      version: COURIER_OFFLINE_QUEUE_VERSION,
-    });
+    return localOrderScope("orders:outbox:courier");
+  }
+
+  function courierV2Enabled() {
+    const context = window.AdminAccessContext?.local_context;
+    return isCourierWorkspace && !courierOfflineState.v2Refused && workspaceAccessIsCurrent() && context?.courierOfflineV2 === true
+      && context.principal?.type === 'user' && Number(context.tenantId) > 0
+      && (window.AdminAccessContext?.permissions || []).some(grant => grant === '*' || grant?.key === 'courier.orders.update');
+  }
+
+  async function courierCommandBase(order) {
+    if (order?.courier_source?.version === 2) return order;
+    const id = Number(order?.id || 0);
+    if (!(id > 0)) return order;
+    const context = orderDetailsContext(id);
+    // Reconnect/offline list restoration can replace a full runtime card with a
+    // summary. Recover its existing scoped passport, never manufacture a proof
+    // from that summary or require a network request for an offline command.
+    const cached = await readCachedFullOrderEntry(id, { allowStale: true, cache: context.cache });
+    if (!isCurrentOrderDetailsContext(context)) throw new Error('LOCAL_SCOPE_CHANGED');
+    if (cached?.order?.courier_source?.version === 2) return cached.order;
+    if (!isAdminOfflineRead() && courierOfflineState.online) return await revalidateCachedFullOrder(id) || order;
+    return order;
   }
 
   function courierOutboxContext(cache = courierOutboxScope()) {
     return {
       cache,
       namespace: cache?.complete ? String(cache.namespace || "") : "",
-      tenantId: Number(cache?.tenantId || 0) || 0,
-      storeId: Number(cache?.storeId || 0) || 0,
+      tenantId: Number(window.AdminAccessContext?.local_context?.tenantId || 0),
+      storeId: Number(localStorage.getItem('activeStoreId') || 0),
+      actorUserId: Number(window.AdminAccessContext?.local_context?.principal?.type === 'user'
+        ? window.AdminAccessContext.local_context.principal.id : 0),
+      activeRoleId: Number(window.AdminAccessContext?.local_context?.activeRoleId || 0),
     };
   }
 
   function isCurrentCourierOutboxContext(context) {
     return Boolean(context?.namespace
+      && context.cache?.isCurrent()
       && courierOutboxScope()?.namespace === context.namespace);
   }
 
   function queueCourierOutboxOperation(context, operation) {
     if (!context?.namespace) return Promise.reject(new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE"));
     const previous = courierOutboxOperations.get(context.namespace) || Promise.resolve();
-    const promise = previous.catch(() => {}).then(operation);
+    const run = async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (!isCurrentCourierOutboxContext(context)) throw new Error('LOCAL_SCOPE_CHANGED');
+        try { return await operation(); }
+        catch (error) { if (error.message !== 'LOCAL_CAS_MISMATCH' || attempt === 2) throw error; }
+      }
+    };
+    const promise = previous.catch(() => {}).then(() => window.navigator.locks?.request
+      ? window.navigator.locks.request('courier:outbox:' + context.namespace, run) : run());
     courierOutboxOperations.set(context.namespace, promise);
     return promise.finally(() => {
       if (courierOutboxOperations.get(context.namespace) === promise) {
@@ -2790,12 +2836,12 @@
       window.crypto.getRandomValues(parts);
       return `courier-${Date.now().toString(36)}-${Array.from(parts, (part) => part.toString(16)).join("-")}`;
     }
-    return `courier-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+    throw new Error('COURIER_OUTBOX_CRYPTO_REQUIRED');
   }
 
   function normalizeCourierQueueItem(raw) {
     const type = String(raw?.type || "").trim().toLowerCase();
-    if (type !== "status" && type !== "payment") return null;
+    if (!["status", "payment", "non_delivery", "damage"].includes(type)) return null;
     const orderId = Number(raw?.orderId || 0);
     if (!(orderId > 0)) return null;
     const request = raw?.request && typeof raw.request === "object" ? raw.request : {};
@@ -2813,11 +2859,16 @@
       createdAt,
       updatedAt: Number(raw?.updatedAt || createdAt) || createdAt,
       attempts: Math.max(0, Number(raw?.attempts || 0) || 0),
-      state: ["failed", "blocked"].includes(String(raw?.state || "").trim().toLowerCase())
+      actorUserId: Number(raw?.actorUserId || 0),
+      activeRoleId: Number(raw?.activeRoleId || 0),
+      baseState: typeof raw?.baseState === 'string' ? raw.baseState : null,
+      baseRevision: typeof raw?.baseRevision === 'string' ? raw.baseRevision : null,
+      state: ["failed", "blocked", "confirmed", "conflict", "rejected"].includes(String(raw?.state || "").trim().toLowerCase())
         ? String(raw?.state || "").trim().toLowerCase()
         : "pending",
       error: raw?.error ? String(raw.error) : "",
       lastError: raw?.lastError && typeof raw.lastError === "object" ? { ...raw.lastError } : null,
+      receipt: raw?.receipt && typeof raw.receipt === 'object' ? { ...raw.receipt } : null,
       nextAttemptAt: Number(raw?.nextAttemptAt || 0) || null,
       blockedBy: raw?.blockedBy ? String(raw.blockedBy) : null,
       request: {
@@ -2847,19 +2898,53 @@
 
   async function readCourierOutbox(context) {
     if (!context?.cache?.complete) throw new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE");
-    const stored = await context.cache.get(COURIER_OUTBOX_ENTRY_KEY);
-    return normalizeCourierOutboxPayload(stored);
+    // Read the CAS token BEFORE data: a concurrent change can only cause abort,
+    // never let an old read overwrite a newer queue in another tab.
+    const tokens = await context.cache.compareTokens([COURIER_OUTBOX_ENTRY_KEY]);
+    const stored = await context.cache.get(COURIER_OUTBOX_ENTRY_KEY, { allowStale: true });
+    const payload = normalizeCourierOutboxPayload(stored);
+    payload.revisionToken = tokens[0][1];
+    return payload;
   }
 
-  async function writeCourierOutbox(context, payload) {
+  async function writeCourierOutbox(context, payload, revisionToken) {
     if (!context?.cache?.complete) throw new Error("COURIER_OUTBOX_SCOPE_INCOMPLETE");
     const normalized = normalizeCourierOutboxPayload(payload);
-    await context.cache.set(COURIER_OUTBOX_ENTRY_KEY, {
+    await context.cache.compareAndSetMany([[COURIER_OUTBOX_ENTRY_KEY, revisionToken]], [[COURIER_OUTBOX_ENTRY_KEY, {
       version: COURIER_OFFLINE_QUEUE_VERSION,
       nextSequence: normalized.nextSequence,
       items: normalized.items,
-    });
+    }]]);
     return normalized;
+  }
+
+  async function archiveConfirmedCourierActions(context, current) {
+    // Only acknowledged receipts move; original intent stays intact in the same
+    // protected scope. Queue + archive commit together or neither does.
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const items = current.items.filter(item => item.state === 'confirmed'
+      && item.receipt?.id === item.id && item.receipt.state === 'confirmed'
+      && (item.updatedAt < cutoff || current.items.length >= 100)).slice(0, 25);
+    if (!items.length) return false;
+    const metadataKey = 'meta:archive';
+    const [[, metadataToken]] = await context.cache.compareTokens([metadataKey]);
+    const metadata = await context.cache.get(metadataKey, { allowStale: true });
+    if (metadata && (!Number.isSafeInteger(metadata.bytes) || metadata.bytes < 0
+      || !Number.isSafeInteger(metadata.packs) || metadata.packs < 0)) throw new Error('COURIER_ARCHIVE_CORRUPT');
+    const archive = { version: 1, archivedAt: Date.now(), items };
+    const bytes = new TextEncoder().encode(JSON.stringify(archive)).length;
+    // No deletion on pressure: stop archiving and retain the live queue.
+    if (Number(metadata?.bytes || 0) + bytes > 8 * 1024 * 1024 || Number(metadata?.packs || 0) >= 128) return false;
+    const key = 'archive:' + String(items[0].sequence).padStart(16, '0') + ':' + items[items.length - 1].id;
+    const ids = new Set(items.map(item => item.id));
+    const live = { version: COURIER_OFFLINE_QUEUE_VERSION, nextSequence: current.nextSequence,
+      items: current.items.filter(item => !ids.has(item.id)) };
+    await context.cache.compareAndSetMany([[COURIER_OUTBOX_ENTRY_KEY, current.revisionToken], [key, 'null'], [metadataKey, metadataToken]], [
+      [COURIER_OUTBOX_ENTRY_KEY, live], [key, archive],
+      [metadataKey, { bytes: Number(metadata?.bytes || 0) + bytes, packs: Number(metadata?.packs || 0) + 1 }],
+    ]);
+    applyCourierOutboxPayload(live, context);
+    return true;
   }
 
   function applyCourierOutboxPayload(payload, context) {
@@ -2869,26 +2954,40 @@
       ...courierOfflineState.queue.map((item) => Number(item?.orderId || 0)),
       ...normalized.items.map((item) => Number(item?.orderId || 0)),
     ]);
-    courierOfflineState.queue = normalized.items;
+    courierOfflineState.queue = normalized.items.filter(item => item.state !== 'confirmed');
+    courierOfflineState.history = normalized.items;
     courierOfflineState.nextSequence = normalized.nextSequence;
     courierOfflineState.syncError = "";
     syncCourierShadowOrdersFromQueue();
     applyCourierShadowOrdersToState();
     refreshCourierConnectionBanner();
     refreshCourierOrderQueueButtons(affectedOrderIds);
+    updateCourierOutboxButton();
     return true;
   }
 
-  function reportLegacyCourierOutbox() {
+  async function reportLegacyCourierOutbox() {
     try {
       if (localStorage.getItem(courierOfflineQueueKey()) || localStorage.getItem(courierOfflineShadowKey())) {
         console.warn("Legacy courier outbox was left untouched because it has no user identity scope.");
       }
     } catch {}
+    // Preserve the former user/tenant/store queue in place; its records have no
+    // confirmed role/access view or source fingerprint and cannot be replayed.
+    const context = courierOutboxContext();
+    const legacy = window.AdminPersistentCache?.scope({ domain: 'orders:outbox:courier', version: COURIER_OFFLINE_QUEUE_VERSION,
+      userId: context.actorUserId || null, tenantId: context.tenantId, storeId: context.storeId });
+    if (!isCurrentCourierOutboxContext(context) || !legacy?.complete) return;
+    const stored = (await legacy.getEntry(COURIER_OUTBOX_ENTRY_KEY, { allowStale: true }))?.data;
+    if (isCurrentCourierOutboxContext(context)) courierOfflineState.legacyPending = Boolean(stored?.items?.length);
   }
 
   function getCourierBannerState() {
     if (!isCourierWorkspace) return null;
+    if (courierOfflineState.queue.length && !courierV2Enabled()) return {
+      mode: 'error', text: 'Офлайн-запись не включена для текущего доступа. Сохранённые действия не отправляются и не удалены.', retry: false,
+    };
+    if (courierOfflineState.legacyPending) return { mode: 'error', text: 'Есть ранее сохранённые действия — требуется проверка перед отправкой', retry: false };
     const transient = courierOfflineState.transientBanner;
     if (transient) {
       if (!transient.expiresAt || transient.expiresAt > Date.now()) {
@@ -2896,11 +2995,11 @@
       }
       courierOfflineState.transientBanner = null;
     }
-    const failedItem = courierOfflineState.queue.find((item) => item?.state === "failed") || null;
+    const failedItem = courierOfflineState.queue.find((item) => ["failed", "blocked", "conflict", "rejected"].includes(item?.state)) || null;
     if (failedItem) {
       return {
         mode: "error",
-        text: "Не отправлено",
+        text: failedItem.state === 'conflict' ? 'Конфликт изменений · нужна проверка' : 'Отклонено · нужна проверка',
         retry: true,
       };
     }
@@ -3092,10 +3191,11 @@
   async function hydrateCourierOfflineStateFromStorage() {
     if (!isCourierWorkspace) return;
     const context = courierOutboxContext();
-    reportLegacyCourierOutbox();
+    await reportLegacyCourierOutbox();
     const payload = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
     if (!isCurrentCourierOutboxContext(context)) return;
-    courierOfflineState.queue = payload.items;
+    courierOfflineState.queue = payload.items.filter(item => item.state !== 'confirmed');
+    courierOfflineState.history = payload.items;
     courierOfflineState.nextSequence = payload.nextSequence;
     syncCourierShadowOrdersFromQueue();
     courierOfflineState.syncing = false;
@@ -3106,10 +3206,15 @@
     courierOfflineState.online = navigator.onLine !== false;
     applyCourierShadowOrdersToState();
     refreshCourierConnectionBanner();
+    updateCourierOutboxButton();
   }
 
   function resetCourierOfflineRuntimeState() {
     if (!isCourierWorkspace) return;
+    window.clearTimeout(courierOfflineState.retryTimer);
+    courierOfflineState.retryTimer = null;
+    courierOfflineState.legacyPending = false;
+    courierOfflineState.history = [];
     courierOfflineState.queue = [];
     courierOfflineState.shadowOrders = new Map();
     courierOfflineState.nextSequence = 1;
@@ -3120,28 +3225,47 @@
     courierOfflineState.transientBanner = null;
     courierOfflineState.online = navigator.onLine !== false;
     refreshCourierConnectionBanner();
+    updateCourierOutboxButton();
   }
 
-  async function queueCourierMutation({ type, orderId, request, optimisticOrder }) {
+  async function queueCourierMutation({ type, orderId, request, optimisticOrder, baseOrder }) {
     if (!isCourierWorkspace) return null;
+    if (!courierV2Enabled()) throw new Error('COURIER_OFFLINE_DISABLED');
     const context = courierOutboxContext();
+    const permissions = window.AdminAccessContext?.permissions || [];
+    if (!['status', 'non_delivery', 'damage'].includes(type) || !context.actorUserId || !permissions.some(grant => grant === '*' || grant?.key === 'courier.orders.update')
+      || baseOrder?.courier_source?.actor_user_id !== context.actorUserId
+      || baseOrder.courier_source.active_role_id !== context.activeRoleId || baseOrder?.courier_source?.version !== 2
+      || !/^[1-9][0-9]{0,19}$/.test(baseOrder.courier_source.revision || '')
+      || !/^[a-f0-9]{64}$/.test(baseOrder.courier_source.state || '')) throw new Error('COURIER_OFFLINE_ACTION_UNAVAILABLE');
     return queueCourierOutboxOperation(context, async () => {
-      const current = await readCourierOutbox(context);
+      let current = await readCourierOutbox(context);
+      if (await archiveConfirmedCourierActions(context, current)) current = await readCourierOutbox(context);
       if (current.items.length >= COURIER_OUTBOX_MAX_ITEMS) {
         throw new Error("COURIER_OUTBOX_FULL");
       }
       const now = Date.now();
+      const mutationId = createCourierMutationId();
+      const intent = { version: 2, operation: type, id: mutationId, created_at: now,
+        actor_user_id: context.actorUserId, active_role_id: context.activeRoleId, base_state: baseOrder.courier_source.state,
+        base_status_id: Number(baseOrder.status_id), base_revision: baseOrder.courier_source.revision };
+      const body = type === 'status' ? { status_id: Number(request.body.status_id) }
+        : type === 'non_delivery' ? { reason: String(request.body.reason || '').trim() } : { comment: String(request.body.comment || '').trim() };
+      if (type !== 'status' && (!Object.values(body)[0] || Object.values(body)[0].length > 2000)) throw new Error('COURIER_REPORT_TEXT_REQUIRED');
       const item = normalizeCourierQueueItem({
-        id: createCourierMutationId(), type, orderId,
+        id: mutationId, type, orderId, actorUserId: context.actorUserId, activeRoleId: context.activeRoleId,
+        baseState: intent.base_state, baseRevision: intent.base_revision,
         tenantId: context.tenantId, storeId: context.storeId,
         sequence: current.nextSequence, createdAt: now, updatedAt: now, attempts: 0,
-        state: "pending", request, optimisticOrder,
+        state: "pending", request: { url: `/api/admin/orders/${Number(orderId)}/courier-intent`, method: 'PUT',
+          body: { ...body, courier_intent: intent } }, optimisticOrder: null,
       });
       if (!item) throw new Error("COURIER_OUTBOX_MUTATION_INVALID");
+      if (JSON.stringify({ items: [...current.items, item] }).length > COURIER_OUTBOX_INTENT_BUDGET) throw new Error('COURIER_OUTBOX_FULL');
       const next = await writeCourierOutbox(context, {
         items: [...current.items, item],
         nextSequence: current.nextSequence + 1,
-      });
+      }, current.revisionToken);
       applyCourierOutboxPayload(next, context);
       return item;
     });
@@ -3157,7 +3281,7 @@
     return queueCourierOutboxOperation(context, async () => {
       const current = await readCourierOutbox(context);
       const nextPayload = mutate(current);
-      const next = await writeCourierOutbox(context, nextPayload || current);
+      const next = await writeCourierOutbox(context, nextPayload || current, current.revisionToken);
       applyCourierOutboxPayload(next, context);
       return next;
     });
@@ -3167,7 +3291,10 @@
     if (isLikelyNetworkError(err)) return { type: "retryable", code: "NETWORK_ERROR", status: 0 };
     const status = Number(err?.status || 0);
     const code = String(err?.code || err?.message || "API_ERROR").trim() || "API_ERROR";
-    if (status === 401 || status === 403) return { type: "auth", code, status };
+    if (code === 'COURIER_OFFLINE_DISABLED') return { type: 'gate', code, status };
+    if (['COURIER_REVISION_NOT_READY', 'COURIER_LEGACY_ACTION_REQUIRES_REVIEW'].includes(code)) return { type: 'permanent', code, status };
+    if (status === 401) return { type: "auth", code, status };
+    if (status === 403) return { type: "permanent", code, status };
     if (status === 408 || status === 425 || status === 429 || status >= 500) {
       return { type: "retryable", code, status };
     }
@@ -3192,10 +3319,12 @@
         type: failure.type,
         status: failure.status || null,
         code: failure.code,
-        message: String(err?.message || failure.code),
+        courierEvent: err?.courierEvent ? { id: err.courierEvent.id, state: err.courierEvent.state,
+          observed: err.courierEvent.observed, observed_state: err.courierEvent.observed_state } : null,
+        message: String(err?.message || failure.code).slice(0, 500),
         at: Date.now(),
       },
-      nextAttemptAt,
+      nextAttemptAt: nextAttemptAt || Date.now() + Math.min(60000, 2000 * (2 ** Math.min(5, Number(err?.attempts || 0)))) + Math.floor(Math.random() * 1000),
     };
   }
 
@@ -3204,12 +3333,12 @@
     const now = Date.now();
     for (const item of Array.isArray(items) ? items : []) {
       const orderId = Number(item?.orderId || 0);
-      if (item?.state === "failed" || item?.state === "blocked") {
+      if (["failed", "blocked", "conflict", "rejected"].includes(item?.state)) {
         if (orderId > 0) blockedOrderIds.add(orderId);
         continue;
       }
       if (item?.state !== "pending" || blockedOrderIds.has(orderId)) continue;
-      if (!force && Number(item.nextAttemptAt || 0) > now) {
+      if (!force && (Number(item.nextAttemptAt || 0) > now || item.attempts >= 5 || item.lastError?.type === 'auth')) {
         if (orderId > 0) blockedOrderIds.add(orderId);
         continue;
       }
@@ -3218,8 +3347,33 @@
     return null;
   }
 
-  async function processCourierOfflineQueue({ force = false } = {}) {
-    if (!isCourierWorkspace) return { confirmedOrders: [] };
+  function scheduleCourierOutboxRetry(context) {
+    window.clearTimeout(courierOfflineState.retryTimer);
+    courierOfflineState.retryTimer = null;
+    if (!courierV2Enabled() || !isCurrentCourierOutboxContext(context) || !courierOfflineState.online || isAdminOfflineRead()) return;
+    let retryAt = Infinity;
+    for (const item of courierOfflineState.queue) {
+      if (item.state === 'pending' && item.attempts > 0 && item.attempts < 5 && item.lastError?.type === 'retryable') {
+        retryAt = Math.min(retryAt, Number(item.nextAttemptAt || Date.now()));
+      }
+    }
+    if (!Number.isFinite(retryAt)) return;
+    courierOfflineState.retryTimer = window.setTimeout(() => {
+      courierOfflineState.retryTimer = null;
+      if (isCurrentCourierOutboxContext(context) && courierOfflineState.online && !isAdminOfflineRead()) {
+        void reconcileCourierAfterReconnect({ reason: 'outbox-retry' }).catch(console.error);
+      }
+    }, Math.max(1000, retryAt - Date.now()));
+  }
+
+  async function processCourierOfflineQueue({ force = false, locked = false } = {}) {
+    if (!courierV2Enabled()) return { confirmedOrders: [] };
+    if (!locked && window.navigator.locks?.request) {
+      const scope = courierOutboxContext();
+      if (!scope.namespace) return { confirmedOrders: [] };
+      return window.navigator.locks.request('courier:send:' + scope.namespace, () =>
+        processCourierOfflineQueue({ force, locked: true }));
+    }
     if (!courierOfflineState.queue.length) {
       courierOfflineState.syncError = "";
       syncCourierShadowOrdersFromQueue();
@@ -3240,7 +3394,10 @@
       return { confirmedOrders };
     }
     const existingProcessing = courierOutboxProcessing.get(context.namespace);
-    if (existingProcessing) return existingProcessing;
+    if (existingProcessing) {
+      await existingProcessing;
+      return isCurrentCourierOutboxContext(context) ? processCourierOfflineQueue({ force, locked }) : { confirmedOrders };
+    }
     let resolveProcessing;
     const processingPromise = new Promise((resolve) => { resolveProcessing = resolve; });
     courierOutboxProcessing.set(context.namespace, processingPromise);
@@ -3251,36 +3408,64 @@
     refreshCourierConnectionBanner();
 
     try {
-      while (isCurrentCourierOutboxContext(context) && courierOfflineState.online) {
+      while (courierV2Enabled() && isCurrentCourierOutboxContext(context) && courierOfflineState.online) {
         const stored = await queueCourierOutboxOperation(context, () => readCourierOutbox(context));
+        applyCourierOutboxPayload(stored, context);
         const current = selectNextCourierMutation(stored.items, { force });
         if (!current) break;
 
         try {
+          const intent = current.request.body?.courier_intent;
+          if (!['status', 'non_delivery', 'damage'].includes(current.type) || current.tenantId !== context.tenantId || current.storeId !== context.storeId
+            || current.actorUserId !== context.actorUserId || current.activeRoleId !== context.activeRoleId
+            || !current.baseState || intent?.base_state !== current.baseState || intent?.id !== current.id
+            || intent?.version !== 2 || !current.baseRevision || intent.base_revision !== current.baseRevision
+            || current.request.method !== 'PUT' || current.request.url !== `/api/admin/orders/${current.orderId}/courier-intent`) {
+            throw Object.assign(new Error('COURIER_LEGACY_ACTION_REQUIRES_REVIEW'), { status: 422 });
+          }
           await mutateCourierOutbox(context, (payload) => ({
             ...payload,
             items: payload.items.map((item) => item.id === current.id
               ? { ...item, state: "pending", error: "", attempts: item.attempts + 1, updatedAt: Date.now() }
               : item),
           }));
-          const json = await apiJson(current.request.url, {
-            method: current.request.method || "PUT",
-            body: current.request.body || {},
-            headers: { "Idempotency-Key": current.id },
-          });
+          if (!isCurrentCourierOutboxContext(context) || !courierV2Enabled()) throw new Error('LOCAL_SCOPE_CHANGED');
+          const controller = new AbortController();
+          courierOfflineState.sendAbort = controller;
+          const timer = window.setTimeout(() => controller.abort(), 8000);
+          let json;
+          try {
+            json = await apiJson(current.request.url, { method: current.request.method || 'PUT',
+              body: current.request.body || {}, headers: { 'Idempotency-Key': current.id }, signal: controller.signal });
+          } finally {
+            window.clearTimeout(timer);
+            if (courierOfflineState.sendAbort === controller) courierOfflineState.sendAbort = null;
+          }
+          if (json?.courier_event?.id !== current.id || json.courier_event.state !== 'confirmed') {
+            throw Object.assign(new Error('COURIER_CONFIRMATION_REQUIRED'), { status: 503 });
+          }
           await mutateCourierOutbox(context, (payload) => ({
             ...payload,
-            items: payload.items.filter((item) => item.id !== current.id),
+            items: payload.items.map((item) => item.id === current.id
+              ? { ...item, state: 'confirmed', updatedAt: Date.now(), error: '', lastError: null,
+                receipt: { id: json.courier_event.id, state: json.courier_event.state, observed: json.courier_event.observed } } : item),
           }));
           processedAny = true;
           if (json?.data && isCurrentCourierOutboxContext(context)) {
             confirmedOrders.push({ ...json.data });
             handleOrderEvent(overlayCourierShadowOrder(json.data));
+          } else if (current.type === 'status' && isCurrentCourierOutboxContext(context)) {
+            // V2 ACKs deliberately contain no reusable order card. Refresh the
+            // changed working card after replay too, not only after an online
+            // click; otherwise the next intent reuses the pre-commit revision.
+            const refreshed = await revalidateCachedFullOrder(current.orderId);
+            if (refreshed && isCurrentCourierOutboxContext(context)) confirmedOrders.push({ ...refreshed });
           }
         } catch (err) {
+          err.attempts = current.attempts + 1;
           const failure = classifyCourierMutationFailure(err);
           const errorRecord = courierMutationErrorRecord(err, failure);
-          if (failure.type === "retryable" || failure.type === "auth") {
+          if (failure.type === "retryable" || failure.type === "auth" || failure.type === 'gate') {
             await mutateCourierOutbox(context, (payload) => ({
               ...payload,
               items: payload.items.map((item) => item.id === current.id
@@ -3295,6 +3480,7 @@
                 : item),
             })).catch((persistErr) => console.error("Courier outbox update failed:", persistErr));
             if (isCurrentCourierOutboxContext(context)) {
+              if (failure.type === 'gate') courierOfflineState.v2Refused = true;
               if (failure.code === "NETWORK_ERROR") setCourierOnlineState(false);
               courierOfflineState.syncError = failure.type === "auth"
                 ? "Нужно войти снова"
@@ -3309,7 +3495,8 @@
               if (item.id === current.id) {
                 return {
                   ...item,
-                  state: "failed",
+                  state: failure.type === 'conflict' ? 'conflict'
+                    : ['COURIER_REVISION_NOT_READY', 'COURIER_LEGACY_ACTION_REQUIRES_REVIEW'].includes(failure.code) ? 'blocked' : 'rejected',
                   error: errorRecord.error.message,
                   lastError: errorRecord.error,
                   nextAttemptAt: null,
@@ -3323,6 +3510,11 @@
               return item;
             }),
           })).catch((persistErr) => console.error("Courier outbox update failed:", persistErr));
+          if (failure.status === 403 && ['FORBIDDEN', 'STORE_FORBIDDEN', 'TENANT_MISMATCH'].includes(failure.code)
+            && isCurrentCourierOutboxContext(context)) {
+            localRepository.reset({ forget: true, reason: 'server-permission-refusal' });
+            return { confirmedOrders };
+          }
           if (isCurrentCourierOutboxContext(context)) {
             courierOfflineState.syncError = failure.type === "conflict"
               ? "Конфликт изменений"
@@ -3336,6 +3528,7 @@
         courierOutboxProcessing.delete(context.namespace);
       }
       resolveProcessing({ confirmedOrders });
+      scheduleCourierOutboxRetry(context);
       if (isCurrentCourierOutboxContext(context)) {
         courierOfflineState.syncing = false;
         courierOfflineState.processingNamespace = "";
@@ -3362,7 +3555,7 @@
     try {
       const key = ordersCacheKey();
       if (!key) return null;
-      const raw = localStorage.getItem(key);
+      const raw = window.CourierOfflineVault?.enabled() ? window.CourierOfflineVault.localGet(key) : localStorage.getItem(key);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       const ts = Number(parsed?.ts || 0);
@@ -3526,7 +3719,9 @@
     };
 
     try {
-      localStorage.setItem(key, JSON.stringify(payload));
+      if (window.CourierOfflineVault?.enabled()) {
+        window.CourierOfflineVault.localSet(key, JSON.stringify(payload)).catch(error => console.error('PRIVATE_WORKSPACE_SAVE_FAILED:', error.message));
+      } else localStorage.setItem(key, JSON.stringify(payload));
     } catch {}
   }
 
@@ -4641,11 +4836,12 @@
 
   function getActiveOrderCapabilities() {
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
-    const overrides = activeTab?.orderPassportContext?.capabilities;
-    if (!overrides || typeof overrides !== "object") return workspaceCapabilities;
+    const overrides = activeTab?.orderPassportContext?.capabilities || {};
     return {
       payment: overrides.payment == null ? workspaceCapabilities.payment : overrides.payment !== false,
-      status: overrides.status == null ? workspaceCapabilities.status : overrides.status !== false,
+      status: (overrides.status == null ? workspaceCapabilities.status : overrides.status !== false)
+        && (!isCourierWorkspace || ((window.AdminAccessContext?.permissions || []).some(grant => grant === '*' || grant?.key === 'courier.orders.update')
+          && (!isAdminOfflineRead() && courierOfflineState.online || courierV2Enabled()))),
       edit: overrides.edit == null ? workspaceCapabilities.edit : overrides.edit !== false,
       print: overrides.print == null ? workspaceCapabilities.print : overrides.print !== false,
     };
@@ -4653,6 +4849,9 @@
 
   function syncOrderCapabilities() {
     const capabilities = getActiveOrderCapabilities();
+    $$('[data-courier-report-actions]').forEach(node => node.classList.toggle('hidden', !courierV2Enabled() || !capabilities.status));
+    $$('[data-courier-history-actions]').forEach(node => node.classList.toggle('hidden', isCourierWorkspace
+      || !workspaceAccessIsCurrent() || window.AdminAccessContext?.local_context?.courierEventsRead !== true));
     orderInfoPaymentButtons.forEach((node) => node.classList.toggle("hidden", !capabilities.payment));
     $$('[data-action="order-status-next"], [data-action="order-status-menu-toggle"]').forEach((node) => node.classList.toggle("hidden", !capabilities.status));
     $$('[data-action="order-edit"]').forEach((node) => node.classList.toggle("hidden", !capabilities.edit));
@@ -4667,7 +4866,8 @@
     const label = getOrderPaymentActionLabel(order);
     orderInfoPaymentButtons.forEach((button) => {
       if (!button) return;
-      button.disabled = !capabilities.payment || !hasOrder || isOrderFullyRefunded(order) || hasPendingCourierPayment(order);
+      button.disabled = !capabilities.payment || !hasOrder || isAdminOfflineRead()
+        || (isCourierWorkspace && !courierOfflineState.online) || isOrderFullyRefunded(order) || hasPendingCourierPayment(order);
       const labelEl = button.querySelector("span");
       if (labelEl) labelEl.textContent = label;
       else button.textContent = label;
@@ -4715,7 +4915,8 @@
     try {
       return await queueCourierMutation(mutation);
     } catch (err) {
-      if (previousOrder) applyLocalCourierOrderSnapshot(previousOrder);
+      // Enqueue never publishes an optimistic order; a failed local write must
+      // not roll back a newer realtime/working response to previousOrder.
       syncCourierShadowOrdersFromQueue();
       applyCourierShadowOrdersToState();
       showCourierTransientBanner("error", "Изменение не сохранено", { duration: 3200 });
@@ -4725,10 +4926,169 @@
 
   function throwIfCourierMutationFailed(mutationId) {
     const item = courierOfflineState.queue.find((entry) => entry?.id === mutationId) || null;
-    if (!item || (item.state !== "failed" && item.state !== "blocked")) return;
+    if (!item || !["failed", "blocked", "conflict", "rejected"].includes(item.state)) return;
     const error = new Error(item.error || "COURIER_MUTATION_FAILED");
     error.code = item.lastError?.code || "COURIER_MUTATION_FAILED";
     throw error;
+  }
+
+  function courierActionError(code) {
+    return ({ COURIER_OFFLINE_DISABLED: 'Курьерская офлайн-запись не включена для вашего контекста. Существующие действия сохранены.',
+      COURIER_ORDER_CHANGED: 'Заказ изменён другим сотрудником. Действие сохранено, но не применено.',
+      COURIER_ORDER_NOT_ASSIGNED: 'Заказ больше не назначен вам.', RESOURCE_FORBIDDEN: 'Нет доступа к заказу.',
+      COURIER_FINANCIAL_REVIEW_REQUIRED: 'В заказе есть возврат. Требуется проверка уполномоченным сотрудником.',
+      COURIER_REVISION_NOT_READY: 'Безопасная версия заказов ещё не активирована на сервере.',
+      COURIER_STORE_SCOPE_INVALID: 'Магазин в запросе не совпадает с подтверждённым контекстом. Действие не применено.',
+      COURIER_LEGACY_ACTION_REQUIRES_REVIEW: 'Действие старого формата сохранено. Нужна проверка, автоматическая отправка запрещена.',
+      COURIER_OFFLINE_ACTION_UNAVAILABLE: 'Нужна заранее загруженная карточка назначенного вам заказа с подтверждённой версией v2.',
+      COURIER_OUTBOX_FULL: 'Локальная очередь заполнена. Существующие действия сохранены и не удалены.',
+      COURIER_REPORT_TEXT_REQUIRED: 'Введите причину или комментарий (не более 2000 символов).',
+      LOCAL_SCOPE_CHANGED: 'Контекст доступа изменился. Закройте окно и повторно откройте разрешённый заказ.',
+      LOCAL_CAS_MISMATCH: 'Очередь обновлена в другой вкладке. Повторите действие.',
+      UNAUTHORIZED: 'Нужно снова подтвердить авторизацию.', NETWORK_ERROR: 'Нет ответа сервера. Действие ожидает отправки.',
+    })[code] || 'Сервер не подтвердил действие. Оно сохранено; проверьте доступ и состояние заказа.';
+  }
+
+  function updateCourierOutboxButton() {
+    if (!isCourierWorkspace) return;
+    const button = document.querySelector('[data-action="courier-outbox"]');
+    if (!button) return;
+    button.classList.toggle('hidden', !courierV2Enabled() && !courierOfflineState.history.length);
+    const count = courierOfflineState.history.length;
+    const text = `Действия (${count})`;
+    if (button.textContent !== text) button.textContent = text;
+    button.disabled = !workspaceAccessIsCurrent();
+  }
+
+  function courierHistoryHtml(items) {
+    const states = { pending: 'Ожидает отправки', confirmed: 'Отправлено и подтверждено', conflict: 'Конфликт — не применено',
+      rejected: 'Отклонено', blocked: 'Ожидает проверки', failed: 'Не применено' };
+    const actions = { status: 'Смена статуса', non_delivery: 'Недоставка', damage: 'Повреждение товара', payment: 'Старое денежное действие (не отправляется офлайн)' };
+    if (!items.length) return '<div data-courier-dialog="history" class="empty-state">Сохранённых действий в текущем контексте нет.</div>';
+    return '<div data-courier-dialog="history">' + [...items].reverse().map(item => {
+      const body = item.request.body || {}, observed = item.lastError?.courierEvent?.observed || item.receipt?.observed;
+      const target = item.type === 'status' ? getStatusMetaById(body.status_id)?.title || `Статус #${body.status_id}` : body.reason || body.comment || '';
+      return `<article class="info-card"><strong>Заказ #${escapeHtml(item.orderId)} · ${escapeHtml(actions[item.type] || item.type)}</strong>
+        <p>${escapeHtml(states[item.state] || 'Нужна проверка')}</p><p>${escapeHtml(target)}</p>
+        <p class="muted">${escapeHtml(new Date(item.createdAt).toLocaleString())} · Исходная версия: ${escapeHtml(item.baseRevision || 'не подтверждена')}</p>
+        <p class="muted">Исходный статус: ${escapeHtml(getStatusMetaById(body.courier_intent?.base_status_id)?.title || '#' + (body.courier_intent?.base_status_id || '—'))}${item.actorUserId ? ' · Сотрудник #' + escapeHtml(item.actorUserId) : ''}</p>
+        ${observed ? `<p>На сервере: версия ${escapeHtml(observed.revision || 'неизвестна')}, ${escapeHtml(getStatusMetaById(observed.status_id)?.title || 'статус #' + observed.status_id)}.</p>` : ''}
+        ${item.lastError ? `<p>${escapeHtml(courierActionError(item.lastError.code))}</p>` : ''}
+        ${item.blockedBy ? '<p>Предыдущее действие по заказу требует проверки. Принудительная отправка недоступна.</p>' : ''}
+        <details><summary>ID действия</summary><code>${escapeHtml(item.id)}</code></details></article>`;
+    }).join('') + '</div>';
+  }
+
+  async function openCourierOutbox() {
+    if (!isCourierWorkspace || !workspaceAccessIsCurrent() || !window.AppModal || window.AppModal.isOpen()) return;
+    const context = courierOutboxContext();
+    try {
+      const payload = await queueCourierOutboxOperation(context, async () => {
+        const current = await readCourierOutbox(context);
+        return await archiveConfirmedCourierActions(context, current) ? readCourierOutbox(context) : current;
+      });
+      if (!isCurrentCourierOutboxContext(context) || window.AppModal.isOpen()) return;
+      applyCourierOutboxPayload(payload, context);
+      window.AppModal.open({ title: 'Действия курьера', content: courierHistoryHtml(payload.items)
+        + '<button class="btn btn-ghost" type="button" data-action="courier-archive">Архив подтверждённых действий</button>', showSave: false,
+        cancelText: 'Закрыть', headerNotice: 'Конфликты не применяются повторно. Передайте ID действия уполномоченному сотруднику.' });
+    } catch (error) { if (isCurrentCourierOutboxContext(context)) alert('Не удалось прочитать очередь. Существующие действия не удалены.'); }
+  }
+
+  async function openCourierArchive(cursor = null) {
+    if (!isCourierWorkspace || !workspaceAccessIsCurrent() || !window.AppModal?.isOpen()
+      || !window.AppModal.body?.querySelector('[data-courier-dialog]')) return;
+    const context = courierOutboxContext();
+    const page = await context.cache.scanEntries({ limit: 1, cursor });
+    if (!isCurrentCourierOutboxContext(context) || !window.AppModal.isOpen()
+      || !window.AppModal.body?.querySelector('[data-courier-dialog]')) return;
+    const archived = page.entries.filter(entry => entry.key.startsWith('archive:'));
+    if (archived.some(entry => entry.data?.version !== 1 || !Array.isArray(entry.data.items)
+      || entry.data.items.some(item => item.state !== 'confirmed' || item.receipt?.id !== item.id))) throw new Error('COURIER_ARCHIVE_CORRUPT');
+    window.AppModal.setTitle('Архив подтверждённых действий');
+    window.AppModal.setContent(courierHistoryHtml(archived.flatMap(entry => entry.data.items))
+      + (archived.length && page.cursor ? '<button class="btn btn-ghost" type="button" data-action="courier-archive">Следующая страница архива</button>' : ''));
+    const next = window.AppModal.body.querySelector('[data-action="courier-archive"]');
+    if (next) next.dataset.cursor = page.cursor;
+    window.AppModal.setHeaderNotice('Архив хранится на этом устройстве. Ожидающие и конфликтующие действия не архивируются и не удаляются.');
+  }
+
+  async function openCourierServerHistory(before = null) {
+    const id = Number(getActiveOrder()?.id);
+    if (isCourierWorkspace || !workspaceAccessIsCurrent() || !(id > 0)
+      || window.AdminAccessContext?.local_context?.courierEventsRead !== true || !window.AppModal) return;
+    if (!before) {
+      if (window.AppModal.isOpen()) return;
+      window.AppModal.open({ title: 'Действия и конфликты курьера', showSave: false,
+        content: '<div data-courier-dialog="server-history">Загружаем историю…</div>',
+        headerNotice: 'Исходное действие и состояние при серверной проверке. Автоматическое применение конфликтов недоступно.' });
+    }
+    const context = localRepository.capture();
+    try {
+      const response = await apiJson(`/api/admin/orders/${id}/courier-events${before ? '?before=' + encodeURIComponent(before) : ''}`);
+      if (!context.isCurrent() || !window.AppModal.isOpen()
+        || !window.AppModal.body?.querySelector('[data-courier-dialog="server-history"]')) return;
+      const items = response.data.map(row => ({ id: row.action.id, orderId: id, type: row.action.operation,
+        actorUserId: row.actor_user_id, createdAt: new Date(row.created_at).getTime(), baseRevision: row.action.base_revision,
+        state: row.action.state, request: { body: { ...row.action, courier_intent: row.action } },
+        receipt: row.error ? null : { observed: row.action.observed },
+        lastError: row.error ? { code: row.error, courierEvent: { observed: row.action.observed } } : null }));
+      window.AppModal.setContent('<div data-courier-dialog="server-history">' + courierHistoryHtml(items)
+        + (response.next ? '<button class="btn btn-ghost" type="button" data-action="order-courier-events-next">Ранее</button>' : '') + '</div>');
+      const next = window.AppModal.body.querySelector('[data-action="order-courier-events-next"]');
+      if (next) next.dataset.cursor = response.next;
+    } catch (error) {
+      if (context.isCurrent() && window.AppModal.body?.querySelector('[data-courier-dialog="server-history"]')) {
+        window.AppModal.setFooterNotice(isAdminOfflineRead() ? 'История на сервере доступна при подключении. Локальные действия сохранены на устройстве курьера.'
+          : 'Не удалось получить историю. Существующие события не изменены.');
+      }
+    }
+  }
+
+  async function openCourierReport(operation) {
+    if (!courierV2Enabled() || !['non_delivery', 'damage'].includes(operation) || !getActiveOrderCapabilities().status
+      || !workspaceAccessIsCurrent() || !window.AppModal || window.AppModal.isOpen()) return;
+    let order = getActiveOrder();
+    if (!(Number(order?.id) > 0)) return;
+    const context = courierOutboxContext();
+    try { order = await courierCommandBase(order); }
+    catch (_) { if (isCurrentCourierOutboxContext(context)) alert('Не удалось получить подтверждённую версию заказа.'); return; }
+    if (!isCurrentCourierOutboxContext(context) || window.AppModal.isOpen()) return;
+    if (order.courier_source?.version !== 2 || order.courier_source.actor_user_id !== context.actorUserId) {
+      alert(courierActionError('COURIER_OFFLINE_ACTION_UNAVAILABLE')); return;
+    }
+    const baseOrder = { ...order, courier_source: { ...order.courier_source } };
+    const title = operation === 'non_delivery' ? 'Недоставка: причина' : 'Повреждение товара: комментарий';
+    window.AppModal.open({ title, saveText: 'Сохранить событие',
+      headerNotice: 'Это сообщение курьера, а не отмена заказа, возврат денег или списание. Статус и оплата не меняются.',
+      content: '<form data-courier-dialog="report"><label>' + escapeHtml(title)
+        + '<textarea class="control" name="report" maxlength="2000" rows="5" required></textarea></label></form>',
+      async onSave({ body }) {
+        const field = body.querySelector('textarea[name="report"]');
+        if (!field) return false;
+        const text = field.value.trim();
+        if (!text || text.length > 2000) { window.AppModal.setFooterNotice(courierActionError('COURIER_REPORT_TEXT_REQUIRED')); return false; }
+        try {
+          if (!isCurrentCourierOutboxContext(context)) throw new Error('LOCAL_SCOPE_CHANGED');
+          await queueCourierMutation({ type: operation, orderId: Number(baseOrder.id), baseOrder,
+            request: { body: operation === 'non_delivery' ? { reason: text } : { comment: text } } });
+          if (!isAdminOfflineRead() && courierOfflineState.online) await processCourierOfflineQueue();
+          if (!isCurrentCourierOutboxContext(context) || !window.AppModal.isOpen()
+            || !window.AppModal.body?.querySelector('[data-courier-dialog="report"]')) return false;
+          window.AppModal.setTitle('Действия курьера');
+          window.AppModal.setContent(courierHistoryHtml(courierOfflineState.history));
+          window.AppModal.setButtons({ showSave: false, cancelText: 'Закрыть' });
+          window.AppModal.setHeaderNotice('Событие сохранено. Его состояние показано ниже; конфликты не применяются автоматически.');
+          return false;
+        } catch (error) {
+          if (isCurrentCourierOutboxContext(context) && window.AppModal.isOpen()
+            && window.AppModal.body?.querySelector('[data-courier-dialog="report"]')) {
+            window.AppModal.setFooterNotice(courierActionError(error.code || error.message));
+          }
+          return false;
+        }
+      },
+    });
   }
 
   let mobilePaymentModalOrigin = null;
@@ -4882,6 +5242,10 @@
 
   async function openOrderPaymentDialog(order) {
     if (!workspaceAccessIsCurrent() || hasPendingCourierPayment(order)) return;
+    if (isAdminOfflineRead() || (isCourierWorkspace && !courierOfflineState.online)) {
+      alert('Оплата и возвраты доступны только после подключения к серверу.');
+      return;
+    }
     if (order?.offline_summary === true && !isFullOrder(order)) {
       alert('Для оплаты нужна полная карточка заказа. Откройте её при доступном сервере.');
       return;
@@ -4889,36 +5253,10 @@
     if (!getActiveOrderCapabilities().payment) return;
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
-    if (isCourierWorkspace && !courierOfflineState.online && isPaidOrder(order)) {
-      showCourierTransientBanner("error", "Для возврата нужен интернет", { duration: 3200 });
-      return;
-    }
 
     if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
       if (isPaidOrder(order)) return;
       try {
-        if (isCourierWorkspace) {
-          const payload = { is_paid: 1 };
-          const optimisticOrder = buildOptimisticOrderPaymentSnapshot(order, payload);
-          if (!optimisticOrder) throw new Error("PAYMENT_PAYLOAD_INVALID");
-          const queuedMutation = await queueCourierMutationOrRestore({
-            type: "payment",
-            orderId,
-            request: {
-              url: `/api/admin/orders/${orderId}/paid`,
-              method: "PUT",
-              body: payload,
-            },
-            optimisticOrder,
-          }, order);
-          applyLocalCourierOrderSnapshot(optimisticOrder);
-          if (courierOfflineState.online) {
-            await reconcileCourierAfterReconnect({ reason: "payment-mutation" });
-            throwIfCourierMutationFailed(queuedMutation?.id);
-          }
-          refreshCourierConnectionBanner();
-          return;
-        }
         const json = await apiJson(`/api/admin/orders/${orderId}/paid`, {
           method: "PUT",
           body: { is_paid: 1 },
@@ -4930,8 +5268,6 @@
       return;
     }
 
-    const offlineCapable = isCourierWorkspace && !isPaidOrder(order);
-    const useOfflineCollection = offlineCapable && !courierOfflineState.online;
     const useMobilePaymentPage = isMobile() && document.body.classList.contains("admin-mobile-pages");
     const paymentPageOptions = useMobilePaymentPage
       ? {
@@ -4952,8 +5288,7 @@
         }
       : {};
 
-    if (!offlineCapable) {
-      return sharedOrderPayment.open({
+    return sharedOrderPayment.open({
         order,
         apiJson,
         money,
@@ -4969,53 +5304,6 @@
         },
         ...paymentPageOptions,
       });
-    }
-
-    return sharedOrderPayment.open({
-      order,
-      apiJson,
-      money,
-      formatDateTimeNumeric,
-      getOrderId: (row) => Number(row?.id || 0),
-      getOrderNumber,
-      isPaidOrder,
-      cacheOnlyPaymentMethods: !courierOfflineState.online,
-      submitPayload: async ({ payload }) => {
-        const liveOrder = state.orders.find((row) => Number(row?.id || 0) === orderId) || order;
-        const optimisticOrder = buildOptimisticOrderPaymentSnapshot(liveOrder, payload);
-        if (!optimisticOrder) {
-          throw new Error("PAYMENT_PAYLOAD_INVALID");
-        }
-        const queueRequest = {
-          url: `/api/admin/orders/${orderId}/paid`,
-          method: "PUT",
-          body: payload,
-        };
-
-        const queuedMutation = await queueCourierMutationOrRestore({
-          type: "payment",
-          orderId,
-          request: queueRequest,
-          optimisticOrder,
-        }, liveOrder);
-        const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
-        if (courierOfflineState.online) {
-          await reconcileCourierAfterReconnect({ reason: "payment-mutation" });
-          throwIfCourierMutationFailed(queuedMutation?.id);
-        }
-        refreshCourierConnectionBanner();
-        return state.orders.find((row) => Number(row?.id || 0) === orderId) || appliedOrder || optimisticOrder;
-      },
-      onSuccess() {},
-      onError(err) {
-        if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
-          showCourierTransientBanner("error", "Способы оплаты недоступны офлайн", { duration: 3200 });
-          return;
-        }
-        console.error("orders payment modal error:", err);
-      },
-      ...paymentPageOptions,
-    });
 
   }
 
@@ -5096,23 +5384,30 @@
       body: { status_id: nextStatusId },
     };
 
-    if (isCourierWorkspace) {
+    if (courierV2Enabled()) {
       if (!optimisticOrder || prevStatusId === nextStatusId) return;
-      handleOrderEvent(optimisticOrder, { localOnly: true, persistList: false });
-      const queuedMutation = await queueCourierMutationOrRestore({
+      const context = courierOutboxContext();
+      const baseOrder = await courierCommandBase(prevOrder);
+      if (!isCurrentCourierOutboxContext(context)) return;
+      const item = await queueCourierMutationOrRestore({
         type: "status",
         orderId: id,
         request,
-        optimisticOrder,
+        baseOrder,
       }, prevOrder);
-      await persistOrdersListCache();
-      if (courierOfflineState.online) {
-        await reconcileCourierAfterReconnect({ reason: "status-mutation" });
-        throwIfCourierMutationFailed(queuedMutation?.id);
+      if (!isAdminOfflineRead() && courierOfflineState.online) await processCourierOfflineQueue();
+      if (!isCurrentCourierOutboxContext(context)) return;
+      const result = courierOfflineState.history.find(entry => entry.id === item.id);
+      if (result?.state === 'confirmed') {
+        setOrderStatusSyncState(id, 'saved', 'Подтверждено сервером', 1200);
+      } else if (['conflict', 'rejected', 'blocked'].includes(result?.state)) {
+        setOrderStatusSyncState(id, 'error', 'Не применено · см. «Действия»', 3200);
       }
       refreshCourierConnectionBanner();
       return;
     }
+
+    if (isCourierWorkspace && (isAdminOfflineRead() || !courierOfflineState.online)) throw new Error('COURIER_OFFLINE_DISABLED');
 
     if (!optimisticOrder || prevStatusId === nextStatusId) return;
     if (orderStatusSyncStates.get(id)?.mode === "syncing") return;
@@ -5126,6 +5421,7 @@
       const json = await apiJson(request.url, {
         method: request.method,
         body: request.body,
+        ...(isCourierWorkspace ? { headers: { 'Idempotency-Key': createCourierMutationId() } } : {}),
       });
       const confirmedOrder = json?.data && typeof json.data === "object"
         ? { ...optimisticOrder, ...json.data }
@@ -7698,6 +7994,26 @@
   // Click handlers
   // -----------------------------
   document.addEventListener("click", async (e) => {
+    const archiveButton = e.target.closest('[data-action="courier-archive"]');
+    const eventsButton = e.target.closest('[data-action="order-courier-events"], [data-action="order-courier-events-next"]');
+    if (archiveButton || eventsButton) {
+      e.preventDefault(); e.stopPropagation();
+      try {
+        if (archiveButton) await openCourierArchive(archiveButton.dataset.cursor || null);
+        else await openCourierServerHistory(eventsButton.dataset.cursor || null);
+      } catch (_) {
+        if (window.AppModal?.body?.querySelector('[data-courier-dialog]')) window.AppModal.setFooterNotice('Не удалось прочитать историю. Существующие действия не удалены.');
+      }
+      return;
+    }
+    const outboxButton = e.target.closest('[data-action="courier-outbox"]');
+    const reportButton = e.target.closest('[data-action="courier-report"]');
+    if (outboxButton || reportButton) {
+      e.preventDefault(); e.stopPropagation();
+      if (outboxButton) await openCourierOutbox();
+      else await openCourierReport(reportButton.dataset.courierOperation);
+      return;
+    }
     const tabsHomeBtn = e.target.closest('[data-action="order-tabs-home"]');
     if (tabsHomeBtn) {
       e.preventDefault();
@@ -9046,15 +9362,30 @@
   });
   window.addEventListener('admin:local-context-changed', event => {
     if (event.detail?.state === 'active') return;
+    courierSyncGeneration += 1;
+    courierOfflineState.sendAbort?.abort();
+    courierOfflineState.sendAbort = null;
+    if (window.AppModal?.body?.querySelector('[data-courier-dialog]')) window.AppModal.close('access-context-changed');
+    window.clearTimeout(courierOfflineState.retryTimer);
+    courierOfflineState.retryTimer = null;
     stopOrdersPolling();
     orderDetailsRevalidation.clear();
     authoritativeFullOrderRuntimeKeys.clear();
     if (event.detail?.state === 'revoked') {
+      resetCourierOfflineRuntimeState();
       state.orders = [];
       state.clientsCache.clear();
       tabsState.tabs = [];
       tabsState.activeKey = null;
     }
+  });
+  window.addEventListener('admin:access-context', () => {
+    if (window.AdminAccessContext?.offline !== true) courierOfflineState.v2Refused = false;
+    if (!ordersInitialRestoreComplete || !workspaceAccessIsCurrent() || isAdminOfflineRead()) return;
+    if (isCourierWorkspace) {
+      void hydrateCourierOfflineStateFromStorage()
+        .then(() => reconcileCourierAfterReconnect({ reason: 'confirmed-access' })).catch(console.error);
+    } else if (!ordersLongPollActive) void resumeOrdersRealtime();
   });
   window.addEventListener('pageshow', async event => {
     if (!event.persisted) return;

@@ -66,7 +66,7 @@
       "x-tenant-id": getTenantId(),
       "x-store-id": getStoreId(),
     };
-    const token = localStorage.getItem("authToken");
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     if (token) headers.Authorization = "Bearer " + token;
     return headers;
   }

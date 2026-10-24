@@ -1674,7 +1674,7 @@
     if (!catalogPageContext?.isCurrent() || !access.isCurrent()) throw new Error('LOCAL_CONTEXT_UNAVAILABLE');
     if (productsOfflineRead()) throw new Error('Для этого действия требуется соединение с сервером.');
     // Получаем токен и store_id из localStorage
-    const token = localStorage.getItem('authToken');
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const storeId = localStorage.getItem('activeStoreId') || '1';
     const headers = {
       "Content-Type": "application/json",
@@ -1693,13 +1693,13 @@
       ...opts,
       headers,
     });
-    if (!access.isCurrent() || token !== localStorage.getItem('authToken')
+    if (!access.isCurrent() || token !== (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'))
         || storeId !== (localStorage.getItem('activeStoreId') || '1')) throw new Error('LOCAL_SCOPE_CHANGED');
     
     // Если 401 - перенаправляем на логин
     if (res.status === 401) {
       window.CatalogRepository.checkAccessResponse(401, null);
-      localStorage.removeItem('authToken');
+      (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
       window.location.href = '/login';
@@ -1738,9 +1738,10 @@
   }
 
   async function apiUploadImages(files) {
+    if (!catalogPageContext?.isCurrent() || productsOfflineRead()) throw new Error('Для загрузки изображений требуется соединение с сервером.');
     const endOperation = window.AdminIdleHydration?.beginOperation();
     try {
-    const token = localStorage.getItem('authToken');
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const fd = new FormData();
     files.forEach((f) => fd.append("images", f));
     const headers = { "x-tenant-id": String(TENANT_ID) };
@@ -1753,7 +1754,7 @@
       body: fd
     });
     if (res.status === 401) {
-      localStorage.removeItem('authToken');
+      (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
       window.location.href = '/login';
@@ -1766,9 +1767,10 @@
   }
 
   async function apiUploadCategoryIcon(file) {
+    if (!catalogPageContext?.isCurrent() || productsOfflineRead()) throw new Error('Для загрузки изображений требуется соединение с сервером.');
     const endOperation = window.AdminIdleHydration?.beginOperation();
     try {
-    const token = localStorage.getItem('authToken');
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const fd = new FormData();
     fd.append("icon", file);
     const headers = { "x-tenant-id": String(TENANT_ID) };
@@ -1781,7 +1783,7 @@
       body: fd,
     });
     if (res.status === 401) {
-      localStorage.removeItem('authToken');
+      (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
       localStorage.removeItem('user');
       localStorage.removeItem('tenant');
       window.location.href = '/login';
@@ -1970,7 +1972,7 @@
   let productionZonesRequest = null;
   function apiGetProductionZones() {
     const access = window.AdminLocalRepository.capture();
-    const token = localStorage.getItem('authToken');
+    const token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
     const storeId = localStorage.getItem('activeStoreId');
     if (productionZonesRequest?.access.isCurrent()
         && productionZonesRequest.token === token && productionZonesRequest.storeId === storeId) {

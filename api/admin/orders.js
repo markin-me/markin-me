@@ -35,9 +35,31 @@ const {
 } = require("../../services/order-benefits-accrual-provider");
 const makePrintApiRouter = require("../print");
 const chatTempRuntime = require("../chatTemp");
+const courierActions = require('../helpers/courierActions');
 
 module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can }) {
   const router = express.Router();
+  let courierSchemaReady = null;
+  function courierRevisionReady(executor, tenantId) {
+    if (!courierActions.enabled(tenantId)) return Promise.resolve(false);
+    if (!courierSchemaReady) courierSchemaReady = executor.query(`SELECT
+      (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='order_orders' AND COLUMN_NAME='courier_revision'
+        AND COLUMN_TYPE='bigint unsigned' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='1') AS clock_column,
+      (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='order_orders' AND ENGINE='InnoDB') AS transactional_table,
+      TRIGGER_NAME, ACTION_STATEMENT FROM information_schema.TRIGGERS
+      WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='order_orders'
+        AND ACTION_TIMING='BEFORE' AND EVENT_MANIPULATION='UPDATE'`)
+      .then(([rows]) => {
+        const ready = rows.length === 1 && Number(rows[0].clock_column) === 1 && Number(rows[0].transactional_table) === 1
+          && rows[0].TRIGGER_NAME === 'order_orders_courier_revision_bu'
+          && String(rows[0].ACTION_STATEMENT).replace(/[\s\x60;]/g, '').toLowerCase() === 'setnew.courier_revision=old.courier_revision+1';
+        if (!ready) console.warn('COURIER_REVISION_NOT_READY: v2 disabled; verify approved migration.');
+        return ready;
+      }).catch(() => { console.warn('COURIER_REVISION_NOT_READY: metadata validation failed.'); return false; });
+    return courierSchemaReady;
+  }
   const orderPrintTemplateBuilder = typeof makePrintApiRouter.createOrderPrintTemplateBuilder === "function"
     ? makePrintApiRouter.createOrderPrintTemplateBuilder({ db, helpers })
     : null;
@@ -50,6 +72,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
 
   router.param("id", async (req, res, next, rawId) => {
     try {
+      // The command handler checks assignment under FOR UPDATE. Owned replay
+      // receipts must remain readable after reassignment, WITHOUT order data.
+      if (req.rbacContext === 'courier' && req.method === 'PUT' && /\/courier-intent\/?$/.test(req.path)) return next();
       const id = Number(rawId);
       if (!(id > 0) || typeof can !== "function") return next();
       const tenantId = helpers.getTenantId(req);
@@ -111,6 +136,19 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     }))).digest("hex");
   }
 
+  // A scoped state fingerprint, NOT a monotonic order revision or a snapshot of
+  // dependent tables. Replay compares it while holding the existing order lock.
+  function courierSourceState(row, tenantId, storeId, actor) {
+    const fields = ["id", "status_id", "assigned_user_id", "is_paid", "total_price", "customer_id",
+      "payment_id", "delivery_type_id", "address", "address_comment", "comment", "items",
+      "discounts_json", "online_payment_required", "online_payment_status", "payment_projection"];
+    return crypto.createHash("sha256").update(JSON.stringify([
+      1, tenantId, storeId, Number(actor.userId), Number(actor.activeRoleId || 0),
+      ...fields.map(key => row[key] == null ? null : typeof row[key] === "object"
+        ? stableIdempotencyJson(row[key]) : String(row[key])),
+    ])).digest("hex");
+  }
+
   async function claimOrderMutationIdempotency(conn, req, { tenantId, storeId, orderId, operation, body }) {
     const key = readIdempotencyKey(req);
     if (!key) return { enabled: false };
@@ -167,6 +205,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     return db.query(
       `DELETE FROM order_mutation_idempotency
         WHERE tenant_id=? AND store_id=? AND state='completed'
+          AND (response_json IS NULL OR response_json NOT LIKE '%"courier_event"%')
           AND updated_at < (CURRENT_TIMESTAMP - INTERVAL 30 DAY)
         LIMIT 200`,
       [tenantId, storeId]
@@ -1424,6 +1463,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     discountsJson = null,
     orderPromoCode = null,
     benefitsMetaRaw = null,
+    revisionCovered = false,
   } = {}) {
     const normalizedTenantId = Number(tenantId || 0);
     const normalizedStoreId = Number(storeId || 0);
@@ -1458,10 +1498,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         normalizedOrderId,
         normalizedCustomerId,
         usageRecord.discount_amount,
-        usageRecord.promo_code_id || null
+        usageRecord.promo_code_id || null,
+        { storeId: normalizedStoreId, revisionCovered }
       );
       if (result?.recorded) {
         applied.push(usageRecord);
+        // Only conn-owned callers can reuse the clock within the SAME Tx.
+        // A pool caller's previous usage transaction has already committed.
+        if (typeof queryable.getConnection !== 'function') revisionCovered = true;
       }
     }
 
@@ -1902,6 +1946,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         o.payment_projection, o.payment_satisfied_at, o.manual_paid_at, o.online_payment_total, o.online_payment_required, o.online_payment_status,
         o.time_option_id,
         o.status_id,
+        ${courierActions.enabled(tenantId) && opts.courierSource ? 'CAST(o.courier_revision AS CHAR) AS courier_revision,' : ''}
         o.pickup_store_id,
         o.delivery_address_id,
 
@@ -1968,7 +2013,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
 
     if (!rows.length) return null;
     const r = rows[0];
-
+    // Compute before item/discount enrichment can mutate native JSON values.
+    const courierSource = courierActions.enabled(tenantId) && opts.courierSource ? courierSourceState(r, tenantId, storeId, opts.courierSource) : null;
     const items = parseOrderItemsJson(r.items);
 
     const itemProductIds = [...new Set(items
@@ -2082,6 +2128,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       delivery_zone_id: Number.isFinite(Number(r.deliveryZoneId)) && Number(r.deliveryZoneId) > 0 ? Number(r.deliveryZoneId) : null,
       delivery_zone_name: helpers.strOrNull(r.deliveryZoneName),
     };
+    if (courierActions.enabled(tenantId) && opts.courierSource && courierActions.validRevision(r.courier_revision)
+      && Number(r.assigned_user_id) === Number(opts.courierSource.userId)) {
+      basePayload.courier_source = { version: 2, revision: r.courier_revision, actor_user_id: Number(opts.courierSource.userId),
+        active_role_id: Number(opts.courierSource.activeRoleId || 0),
+        state: courierSource };
+    }
     const [payload] = await attachRefundDataToOrders(db, tenantId, storeId, [basePayload], { storeTimezone });
     return payload || basePayload;
   }
@@ -2968,20 +3020,81 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      if (req.rbacContext === 'courier' && courierActions.enabled(req.user?.tenantId) && !courierActions.validScope(req, tenantId, storeId)) {
+        return res.status(400).json({ ok: false, error: 'COURIER_STORE_SCOPE_INVALID' });
+      }
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
 
-      const payload = await fetchOrderPayload(tenantId, storeId, id);
+      const payload = await fetchOrderPayload(tenantId, storeId, id, {
+        courierSource: req.rbacContext === 'courier' && await courierRevisionReady(db, req.user?.tenantId) ? req.user : null,
+      });
       if (!payload) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      // Assignment may change after router.param's earlier read.
+      if (req.rbacContext === 'courier' && Number(payload.assigned_user_id || 0) > 0
+        && Number(payload.assigned_user_id) !== Number(req.user?.userId)) {
+        return res.status(403).json({ ok: false, error: 'RESOURCE_FORBIDDEN' });
+      }
+      if (payload.courier_source && (typeof can !== 'function'
+        || !(await can(req.user, 'courier.orders.update', req.orderAccessResource)).allowed)) {
+        delete payload.courier_source; // Read permission alone is not an offline write proof.
       }
 
       res.json({ ok: true, data: payload });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // On-demand, indexed audit projection. Never public/SW data, never idle-only.
+  router.get('/:id/courier-events', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!courierActions.enabled(req.user?.tenantId)) return res.status(404).json({ ok: false, error: 'COURIER_OFFLINE_DISABLED' });
+    try {
+      const tenantId = helpers.getTenantId(req), storeId = helpers.getStoreId(req), id = Number(req.params.id);
+      if (!courierActions.validScope(req, tenantId, storeId) || !Number.isSafeInteger(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: 'COURIER_STORE_SCOPE_INVALID' });
+      }
+      const courier = req.rbacContext === 'courier';
+      if (!req.orderAccessResource) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      if (!courier && (typeof can !== 'function' || !(await can(req.user, 'orders.status', req.orderAccessResource)).allowed)) {
+        return res.status(403).json({ ok: false, error: 'RESOURCE_FORBIDDEN' });
+      }
+      const before = req.query.before === undefined ? '18446744073709551615' : req.query.before;
+      if (!courierActions.validRevision(before)) return res.status(400).json({ ok: false, error: 'INVALID_CURSOR' });
+      const [rows] = await db.query({ sql: `SELECT CAST(id AS CHAR) AS event_id, actor_user_id, response_status, response_json, created_at
+        FROM order_mutation_idempotency
+        WHERE tenant_id=? AND store_id=? AND order_id=? AND id<? AND operation='order.status' AND state='completed'
+          AND response_json LIKE '%"courier_event"%' ${courier ? 'AND actor_user_id=?' : ''}
+        ORDER BY id DESC LIMIT 25`, timeout: 4000 },
+      [tenantId, storeId, id, before, ...(courier ? [Number(req.user.userId)] : [])]);
+      const data = [];
+      let cursor = null;
+      for (const row of rows) {
+        const response = JSON.parse(row.response_json);
+        const event = response?.courier_event;
+        if (!event || typeof event !== 'object') throw new Error('COURIER_EVENT_INVALID');
+        const record = { event_id: row.event_id, actor_user_id: Number(row.actor_user_id), created_at: row.created_at,
+          action: { id: event.id, version: event.version, operation: event.operation, order_id: id,
+            base_revision: event.base_revision || null, base_status_id: event.base_status_id,
+            status_id: event.status_id, reason: event.reason, comment: event.comment,
+            state: event.state, observed: event.observed || null }, error: response.error || null };
+        if (Buffer.byteLength(JSON.stringify({ ok: true, data: [...data, record], next: row.event_id }), 'utf8') > 64 * 1024) {
+          if (!data.length) return res.status(413).json({ ok: false, error: 'COURIER_EVENT_TOO_LARGE' });
+          break;
+        }
+        data.push(record); cursor = row.event_id;
+      }
+      return res.json({ ok: true, data, next: data.length < rows.length || rows.length === 25 ? cursor : null });
+    } catch (error) {
+      console.warn('COURIER_HISTORY_READ_FAILED:', error.code || error.name);
+      return res.status(503).json({ ok: false, error: 'COURIER_HISTORY_UNAVAILABLE' });
     }
   });
 
@@ -3587,7 +3700,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     }
   };
 
-  router.put("/:id/status", async (req, res) => {
+  router.put(["/:id/status", "/:id/courier-intent"], async (req, res) => {
+    if ((req.body?.courier_intent !== undefined || /\/courier-intent\/?$/.test(req.path))
+      && !courierActions.enabled(req.user?.tenantId)) {
+      return res.status(404).json({ ok: false, error: 'COURIER_OFFLINE_DISABLED' });
+    }
     const conn = await db.getConnection();
     let transactionStarted = false;
     let connectionReleased = false;
@@ -3602,13 +3719,38 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       const statusId = Number(req.body.status_id);
-      const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
+      const courierIntent = req.body?.courier_intent;
+      if (req.rbacContext === 'courier' && courierActions.enabled(req.user?.tenantId) && !courierActions.validScope(req, tenantId, storeId)) {
+        safeRelease();
+        return res.status(400).json({ ok: false, error: 'COURIER_STORE_SCOPE_INVALID' });
+      }
+      // Enabled courier tenants use durable v2 ONLINE too. A legacy header must
+      // not bypass revision/intent validation. Gate OFF retains the online API.
+      if (req.rbacContext === 'courier' && courierActions.enabled(req.user?.tenantId)
+        && courierIntent === undefined && !/\/courier-intent\/?$/.test(req.path)) {
+        safeRelease();
+        return res.status(422).json({ ok: false, error: 'COURIER_LEGACY_ACTION_REQUIRES_REVIEW' });
+      }
+      if (courierIntent !== undefined && !await courierRevisionReady(conn, req.user?.tenantId)) {
+        safeRelease();
+        return res.status(503).json({ ok: false, error: 'COURIER_REVISION_NOT_READY' });
+      }
+      if (/\/courier-intent\/?$/.test(req.path) && courierIntent === undefined) {
+        safeRelease();
+        return res.status(400).json({ ok: false, error: 'COURIER_INTENT_REQUIRED' });
+      }
+      if (courierIntent !== undefined && !courierActions.validIntent(req, readIdempotencyKey(req))) {
+        safeRelease();
+        return res.status(400).json({ ok: false, error: "COURIER_INTENT_INVALID" });
+      }
+      const courierReport = courierIntent && courierActions.REPORTS.has(courierIntent.operation);
+      const hasBenefitsMetaColumn = !courierReport && await ensureOrderBenefitsMetaColumn();
 
       if (!Number.isFinite(id) || id <= 0) {
         safeRelease();
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
-      if (!Number.isFinite(statusId) || statusId <= 0) {
+      if (!courierReport && (!Number.isFinite(statusId) || statusId <= 0)) {
         safeRelease();
         return res.status(400).json({ ok: false, error: "BAD_STATUS_ID" });
       }
@@ -3628,6 +3770,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         if (claim.inProgress) {
           return res.status(425).json({ ok: false, error: claim.code });
         }
+        if (claim.responseStatus >= 400) return res.status(claim.responseStatus).json(claim.responseBody);
+        if (courierIntent) return res.status(claim.responseStatus).json({ ...claim.responseBody, idempotency_replay: true });
         const replayPayload = await fetchOrderPayload(tenantId, storeId, id);
         return res.status(claim.responseStatus).json({
           ...(claim.responseBody || { ok: true }),
@@ -3636,14 +3780,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         });
       }
 
-      const [statusRows] = await conn.query(
+      const [statusRows] = courierReport ? [[]] : await conn.query(
         `SELECT id, code, is_final
          FROM order_statuses
          WHERE tenant_id=? AND store_id=? AND id=?
          LIMIT 1`,
         [tenantId, storeId, statusId]
       );
-      if (!statusRows.length) {
+      if (!courierReport && !statusRows.length) {
         await conn.rollback();
         transactionStarted = false;
         safeRelease();
@@ -3651,7 +3795,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
 
       const [orderRows] = await conn.query(
-        `SELECT id, tenant_id, store_id, total_price, payment_projection, public_id, customer_id, promo_code, items, discounts_json, ${hasBenefitsMetaColumn ? "benefits_meta_json," : "NULL AS benefits_meta_json,"} status_id, stock_deducted_at, stock_document_id, online_payment_required, online_payment_status
+        `SELECT id, tenant_id, store_id, total_price, payment_projection, public_id, customer_id, promo_code, items, discounts_json, ${hasBenefitsMetaColumn ? "benefits_meta_json," : "NULL AS benefits_meta_json,"} status_id, stock_deducted_at, stock_document_id, online_payment_required, online_payment_status,
+          assigned_user_id, is_paid, payment_id, delivery_type_id, address, address_comment, comment
+          ${courierIntent ? ', created_by_user_id, CAST(courier_revision AS CHAR) AS courier_revision' : ''}
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1
@@ -3666,6 +3812,46 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
 
       const orderRow = orderRows[0];
+      if (courierIntent) {
+        const rule = String(req.permission?.accessRule || '');
+        // Grant/store membership were verified by requireAdminPermission. Apply
+        // resource-specific `own` too; the locked row already supplies its owner.
+        if (!['all', 'stores', 'assigned', 'own'].includes(rule)
+          || rule === 'own' && Number(orderRow.created_by_user_id) !== Number(req.user.userId)) {
+          await conn.rollback(); transactionStarted = false; safeRelease();
+          return res.status(403).json({ ok: false, error: 'RESOURCE_FORBIDDEN' });
+        }
+        const assigned = Number(orderRow.assigned_user_id) === Number(req.user.userId);
+        const revisionMatches = String(orderRow.courier_revision) === courierIntent.base_revision;
+        const sourceState = assigned && revisionMatches ? courierSourceState(orderRow, tenantId, storeId, req.user) : null;
+        const sourceMatches = assigned && revisionMatches && sourceState === courierIntent.base_state
+          && Number(orderRow.status_id) === courierIntent.base_status_id;
+        // Refunds have independent writers. Do not treat their financial state
+        // as covered by the order-row revision or auto-resolve it via delivery.
+        const [refunds] = courierReport || !sourceMatches ? [[]] : await conn.query(
+          'SELECT id FROM order_refunds WHERE tenant_id=? AND store_id=? AND order_id=? LIMIT 1 FOR SHARE', [tenantId, storeId, id]);
+        if (!sourceMatches || refunds.length) {
+          const responseStatus = assigned ? 409 : 403;
+          const event = { ...courierActions.event(courierIntent, orderRow, tenantId, storeId,
+            assigned ? 'conflict' : 'rejected', req.body), observed_state: assigned ? sourceState : null };
+          if (!assigned) event.observed = null; // Do not disclose another courier's order state.
+          const body = { ok: false, error: !assigned ? 'COURIER_ORDER_NOT_ASSIGNED'
+            : refunds.length ? 'COURIER_FINANCIAL_REVIEW_REQUIRED' : 'COURIER_ORDER_CHANGED', courier_event: event };
+          await completeOrderMutationIdempotency(conn, claim, responseStatus, body);
+          await conn.commit();
+          transactionStarted = false;
+          safeRelease();
+          return res.status(responseStatus).json(body);
+        }
+        if (courierReport) {
+          const receipt = courierActions.event(courierIntent, orderRow, tenantId, storeId, 'confirmed', req.body);
+          await completeOrderMutationIdempotency(conn, claim, 200, { ok: true, courier_event: receipt });
+          await conn.commit();
+          transactionStarted = false;
+          safeRelease();
+          return res.json({ ok: true, courier_event: receipt }); // No status/payment/stock changes.
+        }
+      }
       if(Number(orderRow.online_payment_required) && ['canceled','cancelled'].includes(String(statusRows[0]?.code))) {
         const bridge=createOrderOnlinePayment({db,client:req.app.get('paymentServiceClient')});
         const financial=await bridge.snapshot(orderRow);
@@ -3818,6 +4004,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         storeId,
         orderId: id,
         statusId,
+        revisionCovered: stockChangedProductIds.length > 0,
         customerId: Number(orderRow?.customer_id || 0) || null,
         discountsJson: orderRow?.discounts_json || null,
         orderPromoCode: orderRow?.promo_code || null,
@@ -3831,11 +4018,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         benefitsMetaRaw: orderRow?.benefits_meta_json || null,
       });
 
-      await completeOrderMutationIdempotency(conn, claim, 200, { ok: true, order_id: id });
+      await completeOrderMutationIdempotency(conn, claim, 200, { ok: true, order_id: id,
+        ...(courierIntent ? { courier_event: { ...courierIntent, order_id: id, tenant_id: tenantId,
+          store_id: storeId, status_id: statusId, state: "confirmed" } } : {}) });
       await conn.commit();
       transactionStarted = false;
       safeRelease();
-      void pruneCompletedOrderMutationIdempotency(tenantId, storeId).catch((err) => {
+      if (!courierIntent) void pruneCompletedOrderMutationIdempotency(tenantId, storeId).catch((err) => {
         console.warn("Order mutation idempotency cleanup failed:", String(err?.message || err));
       });
 
@@ -3886,7 +4075,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         });
       }
 
-      res.json(payload ? { ok: true, data: payload } : { ok: true });
+      res.json({ ok: true, ...(!courierIntent && payload ? { data: payload } : {}),
+        ...(courierIntent ? { courier_event: { id: courierIntent.id, state: 'confirmed' } } : {}) });
     } catch (e) {
       if (transactionStarted) {
         try {

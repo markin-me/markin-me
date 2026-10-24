@@ -1,5 +1,6 @@
 const express = require('express');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
+const { businessRevisionHook, businessMutation } = require('../../services/catalog-snapshot-capture');
 const { buildAdminLoyaltyProgressCustomersPage } = require('../helpers/admin-loyalty-progress');
 
 const DISCOUNT_COLUMNS = `
@@ -2999,6 +3000,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       await conn.beginTransaction();
       inTransaction = true;
 
+      await businessRevisionHook(conn, { tenantId, storeId });
       const [result] = await conn.query(
         `INSERT INTO mkt_discounts (
           tenant_id, store_id, title, description, discount_type, discount_value,
@@ -3179,6 +3181,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       await conn.beginTransaction();
       inTransaction = true;
 
+      await businessRevisionHook(conn, { tenantId, storeId });
       const priorityValue = Object.prototype.hasOwnProperty.call(req.body || {}, 'priority')
         ? (toIntOrNull(req.body?.priority) || 0)
         : (toIntOrNull(existing?.priority) || 0);
@@ -3329,14 +3332,14 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'INVALID_ID' });
       }
 
-      const [result] = await db.query(
+      const [result] = await businessMutation(db, { tenantId, storeId }, conn => conn.query(
         `UPDATE mkt_discounts
             SET is_deleted = 1,
                 deleted_at = CURRENT_TIMESTAMP,
                 is_active = 0
           WHERE id = ? AND tenant_id = ? AND store_id = ?`,
         [discountId, tenantId, storeId]
-      );
+      ));
 
       if (Number(result?.affectedRows || 0) === 0) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
@@ -3360,14 +3363,14 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'INVALID_ID' });
       }
 
-      const [result] = await db.query(
+      const [result] = await businessMutation(db, { tenantId, storeId }, conn => conn.query(
         `UPDATE mkt_discounts
             SET is_deleted = 0,
                 deleted_at = NULL,
                 is_active = 1
           WHERE id = ? AND tenant_id = ? AND store_id = ?`,
         [discountId, tenantId, storeId]
-      );
+      ));
 
       if (Number(result?.affectedRows || 0) === 0) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
@@ -3409,10 +3412,10 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
 
       const newStatus = Number(discount.is_active || 0) === 1 ? 0 : 1;
 
-      await db.query(
+      await businessMutation(db, { tenantId, storeId }, conn => conn.query(
         `UPDATE mkt_discounts SET is_active = ? WHERE id = ? AND tenant_id = ? AND store_id = ?`,
         [newStatus, discountId, tenantId, storeId]
-      );
+      ));
 
       return res.json({ ok: true, is_active: newStatus === 1 });
     } catch (err) {

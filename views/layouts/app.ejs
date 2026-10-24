@@ -27,7 +27,9 @@
   <% if (typeof dashboardShell !== 'undefined' && dashboardShell === true) { %>
     <script>window.__ADMIN_DASHBOARD_SHELL__ = true;</script>
   <% } %>
-  <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
+  <script>window.__COURIER_OFFLINE_PUBLIC_KEY__ = <%- JSON.stringify(typeof courierOfflinePublicKey !== 'undefined' ? courierOfflinePublicKey : null).replace(/</g, '\\u003c') %>;</script>
+  <script src="<%= assetUrl('/static/js/auth.js?v=20261023-courier-unlock-v1') %>"></script>
+  <script src="<%= assetUrl('/static/js/courier-offline-vault.js') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-persistent-cache.js?v=20261014-local-core-v1') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-local-repository.js?v=20261014-local-core-v1') %>"></script>
   <script src="<%= assetUrl('/static/js/admin-idle-hydration.js') %>"></script>
@@ -55,6 +57,7 @@
       window.showConfirmedAdminInterface = function () {
         var repository = window.AdminLocalRepository;
         if (!repository || !repository.isActive()) { lock(); return; }
+        if (CourierOfflineVault.enabled() && !CourierOfflineVault.isUnlocked()) { lock(); CourierOfflineVault.showUnlock(); return; }
         var scope = repository.create({ domain: 'interface', version: 1 });
         if (visibleScope && visibleScope !== scope.namespace) { lock(); window.location.reload(); return; }
         visibleScope = scope.namespace;
@@ -80,7 +83,12 @@
   <script>
     window.AdminServerAccessContext = <%- JSON.stringify(typeof serverAccessContext !== 'undefined' ? serverAccessContext : null).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029') %>;
     if (window.AdminServerAccessContext) {
-      window.AdminServerContextPromise = confirmServerAccessContext(window.AdminServerAccessContext);
+      <% if (typeof serverAccessToken !== 'undefined' && serverAccessToken) { %>
+      if (CourierOfflineVault.enabled()) setAuthToken(<%- JSON.stringify(serverAccessToken).replace(/</g, '\\u003c') %>, { memoryOnly: true });
+      <% } %>
+      window.AdminServerContextPromise = CourierOfflineVault.enabled()
+        ? CourierOfflineVault.ready().then(function () { return confirmServerAccessContext(window.AdminServerAccessContext); })
+        : confirmServerAccessContext(window.AdminServerAccessContext);
     }
   </script>
   <meta name="viewport" content="<%= appViewportContent %>" />
@@ -324,6 +332,7 @@
     </section>
 
     <section class="page-col page-col-center">
+      <p id="adminReadCacheNotice" class="muted hidden" role="status"></p>
       <%- include(centerPartial) %>
     </section>
 
@@ -333,6 +342,30 @@
   </div>
 
   <div id="sidebarOverlay" class="sidebar-overlay"></div>
+  <script>
+    (function () {
+      var notice = document.getElementById('adminReadCacheNotice');
+      var cacheTime;
+      function renderReadCacheNotice() {
+        var visible = window.AdminLocalRepository?.isActive() && isAdminOfflineRead();
+        notice.classList.toggle('hidden', !visible);
+        if (!visible) return;
+        var time = cacheTime ? 'Кеш обновлён: ' + new Date(cacheTime).toLocaleString() + '. '
+          : cacheTime === undefined ? 'Сохранённые данные этого экрана ещё не прочитаны. ' : 'Время обновления кеша неизвестно. ';
+        notice.textContent = 'Офлайн. ' + time + 'Сохранённые данные могут быть устаревшими и неполными. '
+          + (document.body.dataset.adminActivePage === 'courier-screen' && window.AdminAccessContext?.local_context?.courierOfflineV2 === true
+            ? 'Разрешённые курьерские действия доступны при подготовленной карточке, не оплата.' : 'Изменения требуют подключения к серверу.');
+      }
+      window.addEventListener('admin:read-cache', function (event) { cacheTime = event.detail.lastSyncedAt; renderReadCacheNotice(); });
+      window.addEventListener('offline', renderReadCacheNotice);
+      window.addEventListener('online', renderReadCacheNotice);
+      window.addEventListener('admin:access-context', renderReadCacheNotice);
+      window.addEventListener('admin:local-context-changed', function (event) {
+        if (event.detail?.state !== 'active') cacheTime = undefined;
+        renderReadCacheNotice();
+      });
+    })();
+  </script>
 
   <!-- ✅ Универсальная модалка -->
   <%- include('../partials/modal') %>
@@ -476,7 +509,7 @@
               ['name', 'last_name', 'first_name', 'patronymic'].forEach(function (field) { context.user[field] = profile[field]; });
               if (context.user.profile_name) context.user.profile_name = profile.name;
             }
-            localStorage.setItem('user', JSON.stringify(context.user));
+            setAuthLocalValue('user', JSON.stringify(context.user));
             updateUserInfo();
             return renderProfilePhoto(context.user);
           }).catch(function (error) { console.warn('Не удалось обновить фото профиля:', error.message); });
@@ -485,8 +518,8 @@
         // Функция для обновления информации о пользователе
         function updateUserInfo() {
           try {
-            var userStr = localStorage.getItem('user');
-            var tenantStr = localStorage.getItem('tenant');
+            var userStr = (window.getAuthLocalValue ? window.getAuthLocalValue('user') : localStorage.getItem('user'));
+            var tenantStr = (window.getAuthLocalValue ? window.getAuthLocalValue('tenant') : localStorage.getItem('tenant'));
             
             var nameEl = document.getElementById('userMenuName');
             var emailEl = document.getElementById('userMenuEmail');
@@ -553,7 +586,7 @@
               if (window.AdminPersistentCache && typeof window.AdminPersistentCache.resetRuntimeScope === 'function') {
                 window.AdminPersistentCache.resetRuntimeScope();
               }
-              localStorage.removeItem('authToken');
+              (window.setAuthToken ? window.setAuthToken(null) : localStorage.removeItem('authToken'));
               localStorage.removeItem('user');
               localStorage.removeItem('tenant');
               window.location.href = '/login';
@@ -678,9 +711,9 @@
                 if (!roleRequestAccess.isCurrent()) return;
                 if (!response.ok || result.ok !== true) throw new Error(result.error || 'ROLE_SWITCH_FAILED');
                 if (window.AdminLocalRepository) window.AdminLocalRepository.reset({ forget: true });
-                localStorage.setItem('authToken', result.token);
-                localStorage.setItem('user', JSON.stringify(result.user));
-                localStorage.setItem('tenant', JSON.stringify(result.tenant));
+                setAuthToken(result.token);
+                setAuthLocalValue('user', JSON.stringify(result.user));
+                setAuthLocalValue('tenant', JSON.stringify(result.tenant));
                 updateUserInfo();
                 renderProfilePhoto(result.user);
                 renderRoleOptions(result);
@@ -756,13 +789,16 @@
           return restored;
         }
         function loadAccessContext(useServerBootstrap) {
+          if (CourierOfflineVault.enabled() && !CourierOfflineVault.isUnlocked()) {
+            return CourierOfflineVault.ready().then(function () { return loadAccessContext(useServerBootstrap); });
+          }
           if (useServerBootstrap === true && window.AdminServerContextPromise) {
             return window.AdminServerContextPromise.then(function (context) {
               if (!context || !window.AdminLocalRepository.isActive()) return null;
               return applyAccessContext(context);
             });
           }
-          var requestToken = localStorage.getItem('authToken');
+          var requestToken = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
           if (accessContextLoad && accessContextLoad.token === requestToken) return accessContextLoad.promise;
           var repository = window.AdminLocalRepository;
           var ticket = repository ? repository.beginConfirmation() : null;
@@ -784,10 +820,10 @@
             responseReceived = true;
             responseStatus = response.status;
             var context = await response.json();
-            if (localStorage.getItem('authToken') !== requestToken || (requestAccess && !requestAccess.isCurrent())) return null;
+            if ((window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) !== requestToken || (requestAccess && !requestAccess.isCurrent())) return null;
             if (!response.ok || context.ok !== true) throw new Error(context.error || 'AUTH_CONTEXT_FAILED');
-            if (context.user) localStorage.setItem('user', JSON.stringify(context.user));
-            if (context.tenant) localStorage.setItem('tenant', JSON.stringify(context.tenant));
+            if (context.user) setAuthLocalValue('user', JSON.stringify(context.user));
+            if (context.tenant) setAuthLocalValue('tenant', JSON.stringify(context.tenant));
             applyAllowedStoreContext(context);
             if (repository) {
               try {
@@ -798,21 +834,21 @@
               }
               catch (storageError) {
                 console.error('Local context confirmation failed:', storageError);
-                if (storageError.message !== 'LOCAL_SCOPE_CHANGED' && localStorage.getItem('authToken') === requestToken) repository.reset({ forget: true, reason: 'local-context-error' });
+                if (storageError.message !== 'LOCAL_SCOPE_CHANGED' && (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) === requestToken) repository.reset({ forget: true, reason: 'local-context-error' });
                 return null;
               }
             }
-            if (localStorage.getItem('authToken') !== requestToken || (repository && !repository.isActive())) return null;
+            if ((window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) !== requestToken || (repository && !repository.isActive())) return null;
             return applyAccessContext(context);
           } catch (error) {
             if (requestAccess && !requestAccess.isCurrent()) return null;
-            if (repository && !responseReceived && error instanceof TypeError && localStorage.getItem('authToken') === requestToken) {
+            if (repository && !responseReceived && error instanceof TypeError && (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) === requestToken) {
               try {
                 var restored = await restoreAccessContext(requestToken, ticket);
                 if (restored) return restored;
               } catch (restoreError) { console.error('Local context restore failed:', restoreError); }
             }
-            if (repository && localStorage.getItem('authToken') === requestToken && error.message !== 'LOCAL_SCOPE_CHANGED') {
+            if (repository && (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken')) === requestToken && error.message !== 'LOCAL_SCOPE_CHANGED') {
               repository.reset({ forget: true, broadcast: responseReceived, reason: !responseReceived ? 'offline-unavailable'
                 : responseStatus >= 400 && responseStatus < 500 && responseStatus !== 429 ? 'server-refusal' : 'server-unavailable' });
             }
@@ -1004,7 +1040,7 @@
 
         // Проверка авторизации для страниц dashboard
         if (window.location.pathname.startsWith('/dashboard/')) {
-          var token = localStorage.getItem('authToken');
+          var token = (window.getAuthToken ? window.getAuthToken() : localStorage.getItem('authToken'));
           if (!token && !window.__ADMIN_NEUTRAL_SHELL__) {
             window.location.href = '/login';
           }

@@ -158,7 +158,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     if (context === 'new-order' && (route === '/orders/statuses' || route === '/orders/benefits/preview')) return 'new_order.create';
     if (context === 'courier') {
       if (action === 'read') return 'courier.orders.read';
-      if (String(method || '').toUpperCase() === 'PUT' && /^\/orders\/[^/]+\/status$/.test(route)) return 'courier.orders.update';
+      if (String(method || '').toUpperCase() === 'PUT' && /^\/orders\/[^/]+\/(?:status|courier-intent)$/.test(route)) return 'courier.orders.update';
       return 'courier.unsupported';
     }
     if (/^\/orders\/[^/]+\/payment\/refresh$/.test(route) && String(method).toUpperCase() === 'POST') {

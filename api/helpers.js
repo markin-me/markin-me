@@ -1,6 +1,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
+const { writerEnabled, businessMutation, businessRevisionHook } = require('../services/catalog-snapshot-capture');
 
 // Sharp optional mode:
 // - enabled by default if package is available
@@ -279,7 +280,7 @@ async function nextSortOrderForCategories(db, tenantId, step = 10, parentId = nu
  * - burgers (Бургеры)
  * - drinks (Напитки)
  */
-async function ensureDefaultCategories(db, tenantId) {
+async function ensureDefaultCategories(db, tenantId, prepared = null) {
   const [rows] = await db.query(
     'SELECT * FROM prod_categories WHERE tenant_id=? ORDER BY sort_order, id',
     [tenantId]
@@ -293,6 +294,19 @@ async function ensureDefaultCategories(db, tenantId) {
   if (!byCode.has('drinks')) missing.push(['drinks', 'Напитки', null, 1, 1, 20]);
 
   if (missing.length) {
+    if (prepared?.transaction) {
+      if (typeof prepared.transaction !== 'function') throw new Error('INVALID_CATEGORY_WRITER');
+      // Explicit inactive variant only. Re-read under the revision transaction;
+      // a normal read with all defaults present acquires no clock/transaction.
+      return prepared.transaction(conn => ensureDefaultCategories(conn, tenantId, { revisionCovered: true }));
+    }
+    if (!prepared?.revisionCovered && writerEnabled(tenantId)) {
+      if (typeof db.getConnection === 'function') {
+        return businessMutation(db, { tenantId, catalog: true }, conn =>
+          ensureDefaultCategories(conn, tenantId, { revisionCovered: true }));
+      }
+      await businessRevisionHook(db, { tenantId, catalog: true });
+    }
     for (const [code, title, icon, site_visibility, is_active, sort_order] of missing) {
       await db.query(
         'INSERT INTO prod_categories (tenant_id, code, title, icon, site_visibility, is_active, sort_order) VALUES (?,?,?,?,?,?,?)',
@@ -308,14 +322,14 @@ async function ensureDefaultCategories(db, tenantId) {
   return rows2;
 }
 
-async function getAllCategoryId(db, tenantId) {
+async function getAllCategoryId(db, tenantId, revisionCovered = false) {
   const [rows] = await db.query(
     'SELECT id FROM prod_categories WHERE tenant_id=? AND code=? LIMIT 1',
     [tenantId, 'all']
   );
   if (rows.length) return rows[0].id;
 
-  await ensureDefaultCategories(db, tenantId);
+  await ensureDefaultCategories(db, tenantId, revisionCovered ? { revisionCovered: true } : null);
 
   const [rows2] = await db.query(
     'SELECT id FROM prod_categories WHERE tenant_id=? AND code=? LIMIT 1',
@@ -327,8 +341,12 @@ async function getAllCategoryId(db, tenantId) {
 /**
  * Проставляет категории товару. "all" держим всегда.
  */
-async function setProductCategories(db, tenantId, productId, categoryIds) {
-  const allCategoryId = await getAllCategoryId(db, tenantId);
+async function setProductCategories(db, tenantId, productId, categoryIds, revisionCovered = false) {
+  if (!revisionCovered && writerEnabled(tenantId)) {
+    return businessMutation(db, { tenantId, catalog: true }, conn =>
+      setProductCategories(conn, tenantId, productId, categoryIds, true));
+  }
+  const allCategoryId = await getAllCategoryId(db, tenantId, revisionCovered);
 
   const normalized = Array.from(
     new Set(
