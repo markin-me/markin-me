@@ -8793,7 +8793,6 @@
     const settingsPrintApiPrinterName = document.getElementById("settingsPrintApiPrinterName");
     const settingsPrintApiName = document.getElementById("settingsPrintApiName");
     const settingsPrintApiHierarchy = document.getElementById("settingsPrintApiHierarchy");
-    const settingsPrintApiActive = document.getElementById("settingsPrintApiActive");
 
 
 
@@ -26656,7 +26655,7 @@
 
 
 
-    setPrintApiDraftMode(false);
+    setPrintApiDraftMode(true);
 
 
 
@@ -28571,7 +28570,7 @@
 
 
 
-          setPrintApiDraftMode(false);
+          setPrintApiDraftMode(true);
 
           await loadPrintApiCards();
           const connectionId=Number(info?.connection_id||info?.id||printApiSelectedConnectionId);
@@ -28603,7 +28602,7 @@
 
 
 
-          alert("Не удалось сохранить настройки уведомлений CRM_Print_Push_Bot.");
+          alert("Не удалось сохранить подключение: "+err.message);
 
 
 
@@ -43070,7 +43069,7 @@
         context.selector.classList.add('is-open');
         context.menu.showPopover();
         const bounds=context.trigger.getBoundingClientRect();
-        const panel=context.selector.closest('#settingsProductionZonePanel').getBoundingClientRect();
+        const panel=context.selector.closest('#settingsProductionZonePanel, #settingsPrintApiPanel').getBoundingClientRect();
         const left=Math.max(8,panel.left+12),right=Math.min(window.innerWidth-8,panel.right-12);
         const top=Math.max(8,panel.top+8),bottom=Math.min(window.innerHeight-8,panel.bottom-8);
         const below=Math.max(0,bottom-bounds.bottom-8),above=Math.max(0,bounds.top-top-8);
@@ -43571,12 +43570,12 @@
 
 
     function resetPrintApiFormForCreate(storeId = 0) {
+      printApiDeviceSnapshot.removed_devices=[];
       if (settingsPrintApiStore) settingsPrintApiStore.value = storeId ? String(storeId) : "";
       if (settingsPrintApiName) settingsPrintApiName.value = "";
-      if (settingsPrintApiActive) settingsPrintApiActive.checked = true;
       if (settingsPrintApiToken) settingsPrintApiToken.value = "";
       if (settingsPrintApiToken) settingsPrintApiToken.type = "password";
-      if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.textContent = "Показать";
+      if (settingsPrintApiRevealToken) syncPrintApiTokenIcons();
       resetPrintApiDeviceState({
         statusText: "Сначала выберите филиал",
         printerText: "Нет токена подключения"
@@ -43587,7 +43586,7 @@
         sound_new_order_url: "",
         sound_new_message_url: ""
       });
-      if (settingsPrintApiGenerateBtn) settingsPrintApiGenerateBtn.textContent = "Сгенерировать токен";
+      if (settingsPrintApiGenerateBtn) syncPrintApiTokenIcons();
       updatePrintApiOriginalFromCurrentForm();
       clearPrintApiSettingsDirty();
     }
@@ -43599,12 +43598,23 @@
 
 
     function setPrintApiDeviceState(statusText, printerText, printers = [], agents = []) {
-      printApiDeviceSnapshot = {printers,agents};
+      const removals=printApiDeviceSnapshot.removed_devices || [];
+      const excludedAgents=new Set(removals.map(item=>Number(item.agent_id||0)));
+      const excludedPrinters=new Set(removals.map(item=>Number(item.printer_id||0)));
+      agents=(agents||[]).filter(agent=>!excludedAgents.has(Number(agent.id))).map(agent=>({...agent,printers:(agent.printers||[]).filter(printer=>!excludedPrinters.has(Number(printer.id)))}));
+      const remainingIds=new Set(agents.flatMap(agent=>(agent.printers||[]).map(printer=>Number(printer.id))));
+      printers=(printers||[]).filter(printer=>Number(printer.token_id)===printApiSelectedConnectionId&&remainingIds.has(Number(printer.id)));
+      printApiDeviceSnapshot = {printers,agents,removed_devices:removals};
 
 
 
       if (settingsPrintApiPrinterStatus) settingsPrintApiPrinterStatus.value = String(statusText || "");
       if (settingsPrintApiPrinterStatusValue) settingsPrintApiPrinterStatusValue.textContent = String(statusText || "");
+      if(settingsPrintApiCheckBtn){
+        const connected=statusText==='Соединение установлено';
+        settingsPrintApiCheckBtn.classList.toggle('is-connected',connected);
+        settingsPrintApiCheckBtn.setAttribute('aria-label',`Соединение: ${statusText || 'не проверено'}. Нажмите, чтобы повторить проверку`);
+      }
 
 
 
@@ -43640,6 +43650,14 @@
 
 
 
+      const summary=document.getElementById('settingsPrintApiSummary');
+      if(summary){
+        const devices=Array.isArray(agents)?agents:[],online=devices.filter(item=>Number(item.is_online)===1).length;
+        const printers=devices.flatMap(item=>(item.printers||[]).map(printer=>({online:Number(item.is_online)===1&&printer.status==='online'})));
+        const printerOnline=printers.filter(item=>item.online).length;
+        const latest=devices.map(item=>item.last_heartbeat_at).filter(Boolean).sort().pop();
+        summary.textContent=`Устройства: ${online} онлайн / ${devices.length-online} офлайн. Принтеры: ${printerOnline} онлайн / ${printers.length-printerOnline} офлайн.${latest?' Последняя связь: '+new Date(latest).toLocaleString('ru-RU'):''}`;
+      }
       if (settingsPrintApiHierarchy) {
         settingsPrintApiHierarchy.innerHTML = "";
         const connectionAgents = Array.isArray(agents) ? agents : [];
@@ -43656,7 +43674,9 @@
           const meta = document.createElement("span");
           meta.className = "settings-print-api-agent-meta";
           meta.textContent = `${Number(agent.is_online) === 1 ? "Онлайн" : "Не в сети"} · ${agent.last_heartbeat_at ? "Последняя связь: " + agent.last_heartbeat_at : "Связь не установлена"} · версия ${agent.agent_version || "—"}`;
-          header.append(title, meta);
+          const removeAgent=queueButton('Удалить устройство',()=>removePrintApiDevice({agent_id:agentId}));
+          removeAgent.className='btn btn-link btn-sm';
+          header.append(title, meta, removeAgent);
           block.appendChild(header);
           const tableWrap = document.createElement("div");
           tableWrap.className = "settings-print-api-table-wrap";
@@ -43688,6 +43708,8 @@
             testBtn.textContent = "Тест";
             testBtn.addEventListener("click", () => testPrintApiPrinter(Number(printer.id)));
             actionCell.appendChild(testBtn);
+            actionCell.append(queueButton('Удалить',()=>removePrintApiDevice({printer_id:Number(printer.id)})));
+
             row.append(nameCell, statusCell, actionCell);
             tbody.appendChild(row);
           });
@@ -43703,6 +43725,8 @@
       }
 
 
+
+      syncPrintApiSelects();
 
     }
 
@@ -44255,87 +44279,62 @@
 
     function renderPrintApiCards() {
       if (!apiPanelCards) return;
-      apiPanelCards.innerHTML = "";
-      const stores = Array.isArray(storesState.items) ? storesState.items : [];
-      const rows = Array.isArray(printApiListItems) ? printApiListItems : [];
-      if (settingsApiCardsHeader) settingsApiCardsHeader.classList.toggle("hidden", !stores.length);
-      if (!stores.length) return;
-      stores.forEach((store) => {
-        const connections = rows.filter((item) => Number(item.store_id || 0) === Number(store.id) && Number(item.token_id || 0) > 0);
-        const renderRow = (rowData) => {
-        const isConnected = Number(rowData.agent_online || 0) === 1;
-        const hasConnection = Number(rowData.token_id || 0) > 0;
-        const row = document.createElement("button");
-        row.type = "button";
-        row.className = "settings-home-card settings-card settings-api-card";
-        row.classList.toggle("is-active", hasConnection && printApiSelectedConnectionId === Number(rowData.token_id));
-
-        const avatar = document.createElement("div");
-        avatar.className = "product-avatar";
-        avatar.innerHTML = '<i class="fas fa-plug"></i>';
-
-        const info = document.createElement("div");
-        info.className = "order-col";
-        const title = document.createElement("div");
-        title.className = "product-title";
-        title.textContent = hasConnection ? String(rowData.display_name || `Подключение #${rowData.token_id}`) : "Нет подключений";
-        const subtitle = document.createElement("div");
-        subtitle.className = "muted";
-        subtitle.textContent = `${String(store.name || `Филиал #${store.id}`)}${hasConnection ? ` · устройств: ${Number(rowData.agent_count || 0)}` : ""}`;
-        info.appendChild(title);
-        info.appendChild(subtitle);
-
-        const status = document.createElement("div");
-        status.className = "order-col settings-api-card-status";
-        const dot = document.createElement("span");
-        dot.className = `settings-api-status-dot ${isConnected ? "is-online" : "is-offline"}`;
-        dot.title = isConnected ? "Соединение установлено" : "Соединение не установлено";
-        status.appendChild(dot);
-
-        const action = document.createElement("div");
-        action.className = "order-col settings-api-card-actions";
-        const badge = document.createElement("span");
-        badge.className = "badge";
-        badge.textContent = hasConnection ? (Number(rowData.is_active) === 1 ? "Активно" : "Отключено") : "Добавить";
-        action.appendChild(badge);
-        if (hasConnection) {
-          const paused=Number(rowData.printing_paused)===1;
-          const pause=document.createElement('span');pause.className='btn btn-icon btn-sm';pause.tabIndex=0;pause.setAttribute('role','button');
-          pause.title=paused?'Продолжить печать':'Остановить печать';pause.setAttribute('aria-label',pause.title);pause.setAttribute('aria-pressed',String(paused));
-          const icon=document.createElement('i');icon.className='fas '+(paused?'fa-play':'fa-pause');pause.append(icon);
-          const toggle=event=>{event.preventDefault();event.stopPropagation();setPrintApiPause(Number(store.id),Number(rowData.token_id),!paused,pause);};
-          pause.addEventListener('click',toggle);pause.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ')toggle(event);});action.append(pause);
+      apiPanelCards.replaceChildren();
+      apiPanelCards.setAttribute('role','table');
+      apiPanelCards.setAttribute('aria-label','Подключения API печати');
+      if(settingsApiCardsHeader){settingsApiCardsHeader.classList.remove('hidden');apiPanelCards.append(settingsApiCardsHeader);}
+      const connections=[...(Array.isArray(printApiListItems)?printApiListItems:[])];
+      const represented=new Set(connections.map(item=>Number(item.store_id)));
+      for(const store of storesState.items||[])if(!represented.has(Number(store.id)))connections.push({store_id:store.id,store_name:store.name,token_id:0});
+      if(!connections.length){
+        const empty=document.createElement('div');empty.className='empty-state';empty.textContent='Пока нет подключений API';apiPanelCards.append(empty);return;
+      }
+      for(const item of connections){
+        const storeId=Number(item.store_id),connectionId=Number(item.token_id||0);
+        const row=document.createElement('div');row.className='order-row product-row settings-api-table-row';row.setAttribute('role','row');row.tabIndex=0;
+        row.classList.toggle('is-active',connectionId>0&&printApiSelectedConnectionId===connectionId);
+        const open=()=>openPrintApiForStore(storeId,String(item.store_name||''),connectionId);
+        row.addEventListener('click',open);
+        row.addEventListener('keydown',event=>{if(event.target===row&&(event.key==='Enter'||event.key===' ')){event.preventDefault();open();}});
+        const cell=(className='')=>{const element=document.createElement('div');element.className=className;element.setAttribute('role','cell');row.append(element);return element;};
+        const connected=connectionId>0&&Number(item.agent_online)===1;
+        const state=cell('settings-api-table-indicator');
+        const dot=document.createElement('span');dot.className='settings-api-status-dot '+(connected?'is-online':'is-offline');
+        dot.title=connected?'Агент на связи':'Связи с агентом нет';dot.setAttribute('role','img');dot.setAttribute('aria-label',dot.title);state.append(dot);
+        const name=cell('product-title');name.textContent=String(item.display_name||(connectionId>0?`Подключение #${connectionId}`:'Нет подключения'));name.title=name.textContent;
+        const store=cell('muted');store.textContent=String(item.store_name||'');store.title=store.textContent;
+        if(!connectionId){
+          for(let index=0;index<3;index++)cell('settings-api-table-number').textContent='—';
+          const action=cell('settings-api-table-number');const add=document.createElement('button');add.type='button';add.className='btn btn-icon btn-sm';add.title='Добавить подключение';add.setAttribute('aria-label',add.title);const icon=document.createElement('i');icon.className='fas fa-plus';add.append(icon);add.addEventListener('click',event=>{event.stopPropagation();open();});action.append(add);apiPanelCards.append(row);continue;
         }
-        if (hasConnection) {
-          for (const [view,label] of [['queue','\u041e\u0447\u0435\u0440\u0435\u0434\u044c'],['errors','\u041e\u0448\u0438\u0431\u043a\u0438']]) {
-            const link=document.createElement('span');link.className='badge';link.tabIndex=0;link.setAttribute('role','button');
-            link.textContent=label+' / '+Number(rowData[view==='queue'?'queue_count':'failed_count']||0);
-            const open=async(event)=>{event.preventDefault();event.stopPropagation();await openPrintApiForStore(Number(store.id),String(store.name||''),Number(rowData.token_id));showPrintQueueView(view);};
-            link.addEventListener('click',open);link.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ')open(event);});action.append(link);
-          }
+        const printers=cell('settings-api-table-number settings-api-printer-counts');
+        const online=Number(item.printer_online_count||0),offline=Math.max(0,Number(item.printer_count||0)-online);
+        for(const [count,state,label] of [[online,'online','онлайн'],[offline,'offline','офлайн']]){
+          const value=document.createElement('span');value.className='is-'+state;value.textContent=String(count);value.title=`Принтеров ${label}: ${count}`;value.setAttribute('aria-label',value.title);printers.append(value);
         }
-
-        row.appendChild(avatar);
-        row.appendChild(info);
-        row.appendChild(status);
-        row.appendChild(action);
-        row.addEventListener("click", () => openPrintApiForStore(Number(store.id), String(store.name || `Филиал #${store.id}`), Number(rowData.token_id || 0)));
-        apiPanelCards.appendChild(row);
-        };
-        if (connections.length) connections.forEach(renderRow);
-        else renderRow({ store_id: store.id });
-      });
+        for(const [view,field,title] of [['queue','queue_count','Открыть очередь печати'],['errors','failed_count','Открыть ошибки печати']]){
+          const count=Number(item[field]||0),host=cell('settings-api-table-number');
+          const button=document.createElement('button');button.type='button';button.className='btn btn-link btn-sm settings-api-table-count';button.textContent=String(count);button.title=title;button.setAttribute('aria-label',`${title}: ${count}`);
+          button.classList.toggle('has-errors',view==='errors'&&count>0);
+          button.addEventListener('click',async event=>{event.stopPropagation();await open();if(printApiSelectedConnectionId===connectionId)showPrintQueueView(view);});host.append(button);
+        }
+        const paused=Number(item.printing_paused)===1,action=cell('settings-api-table-number');
+        const pause=document.createElement('button');pause.type='button';pause.className='btn btn-icon btn-sm';pause.title=paused?'Продолжить печать':'Остановить печать';pause.setAttribute('aria-label',pause.title);pause.setAttribute('aria-pressed',String(paused));
+        const icon=document.createElement('i');icon.className='fas '+(paused?'fa-play':'fa-pause');pause.append(icon);
+        pause.addEventListener('click',event=>{event.stopPropagation();setPrintApiPause(storeId,connectionId,!paused,pause);});action.append(pause);
+        apiPanelCards.append(row);
+      }
     }
 
     if (settingsPrintApiRevealToken && settingsPrintApiToken) {
       settingsPrintApiRevealToken.addEventListener("click", () => {
         const shouldReveal = settingsPrintApiToken.type === "password";
         settingsPrintApiToken.type = shouldReveal ? "text" : "password";
-        settingsPrintApiRevealToken.textContent = shouldReveal ? "Скрыть" : "Показать";
+        syncPrintApiTokenIcons();
       });
     }
 
-    [settingsPrintApiName, settingsPrintApiActive].filter(Boolean).forEach((control) => {
+    [settingsPrintApiName].filter(Boolean).forEach((control) => {
       control.addEventListener("input", markPrintApiSettingsDirty);
       control.addEventListener("change", markPrintApiSettingsDirty);
     });
@@ -44384,6 +44383,44 @@
 
 
 
+    function removePrintApiDevice(selection) {
+      const current=printApiDeviceSnapshot;
+      let removals=[...(current.removed_devices||[])];
+      if(selection.agent_id){
+        const agent=current.agents.find(item=>Number(item.id)===Number(selection.agent_id));
+        const ids=new Set((agent?.printers||[]).map(item=>Number(item.id)));
+        removals=removals.filter(item=>!ids.has(Number(item.printer_id)));
+      }
+      removals.push(selection);
+      const selected=String(settingsPrintApiPrinterName?.value||'');
+      printApiDeviceSnapshot.removed_devices=removals;
+      setPrintApiDeviceState(settingsPrintApiPrinterStatus?.value,'',current.printers,current.agents);
+      if(settingsPrintApiPrinterName)settingsPrintApiPrinterName.value=selected;
+      syncPrintApiSelects();
+      markPrintApiSettingsDirty();
+    }
+
+    document.getElementById('settingsPrintApiDeleteBtn')?.addEventListener('click',async event=>{
+      const scope=printQueueScope(),key=activeRightTabId;
+      if(!scope.connection_id)return;
+      if(!confirm('Удалить подключение и его устройства? Ключ перестанет работать.'))return;
+      const button=event.currentTarget;button.disabled=true;
+      try{
+        const response=await authFetch('/api/admin/tenant/print-api/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scope)});
+        const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.message||result.error);
+        rightTabs?.querySelector(`[data-right-tab="${key}"] .product-tab-close`)?.click();
+        clearPrintApiTabState(key);
+        if(activeRightTabId===key){rightTabs?.querySelector(`[data-right-tab="${key}"]`)?.remove();setActiveRightTab('');}
+        await loadPrintApiCards();
+      }catch(error){alert('Не удалось удалить подключение: '+error.message);}finally{button.disabled=false;}
+    });
+
+    function syncPrintApiTokenIcons() {
+      const revealed=settingsPrintApiToken?.type==='text';
+      if(settingsPrintApiRevealToken){settingsPrintApiRevealToken.innerHTML=`<i class="fas ${revealed?'fa-eye':'fa-eye-slash'}" aria-hidden="true"></i>`;settingsPrintApiRevealToken.title=revealed?'Скрыть токен':'Показать токен';settingsPrintApiRevealToken.setAttribute('aria-label',settingsPrintApiRevealToken.title);}
+      if(settingsPrintApiGenerateBtn){settingsPrintApiGenerateBtn.innerHTML='<i class="fas fa-sync-alt" aria-hidden="true"></i>';settingsPrintApiGenerateBtn.title='Обновить токен';settingsPrintApiGenerateBtn.setAttribute('aria-label','Обновить токен');}
+    }
+
     function applyPrintApiControlState(info) {
       printApiControlState=info&&info.printing_paused!=null?{
         printing_paused:Number(info.printing_paused),print_control_version:Number(info.print_control_version||0),print_control_confirmed:Number(info.print_control_confirmed||0)
@@ -44392,7 +44429,7 @@
       if(!button)return;
       button.disabled=!printApiControlState||!printApiSelectedConnectionId;
       const paused=printApiControlState?.printing_paused===1;
-      button.replaceChildren();const icon=document.createElement('i');icon.className='fas '+(paused?'fa-play':'fa-pause');button.append(icon,document.createTextNode(paused?' Продолжить':' Остановить печать'));
+      button.replaceChildren();const icon=document.createElement('i');icon.className='fas '+(paused?'fa-play':'fa-pause');button.append(icon);button.title=paused?'Продолжить печать':'Остановить печать';button.setAttribute('aria-label',button.title);
       if(status)status.textContent=!printApiControlState?'':paused?(printApiControlState.print_control_confirmed?'Пауза подтверждена агентами на связи':'Выдача остановлена. Ожидается подтверждение агентов'):'';
     }
     async function setPrintApiPause(storeId,connectionId,paused,button) {
@@ -44414,10 +44451,10 @@
         store_id: Number(settingsPrintApiStore && settingsPrintApiStore.value) || 0,
         connection_id: printApiSelectedConnectionId,
         ...printApiControlState,
+        removed_devices: printApiDeviceSnapshot.removed_devices || [],
         printers: printApiDeviceSnapshot.printers,
         agents: printApiDeviceSnapshot.agents,
         name: String(settingsPrintApiName && settingsPrintApiName.value || ""),
-        is_active: settingsPrintApiActive && settingsPrintApiActive.checked ? 1 : 0,
         token: String((settingsPrintApiToken && settingsPrintApiToken.value) || ""),
         printer_status: String((settingsPrintApiPrinterStatus && settingsPrintApiPrinterStatus.value) || ""),
         printer_name: String((settingsPrintApiPrinterName && settingsPrintApiPrinterName.value) || ""),
@@ -44436,18 +44473,20 @@
       if (settingsPrintApiStore) settingsPrintApiStore.value = safe.store_id ? String(safe.store_id) : "";
       printApiSelectedConnectionId = Number(safe.connection_id || 0);
       if (settingsPrintApiName) settingsPrintApiName.value = String(safe.name || "");
-      if (settingsPrintApiActive) settingsPrintApiActive.checked = Number(safe.is_active ?? 1) === 1;
       if (settingsPrintApiToken) settingsPrintApiToken.value = String(safe.token || "");
       if (settingsPrintApiToken) settingsPrintApiToken.type = "password";
-      if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.textContent = "Показать";
+      if (settingsPrintApiRevealToken) syncPrintApiTokenIcons();
+      printApiDeviceSnapshot.removed_devices=safe.removed_devices || [];
       setPrintApiDeviceState(safe.printer_status, safe.printer_name, safe.printers, safe.agents);
       if(settingsPrintApiPrinterName)settingsPrintApiPrinterName.value=String(safe.default_printer_id||safe.printer_name||"");
       applyPrintApiNotificationSettings(safe);
       applyPrintApiControlState(safe);
       if (settingsPrintApiGenerateBtn) {
-        settingsPrintApiGenerateBtn.textContent = safe.token ? "Пересоздать токен" : "Сгенерировать токен";
+        syncPrintApiTokenIcons();
       }
       clearPrintApiSettingsDirty();
+      syncPrintApiSelects();
+
     }
 
 
@@ -44459,7 +44498,7 @@
       active.snapshot = collectPrintApiFormSnapshot();
       active.store_id = Number(active.snapshot.store_id || active.store_id || 0);
       active.connectionId = Number(active.snapshot.connection_id || 0);
-      active.isDraft = printApiDraftMode;
+      active.isDraft = !active.connectionId;
       active.original = {...printApiOriginal};
       active.dirty = printApiSettingsDirty;
       active.queueState = {view:printQueueView,filters:{...printQueueFilters},before:printQueueBefore,selected:[...printQueueSelected]};
@@ -44480,16 +44519,14 @@
       applyPrintApiSnapshot(active.snapshot || {store_id:active.storeId,connection_id:active.connectionId});
       if(active.original)printApiOriginal={...active.original};
       printApiSettingsDirty=Boolean(active.dirty);
-      setPrintApiDraftMode(Boolean(active.isDraft));
+      setPrintApiDraftMode(true);
       const queue=active.queueState;
-      printQueueFilters=queue?{...queue.filters}:{agent_id:'',printer_id:'',template_name:''};
+      printQueueFilters=queue?{...queue.filters}:{agent_id:[],printer_id:[],template_name:[]};
       if(queue && queue.view!=='settings'){
         printQueueView=queue.view;printQueueBefore=queue.before;
         printQueueSelected.clear();queue.selected.forEach(id=>printQueueSelected.add(id));
-        printQueueSettings?.classList.add('hidden');printQueueBody?.classList.remove('hidden');
-        printApiPanel?.classList.add('is-print-queue');
-        printQueueNav?.querySelectorAll('[data-print-view]').forEach(button=>button.classList.toggle('is-active',button.dataset.printView==='all'));
-        loadPrintQueue();
+        applyPrintApiSection(queue.view);
+        if(!['devices','notifications'].includes(queue.view))loadPrintQueue();
       }
     }
 
@@ -44521,7 +44558,7 @@
     }
     let printQueueVersion = 0;
     let printQueueBefore = null;
-    let printQueueFilters = { agent_id: '', printer_id: '', template_name: '' };
+    let printQueueFilters = { agent_id: [], printer_id: [], template_name: [] };
     const printQueueSelected = new Set();
     let printQueueVisibleJobs = [];
     let printQueueBusy = false;
@@ -44530,7 +44567,7 @@
     const printQueueBody = document.getElementById('settingsPrintApiQueueBody');
     const printQueueSettings = document.getElementById('settingsPrintApiSettingsBody');
     const printQueueNav = document.getElementById('settingsPrintApiQueueNav');
-    const queueLabels = {settings:'Настройки',all:'Печать'};
+    const queueLabels = {settings:'Настройки',all:'Очередь печати',devices:'Устройства',notifications:'Уведомления'};
     printQueueNav?.querySelectorAll('[data-print-view]').forEach(button=>{
       button.textContent=queueLabels[button.dataset.printView];
       button.addEventListener('click',()=>showPrintQueueView(button.dataset.printView));
@@ -44553,14 +44590,28 @@
       }
       return result.data;
     }
-    function showPrintQueueView(view) {
-      releasePrintQueuePdf();
-      printQueueView=view;printQueueVersion++;printQueueBefore=null;printQueueSelected.clear();
+    function applyPrintApiSection(view) {
+      const queue=!['settings','devices','notifications'].includes(view);
       printQueueSettings?.classList.toggle('hidden',view!=='settings');
-      printQueueBody?.classList.toggle('hidden',view==='settings');
-      printApiPanel?.classList.toggle('is-print-queue',view!=='settings');
-      printQueueNav?.querySelectorAll('[data-print-view]').forEach(button=>button.classList.toggle('is-active',button.dataset.printView===view||(button.dataset.printView==='all'&&view!=='settings')));
-      if(view!=='settings')loadPrintQueue();
+      printQueueBody?.classList.toggle('hidden',!queue);
+      document.getElementById('settingsPrintApiDevicesBody')?.classList.toggle('hidden',view!=='devices');
+      document.getElementById('settingsPrintApiNotificationsBody')?.classList.toggle('hidden',view!=='notifications');
+      printApiPanel?.classList.toggle('is-print-queue',queue);
+      printApiPanel?.querySelector('.settings-print-api-control-bar')?.classList.toggle('hidden',!queue);
+      const connectionInfo=printApiPanel?.querySelector('.settings-print-api-connection-info');
+      if(connectionInfo)connectionInfo.open=false;
+      const filterMenu=printQueueBody?.querySelector('.print-queue-filters');
+      if(filterMenu)filterMenu.open=false;
+      printApiPanel?.classList.toggle('is-print-devices',view==='devices');
+      printQueueNav?.querySelectorAll('[data-print-view]').forEach(button=>{
+        const active=button.dataset.printView===view||(button.dataset.printView==='all'&&queue);
+        button.classList.toggle('is-active',active);button.setAttribute('aria-selected',String(active));
+      });
+    }
+    function showPrintQueueView(view) {
+      releasePrintQueuePdf();printQueueView=view;printQueueVersion++;printQueueBefore=null;printQueueSelected.clear();
+      applyPrintApiSection(view);
+      if(!['settings','devices','notifications'].includes(view))loadPrintQueue();
     }
     function printQueueCheckbox(jobs) {
       const label=document.createElement('label');label.className='product-row-select-control';
@@ -44605,36 +44656,91 @@
     }
     function openPrintQueueGroup(jobs) {
       printQueueVersion++;releasePrintQueuePdf();printQueueChecks.length=0;
+      const pauseControl=printQueueBody.querySelector('.settings-print-api-control-bar');
+      if(pauseControl)printApiPanel.insertBefore(pauseControl,printApiPanel.querySelector('.settings-panel-scroll'));
       printQueueBody.replaceChildren(queueButton('Назад к заказам',loadPrintQueue));
       const title=document.createElement('h3');title.textContent=jobs[0].job_name||'—';printQueueBody.append(title);
       const count=document.createElement('p');count.textContent=`Заданий: ${jobs.length}. Здесь можно открыть отдельный документ.`;printQueueBody.append(count);
       for(const job of jobs)printQueueBody.append(printQueueRow([job]));
       syncPrintQueueSelection();
     }
+    document.addEventListener('click',event=>{
+      const filters=printQueueBody?.querySelector('.print-queue-filters[open]');
+      if(filters&&!filters.contains(event.target))filters.open=false;
+    });
+    printQueueBody?.addEventListener('keydown',event=>{
+      if(event.key!=='Escape')return;
+      const filters=printQueueBody.querySelector('.print-queue-filters[open]');
+      if(filters){filters.open=false;filters.querySelector('summary')?.focus();event.stopPropagation();}
+    });
+    function printQueueFilterValues(field) {
+      const value=printQueueFilters[field];return Array.isArray(value)?value.map(String):value?[String(value)]:[];
+    }
+    function renderPrintQueueToolbar(data) {
+      let toolbar=printQueueBody.querySelector('.print-queue-toolbar');
+      const signature=JSON.stringify([data.agents,data.printers,data.templates]);
+      if(toolbar&&toolbar.dataset.options!==signature){
+        const control=toolbar.querySelector('.settings-print-api-control-bar');
+        if(control)printApiPanel.insertBefore(control,printApiPanel.querySelector('.settings-panel-scroll'));
+        toolbar.remove();toolbar=null;
+      }
+      if(!toolbar){
+        toolbar=document.createElement('div');toolbar.className='print-queue-toolbar';toolbar.dataset.options=signature;
+        const tabs=document.createElement('div');tabs.className='settings-print-api-tabs print-queue-status-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Статус печати');
+        for(const [view,title] of [['all','Все'],['queue','Ожидают'],['errors','Ошибки'],['done','Выполнены']]){
+          const button=queueButton(title,()=>showPrintQueueView(view));button.dataset.queueStatus=view;button.setAttribute('role','tab');tabs.append(button);
+        }
+        toolbar.append(tabs);
+        const control=printApiPanel.querySelector('.settings-print-api-control-bar');
+        if(control)toolbar.append(control);
+        const filters=document.createElement('details');filters.className='print-queue-filters';
+        const trigger=document.createElement('summary');trigger.className='btn btn-icon btn-sm';trigger.title='Фильтры';trigger.setAttribute('aria-label','Фильтры');trigger.innerHTML='<i class="fas fa-filter" aria-hidden="true"></i><span class="print-queue-filter-count hidden"></span>';
+        const menu=document.createElement('div');menu.className='settings-delivery-zone-info-popover print-queue-filter-menu';
+        for(const [field,label] of [['agent_id','Устройства'],['printer_id','Принтеры'],['template_name','Шаблоны']]){
+          const accordion=document.createElement('details');accordion.className='print-queue-filter-section';
+          const heading=document.createElement('summary');heading.textContent=label;accordion.append(heading);
+          const options=field==='template_name'?(data.templates||[]).map(item=>[item.title,item.title]):field==='agent_id'?(data.agents||[]).map(item=>[item.id,item.device_name||`Компьютер #${item.id}`]):(data.printers||[]).map(item=>[item.id,`${item.display_name||item.system_name} · ${(data.agents||[]).find(agent=>Number(agent.id)===Number(item.agent_id))?.device_name||'#'+item.agent_id}`]);
+          for(const [value,title] of options){
+            const row=document.createElement('label');row.className='print-queue-filter-option';
+            const checkbox=document.createElement('span');checkbox.className='product-row-select-control';
+            const input=document.createElement('input');input.type='checkbox';input.className='product-row-select-input';input.dataset.filterField=field;input.value=String(value);input.checked=printQueueFilterValues(field).includes(String(value));
+            const box=document.createElement('span');box.className='product-row-select-box';box.setAttribute('aria-hidden','true');checkbox.append(input,box);row.append(checkbox,document.createTextNode(title));
+            input.addEventListener('change',()=>{
+              const selected=new Set(printQueueFilterValues(field));input.checked?selected.add(input.value):selected.delete(input.value);printQueueFilters[field]=[...selected];
+              printQueueBefore=null;printQueueSelected.clear();loadPrintQueue();
+            });accordion.append(row);
+          }
+          if(!options.length){const empty=document.createElement('span');empty.className='muted';empty.textContent='Нет данных';accordion.append(empty);}
+          menu.append(accordion);
+        }
+        menu.append(queueButton('Сбросить',()=>{printQueueFilters={agent_id:[],printer_id:[],template_name:[]};menu.querySelectorAll('input').forEach(input=>input.checked=false);printQueueBefore=null;printQueueSelected.clear();loadPrintQueue();}));
+        filters.append(trigger,menu);toolbar.append(filters);
+        const refresh=queueButton('',()=>loadPrintQueue());refresh.className='btn btn-icon btn-sm';refresh.title='Обновить';refresh.setAttribute('aria-label','Обновить очередь');refresh.innerHTML='<i class="fas fa-sync-alt" aria-hidden="true"></i>';toolbar.append(refresh);
+        printQueueBody.prepend(toolbar);
+      }
+      for(const [view,title,count] of [['all','Все',null],['queue','Ожидают',data.counts?.queue_count],['errors','Ошибки',data.counts?.failed_count],['done','Выполнены',data.counts?.done_count]]){
+        const button=toolbar.querySelector(`[data-queue-status="${view}"]`);button.textContent=title+(count==null?'':' '+Number(count||0));button.classList.toggle('is-active',view===printQueueView);button.setAttribute('aria-selected',String(view===printQueueView));
+      }
+      const count=['agent_id','printer_id','template_name'].reduce((sum,field)=>sum+printQueueFilterValues(field).length,0);
+      toolbar.querySelectorAll('input[data-filter-field]').forEach(input=>input.checked=printQueueFilterValues(input.dataset.filterField).includes(input.value));
+      const badge=toolbar.querySelector('.print-queue-filter-count');badge.textContent=String(count);badge.classList.toggle('hidden',!count);
+      toolbar.querySelector('.print-queue-filters > summary').title=count?`Фильтры: ${count}`:'Фильтры';
+    }
+
     async function loadPrintQueue() {
-      if(!printQueueBody||printQueueView==='settings'||printQueueBusy)return;
+      if(!printQueueBody||['settings','devices','notifications'].includes(printQueueView)||printQueueBusy)return;
       const version=++printQueueVersion,scopeKey=printQueueScopeKey();releasePrintQueuePdf();
-      printQueueBody.textContent='Загрузка очереди…';printQueueChecks.length=0;
+      if(!printQueueBody.querySelector('.print-queue-toolbar'))printQueueBody.textContent='Загрузка очереди…';
+      printQueueBody.setAttribute('aria-busy','true');printQueueChecks.length=0;
       try {
-        const query=new URLSearchParams({...printQueueScope(),...printQueueFilters,view:printQueueView,...(printQueueBefore?{before:printQueueBefore}:{})});
+        const query=new URLSearchParams({...printQueueScope(),...Object.fromEntries(['agent_id','printer_id','template_name'].map(field=>[field,JSON.stringify(printQueueFilterValues(field))])),view:printQueueView,...(printQueueBefore?{before:printQueueBefore}:{})});
         const data=await printQueueRequest('?'+query);
         if(version!==printQueueVersion||scopeKey!==printQueueScopeKey())return;
-        printQueueBody.replaceChildren();printQueueVisibleJobs=data.jobs;
+        const toolbar=printQueueBody.querySelector('.print-queue-toolbar');
+        for(const child of [...printQueueBody.childNodes])if(child!==toolbar)child.remove();
+        printQueueBody.removeAttribute('aria-busy');printQueueVisibleJobs=data.jobs;
         const visible=new Set(data.jobs.map(job=>Number(job.id)));for(const id of printQueueSelected)if(!visible.has(id))printQueueSelected.delete(id);
-        const tabs=document.createElement('div');tabs.className='settings-print-api-actions';
-        for(const [view,title,count] of [['all','Все',null],['queue','Ожидают',data.counts?.queue_count],['errors','Ошибки',data.counts?.failed_count],['done','Выполнены',data.counts?.done_count]]){
-          const button=queueButton(title+(count==null?'':' · '+Number(count||0)),()=>showPrintQueueView(view));button.classList.toggle('is-active',view===printQueueView);tabs.append(button);
-        }
-        printQueueBody.append(tabs);
-        const controls=document.createElement('div');controls.className='settings-print-api-actions';
-        for(const [field,label] of [['agent_id','Компьютер'],['printer_id','Принтер'],['template_name','Шаблон']]){
-          const select=document.createElement('select');select.className='control';select.setAttribute('aria-label',label);
-          const all=document.createElement('option');all.value='';all.textContent=label+': все';select.append(all);
-          const options=field==='template_name'?(data.templates||[]).map(item=>[item.title,item.title]):field==='agent_id'?(data.agents||[]).map(item=>[item.id,item.device_name||`Компьютер #${item.id}`]):(data.printers||[]).filter(item=>!printQueueFilters.agent_id||String(item.agent_id)===printQueueFilters.agent_id).map(item=>[item.id,`${item.display_name||item.system_name} (#${item.agent_id})`]);
-          options.forEach(([value,title])=>{const opt=document.createElement('option');opt.value=String(value);opt.textContent=title;select.append(opt);});select.value=printQueueFilters[field];
-          select.addEventListener('change',()=>{printQueueFilters[field]=select.value;if(field==='agent_id')printQueueFilters.printer_id='';printQueueBefore=null;printQueueSelected.clear();loadPrintQueue();});controls.append(select);
-        }
-        controls.append(queueButton('Обновить',()=>loadPrintQueue()));printQueueBody.append(controls);
+        renderPrintQueueToolbar(data);
         const all=document.createElement('div');all.className='print-queue-select-all';all.append(printQueueCheckbox(data.jobs),document.createTextNode('Выбрать все на странице'));printQueueBody.append(all);
         const groups=new Map();for(const job of data.jobs){if(!groups.has(job.group_key))groups.set(job.group_key,[]);groups.get(job.group_key).push(job);}
         if(!data.jobs.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='Заданий нет';printQueueBody.append(empty);}
@@ -44657,7 +44763,12 @@
         const pages=document.createElement('div');pages.className='settings-print-api-actions';
         if(printQueueBefore)pages.append(queueButton('В начало',()=>{printQueueBefore=null;printQueueSelected.clear();loadPrintQueue();}));
         if(data.next)pages.append(queueButton('Следующие заказы',()=>{printQueueBefore=data.next;printQueueSelected.clear();loadPrintQueue();}));printQueueBody.append(pages);syncPrintQueueSelection();
-      }catch(error){if(version===printQueueVersion&&scopeKey===printQueueScopeKey()){printQueueBody.textContent='Не удалось загрузить печать: '+error.message;printQueueBody.append(queueButton('Повторить загрузку',loadPrintQueue));}}
+      }catch(error){if(version===printQueueVersion&&scopeKey===printQueueScopeKey()){
+        const toolbar=printQueueBody.querySelector('.print-queue-toolbar');
+        for(const child of [...printQueueBody.childNodes])if(child!==toolbar)child.remove();
+        printQueueBody.removeAttribute('aria-busy');
+        const message=document.createElement('p');message.textContent='Не удалось загрузить печать: '+error.message;printQueueBody.append(message,queueButton('Повторить загрузку',loadPrintQueue));
+      }}
     }
     async function mutatePrintQueue(action,ids) {
       if(printQueueBusy||!ids.length)return;
@@ -44682,6 +44793,8 @@
       try{
         const job=await printQueueRequest('/'+id+'?'+new URLSearchParams(printQueueScope()));
         if(version!==printQueueVersion||key!==printQueueScopeKey())return;
+        const pauseControl=printQueueBody.querySelector('.settings-print-api-control-bar');
+        if(pauseControl)printApiPanel.insertBefore(pauseControl,printApiPanel.querySelector('.settings-panel-scroll'));
         printQueueBody.replaceChildren(queueButton('Назад к списку',loadPrintQueue));
         const title=document.createElement('h3');title.textContent=`Задание #${job.id} · ${job.job_name}`;printQueueBody.append(title);
         const details=document.createElement('p');details.textContent=`${job.status} · ${job.agent_name||'Без компьютера'} → ${job.printer_name||'Без принтера'} · Попыток: ${job.attempts}`;printQueueBody.append(details);
@@ -44729,7 +44842,7 @@
       printApiActiveStoreId=Number(storeId);
       renderPrintApiCards();
       const current=getPrintApiTabState(tabId);
-      if(connectionId && !current?.dirty && !current?.isDraft)await loadPrintApiToken(storeId,connectionId);
+      if(connectionId && !current?.dirty)await loadPrintApiToken(storeId,connectionId);
     }
 
     async function startCreatePrintApi() {
@@ -45001,14 +45114,16 @@
 
 
 
+      const draftDefault=settingsPrintApiPrinterName?.value;
       setPrintApiDeviceState(statusText, printerText, info.printers, info.agents);
+      if(printApiSettingsDirty){if(settingsPrintApiPrinterName)settingsPrintApiPrinterName.value=draftDefault;syncPrintApiSelects();return;}
       if (settingsPrintApiName) settingsPrintApiName.value = String(info.display_name || "");
-      if (settingsPrintApiActive) settingsPrintApiActive.checked = Number(info.is_active) === 1;
       if (settingsPrintApiCopyToken) settingsPrintApiCopyToken.disabled = !String(info.token || "");
       if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.disabled = !String(info.token || "");
       if (settingsPrintApiPrinterName && Number(info.default_printer_id || 0) > 0) {
         settingsPrintApiPrinterName.value = String(info.default_printer_id);
       }
+      syncPrintApiSelects();
 
 
 
@@ -45353,13 +45468,14 @@
 
 
       printApiOriginal = {
+        printers: printApiDeviceSnapshot.printers,
+        agents: printApiDeviceSnapshot.agents,
 
 
 
         store_id: Number(settingsPrintApiStore && settingsPrintApiStore.value) || 0,
         connection_id: printApiSelectedConnectionId,
         name: String(settingsPrintApiName && settingsPrintApiName.value || ""),
-        is_active: settingsPrintApiActive && settingsPrintApiActive.checked ? 1 : 0,
 
 
 
@@ -45407,7 +45523,6 @@
     function applyPrintApiOriginalState() {
       printApiSelectedConnectionId = Number(printApiOriginal.connection_id || 0);
       if (settingsPrintApiName) settingsPrintApiName.value = String(printApiOriginal.name || "");
-      if (settingsPrintApiActive) settingsPrintApiActive.checked = Number(printApiOriginal.is_active ?? 1) === 1;
 
 
 
@@ -45435,7 +45550,10 @@
 
 
 
-      setPrintApiDeviceState(printApiOriginal.printer_status, printApiOriginal.printer_name);
+      printApiDeviceSnapshot.removed_devices=[];
+      setPrintApiDeviceState(printApiOriginal.printer_status, printApiOriginal.printer_name, printApiOriginal.printers, printApiOriginal.agents);
+      if(settingsPrintApiPrinterName)settingsPrintApiPrinterName.value=String(printApiOriginal.default_printer_id||'');
+      syncPrintApiSelects();
 
 
 
@@ -45447,7 +45565,7 @@
 
 
 
-        settingsPrintApiGenerateBtn.textContent = printApiOriginal.token ? "Пересоздать токен" : "Сгенерировать токен";
+        syncPrintApiTokenIcons();
 
 
 
@@ -45462,6 +45580,17 @@
 
 
 
+
+    function syncPrintApiSelects() {
+      for(const [select,context] of productionZoneSelectContexts){
+        if(!select.isConnected){closeStoreTimezoneDropdown(context);productionZoneSelectContexts.delete(select);}
+      }
+      printApiPanel?.querySelectorAll('select').forEach(select=>{
+        enhanceProductionZoneSelect(select);
+        const context=productionZoneSelectContexts.get(select);
+        if(context){select.classList.add('hidden');renderStoreTimezoneSelector(context);}
+      });
+    }
 
     function setPrintApiDraftMode(enabled) {
 
@@ -45478,9 +45607,10 @@
 
 
 
+      const deleteButton=document.getElementById('settingsPrintApiDeleteBtn');
+      if(deleteButton)deleteButton.disabled=!(printApiSelectedConnectionId>0);
       if (settingsPrintApiStore) settingsPrintApiStore.disabled = !printApiDraftMode;
       if (settingsPrintApiName) settingsPrintApiName.disabled = !printApiDraftMode;
-      if (settingsPrintApiActive) settingsPrintApiActive.disabled = !printApiDraftMode;
 
 
 
@@ -45585,6 +45715,8 @@
 
 
 
+      syncPrintApiSelects();
+
     }
 
 
@@ -45605,7 +45737,7 @@
 
 
 
-      setPrintApiDraftMode(false);
+      setPrintApiDraftMode(true);
 
 
 
@@ -45748,8 +45880,8 @@
 
         store_id: storeId,
         connection_id: printApiSelectedConnectionId,
+        removed_devices: printApiDeviceSnapshot.removed_devices || [],
         name: String(settingsPrintApiName && settingsPrintApiName.value || "").trim(),
-        is_active: settingsPrintApiActive && settingsPrintApiActive.checked ? 1 : 0,
 
 
 
@@ -45799,10 +45931,11 @@
 
 
 
-      if (!data || data.ok !== true) throw new Error(data?.error || "PRINT_API_SETTINGS_SAVE_FAILED");
+      if (!data || data.ok !== true) throw new Error(data?.message || data?.error || "PRINT_API_SETTINGS_SAVE_FAILED");
 
 
 
+      printApiDeviceSnapshot.removed_devices=[];
       if (data.data) currentInfo = data.data;
 
 
@@ -45934,7 +46067,7 @@
 
 
 
-            settingsPrintApiGenerateBtn.textContent = "Сгенерировать токен";
+            syncPrintApiTokenIcons();
 
 
 
@@ -45968,7 +46101,7 @@
 
         settingsPrintApiToken.value = token;
         settingsPrintApiToken.type = "password";
-        if (settingsPrintApiRevealToken) settingsPrintApiRevealToken.textContent = "Показать";
+        if (settingsPrintApiRevealToken) syncPrintApiTokenIcons();
 
 
 
@@ -46000,7 +46133,7 @@
 
 
 
-          settingsPrintApiGenerateBtn.textContent = token ? "Пересоздать токен" : "Сгенерировать токен";
+          syncPrintApiTokenIcons();
 
 
 
@@ -46155,35 +46288,10 @@
 
 
 
-        clearPrintApiSettingsDirty();
-
-
-
-        applyPrintApiNotificationSettings(data.data || {});
-
-
-
-        resetPrintApiDeviceState({
-
-
-
-          statusText: token ? "Нажмите \"Проверить подключение\"" : "Сначала сгенерируйте токен",
-
-
-
-          printerText: token ? "Статус не проверен" : "Нет токена подключения"
-
-
-
-        });
-
-
-
-        if (settingsPrintApiGenerateBtn) settingsPrintApiGenerateBtn.textContent = "Пересоздать токен";
-
-
-
-        updatePrintApiOriginalFromCurrentForm();
+        printApiOriginal.token=token;
+        if(settingsPrintApiToken)settingsPrintApiToken.type='password';
+        syncPrintApiTokenIcons();
+        persistActivePrintApiTabState();
         await loadPrintApiCards();
 
 
@@ -46252,7 +46360,7 @@
 
 
 
-      const initialText = settingsPrintApiCheckBtn ? settingsPrintApiCheckBtn.textContent : "";
+      const connectionLabel=document.getElementById("settingsPrintApiConnectionLabel");
 
 
 
@@ -46264,7 +46372,8 @@
 
 
 
-        settingsPrintApiCheckBtn.textContent = "Проверка...";
+        settingsPrintApiCheckBtn.setAttribute("aria-busy","true");
+        if(connectionLabel)connectionLabel.textContent="Проверка…";
 
 
 
@@ -46369,6 +46478,8 @@
 
 
         console.error("Не удалось проверить подключение print API:", err);
+        if(settingsPrintApiCheckBtn)settingsPrintApiCheckBtn.classList.remove('is-connected');
+        if(settingsPrintApiPrinterStatusValue)settingsPrintApiPrinterStatusValue.textContent='Не удалось проверить соединение';
 
 
 
@@ -46404,7 +46515,8 @@
 
 
 
-          settingsPrintApiCheckBtn.textContent = initialText || "Проверить подключение";
+          settingsPrintApiCheckBtn.removeAttribute("aria-busy");
+          if(connectionLabel)connectionLabel.textContent="Соединение";
 
 
 

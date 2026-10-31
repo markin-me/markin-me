@@ -1573,6 +1573,20 @@ function makePrintApiRouter({ db, helpers }) {
     return {paused:Number(rows[0].printing_paused)===1,version:Number(rows[0].print_control_version)};
   }
 
+  router.post('/agent/register',async(req,res)=>{
+    try{
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim());
+      if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
+      const installationId=String(req.body?.installation_id||'').trim();
+      if(!installationId)return res.status(400).json({ok:false,error:'INSTALLATION_REQUIRED'});
+      const [rows]=await db.query('SELECT id,token_id FROM print_agents WHERE tenant_id=? AND store_id=? AND installation_id=?',[tokenRow.tenant_id,tokenRow.store_id,installationId]);
+      if(rows.length&&Number(rows[0].token_id)!==Number(tokenRow.id))return res.status(409).json({ok:false,error:'PRINT_AGENT_CONNECTION_MISMATCH'});
+      if(rows.length)await db.query('UPDATE print_agents SET removed_at=NULL,updated_at=NOW() WHERE id=?',[rows[0].id]);
+      else await resolvePrintContext(tokenRow,installationId);
+      return res.json({ok:true});
+    }catch(error){console.error(error);return res.status(500).json({ok:false,error:'PRINT_AGENT_REGISTER_FAILED'});}
+  });
+
   router.post('/agent/control',async(req,res)=>{
     try{
       const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim());
@@ -1607,7 +1621,7 @@ function makePrintApiRouter({ db, helpers }) {
         LEFT JOIN print_printers p ON p.tenant_id=j.tenant_id AND p.store_id=j.store_id AND p.id=j.target_printer_id
         WHERE j.tenant_id=? AND j.store_id=? AND j.token_id=? AND j.deleted_at IS NULL
           AND (j.target_agent_id IS NULL OR j.target_agent_id=? )
-          AND (j.target_printer_id IS NULL OR (p.agent_id=? AND p.token_id=j.token_id))
+          AND (j.target_printer_id IS NULL OR (p.agent_id=? AND p.token_id=j.token_id AND p.removed_at IS NULL))
           AND (
             j.status='pending'
             OR (j.status='processing' AND j.locked_at < ?)
@@ -1693,6 +1707,7 @@ function makePrintApiRouter({ db, helpers }) {
       throw new Error("PRINT_AGENT_REGISTRATION_FAILED: check print_agents unique indexes; apply the legacy_token_id repair from 2026-09-06_print_api_connections_agents_foundation.sql");
     }
     if (Number(rows[0].token_id) !== tokenId) return null;
+    if(rows[0].removed_at)return null;
     return { token: tokenRow, agent: rows[0] };
   }
 
@@ -2094,7 +2109,7 @@ function makePrintApiRouter({ db, helpers }) {
            AND deleted_at IS NULL AND status IN ('pending','processing','failed') AND target_printer_id IS NOT NULL
          GROUP BY target_printer_id
        ) q ON q.target_printer_id=p.id
-       WHERE p.tenant_id=? AND p.store_id=? AND p.token_id=?
+       WHERE p.tenant_id=? AND p.store_id=? AND p.token_id=? AND p.removed_at IS NULL AND a.removed_at IS NULL
        ORDER BY is_local DESC, p.agent_id ASC, p.is_default DESC, p.display_name ASC, p.id ASC`,
       [agentId, tokenRow.tenant_id, tokenRow.store_id, tokenRow.id,
         tokenRow.tenant_id, tokenRow.store_id, tokenRow.id]
@@ -2169,11 +2184,14 @@ function makePrintApiRouter({ db, helpers }) {
       const printerNames = Array.from(printersByName.keys());
 
       const [defaultRows] = await db.query(
-        "SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND agent_id=? AND is_default=1 LIMIT 1",
+        "SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND agent_id=? AND is_default=1 AND removed_at IS NULL LIMIT 1",
         [tenantId, storeId, agentId]
       );
       let hasDefaultPrinter = defaultRows.length > 0;
+      const [existingRows]=await db.query('SELECT system_name FROM print_printers WHERE tenant_id=? AND store_id=? AND agent_id=?',[tenantId,storeId,agentId]);
+      const existingNames=new Set(existingRows.map(item=>String(item.system_name).toLowerCase()));
       for (const printer of printersByName.values()) {
+        if(printer.status!=='online'&&!existingNames.has(printer.systemName.toLowerCase()))continue;
         await db.query(
           `
           INSERT INTO print_printers
@@ -2187,6 +2205,8 @@ function makePrintApiRouter({ db, helpers }) {
             agent_id=VALUES(agent_id),
             display_name=VALUES(display_name),
             is_default=IF(?, is_default, VALUES(is_default)),
+            removed_at=IF(removed_at IS NOT NULL AND rediscovery_armed=1 AND VALUES(status)='online',NULL,removed_at),
+            rediscovery_armed=IF(removed_at IS NULL,0,IF(VALUES(status)='offline',1,rediscovery_armed)),
             status=VALUES(status),
             last_seen_at=NOW(),
             updated_at=NOW()
@@ -2210,7 +2230,7 @@ function makePrintApiRouter({ db, helpers }) {
         await db.query(
           `
           UPDATE print_printers
-          SET status='offline', updated_at=NOW()
+          SET status='offline', rediscovery_armed=IF(removed_at IS NOT NULL,1,rediscovery_armed), updated_at=NOW()
           WHERE tenant_id=? AND store_id=? AND agent_id=?
             AND system_name NOT IN (?)
           `,
@@ -2220,7 +2240,7 @@ function makePrintApiRouter({ db, helpers }) {
         await db.query(
           `
           UPDATE print_printers
-          SET status='offline', updated_at=NOW()
+          SET status='offline', rediscovery_armed=IF(removed_at IS NOT NULL,1,rediscovery_armed), updated_at=NOW()
           WHERE tenant_id=? AND store_id=? AND agent_id=?
           `,
           [tenantId, storeId, agentId]

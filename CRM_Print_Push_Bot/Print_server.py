@@ -559,7 +559,7 @@ def _get_default_printer_state():
     return _get_printer_state(printer_name)
 
 
-def _list_printers():
+def _list_printers(strict=False):
     if not WINDOWS_PRINTING_AVAILABLE:
         return []
     flags = int(getattr(win32print, "PRINTER_ENUM_LOCAL", 0) or 0)
@@ -567,6 +567,8 @@ def _list_printers():
     try:
         entries = win32print.EnumPrinters(flags)
     except Exception:
+        if strict:
+            raise
         return []
 
     names = []
@@ -636,7 +638,7 @@ def _build_printers_sync_payload():
             default_printer = ""
 
     printers = []
-    names = _list_printers()
+    names = _list_printers(strict=True)
     known_printers = [name.strip().lower() for name in names]
     for name in names:
         system_name = str(name or "").strip()
@@ -1580,7 +1582,11 @@ class PrintServer:
 
     def _sync_printers(self, token, force=False):
         with self._printer_sync_lock:
-            return self._sync_printers_locked(token, force)
+            try:
+                return self._sync_printers_locked(token, force)
+            except Exception:
+                logging.exception("Не удалось получить достоверный список принтеров; синхронизация отменена")
+                return False
 
     def _sync_printers_locked(self, token, force=False):
         if not token:
@@ -2256,6 +2262,9 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         self.print_clear_button.grid(row=0, column=1, sticky="e")
         self.print_pause_status = tk.Label(pause_bar, text="", bg=UI_COLORS["card"], fg=UI_COLORS["muted"], anchor="w", wraplength=440)
         self.print_pause_status.grid(row=1, column=0, columnspan=2, sticky="ew")
+        self.print_register_button = tk.Button(pause_bar, text="Подключить устройство заново", command=self._register_device,
+                                               bg=UI_COLORS["card"], fg=UI_COLORS["text"], relief="flat", cursor="hand2")
+        self.print_register_button.grid(row=2, column=0, columnspan=2, sticky="w")
 
         self.printers_table_container = tk.Frame(self.printer_frame, bg=UI_COLORS["card"])
         self.printers_table_container.grid(row=2, column=0, columnspan=3, sticky="nsew", pady=(0, 0))
@@ -2861,6 +2870,35 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         else:
             messagebox.showerror("Управление печатью", "Сервер не подтвердил изменение: " + problem, parent=self)
         self._refresh_print_pause_ui()
+
+    def _register_device(self):
+        token, base_url = self._get_token(), self._get_crm_base_url()
+        if not token or not messagebox.askyesno("Подключить устройство", "Зарегистрировать этот компьютер заново для введённого API? Удалённые принтеры потребуется отключить и подключить снова.", parent=self):
+            return
+        self.print_register_button.configure(state="disabled")
+        def worker():
+            error = None
+            try:
+                payload = {"installation_id": self._server._get_connection_installation_id(token, base_url)}
+                request = urllib.request.Request(build_crm_request_url(base_url, "/api/print/agent/register"),
+                    data=json.dumps(payload).encode("utf-8"), method="POST", headers={"X-Api-Key": token, "Content-Type": "application/json"})
+                with urllib.request.urlopen(request, timeout=self._server._request_timeout) as response:
+                    if not json.loads(response.read().decode("utf-8")).get("ok"):
+                        raise RuntimeError("PRINT_AGENT_REGISTER_FAILED")
+                self._server._last_printer_payload = None
+                self._server._last_printer_sync_ts = 0.0
+                self._server._last_heartbeat_ts = 0.0
+            except Exception as problem:
+                error = str(problem)
+                logging.exception("Не удалось зарегистрировать устройство")
+            def done():
+                self.print_register_button.configure(state="normal")
+                if error:
+                    messagebox.showerror("Подключение устройства", error, parent=self)
+                else:
+                    self._set_status("Устройство подключено. Переподключите удалённые принтеры.", ok=True)
+            self._schedule_ui(done)
+        threading.Thread(target=worker, daemon=True).start()
 
     def _clear_selected_windows_queue(self):
         context = (self._get_token(), self._get_crm_base_url(), self._server._context_generation)

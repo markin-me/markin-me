@@ -493,7 +493,7 @@ async function getDefaultPrintRoute(db, tenantId, storeId) {
     `SELECT p.id, p.agent_id, p.token_id FROM print_printers p
      INNER JOIN ten_stores s ON s.tenant_id=p.tenant_id AND s.id=p.store_id
       AND s.default_receipt_printer_id=p.id
-     WHERE p.tenant_id=? AND p.store_id=?
+     WHERE p.tenant_id=? AND p.store_id=? AND p.removed_at IS NULL
      ORDER BY p.id ASC LIMIT 1`,
     [tenantId, storeId]
   );
@@ -733,7 +733,7 @@ async function getPrintChoices(db, tenantId, storeId) {
   const [rules] = await db.query(`SELECT r.*,t.document_type AS template_type,z.name AS zone_name,p.system_name AS printer_name,p.agent_id,p.token_id,tok.is_active AS connection_active
     FROM prod_store_print_rules r JOIN print_templates t ON t.tenant_id=r.tenant_id AND t.id=r.template_id AND t.is_active=1
     JOIN prod_production_zones z ON z.tenant_id=r.tenant_id AND z.id=r.production_zone_id AND z.is_active=1
-    LEFT JOIN print_printers p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.printer_id
+    LEFT JOIN print_printers p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.printer_id AND p.removed_at IS NULL
     LEFT JOIN print_api_tokens tok ON tok.tenant_id=p.tenant_id AND tok.store_id=p.store_id AND tok.id=p.token_id
     WHERE r.tenant_id=? AND r.store_id=? AND r.is_enabled=1 ORDER BY r.sort_order,r.id`,[tenantId,storeId]);
   const [products] = await db.query('SELECT id,production_zone_id FROM prod_products WHERE tenant_id=? AND production_zone_id IS NOT NULL',[tenantId]);

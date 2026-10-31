@@ -5717,7 +5717,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
               a.last_heartbeat_at, a.agent_running, a.is_legacy
        FROM print_printers p
        LEFT JOIN print_agents a ON a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.id=p.agent_id
-       WHERE p.tenant_id=? AND p.store_id=?
+       WHERE p.tenant_id=? AND p.store_id=? AND p.removed_at IS NULL AND a.removed_at IS NULL
        ORDER BY p.agent_id ASC, p.display_name ASC, p.system_name ASC`,
       [tenantId, storeId]
     );
@@ -5730,7 +5730,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
               last_heartbeat_at, agent_running,
               IF(last_heartbeat_at IS NOT NULL AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),1,0) AS is_online
        FROM print_agents
-       WHERE tenant_id=? AND store_id=? AND token_id=?
+       WHERE tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL
        ORDER BY id ASC`,
       [tenantId, storeId, connectionId]
     );
@@ -5739,8 +5739,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
   async function selectPrintApiControl(tenantId,storeId,connectionId) {
     const [rows]=await db.query(`SELECT t.printing_paused,t.print_control_version,
-      (EXISTS(SELECT 1 FROM print_agents a WHERE a.tenant_id=t.tenant_id AND a.store_id=t.store_id AND a.token_id=t.id AND a.agent_running=1 AND a.last_heartbeat_at>=DATE_SUB(NOW(),INTERVAL 15 SECOND))
-      AND NOT EXISTS(SELECT 1 FROM print_agents a WHERE a.tenant_id=t.tenant_id AND a.store_id=t.store_id AND a.token_id=t.id AND a.agent_running=1 AND a.last_heartbeat_at>=DATE_SUB(NOW(),INTERVAL 15 SECOND) AND (a.applied_print_control_version IS NULL OR a.applied_print_control_version<>t.print_control_version))) AS print_control_confirmed
+      (EXISTS(SELECT 1 FROM print_agents a WHERE a.tenant_id=t.tenant_id AND a.store_id=t.store_id AND a.token_id=t.id AND a.removed_at IS NULL AND a.agent_running=1 AND a.last_heartbeat_at>=DATE_SUB(NOW(),INTERVAL 15 SECOND))
+      AND NOT EXISTS(SELECT 1 FROM print_agents a WHERE a.tenant_id=t.tenant_id AND a.store_id=t.store_id AND a.token_id=t.id AND a.removed_at IS NULL AND a.agent_running=1 AND a.last_heartbeat_at>=DATE_SUB(NOW(),INTERVAL 15 SECOND) AND (a.applied_print_control_version IS NULL OR a.applied_print_control_version<>t.print_control_version))) AS print_control_confirmed
       FROM print_api_tokens t WHERE t.id=? AND t.tenant_id=? AND t.store_id=?`,[connectionId,tenantId,storeId]);
     return rows[0]||null;
   }
@@ -5796,13 +5796,12 @@ async function fetchStoreWithHours(tenantId, storeId) {
           t.agent_running,
           (SELECT COUNT(*) FROM print_jobs j WHERE j.tenant_id=s.tenant_id AND j.store_id=s.id AND j.token_id=t.id AND j.deleted_at IS NULL AND j.status IN ('pending','processing')) AS queue_count,
           (SELECT COUNT(*) FROM print_jobs j WHERE j.tenant_id=s.tenant_id AND j.store_id=s.id AND j.token_id=t.id AND j.deleted_at IS NULL AND j.status='failed') AS failed_count,
-          (SELECT COUNT(*) FROM print_agents a WHERE a.tenant_id=s.tenant_id AND a.store_id=s.id AND a.token_id=t.id) AS agent_count,
-          IF(
-            t.last_heartbeat_at IS NOT NULL
-            AND t.last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
-            1,
-            0
-          ) AS agent_online
+          (SELECT COUNT(*) FROM print_printers p WHERE p.tenant_id=s.tenant_id AND p.store_id=s.id AND p.token_id=t.id AND p.removed_at IS NULL AND EXISTS(SELECT 1 FROM print_agents a WHERE a.id=p.agent_id AND a.removed_at IS NULL)) AS printer_count,
+          (SELECT COUNT(*) FROM print_printers p JOIN print_agents a ON a.id=p.agent_id AND a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.token_id=p.token_id
+            WHERE p.tenant_id=s.tenant_id AND p.store_id=s.id AND p.token_id=t.id AND p.removed_at IS NULL AND a.removed_at IS NULL AND p.status='online' AND a.agent_running=1 AND a.last_heartbeat_at>=DATE_SUB(NOW(),INTERVAL 15 SECOND)) AS printer_online_count,
+          (SELECT COUNT(*) FROM print_agents a WHERE a.tenant_id=s.tenant_id AND a.store_id=s.id AND a.token_id=t.id AND a.removed_at IS NULL) AS agent_count,
+          EXISTS(SELECT 1 FROM print_agents a WHERE a.tenant_id=s.tenant_id AND a.store_id=s.id AND a.token_id=t.id AND a.removed_at IS NULL
+            AND a.agent_running=1 AND a.last_heartbeat_at>=DATE_SUB(NOW(),INTERVAL 15 SECOND)) AS agent_online
        FROM ten_stores s
        LEFT JOIN print_api_tokens t
          ON t.tenant_id = s.tenant_id AND t.store_id = s.id
@@ -5884,6 +5883,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
    * body: { store_id, notify_new_order_enabled, notify_new_message_enabled, sound_new_order_url, sound_new_message_url }
    */
   router.put('/print-api', async (req, res) => {
+    let conn;
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       const storeId = Number(req.body?.store_id || req.query?.store_id);
@@ -5898,9 +5898,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const storeExists = await ensureStoreExists(tenantId, storeId);
       if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
 
-      const [rows] = await db.query(
+      conn=await db.getConnection(); await conn.beginTransaction();
+      const [rows] = await conn.query(
         `SELECT id, token, is_active FROM print_api_tokens
-         WHERE id=? AND tenant_id=? AND store_id=? LIMIT 1`,
+         WHERE id=? AND tenant_id=? AND store_id=? LIMIT 1 FOR UPDATE`,
         [connectionId, tenantId, storeId]
       );
       if (!rows.length) {
@@ -5920,7 +5921,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         return next ? String(next).slice(0, 1024) : null;
       };
 
-      const [currentRows] = await db.query(
+      const [currentRows] = await conn.query(
         `SELECT
             notify_new_order_enabled,
             notify_new_message_enabled,
@@ -5946,7 +5947,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         : (current.sound_new_message_url ?? null);
 
       try {
-        await db.query(
+        await conn.query(
           `UPDATE print_api_tokens
            SET notify_new_order_enabled=?, notify_new_message_enabled=?, sound_new_order_url=?, sound_new_message_url=?, updated_at=NOW()
            WHERE id=? AND tenant_id=? AND store_id=?`,
@@ -5962,47 +5963,72 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if (hasOwn("default_printer_id")) {
         const defaultPrinterId = Number(req.body.default_printer_id || 0);
         if (defaultPrinterId > 0) {
-          const [printerRows] = await db.query(
+          const [printerRows] = await conn.query(
             `SELECT id FROM print_printers
-             WHERE id=? AND tenant_id=? AND store_id=?
+             WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL
              LIMIT 1`,
-            [defaultPrinterId, tenantId, storeId]
+            [defaultPrinterId, tenantId, storeId, connectionId]
           );
           if (!printerRows.length) {
             return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
           }
-          await db.query(
+          await conn.query(
             `UPDATE ten_stores SET default_receipt_printer_id=? WHERE tenant_id=? AND id=?`,
             [defaultPrinterId, tenantId, storeId]
           );
         } else {
-          await db.query(
-            `UPDATE ten_stores SET default_receipt_printer_id=NULL WHERE tenant_id=? AND id=?`,
-            [tenantId, storeId]
+          await conn.query(
+            `UPDATE ten_stores SET default_receipt_printer_id=NULL WHERE tenant_id=? AND id=? AND default_receipt_printer_id IN (SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=?)`,
+            [tenantId, storeId, tenantId, storeId, connectionId]
           );
         }
       }
 
       if (hasOwn('name')) {
-        await db.query(
+        await conn.query(
           `UPDATE print_api_tokens SET display_name=? WHERE id=? AND tenant_id=? AND store_id=?`,
           [String(req.body.name || '').trim().slice(0, 255) || 'Подключение', Number(rows[0].id), tenantId, storeId]
         );
       }
 
       if (hasOwn('is_active')) {
-        await db.query(
+        await conn.query(
           `UPDATE print_api_tokens SET is_active=?, updated_at=NOW() WHERE id=? AND tenant_id=? AND store_id=?`,
           [parseToggle(req.body.is_active, Number(rows[0].is_active) === 1 ? 1 : 0), connectionId, tenantId, storeId]
         );
       }
 
+      const removals=req.body.removed_devices || [];
+      if(!Array.isArray(removals)||removals.length>200)throw Object.assign(new Error('BAD_PRINT_SELECTION'),{httpStatus:400});
+      for(const item of removals){
+        const agentId=Number(item.agent_id||0),printerId=Number(item.printer_id||0);
+        if(!(agentId>0)&&!(printerId>0))throw Object.assign(new Error('BAD_PRINT_SELECTION'),{httpStatus:400});
+        await removePrintApiDeviceInTransaction(conn,tenantId,storeId,connectionId,agentId,printerId);
+      }
+      await conn.commit();
       const row = await selectPrintApiData(tenantId, storeId, connectionId);
       res.json({ ok: true, data: row || null });
     } catch (err) {
       console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ print API РЅР°СЃС‚СЂРѕРµРє:', err);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
+      res.status(err.httpStatus||500).json(err.payload||{ok:false,error:err.httpStatus?err.message:'DB_ERROR'});
+    } finally { if(conn){await conn.rollback();conn.release();} }
+  });
+
+  router.post('/print-api/remove',async(req,res)=>{
+    let conn;
+    try{
+      const tenantId=req.user?.tenantId??helpers.getTenantId(req),storeId=Number(req.body?.store_id),tokenId=Number(req.body?.connection_id);
+      if(!tenantId||!(storeId>0)||!(tokenId>0))return res.status(400).json({ok:false,error:'BAD_PRINT_SCOPE'});
+      conn=await db.getConnection();await conn.beginTransaction();
+      const [tokens]=await conn.query('SELECT id FROM print_api_tokens WHERE tenant_id=? AND store_id=? AND id=? FOR UPDATE',[tenantId,storeId,tokenId]);
+      if(!tokens.length)return res.status(404).json({ok:false,error:'PRINT_TOKEN_NOT_FOUND'});
+      const [agents]=await conn.query('SELECT id FROM print_agents WHERE tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL',[tenantId,storeId,tokenId]);
+      await conn.query('UPDATE ten_stores SET default_receipt_printer_id=NULL WHERE tenant_id=? AND id=? AND default_receipt_printer_id IN (SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=?)',[tenantId,storeId,tenantId,storeId,tokenId]);
+      for(const agent of agents)await removePrintApiDeviceInTransaction(conn,tenantId,storeId,tokenId,Number(agent.id),0);
+      await conn.query('DELETE FROM print_api_tokens WHERE tenant_id=? AND store_id=? AND id=?',[tenantId,storeId,tokenId]);
+      await conn.commit();res.json({ok:true});
+    }catch(error){res.status(error.httpStatus||500).json(error.payload||{ok:false,error:'PRINT_API_REMOVE_FAILED'});}
+    finally{if(conn){await conn.rollback();conn.release();}}
   });
 
   router.post('/print-api/regenerate', async (req, res) => {
@@ -6023,6 +6049,38 @@ async function fetchStoreWithHours(tenantId, storeId) {
       console.error('Print API token regeneration failed:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
+  });
+
+  async function removePrintApiDeviceInTransaction(conn,tenantId,storeId,tokenId,agentId,printerId) {
+      const [agents]=await conn.query('SELECT id FROM print_agents WHERE tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL AND id IN (SELECT agent_id FROM print_printers WHERE id=?) FOR UPDATE',[tenantId,storeId,tokenId,printerId||0]);
+      let id=agentId||Number(agents[0]?.id||0);
+      const [device]=await conn.query('SELECT id FROM print_agents WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL FOR UPDATE',[id,tenantId,storeId,tokenId]);
+      if(!device.length){throw Object.assign(new Error('PRINT_DEVICE_REMOVE_FAILED'),{httpStatus:404,payload:{ok:false,error:'PRINT_DEVICE_NOT_FOUND'}});}
+      const [printers]=await conn.query(`SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=? AND agent_id=? AND removed_at IS NULL ${printerId>0?'AND id=?':''} FOR UPDATE`,[tenantId,storeId,tokenId,id,...(printerId>0?[printerId]:[])]);
+      const ids=printers.map(item=>Number(item.id));
+      if(printerId>0&&!ids.length){throw Object.assign(new Error('PRINT_DEVICE_REMOVE_FAILED'),{httpStatus:404,payload:{ok:false,error:'PRINT_PRINTER_NOT_FOUND'}});}
+      if(ids.length){
+        const [rules]=await conn.query('SELECT id FROM prod_store_print_rules WHERE tenant_id=? AND store_id=? AND printer_id IN (?) LIMIT 1',[tenantId,storeId,ids]);
+        const [defaults]=await conn.query('SELECT id FROM ten_stores WHERE tenant_id=? AND id=? AND default_receipt_printer_id IN (?)',[tenantId,storeId,ids]);
+        if(rules.length||defaults.length){throw Object.assign(new Error('PRINT_DEVICE_REMOVE_FAILED'),{httpStatus:409,payload:{ok:false,error:'PRINT_DEVICE_IN_USE',message:rules.length?'Принтер используется в производственной зоне. Сначала измените назначение.':'Принтер выбран по умолчанию. Сначала измените настройку филиала.'}});}
+      }
+      const [processing]=await conn.query(`SELECT id FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=? AND status='processing' AND deleted_at IS NULL AND ${printerId>0?'target_printer_id=?':'(target_agent_id=? OR claimed_by_agent_id=?)'} LIMIT 1`,[tenantId,storeId,tokenId,...(printerId>0?[printerId]:[id,id])]);
+      if(processing.length){throw Object.assign(new Error('PRINT_DEVICE_REMOVE_FAILED'),{httpStatus:409,payload:{ok:false,error:'PRINT_DEVICE_PROCESSING',message:'Устройство обрабатывает задание. Сначала приостановите печать и дождитесь завершения обработки.'}});}
+      if(ids.length)await conn.query('UPDATE print_printers SET removed_at=NOW(),rediscovery_armed=0,status=\'offline\',updated_at=NOW() WHERE tenant_id=? AND store_id=? AND id IN (?)',[tenantId,storeId,ids]);
+      if(!printerId)await conn.query('UPDATE print_agents SET removed_at=NOW(),agent_running=0,updated_at=NOW() WHERE id=?',[id]);
+  }
+
+  router.post('/print-api/devices/remove',async(req,res)=>{
+    let conn;
+    try{
+      const tenantId=req.user?.tenantId??helpers.getTenantId(req),storeId=Number(req.body?.store_id),tokenId=Number(req.body?.connection_id);
+      const agentId=Number(req.body?.agent_id),printerId=Number(req.body?.printer_id);
+      if(!tenantId||!(storeId>0)||!(tokenId>0)||(!(agentId>0)&&!(printerId>0)))return res.status(400).json({ok:false,error:'BAD_PRINT_SCOPE'});
+      conn=await db.getConnection();await conn.beginTransaction();
+      await removePrintApiDeviceInTransaction(conn,tenantId,storeId,tokenId,agentId,printerId);
+      await conn.commit();return res.json({ok:true});
+    }catch(error){if(conn)await conn.rollback();console.error(error);return res.status(error.httpStatus||500).json(error.payload||{ok:false,error:'PRINT_DEVICE_REMOVE_FAILED'});}
+    finally{conn?.release();}
   });
 
   const printJobKindSql = `CASE WHEN LEFT(j.pdf_base64,15)='__PRINT_META__:' THEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(CONVERT(FROM_BASE64(SUBSTRING(j.pdf_base64,16)) USING utf8mb4),'$.kind')),'document') WHEN LEFT(j.pdf_base64,16)='__HTML_BASE64__:' THEN 'receipt' ELSE 'pdf' END`;
@@ -6048,10 +6106,19 @@ async function fetchStoreWithHours(tenantId, storeId) {
         FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=? AND deleted_at IS NULL`,scope);
       const conditions=['j.tenant_id=?','j.store_id=?','j.token_id=?','j.deleted_at IS NULL'];
       const params=[...scope];
-      for(const [name,column] of [['agent_id','target_agent_id'],['printer_id','target_printer_id']]){
-        const value=Number(req.query[name]); if(value>0){conditions.push(`j.${column}=?`);params.push(value);}
+      for(const [name,column] of [['agent_id','target_agent_id'],['printer_id','target_printer_id'],['template_name','job_name']]){
+        const raw=String(req.query[name]||'');
+        let values;
+        try{values=raw.startsWith('[')?JSON.parse(raw):raw?[raw]:[];}catch{return res.status(400).json({ok:false,error:'BAD_PRINT_FILTER'});}
+        if(!Array.isArray(values)||values.length>200)return res.status(400).json({ok:false,error:'BAD_PRINT_FILTER'});
+        if(name==='template_name'){
+          if(values.some(value=>typeof value!=='string'||value.length>255))return res.status(400).json({ok:false,error:'BAD_PRINT_FILTER'});
+        }else{
+          if(values.some(value=>!Number.isSafeInteger(Number(value))||Number(value)<=0))return res.status(400).json({ok:false,error:'BAD_PRINT_FILTER'});
+          values=values.map(Number);
+        }
+        if(values.length){conditions.push(`j.${column} IN (?)`);params.push([...new Set(values)]);}
       }
-      if(req.query.template_name){conditions.push('j.job_name=?');params.push(String(req.query.template_name).slice(0,255));}
       const groupKey="IF(j.order_id>0,CONCAT('order:',j.order_id),CONCAT('job:',j.id))";
       const view=String(req.query.view||'all');
       const having = view==='errors'?"SUM(j.status='failed')>0":view==='done'?"SUM(j.status='done')>0":view==='queue'?"SUM(j.status IN ('pending','processing'))>0":'1=1';
@@ -6070,8 +6137,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
           WHERE ${conditions.join(' AND ')} AND ${groupKey} IN (?) ORDER BY j.id`,[...params,page.map(g=>g.group_key)]);
         const rank=new Map(page.map((g,i)=>[g.group_key,i]));jobs.sort((a,b)=>rank.get(a.group_key)-rank.get(b.group_key)||a.id-b.id);
       }
-      const [agents]=await db.query('SELECT id,device_name FROM print_agents WHERE tenant_id=? AND store_id=? AND token_id=? ORDER BY id',scope);
-      const [printers]=await db.query('SELECT id,agent_id,system_name,display_name FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=? ORDER BY agent_id,display_name',scope);
+      const [agents]=await db.query('SELECT id,device_name FROM print_agents WHERE tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL ORDER BY id',scope);
+      const [printers]=await db.query('SELECT id,agent_id,system_name,display_name FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL ORDER BY agent_id,display_name',scope);
       const [templates]=await db.query(`SELECT DISTINCT job_name AS title FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=? AND deleted_at IS NULL ORDER BY job_name`,scope);
       return res.json({ok:true,data:{jobs,agents,printers,templates,counts:counts[0],next:groups.length>20?page[page.length-1].cursor_id:null}});
     }catch(error){console.error('Print queue read failed:',error);return res.status(500).json({ok:false,error:'PRINT_QUEUE_READ_FAILED'});}
@@ -6145,7 +6212,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const [printers] = await db.query(
         `SELECT p.id, p.agent_id, p.token_id FROM print_printers p
          INNER JOIN print_api_tokens t ON t.id=p.token_id AND t.tenant_id=p.tenant_id AND t.store_id=p.store_id
-         WHERE p.id=? AND p.tenant_id=? AND p.store_id=? AND t.is_active=1 LIMIT 1`,
+         WHERE p.id=? AND p.tenant_id=? AND p.store_id=? AND p.removed_at IS NULL AND t.is_active=1 AND EXISTS(SELECT 1 FROM print_agents a WHERE a.id=p.agent_id AND a.removed_at IS NULL) LIMIT 1`,
         [printerId, tenantId, storeId]
       );
       const printer = printers[0] || null;
