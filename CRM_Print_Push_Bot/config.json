@@ -1,7 +1,7 @@
 {
   "crm_base_url": "http://localhost:3000",
-  "token": "e4f1d0f1bf7794b3a8ec6f3e8aeca4441b0a2da28b24e6d47d48a3ae427e2368",
+  "token": "f764c0ed4c85fca31af86a91c4e2c8af1704ddaa36dcd00d50281587f45a12d5",
   "copies": 1,
   "autostart": false,
-  "installation_id": ""
+  "installation_id": "c770a520-63e1-405a-ac96-210809cdeb9b"
 }
