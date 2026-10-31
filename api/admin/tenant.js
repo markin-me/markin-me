@@ -3,6 +3,7 @@ const printTemplateSamples = require('../helpers/printTemplateSamples');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { encodeMetaJobPayload } = require('../printPush');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const employeeIdentity = require('../helpers/employeeIdentity');
@@ -5736,6 +5737,26 @@ async function fetchStoreWithHours(tenantId, storeId) {
     return rows || [];
   }
 
+  async function selectPrintApiControl(tenantId,storeId,connectionId) {
+    const [rows]=await db.query(`SELECT t.printing_paused,t.print_control_version,
+      (EXISTS(SELECT 1 FROM print_agents a WHERE a.tenant_id=t.tenant_id AND a.store_id=t.store_id AND a.token_id=t.id AND a.agent_running=1 AND a.last_heartbeat_at>=DATE_SUB(NOW(),INTERVAL 15 SECOND))
+      AND NOT EXISTS(SELECT 1 FROM print_agents a WHERE a.tenant_id=t.tenant_id AND a.store_id=t.store_id AND a.token_id=t.id AND a.agent_running=1 AND a.last_heartbeat_at>=DATE_SUB(NOW(),INTERVAL 15 SECOND) AND (a.applied_print_control_version IS NULL OR a.applied_print_control_version<>t.print_control_version))) AS print_control_confirmed
+      FROM print_api_tokens t WHERE t.id=? AND t.tenant_id=? AND t.store_id=?`,[connectionId,tenantId,storeId]);
+    return rows[0]||null;
+  }
+  router.post('/print-api/control',async(req,res)=>{
+    try{
+      const tenantId=req.user?.tenantId??helpers.getTenantId(req);
+      const storeId=Number(req.body?.store_id),connectionId=Number(req.body?.connection_id);
+      if(!tenantId||!(storeId>0)||!(connectionId>0)||typeof req.body?.paused!=='boolean')return res.status(400).json({ok:false,error:'BAD_PRINT_CONTROL'});
+      const control=await selectPrintApiControl(tenantId,storeId,connectionId);
+      if(!control)return res.status(404).json({ok:false,error:'PRINT_CONNECTION_NOT_FOUND'});
+      await db.query(`UPDATE print_api_tokens SET printing_paused=?,print_control_version=print_control_version+1,updated_at=NOW()
+        WHERE id=? AND tenant_id=? AND store_id=? AND printing_paused<>?`,[req.body.paused?1:0,connectionId,tenantId,storeId,req.body.paused?1:0]);
+      return res.json({ok:true,data:await selectPrintApiControl(tenantId,storeId,connectionId)});
+    }catch(error){console.error('Print control update failed:',error);return res.status(500).json({ok:false,error:'PRINT_CONTROL_FAILED'});}
+  });
+
   async function selectPrintApiData(tenantId, storeId, connectionId) {
     const row = await selectPrintApiRow(tenantId, storeId, connectionId);
     if (!row) return null;
@@ -5750,6 +5771,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
     });
     return {
       ...row,
+      ...await selectPrintApiControl(tenantId,storeId,connectionId),
       connection_id: Number(row.id),
       agent_online: agents.some((agent) => Number(agent.is_online) === 1) ? 1 : 0,
       default_printer_id: Number(storeRows[0]?.default_receipt_printer_id || 0) || null,
@@ -5766,10 +5788,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
           t.id AS token_id,
           t.display_name,
           t.is_active,
+          t.printing_paused,
+          t.print_control_version,
           t.agent_name,
           t.agent_version,
           t.last_heartbeat_at,
           t.agent_running,
+          (SELECT COUNT(*) FROM print_jobs j WHERE j.tenant_id=s.tenant_id AND j.store_id=s.id AND j.token_id=t.id AND j.deleted_at IS NULL AND j.status IN ('pending','processing')) AS queue_count,
+          (SELECT COUNT(*) FROM print_jobs j WHERE j.tenant_id=s.tenant_id AND j.store_id=s.id AND j.token_id=t.id AND j.deleted_at IS NULL AND j.status='failed') AS failed_count,
           (SELECT COUNT(*) FROM print_agents a WHERE a.tenant_id=s.tenant_id AND a.store_id=s.id AND a.token_id=t.id) AS agent_count,
           IF(
             t.last_heartbeat_at IS NOT NULL
@@ -5999,6 +6025,115 @@ async function fetchStoreWithHours(tenantId, storeId) {
     }
   });
 
+  const printJobKindSql = `CASE WHEN LEFT(j.pdf_base64,15)='__PRINT_META__:' THEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(CONVERT(FROM_BASE64(SUBSTRING(j.pdf_base64,16)) USING utf8mb4),'$.kind')),'document') WHEN LEFT(j.pdf_base64,16)='__HTML_BASE64__:' THEN 'receipt' ELSE 'pdf' END`;
+
+  function printJobDocument(payload) {
+    const raw = String(payload || '');
+    if (raw.startsWith('__PRINT_META__:')) {
+      const meta = JSON.parse(Buffer.from(raw.slice('__PRINT_META__:'.length), 'base64').toString('utf8'));
+      return { kind: String(meta.kind || 'document'), html: String(meta.html || '') };
+    }
+    if (raw.startsWith('__HTML_BASE64__:')) return { kind: 'receipt', html: Buffer.from(raw.slice('__HTML_BASE64__:'.length), 'base64').toString('utf8') };
+    return { kind: 'pdf', pdf_base64: raw };
+  }
+
+  router.get('/print-api/jobs', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = Number(req.query.store_id), tokenId = Number(req.query.connection_id);
+      if (!tenantId || !(storeId > 0) || !(tokenId > 0)) return res.status(400).json({ok:false,error:'BAD_PRINT_SCOPE'});
+      const scope = [tenantId,storeId,tokenId];
+      const [counts] = await db.query(`SELECT SUM(status IN ('pending','processing')) AS queue_count,
+        SUM(status='failed') AS failed_count,SUM(status='done') AS done_count
+        FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=? AND deleted_at IS NULL`,scope);
+      const conditions=['j.tenant_id=?','j.store_id=?','j.token_id=?','j.deleted_at IS NULL'];
+      const params=[...scope];
+      for(const [name,column] of [['agent_id','target_agent_id'],['printer_id','target_printer_id']]){
+        const value=Number(req.query[name]); if(value>0){conditions.push(`j.${column}=?`);params.push(value);}
+      }
+      if(req.query.template_name){conditions.push('j.job_name=?');params.push(String(req.query.template_name).slice(0,255));}
+      const groupKey="IF(j.order_id>0,CONCAT('order:',j.order_id),CONCAT('job:',j.id))";
+      const view=String(req.query.view||'all');
+      const having = view==='errors'?"SUM(j.status='failed')>0":view==='done'?"SUM(j.status='done')>0":view==='queue'?"SUM(j.status IN ('pending','processing'))>0":'1=1';
+      const before=Number(req.query.before);
+      const [groups]=await db.query(`SELECT ${groupKey} AS group_key,MAX(j.id) AS cursor_id
+        FROM print_jobs j WHERE ${conditions.join(' AND ')} GROUP BY group_key
+        HAVING ${having}${before>0?' AND MAX(j.id)<?':''} ORDER BY cursor_id DESC LIMIT 21`,before>0?[...params,before]:params);
+      const page=groups.slice(0,20);
+      let jobs=[];
+      if(page.length){
+        [jobs]=await db.query(`SELECT j.id,j.order_id,j.public_id,j.job_name,j.status,j.attempts,j.last_error,j.created_at,
+          j.retry_of_job_id,j.target_printer_id,j.target_agent_id,${printJobKindSql} AS kind,
+          ${groupKey} AS group_key,p.display_name AS printer_name,a.device_name AS agent_name
+          FROM print_jobs j LEFT JOIN print_printers p ON p.id=j.target_printer_id AND p.tenant_id=j.tenant_id AND p.store_id=j.store_id
+          LEFT JOIN print_agents a ON a.id=j.target_agent_id AND a.tenant_id=j.tenant_id AND a.store_id=j.store_id
+          WHERE ${conditions.join(' AND ')} AND ${groupKey} IN (?) ORDER BY j.id`,[...params,page.map(g=>g.group_key)]);
+        const rank=new Map(page.map((g,i)=>[g.group_key,i]));jobs.sort((a,b)=>rank.get(a.group_key)-rank.get(b.group_key)||a.id-b.id);
+      }
+      const [agents]=await db.query('SELECT id,device_name FROM print_agents WHERE tenant_id=? AND store_id=? AND token_id=? ORDER BY id',scope);
+      const [printers]=await db.query('SELECT id,agent_id,system_name,display_name FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=? ORDER BY agent_id,display_name',scope);
+      const [templates]=await db.query(`SELECT DISTINCT job_name AS title FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=? AND deleted_at IS NULL ORDER BY job_name`,scope);
+      return res.json({ok:true,data:{jobs,agents,printers,templates,counts:counts[0],next:groups.length>20?page[page.length-1].cursor_id:null}});
+    }catch(error){console.error('Print queue read failed:',error);return res.status(500).json({ok:false,error:'PRINT_QUEUE_READ_FAILED'});}
+  });
+
+  router.get('/print-api/jobs/:id', async (req,res)=>{
+    try {
+      const tenantId=req.user?.tenantId ?? helpers.getTenantId(req);
+      const [rows]=await db.query(`SELECT j.*,p.display_name AS printer_name,a.device_name AS agent_name
+        FROM print_jobs j LEFT JOIN print_printers p ON p.id=j.target_printer_id AND p.tenant_id=j.tenant_id AND p.store_id=j.store_id
+        LEFT JOIN print_agents a ON a.id=j.target_agent_id AND a.tenant_id=j.tenant_id AND a.store_id=j.store_id
+        WHERE j.id=? AND j.tenant_id=? AND j.store_id=? AND j.token_id=? AND j.deleted_at IS NULL`,[Number(req.params.id),tenantId,Number(req.query.store_id),Number(req.query.connection_id)]);
+      if(!rows.length)return res.status(404).json({ok:false,error:'PRINT_JOB_NOT_FOUND'});
+      const {pdf_base64,...job}=rows[0];
+      const [retries]=await db.query('SELECT attempts,last_error,created_at FROM print_job_retries WHERE job_id=? AND tenant_id=? ORDER BY id DESC',[job.id,tenantId]);
+      const rootId=Number(job.retry_of_job_id||job.id);
+      const [history]=await db.query(`SELECT id,status,attempts,last_error,created_at,deleted_at FROM print_jobs
+        WHERE tenant_id=? AND store_id=? AND token_id=? AND (id=? OR retry_of_job_id=?) ORDER BY id`,[tenantId,job.store_id,job.token_id,rootId,rootId]);
+      return res.json({ok:true,data:{...job,document:printJobDocument(pdf_base64),retries,history}});
+    }catch(error){console.error('Print job read failed:',error);return res.status(500).json({ok:false,error:'PRINT_JOB_READ_FAILED'});}
+  });
+
+  async function mutatePrintJobs(req,res,action,singleId=null) {
+    let conn;
+    try {
+      const tenantId=req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId=Number(req.body?.store_id),tokenId=Number(req.body?.connection_id);
+      const rawIds=singleId?[singleId]:req.body?.ids;
+      if(!tenantId||!(storeId>0)||!(tokenId>0))return res.status(400).json({ok:false,error:'BAD_PRINT_SCOPE'});
+      if(!Array.isArray(rawIds)||!rawIds.length||rawIds.some(id=>!Number.isSafeInteger(Number(id))||Number(id)<=0))return res.status(400).json({ok:false,error:'BAD_PRINT_SELECTION'});
+      if(rawIds.length>200)return res.status(400).json({ok:false,error:'PRINT_SELECTION_TOO_LARGE'});
+      const ids=[...new Set(rawIds.map(Number))].sort((a,b)=>a-b);
+      const requestId=String(req.body?.request_id||'');
+      if(action==='repeat'&&!/^[a-zA-Z0-9-]{16,80}$/.test(requestId))return res.status(400).json({ok:false,error:'BAD_PRINT_REQUEST_ID'});
+      conn=await db.getConnection();await conn.beginTransaction();
+      const [tokens]=await conn.query('SELECT is_active FROM print_api_tokens WHERE id=? AND tenant_id=? AND store_id=? FOR UPDATE',[tokenId,tenantId,storeId]);
+      if(!tokens.length||(action==='repeat'&&Number(tokens[0].is_active)!==1)){await conn.rollback();return res.status(409).json({ok:false,error:'PRINT_CONNECTION_INACTIVE'});}
+      const [rows]=await conn.query(`SELECT * FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=? AND id IN (?) ORDER BY id FOR UPDATE`,[tenantId,storeId,tokenId,ids]);
+      if(rows.length!==ids.length){await conn.rollback();return res.status(404).json({ok:false,error:'PRINT_JOB_NOT_FOUND'});}
+      if(action==='delete'){
+        if(rows.some(job=>job.status==='processing')){await conn.rollback();return res.status(409).json({ok:false,error:'PRINT_JOB_PROCESSING'});}
+        await conn.query('UPDATE print_jobs SET deleted_at=COALESCE(deleted_at,NOW()),updated_at=NOW() WHERE tenant_id=? AND store_id=? AND token_id=? AND id IN (?)',[tenantId,storeId,tokenId,ids]);
+      }else{
+        if(rows.some(job=>job.deleted_at||!['failed','done'].includes(job.status))){await conn.rollback();return res.status(409).json({ok:false,error:'PRINT_JOB_NOT_REPEATABLE'});}
+        for(const job of rows){
+          const jobKey=`repeat:${requestId}:${job.id}`;
+          const raw=String(job.pdf_base64||'');
+          const payload=raw.startsWith('__PRINT_META__:')?encodeMetaJobPayload({...JSON.parse(Buffer.from(raw.slice(15),'base64').toString('utf8')),job_key:jobKey,notify_order:false}):raw;
+          await conn.query(`INSERT INTO print_jobs
+            (tenant_id,store_id,token_id,target_printer_id,target_agent_id,order_id,public_id,job_key,job_name,pdf_base64,status,attempts,retry_of_job_id,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,'pending',0,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE id=id`,
+            [tenantId,storeId,tokenId,job.target_printer_id,job.target_agent_id,job.order_id,job.public_id,jobKey,job.job_name,payload,job.retry_of_job_id||job.id]);
+        }
+      }
+      await conn.commit();return res.json({ok:true});
+    }catch(error){if(conn)await conn.rollback();console.error('Print queue action failed:',error);return res.status(500).json({ok:false,error:'PRINT_QUEUE_ACTION_FAILED'});}
+    finally{conn?.release();}
+  }
+  router.post('/print-api/jobs/repeat',(req,res)=>mutatePrintJobs(req,res,'repeat'));
+  router.post('/print-api/jobs/delete',(req,res)=>mutatePrintJobs(req,res,'delete'));
+  router.post('/print-api/jobs/:id/retry',(req,res)=>mutatePrintJobs(req,res,'repeat',Number(req.params.id)));
+
   router.post('/print-api/test-print', async (req, res) => {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -6015,12 +6150,19 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
       const printer = printers[0] || null;
       if (!printer || !(Number(printer.agent_id) > 0)) return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
-      const nonce = Date.now();
+      const jobKey = `test-print:${crypto.randomUUID()}`;
+      const payload = encodeMetaJobPayload({
+        kind: 'test',
+        job_key: jobKey,
+        html: '<!doctype html><meta charset="utf-8"><h1>Тестовая печать CRM</h1>',
+        copies: 1,
+        notify_order: false
+      });
       await db.query(
         `INSERT INTO print_jobs
-          (tenant_id, store_id, token_id, target_printer_id, target_agent_id, order_id, public_id, job_name, pdf_base64, status, attempts, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, 'CRM Test Print', ?, 'pending', 0, NOW(), NOW())`,
-        [tenantId, storeId, Number(printer.token_id), printerId, Number(printer.agent_id), nonce, Buffer.from('<!doctype html><meta charset="utf-8"><h1>Тестовая печать CRM</h1>').toString('base64')]
+          (tenant_id, store_id, token_id, target_printer_id, target_agent_id, order_id, job_key, public_id, job_name, pdf_base64, status, attempts, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?, NULL, 'CRM Test Print', ?, 'pending', 0, NOW(), NOW())`,
+        [tenantId, storeId, Number(printer.token_id), printerId, Number(printer.agent_id), jobKey, payload]
       );
       res.json({ ok: true });
     } catch (err) {

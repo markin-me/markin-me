@@ -35430,3 +35430,29 @@ body.page-cash #cashJournalList.orders-list .order-row.shared-order-summary-row 
 .order-print-status-choice.is-open > .new-order-right-select-menu:not(.hidden){display:flex;flex-direction:column}
 .order-print-status-choice > .new-order-right-select-menu > .new-order-right-select-option{width:100%;white-space:normal;text-align:left;flex:0 0 auto}
 .order-stage-btn.is-status-pending{opacity:1}
+
+#settingsPrintApiQueueNav{display:flex;gap:6px;flex-wrap:wrap;flex:0 0 auto}
+#settingsPrintApiQueueNav .is-active{color:var(--color-primary,#ff7a00);font-weight:700}
+#settingsPrintApiQueueBody .settings-print-api-actions{display:flex;gap:6px;flex-wrap:wrap}
+#settingsPrintApiQueueBody .settings-print-api-actions .control{flex:1 1 120px;min-width:0}
+#settingsPrintApiQueueBody .settings-print-api-agent{padding:10px;margin-bottom:10px;overflow-wrap:anywhere}
+#settingsPrintApiQueueBody iframe{display:block;border:1px solid var(--color-border);min-height:200px;background:white}
+.settings-api-card-actions [role="button"]{cursor:pointer}
+.settings-api-card-actions [role="button"]:focus-visible{outline:2px solid var(--color-primary,#ff7a00)}
+
+#settingsPrintApiQueueBulk{display:none}
+#settingsPrintApiPanel.is-print-queue .panel-footer > .product-footer-actions{display:none}
+#settingsPrintApiPanel.is-print-queue #settingsPrintApiQueueBulk{display:flex;flex-wrap:wrap}
+#settingsPrintApiQueueBody .product-row-select-control{position:relative;left:auto;top:auto;transform:none;flex:0 0 18px}
+#settingsPrintApiQueueBody .product-row-select-input:indeterminate + .product-row-select-box::after{content:"";display:block;position:absolute;inset:6px 3px;border-top:2px solid var(--color-primary,#ff7a00)}
+#settingsPrintApiQueueBody .print-queue-select-all{display:flex;align-items:center;gap:10px;margin:12px 0}
+#settingsPrintApiQueueBody .print-queue-group{padding:0}
+#settingsPrintApiQueueBody .print-queue-group > .settings-print-api-agent-header{flex-direction:row;align-items:center;gap:10px}
+#settingsPrintApiQueueBody .print-queue-group-title{flex:1;text-align:left;white-space:normal}
+#settingsPrintApiQueueBody .print-queue-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--color-border);min-width:0}
+#settingsPrintApiQueueBody .print-queue-row > .order-col{flex:1;min-width:0}
+#settingsPrintApiQueueBody .print-queue-row .product-title,#settingsPrintApiQueueBody .print-queue-row .muted{overflow-wrap:anywhere;white-space:normal}
+#settingsPrintApiQueueBody .print-queue-row.is-multi-selected{background:var(--color-surface-2)}
+#settingsPrintApiQueueBody .print-queue-row-actions{display:flex;gap:4px;flex-wrap:wrap}
+#settingsPrintApiQueueBody .print-queue-error{color:var(--color-danger,#dc2626);font-size:12px;overflow-wrap:anywhere}
+#settingsPrintApiQueueBody .settings-print-api-actions .is-active{color:var(--color-primary,#ff7a00);font-weight:700}

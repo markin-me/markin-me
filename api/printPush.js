@@ -896,4 +896,4 @@ function startScheduledAutoPrint(db){
   scheduledAutoPrintTimer.unref?.();
   void tick();
 }
-module.exports = { sendOrderToPrintBot, enqueueSingleLabelPrintJob, getPrintChoices, preparePrintDocuments, enqueueDocuments, startScheduledAutoPrint };
+module.exports = { encodeMetaJobPayload, sendOrderToPrintBot, enqueueSingleLabelPrintJob, getPrintChoices, preparePrintDocuments, enqueueDocuments, startScheduledAutoPrint };

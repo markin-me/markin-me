@@ -217,7 +217,6 @@ BROWSER_TIMEOUT = _safe_float(os.environ.get("PRINT_BROWSER_TIMEOUT"), 25.0)
 CRM_HTTP_TIMEOUT = max(3.0, _safe_float(os.environ.get("CRM_HTTP_TIMEOUT"), 15.0))
 CRM_FETCH_RETRIES = max(1, _safe_int(os.environ.get("CRM_FETCH_RETRIES"), 2))
 CRM_HEARTBEAT_INTERVAL = max(5.0, _safe_float(os.environ.get("CRM_HEARTBEAT_INTERVAL"), 10.0))
-CRM_PRINTER_SYNC_INTERVAL = max(3.0, _safe_float(os.environ.get("CRM_PRINTER_SYNC_INTERVAL"), 5.0))
 CRM_URL_CHECK_DELAY_MS = max(150, _safe_int(os.environ.get("CRM_URL_CHECK_DELAY_MS"), 150))
 CRM_URL_CHECK_TIMEOUT = max(1.0, min(2.0, _safe_float(os.environ.get("CRM_URL_CHECK_TIMEOUT"), 1.5)))
 CRM_URL_CHECK_READ_BYTES = max(1024, _safe_int(os.environ.get("CRM_URL_CHECK_READ_BYTES"), 4096))
@@ -505,14 +504,13 @@ def _decode_meta_job(payload):
     return data if isinstance(data, dict) else {}
 
 
-def _get_printer_state(printer_name):
+def _get_printer_state(printer_name, known_printers=None):
     if not WINDOWS_PRINTING_AVAILABLE:
         return "", False
     printer_name = str(printer_name or "").strip()
     if not printer_name:
         return "", False
 
-    known_printers = [str(name).strip().lower() for name in _list_printers()]
     if known_printers and printer_name.strip().lower() not in known_printers:
         return printer_name, False
 
@@ -638,11 +636,13 @@ def _build_printers_sync_payload():
             default_printer = ""
 
     printers = []
-    for name in _list_printers():
+    names = _list_printers()
+    known_printers = [name.strip().lower() for name in names]
+    for name in names:
         system_name = str(name or "").strip()
         if not system_name:
             continue
-        _, printer_online = _get_printer_state(system_name)
+        _, printer_online = _get_printer_state(system_name, known_printers)
         printers.append({
             "system_name": system_name,
             "display_name": system_name,
@@ -722,7 +722,7 @@ class Printer:
     def __init__(self):
         self._lock = threading.Lock()
 
-    def print_pdf_bytes(self, pdf_bytes, job_name="CRM Receipt", copies=1, printer_name=None):
+    def print_pdf_bytes(self, pdf_bytes, job_name="CRM Receipt", copies=1, printer_name=None, before_print=None, should_continue=None, on_copy_printed=None):
         if not WINDOWS_PRINTING_AVAILABLE:
             raise RuntimeError("Windows printing is not available")
         if not PDF_RENDER_AVAILABLE:
@@ -735,8 +735,14 @@ class Printer:
             raise RuntimeError("Failed to render PDF")
 
         with self._lock:
-            for _ in range(max(1, int(copies))):
-                self._print_images(images, job_name, printer_name=printer_name)
+            for copy_index in range(max(1, int(copies))):
+                if before_print:
+                    before_print()
+                if should_continue and not should_continue():
+                    raise RuntimeError("PRINT_CONNECTION_CHANGED")
+                self._print_images(images, job_name, printer_name=printer_name, should_continue=should_continue)
+                if on_copy_printed:
+                    on_copy_printed(copy_index + 1)
 
     def _render_pdf_to_images(self, pdf_bytes):
         pdf = pdfium.PdfDocument(pdf_bytes)
@@ -780,7 +786,7 @@ class Printer:
             # Printer can already be connected; keep going and let StartDoc decide.
             pass
 
-    def _print_images(self, images, job_name, printer_name=None):
+    def _print_images(self, images, job_name, printer_name=None, should_continue=None):
         requested_printer = str(printer_name or "").strip()
         if requested_printer:
             printer_name, printer_online = _get_printer_state(requested_printer)
@@ -801,6 +807,8 @@ class Printer:
                 hdc = win32ui.CreateDC()
                 hdc.CreatePrinterDC(printer_name)
                 safe_job_name = str(job_name or "CRM Receipt").strip() or "CRM Receipt"
+                if should_continue and not should_continue():
+                    raise RuntimeError("PRINT_CONNECTION_CHANGED")
                 hdc.StartDoc(safe_job_name[:180])
                 doc_started = True
                 printer_w = hdc.GetDeviceCaps(win32con.HORZRES)
@@ -1205,6 +1213,11 @@ class PrintServer:
         self._token_getter = token_getter
         self._copies_getter = copies_getter
         self._installation_id = load_config().get("installation_id", "")
+        self._context_generation = 0
+        self._print_control_scope = None
+        self._print_control_version = -1
+        self._printing_paused = True
+        self._local_pause_scopes = dict(load_config().get("local_pause_scopes") or {})
         self._poll_interval = max(1.0, float(poll_interval))
         self._request_timeout = max(3.0, float(CRM_HTTP_TIMEOUT))
         self._fetch_retries = max(1, int(CRM_FETCH_RETRIES))
@@ -1233,16 +1246,109 @@ class PrintServer:
         self._last_message_poll_error_ts = 0.0
         self._heartbeat_interval = max(5.0, float(CRM_HEARTBEAT_INTERVAL))
         self._last_heartbeat_ts = 0.0
-        self._printer_sync_interval = max(10.0, float(CRM_PRINTER_SYNC_INTERVAL))
         self._last_printer_sync_ts = 0.0
         self._last_printer_sync_error_ts = 0.0
+        self._last_printer_sync_attempt_ts = 0.0
         self._synced_printers_by_system_name = {}
+        self._connection_printers = None
+        self._unassigned_queue_count = 0
         self._selected_printer_system_name = ""
+        self._printer_revision = 0
+        self._printer_sync_revision = -1
+        self._last_printer_payload = None
+        self._printer_sync_lock = threading.Lock()
+        self._printer_watch_stop = threading.Event()
+        if WINDOWS_PRINTING_AVAILABLE:
+            threading.Thread(target=self._watch_printers, daemon=True).start()
         self._connection_ok = True
         self._consecutive_connection_errors = 0
         self._reconnect_error_threshold = 12
         self._last_successful_contact_ts = 0.0
         self.set_crm_base_url(get_runtime_crm_base_url())
+
+    def _watch_printers(self):
+        # Spooler notifications cover printer and job changes. No Tk calls here.
+        import ctypes
+        from ctypes import wintypes
+        spool = ctypes.WinDLL("winspool.drv", use_last_error=True)
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        first = spool.FindFirstPrinterChangeNotification
+        first.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+        first.restype = wintypes.HANDLE
+        next_change = spool.FindNextPrinterChangeNotification
+        next_change.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p, ctypes.c_void_p]
+        next_change.restype = wintypes.BOOL
+        close = spool.FindClosePrinterChangeNotification
+        close.argtypes = [wintypes.HANDLE]
+        close.restype = wintypes.BOOL
+        wait = kernel.WaitForSingleObject
+        wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        wait.restype = wintypes.DWORD
+        while not self._printer_watch_stop.is_set():
+            handle = None
+            notification = None
+            try:
+                handle = win32print.OpenPrinter(None)
+                notification = first(int(handle), 0x000000FF | 0x0000FF00, 0, None)
+                if notification in (None, ctypes.c_void_p(-1).value):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                self._printer_revision += 1
+                while not self._printer_watch_stop.is_set():
+                    result = wait(notification, 1000)
+                    if result == 258:
+                        continue
+                    if result != 0:
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    changes = wintypes.DWORD()
+                    if not next_change(notification, ctypes.byref(changes), None, None):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    self._printer_revision += 1
+            except Exception:
+                logging.exception("Windows printer change subscription failed")
+                self._printer_revision += 1
+                self._printer_watch_stop.wait(10)
+            finally:
+                if notification not in (None, ctypes.c_void_p(-1).value):
+                    close(notification)
+                if handle is not None:
+                    win32print.ClosePrinter(handle)
+
+    def _get_connection_installation_id(self, token, base_url=None):
+        scope = normalize_crm_base_url(base_url or CRM_BASE_URL) + "\n" + str(token or "").strip()
+        return str(uuid.uuid5(uuid.UUID(self._installation_id), scope))
+
+    def _apply_print_control(self, data, token, base_url):
+        control = data.get("print_control") if isinstance(data, dict) else None
+        if not isinstance(control, dict) or token != (self._token_getter() or "").strip() or base_url != CRM_BASE_URL:
+            return
+        scope = self._get_connection_installation_id(token, base_url)
+        version = int(control["version"])
+        if scope == self._print_control_scope and version < self._print_control_version:
+            return
+        if scope != self._print_control_scope or version != self._print_control_version:
+            self._last_heartbeat_ts = 0.0
+        self._print_control_scope = scope
+        self._print_control_version = version
+        self._printing_paused = bool(control["paused"])
+
+    def _is_print_paused(self, context):
+        scope = self._get_connection_installation_id(context[0], context[1])
+        return bool(self._local_pause_scopes.get(scope)) or self._print_control_scope != scope or self._printing_paused
+
+    def _set_print_pause(self, token, base_url, paused):
+        payload = {"installation_id": self._get_connection_installation_id(token, base_url), "paused": bool(paused)}
+        request = urllib.request.Request(build_crm_request_url(base_url, "/api/print/agent/control"),
+                                         data=json.dumps(payload).encode("utf-8"), method="POST",
+                                         headers={"X-Api-Key": token, "Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=self._request_timeout) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if not result.get("ok"):
+            raise RuntimeError("PRINT_CONTROL_FAILED")
+        self._apply_print_control(result.get("data"), token, base_url)
+
+    def _report_print_copy(self, context, job_id, count):
+        if not self._post_job_result(context[0], job_id, "progress", {"printed_copies": count}, base_url=context[1]):
+            raise RuntimeError("PRINT_PROGRESS_UNCERTAIN: document sent to Windows, copy checkpoint not confirmed")
 
     def set_crm_base_url(self, base_url):
         normalized = set_runtime_crm_base_url(base_url)
@@ -1259,6 +1365,7 @@ class PrintServer:
         self._last_message_poll_ts = 0.0
         self._last_heartbeat_ts = 0.0
         self._last_printer_sync_ts = 0.0
+        self._last_printer_payload = None
         self._connection_ok = True
         self._consecutive_connection_errors = 0
         self._last_successful_contact_ts = time.time()
@@ -1286,14 +1393,17 @@ class PrintServer:
                 self._stop_event.wait(self._poll_interval)
                 continue
 
+            context = (token, CRM_BASE_URL, self._context_generation)
             self._send_agent_heartbeat(token)
             self._sync_printers(token)
             self._refresh_notification_settings(token)
             self._initialize_orders_cursor(token)
             self._initialize_messages_cursor(token)
 
+            if not self._is_print_context_current(context):
+                continue
             try:
-                bundle = self._fetch_poll_bundle(token)
+                bundle = self._fetch_poll_bundle(token, context[1])
             except Exception:
                 logging.exception("Ошибка запроса к CRM (/api/print/poll)")
                 self._note_connection_error()
@@ -1320,10 +1430,15 @@ class PrintServer:
                 job = bundle.get("job")
                 if not job:
                     break
+                if not self._is_print_context_current(context) or self._is_print_paused(context):
+                    self._post_job_result(token, job.get("job_id") or job.get("id"), "release", base_url=context[1])
+                    break
                 drained_any_job = True
-                self._process_job(token, job)
+                self._process_job(token, job, context)
+                if not self._is_print_context_current(context):
+                    break
                 try:
-                    bundle = self._fetch_poll_bundle(token)
+                    bundle = self._fetch_poll_bundle(token, context[1])
                 except Exception:
                     logging.exception("Ошибка запроса к CRM (/api/print/poll)")
                     self._note_connection_error()
@@ -1347,6 +1462,7 @@ class PrintServer:
     def _mark_connection_restored_if_needed(self):
         if not self._connection_ok:
             self._connection_ok = True
+            self._last_printer_payload = None
             logging.info("Связь с CRM восстановлена")
 
     def _note_successful_contact(self):
@@ -1386,7 +1502,6 @@ class PrintServer:
         try:
             with urllib.request.urlopen(req, timeout=6) as resp:
                 body = resp.read().decode("utf-8", "ignore")
-                self._note_successful_contact()
         except Exception:
             self._note_connection_error()
             return
@@ -1422,18 +1537,20 @@ class PrintServer:
     def _send_agent_heartbeat(self, token, force=False):
         if not token:
             return False
+        base_url = CRM_BASE_URL
         now = time.time()
         if not force and (now - self._last_heartbeat_ts) < self._heartbeat_interval:
             return False
 
         printer_name, printer_online = _get_default_printer_state()
         payload = {
-            "installation_id": self._installation_id,
+            "installation_id": self._get_connection_installation_id(token),
             "printer_name": printer_name or None,
             "printer_online": bool(printer_online),
-            "agent_name": APP_NAME,
+            "agent_name": socket.gethostname(),
             "agent_version": AGENT_VERSION,
             "running": True,
+            "applied_print_control_version": self._print_control_version if self._print_control_scope == self._get_connection_installation_id(token, base_url) and (self._printing_paused or not self._local_pause_scopes.get(self._print_control_scope)) else -1,
         }
         url = build_crm_request_url(CRM_BASE_URL, "/api/print/agent/heartbeat")
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1453,31 +1570,54 @@ class PrintServer:
                 data = json.loads(body) if body else {}
                 if not data or not data.get("ok"):
                     return False
-                self._last_heartbeat_ts = now
+                old_version = self._print_control_version
+                self._apply_print_control(data.get("data"), token, base_url)
+                self._last_heartbeat_ts = now if old_version == self._print_control_version else 0.0
                 self._note_successful_contact()
                 return True
         except Exception:
             return False
 
     def _sync_printers(self, token, force=False):
+        with self._printer_sync_lock:
+            return self._sync_printers_locked(token, force)
+
+    def _sync_printers_locked(self, token, force=False):
         if not token:
             return False
+        request_base_url = CRM_BASE_URL
         now = time.time()
-        if not force and (now - self._last_printer_sync_ts) < self._printer_sync_interval:
+        revision = self._printer_revision
+        same_context = self._last_printer_payload is not None and self._last_printer_payload[:2] == (request_base_url, token)
+        elapsed = now - self._last_printer_sync_ts
+        if not force and same_context and revision == self._printer_sync_revision and elapsed < 10.0:
             return False
-
-        payload = _build_printers_sync_payload()
-        payload["installation_id"] = self._installation_id
-        url = build_crm_request_url(CRM_BASE_URL, "/api/print/printers/sync")
-        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        if not force and (now - self._last_printer_sync_attempt_ts) < 5.0:
+            return False
+        # Read the shared server queue every 10s; enumerate Windows only on
+        # notifications or the sparse 60s reconciliation.
+        if same_context and not force and revision == self._printer_sync_revision and now - getattr(self, "_last_local_printer_check_ts", 0) < 60.0:
+            payload = self._last_printer_payload[2]
+        else:
+            payload = _build_printers_sync_payload()
+            payload["installation_id"] = self._get_connection_installation_id(token, request_base_url)
+            self._last_local_printer_check_ts = now
+        unchanged = not force and self._last_printer_payload == (request_base_url, token, payload)
+        if unchanged and elapsed < 10.0:
+            self._printer_sync_revision = revision
+            return False
+        suffix = "/api/print/printers?installation_id=" + urllib.parse.quote(self._get_connection_installation_id(token), safe="") if unchanged else "/api/print/printers/sync"
+        url = build_crm_request_url(request_base_url, suffix)
+        raw = None if unchanged else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self._last_printer_sync_attempt_ts = now
         req = urllib.request.Request(
             url,
             data=raw,
-            method="POST",
+            method="GET" if unchanged else "POST",
             headers={
                 "X-Api-Key": token,
                 "Content-Type": "application/json; charset=utf-8",
-                "Content-Length": str(len(raw)),
+                "Content-Length": str(len(raw)) if raw is not None else "0",
             },
         )
         try:
@@ -1486,20 +1626,26 @@ class PrintServer:
                 data = json.loads(body) if body else {}
                 if not data or not (data.get("ok") or data.get("success")):
                     return False
+                if request_base_url != CRM_BASE_URL or token != (self._token_getter() or "").strip():
+                    return False
                 response_printers = data.get("data", {}).get("printers") if isinstance(data.get("data"), dict) else []
                 if isinstance(response_printers, list):
+                    self._connection_printers = response_printers
+                    self._unassigned_queue_count = int(data.get("data", {}).get("unassigned_queue_count") or 0)
                     synced = {}
                     selected_printer = ""
                     for item in response_printers:
                         if not isinstance(item, dict):
                             continue
                         system_name = str(item.get("system_name") or "").strip()
-                        if system_name:
+                        if system_name and item.get("is_local"):
                             synced[system_name.lower()] = item
                             if str(item.get("is_default") or "0") in ("1", "true", "True"):
                                 selected_printer = system_name
                     self._synced_printers_by_system_name = synced
                     self._selected_printer_system_name = selected_printer
+                self._last_printer_payload = (request_base_url, token, payload)
+                self._printer_sync_revision = revision
                 self._last_printer_sync_ts = now
                 self._note_successful_contact()
                 return True
@@ -1569,7 +1715,7 @@ class PrintServer:
         url = build_crm_request_url(
             CRM_BASE_URL,
             "/api/print/poll?after_message_id=-1&installation_id="
-            + urllib.parse.quote(self._installation_id, safe=""),
+            + urllib.parse.quote(self._get_connection_installation_id(token), safe=""),
         )
         req = urllib.request.Request(url, method="GET", headers={"X-Api-Key": token})
         try:
@@ -1617,12 +1763,14 @@ class PrintServer:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _fetch_poll_bundle(self, token):
+    def _fetch_poll_bundle(self, token, base_url=None):
+        base_url = base_url or CRM_BASE_URL
         cursor = int(self._last_message_event_id or 0)
         url = build_crm_request_url(
-            CRM_BASE_URL,
+            base_url,
             f"/api/print/poll?after_message_id={cursor}&installation_id="
-            + urllib.parse.quote(self._installation_id, safe=""),
+            + urllib.parse.quote(self._get_connection_installation_id(token, base_url), safe="")
+            + ("&accept_jobs=0" if self._is_print_paused((token, base_url, self._context_generation)) else ""),
         )
         req = urllib.request.Request(url, method="GET", headers={"X-Api-Key": token})
         body = ""
@@ -1667,12 +1815,14 @@ class PrintServer:
             payload = {}
         if not payload or not payload.get("ok"):
             return None
+        self._apply_print_control(payload.get("data"), token, base_url)
         return payload.get("data")
 
-    def _post_job_result(self, token, job_id, endpoint, payload=None):
-        url = build_crm_request_url(CRM_BASE_URL, f"/api/print/jobs/{job_id}/{endpoint}")
+    def _post_job_result(self, token, job_id, endpoint, payload=None, base_url=None):
+        base_url = base_url or CRM_BASE_URL
+        url = build_crm_request_url(base_url, f"/api/print/jobs/{job_id}/{endpoint}")
         result_payload = dict(payload or {})
-        result_payload["installation_id"] = self._installation_id
+        result_payload["installation_id"] = self._get_connection_installation_id(token, base_url)
         raw = json.dumps(result_payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             url,
@@ -1690,18 +1840,46 @@ class PrintServer:
         except Exception:
             return False
 
-    def _process_job(self, token, job):
+    def _is_print_context_current(self, context):
+        return (not self._stop_event.is_set() and context[2] == self._context_generation
+                and context[1] == CRM_BASE_URL and context[0] == (self._token_getter() or "").strip())
+
+    def _validate_print_claim(self, context, job_id):
+        if not self._is_print_context_current(context):
+            raise RuntimeError("PRINT_CONNECTION_CHANGED")
+        url = build_crm_request_url(context[1], f"/api/print/jobs/{job_id}/ready?installation_id="
+                                    + urllib.parse.quote(self._get_connection_installation_id(context[0], context[1]), safe=""))
+        request = urllib.request.Request(url, headers={"X-Api-Key": context[0]})
+        with urllib.request.urlopen(request, timeout=self._request_timeout) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            if not result.get("ok"):
+                raise RuntimeError("PRINT_JOB_NOT_READY")
+            self._apply_print_control(result.get("data"), context[0], context[1])
+            if self._is_print_paused(context):
+                raise RuntimeError("PRINT_PAUSED")
+            if not result.get("data", {}).get("ready"):
+                raise RuntimeError("PRINT_JOB_NOT_READY")
+        if not self._is_print_context_current(context):
+            raise RuntimeError("PRINT_CONNECTION_CHANGED")
+
+    def _process_job(self, token, job, context=None):
         if not isinstance(job, dict):
             return
         job_id = job.get("job_id") or job.get("id")
         if not job_id:
+            return
+        context = context or (token, CRM_BASE_URL, self._context_generation)
+        if not self._is_print_context_current(context):
+            self._post_job_result(token, job_id, "release", base_url=context[1])
             return
         order = job.get("order") if isinstance(job.get("order"), dict) else {}
         job_payload = job.get("pdf_base64") or job.get("pdfBase64")
         meta_payload = _decode_meta_job(job_payload) if _is_meta_job(job_payload) else {}
         is_label_job = isinstance(meta_payload, dict) and str(meta_payload.get("kind") or "").strip().lower() == "label"
         cache_key = None
-        if meta_payload.get("job_key"):
+        if job.get("retry_of_job_id"):
+            cache_key = f"repeat_job:{job_id}"
+        elif meta_payload.get("job_key"):
             cache_key = f"document_job:{job_id}"
         elif is_label_job:
             cache_key = f"label_job:{job_id}"
@@ -1710,11 +1888,11 @@ class PrintServer:
 
         if cache_key and self.cache.has(cache_key):
             logging.info("Повторная задача %s - печать пропущена", cache_key)
-            self._post_job_result(token, job_id, "ack", {})
+            self._post_job_result(token, job_id, "ack", {}, base_url=context[1])
             return
 
         if not job_payload:
-            self._post_job_result(token, job_id, "fail", {"error": "missing_pdf"})
+            self._post_job_result(token, job_id, "fail", {"error": "missing_pdf"}, base_url=context[1])
             return
 
         order_id = None
@@ -1726,7 +1904,7 @@ class PrintServer:
             pdf_bytes = self._prepare_job_pdf(job_payload, job_name, job_id)
         except Exception as exc:
             logging.exception("Ошибка подготовки PDF задания %s", job_id)
-            self._post_job_result(token, job_id, "fail", {"error": str(exc)})
+            self._post_job_result(token, job_id, "fail", {"error": str(exc)}, base_url=context[1])
             return
 
         try:
@@ -1739,11 +1917,11 @@ class PrintServer:
         except Exception:
             pass
 
-        printer_name = self._selected_printer_system_name
-        if isinstance(meta_payload, dict):
-            meta_printer_name = str(meta_payload.get("printer_name") or "").strip()
-            if meta_printer_name:
-                printer_name = meta_printer_name
+        # The server's routed printer is authoritative; metadata/default are
+        # used only for jobs without an explicit server assignment.
+        printer_name = str(job.get("printer_name") or "").strip()
+        if not printer_name:
+            printer_name = str(meta_payload.get("printer_name") or "").strip() or self._selected_printer_system_name
 
         try:
             should_play_order_sound = bool(meta_payload.get("notify_order", not is_label_job))
@@ -1775,20 +1953,28 @@ class PrintServer:
                         # Подстраховка: принудительно обновляем настройки звука перед воспроизведением.
                         self._refresh_notification_settings(token, force=True)
                     self._play_order_notification_sound()
-            self.printer.print_pdf_bytes(
-                pdf_bytes,
-                job_name=job_name,
-                copies=copies,
-                printer_name=printer_name,
-            )
+            printed_copies = max(0, int(job.get("printed_copies") or 0))
+            if printed_copies < copies:
+                self.printer.print_pdf_bytes(
+                    pdf_bytes,
+                    job_name=job_name,
+                    copies=copies - printed_copies,
+                    printer_name=printer_name,
+                    before_print=lambda: self._validate_print_claim(context, job_id),
+                    should_continue=lambda: self._is_print_context_current(context) and not self._is_print_paused(context),
+                    on_copy_printed=lambda count: self._report_print_copy(context, job_id, printed_copies + count),
+                )
         except Exception as e:
+            if not str(e).startswith("PRINT_PROGRESS_UNCERTAIN") and (str(e) == "PRINT_PAUSED" or self._is_print_paused(context) or not self._is_print_context_current(context)):
+                self._post_job_result(token, job_id, "release", base_url=context[1])
+                return
             logging.exception("Ошибка печати задания %s", job_id)
-            self._post_job_result(token, job_id, "fail", {"error": str(e)})
+            self._post_job_result(token, job_id, "fail", {"error": str(e), "terminal": str(e).startswith("PRINT_PROGRESS_UNCERTAIN")}, base_url=context[1])
             return
 
         if cache_key:
             self.cache.add(cache_key)
-        if self._post_job_result(token, job_id, "ack", {}):
+        if self._post_job_result(token, job_id, "ack", {}, base_url=context[1]):
             logging.info("Задание %s отправлено в печать", job_id)
         else:
             logging.warning("Не удалось отправить ack для задания %s", job_id)
@@ -1911,7 +2097,8 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
             self.card_frame = ctk.CTkFrame(self, fg_color=UI_COLORS["card"], corner_radius=12)
         else:
             self.card_frame = tk.Frame(self, bg=UI_COLORS["card"])
-        self.card_frame.pack(padx=20, pady=(0, 10), fill="x")
+        self.card_frame.pack(padx=20, pady=(0, 10), fill="both", expand=True)
+        self.card_frame.grid_rowconfigure(5, weight=1)
 
         if UI_BACKEND == "ctk":
             self.card_frame.grid_columnconfigure(0, weight=1)
@@ -2015,7 +2202,7 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         else:
             self.printer_frame = tk.Frame(self.card_frame, bg=UI_COLORS["card"])
 
-        self.printer_frame.grid(row=5, column=0, columnspan=3, padx=16, pady=(8, 10), sticky="ew")
+        self.printer_frame.grid(row=5, column=0, columnspan=3, padx=16, pady=(8, 10), sticky="nsew")
         self.printer_frame.grid_columnconfigure(0, weight=1)
         self.printer_frame.grid_columnconfigure(1, weight=0)
         self.printer_frame.grid_columnconfigure(2, weight=0)
@@ -2057,10 +2244,23 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         self._render_autostart_icon()
         self._render_printer_settings_icon()
 
+        self._pause_busy = False
+        pause_bar = tk.Frame(self.printer_frame, bg=UI_COLORS["card"])
+        pause_bar.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        pause_bar.grid_columnconfigure(0, weight=1)
+        self.print_pause_button = tk.Button(pause_bar, text="Остановить печать", command=self._toggle_print_pause,
+                                            bg=UI_COLORS["card"], fg=UI_COLORS["text"], relief="flat", cursor="hand2")
+        self.print_pause_button.grid(row=0, column=0, sticky="w")
+        self.print_clear_button = tk.Button(pause_bar, text="Очистить очередь Windows…", command=self._clear_selected_windows_queue,
+                                            bg=UI_COLORS["card"], fg=UI_COLORS["text"], relief="flat", cursor="hand2")
+        self.print_clear_button.grid(row=0, column=1, sticky="e")
+        self.print_pause_status = tk.Label(pause_bar, text="", bg=UI_COLORS["card"], fg=UI_COLORS["muted"], anchor="w", wraplength=440)
+        self.print_pause_status.grid(row=1, column=0, columnspan=2, sticky="ew")
+
         self.printers_table_container = tk.Frame(self.printer_frame, bg=UI_COLORS["card"])
-        self.printers_table_container.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 0))
+        self.printers_table_container.grid(row=2, column=0, columnspan=3, sticky="nsew", pady=(0, 0))
         self.printers_table_container.grid_columnconfigure(0, weight=1)
-        self.printer_frame.grid_rowconfigure(1, weight=1)
+        self.printer_frame.grid_rowconfigure(2, weight=1)
         self.printers_table_container.grid_rowconfigure(0, weight=1)
         self._table_style = ttk.Style(self)
         try:
@@ -2097,20 +2297,36 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         )
         self.printers_table_tree = ttk.Treeview(
             self.printers_table_container,
-            columns=("status", "name", "queue", "settings"),
-            show="headings",
+            columns=("status", "name", "queue", "errors", "settings"),
+            show="tree headings",
             style="Printers.Treeview",
-            selectmode="none",
+            selectmode="browse",
             height=1,
         )
         self.printers_table_tree.grid(row=0, column=0, sticky="nsew")
+        self.printers_table_scrollbar = ttk.Scrollbar(
+            self.printers_table_container, orient="vertical", command=self.printers_table_tree.yview
+        )
+        self.printers_table_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.printers_table_tree.configure(yscrollcommand=self.printers_table_scrollbar.set)
         self.printers_table_tree.heading("status", text="")
         self.printers_table_tree.heading("name", text="Название")
         self.printers_table_tree.heading("queue", text="Очередь")
+        self.printers_table_tree.heading("errors", text="\u041e\u0448\u0438\u0431\u043a\u0438")
+        self.printers_table_tree.column("errors", anchor="center", width=64, minwidth=64, stretch=False)
         self.printers_table_tree.heading("settings", text="")
-        self.printers_table_tree.column("status", anchor="center", width=44, stretch=False)
+        self.printers_table_tree.column("#0", anchor="center", width=36, minwidth=36, stretch=False)
+        self.printers_table_tree.column("status", width=0, minwidth=0, stretch=False)
+        self._printer_dot_images = {}
+        for state, color in ((True, "#2ecc71"), (False, "#e74c3c")):
+            image = tk.PhotoImage(master=self, width=12, height=12)
+            for y in range(12):
+                for x in range(12):
+                    if (x - 5.5) ** 2 + (y - 5.5) ** 2 <= 25:
+                        image.put(color, (x, y))
+            self._printer_dot_images[state] = image
         self.printers_table_tree.column("name", anchor="w", width=180, stretch=True)
-        self.printers_table_tree.column("queue", anchor="center", width=108, stretch=False)
+        self.printers_table_tree.column("queue", anchor="center", width=64, stretch=False)
         self.printers_table_tree.column("settings", anchor="center", width=42, stretch=False)
         self.printers_table_tree.bind("<Motion>", self._on_printers_tree_motion)
         self.printers_table_tree.bind("<Button-1>", self._on_printers_tree_click)
@@ -2421,6 +2637,8 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         save_config({
             "crm_base_url": crm_base_url,
             "token": token,
+            "installation_id": self._server._installation_id,
+            "local_pause_scopes": self._server._local_pause_scopes,
             "autostart": bool(self._autostart_var.get()),
         })
 
@@ -2535,10 +2753,20 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         self._crm_url_check_timer = self.after(CRM_URL_CHECK_DELAY_MS, self._run_crm_url_check)
 
     def _on_token_change(self):
+        self._server._context_generation += 1
+        self._server._connection_printers = None
+        self._server._unassigned_queue_count = 0
+        self._server._synced_printers_by_system_name = {}
+        self._server._selected_printer_system_name = ""
         self._save_config()
         self._schedule_token_check()
 
     def _on_crm_base_url_change(self):
+        self._server._context_generation += 1
+        self._server._connection_printers = None
+        self._server._unassigned_queue_count = 0
+        self._server._synced_printers_by_system_name = {}
+        self._server._selected_printer_system_name = ""
         self._server.set_crm_base_url(self._get_crm_base_url())
         self._save_config()
         self._schedule_crm_url_check()
@@ -2579,6 +2807,75 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         next_value = max(1, min(50, raw + delta))
         self._copies_var.set(str(next_value))
 
+    def _refresh_print_pause_ui(self):
+        token = self._get_token()
+        scope = self._server._get_connection_installation_id(token, self._get_crm_base_url())
+        local = bool(self._server._local_pause_scopes.get(scope))
+        known = self._server._print_control_scope == scope
+        paused = local or (known and self._server._printing_paused)
+        state = (scope, local, known, paused, self._pause_busy, bool(token))
+        if state == getattr(self, "_pause_ui_state", None):
+            return
+        self._pause_ui_state = state
+        self.print_pause_button.configure(text="▶ Продолжить" if paused else "⏸ Остановить печать",
+                                          state="disabled" if self._pause_busy or not token else "normal")
+        status = "Состояние печати не получено"
+        if local:
+            status = "Пауза на этом компьютере. Остановка на сервере не подтверждена"
+        elif known:
+            status = "Печать приостановлена. Очередь сохранена" if paused else "Печать разрешена"
+        if self._pause_busy:
+            status = "Сохраняется управление печатью…"
+        self.print_pause_status.configure(text=status)
+
+    def _toggle_print_pause(self):
+        if self._pause_busy:
+            return
+        token, base_url = self._get_token(), self._get_crm_base_url()
+        if not token:
+            return
+        scope = self._server._get_connection_installation_id(token, base_url)
+        paused = bool(self._server._local_pause_scopes.get(scope)) or (self._server._print_control_scope == scope and self._server._printing_paused)
+        desired = not paused
+        if desired:
+            # Local gate is immediate and survives restart even if CRM is unreachable.
+            self._server._local_pause_scopes[scope] = True
+            self._save_config()
+        self._pause_busy = True
+        self._refresh_print_pause_ui()
+        def worker():
+            problem = None
+            try:
+                self._server._set_print_pause(token, base_url, desired)
+            except Exception as error:
+                problem = str(error)
+                logging.exception("Не удалось сохранить паузу печати")
+            self._schedule_ui(lambda: self._finish_print_pause(scope, problem))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_print_pause(self, scope, problem):
+        self._pause_busy = False
+        if problem is None:
+            self._server._local_pause_scopes.pop(scope, None)
+            self._save_config()
+        else:
+            messagebox.showerror("Управление печатью", "Сервер не подтвердил изменение: " + problem, parent=self)
+        self._refresh_print_pause_ui()
+
+    def _clear_selected_windows_queue(self):
+        context = (self._get_token(), self._get_crm_base_url(), self._server._context_generation)
+        if not self._server._is_print_paused(context):
+            messagebox.showinfo("Очередь Windows", "Сначала остановите печать.", parent=self)
+            return
+        selected = self.printers_table_tree.selection()
+        tags = self.printers_table_tree.item(selected[0], "tags") if selected else ()
+        name = str(tags[1] if len(tags) > 1 else "").strip()
+        if not name:
+            messagebox.showinfo("Очередь Windows", "Выберите локальный принтер в таблице.", parent=self)
+            return
+        if messagebox.askyesno("Очистить очередь Windows", f"Удалить все задания Windows принтера '{name}'?\nВ очереди могут быть документы других программ. Серверная очередь сохранится.", parent=self):
+            self._clear_printer_queue_action(name)
+
     def _schedule_printer_refresh(self, delay_ms=2000):
         if self._printer_timer:
             try:
@@ -2589,8 +2886,16 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
 
     def _printer_refresh_tick(self):
         self._printer_timer = None
-        self._refresh_printer_ui()
-        self._schedule_printer_refresh(2000)
+        self._refresh_print_pause_ui()
+        revision = self._server._printer_revision
+        now = time.monotonic()
+        metadata = (self._server._connection_printers, self._server._unassigned_queue_count)
+        if metadata != getattr(self, "_ui_printer_metadata", None) or revision != getattr(self, "_ui_printer_revision", -1) or now - getattr(self, "_ui_printer_check_ts", 0) >= 60:
+            self._refresh_printer_ui()
+            self._ui_printer_revision = revision
+            self._ui_printer_metadata = metadata
+            self._ui_printer_check_ts = now
+        self._schedule_printer_refresh(500)
 
     def _set_printer_status(self, connected):
         return
@@ -2775,7 +3080,7 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         try:
             region = self.printers_table_tree.identify("region", event.x, event.y)
             column = self.printers_table_tree.identify_column(event.x)
-            if region == "cell" and column == "#4":
+            if region == "cell" and column == "#5":
                 self.printers_table_tree.configure(cursor="hand2")
             else:
                 self.printers_table_tree.configure(cursor="")
@@ -2786,7 +3091,7 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         try:
             column = self.printers_table_tree.identify_column(event.x)
             row_id = self.printers_table_tree.identify_row(event.y)
-            if column == "#4" and row_id:
+            if column == "#5" and row_id:
                 tags = self.printers_table_tree.item(row_id, "tags") or []
                 printer_name = str(tags[1] if len(tags) > 1 else "").strip()
                 if printer_name:
@@ -2847,127 +3152,54 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _render_printers_table(self):
-        self._clear_printers_table()
-        if not WINDOWS_PRINTING_AVAILABLE:
-            label = tk.Label(
-                self.printers_table_container,
-                text="Список принтеров недоступен: установите pywin32 для текущего Python",
-                font=("Segoe UI", 10),
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["muted"],
-                anchor="w",
-                justify="left",
-                wraplength=360
-            )
-            label.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
-            return
-
-        names = _list_printers()
-        if not names:
-            label = tk.Label(
-                self.printers_table_container,
-                text="Подключенные принтеры не найдены",
-                font=("Segoe UI", 10),
-                bg=UI_COLORS["card"],
-                fg=UI_COLORS["muted"],
-                anchor="w",
-                justify="left",
-                wraplength=360
-            )
-            label.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
-            return
-
-        default_name = str(getattr(self._server, "_selected_printer_system_name", "") or "").strip()
-        try:
-            if not default_name:
-                default_name = str(win32print.GetDefaultPrinter() or "").strip()
-        except Exception:
-            default_name = ""
-
-        try:
-            self.printers_table_tree.configure(height=max(1, min(6, len(names))))
-        except Exception:
-            pass
-        for row_index, name in enumerate(names):
-            system_name = str(name or "").strip()
-            if not system_name:
-                continue
-            _, is_online = _get_printer_state(system_name)
-            is_default = bool(default_name and system_name.lower() == default_name.lower())
-            display_name = self._get_printer_display_name(system_name)
-            name_text = display_name + (" (по умолчанию)" if is_default else "")
-            status_text = ""
-            queue_count = _get_printer_queue_size(system_name)
-            row_tag = f"printer_{row_index}"
-            self.printers_table_tree.insert(
-                "",
-                "end",
-                iid=row_tag,
-                values=(status_text, name_text, "", "⚙"),
-                tags=("printer_row", system_name),
-            )
-        self._clear_printer_status_dots()
-        self._clear_printer_queue_widgets()
-        for row_index, name in enumerate(names):
-            system_name = str(name or "").strip()
-            if not system_name:
-                continue
-            _, is_online = _get_printer_state(system_name)
-            row_id = f"printer_{row_index}"
-            self._printer_status_dots[row_id] = tk.Label(
-                self.printers_table_tree,
-                text="●",
-                fg="#2ecc71" if is_online else "#e74c3c",
-                bg="#2a2a2a",
-                font=("Segoe UI", 11, "bold"),
-                bd=0,
-                highlightthickness=0,
-            )
-            queue_count = _get_printer_queue_size(system_name)
-            count_label = tk.Label(
-                self.printers_table_tree,
-                text=str(queue_count),
-                fg=UI_COLORS["text"],
-                bg="#2a2a2a",
-                font=("Segoe UI", 9, "bold"),
-                bd=0,
-                highlightthickness=0,
-            )
-            open_btn = tk.Canvas(
-                self.printers_table_tree,
-                width=22,
-                height=22,
-                bg="#2a2a2a",
-                highlightthickness=0,
-                bd=0,
-                cursor="hand2",
-            )
-            open_btn.create_text(11, 11, text="🖨", fill=UI_COLORS["text"], font=("Segoe UI", 10))
-            open_btn.bind("<Button-1>", lambda _e, p=system_name: self._open_printer_queue_window(p))
-            clear_btn = tk.Canvas(
-                self.printers_table_tree,
-                width=22,
-                height=22,
-                bg="#2a2a2a",
-                highlightthickness=0,
-                bd=0,
-                cursor="hand2",
-            )
-            clear_btn.create_text(11, 11, text="🗑", fill=UI_COLORS["text"], font=("Segoe UI", 10))
-            clear_btn.bind("<Button-1>", lambda _e, p=system_name: self._clear_printer_queue_action(p))
-            self._printer_queue_widgets[row_id] = {
-                "count": count_label,
-                "open": open_btn,
-                "clear": clear_btn,
-            }
+        # Native Treeview cells keep their position on resize, scrolling and DPI
+        # changes; queue counts are CRM jobs, never Windows spooler jobs.
+        printers = self._server._connection_printers
+        rows = []
+        if printers is None:
+            names = _list_printers()
+            known = [name.strip().lower() for name in names]
+            for name in names:
+                online = _get_printer_state(name, known)[1]
+                rows.append(("local:" + name, ("", name, "?", "?", "\u2699"), name, online))
+        else:
+            for printer in printers:
+                local = bool(printer.get("is_local"))
+                system_name = str(printer.get("system_name") or "")
+                display_name = str(printer.get("display_name") or system_name)
+                if not local:
+                    display_name += " [" + str(printer.get("device_name") or ("PC #" + str(printer.get("agent_id")))) + "]"
+                if printer.get("is_default") in (1, True, "1"):
+                    display_name += " (по умолчанию)"
+                online = bool(printer.get("agent_online")) and printer.get("status") == "online"
+                if local:
+                    online = _get_printer_state(system_name, [system_name.lower()])[1]
+                values = ("", display_name,
+                          str(printer.get("queue_count", 0)), str(printer.get("failed_count", 0)), "⚙" if local else "")
+                rows.append(("printer_" + str(printer["id"]), values, system_name if local else "", online))
+        wanted = {row[0] for row in rows}
+        for row_id in self.printers_table_tree.get_children():
+            if row_id not in wanted:
+                self.printers_table_tree.delete(row_id)
+        for index, (row_id, values, local_name, online) in enumerate(rows):
+            tags = ("printer_row", local_name)
+            image = self._printer_dot_images[online]
+            if self.printers_table_tree.exists(row_id):
+                current = self.printers_table_tree.item(row_id)
+                if tuple(str(value) for value in current["values"]) != values or tuple(current["tags"]) != tags or tuple(current["image"]) != (str(image),):
+                    self.printers_table_tree.item(row_id, values=values, tags=tags, image=image)
+                if self.printers_table_tree.index(row_id) != index:
+                    self.printers_table_tree.move(row_id, "", index)
+            else:
+                self.printers_table_tree.insert("", "end", iid=row_id, values=values, tags=tags, image=image)
+        self.printers_table_tree.configure(height=max(1, min(6, len(rows))))
         self.printers_table_tree.tag_configure("printer_row", foreground=UI_COLORS["text"])
-
-        try:
-            self.printers_table_tree.yview_moveto(0)
-        except Exception:
-            pass
-        self.after_idle(self._sync_printer_status_dots)
-        self.after_idle(self._sync_printer_queue_widgets)
+        unassigned = self._server._unassigned_queue_count
+        self.printers_table_tree.heading("queue", text="Очередь")
+        title = "Подключённые принтеры"
+        if unassigned:
+            title += " (без назначения: " + str(unassigned) + ")"
+        self.printers_section_label.configure(text=title)
 
     def _refresh_printer_ui(self):
         if not WINDOWS_PRINTING_AVAILABLE:
@@ -3429,6 +3661,7 @@ class ConfigApp(ctk.CTk if UI_BACKEND == "ctk" else tk.Tk):
             self._hide_to_tray()
             return
         self._stop_tray_icon()
+        self._server._printer_watch_stop.set()
         if self._printer_timer:
             try:
                 self.after_cancel(self._printer_timer)

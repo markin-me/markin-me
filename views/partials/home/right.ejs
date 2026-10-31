@@ -1261,7 +1261,14 @@
           <div class="settings-list-title">API для печати на удалённом принтере</div>
           <div class="settings-list-subtitle">Настройки выбранного подключения к серверу печати.</div>
         </div>
+        <div class="settings-print-api-actions" id="settingsPrintApiQueueNav">
+          <button type="button" class="btn btn-link btn-sm" data-print-view="settings">Настройки</button>
+          <button type="button" class="btn btn-link btn-sm" data-print-view="all">Печать</button>
+          <button type="button" class="btn btn-link btn-sm" id="settingsPrintApiPauseBtn" disabled><i class="fas fa-pause"></i> Остановить печать</button>
+          <span class="muted" id="settingsPrintApiPauseStatus" role="status"></span>
+        </div>
         <div class="settings-site-form settings-panel-scroll no-scrollbar">
+          <div id="settingsPrintApiSettingsBody" class="settings-site-form">
           <div class="settings-site-field" id="settingsPrintApiStoreField">
             <label class="field-label">ФИЛИАЛ</label>
             <select class="control" id="settingsPrintApiStore"></select>
@@ -1360,8 +1367,11 @@
               <input class="hidden" type="text" id="settingsPrintApiMessageSoundUrl" readonly />
             </div>
           </div>
+          </div>
+          <div id="settingsPrintApiQueueBody" class="hidden"></div>
         </div>
         <div class="panel-footer">
+          <div id="settingsPrintApiQueueBulk" class="products-bulk-footer-actions"></div>
           <div class="product-footer-actions">
             <div class="product-footer-view" id="settingsPrintApiFooterView">
               <button class="product-footer-btn product-footer-edit" type="button" id="settingsPrintApiEditBtn">Редактировать</button>
