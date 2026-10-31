@@ -48,6 +48,18 @@ const {
 
 module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can }) {
   const router = express.Router();
+  router.use((req,res,next)=>{
+    if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
+    const affectsCheckout = req.path === '/' || /^\/(stores|delivery-zones|delivery-settings|order-time-options|order-delivery-types|order-payments|order-statuses)(?:\/|$)/.test(req.path);
+    if (affectsCheckout) res.once('finish',()=>{
+      if(res.statusCode>=200 && res.statusCode<300) {
+        void require('../../services/catalog-sync').recordTenantChange({db,tenantId:helpers.getTenantId(req),entityType:'checkout_settings',operation:'upsert'})
+          .catch(error=>console.error('CHECKOUT_SETTINGS_PUBLISH_FAILED:',error));
+      }
+    });
+    next();
+  });
+
   const devPwaTunnelStatePath = path.resolve(__dirname, '../../tmp/dev-pwa-tunnel.json');
   const DEV_PWA_TUNNEL_VALIDATE_CACHE_MS = 30_000;
   let devPwaTunnelValidationCache = {

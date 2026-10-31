@@ -27023,7 +27023,8 @@ function applySheetAddressTitle(backMode = "cart") {
       const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
       const data = await resp.json();
       if (data?.ok && Array.isArray(data.stores)) {
-        window._pickupStores = data.stores;
+        window._pickupStores = Array.isArray(window.__shopOrderConfig?.checkoutStores)
+            ? window._pickupStores : data.stores;
         ensureValidSelectedPickupStoreId(window._pickupStores);
       }
     } catch {}
@@ -27728,27 +27729,7 @@ function renderSheetAddressList() {
     return "";
   }
   function getStoreStatusInfo(store) {
-    if (!Array.isArray(store.storeHours) || !store.storeHours.length) return null;
-    const tz = Number.isNaN(Number(store.timezone)) ? 0 : Number(store.timezone);
-    const now = new Date();
-    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
-    const localMs = utcMs + tz * 60 * 60 * 1000;
-    const localDate = new Date(localMs);
-    const currentDay = localDate.getDay();
-    const entry = store.storeHours.find(h => Number(h.day_of_week) === currentDay);
-    if (!entry || Number(entry.is_closed) === 1) return { open: false, text: "Закрыто — выходной" };
-    const opens = entry.opens_at ? entry.opens_at.slice(0, 5) : "";
-    const closes = entry.closes_at ? entry.closes_at.slice(0, 5) : "";
-    if (!opens || !closes) return null;
-    const hhmm = localDate.getHours() * 60 + localDate.getMinutes();
-    const [oh, om] = opens.split(":").map(Number);
-    const [ch, cm] = closes.split(":").map(Number);
-    const openMin = oh * 60 + om;
-    const closeMin = ch * 60 + cm;
-    if (hhmm >= openMin && hhmm < closeMin) {
-      return { open: true, text: `Открыто до ${closes}` };
-    }
-    return { open: false, text: `Закрыто до ${opens}` };
+    return window.getShopStoreScheduleStatus(store);
   }
 
   let mobileSelectedPickupCity = null;
@@ -35948,6 +35929,7 @@ function setBottomNavActive(tab) {
   let orderConfigPromise = null;
 
   async function getOrderConfig() {
+    if(window.ensureShopCheckoutSettings && !document.body?.classList.contains('page-kso')) {orderConfigCache=await window.ensureShopCheckoutSettings();return orderConfigCache;}
     if (!orderConfigCache && typeof window.getShopOrderConfigSnapshot === "function") {
       orderConfigCache = window.getShopOrderConfigSnapshot();
     }
@@ -35973,6 +35955,20 @@ function setBottomNavActive(tab) {
     return orderConfigPromise;
   }
 
+  window.addEventListener('shop:storefront-schedules', () => {
+    if (pickupSheetWrap.getClientRects().length > 0) renderSheetPickupList();
+    if (pickupInlineList.getClientRects().length > 0) void renderInlinePickupList();
+    void updateStoreStatus();
+  });
+
+  window.addEventListener('shop:checkout-settings',event=>{
+    const config=event.detail;
+    if(!config)return;
+    orderConfigCache=config;
+    if(config.deliverySettings)commitDeliverySettingsCache(config.deliverySettings,{validatedAt:Date.now()});
+    clearDeliveryQuoteMemoryCache();
+  });
+
   const DELIVERY_SETTINGS_PERSISTENT_CACHE_KEY = "shop_delivery_settings_cache_v1";
   const DELIVERY_SETTINGS_PERSISTENT_CACHE_MAX_ENTRIES = 8;
   const DELIVERY_SETTINGS_PERSISTENT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -35997,9 +35993,10 @@ function setBottomNavActive(tab) {
     const scopeKey = buildDeliveryCacheScopeKey();
     const cachedSettings = getCachedDeliverySettingsForCurrentScope();
     if (cachedSettings) {
-      void ensureFreshDeliverySettingsInBackground("delivery-settings-cache");
+
       return cachedSettings;
     }
+    if(window.ensureShopCheckoutSettings){const config=await window.ensureShopCheckoutSettings();if(config?.deliverySettings)return commitDeliverySettingsCache(config.deliverySettings,{scopeKey,validatedAt:Date.now()});}
     if (deliverySettingsPromise) return deliverySettingsPromise;
     if (deliverySettingsValidationPromise) return deliverySettingsValidationPromise;
     deliverySettingsPromise = apiJson("/api/public/delivery-settings")
@@ -36166,6 +36163,8 @@ function setBottomNavActive(tab) {
       price_tiers: priceTiers,
       default_store_id: normalizeDeliveryCacheId(source.default_store_id),
       delivery_revision: normalizeDeliveryRevisionValue(source.delivery_revision),
+      zones: Array.isArray(source.zones) ? source.zones : null,
+      store_address_map_enabled: source.store_address_map_enabled !== false,
     };
   }
 
@@ -36227,6 +36226,34 @@ function setBottomNavActive(tab) {
         : (normalized.free_delivery_from != null ? Number(normalized.free_delivery_from) : null),
       price_tiers: priceTiers,
     };
+  }
+
+  function buildLocalDeliveryQuoteForAddress(settings,subtotal,address) {
+    const fallback=buildLocalDeliveryQuoteFromSettings(settings,subtotal);
+    const lat=Number(address?.lat),lng=Number(address?.lng);
+    if(address?.lat==null || address?.lng==null || !Number.isFinite(lat) || !Number.isFinite(lng) || settings.store_address_map_enabled===false)return fallback;
+    const inRing=ring=>{
+      if(!Array.isArray(ring) || ring.length<4)return false;
+      let inside=false;
+      for(let index=0,previous=ring.length-1;index<ring.length;previous=index++) {
+        const [x,y]=ring[index],[px,py]=ring[previous];
+        const cross=(lng-x)*(py-y)-(lat-y)*(px-x);
+        if(Math.abs(cross)<=1e-10 && (lng-x)*(lng-px)+(lat-y)*(lat-py)<=1e-10)return true;
+        if((y>lat)!==(py>lat) && lng<(px-x)*(lat-y)/(py-y)+x)inside=!inside;
+      }
+      return inside;
+    };
+    const zone=settings.zones.find(row=>{
+      if(Number(row.is_active)!==1 || !row.geometry)return false;
+      const polygons=row.geometry.type==='Polygon'?[row.geometry.coordinates]:row.geometry.coordinates;
+      return Array.isArray(polygons) && polygons.some(polygon=>Array.isArray(polygon) && inRing(polygon[0]) && !polygon.slice(1).some(inRing));
+    });
+    if(!zone)return fallback;
+    const storeIds=(zone.store_ids || []).map(Number).filter(id=>id>0).sort((a,b)=>a-b);
+    return buildLocalDeliveryQuoteFromCachedCondition({source:'zone',has_settings:true,
+      delivery_zone_id:Number(zone.id),delivery_zone_name:zone.name,price_tiers:zone.price_tiers || [],
+      eta_minutes:zone.eta_minutes,delivery_store_id:storeIds[0] || fallback.delivery_store_id,
+      default_store_id:fallback.default_store_id,delivery_revision:settings.delivery_revision},subtotal);
   }
 
   function buildLocalDeliveryQuoteFromSettings(rawSettings, subtotal) {
@@ -36781,6 +36808,7 @@ function setBottomNavActive(tab) {
   }
 
   function ensureFreshDeliverySettingsInBackground(reason = "background") {
+    if(window.ensureShopCheckoutSettings)return window.ensureShopCheckoutSettings().then(config=>config?.deliverySettings?commitDeliverySettingsCache(config.deliverySettings,{validatedAt:Date.now()}):getCachedDeliverySettingsForCurrentScope());
     if (!reason) {
       // keep signature flexible for warm callers
     }
@@ -36991,6 +37019,11 @@ function setBottomNavActive(tab) {
     }
 
     let defaultSettings = getCachedDeliverySettingsForCurrentScope();
+    if(window.ensureShopCheckoutSettings && !Array.isArray(defaultSettings?.zones)) {
+      const config=await window.ensureShopCheckoutSettings();
+      if(config?.deliverySettings)defaultSettings=commitDeliverySettingsCache(config.deliverySettings,{scopeKey:cacheMeta.scopeKey,validatedAt:Date.now()});
+    }
+    if(Array.isArray(defaultSettings?.zones))return storeDeliveryQuoteInMemory(cacheMeta,buildLocalDeliveryQuoteForAddress(defaultSettings,amount,address));
     if (!hasUsableDeliveryAddressCoordinates(cacheMeta.addressMeta)) {
       if (!defaultSettings) {
         defaultSettings = await getDeliverySettings();
@@ -37674,7 +37707,8 @@ function setBottomNavActive(tab) {
 
       const { storeIsOpen, storeHours, storeTimezone } = config;
 
-      if (storeIsOpen) {
+      const now = new Date(Date.now() + (Number(storeTimezone) || 0) * 3600000);
+      if (window.ShopCheckoutSchedule.allows({ hours: storeHours }, now, now.getUTCHours() * 60 + now.getUTCMinutes())) {
         setStatus(statusEl, false);
         return;
       }
@@ -38174,7 +38208,7 @@ function setBottomNavActive(tab) {
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   }
 
-  function buildTimeSlots(option, targetDate, storeTimezone) {
+  function buildTimeSlots(option, targetDate, storeTimezone, schedule = null) {
     if (!option) return [];
     let start = parseTimeToMinutes(option.starts_at);
     let end = parseTimeToMinutes(option.ends_at);
@@ -38210,7 +38244,8 @@ function setBottomNavActive(tab) {
     const slots = [];
     const limit = Math.min(end, 24 * 60 - 1);
     while (slot <= limit) {
-      slots.push(formatMinutesToTime(slot));
+      const localDay=new Date(`${targetKey}T00:00:00Z`);
+      if(!schedule || window.ShopCheckoutSchedule.allows(schedule,localDay,slot))slots.push(formatMinutesToTime(slot));
       slot += stepMinutes;
     }
     return slots;
@@ -38559,7 +38594,7 @@ function setBottomNavActive(tab) {
       delayMs: 0,
     })).catch(() => {});
 
-    const cfg = orderConfigCache || await getOrderConfig();
+    const cfg = await getOrderConfig();
     let defaultDeliverySettings = getCartPricingCachedDeliverySettings();
     const initialPricingSnapshot = buildCartPricingSnapshot();
     const initialDeliverySubtotal = initialPricingSnapshot && initialPricingSnapshot.visible !== false
@@ -39979,6 +40014,9 @@ function setBottomNavActive(tab) {
     wrap.appendChild(timeLabel);
 
     const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
+    for(const [code,title] of [['asap','\u0411\u044b\u0441\u0442\u0440\u0435\u0435'],['at_time','\u041a\u043e \u0432\u0440\u0435\u043c\u0435\u043d\u0438'],['on_date','\u041d\u0430 \u0434\u0430\u0442\u0443']]) {
+      if(!timeOptions.some(option=>option.code===code))timeOptions.push({code,title});
+    }
     const storeTimezone = cfg.storeTimezone || "+0";
     const timeOptionByCodeInitial = (cfg.timeOptions || []).reduce((acc, option) => {
       if (option && option.code) acc[option.code] = option;
@@ -40009,30 +40047,18 @@ function setBottomNavActive(tab) {
     }
 
     function getCheckoutTimeScheduleContext() {
-      const methodCode = String(methodSelect?.getValue?.() || methodDefault || "takeaway").trim();
-      if (methodCode === "delivery") {
-        const deliveryStore = findCheckoutStoreById(state.selectedAddress?.delivery_store_id);
-        const hours = Array.isArray(deliveryStore?.delivery_hours) && deliveryStore.delivery_hours.length
-          ? deliveryStore.delivery_hours
-          : (Array.isArray(cfg.storeDeliveryHours) && cfg.storeDeliveryHours.length ? cfg.storeDeliveryHours : cfg.storeHours || []);
-        const timezone = String(deliveryStore?.timezone || storeTimezone || "+0").trim() || "+0";
-        return {
-          hours,
-          timezone,
-          isOpen: deliveryStore ? isHoursOpenNow(hours, timezone) : Boolean(cfg.deliveryIsOpen),
-        };
-      }
-
-      const pickupStore = findCheckoutStoreById(selectedPickupStoreId);
-      const hours = Array.isArray(pickupStore?.storeHours) && pickupStore.storeHours.length
-        ? pickupStore.storeHours
-        : (Array.isArray(cfg.storeHours) ? cfg.storeHours : []);
-      const timezone = String(pickupStore?.timezone || storeTimezone || "+0").trim() || "+0";
-      return {
-        hours,
-        timezone,
-        isOpen: pickupStore ? isHoursOpenNow(hours, timezone) : Boolean(cfg.storeIsOpen),
-      };
+      const methodCode=String(methodSelect?.getValue?.() || methodDefault || 'takeaway');
+      const storeId=methodCode==='delivery' ? (deliveryQuote?.delivery_store_id || state.selectedAddress?.delivery_store_id || cfg.deliverySettings?.default_store_id || cfg.settingsStoreId) : (selectedPickupStoreId || cfg.settingsStoreId);
+      const store=(cfg.checkoutStores || []).find(row=>Number(row.id)===Number(storeId));
+      const pointHours=store?.storeHours || (Number(storeId)===Number(cfg.settingsStoreId)?cfg.storeHours:[]);
+      const deliveryHours=store?.delivery_hours || cfg.storeDeliveryHours || [];
+      const sets=[pointHours || []];
+      if(methodCode==='delivery' && Number(store?.use_delivery_hours ?? 1)===1)sets.push(deliveryHours);
+      const timezone=String(store?.timezone || cfg.storeTimezone || '+0');
+      const now=getStoreDateNow(timezone);
+      const schedule={hours:pointHours || [],sets,timezone};
+      schedule.isOpen=window.ShopCheckoutSchedule.allows(schedule,now,now.getUTCHours()*60+now.getUTCMinutes());
+      return schedule;
     }
 
     function getCheckoutTimeTimezone() {
@@ -40040,35 +40066,19 @@ function setBottomNavActive(tab) {
     }
 
     function getCheckoutAvailableTimeState() {
+      const selectedMethod=methodSelect.getValue() || methodDefault || 'takeaway';
+      if(!(cfg.methods || []).some(method=>method.code===selectedMethod))return {availableOptions:[],fallbackCode:''};
       const schedule = getCheckoutTimeScheduleContext();
-      const timeSegment = getTimeSegment(schedule.isOpen, schedule.timezone, schedule.hours);
-      let filteredTimeOptions = timeOptions;
-      let defaultFallback = "asap";
-
-      if (timeSegment === "OPEN") {
-        filteredTimeOptions = timeOptions;
-        defaultFallback = "asap";
-      } else if (timeSegment === "CLOSED_BEFORE_MIDNIGHT") {
-        filteredTimeOptions = timeOptions.filter(opt => opt.code === "on_date");
-        defaultFallback = "on_date";
-      } else if (timeSegment === "CLOSED_AFTER_MIDNIGHT") {
-        filteredTimeOptions = timeOptions.filter(opt => opt.code === "at_time" || opt.code === "on_date");
-        defaultFallback = "at_time";
-      }
-
-      const atTimeOption = timeOptionByCodeInitial.at_time;
-      if (atTimeOption && Number(atTimeOption.has_time_window) === 1) {
-        const atTimeSlots = buildTimeSlots(atTimeOption, null, schedule.timezone);
-        if (!atTimeSlots.length) {
-          filteredTimeOptions = filteredTimeOptions.filter(opt => opt.code !== "at_time");
-          if (defaultFallback === "at_time") defaultFallback = "on_date";
-        }
-      }
-
-      const availableOptions = filteredTimeOptions.length ? filteredTimeOptions : timeOptions;
+      const atTimeOption=timeOptionByCodeInitial.at_time;
+      const todaySlots=atTimeOption?buildTimeSlots(atTimeOption,null,schedule.timezone,schedule):[];
+      const onDateOption=timeOptionByCodeInitial.on_date;
+      const futureSlots=onDateOption && getCheckoutSelectableDates(7).some(date=>buildTimeSlots(onDateOption,date,schedule.timezone,schedule).length>0);
+      const configured=new Set((cfg.timeOptions || []).map(option=>option.code));
+      const availableOptions=timeOptions.filter(option=>configured.has(option.code) && (option.code==='asap'?schedule.isOpen:option.code==='at_time'?todaySlots.length>0:option.code==='on_date' && futureSlots));
+      const defaultFallback=schedule.isOpen?'asap':todaySlots.length?'at_time':'on_date';
       const fallbackCode = availableOptions.some(opt => opt.code === defaultFallback)
         ? defaultFallback
-        : (availableOptions[0]?.code || defaultFallback);
+        : (availableOptions[0]?.code || '');
       return { availableOptions, fallbackCode };
     }
 
@@ -40308,6 +40318,11 @@ function setBottomNavActive(tab) {
       timeModesGrid.appendChild(card);
     });
     timeSection.root.appendChild(timeModesGrid);
+    const timeUnavailableNote=document.createElement('div');
+    timeUnavailableNote.className='muted hidden';
+    timeUnavailableNote.setAttribute('role','status');
+    timeUnavailableNote.textContent='\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u0432\u0440\u0435\u043c\u0435\u043d\u0438 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u044f';
+    timeSection.root.appendChild(timeUnavailableNote);
     checkoutMainSection.appendChild(timeSection.root);
 
     // --- Рендер календаря ---
@@ -40479,6 +40494,7 @@ function setBottomNavActive(tab) {
       }
       const nextState = getCheckoutAvailableTimeState();
       currentAvailableTimeOptions = nextState.availableOptions;
+      timeUnavailableNote.classList.toggle('hidden',currentAvailableTimeOptions.length>0);
       currentAvailableTimeCodes = new Set(currentAvailableTimeOptions.map((option) => option.code));
 
       const selectedCode = timeSelect.getValue();
@@ -40498,7 +40514,7 @@ function setBottomNavActive(tab) {
       if (!currentAvailableTimeCodes.has("at_time")) return;
       const config = timeOptionByCode.at_time;
       timeSelect.setValue("at_time", false);
-      const initialSlots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
+      const initialSlots = buildTimeSlots(config, null, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
       let selectedSlot = initialSlots.includes(timeInput.value)
         ? timeInput.value
         : (initialSlots[0] || "");
@@ -40525,7 +40541,7 @@ function setBottomNavActive(tab) {
           body.appendChild(scroll);
 
           const renderSlots = () => {
-            const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
+            const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
             slotsGrid.innerHTML = "";
             if (!slots.length) {
               const empty = document.createElement("div");
@@ -40630,7 +40646,7 @@ function setBottomNavActive(tab) {
           };
 
           const renderSlots = () => {
-            const slots = buildTimeSlots(config, sheetDate, getCheckoutTimeTimezone());
+            const slots = buildTimeSlots(config, sheetDate, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
             slotsGrid.innerHTML = "";
             if (!slots.length) {
               const empty = document.createElement("div");
@@ -40757,7 +40773,7 @@ function setBottomNavActive(tab) {
         }
         dateSlotsWrap.style.display = "";
         dateRow2.classList.add("is-combined");
-        const slots = buildTimeSlots(config, selectedDate, getCheckoutTimeTimezone());
+        const slots = buildTimeSlots(config, selectedDate, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
         const slotOptions = slots.map(value => ({ code: value, title: value }));
         const preferred = timeInput.value || storedDraftTime || "";
         const defaultSlot = slotOptions.find(slot => slot.code === preferred)
@@ -40777,7 +40793,7 @@ function setBottomNavActive(tab) {
         return;
       }
       dateRow2.classList.remove("is-combined");
-      const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
+      const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
       const slotOptions = slots.map(value => ({ code: value, title: value }));
       const preferred = timeInput.value || storedDraftTime || "";
       const defaultSlot = slotOptions.find(slot => slot.code === preferred)
@@ -40803,6 +40819,45 @@ function setBottomNavActive(tab) {
       updateTimeSlotsOptions();
     });
     refreshCheckoutTimeAvailability();
+    let checkoutTimeTimer=0;
+    let checkoutTimeSignature='';
+    function syncCheckoutClock(force=false) {
+      if(isKsoCheckout || !isCheckoutViewCurrent())return;
+      const schedule=getCheckoutTimeScheduleContext();
+      const stateNow=getCheckoutAvailableTimeState();
+      const option=timeOptionByCode[timeSelect.getValue()];
+      const slots=option?buildTimeSlots(option,timeSelect.getValue()==='on_date'?selectedDate:null,schedule.timezone,schedule):[];
+      const signature=JSON.stringify([schedule.isOpen,stateNow.availableOptions.map(row=>row.code),slots]);
+      if(force || signature!==checkoutTimeSignature) {
+        checkoutTimeSignature=signature;
+        refreshCheckoutTimeAvailability();
+      }
+      clearTimeout(checkoutTimeTimer);
+      checkoutTimeTimer=setTimeout(()=>syncCheckoutClock(),window.ShopCheckoutSchedule.nextDelay(schedule,cfg.timeOptions || []));
+    }
+    const resumeCheckoutClock=()=>{if(!document.hidden)syncCheckoutClock();};
+    const updateCheckoutSettings=event=>{
+      if(!isCheckoutViewCurrent() || isKsoCheckout)return;
+      Object.assign(cfg,event.detail);
+      Object.keys(timeOptionByCode).forEach(key=>delete timeOptionByCode[key]);
+      Object.keys(timeOptionByCodeInitial).forEach(key=>delete timeOptionByCodeInitial[key]);
+      (cfg.timeOptions || []).forEach(option=>{timeOptionByCode[option.code]=option;timeOptionByCodeInitial[option.code]=option;});
+      defaultDeliverySettings=cfg.deliverySettings || defaultDeliverySettings;
+      syncCheckoutClock(true);
+      void refreshCheckoutDeliveryRulesInBackground({reason:'settings-change'});
+    };
+    window.addEventListener('shop:checkout-settings',updateCheckoutSettings);
+    document.addEventListener('visibilitychange',resumeCheckoutClock);
+    window.addEventListener('focus',resumeCheckoutClock);
+    window.addEventListener('pageshow',resumeCheckoutClock);
+    registerCheckoutCleanup(()=>{
+      clearTimeout(checkoutTimeTimer);
+      window.removeEventListener('shop:checkout-settings',updateCheckoutSettings);
+      document.removeEventListener('visibilitychange',resumeCheckoutClock);
+      window.removeEventListener('focus',resumeCheckoutClock);
+      window.removeEventListener('pageshow',resumeCheckoutClock);
+    });
+    syncCheckoutClock(true);
 
     function getDeliveryCostForTotal(baseTotal) {
       if (Array.isArray(deliveryRules.priceTiers) && deliveryRules.priceTiers.length) {
@@ -41692,6 +41747,7 @@ function setBottomNavActive(tab) {
       }
       deliveryQuote = needsDeliveryQuote ? (nextDeliveryQuote || deliveryQuote) : null;
       deliveryRules = buildCheckoutDeliveryRules(deliveryQuote);
+      syncCheckoutClock();
       updateDeliveryPricing();
       void refreshOnlinePaymentAvailability();
     }
@@ -42077,6 +42133,12 @@ function setBottomNavActive(tab) {
 
     if (actions?.submitBtn) {
       actions.submitBtn.onclick = async () => {
+        if(!isKsoCheckout) {
+          syncCheckoutClock();
+          if(!getCheckoutAvailableTimeState().availableOptions.some(option=>option.code===timeSelect.getValue())) {
+            showCheckoutToast('\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u0432\u0440\u0435\u043c\u0435\u043d\u0438 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u044f');return;
+          }
+        }
         let resolvedItems = cartItemsResolved();
         if (!resolvedItems.length) {
           alert("В корзине нет доступных товаров для оформления");
@@ -42470,6 +42532,17 @@ function setBottomNavActive(tab) {
         return;
       }
 
+      if(!isKsoCheckout) {
+        const available=getCheckoutAvailableTimeState().availableOptions;
+        const validCode=available.some(option=>option.code===payload.time_option_code);
+        const option=timeOptionByCode[payload.time_option_code];
+        const schedule=getCheckoutTimeScheduleContext();
+        const validSlot=payload.time_option_code==='asap' || (option && buildTimeSlots(option,payload.time_option_code==='on_date'?selectedDate:null,schedule.timezone,schedule).includes(timeInput.value));
+        if(!validCode || !validSlot) {
+          syncCheckoutClock(true);
+          showCheckoutToast('\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0435 \u0432\u0440\u0435\u043c\u044f \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u043e\u0441\u044c. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0432\u044b\u0431\u043e\u0440.');return;
+        }
+      }
       if ((payload.time_option_code === "at_time" || payload.time_option_code === "on_date")) {
         if (!timeInput.value) {
           alert("Укажите время");

@@ -3109,7 +3109,7 @@ const listenTarget = resolveListenTarget();
 const server = listenTarget.path
   ? app.listen(listenTarget.path)
   : app.listen(listenTarget.port, listenTarget.host);
-createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer, submitOrder: publicShopRouter.submitOrder });
+createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer, submitOrder: publicShopRouter.submitOrder, loadCheckoutSettings: publicShopRouter.loadCheckoutSettings });
 createOrdersWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer });
 createAdminOrderCommandsHub({ server, dispatch(message, res) {
   return new Promise((resolve, reject) => {

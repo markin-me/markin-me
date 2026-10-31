@@ -8725,6 +8725,14 @@
 
 
     const settingsStoreSaveBtn = document.getElementById("settingsStoreSaveBtn");
+    let storeAddressSaveBaseline = null;
+    function storeAddressSaveSignature(value) {
+      return JSON.stringify(['city','address_context_locality','address_street','address_house'].map(key=>String(value?.[key] || '').trim()).concat(isStoreAddressMapModeEnabled()?String(settingsStoreAddressLookup?.value || '').trim():''));
+    }
+    function storeCustomCoordinatesSignature() {
+      return JSON.stringify([storeAddressMapState.customLat ?? null,storeAddressMapState.customLng ?? null]);
+    }
+
 
 
 
@@ -40957,6 +40965,13 @@
 
 
         const addressData = getStoreAddressFormPayload();
+        const savingTab=storeTabs.get(activeRightTabId);
+        const savingStoreId=Number(savingTab?.storeId || storesState.selectedId || 0);
+        const addressChanged=savingTab?.mode==='create' || !storeAddressSaveBaseline
+          || storeAddressSaveBaseline.storeId!==savingStoreId
+          || storeAddressSaveBaseline.signature!==storeAddressSaveSignature(addressData);
+        const coordinatesChanged=!storeAddressSaveBaseline || storeAddressSaveBaseline.coordinates!==storeCustomCoordinatesSignature();
+
 
 
 
@@ -41120,7 +41135,7 @@
 
 
 
-        if (!payload.city) {
+        if (addressChanged && !payload.city) {
 
 
 
@@ -41140,7 +41155,7 @@
 
 
 
-        if (!payload.address) {
+        if (addressChanged && !payload.address) {
 
 
 
@@ -41180,7 +41195,7 @@
 
 
 
-        if (mapModeEnabled) {
+        if (mapModeEnabled && addressChanged) {
 
 
 
@@ -41248,6 +41263,10 @@
 
 
 
+        if (!addressChanged) {
+          for(const key of ['city','address','address_context_locality','address_street','address_house','resolved_city_source_key','selected_source_key','selected_object_type','selected_context_locality','typed_house_part'])delete payload[key];
+          if(!coordinatesChanged){delete payload.lat;delete payload.lng;}
+        }
         await submitStoreSaveWithNormalization(payload, tabData);
 
 
@@ -42616,6 +42635,7 @@
       loadStoreTelegramBindings(store.id);
 
       loadStoreMaxBindings(store.id);
+      storeAddressSaveBaseline={storeId:Number(store.id),signature:storeAddressSaveSignature(getStoreAddressFormPayload()),coordinates:storeCustomCoordinatesSignature()};
 
 
 

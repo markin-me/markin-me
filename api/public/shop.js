@@ -19402,46 +19402,53 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return Date.now() + offsetMinutes * 60 * 1000;
   }
 
-  function isStoreDeliveryOpenNow(hours, timezoneOffset) {
-    if (!Array.isArray(hours) || !hours.length) return false;
-    if (!timezoneOffset && timezoneOffset !== 0) timezoneOffset = "+0";
-    const ts = getStoreLocalTimestamp(timezoneOffset);
-    const local = new Date(ts);
-    const day = local.getUTCDay();
-    const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
-    const entry = hours.find((row) => Number(row.day_of_week) === day);
-    if (!entry) return false;
-    if (Number(entry.is_closed) === 1) return false;
-    const opens = parseDeliveryTimeMinutes(entry.opens_at);
-    const closes = parseDeliveryTimeMinutes(entry.closes_at);
-    if (opens === null || closes === null) return false;
-    return minutes >= opens && minutes < closes;
-  }
+  function isStoreDeliveryOpenNow(hours, timezoneOffset) { return isStoreOpenNow(hours,timezoneOffset); }
 
   /**
    * Check if store is currently open (based on regular hours, not delivery hours)
    */
   function isStoreOpenNow(hours, timezoneOffset) {
-    if (!Array.isArray(hours) || !hours.length) return false;
-    if (!timezoneOffset && timezoneOffset !== 0) timezoneOffset = "+0";
-    const ts = getStoreLocalTimestamp(timezoneOffset);
-    const local = new Date(ts);
-    const day = local.getUTCDay();
-    const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
-    const entry = hours.find((row) => Number(row.day_of_week) === day);
-    if (!entry) return false;
-    if (Number(entry.is_closed) === 1) return false;
-    const opens = parseDeliveryTimeMinutes(entry.opens_at);
-    const closes = parseDeliveryTimeMinutes(entry.closes_at);
-    if (opens === null || closes === null) return false;
-    return minutes >= opens && minutes < closes;
+    const local=new Date(getStoreLocalTimestamp(timezoneOffset || '+0'));
+    const minute=local.getUTCHours()*60+local.getUTCMinutes(),day=local.getUTCDay();
+    for(const shift of [-1,0])for(const row of (Array.isArray(hours)?hours:[])) {
+      if(Number(row.day_of_week)!==(day+shift+7)%7 || Number(row.is_closed)===1)continue;
+      const start=parseDeliveryTimeMinutes(row.opens_at),end=parseDeliveryTimeMinutes(row.closes_at);
+      if(start==null || end==null)continue;
+      if(minute>=start+shift*1440 && minute<(end<=start?end+1440:end)+shift*1440)return true;
+    }
+    return false;
   }
 
   // ------------------------------
   // order-config (Р Т‘Р В»РЎРЏ Р С•РЎвЂћР С•РЎР‚Р СР В»Р ВµР Р…Р С‘РЎРЏ)
   // Р вЂ™Р С’Р вЂ“Р СњР С›: РЎвЂљР Р†Р С•Р в„– РЎвЂћРЎР‚Р С•Р Р…РЎвЂљ Р В¶Р Т‘РЎвЂРЎвЂљ methods / payments / timeOptions
   // ------------------------------
+  async function loadCheckoutSettingsRevision(tenantId, storeId) {
+    const [rows] = await db.query("SELECT COALESCE(MAX(id),0) AS revision FROM catalog_changes WHERE tenant_id=? AND store_id=? AND entity_type='checkout_settings'",[tenantId,storeId]);
+    return String(rows[0]?.revision || '0');
+  }
+
+  async function loadCheckoutStores(tenantId) {
+    const [[stores],[hours],[delivery]] = await Promise.all([
+      db.query('SELECT id,name,address,city,timezone,is_active,use_delivery_hours FROM ten_stores WHERE tenant_id=? AND is_active=1 ORDER BY id',[tenantId]),
+      db.query('SELECT store_id,day_of_week,opens_at,closes_at,is_closed FROM ten_store_hours WHERE tenant_id=?',[tenantId]),
+      db.query('SELECT store_id,day_of_week,opens_at,closes_at,is_closed FROM ten_store_delivery_hours WHERE tenant_id=?',[tenantId]),
+    ]);
+    return stores.map(store=>({...store,storeHours:hours.filter(row=>Number(row.store_id)===Number(store.id)),delivery_hours:delivery.filter(row=>Number(row.store_id)===Number(store.id))}));
+  }
+
   async function loadPublicOrderConfigPayload(req) {
+    const tenant=helpers.getTenantId(req),store=helpers.getStoreId(req);
+    for(let attempt=0;attempt<3;attempt++) {
+      const before=await loadCheckoutSettingsRevision(tenant,store);
+      const data=await readPublicOrderConfigPayload(req);
+      if(before===await loadCheckoutSettingsRevision(tenant,store))return {...data,settingsRevision:before};
+    }
+    throw new Error('CHECKOUT_SETTINGS_CHANGING');
+  }
+  router.loadCheckoutSettings=({tenantId,storeId})=>loadPublicOrderConfigPayload({headers:{'x-tenant-id':String(tenantId),'x-store-id':String(storeId)},query:{}});
+
+  async function readPublicOrderConfigPayload(req) {
     const tenantId = helpers.getTenantId(req);
     const storeId = helpers.getStoreId(req);
     const isKsoConfig = String(req.query?.kso || '').trim() === '1';
@@ -19517,6 +19524,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId]
       );
 
+      const [checkoutStores,deliverySettings,settingsRevision] = await Promise.all([
+        loadCheckoutStores(tenantId),loadPublicDeliverySettingsPayload(req),loadCheckoutSettingsRevision(tenantId,storeId),
+      ]);
       const storeIsOpen = isStoreOpenNow(storeHours, storeTimezone);
       const deliveryIsOpen = isStoreDeliveryOpenNow(deliveryHours, storeTimezone);
       const tenantMapConfig = await getTenantMapConfig(db, tenantId);
@@ -19528,6 +19538,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       timeOptions,
       storeHours,
       storeDeliveryHours: deliveryHours,
+      checkoutStores,deliverySettings,settingsRevision,settingsSchema:1,settingsStoreId:storeId,settingsTenantId:tenantId,
       storeTimezone,
       storeIsOpen,
       deliveryIsOpen,
@@ -26391,8 +26402,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
    * GET /api/public/delivery-settings
    * Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”Р С‘ Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р С‘ Р Т‘Р В»РЎРЏ РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР С–Р С• РЎвЂћР С‘Р В»Р С‘Р В°Р В»Р В°
    */
-  router.get('/delivery-settings', async (req, res) => {
-    try {
+  async function loadPublicDeliverySettingsPayload(req) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const tenantMapConfig = await getTenantMapConfig(db, tenantId);
@@ -26409,9 +26419,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         zones: deliveryZones,
         storeAddressMapEnabled,
       });
-      return res.json({
-        ok: true,
-        data: {
+      return {
           delivery_cost: Number(defaultSettings.delivery_cost || 0),
           min_order_amount: Number(defaultSettings.min_order_amount || 0),
           free_delivery_from: defaultSettings.free_delivery_from != null ? Number(defaultSettings.free_delivery_from) : null,
@@ -26422,14 +26430,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           has_settings: Boolean(defaultSettings.has_settings),
           delivery_revision: deliveryRevision,
           store_address_map_enabled: storeAddressMapEnabled,
-        }
-      });
-
-        // Р СњР ВµРЎвЂљ Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР С” - Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р В° Р В±Р ВµРЎРѓР С—Р В»Р В°РЎвЂљР Р…Р В°РЎРЏ, Р В±Р ВµР В· Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘Р в„–
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
+        };
+  }
+  router.get('/delivery-settings', async (req, res) => {
+    try { res.json({ok:true,data:await loadPublicDeliverySettingsPayload(req)}); }
+    catch(error) { console.error(error);res.status(500).json({ok:false,error:'DB_ERROR'}); }
   });
 
   registerCheckoutBenefitsPreviewProvider({

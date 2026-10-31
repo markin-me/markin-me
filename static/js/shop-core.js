@@ -474,14 +474,154 @@
     return applyPriceRoundingSettings(config, { persist });
   }
 
-  function setShopOrderConfigSnapshot(config, { persistRounding = true } = {}) {
+  // Local weekly intervals; include the previous day's overnight interval.
+  function checkoutScheduleIntervals(hours,date) {
+    const weekday=date.getUTCDay(),rows=[];
+    const minutes=value=>{const match=String(value || '').match(/^(\d{1,2}):(\d{2})/);return match?Number(match[1])*60+Number(match[2]):null;};
+    for(const shift of [-1,0]) {
+      const day=(weekday+shift+7)%7;
+      for(const entry of (Array.isArray(hours)?hours:[]).filter(row=>Number(row.day_of_week)===day && Number(row.is_closed)!==1)) {
+        const start=minutes(entry.opens_at),end=minutes(entry.closes_at);
+        if(start==null || end==null)continue;
+        rows.push([start+shift*1440,(end<=start?end+1440:end)+shift*1440]);
+      }
+    }
+    return rows;
+  }
+  function checkoutScheduleAllows(schedule,date,minute) {
+    return (schedule.sets || [schedule.hours]).every(hours=>checkoutScheduleIntervals(hours,date).some(([start,end])=>minute>=start && minute<end));
+  }
+  function checkoutScheduleNextDelay(schedule,options=[]) {
+    const offset=(Number(schedule.timezone)||0)*3600000,now=Date.now()+offset;
+    const date=new Date(now),midnight=Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate());
+    let next=midnight+86400000;
+    for(let day=0;day<8;day++) {
+      const target=new Date(midnight+day*86400000);
+      for(const hours of schedule.sets || [schedule.hours])for(const [start,end] of checkoutScheduleIntervals(hours,target)) {
+        for(const value of [start,end]) {const at=midnight+day*86400000+value*60000;if(at>now)next=Math.min(next,at);}
+      }
+    }
+    // Slot expiry also changes today's selectable times without a server request.
+    for(const option of options) {
+      const start=String(option.starts_at || '00:00').split(':').map(Number);
+      const step=Math.max(1,Number(option.step_minutes)||30),lead=Math.max(0,Number(option.lead_minutes)||0);
+      const base=midnight+((start[0]*60+(start[1]||0))-lead+1)*60000;
+      const boundary=base+(Math.floor((now-base)/(step*60000))+1)*step*60000;
+      if(boundary>now)next=Math.min(next,boundary);
+    }
+    return Math.max(100,Math.min(2147483647,next-now+50));
+  }
+  window.ShopCheckoutSchedule={intervals:checkoutScheduleIntervals,allows:checkoutScheduleAllows,nextDelay:checkoutScheduleNextDelay};
+
+  let checkoutSettingsDbPromise = null;
+  const checkoutSettingsRequests = new Map();
+  const checkoutSettingsWantedVersions = new Map();
+  function checkoutSettingsScope() { return `${tenantId}:${getActiveStoreId()}:site:v1`; }
+  function checkoutSettingsDb() {
+    if(checkoutSettingsDbPromise)return checkoutSettingsDbPromise;
+    checkoutSettingsDbPromise=new Promise((resolve,reject)=>{
+      if(!window.indexedDB){reject(new Error('INDEXEDDB_UNAVAILABLE'));return;}
+      const request=indexedDB.open('shop-checkout-settings',1);
+      request.onupgradeneeded=()=>{if(!request.result.objectStoreNames.contains('settings'))request.result.createObjectStore('settings');};
+      request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();checkoutSettingsDbPromise=null;};resolve(request.result);};
+      request.onerror=()=>{checkoutSettingsDbPromise=null;reject(request.error);};
+      request.onblocked=()=>console.error('Checkout settings IndexedDB upgrade blocked');
+    });
+    return checkoutSettingsDbPromise;
+  }
+  async function checkoutSettingsStorage(mode,key,value) {
+    const db=await checkoutSettingsDb();
+    return new Promise((resolve,reject)=>{
+      const transaction=db.transaction('settings',mode),store=transaction.objectStore('settings');
+      const request=mode==='readonly'?store.get(key):store.put(value,key);
+      transaction.oncomplete=()=>resolve(request.result || null);
+      transaction.onerror=()=>reject(transaction.error);
+      transaction.onabort=()=>reject(transaction.error || new Error('SETTINGS_CACHE_ABORTED'));
+    });
+  }
+  async function ensureShopCheckoutSettings({refresh=false}={}) {
+    if(document.body?.classList.contains('page-kso'))return getShopOrderConfigSnapshot();
+    const scope=checkoutSettingsScope();
+    const current=getShopOrderConfigSnapshot();
+    if(!refresh && current?.settingsSchema===1 && Number(current.settingsStoreId)===Number(getActiveStoreId()) && Number(current.settingsTenantId)===Number(tenantId))return current;
+    if(checkoutSettingsRequests.has(scope))return checkoutSettingsRequests.get(scope);
+    const task=(async()=>{
+      if(!refresh){
+        try {
+          const cached=await checkoutSettingsStorage('readonly',scope);
+          if(scope!==checkoutSettingsScope())throw new Error('CHECKOUT_SCOPE_CHANGED');
+          if(cached?.settingsSchema===1)return setShopOrderConfigSnapshot(cached,{persistSettings:false});
+        }catch(error){console.error('Checkout settings cache read failed:',error);}
+      }
+      const storeId=getActiveStoreId();
+      const response=await fetch('/api/public/order-config',{headers:{'x-tenant-id':String(tenantId),'x-store-id':String(storeId)},cache:'no-store'});
+      const json=await response.json();
+      if(!response.ok || !json?.ok || !json.data)throw new Error(json?.error || 'CHECKOUT_SETTINGS_LOAD_FAILED');
+      if(scope!==checkoutSettingsScope())throw new Error('CHECKOUT_SCOPE_CHANGED');
+      return setShopOrderConfigSnapshot(json.data);
+    })().finally(()=>checkoutSettingsRequests.delete(scope));
+    checkoutSettingsRequests.set(scope,task);
+    return task;
+  }
+  window.ensureShopCheckoutSettings=ensureShopCheckoutSettings;
+
+  function setShopOrderConfigSnapshot(config, { persistRounding = true, persistSettings = true } = {}) {
     const normalizedConfig = config && typeof config === "object" ? config : null;
+    if(normalizedConfig?.settingsSchema===1 && (Number(normalizedConfig.settingsStoreId)!==Number(getActiveStoreId()) || Number(normalizedConfig.settingsTenantId)!==Number(tenantId)))return getShopOrderConfigSnapshot();
+    const previous=getShopOrderConfigSnapshot();
+    if(previous?.settingsSchema===1 && normalizedConfig?.settingsSchema===1
+      && Number(previous.settingsStoreId)===Number(normalizedConfig.settingsStoreId)
+      && Number(previous.settingsTenantId)===Number(normalizedConfig.settingsTenantId)
+      && String(previous.settingsRevision)===String(normalizedConfig.settingsRevision))return previous;
+    if(normalizedConfig?.settingsSchema===1 && previous?.settingsSchema===1
+      && Number(previous.settingsStoreId)===Number(normalizedConfig.settingsStoreId)
+      && /^\d+$/.test(String(previous.settingsRevision)) && /^\d+$/.test(String(normalizedConfig.settingsRevision))
+      && BigInt(String(normalizedConfig.settingsRevision))<BigInt(String(previous.settingsRevision))
+      && !(String(normalizedConfig.settingsRevision)==='0' && checkoutSettingsWantedVersions.get(checkoutSettingsScope())==='0'))return previous;
     window.__shopOrderConfig = normalizedConfig;
     if (normalizedConfig) {
       applyPriceRoundingSettingsFromOrderConfig(normalizedConfig, { persist: persistRounding });
+      if(normalizedConfig.settingsSchema===1 && !document.body?.classList.contains('page-kso')) {
+        if(Number(normalizedConfig.settingsStoreId)!==Number(getActiveStoreId()) || Number(normalizedConfig.settingsTenantId)!==Number(tenantId))return null;
+        if(persistSettings)void checkoutSettingsStorage('readwrite',checkoutSettingsScope(),normalizedConfig).catch(error=>console.error('Checkout settings cache write failed:',error));
+        window.dispatchEvent(new CustomEvent('shop:checkout-settings',{detail:normalizedConfig}));
+      }
     }
     return window.__shopOrderConfig || null;
   }
+
+  let storefrontScheduleTimer = null;
+  function syncStorefrontSchedules() {
+    const config = window.__shopOrderConfig;
+    if (!Array.isArray(config?.checkoutStores) || document.body.classList.contains('page-kso')) return;
+    const previous = window._pickupStores || [];
+    window._pickupStores = config.checkoutStores.map(store => {
+      const merged = { ...previous.find(row => Number(row.id) === Number(store.id)), ...store };
+      const date = new Date(Date.now() + (Number(store.timezone) || 0) * 3600000);
+      const minute = date.getUTCHours() * 60 + date.getUTCMinutes();
+      merged.isOpen = checkoutScheduleAllows({ hours: store.storeHours }, date, minute);
+      return merged;
+    });
+    syncImmediateCartHeaderHoursText(window._deliveryMode);
+    updateCartModeHeaderUi();
+    updateCartHeaderStoreStatus();
+    updateMobileHeaderStoreStatus();
+    const visible = element => element && element.getClientRects().length > 0;
+    if (visible(elAddressPickupList)) void renderAddressPickupList();
+    if (visible(elPickupList)) renderPickupList();
+    window.dispatchEvent(new CustomEvent('shop:storefront-schedules'));
+    clearTimeout(storefrontScheduleTimer);
+    const delays = config.checkoutStores.map(store => checkoutScheduleNextDelay({
+      timezone: store.timezone,
+      sets: [store.storeHours || [], ...(Number(store.use_delivery_hours) === 1 ? [store.delivery_hours || []] : [])],
+    }));
+    if (delays.length) storefrontScheduleTimer = setTimeout(syncStorefrontSchedules, Math.min(...delays));
+  }
+  window.addEventListener('shop:checkout-settings', syncStorefrontSchedules);
+  const resumeStorefrontSchedules = () => { if (!document.hidden) syncStorefrontSchedules(); };
+  window.addEventListener('focus', resumeStorefrontSchedules);
+  window.addEventListener('pageshow', resumeStorefrontSchedules);
+  document.addEventListener('visibilitychange', resumeStorefrontSchedules);
 
   function getShopOrderConfigSnapshot() {
     return window.__shopOrderConfig && typeof window.__shopOrderConfig === "object"
@@ -501,6 +641,12 @@
 
   window.setShopOrderConfigSnapshot = setShopOrderConfigSnapshot;
   window.getShopOrderConfigSnapshot = getShopOrderConfigSnapshot;
+  if(!document.body?.classList.contains('page-kso')) {
+    const startupScope=checkoutSettingsScope();
+    void checkoutSettingsStorage('readonly',startupScope).then(cached=>{
+      if(cached?.settingsSchema===1 && startupScope===checkoutSettingsScope() && !getShopOrderConfigSnapshot()?.settingsSchema)setShopOrderConfigSnapshot(cached,{persistSettings:false});
+    }).catch(error=>console.error('Checkout settings startup cache failed:',error));
+  }
 
   function parseBooleanFlag(value) {
     if (typeof value === "boolean") return value;
@@ -5311,6 +5457,19 @@
             }
           }
         }
+        if(payload.type==='checkout.settings.changed' || payload.type==='checkout.settings.version') {
+          const scope=checkoutSettingsScope();
+          checkoutSettingsWantedVersions.set(scope,String(payload.revision));
+          void ensureShopCheckoutSettings().then(config=>{
+            if(scope===checkoutSettingsScope() && String(config?.settingsRevision)!==String(payload.revision) && socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'checkout.settings.get'}));
+          }).catch(error=>console.error('Checkout settings sync failed:',error));
+        }
+        if(payload.type==='checkout.settings.snapshot') {
+          setShopOrderConfigSnapshot(payload.data);
+          const desired=checkoutSettingsWantedVersions.get(checkoutSettingsScope());
+          if(desired && desired!=='resync' && /^\d+$/.test(desired) && BigInt(desired)>BigInt(String(payload.data?.settingsRevision || '0')) && socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'checkout.settings.get'}));
+          else checkoutSettingsWantedVersions.delete(checkoutSettingsScope());
+        }
         shopRealtimeListeners.forEach((listener) => {
           try { listener(payload); }
           catch (error) { console.error("Shop realtime subscriber failed:", error); }
@@ -10041,7 +10200,8 @@
         const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
         const data = await resp.json().catch(() => null);
         if (resp.ok && data?.ok && Array.isArray(data.stores)) {
-          window._pickupStores = data.stores;
+          window._pickupStores = Array.isArray(window.__shopOrderConfig?.checkoutStores)
+            ? window._pickupStores : data.stores;
           return data.stores;
         }
       } catch (e) {
@@ -10147,6 +10307,7 @@
   let cartHeaderOrderConfigPromise = null;
 
   async function ensureOrderConfigForHeader() {
+    if(!document.body?.classList.contains('page-kso'))return ensureShopCheckoutSettings();
     const existingConfig = getShopOrderConfigSnapshot();
     if (existingConfig) {
       applyPriceRoundingSettingsFromOrderConfig(existingConfig, { persist: true });
@@ -11790,7 +11951,8 @@ async function showAddressFormView(prefill, editingId, backMode) {
       if (tenantId) {
         const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
         const data = await resp.json();
-        if (data?.ok && Array.isArray(data.stores)) window._pickupStores = data.stores;
+        if (data?.ok && Array.isArray(data.stores)) window._pickupStores = Array.isArray(window.__shopOrderConfig?.checkoutStores)
+            ? window._pickupStores : data.stores;
       }
     } catch {}
   }
@@ -12151,29 +12313,17 @@ function showProductView() {
   function getStoreStatusInfoForList(store) {
     if (!Array.isArray(store?.storeHours) || !store.storeHours.length) return null;
     const tz = Number.isNaN(Number(store.timezone)) ? 0 : Number(store.timezone);
-    const now = new Date();
-    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
-    const localMs = utcMs + tz * 60 * 60 * 1000;
-    const localDate = new Date(localMs);
-    const currentDay = localDate.getDay();
-    const entry = store.storeHours.find((h) => Number(h.day_of_week) === currentDay);
-    if (!entry || Number(entry.is_closed) === 1) return { open: false, text: "Закрыто - выходной" };
-
-    const opens = entry.opens_at ? String(entry.opens_at).slice(0, 5) : "";
-    const closes = entry.closes_at ? String(entry.closes_at).slice(0, 5) : "";
-    if (!opens || !closes) return null;
-
-    const hhmm = localDate.getHours() * 60 + localDate.getMinutes();
-    const [oh, om] = opens.split(":").map(Number);
-    const [ch, cm] = closes.split(":").map(Number);
-    const openMin = oh * 60 + om;
-    const closeMin = ch * 60 + cm;
-
-    if (hhmm >= openMin && hhmm < closeMin) {
-      return { open: true, text: `Открыто до ${closes}` };
+    const date = new Date(Date.now() + tz * 3600000);
+    const minute = date.getUTCHours() * 60 + date.getUTCMinutes();
+    const interval = checkoutScheduleIntervals(store.storeHours, date).find(([start, end]) => minute >= start && minute < end);
+    if (interval) {
+      const end = ((interval[1] % 1440) + 1440) % 1440;
+      return { open: true, text: `\u041e\u0442\u043a\u0440\u044b\u0442\u043e \u0434\u043e ${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}` };
     }
-    return { open: false, text: `Закрыто до ${opens}` };
+    const next = findNextStoreOpeningForList(store.storeHours, store.timezone);
+    return { open: false, text: next?.time ? `\u0417\u0430\u043a\u0440\u044b\u0442\u043e \u0434\u043e ${next.time}` : '\u0417\u0430\u043a\u0440\u044b\u0442\u043e - \u0432\u044b\u0445\u043e\u0434\u043d\u043e\u0439' };
   }
+  window.getShopStoreScheduleStatus = getStoreStatusInfoForList;
 
   function ensureValidPickupStoreIdForAddressList(stores) {
     const ids = (Array.isArray(stores) ? stores : [])
@@ -12228,7 +12378,8 @@ function showProductView() {
       const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
       const data = await resp.json();
       if (data?.ok && Array.isArray(data.stores)) {
-        window._pickupStores = data.stores;
+        window._pickupStores = Array.isArray(window.__shopOrderConfig?.checkoutStores)
+            ? window._pickupStores : data.stores;
         ensureValidPickupStoreIdForAddressList(window._pickupStores);
         return window._pickupStores;
       }

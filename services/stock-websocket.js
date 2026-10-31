@@ -8,7 +8,7 @@ function positiveId(value) {
   return Number.isFinite(number) && number > 0 ? Math.trunc(number) : null;
 }
 
-function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer, submitOrder }) {
+function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer, submitOrder, loadCheckoutSettings }) {
   const rooms = new Map();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
@@ -37,12 +37,16 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
         });
       }
     }) || null;
+    room.unsubscribeSettings = catalogSync.subscribe(tenantId,storeId,change=>{
+      if(change.entity_type==='checkout_settings') broadcast(room,{type:'checkout.settings.changed',revision:change.revision});
+    });
     rooms.set(key, room);
     return room;
   }
   function destroyRoom(room) {
     if (room.sockets.size) return;
     try { room.unsubscribe?.(); } catch (_) {}
+    room.unsubscribeSettings?.();
     rooms.delete(roomKey(room.tenantId, room.storeId));
   }
 
@@ -71,9 +75,13 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
     socket.isAlive = true;
     room.sockets.add(socket);
     send(socket, { type: "ready", revision: room.revision, order_commands: Boolean(submitOrder) });
+    void db.query("SELECT COALESCE(MAX(id),0) AS revision FROM catalog_changes WHERE tenant_id=? AND store_id=? AND entity_type='checkout_settings'",[room.tenantId,room.storeId])
+      .then(([rows])=>send(socket,{type:'checkout.settings.version',revision:String(rows[0]?.revision || '0')}))
+      .catch(error=>console.error('CHECKOUT_SETTINGS_VERSION_FAILED:',error));
     socket.on("pong", () => { socket.isAlive = true; });
     let authVersion = 0;
     let commandRunning = false;
+    let settingsLoading = false;
     socket.customerId = null;
     socket.customerToken = "";
     socket.on("error", () => socket.terminate());
@@ -111,6 +119,15 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
           if (version !== authVersion || socket.readyState !== WebSocket.OPEN) return;
           socket.customerId = customer ? Number(customer.id) : null;
           send(socket, { type: customer ? "customer.ready" : "customer.expired" });
+        }
+        if(message.type==='checkout.settings.get' && loadCheckoutSettings) {
+          if(settingsLoading)return;
+          settingsLoading=true;
+          try {
+            const settings=await loadCheckoutSettings({tenantId:room.tenantId,storeId:room.storeId});
+            send(socket,{type:'checkout.settings.snapshot',data:settings});
+          } finally { settingsLoading=false; }
+          return;
         }
         if (message.type !== "order.create" || !submitOrder) return;
         const requestId = String(message.request_id || "");
@@ -170,11 +187,14 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
         if (page.reset_required) {
           room.revision = await catalogSync.getManifest({ db, tenantId: room.tenantId, storeId: room.storeId });
           broadcast(room, { type: "stock.resync", revision: room.revision });
+          broadcast(room,{type:'checkout.settings.changed',revision:'resync'});
           return;
         }
         const ids = [...new Set((page.changes || [])
           .filter((change) => String(change.operation || "") === "stock")
           .map((change) => positiveId(change.entity_id)).filter(Boolean))];
+        const settingsChanges=(page.changes || []).filter(change=>change.entity_type==='checkout_settings');
+        if(settingsChanges.length)broadcast(room,{type:'checkout.settings.changed',revision:settingsChanges[settingsChanges.length-1].revision});
         room.revision = page.next_revision || room.revision;
         if (ids.length) broadcast(room, {
           type: "stock.changed", revision: room.revision,
