@@ -278,6 +278,13 @@
               <span class="badge">Открыть</span>
             </div>
           </button>
+          <% for (const [type, title] of [['assembly', 'Лист сборки заказа'], ['assembly_batch', 'Общий лист сборки'], ['delivery', 'Лист доставки']]) { %>
+          <button class="settings-home-card settings-card" id="settingsPrintTemplate-<%= type %>-Card" type="button">
+            <div class="product-avatar"><i class="fas fa-print"></i></div>
+            <div class="order-col"><div class="product-title"><%= title %></div><div class="muted">HTML-шаблон · лента 80 мм</div></div>
+            <div class="order-col"><span class="badge">Открыть</span></div>
+          </button>
+          <% } %>
         </div>
       </div>
     </div>

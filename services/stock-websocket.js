@@ -49,7 +49,7 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
   server.on("upgrade", async (request, socket, head) => {
     let url;
     try { url = new URL(request.url, "http://localhost"); } catch (_) { socket.destroy(); return; }
-    if (url.pathname === "/api/orders-ws") return;
+    if (url.pathname === "/api/orders-ws" || url.pathname === "/api/admin/orders-ws") return;
     if (url.pathname !== "/api/stock-ws") { socket.destroy(); return; }
     if (request.headers.origin) {
       try {
@@ -291,4 +291,73 @@ function createOrdersWebSocketHub({ server, db, ordersEvents, authenticateCustom
   return { wss };
 }
 
-module.exports = { createStockWebSocketHub, createOrdersWebSocketHub };
+// Admin commands use the existing authenticated HTTP handlers through a response adapter.
+function createAdminOrderCommandsHub({ server, dispatch }) {
+  const { EventEmitter } = require('events');
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  server.on('upgrade', (request, socket, head) => {
+    let url;
+    try { url = new URL(request.url, 'http://localhost'); } catch (_) { return; }
+    if (url.pathname !== '/api/admin/orders-ws') return;
+    try {
+      if (!request.headers.origin || new URL(request.headers.origin).host !== request.headers.host) { socket.destroy(); return; }
+    } catch (_) { socket.destroy(); return; }
+    wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws));
+  });
+  wss.on('connection', socket => {
+    socket.isAlive = true;
+    let running = false;
+    const send = value => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); };
+    socket.on('error', () => socket.terminate());
+    socket.on('pong', () => { socket.isAlive = true; });
+    send({ type: 'ready' });
+    socket.on('message', async raw => {
+      let message;
+      try { message = JSON.parse(String(raw)); } catch (_) { socket.close(1008, 'Invalid command'); return; }
+      if (!message || !['order.create', 'order.update'].includes(message.type)
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(message.request_id || ''))
+          || !message.body || typeof message.body !== 'object' || Array.isArray(message.body)
+          || !positiveId(message.store_id) || (message.type === 'order.update' && !positiveId(message.order_id))) {
+        socket.close(1008, 'Invalid command'); return;
+      }
+      const reply = (status, payload) => send({ type: 'order.result', request_id: message.request_id, status, payload });
+      if (running) { reply(429, { ok: false, error: 'ORDER_SUBMISSION_BUSY' }); return; }
+      running = true;
+      const response = new EventEmitter();
+      response.statusCode = 200;
+      response.headersSent = false;
+      response.status = code => { response.statusCode = code; return response; };
+      const headers = new Map();
+      response.setHeader = (key, value) => headers.set(String(key).toLowerCase(), value);
+      response.getHeader = key => headers.get(String(key).toLowerCase());
+      response.json = payload => {
+        if (response.headersSent) return response;
+        response.headersSent = true;
+        reply(response.statusCode, payload);
+        response.emit('finish');
+        return response;
+      };
+      response.end = () => response.json({ ok: false, error: 'SESSION_CLOSED' });
+      try {
+        await dispatch(message, response);
+      } catch (error) {
+        console.error('Admin order command failed:', error);
+        response.status(500).json({ ok: false, error: 'ORDER_COMMAND_FAILED' });
+      } finally {
+        running = false;
+      }
+    });
+  });
+  const heartbeat = setInterval(() => {
+    wss.clients.forEach(socket => {
+      if (!socket.isAlive) { socket.terminate(); return; }
+      socket.isAlive = false;
+      socket.ping();
+    });
+  }, 30000);
+  heartbeat.unref?.();
+  wss.on('close', () => clearInterval(heartbeat));
+  return { wss };
+}
+
+module.exports = { createStockWebSocketHub, createOrdersWebSocketHub, createAdminOrderCommandsHub };

@@ -2785,6 +2785,7 @@
     clientCompletedNextOffset: 0,
     clientCompletedHasMore: false,
     clientCompletedLoading: false,
+    clientCompletedRequestToken: 0,
     clientCompletedLoaded: false,
     clientCompletedError: false,
     clientPassportCache: new Map(),
@@ -3481,6 +3482,7 @@
           completedOrders: sanitizeCachedOrders(item.completedOrders),
           completedNextOffset: Number(item.completedNextOffset || 0),
           completedHasMore: item.completedHasMore === true,
+          completedLoaded: item.completedLoaded === true || (Array.isArray(item.completedOrders) && item.completedOrders.length > 0),
         });
       });
       return out;
@@ -3506,6 +3508,7 @@
           completedOrders: sanitizeCachedOrders(item?.completedOrders),
           completedNextOffset: Number(item?.completedNextOffset || 0),
           completedHasMore: item?.completedHasMore === true,
+          completedLoaded: item?.completedLoaded === true,
         };
       });
       localStorage.setItem(CLIENT_DETAILS_CACHE_KEY, JSON.stringify(payload));
@@ -3531,6 +3534,7 @@
       completedOrders: sanitizeCachedOrders(entry.completedOrders),
       completedNextOffset: Number(entry.completedNextOffset || 0),
       completedHasMore: entry.completedHasMore === true,
+      completedLoaded: entry.completedLoaded === true,
       updatedAt,
     };
   }
@@ -3547,6 +3551,7 @@
       completedOrders: [],
       completedNextOffset: 0,
       completedHasMore: false,
+      completedLoaded: false,
       updatedAt: 0,
     };
     const nextClient = Object.prototype.hasOwnProperty.call(patch, "client")
@@ -3572,6 +3577,7 @@
       discounts: nextDiscounts,
       activeOrder: nextActiveOrder || null,
       completedOrders: nextCompletedOrders,
+      completedLoaded: Object.prototype.hasOwnProperty.call(patch, "completedLoaded") ? patch.completedLoaded === true : prev.completedLoaded === true,
       completedNextOffset: Object.prototype.hasOwnProperty.call(patch, "completedNextOffset") ? Number(patch.completedNextOffset || 0) : prev.completedNextOffset,
       completedHasMore: Object.prototype.hasOwnProperty.call(patch, "completedHasMore") ? patch.completedHasMore === true : prev.completedHasMore,
     });
@@ -3591,7 +3597,7 @@
     try {
       const data = await window.AdminPersistentCache.read(clientCacheKey(clientId));
       if (data && typeof data === 'object') {
-        setCachedClientDetails(clientId, data);
+        setCachedClientDetails(clientId, {...data, completedLoaded: data.completedLoaded === true || (Array.isArray(data.completedOrders) && data.completedOrders.length > 0)});
         return getCachedClientDetails(clientId);
       }
     } catch (err) { console.warn('Client cache read failed:', err); }
@@ -26940,7 +26946,17 @@
       card.onclick = () => openOrderTab(o.id);
       clientCompletedOrdersList.appendChild(card);
     });
-    if (clientCompletedOrdersMore) clientCompletedOrdersMore.classList.toggle('hidden', !state.clientCompletedHasMore);
+    if (state.clientCompletedLoading) {
+      const loading = document.createElement('div');
+      loading.className = 'muted';
+      loading.setAttribute('role', 'status');
+      loading.textContent = '\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0438\u0441\u0442\u043e\u0440\u0438\u0438\u2026';
+      clientCompletedOrdersList.appendChild(loading);
+    }
+    if (clientCompletedOrdersMore) {
+      clientCompletedOrdersMore.classList.toggle('hidden', !state.clientCompletedHasMore);
+      clientCompletedOrdersMore.disabled = state.clientCompletedLoading;
+    }
   }
 
   async function loadMoreClientCompletedOrders() {
@@ -26949,25 +26965,29 @@
     state.clientCompletedError = false;
     renderClientCompletedOrders();
     const requestClientId = Number(state.activeClientId);
+    const requestToken = ++state.clientCompletedRequestToken;
     try {
       const clientId = requestClientId;
       const offset = state.clientCompletedNextOffset;
       const json = await apiJson(`/api/admin/clients/${clientId}/orders?view=completed&limit=10&offset=${offset}`);
-      if (Number(state.activeClientId) !== clientId) return;
+      if (Number(state.activeClientId) !== clientId || requestToken !== state.clientCompletedRequestToken) return;
       const rows = Array.isArray(json.data) ? json.data : [];
       state.clientCompletedOrders.push(...rows);
       state.clientCompletedNextOffset = Number(json.next_offset ?? offset + rows.length);
       state.clientCompletedHasMore = json.has_more === true;
       state.clientCompletedLoaded = true;
-      renderClientCompletedOrders();
       const cached = getCachedClientDetails(state.activeClientId) || {};
-      setCachedClientDetails(state.activeClientId, { completedOrders: state.clientCompletedOrders, completedNextOffset: state.clientCompletedNextOffset, completedHasMore: state.clientCompletedHasMore });
+      setCachedClientDetails(state.activeClientId, { completedOrders: state.clientCompletedOrders, completedNextOffset: state.clientCompletedNextOffset, completedHasMore: state.clientCompletedHasMore, completedLoaded: true });
+      saveClientPassportSnapshot();
     } catch (err) {
+      if (Number(state.activeClientId) !== requestClientId || requestToken !== state.clientCompletedRequestToken) return;
       console.error(err);
       state.clientCompletedError = true;
-      renderClientCompletedOrders();
     } finally {
-      if (Number(state.activeClientId) === requestClientId) state.clientCompletedLoading = false;
+      if (Number(state.activeClientId) === requestClientId && requestToken === state.clientCompletedRequestToken) {
+        state.clientCompletedLoading = false;
+        renderClientCompletedOrders();
+      }
     }
   }
 
@@ -27224,12 +27244,18 @@
     const requestedClientId = Number(clientId || 0);
     void ensureClientBenefitsSnapshot(requestedClientId).catch(() => {});
     const previousClientId = Number(state.activeClientId || 0);
+    if (previousClientId !== requestedClientId) {
+      state.clientCompletedRequestToken += 1;
+      state.clientCompletedLoading = false;
+      state.clientCompletedError = false;
+    }
     if (previousClientId > 0 && previousClientId !== requestedClientId) saveClientPassportSnapshot();
     const passportSnapshot = getClientPassportSnapshot(requestedClientId);
     const dirty = getClientPassportDirty(requestedClientId);
     if (passportSnapshot && !dirty.base && !dirty.addresses && !dirty.orders) {
       state.activeClientId = requestedClientId;
       restoreClientPassportSnapshot(passportSnapshot);
+      if (passportSnapshot.completedExpanded && !state.clientCompletedLoaded) void loadMoreClientCompletedOrders();
       hideEmptyState();
       forceShowClientProfilePanel();
       return;
@@ -27241,9 +27267,7 @@
     forceShowClientProfilePanel();
     const activeId = Number(state.activeClientId || 0);
     const cached = getCachedClientDetails(activeId) || await hydrateClientCache(activeId);
-    const hasCachedAddresses = !!(cached && Array.isArray(cached.addresses) && cached.addresses.length);
-    const hasCachedOrders = !!(cached && Array.isArray(cached.orders) && cached.orders.length);
-    const useCacheOnlyForPreload = isChatBridgeMode && !!cached;
+    if (requestToken !== clientProfileRequestToken || !isExpectedClientTabActive()) return;
 
     // highlight list
     $$(".order-row.is-active", document).forEach((n) => n.classList.remove("is-active"));
@@ -27258,20 +27282,28 @@
       renderAddresses();
       renderClientDiscounts();
       state.clientActiveOrder = cached.activeOrder || null;
-      if (Array.isArray(cached.completedOrders)) {
-        state.clientCompletedOrders = cached.completedOrders.slice();
-        state.clientCompletedNextOffset = Number(cached.completedNextOffset || 0);
-        state.clientCompletedHasMore = cached.completedHasMore === true;
-        state.clientCompletedLoaded = cached.completedOrders.length > 0 || state.clientCompletedHasMore === false;
-      }
     }
     if (passportSnapshot && !dirty.addresses) {
       state.addresses = passportSnapshot.addresses.slice();
       renderAddresses();
     }
-    if (passportSnapshot && !dirty.orders) {
-      state.clientActiveOrder = passportSnapshot.activeOrder || state.clientActiveOrder;
-    }
+    state.clientActiveOrder = !dirty.orders && passportSnapshot
+      ? passportSnapshot.activeOrder || null : cached?.activeOrder || null;
+    renderClientActiveOrder();
+
+    const history = !dirty.orders ? (passportSnapshot || cached) : null;
+    state.clientCompletedOrders = history?.completedOrders?.slice() || [];
+    state.clientCompletedNextOffset = Number(history?.completedNextOffset || 0);
+    state.clientCompletedHasMore = history?.completedHasMore === true;
+    state.clientCompletedLoaded = history?.completedLoaded === true;
+    state.clientCompletedError = history?.completedError === true;
+    renderClientCompletedOrders();
+    if (clientCompletedOrdersAccordion) clientCompletedOrdersAccordion.open = passportSnapshot?.completedExpanded === true;
+    if (clientCompletedOrdersAccordion?.open && !state.clientCompletedLoaded) void loadMoreClientCompletedOrders();
+    const preloadTasks = [
+      loadAddresses({preferCache:true,refresh:dirty.addresses || !passportSnapshot}),
+      loadClientActiveOrder(activeId,{preferCache:true,refresh:dirty.orders || !passportSnapshot}),
+    ];
 
     let loadedClient = passportSnapshot?.client || null;
     try {
@@ -27308,21 +27340,6 @@
     showOrdersList();
     setContentTab(passportSnapshot?.activeContentTab || "addresses");
 
-    state.clientCompletedOrders = dirty.orders ? [] : (passportSnapshot?.completedOrders?.slice() || []);
-    state.clientCompletedNextOffset = dirty.orders ? 0 : Number(passportSnapshot?.completedNextOffset || 0);
-    state.clientCompletedHasMore = dirty.orders ? false : passportSnapshot?.completedHasMore === true;
-    state.clientCompletedLoaded = dirty.orders ? false : passportSnapshot?.completedLoaded === true;
-    state.clientCompletedError = dirty.orders ? false : passportSnapshot?.completedError === true;
-    renderClientCompletedOrders();
-    if (clientCompletedOrdersAccordion) clientCompletedOrdersAccordion.open = passportSnapshot?.completedExpanded === true;
-
-    const preloadTasks = [
-      loadAddresses({
-        preferCache: true,
-        refresh: dirty.addresses || (!passportSnapshot && (useCacheOnlyForPreload ? !hasCachedAddresses : true)),
-      }),
-      loadClientActiveOrder(activeId, { preferCache: true, refresh: dirty.orders || (!passportSnapshot && (!useCacheOnlyForPreload || !cached?.activeOrder)) }),
-    ];
     await Promise.allSettled(preloadTasks);
     if (requestToken !== clientProfileRequestToken) return;
     if (!isExpectedClientTabActive()) return;

@@ -26,7 +26,8 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
   }
 
   async function fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone) {
-    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !(Number(orderId) > 0)) return [];
+    const ids=Array.isArray(orderId)?orderId:[orderId];
+    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !ids.length || ids.some(id=>!(Number(id)>0))) return [];
     try {
       const [rows] = await db.query(
         `
@@ -57,10 +58,10 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
           ON ri.tenant_id=r.tenant_id
          AND ri.store_id=r.store_id
          AND ri.refund_id=r.id
-        WHERE r.tenant_id=? AND r.store_id=? AND r.order_id=?
+        WHERE r.tenant_id=? AND r.store_id=? AND r.order_id IN (${ids.map(()=>'?').join(',')})
         ORDER BY r.created_at DESC, r.id DESC, ri.id ASC
         `,
-        [tenantId, storeId, orderId]
+        [tenantId, storeId, ...ids]
       );
 
       const refunds = [];
@@ -131,12 +132,15 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     };
   }
 
-  async function buildOrderTemplateHtml(tenantId, storeId, orderId) {
-    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !(Number(orderId) > 0)) {
+  async function buildOrderTemplateHtml(tenantId, storeId, orderId, options = {}) {
+    const ids=Array.isArray(orderId)?orderId:[orderId];
+    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !ids.length || ids.some(id=>!(Number(id)>0))) {
       return null;
     }
+    const printData=options.printData;
+    if(printData && (Number(printData.tenantId)!==Number(tenantId) || Number(printData.storeId)!==Number(storeId)))throw new Error('PRINT_SCOPE_CHANGED');
 
-    const [orderRows] = await db.query(
+    const [orderRows] = printData ? [printData.orders.has(Number(orderId))?[structuredClone(printData.preparedOrders.get(Number(orderId)) || printData.orders.get(Number(orderId)))]:[]] : await db.query(
       `
       SELECT
         o.id, o.public_id,
@@ -144,6 +148,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         o.customer_id, o.customer_name, o.customer_phone,
         o.address, o.comment, o.address_comment, o.cutlery_qty,
         o.change_from, o.total_price, o.delivery_cost,
+        o.is_paid, o.payment_projection, o.manual_paid_at, o.online_payment_total, o.online_payment_required, o.online_payment_status,
         o.discount_amount, o.discounts_json, o.benefits_meta_json, o.items, o.promo_code,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id, o.payment_id, o.time_option_id, o.status_id,
@@ -155,7 +160,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         t.code AS timeOptionCode, t.title AS timeOptionTitle,
         c.telegram_user_id AS customerTelegramId,
         ps.name AS pickupStoreName, ps.address AS pickupStoreAddress,
-        ca.comment AS address_comment_from_cust
+        ca.comment AS address_comment_from_cust, ca.entrance AS address_entrance, ca.floor AS address_floor, ca.apartment AS address_apartment
       FROM order_orders o
       LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
       LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
@@ -164,17 +169,34 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       LEFT JOIN cust_customers c ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
       LEFT JOIN ten_stores ps ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
       LEFT JOIN cust_customer_addresses ca ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
-      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? LIMIT 1
+      WHERE o.tenant_id=? AND o.store_id=? AND o.id IN (${ids.map(()=>'?').join(',')})
       `,
-      [tenantId, storeId, orderId]
+      [tenantId, storeId, ...ids]
     );
+
+    if(Array.isArray(orderId)){
+      const orders=new Map(orderRows.map(order=>[Number(order.id),order]));
+      if(ids.some(id=>!orders.has(Number(id))))throw new Error('ORDER_NOT_FOUND');
+      const storeTimezone=await getStoreTimezone(tenantId,storeId);
+      const refunds=await fetchRefundRecordsForOrder(tenantId,storeId,ids,storeTimezone);
+      const refundsByOrder=new Map();
+      for(const refund of refunds){const id=Number(refund.order_id);if(!refundsByOrder.has(id))refundsByOrder.set(id,[]);refundsByOrder.get(id).push(refund);}
+      const templateIds=options.templateIds || [];
+      if(!templateIds.length)throw new Error('BAD_PRINT_SELECTION');
+      const [templates]=await db.query(`SELECT id,document_type,template_html FROM print_templates WHERE tenant_id=? AND is_active=1 AND id IN (${templateIds.map(()=>'?').join(',')})`,[tenantId,...templateIds]);
+      const zoneProducts=new Map();
+      for(const product of options.productZones || []){const zone=Number(product.production_zone_id);if(!zoneProducts.has(zone))zoneProducts.set(zone,new Set());zoneProducts.get(zone).add(Number(product.id));}
+      return {tenantId,storeId,orders,preparedOrders:new Map(),storeTimezone,refundsByOrder,templates:new Map(templates.map(template=>[Number(template.id),template])),zoneProducts};
+    }
 
     if (!orderRows.length) {
       return null;
     }
 
     const order = orderRows[0];
+    const storeTimezone = printData ? printData.storeTimezone : await getStoreTimezone(tenantId, storeId);
 
+    if(!printData?.preparedOrders.has(Number(orderId))){
     let items = [];
     try {
       const parsed = order.items ? JSON.parse(order.items) : [];
@@ -189,7 +211,6 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
 
     order.items = items;
     order.discounts_json = discountsJson;
-    const storeTimezone = await getStoreTimezone(tenantId, storeId);
     order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
     order.scheduled_at = normalizeScheduledAtForPrint(order, storeTimezone) || order.scheduled_at;
     order.address_comment = (order.address_comment && String(order.address_comment).trim())
@@ -209,15 +230,43 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       order,
       buildOrderRefundState(
         order,
-        await fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone)
+        printData ? structuredClone(printData.refundsByOrder.get(Number(orderId)) || []) : await fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone)
       )
     );
-
-    const templateHtml = await getActivePrintTemplateHtml(tenantId, "receipt");
-    if (!templateHtml) {
-      throw new Error("PRINT_RECEIPT_TEMPLATE_NOT_CONFIGURED");
+    if(printData)printData.preparedOrders.set(Number(orderId),structuredClone(order));
     }
-    return generateReceiptHtmlForOrder(order, storeTimezone, templateHtml);
+
+    if (options.dataOnly) return { order, storeTimezone };
+    const [templates] = printData ? [[printData.templates.get(Number(options.templateId))].filter(Boolean)] : await db.query(`SELECT id, document_type, template_html FROM print_templates
+      WHERE tenant_id=? AND is_active=1 AND ${options.templateId ? 'id=?' : "document_type='receipt'"} ORDER BY id LIMIT 1`,
+      [tenantId, ...(options.templateId ? [options.templateId] : [])]);
+    const template = templates[0];
+    if (!template?.template_html) throw new Error("PRINT_TEMPLATE_NOT_CONFIGURED");
+    if (options.zoneId && ['assembly','label'].includes(template.document_type)) {
+      let allowed=printData?.zoneProducts.get(Number(options.zoneId));
+      if(!printData){
+        const [products] = await db.query('SELECT id FROM prod_products WHERE tenant_id=? AND production_zone_id=?', [tenantId, options.zoneId]);
+        allowed=new Set(products.map(product=>Number(product.id)));
+      }
+      if(!allowed)allowed=new Set();
+      order.items = getDisplayOrder(order).items.flatMap(item => {
+        if (item.type === 'combo') { const selections=(item.selections || []).filter(selection => allowed.has(Number(selection.product_id))); return selections.length ? [{...item,selections}] : []; }
+        return allowed.has(Number(item.product_id)) ? [item] : [];
+      });
+      delete order.remaining_order;
+      if (!order.items.length) return null;
+    }
+    if (template.document_type === 'delivery' && order.method_code !== 'delivery') return null;
+    const rendered=generateReceiptHtmlForOrder(order, storeTimezone, template.template_html, { ...options, documentType: template.document_type });
+    const statusCode=String(order.statusCode || '').trim().toLowerCase();
+    if(options.individualPrint && ['delivered','canceled','cancelled'].includes(statusCode)){
+      const canceled=statusCode!=='delivered';
+      const text=!canceled?'ВЫПОЛНЕН · ПОВТОРНАЯ ПЕЧАТЬ':template.document_type==='delivery'?'ОТМЕНЁН · НЕ ДОСТАВЛЯТЬ':['assembly','label'].includes(template.document_type)?'ОТМЕНЁН · НЕ ГОТОВИТЬ':'ЗАКАЗ ОТМЕНЁН';
+      const badge=`<div style="text-align:center;font-weight:bold;font-size:${template.document_type==='label'?'7pt':'13px'};border-bottom:1px solid #000;padding-bottom:1mm;margin-bottom:1mm">${escapeHtml(text)}</div>`;
+      const mark=html=>String(html).replace(/<body\b[^>]*>/i,tag=>tag+badge);
+      return Array.isArray(rendered)?rendered.map(part=>({...part,html:mark(part.html)})):mark(rendered);
+    }
+    return rendered;
   }
 
   async function getActivePrintTemplateHtml(tenantId, documentType) {
@@ -634,7 +683,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     });
   }
 
-  function generateReceiptHtmlForOrder(order, storeTimezone, templateHtml = "") {
+  function generateReceiptHtmlForOrder(order, storeTimezone, templateHtml = "", options = {}) {
     const receiptOrder = getDisplayOrder(order) || order;
     const hasRefunds = hasOrderRefunds(order);
     const createdAtStr = String(receiptOrder.created_at || "").replace(" ", "T");
@@ -671,8 +720,9 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       return Math.round(numeric) === numeric ? String(Math.round(numeric)) : numeric.toFixed(2);
     }
 
-    const receiptItems = Array.isArray(receiptOrder.items)
-      ? receiptOrder.items.slice().sort((a, b) => {
+    const sourceItems = options.items || receiptOrder.items;
+    const receiptItems = Array.isArray(sourceItems)
+      ? sourceItems.slice().sort((a, b) => {
           const aAuto = isAutoAddItem(a);
           const bAuto = isAutoAddItem(b);
           if (aAuto && !bAuto) return 1;
@@ -758,7 +808,11 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         : receiptTotalStr(lineTotal);
     }
 
-    function renderComboItem(item) {
+    function assemblyRow(name, composition, qty) {
+      const details = composition.replace(/receipt-composition-item--sub/g, 'sub').replace(/receipt-composition-item--group/g, 'group').replace(/receipt-composition-item/g, 'detail');
+      return `<tr><td class="check"><span class="box"></span></td><td><b>${name}</b>${details}</td><td class="qty">${escapeHtml(qty)}</td></tr>`;
+    }
+    function renderComboItem(item, assembly = false) {
       const name = escapeHtml(item?.name || item?.combo_title || "Комбо");
       const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
       const qtyStr = `${qty} x`;
@@ -789,6 +843,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
         : "";
 
+      if (assembly) return assemblyRow(name, compositionHtml, qty);
       return `
         <div class="receipt-item">
           <div class="receipt-item-row">
@@ -801,7 +856,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       `;
     }
 
-    function renderProductItem(item) {
+    function renderProductItem(item, assembly = false) {
       const rawName = String(item?.product_name || item?.name || "Товар").trim() || "Товар";
       const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
       const basePrice = parseFloat(item?.price || 0);
@@ -860,6 +915,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
         : "";
 
+      if (assembly) return assemblyRow(name, compositionHtml, qty);
       return `
         <div class="receipt-item">
           <div class="receipt-item-row">
@@ -920,6 +976,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       order: {
         id: receiptOrder.id,
         created_at: dateStr,
+        created_at_short: dateStr,
         schedule_text: scheduleText || (isUrgent ? "Быстрее" : ""),
         address_comment: receiptOrder.address_comment || "",
         comment: receiptOrder.comment || "",
@@ -971,6 +1028,112 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       },
     };
 
+    if (['assembly','assembly_batch','delivery','label'].includes(options.documentType)) {
+      const comment = value => String(value || '').trim() ? `<div class="note">${escapeHtml(String(value).trim())}</div>` : '';
+      const comments = [...new Set([receiptOrder.address_comment, receiptOrder.comment].map(value => String(value || '').trim()).filter(Boolean))];
+      const payment = require('./helpers/orderPaymentSummary').getOrderPaymentSummary(receiptOrder);
+      const moneyMinor = value => (Number(value) / 100).toLocaleString('ru-RU', {maximumFractionDigits:2}) + ' ₽';
+      const due = payment.paymentSatisfied ? 0 : Math.max(0, payment.amount - payment.paidAmount);
+      const paymentRows = [];
+      if (payment.paidAmount > 0) paymentRows.push(`<div class="pay"><span>Оплачено</span><span>${escapeHtml(moneyMinor(payment.paidAmount))}</span></div>`);
+      const collectionMethod = ({cash:'Наличными',card:'Картой'})[payment.method] || paymentTitle;
+      paymentRows.push(`<div class="pay"><span>${escapeHtml(collectionMethod)} · К получению</span><span>${escapeHtml(moneyMinor(due))}</span></div>`);
+      const data = { ...templateData,
+        assembly: { comment_html: comment(receiptOrder.comment), items_html: receiptItems.map(item => item.type === 'combo' ? renderComboItem(item, true) : renderProductItem(item, true)).join('') },
+        delivery: { ...templateData.delivery, comment_html: comment(comments.join('\n')) },
+        payment: { ...templateData.payment, summary_html: paymentRows.join('') }
+      };
+      const scheduleDate = String(receiptOrder.scheduled_at || receiptOrder.created_at || '').slice(0,10);
+      const needsDate = options.documentType === 'delivery' || (receiptOrder.scheduled_at && scheduleDate !== toDateKey(getStoreDateNow(storeTimezone)));
+      if (needsDate && !/\d{2}\.\d{2}\.\d{4}/.test(data.order.schedule_text)) data.order.schedule_text = `${scheduleDate.split('-').reverse().join('.')} · ${data.order.schedule_text}`;
+      if(['assembly','label','delivery'].includes(options.documentType)){
+        const scheduled=String(receiptOrder.scheduled_at || '').match(/^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2})/);
+        const asap=['asap','urgent'].includes(String(receiptOrder.time_option_code || '').toLowerCase());
+        data.order={...data.order,schedule_date:scheduleDate.split('-').reverse().join('.'),schedule_text:scheduled && !asap ? `Ко времени: ${scheduled[1]}` : (asap && ['label','delivery'].includes(options.documentType)?'Быстрее':receiptOrder.time_option_title || (asap?'Как можно быстрее':''))};
+      }
+      if(options.documentType==='assembly_batch' && options.assemblyGroups){
+        const groups=options.assemblyGroups;
+        const orderIds=groups.flatMap(group=>group.orders.map(order=>order.id));
+        // Batch metadata belongs to the whole selection, not to the anchor order.
+        data.order={...data.order,id:orderIds.join(', '),schedule_text:''};
+        data.assembly.comment_html='';
+        const heading=title=>`<tr><td colspan="3" style="padding:12px 3px 8px;text-align:center;border-top:2px solid #000;border-bottom:2px solid #000;break-after:avoid"><b style="font-size:calc(13px + 1pt)">${escapeHtml(title)}</b></td></tr>`;
+        const days=new Map();
+        for(const group of groups){if(!days.has(group.date))days.set(group.date,[]);days.get(group.date).push(group);}
+        data.assembly.items_html=[...days].map(([date,dayGroups])=>{
+          const title=`Общий лист сборки · ${date.split('-').reverse().join('.')}`;
+          const dayHeading=`<tr><td colspan="3" style="text-align:left;padding:10px 0;border:0;break-after:avoid"><b style="font-size:15px">${escapeHtml(title)}</b></td></tr>`;
+          const content=dayGroups.map(group=>{
+            const items=group.items.slice().sort((a,b)=>Number(isAutoAddItem(a))-Number(isAutoAddItem(b)));
+            return heading(group.title)+items.map(item=>(item.type==='combo'?renderComboItem(item,true):renderProductItem(item,true)).replace(/<td>/g,'<td style="text-align:left">')).join('');
+          }).join('');
+          const tear='<tr><td colspan="3" style="padding:6mm 0 2mm;border:0"><div style="border-top:1px dashed #000"></div></td></tr>';
+          return dayHeading+content+tear;
+        }).join('');
+      }
+      if (options.documentType === 'delivery') {
+        const canceled=['canceled','cancelled'].includes(String(receiptOrder.statusCode || receiptOrder.status_code || '').trim().toLowerCase());
+        if(canceled){
+          const rows=[];
+          if(payment.paidAmount>0)rows.push(`<div class="pay"><span>Оплачено</span><span>${escapeHtml(moneyMinor(payment.paidAmount))}</span></div>`);
+          if(payment.refundedAmount>0)rows.push(`<div class="pay"><span>Возвращено</span><span>${escapeHtml(moneyMinor(payment.refundedAmount))}</span></div>`);
+          data.payment.summary_html=rows.join('');
+        }else if(payment.paymentSatisfied){
+          data.payment.summary_html='<div style="margin-top:12px;text-align:center;font-size:18px;font-weight:bold">ОПЛАЧЕНО</div>';
+        }else{
+          const deliveryPaymentMethod=['cash','card'].includes(receiptOrder.payment_code)?receiptOrder.payment_code:payment.method;
+          const methodText=({cash:'Наличными',card:'Картой'})[deliveryPaymentMethod] || collectionMethod;
+          const rows=[`<div style="margin-top:12px">${escapeHtml(methodText)}</div>`];
+          const tendered=Math.round(changeFrom*100);
+          if(deliveryPaymentMethod==='cash' && tendered>0){
+            rows.push(`<div class="pay"><span>Сдача с</span><span>${escapeHtml(moneyMinor(tendered))}</span></div>`);
+            rows.push(`<div class="pay"><span>Сдача</span><span>${escapeHtml(moneyMinor(Math.max(0,tendered-due)))}</span></div>`);
+          }
+          rows.push(`<div style="margin-top:12px;text-align:center;font-size:20px;font-weight:bold;break-inside:avoid">ПРИНЯТЬ: ${escapeHtml(moneyMinor(due))}</div>`);
+          data.payment.summary_html=rows.join('');
+        }
+        data.delivery.tear_line_html=require('./helpers/printTemplateSamples').getDeliveryTearLineHtml();
+        const parts = [String(data.delivery.address || '').trim()];
+        for (const [value,label,pattern] of [[receiptOrder.address_apartment,'кв.',/кв[.\s]|квартира|офис/i],[receiptOrder.address_entrance,'подъезд',/подъезд/i],[receiptOrder.address_floor,'этаж',/этаж/i]]) {
+          if (String(value || '').trim() && !pattern.test(parts[0])) parts.push(`${label} ${String(value).trim()}`);
+        }
+        data.delivery.address = parts.filter(Boolean).join(', ');
+      }
+      if (options.documentType === 'label') {
+        const labelTemplate=String(templateHtml).replace(/<div class="label-header">\s*<span class="label-order">№\{\{\s*order.id\s*\}\}<\/span>\s*<span class="label-datetime">\{\{\s*order.created_at_short\s*\}\}<\/span>\s*<\/div>\s*<div class="label-schedule">\{\{\s*order.schedule_text\s*\}\}<\/div>/,require('./helpers/printTemplateSamples').getLabelHeaderHtml());
+        return receiptItems.map(item => {
+          const quantity = Math.max(1, Number(item.quantity || item.qty || 1));
+          const unit = { ...item, quantity: 1, qty: 1 };
+          const content = item.type === 'combo' ? renderComboItem(unit, true) : renderProductItem(unit, true);
+          const name = (content.match(/<b>([\s\S]*?)<\/b>/) || [,''])[1];
+          const composition = (content.match(/<div class="receipt-composition">([\s\S]*)<\/div><\/td>/) || [,''])[1];
+          const labelData = {...data, item:{...data.item, name, composition_html:composition.replace(/class="detail(?: sub| group)?"/g,'class="label-composition-item"'), variant_label:'', ingredient_quantity:'', ingredient_unit:'', ingredient_name:'', option_variant:'', option_title:'', client_composition:''}, composition:{html:composition}, gift:{name:'',html:''}};
+          const html = renderPrintTemplate(labelTemplate, labelData, new Set(["item.name"]));
+          return { html, copies: quantity };
+        });
+      }
+      let documentTemplate = ['assembly','assembly_batch'].includes(options.documentType)
+        ? String(templateHtml).replace(/<thead\b[^>]*>[\s\S]*?<\/thead\s*>/gi, '')
+        : templateHtml;
+      if(options.documentType==='assembly_batch'){
+        if(options.assemblyGroups)documentTemplate=documentTemplate.replace(/<header\b[^>]*>\s*Общий лист сборки\s*<\/header>/i,'');
+        documentTemplate=documentTemplate.replace(/<table\b([^>]*)>([\s\S]*?\{\{\s*assembly.items_html\s*\}\}[\s\S]*?)<\/table>/i,(match,attributes,body)=>{
+          const columns='<colgroup><col style="width:22px"><col><col style="width:43px"></colgroup>';
+          return `<table${attributes}>${/<colgroup\b/i.test(body)?'':columns}${body}</table>`;
+        });
+      }
+      if(options.documentType==='assembly'){
+        documentTemplate=String(documentTemplate).replace('<header>№{{ order.id }} · {{ order.schedule_text }} · {{ delivery.type }}</header>',require('./helpers/printTemplateSamples').getAssemblyHeaderHtml());
+      }
+      if(options.documentType==='delivery'){
+        documentTemplate=String(documentTemplate).replace('<header>№{{ order.id }} · {{ order.schedule_text }}</header>',require('./helpers/printTemplateSamples').getAssemblyHeaderHtml());
+        if(!/\{\{\s*delivery.tear_line_html\s*\}\}/.test(documentTemplate)){
+          documentTemplate=documentTemplate.replace(/<\/body\s*>/i,'{{ delivery.tear_line_html }}</body>');
+        }
+      }
+      const rendered = renderPrintTemplate(documentTemplate, data);
+      return rendered + `<script>addEventListener('load',async()=>{await document.fonts.ready;const height=Math.ceil(document.body.scrollHeight*25.4/96+1);const style=document.createElement('style');style.textContent='@page{size:80mm '+height+'mm;margin:0}';document.head.append(style);});</script>`;
+    }
     if (String(templateHtml || "").trim()) {
       return renderPrintTemplate(templateHtml, templateData, new Set(["receipt.items_html", "receipt.summary_html", "item.total"]));
     }

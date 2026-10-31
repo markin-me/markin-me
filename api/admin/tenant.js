@@ -1,4 +1,5 @@
 ﻿const express = require('express');
+const printTemplateSamples = require('../helpers/printTemplateSamples');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -6123,11 +6124,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
   </style>
 </head>
 <body>
-  <div class="label-header">
-    <span class="label-order">№{{ order.id }}</span>
-    <span class="label-datetime">{{ order.created_at_short }}</span>
-  </div>
-  <div class="label-schedule">{{ order.schedule_text }}</div>
+  ${printTemplateSamples.getLabelHeaderHtml()}
   <div class="label-item-name">{{ item.name }}</div>
   <div class="label-composition">{{ item.composition_html }}</div>
   <div class="label-gift">{{ gift.html }}</div>
@@ -6136,24 +6133,33 @@ async function fetchStoreWithHours(tenantId, storeId) {
   }
 
   function getDefaultPrintTemplateHtml(documentType) {
-    return documentType === "label" ? getDefaultLabelTemplateHtml() : getDefaultReceiptTemplateHtml();
+    return printTemplateSamples.getDefaultHtml(documentType) || (documentType === "label" ? getDefaultLabelTemplateHtml() : getDefaultReceiptTemplateHtml());
   }
 
   async function ensureDefaultPrintTemplates(tenantId) {
     const defaults = [
       { documentType: "receipt", title: "Чек заказа" },
       { documentType: "label", title: "Этикетка товара" },
+      ...Object.entries(printTemplateSamples.titles).map(([documentType, title]) => ({ documentType, title })),
     ];
     for (const item of defaults) {
       if (item.documentType === "receipt") item.title = "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430";
       if (item.documentType === "label") item.title = "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430";
+      const isNewType = Object.hasOwn(printTemplateSamples.titles, item.documentType);
+      if (isNewType) {
+        const [existing] = await db.query(
+          `SELECT id FROM print_templates WHERE tenant_id=? AND document_type=? LIMIT 1`,
+          [tenantId, item.documentType]
+        );
+        if (existing.length) continue;
+      }
       await db.query(
         `INSERT INTO print_templates (tenant_id, store_id, document_type, title, template_html, is_active)
          VALUES (?, NULL, ?, ?, ?, 1)
-         ON DUPLICATE KEY UPDATE
+         ON DUPLICATE KEY UPDATE ${isNewType ? 'id=id' : `
            title=COALESCE(NULLIF(title,''), VALUES(title)),
            template_html=COALESCE(NULLIF(template_html,''), VALUES(template_html)),
-           is_active=1`,
+           is_active=1`}`,
         [tenantId, item.documentType, item.title, getDefaultPrintTemplateHtml(item.documentType)]
       );
     }
@@ -6165,12 +6171,12 @@ async function fetchStoreWithHours(tenantId, storeId) {
       `SELECT id, tenant_id, store_id, document_type, title, template_html, is_active, created_at, updated_at
        FROM print_templates
        WHERE tenant_id=? AND is_active=1
-       ORDER BY FIELD(document_type,'receipt','label'), id ASC`,
+       ORDER BY FIELD(document_type,'receipt','label','assembly','assembly_batch','delivery'), id ASC`,
       [tenantId]
     );
     return (rows || []).map((row) => {
       const documentType = String(row.document_type || "");
-      if (documentType !== "receipt" && documentType !== "label") return row;
+      if (documentType !== "receipt" && documentType !== "label" && !Object.hasOwn(printTemplateSamples.titles, documentType)) return row;
       const defaultTemplateHtml = getDefaultPrintTemplateHtml(documentType);
       const templateHtml = String(row.template_html || "");
       const legacyLabelSignature = documentType === "label" && [
@@ -6178,10 +6184,11 @@ async function fetchStoreWithHours(tenantId, storeId) {
         "label-item-row { display: flex; align-items: flex-start; gap: 2mm; margin-top: 2mm; }",
         "label-item-price { flex-shrink: 0; }"
       ].every((part) => templateHtml.includes(part));
-      const normalizedTemplateHtml = legacyLabelSignature ? defaultTemplateHtml : templateHtml;
+      const normalizedTemplateHtml = legacyLabelSignature ? defaultTemplateHtml : printTemplateSamples.normalizeSettingsHtml(documentType, templateHtml);
       const isCustomized = String(normalizedTemplateHtml || "").trim() !== String(defaultTemplateHtml || "").trim();
       return {
         ...row,
+        ...(Object.hasOwn(printTemplateSamples.titles, documentType) ? { demo_samples: printTemplateSamples.getSamples(documentType) } : {}),
         default_template_html: defaultTemplateHtml,
         template_html: normalizedTemplateHtml,
         is_customized: isCustomized ? 1 : 0,
@@ -6252,8 +6259,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
            SELECT rr.id
            FROM prod_store_print_rules rr
            WHERE rr.tenant_id=z.tenant_id
-             AND rr.production_zone_id=z.id
-             AND rr.document_type='label'
+             AND rr.production_zone_id=z.id AND rr.is_enabled=1
            ORDER BY rr.updated_at DESC, rr.id DESC
            LIMIT 1
          )
@@ -6304,9 +6310,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       [tenantId]
     );
     const [ruleRows] = await db.query(
-      `SELECT id, store_id, production_zone_id, printer_id, template_id, copies, is_enabled
+      `SELECT id, store_id, production_zone_id, document_type, printer_id, template_id, copies, is_enabled, auto_print, zone_auto_print, auto_print_date_scope, scheduled_auto_print, scheduled_auto_print_time, scheduled_print, item_scope, config_version
        FROM prod_store_print_rules
-       WHERE tenant_id=? AND document_type='label'
+       WHERE tenant_id=? AND is_enabled=1
        ORDER BY updated_at DESC, id DESC`,
       [tenantId]
     );
@@ -6332,144 +6338,57 @@ async function fetchStoreWithHours(tenantId, storeId) {
     }
   });
 
-  router.post('/production-zones', async (req, res) => {
-    try {
-      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
-      const name = helpers.strOrNull(req.body?.name);
-      const storeId = Number(req.body?.store_id || 0);
-      const printerId = Number(req.body?.printer_id || 0);
-      const templateId = Number(req.body?.template_id || 0);
-      const copies = Math.max(1, Number(req.body?.copies || 1) || 1);
-      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
-      if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
-      if (!Number.isFinite(storeId) || storeId <= 0) return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
-      if (!Number.isFinite(printerId) || printerId <= 0) return res.status(400).json({ ok: false, error: 'BAD_PRINTER_ID' });
-      if (!Number.isFinite(templateId) || templateId <= 0) return res.status(400).json({ ok: false, error: 'BAD_TEMPLATE_ID' });
-      const storeExists = await ensureStoreExists(tenantId, storeId);
-      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
-      const [printerRows] = await db.query(
-        `SELECT id FROM print_printers
-         WHERE id=? AND tenant_id=? AND store_id=?
-         LIMIT 1`,
-        [printerId, tenantId, storeId]
-      );
-      if (!printerRows.length) return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
-      const [templateRows] = await db.query(
-        `SELECT id FROM print_templates
-         WHERE id=? AND tenant_id=? AND is_active=1
-         LIMIT 1`,
-        [templateId, tenantId]
-      );
-      if (!templateRows.length) return res.status(404).json({ ok: false, error: 'PRINT_TEMPLATE_NOT_FOUND' });
-      const [sortRows] = await db.query(
-        `SELECT COALESCE(MAX(sort_order),0)+10 AS next_sort
-         FROM prod_production_zones
-         WHERE tenant_id=?`,
-        [tenantId]
-      );
-      const sortOrder = Number(sortRows[0]?.next_sort || 10);
-      let insertResult;
-      try {
-        [insertResult] = await db.query(
-          `INSERT INTO prod_production_zones (tenant_id, name, description, sort_order, is_active)
-           VALUES (?,?,?,?,1)`,
-          [tenantId, name, null, sortOrder]
-        );
-      } catch (insertErr) {
-        if (String(insertErr?.code || "") === "ER_DUP_ENTRY") {
-          return res.status(409).json({ ok: false, error: 'ZONE_NAME_EXISTS' });
-        }
-        throw insertErr;
-      }
-      const zoneId = Number(insertResult.insertId || 0);
-      await db.query(
-        `INSERT INTO prod_store_print_rules
-           (tenant_id, store_id, production_zone_id, document_type, printer_id, template_id, copies, is_enabled, sort_order)
-         VALUES (?,?,?,?,?,?,?,1,0)
-         ON DUPLICATE KEY UPDATE
-           printer_id=VALUES(printer_id),
-           template_id=VALUES(template_id),
-           copies=VALUES(copies),
-           is_enabled=1,
-           updated_at=NOW()`,
-        [tenantId, storeId, zoneId, 'label', printerId, templateId, copies]
-      );
-      const data = await selectProductionZonesData(tenantId);
-      res.json({ ok: true, data, zone_id: zoneId });
-    } catch (err) {
-      console.error('РћС€РёР±РєР° СЃРѕР·РґР°РЅРёСЏ РїСЂРѕРёР·РІРѕРґСЃС‚РІРµРЅРЅРѕР№ Р·РѕРЅС‹:', err);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
-  });
-
-  router.put('/production-zones/:id', async (req, res) => {
+  async function saveProductionZoneRules(req, res) {
+    let connection;
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       const zoneId = Number(req.params.id || 0);
-      const name = helpers.strOrNull(req.body?.name);
       const storeId = Number(req.body?.store_id || 0);
       const printerId = Number(req.body?.printer_id || 0);
-      const templateId = Number(req.body?.template_id || 0);
-      const copies = Math.max(1, Number(req.body?.copies || 1) || 1);
-      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
-      if (!Number.isFinite(zoneId) || zoneId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ZONE_ID' });
-      if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
-      if (!Number.isFinite(storeId) || storeId <= 0) return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
-      if (!Number.isFinite(printerId) || printerId <= 0) return res.status(400).json({ ok: false, error: 'BAD_PRINTER_ID' });
-      if (!Number.isFinite(templateId) || templateId <= 0) return res.status(400).json({ ok: false, error: 'BAD_TEMPLATE_ID' });
-      const [zoneRows] = await db.query(
-        `SELECT id FROM prod_production_zones WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
-        [tenantId, zoneId]
-      );
-      if (!zoneRows.length) return res.status(404).json({ ok: false, error: 'ZONE_NOT_FOUND' });
-      const storeExists = await ensureStoreExists(tenantId, storeId);
-      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
-      const [printerRows] = await db.query(
-        `SELECT id FROM print_printers
-         WHERE id=? AND tenant_id=? AND store_id=?
-         LIMIT 1`,
-        [printerId, tenantId, storeId]
-      );
-      if (!printerRows.length) return res.status(404).json({ ok: false, error: 'PRINT_PRINTER_NOT_FOUND' });
-      const [templateRows] = await db.query(
-        `SELECT id FROM print_templates
-         WHERE id=? AND tenant_id=? AND is_active=1
-         LIMIT 1`,
-        [templateId, tenantId]
-      );
-      if (!templateRows.length) return res.status(404).json({ ok: false, error: 'PRINT_TEMPLATE_NOT_FOUND' });
-      try {
-        await db.query(
-          `UPDATE prod_production_zones
-           SET name=?, description=NULL, updated_at=NOW()
-           WHERE tenant_id=? AND id=?`,
-          [name, tenantId, zoneId]
-        );
-      } catch (updateErr) {
-        if (String(updateErr?.code || "") === "ER_DUP_ENTRY") {
-          return res.status(409).json({ ok: false, error: 'ZONE_NAME_EXISTS' });
-        }
-        throw updateErr;
+      const name = helpers.strOrNull(req.body?.name);
+      const rules = req.body?.rules;
+      const dateScope=req.body?.auto_print_date_scope;
+      if(!['today','all'].includes(dateScope) || typeof req.body.auto_print!=='boolean')return res.status(400).json({ok:false,error:'BAD_PRINT_RULES'});
+      const scheduledTime=String(req.body?.scheduled_auto_print_time || '');
+      if(typeof req.body.scheduled_auto_print!=='boolean' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(scheduledTime))return res.status(400).json({ok:false,error:'BAD_PRINT_RULES'});
+      if (!tenantId || !name || !Number.isSafeInteger(storeId) || storeId <= 0 || !Number.isSafeInteger(printerId) || printerId <= 0 || (req.params.id && (!Number.isSafeInteger(zoneId) || zoneId <= 0))) return res.status(400).json({ok:false,error:'BAD_ZONE_DATA'});
+      if (!Array.isArray(rules) || !rules.length || rules.length > 5 || new Set(rules.map(rule => Number(rule.template_id))).size !== rules.length) return res.status(400).json({ok:false,error:'BAD_PRINT_RULES'});
+      if (rules.some(rule => !Number.isSafeInteger(rule.copies) || rule.copies < 1 || rule.copies > 100 || !['order','zone'].includes(rule.item_scope) || typeof rule.auto_print!=='boolean' || typeof rule.scheduled_print!=='boolean')) return res.status(400).json({ok:false,error:'BAD_PRINT_RULES'});
+      if(req.body.auto_print && req.body.scheduled_auto_print && !rules.some(rule=>rule.scheduled_print))return res.status(400).json({ok:false,error:'BAD_PRINT_RULES'});
+      connection = await db.getConnection();
+      await connection.beginTransaction();
+      const [printers] = await connection.query('SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND id=?', [tenantId,storeId,printerId]);
+      if (!printers.length) throw Object.assign(new Error('PRINT_PRINTER_NOT_FOUND'),{status:400});
+      const [templates] = await connection.query(`SELECT id,document_type FROM print_templates WHERE tenant_id=? AND is_active=1 AND id IN (${rules.map(()=>'?').join(',')})`,[tenantId,...rules.map(rule=>Number(rule.template_id))]);
+      if (templates.length !== rules.length || templates.some(t => !['receipt','assembly','assembly_batch','delivery','label'].includes(t.document_type)) || new Set(templates.map(t=>t.document_type)).size !== templates.length) throw Object.assign(new Error('BAD_PRINT_RULES'),{status:400});
+      let id = zoneId;
+      if (id) {
+        const [zones] = await connection.query('SELECT id FROM prod_production_zones WHERE tenant_id=? AND id=? AND is_active=1 FOR UPDATE',[tenantId,id]);
+        if (!zones.length) throw Object.assign(new Error('ZONE_NOT_FOUND'),{status:404});
+        await connection.query('UPDATE prod_production_zones SET name=?,updated_at=NOW() WHERE tenant_id=? AND id=?',[name,tenantId,id]);
+      } else {
+        const [result] = await connection.query('INSERT INTO prod_production_zones (tenant_id,name,sort_order,is_active) VALUES (?,?,0,1)',[tenantId,name]);
+        id = Number(result.insertId);
       }
-      await db.query(
-        `INSERT INTO prod_store_print_rules
-           (tenant_id, store_id, production_zone_id, document_type, printer_id, template_id, copies, is_enabled, sort_order)
-         VALUES (?,?,?,?,?,?,?,1,0)
-         ON DUPLICATE KEY UPDATE
-           printer_id=VALUES(printer_id),
-           template_id=VALUES(template_id),
-           copies=VALUES(copies),
-           is_enabled=1,
-           updated_at=NOW()`,
-        [tenantId, storeId, zoneId, 'label', printerId, templateId, copies]
-      );
-      const data = await selectProductionZonesData(tenantId);
-      res.json({ ok: true, data, zone_id: zoneId });
-    } catch (err) {
-      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ РїСЂРѕРёР·РІРѕРґСЃС‚РІРµРЅРЅРѕР№ Р·РѕРЅС‹:', err);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
-  });
+      // Retain rule IDs when editing: auto-job identities must remain stable.
+      await connection.query('UPDATE prod_store_print_rules SET is_enabled=0,config_version=2 WHERE tenant_id=? AND production_zone_id=? AND store_id=?',[tenantId,id,storeId]);
+      for (const rule of rules) {
+        const type = templates.find(t => Number(t.id) === Number(rule.template_id)).document_type;
+        const scope = ['receipt','delivery','assembly_batch'].includes(type) ? 'order' : rule.item_scope;
+        await connection.query(`INSERT INTO prod_store_print_rules (tenant_id,store_id,production_zone_id,document_type,printer_id,template_id,copies,is_enabled,auto_print,zone_auto_print,auto_print_date_scope,scheduled_auto_print,scheduled_auto_print_time,scheduled_print,item_scope,config_version,sort_order)
+          VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,2,0) ON DUPLICATE KEY UPDATE printer_id=VALUES(printer_id),template_id=VALUES(template_id),copies=VALUES(copies),is_enabled=1,auto_print=VALUES(auto_print),zone_auto_print=VALUES(zone_auto_print),auto_print_date_scope=VALUES(auto_print_date_scope),scheduled_auto_print=VALUES(scheduled_auto_print),scheduled_auto_print_time=VALUES(scheduled_auto_print_time),scheduled_print=VALUES(scheduled_print),item_scope=VALUES(item_scope),config_version=2,updated_at=NOW()`,
+          [tenantId,storeId,id,type,printerId,rule.template_id,rule.copies,type!=='assembly_batch' && rule.auto_print ? 1 : 0,req.body.auto_print ? 1 : 0,dateScope,req.body.scheduled_auto_print ? 1 : 0,scheduledTime,rule.scheduled_print?1:0,scope]);
+      }
+      await connection.commit();
+      res.json({ok:true,zone_id:id,data:await selectProductionZonesData(tenantId)});
+    } catch (error) {
+      if (connection) await connection.rollback();
+      console.error('Save print zone:',error);
+      res.status(error.status || 500).json({ok:false,error:error.code==='ER_DUP_ENTRY'?'ZONE_NAME_EXISTS':error.status?error.message:'DB_ERROR'});
+    } finally { if (connection) connection.release(); }
+  }
+  router.post('/production-zones', saveProductionZoneRules);
+  router.put('/production-zones/:id', saveProductionZoneRules);
 
   /**
    * POST /api/admin/tenant/password

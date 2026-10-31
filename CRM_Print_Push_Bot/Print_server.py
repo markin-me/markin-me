@@ -1701,7 +1701,9 @@ class PrintServer:
         meta_payload = _decode_meta_job(job_payload) if _is_meta_job(job_payload) else {}
         is_label_job = isinstance(meta_payload, dict) and str(meta_payload.get("kind") or "").strip().lower() == "label"
         cache_key = None
-        if is_label_job:
+        if meta_payload.get("job_key"):
+            cache_key = f"document_job:{job_id}"
+        elif is_label_job:
             cache_key = f"label_job:{job_id}"
         else:
             cache_key = _get_order_cache_key(order) or f"job:{job_id}"
@@ -1744,7 +1746,7 @@ class PrintServer:
                 printer_name = meta_printer_name
 
         try:
-            should_play_order_sound = not is_label_job
+            should_play_order_sound = bool(meta_payload.get("notify_order", not is_label_job))
             if should_play_order_sound:
                 try:
                     numeric_job_id = int(job_id)

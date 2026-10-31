@@ -75,12 +75,16 @@
 
   function moveContextActions(level) {
     restoreContextActions();
+    body.classList.remove('orders-mobile-selection');
     const showOrdersActionsOnRoot = activePage === "orders" && level === "left";
     const showCourierActionsOnRoot = activePage === "courier-screen" && level === "left";
     const showCashActionsOnRoot = activePage === "cash" && level === "left";
     if (!isMobile() || (level !== "center" && !showOrdersActionsOnRoot && !showCourierActionsOnRoot && !showCashActionsOnRoot) || !mobileActions) return;
+    const selectingOrders = activePage === 'orders' && body.classList.contains('orders-selection-mode');
+    const selectionActions = selectingOrders ? document.getElementById('ordersBulkActions') : null;
+    body.classList.toggle('orders-mobile-selection', Boolean(selectionActions && (level === 'center' || showOrdersActionsOnRoot)));
     const candidates = Array.prototype.slice.call(centerColumn.querySelectorAll(".toolbar-right"));
-    const actions = candidates.find(visible);
+    const actions = selectionActions || candidates.find(visible);
     if (!actions) return;
     actionOrigin = document.createComment("mobile-toolbar-actions-origin");
     actions.parentNode.insertBefore(actionOrigin, actions);
@@ -298,6 +302,7 @@
       return;
     }
     restoreContextActions();
+    body.classList.remove('orders-mobile-selection');
     moveAccountControls();
     restoreOrderTabs();
     closeSidebar();
@@ -306,6 +311,7 @@
     backButton.classList.add("hidden");
   }
 
+  document.addEventListener('ordersSelectionModeChanged', function () { moveContextActions(currentLevel); });
   window.addEventListener("resize", syncViewport);
   window.addEventListener("pageshow", syncViewport);
   window.__adminMobilePages = {

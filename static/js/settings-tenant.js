@@ -8240,6 +8240,13 @@
 
 
     const productionZoneTemplateSelect = document.getElementById("settingsProductionZoneTemplate");
+    const productionZoneDocuments = document.getElementById("settingsProductionZoneDocuments");
+    const productionZoneAutoPrint = document.getElementById("settingsProductionZoneAutoPrint");
+    const productionZoneDateScope=document.getElementById('settingsProductionZoneDateScope');
+    const productionZoneScheduled=document.getElementById('settingsProductionZoneScheduled');
+    const productionZoneScheduledTime=document.getElementById('settingsProductionZoneScheduledTime');
+    const productionZoneSelectContexts=new Map();
+    let productionZoneTimeParts=null;
 
 
 
@@ -9178,6 +9185,12 @@
     };
 
 
+
+    const extraPrintTemplates = Object.fromEntries(["assembly", "assembly_batch", "delivery"].map(type => {
+      const el = suffix => document.getElementById(`settingsPrintTemplate-${type}-${suffix}`);
+      return [type, { card: el("Card"), panel: el("Panel"), html: el("Html"), footerView: el("FooterView"), footerEdit: el("FooterEdit"), edit: el("EditBtn"), cancel: el("CancelBtn"), save: el("SaveBtn"), preview: el("Preview"), print: el("Print"), error: el("Error"), initialized: false, timer: null }];
+    }));
+    const canUpdatePrintTemplates = paymentFullAccess || paymentKeys.has("settings.print_templates.update");
 
     const printTemplatesState = {
 
@@ -20800,6 +20813,16 @@
 
 
 
+      Object.entries(extraPrintTemplates).forEach(([type, ui]) => {
+        const active = tabId === `print-template-${type}`;
+        if (ui.panel) ui.panel.classList.toggle("hidden", !active);
+        toggleRightPanelFooter(ui.footerView, ui.footerEdit, active);
+        if (ui.card) ui.card.classList.toggle("is-active", active);
+        if (active) {
+          setPrintTemplateMode(type, printTemplatesState.modes[type]);
+          if (!ui.initialized) openPrintTemplate(type);
+        }
+      });
       if (printTemplateReceiptPanel) printTemplateReceiptPanel.classList.toggle("hidden", tabId !== "print-template-receipt");
 
 
@@ -21237,6 +21260,13 @@
 
 
 
+          const extraType = tabId.replace(/^print-template-/, "");
+          const extraUi = extraPrintTemplates[extraType];
+          if (extraUi) {
+            extraUi.initialized = false;
+            clearTimeout(extraUi.timer);
+            if (extraUi.card) extraUi.card.classList.remove("is-active");
+          }
           if (tabId === "print-template-receipt" && printTemplateReceiptCard) printTemplateReceiptCard.classList.remove("is-active");
 
 
@@ -28161,6 +28191,55 @@
 
 
 
+
+    function sizePrintTemplateCode(textarea) {
+      if (!textarea || !textarea.getClientRects().length) return;
+      textarea.style.height = "0px";
+      textarea.style.height = `${textarea.scrollHeight + 2}px`;
+    }
+    document.querySelectorAll(".settings-print-template-panel").forEach(panel => {
+      const textarea = panel.querySelector("textarea");
+      const accordion = panel.querySelector(".settings-print-template-html");
+      accordion.addEventListener("toggle", () => {
+        if (accordion.open) sizePrintTemplateCode(textarea);
+      });
+      textarea.addEventListener("input", () => sizePrintTemplateCode(textarea));
+    });
+    const printTemplateResizeObserver = new ResizeObserver(entries => {
+      for (const { target } of entries) {
+        if (target.classList.contains("hidden")) continue;
+        const width = target.clientWidth;
+        if (target.dataset.printTemplateWidth === String(width)) continue;
+        target.dataset.printTemplateWidth = String(width);
+        sizePrintTemplateCode(target.querySelector("textarea"));
+        const type = target.dataset.printTemplateType;
+        if (type && extraPrintTemplates[type]?.initialized) renderPrintTemplatePreview(type);
+      }
+    });
+    document.querySelectorAll(".settings-print-template-panel").forEach(panel => {
+      const type = Object.keys(extraPrintTemplates).find(key => extraPrintTemplates[key].panel === panel);
+      if (type) panel.dataset.printTemplateType = type;
+      // Observe width only: document height is managed by the panel's scroll area.
+      printTemplateResizeObserver.observe(panel);
+    });
+
+    Object.entries(extraPrintTemplates).forEach(([type, ui]) => {
+      if (!ui.card || !ui.panel) return;
+      ui.card.addEventListener("click", () => {
+        if (rightDefault) rightDefault.classList.add("hidden");
+        ensureTab(`print-template-${type}`, ui.card.querySelector(".product-title").textContent);
+      });
+      ui.edit.hidden = !canUpdatePrintTemplates;
+      ui.edit.addEventListener("click", () => setPrintTemplateMode(type, "edit"));
+      ui.cancel.addEventListener("click", () => fillPrintTemplatePanel(type));
+      ui.save.addEventListener("click", () => savePrintTemplate(type));
+      ui.html.addEventListener("input", () => {
+        clearTimeout(ui.timer);
+        ui.print.disabled = true;
+        ui.timer = setTimeout(() => renderPrintTemplatePreview(type), 250);
+      });
+      ui.print.addEventListener("click", () => renderPrintTemplatePreview(type, true));
+    });
 
     if (printTemplateReceiptCard) {
 
@@ -42716,19 +42795,23 @@
 
 
 
-    function renderStoreTimezoneSelector() {
+    function getStoreTimezoneSelectContext(){
+      return {select:settingsStoreTimezoneSelect,selector:settingsStoreTimezoneSelector,trigger:settingsStoreTimezoneTrigger,menu:settingsStoreTimezoneMenu,value:settingsStoreTimezoneValue};
+    }
+
+    function renderStoreTimezoneSelector(context=getStoreTimezoneSelectContext()) {
 
 
 
-      if (!settingsStoreTimezoneSelect) return;
+      if (!context.select) return;
 
 
 
-      const options = Array.from(settingsStoreTimezoneSelect.options || []);
+      const options = Array.from(context.select.options || []);
 
 
 
-      const selectedValue = String(settingsStoreTimezoneSelect.value || "");
+      const selectedValue = String(context.select.value || "");
 
 
 
@@ -42740,23 +42823,11 @@
 
 
 
-      if (settingsStoreTimezoneValue) {
+      if (context.value) {
 
 
 
-        settingsStoreTimezoneValue.textContent = selectedOption ? selectedOption.textContent : "—";
-
-
-
-      }
-
-
-
-      if (settingsStoreTimezoneTrigger) {
-
-
-
-        settingsStoreTimezoneTrigger.disabled = options.length === 0;
+        context.value.textContent = selectedOption ? selectedOption.textContent : "—";
 
 
 
@@ -42764,11 +42835,11 @@
 
 
 
-      if (settingsStoreTimezoneSelector) {
+      if (context.trigger) {
 
 
 
-        settingsStoreTimezoneSelector.classList.toggle("is-disabled", options.length === 0);
+        context.trigger.disabled = options.length === 0 || (context.respectDisabled && context.select.disabled);
 
 
 
@@ -42776,11 +42847,23 @@
 
 
 
-      if (!settingsStoreTimezoneMenu) {
+      if (context.selector) {
 
 
 
-        if (!options.length) closeStoreTimezoneDropdown();
+        context.selector.classList.toggle("is-disabled", options.length === 0 || (context.respectDisabled && context.select.disabled));
+
+
+
+      }
+
+
+
+      if (!context.menu) {
+
+
+
+        if (!options.length) closeStoreTimezoneDropdown(context);
 
 
 
@@ -42796,7 +42879,7 @@
 
 
 
-      settingsStoreTimezoneMenu.innerHTML = "";
+      context.menu.innerHTML = "";
 
 
 
@@ -42813,6 +42896,7 @@
 
 
         item.type = "button";
+        item.disabled=option.disabled;
 
 
 
@@ -42836,7 +42920,7 @@
 
 
 
-        settingsStoreTimezoneMenu.appendChild(item);
+        context.menu.appendChild(item);
 
 
 
@@ -42852,7 +42936,7 @@
 
 
 
-        closeStoreTimezoneDropdown();
+        closeStoreTimezoneDropdown(context);
 
 
 
@@ -42868,15 +42952,16 @@
 
 
 
-    function closeStoreTimezoneDropdown() {
+    function closeStoreTimezoneDropdown(context=getStoreTimezoneSelectContext()) {
+      if(context.topLayer && context.menu?.matches(':popover-open'))context.menu.hidePopover();
 
 
 
-      const timezoneField = settingsStoreTimezoneSelector && settingsStoreTimezoneSelector.closest
+      const timezoneField = context.selector && context.selector.closest
 
 
 
-        ? settingsStoreTimezoneSelector.closest(".settings-store-timezone-field")
+        ? context.selector.closest(".settings-store-timezone-field")
 
 
 
@@ -42896,11 +42981,11 @@
 
 
 
-      if (settingsStoreTimezoneSelector) {
+      if (context.selector) {
 
 
 
-        settingsStoreTimezoneSelector.classList.remove("is-open", "is-drop-up");
+        context.selector.classList.remove("is-open", "is-drop-up");
 
 
 
@@ -42908,11 +42993,11 @@
 
 
 
-      if (settingsStoreTimezoneTrigger) {
+      if (context.trigger) {
 
 
 
-        settingsStoreTimezoneTrigger.setAttribute("aria-expanded", "false");
+        context.trigger.setAttribute("aria-expanded", "false");
 
 
 
@@ -42928,19 +43013,35 @@
 
 
 
-    function openStoreTimezoneDropdown() {
+    function openStoreTimezoneDropdown(context=getStoreTimezoneSelectContext()) {
 
 
 
-      if (!settingsStoreTimezoneSelector || !settingsStoreTimezoneTrigger || settingsStoreTimezoneTrigger.disabled) return;
+      if (!context.selector || !context.trigger || context.trigger.disabled) return;
+      if(context.topLayer){
+        context.selector.classList.add('is-open');
+        context.menu.showPopover();
+        const bounds=context.trigger.getBoundingClientRect();
+        const panel=context.selector.closest('#settingsProductionZonePanel').getBoundingClientRect();
+        const left=Math.max(8,panel.left+12),right=Math.min(window.innerWidth-8,panel.right-12);
+        const top=Math.max(8,panel.top+8),bottom=Math.min(window.innerHeight-8,panel.bottom-8);
+        const below=Math.max(0,bottom-bounds.bottom-8),above=Math.max(0,bounds.top-top-8);
+        context.menu.style.width=`${Math.min(Math.max(bounds.width,context.minMenuWidth || 0),right-left)}px`;
+        context.menu.style.maxHeight=`${Math.max(1,Math.min(230,Math.max(above,below)))}px`;
+        const width=context.menu.offsetWidth,height=context.menu.offsetHeight;
+        context.menu.style.left=`${Math.max(left,Math.min(bounds.left,right-width))}px`;
+        context.menu.style.top=`${Math.max(top,Math.min(bottom-height,below>=height?bounds.bottom+8:bounds.top-height-8))}px`;
+        context.trigger.setAttribute('aria-expanded','true');
+        return;
+      }
 
 
 
-      const timezoneField = settingsStoreTimezoneSelector.closest
+      const timezoneField = context.selector.closest
 
 
 
-        ? settingsStoreTimezoneSelector.closest(".settings-store-timezone-field")
+        ? context.selector.closest(".settings-store-timezone-field")
 
 
 
@@ -42948,11 +43049,11 @@
 
 
 
-      const menuHeight = settingsStoreTimezoneMenu
+      const menuHeight = context.menu
 
 
 
-        ? Math.min(settingsStoreTimezoneMenu.scrollHeight || 0, 230)
+        ? Math.min(context.menu.scrollHeight || 0, 230)
 
 
 
@@ -42960,7 +43061,7 @@
 
 
 
-      const triggerRect = settingsStoreTimezoneTrigger.getBoundingClientRect();
+      const triggerRect = context.trigger.getBoundingClientRect();
 
 
 
@@ -42988,15 +43089,15 @@
 
 
 
-      settingsStoreTimezoneSelector.classList.toggle("is-drop-up", shouldDropUp);
+      context.selector.classList.toggle("is-drop-up", shouldDropUp);
 
 
 
-      settingsStoreTimezoneSelector.classList.add("is-open");
+      context.selector.classList.add("is-open");
 
 
 
-      settingsStoreTimezoneTrigger.setAttribute("aria-expanded", "true");
+      context.trigger.setAttribute("aria-expanded", "true");
 
 
 
@@ -43008,11 +43109,11 @@
 
 
 
-    function toggleStoreTimezoneDropdown(forceOpen) {
+    function toggleStoreTimezoneDropdown(forceOpen,context=getStoreTimezoneSelectContext()) {
 
 
 
-      if (!settingsStoreTimezoneSelector || !settingsStoreTimezoneTrigger || settingsStoreTimezoneTrigger.disabled) return;
+      if (!context.selector || !context.trigger || context.trigger.disabled) return;
 
 
 
@@ -43024,7 +43125,7 @@
 
 
 
-        : !settingsStoreTimezoneSelector.classList.contains("is-open");
+        : !context.selector.classList.contains("is-open");
 
 
 
@@ -43032,7 +43133,7 @@
 
 
 
-        closeStoreTimezoneDropdown();
+        closeStoreTimezoneDropdown(context);
 
 
 
@@ -43048,7 +43149,7 @@
 
 
 
-      openStoreTimezoneDropdown();
+      openStoreTimezoneDropdown(context);
 
 
 
@@ -43565,6 +43666,81 @@
 
 
 
+    function renderPrintTemplatePreview(type, print = false) {
+      const ui = extraPrintTemplates[type];
+      clearTimeout(ui.timer);
+      ui.print.disabled = true;
+      ui.preview.onload = null;
+      try {
+        const fragments = {
+          "assembly.items_html": '<tr><td class="check"><span class="box"></span></td><td><b>{{ item.variant_label }} {{ item.name }}</b><div class="detail">• {{ item.ingredient_quantity }} {{ item.ingredient_unit }} {{ item.ingredient_name }}</div><div class="detail">• {{ item.option_variant }} {{ item.option_title }}</div><div class="detail">• {{ item.client_composition }}</div></td><td class="qty">{{ item.quantity }}</td></tr>',
+          "assembly.comment_html": '<div class="note">{{ order.comment }}</div>',
+          "delivery.comment_html": '<div class="note">{{ order.address_comment }}<br>{{ order.comment }}</div>',
+          "payment.summary_html": '<div class="pay">{{ payment.summary_html }}</div>',
+        };
+        fragments["delivery.tear_line_html"] = '<div style="margin-top:6mm;border-top:1px dashed #000"></div>';
+        if (type === 'assembly_batch') {
+          fragments["assembly.items_html"] = '<tr><td colspan="3" style="text-align:center;border-top:2px solid #000;border-bottom:2px solid #000;padding:12px 3px;font-size:14px;font-weight:bold">?? ???????: {{ order.time }}</td></tr>' + fragments["assembly.items_html"] + '<tr><td colspan="3" style="padding:6mm 0 2mm;border:0"><div style="border-top:1px dashed #000"></div></td></tr>';
+        }
+        const html = ui.html.value.replace(/{{\s*([\w.]+)\s*}}/g, (variable, key) => Object.hasOwn(fragments, key) ? fragments[key] : variable);
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        if (type === 'assembly_batch') {
+          const header = doc.querySelector('header');
+          if (header && header.textContent.trim() === '????? ???? ??????') header.textContent = '????? ???? ?????? ? {{ order.schedule_date }}';
+        }
+        const version = String(ui.previewVersion = (ui.previewVersion || 0) + 1);
+        doc.documentElement.dataset.printPreviewVersion = version;
+        // Strip active content before srcdoc; CSP also blocks external resources.
+        doc.querySelectorAll("script,iframe,frame,frameset,object,embed,base,meta,link,form").forEach(el => el.remove());
+        doc.querySelectorAll("*").forEach(el => {
+          for (const attr of [...el.attributes]) {
+            if (/^on/i.test(attr.name) || ["href", "src", "srcset", "action", "formaction", "xlink:href", "target", "srcdoc"].includes(attr.name.toLowerCase())) el.removeAttribute(attr.name);
+          }
+        });
+        const policy = doc.createElement("meta");
+        policy.httpEquiv = "Content-Security-Policy";
+        policy.content = "default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'";
+        doc.head.prepend(policy);
+        const layout = doc.createElement("style");
+        layout.textContent = `body{width:100%;} .qty{white-space:normal;overflow-wrap:anywhere;width:100px;} .pay span:last-child{white-space:normal;}
+          @media print{body{width:80mm;}}`;
+        doc.head.appendChild(layout);
+        const screen = doc.createElement("style");
+        screen.media = "screen";
+        screen.textContent = "html,body{font-size:13px;}header{font-size:16px}.detail{font-size:12px}";
+        screen.id = "print-template-screen-style";
+        doc.head.appendChild(screen);
+        ui.preview.onload = () => {
+          try {
+            const rendered = ui.preview.contentDocument;
+            if (rendered.documentElement.dataset.printPreviewVersion !== version) return;
+            const height = rendered.body.scrollHeight;
+            ui.preview.style.height = `${height + 2}px`;
+            const screenStyle = rendered.getElementById("print-template-screen-style");
+            screenStyle.media = "not all";
+            rendered.body.style.width = "80mm";
+            const printHeight = rendered.body.scrollHeight;
+            rendered.body.style.width = "";
+            screenStyle.media = "screen";
+            const page = rendered.createElement("style");
+            page.textContent = `@page { size: 80mm ${Math.ceil(printHeight * 25.4 / 96 + 1)}mm; margin: 0; }`;
+            rendered.head.appendChild(page);
+            ui.print.disabled = false;
+            if (print) { ui.preview.contentWindow.focus(); ui.preview.contentWindow.print(); }
+          } catch (error) {
+            ui.error.textContent = `Ошибка предпросмотра/печати: ${error.message}`;
+            ui.error.classList.remove("hidden");
+          }
+        };
+        ui.error.classList.add("hidden");
+        ui.preview.srcdoc = "<!doctype html>" + doc.documentElement.outerHTML;
+      } catch (error) {
+        ui.error.textContent = error.message;
+        ui.error.classList.remove("hidden");
+        ui.preview.srcdoc = "";
+      }
+    }
+
     function getPrintTemplateByType(documentType) {
       return printTemplatesState.templates.find((template) => String(template.document_type || "") === String(documentType || "")) || null;
     }
@@ -43604,7 +43780,8 @@
 
 
     function getPrintTemplateTextarea(documentType) {
-      return documentType === "label" ? printTemplateLabelHtml : printTemplateReceiptHtml;
+      if (Object.hasOwn(extraPrintTemplates, documentType)) return extraPrintTemplates[documentType].html;
+      return documentType === "label" ? printTemplateLabelHtml : documentType === "receipt" ? printTemplateReceiptHtml : null;
     }
 
 
@@ -43612,11 +43789,18 @@
     function setPrintTemplateMode(documentType, mode) {
       const isLabel = documentType === "label";
       const textarea = getPrintTemplateTextarea(documentType);
-      const footerView = isLabel ? printTemplateLabelFooterView : printTemplateReceiptFooterView;
-      const footerEdit = isLabel ? printTemplateLabelFooterEdit : printTemplateReceiptFooterEdit;
+      const extraUi = extraPrintTemplates[documentType];
+      if (extraUi && mode === "edit" && !canUpdatePrintTemplates) return;
+      const footerView = extraUi ? extraUi.footerView : isLabel ? printTemplateLabelFooterView : printTemplateReceiptFooterView;
+      const footerEdit = extraUi ? extraUi.footerEdit : isLabel ? printTemplateLabelFooterEdit : printTemplateReceiptFooterEdit;
       printTemplatesState.modes[documentType] = mode === "edit" ? "edit" : "view";
       const isEdit = printTemplatesState.modes[documentType] === "edit";
-      if (textarea) textarea.readOnly = !isEdit;
+      if (textarea) {
+        textarea.readOnly = !isEdit;
+        const accordion = textarea.closest("details");
+        if (isEdit && accordion) accordion.open = true;
+        sizePrintTemplateCode(textarea);
+      }
       if (footerView) footerView.classList.toggle("hidden", isEdit);
       if (footerEdit) footerEdit.classList.toggle("hidden", !isEdit);
     }
@@ -43626,13 +43810,22 @@
     function fillPrintTemplatePanel(documentType) {
       const template = getPrintTemplateByType(documentType);
       const textarea = getPrintTemplateTextarea(documentType);
-      if (!template || !textarea) return;
+      if (!template || !textarea) {
+        const ui = extraPrintTemplates[documentType];
+        if (ui) { ui.error.textContent = "Шаблон недоступен. Проверьте, что он активен."; ui.error.classList.remove("hidden"); ui.print.disabled = true; }
+        return;
+      }
       const defaultHtml = String(template.default_template_html || "");
       const templateHtml = String(template.template_html || "");
-      textarea.value = defaultHtml || templateHtml;
-      const card = documentType === "label" ? printTemplateLabelCard : printTemplateReceiptCard;
+      const extraUi = extraPrintTemplates[documentType];
+      textarea.value = extraUi ? (templateHtml || defaultHtml) : (defaultHtml || templateHtml);
+      const card = extraUi ? extraUi.card : documentType === "label" ? printTemplateLabelCard : printTemplateReceiptCard;
       const title = card ? card.querySelector(".product-title") : null;
-      if (title) title.textContent = String(template.title || (documentType === "label" ? "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430" : "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430"));
+      if (title) title.textContent = String(template.title || (extraPrintTemplates[documentType] ? extraPrintTemplates[documentType].panel.querySelector(".settings-list-title").textContent : documentType === "label" ? "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430" : "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430"));
+      if (extraUi) {
+        extraUi.initialized = true;
+        renderPrintTemplatePreview(documentType);
+      }
       printTemplatesState.snapshots[documentType] = { ...template };
       setPrintTemplateMode(documentType, "view");
     }
@@ -43640,13 +43833,18 @@
 
 
     async function openPrintTemplate(documentType) {
-      await ensurePrintTemplatesLoaded();
+      if (!await ensurePrintTemplatesLoaded()) {
+        const ui = extraPrintTemplates[documentType];
+        if (ui) { ui.error.textContent = "Не удалось загрузить шаблоны. Закройте вкладку и откройте снова."; ui.error.classList.remove("hidden"); ui.print.disabled = true; }
+        return;
+      }
       fillPrintTemplatePanel(documentType);
     }
 
 
 
     async function savePrintTemplate(documentType) {
+      if (extraPrintTemplates[documentType] && !canUpdatePrintTemplates) return;
       let template = getPrintTemplateByType(documentType);
       const textarea = getPrintTemplateTextarea(documentType);
       if (!template) {
@@ -43662,7 +43860,7 @@
         alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 HTML \u0448\u0430\u0431\u043b\u043e\u043d\u0430.");
         return;
       }
-      const saveBtn = documentType === "label" ? printTemplateLabelSaveBtn : printTemplateReceiptSaveBtn;
+      const saveBtn = extraPrintTemplates[documentType]?.save || (documentType === "label" ? printTemplateLabelSaveBtn : printTemplateReceiptSaveBtn);
       const idleText = saveBtn ? String(saveBtn.textContent || "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c") : "";
       if (saveBtn) {
         saveBtn.disabled = true;
@@ -43672,7 +43870,7 @@
         const res = await authFetch(`/api/admin/tenant/print-templates/${template.id}`, {
           method: "PUT",
           body: JSON.stringify({
-            title: template.title || (documentType === "label" ? "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430" : "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430"),
+            title: template.title || (extraPrintTemplates[documentType] ? extraPrintTemplates[documentType].panel.querySelector(".settings-list-title").textContent : documentType === "label" ? "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430 \u0442\u043e\u0432\u0430\u0440\u0430" : "\u0427\u0435\u043a \u0437\u0430\u043a\u0430\u0437\u0430"),
             template_html: templateHtml
           })
         });
@@ -43736,6 +43934,9 @@
       [productionZoneNameInput, productionZoneStoreSelect, productionZonePrinterSelect, productionZoneTemplateSelect, productionZoneCopiesInput].forEach((el) => {
         if (el) el.disabled = !isEdit;
       });
+      productionZoneDocuments?.querySelectorAll("input,select,button").forEach(el => el.disabled = !isEdit);
+      if (productionZoneAutoPrint) productionZoneAutoPrint.disabled = !isEdit;
+      syncProductionZonePrintControls();
       if (productionZoneFooterView) productionZoneFooterView.classList.toggle("hidden", isEdit);
       if (productionZoneFooterEdit) productionZoneFooterEdit.classList.toggle("hidden", !isEdit);
     }
@@ -43787,31 +43988,115 @@
 
 
 
-    function populateProductionZoneTemplates(selectedTemplateId) {
-      if (!productionZoneTemplateSelect) return;
-      const templates = printTemplatesState.templates;
-      productionZoneTemplateSelect.innerHTML = "";
-      if (!templates.length) {
-        const opt = document.createElement("option");
-        opt.value = "";
-        opt.textContent = "\u041d\u0435\u0442 \u0448\u0430\u0431\u043b\u043e\u043d\u043e\u0432 \u043f\u0435\u0447\u0430\u0442\u0438";
-        productionZoneTemplateSelect.appendChild(opt);
-        return;
+    function populateProductionZoneTemplates() {
+      if (!productionZoneDocuments) return;
+      for(const [select,context] of productionZoneSelectContexts)if(!select.isConnected){closeStoreTimezoneDropdown(context);productionZoneSelectContexts.delete(select);}
+      for(const select of [productionZoneStoreSelect,productionZonePrinterSelect,productionZoneDateScope])enhanceProductionZoneSelect(select);
+      initProductionZoneTimeSelects();
+      const zoneId = Number(productionZonesState.snapshot?.id || 0);
+      const storeId = Number(productionZoneStoreSelect?.value || 0);
+      const rules = productionZonesState.rules.filter(rule => Number(rule.production_zone_id) === zoneId && Number(rule.store_id) === storeId && Number(rule.is_enabled) === 1);
+      productionZoneAutoPrint.checked = rules.length ? rules.some(rule => Number(rule.zone_auto_print) === 1) : true;
+      productionZoneDateScope.value=rules[0]?.auto_print_date_scope || 'today';
+      productionZoneScheduled.checked=rules.some(rule=>Number(rule.scheduled_auto_print)===1);
+      productionZoneScheduledTime.value=rules[0]?.scheduled_auto_print_time || '08:00';
+      productionZoneDocuments.replaceChildren();
+      for (const template of printTemplatesState.templates.filter(t => ['receipt','assembly','assembly_batch','delivery','label'].includes(t.document_type))) {
+        const rule = rules.find(rule => Number(rule.template_id) === Number(template.id));
+        const row = document.createElement('div');
+        row.className = 'production-zone-document';
+        row.dataset.templateId = String(template.id);
+        const label = document.createElement('label');label.className='products-bulk-toggle-all';
+        const check = document.createElement('input'); check.type = 'checkbox'; check.checked = Boolean(rule); check.dataset.printDocument = '';
+        check.className='products-bulk-toggle-all-input';
+        const checkUi=document.createElement('span');checkUi.className='products-bulk-toggle-all-box';checkUi.setAttribute('aria-hidden','true');
+        label.append(check,checkUi,document.createTextNode(template.title));
+        const copies = document.createElement('input'); copies.type = 'number'; copies.className = 'discount-stepper-input'; copies.min = '1'; copies.max = '100'; copies.step = '1'; copies.value = String(rule?.copies || 1); copies.dataset.printCopies = ''; copies.setAttribute('aria-label','Количество копий: '+template.title);
+        const stepper=document.createElement('div');stepper.className='discount-stepper production-zone-copies';
+        const step=delta=>{const button=document.createElement('button');button.type='button';button.className='discount-stepper-btn';button.textContent=delta<0?'−':'+';button.setAttribute('aria-label',(delta<0?'Уменьшить':'Увеличить')+' копии: '+template.title);button.addEventListener('click',()=>{copies.value=String(Math.max(1,Math.min(100,(Number(copies.value)||1)+delta)));copies.dispatchEvent(new Event('change',{bubbles:true}));});return button;};
+        stepper.append(step(-1),copies,step(1));
+        const autoLabel=document.createElement('label');autoLabel.className='products-bulk-toggle-all production-zone-auto-check';
+        const auto=document.createElement('input');auto.type='checkbox';auto.className='products-bulk-toggle-all-input';auto.dataset.printAuto='';auto.checked=template.document_type!=='assembly_batch' && Number(rule?.auto_print)===1;auto.setAttribute('aria-label','При поступлении: '+template.title);
+        const autoUi=checkUi.cloneNode();autoLabel.append(auto,autoUi);
+        if(template.document_type==='assembly_batch'){auto.dataset.manualOnly='';autoLabel.classList.add('is-manual-only');autoLabel.title='При поступлении не печатается; доступен вручную и по времени';}
+        const scheduledLabel=document.createElement('label');scheduledLabel.className='products-bulk-toggle-all production-zone-auto-check';
+        const scheduled=auto.cloneNode();scheduled.removeAttribute('data-manual-only');scheduled.removeAttribute('data-print-auto');scheduled.dataset.printScheduled='';scheduled.checked=Number(rule?.scheduled_print)===1;scheduled.setAttribute('aria-label','По времени: '+template.title);scheduledLabel.append(scheduled,checkUi.cloneNode());
+        const scope = document.createElement('select'); scope.className = 'control production-zone-select'; scope.dataset.printScope = '';scope.setAttribute('aria-label','Состав документа: '+template.title);
+        const scopes = ['assembly','label'].includes(template.document_type) ? [['zone','Товары зоны'],['order','Весь заказ']] : [['order','Весь заказ']];
+        for (const [value,title] of scopes) { const option=document.createElement('option');option.value=value;option.textContent=title;scope.append(option); }
+        scope.value = scopes.some(([value]) => value === rule?.item_scope) ? rule.item_scope : scopes[0][0];
+        row.append(label,stepper,autoLabel,scheduledLabel,scope);scope.classList.toggle('hidden',scopes.length===1);productionZoneDocuments.append(row);
+        if(scopes.length>1)enhanceProductionZoneSelect(scope);
+        check.addEventListener('change',()=>{if(!check.checked){auto.checked=false;scheduled.checked=false;}syncProductionZonePrintControls();});
       }
-      templates.forEach((template) => {
-        const opt = document.createElement("option");
-        opt.value = String(template.id);
-        const type = String(template.document_type || "") === "receipt" ? "\u0427\u0435\u043a" : "\u042d\u0442\u0438\u043a\u0435\u0442\u043a\u0430";
-        opt.textContent = `${String(template.title || "\u0428\u0430\u0431\u043b\u043e\u043d \u043f\u0435\u0447\u0430\u0442\u0438")} - ${type}`;
-        if (Number(template.id) === Number(selectedTemplateId)) opt.selected = true;
-        productionZoneTemplateSelect.appendChild(opt);
+      setProductionZoneFormMode(productionZonesState.mode);
+    }
+
+    function syncProductionZonePrintControls(){
+      const edit=productionZonesState.mode==='edit';
+      const enabled=edit && productionZoneAutoPrint.checked;
+      productionZoneDateScope.disabled=!enabled;
+      productionZoneScheduled.disabled=!enabled;
+      productionZoneScheduledTime.disabled=!enabled || !productionZoneScheduled.checked;
+      productionZoneScheduledTime.closest('.production-zone-schedule-time').classList.toggle('hidden',!productionZoneScheduled.checked);
+      if(productionZoneTimeParts){
+        const [hour,minute]=productionZoneScheduledTime.value.split(':');
+        productionZoneTimeParts.hour.value=hour;productionZoneTimeParts.minute.value=minute;
+        for(const select of [productionZoneTimeParts.hour,productionZoneTimeParts.minute])select.disabled=productionZoneScheduledTime.disabled;
+      }
+      productionZoneDocuments?.querySelectorAll('[data-template-id]').forEach(row=>{
+        const available=row.querySelector('[data-print-document]').checked;
+        row.querySelectorAll('.production-zone-copies input,.production-zone-copies button,[data-print-scope]').forEach(control=>control.disabled=!edit || !available);
+        const auto=row.querySelector('[data-print-auto]');auto.disabled=!enabled || !available || auto.hasAttribute('data-manual-only');
+        row.querySelector('[data-print-scheduled]').disabled=!enabled || !available || !productionZoneScheduled.checked;
       });
-      if (!productionZoneTemplateSelect.value && productionZoneTemplateSelect.options.length) {
-        productionZoneTemplateSelect.selectedIndex = 0;
+      for(const [select,context] of productionZoneSelectContexts){
+        if(!select.isConnected){closeStoreTimezoneDropdown(context);productionZoneSelectContexts.delete(select);continue;}
+        if(select.disabled)closeStoreTimezoneDropdown(context);
+        renderStoreTimezoneSelector(context);
       }
     }
 
-
+    // Extend the existing settings selector renderer/open/close functions for zone fields.
+    function enhanceProductionZoneSelect(select){
+      if(!select || productionZoneSelectContexts.has(select))return;
+      const selector=document.createElement('div');selector.className='new-order-right-select-wrap production-zone-system-select';
+      select.parentNode.insertBefore(selector,select);selector.append(select);select.classList.add('hidden');select.tabIndex=-1;select.setAttribute('aria-hidden','true');
+      const trigger=document.createElement('button');trigger.type='button';trigger.className='new-order-right-select-trigger';trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');
+      trigger.setAttribute('aria-label',select.getAttribute('aria-label') || ({settingsProductionZoneStore:'Филиал',settingsProductionZonePrinter:'Принтер',settingsProductionZoneDateScope:'Какие заказы печатать автоматически'})[select.id] || 'Выбрать значение');
+      const value=document.createElement('span');const arrow=document.createElement('i');arrow.className='fas fa-chevron-down';trigger.append(value,arrow);
+      const menu=document.createElement('div');menu.className='new-order-right-select-menu production-zone-system-menu';menu.setAttribute('role','listbox');menu.setAttribute('popover','manual');selector.append(trigger,menu);
+      if(select.hasAttribute('data-time-part'))menu.classList.add('production-zone-time-menu');
+      const context={select,selector,trigger,menu,value,respectDisabled:true,topLayer:true,minMenuWidth:select.hasAttribute('data-time-part')?64:0};productionZoneSelectContexts.set(select,context);
+      trigger.addEventListener('click',event=>{
+        event.preventDefault();event.stopPropagation();
+        const open=!selector.classList.contains('is-open');
+        for(const other of productionZoneSelectContexts.values())if(other!==context)closeStoreTimezoneDropdown(other);
+        renderStoreTimezoneSelector(context);toggleStoreTimezoneDropdown(open,context);
+      });
+      menu.addEventListener('click',event=>{
+        const option=event.target.closest('[data-store-timezone-option]');if(!option || select.disabled || option.disabled)return;
+        event.preventDefault();event.stopPropagation();select.value=option.getAttribute('data-store-timezone-option');select.dispatchEvent(new Event('change',{bubbles:true}));closeStoreTimezoneDropdown(context);trigger.focus();
+      });
+      selector.addEventListener('keydown',event=>{if(event.key==='Escape'){closeStoreTimezoneDropdown(context);trigger.focus();event.stopPropagation();}});
+      select.addEventListener('change',()=>renderStoreTimezoneSelector(context));renderStoreTimezoneSelector(context);
+    }
+    function initProductionZoneTimeSelects(){
+      if(productionZoneTimeParts || !productionZoneScheduledTime)return;
+      productionZoneScheduledTime.type='hidden';
+      const parts=document.createElement('div');parts.className='production-zone-time-parts';
+      const makePart=(title,count)=>{
+        const select=document.createElement('select');select.dataset.timePart='';select.setAttribute('aria-label',title);
+        for(let index=0;index<count;index++){const option=document.createElement('option');option.value=String(index).padStart(2,'0');option.textContent=option.value;select.append(option);}
+        parts.append(select);return select;
+      };
+      const hour=makePart('Часы запуска',24),separator=document.createElement('span');separator.textContent=':';parts.append(separator);
+      const minute=makePart('Минуты запуска',60);productionZoneScheduledTime.after(parts);productionZoneTimeParts={hour,minute};
+      for(const select of [hour,minute]){enhanceProductionZoneSelect(select);select.addEventListener('change',()=>{productionZoneScheduledTime.value=hour.value+':'+minute.value;productionZoneScheduledTime.dispatchEvent(new Event('change',{bubbles:true}));});}
+    }
+    document.addEventListener('click',event=>{for(const context of productionZoneSelectContexts.values())if(!context.selector.contains(event.target))closeStoreTimezoneDropdown(context);});
+    productionZoneDocuments?.closest('.settings-panel-scroll')?.addEventListener('scroll',()=>{for(const context of productionZoneSelectContexts.values())closeStoreTimezoneDropdown(context);});
+    for(const control of [productionZoneAutoPrint,productionZoneDateScope,productionZoneScheduled])control?.addEventListener('change',syncProductionZonePrintControls);
 
     function fillProductionZoneForm(zone, mode) {
       const firstStoreId = productionZonesState.stores[0] ? Number(productionZonesState.stores[0].id) : 0;
@@ -43823,6 +44108,7 @@
       if (productionZoneNameInput) productionZoneNameInput.value = String(zone && zone.name || "");
       populateProductionZoneStores(storeId);
       populateProductionZonePrinters(storeId, printerId);
+      productionZonesState.snapshot = zone ? { ...zone } : null;
       populateProductionZoneTemplates(templateId);
       if (productionZoneCopiesInput) productionZoneCopiesInput.value = String(copies);
       productionZonesState.snapshot = zone ? { ...zone } : null;
@@ -43882,10 +44168,11 @@
           subtitle.className = "muted";
           const printerName = getProductionZonePrinterName(rule && rule.printer_id);
           const template = getPrintTemplateById(rule && rule.template_id);
-          const templateTitle = template ? String(template.title || "") : "";
+          const zoneRules = productionZonesState.rules.filter(item => Number(item.production_zone_id) === Number(zone.id) && Number(item.store_id) === Number(store.id) && Number(item.is_enabled) === 1);
+          const templateTitle = zoneRules.map(item => `${getPrintTemplateById(item.template_id)?.title || 'Шаблон'} × ${item.copies}`).join(', ');
           const copiesText = Math.max(1, Number(rule && rule.copies || 1) || 1);
           subtitle.textContent = printerName
-            ? `${printerName}${templateTitle ? ` - ${templateTitle}` : ""}${copiesText > 1 ? ` - ${copiesText} коп.` : ""}`
+            ? `${printerName}${templateTitle ? ` — ${templateTitle}` : ""} · ${zoneRules.some(item=>Number(item.zone_auto_print)===1 && (Number(item.auto_print)===1 || (Number(item.scheduled_auto_print)===1 && Number(item.scheduled_print)===1)))?"Автопечать":"Ручная печать"}${zoneRules.some(item=>Number(item.zone_auto_print)===1 && Number(item.scheduled_auto_print)===1 && Number(item.scheduled_print)===1)?' · По времени '+zoneRules[0].scheduled_auto_print_time:''}`
             : "\u041f\u0440\u0430\u0432\u0438\u043b\u043e \u043f\u0435\u0447\u0430\u0442\u0438 \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u043e";
           info.appendChild(title);
           info.appendChild(subtitle);
@@ -44239,8 +44526,10 @@
       const name = String(productionZoneNameInput && productionZoneNameInput.value || "").trim();
       const storeId = Number(productionZoneStoreSelect && productionZoneStoreSelect.value || 0);
       const printerId = Number(productionZonePrinterSelect && productionZonePrinterSelect.value || 0);
-      const templateId = Number(productionZoneTemplateSelect && productionZoneTemplateSelect.value || 0);
-      const copies = Math.max(1, Number(productionZoneCopiesInput && productionZoneCopiesInput.value || 1) || 1);
+      const rules = [...productionZoneDocuments.querySelectorAll('[data-template-id]')].filter(row => row.querySelector('[data-print-document]').checked).map(row => ({template_id:Number(row.dataset.templateId),copies:Number(row.querySelector('[data-print-copies]').value),item_scope:row.querySelector('[data-print-scope]').value,auto_print:row.querySelector('[data-print-auto]').checked,scheduled_print:row.querySelector('[data-print-scheduled]').checked}));
+      if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(productionZoneScheduledTime.value)){alert('Укажите время запуска, например 08:00.');return;}
+      if(productionZoneAutoPrint.checked && productionZoneScheduled.checked && !rules.some(rule=>rule.scheduled_print)){alert('Выберите хотя бы один шаблон в колонке «По времени».');return;}
+      if (!rules.length || rules.some(rule => !Number.isInteger(rule.copies) || rule.copies < 1 || rule.copies > 100)) { alert('Выберите документы и количество копий от 1 до 100.'); return; }
       if (!name) {
         alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u0437\u043e\u043d\u044b.");
         return;
@@ -44251,10 +44540,6 @@
       }
       if (!printerId) {
         alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0440\u0438\u043d\u0442\u0435\u0440.");
-        return;
-      }
-      if (!templateId) {
-        alert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0435\u0447\u0430\u0442\u0438.");
         return;
       }
       const id = Number(productionZonesState.snapshot && productionZonesState.snapshot.id || 0);
@@ -44268,7 +44553,7 @@
       try {
         const res = await authFetch(url, {
           method,
-          body: JSON.stringify({ name, store_id: storeId, printer_id: printerId, template_id: templateId, copies })
+          body: JSON.stringify({ name, store_id: storeId, printer_id: printerId, rules, auto_print: productionZoneAutoPrint.checked,auto_print_date_scope:productionZoneDateScope.value,scheduled_auto_print:productionZoneScheduled.checked,scheduled_auto_print_time:productionZoneScheduledTime.value })
         });
         const data = await res.json();
         if (!data || !data.ok || !data.data) {

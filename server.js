@@ -15,7 +15,7 @@ const { URL, domainToASCII } = require('url');
 const db = require('./db');
 const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
-const { createStockWebSocketHub, createOrdersWebSocketHub } = require('./services/stock-websocket');
+const { createStockWebSocketHub, createOrdersWebSocketHub, createAdminOrderCommandsHub } = require('./services/stock-websocket');
 const {
   startPolling: startTelegramPolling,
   handleWebhookUpdate: handleTelegramWebhookUpdate,
@@ -2143,7 +2143,7 @@ app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
   res.on('close', cleanup);
 });
 
-app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers, presenceService }));
+app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers, presenceService, ordersEvents }));
 app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers, can }));
 app.use('/api/admin/subscriptions', authMiddleware, makeAdminSubscriptionsRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
@@ -3111,8 +3111,46 @@ const server = listenTarget.path
   : app.listen(listenTarget.port, listenTarget.host);
 createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer, submitOrder: publicShopRouter.submitOrder });
 createOrdersWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer });
+createAdminOrderCommandsHub({ server, dispatch(message, res) {
+  return new Promise((resolve, reject) => {
+    res.once('finish', resolve);
+    const creating = message.type === 'order.create';
+    const req = {
+      app, method: creating ? 'POST' : 'PUT',
+      url: creating ? '/orders' : `/orders/${Number(message.order_id)}`,
+      path: creating ? '/orders' : `/orders/${Number(message.order_id)}`,
+      query: {}, params: {}, body: message.body,
+      headers: {
+        authorization: `Bearer ${String(message.token || '')}`,
+        'x-store-id': String(message.store_id), 'x-rbac-context': 'new-order',
+        'idempotency-key': message.request_id,
+      },
+      get(name) { return this.headers[String(name).toLowerCase()]; },
+    };
+    const fail = error => error ? reject(error) : res.status(404).json({ ok: false, error: 'ORDER_COMMAND_NOT_FOUND' });
+    Promise.resolve(authMiddleware(req, res, () => {
+      if (creating) {
+        return requirePermission('new_order.create')(req, res, async () => {
+          try {
+            if (!req.user.fullAccess && !await userHasStore(req.user, Number(message.store_id))) {
+              return res.status(403).json({ ok: false, error: 'STORE_FORBIDDEN' });
+            }
+            return await publicShopRouter.submitOrder(req, res);
+          } catch (error) { reject(error); }
+        });
+      }
+      return requireAdminPermission(req, res, () => {
+        req.url = `/${Number(message.order_id)}`;
+        req.path = req.url;
+        adminOrdersRouter.handle(req, res, fail);
+      });
+    })).catch(reject);
+  });
+} });
+
 
 server.on('listening', () => {
+  require('./api/printPush').startScheduledAutoPrint(db);
   const bindLabel = listenTarget.path
     ? listenTarget.path
     : `${listenTarget.host || '0.0.0.0'}:${listenTarget.port}`;

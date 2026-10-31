@@ -330,7 +330,7 @@
       var currentCode=String(config.currentCode || '').toLowerCase();
       var terminal=currentCode==='delivered'?'delivered':(['canceled','cancelled'].includes(currentCode)?'canceled':'');
       var label=sync?sync.label+(canCycle?' · Следующий этап: '+nextTitle:''):(canCycle?'Перейти на следующий этап: '+nextTitle:'Финальный этап: '+currentTitle);
-      var icon=sync && sync.mode!=='saved'?(sync.mode==='syncing'?'fa-spinner fa-spin':'fa-circle-exclamation'):(terminal==='canceled'?'fa-xmark':terminal==='delivered'?'fa-check':sync?'fa-check':'fa-arrow-right');
+      var icon=sync && sync.mode!=='saved'?(sync.mode==='pending'?'fa-clock':sync.mode==='syncing'?'fa-spinner fa-spin':'fa-circle-exclamation'):(terminal==='canceled'?'fa-xmark':terminal==='delivered'?'fa-check':sync?'fa-check':'fa-arrow-right');
       return '<button class="order-stage-btn order-stage-btn--arrow'+(canCycle?'':' is-static')+(sync?' is-status-'+escapeHtml(sync.mode):'')+(terminal && (!sync || sync.mode==='saved')?' is-final-'+terminal:'')+'" type="button" data-action="order-row-status-next" data-order-id="'+escapeHtml(orderId)+'"'+nextStatusAttr+
         ' data-stage-tooltip="'+escapeHtml(label)+'" aria-label="'+escapeHtml(label)+'"'+disabledAttr+'><i class="fas '+icon+'" aria-hidden="true"></i></button>';
     }
@@ -1441,6 +1441,80 @@
   }
 
   function createStatusQueue(options) {
+    if (options.saveBatch) {
+      var entries=new Map(),active=null,timer=null,flushing=false,restoredScope=null,confirmedGuards=new Map();
+      function snapshot(){return [...entries.values()].filter(entry=>entry.scope===options.scope()).map(entry=>({...entry,steps:entry.steps.slice()}));}
+      var persistence=Promise.resolve();
+      function persist(){var scope=options.storage(),data=snapshot();if(active)for(var entry of active.values()){if(entry.scope!==options.scope())continue;var next=data.find(item=>item.id===entry.id);if(next){next.retry={...entry};}else data.push({...entry});}persistence=persistence.catch(()=>{}).then(()=>scope?.set('pending',data));return persistence;}
+      function applyPending(entry){options.apply(entry.latest,true);options.onState(entry.id,'pending','Ожидает отправки',0);}
+      function schedule(){if(timer || flushing)return;timer=setTimeout(()=>{timer=null;void flush();},20000);}
+      async function restore(){
+        var scope=options.scope();if(restoredScope===scope)return;restoredScope=scope;
+        var storage=options.storage();
+        try{var saved=await storage?.get('pending');if(options.scope()!==scope)return;
+          for(var entry of saved || []){if(entries.has(entry.id))continue;entry.scope=scope;entry.visited_status_ids=entry.visited_status_ids || entry.steps.map(step=>step.status_id);entry.steps=entry.steps.slice(-1);if(entry.retry)entry.retry.scope=scope;entries.set(entry.id,entry);applyPending(entry);}
+          if(entries.size)schedule();
+        }catch(error){console.error('Status queue restore:',error);}
+      }
+      async function flush(){
+        if(flushing)return;
+        var scope=options.scope(),batch=snapshot().slice(0,100);if(!batch.length)return;
+        if(navigator.onLine===false){schedule();return;}
+        batch=batch.map(entry=>{if(!entry.retry){entries.delete(entry.id);return entry;}var retry=entry.retry,pending=entries.get(entry.id);delete pending.retry;pending.expected=Number(retry.latest.status_id);return retry;});
+        flushing=true;active=new Map(batch.map(entry=>[entry.id,entry]));
+        try{
+          var results=await options.saveBatch(batch.map(entry=>({order_id:entry.id,expected_status_id:entry.expected,steps:entry.steps,visited_status_ids:entry.visited_status_ids || []})));
+          if(options.scope()!==scope)return;
+          for(var entry of batch){
+            var result=results.find(item=>Number(item.order_id)===entry.id),next=entries.get(entry.id);
+            active.delete(entry.id);
+            if(result?.ok && result.data){
+              var priorGuard=confirmedGuards.get(entry.id),oldMutations=new Set(priorGuard?.scope===scope ? priorGuard.oldMutations : []);
+              if(priorGuard?.scope===scope && priorGuard.order.status_mutation_id)oldMutations.add(priorGuard.order.status_mutation_id);
+              confirmedGuards.set(entry.id,{scope:scope,order:result.data,oldMutations:oldMutations});
+              if(next){next.expected=Number(result.data.status_id);if(Number(next.latest.status_id)===next.expected){entries.delete(entry.id);options.apply(result.data,false);options.onState(entry.id,'saved','Сохранено',1200);}else applyPending(next);}
+              else{options.apply(result.data,false);options.onState(entry.id,'saved','Сохранено',1200);}
+            }else{
+              try{var confirmed=await options.recover(entry.id);if(options.scope()===scope){var newer=entries.get(entry.id);if(newer){newer.expected=Number(confirmed.status_id);applyPending(newer);}else options.apply(confirmed,false);}}catch(error){console.error('Status recovery:',error);}
+              if(options.scope()===scope)options.onState(entry.id,'error','Не сохранено: '+(result?.error || 'STATUS_FAILED'),0);
+            }
+          }
+        }catch(error){
+          if(options.scope()===scope)for(var entry of batch){
+            var next=entries.get(entry.id);
+            if(next)entry={...next,retry:entry};
+            entries.set(entry.id,entry);options.onState(entry.id,'error','Не отправлено. Повторим автоматически.',0);
+          }
+          console.error('Status batch:',error);
+        }finally{
+          active=null;
+          if(options.scope()===scope){await persist().catch(error=>console.error('Status persistence:',error));}
+          flushing=false;if(snapshot().length)schedule();
+        }
+      }
+      return {
+        restore:restore,flush:flush,
+        hasPendingChanges:()=>snapshot().length>0 || Boolean(active && [...active.values()].some(entry=>entry.scope===options.scope())),
+        hasPending:id=>entries.get(Number(id))?.scope===options.scope() || active?.get(Number(id))?.scope===options.scope(),
+        overlay:function(order){var id=Number(order?.id),entry=entries.get(id) || active?.get(id),guard=confirmedGuards.get(id);if(!entry || entry.scope!==options.scope()){if(!guard || guard.scope!==options.scope() || !guard.oldMutations.has(order?.status_mutation_id))return order;entry={latest:guard.order};}return {...order,status_id:entry.latest.status_id,status_title:entry.latest.status_title,status_code:entry.latest.status_code,status_color:entry.latest.status_color};},
+        enqueue:function(previous,optimistic){return this.enqueueMany([{previous:previous,optimistic:optimistic}]);},
+        enqueueMany:function(changes){
+          var scope=options.scope();
+          for(var change of changes){
+            var previous=change.previous,optimistic=change.optimistic,id=Number(previous.id),entry=entries.get(id);
+            if(!entry || entry.scope!==scope)entry={id:id,scope:scope,expected:Number(previous.status_id),steps:[],visited_status_ids:[],latest:previous};
+            entry.visited_status_ids=[...new Set([...(entry.visited_status_ids || []),Number(optimistic.status_id)])];
+            entry.steps=[{status_id:Number(optimistic.status_id),mutation_id:crypto.randomUUID()}];entry.latest=optimistic;
+            if(Number(optimistic.status_id)===entry.expected && !active?.has(id) && !entry.retry){entries.delete(id);options.apply(optimistic,true);options.onState(id,'saved','Без изменений',1200);}
+            else{entries.set(id,entry);applyPending(entry);}
+          }
+          if(!changes.length)return Promise.resolve();
+          schedule();
+          return persist().catch(error=>{for(var change of changes)options.onState(Number(change.previous.id),'error','Не удалось сохранить очередь на устройстве',0);console.error(error);throw error;});
+        }
+      };
+    }
+
     var pending=new Map();
     var mutations=new Map(),settled=new Map(),revision=0;
     function current(entry){return pending.get(entry.id)===entry && options.scope()===entry.scope;}

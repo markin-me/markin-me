@@ -5870,7 +5870,6 @@ body.page-orders .orders-row-select-control{
   transform:translateY(-50%);
 }
 body.page-orders .order-id-select-hit{cursor:inherit;}
-#ordersBulkFooter .products-bulk-footer-actions{justify-content:space-between;}
 .product-row-stock-input-wrap.is-saving .product-row-stock-unit-hint{
   opacity:0;
 }
@@ -6801,9 +6800,32 @@ body.page-orders .order-id-select-hit{cursor:inherit;}
   background:var(--color-surface);
   border-top:none;
 }
+.settings-print-template-panel > .settings-list-header{flex:0 0 auto}
+.settings-print-template-panel > .settings-panel-scroll{
+  display:flex;flex-direction:column;gap:14px;overflow-y:auto;overflow-x:hidden;
+}
+.settings-print-template-panel > .settings-panel-scroll > *{flex:0 0 auto;min-width:0}
+.settings-print-template-preview{
+  padding:12px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;min-width:0;
+}
+.settings-print-template-paper{
+  width:100%;overflow-wrap:anywhere;
+}
+.settings-print-template-paper :is(span,strong){overflow-wrap:anywhere;min-width:0}
+.settings-print-template-html{min-width:0}
+.settings-print-template-html > summary{cursor:pointer;font-weight:600;padding:10px 0}
+.settings-print-template-panel textarea.settings-print-template-code{
+  display:block;width:100%;min-height:0;max-height:none;overflow:hidden;resize:none;
+  white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 Consolas,'Courier New',monospace;
+}
 .settings-production-zone-form{
   align-content:start;
+  grid-template-columns:minmax(0,1fr);
+  min-width:0;
+  max-width:100%;
 }
+.settings-production-zone-form > *, .settings-production-zone-form .settings-site-field{min-width:0;max-width:100%}
+.settings-production-zone-form .control{box-sizing:border-box;min-width:0;max-width:100%;border-radius:999px}
 .settings-production-zone-store-group{
   display:grid;
   gap:8px;
@@ -35327,3 +35349,84 @@ body.page-cash #cashJournalList.orders-list .order-row.shared-order-summary-row 
   body.page-orders .orders-list .order-row.shared-order-summary-row .order-orders-mobile-status-row .order-col.order-total,
   body.page-cash.admin-mobile-pages #cashJournalList.orders-list .order-row.shared-order-summary-row .order-orders-mobile-status-row .order-col.order-total{width:100%;min-width:0;max-width:100%}
 }
+
+/* Existing order print action and production-zone form. */
+.production-zone-print-settings{--production-zone-columns:minmax(0,1fr) 94px 44px 68px;display:grid;gap:14px;min-width:0}
+.production-zone-print-settings .field-label{margin-bottom:0}
+.production-zone-document-head,.production-zone-document{display:grid;grid-template-columns:var(--production-zone-columns);column-gap:8px;align-items:center;min-width:0}
+.production-zone-document-head{font-size:11px;line-height:1.3;padding-bottom:8px;border-bottom:1px solid var(--color-border)}
+.production-zone-document-head > span:not(:first-child){text-align:center}
+.production-zone-document{row-gap:10px;margin:0;padding:14px 0;border-bottom:1px solid var(--color-border)}
+.production-zone-document > select{grid-column:1/-1}
+.settings-production-zone-form .products-bulk-toggle-all{display:flex;align-items:center;justify-content:flex-start;width:auto;height:auto;min-height:24px;min-width:0;white-space:normal;gap:10px;line-height:1.4}
+.settings-production-zone-form .products-bulk-toggle-all-input{inset:auto;left:0;top:50%;transform:translateY(-50%);width:20px;height:20px}
+.settings-production-zone-form .products-bulk-toggle-all-box{flex:0 0 16px;width:16px;height:16px;min-width:16px;border-radius:4px;box-sizing:border-box}
+.production-zone-document > .products-bulk-toggle-all:first-child{font-weight:700}
+.production-zone-auto-check{justify-self:center}
+.settings-production-zone-form .production-zone-auto-check{width:20px;height:24px;justify-content:center}
+.production-zone-auto-check.is-manual-only > input,.production-zone-auto-check.is-manual-only > .products-bulk-toggle-all-box{display:none}
+.production-zone-auto-check.is-manual-only::after{content:'—';color:var(--color-text-muted)}
+.production-zone-copies{--qty-pill-h:28px;--qty-pill-side:28px;grid-template-columns:28px minmax(0,1fr) 28px;width:94px;min-width:0;box-sizing:border-box}
+.production-zone-copies .discount-stepper-input{width:100%;box-sizing:border-box;min-width:0;padding:0;text-align:center}
+.production-zone-copies .discount-stepper-btn{width:28px;min-width:28px;height:28px}
+.settings-production-zone-form .production-zone-select{border-radius:24px;min-width:0;padding-right:24px}
+.production-zone-schedule-time{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.production-zone-schedule-time input{width:112px;border-radius:24px}
+.production-zone-system-select{min-width:0;width:100%;max-width:100%;box-sizing:border-box}
+.production-zone-document > .production-zone-system-select{grid-column:1/-1}
+.production-zone-system-select .new-order-right-select-trigger{box-sizing:border-box;width:100%;max-width:100%;border-radius:999px;height:36px;min-width:0;justify-content:space-between;font-size:14px;font-weight:600}
+.production-zone-system-select .new-order-right-select-trigger > span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.production-zone-system-select .new-order-right-select-trigger:disabled{cursor:default;opacity:.6}
+.production-zone-system-menu[popover]{position:fixed;inset:auto;margin:0;transform:none;display:none;box-sizing:border-box;grid-template-columns:minmax(0,1fr)}
+.production-zone-system-menu:popover-open{display:grid}
+.production-zone-system-menu .new-order-right-select-option{justify-content:flex-start;text-align:left;min-width:0;box-sizing:border-box;padding:0 12px;font-size:14px;font-weight:600;min-height:36px;height:auto;line-height:1.3;overflow-wrap:anywhere}
+.production-zone-system-menu .new-order-right-select-option:disabled{opacity:.5;cursor:default}
+.production-zone-time-parts{display:grid;grid-template-columns:54px 10px 54px;align-items:center;text-align:center;flex-shrink:0}
+.production-zone-time-parts .new-order-right-select-trigger{padding:0 8px;gap:4px}
+.production-zone-time-menu[popover]{overflow-y:auto;scrollbar-width:none;scrollbar-gutter:auto;padding:6px;border-radius:16px}
+.production-zone-time-menu::-webkit-scrollbar{display:none;width:0;height:0}
+.production-zone-time-menu .new-order-right-select-option{white-space:nowrap;overflow-wrap:normal;word-break:normal;justify-content:center;padding:0 6px;flex-shrink:0}
+.order-print-popover{position:fixed;inset:auto;margin:0;width:min(400px,calc(100vw - 16px));max-height:calc(100vh - 32px);overflow:auto;padding:16px;border:1px solid var(--color-border);border-radius:14px;background:var(--color-surface);color:var(--color-text);box-shadow:0 8px 32px #0003}
+.order-print-popover > * + *{margin-top:12px}
+.order-print-document{display:grid;grid-template-columns:18px minmax(0,1fr) 65px;gap:8px;align-items:center;margin:10px 0}
+.order-print-popover > button{width:100%}
+
+/* Reuse the order selection controls in the desktop toolbar/mobile header. */
+#ordersToolbar.is-selecting > .toolbar-left,
+#ordersToolbar.is-selecting > .toolbar-right:not(.orders-selection-actions){display:none}
+#ordersToolbar > .orders-selection-actions{width:100%}
+.orders-selection-controls{display:flex;align-items:center;gap:12px;width:100%;min-width:0}
+.orders-selection-count{display:flex;align-items:center;gap:10px;margin-right:auto;white-space:nowrap}
+.orders-selection-actions .icon-btn{flex:0 0 auto}
+@media(max-width:768px){
+  body.orders-mobile-selection .admin-mobile-header-nav{display:none}
+  body.orders-mobile-selection #adminMobileHeaderActions{flex:1 1 auto;width:100%}
+  body.orders-mobile-selection #ordersBulkActions{width:100%}
+  body.orders-mobile-selection .orders-selection-controls{width:100%}
+  body.orders-mobile-selection #ordersBulkClear{order:-1}
+}
+
+.order-print-popover .order-print-document{grid-template-columns:18px minmax(0,1fr) auto;align-items:center}
+.order-print-assignments{grid-column:3;text-align:right;white-space:normal;max-width:150px;font-size:12px;overflow-wrap:anywhere}
+.order-print-popover .order-print-copies{grid-column:3;justify-self:end;--qty-pill-h:32px;--qty-pill-side:32px;grid-template-columns:32px 48px 32px;min-width:112px}
+.order-print-copies .discount-stepper-input{width:48px;min-width:48px;max-width:48px;padding:0 4px;appearance:textfield;-moz-appearance:textfield}
+.order-print-copies .discount-stepper-input::-webkit-inner-spin-button,
+.order-print-copies .discount-stepper-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+
+.order-print-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.order-print-heading-title{display:flex;align-items:center;gap:8px;min-width:0}
+.order-print-heading-title > strong{min-width:0;font-size:13px}
+.order-print-heading .order-print-mode{flex:0 0 auto;gap:6px;white-space:nowrap}
+.order-print-mode .switch-text{font-size:12px}
+.order-print-popover [role="status"]:empty{display:none}
+.order-print-actions{position:relative;display:flex;align-items:center;gap:8px}
+.order-print-actions > .btn{flex:1 1 auto;min-width:0;border-radius:999px;justify-content:center;text-align:center}
+.order-print-actions > .order-print-info{flex:0 0 36px;width:36px;height:36px;border-radius:50%;font-weight:700;font-style:normal}
+.order-print-help{position:absolute;bottom:calc(100% + 8px);right:0;z-index:1;width:min(300px,100%);padding:12px;border:1px solid var(--color-border);border-radius:12px;background:var(--color-surface);box-shadow:0 4px 16px #0002;font-size:12px;line-height:1.5}
+
+.order-print-status-choice{position:relative;width:100%}
+.order-print-status-choice > .new-order-right-select-trigger{width:100%;justify-content:space-between}
+.order-print-status-choice > .new-order-right-select-menu{position:static;inset:auto;transform:none;width:100%;min-width:0;max-width:100%;max-height:none;margin:6px 0 0;overflow:visible;box-sizing:border-box}
+.order-print-status-choice.is-open > .new-order-right-select-menu:not(.hidden){display:flex;flex-direction:column}
+.order-print-status-choice > .new-order-right-select-menu > .new-order-right-select-option{width:100%;white-space:normal;text-align:left;flex:0 0 auto}
+.order-stage-btn.is-status-pending{opacity:1}

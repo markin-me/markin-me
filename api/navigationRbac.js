@@ -171,6 +171,8 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     if (route.includes('/assignee')) return 'orders.assign';
     if (action === 'update' && (/\/status$/.test(route) || route.endsWith('/paid'))) return 'orders.status';
     if (action === 'delete') return 'orders.cancel';
+    if (route === '/orders/status-batch') return 'orders.status';
+    if (route.startsWith('/orders/print/')) return 'orders.list.read';
     if (route.includes('/print-item-label')) return 'orders.list.read';
     return byAction('orders.list');
   }

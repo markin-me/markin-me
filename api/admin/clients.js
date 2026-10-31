@@ -11,9 +11,33 @@ const {
   serializeCustomerAddress,
 } = require('../../data/customer-address');
 
-module.exports = function makeAdminClientsRouter({ db, helpers, presenceService }) {
+module.exports = function makeAdminClientsRouter({ db, helpers, presenceService, ordersEvents }) {
   const router = express.Router();
   let customerGenderColumnPromise = null;
+  // Invalidation only: personal data stays behind the normal client API checks.
+  router.use((req,res,next) => {
+    if (['POST','PUT','PATCH','DELETE'].includes(req.method)) {
+      res.on('finish',()=>{
+        if(res.statusCode<200 || res.statusCode>=300)return;
+        const match=String(req.path).match(/^\/(\d+)(?:\/addresses(?:\/|$)|$)/);
+        if(match || req.path==='/') ordersEvents?.publish(helpers.getTenantId(req),helpers.getStoreId(req),'client.changed',{client_id:Number(match?.[1] || 0)});
+      });
+    }
+    next();
+  });
+  router.get('/sync/events', (req,res) => {
+    const tenantId=helpers.getTenantId(req),storeId=helpers.getStoreId(req);
+    if(!tenantId || !storeId)return res.status(400).json({ok:false,error:'SCOPE_REQUIRED'});
+    res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});
+    res.flushHeaders();
+    const send=data=>{res.write(`data: ${JSON.stringify(data)}\n\n`);res.flush?.();};
+    const unsubscribe=ordersEvents.subscribe(tenantId,storeId,event=>{if(event.event==='client.changed')send(event.data);});
+    // Each reconnect asks the client to reconcile missed changes.
+    send({resync:true});
+    const timer=setInterval(()=>{res.write(': heartbeat\n\n');res.flush?.();},20000);
+    req.on('close',()=>{clearInterval(timer);unsubscribe();});
+  });
+
 
   router.param('id', async (req, res, next, rawId) => {
     try {
@@ -2030,6 +2054,9 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService 
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      const selectedIds = req.query.ids == null ? [] : [...new Set(String(req.query.ids).split(',').map(Number))];
+      if (selectedIds.length > 50 || selectedIds.some(id => !Number.isSafeInteger(id) || id <= 0)) return res.status(400).json({ok:false,error:'BAD_ORDER_IDS'});
+      const idsClause = selectedIds.length ? `AND o.id IN (${selectedIds.map(() => '?').join(',')})` : '';
       const view = String(req.query.view || '').trim().toLowerCase();
       const isCompleted = view === 'completed' || view === 'history';
       const isActive = view === 'active';
@@ -2061,9 +2088,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService 
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
            ${actorClause}
            ${statusClause}
+           ${idsClause}
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ? OFFSET ?`,
-        [tenantId, storeId, customerId, ...actorParams, sqlLimit, offset]
+        [tenantId, storeId, customerId, ...actorParams, ...selectedIds, sqlLimit, offset]
       );
       if (!hasPagedView) return res.json({ ok: true, data: rows });
       const data = rows.slice(0, limit);

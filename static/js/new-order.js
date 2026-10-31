@@ -336,6 +336,13 @@
     resolveLoadReady = resolve;
   });
   let bootstrapDataReadyPromise = Promise.resolve();
+  let resolveLocalEditorDataReady;
+  const localEditorDataReadyPromise = new Promise(resolve => { resolveLocalEditorDataReady = resolve; });
+
+  let adminOrderSocket = null;
+  let adminOrderSocketReady = null;
+  const adminOrderCommands = new Map();
+
   let checkoutSessionRevision = 0;
   let durableCreateDraftSaveTimer = null;
   let durableCreateDraftUserRevision = 0;
@@ -1811,31 +1818,64 @@
     return Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
   }
 
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void ensureRightDeliverySettingsLoaded();
+  });
+  let rightDeliverySettingsScope = '';
+  let rightDeliverySettingsCheckedAt = 0;
+  function applyRightDeliverySettings(settings, scope) {
+    if (scope !== newOrderCacheScopeKey()) return;
+    const changed = JSON.stringify(state.rightDeliverySettings) !== JSON.stringify(settings);
+    state.rightDeliverySettings = settings;
+    state.rightDeliverySettingsReady = true;
+    rightDeliverySettingsScope = scope;
+    if (!changed) return;
+    for (const order of state.rightOrders) {
+      invalidateRightDeliveryQuote(Number(order.id));
+      scheduleRightDeliveryQuoteRefresh(Number(order.id), { immediate: true });
+    }
+    schedulePersistBootstrapSnapshot();
+    queueRenderRightOrderTabs();
+  }
+
   async function ensureRightDeliverySettingsLoaded() {
-    const currentSettings = state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
-      ? state.rightDeliverySettings
-      : null;
-    const hasLocalQuoteConfig = !!currentSettings
-      && Array.isArray(currentSettings?.zones)
-      && Array.isArray(currentSettings?.price_tiers);
-    if (state.rightDeliverySettingsReady && hasLocalQuoteConfig) return currentSettings;
-    if (state.rightDeliverySettingsPromise) return state.rightDeliverySettingsPromise;
+    const scope = newOrderCacheScopeKey();
+    if (rightDeliverySettingsScope === scope && state.rightDeliverySettingsReady
+      && Date.now() - rightDeliverySettingsCheckedAt < 60000) return state.rightDeliverySettings;
+    if (state.rightDeliverySettingsPromise && rightDeliverySettingsScope === scope) return state.rightDeliverySettingsPromise;
+    rightDeliverySettingsScope = scope;
     state.rightDeliverySettingsLoading = true;
-    state.rightDeliverySettingsPromise = (async () => {
+    const load = async () => {
+      if (scope !== newOrderCacheScopeKey()) throw new Error('DELIVERY_SCOPE_CHANGED');
+      const json = await apiJson('/api/public/delivery-settings');
+      if (scope !== newOrderCacheScopeKey()) throw new Error('DELIVERY_SCOPE_CHANGED');
+      return json.data;
+    };
+    const promise = (async () => {
       try {
-        const json = await apiJson("/api/public/delivery-settings");
-        state.rightDeliverySettings = json?.data || null;
-      } catch {
-        state.rightDeliverySettings = null;
+        const settings = window.AdminReferenceCache
+          ? await window.AdminReferenceCache.getOrLoadReference('delivery-settings', {
+            load,
+            validate: data => Boolean(data && Array.isArray(data.zones) && Array.isArray(data.price_tiers)),
+            onUpdate: data => applyRightDeliverySettings(data, scope),
+          })
+          : await load();
+        if (scope !== newOrderCacheScopeKey()) return null;
+        rightDeliverySettingsCheckedAt = Date.now();
+        applyRightDeliverySettings(settings, scope);
+        return settings;
+      } catch (error) {
+        console.warn('Не удалось обновить условия доставки:', error);
+        return scope === newOrderCacheScopeKey() ? state.rightDeliverySettings : null;
       } finally {
-        state.rightDeliverySettingsLoading = false;
-        state.rightDeliverySettingsReady = true;
-        state.rightDeliverySettingsPromise = null;
-        schedulePersistBootstrapSnapshot();
+        if (state.rightDeliverySettingsPromise === promise) {
+          state.rightDeliverySettingsLoading = false;
+          state.rightDeliverySettingsPromise = null;
+        }
       }
-      return state.rightDeliverySettings;
     })();
-    return state.rightDeliverySettingsPromise;
+    state.rightDeliverySettingsPromise = promise;
+    return promise;
   }
 
   function normalizeRightDeliveryMoney(value) {
@@ -8231,6 +8271,136 @@
     return buildRightAddressLine(getAddressDraftFromClientAddress(address, getDefaultRightAddressCity()));
   }
 
+  function clientLocalScope() {
+    return window.AdminPersistentCache?.scope({domain:'admin:checkout-clients',version:1});
+  }
+  const clientLocalRequests = new Map();
+  async function readClientLocal(key) {
+    const cache=clientLocalScope();
+    if(!cache?.complete)return null;
+    try{return (await cache.getEntry(key,{allowStale:true}))?.data || null;}
+    catch(error){console.warn('Client IndexedDB read:',error);return null;}
+  }
+  async function writeClientLocal(cache,key,value) {
+    if(!cache?.complete)return;
+    try{await cache.set(key,value);}
+    catch(error){console.warn('Client IndexedDB write:',error);}
+  }
+  async function fetchClientAddressSnapshot(clientId) {
+    const cache=clientLocalScope(),key=`${cache?.namespace}:${clientId}`;
+    if(clientLocalRequests.has(key))return clientLocalRequests.get(key);
+    const task=(async()=>{
+      const json=await apiJson(`/api/admin/clients/${clientId}/addresses`);
+      const rows=(Array.isArray(json.data)?json.data:[]).map(normalizeClientAddressRow).filter(row=>row.id>0);
+      await writeClientLocal(cache,`addresses:${clientId}`,rows);
+      if(cache?.namespace!==clientLocalScope()?.namespace)return rows;
+      setBoundedRuntimeCache(state.rightClientAddressesByClientId,clientId,rows);
+      for(const order of state.rightOrders){
+        if(Number(order.form?.clientId)!==clientId)continue;
+        state.rightClientAddressesByOrder.set(Number(order.id),rows);
+        if(rightAddressLookupState.orderId===Number(order.id))renderRightAddressList(order.id);
+      }
+      return rows;
+    })().finally(()=>clientLocalRequests.delete(key));
+    clientLocalRequests.set(key,task);return task;
+  }
+  async function refreshLocalClient(clientId) {
+    const cache=clientLocalScope();
+    const previous=await readClientLocal(`client:${clientId}`);
+    let row;
+    try { row=(await apiJson(`/api/admin/clients/${clientId}`)).data; }
+    catch(error) {
+      if(Number(error.status)!==404)throw error;
+      row=null;
+    }
+    if(cache?.namespace!==clientLocalScope()?.namespace)return;
+    const phone=row?normalizePhoneRu(row.phone):'';
+    if(previous?.phone && previous.phone!==phone)await cache.remove(`phone:${previous.phone}`);
+    if(!row || Number(row.is_active)===0){
+      if(previous?.phone)await cache.remove(`phone:${previous.phone}`);
+      await cache.remove(`client:${clientId}`);
+      await cache.remove(`addresses:${clientId}`);
+      state.rightClientAddressesByClientId.delete(clientId);
+      return;
+    }
+    const payload={found:true,clientId,name:String(row.name || '')};
+    if(phone.length===11)await writeClientLocal(cache,`phone:${phone}`,payload);
+    await writeClientLocal(cache,`client:${clientId}`,{phone});
+    await fetchClientAddressSnapshot(clientId);
+  }
+  let clientWarmGeneration=0;
+  async function warmLocalClients() {
+    const generation=++clientWarmGeneration,cache=clientLocalScope();
+    if(!cache?.complete || navigator.onLine===false)return;
+    const previous=await readClientLocal("directory") || [];
+    const directory=[];
+    for(let offset=0;generation===clientWarmGeneration;offset+=100){
+      const json=await apiJson(`/api/admin/clients?mode=lightweight&limit=100&offset=${offset}`);
+      if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
+      const rows=Array.isArray(json.data)?json.data:[];
+      for(const row of rows){
+        if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
+        const phone=normalizePhoneRu(row.phone);
+        directory.push({id:Number(row.id),phone});
+        if(phone.length===11){
+          await writeClientLocal(cache,`phone:${phone}`,{found:true,clientId:Number(row.id),name:String(row.name || '')});
+          await writeClientLocal(cache,`client:${row.id}`,{phone});
+        }
+      }
+      // Warm recent clients' addresses without flooding the server.
+      if(offset===0)for(const row of rows.slice(0,10)){
+        if(generation!==clientWarmGeneration)return;
+        await fetchClientAddressSnapshot(Number(row.id));
+      }
+      if(rows.length<100)break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
+    const phones=new Set(directory.map(row=>row.phone));
+    const ids=new Set(directory.map(row=>row.id));
+    for(const old of previous){
+      if(!phones.has(old.phone))await cache.remove(`phone:${old.phone}`);
+      if(!ids.has(old.id)){await cache.remove(`addresses:${old.id}`);await cache.remove(`client:${old.id}`);state.rightClientAddressesByClientId.delete(old.id);}
+    }
+    await writeClientLocal(cache,'directory',directory);
+    state.rightClientLookupCache.clear();
+  }
+  let clientSyncAbort=null;
+  async function connectClientSync() {
+    clientSyncAbort?.abort();
+    const controller=new AbortController();clientSyncAbort=controller;
+    const scope=clientLocalScope()?.namespace;
+    try{
+      const token=localStorage.getItem('authToken');
+      const response=await fetch('/api/admin/clients/sync/events',{signal:controller.signal,headers:{Authorization:`Bearer ${token}`,'x-store-id':String(getStoreIdFromStorage())}});
+      if(!response.ok || !response.body)throw new Error(`CLIENT_SYNC_${response.status}`);
+      const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
+      while(!controller.signal.aborted){
+        const {value,done}=await reader.read();if(done)break;
+        buffer+=decoder.decode(value,{stream:true});
+        let boundary;
+        while((boundary=buffer.indexOf('\n\n'))>=0){
+          const message=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);
+          const line=message.split('\n').find(line=>line.startsWith('data: '));
+          if(!line){if(document.visibilityState!=='hidden')void ensureRightDeliverySettingsLoaded();continue;}
+          if(scope!==clientLocalScope()?.namespace)return;
+          const event=JSON.parse(line.slice(6));
+          void ensureRightDeliverySettingsLoaded();
+          if(event.resync || !event.client_id){
+            void warmLocalClients().catch(error=>console.warn('Client warmup:',error));
+            for(const id of new Set(state.rightOrders.map(order=>Number(order.form?.clientId || 0)).filter(Boolean)))void refreshLocalClient(id).catch(error=>console.warn('Client resync:',error));
+          }
+          else{
+            state.rightClientLookupCache.clear();
+            void refreshLocalClient(Number(event.client_id)).catch(error=>console.warn('Client refresh:',error));
+          }
+        }
+      }
+    }catch(error){if(!controller.signal.aborted)console.warn('Client realtime:',error);}
+    if(!controller.signal.aborted && scope===clientLocalScope()?.namespace)setTimeout(connectClientSync,3000);
+  }
+  setTimeout(()=>{void connectClientSync();},0);
+
   async function lookupClientByPhoneForRightOrder(orderId, phoneValue, opts = {}) {
     const normalizedDigits = normalizePhoneRu(phoneValue);
     if (normalizedDigits.length !== 11) return;
@@ -8238,7 +8408,9 @@
     const reqSeq = Number(state.rightClientLookupReqSeqByOrder.get(id) || 0) + 1;
     state.rightClientLookupReqSeqByOrder.set(id, reqSeq);
     const cacheKey = normalizedDigits;
-    let payload = state.rightClientLookupCache.get(cacheKey) || null;
+    const localScope = clientLocalScope();
+    let payload = state.rightClientLookupCache.get(cacheKey) || await readClientLocal(`phone:${cacheKey}`);
+    if(localScope?.namespace!==clientLocalScope()?.namespace)return;
 
     if (!payload) {
       let lookupPromise = state.rightClientLookupPromiseByPhone.get(cacheKey) || null;
@@ -8259,6 +8431,8 @@
       }
       try {
         payload = await lookupPromise;
+        if(localScope?.namespace!==clientLocalScope()?.namespace)return;
+        if(payload.found)await writeClientLocal(localScope,`phone:${cacheKey}`,payload);
         setBoundedRuntimeCache(state.rightClientLookupCache, cacheKey, payload);
       } catch {
         return;
@@ -8342,10 +8516,10 @@
     state.rightClientAddressReqSeqByOrder.set(id, reqSeq);
     const orderBefore = state.rightOrders.find((row) => Number(row?.id || 0) === id) || null;
     const addressBefore = String(orderBefore?.form?.address || "");
-    const [addresses] = await Promise.all([
-      loadClientAddressesForRightOrder(id, { clientId: selectedClientId }),
-      ensureRightClientDiscountsLoaded(selectedClientId),
-    ]);
+    void ensureRightClientDiscountsLoaded(selectedClientId).then(()=>{
+      if(Number(state.rightOrders.find(row=>Number(row.id)===id)?.form?.clientId)===selectedClientId)renderRightOrderTabs();
+    });
+    const addresses = await loadClientAddressesForRightOrder(id, { clientId: selectedClientId });
     if (Number(state.rightClientAddressReqSeqByOrder.get(id) || 0) !== reqSeq) return;
     const index = state.rightOrders.findIndex((row) => Number(row?.id || 0) === id);
     if (index < 0) return;
@@ -13039,6 +13213,7 @@
 
   async function loadClientAddressesForRightOrder(orderId, opts = {}) {
     const id = Number(orderId || 0);
+    const addressScope=clientLocalScope()?.namespace;
     const clientId = Number(opts?.clientId || 0) || await getClientIdByOrder(id);
     if (!(clientId > 0)) {
       state.rightClientAddressesByOrder.set(id, []);
@@ -13051,12 +13226,22 @@
     }
     let requestPromise = state.rightClientAddressesPromiseByClientId.get(clientId) || null;
     if (!requestPromise) {
-      requestPromise = apiJson(`/api/admin/clients/${clientId}/addresses`)
-        .then((json) => (Array.isArray(json?.data) ? json.data : []).map(normalizeClientAddressRow).filter((a) => a.id > 0));
+      if(!opts?.force){
+        const cached=await readClientLocal(`addresses:${clientId}`);
+        if(addressScope!==clientLocalScope()?.namespace)return [];
+        if(cached){
+          setBoundedRuntimeCache(state.rightClientAddressesByClientId,clientId,cached);
+          state.rightClientAddressesByOrder.set(id,cached);
+          void fetchClientAddressSnapshot(clientId).catch(error=>console.warn('Address revalidation:',error));
+          return cached;
+        }
+      }
+      requestPromise = fetchClientAddressSnapshot(clientId);
       state.rightClientAddressesPromiseByClientId.set(clientId, requestPromise);
     }
     try {
       const list = await requestPromise;
+      if(addressScope!==clientLocalScope()?.namespace)return [];
       setBoundedRuntimeCache(state.rightClientAddressesByClientId, clientId, list);
       const currentOrder = state.rightOrders.find((row) => Number(row?.id || 0) === id) || null;
       if (Number(currentOrder?.form?.clientId || 0) !== clientId) return list;
@@ -13169,8 +13354,13 @@
     if (!forceReload && rightAddressMapModePromise) return rightAddressMapModePromise;
     rightAddressMapModePromise = (async () => {
       try {
-        const json = await apiJson("/api/admin/tenant/map-provider-config");
-        rightAddressMapModeEnabled = parseRightAddressBooleanFlag(json?.data?.store_address_map_enabled);
+        const scope=clientLocalScope()?.namespace;
+        const load=async()=> (await apiJson("/api/admin/tenant/map-provider-config")).data;
+        const config=window.AdminReferenceCache
+          ? await window.AdminReferenceCache.getOrLoadReference('checkout-address-mode',{load,validate:data=>Boolean(data && Object.hasOwn(data,'store_address_map_enabled'))})
+          : await load();
+        if(scope!==clientLocalScope()?.namespace)return null;
+        rightAddressMapModeEnabled = parseRightAddressBooleanFlag(config.store_address_map_enabled);
       } catch {
         rightAddressMapModeEnabled = false;
       } finally {
@@ -13560,6 +13750,7 @@
     const { backdrop } = getRightAddressOverlayElements();
     if (!backdrop) return;
     closeRightAddressLookupPopover();
+    rightAddressLookupState.orderId=0;
     backdrop.classList.add("hidden");
     backdrop.onclick = null;
   }
@@ -13680,12 +13871,20 @@
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     ensureRightAddressOverlay();
-    rightAddressMapModeEnabled = await ensureRightAddressMapMode(true);
+    const mapModePromise = ensureRightAddressMapMode();
     const { backdrop, newBtn, saveBtn, cancelBtn, lookup, street, house, lookupWrap } = getRightAddressOverlayElements();
     if (!backdrop || !saveBtn || !cancelBtn) return;
     rightAddressLookupState.orderId = id;
 
-    await loadClientAddressesForRightOrder(id);
+    const addressLoad = loadClientAddressesForRightOrder(id);
+    void addressLoad.then(()=>{
+      if(rightAddressLookupState.orderId===id)renderRightAddressList(id);
+    });
+    void mapModePromise.then(()=>{
+      if(rightAddressLookupState.orderId!==id)return;
+      if(lookupWrap)lookupWrap.classList.toggle('hidden',!rightAddressMapModeEnabled);
+      syncRightAddressMapLayout(rightAddressMapModeEnabled);
+    });
     const rows = Array.isArray(state.rightClientAddressesByOrder.get(id)) ? state.rightClientAddressesByOrder.get(id) : [];
 
     const existingSelectedId = Number(state.rightAddressSelectedIdByOrder.get(id) || 0);
@@ -17272,6 +17471,82 @@
     schedulePersistBootstrapSnapshot();
   }
 
+  function adminOrderTransportError(sent = false) {
+    const error = new Error(sent ? 'ORDER_RESULT_UNKNOWN' : 'ORDER_SOCKET_UNAVAILABLE');
+    error.transportUnavailable = true;
+    error.commandSent = sent;
+    error.responseReceived = false;
+    return error;
+  }
+
+  function ensureAdminOrderSocket() {
+    if (adminOrderSocketReady) return adminOrderSocketReady;
+    if (typeof WebSocket !== 'function') return Promise.reject(adminOrderTransportError());
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${protocol}//${location.host}/api/admin/orders-ws`);
+    adminOrderSocket = socket;
+    adminOrderSocketReady = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { reject(adminOrderTransportError()); socket.close(); }, 3000);
+      const fail = () => { clearTimeout(timer); reject(adminOrderTransportError()); };
+      socket.addEventListener('error', fail, { once: true });
+      socket.addEventListener('close', fail, { once: true });
+      socket.addEventListener('message', event => {
+        let message;
+        try { message = JSON.parse(event.data); } catch (_) { return; }
+        if (message.type === 'ready') { clearTimeout(timer); resolve(socket); return; }
+        if (message.type !== 'order.result') return;
+        const pending = adminOrderCommands.get(message.request_id);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        adminOrderCommands.delete(message.request_id);
+        if (message.payload?.ok === true) pending.resolve(message.payload);
+        else {
+          const error = new Error(message.payload?.error || `API_ERROR_${message.status}`);
+          error.httpStatus = message.status;
+          error.responseReceived = true;
+          pending.reject(error);
+        }
+      });
+    });
+    socket.addEventListener('close', () => {
+      if (adminOrderSocket === socket) { adminOrderSocket = null; adminOrderSocketReady = null; }
+      for (const [id, pending] of adminOrderCommands) {
+        if (pending.socket !== socket) continue;
+        clearTimeout(pending.timer);
+        adminOrderCommands.delete(id);
+        pending.reject(adminOrderTransportError(true));
+      }
+    });
+    return adminOrderSocketReady;
+  }
+
+  async function sendAdminOrderCommand(url, opts, headers) {
+    const token = localStorage.getItem('authToken');
+    const storeId = String(headers['x-store-id']);
+    const socket = await ensureAdminOrderSocket();
+    if (token !== localStorage.getItem('authToken') || storeId !== String(localStorage.getItem('activeStoreId') || '1')) throw new Error('ORDER_SCOPE_CHANGED');
+    if (socket.readyState !== WebSocket.OPEN) throw adminOrderTransportError();
+    const creating = url === '/api/public/orders';
+    const requestId = creating ? headers['Idempotency-Key'] : createOrderSubmissionId();
+    if (adminOrderCommands.has(requestId)) throw new Error('ORDER_SUBMISSION_BUSY');
+    const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body;
+    return new Promise((resolve, reject) => {
+      const pending = {resolve, reject, socket, timer: setTimeout(() => {
+        adminOrderCommands.delete(requestId);
+        reject(adminOrderTransportError(true));
+      }, 120000)};
+      adminOrderCommands.set(requestId, pending);
+      try {
+        socket.send(JSON.stringify({type: creating ? 'order.create' : 'order.update', request_id: requestId,
+          order_id: creating ? null : Number(url.split('/').pop()), token, store_id: Number(storeId), body}));
+      } catch (_) {
+        clearTimeout(pending.timer);
+        adminOrderCommands.delete(requestId);
+        reject(adminOrderTransportError());
+      }
+    });
+  }
+
   async function apiJson(url, opts = {}) {
     const token = localStorage.getItem("authToken");
     const storeId = localStorage.getItem("activeStoreId") || "1";
@@ -17282,6 +17557,27 @@
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       "x-store-id": storeId,
     };
+    const orderCommand = (opts.method === 'PUT' && /^\/api\/admin\/orders\/\d+$/.test(url))
+      || (opts.method === 'POST' && url === '/api/public/orders' && headers['Idempotency-Key']);
+    if (orderCommand) {
+      const requestToken = localStorage.getItem('authToken');
+      const requestStore = localStorage.getItem('activeStoreId') || '1';
+      const isCurrentScope = () => requestToken === localStorage.getItem('authToken') && requestStore === (localStorage.getItem('activeStoreId') || '1');
+      try {
+        const result = await sendAdminOrderCommand(url, opts, headers);
+        if (!isCurrentScope()) throw new Error('ORDER_SCOPE_CHANGED');
+        return result;
+      }
+      catch (error) {
+        if (!error.transportUnavailable) throw error;
+        if (!isCurrentScope()) throw new Error('ORDER_SCOPE_CHANGED');
+        // Creation is persistently idempotent. An already-sent edit must not be replayed blindly.
+        if (error.commandSent && opts.method === 'PUT') {
+          error.message = '\u0421\u0432\u044f\u0437\u044c \u043f\u043e\u0442\u0435\u0440\u044f\u043d\u0430. \u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0451\u043d. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0437\u0430\u043a\u0430\u0437 \u043f\u0435\u0440\u0435\u0434 \u043f\u043e\u0432\u0442\u043e\u0440\u043e\u043c.';
+          throw error;
+        }
+      }
+    }
     const res = await fetch(url, { method: opts.method || "GET", headers, body: opts.body });
     const data = await res.json().catch(() => null);
     if (!data || data.ok !== true) {
@@ -21938,7 +22234,7 @@
     const scopeKey = newOrderCacheScopeKey();
     const run = () => {
       if (generation !== idleWarmupGeneration || newOrderCacheScopeKey() !== scopeKey) return;
-      if (state.rightDeliverySettingsReady || state.rightDeliverySettingsPromise) return;
+      if (state.rightDeliverySettingsPromise) return;
       void ensureRightDeliverySettingsLoaded().catch(() => {});
     };
     if (typeof window.requestIdleCallback === "function") {
@@ -23716,7 +24012,8 @@
     },
     createBlankSession: (opts = {}) => buildBlankDraftSession(opts),
     createSessionFromOrder: async (order, opts = {}) => {
-      await bootstrapDataReadyPromise;
+      const locallyReady = await Promise.race([localEditorDataReadyPromise, bootstrapDataReadyPromise.then(() => false)]);
+      if (!locallyReady) await bootstrapDataReadyPromise;
       return buildDraftSessionFromOrder(order, opts);
     },
   };
@@ -23805,6 +24102,7 @@
   }
 
   async function load() {
+    void ensureAdminOrderSocket().catch(() => {});
     renderStartupShell();
     markLoadReady();
     startupInventoryPromise = null;
@@ -23854,6 +24152,11 @@
       }
 
       await ensureTenantPriceRoundingSettings();
+      const localEditorReady = state.categories.length > 0 && state.checkoutDraftReady
+        && state.rightDeliveryTypes.length > 0 && state.rightPaymentTypes.length > 0 && state.rightTimeOptions.length > 0
+        && state.unitConversions.length > 0
+        && (Boolean(window.CatalogRepository?.getAllProducts().length) || [...state.categoryProductsCache.values()].some(payload => payload?.source?.length));
+      resolveLocalEditorDataReady(Boolean(localEditorReady));
       const hasLocalProducts = Boolean(window.CatalogRepository?.getAllProducts().length)
         || [...state.categoryProductsCache.values()].some((payload) => Array.isArray(payload?.source) && payload.source.length > 0);
       const needsBootstrap = (
@@ -24097,6 +24400,22 @@
     closeNewOrderStockSocket();
   }, { once: true });
   document.addEventListener("tenantStoreChanged", () => {
+    rightDeliverySettingsScope = '';
+    rightDeliverySettingsCheckedAt = 0;
+    state.rightDeliverySettings = null;
+    state.rightDeliverySettingsReady = false;
+    state.rightDeliverySettingsPromise = null;
+    state.rightDeliverySettingsLoading = false;
+    clientWarmGeneration++;
+    state.rightClientLookupCache.clear();
+    state.rightClientLookupPromiseByPhone.clear();
+    state.rightClientAddressesByClientId.clear();
+    state.rightClientAddressesPromiseByClientId.clear();
+    state.rightClientAddressesByOrder.clear();
+    rightAddressMapModeEnabled=null;
+    rightAddressMapModePromise=null;
+    closeRightAddressOverlay();
+    void connectClientSync();
     closeNewOrderStockSocket();
     idleWarmupGeneration += 1;
     inventoryRequestGeneration += 1;

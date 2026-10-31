@@ -8,6 +8,9 @@
   const generations = new Map();
   let runtimeGeneration = 0;
   const definitions = {
+    "delivery-settings": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000, refreshAfterMs: 60 * 1000 },
+    "checkout-address-mode": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000, refreshAfterMs: 60 * 1000 },
+    "print-options": { version: 2, ttlMs: 7 * 24 * 60 * 60 * 1000, refreshAfterMs: 60 * 1000 },
     "store-time": { version: 1, ttlMs: 24 * 60 * 60 * 1000 },
     "payment-methods": { version: 1, ttlMs: 12 * 60 * 60 * 1000 },
     stores: { version: 1, ttlMs: 2 * 60 * 60 * 1000 },
@@ -51,7 +54,7 @@
       if (scope && currentScope && currentScope.namespace === scope.namespace
         && generation === (generations.get(key) || 0) && startedRuntimeGeneration === runtimeGeneration) {
         await scope.set("value", data, { ttlMs: definitions[name].ttlMs }).catch(() => false);
-        memory.set(key, { data, stale: false, expiresAt: Date.now() + definitions[name].ttlMs });
+        memory.set(key, { data, stale: false, expiresAt: Date.now() + (definitions[name].refreshAfterMs || definitions[name].ttlMs) });
         if (cachedData !== null && !sameValue(cachedData, data) && typeof options.onUpdate === "function") {
           options.onUpdate(data);
         }
@@ -78,6 +81,11 @@
     }
     if (!entry) {
       entry = await scope.getEntry("value", { allowStale: true }).catch(() => null);
+      if (entry && definition.refreshAfterMs) {
+        // Keep the persisted snapshot longer than its network revalidation age.
+        entry.expiresAt = Number(entry.updatedAt || entry.createdAt || 0) + definition.refreshAfterMs;
+        entry.stale = entry.expiresAt <= Date.now();
+      }
       if (entry) memory.set(key, entry);
     }
     if (entry) {
