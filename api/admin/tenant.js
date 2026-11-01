@@ -3423,6 +3423,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
           : field;
 
       const url = `/static/uploads/tenants/${tenantId}/sounds/${file.filename}`;
+      if(field==='print_sound_new_order_url'||field==='print_sound_new_message_url')return res.json({ok:true,url,name:file.originalname});
 
       await db.query(
         `UPDATE ten_tenants SET ${tenantField}=? WHERE id=?`,
@@ -5650,6 +5651,13 @@ async function fetchStoreWithHours(tenantId, storeId) {
    * GET /api/admin/tenant/print-api?store_id=1
    * Р’РѕР·РІСЂР°С‰Р°РµС‚ С‚РѕРєРµРЅ РґР»СЏ РїРµС‡Р°С‚Рё РїРѕ С„РёР»РёР°Р»Сѓ
    */
+  router.use('/print-api',(req,res,next)=>{
+    res.once('finish',()=>{
+      if(req.method==='GET'||res.statusCode>=400||req.printControlChanged===false)return;
+      const tenantId=req.user?.tenantId??helpers.getTenantId(req);
+      if(tenantId)ordersEvents.publish(tenantId,0,'print.changed',{kind:req.path.includes('/jobs')||req.path.includes('test-print')?'queue':req.path.includes('control')?'control':'devices',store_id:Number(req.body?.store_id),connection_id:Number(req.body?.connection_id)});
+    });next();
+  });
   async function selectPrintApiRow(tenantId, storeId, connectionId) {
     if (!(Number(connectionId) > 0)) return null;
     try {
@@ -5751,8 +5759,9 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if(!tenantId||!(storeId>0)||!(connectionId>0)||typeof req.body?.paused!=='boolean')return res.status(400).json({ok:false,error:'BAD_PRINT_CONTROL'});
       const control=await selectPrintApiControl(tenantId,storeId,connectionId);
       if(!control)return res.status(404).json({ok:false,error:'PRINT_CONNECTION_NOT_FOUND'});
-      await db.query(`UPDATE print_api_tokens SET printing_paused=?,print_control_version=print_control_version+1,updated_at=NOW()
+      const [changed]=await db.query(`UPDATE print_api_tokens SET printing_paused=?,print_control_version=print_control_version+1,updated_at=NOW()
         WHERE id=? AND tenant_id=? AND store_id=? AND printing_paused<>?`,[req.body.paused?1:0,connectionId,tenantId,storeId,req.body.paused?1:0]);
+      req.printControlChanged=changed.affectedRows>0;
       return res.json({ok:true,data:await selectPrintApiControl(tenantId,storeId,connectionId)});
     }catch(error){console.error('Print control update failed:',error);return res.status(500).json({ok:false,error:'PRINT_CONTROL_FAILED'});}
   });
@@ -6182,7 +6191,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         if(rows.some(job=>job.status==='processing')){await conn.rollback();return res.status(409).json({ok:false,error:'PRINT_JOB_PROCESSING'});}
         await conn.query('UPDATE print_jobs SET deleted_at=COALESCE(deleted_at,NOW()),updated_at=NOW() WHERE tenant_id=? AND store_id=? AND token_id=? AND id IN (?)',[tenantId,storeId,tokenId,ids]);
       }else{
-        if(rows.some(job=>job.deleted_at||!['failed','done'].includes(job.status))){await conn.rollback();return res.status(409).json({ok:false,error:'PRINT_JOB_NOT_REPEATABLE'});}
+        if(rows.some(job=>job.deleted_at||!['pending','failed','done'].includes(job.status))){await conn.rollback();return res.status(409).json({ok:false,error:'PRINT_JOB_NOT_REPEATABLE'});}
         for(const job of rows){
           const jobKey=`repeat:${requestId}:${job.id}`;
           const raw=String(job.pdf_base64||'');

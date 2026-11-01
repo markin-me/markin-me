@@ -1963,7 +1963,7 @@ const publicShopRouter = makePublicShopRouter({ db, helpers, ordersEvents, prese
 app.set('synchronizeOrderOnlinePayment',publicShopRouter.synchronizeOnlinePayment);
 publicShopRouter.startPaymentReleaseWorker();
 app.use('/api/public', publicShopRouter);
-app.use('/api/print', makePrintApiRouter({ db, helpers }));
+app.use('/api/print', makePrintApiRouter({ db, helpers, ordersEvents }));
 
 function isCustomerChatRequest(req) {
   const actor = String(
@@ -2156,7 +2156,7 @@ app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessa
 const adminOrdersRouter=makeAdminOrdersRouter({db,helpers,ordersEvents,can});
 publicShopRouter.setAbandonedCleanup(()=>adminOrdersRouter.cleanupAbandoned(app.get('paymentServiceClient')));
 app.use('/api/admin/orders', authMiddleware, adminOrdersRouter);
-app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers, can }));
+app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers, ordersEvents, can }));
 app.use('/api/admin/payment-connections', authMiddleware, makePaymentConnectionsRouter({ db }));
 app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents, can }));
 app.use('/api/admin/team', authMiddleware, makeAdminTeamRouter({ db, helpers, requirePermission }));
@@ -3111,7 +3111,7 @@ const server = listenTarget.path
   : app.listen(listenTarget.port, listenTarget.host);
 createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer, submitOrder: publicShopRouter.submitOrder, loadCheckoutSettings: publicShopRouter.loadCheckoutSettings });
 createOrdersWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer });
-createAdminOrderCommandsHub({ server, dispatch(message, res) {
+createAdminOrderCommandsHub({ server, ordersEvents, dispatch(message, res) {
   return new Promise((resolve, reject) => {
     res.once('finish', resolve);
     const creating = message.type === 'order.create';
@@ -3129,6 +3129,7 @@ createAdminOrderCommandsHub({ server, dispatch(message, res) {
     };
     const fail = error => error ? reject(error) : res.status(404).json({ ok: false, error: 'ORDER_COMMAND_NOT_FOUND' });
     Promise.resolve(authMiddleware(req, res, () => {
+      if(message.type==='print.subscribe')return res.json({ok:true,data:{tenant_id:req.user?.tenantId??helpers.getTenantId(req)}});
       if (creating) {
         return requirePermission('new_order.create')(req, res, async () => {
           try {
@@ -3150,6 +3151,7 @@ createAdminOrderCommandsHub({ server, dispatch(message, res) {
 
 
 server.on('listening', () => {
+  require('./api/printPush').setPrintEventsHub(ordersEvents);
   require('./api/printPush').startScheduledAutoPrint(db);
   const bindLabel = listenTarget.path
     ? listenTarget.path

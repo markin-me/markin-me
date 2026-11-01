@@ -1335,19 +1335,19 @@
                   <span class="switch-ui" aria-hidden="true"></span>
                 </label>
               </div>
-              <div class="settings-sound-box" style="margin-top:6px;">
-                <span class="settings-sound-label" id="settingsPrintApiOrderSoundLabel">Файл не выбран</span>
-                <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" id="settingsPrintApiOrderSoundPlayBtn" aria-label="Прослушать">
-                  <i class="fas fa-play"></i>
-                </button>
-              </div>
-              <div class="settings-sound-actions" style="margin-top:6px;">
-                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" id="settingsPrintApiOrderSoundUploadBtn">
-                  <i class="fas fa-upload"></i>
-                </button>
-                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" id="settingsPrintApiOrderSoundClearBtn">
-                  <i class="fas fa-trash"></i>
-                </button>
+              <div class="print-notification-audio" data-print-audio="Order">
+                <button class="btn btn-icon btn-sm" type="button" title="Воспроизвести" aria-label="Воспроизвести" id="settingsPrintApiOrderSoundPlayBtn" disabled><i class="fas fa-play" aria-hidden="true"></i></button>
+                <div class="print-notification-track">
+                  <span class="settings-sound-label" id="settingsPrintApiOrderSoundLabel" role="status">Звук не загружен</span>
+                  <div class="print-notification-wave hidden">
+                    <canvas width="600" height="54" aria-hidden="true"></canvas>
+                    <input type="range" min="0" max="1" value="0" step="0.05" aria-label="Позиция воспроизведения" disabled />
+                  </div>
+                  <span class="print-notification-time hidden"></span>
+                </div>
+                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить новый звук" aria-label="Загрузить новый звук" id="settingsPrintApiOrderSoundUploadBtn"><i class="fas fa-upload" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm" type="button" title="Скачать звук" aria-label="Скачать звук" id="settingsPrintApiOrderSoundDownloadBtn" disabled><i class="fas fa-download" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить звук" aria-label="Удалить звук" id="settingsPrintApiOrderSoundClearBtn"><i class="fas fa-trash" aria-hidden="true"></i></button>
               </div>
               <input class="control hidden" type="file" id="settingsPrintApiOrderSoundFile" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" />
               <input class="hidden" type="text" id="settingsPrintApiOrderSoundUrl" readonly />
@@ -1362,19 +1362,19 @@
                   <span class="switch-ui" aria-hidden="true"></span>
                 </label>
               </div>
-              <div class="settings-sound-box" style="margin-top:6px;">
-                <span class="settings-sound-label" id="settingsPrintApiMessageSoundLabel">Файл не выбран</span>
-                <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" id="settingsPrintApiMessageSoundPlayBtn" aria-label="Прослушать">
-                  <i class="fas fa-play"></i>
-                </button>
-              </div>
-              <div class="settings-sound-actions" style="margin-top:6px;">
-                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" id="settingsPrintApiMessageSoundUploadBtn">
-                  <i class="fas fa-upload"></i>
-                </button>
-                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" id="settingsPrintApiMessageSoundClearBtn">
-                  <i class="fas fa-trash"></i>
-                </button>
+              <div class="print-notification-audio" data-print-audio="Message">
+                <button class="btn btn-icon btn-sm" type="button" title="Воспроизвести" aria-label="Воспроизвести" id="settingsPrintApiMessageSoundPlayBtn" disabled><i class="fas fa-play" aria-hidden="true"></i></button>
+                <div class="print-notification-track">
+                  <span class="settings-sound-label" id="settingsPrintApiMessageSoundLabel" role="status">Звук не загружен</span>
+                  <div class="print-notification-wave hidden">
+                    <canvas width="600" height="54" aria-hidden="true"></canvas>
+                    <input type="range" min="0" max="1" value="0" step="0.05" aria-label="Позиция воспроизведения" disabled />
+                  </div>
+                  <span class="print-notification-time hidden"></span>
+                </div>
+                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить новый звук" aria-label="Загрузить новый звук" id="settingsPrintApiMessageSoundUploadBtn"><i class="fas fa-upload" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm" type="button" title="Скачать звук" aria-label="Скачать звук" id="settingsPrintApiMessageSoundDownloadBtn" disabled><i class="fas fa-download" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить звук" aria-label="Удалить звук" id="settingsPrintApiMessageSoundClearBtn"><i class="fas fa-trash" aria-hidden="true"></i></button>
               </div>
               <input class="control hidden" type="file" id="settingsPrintApiMessageSoundFile" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" />
               <input class="hidden" type="text" id="settingsPrintApiMessageSoundUrl" readonly />
@@ -1390,6 +1390,7 @@
               <button class="product-footer-btn product-footer-edit" type="button" id="settingsPrintApiEditBtn">Редактировать</button>
             </div>
             <div class="product-footer-edit-mode hidden" id="settingsPrintApiFooterEdit">
+              <div id="settingsPrintApiDirtyNotice" class="muted hidden" role="status">Несохранённые изменения</div>
               <button class="product-footer-btn product-footer-cancel" type="button" id="settingsPrintApiCancelBtn" title="Отменить" aria-label="Отменить">
                 <i class="fas fa-times"></i>
               </button>

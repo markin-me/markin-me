@@ -9541,6 +9541,8 @@
 
     let printApiListItems = [];
     let printApiDeviceSnapshot = {printers:[],agents:[]};
+    const printApiExpandedDevices=new Set();
+    const printApiAudioStates=new Map(),printApiAudioNames=new Map();
     let printApiControlState = null;
     let printApiActiveStoreId = 0;
     let printApiSelectedConnectionId = 0;
@@ -20822,6 +20824,7 @@
 
 
       if (printApiPanel) printApiPanel.classList.toggle("hidden", !isPrintApiTabId(tabId));
+      if(!isPrintApiTabId(tabId))for(const state of printApiAudioStates.values())state.audio?.pause();
 
 
 
@@ -28658,7 +28661,10 @@
 
 
 
+          const uploadTab=activeRightTabId;
           const url = await uploadPrintApiSound(file, "print_sound_new_order_url");
+          if(uploadTab!==activeRightTabId)return;
+          if(url)printApiAudioNames.set(url,file.name);
 
 
 
@@ -28734,7 +28740,10 @@
 
 
 
+          const uploadTab=activeRightTabId;
           const url = await uploadPrintApiSound(file, "print_sound_new_message_url");
+          if(uploadTab!==activeRightTabId)return;
+          if(url)printApiAudioNames.set(url,file.name);
 
 
 
@@ -28794,7 +28803,7 @@
 
 
 
-        playSoundPreview(settingsPrintApiOrderSoundUrl ? settingsPrintApiOrderSoundUrl.value : "");
+        playSoundPreview(settingsPrintApiOrderSoundUrl ? settingsPrintApiOrderSoundUrl.value : "", "Order");
 
 
 
@@ -28814,7 +28823,7 @@
 
 
 
-        playSoundPreview(settingsPrintApiMessageSoundUrl ? settingsPrintApiMessageSoundUrl.value : "");
+        playSoundPreview(settingsPrintApiMessageSoundUrl ? settingsPrintApiMessageSoundUrl.value : "", "Message");
 
 
 
@@ -43659,65 +43668,61 @@
         summary.textContent=`Устройства: ${online} онлайн / ${devices.length-online} офлайн. Принтеры: ${printerOnline} онлайн / ${printers.length-printerOnline} офлайн.${latest?' Последняя связь: '+new Date(latest).toLocaleString('ru-RU'):''}`;
       }
       if (settingsPrintApiHierarchy) {
-        settingsPrintApiHierarchy.innerHTML = "";
-        const connectionAgents = Array.isArray(agents) ? agents : [];
-        if (!connectionAgents.length) settingsPrintApiHierarchy.textContent = "Устройства ещё не подключены";
-        connectionAgents.forEach((agent) => {
-          const agentId = Number(agent.id || 0);
-          const agentPrinters = Array.isArray(agent.printers) ? agent.printers : [];
-          const block = document.createElement("div");
-          block.className = "settings-print-api-agent";
-          const header = document.createElement("div");
-          header.className = "settings-print-api-agent-header";
-          const title = document.createElement("strong");
-          title.textContent = String(agent.device_name || (agentId ? `Компьютер #${agentId}` : "Устройство"));
-          const meta = document.createElement("span");
-          meta.className = "settings-print-api-agent-meta";
-          meta.textContent = `${Number(agent.is_online) === 1 ? "Онлайн" : "Не в сети"} · ${agent.last_heartbeat_at ? "Последняя связь: " + agent.last_heartbeat_at : "Связь не установлена"} · версия ${agent.agent_version || "—"}`;
-          const removeAgent=queueButton('Удалить устройство',()=>removePrintApiDevice({agent_id:agentId}));
-          removeAgent.className='btn btn-link btn-sm';
-          header.append(title, meta, removeAgent);
-          block.appendChild(header);
-          const tableWrap = document.createElement("div");
-          tableWrap.className = "settings-print-api-table-wrap";
-          const table = document.createElement("table");
-          table.className = "settings-print-api-table";
-          table.innerHTML = "<thead><tr><th>Принтер</th><th>Статус</th><th>Действие</th></tr></thead>";
-          const tbody = document.createElement("tbody");
-          if (!agentPrinters.length) {
-            const emptyRow = document.createElement("tr");
-            const emptyCell = document.createElement("td");
-            emptyCell.colSpan = 3;
-            emptyCell.className = "muted";
-            emptyCell.textContent = "Принтеры ещё не подключены";
-            emptyRow.appendChild(emptyCell);
-            tbody.appendChild(emptyRow);
+        const signature=JSON.stringify([printApiSelectedConnectionId,agents]);
+        if(settingsPrintApiHierarchy.dataset.signature!==signature){
+          settingsPrintApiHierarchy.dataset.signature=signature;
+          settingsPrintApiHierarchy.replaceChildren();
+          const devices=Array.isArray(agents)?agents:[];
+          const printerOnline=(agent,printer)=>Number(agent.is_online)===1&&Number(agent.agent_running)===1&&printer.status==='online';
+          const counters=(online,total)=>{
+            const counts=document.createElement('span');counts.className='print-device-counts';
+            const on=document.createElement('span');on.className='is-online';on.textContent=String(online);on.title='Принтеров онлайн';
+            const off=document.createElement('span');off.className='is-offline';off.textContent=String(total-online);off.title='Принтеров офлайн';
+            counts.append(document.createTextNode('Принтеры: '),on,document.createTextNode(' / '),off);return counts;
+          };
+          const dot=online=>{
+            const indicator=document.createElement('span');indicator.className='print-device-dot '+(online?'is-online':'is-offline');indicator.title=online?'Онлайн':'Не в сети';indicator.setAttribute('role','img');indicator.setAttribute('aria-label',indicator.title);return indicator;
+          };
+          const iconButton=(icon,title,action)=>{
+            const button=queueButton('',action);button.className='btn btn-icon btn-sm';button.title=title;button.setAttribute('aria-label',title);const image=document.createElement('i');image.className='fas '+icon;image.setAttribute('aria-hidden','true');button.append(image);return button;
+          };
+          const summary=document.createElement('div');summary.className='print-devices-summary';
+          const total=devices.flatMap(agent=>agent.printers||[]).length;
+          const online=devices.reduce((sum,agent)=>sum+(agent.printers||[]).filter(printer=>printerOnline(agent,printer)).length,0);
+          const count=document.createElement('span');count.textContent=`Устройства: ${devices.length}`;summary.append(count,counters(online,total));settingsPrintApiHierarchy.append(summary);
+          if(!devices.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='Устройства ещё не подключены';settingsPrintApiHierarchy.append(empty);}
+          for(const agent of devices){
+            const id=Number(agent.id),key=printApiSelectedConnectionId+':'+id;
+            const printers=agent.printers||[],online=Number(agent.is_online)===1&&Number(agent.agent_running)===1;
+            const section=document.createElement('section');section.className='print-device-group';
+            const opened=printApiExpandedDevices.has(key);section.classList.toggle('is-open',opened);
+            const header=document.createElement('div');header.className='print-device-header';
+            const toggle=document.createElement('button');toggle.type='button';toggle.className='print-device-toggle';toggle.setAttribute('aria-expanded',String(opened));
+            const copy=document.createElement('span');copy.className='print-device-copy';
+            const name=document.createElement('strong');name.textContent=agent.device_name||`Компьютер #${id}`;
+            copy.append(name,counters(printers.filter(printer=>printerOnline(agent,printer)).length,printers.length));toggle.append(dot(online),copy);
+            const actions=document.createElement('div');actions.className='print-device-actions';
+            const info=document.createElement('details');info.className='settings-print-api-connection-info print-device-info';
+            const trigger=document.createElement('summary');trigger.className='btn btn-icon btn-sm';trigger.title='Информация об устройстве';trigger.setAttribute('aria-label',trigger.title);trigger.innerHTML='<i class="fas fa-info-circle" aria-hidden="true"></i>';
+            const popover=document.createElement('div');popover.className='settings-delivery-zone-info-popover';
+            const title=document.createElement('strong');title.textContent=agent.device_name||`Компьютер #${id}`;popover.append(title);
+            for(const text of [`Устройство #${id}`,online?'Онлайн':'Не в сети',`Версия агента: ${agent.agent_version||'—'}`,agent.last_heartbeat_at?'Последняя связь: '+new Date(agent.last_heartbeat_at).toLocaleString('ru-RU'):'Связь не установлена']){const line=document.createElement('div');line.textContent=text;popover.append(line);}
+            info.append(trigger,popover);actions.append(info,iconButton('fa-trash','Удалить устройство',()=>removePrintApiDevice({agent_id:id})));
+            header.append(toggle,actions);
+            const body=document.createElement('div');body.className='print-device-printers';body.classList.toggle('hidden',!opened);
+            toggle.addEventListener('click',()=>{const open=body.classList.contains('hidden');body.classList.toggle('hidden',!open);section.classList.toggle('is-open',open);toggle.setAttribute('aria-expanded',String(open));open?printApiExpandedDevices.add(key):printApiExpandedDevices.delete(key);});
+            if(!printers.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='Принтеры ещё не подключены';body.append(empty);}
+            for(const printer of printers){
+              const row=document.createElement('div');row.className='print-device-printer';
+              const name=document.createElement('span');name.className='print-device-printer-name';name.textContent=printer.display_name||printer.system_name||'Принтер';
+              const buttons=document.createElement('div');buttons.className='print-device-actions';
+              const test=iconButton('fa-print','Тестовая печать',()=>testPrintApiPrinter(Number(printer.id)));
+              buttons.append(test,iconButton('fa-trash','Удалить принтер',()=>removePrintApiDevice({printer_id:Number(printer.id)})));
+              row.append(dot(printerOnline(agent,printer)),name,buttons);body.append(row);
+            }
+            section.append(header,body);settingsPrintApiHierarchy.append(section);
           }
-          agentPrinters.forEach((printer) => {
-            const row = document.createElement("tr");
-            const nameCell = document.createElement("td");
-            nameCell.textContent = String(printer.display_name || printer.system_name || "Принтер");
-            const statusCell = document.createElement("td");
-            const isOffline = Number(agent.is_online) !== 1 || Number(agent.agent_running) !== 1 || String(printer.status || "offline") !== "online";
-            statusCell.textContent = isOffline ? "Не в сети" : "Онлайн";
-            statusCell.className = isOffline ? "is-offline" : "is-online";
-            const actionCell = document.createElement("td");
-            const testBtn = document.createElement("button");
-            testBtn.type = "button";
-            testBtn.className = "btn btn-link btn-sm";
-            testBtn.textContent = "Тест";
-            testBtn.addEventListener("click", () => testPrintApiPrinter(Number(printer.id)));
-            actionCell.appendChild(testBtn);
-            actionCell.append(queueButton('Удалить',()=>removePrintApiDevice({printer_id:Number(printer.id)})));
-
-            row.append(nameCell, statusCell, actionCell);
-            tbody.appendChild(row);
-          });
-          table.appendChild(tbody);
-          tableWrap.appendChild(table);
-          block.appendChild(tableWrap);
-          settingsPrintApiHierarchy.appendChild(block);
-        });
+        }
       }
 
       if (printApiListLoaded) {
@@ -43777,6 +43782,7 @@
         if (type === "job") {
           ui.preview.onload = () => {
             ui.preview.style.height = `${ui.preview.contentDocument.body.scrollHeight + 2}px`;
+            if(print){ui.preview.contentWindow.focus();ui.preview.contentWindow.print();}
           };
           ui.error.classList.add("hidden");
           ui.preview.srcdoc = "<!doctype html>" + doc.documentElement.outerHTML;
@@ -44530,12 +44536,73 @@
       }
     }
 
+    let printRealtimeSocket=null,printRealtimeReconnect=null,printRealtimeTimer=null,printRealtimeRefreshing=false;
+    let printRealtimeConnected=false;
+    const printRealtimeChanges=new Map();
+    function schedulePrintRealtimeRefresh(change){
+      const key=JSON.stringify([change.kind,change.store_id||0,change.connection_id||0]);printRealtimeChanges.set(key,change);
+      if(printRealtimeTimer||printRealtimeRefreshing)return;
+      printRealtimeTimer=setTimeout(async()=>{
+        printRealtimeTimer=null;printRealtimeRefreshing=true;
+        const changes=[...printRealtimeChanges.values()];printRealtimeChanges.clear();
+        try{
+          const storeId=Number(settingsPrintApiStore?.value),connectionId=printApiSelectedConnectionId;
+          const relevant=changes.filter(item=>(!item.store_id||Number(item.store_id)===storeId)&&(!item.connection_id||Number(item.connection_id)===connectionId));
+          const queueChanged=relevant.some(item=>item.kind==='queue'||item.kind==='resync');
+          for(const item of changes.filter(item=>item.kind==='queue')){
+            for(const connection of printApiListItems.filter(connection=>(!item.store_id||Number(connection.store_id)===Number(item.store_id))&&(!item.connection_id||Number(connection.token_id)===Number(item.connection_id)))){
+              await window.AdminPersistentCache?.scope({domain:'print:queue:'+Number(connection.token_id),version:1,storeId:Number(connection.store_id)})?.clear();
+            }
+          }
+          await loadPrintApiCards();
+          if(isPrintApiTabId(activeRightTabId)&&storeId===Number(settingsPrintApiStore?.value)&&connectionId===printApiSelectedConnectionId){
+            if(queueChanged&&!printQueueBusy&&printQueueBody?.querySelector('.print-queue-toolbar')&&!['settings','devices','notifications'].includes(printQueueView))await loadPrintQueue({background:true});
+            if(relevant.some(item=>item.kind!=='queue'))await checkPrintApiConnection(storeId,{silent:true});
+          }
+        }catch(error){console.error('Не удалось применить событие печати:',error);}
+        finally{
+          printRealtimeRefreshing=false;
+          if(printRealtimeChanges.size){const next=[...printRealtimeChanges.values()][0];schedulePrintRealtimeRefresh(next);}
+        }
+      },150);
+    }
+    function startPrintRealtime(){
+      if(printRealtimeSocket||printRealtimeReconnect)return;
+      const token=localStorage.getItem('authToken');if(!token)return;
+      const socket=new WebSocket(`${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/api/admin/orders-ws`);printRealtimeSocket=socket;
+      socket.addEventListener('message',event=>{
+        if(socket!==printRealtimeSocket)return;
+        let message;try{message=JSON.parse(event.data);}catch(error){console.error('Некорректное событие печати:',error);return;}
+        if(message.type==='ready')socket.send(JSON.stringify({type:'print.subscribe',token}));
+        if(message.type==='print.ready'){
+          const restored=printRealtimeConnected;printRealtimeConnected=true;
+          // One snapshot after subscription prevents a gap between initial HTTP load and subscribing.
+          schedulePrintRealtimeRefresh({kind:'resync'});
+          if(restored&&printQueueBody?.querySelector('.print-queue-toolbar'))setPrintQueueLoadStatus('');
+        }
+        if(message.type==='print.changed')schedulePrintRealtimeRefresh(message);
+      });
+      socket.addEventListener('error',()=>socket.close());
+      socket.addEventListener('close',event=>{
+        if(socket!==printRealtimeSocket)return;printRealtimeSocket=null;
+        if(printQueueBody?.querySelector('.print-queue-toolbar'))setPrintQueueLoadStatus('Связь realtime потеряна. Показаны последние полученные данные.');
+        if(event.code!==1008&&localStorage.getItem('authToken')===token){printRealtimeReconnect=setTimeout(()=>{printRealtimeReconnect=null;startPrintRealtime();},2000);}
+      });
+    }
+    window.addEventListener('storage',event=>{
+      if(event.key!=='authToken')return;
+      clearTimeout(printRealtimeReconnect);printRealtimeReconnect=null;
+      const socket=printRealtimeSocket;printRealtimeSocket=null;socket?.close();
+      if(event.newValue)startPrintRealtime();
+    });
+
     async function loadPrintApiCards() {
       try {
         const res = await authFetch("/api/admin/tenant/print-api/list?_ts=" + Date.now());
         const data = await res.json();
         if (!data || !data.ok || !data.data) throw new Error("LOAD_FAILED");
         printApiListLoaded = true;
+        void startPrintRealtime();
         printApiListItems = Array.isArray(data.data.items) ? data.data.items : [];
         renderPrintApiCards();
         return data.data;
@@ -44602,6 +44669,7 @@
       if(connectionInfo)connectionInfo.open=false;
       const filterMenu=printQueueBody?.querySelector('.print-queue-filters');
       if(filterMenu)filterMenu.open=false;
+      for(const slot of ['Order','Message']){if(view==='notifications')syncPrintApiAudioSlot(slot,{revalidate:true});else printApiAudioStates.get(slot)?.audio?.pause();}
       printApiPanel?.classList.toggle('is-print-devices',view==='devices');
       printQueueNav?.querySelectorAll('[data-print-view]').forEach(button=>{
         const active=button.dataset.printView===view||(button.dataset.printView==='all'&&queue);
@@ -44618,52 +44686,131 @@
       const input=document.createElement('input');input.type='checkbox';input.className='product-row-select-input';input.setAttribute('aria-label','Выбрать задания');
       const box=document.createElement('span');box.className='product-row-select-box';box.setAttribute('aria-hidden','true');label.append(input,box);
       const ids=jobs.filter(job=>job.status!=='processing').map(job=>Number(job.id));
-      input.addEventListener('change',()=>{for(const id of ids){if(input.checked)printQueueSelected.add(id);else printQueueSelected.delete(id);}syncPrintQueueSelection();});
+      input.addEventListener('change',()=>{
+        if(label.closest('.print-queue-select-toggle')&&printQueueSelected.size){
+          printQueueSelected.clear();
+        }else{
+          for(const id of ids){if(input.checked)printQueueSelected.add(id);else printQueueSelected.delete(id);}
+        }
+        syncPrintQueueSelection();
+      });
       printQueueChecks.push({input,ids});return label;
     }
     function syncPrintQueueSelection() {
       for(const {input,ids} of printQueueChecks){const count=ids.filter(id=>printQueueSelected.has(id)).length;input.checked=ids.length>0&&count===ids.length;input.indeterminate=count>0&&count<ids.length;input.disabled=printQueueBusy||!ids.length;}
       printQueueBody?.querySelectorAll('[data-print-job-ids]').forEach(row=>row.classList.toggle('is-multi-selected',JSON.parse(row.dataset.printJobIds).some(id=>printQueueSelected.has(id))));
-      const footer=document.getElementById('settingsPrintApiQueueBulk');if(!footer)return;
-      footer.replaceChildren();
-      const count=document.createElement('span');count.className='products-bulk-footer-count';count.textContent=`Выбрано: ${printQueueSelected.size}`;footer.append(count);
+      printQueueBody?.querySelectorAll('[data-print-mutation]').forEach(button=>{
+        const ids=JSON.parse(button.closest('[data-print-job-ids]').dataset.printJobIds);
+        const jobs=printQueueVisibleJobs.filter(job=>ids.includes(Number(job.id)));
+        button.disabled=!printQueueServerConfirmed||printQueueBusy||!jobs.some(job=>button.dataset.printMutation==='repeat'?['pending','done','failed'].includes(job.status):job.status!=='processing');
+      });
+      const toolbar=printQueueBody?.querySelector('.print-queue-toolbar');if(!toolbar)return;
       const selected=printQueueVisibleJobs.filter(job=>printQueueSelected.has(Number(job.id)));
-      const repeat=queueButton('Повторить',()=>mutatePrintQueue('repeat',[...printQueueSelected]));repeat.disabled=printQueueBusy||!selected.length||selected.some(job=>!['done','failed'].includes(job.status));
-      const remove=queueButton('Удалить',()=>mutatePrintQueue('delete',[...printQueueSelected]));remove.disabled=printQueueBusy||!selected.length;
-      const clear=queueButton('Снять выбор',()=>{printQueueSelected.clear();syncPrintQueueSelection();});clear.disabled=printQueueBusy||!selected.length;footer.append(repeat,remove,clear);
+      toolbar.classList.toggle('has-selection',selected.length>0);
+      toolbar.querySelector('.print-queue-selection-count').textContent=`Выбрано: ${selected.length}`;
+      toolbar.querySelector('[data-selection-action="repeat"]').disabled=!printQueueServerConfirmed||printQueueBusy||!selected.length||selected.some(job=>!['pending','done','failed'].includes(job.status));
+      toolbar.querySelector('[data-selection-action="delete"]').disabled=!printQueueServerConfirmed||printQueueBusy||!selected.length;
     }
-    function printQueueRow(jobs) {
+    function printQueueRow(jobs, options = {}) {
       const job=jobs[jobs.length-1];
       const row=document.createElement('div');row.className='order-row print-queue-row';row.dataset.printJobIds=JSON.stringify(jobs.map(item=>Number(item.id)));
       row.append(printQueueCheckbox(jobs));
       const content=document.createElement('div');content.className='order-col';
-      const title=document.createElement('div');title.className='product-title';title.textContent=job.job_name||'—';
+      const title=document.createElement(options.expand?'button':'div');title.className='product-title';title.textContent=options.title||job.job_name||'—';
       const target=document.createElement('div');target.className='muted';target.textContent=`${job.agent_name||'Без компьютера'} → ${job.printer_name||'Без принтера'} · Заданий: ${jobs.length}`;
+      if(options.expand){title.type='button';title.classList.add('print-queue-expand');title.setAttribute('aria-expanded',String(options.open));title.addEventListener('click',options.expand);}
+      if(options.subtitle)target.textContent=options.subtitle;
       content.append(title,target);
       const counts=new Map();for(const item of jobs)counts.set(item.status,(counts.get(item.status)||0)+1);
       const status=document.createElement('span');status.className='badge';status.textContent=[...counts].map(([state,count])=>`${({pending:'Ожидает',processing:'Выполняется',failed:'Ошибка',done:'Выполнено'})[state]||state}: ${count}`).join(' · ');
       if(counts.has('done'))status.title='Выполнено: агент передал документ в очередь Windows';
-      const repeat=jobs.filter(item=>['done','failed'].includes(item.status)).map(item=>item.id);
+      const repeat=jobs.filter(item=>['pending','done','failed'].includes(item.status)).map(item=>item.id);
       const remove=jobs.filter(item=>item.status!=='processing').map(item=>item.id);
       const actions=document.createElement('div');actions.className='print-queue-row-actions';
       for(const [icon,label,action,disabled] of [
-        ['fa-eye','Просмотр заданий',()=>jobs.length===1?openPrintQueueJob(job.id):openPrintQueueGroup(jobs),false],
-        ['fa-redo',`Повторить выполненные и с ошибкой (${repeat.length})`,()=>mutatePrintQueue('repeat',repeat),!repeat.length],
+        ['fa-eye','Просмотр заданий',()=>previewPrintQueueJobs(jobs),false],
+        ['fa-redo',`Повторить задания (${repeat.length})`,()=>mutatePrintQueue('repeat',repeat),!repeat.length],
         ['fa-trash',`Удалить задания (${remove.length})`,()=>mutatePrintQueue('delete',remove),!remove.length]]){
-        const button=queueButton('',action);button.className='btn btn-icon btn-sm';button.title=label;button.setAttribute('aria-label',label);button.disabled=disabled;const image=document.createElement('i');image.className='fas '+icon;button.append(image);actions.append(button);
+        const button=queueButton('',action);button.className='btn btn-icon btn-sm';button.title=label;button.setAttribute('aria-label',label);if(icon!=='fa-eye')button.dataset.printMutation=icon==='fa-redo'?'repeat':'delete';button.disabled=disabled||(icon!=='fa-eye'&&!printQueueServerConfirmed);const image=document.createElement('i');image.className='fas '+icon;button.append(image);actions.append(button);
       }
       row.append(content,status,actions);return row;
     }
-    function openPrintQueueGroup(jobs) {
-      printQueueVersion++;releasePrintQueuePdf();printQueueChecks.length=0;
-      const pauseControl=printQueueBody.querySelector('.settings-print-api-control-bar');
-      if(pauseControl)printApiPanel.insertBefore(pauseControl,printApiPanel.querySelector('.settings-panel-scroll'));
-      printQueueBody.replaceChildren(queueButton('Назад к заказам',loadPrintQueue));
-      const title=document.createElement('h3');title.textContent=jobs[0].job_name||'—';printQueueBody.append(title);
-      const count=document.createElement('p');count.textContent=`Заданий: ${jobs.length}. Здесь можно открыть отдельный документ.`;printQueueBody.append(count);
-      for(const job of jobs)printQueueBody.append(printQueueRow([job]));
-      syncPrintQueueSelection();
+    const printQueueExpanded=new Set();
+    function printQueueAccordion(jobs,key,title,subtitle,level,build){
+      const section=document.createElement('section');section.className='print-queue-accordion';section.dataset.level=String(level);
+      const content=document.createElement('div');content.className='print-queue-accordion-content';
+      const open=printQueueExpanded.has(key);content.classList.toggle('hidden',!open);section.classList.toggle('is-open',open);
+      let built=false;
+      const expand=()=>{
+        const opened=content.classList.contains('hidden');content.classList.toggle('hidden',!opened);section.classList.toggle('is-open',opened);
+        header.querySelector('.print-queue-expand').setAttribute('aria-expanded',String(opened));
+        if(opened){printQueueExpanded.add(key);if(!built){built=true;build(content);syncPrintQueueSelection();}}else printQueueExpanded.delete(key);
+      };
+      const header=printQueueRow(jobs,{title,subtitle,expand,open});section.append(header,content);
+      if(open){built=true;build(content);}
+      return section;
     }
+    async function loadPrintQueueJobContent(job,container,title){
+      container.textContent='Загрузка документа…';
+      const scope=printQueueScopeKey();
+      try{
+        const item=await printQueueRequest('/'+job.id+'?'+new URLSearchParams(printQueueScope()));
+        if(scope!==printQueueScopeKey()||!container.isConnected)return;
+        container.replaceChildren();
+        const heading=document.createElement('p');heading.textContent=job.order_id>0?'Заказ '+(job.public_id||'#'+job.order_id):'Без заказа';container.append(heading);
+        if(item.last_error){const error=document.createElement('p');error.textContent=item.last_error;container.append(error);}
+        if(item.document.html){
+          const doc=new DOMParser().parseFromString(item.document.html,'text/html');
+          const name=doc.querySelector('.item-name,.product-name,.label-name,[data-item-name]');
+          if(name?.textContent.trim())title.textContent=name.textContent.trim();
+          const frame=document.createElement('iframe');frame.title=item.job_name;frame.setAttribute('sandbox','allow-same-origin');frame.className='print-queue-document-frame';
+          const error=document.createElement('p'),print=document.createElement('button');container.append(error,frame);
+          renderPrintTemplatePreview('job',false,{html:{value:item.document.html},preview:frame,error,print});
+        }else if(item.document.pdf_base64){
+          const button=queueButton('Просмотреть документ',()=>previewPrintQueueJobs([job]));container.append(button);
+        }
+      }catch(error){if(container.isConnected)container.textContent='Не удалось загрузить документ: '+error.message;}
+    }
+    async function previewPrintQueueJobs(jobs){
+      const scope=printQueueScope(),key=printQueueScopeKey();
+      // Reuse the saved-document preview; fetch in bounded batches.
+      const documents=[];
+      try{
+        for(let index=0;index<jobs.length;index+=4){
+          documents.push(...await Promise.all(jobs.slice(index,index+4).map(job=>printQueueRequest('/'+job.id+'?'+new URLSearchParams(scope)))));
+          if(key!==printQueueScopeKey())return;
+        }
+        if(documents.every(job=>Boolean(job.document.html))){
+          const combined=document.implementation.createHTMLDocument('Печать');
+          for(const [index,job] of documents.entries()){
+            const doc=new DOMParser().parseFromString(job.document.html,'text/html');
+            const section=combined.createElement('section');section.className='print-saved-page';
+            // Scope each saved template's styles so templates do not overwrite each other.
+            const styles=[...doc.querySelectorAll('style')].map(style=>style.textContent).join('\n');
+            doc.querySelectorAll('style').forEach(style=>style.remove());
+            const style=combined.createElement('style');style.textContent=`@scope (#print-saved-${index}) {${styles.replace(/(^|[},\s])(?:html|body)(?=[\s,{.:#>])/g,'$1:scope')}}`;
+            section.id=`print-saved-${index}`;section.append(style,...doc.body.childNodes);combined.body.append(section);
+          }
+          const layout=combined.createElement('style');layout.textContent='.print-saved-page{break-after:page}.print-saved-page:last-child{break-after:auto}';combined.head.append(layout);
+          let frame=document.getElementById('settingsPrintApiBrowserPreview');
+          if(!frame){frame=document.createElement('iframe');frame.id='settingsPrintApiBrowserPreview';frame.title='Предпросмотр печати';frame.setAttribute('sandbox','allow-same-origin allow-modals');frame.style.cssText='position:fixed;left:-10000px;top:0;width:800px;height:600px;border:0';document.body.append(frame);}
+          const error=document.createElement('p'),print=document.createElement('button');
+          renderPrintTemplatePreview('job',true,{html:{value:combined.documentElement.outerHTML},preview:frame,error,print});
+          return;
+        }
+        // PDF documents use the browser PDF viewer and its native print preview.
+        for(const job of documents){
+          if(job.document.html){await previewPrintQueueJobs([job]);continue;}
+          if(!job.document.pdf_base64)throw new Error('В задании отсутствует документ');
+          const bytes=Uint8Array.from(atob(job.document.pdf_base64.replace(/^data:application\/pdf;base64,/,'')),char=>char.charCodeAt(0));
+          const url=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
+          const frame=document.createElement('iframe');frame.title=job.job_name;frame.style.cssText='position:fixed;left:-10000px;top:0;width:800px;height:600px';
+          frame.onload=()=>{frame.contentWindow.focus();frame.contentWindow.print();};frame.src=url;document.body.append(frame);
+          frame.contentWindow.addEventListener('afterprint',()=>{frame.remove();URL.revokeObjectURL(url);},{once:true});
+        }
+      }catch(error){alert('Не удалось открыть предпросмотр: '+error.message);}
+    }
+
     document.addEventListener('click',event=>{
       const filters=printQueueBody?.querySelector('.print-queue-filters[open]');
       if(filters&&!filters.contains(event.target))filters.open=false;
@@ -44715,61 +44862,123 @@
         }
         menu.append(queueButton('Сбросить',()=>{printQueueFilters={agent_id:[],printer_id:[],template_name:[]};menu.querySelectorAll('input').forEach(input=>input.checked=false);printQueueBefore=null;printQueueSelected.clear();loadPrintQueue();}));
         filters.append(trigger,menu);toolbar.append(filters);
-        const refresh=queueButton('',()=>loadPrintQueue());refresh.className='btn btn-icon btn-sm';refresh.title='Обновить';refresh.setAttribute('aria-label','Обновить очередь');refresh.innerHTML='<i class="fas fa-sync-alt" aria-hidden="true"></i>';toolbar.append(refresh);
+        const actions=document.createElement('div');actions.className='print-queue-selected-actions';
+        for(const [action,icon,title] of [['repeat','fa-print','Распечатать выбранное'],['delete','fa-trash','Удалить выбранное']]){
+          const button=queueButton('',()=>mutatePrintQueue(action,[...printQueueSelected]));button.className='btn btn-icon btn-sm';button.dataset.selectionAction=action;button.title=title;button.setAttribute('aria-label',title);button.innerHTML=`<i class="fas ${icon}" aria-hidden="true"></i>`;actions.append(button);
+        }
+        const count=document.createElement('span');count.className='print-queue-selection-count';actions.append(count);toolbar.append(actions);
         printQueueBody.prepend(toolbar);
       }
       for(const [view,title,count] of [['all','Все',null],['queue','Ожидают',data.counts?.queue_count],['errors','Ошибки',data.counts?.failed_count],['done','Выполнены',data.counts?.done_count]]){
-        const button=toolbar.querySelector(`[data-queue-status="${view}"]`);button.textContent=title+(count==null?'':' '+Number(count||0));button.classList.toggle('is-active',view===printQueueView);button.setAttribute('aria-selected',String(view===printQueueView));
+        const button=toolbar.querySelector(`[data-queue-status="${view}"]`);button.textContent=title+(view==='all'?'':count==null?' —':' '+Number(count||0));button.classList.toggle('is-active',view===printQueueView);button.setAttribute('aria-selected',String(view===printQueueView));
       }
+      toolbar.querySelectorAll('button').forEach(button=>button.disabled=false);
+      applyPrintApiControlState(printApiControlState);
+      if(!printQueueServerConfirmed){const pause=toolbar.querySelector('#settingsPrintApiPauseBtn');if(pause)pause.disabled=true;}
+      let selectAll=toolbar.querySelector('.print-queue-select-toggle');
+      if(!selectAll){selectAll=document.createElement('span');selectAll.className='print-queue-select-toggle';toolbar.prepend(selectAll);}
+      const oldInput=selectAll.querySelector('input');
+      const oldIndex=printQueueChecks.findIndex(item=>item.input===oldInput);
+      if(oldIndex>=0)printQueueChecks.splice(oldIndex,1);
+      selectAll.replaceChildren(printQueueCheckbox(data.jobs));
       const count=['agent_id','printer_id','template_name'].reduce((sum,field)=>sum+printQueueFilterValues(field).length,0);
       toolbar.querySelectorAll('input[data-filter-field]').forEach(input=>input.checked=printQueueFilterValues(input.dataset.filterField).includes(input.value));
       const badge=toolbar.querySelector('.print-queue-filter-count');badge.textContent=String(count);badge.classList.toggle('hidden',!count);
       toolbar.querySelector('.print-queue-filters > summary').title=count?`Фильтры: ${count}`:'Фильтры';
     }
 
-    async function loadPrintQueue() {
-      if(!printQueueBody||['settings','devices','notifications'].includes(printQueueView)||printQueueBusy)return;
-      const version=++printQueueVersion,scopeKey=printQueueScopeKey();releasePrintQueuePdf();
-      if(!printQueueBody.querySelector('.print-queue-toolbar'))printQueueBody.textContent='Загрузка очереди…';
-      printQueueBody.setAttribute('aria-busy','true');printQueueChecks.length=0;
-      try {
-        const query=new URLSearchParams({...printQueueScope(),...Object.fromEntries(['agent_id','printer_id','template_name'].map(field=>[field,JSON.stringify(printQueueFilterValues(field))])),view:printQueueView,...(printQueueBefore?{before:printQueueBefore}:{})});
-        const data=await printQueueRequest('?'+query);
-        if(version!==printQueueVersion||scopeKey!==printQueueScopeKey())return;
+    let printQueueServerConfirmed=false;
+    function printQueueCacheScope(){
+      return window.AdminPersistentCache?.scope({domain:'print:queue:'+Number(printApiSelectedConnectionId||0),version:1,storeId:Number(settingsPrintApiStore?.value||0)});
+    }
+    function setPrintQueueLoadStatus(message){
+      let status=printQueueBody.querySelector('.print-queue-load-status');
+      if(!status){status=document.createElement('p');status.className='muted print-queue-load-status';status.setAttribute('role','status');printQueueBody.querySelector('.print-queue-toolbar')?.after(status);}
+      status.textContent=message;status.classList.toggle('hidden',!message);
+    }
+    function renderPrintQueueData(data,scopeKey){
+        const renderKey=JSON.stringify([printQueueBody.dataset.cacheContext,scopeKey,printQueueView,printQueueFilters,printQueueBefore,Boolean(data.placeholder),data.jobs,data.next]);
+        if(printQueueBody.dataset.renderKey===renderKey&&printQueueBody.querySelector('.print-queue-toolbar')){
+          renderPrintQueueToolbar(data);syncPrintQueueSelection();return;
+        }
+        printQueueBody.dataset.renderKey=renderKey;printQueueChecks.length=0;
         const toolbar=printQueueBody.querySelector('.print-queue-toolbar');
         for(const child of [...printQueueBody.childNodes])if(child!==toolbar)child.remove();
-        printQueueBody.removeAttribute('aria-busy');printQueueVisibleJobs=data.jobs;
-        const visible=new Set(data.jobs.map(job=>Number(job.id)));for(const id of printQueueSelected)if(!visible.has(id))printQueueSelected.delete(id);
+        printQueueVisibleJobs=data.jobs;
+        const visible=new Set(data.jobs.filter(job=>job.status!=='processing').map(job=>Number(job.id)));for(const id of printQueueSelected)if(!visible.has(id))printQueueSelected.delete(id);
         renderPrintQueueToolbar(data);
-        const all=document.createElement('div');all.className='print-queue-select-all';all.append(printQueueCheckbox(data.jobs),document.createTextNode('Выбрать все на странице'));printQueueBody.append(all);
+
         const groups=new Map();for(const job of data.jobs){if(!groups.has(job.group_key))groups.set(job.group_key,[]);groups.get(job.group_key).push(job);}
-        if(!data.jobs.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='Заданий нет';printQueueBody.append(empty);}
+        if(!data.placeholder&&!data.jobs.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='Заданий нет';printQueueBody.append(empty);}
         for(const jobs of groups.values()){
-          const group=document.createElement('section');group.className='settings-print-api-agent print-queue-group';
-          const header=document.createElement('div');header.className='settings-print-api-agent-header';header.append(printQueueCheckbox(jobs));
-          const roots=new Map();for(const job of jobs)roots.set(Number(job.retry_of_job_id||job.id),job);
-          const completed=[...roots.values()].filter(job=>job.status==='done').length;
-          const first=jobs[0];const title=queueButton(`${first.order_id>0?'Заказ '+(first.public_id||'#'+first.order_id):'Без заказа'} · Выполнено ${completed} из ${roots.size}`,()=>{body.classList.toggle('hidden');title.setAttribute('aria-expanded',String(!body.classList.contains('hidden')));});
-          title.className='btn btn-link print-queue-group-title';title.setAttribute('aria-expanded','true');header.append(title);
-          const body=document.createElement('div');
-          const documents=new Map();
-          for(const job of jobs){
-            const key=JSON.stringify([job.job_name,job.target_agent_id,job.target_printer_id]);
-            if(!documents.has(key))documents.set(key,[]);documents.get(key).push(job);
-          }
-          for(const documentJobs of documents.values())body.append(printQueueRow(documentJobs));
-          group.append(header,body);printQueueBody.append(group);
+          const first=jobs[0],key=printQueueScopeKey()+':'+first.group_key;
+          const orderTitle=first.order_id>0?'Заказ '+(first.public_id||'#'+first.order_id):'Без заказа';
+          const completed=jobs.filter(job=>job.status==='done').length;
+          const group=printQueueAccordion(jobs,key,orderTitle,`Выполнено ${completed} из ${jobs.length}`,0,body=>{
+            const templates=new Map();
+            for(const job of jobs){const name=job.job_name||'—';if(!templates.has(name))templates.set(name,[]);templates.get(name).push(job);}
+            for(const [name,items] of templates){
+              body.append(printQueueAccordion(items,key+':'+name,name,`Заданий: ${items.length}`,1,children=>{
+                for(const job of items){
+                  const item=printQueueAccordion([job],key+':job:'+job.id,`${job.job_name||'—'} · #${job.id}`,`${orderTitle} · ${job.agent_name||'Без компьютера'} → ${job.printer_name||'Без принтера'}`,2,content=>{
+                    const title=content.parentElement.querySelector('.print-queue-expand');loadPrintQueueJobContent(job,content,title);
+                  });children.append(item);
+                }
+              }));
+            }
+          });printQueueBody.append(group);
         }
         const pages=document.createElement('div');pages.className='settings-print-api-actions';
         if(printQueueBefore)pages.append(queueButton('В начало',()=>{printQueueBefore=null;printQueueSelected.clear();loadPrintQueue();}));
         if(data.next)pages.append(queueButton('Следующие заказы',()=>{printQueueBefore=data.next;printQueueSelected.clear();loadPrintQueue();}));printQueueBody.append(pages);syncPrintQueueSelection();
-      }catch(error){if(version===printQueueVersion&&scopeKey===printQueueScopeKey()){
-        const toolbar=printQueueBody.querySelector('.print-queue-toolbar');
-        for(const child of [...printQueueBody.childNodes])if(child!==toolbar)child.remove();
+    }
+    async function loadPrintQueue({background=false} = {}) {
+      if(!printQueueBody||['settings','devices','notifications'].includes(printQueueView)||printQueueBusy)return;
+      const version=++printQueueVersion,scopeKey=printQueueScopeKey();releasePrintQueuePdf();
+      const cache=printQueueCacheScope();
+      const query=new URLSearchParams({...printQueueScope(),...Object.fromEntries(['agent_id','printer_id','template_name'].map(field=>[field,JSON.stringify(printQueueFilterValues(field).sort())])),view:printQueueView,...(printQueueBefore?{before:printQueueBefore}:{})});
+      const cacheKey=query.toString(),contextKey=JSON.stringify([cache?.namespace,cacheKey]);
+      const current=()=>version===printQueueVersion&&scopeKey===printQueueScopeKey()&&cache?.namespace===printQueueCacheScope()?.namespace;
+      const changedContext=printQueueBody.dataset.cacheContext!==contextKey;
+      printQueueBody.dataset.cacheContext=contextKey;
+      printQueueBody.setAttribute('aria-busy','true');
+      let hasData=!changedContext&&Boolean(printQueueBody.querySelector('.print-queue-accordion'));
+      let cacheError='';
+      if(changedContext||!printQueueBody.querySelector('.print-queue-toolbar')){
+        printQueueServerConfirmed=false;
+        renderPrintQueueData({placeholder:true,jobs:[],agents:[],printers:[],templates:[],counts:{},next:null},scopeKey);
+      }
+      if(!background||!hasData)setPrintQueueLoadStatus(hasData?'Обновление данных…':'Загрузка очереди…');
+      try{
+        if(changedContext){
+          try{
+            if(!cache?.complete)throw new Error('Не определён пользователь или компания для кэша');
+            const entry=await cache.getEntry(cacheKey,{allowStale:true});
+            if(!current())return;
+            if(entry?.data){printQueueServerConfirmed=false;renderPrintQueueData(entry.data,scopeKey);hasData=true;setPrintQueueLoadStatus('Показаны сохранённые данные. Обновление…');}
+          }catch(error){cacheError='Не удалось прочитать IndexedDB';console.error(cacheError,error);}
+        }
+        const data=await printQueueRequest('?'+query);
+        if(!current())return;
+        printQueueServerConfirmed=true;renderPrintQueueData(data,scopeKey);hasData=true;
         printQueueBody.removeAttribute('aria-busy');
-        const message=document.createElement('p');message.textContent='Не удалось загрузить печать: '+error.message;printQueueBody.append(message,queueButton('Повторить загрузку',loadPrintQueue));
+        setPrintQueueLoadStatus(cacheError);
+        try{
+          if(!cache?.complete)throw new Error('Не определён пользователь или компания для кэша');
+          const saved=await cache.getEntry(cacheKey,{allowStale:true});
+          if(JSON.stringify(saved?.data)!==JSON.stringify(data)){
+            if(!await cache.set(cacheKey,data,{ttlMs:7*24*60*60*1000}))throw new Error('Не удалось сохранить очередь');
+            await cache.prune(100);
+          }
+        }catch(error){console.error('Ошибка сохранения очереди в IndexedDB:',error);if(current())setPrintQueueLoadStatus('Данные получены. Не удалось сохранить очередь в IndexedDB.');}
+      }catch(error){if(current()){
+        printQueueServerConfirmed=false;printQueueBody.removeAttribute('aria-busy');syncPrintQueueSelection();
+        printQueueBody.querySelectorAll('[data-print-mutation]').forEach(button=>button.disabled=true);
+        const pause=printQueueBody.querySelector('#settingsPrintApiPauseBtn');if(pause)pause.disabled=true;
+        setPrintQueueLoadStatus((hasData?'Нет связи — показаны последние полученные данные. ':'Не удалось загрузить очередь. ')+error.message);
       }}
     }
+
     async function mutatePrintQueue(action,ids) {
       if(printQueueBusy||!ids.length)return;
       if(action==='delete'&&!window.confirm(`Удалить выбранные задания печати (${ids.length})?`))return;
@@ -44784,6 +44993,7 @@
           for(const id of batch)printQueueSelected.delete(Number(id));
         }
         printQueuePendingAction=null;printQueueSelected.clear();
+        try{await printQueueCacheScope()?.clear();}catch(error){console.error('Не удалось обновить кэш очереди:',error);}
       }catch(error){alert('Не удалось выполнить действие: '+error.message);}
       finally{printQueueBusy=false;if(key===printQueueScopeKey()){await loadPrintQueue();await loadPrintApiCards();}}
     }
@@ -45164,84 +45374,8 @@
 
 
     function schedulePrintApiAutoRefresh() {
-
-
-
-      stopPrintApiAutoRefresh();
-
-
-
-      if (!isPrintApiTabId(activeRightTabId)) return;
-
-
-
-      const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
-
-
-
-      if (!storeId) return;
-
-
-
-      printApiRefreshTimer = setTimeout(async () => {
-
-
-
-        if (printApiConnectionCheckInFlight) {
-
-
-
-          schedulePrintApiAutoRefresh();
-
-
-
-          return;
-
-
-
-        }
-
-
-
-        try {
-
-
-
-          printApiConnectionCheckInFlight = true;
-
-
-
-          await checkPrintApiConnection(storeId, { silent: true });
-
-
-
-        } finally {
-
-
-
-          printApiConnectionCheckInFlight = false;
-
-
-
-          schedulePrintApiAutoRefresh();
-
-
-
-        }
-
-
-
-      }, printApiAutoRefreshDelayMs);
-
-
-
+      stopPrintApiAutoRefresh();void startPrintRealtime();
     }
-
-
-
-
-
-
 
     function applyPrintApiNotificationSettings(info) {
 
@@ -45251,41 +45385,9 @@
 
 
 
-      const applySoundFieldUi = (urlValue, labelEl, playBtn) => {
-
-
-
-        const url = String(urlValue || "").trim();
-
-
-
-        if (labelEl) {
-
-
-
-          labelEl.textContent = url ? "Файл загружен" : "Файл не выбран";
-
-
-
-        }
-
-
-
-        if (playBtn) {
-
-
-
-          playBtn.classList.toggle("hidden", !url);
-
-
-
-        }
-
-
-
+      const applySoundFieldUi = (urlValue,labelEl) => {
+        syncPrintApiAudioSlot(labelEl===settingsPrintApiOrderSoundLabel?'Order':'Message');
       };
-
-
 
       if (settingsPrintApiNotifyNewOrder) {
 
@@ -45420,6 +45522,7 @@
 
 
     function markPrintApiSettingsDirty() {
+      document.getElementById("settingsPrintApiDirtyNotice")?.classList.remove("hidden");
 
 
 
@@ -45444,6 +45547,7 @@
 
 
     function clearPrintApiSettingsDirty() {
+      document.getElementById("settingsPrintApiDirtyNotice")?.classList.add("hidden");
 
 
 
@@ -45593,6 +45697,7 @@
     }
 
     function setPrintApiDraftMode(enabled) {
+      document.getElementById("settingsPrintApiDirtyNotice")?.classList.toggle("hidden",!printApiSettingsDirty);
 
 
 
@@ -45687,11 +45792,11 @@
 
 
 
-      if (settingsPrintApiOrderSoundPlayBtn) settingsPrintApiOrderSoundPlayBtn.disabled = !printApiDraftMode;
+      paintPrintApiAudio("Order");
 
 
 
-      if (settingsPrintApiOrderSoundClearBtn) settingsPrintApiOrderSoundClearBtn.disabled = !printApiDraftMode;
+      if (settingsPrintApiOrderSoundClearBtn) settingsPrintApiOrderSoundClearBtn.disabled = !printApiDraftMode||!String(settingsPrintApiOrderSoundUrl?.value||"");
 
 
 
@@ -45699,11 +45804,11 @@
 
 
 
-      if (settingsPrintApiMessageSoundPlayBtn) settingsPrintApiMessageSoundPlayBtn.disabled = !printApiDraftMode;
+      paintPrintApiAudio("Message");
 
 
 
-      if (settingsPrintApiMessageSoundClearBtn) settingsPrintApiMessageSoundClearBtn.disabled = !printApiDraftMode;
+      if (settingsPrintApiMessageSoundClearBtn) settingsPrintApiMessageSoundClearBtn.disabled = !printApiDraftMode||!String(settingsPrintApiMessageSoundUrl?.value||"");
 
 
 
@@ -45952,41 +46057,74 @@
 
 
 
-    function playSoundPreview(url) {
-
-
-
-      const soundUrl = String(url || "").trim();
-
-
-
-      if (!soundUrl) return;
-
-
-
-      try {
-
-
-
-        const audio = new Audio(soundUrl);
-
-
-
-        audio.play().catch(() => {});
-
-
-
-      } catch {}
-
-
-
+    function printApiAudioTime(seconds){
+      const value=Math.max(0,Math.floor(Number(seconds)||0));return Math.floor(value/60)+':'+String(value%60).padStart(2,'0');
     }
-
-
-
-
-
-
+    function destroyPrintApiAudio(state){
+      state?.controller?.abort();state?.audio?.pause();
+      if(state?.audio){state.audio.removeAttribute('src');state.audio.load();}
+      if(state?.blobUrl)URL.revokeObjectURL(state.blobUrl);
+    }
+    function paintPrintApiAudio(slot){
+      const state=printApiAudioStates.get(slot),root=printApiPanel?.querySelector(`[data-print-audio="${slot}"]`);if(!root)return;
+      const label=root.querySelector('.settings-sound-label'),wave=root.querySelector('.print-notification-wave'),time=root.querySelector('.print-notification-time');
+      const play=document.getElementById(`settingsPrintApi${slot}SoundPlayBtn`),download=document.getElementById(`settingsPrintApi${slot}SoundDownloadBtn`),clear=document.getElementById(`settingsPrintApi${slot}SoundClearBtn`),seek=root.querySelector('input[type="range"]');
+      const ready=state?.status==='ready',playing=ready&&!state.audio.paused;
+      label.textContent=ready?state.name:state?.status==='error'?state.error:state?.url?'Проверка аудиофайла…':'Звук не загружен';label.title=label.textContent;
+      root.classList.toggle('is-error',state?.status==='error');
+      play.disabled=!ready;play.innerHTML=`<i class="fas ${playing?'fa-pause':'fa-play'}" aria-hidden="true"></i>`;play.title=playing?'Пауза':'Воспроизвести';play.setAttribute('aria-label',play.title);
+      download.disabled=!ready;clear.disabled=!state?.url;wave.classList.toggle('hidden',!ready);time.classList.toggle('hidden',!ready);seek.disabled=!ready;
+      if(!ready)return;
+      const current=state.audio.currentTime||0,duration=state.audio.duration;
+      time.textContent=printApiAudioTime(current)+' / '+printApiAudioTime(duration);seek.max=String(duration);seek.value=String(current);seek.setAttribute('aria-valuetext',time.textContent);
+      const canvas=root.querySelector('canvas'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);
+      const primary=getComputedStyle(root).getPropertyValue('--color-primary').trim()||'#ff7a00';
+      state.peaks.forEach((peak,index)=>{const height=Math.max(2,peak*48);ctx.fillStyle=index/state.peaks.length<=current/duration?primary:'#a8afb9';ctx.fillRect(index*canvas.width/state.peaks.length,(canvas.height-height)/2,4,height);});
+    }
+    function syncPrintApiAudioSlot(slot,{revalidate=false} = {}){
+      const input=document.getElementById(`settingsPrintApi${slot}SoundUrl`),url=String(input?.value||'').trim();
+      const key=activeRightTabId+':'+url;let state=printApiAudioStates.get(slot);
+      if(state?.key!==key||revalidate){destroyPrintApiAudio(state);state={key,url,status:url?'pending':'empty'};printApiAudioStates.set(slot,state);}
+      paintPrintApiAudio(slot);
+      if(document.getElementById('settingsPrintApiNotificationsBody')?.classList.contains('hidden')||state.status!=='pending')return;
+      state.status='loading';state.controller=new AbortController();
+      const current=()=>printApiAudioStates.get(slot)===state;
+      (async()=>{
+        let context;
+        try{
+          const response=await fetch(url,{signal:state.controller.signal,cache:'no-cache'});
+          if(!response.ok)throw new Error(`Файл недоступен (HTTP ${response.status})`);
+          const blob=await response.blob();if(!blob.size)throw new Error('Аудиофайл пуст');
+          const AudioContext=window.AudioContext||window.webkitAudioContext;if(!AudioContext)throw new Error('Браузер не поддерживает анализ аудио');
+          context=new AudioContext();
+          const buffer=await context.decodeAudioData(await blob.arrayBuffer());
+          if(!current())return;
+          state.peaks=Array.from({length:80},(_,index)=>{
+            const start=Math.floor(index*buffer.length/80),end=Math.floor((index+1)*buffer.length/80);let peak=0;
+            for(let channel=0;channel<buffer.numberOfChannels;channel++){const data=buffer.getChannelData(channel);for(let sample=start;sample<end;sample++)peak=Math.max(peak,Math.abs(data[sample]));}return peak;
+          });
+          const maximum=Math.max(...state.peaks);if(maximum>0)state.peaks=state.peaks.map(value=>value/maximum);
+          state.name=printApiAudioNames.get(url)||decodeURIComponent(new URL(url,location.href).pathname.split('/').pop())||'Аудиофайл';
+          state.blobUrl=URL.createObjectURL(blob);state.audio=new Audio();
+          state.audio.addEventListener('loadedmetadata',()=>{if(!current())return;if(!Number.isFinite(state.audio.duration)||state.audio.duration<=0){state.status='error';state.error='Не удалось определить длительность';}else state.status='ready';paintPrintApiAudio(slot);});
+          state.audio.addEventListener('error',()=>{if(current()){state.status='error';state.error='Файл не воспроизводится';paintPrintApiAudio(slot);}});
+          for(const event of ['play','pause','timeupdate','ended'])state.audio.addEventListener(event,()=>{if(current())paintPrintApiAudio(slot);});
+          state.audio.src=state.blobUrl;state.audio.load();
+        }catch(error){if(current()&&error.name!=='AbortError'){state.status='error';state.error='Не удалось прочитать аудиофайл'+(error.message?': '+error.message:'');paintPrintApiAudio(slot);}}
+        finally{if(context)await context.close();}
+      })();
+    }
+    async function playSoundPreview(url,slot){
+      const state=printApiAudioStates.get(slot);if(state?.url!==url||state.status!=='ready')return;
+      if(!state.audio.paused){state.audio.pause();return;}
+      for(const other of printApiAudioStates.values())if(other!==state)other.audio?.pause();
+      try{await state.audio.play();}catch(error){state.status='error';state.error='Не удалось воспроизвести: '+error.message;paintPrintApiAudio(slot);}
+    }
+    for(const slot of ['Order','Message']){
+      const root=printApiPanel?.querySelector(`[data-print-audio="${slot}"]`);
+      root?.querySelector('input[type="range"]')?.addEventListener('input',event=>{const state=printApiAudioStates.get(slot);if(state?.status==='ready'){state.audio.currentTime=Number(event.target.value);paintPrintApiAudio(slot);}});
+      document.getElementById(`settingsPrintApi${slot}SoundDownloadBtn`)?.addEventListener('click',()=>{const state=printApiAudioStates.get(slot);if(state?.status!=='ready')return;const link=document.createElement('a');link.href=state.blobUrl;link.download=state.name;document.body.append(link);link.click();link.remove();});
+    }
 
     async function fetchPrintApiInfo(storeId, connectionId = printApiSelectedConnectionId) {
 

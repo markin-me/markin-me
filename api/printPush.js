@@ -1,3 +1,6 @@
+let printEventsHub=null;
+function setPrintEventsHub(hub){printEventsHub=hub;}
+function notifyPrintChanged(tenantId,storeId){printEventsHub?.publish(tenantId,0,'print.changed',{kind:'queue',store_id:storeId});}
 ﻿const http = require("http");
 const https = require("https");
 const { URL } = require("url");
@@ -485,6 +488,7 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, targetPrinterId
       createdAtValue,
     ]
   );
+  notifyPrintChanged(tenantId,storeId);
   return true;
 }
 
@@ -555,6 +559,7 @@ async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order, re
       ]
     );
   }
+  if(jobs.length)notifyPrintChanged(tenantId,storeId);
   return jobs.length;
 }
 
@@ -843,6 +848,7 @@ async function enqueueDocuments(db, {tenantId,storeId,documents,requestId,automa
     await writePending();
     if(deferredIds.length)await connection.query(`UPDATE print_auto_deferred SET state='completed' WHERE tenant_id=? AND store_id=? AND state='pending' AND id IN (${deferredIds.map(()=>'?').join(',')})`,[tenantId,storeId,...deferredIds]);
     await connection.commit();
+    if(documents.length)notifyPrintChanged(tenantId,storeId);
     return documents.length;
   } catch(error) {await connection.rollback();throw error;} finally {connection.release();}
 }
@@ -896,4 +902,4 @@ function startScheduledAutoPrint(db){
   scheduledAutoPrintTimer.unref?.();
   void tick();
 }
-module.exports = { encodeMetaJobPayload, sendOrderToPrintBot, enqueueSingleLabelPrintJob, getPrintChoices, preparePrintDocuments, enqueueDocuments, startScheduledAutoPrint };
+module.exports = { setPrintEventsHub, encodeMetaJobPayload, sendOrderToPrintBot, enqueueSingleLabelPrintJob, getPrintChoices, preparePrintDocuments, enqueueDocuments, startScheduledAutoPrint };

@@ -312,7 +312,7 @@ function createOrdersWebSocketHub({ server, db, ordersEvents, authenticateCustom
 }
 
 // Admin commands use the existing authenticated HTTP handlers through a response adapter.
-function createAdminOrderCommandsHub({ server, dispatch }) {
+function createAdminOrderCommandsHub({ server, dispatch, ordersEvents }) {
   const { EventEmitter } = require('events');
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   server.on('upgrade', (request, socket, head) => {
@@ -326,7 +326,8 @@ function createAdminOrderCommandsHub({ server, dispatch }) {
   });
   wss.on('connection', socket => {
     socket.isAlive = true;
-    let running = false;
+    let running = false,printUnsubscribe=null,printAuthorizing=false;
+    socket.on('close',()=>printUnsubscribe?.());
     const send = value => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); };
     socket.on('error', () => socket.terminate());
     socket.on('pong', () => { socket.isAlive = true; });
@@ -334,6 +335,33 @@ function createAdminOrderCommandsHub({ server, dispatch }) {
     socket.on('message', async raw => {
       let message;
       try { message = JSON.parse(String(raw)); } catch (_) { socket.close(1008, 'Invalid command'); return; }
+      if(message?.type==='print.subscribe'){
+        if(printAuthorizing||printUnsubscribe)return;
+        if(typeof message.token!=='string'||message.token.length>8192){socket.close(1008,'Invalid authentication');return;}
+        printAuthorizing=true;
+        const response=new EventEmitter();response.statusCode=200;response.headersSent=false;
+        response.status=code=>{response.statusCode=code;return response;};
+        response.setHeader=()=>{};response.getHeader=()=>undefined;
+        response.json=payload=>{
+          response.headersSent=true;
+          const tenantId=Number(payload?.data?.tenant_id);
+          if(response.statusCode>=400||!payload?.ok||!tenantId){socket.close(1008,'Unauthorized');response.emit('finish');return response;}
+          if(socket.readyState===WebSocket.OPEN){
+            printUnsubscribe=ordersEvents.subscribe(tenantId,0,event=>{
+              if(event.event==='print.changed')send({type:'print.changed',cursor:event.id,...event.data});
+            });
+            // Token expiry closes the subscription; reconnect must authenticate again.
+            const expiry=Number(JSON.parse(Buffer.from(message.token.split('.')[1],'base64url').toString()).exp||0);
+            if(expiry){const timer=setTimeout(()=>socket.close(1008,'Session expired'),Math.max(0,Math.min(2147483647,expiry*1000-Date.now())));timer.unref?.();socket.once('close',()=>clearTimeout(timer));}
+            send({type:'print.ready',cursor:ordersEvents.getCurrentCursor(tenantId,0)});
+          }
+          response.emit('finish');return response;
+        };
+        response.end=()=>response.json({ok:false});
+        try{await dispatch(message,response);}catch(error){console.error('Print subscription failed:',error);socket.close(1011,'Authentication failed');}
+        finally{printAuthorizing=false;}
+        return;
+      }
       if (!message || !['order.create', 'order.update'].includes(message.type)
           || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(message.request_id || ''))
           || !message.body || typeof message.body !== 'object' || Array.isArray(message.body)

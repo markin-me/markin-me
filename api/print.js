@@ -1357,8 +1357,37 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
   };
 }
 
-function makePrintApiRouter({ db, helpers }) {
+function makePrintApiRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+  const presenceExpiry=new Map(),printerSnapshots=new Map();
+  function publishPrintChange(scope,kind){ordersEvents.publish(scope.tenant_id,0,'print.changed',{kind,store_id:scope.store_id,connection_id:scope.id});}
+  router.use((req,res,next)=>{
+    const json=res.json.bind(res);
+    res.json=payload=>{
+      const scope=req.printScope;
+      if(scope&&payload?.ok!==false&&res.statusCode<400){
+        if(req.path==='/agent/heartbeat'&&req.printAgent){
+          const agent=req.printAgent,key=String(agent.id),running=!(req.body.running===false||req.body.running===0||req.body.running==='0'||req.body.running==='false');
+          const online=Number(agent.agent_running)===1&&Date.now()-new Date(agent.last_heartbeat_at).getTime()<15000;
+          const signature=JSON.stringify([req.body.agent_name||null,req.body.agent_version||null,req.body.printer_name||null]);
+          const previous=JSON.stringify([agent.device_name||null,agent.agent_version||null,agent.printer_name||null]);
+          if(online!==running)publishPrintChange(scope,'presence');
+          else if(signature!==previous)publishPrintChange(scope,'devices');
+          if(req.printControlChanged)publishPrintChange(scope,'control');
+          clearTimeout(presenceExpiry.get(key));presenceExpiry.delete(key);
+          if(running){const timer=setTimeout(()=>{presenceExpiry.delete(key);publishPrintChange(scope,'presence');},15050);timer.unref?.();presenceExpiry.set(key,timer);}
+        }else if(req.path==='/printers/sync'){
+          const key=scope.id+':'+String(req.body.installation_id||'legacy');
+          const value=JSON.stringify((req.body.printers||[]).map(item=>[item.system_name,item.display_name,item.status,Boolean(item.is_default)]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
+          if(printerSnapshots.get(key)!==value){printerSnapshots.set(key,value);publishPrintChange(scope,'devices');}
+        }else if(req.path==='/agent/control'&&req.printControlChanged)publishPrintChange(scope,'control');
+        else if(req.path==='/agent/register'||req.path==='/printers/rename')publishPrintChange(scope,'devices');
+        else if((req.path==='/poll'&&payload?.data?.job)||(req.path==='/jobs/next'&&payload?.data?.job_id)||(/^\/jobs\/\d+\/(ack|fail|release|progress)$/.test(req.path)&&req.method==='POST'&&req.printJobChanged!==false))publishPrintChange(scope,'queue');
+      }
+      return json(payload);
+    };next();
+  });
+
   const HTML_JOB_PREFIX = "__HTML_BASE64__:";
   const orderPrintTemplateBuilder = createOrderPrintTemplateBuilder({ db, helpers });
 
@@ -1410,7 +1439,7 @@ function makePrintApiRouter({ db, helpers }) {
     return null;
   }
 
-  async function resolveToken(token) {
+  async function resolveToken(token, request) {
     let rows;
     try {
       [rows] = await db.query(
@@ -1439,6 +1468,7 @@ function makePrintApiRouter({ db, helpers }) {
     if (!rows.length) return null;
     const row = rows[0];
     if (!Number(row.is_active)) return null;
+    if(request)request.printScope=row;
     return row;
   }
 
@@ -1575,7 +1605,7 @@ function makePrintApiRouter({ db, helpers }) {
 
   router.post('/agent/register',async(req,res)=>{
     try{
-      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim());
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
       if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
       const installationId=String(req.body?.installation_id||'').trim();
       if(!installationId)return res.status(400).json({ok:false,error:'INSTALLATION_REQUIRED'});
@@ -1589,13 +1619,14 @@ function makePrintApiRouter({ db, helpers }) {
 
   router.post('/agent/control',async(req,res)=>{
     try{
-      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim());
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
       if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
       if(typeof req.body?.paused!=='boolean')return res.status(400).json({ok:false,error:'BAD_PRINT_CONTROL'});
       const context=await resolvePrintContext(tokenRow,req.body.installation_id);
       if(!context)return res.status(409).json({ok:false,error:'PRINT_AGENT_CONNECTION_MISMATCH'});
-      await db.query(`UPDATE print_api_tokens SET printing_paused=?,print_control_version=print_control_version+1,updated_at=NOW()
+      const [changed]=await db.query(`UPDATE print_api_tokens SET printing_paused=?,print_control_version=print_control_version+1,updated_at=NOW()
         WHERE id=? AND tenant_id=? AND store_id=? AND printing_paused<>?`,[req.body.paused?1:0,tokenRow.id,tokenRow.tenant_id,tokenRow.store_id,req.body.paused?1:0]);
+      req.printControlChanged=changed.affectedRows>0;
       return res.json({ok:true,data:{print_control:await readPrintControl(tokenRow)}});
     }catch(error){console.error('Print control failed:',error);return res.status(500).json({ok:false,error:'PRINT_CONTROL_FAILED'});}
   });
@@ -1968,7 +1999,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2019,7 +2050,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2042,6 +2073,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
       }
 
+      req.printAgent=context.agent;
       await db.query(
         `UPDATE print_agents
          SET device_name=?, agent_version=?, printer_name=?, last_heartbeat_at=NOW(),
@@ -2084,6 +2116,7 @@ function makePrintApiRouter({ db, helpers }) {
 
       const control=await readPrintControl(tokenRow);
       if(Number.isSafeInteger(req.body?.applied_print_control_version) && req.body.applied_print_control_version===control.version){
+        req.printControlChanged=Number(context.agent.applied_print_control_version)!==control.version;
         await db.query('UPDATE print_agents SET applied_print_control_version=? WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?',[control.version,context.agent.id,tokenRow.tenant_id,tokenRow.store_id,tokenRow.id]);
       }
       return res.json({ ok: true, data:{print_control:control} });
@@ -2128,7 +2161,7 @@ function makePrintApiRouter({ db, helpers }) {
     try {
       const apiKey = req.get("X-Api-Key");
       if (!apiKey) return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       const context = await resolvePrintContext(tokenRow, req.query.installation_id);
       if (!context) return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
@@ -2148,7 +2181,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, success: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, success: false, error: "API_KEY_INVALID" });
       }
@@ -2264,7 +2297,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, success: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, success: false, error: "API_KEY_INVALID" });
       }
@@ -2321,7 +2354,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2399,7 +2432,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2457,7 +2490,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2572,7 +2605,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2602,7 +2635,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2633,7 +2666,7 @@ function makePrintApiRouter({ db, helpers }) {
   // Revalidate the claim immediately before sending a document to Windows.
   router.get('/jobs/:id/ready',async(req,res)=>{
     try{
-      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim());
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
       if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
       const context=await resolvePrintContext(tokenRow,req.query.installation_id);
       if(!context)return res.status(409).json({ok:false,error:'PRINT_AGENT_CONNECTION_MISMATCH'});
@@ -2644,24 +2677,30 @@ function makePrintApiRouter({ db, helpers }) {
   });
   router.post('/jobs/:id/progress',async(req,res)=>{
     try{
-      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim());
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
       if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
       const context=await resolvePrintContext(tokenRow,req.body?.installation_id);
       const copies=Number(req.body?.printed_copies);
       if(!context||!Number.isSafeInteger(copies)||copies<1)return res.status(400).json({ok:false,error:'BAD_PRINT_PROGRESS'});
       const [result]=await db.query(`UPDATE print_jobs SET printed_copies=GREATEST(printed_copies,?),updated_at=NOW()
-        WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing' AND claimed_by_agent_id=?`,[copies,Number(req.params.id),tokenRow.tenant_id,tokenRow.store_id,tokenRow.id,context.agent.id]);
-      return res.status(result.affectedRows?200:409).json({ok:result.affectedRows>0});
+        WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing' AND claimed_by_agent_id=? AND printed_copies<?`,[copies,Number(req.params.id),tokenRow.tenant_id,tokenRow.store_id,tokenRow.id,context.agent.id,copies]);
+      req.printJobChanged=result.affectedRows>0;
+      if(!req.printJobChanged){
+        const [existing]=await db.query(`SELECT id FROM print_jobs WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing' AND claimed_by_agent_id=? AND printed_copies>=?`,[Number(req.params.id),tokenRow.tenant_id,tokenRow.store_id,tokenRow.id,context.agent.id,copies]);
+        return res.status(existing.length?200:409).json({ok:existing.length>0});
+      }
+      return res.json({ok:true});
     }catch(error){console.error(error);return res.status(500).json({ok:false,error:'PRINT_PROGRESS_FAILED'});}
   });
   router.post('/jobs/:id/release',async(req,res)=>{
     try{
-      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim());
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
       if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
       const context=await resolvePrintContext(tokenRow,req.body?.installation_id);
       if(!context)return res.status(409).json({ok:false,error:'PRINT_AGENT_CONNECTION_MISMATCH'});
-      await db.query(`UPDATE print_jobs SET status='pending',locked_at=NULL,claimed_by_agent_id=NULL,attempts=GREATEST(0,attempts-1),updated_at=NOW()
+      const [changed]=await db.query(`UPDATE print_jobs SET status='pending',locked_at=NULL,claimed_by_agent_id=NULL,attempts=GREATEST(0,attempts-1),updated_at=NOW()
         WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing' AND claimed_by_agent_id=?`,[Number(req.params.id),tokenRow.tenant_id,tokenRow.store_id,tokenRow.id,context.agent.id]);
+      req.printJobChanged=changed.affectedRows>0;
       return res.json({ok:true});
     }catch(error){console.error(error);return res.status(500).json({ok:false,error:'PRINT_JOB_RELEASE_FAILED'});}
   });
@@ -2673,7 +2712,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2732,7 +2771,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2814,7 +2853,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -3288,7 +3327,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
