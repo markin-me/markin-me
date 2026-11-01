@@ -1,3 +1,4 @@
+const {accumulationWindow,nextRelease,loadStorePrintHours}=require('./helpers/storePrintWindow');
 let printEventsHub=null;
 function setPrintEventsHub(hub){printEventsHub=hub;}
 function notifyPrintChanged(tenantId,storeId){printEventsHub?.publish(tenantId,0,'print.changed',{kind:'queue',store_id:storeId});}
@@ -651,16 +652,21 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
     if(!dateRows.length)return fail('ORDER_NOT_FOUND');
     const createdLocal=require('./helpers').utcToStoreDateTime(dateRows[0].created_at,autoTimezone);
     const orderDay=dateRows[0].scheduled_day || createdLocal.slice(0,10);
-    const timedRules=choices.rules.filter(rule=>Number(rule.zone_auto_print)===1 && Number(rule.scheduled_auto_print)===1 && Number(rule.scheduled_print)===1 && (createdLocal.slice(11,16)<rule.scheduled_auto_print_time || (rule.auto_print_date_scope==='today' && orderDay>createdLocal.slice(0,10))));
+    const scheduledRules=choices.rules.filter(rule=>Number(rule.zone_auto_print)===1&&Number(rule.scheduled_auto_print)===1);
+    const hours=scheduledRules.length?await loadStorePrintHours(db,resolvedTenantId,resolvedStoreId):null;
+    const windows=new Map(scheduledRules.map(rule=>[Number(rule.id),accumulationWindow(hours,rule.scheduled_auto_print_time,createdLocal)]));
+    const timedRules=scheduledRules.filter(rule=>Number(rule.scheduled_print)===1&&(windows.get(Number(rule.id))||(rule.auto_print_date_scope==='today'&&orderDay>createdLocal.slice(0,10))));
     if(timedRules.length){
       const deferred=timedRules.map(rule=>{
-        let due=createdLocal.slice(0,10);
-        if(rule.auto_print_date_scope==='today' && orderDay>due)due=orderDay;
-        return [resolvedTenantId,resolvedStoreId,Number(order.id || order.order_id || order.orderId),rule.id,due];
+        let due=windows.get(Number(rule.id))?.dueDate||orderDay;
+        if(rule.auto_print_date_scope==='today'&&orderDay>due)due=orderDay;
+        due=nextRelease(hours,rule.scheduled_auto_print_time,due+' 00:00:00').slice(0,10);
+        return [resolvedTenantId,resolvedStoreId,Number(order.id||order.order_id||order.orderId),rule.id,due];
       });
       await db.query(`INSERT INTO print_auto_deferred (tenant_id,store_id,order_id,rule_id,due_date) VALUES ${deferred.map(()=>'(?,?,?,?,?)').join(',')} ON DUPLICATE KEY UPDATE due_date=IF(state='pending',VALUES(due_date),due_date)`,deferred.flat());
+      notifyPrintChanged(resolvedTenantId,resolvedStoreId);
     }
-    const rules=choices.rules.filter(rule=>Number(rule.zone_auto_print)===1 && Number(rule.auto_print)===1 && rule.template_type!=='assembly_batch' && (Number(rule.scheduled_auto_print)!==1 || createdLocal.slice(11,16)>=rule.scheduled_auto_print_time) && (rule.auto_print_date_scope==='all' || (rule.auto_print_date_scope==='today' && orderDay===today)));
+    const rules=choices.rules.filter(rule=>Number(rule.zone_auto_print)===1&&Number(rule.auto_print)===1&&rule.template_type!=='assembly_batch'&&!windows.get(Number(rule.id))&&(rule.auto_print_date_scope==='all'||(rule.auto_print_date_scope==='today'&&orderDay===today)));
     if (!rules.length) return true;
     const documents=[];
     for (const rule of rules) {
@@ -861,12 +867,15 @@ function startScheduledAutoPrint(db){
     scheduledAutoPrintRunning=true;
     try{
       const [rules]=await db.query(`SELECT DISTINCT r.* FROM prod_store_print_rules r JOIN print_auto_deferred d ON d.tenant_id=r.tenant_id AND d.store_id=r.store_id AND d.rule_id=r.id AND d.state='pending' JOIN prod_production_zones z ON z.tenant_id=r.tenant_id AND z.id=r.production_zone_id AND z.is_active=1 WHERE r.is_enabled=1 AND r.zone_auto_print=1 AND r.scheduled_auto_print=1 AND r.scheduled_print=1 AND d.due_date<=DATE_ADD(UTC_DATE(),INTERVAL 1 DAY)`);
-      const timezones=new Map();
+      const timezones=new Map(),hoursByStore=new Map();
       for(const rule of rules){
         const key=`${rule.tenant_id}:${rule.store_id}`;
         if(!timezones.has(key))timezones.set(key,await getStoreTimezone(db,rule.tenant_id,rule.store_id));
         const timezone=timezones.get(key),now=getStoreNowDateTime(timezone),today=now.slice(0,10);
-        if(now.slice(11,16)<rule.scheduled_auto_print_time)continue;
+        try{if(!hoursByStore.has(key))hoursByStore.set(key,await loadStorePrintHours(db,rule.tenant_id,rule.store_id));}
+        catch(error){console.error('Scheduled print store hours:',{tenantId:rule.tenant_id,storeId:rule.store_id,error:error.message});continue;}
+        const hours=hoursByStore.get(key);
+        if(now.slice(11,16)<String(rule.scheduled_auto_print_time).slice(0,5))continue;
         const lockName=`print-auto:${key}:${rule.id}`;
         const connection=await db.getConnection();let locked=false;
         try{
@@ -874,18 +883,21 @@ function startScheduledAutoPrint(db){
           if(Number(locks[0]?.acquired)!==1)continue;
           locked=true;
           const cursor=scheduledAutoCursors.get(lockName) || 0;
-          const [pending]=await connection.query(`SELECT d.id AS dispatch_id,d.order_id,o.is_active,o.online_payment_required,o.online_payment_status,o.payment_projection,o.is_paid,o.total_price,DATE_FORMAT(o.scheduled_at,'%Y-%m-%d') AS scheduled_day,DATE_FORMAT(o.created_at,'%Y-%m-%d %H:%i:%s') AS created_at,s.code AS status_code FROM print_auto_deferred d LEFT JOIN order_orders o ON o.tenant_id=d.tenant_id AND o.store_id=d.store_id AND o.id=d.order_id LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id WHERE d.tenant_id=? AND d.store_id=? AND d.rule_id=? AND d.state='pending' AND d.due_date<=? AND d.id>? ORDER BY d.id LIMIT 100`,[rule.tenant_id,rule.store_id,rule.id,today,cursor]);
+          const [pending]=await connection.query(`SELECT d.id AS dispatch_id,d.order_id,DATE_FORMAT(d.due_date,'%Y-%m-%d') AS due_date,o.is_active,o.online_payment_required,o.online_payment_status,o.payment_projection,o.is_paid,o.total_price,DATE_FORMAT(o.scheduled_at,'%Y-%m-%d') AS scheduled_day,DATE_FORMAT(o.created_at,'%Y-%m-%d %H:%i:%s') AS created_at,s.code AS status_code FROM print_auto_deferred d LEFT JOIN order_orders o ON o.tenant_id=d.tenant_id AND o.store_id=d.store_id AND o.id=d.order_id LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id WHERE d.tenant_id=? AND d.store_id=? AND d.rule_id=? AND d.state='pending' AND d.due_date<=? AND d.id>? ORDER BY d.id LIMIT 100`,[rule.tenant_id,rule.store_id,rule.id,today,cursor]);
           if(!pending.length){scheduledAutoCursors.set(lockName,0);continue;}
           scheduledAutoCursors.set(lockName,Number(pending[pending.length-1].dispatch_id));
           const ready=[],skipped=[];
           for(const order of pending){
+            const due=String(order.due_date instanceof Date?order.due_date.toISOString().slice(0,10):order.due_date).slice(0,10);
+            if(now<nextRelease(hours,rule.scheduled_auto_print_time,due+' 00:00:00'))continue;
             if(!Number(order.is_active) || ['delivered','canceled','cancelled'].includes(String(order.status_code))){skipped.push(order.dispatch_id);continue;}
-            const day=order.scheduled_day || require('./helpers').utcToStoreDateTime(order.created_at,timezone).slice(0,10);
+            const day=order.scheduled_day || due;
             if(rule.auto_print_date_scope==='today' && day>today){await connection.query('UPDATE print_auto_deferred SET due_date=? WHERE id=? AND state=\'pending\'',[day,order.dispatch_id]);continue;}
             if(rule.auto_print_date_scope==='today' && day<today){skipped.push(order.dispatch_id);continue;}
             if(isOrderEligibleForFulfillment(order))ready.push(order);
           }
           if(skipped.length)await connection.query(`UPDATE print_auto_deferred SET state='skipped' WHERE tenant_id=? AND store_id=? AND id IN (${skipped.map(()=>'?').join(',')})`,[rule.tenant_id,rule.store_id,...skipped]);
+          if(skipped.length)notifyPrintChanged(rule.tenant_id,rule.store_id);
           if(!ready.length)continue;
           const orderIds=ready.map(order=>Number(order.order_id));
           let documents;

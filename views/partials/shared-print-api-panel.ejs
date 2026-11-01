@@ -1,0 +1,144 @@
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPrintApiPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">API для печати на удалённом принтере</div>
+          <div class="settings-list-subtitle">Настройки выбранного подключения к серверу печати.</div>
+        </div>
+        <div class="settings-print-api-tabs" id="settingsPrintApiQueueNav" role="tablist" aria-label="Разделы подключения">
+          <button type="button" data-print-view="settings" role="tab" class="is-active" aria-selected="true">Настройки</button>
+          <button type="button" data-print-view="all" role="tab" aria-selected="false">Очередь печати</button>
+          <button type="button" data-print-view="devices" role="tab" aria-selected="false">Устройства</button>
+          <button type="button" data-print-view="notifications" role="tab" aria-selected="false">Уведомления</button>
+        </div>
+        <div class="settings-print-api-control-bar hidden">
+          <button type="button" class="btn btn-link btn-sm" id="settingsPrintApiPauseBtn" disabled><i class="fas fa-pause"></i> Остановить печать</button>
+          <span class="muted" id="settingsPrintApiPauseStatus" role="status"></span>
+        </div>
+        <div class="settings-site-form settings-panel-scroll no-scrollbar">
+          <div id="settingsPrintApiSettingsBody" class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">НАЗВАНИЕ ПОДКЛЮЧЕНИЯ</label>
+            <input class="control settings-delivery-zone-pill-control" type="text" id="settingsPrintApiName" placeholder="Основное подключение" />
+          </div>
+          <div class="settings-site-field" id="settingsPrintApiStoreField">
+            <label class="field-label">ФИЛИАЛ</label>
+            <div class="settings-print-api-store-controls">
+              <div class="settings-print-api-store-select">
+            <select class="control" id="settingsPrintApiStore" aria-label="Филиал"></select>
+            <div class="settings-print-api-store-value hidden" id="settingsPrintApiStoreValue"></div>
+              </div>
+          <div class="settings-print-api-connection-row">
+            <input class="hidden" type="text" id="settingsPrintApiPrinterStatus" readonly />
+            <button class="btn btn-link btn-sm settings-print-api-connection-check" type="button" id="settingsPrintApiCheckBtn" title="Нажмите, чтобы повторить проверку">
+              <span class="settings-print-api-connection-dot" aria-hidden="true"></span>
+              <span id="settingsPrintApiConnectionLabel">Соединение</span>
+            </button>
+            <details class="settings-print-api-connection-info">
+              <summary class="btn btn-icon btn-sm" title="Информация о соединении" aria-label="Информация о соединении"><i class="fas fa-info-circle" aria-hidden="true"></i></summary>
+              <div class="settings-delivery-zone-info-popover" role="status">
+                <strong id="settingsPrintApiPrinterStatusValue"></strong>
+                <div class="muted" id="settingsPrintApiSummary"></div>
+              </div>
+            </details>
+          </div>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ТОКЕН (X-Api-Key)</label>
+            <div class="settings-print-api-token-field">
+              <input class="control settings-delivery-zone-pill-control" type="password" id="settingsPrintApiToken" readonly />
+              <div class="settings-print-api-token-icons">
+                <button class="btn btn-icon btn-sm" type="button" id="settingsPrintApiGenerateBtn" title="Обновить токен" aria-label="Обновить токен"><i class="fas fa-sync-alt" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm" type="button" id="settingsPrintApiRevealToken" title="Показать токен" aria-label="Показать токен"><i class="fas fa-eye-slash" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm" type="button" id="settingsPrintApiCopyToken" title="Скопировать токен" aria-label="Скопировать токен"><i class="fas fa-copy" aria-hidden="true"></i></button>
+              </div>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ПРИНТЕР ДЛЯ ЧЕКОВ ПО УМОЛЧАНИЮ</label>
+            <select class="control" id="settingsPrintApiPrinterName" aria-label="Принтер для чеков по умолчанию"></select>
+            <div class="field-hint">Общая настройка филиала для старого сценария автопечати, когда нет новых правил производственных зон.</div>
+          </div>
+          </div>
+          <div id="settingsPrintApiDevicesBody" class="settings-site-form hidden">
+          <div class="settings-site-field">
+            <label class="field-label">КОМПЬЮТЕРЫ И ПРИНТЕРЫ</label>
+            <div id="settingsPrintApiHierarchy" class="settings-print-api-hierarchy"></div>
+          </div>
+          </div>
+          <div id="settingsPrintApiNotificationsBody" class="hidden">
+          <div class="settings-print-api-notifications">
+            <div class="settings-site-field" style="margin:0;">
+              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field" style="margin:0 0 4px 0;">
+                <div class="settings-system-telegram-switch-copy">
+                  <span class="field-label" style="margin:0;">Звук нового заказа</span>
+                </div>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="settingsPrintApiNotifyNewOrder" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="print-notification-audio" data-print-audio="Order">
+                <button class="btn btn-icon btn-sm" type="button" title="Воспроизвести" aria-label="Воспроизвести" id="settingsPrintApiOrderSoundPlayBtn" disabled><i class="fas fa-play" aria-hidden="true"></i></button>
+                <div class="print-notification-track">
+                  <span class="settings-sound-label" id="settingsPrintApiOrderSoundLabel" role="status">Звук не загружен</span>
+                  <div class="print-notification-wave hidden">
+                    <canvas width="600" height="54" aria-hidden="true"></canvas>
+                    <input type="range" min="0" max="1" value="0" step="0.05" aria-label="Позиция воспроизведения" disabled />
+                  </div>
+                  <span class="print-notification-time hidden"></span>
+                </div>
+                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить новый звук" aria-label="Загрузить новый звук" id="settingsPrintApiOrderSoundUploadBtn"><i class="fas fa-upload" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm" type="button" title="Скачать звук" aria-label="Скачать звук" id="settingsPrintApiOrderSoundDownloadBtn" disabled><i class="fas fa-download" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить звук" aria-label="Удалить звук" id="settingsPrintApiOrderSoundClearBtn"><i class="fas fa-trash" aria-hidden="true"></i></button>
+              </div>
+              <input class="control hidden" type="file" id="settingsPrintApiOrderSoundFile" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" />
+              <input class="hidden" type="text" id="settingsPrintApiOrderSoundUrl" readonly />
+            </div>
+            <div class="settings-site-field" style="margin:0;">
+              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field" style="margin:0 0 4px 0;">
+                <div class="settings-system-telegram-switch-copy">
+                  <span class="field-label" style="margin:0;">Звук нового сообщения</span>
+                </div>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="settingsPrintApiNotifyNewMessage" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="print-notification-audio" data-print-audio="Message">
+                <button class="btn btn-icon btn-sm" type="button" title="Воспроизвести" aria-label="Воспроизвести" id="settingsPrintApiMessageSoundPlayBtn" disabled><i class="fas fa-play" aria-hidden="true"></i></button>
+                <div class="print-notification-track">
+                  <span class="settings-sound-label" id="settingsPrintApiMessageSoundLabel" role="status">Звук не загружен</span>
+                  <div class="print-notification-wave hidden">
+                    <canvas width="600" height="54" aria-hidden="true"></canvas>
+                    <input type="range" min="0" max="1" value="0" step="0.05" aria-label="Позиция воспроизведения" disabled />
+                  </div>
+                  <span class="print-notification-time hidden"></span>
+                </div>
+                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить новый звук" aria-label="Загрузить новый звук" id="settingsPrintApiMessageSoundUploadBtn"><i class="fas fa-upload" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm" type="button" title="Скачать звук" aria-label="Скачать звук" id="settingsPrintApiMessageSoundDownloadBtn" disabled><i class="fas fa-download" aria-hidden="true"></i></button>
+                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить звук" aria-label="Удалить звук" id="settingsPrintApiMessageSoundClearBtn"><i class="fas fa-trash" aria-hidden="true"></i></button>
+              </div>
+              <input class="control hidden" type="file" id="settingsPrintApiMessageSoundFile" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" />
+              <input class="hidden" type="text" id="settingsPrintApiMessageSoundUrl" readonly />
+            </div>
+          </div>
+          </div>
+          <div id="settingsPrintApiQueueBody" class="hidden"></div>
+        </div>
+        <div class="panel-footer">
+          <div id="settingsPrintApiQueueBulk" class="products-bulk-footer-actions"></div>
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsPrintApiFooterView">
+              <button class="product-footer-btn product-footer-edit" type="button" id="settingsPrintApiEditBtn">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsPrintApiFooterEdit">
+              <div id="settingsPrintApiDirtyNotice" class="muted hidden" role="status">Несохранённые изменения</div>
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsPrintApiCancelBtn" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintApiSaveSettingsBtn">Сохранить</button>
+              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsPrintApiDeleteBtn" title="Удалить подключение" aria-label="Удалить подключение"><i class="fas fa-trash" aria-hidden="true"></i></button>
+            </div>
+          </div>
+        </div>
+      </div>

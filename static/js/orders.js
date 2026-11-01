@@ -2099,6 +2099,65 @@
     });
   }
 
+  let ordersPrintPanel=null;
+  const ordersPrintStores={loaded:false,items:[]};
+  function syncOrdersPrintTabs(){
+    for(const element of orderTabsEls)for(const tab of element.querySelectorAll('[data-order-tab-key]')){const key=tab.getAttribute('data-order-tab-key');if(ordersPrintPanel?.isPrintApiTabId(key))tab.setAttribute('data-right-tab',key);}
+  }
+  function showOrdersPrintPanel(visible){
+    document.getElementById('ordersPrintApiHost')?.classList.toggle('hidden',!visible);
+    document.querySelector('#ordersRightPane .orders-info > .panel-body')?.classList.toggle('hidden',visible);
+    if(visible)document.getElementById('orderInfoFooter')?.classList.add('hidden');
+    ordersPrintPanel?.printApiPanel?.classList.toggle('hidden',!visible);
+    if(!visible)for(const audio of ordersPrintPanel?.printApiAudioStates?.values()||[])audio.audio?.pause();
+  }
+  function renderOrdersPrintButton(){
+    const button=document.getElementById('ordersPrintQueueBtn');if(!button||!ordersPrintPanel)return;
+    if(!ordersPrintPanel.printApiListLoaded){
+      const menu=document.getElementById('ordersPrintConnections');menu.replaceChildren();
+      const status=document.createElement('p');status.textContent='Данные подключений ещё не получены';
+      const retry=document.createElement('button');retry.type='button';retry.className='btn btn-link';retry.textContent='Повторить загрузку';retry.addEventListener('click',()=>ordersPrintPanel.loadPrintApiCards());menu.append(status,retry);return;
+    }
+    const connections=ordersPrintPanel.printApiListItems.filter(item=>Number(item.store_id)===getStoreIdFromStorage()&&Number(item.token_id)>0);
+    const queue=connections.reduce((sum,item)=>sum+Number(item.queue_count||0),0),errors=connections.reduce((sum,item)=>sum+Number(item.failed_count||0),0);
+    document.getElementById('ordersPrintQueueCount').textContent=String(queue);document.getElementById('ordersPrintErrorCount').textContent=String(errors);button.title=`Очередь печати: ${queue}. Ошибки: ${errors}`;
+    const menu=document.getElementById('ordersPrintConnections');menu.replaceChildren();
+    if(!connections.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='У выбранного филиала нет подключений печати';menu.append(empty);}
+    for(const connection of connections){
+      const row=document.createElement('button');row.type='button';row.className='btn btn-link orders-print-connection';row.setAttribute('role','menuitem');
+      const dot=document.createElement('span');dot.className='orders-print-dot '+(Number(connection.agent_online)===1?'is-online':'is-offline');
+      const name=document.createElement('span');name.textContent=connection.display_name||`Подключение #${connection.token_id}`;
+      const counts=document.createElement('span');counts.textContent=`${Number(connection.queue_count||0)} / ${Number(connection.failed_count||0)}`;counts.title='Очередь / ошибки';row.append(dot,name,counts);
+      row.addEventListener('click',async()=>{
+        menu.hidePopover();button.setAttribute('aria-expanded','false');
+        const key=ordersPrintPanel.getPrintApiTabKey(connection.store_id,connection.token_id),existed=Boolean(ordersPrintPanel.getPrintApiTabState(key));
+        await ordersPrintPanel.openPrintApiForStore(Number(connection.store_id),connection.display_name,Number(connection.token_id));
+        if(!existed)ordersPrintPanel.showPrintQueueView('all');
+      });menu.append(row);
+    }
+  }
+  document.addEventListener('tenantStoreChanged',()=>{document.getElementById('ordersPrintConnections')?.hidePopover();renderOrdersPrintButton();});
+  async function initOrdersPrintPanel(){
+    if(!document.getElementById('ordersPrintApiHost'))return;
+    ordersPrintPanel=window.SharedPrintApiPanel.create({
+      get activeRightTabId(){return tabsState.activeKey||'';},get rightTabs(){return document.getElementById('orderTabs');},rightDefault:null,apiPanelCards:null,settingsApiCardsHeader:null,
+      storesState:ordersPrintStores,extraPrintTemplates:{},productionZonePanel:null,productionZoneStoreSelect:null,
+      async loadStores(){const result=await apiJson('/api/admin/tenant/stores');if(!result.ok)throw new Error('LOAD_STORES_FAILED');ordersPrintStores.items=result.stores||[];ordersPrintStores.loaded=true;},
+      ensureTab(key,title){let tab=tabsState.tabs.find(item=>item.key===key);if(!tab){const current=ordersPrintPanel.getPrintApiTabState(key);tab={key,type:'print',title,storeId:Number(current?.storeId||current?.store_id||0),connectionId:Number(current?.connectionId||0)};tabsState.tabs.push(tab);}else tab.title=title;renderOrderTabs();},
+      setActiveRightTab(key){if(key)setActiveOrderTab(key,{openMobile:true});else goToOrdersHomeView();},
+      async uploadTenantSound(field,file){const form=new FormData();form.append('field',field);form.append('file',file);const response=await fetch('/api/admin/tenant/upload-sound',{method:'POST',headers:{Authorization:'Bearer '+localStorage.getItem('authToken')},body:form});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'SOUND_UPLOAD_FAILED');return result;},
+      onConnectionsChanged:renderOrdersPrintButton,
+    });
+    const button=document.getElementById('ordersPrintQueueBtn'),menu=document.getElementById('ordersPrintConnections');
+    button.addEventListener('click',()=>{
+      if(menu.matches(':popover-open')){menu.hidePopover();button.setAttribute('aria-expanded','false');return;}
+      renderOrdersPrintButton();menu.showPopover();const rect=button.getBoundingClientRect();menu.style.width='min(360px,calc(100vw - 24px))';menu.style.left=Math.max(12,Math.min(rect.left,innerWidth-menu.offsetWidth-12))+'px';menu.style.top=rect.bottom+6+'px';button.setAttribute('aria-expanded','true');
+    });
+    document.addEventListener('click',event=>{if(menu.matches(':popover-open')&&!menu.contains(event.target)&&!button.contains(event.target)){menu.hidePopover();button.setAttribute('aria-expanded','false');}});
+    menu.addEventListener('keydown',event=>{if(event.key==='Escape'){menu.hidePopover();button.setAttribute('aria-expanded','false');button.focus();}});
+    await ordersPrintPanel.loadPrintApiCards();
+  }
+
   function renderOrderTabs() {
     if (sharedOrderPanel) {
       sharedOrderPanel.renderTabs({
@@ -2107,6 +2166,7 @@
         tabs: tabsState.tabs,
         activeKey: tabsState.activeKey,
       });
+      syncOrdersPrintTabs();
       return;
     }
     if (!orderTabsEls.length) return;
@@ -2126,9 +2186,11 @@
       `;
     }).join("");
     orderTabsEls.forEach((el) => { el.innerHTML = html; });
+    syncOrdersPrintTabs();
   }
 
   function setActiveOrderTab(key, { openMobile = false } = {}) {
+    if(ordersPrintPanel?.isPrintApiTabId(tabsState.activeKey))ordersPrintPanel.persistActivePrintApiTabState();
     const mountedTab = tabsState.tabs.find((t) => t.key === mountedCheckoutTabKey) || null;
     if (mountedTab) captureCheckoutSessionForTab(mountedTab);
 
@@ -2144,6 +2206,14 @@
     }
     tabsState.activeKey = key;
     const activationRevision = ++checkoutTabActivationRevision;
+    if(ordersPrintPanel?.isPrintApiTabId(key)){
+      mountedCheckoutTabKey=null;state.activeOrderId=null;setOrdersCheckoutLayoutEnabled(false);renderOrderTabs();showOrdersPrintPanel(true);
+      if(ordersPrintPanel.getPrintApiTabState(key)){ordersPrintPanel.renderActivePrintApiTab();ordersPrintPanel.ensurePrintApiReady();}
+      else void ordersPrintPanel.openPrintApiForStore(tab.storeId,tab.title,tab.connectionId).then(()=>ordersPrintPanel.showPrintQueueView('all'));
+      if(openMobile&&shouldUseMobileSheet())openSheet();schedulePersistOrdersCache();return;
+    }
+    showOrdersPrintPanel(false);
+
 
     if (tab.type === "order") {
       tab.mode = normalizeTabMode(tab.mode);
@@ -2216,6 +2286,8 @@
   }
 
   function goToOrdersHomeView() {
+    if(ordersPrintPanel?.isPrintApiTabId(tabsState.activeKey))ordersPrintPanel.persistActivePrintApiTabState();
+    showOrdersPrintPanel(false);
     const mountedTab = tabsState.tabs.find((tab) => tab.key === mountedCheckoutTabKey) || null;
     if (mountedTab) captureCheckoutSessionForTab(mountedTab);
     tabsState.activeKey = null;
@@ -2746,6 +2818,7 @@
     const idx = tabsState.tabs.findIndex((tab) => tab.key === key);
     if (idx < 0) return;
     const tabToClose = tabsState.tabs[idx];
+    if(tabToClose.type==='print'){ordersPrintPanel?.clearPrintApiTabState(key);if(tabsState.activeKey===key)showOrdersPrintPanel(false);}
     if (tabToClose.key === mountedCheckoutTabKey) captureCheckoutSessionForTab(tabToClose);
     const wasActive = tabsState.activeKey === key;
     tabsState.tabs.splice(idx, 1);
@@ -3524,6 +3597,7 @@
   function serializeTabForCache(tab) {
     if (!tab || typeof tab !== "object") return null;
     const type = String(tab.type || "");
+    if(type==='print')return {key:tab.key,type,title:tab.title,storeId:tab.storeId,connectionId:tab.connectionId};
     if (type !== "order" && type !== "client") return null;
     const out = {
       key: String(tab.key || ""),
@@ -3553,6 +3627,7 @@
         if (!row || typeof row !== "object") return null;
         const type = String(row.type || "");
         const key = String(row.key || "").trim();
+        if(type==='print'&&key&&Number(row.storeId)>0&&Number(row.connectionId)>0)return {key,type,title:String(row.title||'Очередь печати'),storeId:Number(row.storeId),connectionId:Number(row.connectionId)};
         if (!key || (type !== "order" && type !== "client")) return null;
         if (type === "order") {
           return {
@@ -3600,6 +3675,7 @@
         if (!row || typeof row !== "object") return null;
         const type = String(row.type || "");
         const key = String(row.key || "").trim();
+        if(type==='print'&&key&&Number(row.storeId)>0&&Number(row.connectionId)>0)return {key,type,title:String(row.title||'Очередь печати'),storeId:Number(row.storeId),connectionId:Number(row.connectionId)};
         if (!key || (type !== "order" && type !== "client")) return null;
         if (type === "order") {
           const orderId = Number(row.orderId || 0);
@@ -9614,5 +9690,6 @@
         }
       });
   });
+  void initOrdersPrintPanel().catch(error=>console.error('Не удалось подключить панель печати:',error));
 })();
 

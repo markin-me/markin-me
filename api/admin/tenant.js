@@ -6113,6 +6113,13 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const [counts] = await db.query(`SELECT SUM(status IN ('pending','processing')) AS queue_count,
         SUM(status='failed') AS failed_count,SUM(status='done') AS done_count
         FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=? AND deleted_at IS NULL`,scope);
+      const [accumulationRows]=await db.query(`SELECT COUNT(DISTINCT d.order_id) AS order_count,
+        MIN(CONCAT(DATE_FORMAT(d.due_date,'%Y-%m-%d'),' ',r.scheduled_auto_print_time)) AS release_at
+        FROM print_auto_deferred d JOIN prod_store_print_rules r ON r.id=d.rule_id AND r.tenant_id=d.tenant_id AND r.store_id=d.store_id
+        JOIN print_printers p ON p.id=r.printer_id AND p.tenant_id=r.tenant_id AND p.store_id=r.store_id
+        JOIN print_agents a ON a.id=p.agent_id AND a.tenant_id=p.tenant_id AND a.store_id=p.store_id
+        JOIN prod_production_zones z ON z.id=r.production_zone_id AND z.tenant_id=r.tenant_id
+        WHERE d.tenant_id=? AND d.store_id=? AND p.token_id=? AND d.state='pending' AND r.is_enabled=1 AND r.zone_auto_print=1 AND r.scheduled_auto_print=1 AND r.scheduled_print=1 AND p.removed_at IS NULL AND a.removed_at IS NULL AND z.is_active=1`,scope);
       const conditions=['j.tenant_id=?','j.store_id=?','j.token_id=?','j.deleted_at IS NULL'];
       const params=[...scope];
       for(const [name,column] of [['agent_id','target_agent_id'],['printer_id','target_printer_id'],['template_name','job_name']]){
@@ -6149,7 +6156,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const [agents]=await db.query('SELECT id,device_name FROM print_agents WHERE tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL ORDER BY id',scope);
       const [printers]=await db.query('SELECT id,agent_id,system_name,display_name FROM print_printers WHERE tenant_id=? AND store_id=? AND token_id=? AND removed_at IS NULL ORDER BY agent_id,display_name',scope);
       const [templates]=await db.query(`SELECT DISTINCT job_name AS title FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=? AND deleted_at IS NULL ORDER BY job_name`,scope);
-      return res.json({ok:true,data:{jobs,agents,printers,templates,counts:counts[0],next:groups.length>20?page[page.length-1].cursor_id:null}});
+      return res.json({ok:true,data:{jobs,agents,printers,templates,counts:counts[0],accumulation:accumulationRows[0],next:groups.length>20?page[page.length-1].cursor_id:null}});
     }catch(error){console.error('Print queue read failed:',error);return res.status(500).json({ok:false,error:'PRINT_QUEUE_READ_FAILED'});}
   });
 
