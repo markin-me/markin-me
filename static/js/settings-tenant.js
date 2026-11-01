@@ -42872,6 +42872,9 @@
 
 
       const selectedOption = options.find((option) => String(option.value) === selectedValue) || null;
+      const grouped=context.select===productionZonePrinterSelect;
+      const indicator=online=>{const dot=document.createElement('span');dot.className='production-printer-status '+(online==='true'?'is-online':'is-offline');dot.setAttribute('aria-hidden','true');return dot;};
+
 
 
 
@@ -42883,7 +42886,9 @@
 
 
 
-        context.value.textContent = selectedOption ? selectedOption.textContent : "—";
+        context.value.textContent = selectedOption ? (grouped?selectedOption.dataset.printerLabel||selectedOption.textContent:selectedOption.textContent) : "—";
+        if(grouped&&selectedOption?.dataset.online)context.value.prepend(indicator(selectedOption.dataset.online));
+        if(grouped&&context.trigger)context.trigger.title=selectedOption?.textContent||'';
 
 
 
@@ -42939,7 +42944,19 @@
 
 
 
+      let connectionId=null,agentId=null;
       options.forEach((option) => {
+        if(grouped&&option.dataset.connectionId){
+          if(connectionId!==option.dataset.connectionId){
+            connectionId=option.dataset.connectionId;agentId=null;
+            const heading=document.createElement('div');heading.className='production-printer-connection';heading.textContent=option.dataset.connectionName;context.menu.append(heading);
+          }
+          if(agentId!==option.dataset.agentId){
+            agentId=option.dataset.agentId;
+            const heading=document.createElement('div');heading.className='production-printer-device';heading.append(indicator(option.dataset.agentOnline),document.createTextNode(option.dataset.agentName));context.menu.append(heading);
+          }
+        }
+
 
 
 
@@ -42972,7 +42989,9 @@
 
 
 
-        item.textContent = option.textContent || value;
+        item.textContent = grouped?(option.dataset.printerLabel||option.textContent):(option.textContent||value);
+        if(grouped&&option.dataset.online){item.prepend(indicator(option.dataset.online));item.classList.add('production-printer-option');item.title=option.textContent;item.setAttribute('aria-label',option.textContent);}
+
 
 
 
@@ -44045,35 +44064,24 @@
 
 
     function populateProductionZonePrinters(storeId, selectedPrinterId) {
-      if (!productionZonePrinterSelect) return;
-      const printers = getProductionZonePrintersForStore(storeId);
-      productionZonePrinterSelect.innerHTML = "";
-      if (!printers.length) {
-        const opt = document.createElement("option");
-        opt.value = "";
-        opt.textContent = "\u041d\u0435\u0442 \u0437\u0430\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0445 \u043f\u0440\u0438\u043d\u0442\u0435\u0440\u043e\u0432";
-        productionZonePrinterSelect.appendChild(opt);
-        return;
+      if(!productionZonePrinterSelect)return;
+      const printers=[...getProductionZonePrintersForStore(storeId)].sort((a,b)=>String(a.connection_name||'').localeCompare(String(b.connection_name||''),'ru')||Number(a.token_id)-Number(b.token_id)||Number(a.agent_id)-Number(b.agent_id)||String(a.display_name||a.system_name).localeCompare(String(b.display_name||b.system_name),'ru'));
+      productionZonePrinterSelect.replaceChildren();
+      const empty=document.createElement('option');empty.value='';empty.textContent=printers.length?'Не выбран':'Нет зарегистрированных принтеров';productionZonePrinterSelect.append(empty);
+      for(const printer of printers){
+        const option=document.createElement('option');option.value=String(printer.id);option.textContent=getProductionZonePrinterName(printer.id);
+        option.dataset.printerLabel=String(printer.display_name||printer.system_name||'#'+printer.id);
+        option.dataset.connectionId=String(printer.token_id);option.dataset.connectionName=printer.connection_name||`Подключение #${printer.token_id}`;
+        option.dataset.agentId=String(printer.agent_id);option.dataset.agentName=printer.agent_name||`Компьютер #${printer.agent_id}`;
+        option.dataset.online=String(Number(printer.agent_online)===1&&Number(printer.agent_running)===1&&Number(printer.connection_active)===1&&printer.status==='online');
+        option.dataset.agentOnline=String(Number(printer.agent_online)===1&&Number(printer.agent_running)===1);
+        productionZonePrinterSelect.append(option);
       }
-      printers.forEach((printer) => {
-        const opt = document.createElement("option");
-        opt.value = String(printer.id);
-        opt.textContent = getProductionZonePrinterName(printer.id);
-        if (Number(printer.id) === Number(selectedPrinterId)) opt.selected = true;
-        productionZonePrinterSelect.appendChild(opt);
-      });
-      if (selectedPrinterId > 0 && !productionZonePrinterSelect.value) {
-        const missing = document.createElement("option");
-        missing.value = String(selectedPrinterId);
-        missing.textContent = `\u041f\u0440\u0438\u043d\u0442\u0435\u0440 #${selectedPrinterId} \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d / \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d`;
-        missing.selected = true;
-        productionZonePrinterSelect.appendChild(missing);
-      } else if (!productionZonePrinterSelect.value && productionZonePrinterSelect.options.length) {
-        productionZonePrinterSelect.selectedIndex = 0;
-      }
+      const valid=printers.some(printer=>Number(printer.id)===Number(selectedPrinterId));
+      productionZonePrinterSelect.value=valid?String(selectedPrinterId):'';
+      if(Number(selectedPrinterId)>0&&!valid)empty.textContent='Назначенный принтер недоступен — выберите другой';
+      const context=productionZoneSelectContexts.get(productionZonePrinterSelect);if(context)renderStoreTimezoneSelector(context);
     }
-
-
 
     function populateProductionZoneTemplates() {
       if (!productionZoneDocuments) return;
@@ -44154,6 +44162,7 @@
       const value=document.createElement('span');const arrow=document.createElement('i');arrow.className='fas fa-chevron-down';trigger.append(value,arrow);
       const menu=document.createElement('div');menu.className='new-order-right-select-menu production-zone-system-menu';menu.setAttribute('role','listbox');menu.setAttribute('popover','manual');selector.append(trigger,menu);
       if(select.hasAttribute('data-time-part'))menu.classList.add('production-zone-time-menu');
+      if(select===productionZonePrinterSelect)menu.classList.add('production-printer-menu');
       const context={select,selector,trigger,menu,value,respectDisabled:true,topLayer:true,minMenuWidth:select.hasAttribute('data-time-part')?64:0};productionZoneSelectContexts.set(select,context);
       trigger.addEventListener('click',event=>{
         event.preventDefault();event.stopPropagation();
@@ -44555,6 +44564,7 @@
             }
           }
           await loadPrintApiCards();
+          if(productionZonePanel&&!productionZonePanel.classList.contains('hidden')&&changes.some(item=>['devices','presence','resync'].includes(item.kind)&&(!item.store_id||Number(item.store_id)===Number(productionZoneStoreSelect?.value))))await loadProductionZones({printersOnly:true});
           if(isPrintApiTabId(activeRightTabId)&&storeId===Number(settingsPrintApiStore?.value)&&connectionId===printApiSelectedConnectionId){
             if(queueChanged&&!printQueueBusy&&printQueueBody?.querySelector('.print-queue-toolbar')&&!['settings','devices','notifications'].includes(printQueueView))await loadPrintQueue({background:true});
             if(relevant.some(item=>item.kind!=='queue'))await checkPrintApiConnection(storeId,{silent:true});
@@ -45072,6 +45082,12 @@
         const res = await authFetch("/api/admin/tenant/production-zones");
         const data = await res.json();
         if (!data || !data.ok || !data.data) throw new Error("LOAD_FAILED");
+        if(options.printersOnly){
+          productionZonesState.printers=Array.isArray(data.data.printers)?data.data.printers:[];
+          populateProductionZonePrinters(Number(productionZoneStoreSelect?.value||0),Number(productionZonePrinterSelect?.value||0));
+          return data.data;
+        }
+        void startPrintRealtime();
         productionZonesState.loaded = true;
         productionZonesState.zones = Array.isArray(data.data.zones) ? data.data.zones : [];
         productionZonesState.stores = Array.isArray(data.data.stores) ? data.data.stores : [];

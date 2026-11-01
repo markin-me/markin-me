@@ -6528,14 +6528,14 @@ async function fetchStoreWithHours(tenantId, storeId) {
               p.is_default, p.status, p.last_seen_at,
               a.device_name AS agent_name, a.last_heartbeat_at AS agent_last_heartbeat_at,
               a.agent_running,
-              IF(a.last_heartbeat_at IS NOT NULL AND a.last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),1,0) AS agent_online,
+              IF(a.agent_running=1 AND a.last_heartbeat_at IS NOT NULL AND a.last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),1,0) AS agent_online,
               t.display_name AS connection_name, t.is_active AS connection_active
        FROM print_printers p
        LEFT JOIN print_agents a
          ON a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.token_id=p.token_id AND a.id=p.agent_id
        LEFT JOIN print_api_tokens t
          ON t.tenant_id=p.tenant_id AND t.store_id=p.store_id AND t.id=p.token_id
-       WHERE p.tenant_id=?
+       WHERE p.tenant_id=? AND p.removed_at IS NULL AND a.removed_at IS NULL AND a.id IS NOT NULL AND t.id IS NOT NULL
        ORDER BY p.store_id ASC, t.display_name ASC, p.agent_id ASC, p.display_name ASC, p.system_name ASC`,
       [tenantId]
     );
@@ -6587,7 +6587,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       if(req.body.auto_print && req.body.scheduled_auto_print && !rules.some(rule=>rule.scheduled_print))return res.status(400).json({ok:false,error:'BAD_PRINT_RULES'});
       connection = await db.getConnection();
       await connection.beginTransaction();
-      const [printers] = await connection.query('SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND id=?', [tenantId,storeId,printerId]);
+      const [printers] = await connection.query('SELECT p.id FROM print_printers p JOIN print_agents a ON a.id=p.agent_id AND a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.token_id=p.token_id JOIN print_api_tokens t ON t.id=p.token_id AND t.tenant_id=p.tenant_id AND t.store_id=p.store_id WHERE p.tenant_id=? AND p.store_id=? AND p.id=? AND p.removed_at IS NULL AND a.removed_at IS NULL', [tenantId,storeId,printerId]);
       if (!printers.length) throw Object.assign(new Error('PRINT_PRINTER_NOT_FOUND'),{status:400});
       const [templates] = await connection.query(`SELECT id,document_type FROM print_templates WHERE tenant_id=? AND is_active=1 AND id IN (${rules.map(()=>'?').join(',')})`,[tenantId,...rules.map(rule=>Number(rule.template_id))]);
       if (templates.length !== rules.length || templates.some(t => !['receipt','assembly','assembly_batch','delivery','label'].includes(t.document_type)) || new Set(templates.map(t=>t.document_type)).size !== templates.length) throw Object.assign(new Error('BAD_PRINT_RULES'),{status:400});
