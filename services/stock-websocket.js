@@ -82,6 +82,7 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
     let authVersion = 0;
     let commandRunning = false;
     let settingsLoading = false;
+    let catalogLoading = false;
     socket.customerId = null;
     socket.customerToken = "";
     socket.on("error", () => socket.terminate());
@@ -110,6 +111,21 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
       }
       try {
         if (message.type === "ping") send(socket, { type: "pong", ts: Date.now() });
+        if (message.type === "catalog.sync") {
+          if (catalogLoading) return;
+          catalogLoading = true;
+          socket.catalogSubscribed = true;
+          try {
+            const page = await catalogSync.getChanges({
+              db, tenantId: room.tenantId, storeId: room.storeId, since: message.since, limit: 500,
+            });
+            if (page.reset_required) page.next_revision = await catalogSync.getManifest({
+              db, tenantId: room.tenantId, storeId: room.storeId,
+            });
+            send(socket, { type: "catalog.changes", ...page });
+          } finally { catalogLoading = false; }
+          return;
+        }
         if (message.type === "auth") {
           const version = ++authVersion;
           socket.customerId = null;
@@ -187,6 +203,9 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
         if (page.reset_required) {
           room.revision = await catalogSync.getManifest({ db, tenantId: room.tenantId, storeId: room.storeId });
           broadcast(room, { type: "stock.resync", revision: room.revision });
+          room.sockets.forEach(client => {
+            if (client.catalogSubscribed) send(client, { type: "catalog.changed", revision: room.revision });
+          });
           broadcast(room,{type:'checkout.settings.changed',revision:'resync'});
           return;
         }
@@ -196,6 +215,9 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
         const settingsChanges=(page.changes || []).filter(change=>change.entity_type==='checkout_settings');
         if(settingsChanges.length)broadcast(room,{type:'checkout.settings.changed',revision:settingsChanges[settingsChanges.length-1].revision});
         room.revision = page.next_revision || room.revision;
+        if (page.changes?.length) room.sockets.forEach(client => {
+          if (client.catalogSubscribed) send(client, { type: "catalog.changed", revision: room.revision });
+        });
         if (ids.length) broadcast(room, {
           type: "stock.changed", revision: room.revision,
           changed_product_ids: ids, affected_product_ids: ids, product_ids: ids,

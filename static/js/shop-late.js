@@ -725,6 +725,23 @@ let comboDetailsPrefetchTimer = null;
 const COMBO_DETAILS_CACHE_TTL_MS = 5 * 60 * 1000;
 const COMBO_PREVIEW_SHARED_TTL_MS = 5 * 60 * 1000;
 
+// The existing KSO change stream invalidates the same caches used by product/combo screens.
+window.addEventListener('shop:kso-catalog-invalidated', event => {
+  if (!document.body.classList.contains('page-kso')) return;
+  const ids = event.detail?.productIds || [];
+  ids.forEach(id => {
+    comboProductIngredientsCache.delete(id);
+    comboProductVariantsCache.delete(id);
+    productDetailsConfigCache.delete(id);
+    productBuyXGetYDetailCache.delete(id);
+    comboProductBatchWarmupCache.delete(id);
+  });
+  comboDetailsCache.clear();
+  comboProductPreviewSharedCache.clear();
+  comboBlockPreviewWarmCache.clear();
+  comboBlockPreviewResolvedCache.clear();
+});
+
 function normalizeProductDetailIds(productIds, limit = 0) {
   const ids = Array.isArray(productIds)
     ? Array.from(new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
@@ -7323,7 +7340,7 @@ async function mountProductDetails(options = {}) {
     return freshButton;
   }
 
-  function finishStandaloneDetailsClose() {
+  function finishStandaloneDetailsClose({ restore = true } = {}) {
     standaloneComboLoadSeq += 1;
     standaloneComboLoadingId = null;
     const backHandler = standaloneDetailsBackHandler;
@@ -7339,9 +7356,9 @@ async function mountProductDetails(options = {}) {
     openProductCtx = null;
     if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
     if (typeof setActiveNav === "function") {
-      setActiveNav(returnTarget === "cart" ? "cart" : "menu");
+      setActiveNav(restore && returnTarget === "cart" ? "cart" : "menu");
     }
-    if (typeof backHandler === "function") backHandler();
+    if (restore && typeof backHandler === "function") backHandler();
   }
 
   function closeStandaloneDetailsPage() {
@@ -7395,7 +7412,66 @@ async function mountProductDetails(options = {}) {
     if (typeof stepBackHandler === "function") stepBackHandler();
   }
 
+  function bindKsoPageBackSwipe(page, onBack) {
+    if (!document.body.classList.contains('page-kso') || !page) return;
+    page._ksoBackSwipeAction = onBack;
+    if (page.dataset.ksoBackSwipeBound) return;
+    page.dataset.ksoBackSwipeBound = '1';
+    let gesture = null;
+    let suppressClickUntil = 0;
+    page.addEventListener('touchstart', event => {
+      gesture = null;
+      suppressClickUntil = 0;
+      if (event.touches.length !== 1 || window.AppModal?.isOpen?.()
+        || event.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      let target = event.target;
+      while (target && target !== page) {
+        if (target.scrollWidth > target.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(target).overflowX)) return;
+        target = target.parentElement;
+      }
+      const touch = event.touches[0];
+      gesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, dx: 0, dy: 0, horizontal: false };
+    }, { passive: true, capture: true });
+    const track = touches => {
+      if (!gesture) return;
+      for (const touch of touches) {
+        if (touch.identifier !== gesture.id) continue;
+        gesture.dx = touch.clientX - gesture.x;
+        gesture.dy = touch.clientY - gesture.y;
+        if (!gesture.horizontal && (gesture.dx < -12 || (Math.abs(gesture.dy) > 12 && Math.abs(gesture.dy) > Math.abs(gesture.dx)))) {
+          gesture = null;
+          return;
+        }
+        if (gesture.dx >= 8 && gesture.dx > Math.abs(gesture.dy) * 1.5) gesture.horizontal = true;
+        break;
+      }
+    };
+    page.addEventListener('touchmove', event => {
+      if (event.touches.length !== 1) { gesture = null; return; }
+      track(event.touches);
+      if (gesture?.horizontal) {
+        if (event.cancelable) event.preventDefault();
+        event.stopPropagation();
+      }
+    }, { passive: false, capture: true });
+    page.addEventListener('touchend', event => {
+      track(event.changedTouches);
+      const completed = gesture;
+      gesture = null;
+      if (!completed?.horizontal) return;
+      suppressClickUntil = Date.now() + 250;
+      if (!event.touches.length && completed.dx >= 80 && completed.dx > Math.abs(completed.dy) * 1.8) page._ksoBackSwipeAction?.();
+    }, { passive: true, capture: true });
+    page.addEventListener('touchcancel', () => { gesture = null; }, { passive: true, capture: true });
+    page.addEventListener('click', event => {
+      if (event.detail === 0 || Date.now() >= suppressClickUntil) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  }
+
   standaloneDetailsBackBtn?.addEventListener("click", closeStandaloneDetailsPage);
+  bindKsoPageBackSwipe(standaloneDetailsPage, () => standaloneDetailsBackBtn?.click());
   window.addEventListener("popstate", (event) => {
     if (!document.body?.classList.contains("shop-details-page-active")) return;
     event.stopImmediatePropagation();
@@ -10475,7 +10551,15 @@ async function mountProductDetails(options = {}) {
     }
   }
 
-  function closeShopSheetIfOpen() {
+  function closeShopSheetIfOpen(options = {}) {
+    if (document.body?.classList.contains('page-kso') && options.resetSession === true) {
+      if (document.body.classList.contains('shop-details-page-active')) finishStandaloneDetailsClose({ restore: false });
+      if (document.body.classList.contains('shop-categories-page-active') && categoriesPageClose) categoriesPageClose({ immediate: true });
+      openCartSheetCtx = null;
+      const nextState = { ...(window.history.state || {}) };
+      ['shopDetailsPage', 'shopDetailsStep', 'shopCategoriesPage', 'sheet', 'shopBack', 'shopCartCheckout'].forEach(key => delete nextState[key]);
+      window.history.replaceState(nextState, '', window.location.href);
+    }
     if (document.body?.classList.contains("page-kso") && document.body.classList.contains("shop-cart-page-active")) {
       document.getElementById("shopCartPage")?.classList.add("hidden");
       document.body.classList.remove("shop-cart-page-active", "shop-checkout-overlay-open");
@@ -10645,7 +10729,8 @@ function openCategoriesSheet() {
         selectCategory(pendingSelection.id, pendingSelection.title, { alignFirstCard: true });
       }
     };
-    const requestBack = () => {
+    const requestBack = (options = {}) => {
+      if (options.immediate === true) { closePage(); return; }
       if (window.history.state?.shopCategoriesPage === true) {
         window.history.back();
         return;
@@ -10655,6 +10740,7 @@ function openCategoriesSheet() {
 
     categoriesPageClose = requestBack;
     page.querySelector("[data-categories-page-back]").onclick = requestBack;
+    bindKsoPageBackSwipe(page, () => page.querySelector('[data-categories-page-back]')?.click());
     sheetNavigationState.type = "categories";
     sheetNavigationState.screen = "list";
     sheetNavigationState.data = null;
@@ -24400,6 +24486,7 @@ function openCartSheet() {
     cartPageContent.replaceChildren(wrapEl);
     cartPage.classList.remove("hidden");
     document.body.classList.add("shop-cart-page-active");
+    bindKsoPageBackSwipe(cartPage, () => cartPageHeaderContent?.querySelector('.shop-page-header-btn')?.click());
     if (document.body.classList.contains("page-kso")) {
       if(!cartPageHeaderContent.querySelector('.shop-page-header-btn')){
       const backButton = document.createElement("button");

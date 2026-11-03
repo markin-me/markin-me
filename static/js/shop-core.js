@@ -380,9 +380,71 @@
   const ADDRESS_DRAFT_KEY = `shop_address_draft_t${tenantId}`;
   const AUTO_ADD_DISMISSED_KEY = `shop_auto_add_dismissed_t${tenantId}_s${getActiveStoreId()}`;
   const CATALOG_SNAPSHOT_VERSION = 2;
-  const CATALOG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+  const isKsoCatalogCache = document.body.classList.contains('page-kso');
+  const CATALOG_SNAPSHOT_MAX_AGE_MS = (isKsoCatalogCache ? 7 * 24 : 6) * 60 * 60 * 1000;
   const CATALOG_SNAPSHOT_KEY = `shop_catalog_snapshot_v${CATALOG_SNAPSHOT_VERSION}_t${tenantId}_s${getActiveStoreId()}`;
   let catalogSnapshotSaveTimer = null;
+  let catalogLastScrollAt = 0;
+  let catalogTouchActive = false;
+  let catalogCacheRestoring = false;
+  let catalogCacheWriting = false;
+  let catalogCacheMigrating = false;
+  const catalogDirtyCategories = new Set();
+  const catalogCompleteCategories = new Set();
+  const catalogDirtyPassports = new Set();
+  const catalogCacheScope = () => `kso:v${CATALOG_SNAPSHOT_VERSION}:${tenantId}:${getActiveStoreId()}:`;
+  const catalogInitialScope = catalogCacheScope();
+  const catalogResources = new Map();
+  const catalogDirtyResources = new Set();
+  const catalogResourceInflight = new Map();
+  const catalogEffectiveInflight = new Map();
+  let catalogRevision = '0';
+  let catalogPersistedRevision = '0';
+  let catalogGeneration = 0;
+  let catalogStartupReady = false;
+  let catalogSyncPending = false;
+  let catalogSyncWanted = false;
+  let catalogSyncApplying = false;
+  let catalogSyncTimer = null;
+  let catalogWarmupPromise = null;
+  let catalogWarmupCompleteGeneration = -1;
+
+  function ksoCatalogResourceKey(url, opts) {
+    if (!isKsoCatalogCache || catalogCacheScope() !== catalogInitialScope || (opts.method || 'GET') !== 'GET') return null;
+    // Public catalog data only; customer, order and payment responses must never enter this cache.
+    return /^\/api\/public\/(?:shop\/bootstrap\?kso=1|categories|unit-conversions|auto-add|cart-upsell|combos\/\d+)$/.test(url) ? url : null;
+  }
+
+  function waitForKsoCatalogIdle() {
+    if (!isKsoCatalogCache) return Promise.resolve();
+    return new Promise(resolve => {
+      const check = () => {
+        if (catalogTouchActive || Date.now() - catalogLastScrollAt < 600) { setTimeout(check, 200); return; }
+        if (typeof requestIdleCallback === 'function') requestIdleCallback(() => {
+          if (catalogTouchActive || Date.now() - catalogLastScrollAt < 600) check(); else resolve();
+        });
+        else resolve();
+      };
+      check();
+    });
+  }
+
+  async function forEachKsoCatalogChunk(items, apply) {
+    await waitForKsoCatalogIdle();
+    let startedAt = performance.now();
+    let count = 0;
+    for (const item of items) {
+      if (count >= 4 || performance.now() - startedAt >= 4) {
+        // Yield a browser task so new touch/scroll events can run before the next portion.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await waitForKsoCatalogIdle();
+        count = 0;
+        startedAt = performance.now();
+      }
+      apply(item);
+      count += 1;
+    }
+  }
   const ORDER_ROUNDING_CACHE_VERSION = 1;
   const ORDER_ROUNDING_CACHE_KEY = `shop_order_rounding_cache_v${ORDER_ROUNDING_CACHE_VERSION}_t${tenantId}`;
 
@@ -521,8 +583,8 @@
     if(checkoutSettingsDbPromise)return checkoutSettingsDbPromise;
     checkoutSettingsDbPromise=new Promise((resolve,reject)=>{
       if(!window.indexedDB){reject(new Error('INDEXEDDB_UNAVAILABLE'));return;}
-      const request=indexedDB.open('shop-checkout-settings',1);
-      request.onupgradeneeded=()=>{if(!request.result.objectStoreNames.contains('settings'))request.result.createObjectStore('settings');};
+      const request=indexedDB.open('shop-checkout-settings',2);
+      request.onupgradeneeded=()=>{for(const name of ['settings','catalog'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name);};
       request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();checkoutSettingsDbPromise=null;};resolve(request.result);};
       request.onerror=()=>{checkoutSettingsDbPromise=null;reject(request.error);};
       request.onblocked=()=>console.error('Checkout settings IndexedDB upgrade blocked');
@@ -4698,6 +4760,25 @@
   window.submitShopOrder = submitShopOrder;
 
   async function apiJson(url, opts = {}) {
+    const key = ksoCatalogResourceKey(url, opts);
+    if (!key) return fetchShopJson(url, opts);
+    if (catalogResources.has(key)) return clonePassportValue(catalogResources.get(key));
+    if (catalogResourceInflight.has(key)) return clonePassportValue(await catalogResourceInflight.get(key));
+    const generation = catalogGeneration;
+    const task = fetchShopJson(url, opts).then(json => {
+      if (generation !== catalogGeneration) throw new Error('CATALOG_CHANGED_DURING_REQUEST');
+      catalogResources.set(key, clonePassportValue(json));
+      catalogDirtyResources.add(key);
+      scheduleCatalogSnapshotSave();
+      return json;
+    });
+    catalogResourceInflight.set(key, task);
+    try { return clonePassportValue(await task); }
+    finally { if (catalogResourceInflight.get(key) === task) catalogResourceInflight.delete(key); }
+  }
+
+  async function fetchShopJson(url, opts = {}) {
+    const catalogRequestGeneration = catalogGeneration;
     const token = getCustomerToken();
     const referralCode = getStoredReferralCode();
     const headers = {
@@ -4716,7 +4797,10 @@
       signal: opts.signal,
     });
 
+    if (isKsoCatalogCache && /^\/api\/public\/(?:products(?:\/|\?)|options\/|combos\/)/.test(url)) await waitForKsoCatalogIdle();
     const json = await res.json().catch(() => null);
+    if (isKsoCatalogCache && /^\/api\/public\/(?:products(?:\/|\?)|options\/|combos\/)/.test(url)
+      && catalogRequestGeneration !== catalogGeneration) throw new Error('CATALOG_CHANGED_DURING_REQUEST');
     if (!json || json.ok !== true) {
       const err = json?.error || `API_ERROR (${res.status})`;
       const e = new Error(err);
@@ -5130,7 +5214,8 @@
     });
     mergeProductPassport(pid, { product, defaultConfig: config });
 
-    if (elProductsGrid) {
+    if (isKsoCatalogCache) scheduleSyncAllProductCardsFromCart([pid]);
+    if (elProductsGrid && !isKsoCatalogCache) {
       elProductsGrid.querySelectorAll(`.sp-card[data-product-id="${pid}"]`).forEach((card) => {
         syncProductCardStaticContent(card, product);
         const price = card.querySelector(".sp-current-price");
@@ -5175,6 +5260,7 @@
     const ids = Array.isArray(productIds) ? productIds : [];
     ids.forEach((rawId) => {
       const pid = Number(rawId || 0);
+      if (isKsoCatalogCache && getProductPassport(pid)?.defaultConfig?.is_fulfillable != null) return;
       if (Number.isFinite(pid) && pid > 0) stockAvailabilityBatchPendingIds.add(pid);
     });
     if (!stockAvailabilityBatchPendingIds.size) return;
@@ -5202,6 +5288,9 @@
     const requestGenerations = new Map(ids.map((id) => [id, getStockConfigGeneration(id)]));
     stockAvailabilityBatchInFlight = true;
     try {
+      if (isKsoCatalogCache) {
+        await refreshKsoEffectiveConfigs(ids);
+      } else {
       const json = await apiJson('/api/public/products/batch/default-cart-config', {
         method: 'POST',
         body: { ids },
@@ -5210,6 +5299,7 @@
       Object.entries(configs).forEach(([productId, config]) => {
         applyEffectiveStockConfigRow(productId, config, requestGenerations.get(Number(productId)));
       });
+      }
       pruneUnavailableCartItems();
       updateCartBadge();
     } catch (err) {
@@ -5442,6 +5532,10 @@
           stockReconnectAttempt = 0;
           shopRealtimeReady = payload.order_commands === true;
           if (token) socket.send(JSON.stringify({ type: "auth", customer_token: token }));
+          if(isKsoCatalogCache){
+            catalogSyncPending = false;
+            requestKsoCatalogSync();
+          }
         }
         if (payload.type === "customer.ready") shopRealtimeCustomerReady = true;
         if (payload.type === "customer.expired") shopRealtimeCustomerReady = false;
@@ -5476,8 +5570,13 @@
           try { listener(payload); }
           catch (error) { console.error("Shop realtime subscriber failed:", error); }
         });
-        if (payload.type === "stock.changed") void applyStockChangedEvent(payload);
+        if (isKsoCatalogCache && payload.type === 'catalog.changed') requestKsoCatalogSync();
+        if (isKsoCatalogCache && payload.type === 'catalog.changes') {
+          void applyKsoCatalogChanges(payload, socket);
+        }
+        if (payload.type === "stock.changed" && !isKsoCatalogCache) void applyStockChangedEvent(payload);
         if (payload.type === "stock.resync") {
+          if (isKsoCatalogCache) { requestKsoCatalogSync(); return; }
           const visibleIds = collectVisibleProductIdsForStock();
           visibleIds.forEach((id) => {
             advanceStockConfigGeneration(id);
@@ -5634,7 +5733,8 @@
 
     const wakeup = () => {
       ensurePublicStockEventsConnection();
-      queueStockAvailabilityRefresh("stock_sync_wakeup", 200);
+      if (isKsoCatalogCache) requestKsoCatalogSync();
+      else queueStockAvailabilityRefresh("stock_sync_wakeup", 200);
     };
 
     document.addEventListener("visibilitychange", () => {
@@ -5729,7 +5829,7 @@
   }
 
   function updateCategoriesActiveUi() {
-    $$(".shop-cat-item", elCatsList).forEach((x) => {
+    (isKsoCatalogCache?[]:$$(".shop-cat-item", elCatsList)).forEach((x) => {
       const id = Number(x.getAttribute("data-cat-id"));
       x.classList.toggle("is-active", Number(state.activeCategoryId) === id);
     });
@@ -5753,6 +5853,7 @@
   }
 
   function syncCategoryFocusPadding() {
+    if(isKsoCatalogCache)return;
     if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
     const host = getCategoriesScrollHost();
     if (!host) return;
@@ -5766,6 +5867,7 @@
 
   function scheduleCategoryFocusUpdate() {
     if (!document.body?.classList.contains("page-kso")) return;
+    if(isKsoCatalogCache)return;
     if (categoryFocusRaf) return;
     categoryFocusRaf = requestAnimationFrame(() => {
       categoryFocusRaf = null;
@@ -5776,6 +5878,7 @@
 
   function scrollActiveCategoryToCenter() {
     if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
+    if(isKsoCatalogCache)return;
     const host = getCategoriesScrollHost();
     const active = elCatsList.querySelector(".shop-cat-item.is-active");
     if (!host || !active) return;
@@ -5791,6 +5894,7 @@
   }
 
   function updateCategoryFocusState() {
+    if(isKsoCatalogCache)return;
     if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
     const host = getCategoriesScrollHost();
     if (!host) return;
@@ -5818,6 +5922,7 @@
   }
 
   function bindMobileHeaderCollapseOnScroll() {
+    if (isKsoCatalogCache) return;
     if (bindMobileHeaderCollapseOnScroll._bound) return;
     bindMobileHeaderCollapseOnScroll._bound = true;
     const update = () => {
@@ -9083,6 +9188,7 @@
     });
     if (patch.updated_at != null) entry.updated_at = patch.updated_at;
     entry.ts = Date.now();
+    if(isKsoCatalogCache&&!catalogCacheRestoring)catalogDirtyPassports.add(Number(productId));
     if (typeof scheduleCatalogSnapshotSave === "function") scheduleCatalogSnapshotSave();
     return entry;
   }
@@ -13323,6 +13429,7 @@ async function initAddresses() {
 
   function updateStickySubcategoryRows() {
     if (!elProductsGrid) return;
+    if(isKsoCatalogCache&&!isMobileViewport())return;
     const rows = Array.from(elProductsGrid.querySelectorAll(".shop-category-subcategory-row"));
     if (!rows.length) return;
     if (!isMobileViewport()) {
@@ -13382,6 +13489,7 @@ async function initAddresses() {
     if (!categoryHeaders.length) return;
     if (isProgrammaticCategoryScroll) return;
     const isKsoPage = document.body?.classList.contains("page-kso");
+    if (isKsoPage && (catalogTouchActive || Date.now() - catalogLastScrollAt < 180)) return;
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     let containerTop = 0;
@@ -13435,7 +13543,29 @@ async function initAddresses() {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     const scroller = isMobile ? window : (elProductsScroller || window);
     if (!scroller || !scroller.addEventListener) return;
+    let settledTimer = null;
+    let ksoKineticMoving = false;
+    const hasNativeScrollEnd = 'onscrollend' in scroller;
+    const settleKsoCategory = () => {
+      clearTimeout(settledTimer);
+      settledTimer = null;
+      if (ksoKineticMoving) return;
+      if (catalogTouchActive || Date.now() - catalogLastScrollAt < 180) {
+        settledTimer = setTimeout(settleKsoCategory, 180);
+        return;
+      }
+      updateActiveCategoryFromScroll();
+    };
+    const onKsoScroll = () => {
+      catalogLastScrollAt = Date.now();
+      if (!hasNativeScrollEnd && !ksoKineticMoving) {
+        clearTimeout(settledTimer);
+        settledTimer = setTimeout(settleKsoCategory, 180);
+      }
+    };
+    if (isKsoCatalogCache && hasNativeScrollEnd) scroller.addEventListener('scrollend', settleKsoCategory, { passive: true });
     scroller.addEventListener("scroll", () => {
+        if (isKsoCatalogCache) { onKsoScroll(); return; }
         if (categoryScrollRaf) return;
         categoryScrollRaf = requestAnimationFrame(() => {
           categoryScrollRaf = null;
@@ -13447,6 +13577,12 @@ async function initAddresses() {
     // Desktop fallback: also listen on window in case scroll container changes
     if (!isMobile && scroller !== window) {
       window.addEventListener("scroll", () => {
+        if (isKsoCatalogCache) {
+          catalogLastScrollAt = Date.now();
+          clearTimeout(settledTimer);
+          settledTimer = setTimeout(settleKsoCategory, 180);
+          return;
+        }
         if (categoryScrollRaf) return;
         categoryScrollRaf = requestAnimationFrame(() => {
           categoryScrollRaf = null;
@@ -13456,17 +13592,201 @@ async function initAddresses() {
       });
     }
 
-    if (document.body?.classList.contains("page-kso")) {
-      const host = getCategoriesScrollHost();
-      if (host && !host.dataset.categoryFocusBound) {
-        host.addEventListener("scroll", scheduleCategoryFocusUpdate, { passive: true });
-        window.addEventListener("resize", scheduleCategoryFocusUpdate);
-        host.dataset.categoryFocusBound = "1";
-      }
+    if (isKsoCatalogCache) {
+      // Touch-only vertical motion. Wheel, mouse and horizontal chip scrolling stay native.
+      let catalogGesture = null;
+      let suppressCatalogClickUntil = 0;
+      let motionFrame = 0;
+      let velocity = 0;
+      let position = 0;
+      let motionNode = null;
+      let maxScroll = 0;
+      let lastFrameAt = 0;
+      let releaseOffset = 0;
+      const maxVelocity = 1.15; // CSS pixels/ms; cap a fast flick on a large touchscreen.
+      const decayMs = 300;
+      const stopMotion = () => {
+        cancelAnimationFrame(motionFrame);
+        motionFrame = 0;
+        velocity = 0;
+        releaseOffset = 0;
+        ksoKineticMoving = false;
+      };
+      const resetCatalogGesture = () => {
+        stopMotion();
+        catalogGesture = null;
+        catalogTouchActive = false;
+        motionNode = null;
+        maxScroll = 0;
+        lastFrameAt = 0;
+      };
+      const writePosition = next => {
+        position = Math.max(0, Math.min(maxScroll, next));
+        motionNode.scrollTop = position;
+        catalogLastScrollAt = Date.now();
+        return position === next;
+      };
+      const animateMotion = now => {
+        motionFrame = 0;
+        if (!motionNode?.isConnected || !document.body.classList.contains('shop-main')
+          || document.body.matches('.shop-cart-page-active, .shop-details-page-active, .shop-categories-page-active, .modal-open') || document.hidden) {
+          resetCatalogGesture();
+          return;
+        }
+        const elapsed = Math.min(32, Math.max(0, now - lastFrameAt));
+        lastFrameAt = now;
+        const follow = 1 - Math.exp(-elapsed / 18);
+        if (catalogGesture?.axis === 'y') {
+          const target = Math.max(0, Math.min(maxScroll, catalogGesture.targetTop));
+          if (Math.abs(target - position) > 0.05) writePosition(position + (target - position) * follow);
+          motionFrame = requestAnimationFrame(animateMotion);
+          return;
+        }
+        const attenuation = Math.exp(-Math.max(0, elapsed) / decayMs);
+        const distance = velocity * decayMs * (1 - attenuation);
+        velocity *= attenuation;
+        const catchUp = releaseOffset * follow;
+        releaseOffset -= catchUp;
+        if (!writePosition(position + distance + catchUp) || (Math.abs(velocity) < 0.015 && Math.abs(releaseOffset) < 0.1)) {
+          stopMotion();
+          settleKsoCategory();
+          return;
+        }
+        motionFrame = requestAnimationFrame(animateMotion);
+      };
+      elProductsScroller?.classList.add('kso-touch-scroll');
+      const trackCatalogMovement = touches => {
+        if (!catalogGesture) return;
+        for (const touch of touches) {
+          if (touch.identifier !== catalogGesture.id) continue;
+          const dx = touch.clientX - catalogGesture.x;
+          const dy = touch.clientY - catalogGesture.y;
+          if (dx * dx + dy * dy >= 8 * 8) catalogGesture.moved = true;
+          break;
+        }
+      };
+      const chooseCatalogAxis = (gesture, dx, dy) => {
+        if (gesture.axis) return;
+        if (gesture.horizontalStrip && Math.abs(dx) >= 8 && Math.abs(dx) > Math.abs(dy) * 1.5) gesture.axis = 'x';
+        else if (Math.abs(dy) >= 4 && (!gesture.horizontalStrip || Math.abs(dy) >= Math.abs(dx) * 0.75)) gesture.axis = 'y';
+      };
+      scroller.addEventListener('touchstart', event => {
+        catalogTouchActive = true;
+        suppressCatalogClickUntil = 0;
+        const carryVelocity = velocity;
+        stopMotion();
+        if (event.touches.length !== 1) {
+          catalogGesture = null;
+          suppressCatalogClickUntil = Date.now() + 250;
+          return;
+        }
+        const touch = event.touches[0];
+        const panelScrolls = elProductsScroller && elProductsScroller.clientHeight > 0
+          && elProductsScroller.scrollHeight > elProductsScroller.clientHeight
+          && /auto|scroll/.test(getComputedStyle(elProductsScroller).overflowY);
+        motionNode = panelScrolls ? elProductsScroller : document.scrollingElement;
+        position = motionNode?.scrollTop || 0;
+        maxScroll = motionNode ? Math.max(0, motionNode.scrollHeight - motionNode.clientHeight) : 0;
+        const now = performance.now();
+        const strip = event.target.closest?.('.shop-subcategory-chips, .shop-cat-chips');
+        catalogGesture = elProductsGrid?.contains(event.target)
+          ? { id: touch.identifier, x: touch.clientX, y: touch.clientY, moved: false,
+              horizontalStrip: Boolean(strip && strip.scrollWidth > strip.clientWidth),
+              axis: null, startTop: position, targetTop: position, carryVelocity,
+              samples: [{ y: touch.clientY, at: now }], lastMoveAt: now, lastY: touch.clientY }
+          : null;
+      }, { passive: true });
+      scroller.addEventListener('touchmove', event => {
+        trackCatalogMovement(event.touches);
+        if (!catalogGesture || event.touches.length !== 1 || !motionNode) return;
+        const touch = event.touches[0];
+        if (touch.identifier !== catalogGesture.id) return;
+        const dx = touch.clientX - catalogGesture.x;
+        const dy = touch.clientY - catalogGesture.y;
+        chooseCatalogAxis(catalogGesture, dx, dy);
+        if (catalogGesture.axis !== 'y') return;
+        if (event.cancelable) event.preventDefault();
+        catalogGesture.moved = true;
+        ksoKineticMoving = true;
+        const now = performance.now();
+        if (touch.clientY !== catalogGesture.lastY) catalogGesture.lastMoveAt = now;
+        catalogGesture.lastY = touch.clientY;
+        catalogGesture.samples.push({ y: touch.clientY, at: now });
+        while (catalogGesture.samples.length > 2 && catalogGesture.samples[0].at < now - 100) catalogGesture.samples.shift();
+        catalogGesture.targetTop = catalogGesture.startTop - dy;
+        if (!motionFrame) { lastFrameAt = now; motionFrame = requestAnimationFrame(animateMotion); }
+      }, { passive: false });
+      const finishTouch = event => {
+        trackCatalogMovement(event.changedTouches);
+        catalogTouchActive = event.touches.length > 0;
+        if (!catalogTouchActive) {
+          if (catalogGesture && event.type === 'touchend') {
+            for (const touch of event.changedTouches) {
+              if (touch.identifier !== catalogGesture.id) continue;
+              const dy = touch.clientY - catalogGesture.y;
+              const dx = touch.clientX - catalogGesture.x;
+              chooseCatalogAxis(catalogGesture, dx, dy);
+              if (catalogGesture.axis === 'y') {
+                catalogGesture.moved = true;
+                catalogGesture.targetTop = catalogGesture.startTop - dy;
+                if (touch.clientY !== catalogGesture.lastY) {
+                  catalogGesture.lastMoveAt = performance.now();
+                  catalogGesture.samples.push({ y: touch.clientY, at: catalogGesture.lastMoveAt });
+                }
+              }
+              break;
+            }
+          }
+          if (catalogGesture && (catalogGesture.moved || event.type === 'touchcancel')) {
+            suppressCatalogClickUntil = Date.now() + 250;
+          }
+          const gesture = catalogGesture;
+          catalogGesture = null;
+          cancelAnimationFrame(motionFrame);
+          motionFrame = 0;
+          if (gesture?.axis === 'y' && event.type !== 'touchcancel' && motionNode) {
+            releaseOffset = Math.max(0, Math.min(maxScroll, gesture.targetTop)) - position;
+            const now = performance.now();
+            const first = gesture.samples[0];
+            const last = gesture.samples[gesture.samples.length - 1];
+            const sampleVelocity = now - gesture.lastMoveAt <= 90
+              ? (first.y - last.y) / Math.max(16, last.at - first.at) : 0;
+            const carry = Math.sign(sampleVelocity) === Math.sign(gesture.carryVelocity) ? gesture.carryVelocity * 0.2 : 0;
+            velocity = Math.max(-maxVelocity, Math.min(maxVelocity, sampleVelocity * 0.65 + carry));
+            if (Math.abs(velocity) >= 0.025 || Math.abs(releaseOffset) >= 0.1) {
+              ksoKineticMoving = true;
+              lastFrameAt = now;
+              motionFrame = requestAnimationFrame(animateMotion);
+            } else { stopMotion(); settleKsoCategory(); }
+          } else { stopMotion(); settleKsoCategory(); }
+        }
+      };
+      window.addEventListener('touchend', finishTouch, { passive: true });
+      window.addEventListener('touchcancel', finishTouch, { passive: true });
+      scroller.addEventListener('wheel', stopMotion, { passive: true });
+      elProductsGrid?.addEventListener('pointerdown', event => {
+        if (event.pointerType !== 'touch') { stopMotion(); suppressCatalogClickUntil = 0; }
+      }, { passive: true });
+      elProductsGrid?.addEventListener('click', event => {
+        // Capture before card and quantity handlers; keyboard/programmatic clicks remain intact.
+        if (event.detail === 0 || Date.now() >= suppressCatalogClickUntil) return;
+        if (event.pointerType && event.pointerType !== 'touch') return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+      window.addEventListener('blur', () => {
+        resetCatalogGesture();
+        suppressCatalogClickUntil = 0;
+      }, { passive: true });
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) resetCatalogGesture();
+      });
+      window.addEventListener('resize', resetCatalogGesture, { passive: true });
     }
   }
 
   function renderCategories() {
+    if(isKsoCatalogCache)return;
     elCatsList.innerHTML = "";
 
     getVisibleCategories().forEach((c) => {
@@ -14244,6 +14564,7 @@ async function initAddresses() {
   }
 
   function bindShopWarmups() {
+    if (isKsoCatalogCache) return; // KSO warms only missing records after startup, never on a swipe.
     if (bindShopWarmups._bound) return;
     bindShopWarmups._bound = true;
 
@@ -14358,6 +14679,7 @@ async function initAddresses() {
   const INITIAL_CATALOG_WARM_TIMEOUT_MS = 1400;
 
   function renderCategoriesSkeleton(count = INITIAL_CATALOG_SKELETON_CATEGORIES) {
+    if(isKsoCatalogCache)return;
     if (!elCatsList) return;
     const n = Math.max(1, Number(count || 0));
     const frag = document.createDocumentFragment();
@@ -14486,6 +14808,7 @@ async function initAddresses() {
   }
 
   async function warmInitialCatalogInteractionData(opts = {}) {
+    if (isKsoCatalogCache) return;
     const productLimit = Math.max(1, Number(opts.productLimit || INITIAL_CATALOG_PREFETCH_PRODUCTS));
     const comboLimit = Math.max(0, Number(opts.comboLimit || INITIAL_CATALOG_PREFETCH_COMBOS));
     const { productIds, comboIds } = collectInitialCatalogWarmIds({
@@ -14650,6 +14973,7 @@ async function initAddresses() {
   }
 
   function scheduleComboDetailsPrefetch(comboIds, opts = {}) {
+    if (isKsoCatalogCache) return;
     const ids = Array.isArray(comboIds)
       ? comboIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
       : [];
@@ -15086,6 +15410,7 @@ async function initAddresses() {
           }
         });
         const warmComboDetailsOnIntent = () => {
+          if (isKsoCatalogCache) return;
           scheduleComboDetailsPrefetch([comboId], { limit: 1, delayMs: 0 });
         };
         card.addEventListener("pointerenter", warmComboDetailsOnIntent, { passive: true, once: true });
@@ -17185,7 +17510,7 @@ function removeFromCartByKey(cartKey, productId) {
   }
   window.syncKsoFloatingCartButton = syncKsoFloatingCartButton;
 
-  const KSO_IDLE_RESET_MS = 5 * 60 * 1000;
+  const KSO_IDLE_RESET_MS = 3 * 60 * 1000;
   const KSO_IDLE_WARNING_MS = 30 * 1000;
   let ksoIdleResetTimer = 0;
   let ksoIdleWarningTimer = 0;
@@ -17381,6 +17706,7 @@ function removeFromCartByKey(cartKey, productId) {
       try {
         if (typeof clearCustomer === "function") clearCustomer({ fullReset: true });
       } catch {}
+      if (typeof closeShopSheetIfOpen === 'function') closeShopSheetIfOpen({ resetSession: true });
       showKsoMethodGate();
     } finally {
       ksoIdleResetInProgress = false;
@@ -17403,6 +17729,11 @@ function removeFromCartByKey(cartKey, productId) {
   function handleKsoIdleActivity(event) {
     const target = event?.target;
     if (target?.closest?.("#shopKsoIdleWarning")) return;
+    if(event.type==='scroll'){
+      const now=Date.now();
+      if(now-(handleKsoIdleActivity.lastScrollReset||0)<1000)return;
+      handleKsoIdleActivity.lastScrollReset=now;
+    }
     resetKsoIdleTimer();
   }
 
@@ -17675,6 +18006,10 @@ function updateCartBadge() {
   }
 
   function syncAllProductCardsFromCart() {
+    if (isKsoCatalogCache) {
+      scheduleSyncAllProductCardsFromCart();
+      return;
+    }
     if (!elProductsGrid) return;
     const cards = elProductsGrid.querySelectorAll(".sp-card[data-product-id]");
     cards.forEach((card) => {
@@ -17687,12 +18022,49 @@ function updateCartBadge() {
     });
   }
 
-  function scheduleSyncAllProductCardsFromCart() {
+  const ksoPendingCardIds = new Set();
+  let ksoSyncAllCards = false;
+  let ksoCardSyncRunning = false;
+
+  async function flushKsoProductCardSync() {
+    if (ksoCardSyncRunning) return;
+    ksoCardSyncRunning = true;
+    const all = ksoSyncAllCards;
+    const ids = new Set(ksoPendingCardIds);
+    ksoSyncAllCards = false;
+    ksoPendingCardIds.clear();
+    try {
+      await waitForKsoCatalogIdle();
+      const cards = Array.from(elProductsGrid?.querySelectorAll('.sp-card[data-product-id]') || [])
+        .filter(card => all || ids.has(Number(card.dataset.productId)));
+      await forEachKsoCatalogChunk(cards, card => {
+        if (!card.isConnected) return;
+        const id = Number(card.dataset.productId);
+        const product = state.productCache.get(id);
+        if (!product || Number(product.site_visibility) === 0) { card.remove(); return; }
+        syncProductCardStaticContent(card, product);
+        applyCardState(card, product, cartQty(id));
+      });
+    } catch (error) {
+      console.error('KSO catalog card update failed:', error);
+    } finally {
+      ksoCardSyncRunning = false;
+      if (ksoSyncAllCards || ksoPendingCardIds.size) scheduleSyncAllProductCardsFromCart([]);
+    }
+  }
+
+  function scheduleSyncAllProductCardsFromCart(productIds = null) {
+    if (isKsoCatalogCache) {
+      if (productIds == null) ksoSyncAllCards = true;
+      else productIds.forEach(id => ksoPendingCardIds.add(Number(id)));
+      if (ksoCardSyncRunning) return;
+    }
     if (__syncAllCardsTimer) return;
     __syncAllCardsTimer = setTimeout(() => {
       __syncAllCardsTimer = null;
-      syncAllProductCardsFromCart();
-    }, 0);
+      if (isKsoCatalogCache) void flushKsoProductCardSync();
+      else syncAllProductCardsFromCart();
+    }, isKsoCatalogCache ? (catalogTouchActive ? 200 : Math.max(0, 650 - (Date.now() - catalogLastScrollAt))) : 0);
   }
 
   function buildCartKeySignature(cartItems = state.cart) {
@@ -18140,6 +18512,7 @@ function updateCartBadge() {
     __categoryLoadLimit.set(cid, reqLimit);
     try {
       await loadProductsForCategory(cid, { limit: reqLimit, lite: true });
+      await waitForKsoCatalogIdle();
       renderProducts({ appendOnly: true });
       prioritizeAboveFoldCardImages();
       void warmInitialCatalogInteractionData({
@@ -18183,6 +18556,7 @@ function updateCartBadge() {
   }
 
   function saveCatalogSnapshotFromState() {
+    if(isKsoCatalogCache){scheduleCatalogSnapshotSave();return;}
     try {
       const payload = {
         v: CATALOG_SNAPSHOT_VERSION,
@@ -18198,11 +18572,315 @@ function updateCartBadge() {
   }
 
   function scheduleCatalogSnapshotSave() {
+    if(isKsoCatalogCache&&catalogCacheRestoring)return;
     if (catalogSnapshotSaveTimer) return;
     catalogSnapshotSaveTimer = setTimeout(() => {
       catalogSnapshotSaveTimer = null;
-      saveCatalogSnapshotFromState();
+      if(isKsoCatalogCache){
+        if(catalogTouchActive||Date.now()-catalogLastScrollAt<600||catalogCacheWriting){scheduleCatalogSnapshotSave();return;}
+        const persist=()=>{
+          if(catalogTouchActive||Date.now()-catalogLastScrollAt<600){scheduleCatalogSnapshotSave();return;}
+          void persistKsoCatalogCache();
+        };
+        if(typeof requestIdleCallback==='function')requestIdleCallback(persist);else setTimeout(persist,0);
+      }else saveCatalogSnapshotFromState();
     }, 700);
+  }
+
+  function requestKsoCatalogSync() {
+    if (!isKsoCatalogCache) return;
+    catalogSyncWanted = true;
+    if (!catalogStartupReady || catalogSyncPending || catalogSyncApplying || stockEventsSource?.readyState !== WebSocket.OPEN) return;
+    catalogSyncWanted = false;
+    catalogSyncPending = true;
+    clearTimeout(catalogSyncTimer);
+    stockEventsSource.send(JSON.stringify({ type: 'catalog.sync', since: catalogRevision }));
+    catalogSyncTimer = setTimeout(() => {
+      catalogSyncPending = false;
+      requestKsoCatalogSync();
+    }, 30000);
+  }
+
+  function invalidateKsoCatalogResources(predicate) {
+    catalogResources.forEach((value, key) => {
+      if (predicate(key, value)) { catalogResources.delete(key); catalogDirtyResources.add(key); }
+    });
+    catalogResourceInflight.clear();
+  }
+
+  function invalidateKsoProductData(ids) {
+    ids.forEach(id => {
+      advanceStockConfigGeneration(id);
+      upsellDefaultConfigCache.delete(id);
+      state.productOptionsCache.delete(id);
+      productIngredientRequirementsCache.delete(id);
+      const passport = getProductPassport(id);
+      if (passport) {
+        ['ingredients', 'variants', 'optionAssignments', 'optionGroups', 'defaultConfig'].forEach(key => { passport[key] = null; });
+        catalogDirtyPassports.add(id);
+      }
+    });
+    if (ids.length) state.optionGroupCache.clear();
+    window.dispatchEvent(new CustomEvent('shop:kso-catalog-invalidated', { detail: { productIds: ids } }));
+  }
+
+  async function applyKsoCatalogChanges(page, socket) {
+    if (socket !== stockEventsSource || catalogSyncApplying) return;
+    clearTimeout(catalogSyncTimer);
+    catalogSyncApplying = true;
+    let applied = false;
+    try {
+      await waitForKsoCatalogIdle();
+      if (socket !== stockEventsSource || catalogCacheScope() !== catalogInitialScope) return;
+      const hadMissingCategories = collectCatalogCategoryIds().some(id => !state.productsByCategory.has(id)
+        || !catalogCompleteCategories.has(id));
+      if (hadMissingCategories) {
+        await loadProductsByCategory();
+        await waitForKsoCatalogIdle();
+        renderProducts({ appendOnly: true });
+      }
+      const changes = (Array.isArray(page.changes) ? page.changes : []).filter(change => change.entity_type !== 'checkout_settings');
+      const reset = page.reset_required === true;
+      if (reset || changes.length) {
+        catalogGeneration += 1;
+        const productIds = new Set();
+        let structureChanged = reset;
+        let referencesChanged = reset;
+        let combosChanged = reset;
+        let membershipChanged = false;
+        changes.forEach(change => {
+          if (change.entity_type === 'checkout_settings') return;
+          const id = Number(change.entity_id);
+          if (change.entity_type === 'product' || change.operation === 'stock') {
+            if (id > 0) productIds.add(id);
+          } else if (change.entity_type === 'category') structureChanged = true;
+          else if (change.entity_type === 'combo' || change.entity_type === 'combo-block') combosChanged = true;
+          else referencesChanged = true;
+        });
+        if (reset || referencesChanged) state.productCache.forEach((_, id) => productIds.add(id));
+        const ids = [...productIds];
+        let enhancersChanged = reset || referencesChanged;
+        if (ids.length || structureChanged || referencesChanged || combosChanged) invalidateKsoProductData(ids);
+        invalidateKsoCatalogResources((key, value) => {
+          if (reset || referencesChanged) return true;
+          if (structureChanged && (key.includes('/bootstrap') || key.endsWith('/categories'))) return true;
+          if (key.includes('/combos/')) return combosChanged || structureChanged
+            || (ids.length && (typeof collectComboProductIds !== 'function'
+              || collectComboProductIds(value?.data).some(id => productIds.has(id))));
+          if (/\/(?:auto-add|cart-upsell)$/.test(key)) {
+            const rows = key.endsWith('/auto-add') ? value?.data?.items : value?.data;
+            const affected = (Array.isArray(rows) ? rows : []).some(row => productIds.has(Number(row.product_id || row.product?.id || row.id)));
+            enhancersChanged = enhancersChanged || affected;
+            return affected;
+          }
+          return false;
+        });
+        if (structureChanged || referencesChanged || combosChanged) {
+          await loadShopBootstrap();
+          await loadProductsByCategory({ force: true });
+        }
+        for (let offset = 0; offset < ids.length; offset += 24) {
+          await waitForKsoCatalogIdle();
+          membershipChanged = (await refreshCatalogPassportBatch(ids.slice(offset, offset + 24))) || membershipChanged;
+        }
+        if (enhancersChanged) {
+          autoAddLoaded = false;
+          upsellLoaded = false;
+          await loadCartEnhancersData();
+          if (!autoAddLoaded || !upsellLoaded) throw new Error('KSO_CART_CATALOG_INCOMPLETE');
+        }
+        await waitForKsoCatalogIdle();
+        if (socket !== stockEventsSource) return;
+        // Structural changes need a new grid. Price/stock changes patch existing cards.
+        if (structureChanged || referencesChanged || combosChanged || membershipChanged) {
+          renderCategories();
+          renderCategoryChips();
+          renderProducts();
+        } else {
+          scheduleSyncAllProductCardsFromCart(ids);
+        }
+        if (ids.length || structureChanged || referencesChanged || combosChanged) {
+          window.invalidateShopCartPricingSnapshotCache?.();
+          pruneUnavailableCartItems();
+          await refreshCartAfterEnhancersLoaded({ force: true });
+          if (document.body.classList.contains('shop-cart-page-active')) {
+            await window.syncShopCartPricingSummaryUi?.({ reason: 'kso.catalog.changed' });
+          }
+        }
+      }
+      if (socket !== stockEventsSource) return;
+      catalogRevision = String(page.next_revision || catalogRevision);
+      applied = true;
+      scheduleCatalogSnapshotSave();
+      if (page.has_more) catalogSyncWanted = true;
+    } catch (error) {
+      console.error('KSO catalog synchronization failed; checkpoint retained:', error);
+      catalogSyncWanted = false;
+      clearTimeout(catalogSyncTimer);
+      catalogSyncTimer = setTimeout(requestKsoCatalogSync, 5000);
+    } finally {
+      catalogSyncApplying = false;
+      catalogSyncPending = false;
+      if (catalogSyncWanted) requestKsoCatalogSync();
+      else if (applied) void warmMissingKsoCatalogData();
+    }
+  }
+
+  async function refreshKsoEffectiveConfigs(productIds) {
+    const ids = [...new Set(productIds)].filter(id => state.productCache.has(id)
+      && Number(state.productCache.get(id)?.site_visibility) !== 0
+      && getProductPassport(id)?.defaultConfig?.is_fulfillable == null);
+    const pending = [...new Set(ids.map(id => catalogEffectiveInflight.get(id)).filter(Boolean))];
+    if (pending.length) await Promise.all(pending);
+    const missing = ids.filter(id => getProductPassport(id)?.defaultConfig?.is_fulfillable == null);
+    if (!missing.length) return;
+    const generations = new Map(missing.map(id => [id, getStockConfigGeneration(id)]));
+    const task = (async () => {
+      const json = await apiJson('/api/public/products/batch/default-cart-config', {
+        method: 'POST', body: { ids: missing },
+      });
+      await waitForKsoCatalogIdle();
+      await forEachKsoCatalogChunk(missing, id => {
+        const config = json?.data?.[id];
+        if (!config) throw new Error('KSO_EFFECTIVE_CONFIG_MISSING:' + id);
+        applyEffectiveStockConfigRow(id, config, generations.get(id));
+      });
+    })();
+    missing.forEach(id => catalogEffectiveInflight.set(id, task));
+    try { await task; }
+    finally { missing.forEach(id => { if (catalogEffectiveInflight.get(id) === task) catalogEffectiveInflight.delete(id); }); }
+  }
+
+  function warmMissingKsoCatalogData() {
+    if (!isKsoCatalogCache || catalogWarmupPromise) return catalogWarmupPromise;
+    if (catalogWarmupCompleteGeneration === catalogGeneration) return;
+    const generation = catalogGeneration;
+    catalogWarmupPromise = (async () => {
+      let warmed = false;
+      await waitForKsoCatalogIdle();
+      await ensureShopLateLoaded();
+      const ids = [...state.productCache.keys()].filter(id => {
+        const p = getProductPassport(id);
+        return p?.product && Number(p.product.site_visibility) !== 0 && (!Array.isArray(p.ingredients) || !Array.isArray(p.variants)
+          || !Array.isArray(p.optionAssignments) || !Array.isArray(p.optionGroups) || !p.defaultConfig);
+      });
+      for (let offset = 0; offset < ids.length; offset += 24) {
+        await waitForKsoCatalogIdle();
+        if (catalogSyncApplying) return;
+        warmed = true;
+        await window.preloadProductPassportsBatch(ids.slice(offset, offset + 24), { details: true });
+      }
+      const effectiveIds = [...state.productCache.keys()].filter(id => Number(state.productCache.get(id)?.site_visibility) !== 0
+        && getProductPassport(id)?.defaultConfig?.is_fulfillable == null);
+      for (let offset = 0; offset < effectiveIds.length; offset += 24) {
+        await waitForKsoCatalogIdle();
+        if (catalogSyncApplying) return;
+        warmed = true;
+        await refreshKsoEffectiveConfigs(effectiveIds.slice(offset, offset + 24));
+      }
+      const comboIds = new Set();
+      state.combosByCategory.forEach(list => list.forEach(combo => comboIds.add(Number(combo.id))));
+      for (const id of comboIds) {
+        if (!(id > 0) || catalogResources.has('/api/public/combos/' + id)) continue;
+        await waitForKsoCatalogIdle();
+        if (catalogSyncApplying) return;
+        warmed = true;
+        await apiJson('/api/public/combos/' + id);
+      }
+      // Options/ingredients and combo replacements can reference products outside the visible catalog.
+      const references = new Set();
+      const collectReferences = passport => {
+        (passport?.ingredients || []).forEach(row => references.add(Number(row.ingredient_id)));
+        (passport?.optionGroups || []).forEach(group => (group.items || []).forEach(row => {
+          references.add(Number(row.target_product_id || row.product_id));
+        }));
+      };
+      state.productPassports.forEach(collectReferences);
+      if (typeof collectComboProductIds === 'function') catalogResources.forEach((value, key) => {
+        if (key.includes('/combos/')) collectComboProductIds(value?.data).forEach(id => references.add(id));
+      });
+      const visited = new Set();
+      while (references.size) {
+        const batch = [...references].filter(id => id > 0 && !visited.has(id)).slice(0, 24);
+        if (!batch.length) break;
+        batch.forEach(id => { references.delete(id); visited.add(id); });
+        await waitForKsoCatalogIdle();
+        if (catalogSyncApplying) return;
+        if (batch.some(id => {
+          const p = getProductPassport(id);
+          return !p?.product || !Array.isArray(p.ingredients) || !Array.isArray(p.variants)
+            || !Array.isArray(p.optionAssignments) || !Array.isArray(p.optionGroups) || !p.defaultConfig;
+        })) warmed = true;
+        await window.preloadProductPassportsBatch(batch, { details: true });
+        batch.forEach(id => collectReferences(getProductPassport(id)));
+        await refreshKsoEffectiveConfigs(batch);
+      }
+      if (warmed) scheduleSyncAllProductCardsFromCart();
+      catalogWarmupCompleteGeneration = generation;
+    })().catch(error => console.error('KSO missing catalog data load failed:', error))
+      .finally(() => {
+        catalogWarmupPromise = null;
+        if (generation !== catalogGeneration && !catalogSyncApplying) void warmMissingKsoCatalogData();
+      });
+    return catalogWarmupPromise;
+  }
+
+  async function persistKsoCatalogCache() {
+    if(catalogCacheWriting||(!state.categories?.length&&!catalogStartupReady))return;
+    const scope=catalogCacheScope();
+    if(scope!==catalogInitialScope)return;
+    const categoryIds=[...catalogDirtyCategories].slice(0,8);
+    const passportIds=[...catalogDirtyPassports].slice(0,32);
+    const resourceKeys=[...catalogDirtyResources].slice(0,8);
+    categoryIds.forEach(id=>catalogDirtyCategories.delete(id));
+    passportIds.forEach(id=>catalogDirtyPassports.delete(id));
+    resourceKeys.forEach(key=>catalogDirtyResources.delete(key));
+    // Persist the checkpoint only after the entire update has reached IndexedDB.
+    const revisionToSave = !catalogSyncApplying && !catalogDirtyCategories.size && !catalogDirtyPassports.size && !catalogDirtyResources.size
+      ? catalogRevision : catalogPersistedRevision;
+    catalogCacheWriting=true;
+    try{
+      const db=await checkoutSettingsDb();
+      if(scope!==catalogCacheScope())throw new Error('CATALOG_SCOPE_CHANGED');
+      if(catalogTouchActive||Date.now()-catalogLastScrollAt<600){categoryIds.forEach(id=>catalogDirtyCategories.add(id));passportIds.forEach(id=>catalogDirtyPassports.add(id));resourceKeys.forEach(key=>catalogDirtyResources.add(key));scheduleCatalogSnapshotSave();return;}
+      await new Promise((resolve,reject)=>{
+        const tx=db.transaction('catalog','readwrite'),store=tx.objectStore('catalog'),ts=Date.now();
+        store.put({ts,v:CATALOG_SNAPSHOT_VERSION,revision:revisionToSave,activeCategoryId:state.activeCategoryId,categories:state.categories},scope+'meta');
+        for(const id of categoryIds){if(state.productsByCategory.has(id))store.put({ts,id,complete:catalogCompleteCategories.has(id),limit:__categoryLoadLimit.get(id)||0,products:state.productsByCategory.get(id)||[],combos:state.combosByCategory.get(id)||[]},scope+'category:'+id);else store.delete(scope+'category:'+id);}
+        for(const id of passportIds){const value=state.productPassports.get(id);if(value)store.put({ts,id,value},scope+'passport:'+id);else store.delete(scope+'passport:'+id);}
+        for(const key of resourceKeys){if(catalogResources.has(key))store.put({ts,key,value:catalogResources.get(key)},scope+'resource:'+key);else store.delete(scope+'resource:'+key);}
+        tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('CATALOG_CACHE_ABORTED'));
+      });
+      catalogPersistedRevision=revisionToSave;
+      if(catalogCacheMigrating&&!catalogDirtyCategories.size&&!catalogDirtyPassports.size){localStorage.removeItem(CATALOG_SNAPSHOT_KEY);catalogCacheMigrating=false;}
+    }catch(error){
+      categoryIds.forEach(id=>catalogDirtyCategories.add(id));passportIds.forEach(id=>catalogDirtyPassports.add(id));
+      console.error('KSO catalog cache write failed:',error);
+      resourceKeys.forEach(key=>catalogDirtyResources.add(key));
+      return;
+    }finally{catalogCacheWriting=false;}
+    if(catalogDirtyCategories.size||catalogDirtyPassports.size||catalogDirtyResources.size||catalogPersistedRevision!==catalogRevision)scheduleCatalogSnapshotSave();
+  }
+
+  async function readKsoCatalogCache() {
+    const scope=catalogCacheScope(),db=await checkoutSettingsDb();
+    const records=await new Promise((resolve,reject)=>{
+      const tx=db.transaction('catalog','readwrite'),store=tx.objectStore('catalog'),rows=[];
+      const request=store.openCursor(IDBKeyRange.bound(scope,scope+'\uffff'));
+      request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value;if(Date.now()-Number(value?.ts||0)>CATALOG_SNAPSHOT_MAX_AGE_MS)cursor.delete();else rows.push({key:cursor.key,value});cursor.continue();};
+      tx.oncomplete=()=>resolve(rows);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('CATALOG_CACHE_ABORTED'));
+    });
+    if(scope!==catalogCacheScope())return null;
+    const meta=records.find(row=>row.key===scope+'meta')?.value;
+    if(!meta||meta.v!==CATALOG_SNAPSHOT_VERSION)return null;
+    const snapshot={...meta,productsByCategory:{},combosByCategory:{},productPassports:{},categoryLimits:{},categoryComplete:{}};
+    catalogRevision = catalogPersistedRevision = String(meta.revision || '0');
+    for(const {key,value} of records){
+      if(key.startsWith(scope+'category:')){snapshot.productsByCategory[value.id]=value.products;snapshot.combosByCategory[value.id]=value.combos;snapshot.categoryLimits[value.id]=value.limit;snapshot.categoryComplete[value.id]=value.complete===true;}
+      if(key.startsWith(scope+'passport:'))snapshot.productPassports[value.id]=value.value;
+      if(key.startsWith(scope+'resource:'))catalogResources.set(value.key,value.value);
+    }
+    return snapshot;
   }
 
   function loadCatalogSnapshotFromStorage() {
@@ -18223,7 +18901,7 @@ function updateCartBadge() {
 
   function applyCatalogSnapshot(snapshot) {
     const categories = Array.isArray(snapshot?.categories) ? snapshot.categories : [];
-    if (!categories.length) return false;
+    if (!categories.length && (!isKsoCatalogCache || snapshot?.revision == null)) return false;
 
     state.categories = categories;
     state.productsByCategory = new Map();
@@ -18252,6 +18930,8 @@ function updateCartBadge() {
         mergeProductPassport(pid, { product: p });
       });
       state.productsByCategory.set(cid, list);
+      if(isKsoCatalogCache)__categoryLoadLimit.set(cid,Number(snapshot?.categoryLimits?.[cid]||0));
+      if (isKsoCatalogCache && snapshot?.categoryComplete?.[cid]) catalogCompleteCategories.add(cid);
     });
 
     const productPassports = snapshot?.productPassports && typeof snapshot.productPassports === "object"
@@ -18278,6 +18958,12 @@ function updateCartBadge() {
         defaultConfig: entry.defaultConfig || null,
         updated_at: entry.updated_at || null,
       });
+      if (isKsoCatalogCache && entry.defaultConfig) {
+        window.cacheUpsellDefaultConfig(pid, entry.defaultConfig);
+        if (entry.defaultConfig.is_fulfillable != null) productIngredientRequirementsCache.set(pid, {
+          status: 'ready', requirements: buildIngredientRequirementsMap(entry.defaultConfig.ingredients || []),
+        });
+      }
     });
 
     const combosByCategory = snapshot?.combosByCategory && typeof snapshot.combosByCategory === "object"
@@ -18304,7 +18990,7 @@ function updateCartBadge() {
     renderCategoryChips();
     renderProducts();
     updateCartBadge();
-    queueCatalogPassportRefresh();
+    if (!isKsoCatalogCache) queueCatalogPassportRefresh();
     return true;
   }
 
@@ -18332,7 +19018,9 @@ function updateCartBadge() {
       body: { ids: productIds },
     });
     const data = json?.data && typeof json.data === "object" ? json.data : {};
-    productIds.forEach((id) => {
+    if (isKsoCatalogCache) await waitForKsoCatalogIdle();
+    const changedCategories = new Set();
+    const applyPassport = (id) => {
       const payload = data[id] || data[String(id)] || null;
       if (!payload || typeof payload !== "object") {
         const cached = state.productCache.get(id);
@@ -18341,6 +19029,12 @@ function updateCartBadge() {
           cached.site_visibility = 0;
           mergeProductPassport(id, { product: cached });
         }
+        if (isKsoCatalogCache) state.productsByCategory.forEach((list, cid) => {
+          if (!list.some(p => Number(p.id) === id)) return;
+          state.productsByCategory.set(cid, list.filter(p => Number(p.id) !== id));
+          catalogDirtyCategories.add(cid);
+          changedCategories.add(cid);
+        });
         return;
       }
       const product = payload.product && typeof payload.product === "object" ? payload.product : null;
@@ -18362,14 +19056,43 @@ function updateCartBadge() {
         window.cacheUpsellDefaultConfig(id, payload.defaultConfig);
       }
       mergeProductPassport(id, patch);
-    });
+      if (isKsoCatalogCache) {
+        const memberships = new Set((product.category_ids || []).map(Number));
+        state.productsByCategory.forEach((list, cid) => {
+          const index = list.findIndex(p => Number(p.id) === id);
+          const belongs = Number(product.site_visibility) !== 0 && memberships.has(Number(cid));
+          if (index >= 0 && belongs) {
+            list[index] = state.productCache.get(id);
+            catalogDirtyCategories.add(cid);
+          } else if ((index >= 0) !== belongs) changedCategories.add(cid);
+        });
+      }
+    };
+    if (isKsoCatalogCache) await forEachKsoCatalogChunk(productIds, applyPassport);
+    else productIds.forEach(applyPassport);
+    if (isKsoCatalogCache) {
+      await forEachKsoCatalogChunk(productIds, id => {
+        if (data[id]) window.__applySharedProductPassportPayloads?.({ [id]: data[id] });
+      });
+      await refreshKsoEffectiveConfigs(productIds);
+      if (changedCategories.size) await loadProductsByCategory({ categoryIds: [...changedCategories] });
+      return changedCategories.size > 0;
+    }
     scheduleSyncAllProductCardsFromCart();
   }
 
-  function restoreCatalogSnapshotForFastPaint() {
-    const snapshot = loadCatalogSnapshotFromStorage();
+  async function restoreCatalogSnapshotForFastPaint() {
+    let snapshot;
+    if(isKsoCatalogCache){
+      try{snapshot=await readKsoCatalogCache();}catch(error){console.error('KSO catalog cache read failed:',error);}
+      if(!snapshot){snapshot=loadCatalogSnapshotFromStorage();catalogCacheMigrating=!!snapshot;}
+    }else snapshot=loadCatalogSnapshotFromStorage();
     if (!snapshot) return false;
-    return applyCatalogSnapshot(snapshot);
+    catalogCacheRestoring=true;
+    try{return applyCatalogSnapshot(snapshot);}finally{
+      catalogCacheRestoring=false;
+      if(catalogCacheMigrating){for(const id of state.productsByCategory.keys())catalogDirtyCategories.add(id);for(const id of state.productPassports.keys())catalogDirtyPassports.add(id);scheduleCatalogSnapshotSave();}
+    }
   }
 
   async function loadCategories() {
@@ -18383,6 +19106,17 @@ function updateCartBadge() {
     if (!data || typeof data !== "object") return null;
     if (Array.isArray(data.categories)) {
       state.categories = data.categories;
+      if (isKsoCatalogCache) {
+        const validIds = new Set(collectCatalogCategoryIds());
+        for (const id of state.productsByCategory.keys()) {
+          if (validIds.has(id)) continue;
+          state.productsByCategory.delete(id);
+          state.combosByCategory.delete(id);
+          catalogCompleteCategories.delete(id);
+          __categoryLoadLimit.delete(id);
+          catalogDirtyCategories.add(id);
+        }
+      }
     }
     if (data.orderConfig && typeof data.orderConfig === "object") {
       setShopOrderConfigSnapshot(data.orderConfig, { persistRounding: true });
@@ -18583,6 +19317,13 @@ function updateCartBadge() {
       }
 
       await warmupCartProducts();
+      if (isKsoCatalogCache && !document.body.classList.contains('shop-cart-page-active')) {
+        // Keep cart data current; its existing opening path will render the visible page.
+        markCartUiDirty();
+        updateCartBadge();
+        cartEnhancersLastRefreshSignature = getCartEnhancersRefreshSignature();
+        return autoChanged;
+      }
       renderCart(true);
       updateCartBadge();
 
@@ -20415,12 +21156,15 @@ function updateCartBadge() {
     return product;
   }
 
-  async function loadProductsByCategory() {
+  async function loadProductsByCategory(opts = {}) {
     const categories = getVisibleCategories();
-    const categoryIds = collectCatalogCategoryIds(categories);
+    const categoryIds = collectCatalogCategoryIds(categories).filter(id => (!opts.categoryIds || opts.categoryIds.includes(id)) && (!isKsoCatalogCache || opts.force || opts.categoryIds
+      || !state.productsByCategory.has(id) || !catalogCompleteCategories.has(id)));
+    if (!categoryIds.length) return;
 
     let productsByCategory = {};
     let combosByCategory = {};
+    const refreshedCategoryIds=new Set();
 
     try {
       for (let index = 0; index < categoryIds.length; index += 50) {
@@ -20431,6 +21175,7 @@ function updateCartBadge() {
         });
         productsByCategory = { ...productsByCategory, ...(json.data || {}) };
         combosByCategory = { ...combosByCategory, ...(json.combos || {}) };
+        chunk.forEach(id=>refreshedCategoryIds.add(Number(id)));
       }
     } catch (e) {
       console.warn("loadProductsByCategory: batch failed, falling back", e);
@@ -20440,8 +21185,10 @@ function updateCartBadge() {
           try {
             const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(categoryId)}`);
             combosByCategory[categoryId] = Array.isArray(json.combos) ? json.combos : [];
+            refreshedCategoryIds.add(Number(categoryId));
             return [Number(categoryId), Array.isArray(json.data) ? json.data : []];
           } catch (e2) {
+            if(isKsoCatalogCache){console.error('KSO category refresh failed; retaining saved data:',categoryId,e2);combosByCategory[categoryId]=state.combosByCategory.get(Number(categoryId))||[];return [Number(categoryId),state.productsByCategory.get(Number(categoryId))||[]];}
             combosByCategory[categoryId] = [];
             return [Number(categoryId), []];
           }
@@ -20452,6 +21199,7 @@ function updateCartBadge() {
 
     const entries = categoryIds.map(id => {
       const list = Array.isArray(productsByCategory[id]) ? productsByCategory[id] : [];
+      if(isKsoCatalogCache&&!refreshedCategoryIds.has(Number(id)))return [id,list];
       for (const p of list) {
         ensureCachedProductCategoryIds(p, id);
         if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
@@ -20460,11 +21208,15 @@ function updateCartBadge() {
         mergeProductIntoCache(p, "products_by_category");
       }
       state.combosByCategory.set(id, Array.isArray(combosByCategory[id]) ? combosByCategory[id] : []);
+      if(isKsoCatalogCache){catalogDirtyCategories.add(id);catalogCompleteCategories.add(id);__categoryLoadLimit.set(id,200);}
       return [id, list];
     });
 
-    state.productsByCategory = new Map(entries);
+    state.productsByCategory = isKsoCatalogCache ? new Map([...state.productsByCategory, ...entries]) : new Map(entries);
     saveCatalogSnapshotFromState();
+    if (isKsoCatalogCache && categoryIds.some(id => !refreshedCategoryIds.has(Number(id)))) {
+      throw new Error('KSO_CATALOG_CATEGORIES_INCOMPLETE');
+    }
     if (pruneUnavailableCartItems()) {
       renderCart();
       updateCartBadge();
@@ -20511,11 +21263,13 @@ function updateCartBadge() {
       }
       if (!(state.productsByCategory instanceof Map)) state.productsByCategory = new Map();
       state.productsByCategory.set(cid, list);
+      if(isKsoCatalogCache){catalogDirtyCategories.add(cid);if(lite)catalogCompleteCategories.delete(cid);else catalogCompleteCategories.add(cid);}
       saveCatalogSnapshotFromState();
       try { if (lite) __categoryLoadLimit.set(cid, limit); } catch {}
       return list;
     } catch (e) {
       console.warn("loadProductsForCategory: failed for category", cid, e);
+      if (isKsoCatalogCache) { __categoryLoadLimit.delete(cid); throw e; }
 
       // ?????????? ????????????, ??? ??????? ?? ??????????
       try {
@@ -20655,6 +21409,7 @@ function updateCartBadge() {
   }
 
   function bindShopPullToRefresh() {
+    if (isKsoCatalogCache) return;
     if (shopPullRefreshState) return;
     shopPullRefreshState = {
       startX: 0,
@@ -20770,6 +21525,7 @@ function withShopSplashTimeout(promise, timeoutMs) {
 }
 
 function scheduleAllProductIngredientBatch() {
+  if (isKsoCatalogCache) return; // Full missing passports are loaded once by the KSO cache warmup.
   const allProductIds = [];
   if (state.productsByCategory instanceof Map) {
     state.productsByCategory.forEach(function(products) {
@@ -20797,7 +21553,7 @@ async function initCore() {
       document.body.classList.remove("shop-main");
     }
 
-    const hasSnapshotPaint = restoreCatalogSnapshotForFastPaint();
+    const hasSnapshotPaint = await restoreCatalogSnapshotForFastPaint();
     if (hasSnapshotPaint) {
       try {
         if (typeof updateStoreStatus === "function") updateStoreStatus();
@@ -20861,18 +21617,19 @@ async function initCore() {
 
     if (productsReadyForFirstPaint) {
       if (hasSnapshotPaint && elProductsGrid?.querySelector(".sp-card[data-product-id]")) {
+        if (isKsoCatalogCache) renderProducts({ appendOnly: true });
         syncAllProductCardsFromCart();
       } else {
         renderProducts();
       }
-      queueVisibleProductStockRefresh("first_paint", 0);
+      if (!isKsoCatalogCache) queueVisibleProductStockRefresh("first_paint", 0);
       prioritizeAboveFoldCardImages();
       scheduleAllProductIngredientBatch();
     } else {
       productsLoadPromise.then((ok) => {
         if (!ok) return;
         renderProducts();
-        queueVisibleProductStockRefresh("first_products_loaded", 0);
+        if (!isKsoCatalogCache) queueVisibleProductStockRefresh("first_products_loaded", 0);
         prioritizeAboveFoldCardImages();
         scheduleAllProductIngredientBatch();
       }).catch(() => {});
@@ -20920,6 +21677,13 @@ async function initCore() {
     bindShopPullToRefresh();
     syncStorefrontChatWidgetStateOnBoot().catch(function () {});
     startStockSync();
+    if (isKsoCatalogCache) {
+      // Do not race startup fetches with change replay, even if the splash timed out.
+      void productsLoadPromise.then(() => {
+        catalogStartupReady = true;
+        requestKsoCatalogSync();
+      });
+    }
 
   } catch (e) {
     console.error(e);

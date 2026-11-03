@@ -903,7 +903,7 @@ function startScheduledAutoPrint(db){
           let documents;
           try{documents=await preparePrintDocuments(db,{tenantId:rule.tenant_id,storeId:rule.store_id,orderIds,automatic:true,bulk:true,selections:[{template_id:Number(rule.template_id),copies:Number(rule.copies),rule_id:Number(rule.id)}]});}
           catch(error){if(error.message!=='NO_MATCHING_DOCUMENTS')throw error;documents=[];}
-          await enqueueDocuments(db,{tenantId:rule.tenant_id,storeId:rule.store_id,documents,automatic:true,requestId:`scheduled:${rule.id}:${ready[0].dispatch_id}`,deferredIds:ready.map(order=>Number(order.dispatch_id))});
+          await enqueueDocuments(db,{tenantId:rule.tenant_id,storeId:rule.store_id,documents,automatic:true,requestId:`scheduled_${rule.id}_${ready[0].dispatch_id}`,deferredIds:ready.map(order=>Number(order.dispatch_id))});
         }catch(error){console.error('Scheduled auto-print rule:',{tenantId:rule.tenant_id,storeId:rule.store_id,ruleId:rule.id},error);}
         finally{try{if(locked)await connection.query('SELECT RELEASE_LOCK(?)',[lockName]);}finally{connection.release();}}
       }
