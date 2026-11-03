@@ -2474,15 +2474,7 @@
       const isActive = Number(item.id) === activeId;
       return `<button class="chip products-category-toolbar-chip ${isActive ? "is-active" : ""}" type="button" data-products-category-chip="${Number(item.id)}">${escapeHtml(item.title || "")}</button>`;
     }).join("");
-    const parent = items[0] || null;
-    const canCreateSubcategory = parent && String(parent.code || "") !== "all";
-    if (toolbarIcon && canCreateSubcategory) {
-      toolbarIcon.className = "fas fa-ellipsis-v products-category-toolbar-menu";
-      toolbarIcon.setAttribute("role", "button");
-      toolbarIcon.setAttribute("tabindex", "0");
-      toolbarIcon.setAttribute("title", "Добавить подкатегорию");
-      toolbarIcon.setAttribute("aria-label", "Добавить подкатегорию");
-    } else if (toolbarIcon) {
+    if (toolbarIcon) {
       toolbarIcon.className = "fas fa-box";
       toolbarIcon.removeAttribute("role");
       toolbarIcon.removeAttribute("tabindex");
@@ -6297,11 +6289,6 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
   function resetProductsBulkActions() {
     state.productsBulkActions = getDefaultProductsBulkActions();
-    if (productsBulkMenu) {
-      productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((input) => {
-        input.checked = false;
-      });
-    }
   }
 
   function closeProductsBulkCategoryPicker() {
@@ -6331,9 +6318,13 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
   function syncProductsBulkActionsUi() {
     if (productsBulkMenu) {
-      productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((input) => {
-        const key = String(input.dataset.bulkAction || "");
-        input.checked = Boolean(state.productsBulkActions?.[key]);
+      productsBulkMenu.querySelectorAll(".products-bulk-switch").forEach((group) => {
+        const choices = Array.from(group.querySelectorAll("[data-bulk-choice]"));
+        const selected = choices.find((button) => state.productsBulkActions?.[button.dataset.bulkChoice]);
+        choices.forEach((button) => {
+          button.setAttribute("aria-pressed", String(selected ? button === selected : !button.dataset.bulkChoice));
+          button.disabled = state.productsBulkApplying;
+        });
       });
     }
     if (productsBulkCategoryMode) {
@@ -6473,11 +6464,13 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       : state.selectedProductIds.size;
     const shouldShow = state.mode === "products" && selectedCount > 0;
     productsBulkFooter.classList.toggle("hidden", !shouldShow);
+    productsBulkFooter.closest(".toolbar")?.classList.toggle("has-products-selection", shouldShow);
     if (!shouldShow) closeProductsBulkMenu();
     if (productsBulkSelectedCount) {
       productsBulkSelectedCount.textContent = String(selectedCount);
     }
     if (productsBulkToggleAllInput) {
+      productsBulkToggleAllInput.closest(".products-header-selection")?.classList.toggle("hidden", state.mode !== "products");
       const selectedInGroup = visibleGroupIds.filter((id) => state.selectedProductIds.has(id)).length;
       productsBulkToggleAllInput.checked = visibleGroupIds.length > 0 && selectedInGroup === visibleGroupIds.length;
       productsBulkToggleAllInput.indeterminate = selectedInGroup > 0 && selectedInGroup < visibleGroupIds.length;
@@ -6695,6 +6688,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!state.selectedProductIds.size) {
       resetProductsBulkActions();
       resetProductsBulkCategoryAction();
+      resetProductsBulkProductionZoneAction();
       closeProductsBulkMenu();
       syncProductsBulkFooter();
       return;
@@ -6702,6 +6696,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     state.selectedProductIds.clear();
     resetProductsBulkActions();
     resetProductsBulkCategoryAction();
+    resetProductsBulkProductionZoneAction();
     closeProductsBulkMenu();
     syncProductRowSelectionUI(productsList);
     syncProductsBulkFooter();
@@ -6722,6 +6717,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (state.selectedProductIds.size === 0) {
       resetProductsBulkActions();
       resetProductsBulkCategoryAction();
+      resetProductsBulkProductionZoneAction();
       closeProductsBulkMenu();
     }
     syncProductRowSelectionUI(productsList);
@@ -6745,6 +6741,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (state.selectedProductIds.size === 0) {
       resetProductsBulkActions();
       resetProductsBulkCategoryAction();
+      resetProductsBulkProductionZoneAction();
       closeProductsBulkMenu();
     }
     syncProductRowSelectionUI(productsList);
@@ -15225,7 +15222,11 @@ const isViewMode = state.comboPanel.mode === "view";
     const defaultSelected = new Set();
     if (state.allCategoryId) defaultSelected.add(state.allCategoryId);
     if (isCreate) {
-      if (state.currentCategoryId && state.currentCategoryId !== state.allCategoryId) defaultSelected.add(state.currentCategoryId);
+      if (state.currentCategoryId && state.currentCategoryId !== state.allCategoryId) {
+        defaultSelected.add(state.currentCategoryId);
+        const parentId = Number(state.categories.find((category) => Number(category.id) === Number(state.currentCategoryId))?.parent_id || 0);
+        if (parentId > 0) defaultSelected.add(parentId);
+      }
     }
 
     let cachedProductDetails = product?.id ? getCachedProductDetails(product.id) : null;
@@ -22823,19 +22824,6 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
-    if (toolbarIcon) {
-      toolbarIcon.addEventListener("click", () => {
-        if (!toolbarIcon.classList.contains("products-category-toolbar-menu")) return;
-        openCreateSubcategoryModal();
-      });
-      toolbarIcon.addEventListener("keydown", (event) => {
-        if (!toolbarIcon.classList.contains("products-category-toolbar-menu")) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        openCreateSubcategoryModal();
-      });
-    }
-
     if (productsSearchToggle) {
       productsSearchToggle.addEventListener("click", () => {
         const toolbarState = getProductsToolbarState();
@@ -22892,23 +22880,22 @@ const isViewMode = state.comboPanel.mode === "view";
         event.preventDefault();
         event.stopPropagation();
         const nextOpen = productsBulkMenu.classList.contains("hidden");
+        closeProductsBulkCategoryMenu();
+        closeProductsBulkProductionZoneMenu();
         productsBulkMenu.classList.toggle("hidden", !nextOpen);
         productsBulkMenuWrap.classList.toggle("is-open", nextOpen);
       });
     }
 
     if (productsBulkMenu) {
-      productsBulkMenu.addEventListener("click", (event) => event.stopPropagation());
-      productsBulkMenu.addEventListener("change", (event) => {
-        const input = event.target?.closest?.("input[data-bulk-action]");
-        if (!input) return;
-        const key = String(input.dataset.bulkAction || "");
-        if (!key) return;
-        setProductsBulkAction(key, input.checked);
-        productsBulkMenu.querySelectorAll("input[data-bulk-action]").forEach((itemInput) => {
-          const itemKey = String(itemInput.dataset.bulkAction || "");
-          itemInput.checked = Boolean(state.productsBulkActions?.[itemKey]);
+      productsBulkMenu.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const button = event.target.closest("[data-bulk-choice]");
+        if (!button || state.productsBulkApplying) return;
+        button.closest(".products-bulk-switch").querySelectorAll("[data-bulk-choice]").forEach((choice) => {
+          if (choice.dataset.bulkChoice) setProductsBulkAction(choice.dataset.bulkChoice, false);
         });
+        if (button.dataset.bulkChoice) setProductsBulkAction(button.dataset.bulkChoice, true);
         syncProductsBulkActionsUi();
       });
     }
@@ -22916,11 +22903,7 @@ const isViewMode = state.comboPanel.mode === "view";
     if (productsBulkCancelBtn) {
       productsBulkCancelBtn.addEventListener("click", () => {
         if (state.productsBulkApplying) return;
-        resetProductsBulkActions();
-        resetProductsBulkCategoryAction();
-        resetProductsBulkProductionZoneAction();
-        closeProductsBulkMenu();
-        syncProductsBulkFooter();
+        clearProductsBulkSelection();
       });
     }
 
@@ -22940,6 +22923,7 @@ const isViewMode = state.comboPanel.mode === "view";
           closeProductsBulkCategoryMenu();
         } else {
           closeProductsBulkMenu();
+          closeProductsBulkProductionZoneMenu();
           if (productsBulkCategoryMenu) productsBulkCategoryMenu.classList.remove("hidden");
           if (productsBulkCategorySelectWrap) productsBulkCategorySelectWrap.classList.add("is-open");
           productsBulkCategoryTrigger.setAttribute("aria-expanded", "true");
@@ -23144,6 +23128,10 @@ const isViewMode = state.comboPanel.mode === "view";
       addMainBtn.addEventListener("click", (e) => {
         if (state.mode === "products") {
           if (addMainWrapper && addMainDropdown) {
+            const parent = getCategoryHeaderItems(state.currentCategoryId)[0];
+            const subcategoryItem = addMainDropdown.querySelector('[data-add-action="subcategory"]');
+            if (subcategoryItem) subcategoryItem.disabled = !(Number(parent?.id) > 0) || parent.code === "all";
+            closeProductsFilterDropdown();
             addMainWrapper.classList.toggle("is-open");
             e.stopPropagation();
           }
@@ -23170,11 +23158,12 @@ const isViewMode = state.comboPanel.mode === "view";
     if (addMainDropdown && addMainWrapper) {
       addMainDropdown.addEventListener("click", (e) => {
         const item = e.target.closest("[data-add-action]");
-        if (!item) return;
+        if (!item || item.disabled) return;
         addMainWrapper.classList.remove("is-open");
         const action = item.getAttribute("data-add-action");
         if (action === "product") openProductModal({ mode: "create" });
         else if (action === "combo") openComboSetCreate();
+        else if (action === "subcategory") openCreateSubcategoryModal();
       });
       document.addEventListener("click", () => {
         addMainWrapper.classList.remove("is-open");

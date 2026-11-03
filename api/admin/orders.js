@@ -1029,7 +1029,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     const settings = await loadBonusProgramSettings(queryable, normalizedTenantId);
     const blockedByRedeem = Boolean(benefitsMeta?.bonus_accrual_blocked_by_redeem)
       || (redeemAmount > 0 && !settings.allowRedeemAndAccrue);
-    const storedAccrualAmount = Number.isFinite(Number(benefitsMeta?.bonus_accrual_amount))
+    const storedAccrualAmount = benefitsMeta?.bonus_accrual_amount != null && Number.isFinite(Number(benefitsMeta.bonus_accrual_amount))
       ? Number(benefitsMeta.bonus_accrual_amount)
       : null;
     const recalculatedAccrualAmount = blockedByRedeem || storedAccrualAmount != null

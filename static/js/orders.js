@@ -2130,9 +2130,8 @@
       const counts=document.createElement('span');counts.textContent=`${Number(connection.queue_count||0)} / ${Number(connection.failed_count||0)}`;counts.title='Очередь / ошибки';row.append(dot,name,counts);
       row.addEventListener('click',async()=>{
         menu.hidePopover();button.setAttribute('aria-expanded','false');
-        const key=ordersPrintPanel.getPrintApiTabKey(connection.store_id,connection.token_id),existed=Boolean(ordersPrintPanel.getPrintApiTabState(key));
         await ordersPrintPanel.openPrintApiForStore(Number(connection.store_id),connection.display_name,Number(connection.token_id));
-        if(!existed)ordersPrintPanel.showPrintQueueView('all');
+        ordersPrintPanel.showPrintQueueView('all');
       });menu.append(row);
     }
   }
@@ -2210,7 +2209,7 @@
       mountedCheckoutTabKey=null;state.activeOrderId=null;setOrdersCheckoutLayoutEnabled(false);renderOrderTabs();showOrdersPrintPanel(true);
       if(ordersPrintPanel.getPrintApiTabState(key)){ordersPrintPanel.renderActivePrintApiTab();ordersPrintPanel.ensurePrintApiReady();}
       else void ordersPrintPanel.openPrintApiForStore(tab.storeId,tab.title,tab.connectionId).then(()=>ordersPrintPanel.showPrintQueueView('all'));
-      if(openMobile&&shouldUseMobileSheet())openSheet();schedulePersistOrdersCache();return;
+      if(openMobile&&isMobile())openSheet();schedulePersistOrdersCache();return;
     }
     showOrdersPrintPanel(false);
 

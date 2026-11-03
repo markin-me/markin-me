@@ -1,6 +1,10 @@
 <div class="center-stack">
   <div class="panel toolbar-island">
-    <div class="toolbar">
+    <div class="toolbar products-main-toolbar">
+      <label class="products-bulk-toggle-all products-header-selection hidden" aria-label="Выделить все товары в текущей группе">
+      <input class="products-bulk-toggle-all-input" type="checkbox" id="productsBulkToggleAllInput" />
+      <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+      </label>
       <div class="toolbar-title">
         <i class="fas fa-box" id="productsToolbarIcon"></i>
         <span id="productsToolbarText">Товары</span>
@@ -69,9 +73,87 @@
             <i class="fas fa-layer-group"></i>
             <span>Комбо-набор</span>
           </button>
+          <button type="button" class="add-main-dropdown-item" data-add-action="subcategory" role="menuitem" disabled>
+            <i class="fas fa-folder-plus"></i>
+            <span>Подкатегория</span>
+          </button>
         </div>
         </div>
       </div>
+    <div class="products-bulk-toolbar hidden" id="productsBulkFooter">
+      <div class="products-bulk-footer-actions">
+        <div class="products-bulk-footer-count">
+
+          <span>Выбрано: <b id="productsBulkSelectedCount">0</b></span>
+        </div>
+        <div class="products-bulk-actions" id="productsBulkActions">
+          <div class="products-bulk-production-zone-control">
+            <label class="products-bulk-production-zone-label" for="productsBulkProductionZoneId">Зона производства</label>
+            <select class="control control-sm products-bulk-production-zone-select native-hidden" id="productsBulkProductionZoneId" aria-label="Зона производства">
+              <option value="">-</option>
+            </select>
+            <div class="products-bulk-production-zone-select-wrap" id="productsBulkProductionZoneSelectWrap">
+              <button class="products-bulk-production-zone-trigger" type="button" id="productsBulkProductionZoneTrigger" aria-haspopup="menu" aria-expanded="false">
+                <span id="productsBulkProductionZoneTriggerText">-</span>
+                <i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="products-bulk-production-zone-menu hidden" id="productsBulkProductionZoneMenu" role="menu" aria-label="Зона производства">
+                <button type="button" class="products-bulk-production-zone-option" data-bulk-production-zone-id="" role="menuitem">-</button>
+              </div>
+            </div>
+          </div>
+          <div class="products-bulk-category-control">
+            <label class="products-bulk-category-label" for="productsBulkCategoryMode">Категории</label>
+            <select class="control control-sm products-bulk-category-select native-hidden" id="productsBulkCategoryMode" aria-label="Категории">
+              <option value="none">-</option>
+              <option value="add">Добавить</option>
+              <option value="remove">Удалить</option>
+              <option value="replace">Переместить</option>
+            </select>
+            <div class="products-bulk-category-select-wrap" id="productsBulkCategorySelectWrap">
+              <button class="products-bulk-category-trigger" type="button" id="productsBulkCategoryTrigger" aria-haspopup="menu" aria-expanded="false">
+                <span id="productsBulkCategoryTriggerText">-</span>
+                <i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="products-bulk-category-menu hidden" id="productsBulkCategoryMenu" role="menu" aria-label="Категории">
+                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="none" role="menuitem">-</button>
+                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="add" role="menuitem">Добавить</button>
+                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="remove" role="menuitem">Удалить</button>
+                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="replace" role="menuitem">Переместить</button>
+              </div>
+            </div>
+            <button class="btn btn-ghost icon-btn hidden" type="button" id="productsBulkCategoryPickerBtn" aria-label="Выбрать категории">+</button>
+          </div>
+          <div class="products-bulk-menu-wrap" id="productsBulkMenuWrap">
+            <button class="btn btn-ghost icon-btn" type="button" id="productsBulkMenuToggleBtn" aria-label="Действия">...</button>
+            <div class="products-bulk-menu hidden" id="productsBulkMenu">
+              <div class="products-bulk-switch" role="group" aria-label="Неактивные / Активные">
+                <button type="button" data-bulk-choice="deactivate" aria-pressed="false">Неактивные</button>
+                <button type="button" data-bulk-choice="" aria-pressed="true" title="Не менять" aria-label="Не менять">—</button>
+                <button type="button" data-bulk-choice="activate" aria-pressed="false">Активные</button>
+              </div>
+              <div class="products-bulk-switch" role="group" aria-label="Скрытые / Видимые">
+                <button type="button" data-bulk-choice="hide" aria-pressed="false">Скрытые</button>
+                <button type="button" data-bulk-choice="" aria-pressed="true" title="Не менять" aria-label="Не менять">—</button>
+                <button type="button" data-bulk-choice="show" aria-pressed="false">Видимые</button>
+              </div>
+              <div class="products-bulk-switch" role="group" aria-label="Обнулить / Бесконечный">
+                <button type="button" data-bulk-choice="zero_stock" aria-pressed="false">Обнулить</button>
+                <button type="button" data-bulk-choice="" aria-pressed="true" title="Не менять" aria-label="Не менять">—</button>
+                <button type="button" data-bulk-choice="infinite_stock" aria-pressed="false">Бесконечный</button>
+              </div>
+              <div class="products-bulk-switch" role="group" aria-label="Со склада / Под заказ">
+                <button type="button" data-bulk-choice="fulfillment_stock" aria-pressed="false">Со склада</button>
+                <button type="button" data-bulk-choice="" aria-pressed="true" title="Не менять" aria-label="Не менять">—</button>
+                <button type="button" data-bulk-choice="fulfillment_made_to_order" aria-pressed="false">Под заказ</button>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-ghost icon-btn" type="button" id="productsBulkCancelBtn" title="Отменить изменения и снять выбор" aria-label="Отменить изменения и снять выбор">✕</button>
+          <button class="btn icon-btn" type="button" id="productsBulkApplyBtn" title="Применить действия" aria-label="Применить действия">✓</button>
+        </div>
+      </div>
+    </div>
     </div>
   </div>
 
@@ -146,95 +228,7 @@
       <div class="content-view hidden" data-view-content="production-history"><div class="info-card">История производства...</div></div>
 
     </div>
-    <div class="panel-footer hidden" id="productsBulkFooter">
-      <div class="products-bulk-footer-actions">
-        <div class="products-bulk-footer-count">
-          <label class="products-bulk-toggle-all" aria-label="Выделить все товары в текущей группе">
-            <input class="products-bulk-toggle-all-input" type="checkbox" id="productsBulkToggleAllInput" />
-            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
-          </label>
-          <span>Выбрано: <b id="productsBulkSelectedCount">0</b></span>
-        </div>
-        <div class="products-bulk-actions" id="productsBulkActions">
-          <div class="products-bulk-production-zone-control">
-            <label class="products-bulk-production-zone-label" for="productsBulkProductionZoneId">Зона производства</label>
-            <select class="control control-sm products-bulk-production-zone-select native-hidden" id="productsBulkProductionZoneId" aria-label="Зона производства">
-              <option value="">-</option>
-            </select>
-            <div class="products-bulk-production-zone-select-wrap" id="productsBulkProductionZoneSelectWrap">
-              <button class="products-bulk-production-zone-trigger" type="button" id="productsBulkProductionZoneTrigger" aria-haspopup="menu" aria-expanded="false">
-                <span id="productsBulkProductionZoneTriggerText">-</span>
-                <i class="fas fa-chevron-down" aria-hidden="true"></i>
-              </button>
-              <div class="products-bulk-production-zone-menu hidden" id="productsBulkProductionZoneMenu" role="menu" aria-label="Зона производства">
-                <button type="button" class="products-bulk-production-zone-option" data-bulk-production-zone-id="" role="menuitem">-</button>
-              </div>
-            </div>
-          </div>
-          <div class="products-bulk-category-control">
-            <label class="products-bulk-category-label" for="productsBulkCategoryMode">Категории</label>
-            <select class="control control-sm products-bulk-category-select native-hidden" id="productsBulkCategoryMode" aria-label="Категории">
-              <option value="none">-</option>
-              <option value="add">Добавить</option>
-              <option value="remove">Удалить</option>
-              <option value="replace">Переместить</option>
-            </select>
-            <div class="products-bulk-category-select-wrap" id="productsBulkCategorySelectWrap">
-              <button class="products-bulk-category-trigger" type="button" id="productsBulkCategoryTrigger" aria-haspopup="menu" aria-expanded="false">
-                <span id="productsBulkCategoryTriggerText">-</span>
-                <i class="fas fa-chevron-down" aria-hidden="true"></i>
-              </button>
-              <div class="products-bulk-category-menu hidden" id="productsBulkCategoryMenu" role="menu" aria-label="Категории">
-                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="none" role="menuitem">-</button>
-                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="add" role="menuitem">Добавить</button>
-                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="remove" role="menuitem">Удалить</button>
-                <button type="button" class="products-bulk-category-option" data-bulk-category-mode="replace" role="menuitem">Переместить</button>
-              </div>
-            </div>
-            <button class="btn btn-ghost icon-btn hidden" type="button" id="productsBulkCategoryPickerBtn" aria-label="Выбрать категории">+</button>
-          </div>
-          <div class="products-bulk-menu-wrap" id="productsBulkMenuWrap">
-            <button class="btn btn-ghost icon-btn" type="button" id="productsBulkMenuToggleBtn" aria-label="Действия">...</button>
-            <div class="products-bulk-menu hidden" id="productsBulkMenu">
-              <label class="products-bulk-menu-item">
-                <input type="checkbox" data-bulk-action="activate" />
-                <span>Сделать активными</span>
-              </label>
-              <label class="products-bulk-menu-item">
-                <input type="checkbox" data-bulk-action="deactivate" />
-                <span>Сделать неактивными</span>
-              </label>
-              <label class="products-bulk-menu-item">
-                <input type="checkbox" data-bulk-action="show" />
-                <span>Сделать видимыми</span>
-              </label>
-              <label class="products-bulk-menu-item">
-                <input type="checkbox" data-bulk-action="hide" />
-                <span>Сделать невидимыми</span>
-              </label>
-              <label class="products-bulk-menu-item">
-                <input type="checkbox" data-bulk-action="infinite_stock" />
-                <span>Бесконечный остаток</span>
-              </label>
-              <label class="products-bulk-menu-item">
-                <input type="checkbox" data-bulk-action="zero_stock" />
-                <span>Обнулить остаток</span>
-              </label>
-              <label class="products-bulk-menu-item">
-                <input type="checkbox" data-bulk-action="fulfillment_stock" />
-                <span>Сделать Со склада</span>
-              </label>
-              <label class="products-bulk-menu-item">
-                <input type="checkbox" data-bulk-action="fulfillment_made_to_order" />
-                <span>Сделать Под заказ</span>
-              </label>
-            </div>
-          </div>
-          <button class="btn btn-ghost icon-btn" type="button" id="productsBulkCancelBtn" aria-label="Сбросить действия">✕</button>
-          <button class="btn icon-btn" type="button" id="productsBulkApplyBtn" aria-label="Применить действия">✓</button>
-        </div>
-      </div>
-    </div>
+
   </div>
 </div>
 

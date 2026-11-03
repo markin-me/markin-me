@@ -3574,7 +3574,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
-      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const ksoPhone = req.query.kso_phone != null ? helpers.normalizePhone(req.query.kso_phone) : null;
+      if(req.query.kso_phone != null && !/^7\d{10}$/.test(ksoPhone))return res.status(400).json({ok:false,error:'INVALID_PHONE'});
+      let customer = token ? await getCustomerByToken(tenantId, token) : null;
+      if(ksoPhone){const [rows]=await db.query('SELECT id FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 1',[tenantId,ksoPhone]);customer=rows[0]||null;}
       const [[settingsRow]] = await db.query(
         `SELECT bonus_program_enabled, referral_program_enabled,
                 bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
@@ -3643,6 +3646,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         });
       });
       const loadedAccount = await loadPublicBonusAccount(tenantId, customer);
+      if(ksoPhone){
+        const account=mapPublicBonusAccountRow(loadedAccount);
+        const level=levelRows.find(row=>Number(row.id)===Number(account?.level_id));
+        const favoritePercents=[];
+        if(level&&customer){
+          const {group,enabled}=await loadBonusFavoriteCategoryGroupForLevel(tenantId,level.id);
+          if(enabled){
+            const [selected]=await db.query("SELECT category_id FROM mkt_customer_bonus_favorite_categories WHERE tenant_id=? AND customer_id=? AND period_key=DATE_FORMAT(CURDATE(), '%Y-%m') ORDER BY id ASC",[tenantId,customer.id]);
+            const selectedIds=new Set(selected.map(row=>Number(row.category_id)).slice(0,group.categoriesLimit));
+            for(const category of group.categoryItems||[]){const id=Number(category.id||category.categoryId);if(selectedIds.has(id))favoritePercents.push([id,Number(category.bonus_percent||category.bonusPercent||0)]);}
+          }
+        }
+        return res.json({ok:true,data:{enabled:Number(settingsRow?.bonus_program_enabled||0)===1,level:level?mapPublicBonusLevelRow(level,{rangesByLevel,activeFavoriteGroup}):null,favorite_percents:favoritePercents}});
+      }
       const promotedAccount = await promotePublicBonusAccountIfEligible(db, tenantId, customer, loadedAccount, levelRows);
       const account = mapPublicBonusAccountRow(promotedAccount);
       const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows, promotedAccount);
@@ -23907,7 +23924,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       // auth customer (optional)
       const token = str(req.headers['x-customer-token']);
-      const authCustomer = token ? await getCustomerByToken(tenantId, token) : null;
+      const isKsoOrder = req.body?.kso === true;
+      const authCustomer = !isKsoOrder && token ? await getCustomerByToken(tenantId, token) : null;
+      if(isKsoOrder){
+        if(!['cash','card'].includes(String(req.body.payment_code||'')))return res.status(400).json({ok:false,error:'INVALID_PAYMENT_METHOD'});
+        if(req.body.bonus_redeem_enabled===true||Number(req.body.bonus_redeem_amount||0)>0||(Array.isArray(req.body.items)?req.body.items:[]).some(item=>Number(item?.bonus_redeem_line_amount||item?.bonusRedeemLineAmount||0)>0))return res.status(400).json({ok:false,error:'KSO_BONUS_ACCRUAL_ONLY'});
+        req.body.bonus_redeem_enabled=false;req.body.bonus_redeem_amount=0;
+        req.body.bonus_accrual_amount=null;req.body.bonus_accrual_blocked_by_redeem=false;
+        req.body.bonus_account_id=null;req.body.bonus_level_id=null;req.body.change_from=null;
+      }
 
       const items = Array.isArray(req.body.items) ? req.body.items : [];
       if (!items.length) return res.status(400).json({ ok: false, error: 'EMPTY_ITEMS' });
@@ -23957,7 +23982,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId, deliveryTypeId]
       );
       const selectedDeliveryType = Array.isArray(deliveryTypeRows) ? deliveryTypeRows[0] : null;
-      const requireClientData = Number(selectedDeliveryType?.require_client_data ?? 1) !== 0;
+      const requireClientData = !isKsoOrder && Number(selectedDeliveryType?.require_client_data ?? 1) !== 0;
 
       // customer data:
       let customerId = authCustomer?.id || null;
@@ -25764,6 +25789,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             { promoCode }
           );
       const discountsJson = storedDiscountEntries.length > 0 ? JSON.stringify(storedDiscountEntries) : null;
+      if(isKsoOrder&&getOrderBonusRedeemAmount(discountsJson)>0)return res.status(400).json({ok:false,error:'KSO_BONUS_ACCRUAL_ONLY'});
       const benefitsMetaJson = buildOrderBenefitsMetaJsonFromDraft({
         selected_discount_id: selectedDiscountId,
         selected_discount_source: selectedDiscountSource,

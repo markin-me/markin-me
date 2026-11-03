@@ -611,6 +611,7 @@ if (settingsPrintApiCopyToken) {
 function populatePrintApiStores(items) {
 
       if (!settingsPrintApiStore) return;
+      const selectedStoreId = settingsPrintApiStore.value;
 
       settingsPrintApiStore.innerHTML = "";
 
@@ -627,6 +628,7 @@ function populatePrintApiStores(items) {
         settingsPrintApiStore.appendChild(opt);
 
       });
+      settingsPrintApiStore.value = selectedStoreId;
     }
 
 function resetPrintApiFormForCreate(storeId = 0) {
@@ -862,9 +864,7 @@ function renderPrintApiCards() {
       host.apiPanelCards.setAttribute('role','table');
       host.apiPanelCards.setAttribute('aria-label','Подключения API печати');
       if(host.settingsApiCardsHeader){host.settingsApiCardsHeader.classList.remove('hidden');host.apiPanelCards.append(host.settingsApiCardsHeader);}
-      const connections=[...(Array.isArray(printApiListItems)?printApiListItems:[])];
-      const represented=new Set(connections.map(item=>Number(item.store_id)));
-      for(const store of host.storesState.items||[])if(!represented.has(Number(store.id)))connections.push({store_id:store.id,store_name:store.name,token_id:0});
+      const connections=(Array.isArray(printApiListItems)?printApiListItems:[]).filter(item=>Number(item.token_id)>0);
       if(!connections.length){
         const empty=document.createElement('div');empty.className='empty-state';empty.textContent='Пока нет подключений API';host.apiPanelCards.append(empty);return;
       }
@@ -960,11 +960,20 @@ function removePrintApiDevice(selection) {
 document.getElementById('settingsPrintApiDeleteBtn')?.addEventListener('click',async event=>{
       const scope=printQueueScope(),key=host.activeRightTabId;
       if(!scope.connection_id)return;
-      if(!confirm('Удалить подключение и его устройства? Ключ перестанет работать.'))return;
+      const connection=printApiListItems.find(item=>Number(item.token_id)===scope.connection_id);
+      if(connection)scope.store_id=Number(connection.store_id);
+      if(!confirm('Удалить подключение, его устройства, всю очередь и историю печати? Ключ перестанет работать.'))return;
+      const queueCache=printQueueCacheScope();
       const button=event.currentTarget;button.disabled=true;
       try{
-        const response=await authFetch('/api/admin/tenant/print-api/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scope)});
-        const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.message||result.error);
+        const remove=detach=>authFetch('/api/admin/tenant/print-api/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...scope,detach_zone_printers:detach})});
+        let response=await remove(false),result=await response.json();
+        if(response.status===409&&result.error==='PRINT_CONNECTION_ZONE_CONFIRM_REQUIRED'){
+          if(!confirm(result.message))return;
+          response=await remove(true);result=await response.json();
+        }
+        if(!response.ok||!result.ok)throw new Error(result.message||result.error);
+        try{await queueCache?.clear();}catch(error){console.error('Не удалось очистить кэш удалённого подключения:',error);}
         host.rightTabs?.querySelector(`[data-right-tab="${key}"] .product-tab-close`)?.click();
         clearPrintApiTabState(key);
         if(host.activeRightTabId===key){host.rightTabs?.querySelector(`[data-right-tab="${key}"]`)?.remove();host.setActiveRightTab('');}
@@ -1259,7 +1268,7 @@ function printQueueCheckbox(jobs) {
       const label=document.createElement('label');label.className='product-row-select-control';
       const input=document.createElement('input');input.type='checkbox';input.className='product-row-select-input';input.setAttribute('aria-label','Выбрать задания');
       const box=document.createElement('span');box.className='product-row-select-box';box.setAttribute('aria-hidden','true');label.append(input,box);
-      const ids=jobs.filter(job=>job.status!=='processing').map(job=>Number(job.id));
+      const ids=jobs.map(job=>Number(job.id));
       input.addEventListener('change',()=>{
         if(label.closest('.print-queue-select-toggle')&&printQueueSelected.size){
           printQueueSelected.clear();
@@ -1277,7 +1286,7 @@ function syncPrintQueueSelection() {
       printQueueBody?.querySelectorAll('[data-print-mutation]').forEach(button=>{
         const ids=JSON.parse(button.closest('[data-print-job-ids]').dataset.printJobIds);
         const jobs=printQueueVisibleJobs.filter(job=>ids.includes(Number(job.id)));
-        button.disabled=!printQueueServerConfirmed||printQueueBusy||!jobs.some(job=>button.dataset.printMutation==='repeat'?['pending','done','failed'].includes(job.status):job.status!=='processing');
+        button.disabled=!printQueueServerConfirmed||printQueueBusy||!jobs.some(job=>button.dataset.printMutation==='repeat'?['pending','done','failed'].includes(job.status):true);
       });
       const toolbar=printQueueBody?.querySelector('.print-queue-toolbar');if(!toolbar)return;
       const selected=printQueueVisibleJobs.filter(job=>printQueueSelected.has(Number(job.id)));
@@ -1285,6 +1294,7 @@ function syncPrintQueueSelection() {
       toolbar.querySelector('.print-queue-selection-count').textContent=`Выбрано: ${selected.length}`;
       toolbar.querySelector('[data-selection-action="repeat"]').disabled=!printQueueServerConfirmed||printQueueBusy||!selected.length||selected.some(job=>!['pending','done','failed'].includes(job.status));
       toolbar.querySelector('[data-selection-action="delete"]').disabled=!printQueueServerConfirmed||printQueueBusy||!selected.length;
+      toolbar.querySelector('[data-selection-action="clear"]').disabled=!printQueueServerConfirmed||printQueueBusy;
     }
 
 function printQueueRow(jobs, options = {}) {
@@ -1301,7 +1311,7 @@ function printQueueRow(jobs, options = {}) {
       const status=document.createElement('span');status.className='badge';status.textContent=[...counts].map(([state,count])=>`${({pending:'Ожидает',processing:'Выполняется',failed:'Ошибка',done:'Выполнено'})[state]||state}: ${count}`).join(' · ');
       if(counts.has('done'))status.title='Выполнено: агент передал документ в очередь Windows';
       const repeat=jobs.filter(item=>['pending','done','failed'].includes(item.status)).map(item=>item.id);
-      const remove=jobs.filter(item=>item.status!=='processing').map(item=>item.id);
+      const remove=jobs.map(item=>item.id);
       const actions=document.createElement('div');actions.className='print-queue-row-actions';
       for(const [icon,label,action,disabled] of [
         ['fa-eye','Просмотр заданий',()=>previewPrintQueueJobs(jobs),false],
@@ -1446,7 +1456,7 @@ function renderPrintQueueToolbar(data) {
         menu.append(queueButton('Сбросить',()=>{printQueueFilters={agent_id:[],printer_id:[],template_name:[]};menu.querySelectorAll('input').forEach(input=>input.checked=false);printQueueBefore=null;printQueueSelected.clear();loadPrintQueue();}));
         filters.append(trigger,menu);toolbar.append(filters);
         const actions=document.createElement('div');actions.className='print-queue-selected-actions';
-        for(const [action,icon,title] of [['repeat','fa-print','Распечатать выбранное'],['delete','fa-trash','Удалить выбранное']]){
+        for(const [action,icon,title] of [['repeat','fa-print','Распечатать выбранное'],['delete','fa-trash','Удалить выбранное'],['clear','fa-broom','Очистить всю очередь']]){
           const button=queueButton('',()=>mutatePrintQueue(action,[...printQueueSelected]));button.className='btn btn-icon btn-sm';button.dataset.selectionAction=action;button.title=title;button.setAttribute('aria-label',title);button.innerHTML=`<i class="fas ${icon}" aria-hidden="true"></i>`;actions.append(button);
         }
         const count=document.createElement('span');count.className='print-queue-selection-count';actions.append(count);toolbar.append(actions);
@@ -1491,7 +1501,7 @@ function renderPrintQueueData(data,scopeKey){
         const toolbar=printQueueBody.querySelector('.print-queue-toolbar');
         for(const child of [...printQueueBody.childNodes])if(child!==toolbar)child.remove();
         printQueueVisibleJobs=data.jobs;
-        const visible=new Set(data.jobs.filter(job=>job.status!=='processing').map(job=>Number(job.id)));for(const id of printQueueSelected)if(!visible.has(id))printQueueSelected.delete(id);
+        const visible=new Set(data.jobs.map(job=>Number(job.id)));for(const id of printQueueSelected)if(!visible.has(id))printQueueSelected.delete(id);
         renderPrintQueueToolbar(data);
 
         if(Number(data.accumulation?.order_count)>0){
@@ -1571,19 +1581,21 @@ async function loadPrintQueue({background=false} = {}) {
     }
 
 async function mutatePrintQueue(action,ids) {
-      if(printQueueBusy||!ids.length)return;
+      if(printQueueBusy||(action!=='clear'&&!ids.length))return;
+      if(action==='clear'&&!window.confirm('Очистить всю очередь текущего подключения? Будут удалены все ожидающие, выполняющиеся, выполненные задания и ошибки, независимо от фильтра и выбранных строк.'))return;
       if(action==='delete'&&!window.confirm(`Удалить выбранные задания печати (${ids.length})?`))return;
       const scope=printQueueScope(),key=printQueueScopeKey(),selection=JSON.stringify([key,action,[...ids].sort((a,b)=>a-b)]);
       if(!printQueuePendingAction||printQueuePendingAction.selection!==selection)printQueuePendingAction={selection,request_id:crypto.randomUUID()};
       printQueueBusy=true;syncPrintQueueSelection();printQueueBody.querySelectorAll('button,select').forEach(control=>control.disabled=true);
       try{
         const requestId=printQueuePendingAction.request_id;
-        for(let offset=0;offset<ids.length;offset+=200){
+        for(let offset=0;offset<(action==='clear'?1:ids.length);offset+=200){
           const batch=ids.slice(offset,offset+200);
           await printQueueRequest('/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...scope,ids:batch,request_id:requestId})});
           for(const id of batch)printQueueSelected.delete(Number(id));
         }
         printQueuePendingAction=null;printQueueSelected.clear();
+        if(action==='clear')printQueueBefore=null;
         try{await printQueueCacheScope()?.clear();}catch(error){console.error('Не удалось обновить кэш очереди:',error);}
       }catch(error){alert('Не удалось выполнить действие: '+error.message);}
       finally{printQueueBusy=false;if(key===printQueueScopeKey()){await loadPrintQueue();await loadPrintApiCards();}}
@@ -1610,7 +1622,7 @@ async function openPrintQueueJob(id) {
         }
         for(const retry of job.retries){const history=document.createElement('p');history.textContent=`Ручной повтор ${retry.created_at}: попыток ${retry.attempts}, ошибка: ${retry.last_error||'—'}`;printQueueBody.append(history);}
         if(['failed','done'].includes(job.status))printQueueBody.append(queueButton('Повторить',()=>retryPrintQueueJob(job.id)));
-        if(job.status!=='processing')printQueueBody.append(queueButton('Удалить',()=>mutatePrintQueue('delete',[job.id])));
+        printQueueBody.append(queueButton('Удалить',()=>mutatePrintQueue('delete',[job.id])));
         if(job.document.html){
           const preview=document.createElement('iframe');preview.title='Сохранённый документ';preview.setAttribute('sandbox','allow-same-origin');preview.style.width='100%';
           const error=document.createElement('p'),print=document.createElement('button');print.type='button';print.className='hidden';
@@ -1903,7 +1915,7 @@ function setPrintApiDraftMode(enabled) {
       }
 
       const deleteButton=document.getElementById('settingsPrintApiDeleteBtn');
-      if(deleteButton)deleteButton.disabled=!(printApiSelectedConnectionId>0);
+      if(deleteButton){deleteButton.disabled=!(printApiSelectedConnectionId>0);deleteButton.classList.toggle('hidden',!(printApiSelectedConnectionId>0));}
       if (settingsPrintApiStore) settingsPrintApiStore.disabled = !printApiDraftMode;
       if (settingsPrintApiName) settingsPrintApiName.disabled = !printApiDraftMode;
 
@@ -1963,6 +1975,14 @@ function setPrintApiDraftMode(enabled) {
     }
 
 async function cancelPrintApiDraft() {
+      if(!printApiSelectedConnectionId&&isPrintApiTabId(host.activeRightTabId)){
+        const key=host.activeRightTabId;
+        clearPrintApiSettingsDirty();
+        host.rightTabs?.querySelector(`[data-right-tab="${key}"] .product-tab-close`)?.click();
+        clearPrintApiTabState(key);
+        if(host.activeRightTabId===key){host.rightTabs?.querySelector(`[data-right-tab="${key}"]`)?.remove();host.setActiveRightTab('');}
+        return;
+      }
 
       const originalStoreId = Number(printApiOriginal.store_id || 0);
 

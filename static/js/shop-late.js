@@ -6590,7 +6590,7 @@ optionGroups.forEach((group) => {
   refreshVariantAvailabilityUi();
 
   // На мобильных: синхронизируем кнопки с единым блоком
-  const isMobile = window.matchMedia("(max-width: 768px)").matches;
+  const isMobile = window.matchMedia("(max-width: 768px)").matches || (document.body?.classList.contains("page-kso") && container.id === "shopDetailsPageContent");
   if (isMobile && elMobileProductActions) {
     elMobileProductActions.classList.remove("is-read-only-back");
   }
@@ -7449,7 +7449,7 @@ async function mountProductDetails(options = {}) {
     const hasCustomOnBack = typeof onBack === "function";
     const resolvedOnBack = hasCustomOnBack ? onBack : showCartView;
 
-    if (isMobile && !isKsoPage) {
+    if (isMobile || isKsoPage) {
       await openStandaloneProductPage(p, {
         cartKey,
         prefillItem,
@@ -7850,7 +7850,7 @@ async function mountProductDetails(options = {}) {
       updateFooterAction();
 
       // На мобилке привязываем футер комбо к блоку над навигацией (как у товаров)
-      const isMobileCombo = window.matchMedia("(max-width: 768px)").matches;
+      const isMobileCombo = window.matchMedia("(max-width: 768px)").matches || (document.body?.classList.contains("page-kso") && container === standaloneDetailsContent);
       if (isMobileCombo && (openCartSheetCtx || container === standaloneDetailsContent) && elMobileProductActions && elMobileQtyWrap && elMobileAddToCartBtn) {
         footer.style.display = "none";
         elMobileCartActions.classList.add("hidden");
@@ -10202,7 +10202,7 @@ async function mountProductDetails(options = {}) {
     let standaloneFavoriteButton = null;
     let standaloneLoadSeq = null;
 
-    if (isMobile && !isKsoPage) {
+    if (isMobile || isKsoPage) {
       if (
         standaloneComboLoadingId === safeComboId &&
         document.body?.classList.contains("shop-details-page-active")
@@ -10265,7 +10265,7 @@ async function mountProductDetails(options = {}) {
       return;
     }
 
-    if (isMobile && !isKsoPage) {
+    if (isMobile || isKsoPage) {
       if (
         standaloneLoadSeq !== standaloneComboLoadSeq ||
         !document.body?.classList.contains("shop-details-page-active")
@@ -10476,6 +10476,17 @@ async function mountProductDetails(options = {}) {
   }
 
   function closeShopSheetIfOpen() {
+    if (document.body?.classList.contains("page-kso") && document.body.classList.contains("shop-cart-page-active")) {
+      document.getElementById("shopCartPage")?.classList.add("hidden");
+      document.body.classList.remove("shop-cart-page-active", "shop-checkout-overlay-open");
+      cleanupCheckoutViewSubscriptions();
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
+      openProductCtx = null;
+      if (typeof setActiveNav === "function") setActiveNav("menu");
+      window.syncKsoFloatingCartButton?.();
+    }
     if (!window.AppModal) return;
     resetShopModalHeaderUi();
     if (window.AppModal.isOpen()) {
@@ -10592,7 +10603,7 @@ function openCategoriesSheet() {
   const list = cache.list;
   syncCategoriesSheetActiveRow(list);
 
-  if (window.matchMedia("(max-width: 768px)").matches) {
+  if (window.matchMedia("(max-width: 768px)").matches || document.body.classList.contains('page-kso')) {
     categoriesPagePendingSelection = null;
     const profilePage = document.getElementById("shopProfilePage");
     const pageParent = profilePage?.parentElement || document.body;
@@ -16767,7 +16778,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return Array.from(productCategoryIds).reduce((max, id) => Math.max(max, Number(selectedCategoryPercents.get(id) || 0)), 0);
   }
 
-  function calculateCartBonusPreview(cartItems, lineStates, itemsTotal, level) {
+  function calculateCartBonusPreview(cartItems, lineStates, itemsTotal, level, favoritePercents = null) {
     const safeItems = Array.isArray(cartItems) ? cartItems : [];
     const safeLineStates = Array.isArray(lineStates) ? lineStates : [];
     const lineTotalsByKey = new Map(
@@ -16783,7 +16794,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       .filter((row) => row.amount > 0 && row.percent > 0 && Number(itemsTotal || 0) >= row.amount)
       .sort((a, b) => b.amount - a.amount)[0]?.percent || 0;
     const cashbackPercent = Math.max(0, Number(level?.cashback_percent || 0)) + orderRangePercent;
-    const selectedCategoryPercents = getCartBonusFavoriteCategoryPercents(level?.id);
+    const selectedCategoryPercents = favoritePercents || getCartBonusFavoriteCategoryPercents(level?.id);
     let rawBonus = 0;
 
     safeItems.forEach((item) => {
@@ -16913,6 +16924,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   }
 
   function mountCartPageCheckoutActionInSummary(sectionEl) {
+    if (document.body?.classList.contains("page-kso")) return;
     if (!document.body?.classList.contains("shop-cart-page-active")) return;
     if (!sectionEl || sectionEl.closest(".shop-cart-list") !== openCartSheetCtx?.listEl) return;
     const card = sectionEl.querySelector(".shop-cart-pricing-summary-card");
@@ -18555,6 +18567,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     applyCartPricingStateToSummarySections(effectiveSummaryState);
     applyCartPricingLineStatesToConnectedRows(effectiveSummaryState);
     updateCartBonusRedeemSections(effectiveSummaryState);
+    if(document.body?.classList.contains('page-kso'))refreshKsoBonusRecipient(effectiveSummaryState);
     return effectiveSummaryState;
   }
 
@@ -24305,12 +24318,40 @@ function clearCheckoutRouteHistoryState() {
   window.history.replaceState(nextState, "", window.location.href);
 }
 
+  let ksoBonusRecipient = null;
+  function refreshKsoBonusRecipient(pricingSnapshot = null) {
+    const summary=document.querySelector('#shopCartPage [data-kso-bonus-summary]');
+    if(!summary)return;
+    document.querySelector('#shopCartPage .shop-kso-bonus-phone-button')?.classList.toggle('hidden',!!ksoBonusRecipient);
+    if(!ksoBonusRecipient){summary.textContent='';summary.classList.add('hidden');return;}
+    const snapshot=pricingSnapshot||buildCartPricingSnapshot();
+    const amount=ksoBonusRecipient.config.enabled&&ksoBonusRecipient.config.level
+      ? calculateCartBonusPreview(cartItemsResolved(),snapshot.lineStates,snapshot.itemsTotal,ksoBonusRecipient.config.level,new Map(ksoBonusRecipient.config.favorite_percents||[])):0;
+    const markup=`<div class="shop-kso-bonus-recipient-number">${escapeHtml(formatPhonePlus7(ksoBonusRecipient.phone))}</div><div class="shop-kso-bonus-recipient-amount">+${amount} ${getShopBonusCoinIconHtml('1em','2px')}</div><div class="shop-kso-bonus-recipient-note">Доступно только начисление бонусов.</div>`;
+    if(summary.innerHTML!==markup)summary.innerHTML=markup;
+    summary.classList.remove('hidden');
+  }
+  window.refreshKsoBonusRecipient=refreshKsoBonusRecipient;
+  window.clearKsoBonusRecipient=()=>{ksoBonusRecipient=null;refreshKsoBonusRecipient();};
+  function openKsoBonusPhone() {
+    const content=buildLoginContent({initialPhone:ksoBonusRecipient?.phone,onPhoneSave:async phone=>{
+        const result=await apiJson('/api/public/bonus/config?kso_phone='+encodeURIComponent(phone));
+        if(!result.ok)throw new Error(result.error||'Не удалось получить данные бонусов');
+        if(!content.isConnected)return;
+        ksoBonusRecipient={phone,config:result.data};refreshKsoBonusRecipient();window.AppModal.close('saved');
+    }});
+    const modal=document.getElementById('appModal');
+    setAppModalMode('shop');
+    modal?.classList.add('shop-kso-bonus-phone-modal');
+    window.AppModal.open({title:'Бонусы',content,showSave:false,showCancel:false,onClose:()=>modal?.classList.remove('shop-kso-bonus-phone-modal')});
+  }
 function openCartSheet() {
   if (!window.AppModal) return;
+  if(document.body.classList.contains('page-kso')&&state.cartBonusRedeemEnabled){state.cartBonusRedeemEnabled=false;invalidateCartPricingSnapshotCache();}
   const cartPage = document.getElementById("shopCartPage");
   const cartPageContent = document.getElementById("shopCartPageContent");
   const cartPageHeaderContent = document.getElementById("shopCartPageHeaderContent");
-  const useCartPage = window.matchMedia("(max-width: 768px)").matches && !!cartPage && !!cartPageContent;
+  const useCartPage = (window.matchMedia("(max-width: 768px)").matches || document.body?.classList.contains("page-kso")) && !!cartPage && !!cartPageContent;
   const buildCartSheetRenderSignature = () => {
     const rows = cartItemsResolved().map((item) => {
       const key = str(item?.key || "");
@@ -24359,6 +24400,20 @@ function openCartSheet() {
     cartPageContent.replaceChildren(wrapEl);
     cartPage.classList.remove("hidden");
     document.body.classList.add("shop-cart-page-active");
+    if (document.body.classList.contains("page-kso")) {
+      if(!cartPageHeaderContent.querySelector('.shop-page-header-btn')){
+      const backButton = document.createElement("button");
+      backButton.type = "button";
+      backButton.className = "shop-page-header-btn";
+      backButton.setAttribute("aria-label", "Назад в каталог");
+      backButton.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      backButton.addEventListener("click", closeShopSheetIfOpen);
+      const title = document.createElement("strong");
+      title.textContent = "Корзина";
+      cartPageHeaderContent.append(backButton, title);
+      }
+    }
+    window.syncKsoFloatingCartButton?.();
     return true;
   }
 
@@ -25410,6 +25465,11 @@ function openCartSheet() {
   cartActions.appendChild(clearBtn);
   cartActions.appendChild(btn);
   footer.appendChild(cartActions);
+  if(document.body.classList.contains('page-kso')){
+    const bonusSummary=document.createElement('div');bonusSummary.dataset.ksoBonusSummary='';bonusSummary.className='shop-kso-bonus-summary hidden';
+    const bonusButton=document.createElement('button');bonusButton.type='button';bonusButton.className='control shop-kso-bonus-phone-button';bonusButton.textContent='Указать номер для начисления бонусов';bonusButton.addEventListener('click',openKsoBonusPhone);
+    footer.insertBefore(bonusSummary,cartActions);footer.insertBefore(bonusButton,cartActions);
+  }
 
   const checkoutActions = document.createElement("div");
   checkoutActions.className = "shop-checkout-footer-actions hidden";
@@ -25584,7 +25644,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function moveCartPageUpsellToCheckoutFooter() {
-    if (!useCartPage) return;
+    if (!useCartPage || document.body?.classList.contains("page-kso")) return;
     const upsell = list.querySelector(".shop-cart-upsell")
       || checkoutOverlayFooterHost.querySelector(".shop-cart-upsell");
     if (!upsell) return;
@@ -25675,6 +25735,25 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   async function showSheetCheckout() {
+    if(document.body.classList.contains('page-kso')){
+      invalidateAddressSheetUiState();
+      cleanupCheckoutViewSubscriptions();
+      setSheetCheckoutOverlayActive(false);
+      const content=document.createElement('div');content.className='shop-kso-payment-content';
+      checkoutWrap.classList.remove('hidden','shop-checkout-content--overlay');
+      checkoutActions.classList.remove('hidden');
+      content.append(checkoutWrap,checkoutActions);
+      const modal=document.getElementById('appModal');modal.classList.add('shop-kso-action-modal','shop-kso-payment-modal');
+      setAppModalMode('shop');
+      window.AppModal.open({title:'Способ оплаты',content,hideFooter:true,onClose:()=>{
+        modal.classList.remove('shop-kso-action-modal','shop-kso-payment-modal');
+        checkoutOverlayPanel.insertBefore(checkoutWrap,checkoutOverlayFooterHost);footer.append(checkoutActions);
+        showSheetCart();
+      }});
+      await openCheckoutView({container:checkoutWrap,onBack:()=>window.AppModal.close('back'),onShowBenefits:showSheetBenefits,hasAddressEditor:true,isSheet:true,actions:{submitBtn,backBtn}});
+      return;
+    }
+    if(document.body.classList.contains('page-kso')){footer.querySelector('.shop-kso-bonus-phone-button')?.classList.add('hidden');footer.querySelector('[data-kso-bonus-summary]')?.classList.add('hidden');checkoutOverlayTitle.textContent='Способ оплаты';}
     document.body.classList.remove("shop-address-page-active", "shop-address-form-page-active");
     const isKsoCheckout = Boolean(document.body?.classList?.contains("page-kso"));
     invalidateAddressSheetUiState();
@@ -25685,12 +25764,13 @@ function applySheetAddressTitle(backMode = "cart") {
     hideInlineAddressToggle();
     showHeaderToggle();
     setCartSheetScreenMode("cart");
-    if (isKsoCheckout && checkoutWrap.parentElement !== wrap) {
+    const useInlineKsoCheckout = isKsoCheckout && !useCartPage;
+    if (useInlineKsoCheckout && checkoutWrap.parentElement !== wrap) {
       wrap.insertBefore(checkoutWrap, benefitsWrap);
-    } else if (!isKsoCheckout && checkoutWrap.parentElement !== checkoutOverlayPanel) {
+    } else if (!useInlineKsoCheckout && checkoutWrap.parentElement !== checkoutOverlayPanel) {
       checkoutOverlayPanel.insertBefore(checkoutWrap, checkoutOverlayFooterHost);
     }
-    setSheetCheckoutOverlayActive(!isKsoCheckout);
+    setSheetCheckoutOverlayActive(!useInlineKsoCheckout);
     moveCartPageUpsellToCheckoutFooter();
     if (useCartPage && window.history.state?.shopCartCheckout !== true) {
       window.history.pushState(
@@ -26418,6 +26498,7 @@ function applySheetAddressTitle(backMode = "cart") {
 
   function showSheetCart() {
     cancelPendingCheckoutFlow();
+    if(document.body.classList.contains('page-kso'))refreshKsoBonusRecipient();
     clearCheckoutRouteHistoryState();
     document.body.classList.remove("shop-address-page-active", "shop-address-form-page-active");
     invalidateAddressSheetUiState();
@@ -27187,6 +27268,10 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function showSheetProduct(product, { cartKey, prefillItem, onBack, readOnly } = {}) {
+    if (document.body?.classList.contains("page-kso")) {
+      void openStandaloneProductPage(product, { cartKey, prefillItem, readOnly, onBack: typeof onBack === "function" ? onBack : showSheetCart, returnTarget: "cart" });
+      return;
+    }
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
@@ -27244,6 +27329,10 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function showSheetCombo(comboData, { cartKey, prefillItem, onBack } = {}) {
+    if (document.body?.classList.contains("page-kso")) {
+      openStandaloneComboPage(comboData, { cartKey, prefillItem, onBack: typeof onBack === "function" ? onBack : showSheetCart, returnTarget: "cart" });
+      return;
+    }
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
@@ -27956,6 +28045,7 @@ function renderSheetAddressList() {
 
   // events
   btn.addEventListener("click", async () => {
+    if(document.body.classList.contains('page-kso')){state.cartBonusRedeemEnabled=false;await showSheetCheckout();return;}
     const authorized = await requireAuthForCheckout({ isSheet: true });
     if (!authorized) return;
     await startCheckoutFlow({ isSheet: true, forceAddressRefresh: false });
@@ -28463,7 +28553,7 @@ function renderSheetAddressList() {
     }
   }
 
-  function buildLoginContent({ onSuccess }) {
+  function buildLoginContent({ onSuccess, onPhoneSave, initialPhone }) {
     const isKsoAuth = Boolean(document.body?.classList?.contains("page-kso"));
     const wrap = document.createElement("div");
     wrap.className = "shop-auth";
@@ -28471,7 +28561,7 @@ function renderSheetAddressList() {
 
     const note = document.createElement("div");
     note.className = "shop-auth-text muted";
-    note.textContent = "Введите телефон.";
+    note.textContent = typeof onPhoneSave === 'function' ? 'Укажите номер для начисления бонусов. Доступно только начисление.' : "Введите телефон.";
     wrap.appendChild(note);
 
     const form = document.createElement("div");
@@ -28492,6 +28582,11 @@ function renderSheetAddressList() {
     phone.setAttribute("data-lpignore", "true");
     phone.setAttribute("data-form-type", "other");
     phone.value = "+7";
+    if(typeof onPhoneSave === 'function'){
+      phone.value=initialPhone?formatPhonePlus7(initialPhone):'+7';
+      phone.readOnly=true;
+      phone.inputMode='none';
+    }
     phone.placeholder = "+7 (999) 999-99-99";
     form.appendChild(phoneLabel);
     form.appendChild(phone);
@@ -28500,7 +28595,7 @@ function renderSheetAddressList() {
     nextBtn.type = "button";
     nextBtn.className = "btn btn-primary";
     nextBtn.style.width = "100%";
-    nextBtn.textContent = "Продолжить";
+    nextBtn.textContent = typeof onPhoneSave === 'function' ? 'Сохранить' : "Продолжить";
     form.appendChild(nextBtn);
 
     const ksoKeypad = document.createElement("div");
@@ -28523,6 +28618,7 @@ function renderSheetAddressList() {
       ksoKeypad.appendChild(btn);
     });
     form.appendChild(ksoKeypad);
+    if(typeof onPhoneSave === 'function')form.appendChild(nextBtn);
 
     const maxLoginBtn = document.createElement("button");
     maxLoginBtn.type = "button";
@@ -28879,6 +28975,7 @@ function renderSheetAddressList() {
       }
       nextBtn.disabled = true;
       try {
+        if(typeof onPhoneSave === 'function'){await onPhoneSave(n);return;}
         if (isKsoAuth) {
           const json = await apiJson("/api/public/auth/kso-login", {
             method: "POST",
@@ -28918,6 +29015,7 @@ function renderSheetAddressList() {
         revealSecondStep({ needsNameInput });
       } catch (e) {
         const err = String(e && e.message ? e.message : "");
+        if(typeof onPhoneSave === 'function'){alert('Не удалось сохранить номер: '+err);return;}
         if (err === "MESSENGER_NOT_LINKED") alert("\u041d\u043e\u043c\u0435\u0440 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d, \u043d\u043e \u0431\u043e\u0442 \u043d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d");
         else alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0441\u0442\u0430\u0442\u0443\u0441 \u0432\u0445\u043e\u0434\u0430");
       } finally {
@@ -30349,6 +30447,7 @@ function renderSheetAddressList() {
   }
 
   async function startCheckoutFlow({ isSheet, forceAddressRefresh = true } = {}) {
+    if (document.body?.classList.contains("page-kso") && document.body.classList.contains("shop-cart-page-active")) isSheet = true;
     const runId = ++checkoutFlowRunId;
     try { void preloadCartEnhancers(); } catch {}
     Promise.resolve(queueCheckoutOpenPrewarm("start-checkout", {
@@ -40253,39 +40352,6 @@ function setBottomNavActive(tab) {
     const checkoutMainSection = document.createElement("section");
     checkoutMainSection.className = "shop-checkout-card-section shop-checkout-card-section--combined";
 
-    if (isKsoCheckout && me) {
-      const customerSection = createCheckoutCardSection("Клиент");
-      customerSection.root.classList.add("shop-checkout-card-subsection", "shop-checkout-customer-section");
-      const customerCard = document.createElement("div");
-      customerCard.className = "shop-checkout-customer-card";
-      const customerName = document.createElement("div");
-      customerName.className = "shop-checkout-customer-name";
-      customerName.textContent = hasCompletedCustomerName(me) ? str(me.name || "").trim() : "Клиент";
-      const customerPhone = document.createElement("div");
-      customerPhone.className = "shop-checkout-customer-phone";
-      customerPhone.textContent = me?.phone ? formatPhonePlus7(me.phone) : str(phone.value || "");
-      customerCard.appendChild(customerName);
-      customerCard.appendChild(customerPhone);
-      customerSection.root.appendChild(customerCard);
-      checkoutMainSection.appendChild(customerSection.root);
-    }
-
-    if (isKsoCheckout && typeof buildCartBonusRedeemSection === "function") {
-      const bonusRedeemSection = buildCartBonusRedeemSection();
-      if (bonusRedeemSection) {
-        bonusRedeemSection.classList.add("shop-checkout-card-subsection", "shop-checkout-kso-bonus-section");
-        checkoutMainSection.appendChild(bonusRedeemSection);
-        if (typeof bindCartBonusRedeemSection === "function") {
-          bindCartBonusRedeemSection(bonusRedeemSection);
-        }
-        if (typeof window.refreshShopCartBonusRedeemUi === "function") {
-          try {
-            window.refreshShopCartBonusRedeemUi();
-          } catch {}
-        }
-      }
-    }
-
     const timeSection = createCheckoutCardSection("Дата и время получения");
     timeSection.root.classList.add("shop-checkout-card-subsection");
     if (isKsoCheckout) timeSection.root.classList.add("hidden");
@@ -40875,9 +40941,9 @@ function setBottomNavActive(tab) {
 
     let currentPayableTotal = getPayableTotalForMethod(methodSelect.getValue());
 
-    const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
+    const payments = (cfg.payments || []).filter(x=>!isKsoCheckout||['cash','card'].includes(x.code)).map(x => ({ code: x.code, title: isKsoCheckout?(x.code==='cash'?'Наличные':'Картой'):x.title, icon: x.icon }));
     let onlineAvailable = false, onlineAvailabilitySequence = 0;
-    const payDefault = str(draft?.payment_code || "").trim();
+    const payDefault = isKsoCheckout ? '' : str(draft?.payment_code || "").trim();
     function getPaymentOptionIconElement(code, iconRaw) {
       const fallbackIcons = {
         cash: "fas fa-money-bill-wave",
@@ -40918,7 +40984,7 @@ function setBottomNavActive(tab) {
         icon: getPaymentOptionIconElement(payment.code, payment.icon),
         onClick: () => {
           if (payment.code === "online" && !onlineAvailable) return;
-          if (payment.code === "cash") {
+          if (payment.code === "cash" && !isKsoCheckout) {
             openCashChangeSelectionSheet();
             return;
           }
@@ -40989,9 +41055,11 @@ function setBottomNavActive(tab) {
 
     function syncPaymentCards() {
       const selectedCode = paySelect.getValue();
+      if(isKsoCheckout&&actions?.submitBtn)actions.submitBtn.disabled=!['cash','card'].includes(selectedCode);
       paymentCards.forEach((card, code) => {
         card.classList.toggle("is-active", code === selectedCode);
         card.setAttribute("aria-pressed", code === selectedCode ? "true" : "false");
+        if(isKsoCheckout){setCheckoutCardOptionContent(card,{title:code==='cash'?'Наличные':'Картой',value:'',meta:''});return;}
         if (code === "cash") {
           setCheckoutCardOptionContent(card, {
             title: card.dataset.baseTitle || "",
@@ -41769,6 +41837,7 @@ function setBottomNavActive(tab) {
     void refreshCheckoutDeliveryRulesInBackground({ reason: "checkout-open" });
 
     function getChangeFromValue() {
+      if(isKsoCheckout)return null;
       if (paySelect.getValue() !== "cash") return null;
       if (changeMode === "none") return null;
       if (changeMode === "custom") {
@@ -42294,8 +42363,9 @@ function setBottomNavActive(tab) {
               .filter(Boolean)
           : snapshotDiscountBreakdown;
       const payload = {
+        kso: isKsoCheckout,
         customer_name: null,
-        customer_phone: str(phone.value).trim(),
+        customer_phone: isKsoCheckout?(ksoBonusRecipient?.phone||null):str(phone.value).trim(),
         promo_code: normalizedPromoCode || null,
         selected_discount_id: normalizedSelectedDiscountId,
         selected_discount_source: normalizedSelectedDiscountSource,
@@ -42480,7 +42550,7 @@ function setBottomNavActive(tab) {
       const isAuthed = !!(getCustomerToken() && me);
       const requireClientData = isMethodClientDataRequired(payload.method_code);
 
-      if (!isAuthed) {
+      if (!isAuthed && !isKsoCheckout) {
         const authorized = await requireAuthForCheckout({ isSheet: !!isSheet });
         if (!authorized) return;
         return;

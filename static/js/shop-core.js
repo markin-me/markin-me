@@ -1066,6 +1066,7 @@
   }
 
   function refreshCartBonusSectionAfterConfigLoad(listEl = null, totalEl = null) {
+    if(document.body?.classList.contains('page-kso'))return;
     const targetList = listEl || openCartSheetCtx?.listEl || elCartList;
     const targetTotal = totalEl || openCartSheetCtx?.totalEl || elCartTotal;
     if (!targetList || !targetTotal) return;
@@ -1127,6 +1128,7 @@
   }
 
   function buildCartBonusRedeemSection({ emptyCart = false } = {}) {
+    if(document.body?.classList.contains('page-kso'))return null;
     const level = getCartBonusAccountLevel();
     if (!level) return buildCartBonusJoinSection();
     const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
@@ -13289,7 +13291,9 @@ async function initAddresses() {
         const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
         if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
           const targetCenterOffset = Math.max(0, (scroller.clientHeight / 2) - (scrollTarget.offsetHeight / 2) - 200);
-          const top = scrollTarget.offsetTop - Math.max(0, padTop || 0) - targetCenterOffset;
+          const top = document.body.classList.contains('page-kso')
+            ? scroller.scrollTop + header.getBoundingClientRect().top - scroller.getBoundingClientRect().top - scroller.clientTop
+            : scrollTarget.offsetTop - Math.max(0, padTop || 0) - targetCenterOffset;
           elProductsScroller.scrollTo({
             top: Math.max(0, top),
             behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
@@ -17073,6 +17077,17 @@ function removeFromCartByKey(cartKey, productId) {
 
   function ensureKsoFloatingCartButton() {
     if (!document.body || !document.body.classList.contains("page-kso")) return null;
+    if(!document.getElementById('shopKsoCategoriesBtn')){
+      const categoriesButton=document.createElement('button');categoriesButton.id='shopKsoCategoriesBtn';categoriesButton.type='button';categoriesButton.className='shop-kso-categories-btn';
+      categoriesButton.innerHTML='<i class="fas fa-th-large" aria-hidden="true"></i><span>Категории</span>';
+      categoriesButton.addEventListener('click',async()=>{
+        categoriesButton.disabled=true;
+        try{await ensureShopLateLoaded();window.openCategoriesSheet();}
+        catch(error){console.error(error);showToast('Не удалось открыть категории. Повторите попытку.');}
+        finally{categoriesButton.disabled=false;}
+      });
+      document.body.appendChild(categoriesButton);
+    }
     let wrap = document.getElementById("shopKsoFloatingCartWrap");
     if (!wrap) {
       wrap = document.createElement("div");
@@ -17098,26 +17113,25 @@ function removeFromCartByKey(cartKey, productId) {
       clearBtn.type = "button";
       clearBtn.id = "shopKsoFloatingCartClearBtn";
       clearBtn.className = "shop-kso-floating-cart-clear hidden";
-      clearBtn.innerHTML = '<i class="fas fa-trash-can" aria-hidden="true"></i>';
+      clearBtn.innerHTML = '<i class="fas fa-trash-can" aria-hidden="true"></i><span>Очистить корзину</span>';
       clearBtn.title = "Очистить корзину";
       clearBtn.setAttribute("aria-label", "Очистить корзину");
       wrap.appendChild(clearBtn);
-      if (typeof attachTwoStepClear === "function") {
-        attachTwoStepClear(clearBtn, async () => {
+      clearBtn.addEventListener('click', async () => {
+        const modal=document.getElementById('appModal');
+        const content=document.createElement('p');content.className='shop-kso-confirm-message';content.textContent='Очистить корзину?';
+        modal.classList.add('shop-kso-action-modal');
+        window.AppModal.open({title:'Очистить корзину?',content,cancelText:'Отмена',saveText:'Очистить',onClose:()=>modal.classList.remove('shop-kso-action-modal'),onSave:async()=>{
           const cleared = await clearCartAll();
-          if (cleared === false) return;
+          if (cleared === false) return false;
           if (typeof closeShopSheetIfOpen === "function") {
             closeShopSheetIfOpen();
           } else if (window.AppModal?.isOpen?.()) {
             window.AppModal.close("sheet");
           }
-        }, {
-          defaultHtml: '<i class="fas fa-trash-can" aria-hidden="true"></i>',
-          confirmText: "Очистить корзину?",
-          compactCheckout: false,
-          resetMs: 5000,
-        });
-      }
+          return true;
+        }});
+      });
     }
     let btn = document.getElementById("shopKsoFloatingCartBtn");
     if (!btn) {
@@ -17140,6 +17154,13 @@ function removeFromCartByKey(cartKey, productId) {
     const wrap = document.getElementById("shopKsoFloatingCartWrap");
     const homeBtn = document.getElementById("shopKsoFloatingCartHomeBtn");
     const clearBtn = document.getElementById("shopKsoFloatingCartClearBtn");
+    const cartPageActions = document.body.classList.contains("shop-cart-page-active")
+      ? document.querySelector("#shopCartPageHeaderContent")
+      : null;
+    const actionsHost = cartPageActions || wrap;
+    for (const button of [homeBtn, clearBtn]) {
+      if (button && actionsHost && button.parentElement !== actionsHost) actionsHost.appendChild(button);
+    }
     const items = cartItemsResolved();
     const total = computeCartTotals(items).total;
     const badge = btn.querySelector("#shopKsoFloatingCartBadge");
@@ -17147,9 +17168,9 @@ function removeFromCartByKey(cartKey, productId) {
       badge.textContent = money(total);
       badge.classList.toggle("hidden", total <= 0);
     }
-    const isCartOpen = !!window.AppModal?.isOpen?.()
+    const isCartOpen = document.body.classList.contains("shop-cart-page-active") || (!!window.AppModal?.isOpen?.()
       && !!openCartSheetCtx
-      && !!window.AppModal?.body?.classList?.contains("shop-cart-sheet-body");
+      && !!window.AppModal?.body?.classList?.contains("shop-cart-sheet-body"));
     const shouldShowCart = total > 0;
     const shouldShowClear = shouldShowCart && isCartOpen;
     btn.classList.toggle("hidden", !shouldShowCart);
@@ -17160,6 +17181,7 @@ function removeFromCartByKey(cartKey, productId) {
       clearBtn.classList.toggle("is-confirm", shouldShowClear && clearBtn.classList.contains("is-confirm"));
       if (!shouldShowClear && typeof clearBtn.reset === "function") clearBtn.reset();
     }
+    window.refreshKsoBonusRecipient?.();
   }
   window.syncKsoFloatingCartButton = syncKsoFloatingCartButton;
 
@@ -17472,6 +17494,7 @@ function updateCartBadge() {
       }
 
       state.cart = [];
+      if(document.body?.classList.contains('page-kso'))window.clearKsoBonusRecipient?.();
       clearAllAutoAddDismissed();
       applyAutoAddRules();
       saveCart();
@@ -19662,6 +19685,7 @@ function updateCartBadge() {
 
   function appendUpsellToList(listEl) {
     if (!listEl) return;
+    if (document.body?.classList.contains("page-kso")) return;
     var allProducts = state.upsellProducts || [];
     if (allProducts.length === 0) {
       var old = listEl.querySelector(".shop-cart-upsell") || (
