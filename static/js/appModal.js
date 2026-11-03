@@ -20,6 +20,7 @@
   let currentOnSecondarySave = null;
   let currentOnClose = null;
   let closeSeq = 0;
+  let dismissConfirmation = null;
 
   let lastActiveEl = null;
 
@@ -161,6 +162,7 @@
   }
 
   function close(reason) {
+    if(dismissConfirmation){dismissConfirmation(false);return;}
     if (!isOpen()) return;
 
     const closeToken = ++closeSeq;
@@ -274,7 +276,185 @@
     }
   });
 
+  let pendingConfirmation = null;
+  function confirm(options = {}) {
+    if (pendingConfirmation) return pendingConfirmation;
+    const profileSettings=Array.from(document.querySelectorAll('.shop-profile-settings-redesign')).find(element=>element.getClientRects().length);
+    if(profileSettings || options.appearance==='shop-warning'){
+      const activeEl=document.activeElement;
+      const profileHost=profileSettings?.closest('#shopProfileSettingsPage')||profileSettings||modal;
+      const underlying=(profileSettings
+        ?(isOpen()&&modal.contains(profileSettings)?Array.from(modal.children):[profileHost])
+        :Array.from(document.body.children)).map(element=>({element,inert:element.inert}));
+      const overlay=document.createElement('div');overlay.className='app-modal-confirmation';
+      const panel=document.createElement('section');panel.className='app-modal-confirmation-panel';
+      panel.setAttribute('role','alertdialog');panel.setAttribute('aria-modal','true');
+      panel.setAttribute('aria-labelledby','appModalConfirmationTitle');
+      panel.setAttribute('aria-describedby','appModalConfirmationMessage');
+      const heading=document.createElement('h2');heading.id='appModalConfirmationTitle';heading.textContent=options.title||'Подтверждение';
+      const message=document.createElement('p');message.id='appModalConfirmationMessage';message.textContent=options.message||'';
+      const actions=document.createElement('div');actions.className='app-modal-confirmation-actions';
+      const cancel=document.createElement('button');cancel.type='button';cancel.textContent=options.cancelText||'Отмена';
+      const accept=document.createElement('button');accept.type='button';accept.textContent=options.saveText||'Подтвердить';
+      if(options.showCancel!==false)actions.append(cancel);
+      actions.append(accept);panel.append(heading,message,actions);overlay.append(panel);
+      const choices=Array.isArray(options.choices)?options.choices:[];
+      let choiceBusy=false;
+      const choiceButtons=choices.map(choice=>{
+        const button=document.createElement('button');button.type='button';button.textContent=choice.label;button.disabled=Boolean(choice.disabled);
+        if(choice.icon){const icon=document.createElement('img');icon.src=choice.icon;icon.alt='';button.prepend(icon);}
+        button.onclick=async()=>{
+          if(choiceBusy)return;
+          if(typeof options.onChoice!=='function'){dismissConfirmation(choice.value);return;}
+          const previousRect=button.getBoundingClientRect();
+          const providers=button.parentElement;
+          if(options.keepChoiceOpen){
+            choiceButtons.forEach(item=>{item.hidden=item!==button;});
+            providers.classList.add('has-selected-provider');
+            if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+              const nextRect=button.getBoundingClientRect();
+              button.animate([{transform:`translateX(${previousRect.left-nextRect.left}px)`},{transform:'translateX(0)'}],{duration:250,easing:'cubic-bezier(.2,.8,.2,1)'});
+            }
+          }
+          choiceBusy=true;
+          choiceButtons.forEach(item=>{item.disabled=true;});cancel.disabled=true;
+          const originalContent=Array.from(button.childNodes);
+          button.classList.add('is-opening');button.setAttribute('aria-busy','true');
+          button.textContent=`Открываем ${choice.label}…`;
+          let providerReady=false;
+          try{
+            const result=await options.onChoice(choice.value);
+            providerReady=Boolean(result?.ready);
+            if(options.keepChoiceOpen){
+              button.replaceChildren(...originalContent);
+              if(result?.ready){
+                const icon=button.querySelector('img');
+                button.textContent=`Открыть ${choice.label}`;
+                if(icon)button.prepend(icon);
+              }
+              if(result?.message)message.textContent=result.message;
+            }
+          }finally{
+            choiceBusy=false;
+            if(options.keepChoiceOpen){
+              if(!providerReady){
+                providers.classList.remove('has-selected-provider');
+                choiceButtons.forEach(item=>{item.hidden=false;});
+              }
+              button.classList.remove('is-opening');button.removeAttribute('aria-busy');
+              if(!button.querySelector('img'))button.replaceChildren(...originalContent);
+              choiceButtons.forEach((item,index)=>{item.disabled=Boolean(choices[index].disabled);});cancel.disabled=false;
+            }else dismissConfirmation(choice.value);
+          }
+        };return button;
+      });
+      if(choiceButtons.length){
+        const providers=document.createElement('div');providers.className='app-modal-confirmation-choices';providers.append(...choiceButtons);
+        panel.insertBefore(providers,actions);accept.remove();
+      }
+      underlying.forEach(({element})=>{element.inert=true;});
+      overlay.style.zIndex=String(Math.max(Number(getComputedStyle(modal).zIndex)||0,Number(getComputedStyle(backdrop).zIndex)||0,Number(getComputedStyle(profileHost).zIndex)||0)+1);
+      document.body.append(overlay);
+      const onKey=event=>{
+        if(choiceBusy){if(event.key==='Escape'||event.key==='Tab'){event.preventDefault();event.stopImmediatePropagation();}return;}
+        if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();dismissConfirmation(false);}
+        else if(event.key==='Tab'){
+          event.preventDefault();event.stopImmediatePropagation();
+          const buttons=Array.from(panel.querySelectorAll('button:not(:disabled):not([hidden])'));
+          const index=buttons.indexOf(document.activeElement);
+          buttons[(index+(event.shiftKey?-1:1)+buttons.length)%buttons.length]?.focus();
+        }else if(!choiceButtons.length&&(event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();event.stopImmediatePropagation();dismissConfirmation(true);}
+      };
+      pendingConfirmation=new Promise(resolve=>{
+        dismissConfirmation=accepted=>{
+          if(choiceBusy)return;
+          document.removeEventListener('keydown',onKey,true);
+          overlay.remove();
+          underlying.forEach(({element,inert})=>{element.inert=inert;});
+          dismissConfirmation=null;pendingConfirmation=null;
+          activeEl?.focus?.({preventScroll:true});
+          resolve(accepted);
+        };
+        cancel.onclick=()=>dismissConfirmation(false);
+        accept.onclick=()=>dismissConfirmation(true);
+        overlay.onclick=event=>{if(event.target===overlay)dismissConfirmation(false);};
+      });
+      document.addEventListener('keydown',onKey,true);
+      (choiceButtons.find(button=>!button.disabled)||(options.showCancel===false?accept:cancel)).focus();
+      return pendingConfirmation;
+    }
+    const header = titleEl.closest('.app-modal-header');
+    const footer = btnSave.closest('.app-modal-footer');
+    const controls = [btnClose, btnCancel, btnSecondarySave, btnSave];
+    const saved = isOpen() ? {
+      nodes: Array.from(bodyEl.childNodes), headerNodes: Array.from(header.childNodes),
+      modalClass: modal.className, bodyClass: bodyEl.className, headerClass: header.className,
+      footerClass: footer.className, title: titleEl.textContent, titleClass: titleEl.className,
+      headerNotice: headerNotice.textContent, footerNotice: footerNotice.textContent,
+      onSave: currentOnSave, onSecondarySave: currentOnSecondarySave, onClose: currentOnClose,
+      options: currentOptions, lastActiveEl, activeEl: document.activeElement, scrollTop: bodyEl.scrollTop,
+      controls: controls.map(element => ({ className: element.className, text: element.innerHTML, disabled: element.disabled })),
+    } : null;
+    const message = document.createElement('div');
+    message.className = 'team-unsaved-message';
+    message.textContent = options.message || '';
+    let accepted = false;
+    pendingConfirmation = new Promise(resolve => {
+      if (saved) {
+        bodyEl.replaceChildren();
+        header.replaceChildren(...[headerNotice, titleEl, header.querySelector('.app-modal-actions')].filter(Boolean));
+      }
+      modal.className = 'app-modal team-unsaved-modal';
+      bodyEl.className = 'app-modal-body';
+      header.className = 'app-modal-header';
+      footer.classList.remove('hidden');
+      titleEl.classList.remove('hidden');
+      open({
+        title: options.title || 'Подтверждение', content: message,
+        cancelText: options.cancelText || 'Отмена', saveText: options.saveText || 'Подтвердить',
+        showCancel: options.showCancel !== false,
+        onSave: () => { accepted = true; },
+        onClose: () => {
+          if (saved) {
+            modal.className = saved.modalClass;
+            bodyEl.className = saved.bodyClass;
+            header.className = saved.headerClass;
+            footer.className = saved.footerClass;
+            header.replaceChildren(...saved.headerNodes);
+            bodyEl.replaceChildren(...saved.nodes);
+            titleEl.textContent = saved.title;
+            titleEl.className = saved.titleClass;
+            setHeaderNotice(saved.headerNotice);
+            setFooterNotice(saved.footerNotice);
+            controls.forEach((element, index) => {
+              element.className = saved.controls[index].className;
+              element.innerHTML = saved.controls[index].text;
+              element.disabled = saved.controls[index].disabled;
+            });
+            currentOnSave = saved.onSave;
+            currentOnSecondarySave = saved.onSecondarySave;
+            currentOnClose = saved.onClose;
+            currentOptions = saved.options;
+            lastActiveEl = saved.lastActiveEl;
+            backdrop.classList.add('is-active');
+            backdrop.setAttribute('aria-hidden', 'false');
+            modal.setAttribute('aria-hidden', 'false');
+            document.body.classList.add('modal-open');
+            saved.activeEl?.focus?.({ preventScroll: true });
+            bodyEl.scrollTop = saved.scrollTop;
+          } else {
+            modal.classList.remove('team-unsaved-modal');
+          }
+          pendingConfirmation = null;
+          resolve(accepted);
+        },
+      });
+    });
+    return pendingConfirmation;
+  }
+
   window.AppModal = {
+    confirm,
     open,
     close,
     setTitle,

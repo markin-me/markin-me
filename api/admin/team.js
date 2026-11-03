@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { getPermissionGrant, revokeUserStreams } = require('../middleware/auth');
 const employeeIdentity = require('../helpers/employeeIdentity');
+const { ensureEmployeeCustomer } = require('../helpers/employeeCustomer');
 
 const VALID_ACCESS_RULES = new Set(['all', 'stores', 'own', 'assigned']);
 const EMPLOYEE_STATUSES = new Set(['active', 'blocked', 'archived']);
@@ -597,6 +598,19 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     }
   });
 
+  router.get('/employee-customers', requirePermission('team.employees.read'), async (req, res) => {
+    try {
+      const [rows] = await db.query(
+        `SELECT employee_id, customer_id, conflict_code, phone_verified_at
+         FROM auth_employee_customer_links WHERE tenant_id=? ORDER BY employee_id`, [tenantId(req)]
+      );
+      return res.json({ ok: true, links: rows });
+    } catch (error) {
+      console.error('EMPLOYEE_CUSTOMER_LINKS_READ_FAILED:', error.code || error.name);
+      return teamError(res, 500, 'DB_ERROR');
+    }
+  });
+
   router.get('/users/:id', requireEmployeeRead, async (req, res) => {
     try {
       const users = await loadUsers(db, tenantId(req), Number(req.params.id));
@@ -821,6 +835,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       );
       const userId = Number(result.insertId);
       await replaceUserRelations(conn, currentTenantId, userId, roleIds, storeIds);
+      await ensureEmployeeCustomer(conn, currentTenantId, userId);
       await conn.commit();
       const users = await loadUsers(db, currentTenantId, userId);
       return res.status(201).json({ ok: true, user: users[0] });
@@ -961,6 +976,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         await replaceUserRelations(conn, currentTenantId, userId, roleIds, storeIds,
           Number(existing.is_owner) === 1 ? { protectedRoleIds: existing.owner_role_ids, replaceStores: !storesUnchanged } : {});
       }
+      await ensureEmployeeCustomer(conn, currentTenantId, userId);
       await conn.commit();
       const users = await loadUsers(db, currentTenantId, userId);
       return res.json({ ok: true, user: users[0] });

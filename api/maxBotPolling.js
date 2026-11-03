@@ -1,5 +1,6 @@
 const { confirmMaxLink, sendMaxMessage, getTenantMaxBotId } = require('./maxIntegration');
 const crypto = require('crypto');
+const { keepCurrentOperationPending, markCurrentOperation, recordCurrentServiceMessage } = require('./messengerCleanup');
 
 function normalizeUpdatesPayload(data) {
   if (!data) return [];
@@ -240,7 +241,7 @@ async function rememberPendingToken(db, tenantId, userId, token) {
       [tenantId, token, String(userId)]
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_MAX_PENDING_FAILED:', err.message || err);
+    console.error('AUTH_DUAL_WRITE_MAX_PENDING_FAILED:', err.code || err.name);
   }
 }
 
@@ -296,7 +297,7 @@ async function rememberPendingOrigin(db, tenantId, userId, origin) {
       [tId, tokenKey, normalized]
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_MAX_PENDING_ORIGIN_FAILED:', err.message || err);
+    console.error('AUTH_DUAL_WRITE_MAX_PENDING_ORIGIN_FAILED:', err.code || err.name);
   }
 }
 
@@ -330,7 +331,7 @@ async function cleanupPending(db) {
        WHERE provider='max' AND purpose='pending' AND expires_at <= NOW()`
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_MAX_PENDING_CLEANUP_FAILED:', err.message || err);
+    console.error('AUTH_DUAL_WRITE_MAX_PENDING_CLEANUP_FAILED:', err.code || err.name);
   }
 }
 
@@ -492,16 +493,12 @@ function buildFinishLoginUrl(siteUrl, loginToken, target, usePersistentToken = f
 
 async function issueOneTimeLoginToken(db, tenantId, customerId) {
   const token = makeOneTimeLoginToken();
-  try {
-    await db.query(
-      `INSERT INTO cust_customer_auth_tokens
-       (tenant_id, customer_id, provider, purpose, token, expires_at)
-       VALUES (?, ?, 'max', 'login', ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
-      [Number(tenantId), Number(customerId), token]
-    );
-  } catch (err) {
-    console.error('AUTH_DUAL_WRITE_MAX_LOGIN_TOKEN_FAILED:', err.message || err);
-  }
+  await db.query(
+    `INSERT INTO cust_customer_auth_tokens
+     (tenant_id, customer_id, provider, purpose, token, expires_at)
+     VALUES (?, ?, 'max', 'login', ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
+    [Number(tenantId), Number(customerId), token]
+  );
   return token;
 }
 
@@ -531,7 +528,7 @@ async function issuePersistentMaxLoginToken(db, tenantId, customerId, maxUserId)
       [tId, cId, token, providerUserId]
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_MAX_PERSISTENT_LOGIN_TOKEN_FAILED:', err.message || err);
+    console.error('AUTH_DUAL_WRITE_MAX_PERSISTENT_LOGIN_TOKEN_FAILED:', err.code || err.name);
   }
   return token;
 }
@@ -591,9 +588,9 @@ async function buildLoginMessage(db, tenantId, customerId, okText, originBaseUrl
     [Number(tenantId), Number(customerId)]
   );
   const providerUserId = String(customerRows[0]?.max_user_id || '').trim();
-  const loginToken = await issuePersistentMaxLoginToken(db, tenantId, Number(customerId), providerUserId);
-  const finishSiteUrl = buildFinishLoginUrl(links.siteUrl, loginToken, 'site', true);
-  const finishMiniAppUrl = buildFinishLoginUrl(links.siteUrl, loginToken, 'miniapp', true);
+  const loginToken = await issueOneTimeLoginToken(db, tenantId, Number(customerId));
+  const finishSiteUrl = buildFinishLoginUrl(links.siteUrl, loginToken, 'site', false);
+  const finishMiniAppUrl = buildFinishLoginUrl(links.siteUrl, loginToken, 'miniapp', false);
   const siteButtonUrl = toMaxInlineLinkUrl(finishSiteUrl);
   const miniAppButtonUrl = toMaxInlineLinkUrl(finishMiniAppUrl);
   const tenantBotId = await getTenantMaxBotId(db, Number(tenantId));
@@ -664,7 +661,7 @@ async function bindByPhoneDirect(db, helpers, tenantId, maxUserId, phone, sender
         [tId, customerId, uId, normalizedPhone]
       );
     } catch (err) {
-      console.error('AUTH_DUAL_WRITE_MAX_IDENTITY_FAILED:', err.message || err);
+      console.error('AUTH_DUAL_WRITE_MAX_IDENTITY_FAILED:', err.code || err.name);
     }
     return { ok: true, customerId, phone: normalizedPhone };
   }
@@ -700,7 +697,7 @@ async function bindByPhoneDirect(db, helpers, tenantId, maxUserId, phone, sender
       [tId, customerId, uId, normalizedPhone]
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_MAX_IDENTITY_FAILED:', err.message || err);
+    console.error('AUTH_DUAL_WRITE_MAX_IDENTITY_FAILED:', err.code || err.name);
   }
 
   return { ok: true, customerId, phone: normalizedPhone };
@@ -733,6 +730,202 @@ function isPlainStartCommand(text) {
     /^\/startapp(?:\s+)?$/i.test(t) ||
     /^\/link(?:\s+)?$/i.test(t)
   );
+}
+
+async function sendTenantMaxMessage(payload) {
+  const result = await sendMaxMessage({ ...payload, signal: AbortSignal.timeout(10000), requireMessageConfirmation:true });
+  if (result?.ok !== true) {
+    const error = new Error('MAX_DELIVERY_FAILED');
+    error.code = 'MAX_DELIVERY_FAILED';
+    throw error;
+  }
+  await recordCurrentServiceMessage({
+    provider: 'max',
+    chatId: result.data?.message?.recipient?.chat_id || result.data?.message?.recipient?.user_id || payload.maxUserId,
+    messageId: result.data?.message?.body?.mid,
+  });
+  return result;
+}
+
+async function answerTenantMaxCallback(token,callbackId,text){
+  const base=String(process.env.MAX_API_BASE_URL || 'https://platform-api2.max.ru').replace(/\/$/,'');
+  if(!base.startsWith('https://'))throw Object.assign(new Error('MAX_HTTPS_REQUIRED'),{code:'MAX_HTTPS_REQUIRED'});
+  const response=await fetch(`${base}/answers?callback_id=${encodeURIComponent(callbackId)}`,{method:'POST',headers:{Authorization:token,'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),body:JSON.stringify({message:{text}})});
+  const answer=await response.json().catch(()=>null);
+  if(!response.ok || answer?.success!==true)throw Object.assign(new Error('MAX_CALLBACK_FAILED'),{code:'MAX_CALLBACK_FAILED'});
+}
+
+async function sendTenantMaxProfileHint(db, tenantId, token, userId, send) {
+  keepCurrentOperationPending();
+  const links = await getTenantReturnLinks(db, tenantId);
+  const url = toMaxInlineLinkUrl(links.siteUrl);
+  await send({ db, tenantId, botToken: token, maxUserId: userId,
+    text: 'Нажмите «Войти через MAX» в исходной карточке магазина или CRM. При первой привязке передайте свой контакт; сотрудник затем один раз подтвердит логин и пароль в той же карточке. Подтвердите новый запрос кнопкой «Авторизоваться» в боте. Обычный Start сам по себе не предоставляет доступ.',
+    extraPayload: url && isMaxInlineLinkUrl(url)
+      ? { attachments: [{ type: 'inline_keyboard', payload: { buttons: [[{ type: 'link', text: 'Открыть сайт', url }]] } }] }
+      : undefined });
+}
+
+async function handleTenantMaxUpdate(db, helpers, { tenantId, token }, u, options = {}, send = sendTenantMaxMessage) {
+  if(u?.update_type==='message_callback' && /^auth:(?:b_[A-Za-z0-9_-]{40}|r_[A-Za-z0-9_-]{43})$/.test(String(u.callback?.payload)) && options.onBrowserAuth){
+    const uid=String(u.callback?.user?.user_id || '');
+    if(!uid || u.callback.user.is_bot)return;
+    const result=await options.onBrowserAuth({providerUserId:uid,token:u.callback.payload.slice(5),confirm:true});
+    await answerTenantMaxCallback(token,u.callback.callback_id,result.ok?'Подтверждение принято. Вернитесь в исходную вкладку для завершения входа.':'Запрос истёк или доступ не разрешён');
+    await send({db,tenantId,botToken:token,maxUserId:uid,text:result.ok?'Подтверждение принято. Вернитесь в исходную вкладку.'
+      :result.error==='EMPLOYEE_MESSENGER_NOT_LINKED'?'Вернитесь в исходную карточку и подтвердите логин и пароль, затем нажмите кнопку снова.'
+      :result.error==='CUSTOMER_OWNERSHIP_PROOF_REQUIRED'?'Карточка с этим номером уже существует. Нужны ранее подтверждённый мессенджер или помощь администратора. Совпадения номера и даты рождения для привязки недостаточно.'
+      :'Вход не подтверждён. Начните заново в исходном браузере.'});
+    return;
+  }
+  const parsed = parseUpdate(u);
+  if (options.loginEnabled === false) {
+    if (parsed.userId && (parsed.payload || isPlainStartCommand(parsed.text) || parsed.updateType === 'bot_started')) {
+      await markCurrentOperation('error');
+      const links = await getTenantReturnLinks(db, tenantId);
+      await send({ db, tenantId, botToken: token, maxUserId: parsed.userId,
+        text: 'Вход через бота отключён в настройках магазина.',
+        extraPayload: links.miniAppUrl ? { attachments: [{ type: 'inline_keyboard', payload: { buttons: [[{ type: 'link', text: 'Открыть мини-приложение', url: links.miniAppUrl }]] } }] } : undefined });
+    }
+    return;
+  }
+
+  const startToken = parsed.payload || extractStartAppToken(parsed.text);
+  if(parsed.hasContact && options.onBrowserContact){
+    const message=u?.message;
+    const contacts=(message?.body?.attachments || []).filter(a=>a.type==='contact');
+    const payload=contacts[0]?.payload;
+    const vcf=typeof payload?.vcf_info==='string'?payload.vcf_info.replace(/\\r\\n/g,'\r\n'):'';
+    const hash=String(payload?.hash || '');
+    const expected=crypto.createHmac('sha256',token).update(vcf).digest();
+    const received=/^[a-f0-9]{64}$/i.test(hash)?Buffer.from(hash,'hex'):/^[A-Za-z0-9+/]{43}=$/.test(hash)?Buffer.from(hash,'base64'):Buffer.alloc(0);
+    const phones=[...vcf.matchAll(/^TEL(?:;[^:\r\n]*)?:([^\r\n]+)$/gmi)];
+    const valid=contacts.length===1 && vcf.length<=10000 && received.length===32 && crypto.timingSafeEqual(expected,received)
+      && phones.length===1 && message?.sender?.user_id && !message.sender.is_bot
+      && payload.max_info?.user_id && String(payload.max_info.user_id)===String(message.sender.user_id)
+      && message.recipient?.chat_type==='dialog';
+    if(!valid){await markCurrentOperation('error');await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Контакт не подтверждён MAX. Используйте только кнопку «Поделиться контактом», не текст и не пересланную карточку.'});return;}
+    const result=await options.onBrowserContact({providerUserId:String(message.sender.user_id),phone:phones[0][1],name:[message.sender.first_name,message.sender.last_name].filter(Boolean).join(' ') || message.sender.name,avatarUrl:message.sender.full_avatar_url || message.sender.avatar_url});
+    if(result.context==='PROFILE_LINK'){
+      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok
+        ?result.guestConfirmed?'Номер телефона подтверждён! MAX подключён к вашему профилю. Теперь вам доступны бонусы и вход по коду.':'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
+        :result.error==='CONTACT_PHONE_MISMATCH'?'Не удалось привязать мессенджер, так как номер телефона не совпадает с учётной записью':'Не удалось привязать MAX. Начните привязку заново в профиле.'});return;
+    }
+    if(result.autoConfirmed){await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Номер телефона подтверждён. Вход в магазин будет завершён автоматически'});return;}
+    await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok
+      ? result.accountType==='employee'?'Контакт подтверждён. Введите логин и пароль в исходной карточке CRM, затем нажмите «Авторизоваться».':'Контакт подтверждён. Подтвердите начатый вами вход.'
+      :result.error==='CUSTOMER_RELINK_PROOF_REQUIRED'?'Для повторного подключения используйте прежний MAX-аккаунт. Если он недоступен, восстановите доступ через магазин.':result.error==='CONTACT_REQUEST_AMBIGUOUS'?'Открыто несколько запросов входа. Отмените лишние в исходных вкладках, затем отправьте контакт снова.':'Запрос отсутствует или истёк. Начните вход заново в исходной карточке.',extraPayload:result.ok?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'Авторизоваться',payload:`auth:${result.reference}`}]]}}]}:undefined});return;
+  }
+  if (startToken?.startsWith('l_') && parsed.userId && typeof options.onAuthLogin === 'function') {
+    const result = await options.onAuthLogin({ providerUserId: parsed.userId, token: startToken });
+    if (!result.ok || result.alreadySent) await send({ db, tenantId, botToken: token, maxUserId: parsed.userId,
+      text: result.alreadySent ? 'Код уже отправлен. Он действует 3 минуты. Для нового кода вернитесь на карточку входа.'
+        : result.error === 'CODE_DELIVERY_FAILED' ? 'Не удалось доставить код. Создайте новый запрос на карточке входа.'
+        : 'Запрос входа истёк или привязка не подтверждена. Вернитесь на карточку входа. Сотруднику нужно сначала войти с паролем и привязать MAX в профиле.' });
+    return;
+  }
+  if(startToken?.startsWith('b_') && parsed.userId && options.onBrowserAuth){
+    const result=await options.onBrowserAuth({providerUserId:parsed.userId,token:startToken,confirm:false});
+    if(result.ok&&result.contactRequired){
+      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Для первого входа передайте собственный номер системной кнопкой MAX.',extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Поделиться контактом'}]]}}]}});return;
+    }
+    await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok?'Подтвердите вход. Если вы его не начинали, не нажимайте кнопку.':'Запрос истёк. Начните заново в магазине.',
+      extraPayload:result.ok&&!result.confirmed?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'✅ Авторизоваться',payload:`auth:${startToken}`}]]}}]}:undefined});
+    return;
+  }
+  if (startToken?.startsWith('a_') && parsed.userId && typeof options.onAuthLink === 'function') {
+    const result = await options.onAuthLink({ provider: 'max', providerUserId: parsed.userId, token: startToken });
+    if(result?.contactRequired){
+      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Подтвердите собственный контакт для привязки MAX к вашему профилю.',extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Поделиться своим контактом'}]]}}]}});return;
+    }
+    await send({ db, tenantId, botToken: token, maxUserId: parsed.userId, text: result?.ok
+      ? result.context==='PROFILE_LINK'
+        ?'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
+        :'MAX успешно привязан. Вернитесь в CRM. При следующем входе подтвердите его кнопкой «Авторизоваться» в боте.'
+      : 'Ссылка недействительна или истекла. Получите новую в профиле.' });
+    return;
+  }
+  if (startToken && parsed.userId) {
+    let loginOrigin = '';
+    if (!isGenericLinkPayload(startToken)) {
+      loginOrigin = await readLoginOriginToken(db, tenantId, startToken);
+      if (loginOrigin) {
+        await rememberPendingOrigin(db, tenantId, parsed.userId, loginOrigin);
+      } else {
+        await rememberPendingToken(db, tenantId, parsed.userId, startToken);
+      }
+    }
+    const pendingOrigin = loginOrigin || await readPendingOrigin(db, tenantId, parsed.userId);
+    const knownCustomerId = await findKnownCustomerForAuth(
+      db,
+      helpers,
+      tenantId,
+      parsed.userId,
+      null
+    );
+    if (knownCustomerId) {
+      const loginMessage = await buildLoginMessage(
+        db,
+        tenantId,
+        knownCustomerId,
+        '\u041c\u044b \u0443\u0437\u043d\u0430\u043b\u0438 \u0432\u0430\u0448 \u0430\u043a\u043a\u0430\u0443\u043d\u0442. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435, \u043a\u0443\u0434\u0430 \u043f\u0435\u0440\u0435\u0439\u0442\u0438:',
+        pendingOrigin
+      );
+      await send({
+        db,
+        tenantId,
+        botToken: token,
+        maxUserId: parsed.userId,
+        text: loginMessage.text,
+        extraPayload: loginMessage.extraPayload || undefined,
+      });
+      return;
+    }
+    await sendTenantMaxProfileHint(db, tenantId, token, parsed.userId, send);
+    return;
+  }
+
+  if ((isPlainStartCommand(parsed.text) || parsed.updateType === 'bot_started') && parsed.userId) {
+    const pendingOrigin = await readPendingOrigin(db, tenantId, parsed.userId);
+    const knownCustomerId = await findKnownCustomerForAuth(
+      db,
+      helpers,
+      tenantId,
+      parsed.userId,
+      null
+    );
+    if (knownCustomerId) {
+      const loginMessage = await buildLoginMessage(
+        db,
+        tenantId,
+        knownCustomerId,
+        '\u041c\u044b \u0443\u0437\u043d\u0430\u043b\u0438 \u0432\u0430\u0448 \u0430\u043a\u043a\u0430\u0443\u043d\u0442. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435, \u043a\u0443\u0434\u0430 \u043f\u0435\u0440\u0435\u0439\u0442\u0438:',
+        pendingOrigin
+      );
+      await send({
+        db,
+        tenantId,
+        botToken: token,
+        maxUserId: parsed.userId,
+        text: loginMessage.text,
+        extraPayload: loginMessage.extraPayload || undefined,
+      });
+      return;
+    }
+    await sendTenantMaxProfileHint(db, tenantId, token, parsed.userId, send);
+    return;
+  }
+
+  if (parsed.userId && (parsed.phone || parsed.hasContact)) {
+    const knownId = await findKnownCustomerForAuth(db, helpers, tenantId, parsed.userId, null);
+    if (knownId) {
+      const message = await buildLoginMessage(db, tenantId, knownId, 'Выберите, куда перейти:');
+      await send({ db, tenantId, botToken: token, maxUserId: parsed.userId, text: message.text, extraPayload: message.extraPayload });
+    } else {
+      await send({ db, tenantId, botToken: token, maxUserId: parsed.userId,
+        text: 'Для безопасной привязки войдите на сайт магазина и откройте настройки профиля. Номер телефона сам по себе не привязывает аккаунт.' });
+    }
+  }
 }
 
 function startMaxPolling(db, helpers) {
@@ -868,193 +1061,12 @@ function startMaxPolling(db, helpers) {
       for (const u of updates) {
         const eventKey = makeEventDedupKey(u);
         if (!rememberIfNewEvent(token, eventKey)) continue;
-        const parsed = parseUpdate(u);
-
-        const startToken = parsed.payload || extractStartAppToken(parsed.text);
-        if (startToken && parsed.userId) {
-          let loginOrigin = '';
-          if (!isGenericLinkPayload(startToken)) {
-            loginOrigin = await readLoginOriginToken(db, tenantId, startToken);
-            if (loginOrigin) {
-              await rememberPendingOrigin(db, tenantId, parsed.userId, loginOrigin);
-            } else {
-              await rememberPendingToken(db, tenantId, parsed.userId, startToken);
-            }
-          }
-          const pendingOrigin = loginOrigin || await readPendingOrigin(db, tenantId, parsed.userId);
-          const knownCustomerId = await findKnownCustomerForAuth(
-            db,
-            helpers,
-            tenantId,
-            parsed.userId,
-            parsed.phone
-          );
-          if (knownCustomerId) {
-            const loginMessage = await buildLoginMessage(
-              db,
-              tenantId,
-              knownCustomerId,
-              '\u041c\u044b \u0443\u0437\u043d\u0430\u043b\u0438 \u0432\u0430\u0448 \u0430\u043a\u043a\u0430\u0443\u043d\u0442. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435, \u043a\u0443\u0434\u0430 \u043f\u0435\u0440\u0435\u0439\u0442\u0438:',
-              pendingOrigin
-            );
-            await sendMaxMessageSafe({
-              db,
-              tenantId,
-              botToken: token,
-              maxUserId: parsed.userId,
-              text: loginMessage.text,
-              extraPayload: loginMessage.extraPayload || undefined,
-            });
-            continue;
-          }
-          const contactButtonAttachment = {
-            attachments: [
-              {
-                type: 'inline_keyboard',
-                payload: {
-                  buttons: [
-                    [{ type: 'request_contact', text: '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430' }],
-                  ],
-                },
-              },
-            ],
-          };
-          try {
-            await sendMaxMessageSafe({
-              db,
-              tenantId,
-              botToken: token,
-              maxUserId: parsed.userId,
-              text: '\u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443 \u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430 \u0434\u043b\u044f \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u044f \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438.',
-              extraPayload: contactButtonAttachment,
-            });
-          } catch {
-            await sendMaxMessageSafe({
-              db,
-              tenantId,
-              botToken: token,
-              maxUserId: parsed.userId,
-              text: '\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\u043c \u0434\u043b\u044f \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u044f \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438.',
-            });
-          }
-          continue;
-        }
-
-        if (isPlainStartCommand(parsed.text) && parsed.userId) {
-          const pendingOrigin = await readPendingOrigin(db, tenantId, parsed.userId);
-          const knownCustomerId = await findKnownCustomerForAuth(
-            db,
-            helpers,
-            tenantId,
-            parsed.userId,
-            parsed.phone
-          );
-          if (knownCustomerId) {
-            const loginMessage = await buildLoginMessage(
-              db,
-              tenantId,
-              knownCustomerId,
-              '\u041c\u044b \u0443\u0437\u043d\u0430\u043b\u0438 \u0432\u0430\u0448 \u0430\u043a\u043a\u0430\u0443\u043d\u0442. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435, \u043a\u0443\u0434\u0430 \u043f\u0435\u0440\u0435\u0439\u0442\u0438:',
-              pendingOrigin
-            );
-            await sendMaxMessageSafe({
-              db,
-              tenantId,
-              botToken: token,
-              maxUserId: parsed.userId,
-              text: loginMessage.text,
-              extraPayload: loginMessage.extraPayload || undefined,
-            });
-            continue;
-          }
-          await sendMaxMessageSafe({
-            db,
-            tenantId,
-            botToken: token,
-            maxUserId: parsed.userId,
-            text: '\u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443 \u043d\u0438\u0436\u0435 \u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430. \u0415\u0441\u043b\u0438 \u043d\u0443\u0436\u043d\u043e \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0443, \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0443 /link.',
-            extraPayload: {
-              attachments: [
-                {
-                  type: 'inline_keyboard',
-                  payload: {
-                    buttons: [
-                      [{ type: 'request_contact', text: '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430' }],
-                    ],
-                  },
-                },
-              ],
-            },
-          });
-          continue;
-        }
-
-        if (parsed.userId && (parsed.phone || parsed.hasContact)) {
-          const pendingToken = await readPendingToken(db, tenantId, parsed.userId);
-          let result = null;
-
-          if (pendingToken && !isGenericLinkPayload(pendingToken)) {
-            // Link token can complete binding even if MAX did not provide the phone explicitly.
-            result = await confirmMaxLink({
-              db,
-              helpers,
-              token: pendingToken,
-              maxUserId: parsed.userId,
-              phone: parsed.phone,
-            });
-            // In "Login via MAX" flow payload can be generic (e.g. "link").
-            // In this case confirmMaxLink can return TOKEN_INVALID_OR_EXPIRED.
-            // Then fallback to phone-based binding if phone is present.
-            if (!result?.ok && parsed.phone && String(result?.error || '') === 'TOKEN_INVALID_OR_EXPIRED') {
-              result = await bindByPhoneDirect(db, helpers, tenantId, parsed.userId, parsed.phone, parsed.senderName);
-            }
-          } else if (parsed.phone) {
-            result = await bindByPhoneDirect(db, helpers, tenantId, parsed.userId, parsed.phone, parsed.senderName);
-          } else {
-            result = { ok: false, error: 'PHONE_NOT_PROVIDED' };
-          }
-
-          let text = result.ok
-            ? 'MAX \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d \u043a \u0432\u0430\u0448\u0435\u043c\u0443 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0443.'
-            : (result.error === 'PHONE_NOT_PROVIDED'
-              ? '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u043d\u043e\u043c\u0435\u0440. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c MAX" \u043d\u0430 \u0441\u0430\u0439\u0442\u0435 \u0438 \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435.'
-              : '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0443. \u0421\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u0439\u0442\u0435 \u043d\u043e\u0432\u0443\u044e \u0441\u0441\u044b\u043b\u043a\u0443 \u043d\u0430 \u0441\u0430\u0439\u0442\u0435.');
-
-          if (!result.ok && String(result.error || '') === 'PHONE_NOT_PROVIDED') {
-            try {
-              const dump = JSON.stringify(parsed.raw || {}).slice(0, 2000);
-              console.warn(`MAX contact without phone (tenant ${tenantId}, user ${parsed.userId}): ${dump}`);
-            } catch {}
-          }
-
-          let extraPayload = null;
-          if (result.ok) {
-            const pendingOrigin = await readPendingOrigin(db, tenantId, parsed.userId);
-            const loginMessage = await buildLoginMessage(
-              db,
-              tenantId,
-              Number(result.customerId),
-              text,
-              pendingOrigin
-            );
-            text = loginMessage.text;
-            extraPayload = loginMessage.extraPayload || null;
-          }
-
-          await sendMaxMessageSafe({
-            db,
-            tenantId,
-            botToken: token,
-            maxUserId: parsed.userId,
-            text,
-            extraPayload: extraPayload || undefined,
-          });
-        }
+        await handleTenantMaxUpdate(db, helpers, { tenantId, token }, u, {}, sendMaxMessageSafe);
       }
 
       if (marker) markersByToken.set(token, marker);
     } catch (err) {
-      console.error(`MAX polling error (tenant ${tenantId}):`, err.message || err);
+      console.error(`MAX polling error (tenant ${tenantId}):`, err.code || err.name);
     }
   }
 
@@ -1079,7 +1091,7 @@ function startMaxPolling(db, helpers) {
       }
       await cleanupPending(db);
     } catch (err) {
-      console.error('MAX polling loop error:', err.message || err);
+      console.error('MAX polling loop error:', err.code || err.name);
     } finally {
       pollBusy = false;
     }
@@ -1100,4 +1112,4 @@ function startMaxPolling(db, helpers) {
   };
 }
 
-module.exports = { startMaxPolling };
+module.exports = { startMaxPolling, handleTenantMaxUpdate };

@@ -1,4 +1,15 @@
 (() => {
+  async function initCustomerAuthSettings(){
+    const panel=document.getElementById('customerAuthSettings'),notice=document.getElementById('customerAuthNotice');if(!panel)return;
+    const request=async options=>{const response=await authFetch('/api/admin/tenant/customer-auth',options);const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'REQUEST_FAILED');return data;};
+    const render=data=>{for(const key of ['birthday','tg','max'])panel.querySelector(`[data-customer-auth="${key}"]`).checked=data.settings[key];};
+    try{const data=await request();render(data);panel.disabled=!data.can_update;notice.textContent='Настройки не изменяют способы входа сотрудников.';}catch(error){notice.textContent='Не удалось загрузить настройки авторизации.';return;}
+    document.getElementById('customerAuthSave').addEventListener('click',async()=>{
+      const body={};for(const key of ['birthday','tg','max'])body[key]=panel.querySelector(`[data-customer-auth="${key}"]`).checked;
+      panel.disabled=true;notice.textContent='Сохраняем…';
+      try{render(await request({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));notice.textContent='Сохранено. Настройки сотрудников не изменены.';}catch(error){notice.textContent='Не удалось сохранить настройки.';}finally{panel.disabled=false;}
+    });
+  }
   function initCorporateLoginSuffix() {
     const input = document.getElementById('corporateLoginSuffix');
     const generate = document.getElementById('corporateLoginSuffixGenerate');
@@ -6271,6 +6282,7 @@
 
   document.addEventListener("DOMContentLoaded", async () => {
     initCorporateLoginSuffix();
+    void initCustomerAuthSettings();
 
 
 

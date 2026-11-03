@@ -25,6 +25,7 @@
     return 1;
   }
   const tenantId = getTenantId();
+  let orderSearchQuery='';
   const appVersion = String(window.__APP_VERSION__ || document.body?.dataset?.appVersion || "")
     .trim()
     .replace(/[^a-z0-9._-]+/gi, "_") || "dev";
@@ -6146,6 +6147,7 @@
   // Orders list
   // -----------------------------
   function orderMatchesDateRange(order) {
+    if(orderSearchQuery)return true;
     if (!order) return false;
 
     if (state.date.start && state.date.end) {
@@ -6171,6 +6173,11 @@
 
   function orderMatchesFilters(order) {
     if (!shouldKeepOrderInState(order)) return false;
+    if(orderSearchQuery){
+      const rawDigits=orderSearchQuery.replace(/\D/g,'');
+      const digits=rawDigits.length===11&&rawDigits.startsWith('8')?'7'+rawDigits.slice(1):rawDigits;
+      if(String(order.id)!==orderSearchQuery&&(!digits||![order.customer_phone,order.owner_phone].some(phone=>String(phone||'').replace(/\D/g,'').includes(digits))))return false;
+    }
 
     if (isCourierWorkspace) {
       const bucketId = getCourierBucketId(order);
@@ -6182,7 +6189,7 @@
       return false;
     }
 
-    if (state.date.start && state.date.end) {
+    if (!orderSearchQuery && state.date.start && state.date.end) {
       // Use scheduled_at if available, otherwise fall back to created_at
       const dateStr = order.scheduled_at || order.created_at;
       // Время в базе уже в timezone филиала
@@ -6694,6 +6701,49 @@
   }
 
   let ordersQueryGeneration = 0;
+  const ordersSearchForm = document.getElementById('ordersPhoneSearch');
+  const ordersSearchInput = document.getElementById('ordersPhoneSearchInput');
+  const ordersSearchToggle = document.getElementById('ordersSearchToggle');
+  let ordersSearchTimer;
+  function closeOrdersSearch() {
+    clearTimeout(ordersSearchTimer);
+    ordersSearchForm?.classList.remove('is-open');
+    ordersSearchToggle?.setAttribute('aria-expanded', 'false');
+    if (ordersSearchInput) {
+      ordersSearchInput.value = '';
+      ordersSearchInput.tabIndex = -1;
+    }
+    ordersSearchToggle?.focus();
+    if (orderSearchQuery) ordersSearchForm?.requestSubmit();
+  }
+  ordersSearchToggle?.addEventListener('click', () => {
+    if (ordersSearchForm.classList.contains('is-open')) return closeOrdersSearch();
+    ordersSearchForm.classList.add('is-open');
+    ordersSearchToggle.setAttribute('aria-expanded', 'true');
+    ordersSearchInput.tabIndex = 0;
+    ordersSearchInput.focus();
+  });
+  ordersSearchInput?.addEventListener('input', () => {
+    clearTimeout(ordersSearchTimer);
+    ordersSearchTimer = setTimeout(() => ordersSearchForm.requestSubmit(), 300);
+  });
+  ordersSearchInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeOrdersSearch();
+    }
+  });
+  ordersSearchForm?.addEventListener('submit',async(event)=>{
+    event.preventDefault();
+    clearTimeout(ordersSearchTimer);
+    if (orderSearchQuery === String(ordersSearchInput?.value || '').trim()) return;
+    orderSearchQuery=String(document.getElementById('ordersPhoneSearchInput')?.value||'').trim();
+    ordersPersistentCacheRestored=false;
+    state.orders=[];state.activeOrderId=null;state.activeStatusId='all';
+    updateDateLabel();renderStages();
+    try{await loadOrders();renderOrders();renderOrderTabs();setInfo(null);}
+    catch(error){console.error('ORDER_PHONE_SEARCH_FAILED',error);window.alert('Не удалось найти заказы. Повторите поиск.');}
+  });
 
   async function loadOrders({ resetPagination = true, append = false, context = null } = {}) {
     const queryGeneration = resetPagination ? ++ordersQueryGeneration : ordersQueryGeneration;
@@ -6702,7 +6752,8 @@
       state.ordersPagination = { hasMore: false, nextOffset: 0, loading: false };
     }
     const qs = new URLSearchParams();
-    if (state.date.start && state.date.end) {
+    if(orderSearchQuery)qs.set('q',orderSearchQuery);
+    if (!orderSearchQuery && state.date.start && state.date.end) {
       qs.set("start_date", toDateKey(state.date.start));
       qs.set("end_date", toDateKey(state.date.end));
     }
@@ -6823,7 +6874,7 @@
   }
 
   function updateDateLabel() {
-    if (dateLabel) dateLabel.textContent = formatDateLabel(state.date.start, state.date.end);
+    if (dateLabel) dateLabel.textContent = orderSearchQuery?'Все даты · поиск':formatDateLabel(state.date.start, state.date.end);
   }
 
   function applyDateFilter(closePopover = true) {

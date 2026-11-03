@@ -553,6 +553,14 @@
 
       <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSitePanel">
         <div class="settings-site-form settings-panel-scroll">
+          <fieldset class="settings-site-field" id="customerAuthSettings" disabled>
+            <legend class="field-label">АВТОРИЗАЦИЯ ПОКУПАТЕЛЕЙ</legend>
+            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="birthday" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Переходный вход по дате рождения</span></label>
+            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="tg" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Telegram для покупателей</span></label>
+            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="max" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">MAX для покупателей</span></label>
+            <button class="btn btn-primary" type="button" id="customerAuthSave">Сохранить авторизацию</button>
+          </fieldset>
+          <div class="muted" role="status" id="customerAuthNotice"></div>
           <div class="settings-site-field">
             <label class="field-label">НАЗВАНИЕ САЙТА</label>
             <div class="site-name-row">
@@ -623,7 +631,7 @@
           <div class="settings-site-field">
             <label class="field-label">ТОКЕН БОТА</label>
             <div class="control-with-action">
-              <input class="control" type="text" id="tenantTelegramBotToken" placeholder="123456:ABC-DEF..." autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              <input class="control" type="password" id="tenantTelegramBotToken" placeholder="123456:ABC-DEF..." autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
               <button class="control-inline-btn" type="button" id="tenantTelegramBotTokenCopyBtn" title="Скопировать">
                 <i class="fas fa-copy"></i>
               </button>
@@ -695,7 +703,7 @@
           <div class="settings-site-field">
             <label class="field-label">ТОКЕН БОТА MAX</label>
             <div class="control-with-action">
-              <input class="control" type="text" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              <input class="control" type="password" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
               <button class="control-inline-btn" type="button" id="tenantMaxBotTokenCopyBtn" title="Скопировать">
                 <i class="fas fa-copy"></i>
               </button>

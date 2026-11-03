@@ -130,7 +130,10 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
         };
         try {
           const token = String(message.customer_token || "").trim();
-          if (token && !(await authenticateCustomer(room.tenantId, token))) {
+          const authenticated = !token || (token.startsWith('g_')
+            ? await require('../api/helpers/customerAuth').getGuest(db,room.tenantId,token,false,room.storeId)
+            : await authenticateCustomer(room.tenantId, token));
+          if (!authenticated) {
             response.status(401).json({ ok: false, error: "UNAUTHORIZED" }); return;
           }
           await submitOrder({

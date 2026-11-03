@@ -8,7 +8,11 @@ const localtunnel = require('localtunnel');
 
 const DEFAULT_PORT = 3000;
 const paymentWebhookMode=process.argv.includes('--payment-webhook');
-const stateFilePath = path.resolve(__dirname, '..', 'tmp', paymentWebhookMode?'dev-payment-webhook-tunnel.json':'dev-pwa-tunnel.json');
+const telegramWebhookMode=process.argv.includes('--telegram-webhook');
+const maxWebhookMode=process.argv.includes('--max-webhook');
+const messengerWebhookMode=telegramWebhookMode || maxWebhookMode;
+const restrictedWebhookMode=paymentWebhookMode || messengerWebhookMode;
+const stateFilePath = path.resolve(__dirname, '..', 'tmp', maxWebhookMode?'dev-max-webhook-tunnel.json':telegramWebhookMode?'dev-telegram-webhook-tunnel.json':paymentWebhookMode?'dev-payment-webhook-tunnel.json':'dev-pwa-tunnel.json');
 const cloudflaredDirPath = path.resolve(__dirname, '..', 'tmp', 'cloudflared');
 const cloudflaredBinaryPath = path.join(cloudflaredDirPath, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
 const cloudflaredDownloadUrl = process.platform === 'win32' && process.arch === 'x64'
@@ -187,13 +191,13 @@ async function startCloudflaredTunnel({ port, localHost }) {
   const binaryPath = await ensureCloudflaredBinary();
   const localUrl = `http://${localHost}:${port}`;
   const args = ['tunnel', '--url', localUrl, '--no-autoupdate'];
-  if(paymentWebhookMode)args.push('--protocol','http2');
+  if(restrictedWebhookMode)args.push('--protocol','http2');
   const child = spawn(binaryPath, args, {
     cwd: path.dirname(binaryPath),
-    ...(paymentWebhookMode?{windowsHide:true}:{}),
+    ...(restrictedWebhookMode?{windowsHide:true}:{}),
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  if(paymentWebhookMode)activeTunnel={child,close(){child.kill();}};
+  if(restrictedWebhookMode)activeTunnel={child,close(){child.kill();}};
 
   let resolved = false;
   const urlPattern = /(https:\/\/[-a-z0-9.]+trycloudflare\.com)/i;
@@ -312,7 +316,7 @@ async function startLocaltunnelTunnel({ port, localHost }) {
 
 async function startPreferredTunnel({ provider, port, localHost }) {
   // The payment route must never fall back to a provider with different IP forwarding semantics.
-  if(paymentWebhookMode)return startCloudflaredTunnel({port,localHost});
+  if(restrictedWebhookMode)return startCloudflaredTunnel({port,localHost});
   if (provider === 'localtunnel') {
     return startLocaltunnelTunnel({ port, localHost });
   }
@@ -326,16 +330,38 @@ async function startPreferredTunnel({ provider, port, localHost }) {
 }
 
 async function main() {
-  if(paymentWebhookMode){
-    const serviceEnv=require('dotenv').parse(fs.readFileSync(path.resolve(__dirname,'../services/payment-service/.env')));
-    if(serviceEnv.PAYMENT_CHECKOUT_ENVIRONMENT!=='test' || serviceEnv.PAYMENT_WEBHOOKS_ENABLED!=='1')
+  if([paymentWebhookMode,telegramWebhookMode,maxWebhookMode].filter(Boolean).length>1)throw new Error('Choose one webhook mode.');
+  if(restrictedWebhookMode){
+    const serviceEnv=require('dotenv').parse(fs.readFileSync(path.resolve(__dirname,messengerWebhookMode?'../.env':'../services/payment-service/.env')));
+    if(paymentWebhookMode && (serviceEnv.PAYMENT_CHECKOUT_ENVIRONMENT!=='test' || serviceEnv.PAYMENT_WEBHOOKS_ENABLED!=='1'))
       throw new Error('Payment webhook tunnel requires enabled webhooks and test environment.');
-    const servicePort=Number(serviceEnv.PAYMENT_SERVICE_PORT || 3500);
-    const proxyPort=Number(readArgValue('--port') || 3501);
+    let verifyTelegramSecret;
+    const tenantId=Number(readArgValue('--tenant') || 1);
+    if(messengerWebhookMode){
+      if(serviceEnv.DB_NAME!=='a1186497_test' || !Number.isSafeInteger(tenantId) || tenantId<=0)
+        throw new Error('Telegram tunnel requires explicit test DB and a valid tenant.');
+      for(const key of ['AUTH_WEBHOOK_SECRET','AUTH_CODE_PEPPER','JWT_SECRET']){
+        if(process.env[key]===undefined && serviceEnv[key]!==undefined)process.env[key]=serviceEnv[key];
+      }
+      const {getTenantWebhookSecret,verifyTenantWebhookSecret}=require('../api/messengerDelivery');
+      const scope={tenantId,provider:'tg'};
+      if(maxWebhookMode){
+        const pool=require('mysql2/promise').createPool({host:serviceEnv.DB_HOST,user:serviceEnv.DB_USER,password:serviceEnv.DB_PASSWORD,database:serviceEnv.DB_NAME,port:Number(serviceEnv.DB_PORT||3306),connectionLimit:1});
+        try{Object.assign(scope,await require('../api/messengerDelivery').getTenantBotConfig(pool,tenantId,'max'));}finally{await pool.end();}
+      }
+      getTenantWebhookSecret(scope); // Fail closed before opening a listener or a public tunnel.
+      verifyTelegramSecret=value=>verifyTenantWebhookSecret(scope,value);
+    }
+    const route=messengerWebhookMode?`/api/${maxWebhookMode?'max':'telegram'}/webhook/${tenantId}`:'/webhooks/yookassa';
+    const secretHeader=maxWebhookMode?'x-max-bot-api-secret':'x-telegram-bot-api-secret-token';
+    const servicePort=Number(messengerWebhookMode?(readArgValue('--service-port') || 3107):(serviceEnv.PAYMENT_SERVICE_PORT || 3500));
+    const proxyPort=Number(readArgValue('--port') || (maxWebhookMode?3509:telegramWebhookMode?3507:3501));
     if(!Number.isInteger(servicePort) || servicePort<1 || servicePort>65535 || !Number.isInteger(proxyPort)
-      || proxyPort<1 || proxyPort>65535 || proxyPort===3000 || proxyPort===servicePort)throw new Error('Invalid webhook ports.');
+      || proxyPort<1 || proxyPort>65535 || proxyPort===3000 || proxyPort===servicePort
+      || (messengerWebhookMode && servicePort!==3107))throw new Error('Invalid webhook ports.');
     webhookProxy=http.createServer((req,res)=>{
-      if(req.method!=='POST' || req.url!=='/webhooks/yookassa'){res.writeHead(404);return res.end();}
+      if(req.method!=='POST' || req.url!==route){res.writeHead(404);return res.end();}
+      if(messengerWebhookMode && !verifyTelegramSecret(req.headers[secretHeader])){res.writeHead(401);return res.end();}
       const source=req.headers['cf-connecting-ip'];
       if(typeof source!=='string' || !isIP(source)){res.writeHead(403);return res.end();}
       if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')){res.writeHead(415);return res.end();}
@@ -344,8 +370,9 @@ async function main() {
       req.on('error',()=>{if(!res.headersSent){res.writeHead(400);res.end();}});
       req.on('end',()=>{
         if(oversized || req.aborted)return;
-        const upstream=http.request({hostname:'127.0.0.1',port:servicePort,path:'/webhooks/yookassa',method:'POST',
-          timeout:10000,headers:{'content-type':'application/json','content-length':size,'x-forwarded-for':source}},response=>{
+        const upstream=http.request({hostname:'127.0.0.1',port:servicePort,path:route,method:'POST',
+          timeout:10000,headers:{'content-type':'application/json','content-length':size,'x-forwarded-for':source,
+            ...(messengerWebhookMode?{'x-forwarded-proto':'https',[secretHeader]:req.headers[secretHeader]}:{}),}},response=>{
           res.writeHead(response.statusCode,{'content-type':'application/json','cache-control':'no-store'});response.pipe(res);
           response.on('error',()=>res.destroy());
         });
@@ -359,8 +386,8 @@ async function main() {
     webhookProxy.on('error',()=>void shutdown(1));
     const tunnel=await startPreferredTunnel({provider:'cloudflared',port:proxyPort,localHost:'127.0.0.1'});
     writeStateFile(tunnel);
-    console.log(`[payment-webhook-tunnel] URL: ${tunnel.public_url}/webhooks/yookassa`);
-    console.log('[payment-webhook-tunnel] Only POST /webhooks/yookassa is public. Keep this process running; Ctrl+C stops it.');
+    console.log(`[webhook-tunnel] URL: ${tunnel.public_url}${route}`);
+    console.log(`[webhook-tunnel] Only POST ${route} is public. Keep this process running; Ctrl+C stops it.`);
     await waitForever();return;
   }
   const port = resolvePort();
@@ -400,7 +427,7 @@ process.on('unhandledRejection', (error) => {
 
 main().catch((error) => {
   console.error('[dev-pwa-tunnel] failed to start:', error && error.stack ? error.stack : error);
-  if(paymentWebhookMode){void shutdown(1);return;}
+  if(restrictedWebhookMode){void shutdown(1);return;}
   clearStateFile();
   process.exit(1);
 });

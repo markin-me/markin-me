@@ -3,10 +3,53 @@
  * Формат сообщения 1 в 1 как печатный чек.
  */
 const TELEGRAM_API = 'https://api.telegram.org/bot';
+const { getTenantBotConfig, assertTenantTelegramContact, sendTelegramText, telegramBotKey } = require('./messengerDelivery');
 
-async function sendNewOrderNotification(tenantId, storeId, orderPayload, { db, botToken, strictErrors=false }) {
-  if (!botToken || typeof botToken !== 'string' || botToken.trim() === '') return;
+async function sendCustomerOrderStatus(tenantId,storeId,order,{db}) {
+  const [rows]=await db.query(`SELECT DISTINCT ch.provider_user_id,s.customer_progress_title,s.title
+    FROM order_orders o JOIN cust_customers c ON c.tenant_id=o.tenant_id AND c.id=o.customer_id AND c.is_active=1
+    JOIN auth_account_links a ON a.tenant_id=c.tenant_id AND a.account_type='customer' AND a.account_id=c.id
+    JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.provider='tg'
+    JOIN auth_messenger_channels ch ON ch.id=m.channel_id AND ch.person_id=a.person_id AND ch.revoked_at IS NULL
+    JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+    WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.status_id=? AND o.customer_id=? LIMIT 2`,
+    [tenantId,storeId,Number(order.id),Number(order.status_id),Number(order.customer_id)]);
+  if(rows.length!==1)return;
+  const config=await getTenantBotConfig(db,tenantId,'tg',{allowDisabled:true});
+  const uid=String(rows[0].provider_user_id);
+  await assertTenantTelegramContact(db,config,uid);
+  const ids=[tenantId,Number(order.id),Number(order.status_id)];
+  const [insert]=await db.query('INSERT IGNORE INTO telegram_customer_notifications (tenant_id,order_id,status_id) VALUES (?,?,?)',ids);
+  if(!insert.affectedRows){
+    const [claim]=await db.query("UPDATE telegram_customer_notifications SET state='sending',updated_at=NOW() WHERE tenant_id=? AND order_id=? AND status_id=? AND (state='failed' OR (state='sending' AND updated_at<DATE_SUB(NOW(),INTERVAL 2 MINUTE))) AND attempts<3",ids);
+    if(!claim.affectedRows)return;
+  }
+  const text=`Ваш заказ №${Number(order.id)}: ${String(rows[0].customer_progress_title||rows[0].title||'статус обновлён')}.`;
+  let lastError;
+  for(let attempt=0;attempt<3;attempt++){
+    const [claim]=await db.query("UPDATE telegram_customer_notifications SET attempts=attempts+1,updated_at=NOW() WHERE tenant_id=? AND order_id=? AND status_id=? AND attempts<3",ids);
+    if(!claim.affectedRows)break;
+    try{
+      await sendTelegramText(config.token,uid,text,AbortSignal.timeout(10000));
+      await db.query("UPDATE telegram_customer_notifications SET state='sent',updated_at=NOW() WHERE tenant_id=? AND order_id=? AND status_id=?",ids);
+      return;
+    }catch(error){
+      lastError=error;
+      if(['TELEGRAM_BOT_BLOCKED','TELEGRAM_CHAT_UNAVAILABLE'].includes(error.code)){
+        await db.query('UPDATE auth_telegram_bot_contacts SET reachable=0,updated_at=NOW() WHERE tenant_id=? AND bot_key=? AND provider_user_id=?',[tenantId,telegramBotKey(config.token),uid]);
+        await db.query("UPDATE telegram_customer_notifications SET state='blocked',updated_at=NOW() WHERE tenant_id=? AND order_id=? AND status_id=?",ids);
+        throw error;
+      }
+      const delay=error.code==='TELEGRAM_RATE_LIMITED'?Math.max(1000,Number(error.retryAfter||2)*1000):1000*(attempt+1);
+      if(delay>60000)break;
+      if(attempt<2)await new Promise(resolve=>setTimeout(resolve,delay));
+    }
+  }
+  await db.query("UPDATE telegram_customer_notifications SET state='failed',updated_at=NOW() WHERE tenant_id=? AND order_id=? AND status_id=?",ids);
+  throw Object.assign(new Error('CUSTOMER_TELEGRAM_DELIVERY_FAILED'),{code:lastError?.code||'CUSTOMER_TELEGRAM_DELIVERY_FAILED'});
+}
 
+async function sendNewOrderNotification(tenantId, storeId, orderPayload, { db, strictErrors=false }) {
   // 1. Получаем chat_id из привязок на уровне филиала (ten_store_telegram)
   const [storeRows] = await db.query(
     `SELECT telegram_chat_id FROM ten_store_telegram
@@ -29,6 +72,7 @@ async function sendNewOrderNotification(tenantId, storeId, orderPayload, { db, b
   globalRows.forEach(r => chatIds.add(String(r.telegram_chat_id)));
 
   if (chatIds.size === 0) return;
+  const { token: botToken } = await getTenantBotConfig(db, tenantId, 'tg', { allowDisabled: true });
 
   const opts = {};
   const adminBase = (process.env.ADMIN_BASE_URL || process.env.ORDER_LINK_BASE || '').trim();
@@ -458,4 +502,4 @@ function formatOrderMessage(p, opts = {}) {
   return lines.join('\n');
 }
 
-module.exports = { sendNewOrderNotification, formatOrderMessage };
+module.exports = { sendNewOrderNotification, formatOrderMessage, sendCustomerOrderStatus };

@@ -17,19 +17,40 @@ const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
 const { createStockWebSocketHub, createOrdersWebSocketHub } = require('./services/stock-websocket');
 const {
-  startPolling: startTelegramPolling,
   handleWebhookUpdate: handleTelegramWebhookUpdate,
   setWebhook: setTelegramWebhook,
   deleteWebhook: deleteTelegramWebhook
 } = require('./api/telegramBot');
-const { startMaxPolling } = require('./api/maxBotPolling');
 const {
-  startPolling: startSystemMaxPolling,
   handleWebhookUpdate: handleSystemMaxWebhookUpdate,
   setWebhook: setSystemMaxWebhook,
   deleteWebhook: deleteSystemMaxWebhook
 } = require('./api/systemMaxBot');
-const { startTenantTelegramAuthPolling } = require('./api/tgAuthBotPolling');
+const {
+  completeLinkChallenge,
+  completeBotLoginRequest,
+  processWebhookEvent,
+  browserBotAction,
+} = require('./api/messengerAuth');
+const {
+  getWebhookSecret,
+  verifyWebhookSecret,
+  getTenantBotConfig,
+  getTenantWebhookSecret,
+  verifyTenantWebhookSecret,
+  recordTenantTelegramContact,
+  deliverCode,
+} = require('./api/messengerDelivery');
+const { handleTenantTelegramUpdate } = require('./api/tenantTelegramBot');
+const { handleTenantMaxUpdate } = require('./api/maxBotPolling');
+const {
+  createServiceInteractionContext,
+  createMessengerCleanupWorker,
+  markCurrentOperation,
+  recordCurrentTelegramUserServiceMessage,
+  resolveServiceOperation,
+  runWithOperation,
+} = require('./api/messengerCleanup');
 const {
   readSystemSettings,
   writeSystemSettings,
@@ -85,6 +106,7 @@ const {
 const { authMiddleware, requirePermission, userHasStore, can, isUserSessionActive } = require('./api/middleware/auth');
 
 const app = express();
+const messengerCleanupWorker = createMessengerCleanupWorker(db);
 // Only trusted reverse proxies may supply client IP/protocol for login limits and HTTPS checks.
 app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 app.use('/internal/v1/payment-events',require('./api/paymentEvents')());
@@ -131,15 +153,12 @@ const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACH
 const SLOW_REQUEST_LOG_MS = Math.max(0, Number(process.env.SLOW_REQUEST_LOG_MS || 1200) || 1200);
 const runtimePollingState = {
   telegram_env_enabled: String(process.env.DISABLE_TELEGRAM_POLLING || '').trim() !== '1',
-  telegram_tenant_enabled: String(process.env.DISABLE_TG_AUTH_POLLING || '').trim() !== '1',
+  telegram_tenant_enabled: false,
   max_env_enabled: String(process.env.DISABLE_MAX_POLLING || '').trim() !== '1',
 };
 const tenantLookupCache = new Map();
 const tenantLookupInflight = new Map();
 const staticVersionCache = new Map();
-let telegramEnvPollingHandle = null;
-let telegramTenantPollingHandle = null;
-let maxEnvPollingHandle = null;
 let fatalErrorLogged = false;
 
 function normalizeConfiguredHost(value) {
@@ -258,17 +277,6 @@ function nowMs() {
 
 function hasOwn(target, key) {
   return Boolean(target) && Object.prototype.hasOwnProperty.call(target, key);
-}
-
-function isAbsoluteHttpUrl(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return false;
-  try {
-    const parsed = new URL(raw);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 function isAbsoluteHttpsUrl(value) {
@@ -519,6 +527,7 @@ process.on('uncaughtException', (err) => {
 });
 
 Object.assign(runtimePollingState, getBootstrappedPollingState(runtimePollingState));
+runtimePollingState.telegram_tenant_enabled = false;
 
 function getSystemTelegramConfig(sourceState = readSystemSettings()) {
   return getEffectiveTelegramBotConfig(sourceState);
@@ -559,6 +568,15 @@ app.use(cors());
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 app.use(cookieParser());
+app.use((req,res,next)=>{
+  if(process.env.DB_NAME==='a1186497_test' && String(process.env.PORT)==='3107'
+      && /^\/api\/(?:public\/auth\/(?:messenger-browser\/start|link-token)|auth\/(?:messenger-browser\/start|messenger-links\/(?:tg|max)))$/.test(req.path)){
+    const started=Date.now();
+    const route=req.path;
+    res.once('finish',()=>console.info('AUTH_ENTRY_REQUEST',{route,status:res.statusCode,durationMs:Date.now()-started}));
+  }
+  next();
+});
 app.use((req, res, next) => {
   const startedAt = nowMs();
   const metrics = typeof db.createEmptyRequestMetrics === 'function'
@@ -1060,6 +1078,19 @@ app.use(async (req, res, next) => {
     || route.startsWith('/api/admin')
   );
 
+  if(route.startsWith('/api/public/')){
+    try {
+      const localTest=process.env.DB_NAME==='a1186497_test'&&['localhost','127.0.0.1','::1'].includes(getRequestRoutingHost(req));
+      if(!localTest)await isTenantHost(req);
+      if(req._resolvedTenant){
+        const tenantId=Number(req._resolvedTenant.id),requested=req.headers['x-tenant-id'];
+        if(requested!=null&&Number(requested)!==tenantId)return res.status(403).json({ok:false,error:'TENANT_SCOPE_MISMATCH'});
+        req.headers['x-tenant-id']=String(tenantId);
+      }
+    }
+    catch(error){console.error('BROWSER_AUTH_TENANT_FAILED:',error.code||error.name);return res.status(503).json({ok:false,error:'TENANT_RESOLUTION_FAILED'});}
+  }
+
   if (!isAdminRoute) return next();
 
   try {
@@ -1079,6 +1110,16 @@ app.use(async (req, res, next) => {
   return next();
 });
 
+function publicTenantView(tenant) {
+  if (!tenant || typeof tenant !== 'object') return tenant;
+  const view = { ...tenant };
+  delete view.telegram_bot_token;
+  delete view.max_bot_token;
+  delete view.password_hash;
+  delete view.map_provider_accounts_json;
+  return view;
+}
+
 async function renderShop(req, res) {
   try {
     if (String(req.query && req.query.install || '').trim() === '1') {
@@ -1087,7 +1128,7 @@ async function renderShop(req, res) {
     const tenant = req._resolvedTenant || await resolveTenant(req);
     const mapConfig = normalizeTenantMapConfig(tenant);
     const tenantView = tenant && typeof tenant === 'object'
-      ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
+      ? { ...publicTenantView(tenant), store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
       : tenant;
 
     const pageTitle = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
@@ -1104,7 +1145,7 @@ async function renderKso(req, res) {
     const tenant = req._resolvedTenant || await resolveTenant(req);
     const mapConfig = normalizeTenantMapConfig(tenant);
     const tenantView = tenant && typeof tenant === 'object'
-      ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
+      ? { ...publicTenantView(tenant), store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
       : tenant;
 
     const pageTitle = (tenant && (tenant.site_name || tenant.name))
@@ -1123,7 +1164,7 @@ async function renderShopInstallPage(req, res) {
     const tenant = req._resolvedTenant || await resolveTenant(req);
     const mapConfig = normalizeTenantMapConfig(tenant);
     const tenantView = tenant && typeof tenant === 'object'
-      ? { ...tenant, store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
+      ? { ...publicTenantView(tenant), store_address_map_enabled: Boolean(mapConfig.store_address_map_enabled) }
       : tenant;
     const tenantId = tenantView && tenantView.id ? tenantView.id : 1;
     const tenantHostShop = Boolean(
@@ -1893,7 +1934,7 @@ app.get('/max-app', (req, res) => {
     const launchToken = extractMaxAppLaunchToken(req);
     if (launchToken) {
       const qs = new URLSearchParams();
-      qs.set('ptoken', launchToken);
+      qs.set('token', launchToken);
       qs.set('target', 'miniapp');
       return res.redirect(302, `/api/public/max/finish-login?${qs.toString()}`);
     }
@@ -1938,21 +1979,199 @@ app.get('/auth', (req, res) => res.redirect('/login'));
 // ------------------------------
 // Telegram webhook (публичный, без авторизации)
 // ------------------------------
-app.post('/api/telegram/webhook', (req, res) => {
-  res.sendStatus(200);
+async function handleTenantBotWebhook(req, res, provider) {
+  if (!req.secure) return res.status(426).json({ ok: false, error: 'HTTPS_REQUIRED' });
+  let stage = 'secret';
+  try {
+    const header = provider === 'tg' ? 'x-telegram-bot-api-secret-token' : 'x-max-bot-api-secret';
+    const received = String(req.get(header) || '');
+    if (!/^[A-Za-z0-9_-]{43}$/.test(received)) {
+      return res.status(401).json({ ok: false, error: 'WEBHOOK_UNAUTHORIZED' });
+    }
+    const scope = { tenantId: Number(req.params.tenantId), provider };
+    let config;
+    if (provider !== 'tg') {
+      stage = 'configuration';
+      config = await getTenantBotConfig(db, scope.tenantId, provider, { allowDisabled: true });
+    }
+    stage = 'secret';
+    if (!verifyTenantWebhookSecret(config || scope, received)) {
+      return res.status(401).json({ ok: false, error: 'WEBHOOK_UNAUTHORIZED' });
+    }
+    stage = 'configuration';
+    if (!config) config = await getTenantBotConfig(db, scope.tenantId, provider, { allowDisabled: true });
+    const namespace = getTenantWebhookSecret(config);
+    stage = 'event_dispatch';
+    const ingressConfig=config;
+    await processWebhookEvent(db, provider, req.body, async (eventDb, webhookEvent) => {
+      stage = 'handler';
+      let config=ingressConfig;
+      const rawStart=provider==='tg'
+        ? String(req.body?.message?.text||'').match(/^\/start(?:@\w+)?\s+([abl]_[A-Za-z0-9_-]{40})$/)?.[1]
+        : String(req.body?.payload||'').match(/^[abl]_[A-Za-z0-9_-]{40}$/)?.[0];
+      const rawCallback=String(provider==='tg'?req.body?.callback_query?.data:req.body?.callback?.payload);
+      const scopedToken=rawStart || rawCallback.match(/^auth:([br]_[A-Za-z0-9_-]{40,43})$/)?.[1];
+      if(scopedToken){
+        const reference=scopedToken.startsWith('r_');
+        const table=reference || /^[br]_/.test(scopedToken)?'auth_browser_requests':'auth_verification_challenges';
+        const [targets]=await eventDb.query(`SELECT tenant_id FROM ${table} WHERE ${reference?'public_id':'token_hash'}=? AND provider=? LIMIT 1`,
+          [reference?scopedToken.slice(2):require('crypto').createHash('sha256').update(scopedToken).digest(),provider]);
+        if(targets[0] && Number(targets[0].tenant_id)!==config.tenantId){
+          const target=await getTenantBotConfig(eventDb,Number(targets[0].tenant_id),provider,{allowDisabled:true});
+          if(target.token!==config.token)throw Object.assign(new Error('BOT_SCOPE_MISMATCH'),{code:'BOT_SCOPE_MISMATCH',status:403});
+          config=target;
+        }
+      }
+      const contactUid=provider==='tg' && req.body?.message?.contact ? req.body.message.from?.id
+        : provider==='max' && req.body?.message?.body?.attachments?.some(a=>a.type==='contact') ? req.body.message.sender?.user_id : null;
+      let ambiguousContact=false;
+      if(contactUid){
+        const tokenColumn=provider==='tg'?'telegram_bot_token':'max_bot_token';
+        const [targets]=await eventDb.query(`SELECT r.tenant_id FROM auth_browser_requests r JOIN ten_tenants t ON t.id=r.tenant_id AND t.is_active=1
+          WHERE r.provider=? AND r.provider_user_id=? AND r.state='started' AND r.expires_at>NOW() AND TRIM(t.${tokenColumn})=?
+          UNION SELECT c.tenant_id FROM auth_verification_challenges c JOIN ten_tenants t ON t.id=c.tenant_id AND t.is_active=1
+          WHERE c.provider=? AND c.completed_provider_user_id=? AND c.purpose='link' AND c.delivery_status='pending'
+            AND c.consumed_at IS NULL AND c.expires_at>NOW() AND TRIM(t.${tokenColumn})=? LIMIT 2`,[provider,String(contactUid),config.token,provider,String(contactUid),config.token]);
+        if(targets.length===1 && Number(targets[0].tenant_id)!==config.tenantId){
+          const target=await getTenantBotConfig(eventDb,Number(targets[0].tenant_id),provider,{allowDisabled:true});
+          if(target.token!==config.token)throw Object.assign(new Error('BOT_SCOPE_MISMATCH'),{code:'BOT_SCOPE_MISMATCH',status:403});
+          config=target;
+        }
+        ambiguousContact=targets.length>1;
+      }
+      const serviceContext=await resolveServiceOperation(eventDb,{
+        tenantId:config.tenantId,provider,token:scopedToken,providerUserId:contactUid,
+      }) || createServiceInteractionContext(eventDb, {
+        tenantId: config.tenantId, provider, eventKey: webhookEvent.eventKey,
+      });
+      await runWithOperation(serviceContext,async()=>{
+      const customerEnabled=Boolean((await require('./api/helpers/customerAuth').settings(eventDb,config.tenantId))[provider]);
+      const options = {
+        onBrowserAuth: async ({providerUserId,token,confirm})=>{
+          const result=(config.enabled||customerEnabled)
+            ? await browserBotAction(eventDb,{tenantId:config.tenantId,provider,providerUserId,token,confirm,employeeEnabled:config.enabled})
+            : {ok:false};
+          if(confirm&&result.ok)await markCurrentOperation('success');
+          else if(!result.ok)await markCurrentOperation('error');
+          if(!confirm&&provider==='tg')await recordCurrentTelegramUserServiceMessage(req.body?.message,'start');
+          return result;
+        },
+        onBrowserContact: async ({providerUserId,phone,name,avatarUrl})=>{
+          if(ambiguousContact)return {ok:false,error:'CONTACT_REQUEST_AMBIGUOUS'};
+          if(!config.enabled&&!customerEnabled)return {ok:false};
+          const profileLink=await completeLinkChallenge(eventDb,provider,providerUserId,null,config.tenantId,
+            provider==='tg'?{telegramContact:req.body.message,customerOnly:true}:{verifiedMaxContact:{providerUserId,phone},customerOnly:true});
+          if(profileLink.matched!==false){
+            if(profileLink.ok&&!profileLink.contactRequired)await markCurrentOperation('success');
+            else if(!profileLink.ok)await markCurrentOperation('error');
+            if(provider==='tg')await recordCurrentTelegramUserServiceMessage(req.body?.message,'contact');
+            return {...profileLink,context:'PROFILE_LINK'};
+          }
+          const result=await browserBotAction(eventDb,{tenantId:config.tenantId,provider,providerUserId,contact:{phone,name},employeeEnabled:config.enabled});
+          if(result.autoConfirmed)await markCurrentOperation('success');
+          else if(!result.ok&&result.matched!==false)await markCurrentOperation('error');
+          if(provider==='tg'&&result.matched!==false)await recordCurrentTelegramUserServiceMessage(req.body?.message,'contact');
+          return result;
+        },
+        loginEnabled: config.enabled||customerEnabled,
+        miniAppEnabled: config.miniAppEnabled,
+        onAuthLogin: async ({ providerUserId, token }) => {
+          const result=await completeBotLoginRequest(eventDb, provider, providerUserId, token, config.tenantId,
+            message => deliverCode(eventDb, message));
+          if(!result.ok)await markCurrentOperation('error');
+          if(provider==='tg')await recordCurrentTelegramUserServiceMessage(req.body?.message,'start');
+          return result;
+        },
+        onAuthLink: async ({ providerUserId, token }) => {
+          const result=config.enabled||customerEnabled
+            ? await completeLinkChallenge(eventDb, provider, providerUserId, token, config.tenantId,{employeeEnabled:config.enabled})
+            : { ok: false };
+          if(result.ok&&!result.contactRequired)await markCurrentOperation('success');
+          else if(!result.ok)await markCurrentOperation('error');
+          if(provider==='tg')await recordCurrentTelegramUserServiceMessage(req.body?.message,'start');
+          return result;
+        },
+        onAuthContact: async ({ providerUserId, message }) => {
+          const result=config.enabled
+            ? await completeLinkChallenge(eventDb, 'tg', providerUserId, null, config.tenantId, { telegramContact: message })
+            : { ok: false };
+          if(result.ok&&!result.contactRequired)await markCurrentOperation('success');
+          else if(!result.ok&&result.matched!==false)await markCurrentOperation('error');
+          if(result.matched!==false)await recordCurrentTelegramUserServiceMessage(message,'contact');
+          return result;
+        },
+      };
+      if (provider === 'tg') {
+        await recordTenantTelegramContact(eventDb, config, req.body);
+        await handleTenantTelegramUpdate(eventDb, helpers, {
+          tenantId: config.tenantId, token: config.token, username: config.identifier,
+        }, req.body, options);
+      } else {
+        await handleTenantMaxUpdate(eventDb, helpers, {
+          tenantId: config.tenantId, token: config.token,
+        }, req.body, options);
+      }
+      });
+    }, namespace);
+    return res.sendStatus(200);
+  } catch (error) {
+    const reason = String(error.code || error.name || 'UNKNOWN');
+    console.error('TENANT_BOT_WEBHOOK_FAILED:', {
+      stage, provider,
+      reason: /^[A-Z0-9_]+$/i.test(reason) ? reason : 'UNKNOWN',
+      missingTable: error.code === 'ER_NO_SUCH_TABLE',
+    });
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: stage === 'secret' && error.code === 'AUTH_WEBHOOK_SECRET_REQUIRED'
+        ? 'AUTH_WEBHOOK_SECRET_REQUIRED' : 'WEBHOOK_PROCESSING_FAILED',
+    });
+  }
+}
+
+app.post('/api/telegram/webhook/:tenantId', (req, res) => handleTenantBotWebhook(req, res, 'tg'));
+app.post('/api/max/webhook/:tenantId', (req, res) => handleTenantBotWebhook(req, res, 'max'));
+
+app.post('/api/telegram/webhook', async (req, res) => {
   const token = getSystemTelegramConfig().telegram_bot_token;
   const update = req.body;
-  if (token && update) {
-    handleTelegramWebhookUpdate(db, token, update).catch((err) => console.error('Telegram webhook:', err));
+  if (!req.secure) return res.status(426).json({ ok: false, error: 'HTTPS_REQUIRED' });
+  if (!token || !update) return res.status(503).json({ ok: false, error: 'WEBHOOK_NOT_CONFIGURED' });
+  if (!verifyWebhookSecret('tg', req.get('x-telegram-bot-api-secret-token'))) {
+    return res.status(401).json({ ok: false, error: 'WEBHOOK_UNAUTHORIZED' });
+  }
+  try {
+    // A tenant bot must not also be consumed by the legacy system dispatcher.
+    const [tenantBots] = await db.query(
+      'SELECT id FROM ten_tenants WHERE is_active=1 AND telegram_bot_token=? LIMIT 1', [token]
+    );
+    if (tenantBots.length) return res.status(409).json({ ok: false, error: 'TENANT_WEBHOOK_REQUIRED' });
+    await processWebhookEvent(db, 'tg', update, (eventDb) => handleTelegramWebhookUpdate(eventDb, token, update, {
+      onAuthLink: async () => ({ ok: false }),
+    }));
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error('Telegram webhook:', err.code || err.name || 'WEBHOOK_PROCESSING_FAILED');
+    return res.sendStatus(500);
   }
 });
 
-app.post('/api/max/webhook', (req, res) => {
-  res.sendStatus(200);
+app.post('/api/max/webhook', async (req, res) => {
   const token = getSystemMaxConfig().max_bot_token;
   const update = req.body;
-  if (token && update) {
-    handleSystemMaxWebhookUpdate(db, token, update).catch((err) => console.error('System MAX webhook:', err));
+  if (!req.secure) return res.status(426).json({ ok: false, error: 'HTTPS_REQUIRED' });
+  if (!token || !update) return res.status(503).json({ ok: false, error: 'WEBHOOK_NOT_CONFIGURED' });
+  if (!verifyWebhookSecret('max', req.get('x-max-bot-api-secret'))) {
+    return res.status(401).json({ ok: false, error: 'WEBHOOK_UNAUTHORIZED' });
+  }
+  try {
+    await processWebhookEvent(db, 'max', update, (eventDb) => handleSystemMaxWebhookUpdate(eventDb, token, update, {
+      onAuthLink: async () => ({ ok: false }),
+    }));
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error('System MAX webhook:', err.code || err.name || 'WEBHOOK_PROCESSING_FAILED');
+    return res.sendStatus(500);
   }
 });
 
@@ -2472,33 +2691,6 @@ app.use((err, req, res, next) => {
   return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
 });
 
-function startTelegramEnvPollingIfNeeded() {
-  if (!runtimePollingState.telegram_env_enabled) return;
-  if (telegramEnvPollingHandle) return;
-
-  const systemTelegramConfig = getSystemTelegramConfig();
-  const telegramToken = systemTelegramConfig.telegram_bot_token;
-  const webhookUrl = systemTelegramConfig.telegram_webhook_url;
-  if (!telegramToken || webhookUrl) return;
-
-  try {
-    telegramEnvPollingHandle = startTelegramPolling(db, telegramToken) || null;
-  } catch (e) {
-    console.error('Telegram bot start error:', e.message);
-  }
-}
-
-function stopTelegramEnvPollingIfRunning() {
-  if (!telegramEnvPollingHandle) return;
-  try {
-    if (typeof telegramEnvPollingHandle.stop === 'function') telegramEnvPollingHandle.stop();
-  } catch (e) {
-    console.error('Telegram bot stop error:', e.message || e);
-  } finally {
-    telegramEnvPollingHandle = null;
-  }
-}
-
 async function syncSystemTelegramRuntime(previousConfig = null) {
   const nextConfig = getSystemTelegramConfig();
   const previousToken = previousConfig && typeof previousConfig === 'object'
@@ -2509,8 +2701,6 @@ async function syncSystemTelegramRuntime(previousConfig = null) {
     : '';
   const nextToken = String(nextConfig.telegram_bot_token || '').trim();
   const nextWebhookUrl = String(nextConfig.telegram_webhook_url || '').trim();
-
-  stopTelegramEnvPollingIfRunning();
 
   if (previousToken && previousToken !== nextToken) {
     await removeTelegramWebhook(previousToken);
@@ -2525,65 +2715,12 @@ async function syncSystemTelegramRuntime(previousConfig = null) {
   }
 
   if (nextWebhookUrl) {
-    try {
-      await setTelegramWebhook(nextToken, nextWebhookUrl);
-    } catch (e) {
-      console.error('Telegram setWebhook error:', e.message || e);
-    }
+    await setTelegramWebhook(nextToken, nextWebhookUrl, getWebhookSecret('tg', nextToken));
     return nextConfig;
   }
 
-  await removeTelegramWebhook(nextToken);
-  startTelegramEnvPollingIfNeeded();
+  if (previousWebhookUrl) await removeTelegramWebhook(nextToken || previousToken);
   return nextConfig;
-}
-
-function startTenantTelegramPollingIfNeeded() {
-  if (!runtimePollingState.telegram_tenant_enabled) return;
-  if (telegramTenantPollingHandle) return;
-  try {
-    telegramTenantPollingHandle = startTenantTelegramAuthPolling(db, helpers) || null;
-  } catch (e) {
-    console.error('TG auth polling start error:', e.message || e);
-  }
-}
-
-function stopTenantTelegramPollingIfRunning() {
-  if (!telegramTenantPollingHandle) return;
-  try {
-    if (typeof telegramTenantPollingHandle.stop === 'function') telegramTenantPollingHandle.stop();
-  } catch (e) {
-    console.error('TG auth polling stop error:', e.message || e);
-  } finally {
-    telegramTenantPollingHandle = null;
-  }
-}
-
-function startMaxEnvPollingIfNeeded() {
-  if (!runtimePollingState.max_env_enabled) return;
-  if (maxEnvPollingHandle) return;
-
-  const systemMaxConfig = getSystemMaxConfig();
-  const maxToken = systemMaxConfig.max_bot_token;
-  const webhookUrl = systemMaxConfig.max_webhook_url;
-  if (!maxToken || webhookUrl) return;
-
-  try {
-    maxEnvPollingHandle = startSystemMaxPolling(db, maxToken) || null;
-  } catch (e) {
-    console.error('System MAX bot start error:', e.message || e);
-  }
-}
-
-function stopMaxEnvPollingIfRunning() {
-  if (!maxEnvPollingHandle) return;
-  try {
-    if (typeof maxEnvPollingHandle.stop === 'function') maxEnvPollingHandle.stop();
-  } catch (e) {
-    console.error('System MAX bot stop error:', e.message || e);
-  } finally {
-    maxEnvPollingHandle = null;
-  }
 }
 
 async function syncSystemMaxRuntime(previousConfig = null) {
@@ -2596,8 +2733,6 @@ async function syncSystemMaxRuntime(previousConfig = null) {
     : '';
   const nextToken = String(nextConfig.max_bot_token || '').trim();
   const nextWebhookUrl = String(nextConfig.max_webhook_url || '').trim();
-
-  stopMaxEnvPollingIfRunning();
 
   if (previousToken && previousToken !== nextToken) {
     await removeSystemMaxWebhook(previousToken);
@@ -2612,18 +2747,15 @@ async function syncSystemMaxRuntime(previousConfig = null) {
   }
 
   if (nextWebhookUrl) {
-    try {
-      await setSystemMaxWebhook(nextToken, nextWebhookUrl);
-    } catch (e) {
-      console.error('System MAX setWebhook error:', e.message || e);
-    }
+    await setSystemMaxWebhook(nextToken, nextWebhookUrl, getWebhookSecret('max', nextToken));
     return nextConfig;
   }
 
-  await removeSystemMaxWebhook(nextToken);
-  startMaxEnvPollingIfNeeded();
+  if (previousWebhookUrl) await removeSystemMaxWebhook(nextToken || previousToken);
   return nextConfig;
 }
+
+app.use(['/api/admin/system/telegram-bot', '/api/admin/system/max-bot'], authMiddleware, requirePermission('settings.system.integrations'));
 
 app.get('/api/admin/system/polling', authMiddleware, (req, res) => {
   return res.json({
@@ -2650,9 +2782,10 @@ app.put('/api/admin/system/polling', authMiddleware, async (req, res) => {
   }
 
   if (hasTenant) {
-    runtimePollingState.telegram_tenant_enabled = Boolean(req.body.telegram_tenant_enabled);
-    if (runtimePollingState.telegram_tenant_enabled) startTenantTelegramPollingIfNeeded();
-    else stopTenantTelegramPollingIfRunning();
+    if (Boolean(req.body.telegram_tenant_enabled)) {
+      return res.status(400).json({ ok: false, error: 'POLLING_NOT_SUPPORTED' });
+    }
+    runtimePollingState.telegram_tenant_enabled = false;
   }
 
   writeSystemSettings(runtimePollingState, { defaults: runtimePollingState });
@@ -2720,7 +2853,7 @@ app.put('/api/admin/system/telegram-bot', authMiddleware, async (req, res) => {
     return res.status(400).json({ ok: false, error: 'TOKEN_REQUIRED' });
   }
 
-  if (telegramWebhookUrl && !isAbsoluteHttpUrl(telegramWebhookUrl)) {
+  if (telegramWebhookUrl && !isAbsoluteHttpsUrl(telegramWebhookUrl)) {
     return res.status(400).json({ ok: false, error: 'INVALID_WEBHOOK_URL' });
   }
 
@@ -2729,9 +2862,10 @@ app.put('/api/admin/system/telegram-bot', authMiddleware, async (req, res) => {
   }
 
   if (hasTenantEnabled) {
-    runtimePollingState.telegram_tenant_enabled = Boolean(body.telegram_tenant_enabled);
-    if (runtimePollingState.telegram_tenant_enabled) startTenantTelegramPollingIfNeeded();
-    else stopTenantTelegramPollingIfRunning();
+    if (Boolean(body.telegram_tenant_enabled)) {
+      return res.status(400).json({ ok: false, error: 'POLLING_NOT_SUPPORTED' });
+    }
+    runtimePollingState.telegram_tenant_enabled = false;
   }
 
   const savedState = writeSystemSettings(
@@ -3120,23 +3254,9 @@ server.on('listening', () => {
   console.log(`Passenger mode: ${String(process.env.IN_PASSENGER || '').trim() === '1' ? 'yes' : 'no'}`);
   console.log(`🚀 Сервер запущен на ${PORT}`);
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
-  syncSystemTelegramRuntime().catch((e) => console.error('Telegram runtime sync error:', e.message || e));
+  // Webhook registration is an explicit operator action, never a startup side effect.
+  messengerCleanupWorker.start();
 
-  syncSystemMaxRuntime().catch((e) => console.error('System MAX runtime sync error:', e.message || e));
-
-  try {
-    startMaxPolling(db, helpers);
-  } catch (e) {
-    console.error('MAX tenant polling start error:', e.message || e);
-  }
-
-  if (runtimePollingState.telegram_tenant_enabled) {
-    try {
-      telegramTenantPollingHandle = startTenantTelegramAuthPolling(db, helpers) || null;
-    } catch (e) {
-      console.error('TG auth polling start error:', e.message || e);
-    }
-  }
 });
 
 server.on('error', (err) => {

@@ -159,6 +159,8 @@
     <%- include(extraPartial) %>
   <% } %>
 
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/auth-card.css') %>">
+  <script src="<%= assetUrl('/static/js/auth-card.js') %>"></script>
   <script>
     window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260930-option-defaults-card-v3') %>";
     <% if (!isKsoPage) { %>
@@ -171,6 +173,7 @@
   <script src="<%= assetUrl('/static/js/appModal.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/shop-pwa-presence.js?v=20260407a') %>" defer></script>
 
+  <script src="<%= assetUrl('/static/js/shared-bonus-accrual.js') %>" defer></script>
   <% if (Array.isArray(pageScripts)) { %>
     <% pageScripts.forEach(function (src) { %>
       <script src="<%= assetUrl(src) %>" defer></script>

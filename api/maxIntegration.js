@@ -43,10 +43,13 @@ async function getTenantMaxBotToken(db, tenantId) {
   return token || null;
 }
 
-async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPayload, signal }) {
+async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPayload, signal, requireMessageConfirmation = false }) {
   const token = String(botToken || '').trim() || (db ? await getTenantMaxBotToken(db, tenantId) : null);
-  const apiBase = String(process.env.MAX_API_BASE_URL || '').trim().replace(/\/+$/, '');
+  const apiBase = String(process.env.MAX_API_BASE_URL || 'https://platform-api2.max.ru').trim().replace(/\/+$/, '');
   if (!token || !apiBase || !maxUserId || !text) return { ok: false, skipped: true };
+  if (requireMessageConfirmation && new URL(apiBase).protocol !== 'https:') {
+    throw Object.assign(new Error('MAX_HTTPS_REQUIRED'), { code: 'MAX_HTTPS_REQUIRED' });
+  }
 
   const userQuery = encodeURIComponent(String(maxUserId).trim());
   const makePayload = (withExtra) => {
@@ -79,6 +82,12 @@ async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPa
   };
 
   const first = await sendOnce(makePayload(true));
+  if (requireMessageConfirmation && (!first.ok || !first.data?.message)) {
+    const code = !first.ok
+      ? ({ 401: 'MAX_TOKEN_REJECTED', 403: 'MAX_BOT_BLOCKED', 429: 'MAX_RATE_LIMITED' })[first.status] || 'MAX_DELIVERY_FAILED'
+      : 'MAX_INVALID_DELIVERY_RESPONSE';
+    throw Object.assign(new Error(code), { code, httpStatus: first.status });
+  }
   if (first.ok) return { ok: true, data: first.data };
 
   const hasExtraPayload = Boolean(extraPayload && typeof extraPayload === 'object');

@@ -21,7 +21,46 @@ async function sendContactRequestMessage(apiBase, chatId) {
   );
 }
 
-async function processUpdate(db, apiBase, update) {
+async function connectStoreChat(db, apiBase, chatId, payload, tenantId = null) {
+  const [rows] = await db.query(
+    `SELECT id, tenant_id, store_id, secret_key FROM ten_store_telegram
+     WHERE connect_token=? AND (? IS NULL OR tenant_id=?)
+       AND (connect_token_expires_at IS NULL OR connect_token_expires_at>NOW())
+     LIMIT 1`,
+    [payload, tenantId, tenantId]
+  );
+  if (!rows.length) return false;
+  const row = rows[0];
+  const [connected] = await db.query(
+    `UPDATE ten_store_telegram
+     SET telegram_chat_id = ?, connect_token = NULL, connect_token_expires_at = NULL
+     WHERE id = ? AND tenant_id=? AND connect_token=?
+       AND (connect_token_expires_at IS NULL OR connect_token_expires_at>NOW())`,
+    [chatId, row.id, row.tenant_id, payload]
+  );
+  if (!connected.affectedRows) return true;
+  const [storeRows] = await db.query(
+    'SELECT name FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+    [row.tenant_id, row.store_id]
+  );
+  const storeName = storeRows[0]?.name || `\u0424\u0438\u043b\u0438\u0430\u043b #${row.store_id}`;
+  await sendMessage(
+    apiBase,
+    chatId,
+    `\u0413\u043e\u0442\u043e\u0432\u043e. \u0412\u044b \u0431\u0443\u0434\u0435\u0442\u0435 \u043f\u043e\u043b\u0443\u0447\u0430\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0437\u0430\u043a\u0430\u0437\u0430\u0445 \u043f\u043e \u0444\u0438\u043b\u0438\u0430\u043b\u0443 \u00ab${storeName}\u00bb.`
+  );
+  const secretKey = row.secret_key || '';
+  if (secretKey) {
+    await sendMessage(
+      apiBase,
+      chatId,
+      `\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u044d\u0442\u0438 \u043a\u043b\u044e\u0447\u0438 \u0432 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u0445 \u0444\u0438\u043b\u0438\u0430\u043b\u0430 \u043f\u0440\u0438 \u043d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e\u0441\u0442\u0438:\n\nAPI key: ${chatId}\nSecret key: ${secretKey}`
+    );
+  }
+  return true;
+}
+
+async function processUpdate(db, apiBase, update, options = {}) {
   const message = update.message;
   if (!message) return;
 
@@ -51,6 +90,23 @@ async function processUpdate(db, apiBase, update) {
     const payload = (rawPayload.split(/\s/)[0] || rawPayload).replace(/[^a-zA-Z0-9_-]/g, '');
 
     if (payload) {
+      if (payload.startsWith('a_') && typeof options.onAuthLink === 'function') {
+        if (message.chat?.type !== 'private' || tgUserId == null || String(chatId) !== String(tgUserId)) return;
+        const result = await options.onAuthLink({
+          provider: 'tg',
+          providerUserId: tgUserId != null ? String(tgUserId) : String(chatId),
+          token: payload,
+        });
+        await sendMessage(
+          apiBase,
+          chatId,
+          result?.ok
+            ? 'Telegram успешно привязан к выбранной учётной записи.'
+            : 'Ссылка недействительна или истекла. Получите новую в профиле.'
+        );
+        return;
+      }
+
       if (TG_LOGIN_START_PAYLOADS.has(String(payload).toLowerCase())) {
         await sendContactRequestMessage(apiBase, chatId);
         return;
@@ -96,46 +152,8 @@ async function processUpdate(db, apiBase, update) {
         return;
       }
 
-      const [rows] = await db.query(
-        `SELECT id, tenant_id, store_id, secret_key
-         FROM ten_store_telegram
-         WHERE connect_token = ? AND (connect_token_expires_at IS NULL OR connect_token_expires_at > NOW())
-         LIMIT 1`,
-        [payload]
-      );
-      if (!rows.length) {
-        await sendMessage(
-          apiBase,
-          chatId,
-          '\u0421\u0441\u044b\u043b\u043a\u0430 \u043d\u0435\u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043b\u044c\u043d\u0430 \u0438\u043b\u0438 \u0438\u0441\u0442\u0435\u043a\u043b\u0430. \u041f\u043e\u043b\u0443\u0447\u0438\u0442\u0435 \u043d\u043e\u0432\u0443\u044e \u0432 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u0445 \u0444\u0438\u043b\u0438\u0430\u043b\u0430.'
-        );
-        return;
-      }
-
-      const row = rows[0];
-      await db.query(
-        `UPDATE ten_store_telegram
-         SET telegram_chat_id = ?, connect_token = NULL, connect_token_expires_at = NULL
-         WHERE id = ?`,
-        [chatId, row.id]
-      );
-      const [storeRows] = await db.query(
-        'SELECT name FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
-        [row.tenant_id, row.store_id]
-      );
-      const storeName = storeRows[0]?.name || `\u0424\u0438\u043b\u0438\u0430\u043b #${row.store_id}`;
-      await sendMessage(
-        apiBase,
-        chatId,
-        `\u0413\u043e\u0442\u043e\u0432\u043e. \u0412\u044b \u0431\u0443\u0434\u0435\u0442\u0435 \u043f\u043e\u043b\u0443\u0447\u0430\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0437\u0430\u043a\u0430\u0437\u0430\u0445 \u043f\u043e \u0444\u0438\u043b\u0438\u0430\u043b\u0443 \u00ab${storeName}\u00bb.`
-      );
-      const secretKey = row.secret_key || '';
-      if (secretKey) {
-        await sendMessage(
-          apiBase,
-          chatId,
-          `\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u044d\u0442\u0438 \u043a\u043b\u044e\u0447\u0438 \u0432 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u0445 \u0444\u0438\u043b\u0438\u0430\u043b\u0430 \u043f\u0440\u0438 \u043d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e\u0441\u0442\u0438:\n\nAPI key: ${chatId}\nSecret key: ${secretKey}`
-        );
+      if (!await connectStoreChat(db, apiBase, chatId, payload)) {
+        await sendMessage(apiBase, chatId, 'Ссылка недействительна или истекла. Получите новую в настройках филиала.');
       }
       return;
     }
@@ -149,7 +167,8 @@ async function processUpdate(db, apiBase, update) {
 
     await sendContactRequestMessage(apiBase, chatId);
   } catch (err) {
-    console.error('Telegram bot processUpdate:', err);
+    console.error('Telegram bot processUpdate:', err.code || err.name);
+    if (typeof options.onAuthLink === 'function') throw err;
     try {
       await sendMessage(apiBase, chatId, '\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u043f\u043e\u0437\u0436\u0435.');
     } catch (_) {}
@@ -212,19 +231,23 @@ async function sendMessage(apiBase, chatId, text, extra = null) {
   return data;
 }
 
-async function handleWebhookUpdate(db, token, update) {
+async function handleWebhookUpdate(db, token, update, options = {}) {
   if (!token || !update) return;
   const apiBase = `${TELEGRAM_API}${token.trim()}`;
-  await processUpdate(db, apiBase, update);
+  await processUpdate(db, apiBase, update, options);
 }
 
-async function setWebhook(token, webhookUrl) {
+async function setWebhook(token, webhookUrl, secret = '') {
   if (!token || !webhookUrl) return;
   const apiBase = `${TELEGRAM_API}${token.trim()}`;
   const res = await fetch(`${apiBase}/setWebhook`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: webhookUrl }),
+    body: JSON.stringify({
+      url: webhookUrl,
+      ...(String(secret || '').trim() ? { secret_token: String(secret).trim() } : {}),
+      allowed_updates: ['message'],
+    }),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.description || 'setWebhook failed');
@@ -244,4 +267,4 @@ async function deleteWebhook(token) {
   return data;
 }
 
-module.exports = { startPolling, sendMessage, processUpdate, handleWebhookUpdate, setWebhook, deleteWebhook };
+module.exports = { startPolling, sendMessage, processUpdate, handleWebhookUpdate, setWebhook, deleteWebhook, connectStoreChat };

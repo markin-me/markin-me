@@ -714,6 +714,19 @@ body[data-admin-active-page] .shop-header-profile-img{width:24px;height:24px;fle
   background: rgba(231, 76, 60, 0.1);
 }
 
+.messenger-security-list{display:grid;gap:12px}
+.app-modal.app-modal-footer-hidden .app-modal-footer{display:none}
+.messenger-security-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;padding:16px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface-2)}
+.messenger-security-copy{min-width:0}
+.messenger-security-title{display:flex;align-items:center;gap:8px;margin:0 0 5px;color:var(--color-text);font-weight:700}
+.messenger-security-state{margin:0;color:var(--color-text-muted);font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.messenger-security-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.messenger-security-notice{min-height:20px;margin:12px 0 0;color:var(--color-text-muted);font-size:13px;line-height:1.45}
+.messenger-security-notice.is-error{color:var(--color-danger,#dc3545)}
+.messenger-security-confirm{margin-top:14px;padding:14px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface)}
+.messenger-security-confirm .control{width:100%;margin:8px 0 10px}
+@media (max-width:600px){.messenger-security-card{grid-template-columns:1fr}.messenger-security-actions{justify-content:stretch}.messenger-security-actions .btn{flex:1 1 auto}.messenger-security-confirm .btn{width:100%}}
+
 /* ================= Layout / Grid ================= */
 
 .main-container{
@@ -19800,6 +19813,7 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
   opacity:1;
   margin-right:8px;
 }
+#ordersSearchToggle{border-radius:50%;}
 .cl-search-input:focus{border-color:var(--color-primary);}
 .cl-search-input::placeholder{color:var(--color-text-muted);opacity:.6;}
 

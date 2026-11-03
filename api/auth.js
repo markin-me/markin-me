@@ -2,7 +2,16 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const employeeIdentity = require('./helpers/employeeIdentity');
-const { loadLegacyOwner, authMiddleware } = require('./middleware/auth');
+const { ensureEmployeeCustomer } = require('./helpers/employeeCustomer');
+const { loadLegacyOwner, authMiddleware, revokeUserStreams } = require('./middleware/auth');
+const {
+  MessengerAuthError,
+  createLinkChallenge,
+  getAccountChannels,
+  unlinkAccountChannel,
+  browserBinding, createBrowserRequest, consumeBrowserRequest, proveBrowserEmployee,
+} = require('./messengerAuth');
+const { buildProviderLink, getTenantChannelAvailability, getTenantBotConfig, assertBrowserProviderReady } = require('./messengerDelivery');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
@@ -10,7 +19,45 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
 module.exports = function makeAuthRouter({ db, helpers }) {
   const router = express.Router();
   const loginAttempts = new Map();
-  router.use(['/login', '/change-password'], (req, res, next) => {
+  router.use('/messenger-browser',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
+  // Context is fixed by this employee router, never taken from the browser body.
+  const browserTenant = req => Number(req._resolvedTenant?.id || (process.env.DB_NAME === 'a1186497_test' && ['localhost','127.0.0.1','::1'].includes(req.hostname) ? 1 : 0));
+  router.post('/messenger-browser/start', async (req,res) => {
+    try {
+      if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
+      const tenantId=browserTenant(req);
+      if (!tenantId) throw new MessengerAuthError('TENANT_REQUIRED',400);
+      const provider=String(req.body.provider || '');
+      await assertBrowserProviderReady(await getTenantBotConfig(db,tenantId,provider));
+      const request=await createBrowserRequest(db,{tenantId,accountType:'employee',provider,binding:browserBinding(req,res),ipAddress:req.ip,purpose:req.body.purpose||'login'});
+      res.json({ok:true,request_id:request.requestId,bot_link:await buildProviderLink(db,tenantId,provider,request.token)});
+    } catch(e){sendMessengerError(res,e);}
+  });
+  router.post('/messenger-browser/status', async (req,res) => {
+    try {
+      if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
+      const value=await consumeBrowserRequest(db,{tenantId:browserTenant(req),accountType:'employee',requestId:req.body.request_id,
+        binding:req.cookies?.messenger_browser,cancel:req.body.cancel===true,onVerified:async(conn,r)=>{
+          await getTenantBotConfig(conn,r.tenant_id,r.provider);
+          const [users]=await conn.query(`SELECT u.*,t.name tenant_name,t.slug tenant_slug FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id WHERE u.id=? AND u.tenant_id=? AND t.is_active=1`,[r.account_id,r.tenant_id]);
+          if(!users[0])throw new MessengerAuthError('ACCOUNT_NOT_AVAILABLE',403);
+          if(r.purpose==='password_reset'){
+            try{employeeIdentity.validatePassword(req.body.new_password);}catch(error){throw new MessengerAuthError(error.code,400);}
+            const hash=await bcrypt.hash(req.body.new_password,10);
+            await conn.query("UPDATE app_users SET password_hash=?,auth_version=auth_version+1,must_change_password=0 WHERE tenant_id=? AND id=?",[hash,r.tenant_id,r.account_id]);
+            await conn.query("UPDATE auth_verification_challenges SET consumed_at=NOW() WHERE tenant_id=? AND account_type='employee' AND account_id=? AND consumed_at IS NULL",[r.tenant_id,r.account_id]);
+            await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE tenant_id=? AND account_type='employee' AND provider=? AND provider_user_id=? AND public_id<>? AND state IN ('pending','started','confirmed')",[r.tenant_id,r.provider,r.provider_user_id,r.public_id]);
+            return {next:'login',password_reset:true,revokedUserId:r.account_id};
+          }
+          const auth=await buildSuccessfulAuth(users[0],{id:r.tenant_id,name:users[0].tenant_name,slug:users[0].tenant_slug},conn);
+          if(!auth.body.ok)throw new MessengerAuthError(auth.body.error,auth.status);
+          return auth.body;
+        }});
+      if(value.password_reset){revokeUserStreams(browserTenant(req),value.revokedUserId);delete value.revokedUserId;}
+      res.json(value);
+    } catch(e){sendMessengerError(res,e);}
+  });
+  router.use(['/login', '/change-password', '/messenger-code/request', '/messenger-code/verify', '/messenger-links'], (req, res, next) => {
     if (!employeeIdentity.secureTransport(req)) return res.status(426).json({ ok: false, error: 'HTTPS_REQUIRED' });
     const now = Date.now();
     for (const [key, item] of loginAttempts) if (item.until <= now) loginAttempts.delete(key);
@@ -148,6 +195,30 @@ module.exports = function makeAuthRouter({ db, helpers }) {
     };
   }
 
+
+  function currentEmployeeScope(req) {
+    const accountId = Number(req.user?.userId || req.user?.sessionUserId || 0);
+    const tenantId = Number(req.user?.tenantId || 0);
+    if (!(accountId > 0) || !(tenantId > 0)) throw new MessengerAuthError('EMPLOYEE_ACCOUNT_REQUIRED', 403);
+    return { tenantId, accountType: 'employee', accountId };
+  }
+
+  function sendMessengerError(res, error, fallback = 'MESSENGER_AUTH_ERROR') {
+    const status = Number(error?.status || 0) || 500;
+    const code = error instanceof MessengerAuthError ? error.code : fallback;
+    if (error?.details?.retryAfter) res.set('Retry-After', String(error.details.retryAfter));
+    return res.status(status).json({
+      ok: false,
+      error: code,
+      ...(error?.details && typeof error.details === 'object' ? {
+        fallback_available: Boolean(error.details.fallbackAvailable),
+        provider: error.details.provider || undefined,
+        retry_after: error.details.retryAfter || undefined,
+        attempts_remaining: error.details.attemptsRemaining,
+      } : {}),
+    });
+  }
+
   router.post('/register', async (req, res) => {
     const conn = await db.getConnection();
     try {
@@ -219,6 +290,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       const userId = Number(userResult.insertId);
       const ownerRoleId = await ensureOwnerRole(conn, tenantId, userId);
       await helpers.ensureDefaultCategories(conn, tenantId);
+      await ensureEmployeeCustomer(conn, tenantId, userId);
       await conn.commit();
 
       const user = { id: userId, tenant_id: tenantId, email, login: null, name: name || 'Владелец', role: 'owner' };
@@ -237,6 +309,69 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       return res.status(500).json({ ok: false, error: 'REGISTRATION_ERROR' });
     } finally {
       conn.release();
+    }
+  });
+
+  router.post('/messenger-code/request', (req,res)=>res.status(410).json({ok:false,error:'BROWSER_CONFIRMATION_REQUIRED'}));
+  router.post('/messenger-code/verify', (req,res)=>res.status(410).json({ok:false,error:'BROWSER_CONFIRMATION_REQUIRED'}));
+
+  router.get('/messenger-links', authMiddleware, async (req, res) => {
+    try {
+      const channels = await getAccountChannels(db, currentEmployeeScope(req));
+      const availability = await getTenantChannelAvailability(db, currentEmployeeScope(req).tenantId);
+      const byProvider = Object.fromEntries(channels.map((channel) => [channel.provider, channel]));
+      return res.json({
+        ok: true,
+        availability,
+        channels: {
+          max: byProvider.max || null,
+          tg: byProvider.tg || null,
+        },
+      });
+    } catch (error) {
+      console.error('EMPLOYEE_MESSENGER_LINKS_FAILED:', error.code || error.name);
+      return sendMessengerError(res, error);
+    }
+  });
+
+  router.post('/messenger-links/:provider', authMiddleware, async (req, res) => {
+    try {
+      const provider = String(req.params.provider || '').trim().toLowerCase();
+      if (!await buildProviderLink(db, currentEmployeeScope(req).tenantId, provider, 'configuration-check')) {
+        throw new MessengerAuthError('BOT_NOT_CONFIGURED', 409);
+      }
+      const challenge = await createLinkChallenge(db, currentEmployeeScope(req), provider);
+      return res.json({
+        ok: true,
+        provider: challenge.provider,
+        link: await buildProviderLink(db, currentEmployeeScope(req).tenantId, challenge.provider, challenge.token),
+        expires_at: challenge.expiresAt,
+      });
+    } catch (error) {
+      console.error('EMPLOYEE_MESSENGER_LINK_CREATE_FAILED:', error.code || error.name);
+      return sendMessengerError(res, error);
+    }
+  });
+
+  router.delete('/messenger-links/:provider', authMiddleware, async (req, res) => {
+    try {
+      const scope = currentEmployeeScope(req);
+      const currentPassword = typeof req.body.current_password === 'string' ? req.body.current_password : '';
+      if (!currentPassword) return res.status(400).json({ ok: false, error: 'CURRENT_PASSWORD_REQUIRED' });
+      const [rows] = await db.query(
+        `SELECT password_hash FROM app_users
+         WHERE id=? AND tenant_id=? AND is_active=1 AND employee_status='active'
+         LIMIT 1`,
+        [scope.accountId, scope.tenantId]
+      );
+      if (!rows[0]?.password_hash || !await bcrypt.compare(currentPassword, rows[0].password_hash)) {
+        return res.status(400).json({ ok: false, error: 'CURRENT_PASSWORD_INVALID' });
+      }
+      await unlinkAccountChannel(db, scope, req.params.provider);
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error('EMPLOYEE_MESSENGER_UNLINK_FAILED:', error.code || error.name);
+      return sendMessengerError(res, error);
     }
   });
 
@@ -279,13 +414,19 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         if (user.employee_status === 'archived') return res.status(403).json({ ok: false, error: 'USER_ARCHIVED' });
         if (user.employee_status !== 'active' || Number(user.is_active) !== 1) return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
         if (Number(user.tenant_active) !== 1) return res.status(403).json({ ok: false, error: 'TENANT_BLOCKED' });
+        if(req.body.messenger_request_id){
+          if(Number(user.tenant_id)!==browserTenant(req))throw new MessengerAuthError('INVALID_CREDENTIALS',401);
+          if(Number(user.must_change_password))throw new MessengerAuthError('PASSWORD_CHANGE_REQUIRED',403);
+          return res.json(await proveBrowserEmployee(db,{tenantId:user.tenant_id,accountId:user.id,
+            requestId:req.body.messenger_request_id,binding:req.cookies?.messenger_browser,passwordHash:user.password_hash,authVersion:user.auth_version}));
+        }
         await db.query('UPDATE app_users SET last_login_at=NOW() WHERE id=? AND tenant_id=?', [user.id, user.tenant_id]);
         const tenant = { id: Number(user.tenant_id), name: user.tenant_name, slug: user.tenant_slug };
         const auth = await buildSuccessfulAuth(user, tenant);
         return res.status(auth.status).json(auth.body);
       }
 
-      if (corporate || !credential.includes('@')) return res.status(401).json({ ok: false, error: 'INVALID_CREDENTIALS' });
+      if (req.body.messenger_request_id || corporate || !credential.includes('@')) return res.status(401).json({ ok: false, error: 'INVALID_CREDENTIALS' });
       const [tenants] = await db.query(
         `SELECT id AS tenant_id, email, password_hash, name AS tenant_name, slug AS tenant_slug, is_active
          FROM ten_tenants WHERE email=? LIMIT 1`,
@@ -308,6 +449,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         tenant: { id: Number(tenant.tenant_id), name: tenant.tenant_name, slug: tenant.tenant_slug },
       });
     } catch (error) {
+      if(error instanceof MessengerAuthError)return sendMessengerError(res,error);
       console.error('Ошибка входа:', error);
       return res.status(500).json({ ok: false, error: 'LOGIN_ERROR' });
     }
@@ -342,12 +484,29 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'CURRENT_PASSWORD_INVALID' });
       }
       const passwordHash = await bcrypt.hash(newPassword, 10);
-      const [updated] = await db.query(
-        "UPDATE app_users SET password_hash=?, must_change_password=0 WHERE id=? AND tenant_id=? AND password_hash=? AND is_active=1 AND employee_status='active' AND auth_version=?",
-        [passwordHash, user.id, user.tenant_id, user.password_hash, user.auth_version]
-      );
-      if (!updated.affectedRows) return res.status(409).json({ ok: false, error: 'PASSWORD_CHANGE_CONFLICT' });
+      const conn = await db.getConnection();
+      try {
+        await conn.beginTransaction();
+        const [updated] = await conn.query(
+          "UPDATE app_users SET password_hash=?, must_change_password=0, auth_version=auth_version+1 WHERE id=? AND tenant_id=? AND password_hash=? AND is_active=1 AND employee_status='active' AND auth_version=?",
+          [passwordHash, user.id, user.tenant_id, user.password_hash, user.auth_version]
+        );
+        if (!updated.affectedRows) throw new MessengerAuthError('PASSWORD_CHANGE_CONFLICT', 409);
+        await conn.query(
+          `UPDATE auth_verification_challenges SET consumed_at=NOW()
+           WHERE tenant_id=? AND account_type='employee' AND account_id=? AND consumed_at IS NULL`,
+          [user.tenant_id, user.id]
+        );
+        await conn.commit();
+      } catch (error) {
+        try { await conn.rollback(); } catch (_) {}
+        throw error;
+      } finally {
+        conn.release();
+      }
       user.must_change_password = 0;
+      user.auth_version = Number(user.auth_version || 0) + 1;
+      revokeUserStreams(user.tenant_id, user.id);
       const tenant = { id: Number(user.tenant_id), name: user.tenant_name, slug: user.tenant_slug };
       const auth = await buildSuccessfulAuth(user, tenant);
       return res.status(auth.status).json(auth.body);
@@ -356,6 +515,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: 'INVALID_TOKEN' });
       }
       console.error('PASSWORD_CHANGE_FAILED:', error.code || error.name);
+      if (error instanceof MessengerAuthError) return sendMessengerError(res, error);
       return res.status(500).json({ ok: false, error: 'PASSWORD_CHANGE_ERROR' });
     }
   });

@@ -1,6 +1,7 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const customerBonus=require('../helpers/customerBonus');
 const productPassportSnapshots = require("../../services/product-passport-snapshots");
 const { sendOrderToPrintBot, enqueueSingleLabelPrintJob } = require("../printPush");
 const {isOrderEligibleForFulfillment} = require("../helpers/orderFulfillment");
@@ -656,169 +657,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     }
   }
 
-  function parseBonusCategoryGroupIds(rawValue) {
-    const values = parseOrderItemsJson(rawValue);
-    return values
-      .map((id) => Number(id || 0))
-      .filter((id, index, list) => id > 0 && list.indexOf(id) === index);
-  }
-
-  function getOrderBonusItemCategoryIds(item) {
-    const ids = new Set();
-    [
-      item?.category_id,
-      item?._category_id,
-      item?.combo_category_id,
-      item?.product?.category_id,
-      item?.product_category_id,
-    ].forEach((id) => {
-      const numericId = Number(id || 0);
-      if (numericId > 0) ids.add(numericId);
-    });
-    if (Array.isArray(item?.category_ids)) {
-      item.category_ids.forEach((id) => {
-        const numericId = Number(id || 0);
-        if (numericId > 0) ids.add(numericId);
-      });
-    }
-    return ids;
-  }
-
-  function orderBonusItemMatchesFavoriteCategory(item, selectedCategoryIds, comboCategoryIdsById = new Map()) {
-    if (!(selectedCategoryIds instanceof Set) || !selectedCategoryIds.size) return false;
-    const ids = getOrderBonusItemCategoryIds(item);
-    const comboId = Number(item?.combo_id || item?.combo?.id || 0);
-    if (comboId > 0 && comboCategoryIdsById instanceof Map) {
-      const comboCategoryId = Number(comboCategoryIdsById.get(comboId) || 0);
-      if (comboCategoryId > 0) ids.add(comboCategoryId);
-    }
-    if (!ids.size) return false;
-    return Array.from(ids).some((id) => selectedCategoryIds.has(id));
-  }
-
-  function getOrderBonusItemFavoritePercent(item, selectedCategoryPercents, comboCategoryIdsById = new Map()) {
-    if (!(selectedCategoryPercents instanceof Map) || !selectedCategoryPercents.size) return 0;
-    const comboId = Number(item?.combo_id || item?.combo?.id || 0);
-    const isCombo = String(item?.type || '').trim().toLowerCase() === 'combo' || comboId > 0;
-    if (isCombo) {
-      const comboCategoryId = Number(item?.combo_category_id || comboCategoryIdsById.get(comboId) || 0);
-      if (comboCategoryId > 0) return Math.max(0, Number(selectedCategoryPercents.get(comboCategoryId) || 0));
-      const ids = getOrderBonusItemCategoryIds(item);
-      const categoryId = Array.from(ids)[0] || 0;
-      return categoryId > 0 ? Math.max(0, Number(selectedCategoryPercents.get(categoryId) || 0)) : 0;
-    }
-    const ids = getOrderBonusItemCategoryIds(item);
-    let percent = 0;
-    ids.forEach((id) => {
-      percent = Math.max(percent, Number(selectedCategoryPercents.get(id) || 0));
-    });
-    return Math.max(0, percent);
-  }
 
   async function calculateStoredOrderBonusAccrual(queryable, tenantId, orderId, customerId, levelId) {
-    if (!(tenantId > 0) || !(orderId > 0) || !(customerId > 0) || !(levelId > 0)) return null;
-    const [[orderRow]] = await queryable.query(
-      `SELECT items
-         FROM order_orders
-        WHERE tenant_id = ? AND id = ?
-        LIMIT 1`,
-      [tenantId, orderId]
-    );
-    const items = parseOrderItemsJson(orderRow?.items).filter((item) => Number(item?.is_gift_reward || 0) !== 1);
-    if (!items.length) return null;
-
-    const [[levelRow]] = await queryable.query(
-      `SELECT id, cashback_percent, favorite_categories_limit
-         FROM mkt_bonus_levels
-        WHERE tenant_id = ? AND id = ? AND is_active = 1
-        LIMIT 1`,
-      [tenantId, levelId]
-    );
-    if (!(Number(levelRow?.id || 0) > 0)) return null;
-
-    const [rangeRows] = await queryable.query(
-      `SELECT amount, percent
-         FROM mkt_bonus_level_order_ranges
-        WHERE tenant_id = ? AND level_id = ?
-        ORDER BY amount DESC, sort_order DESC, id DESC`,
-      [tenantId, levelId]
-    );
-    const orderTotal = roundMoney(items.reduce((sum, item) => (
-      sum + Math.max(0, Number(item?.line_total || 0))
-    ), 0));
-    const orderRangePercent = (Array.isArray(rangeRows) ? rangeRows : [])
-      .map((row) => ({
-        amount: Math.max(0, Number(row?.amount || 0)),
-        percent: Math.max(0, Number(row?.percent || 0)),
-      }))
-      .find((row) => row.amount > 0 && row.percent > 0 && orderTotal >= row.amount)?.percent || 0;
-
-    let selectedCategoryPercents = new Map();
-    let comboCategoryIdsById = new Map();
-    const favoriteLimit = Math.max(0, Math.floor(Number(levelRow.favorite_categories_limit || 0)));
-    if (favoriteLimit > 0) {
-      const [groupItemRows] = await queryable.query(
-        `SELECT i.category_id, i.bonus_percent
-           FROM mkt_bonus_category_groups g
-           JOIN mkt_bonus_category_group_items i
-             ON i.tenant_id = g.tenant_id AND i.group_id = g.id
-           JOIN prod_categories pc
-             ON pc.tenant_id = i.tenant_id AND pc.id = i.category_id
-          WHERE g.tenant_id = ? AND g.month_number = MONTH(CURDATE()) AND pc.is_active = 1`,
-        [tenantId]
-      );
-      const activeCategoryPercents = new Map(
-        (Array.isArray(groupItemRows) ? groupItemRows : [])
-          .map((row) => [Number(row?.category_id || 0), Math.max(0, Number(row?.bonus_percent || 0))])
-          .filter(([categoryId]) => categoryId > 0)
-      );
-      const [categoryRows] = activeCategoryPercents.size ? await queryable.query(
-        `SELECT category_id
-           FROM mkt_customer_bonus_favorite_categories
-          WHERE tenant_id = ? AND customer_id = ? AND period_key = DATE_FORMAT(CURDATE(), '%Y-%m')`,
-        [tenantId, customerId]
-      ) : [[]];
-      const selectedIds = (Array.isArray(categoryRows) ? categoryRows : [])
-        .map((row) => Number(row?.category_id || 0))
-        .filter((id, index, list) => id > 0 && activeCategoryPercents.has(id) && list.indexOf(id) === index)
-        .slice(0, favoriteLimit);
-      selectedCategoryPercents = new Map(
-        selectedIds.map((id) => [id, activeCategoryPercents.get(id) || 0])
-      );
-      const unresolvedComboIds = [...new Set(items
-        .filter((item) => String(item?.type || '').trim().toLowerCase() === 'combo' || Number(item?.combo_id || item?.combo?.id || 0) > 0)
-        .filter((item) => !(Number(item?.combo_category_id || item?.combo?.combo_category_id || item?.combo?.category_id || 0) > 0))
-        .map((item) => Number(item?.combo_id || item?.combo?.id || 0))
-        .filter((id) => id > 0))];
-      if (selectedCategoryPercents.size && unresolvedComboIds.length) {
-        const [comboRows] = await queryable.query(
-          `SELECT combo.id AS combo_id, category.id AS category_id
-             FROM prod_combos combo
-             JOIN prod_categories category
-               ON category.tenant_id = combo.tenant_id
-              AND LOWER(TRIM(category.code)) = LOWER(TRIM(combo.category_code))
-            WHERE combo.tenant_id = ? AND combo.id IN (?)`,
-          [tenantId, unresolvedComboIds]
-        );
-        comboCategoryIdsById = new Map(
-          (Array.isArray(comboRows) ? comboRows : [])
-            .map((row) => [Number(row?.combo_id || 0), Number(row?.category_id || 0)])
-            .filter(([comboId, categoryId]) => comboId > 0 && categoryId > 0)
-        );
-      }
-    }
-
-    const cashbackPercent = Math.max(0, Number(levelRow.cashback_percent || 0)) + orderRangePercent;
-    let rawBonus = 0;
-    items.forEach((item) => {
-      const lineTotal = roundMoney(Math.max(0, Number(item?.line_total || 0)));
-      if (!(lineTotal > 0)) return;
-      const favoritePercent = getOrderBonusItemFavoritePercent(item, selectedCategoryPercents, comboCategoryIdsById);
-      const percent = cashbackPercent + favoritePercent;
-      if (!(percent > 0)) return;
-      rawBonus += lineTotal * percent / 100;
-    });
-    return Math.floor(Math.max(0, rawBonus));
+    if (!(tenantId > 0) || !(orderId > 0) || !(levelId > 0)) return null;
+    const [[order]]=await queryable.query('SELECT items FROM order_orders WHERE tenant_id=? AND id=?',[tenantId,orderId]);
+    return customerBonus.calculateAccrual(queryable,{tenantId,customerId,levelId,items:parseOrderItemsJson(order?.items)});
   }
 
   async function getBonusTransactionAmount(queryable, tenantId, orderId, type, reason) {
@@ -968,11 +811,23 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     discountsJson = null,
     benefitsMetaRaw = null,
   } = {}) {
+    if(typeof queryable.getConnection==='function'){
+      const conn=await queryable.getConnection();
+      try{
+        await conn.beginTransaction();
+        const result=await settleOrderBonus(conn,{tenantId,orderId,customerId,discountsJson,benefitsMetaRaw});
+        await conn.commit();return result;
+      }catch(error){await conn.rollback();throw error;}finally{conn.release();}
+    }
     const normalizedTenantId = Number(tenantId || 0);
     const normalizedOrderId = Number(orderId || 0);
-    const normalizedCustomerId = Number(customerId || 0);
+    const [[bonusOrder]]=await queryable.query(`SELECT guest_session_hash,bonus_customer_id,benefits_meta_json
+      FROM order_orders WHERE tenant_id=? AND id=? FOR UPDATE`,[normalizedTenantId,normalizedOrderId]);
+    const guestOrigin=Boolean(bonusOrder?.guest_session_hash);
+    const normalizedCustomerId = Number(guestOrigin?bonusOrder.bonus_customer_id:customerId)||0;
     if (!(normalizedTenantId > 0) || !(normalizedOrderId > 0) || !(normalizedCustomerId > 0)) return { redeemed: 0, accrued: 0 };
     const settleReferralRewards = async () => {
+      if(guestOrigin)return null;
       const provider = getOrderBenefitsAccrualProvider();
       if (!provider || typeof provider.settleReferralRewards !== "function") return null;
       return provider.settleReferralRewards({
@@ -982,8 +837,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         customerId: normalizedCustomerId,
       });
     };
-    const benefitsMeta = parseOrderBenefitsMetaJson(benefitsMetaRaw);
-    const redeemAmount = getOrderBonusRedeemAmount(discountsJson, benefitsMeta);
+    const benefitsMeta = parseOrderBenefitsMetaJson(guestOrigin?bonusOrder.benefits_meta_json:benefitsMetaRaw);
+    const redeemAmount = guestOrigin?0:getOrderBonusRedeemAmount(discountsJson, benefitsMeta);
     if (redeemAmount > 0) {
       await reserveOrderBonusRedeem(queryable, {
         tenantId: normalizedTenantId,
@@ -994,7 +849,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       });
     }
     const [accountRows] = await queryable.query(
-      `SELECT id, customer_id, level_id, balance
+      `SELECT id, customer_id, level_id, balance,status
          FROM mkt_customer_bonus_accounts
         WHERE tenant_id=? AND customer_id=?
         LIMIT 1
@@ -1002,7 +857,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       [normalizedTenantId, normalizedCustomerId]
     );
     const account = Array.isArray(accountRows) && accountRows.length ? accountRows[0] : null;
-    if (!(Number(account?.id || 0) > 0)) {
+    if (!(Number(account?.id || 0) > 0) || (guestOrigin&&account.status!=='active')) {
       await settleReferralRewards();
       return { redeemed: 0, accrued: 0 };
     }
@@ -1894,6 +1749,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         o.created_by_user_id,
         o.customer_name,
         o.customer_phone,
+        o.auth_status_at_creation,
+        IF(o.guest_session_hash IS NULL,NULL,LEFT(SHA2(o.guest_session_hash,256),16)) guest_session_audit_id,
+        o.bonus_customer_id,
+        (SELECT c.phone FROM cust_customers c WHERE c.tenant_id=o.tenant_id AND c.id=o.customer_id) owner_phone,
+        (SELECT c.phone FROM cust_customers c WHERE c.tenant_id=o.tenant_id AND c.id=o.bonus_customer_id) bonus_phone,
+        (SELECT COALESCE(SUM(bt.amount),0) FROM mkt_customer_bonus_transactions bt WHERE bt.tenant_id=o.tenant_id AND bt.order_id=o.id AND bt.type='accrual') bonus_accrued,
+        (SELECT GROUP_CONCAT(bt.id ORDER BY bt.id) FROM mkt_customer_bonus_transactions bt WHERE bt.tenant_id=o.tenant_id AND bt.order_id=o.id AND bt.type='accrual') bonus_transaction_ids,
         o.promo_code,
         o.address,
         o.comment,
@@ -2030,6 +1892,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       customer_id: r.customer_id,
       customer_name: r.customer_name,
       customer_phone: r.customer_phone,
+      auth_status_at_creation:r.auth_status_at_creation||(r.guest_session_audit_id?'unverified':null),
+      guest_session_audit_id:r.guest_session_audit_id||null,
+      owner_phone:r.owner_phone||null,
+      bonus_customer_id:r.bonus_customer_id||null,
+      bonus_phone:r.bonus_phone||null,
+      bonus_accrued:Number(r.bonus_accrued)||0,
+      bonus_transaction_ids:String(r.bonus_transaction_ids||'').split(',').map(Number).filter(id=>id>0),
       promo_code: r.promo_code ?? null,
       address: r.address,
       comment: r.comment,
@@ -2344,6 +2213,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       let where = `o.tenant_id=? AND o.store_id=? AND o.is_active=1`;
       const params = [tenantId, storeId];
 
+      const contactPhone=helpers.normalizePhone(req.query.contact_phone||req.query.phone);
+      const ownerId=Number(req.query.customer_id||0);
+      if(contactPhone){where+=' AND o.customer_phone=?';params.push(contactPhone);}
+      if(Number.isSafeInteger(ownerId)&&ownerId>0){where+=' AND o.customer_id=?';params.push(ownerId);}
+      const search=String(req.query.q||'').trim();
+      if(search){
+        const normalized=helpers.normalizePhone(search);
+        where+=` AND (CAST(o.id AS CHAR)=? OR o.customer_phone LIKE ? OR EXISTS(SELECT 1 FROM cust_customers owner
+          WHERE owner.tenant_id=o.tenant_id AND owner.id=o.customer_id AND owner.phone LIKE ?))`;
+        params.push(search,`%${normalized||search}%`,`%${normalized||search}%`);
+      }
+
       const accessRule = String(req.permission?.accessRule || "all");
       if (req.rbacContext === "courier") {
         where += ` AND (o.assigned_user_id IS NULL OR o.assigned_user_id=?)`;
@@ -2389,6 +2270,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
             o.public_id,
             DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
              o.customer_id,
+             (SELECT owner.phone FROM cust_customers owner WHERE owner.tenant_id=o.tenant_id AND owner.id=o.customer_id) owner_phone,
+             o.auth_status_at_creation,
              o.assigned_user_id,
             o.customer_name,
             o.customer_phone,
@@ -2472,6 +2355,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           o.public_id,
           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
            o.customer_id,
+           (SELECT owner.phone FROM cust_customers owner WHERE owner.tenant_id=o.tenant_id AND owner.id=o.customer_id) owner_phone,
+           o.auth_status_at_creation,
            o.assigned_user_id,
            o.created_by_user_id,
           o.customer_name,

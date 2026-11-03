@@ -995,7 +995,7 @@ function normalizePushPreferences(raw, statuses) {
     chat: source.chat !== false,
     important: source.important !== false,
     orders: source.orders !== false,
-    orderStatusIds: selectedIds.length ? selectedIds : availableIds,
+    orderStatusIds: Array.isArray(source.orderStatusIds) ? selectedIds : availableIds,
   };
 }
 
@@ -1043,6 +1043,9 @@ async function sendOrderStatusPush(tenantId, storeId, order, options={}) {
   const statusText = statusTitle
     ? statusTitle.charAt(0).toLocaleLowerCase("ru-RU") + statusTitle.slice(1)
     : "обновлён";
+  await require('./telegramNotifications').sendCustomerOrderStatus(tenantId,storeId,order,{db}).catch(error=>{
+    console.error('CUSTOMER_TELEGRAM_STATUS_FAILED:', /^[A-Z0-9_]+$/.test(String(error.code))?error.code:'DELIVERY_ERROR');
+  });
   await sendPushToSubscriptions(rows, Object.assign({
     type: "order_status",
     tenant_id: Number(tenantId),
@@ -1368,6 +1371,8 @@ async function resolveCustomerClientIdByToken(tenantId, customerToken) {
       WHERE s.tenant_id = ?
         AND s.token = ?
         AND s.is_active = 1
+        AND s.revoked_at IS NULL
+        AND (s.expires_at IS NULL OR s.expires_at>UTC_TIMESTAMP())
         AND c.is_active = 1
       LIMIT 1`,
     [Number(tenantId), token]
@@ -4687,8 +4692,8 @@ function makeChatTempRouter() {
         [Number(tenantId), Number(storeId), Number(clientId)]
       );
       const row = rows?.[0] || {};
-      let ids = [];
-      try { ids = JSON.parse(row.push_order_status_ids_json || "[]"); } catch {}
+      let ids;
+      if(row.push_order_status_ids_json!=null)ids=JSON.parse(row.push_order_status_ids_json);
       return res.json({ ok: true, data: { statuses, preferences: normalizePushPreferences({ chat: Number(row.push_chat_enabled) !== 0, important: Number(row.push_important_enabled) !== 0, orders: Number(row.push_orders_enabled) !== 0, orderStatusIds: ids }, statuses) } });
     } catch (err) {
       console.error("chat-temp GET /push/preferences error:", err);
@@ -4705,10 +4710,14 @@ function makeChatTempRouter() {
       const statuses = await listOrderStatuses(tenantId, storeId);
       const preferences = normalizePushPreferences(req.body?.preferences, statuses);
       await ensurePushSubscriptionsTable();
-      await db.query(
+      const [updated] = await db.query(
         `UPDATE chat_push_subscriptions SET push_chat_enabled=?, push_important_enabled=?, push_orders_enabled=?, push_order_status_ids_json=? WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in'`,
         [preferences.chat ? 1 : 0, preferences.important ? 1 : 0, preferences.orders ? 1 : 0, JSON.stringify(preferences.orderStatusIds), Number(tenantId), Number(storeId), Number(clientId)]
       );
+      if(!updated.affectedRows){
+        const [[subscription]]=await db.query("SELECT id FROM chat_push_subscriptions WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in' LIMIT 1",[Number(tenantId),Number(storeId),Number(clientId)]);
+        if(!subscription)return res.status(409).json({ok:false,error:'PUSH_SUBSCRIPTION_REQUIRED'});
+      }
       if (!preferences.important) {
         await db.query(
           `UPDATE mkt_customer_notification_consents

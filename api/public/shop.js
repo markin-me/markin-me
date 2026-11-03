@@ -7,9 +7,6 @@ const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendNewOrderMaxNotification } = require('../maxNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
 const makeChatTempRouter = require('../chatTemp');
-const {
-  getEffectiveTelegramBotConfig,
-} = require('../../data/system-settings');
 const { geocodeStoreAddress } = require('../../data/map-geocoder');
 const { getTenantMapConfig } = require('../../data/tenant-map-config');
 const {
@@ -41,11 +38,6 @@ const {
 const discountHelpers = require('../helpers/discounts');
 const {
   makeLinkToken,
-  buildMaxDeepLink,
-  getTenantMaxBotId,
-  getTenantMaxBotToken,
-  sendMaxMessage,
-  confirmMaxLink,
   notifyCustomerLogin,
 } = require('../maxIntegration');
 const {
@@ -64,10 +56,249 @@ const {createOrderOnlinePayment,paymentError} = require('../../data/order-online
 const {isOrderEligibleForFulfillment} = require('../helpers/orderFulfillment');
 const {buildOnlineItemPrices} = require('../helpers/orderOnlinePricing');
 const {getOrderPaymentSummary,storedProjection,clientPaymentSummary}=require('../helpers/orderPaymentSummary');
-const TELEGRAM_API = 'https://api.telegram.org/bot';
+const {
+  MessengerAuthError,
+  createLinkChallenge,
+  getAccountChannels,
+  issueCodeChallenge,
+  unlinkAccountChannel,
+  verifyCodeChallenge,
+  browserBinding, createBrowserRequest, consumeBrowserRequest,verifyCustomerBrowserCode,
+} = require('../messengerAuth');
+const { buildProviderLink, deliverCode, getTenantBotConfig, assertBrowserProviderReady } = require('../messengerDelivery');
+const customerAuth=require('../helpers/customerAuth');
+const customerBonus=require('../helpers/customerBonus');
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, presenceService, paymentServiceClient }) {
   const router = express.Router();
+  const phoneAttempts=new Map();
+  const customerSessionHasChannel=`EXISTS(SELECT 1 FROM auth_account_links a
+    JOIN auth_account_messenger_links l ON l.account_link_id=a.id
+    JOIN auth_messenger_channels ch ON ch.id=l.channel_id AND ch.person_id=a.person_id AND ch.revoked_at IS NULL
+    WHERE a.tenant_id=s.tenant_id AND a.account_type='customer' AND a.account_id=s.customer_id)`;
+  router.use(['/auth/phone-flow','/auth/guest'],(req,res,next)=>{
+    res.set('Cache-Control','no-store');
+    if(process.env.NODE_ENV==='production'&&!req.secure)return res.status(426).json({ok:false,error:'HTTPS_REQUIRED'});
+    const now=Date.now(),key=String(req.ip),old=phoneAttempts.get(key),item=old&&old.until>now?old:{count:0,until:now+900000};
+    if(phoneAttempts.size>10000)for(const [k,v]of phoneAttempts)if(v.until<now)phoneAttempts.delete(k);
+    phoneAttempts.set(key,item);if(++item.count>60)return res.status(429).json({ok:false,error:'LOGIN_RATE_LIMITED'});next();
+  });
+  router.use('/auth/messenger-browser',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
+  router.use('/orders',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
+  const browserCustomerTenant=req=>Number(req._resolvedTenant?.id || (['localhost','127.0.0.1','::1'].includes(req.hostname)&&process.env.DB_NAME==='a1186497_test'?1:0));
+  router.use(['/bonus','/checkout/benefits'],async(req,res,next)=>{
+    const token=str(req.headers['x-customer-token']);
+    const path=req.originalUrl.split('?')[0];
+    if(req.method==='GET'&&path.endsWith('/bonus/config'))return next();
+    try{
+      if(!token.startsWith('g_')){
+        const customer=token?await getCustomerByToken(helpers.getTenantId(req),token,{refreshSession:false}):null;
+        if(customer&&customer.auth_strength!=='strong')return res.status(403).json({ok:false,error:'CUSTOMER_VERIFICATION_REQUIRED'});
+        return next();
+      }
+      if(!await customerAuth.getGuest(db,helpers.getTenantId(req),token,false,helpers.getStoreId(req)))return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+      if(req.method==='POST'&&path.endsWith('/bonus/preview'))return next();
+      return res.status(403).json({ok:false,error:'CUSTOMER_VERIFICATION_REQUIRED'});
+    }catch(error){sendCustomerMessengerError(res,error);}
+  });
+  async function customerBrowserSession(conn,r,req){
+    const tenantId=Number(r.tenant_id),token=makeToken32();
+    await dualWriteSession(conn,{tenantId,storeId:helpers.getStoreId(req),customerId:r.account_id,token,expiresAt:null,isActive:1,authStrength:'strong',userAgent:String(req.headers['user-agent']||'').slice(0,500),ipAddress:String(req.ip||'').slice(0,64)});
+    if(r.guest_session_hash){
+      await customerAuth.promoteGuest(conn,tenantId,str(req.headers['x-customer-token']),r,helpers.getStoreId(req));
+      await syncCustomerOrderMetrics(conn,tenantId,r.account_id);
+    }
+    else if(str(req.headers['x-customer-token']).startsWith('g_'))throw new MessengerAuthError('GUEST_SESSION_MISMATCH',403);
+    const [[customer]]=await conn.query("SELECT id,name,phone,DATE_FORMAT(birthday,'%Y-%m-%d') birthday,photo FROM cust_customers WHERE tenant_id=? AND id=?",[tenantId,r.account_id]);
+    return {ok:true,token,customer};
+  }
+  router.post('/auth/phone-flow/start',async(req,res)=>{
+    try{
+      const tenantId=browserCustomerTenant(req),phone=customerAuth.phone(req.body.phone),policy=await customerAuth.settings(db,tenantId),customer=await customerAuth.byPhone(db,tenantId,phone);
+      const providers=[];
+      for(const provider of ['max','tg'])if(policy[provider]){try{await getTenantBotConfig(db,tenantId,provider,{customer:true});providers.push(provider);}catch(error){if(error.code!=='TENANT_BOT_UNAVAILABLE')throw error;}}
+      if(!customer?.phone_verified_at)return res.json({ok:true,mode:'unverified',channels:providers,customer_exists:Boolean(customer),birthday_allowed:Boolean(customer)&&policy.birthday});
+      const channels=await getAccountChannels(db,customerScope(tenantId,customer.id),{includePrivate:true});
+      const available=providers.filter(p=>channels.some(c=>c.provider===p&&c.verifiedAt));
+      if(!available.length){
+        if(channels.length)throw new MessengerAuthError('CUSTOMER_MESSENGER_NOT_AVAILABLE',409);
+        return res.json({ok:true,mode:'unverified',channels:providers,customer_exists:true,relink_required:true,birthday_allowed:false});
+      }
+      let provider=req.body.provider?String(req.body.provider):available[0];if(!available.includes(provider))throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
+      const guestToken=str(req.headers['x-customer-token']);
+      const guest=guestToken.startsWith('g_')?await customerAuth.getGuest(db,tenantId,guestToken,false,helpers.getStoreId(req)):null;
+      if(guestToken.startsWith('g_')&&!guest)throw new MessengerAuthError('UNAUTHORIZED',401);
+      const binding=browserBinding(req,res);
+      if(!req.body.provider){
+        const [[existing]]=await db.query(`SELECT r.public_id,r.provider,
+          GREATEST(0,TIMESTAMPDIFF(SECOND,NOW(),c.resend_after)) resend_after,
+          TIMESTAMPDIFF(SECOND,NOW(),LEAST(r.expires_at,c.expires_at,DATE_ADD(c.created_at,INTERVAL 3 MINUTE))) expires_in
+          FROM auth_browser_requests r JOIN auth_verification_challenges c ON c.public_id=r.code_challenge_id
+          WHERE r.tenant_id=? AND r.account_type='customer' AND r.account_id=? AND r.requested_phone=?
+            AND r.guest_session_hash <=> ? AND r.browser_hash=? AND r.provider IN (?)
+            AND r.state='pending' AND r.expires_at>NOW()
+            AND c.tenant_id=r.tenant_id AND c.account_type=r.account_type AND c.account_id=r.account_id
+            AND c.provider=r.provider AND c.purpose='login' AND c.delivery_status='sent'
+            AND c.consumed_at IS NULL AND c.expires_at>NOW() AND DATE_ADD(c.created_at,INTERVAL 3 MINUTE)>NOW() AND c.attempts<c.max_attempts
+          ORDER BY r.created_at DESC LIMIT 1`,[tenantId,customer.id,phone,guest?.token_hash||null,crypto.createHash('sha256').update(binding,'utf8').digest(),available]);
+        if(existing)return res.json({ok:true,mode:'code',request_id:existing.public_id,provider:existing.provider,channels:available,link_channels:providers,expires_in:Number(existing.expires_in),resend_after:Number(existing.resend_after),already_sent:true});
+      }
+      const request=await createBrowserRequest(db,{tenantId,accountType:'customer',provider,binding,ipAddress:req.ip,guestSessionHash:guest?.token_hash||null});
+      await db.query('UPDATE auth_browser_requests SET requested_phone=?,account_id=? WHERE public_id=?',[phone,customer.id,request.requestId]);
+      let challenge;
+      try{challenge=await issueCodeChallenge(db,{tenantId,accountType:'customer',accountId:customer.id,purpose:'login',provider,ipAddress:req.ip,deliver:payload=>deliverCode(db,payload,{customer:true})});}
+      catch(error){
+        const otherProvider=available.find(p=>p!==provider);
+        if(['CODE_DELIVERY_FAILED','TELEGRAM_BOT_START_REQUIRED'].includes(error.code)&&otherProvider){
+          provider=otherProvider;
+          try{challenge=await issueCodeChallenge(db,{tenantId,accountType:'customer',accountId:customer.id,purpose:'login',provider,ipAddress:req.ip,deliver:payload=>deliverCode(db,payload,{customer:true})});}
+          catch(telegramError){error=telegramError;}
+        }
+        if(!challenge){
+        if(error.code==='CODE_RESEND_TOO_SOON'){
+          const [[existing]]=await db.query(`SELECT r.public_id,
+            GREATEST(0,TIMESTAMPDIFF(SECOND,NOW(),c.resend_after)) resend_after,
+            TIMESTAMPDIFF(SECOND,NOW(),LEAST(r.expires_at,c.expires_at,DATE_ADD(c.created_at,INTERVAL 3 MINUTE))) expires_in
+            FROM auth_browser_requests r JOIN auth_verification_challenges c ON c.public_id=r.code_challenge_id
+            WHERE r.tenant_id=? AND r.account_type='customer' AND r.account_id=? AND r.requested_phone=? AND r.guest_session_hash <=> ?
+              AND r.provider=? AND r.browser_hash=? AND r.state='pending' AND r.expires_at>NOW()
+              AND c.tenant_id=r.tenant_id AND c.account_type=r.account_type AND c.account_id=r.account_id
+              AND c.provider=r.provider AND c.purpose='login' AND c.delivery_status='sent'
+              AND c.consumed_at IS NULL AND c.expires_at>NOW() AND DATE_ADD(c.created_at,INTERVAL 3 MINUTE)>NOW() AND c.attempts<c.max_attempts
+            ORDER BY r.created_at DESC LIMIT 1`,[tenantId,customer.id,phone,guest?.token_hash||null,provider,crypto.createHash('sha256').update(binding,'utf8').digest()]);
+          if(existing)return res.json({ok:true,mode:'code',request_id:existing.public_id,provider,channels:available,link_channels:providers,expires_in:Number(existing.expires_in),resend_after:Number(existing.resend_after),already_sent:true});
+        }
+        if(['CODE_DELIVERY_FAILED','TELEGRAM_BOT_START_REQUIRED'].includes(error.code)){
+          error.details={...error.details,fallbackAvailable:false,linkChannels:providers.filter(p=>!available.includes(p)),deliveryFailed:true};
+        }
+        throw error;
+        }
+      }
+      await db.query('UPDATE auth_browser_requests SET provider=?,code_challenge_id=?,expires_at=DATE_ADD(NOW(),INTERVAL 3 MINUTE) WHERE public_id=?',[provider,challenge.requestId,request.requestId]);
+      res.json({ok:true,mode:'code',request_id:request.requestId,provider,channels:available,link_channels:providers,expires_in:180,resend_after:60});
+    }catch(error){sendCustomerMessengerError(res,error);}
+  });
+  router.post('/auth/phone-flow/verify',async(req,res)=>{
+    try{res.json(await verifyCustomerBrowserCode(db,{tenantId:browserCustomerTenant(req),requestId:req.body.request_id,binding:req.cookies?.messenger_browser,code:req.body.code,onVerified:(conn,r)=>customerBrowserSession(conn,r,req)}));}
+    catch(error){sendCustomerMessengerError(res,error);}
+  });
+  router.post('/auth/guest',async(req,res)=>{
+    try{res.json(await customerAuth.createGuest(db,browserCustomerTenant(req),req.body.phone,str(req.headers['x-customer-token']),helpers.getStoreId(req)));}catch(error){sendCustomerMessengerError(res,error);}
+  });
+  router.use('/me',async(req,res,next)=>{
+    res.set('Cache-Control','no-store');
+    const token=str(req.headers['x-customer-token']);if(!token.startsWith('g_'))return next();
+    try{
+      const tenantId=browserCustomerTenant(req),guest=await customerAuth.getGuest(db,tenantId,token,false,helpers.getStoreId(req));if(!guest)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+      const customer=customerAuth.guestCustomer(guest),route=req.path;
+      if((req.method==='PUT'&&route==='/')||(['POST','DELETE'].includes(req.method)&&route==='/photo')){req.authGuest=guest;return next();}
+      if(req.method==='GET'&&route==='/bootstrap')return res.json({ok:true,data:{customer,addresses:guest.addresses}});
+      if(req.method==='GET'&&route==='/')return res.json({ok:true,data:customer,customer});
+      if(req.method==='GET'&&route==='/settings-bootstrap'){
+        const policy=await customerAuth.settings(db,tenantId);
+        return res.json({ok:true,data:{auth_options:{max_login_enabled:policy.max,tg_login_enabled:policy.tg},max:{linked:false},tg:{linked:false},phone_verification:{verified:false}}});
+      }
+      if(req.method==='GET'&&/^\/orders(?:\/[0-9]+)?$/.test(route)){req.authGuest=guest;return next();}
+      const address=route.match(/^\/addresses(?:\/([0-9]+))?(\/default)?$/);
+      if(address)return res.json(await customerAuth.guestAddresses(db,tenantId,token,req.method,address[1],{...req.body,default_only:Boolean(address[2])},helpers.getStoreId(req)));
+      return res.status(403).json({ok:false,error:'GUEST_OPERATION_FORBIDDEN'});
+    }catch(error){sendCustomerMessengerError(res,error);}
+  });
+  router.use(['/auth/messenger-browser','/auth/link-token','/auth/messenger-links','/phone-verification','/max/link-token','/tg/link-token'],async(req,res,next)=>{
+    try{
+      if(process.env.NODE_ENV==='production'&&!req.secure)return res.status(426).json({ok:false,error:'HTTPS_REQUIRED'});
+      if(req.originalUrl.split('?')[0].includes('/auth/messenger-browser/')||req.method==='GET')return next();
+      if(req.method==='POST'&&req.originalUrl.split('?')[0].endsWith('/auth/link-token')&&str(req.headers['x-customer-token']).startsWith('g_')){
+        if(!await customerAuth.getGuest(db,browserCustomerTenant(req),str(req.headers['x-customer-token']),false,helpers.getStoreId(req)))return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+        return next();
+      }
+      const customer=await getCustomerByToken(helpers.getTenantId(req),str(req.headers['x-customer-token']),{refreshSession:false});
+      if(!customer||customer.auth_strength!=='strong')return res.status(403).json({ok:false,error:'STRONG_AUTH_REQUIRED'});
+      next();
+    }catch(e){next(e);}
+  });
+  router.post('/auth/messenger-browser/start', async (req,res)=>{
+    try{
+      const tenantId=browserCustomerTenant(req),provider=String(req.body.provider || '');
+      const phone=customerAuth.phone(req.body.phone),policy=await customerAuth.settings(db,tenantId);
+      if(!policy[provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
+      const customer=await customerAuth.byPhone(db,tenantId,phone);
+      if(customer?.phone_verified_at&&(await getAccountChannels(db,customerScope(tenantId,customer.id),{includePrivate:true})).some(channel=>channel.provider===provider&&channel.verifiedAt))throw new MessengerAuthError('CUSTOMER_CODE_REQUIRED',409);
+      await assertBrowserProviderReady(await getTenantBotConfig(db,tenantId,provider,{customer:true}));
+      const guestToken=str(req.headers['x-customer-token']);
+      const guest=guestToken.startsWith('g_')?await customerAuth.getGuest(db,tenantId,guestToken,false,helpers.getStoreId(req)):null;
+      if(guestToken.startsWith('g_')&&!guest)throw new MessengerAuthError('UNAUTHORIZED',401);
+      const request=await createBrowserRequest(db,{tenantId,accountType:'customer',provider,binding:browserBinding(req,res),ipAddress:req.ip,
+        purpose:guest?'profile_link':'login',guestSessionHash:guest?.token_hash||null});
+      await db.query('UPDATE auth_browser_requests SET requested_phone=? WHERE public_id=?',[phone,request.requestId]);
+      res.json({ok:true,context:'LOGIN',request_id:request.requestId,bot_link:await buildProviderLink(db,tenantId,provider,request.token,{customer:true})});
+    }catch(e){console.error('CUSTOMER_BROWSER_START_FAILED:',e.code||e.name);sendCustomerMessengerError(res,e);}
+  });
+  router.post('/auth/messenger-browser/status', async (req,res)=>{
+    try{
+      const tenantId=browserCustomerTenant(req);
+      const value=await consumeBrowserRequest(db,{tenantId,accountType:'customer',requestId:req.body.request_id,
+        binding:req.cookies?.messenger_browser,guestToken:str(req.headers['x-customer-token']),storeId:helpers.getStoreId(req),cancel:req.body.cancel===true,onVerified:async(conn,r)=>{
+          await getTenantBotConfig(conn,tenantId,r.provider,{customer:true});
+          if(!(await customerAuth.settings(conn,tenantId))[r.provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
+          return customerBrowserSession(conn,r,req);
+        }});
+      if(value.state==='confirmed'){
+        try{await mergeGuestChatIntoCustomerIfNeeded(tenantId,readIncomingGuestChatClientId(req),value.customer.id);}
+        catch(error){console.error('AUTH_GUEST_CHAT_MERGE_FAILED:',error.code || error.name);value.warnings=['GUEST_CHAT_MERGE_FAILED'];}
+      }
+      res.json(value);
+    }catch(e){sendCustomerMessengerError(res,e);}
+  });
+  const birthdayAttempts=new Map();
+  router.use('/auth/login',(req,res,next)=>{
+    const now=Date.now(),key=String(req.ip),previous=birthdayAttempts.get(key);
+    if(birthdayAttempts.size>10000)for(const [k,v]of birthdayAttempts)if(v.until<now)birthdayAttempts.delete(k);
+    const item=previous&&previous.until>now?previous:{count:0,until:now+15*60000};
+    birthdayAttempts.set(key,item);
+    if(++item.count>10){res.set('Retry-After',String(Math.ceil((item.until-now)/1000)));return res.status(429).json({ok:false,error:'LOGIN_RATE_LIMITED'});}
+    next();
+  });
+  router.use(['/auth/messenger-code', '/auth/link-token', '/auth/messenger-links', '/phone-verification', '/max/link-token', '/tg/link-token'], (req, res, next) => {
+    if (process.env.NODE_ENV === 'production' && !req.secure) {
+      return res.status(426).json({ ok: false, error: 'HTTPS_REQUIRED' });
+    }
+    next();
+  });
+  const customerScope = (tenantId, customerId) => ({
+    tenantId: Number(tenantId),
+    accountType: 'customer',
+    accountId: Number(customerId),
+  });
+  const sendCustomerMessengerError = (res, error, fallback = 'MESSENGER_AUTH_ERROR') => {
+    const status = Number(error?.status || 0) || 500;
+    if (error?.details?.retryAfter) res.set('Retry-After', String(error.details.retryAfter));
+    return res.status(status).json({
+      ok: false,
+      error: error instanceof MessengerAuthError ? error.code : fallback,
+      fallback_available: Boolean(error?.details?.fallbackAvailable),
+      provider: error?.details?.provider || undefined,
+      retry_after: error?.details?.retryAfter || undefined,
+      attempts_remaining: error?.details?.attemptsRemaining,
+      link_channels: error?.details?.linkChannels,
+      delivery_failed: error?.details?.deliveryFailed || undefined,
+    });
+  };
+  async function enabledMessengerProvider(tenantId, requestedProvider) {
+    const [rows] = await db.query(
+      'SELECT max_login_enabled, tg_login_enabled FROM ten_tenants WHERE id=? LIMIT 1',
+      [tenantId]
+    );
+    const maxEnabled = Number(rows[0]?.max_login_enabled || 0) === 1;
+    const tgEnabled = Number(rows[0]?.tg_login_enabled || 0) === 1;
+    const requested = String(requestedProvider || '').trim().toLowerCase().replace('telegram', 'tg');
+    if (!maxEnabled && !tgEnabled) throw new MessengerAuthError('MESSENGER_LOGIN_DISABLED', 409);
+    if (requested && !['max', 'tg'].includes(requested)) throw new MessengerAuthError('BAD_PROVIDER', 400);
+    if (requested === 'max' && !maxEnabled) throw new MessengerAuthError('MESSENGER_LOGIN_DISABLED', 409);
+    if (requested === 'tg' && !tgEnabled) throw new MessengerAuthError('MESSENGER_LOGIN_DISABLED', 409);
+    if (requested) return requested;
+    return null;
+  }
   const onlinePayments = createOrderOnlinePayment({db,client:paymentServiceClient});
   // Reuse the release actions below; this worker only resumes durable pending work.
   let releaseWorkerStarted=false;
@@ -221,9 +452,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
   // Admin and customer refresh use the same application flow and durable release marker.
   router.synchronizeOnlinePayment=synchronizeOnlinePayment;
   async function deliverPaymentReleaseEffects(order,payload){
-    const botToken=getEffectiveTelegramBotConfig().telegram_bot_token;
     const actions={print:()=>sendOrderToPrintBot({db,order:payload,tenantId:order.tenant_id,storeId:order.store_id,strictErrors:true}),
-      telegram:()=>botToken?sendNewOrderNotification(order.tenant_id,order.store_id,payload,{db,botToken,strictErrors:true}):null,
+      telegram:()=>sendNewOrderNotification(order.tenant_id,order.store_id,payload,{db,strictErrors:true}),
       max:()=>sendNewOrderMaxNotification(order.tenant_id,order.store_id,payload,{db,strictErrors:true}),
       push:()=>typeof makeChatTempRouter.sendOrderStatusPush==='function'?makeChatTempRouter.sendOrderStatusPush(order.tenant_id,order.store_id,payload,{strictErrors:true}):null};
     for(const [effect,send] of Object.entries(actions)){
@@ -251,16 +481,27 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       res.set('cache-control','no-store').json({ok:true,data:await onlineAvailability(tenantId,storeId)});
     } catch(error) { res.status(error.status || 503).json({ok:false,error:error.code || 'PAYMENT_SERVICE_UNAVAILABLE'}); }
   });
-  async function authorizeOnlineOrder(req) {
-    const tenantId=helpers.getTenantId(req),order=await onlinePayments.load(tenantId,req.params.publicId);
+  async function authorizeCustomerOrder(req,order,{allowPaymentToken=false,allowSubmissionScope=false,submissionReplay=false}={}) {
+    const tenantId=helpers.getTenantId(req),storeId=helpers.getStoreId(req);
+    if(Number(order.tenant_id)!==tenantId || (Number(order.store_id)!==storeId
+      && !(allowSubmissionScope&&Number(order.submission_scope_store_id)===storeId)))throw paymentError('ORDER_NOT_FOUND',404);
     const token=str(req.headers['x-customer-token']);
-    if (token) {
+    if(token.startsWith('g_')){
+      const guest=await customerAuth.getGuest(db,tenantId,token,false,storeId);
+      if(!guest || order.customer_id!=null || !Buffer.isBuffer(order.guest_session_hash)
+        || order.guest_session_hash.length!==guest.token_hash.length
+        || !crypto.timingSafeEqual(order.guest_session_hash,guest.token_hash))throw paymentError('ORDER_NOT_FOUND',404);
+    }else if (token) {
       const customer=await getCustomerByToken(tenantId,token);
       if (!customer || Number(customer.id)!==Number(order.customer_id)) throw paymentError('ORDER_NOT_FOUND',404);
     } else {
-      const accessToken=String(req.headers['x-order-payment-token'] || '');
-      if (!order.submission_id || accessToken!==String(order.submission_id)) throw paymentError('ORDER_NOT_FOUND',404);
+      const accessToken=String(req.headers[submissionReplay?'idempotency-key':'x-order-payment-token'] || '');
+      if (!allowPaymentToken || order.guest_session_hash || !order.submission_id || accessToken!==String(order.submission_id)) throw paymentError('ORDER_NOT_FOUND',404);
     }
+  }
+  async function authorizeOnlineOrder(req) {
+    const order=await onlinePayments.load(helpers.getTenantId(req),req.params.publicId);
+    await authorizeCustomerOrder(req,order,{allowPaymentToken:true,allowSubmissionScope:true});
     return order;
   }
   router.post('/orders/:publicId/pay',async(req,res)=>{
@@ -356,7 +597,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
 
   async function findOrderSubmission(tenantId, scopeStoreId, submissionId) {
     const [rows] = await db.query(
-      `SELECT id, public_id, submission_fingerprint
+      `SELECT id, public_id, submission_fingerprint,tenant_id,store_id,submission_scope_store_id,submission_id,customer_id,guest_session_hash
        FROM order_orders
        WHERE tenant_id=? AND submission_scope_store_id=? AND submission_id=?
        LIMIT 1`,
@@ -2591,48 +2832,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return null;
   }
 
-  async function isTenantMaxLoginEnabled(tenantId) {
-    const [rows] = await db.query(
-      'SELECT max_login_enabled FROM ten_tenants WHERE id=? LIMIT 1',
-      [tenantId]
-    );
-    if (!rows.length) return false;
-    return Number(rows[0].max_login_enabled || 0) === 1;
-  }
-
-  async function isTenantTgLoginEnabled(tenantId) {
-    const [rows] = await db.query(
-      'SELECT tg_login_enabled FROM ten_tenants WHERE id=? LIMIT 1',
-      [tenantId]
-    );
-    if (!rows.length) return false;
-    return Number(rows[0].tg_login_enabled || 0) === 1;
-  }
-
-  async function sendTenantTelegramText({ tenantId, telegramUserId, text }) {
-    const [rows] = await db.query(
-      'SELECT telegram_bot_token FROM ten_tenants WHERE id=? LIMIT 1',
-      [tenantId]
-    );
-    const botToken = String(rows[0]?.telegram_bot_token || '').trim();
-    if (!botToken) throw new Error('TG_BOT_NOT_CONFIGURED');
-    if (!telegramUserId) throw new Error('TG_USER_NOT_LINKED');
-
-    const res = await fetch(`${TELEGRAM_API}${botToken}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: String(telegramUserId),
-        text: String(text || ''),
-      }),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data || data.ok === false) {
-      throw new Error(`TG_SEND_FAILED:${data?.description || `HTTP_${res.status}`}`);
-    }
-    return true;
-  }
-
   function attachProductThumbs(row) {
     const photos = Array.isArray(row?.photos) ? row.photos : [];
     const main = photos[0] || null;
@@ -3569,11 +3768,31 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     }
   });
 
+  router.post('/bonus/preview',async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    try{
+      const tenantId=helpers.getTenantId(req),storeId=helpers.getStoreId(req),token=str(req.headers['x-customer-token']);
+      const guest=await customerAuth.getGuest(db,tenantId,token,false,storeId);
+      const customer=guest?null:await getCustomerByToken(tenantId,token,{refreshSession:false});
+      if(!guest&&!customer)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+      const items=req.body?.items;
+      if(!Array.isArray(items)||items.length>200||items.some(item=>!item||!Number.isFinite(Number(item.line_total))||Number(item.line_total)<0||Number(item.line_total)>1e8))return res.status(400).json({ok:false,error:'BAD_ITEMS'});
+      const context=await customerBonus.phoneContext(db,tenantId,guest?customerAuth.phone(req.body.customer_phone||guest.phone):customer.phone);
+      const [[settings]]=await db.query('SELECT bonus_program_enabled FROM mkt_bonus_program_settings WHERE tenant_id=?',[tenantId]);
+      const amount=Number(settings?.bonus_program_enabled)===1&&context.status==='active'&&context.levelId
+        ?await customerBonus.calculateAccrual(db,{tenantId,customerId:context.customerId,levelId:context.levelId,items}):0;
+      return res.json({ok:true,data:{amount}});
+    }catch(error){sendCustomerMessengerError(res,error);}
+  });
+
   router.get('/bonus/config', async (req, res) => {
     try {
+      res.set('Cache-Control','no-store');
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
+      const guest=token.startsWith('g_')?await customerAuth.getGuest(db,tenantId,token,false,storeId):null;
+      if(token.startsWith('g_')&&!guest)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const [[settingsRow]] = await db.query(
         `SELECT bonus_program_enabled, referral_program_enabled,
@@ -3644,7 +3863,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       });
       const loadedAccount = await loadPublicBonusAccount(tenantId, customer);
       const promotedAccount = await promotePublicBonusAccountIfEligible(db, tenantId, customer, loadedAccount, levelRows);
-      const account = mapPublicBonusAccountRow(promotedAccount);
+      let account = mapPublicBonusAccountRow(promotedAccount);
+      if(guest){
+        // Expose only the balance and public card level, never the customer's identity or ledger.
+        const context=await customerBonus.phoneContext(db,tenantId,guest.phone);
+        account={balance:context.balance,level_id:context.levelId,is_guest:true,can_redeem:false,
+          notice:'Только начисление'};
+      }
       const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows, promotedAccount);
       const [referralRows] = await db.query(
         `SELECT id, code, title, invited_count, percent, sort_order, is_active
@@ -4208,6 +4433,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (!hasCursor) params.push(offset);
       const [rows] = await db.query(
         `SELECT t.id, t.level_id, t.order_id, t.referral_id, t.reward_id,
+                CASE WHEN EXISTS(SELECT 1 FROM order_orders o WHERE o.tenant_id=t.tenant_id AND o.id=t.order_id
+                  AND o.customer_id=? AND o.store_id=? AND o.is_active=1) THEN t.order_id ELSE NULL END visible_order_id,
                 t.type, t.amount, t.balance_after, t.reason, t.created_at,
                 bl.title AS level_title
          FROM mkt_customer_bonus_transactions t
@@ -4220,7 +4447,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
            ${whereCursor}
          ORDER BY ${hasCursor ? 't.id DESC' : 't.created_at DESC, t.id DESC'}
          LIMIT ?${hasCursor ? '' : ' OFFSET ?'}`,
-        params
+        [customerId,helpers.getStoreId(req),...params]
       );
       return res.json({
         ok: true,
@@ -4228,13 +4455,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
           id: Number(row.id || 0),
           level_id: row.level_id == null ? null : Number(row.level_id),
           level_title: row.level_title || '',
-          order_id: row.order_id == null ? null : Number(row.order_id),
-          referral_id: row.referral_id == null ? null : Number(row.referral_id),
-          reward_id: row.reward_id == null ? null : Number(row.reward_id),
+          order_id: row.visible_order_id == null ? null : Number(row.visible_order_id),
+          order_accrual:row.type==='accrual'&&(row.order_id!=null||/^order:[0-9]+:bonus_accrual$/.test(row.reason||'')),
+          referral_id: row.visible_order_id == null || row.referral_id == null ? null : Number(row.referral_id),
+          reward_id: row.visible_order_id == null || row.reward_id == null ? null : Number(row.reward_id),
           type: row.type || '',
           amount: Number(row.amount || 0),
           balance_after: row.balance_after == null ? null : Number(row.balance_after),
-          reason: row.reason || '',
+          reason:row.visible_order_id==null&&(row.order_id!=null||/^(order:|first_purchase:|level_percent:)/.test(row.reason||''))
+            ?(row.type==='accrual'?'Бонусы за заказ':row.type==='referral_accrual'?'Реферальное начисление':'Операция по заказу'):row.reason||'',
           created_at: row.created_at || null,
         })),
       });
@@ -5556,36 +5785,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
-  async function dualWriteAuthToken(connOrDb, payload) {
-    try {
-      await connOrDb.query(
-        `INSERT INTO cust_customer_auth_tokens
-         (tenant_id, customer_id, provider, purpose, token, expires_at, used_at, provider_user_id, phone, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, NOW()))`,
-        [
-          Number(payload.tenantId),
-          payload.customerId == null ? null : Number(payload.customerId),
-          String(payload.provider),
-          String(payload.purpose),
-          String(payload.token),
-          payload.expiresAt,
-          payload.usedAt || null,
-          payload.providerUserId || null,
-          payload.phone || null,
-          payload.createdAt || null,
-        ]
-      );
-    } catch (err) {
-      console.error('AUTH_DUAL_WRITE_TOKEN_FAILED:', err.message || err);
-    }
-  }
-
   async function dualWriteSession(connOrDb, payload) {
     try {
+      if(payload.authStrength==='strong'){
+        const channels=await getAccountChannels(connOrDb,customerScope(Number(payload.tenantId),Number(payload.customerId)));
+        if(!channels.length)throw new MessengerAuthError('CUSTOMER_MESSENGER_REQUIRED',403);
+        payload={...payload,expiresAt:null};
+      }
       await connOrDb.query(
         `INSERT INTO cust_customer_sessions
-         (tenant_id, store_id, customer_id, token, expires_at, is_active, user_agent, ip_address)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         (tenant_id, store_id, customer_id, token, expires_at, is_active, user_agent, ip_address, auth_strength)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            expires_at=VALUES(expires_at),
            is_active=VALUES(is_active),
@@ -5600,10 +5810,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
           Number(payload.isActive == null ? 1 : payload.isActive),
           payload.userAgent || null,
           payload.ipAddress || null,
+          payload.authStrength === 'strong' ? 'strong' : 'weak',
         ]
       );
     } catch (err) {
-      console.error('AUTH_DUAL_WRITE_SESSION_FAILED:', err.message || err);
+      console.error('AUTH_DUAL_WRITE_SESSION_FAILED:', err.code || err.name);
+      throw err;
     }
   }
 
@@ -5623,17 +5835,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
   }
 
   async function getCustomerByToken(tenantId, token, options = {}) {
-    if (!token) return null;
+    if (!token || token.startsWith('g_')) return null;
     const sessionTable = 'cust_customer_sessions';
     const [rows] = await db.query(
       `SELECT
          s.id AS session_id,
          s.token,
          s.expires_at,
+         s.store_id AS session_store_id,
+         (s.expires_at IS NULL OR s.expires_at>UTC_TIMESTAMP()) AS session_valid,
+         ${customerSessionHasChannel} AS has_channel,
+         s.auth_strength,
          s.is_active AS session_active,
          c.id AS customer_id,
          c.name,
          c.phone,
+         c.phone_verified_at,
          c.total_orders,
          DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday,
          c.photo,
@@ -5641,7 +5858,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
        FROM ${sessionTable} s
        JOIN cust_customers c
          ON c.tenant_id=s.tenant_id AND c.id=s.customer_id
-       WHERE s.tenant_id=? AND s.token=? AND s.is_active=1
+       WHERE s.tenant_id=? AND s.token=? AND s.is_active=1 AND s.revoked_at IS NULL
        LIMIT 1`,
       [tenantId, token]
     );
@@ -5650,16 +5867,28 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
 
     const r = rows[0];
     if (Number(r.is_active || 0) !== 1) return null;
+    if(r.auth_strength!=='strong'&&(r.phone_verified_at||!(await customerAuth.settings(db,tenantId)).birthday))return null;
 
-    if (r.expires_at) {
-      const exp = new Date(r.expires_at);
-      if (!Number.isNaN(exp.getTime()) && exp.getTime() < Date.now()) return null;
+    if(!Number(r.session_valid))return null;
+    if(r.auth_strength==='strong'){
+      if(Number(r.has_channel)){
+        if(r.expires_at)await db.query(`UPDATE ${sessionTable} s SET expires_at=NULL
+          WHERE s.id=? AND s.tenant_id=? AND s.is_active=1 AND s.revoked_at IS NULL
+          AND s.expires_at>UTC_TIMESTAMP() AND ${customerSessionHasChannel}`,[Number(r.session_id),tenantId]);
+      }else{
+        const offset=await customerAuth.guestStoreOffset(db,tenantId,Number(r.session_store_id));
+        await db.query(`UPDATE ${sessionTable} s SET expires_at=LEAST(COALESCE(expires_at,'9999-12-31'),
+          TIMESTAMPADD(MINUTE,?,DATE_ADD(DATE(TIMESTAMPADD(MINUTE,?,UTC_TIMESTAMP())),INTERVAL 1 DAY)))
+          WHERE s.id=? AND s.tenant_id=? AND s.is_active=1 AND s.revoked_at IS NULL AND NOT ${customerSessionHasChannel}
+          AND (expires_at IS NULL OR expires_at>TIMESTAMPADD(MINUTE,?,DATE_ADD(DATE(TIMESTAMPADD(MINUTE,?,UTC_TIMESTAMP())),INTERVAL 1 DAY)))`,
+          [-offset,offset,Number(r.session_id),tenantId,-offset,offset]);
+      }
     }
 
     // Sliding session: refresh TTL only when expiry is near.
     // This reduces write pressure under frequent /me, /me/orders, /me/addresses calls.
     try {
-      if (options.refreshSession !== false) await db.query(
+      if (r.auth_strength!=='strong' && options.refreshSession !== false) await db.query(
         `UPDATE ${sessionTable}
          SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
          WHERE id=? AND tenant_id=? AND is_active=1
@@ -5675,6 +5904,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       total_orders: Number(r.total_orders || 0) || 0,
       birthday: r.birthday || null,
       photo: r.photo || null,
+      auth_strength:r.auth_strength,
     };
     return data;
   }
@@ -6506,232 +6736,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
 
   // POST /api/public/auth/phone-status
   // body: { phone }
-  router.post('/auth/phone-status', async (req, res) => {
-    try {
-      const tenantId = helpers.getTenantId(req);
-      const phone = helpers.normalizePhone(str(req.body.phone));
-      if (!phone || phone.length < 10) {
-        return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
-      }
-
-      const [rows] = await db.query(
-        `SELECT id, phone_verified_at, name
-         FROM cust_customers
-         WHERE tenant_id=? AND phone=?
-         LIMIT 1`,
-        [tenantId, phone]
-      );
-      if (!rows.length) {
-        return res.json({
-          ok: true,
-          exists: false,
-          has_name: false,
-          needs_name_input: true,
-          requires_messenger_login: false,
-        });
-      }
-
-      const row = rows[0];
-      const [tenantRows] = await db.query(
-        `SELECT tg_login_enabled, max_login_enabled
-         FROM ten_tenants
-         WHERE id=?
-         LIMIT 1`,
-        [tenantId]
-      );
-      const tenantCfg = tenantRows[0] || {};
-      const hasMessengerLogin = Number(tenantCfg.tg_login_enabled || 0) === 1 || Number(tenantCfg.max_login_enabled || 0) === 1;
-
-      return res.json({
-        ok: true,
-        exists: true,
-        has_name: !customerNeedsNameCompletion(row),
-        needs_name_input: customerNeedsNameCompletion(row),
-        requires_messenger_login: Boolean(row.phone_verified_at) && hasMessengerLogin,
-      });
-    } catch (e) {
-      console.error('AUTH_PHONE_STATUS_ERROR:', e);
-      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
-  });
+  router.post('/auth/phone-status', (req,res)=>res.json({ok:true,needs_name_input:false,requires_messenger_login:false}));
 
   // POST /api/public/auth/messenger-code/send
-  // body: { phone }
-  router.post('/auth/messenger-code/send', async (req, res) => {
-    try {
-      const tenantId = helpers.getTenantId(req);
-      const phone = helpers.normalizePhone(str(req.body.phone));
-      if (!phone || phone.length < 10) {
-        return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
-      }
-
-      const [rows] = await db.query(
-        `SELECT id, is_active, phone_verified_at, telegram_user_id, max_user_id
-         FROM cust_customers
-         WHERE tenant_id=? AND phone=?
-         LIMIT 1`,
-        [tenantId, phone]
-      );
-      if (!rows.length) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
-      const row = rows[0];
-      if (Number(row.is_active || 0) !== 1) return res.status(403).json({ ok: false, error: 'CLIENT_BLOCKED' });
-      if (!row.phone_verified_at) return res.status(409).json({ ok: false, error: 'BIRTHDAY_LOGIN_REQUIRED' });
-
-      const [tenantRows] = await db.query(
-        `SELECT tg_login_enabled, max_login_enabled
-         FROM ten_tenants
-         WHERE id=?
-         LIMIT 1`,
-        [tenantId]
-      );
-      const tenantCfg = tenantRows[0] || {};
-      const tgEnabled = Number(tenantCfg.tg_login_enabled || 0) === 1;
-      const maxEnabled = Number(tenantCfg.max_login_enabled || 0) === 1;
-
-      const code = String(Math.floor(1000 + Math.random() * 9000));
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      await db.query(
-        `UPDATE cust_customers
-         SET phone_verify_code=?, phone_verify_expires_at=?, updated_at=NOW()
-         WHERE tenant_id=? AND id=?
-         LIMIT 1`,
-        [code, expiresAt, tenantId, Number(row.id)]
-      );
-
-      const messageText = `\u041a\u043e\u0434 \u0432\u0445\u043e\u0434\u0430: ${code}. \u0421\u0440\u043e\u043a \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044f: 24 \u0447\u0430\u0441\u0430.`;
-      let sentVia = null;
-      let lastSendErr = null;
-
-      // Priority: MAX (if tenant enabled) -> Telegram (fallback if tenant enabled)
-      if (maxEnabled && row.max_user_id) {
-        try {
-          await sendMaxMessage({
-            db,
-            tenantId,
-            maxUserId: row.max_user_id,
-            text: messageText,
-          });
-          sentVia = 'max';
-        } catch (maxErr) {
-          lastSendErr = maxErr;
-        }
-      }
-      if (!sentVia && tgEnabled && row.telegram_user_id) {
-        try {
-          await sendTenantTelegramText({
-            tenantId,
-            telegramUserId: row.telegram_user_id,
-            text: messageText,
-          });
-          sentVia = 'telegram';
-        } catch (tgErr) {
-          lastSendErr = tgErr;
-        }
-      }
-      if (!sentVia) {
-        if (!tgEnabled && !maxEnabled) {
-          return res.status(409).json({ ok: false, error: 'MESSENGER_LOGIN_DISABLED' });
-        }
-        if ((maxEnabled && !row.max_user_id) && (tgEnabled && !row.telegram_user_id)) {
-          return res.status(409).json({ ok: false, error: 'MESSENGER_NOT_LINKED' });
-        }
-        if (lastSendErr) throw lastSendErr;
-        return res.status(409).json({ ok: false, error: 'MESSENGER_NOT_AVAILABLE' });
-      }
-
-      return res.json({ ok: true, sent_via: sentVia, ttl_sec: 86400 });
-    } catch (e) {
-      console.error('AUTH_MESSENGER_CODE_SEND_ERROR:', e);
-      return res.status(500).json({ ok: false, error: 'SEND_FAILED' });
-    }
-  });
+  // body: { phone, provider? }
+  router.post('/auth/messenger-code/send', (req,res)=>res.status(410).json({ok:false,error:'BROWSER_CONFIRMATION_REQUIRED'}));
 
   // POST /api/public/auth/messenger-code/verify
-  // body: { phone, code, name? }
-  router.post('/auth/messenger-code/verify', async (req, res) => {
-    try {
-      const tenantId = helpers.getTenantId(req);
-      const phone = helpers.normalizePhone(str(req.body.phone));
-      const code = String(req.body?.code || '').replace(/\D/g, '').slice(0, 4);
-      const name = normalizeRequiredCustomerName(req.body?.name);
-      const guestChatClientId = readIncomingGuestChatClientId(req);
-      if (!phone || phone.length < 10) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
-      if (code.length !== 4) return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
-
-      const [rows] = await db.query(
-        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, photo,
-                is_active, phone_verified_at, phone_verify_code, phone_verify_expires_at
-         FROM cust_customers
-         WHERE tenant_id=? AND phone=?
-         LIMIT 1`,
-        [tenantId, phone]
-      );
-      if (!rows.length) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
-      const row = rows[0];
-      if (Number(row.is_active || 0) !== 1) return res.status(403).json({ ok: false, error: 'CLIENT_BLOCKED' });
-      if (!row.phone_verified_at) return res.status(409).json({ ok: false, error: 'BIRTHDAY_LOGIN_REQUIRED' });
-      if (!row.phone_verify_code || !row.phone_verify_expires_at) {
-        return res.status(400).json({ ok: false, error: 'CODE_NOT_REQUESTED' });
-      }
-      if (Date.now() > new Date(row.phone_verify_expires_at).getTime()) {
-        return res.status(400).json({ ok: false, error: 'CODE_EXPIRED' });
-      }
-      if (String(row.phone_verify_code) !== code) {
-        return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
-      }
-      if (customerNeedsNameCompletion(row) && !name) {
-        return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
-      }
-
-      const customerId = Number(row.id);
-      if (customerNeedsNameCompletion(row) && name) {
-        await db.query(
-          `UPDATE cust_customers
-           SET name=?, updated_at=NOW()
-           WHERE tenant_id=? AND id=?
-           LIMIT 1`,
-          [name, tenantId, customerId]
-        );
-        row.name = name;
-      }
-      const token = makeToken32();
-      await dualWriteSession(db, {
-        tenantId,
-        storeId: 1,
-        customerId,
-        token,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        isActive: 1,
-      });
-
-      await db.query(
-        `UPDATE cust_customers
-         SET phone_verify_code=NULL, phone_verify_expires_at=NULL, updated_at=NOW()
-         WHERE tenant_id=? AND id=?
-         LIMIT 1`,
-        [tenantId, customerId]
-      );
-
-      await mergeGuestChatIntoCustomerIfNeeded(tenantId, guestChatClientId, customerId);
-
-      return res.json({
-        ok: true,
-        token,
-        customer: {
-          id: row.id,
-          name: row.name,
-          phone: row.phone,
-          birthday: row.birthday || null,
-          photo: row.photo || null,
-        },
-      });
-    } catch (e) {
-      console.error('AUTH_MESSENGER_CODE_VERIFY_ERROR:', e);
-      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
-  });
-
-  // POST /api/public/auth/kso-login
+  // body: { phone, request_id, code, name? }
+  router.post('/auth/messenger-code/verify', (req,res)=>res.status(410).json({ok:false,error:'BROWSER_CONFIRMATION_REQUIRED'}));
   // KSO-only login by phone: find or create customer without birthday.
   router.post('/auth/kso-login', async (req, res) => {
     try {
@@ -6838,60 +6851,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         [tenantId, phone]
       );
 
-      let customerId = null;
-
-      if (!ex.length) {
-        if (!name) {
-          return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
-        }
-        // РЎРѓР С•Р В·Р Т‘Р В°РЎвЂР С Р Р…Р С•Р Р†Р С•Р С–Р С• Р С”Р В»Р С‘Р ВµР Р…РЎвЂљР В°
-        const [ins] = await db.query(
-          `INSERT INTO cust_customers
-           (tenant_id, name, phone, birthday, is_active, registration_date)
-           VALUES (?,?,?,?,1, CURDATE())`,
-          [tenantId, name, phone, birthday]
-        );
-        customerId = Number(ins.insertId);
-      } else {
-        const c = ex[0];
-        if (Number(c.is_active || 0) !== 1) {
-          return res.status(403).json({ ok: false, error: 'CLIENT_BLOCKED' });
-        }
-        const hasMessengerLogin = Number(c.tg_login_enabled || 0) === 1 || Number(c.max_login_enabled || 0) === 1;
-        if (c.phone_verified_at && hasMessengerLogin) {
-          return res.status(403).json({ ok: false, error: 'MESSENGER_LOGIN_REQUIRED' });
-        }
-
-        customerId = Number(c.id);
-        const shouldPersistName = customerNeedsNameCompletion(c);
-        if (shouldPersistName && !name) {
-          return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
-        }
-
-        // Р ВµРЎРѓР В»Р С‘ birthday РЎС“Р В¶Р Вµ Р ВµРЎРѓРЎвЂљРЎРЉ РІР‚вЂќ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С
-        if (c.birthday && String(c.birthday) !== String(birthday)) {
-          return res.status(401).json({ ok: false, error: 'WRONG_BIRTHDAY' });
-        }
-
-        // Р ВµРЎРѓР В»Р С‘ birthday Р В±РЎвЂ№Р В» NULL РІР‚вЂќ Р В·Р В°Р С—Р С‘РЎв‚¬Р ВµР С (Р С—Р ВµРЎР‚Р Р†РЎвЂ№Р в„– Р Р†РЎвЂ¦Р С•Р Т‘)
-        if (!c.birthday) {
-          await db.query(
-            `UPDATE cust_customers SET birthday=? WHERE tenant_id=? AND id=?`,
-            [birthday, tenantId, customerId]
-          );
-        }
-        if (shouldPersistName && name) {
-          await db.query(
-            `UPDATE cust_customers
-             SET name=?, updated_at=NOW()
-             WHERE tenant_id=? AND id=?
-             LIMIT 1`,
-            [name, tenantId, customerId]
-          );
-        }
+      if (!(await customerAuth.settings(db,tenantId)).birthday || ex.length !== 1 || ex[0].phone_verified_at || Number(ex[0].is_active) !== 1 || !ex[0].birthday || String(ex[0].birthday) !== birthday) {
+        return res.status(401).json({ok:false,error:'INVALID_CREDENTIALS'});
       }
-
-      // РЎРѓР С•Р В·Р Т‘Р В°РЎвЂР С РЎРѓР ВµРЎРѓРЎРѓР С‘РЎР‹
+      const customerId=Number(ex[0].id);
       const token = makeToken32();
 
       // РЎРѓРЎР‚Р С•Р С” 30 Р Т‘Р Р…Р ВµР в„–
@@ -6927,7 +6890,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (e?.httpStatus === 404 || e?.message === 'NOT_FOUND') {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
-      console.error(e);
+      console.error('CUSTOMER_PHONE_LOGIN_FAILED:', e.code || e.name);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -6940,37 +6903,19 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const sessionToken = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, sessionToken);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
-
-      const tenantBotId = await getTenantMaxBotId(db, tenantId);
-      const tenantBotToken = await getTenantMaxBotToken(db, tenantId);
-      if (!tenantBotId || !tenantBotToken) {
+      if (!await buildProviderLink(db, tenantId, 'max', 'configuration-check')) {
         return res.status(409).json({ ok: false, error: 'MAX_BOT_NOT_CONFIGURED' });
       }
-
-      const linkToken = makeLinkToken();
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
-      await dualWriteAuthToken(db, {
-        tenantId,
-        customerId: Number(customer.id),
-        provider: 'max',
-        purpose: 'link',
-        token: linkToken,
-        expiresAt,
-      });
-
-      res.json({
+      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), 'max');
+      return res.json({
         ok: true,
-        token: linkToken,
-        link: buildMaxDeepLink(linkToken, tenantBotId),
-        expires_at: expiresAt.toISOString(),
+        provider: 'max',
+        link: await buildProviderLink(db, tenantId, 'max', challenge.token),
+        expires_at: challenge.expiresAt,
       });
     } catch (e) {
-      if (e?.httpStatus === 404 || e?.message === 'NOT_FOUND') {
-        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
-      }
-      console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      console.error('MAX_LINK_CREATE_ERROR:', e.code || e.name);
+      return sendCustomerMessengerError(res, e, 'DB_ERROR');
     }
   });
 
@@ -6982,129 +6927,32 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const sessionToken = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, sessionToken);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
-
-      const [rows] = await db.query(
-        'SELECT telegram_bot_username, telegram_bot_token FROM ten_tenants WHERE id=? LIMIT 1',
-        [tenantId]
-      );
-      const row = rows[0] || {};
-      const username = String(row.telegram_bot_username || '').trim().replace(/^@/, '');
-      const token = String(row.telegram_bot_token || '').trim();
-      if (!username || !token) {
+      if (!await buildProviderLink(db, tenantId, 'tg', 'configuration-check')) {
         return res.status(409).json({ ok: false, error: 'TG_BOT_NOT_CONFIGURED' });
       }
-
-      const linkToken = makeLinkToken();
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
-      await dualWriteAuthToken(db, {
-        tenantId,
-        customerId: Number(customer.id),
-        provider: 'tg',
-        purpose: 'link',
-        token: linkToken,
-        expiresAt,
-      });
-
-      const link = `https://t.me/${encodeURIComponent(username)}?start=${encodeURIComponent(linkToken)}`;
-      res.json({
+      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), 'tg');
+      return res.json({
         ok: true,
-        token: linkToken,
-        link,
-        expires_at: expiresAt.toISOString(),
+        provider: 'tg',
+        link: await buildProviderLink(db, tenantId, 'tg', challenge.token),
+        expires_at: challenge.expiresAt,
       });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      console.error('TG_LINK_CREATE_ERROR:', e.code || e.name);
+      return sendCustomerMessengerError(res, e, 'DB_ERROR');
     }
   });
 
   // GET /api/public/max/auth-link
   // Public link for "Login via MAX" (without existing customer session)
   router.get('/max/auth-link', async (req, res) => {
-    try {
-      const tenantId = helpers.getTenantId(req);
-      if (!(await isTenantMaxLoginEnabled(tenantId))) {
-        return res.json({ ok: true, link: null, disabled: true });
-      }
-      const tenantBotId = await getTenantMaxBotId(db, tenantId);
-      const tenantBotToken = await getTenantMaxBotToken(db, tenantId);
-      if (!tenantBotId || !tenantBotToken) {
-        return res.status(409).json({ ok: false, error: 'MAX_BOT_NOT_CONFIGURED' });
-      }
-
-      const forwardedProto = req.headers['x-forwarded-proto'];
-      const forwardedHost = req.headers['x-forwarded-host'];
-      const firstHeaderValue = (raw, fallback = '') => {
-        if (!raw) return fallback;
-        if (Array.isArray(raw)) return String(raw[0]).trim();
-        return String(raw).split(',')[0].trim();
-      };
-      const protocol = firstHeaderValue(forwardedProto, req.protocol || 'https');
-      const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
-      const origin = `${protocol}://${hostHeader}`;
-      const loginOriginToken = makeToken32();
-
-      await db.query(
-        `INSERT INTO cust_customer_auth_tokens
-         (tenant_id, customer_id, provider, purpose, token, expires_at, used_at, provider_user_id, phone, created_at)
-         VALUES (?, NULL, 'max', 'pending', ?, DATE_ADD(NOW(), INTERVAL 10 YEAR), NULL, ?, 'login_origin', NOW())`,
-        [tenantId, loginOriginToken, origin]
-      );
-
-      const link = `https://max.ru/${encodeURIComponent(tenantBotId)}?start=${encodeURIComponent(loginOriginToken)}`;
-      return res.json({ ok: true, link });
-    } catch (e) {
-      console.error(e);
-      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
+    return res.json({ ok: true, link: null, disabled: true, code_login: true });
   });
 
   // GET /api/public/tg/auth-link
   // Public link for "Login via Telegram" (without existing customer session)
   router.get('/tg/auth-link', async (req, res) => {
-    try {
-      const tenantId = helpers.getTenantId(req);
-      if (!(await isTenantTgLoginEnabled(tenantId))) {
-        return res.json({ ok: true, link: null, disabled: true });
-      }
-
-      const [rows] = await db.query(
-        'SELECT telegram_bot_username, telegram_bot_token FROM ten_tenants WHERE id=? LIMIT 1',
-        [tenantId]
-      );
-      const row = rows[0] || {};
-      const username = String(row.telegram_bot_username || '').trim().replace(/^@/, '');
-      const token = String(row.telegram_bot_token || '').trim();
-      if (!username || !token) {
-        return res.status(409).json({ ok: false, error: 'TG_BOT_NOT_CONFIGURED' });
-      }
-
-      const forwardedProto = req.headers['x-forwarded-proto'];
-      const forwardedHost = req.headers['x-forwarded-host'];
-      const firstHeaderValue = (raw, fallback = '') => {
-        if (!raw) return fallback;
-        if (Array.isArray(raw)) return String(raw[0]).trim();
-        return String(raw).split(',')[0].trim();
-      };
-      const protocol = firstHeaderValue(forwardedProto, req.protocol || 'https');
-      const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
-      const origin = `${protocol}://${hostHeader}`;
-      const loginOriginToken = makeToken32();
-
-      await db.query(
-        `INSERT INTO cust_customer_auth_tokens
-         (tenant_id, customer_id, provider, purpose, token, expires_at, used_at, provider_user_id, phone, created_at)
-         VALUES (?, NULL, 'tg', 'pending', ?, DATE_ADD(NOW(), INTERVAL 10 YEAR), NULL, ?, 'login_origin', NOW())`,
-        [tenantId, loginOriginToken, origin]
-      );
-
-      const link = `https://t.me/${encodeURIComponent(username)}?start=${encodeURIComponent(loginOriginToken)}`;
-      return res.json({ ok: true, link });
-    } catch (e) {
-      console.error(e);
-      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
+    return res.json({ ok: true, link: null, disabled: true, code_login: true });
   });
 
   // GET /api/public/max/finish-login?token=...
@@ -7115,6 +6963,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     const isPersistent = !!persistentToken;
     const effectiveToken = persistentToken || loginToken;
     const target = str(req.query.target).toLowerCase() === 'miniapp' ? 'miniapp' : 'site';
+    if (isPersistent) return res.status(410).send('PERSISTENT_LOGIN_DISABLED');
     if (!effectiveToken) return res.status(400).send('TOKEN_REQUIRED');
 
     const maxLoginReadTable = 'cust_customer_auth_tokens';
@@ -7122,14 +6971,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     try {
       const purposeFilter = 'login';
       const [tenantRows] = await conn.query(
-        `SELECT t.max_login_enabled
+        `SELECT t.id tenant_id
          FROM ${maxLoginReadTable} lt
          JOIN ten_tenants t ON t.id = lt.tenant_id
          WHERE lt.token=? AND lt.provider='max' AND lt.purpose=?
          LIMIT 1`,
         [effectiveToken, purposeFilter]
       );
-      if (!tenantRows.length || Number(tenantRows[0].max_login_enabled || 0) !== 1) {
+      if (!tenantRows.length || !(await customerAuth.settings(conn,tenantRows[0].tenant_id)).max) {
         return res.status(403).send('MAX_LOGIN_DISABLED');
       }
 
@@ -7150,6 +6999,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
           `SELECT id, tenant_id, customer_id
            FROM ${maxLoginReadTable}
            WHERE token=? AND provider='max' AND purpose='login' AND used_at IS NULL AND expires_at > NOW()
+             AND expires_at <= DATE_ADD(created_at, INTERVAL 1 DAY)
            LIMIT 1
            FOR UPDATE`,
           [effectiveToken]
@@ -7165,7 +7015,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const customerId = Number(row.customer_id);
 
       const [customerRows] = await conn.query(
-        `SELECT id, is_active
+        `SELECT id, is_active, phone_verified_at
          FROM cust_customers
          WHERE tenant_id=? AND id=?
          LIMIT 1`,
@@ -7174,6 +7024,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (!customerRows.length || Number(customerRows[0].is_active || 0) !== 1) {
         await conn.rollback();
         return res.status(404).send('CUSTOMER_NOT_FOUND');
+      }
+
+      if(customerRows[0].phone_verified_at || !(await customerAuth.settings(conn,tenantId)).birthday){
+        await conn.query("UPDATE cust_customer_auth_tokens SET used_at=NOW() WHERE tenant_id=? AND provider='max' AND purpose='login' AND token=? AND used_at IS NULL",[tenantId,effectiveToken]);
+        await conn.commit();
+        return res.redirect(303,target==='miniapp'?`/max-app?tenant_id=${tenantId}`:`/shop?tenant_id=${tenantId}`);
       }
 
       const sessionToken = makeToken32();
@@ -7233,6 +7089,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const isPersistent = !!persistentToken;
     const effectiveToken = persistentToken || loginToken;
     const target = str(req.query.target).toLowerCase() === 'miniapp' ? 'miniapp' : 'site';
+    if (isPersistent) return res.status(410).send('PERSISTENT_LOGIN_DISABLED');
     if (!effectiveToken) return res.status(400).send('TOKEN_REQUIRED');
 
     const tgLoginReadTable = 'cust_customer_auth_tokens';
@@ -7240,14 +7097,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const purposeFilter = 'login';
       const [tenantRows] = await conn.query(
-        `SELECT t.tg_login_enabled
+        `SELECT t.id tenant_id
          FROM ${tgLoginReadTable} lt
          JOIN ten_tenants t ON t.id = lt.tenant_id
          WHERE lt.token=? AND lt.provider='tg' AND lt.purpose=?
          LIMIT 1`,
         [effectiveToken, purposeFilter]
       );
-      if (!tenantRows.length || Number(tenantRows[0].tg_login_enabled || 0) !== 1) {
+      if (!tenantRows.length || !(await customerAuth.settings(conn,tenantRows[0].tenant_id)).tg) {
         return res.status(403).send('TG_LOGIN_DISABLED');
       }
 
@@ -7268,6 +7125,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           `SELECT id, tenant_id, customer_id
            FROM ${tgLoginReadTable}
            WHERE token=? AND provider='tg' AND purpose='login' AND used_at IS NULL AND expires_at > NOW()
+             AND expires_at <= DATE_ADD(created_at, INTERVAL 1 DAY)
            LIMIT 1
            FOR UPDATE`,
           [effectiveToken]
@@ -7283,7 +7141,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customerId = Number(tokenRow.customer_id);
 
       const [customerRows] = await conn.query(
-        `SELECT id, is_active
+        `SELECT id, is_active, phone_verified_at
          FROM cust_customers
          WHERE tenant_id=? AND id=?
          LIMIT 1
@@ -7293,6 +7151,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customerRows.length || Number(customerRows[0].is_active || 0) !== 1) {
         await conn.rollback();
         return res.status(404).send('CUSTOMER_NOT_FOUND');
+      }
+
+      if(customerRows[0].phone_verified_at || !(await customerAuth.settings(conn,tenantId)).birthday){
+        await conn.query("UPDATE cust_customer_auth_tokens SET used_at=NOW() WHERE tenant_id=? AND provider='tg' AND purpose='login' AND token=? AND used_at IS NULL",[tenantId,effectiveToken]);
+        await conn.commit();
+        return res.redirect(303,target==='miniapp'?`/tg-app?tenant_id=${tenantId}`:`/shop?tenant_id=${tenantId}`);
       }
 
       const sessionToken = makeLinkToken();
@@ -7356,30 +7220,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customer = await getCustomerByToken(tenantId, sessionToken);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
-      const [rows] = await db.query(
-        `SELECT max_user_id, phone, updated_at
-         FROM cust_customers
-         WHERE tenant_id=? AND id=?
-         LIMIT 1`,
-        [tenantId, Number(customer.id)]
-      );
-
-      if (!rows.length) {
-        return res.json({ ok: true, linked: false, data: null });
-      }
-
+      const channels = await getAccountChannels(db, customerScope(tenantId, customer.id));
+      const channel = channels.find((item) => item.provider === 'max') || null;
+      const [[attempt]]=await db.query("SELECT delivery_status FROM auth_verification_challenges WHERE public_id=? AND tenant_id=? AND account_type='customer' AND account_id=? AND purpose='link' AND provider='max'",[str(req.query.request_id),tenantId,customer.id]);
       return res.json({
         ok: true,
-        linked: true,
-        data: {
-          max_user_id: rows[0].max_user_id,
-          phone: rows[0].phone,
-          linked_at: rows[0].updated_at,
-        },
+        failed: attempt?.delivery_status==='failed',
+        linked: Boolean(channel),
+        data: channel ? { destination: channel.masked, linked_at: channel.verifiedAt } : null,
       });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      console.error('MAX_LINK_STATUS_ERROR:', e.code || e.name);
+      return sendCustomerMessengerError(res, e, 'DB_ERROR');
     }
   });
 
@@ -7392,75 +7244,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customer = await getCustomerByToken(tenantId, sessionToken);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
-      const [rows] = await db.query(
-        `SELECT telegram_user_id, phone, updated_at
-         FROM cust_customers
-         WHERE tenant_id=? AND id=?
-         LIMIT 1`,
-        [tenantId, Number(customer.id)]
-      );
-
-      if (!rows.length) {
-        return res.json({ ok: true, linked: false, data: null });
-      }
-
-      const tgUserId = String(rows[0].telegram_user_id || '').trim();
-      if (!tgUserId) {
-        return res.json({ ok: true, linked: false, data: null });
-      }
-
+      const channels = await getAccountChannels(db, customerScope(tenantId, customer.id));
+      const channel = channels.find((item) => item.provider === 'tg') || null;
+      const [[attempt]]=await db.query("SELECT delivery_status FROM auth_verification_challenges WHERE public_id=? AND tenant_id=? AND account_type='customer' AND account_id=? AND purpose='link' AND provider='tg'",[str(req.query.request_id),tenantId,customer.id]);
       return res.json({
         ok: true,
-        linked: true,
-        data: {
-          telegram_user_id: tgUserId,
-          phone: rows[0].phone,
-          linked_at: rows[0].updated_at,
-        },
+        failed: attempt?.delivery_status==='failed',
+        linked: Boolean(channel),
+        data: channel ? { destination: channel.masked, linked_at: channel.verifiedAt } : null,
       });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      console.error('TG_LINK_STATUS_ERROR:', e.code || e.name);
+      return sendCustomerMessengerError(res, e, 'DB_ERROR');
     }
   });
 
   // POST /api/public/max/link-confirm
   // body: { token, max_user_id, phone }
   router.post('/max/link-confirm', async (req, res) => {
-    try {
-      const secret = String(process.env.MAX_BOT_INTERNAL_SECRET || '').trim();
-      if (!secret) return res.status(503).json({ ok: false, error: 'MAX_SECRET_NOT_CONFIGURED' });
-
-      const givenSecret = str(req.headers['x-max-bot-secret']);
-      if (!givenSecret || givenSecret !== secret) {
-        return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
-      }
-
-      const result = await confirmMaxLink({
-        db,
-        helpers,
-        token: req.body.token,
-        maxUserId: req.body.max_user_id,
-        phone: req.body.phone,
-      });
-
-      if (!result.ok) {
-        return res.status(result.status || 400).json({ ok: false, error: result.error || 'LINK_FAILED' });
-      }
-
-      return res.json({
-        ok: true,
-        data: {
-          tenant_id: result.tenantId,
-          customer_id: result.customerId,
-          max_user_id: result.maxUserId,
-          phone: result.phone,
-        },
-      });
-    } catch (e) {
-      console.error('MAX link confirm error:', e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
+    return res.status(410).json({ ok: false, error: 'LEGACY_LINK_CONFIRM_DISABLED' });
   });
 
   // GET /api/public/phone-verification/status
@@ -7472,9 +7274,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const [rows] = await db.query(
-        `SELECT phone_verified_at, phone_verify_expires_at
-         FROM cust_customers
-         WHERE tenant_id=? AND id=?
+        `SELECT c.phone_verified_at,
+                (SELECT v.public_id FROM auth_verification_challenges v
+                 WHERE v.tenant_id=c.tenant_id AND v.account_type='customer'
+                   AND v.account_id=c.id AND v.purpose='phone_verify' AND v.consumed_at IS NULL
+                 ORDER BY v.id DESC LIMIT 1) AS challenge_public_id,
+                (SELECT v.provider FROM auth_verification_challenges v
+                 WHERE v.tenant_id=c.tenant_id AND v.account_type='customer'
+                   AND v.account_id=c.id AND v.purpose='phone_verify' AND v.consumed_at IS NULL
+                 ORDER BY v.id DESC LIMIT 1) AS challenge_provider,
+                (SELECT v.expires_at FROM auth_verification_challenges v
+                 WHERE v.tenant_id=c.tenant_id AND v.account_type='customer'
+                   AND v.account_id=c.id AND v.purpose='phone_verify' AND v.consumed_at IS NULL
+                 ORDER BY v.id DESC LIMIT 1) AS challenge_expires_at
+         FROM cust_customers c
+         WHERE c.tenant_id=? AND c.id=?
          LIMIT 1`,
         [tenantId, Number(customer.id)]
       );
@@ -7484,7 +7298,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         data: {
           verified: Boolean(row.phone_verified_at),
           phone_verified_at: row.phone_verified_at || null,
-          expires_at: row.phone_verify_expires_at || null,
+          expires_at: row.challenge_expires_at || null,
+          request_id: row.challenge_public_id || null,
+          sent_via: row.challenge_provider || null,
         },
       });
     } catch (e) {
@@ -7501,65 +7317,33 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customer = await getCustomerByToken(tenantId, sessionToken);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
-      const [rows] = await db.query(
-        `SELECT id, max_user_id, telegram_user_id
-         FROM cust_customers
-         WHERE tenant_id=? AND id=? AND is_active=1
-         LIMIT 1`,
-        [tenantId, Number(customer.id)]
-      );
-      const row = rows[0];
-      if (!row) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
-
-      const code = String(Math.floor(1000 + Math.random() * 9000));
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
-      await db.query(
-        `UPDATE cust_customers
-         SET phone_verify_code=?, phone_verify_expires_at=?, phone_verified_at=NULL, updated_at=NOW()
-         WHERE tenant_id=? AND id=?`,
-        [code, expiresAt, tenantId, Number(customer.id)]
-      );
-
-      const messageText = `\u041a\u043e\u0434 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f \u043d\u043e\u043c\u0435\u0440\u0430: ${code}. \u0421\u0440\u043e\u043a \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044f: 24 \u0447\u0430\u0441\u0430.`;
-      let sentVia = '';
-
-      try {
-        await sendTenantTelegramText({
-          tenantId,
-          telegramUserId: row.telegram_user_id,
-          text: messageText,
-        });
-        sentVia = 'telegram';
-      } catch {
-        if (!row.max_user_id) {
-          return res.status(409).json({ ok: false, error: 'TG_NOT_LINKED_AND_MAX_NOT_LINKED' });
-        }
-
-        await sendMaxMessage({
-          db,
-          tenantId,
-          maxUserId: row.max_user_id,
-          text: messageText,
-        });
-        sentVia = 'max';
-      }
-
+      const provider = await enabledMessengerProvider(tenantId, req.body.provider);
+      const challenge = await issueCodeChallenge(db, {
+        ...customerScope(tenantId, customer.id),
+        purpose: 'phone_verify',
+        provider,
+        ipAddress: req.ip,
+        deliver: (message) => deliverCode(db, message),
+      });
       return res.json({
         ok: true,
         data: {
-          expires_at: expiresAt.toISOString(),
-          sent_via: sentVia,
+          request_id: challenge.requestId,
+          expires_at: challenge.expiresAt,
+          resend_after: challenge.resendAfter,
+          sent_via: challenge.provider,
+          destination: challenge.masked,
+          fallback_available: challenge.fallbackAvailable,
         },
       });
     } catch (e) {
-      console.error('PHONE_VERIFY_SEND_ERROR:', e);
-      return res.status(500).json({ ok: false, error: 'SEND_FAILED' });
+      console.error('PHONE_VERIFY_SEND_ERROR:', e.code || e.name);
+      return sendCustomerMessengerError(res, e, 'SEND_FAILED');
     }
   });
 
   // POST /api/public/phone-verification/verify
-  // body: { code }
+  // body: { request_id, code }
   router.post('/phone-verification/verify', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -7567,41 +7351,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customer = await getCustomerByToken(tenantId, sessionToken);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
-      const code = String(req.body?.code || '').replace(/\D/g, '').slice(0, 4);
-      if (code.length !== 4) return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
-
-      const [rows] = await db.query(
-        `SELECT phone_verify_code, phone_verify_expires_at
-         FROM cust_customers
-         WHERE tenant_id=? AND id=?
-         LIMIT 1`,
-        [tenantId, Number(customer.id)]
-      );
-      const row = rows[0];
-      if (!row) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
-      if (!row.phone_verify_code || !row.phone_verify_expires_at) {
-        return res.status(400).json({ ok: false, error: 'CODE_NOT_REQUESTED' });
-      }
-
-      const expMs = new Date(row.phone_verify_expires_at).getTime();
-      if (!Number.isFinite(expMs) || expMs < Date.now()) {
-        return res.status(400).json({ ok: false, error: 'CODE_EXPIRED' });
-      }
-      if (String(row.phone_verify_code) !== code) {
-        return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
-      }
-
-      await db.query(
-        `UPDATE cust_customers
-         SET phone_verified_at=NOW(), phone_verify_code=NULL, phone_verify_expires_at=NULL, updated_at=NOW()
-         WHERE tenant_id=? AND id=?`,
-        [tenantId, Number(customer.id)]
-      );
+      const code = String(req.body?.code || '').replace(/\D/g, '').slice(0, 6);
+      if (code.length !== 6) return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
+      await verifyCodeChallenge(db, {
+        ...customerScope(tenantId, customer.id),
+        purpose: 'phone_verify',
+        requestId: req.body.request_id,
+        code,
+        onVerified: async (conn, challenge) => {
+          await getTenantBotConfig(conn, tenantId, challenge.provider);
+          await conn.query(
+            `UPDATE cust_customers
+             SET phone_verified_at=NOW(), phone_verify_code=NULL, phone_verify_expires_at=NULL, updated_at=NOW()
+             WHERE tenant_id=? AND id=? AND is_active=1`,
+            [tenantId, Number(customer.id)]
+          );
+        },
+      });
 
       return res.json({ ok: true, data: { verified: true } });
     } catch (e) {
-      console.error('PHONE_VERIFY_CHECK_ERROR:', e);
-      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      console.error('PHONE_VERIFY_CHECK_ERROR:', e.code || e.name);
+      return sendCustomerMessengerError(res, e, 'DB_ERROR');
     }
   });
 
@@ -7612,6 +7383,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token'] || req.body.token);
 
       if (!token) return res.json({ ok: true });
+      if(token.startsWith('g_')){await customerAuth.revokeGuest(db,tenantId,token);return res.json({ok:true});}
 
       await db.query(
         `UPDATE cust_customer_sessions
@@ -7650,6 +7422,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const sessionToken = str(req.headers['x-customer-token']);
+      if(sessionToken.startsWith('g_')){
+        const provider=str(req.body?.provider || '').toLowerCase();
+        if(!['tg','max'].includes(provider))throw new MessengerAuthError('BAD_PROVIDER');
+        const policy=await customerAuth.settings(db,tenantId);
+        if(!policy[provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
+        await assertBrowserProviderReady(await getTenantBotConfig(db,tenantId,provider,{customer:true}));
+        const binding=browserBinding(req,res),conn=await db.getConnection();
+        try{
+          await conn.beginTransaction();
+          const guest=await customerAuth.getGuest(conn,tenantId,sessionToken,true,helpers.getStoreId(req));
+          if(!guest)throw new MessengerAuthError('UNAUTHORIZED',401);
+          const [[confirmed]]=await conn.query("SELECT public_id,DATE_FORMAT(expires_at,'%Y-%m-%dT%H:%i:%sZ') expires_at FROM auth_browser_requests WHERE tenant_id=? AND guest_session_hash=? AND browser_hash=? AND purpose='profile_link' AND state='confirmed' AND expires_at>NOW() LIMIT 1",[tenantId,guest.token_hash,crypto.createHash('sha256').update(binding).digest()]);
+          if(confirmed){await conn.commit();return res.json({ok:true,context:'PROFILE_LINK',request_id:confirmed.public_id,expires_at:confirmed.expires_at});}
+          await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE tenant_id=? AND guest_session_hash=? AND state IN ('pending','started')",[tenantId,guest.token_hash]);
+          const request=await createBrowserRequest(conn,{tenantId,accountType:'customer',provider,binding,ipAddress:req.ip,purpose:'profile_link',guestSessionHash:guest.token_hash});
+          await conn.query('UPDATE auth_browser_requests SET requested_phone=?,expires_at=LEAST(expires_at,COALESCE(?,expires_at)) WHERE public_id=?',[guest.phone,guest.session_expires_at,request.requestId]);
+          const [[expiry]]=await conn.query("SELECT DATE_FORMAT(expires_at,'%Y-%m-%dT%H:%i:%sZ') expires_at FROM auth_browser_requests WHERE public_id=?",[request.requestId]);
+          const link=await buildProviderLink(conn,tenantId,provider,request.token,{customer:true});
+          await conn.commit();
+          return res.json({ok:true,context:'PROFILE_LINK',request_id:request.requestId,link,expires_at:expiry.expires_at});
+        }catch(error){await conn.rollback();throw error;}finally{conn.release();}
+      }
       const customer = await getCustomerByToken(tenantId, sessionToken);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
@@ -7657,67 +7451,35 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (provider !== 'max' && provider !== 'tg') {
         return res.status(400).json({ ok: false, error: 'BAD_PROVIDER' });
       }
-
-      if (provider === 'max') {
-        const tenantBotId = await getTenantMaxBotId(db, tenantId);
-        const tenantBotToken = await getTenantMaxBotToken(db, tenantId);
-        if (!tenantBotId || !tenantBotToken) {
-          return res.status(409).json({ ok: false, error: 'MAX_BOT_NOT_CONFIGURED' });
-        }
-
-        const linkToken = makeLinkToken();
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-        await dualWriteAuthToken(db, {
-          tenantId,
-          customerId: Number(customer.id),
-          provider: 'max',
-          purpose: 'link',
-          token: linkToken,
-          expiresAt,
-        });
-
-        return res.json({
-          ok: true,
-          provider: 'max',
-          token: linkToken,
-          link: buildMaxDeepLink(linkToken, tenantBotId),
-          expires_at: expiresAt.toISOString(),
-        });
+      if (!await buildProviderLink(db, tenantId, provider, 'configuration-check')) {
+        return res.status(409).json({ ok: false, error: provider === 'max' ? 'MAX_BOT_NOT_CONFIGURED' : 'TG_BOT_NOT_CONFIGURED' });
       }
-
-      const [rows] = await db.query(
-        'SELECT telegram_bot_username, telegram_bot_token FROM ten_tenants WHERE id=? LIMIT 1',
-        [tenantId]
-      );
-      const row = rows[0] || {};
-      const username = String(row.telegram_bot_username || '').trim().replace(/^@/, '');
-      const token = String(row.telegram_bot_token || '').trim();
-      if (!username || !token) {
-        return res.status(409).json({ ok: false, error: 'TG_BOT_NOT_CONFIGURED' });
-      }
-
-      const linkToken = makeLinkToken();
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      await dualWriteAuthToken(db, {
-        tenantId,
-        customerId: Number(customer.id),
-        provider: 'tg',
-        purpose: 'link',
-        token: linkToken,
-        expiresAt,
-      });
-
-      const link = `https://t.me/${encodeURIComponent(username)}?start=${encodeURIComponent(linkToken)}`;
+      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), provider);
       return res.json({
         ok: true,
-        provider: 'tg',
-        token: linkToken,
-        link,
-        expires_at: expiresAt.toISOString(),
+        provider,
+        link: await buildProviderLink(db, tenantId, provider, challenge.token),
+        expires_at: challenge.expiresAt,
+        context: challenge.context,
+        request_id: challenge.publicId,
       });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      console.error('CUSTOMER_LINK_CREATE_ERROR:', e.code || e.name);
+      return sendCustomerMessengerError(res, e, 'DB_ERROR');
+    }
+  });
+
+  router.delete('/auth/messenger-links/:provider', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      await unlinkAccountChannel(db, customerScope(tenantId, customer.id), req.params.provider,{sessionToken});
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error('CUSTOMER_MESSENGER_UNLINK_ERROR:', e.code || e.name);
+      return sendCustomerMessengerError(res, e, 'DB_ERROR');
     }
   });
 
@@ -7742,16 +7504,26 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const tgLoginEnabled = Number(tenantRow.tg_login_enabled || 0) === 1;
 
       const [rows] = await db.query(
-        `SELECT max_user_id, telegram_user_id, phone,
-                phone_verified_at, phone_verify_expires_at, updated_at
+        `SELECT phone, phone_verified_at
          FROM cust_customers
          WHERE tenant_id=? AND id=?
          LIMIT 1`,
         [tenantId, Number(customer.id)]
       );
       const row = rows[0] || {};
-      const maxUserId = String(row.max_user_id || '').trim();
-      const tgUserId = String(row.telegram_user_id || '').trim();
+      const channels = await getAccountChannels(db, customerScope(tenantId, customer.id));
+      const maxChannel = channels.find((item) => item.provider === 'max') || null;
+      const tgChannel = channels.find((item) => item.provider === 'tg') || null;
+      const [phoneChallenges] = await db.query(
+        `SELECT public_id, provider, expires_at
+         FROM auth_verification_challenges
+         WHERE tenant_id=? AND account_type='customer' AND account_id=?
+           AND purpose='phone_verify' AND delivery_status='sent'
+           AND consumed_at IS NULL AND expires_at>NOW()
+         ORDER BY id DESC LIMIT 1`,
+        [tenantId, Number(customer.id)]
+      );
+      const phoneChallenge = phoneChallenges[0] || null;
 
       return res.json({
         ok: true,
@@ -7761,21 +7533,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             tg_login_enabled: tgLoginEnabled,
           },
           max: {
-            linked: !!maxUserId,
-            max_user_id: maxUserId || null,
-            phone: row.phone || null,
-            linked_at: row.updated_at || null,
+            linked: Boolean(maxChannel),
+            destination: maxChannel?.masked || null,
+            linked_at: maxChannel?.verifiedAt || null,
           },
           tg: {
-            linked: !!tgUserId,
-            telegram_user_id: tgUserId || null,
-            phone: row.phone || null,
-            linked_at: row.updated_at || null,
+            linked: Boolean(tgChannel),
+            destination: tgChannel?.masked || null,
+            linked_at: tgChannel?.verifiedAt || null,
           },
           phone_verification: {
             verified: Boolean(row.phone_verified_at),
             phone_verified_at: row.phone_verified_at || null,
-            expires_at: row.phone_verify_expires_at || null,
+            expires_at: phoneChallenge?.expires_at || null,
+            request_id: phoneChallenge?.public_id || null,
+            sent_via: phoneChallenge?.provider || null,
           },
         },
       });
@@ -8601,6 +8373,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const deliveryAddressId = normalizePositiveIntOrNull(req.body && req.body.delivery_address_id);
       let address = null;
+      if(token.startsWith('g_')){
+        const guest=await customerAuth.getGuest(db,tenantId,token,false,storeId);
+        if(!guest)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+        if(deliveryAddressId){
+          address=guest.addresses.find(a=>Number(a.id)===deliveryAddressId);
+          if(!address)return res.status(404).json({ok:false,error:'ADDRESS_NOT_FOUND'});
+        }
+      }
 
       if (deliveryAddressId && customer) {
         address = await loadSharedCustomerAddressById({
@@ -8722,9 +8502,19 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   // PUT /api/public/me  body: { name?, birthday? }
   router.put('/me', async (req, res) => {
+    if(Object.prototype.hasOwnProperty.call(req.body||{},'phone')||Object.prototype.hasOwnProperty.call(req.body||{},'birthday')){
+      const proof=await getCustomerByToken(helpers.getTenantId(req),str(req.headers['x-customer-token']),{refreshSession:false});
+      if(!proof||proof.auth_strength!=='strong')return res.status(403).json({ok:false,error:'STRONG_AUTH_REQUIRED'});
+    }
     try {
       const tenantId = helpers.getTenantId(req);
       const token = str(req.headers['x-customer-token']);
+      if(req.authGuest){
+        const name=normalizeRequiredCustomerName(req.body?.name);
+        if(!name)return res.status(400).json({ok:false,error:'NAME_REQUIRED'});
+        await customerAuth.updateGuestProfile(db,tenantId,token,{name},helpers.getStoreId(req));
+        return res.json({ok:true});
+      }
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
@@ -8739,8 +8529,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       if (Object.prototype.hasOwnProperty.call(req.body || {}, 'birthday')) {
-        const birthday = parseBirthdayInput(req.body.birthday);
-        if (!birthday) return res.status(400).json({ ok: false, error: 'BAD_BIRTHDAY' });
+        const clearBirthday = req.body.birthday === null;
+        const birthday = clearBirthday ? null : parseBirthdayInput(req.body.birthday);
+        if (!clearBirthday && !birthday) return res.status(400).json({ ok: false, error: 'BAD_BIRTHDAY' });
         updates.push('birthday=?');
         params.push(birthday);
       }
@@ -8772,7 +8563,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       try {
         const tenantId = helpers.getTenantId(req);
         const token = str(req.headers['x-customer-token']);
-        const customer = await getCustomerByToken(tenantId, token);
+        const customer = req.authGuest || await getCustomerByToken(tenantId, token);
         if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
         const file =
@@ -8811,7 +8602,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const rel = path.relative(staticRoot, convertedPath).replace(/\\/g, '/');
         const photoUrl = `/static/${rel}`;
 
-        await db.query(
+        if(req.authGuest)await customerAuth.updateGuestProfile(db,tenantId,token,{photo:photoUrl},helpers.getStoreId(req));
+        else await db.query(
           `UPDATE cust_customers
            SET photo=?
            WHERE tenant_id=? AND id=?`,
@@ -8831,6 +8623,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const token = str(req.headers['x-customer-token']);
+      if(req.authGuest){
+        await customerAuth.updateGuestProfile(db,tenantId,token,{photo:null},helpers.getStoreId(req));
+        return res.json({ok:true});
+      }
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
@@ -9180,6 +8976,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const customer=await getCustomerByToken(tenantId,str(req.headers['x-customer-token']));
+      if(!customer)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+      if(helpers.normalizePhone(req.query.phone||req.query.q)!==customer.phone)return res.status(403).json({ok:false,error:'FORBIDDEN'});
       await ensureOrderStatusCustomerProgressColumn();
       const phone = str(req.query.phone || req.query.q);
       const phoneCandidates = normalizePhoneLookupCandidates(phone);
@@ -9194,7 +8993,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const fetchLimit = limit + 1;
       const storeTimezone = await getStoreTimezone(tenantId, storeId);
-      const placeholders = phoneCandidates.map(() => '?').join(', ');
       const [rows] = await db.query(
         `SELECT
            o.id,
@@ -9221,13 +9019,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          WHERE o.tenant_id=? AND o.store_id=? AND o.is_active=1
            AND COALESCE(s.is_final, 0)=0
            AND LOWER(COALESCE(s.code, '')) NOT IN ('canceled', 'cancelled')
-           AND (
-             o.customer_phone IN (${placeholders})
-             OR c.phone IN (${placeholders})
-           )
+           AND o.customer_id=?
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ?`,
-        [tenantId, storeId, ...phoneCandidates, ...phoneCandidates, fetchLimit]
+        [tenantId, storeId, customer.id, fetchLimit]
       );
 
       const hasMore = rows.length > limit;
@@ -9282,8 +9077,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const storeId = helpers.getStoreId(req);
       await ensureOrderStatusCustomerProgressColumn();
       const token = str(req.headers['x-customer-token']);
-      const customer = await getCustomerByToken(tenantId, token);
-      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const customer = req.authGuest ? null : await getCustomerByToken(tenantId, token);
+      if (!customer && !req.authGuest) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const ownerClause=req.authGuest?'o.guest_session_hash=? AND o.customer_id IS NULL':'o.customer_id=?';
+      const ownerValue=req.authGuest?req.authGuest.token_hash:customer.id;
 
       let limit = Number(req.query.limit ?? 50);
       if (!Number.isFinite(limit) || limit <= 0) limit = 50;
@@ -9319,8 +9116,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            FROM order_orders o
            LEFT JOIN order_statuses s
              ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
-           WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1`,
-          [tenantId, storeId, customer.id]
+           WHERE o.tenant_id=? AND o.store_id=? AND ${ownerClause} AND o.is_active=1`,
+          [tenantId, storeId, ownerValue]
         );
         const summaryRow = summaryRows?.[0] || {};
         summary = {
@@ -9361,7 +9158,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
          LEFT JOIN cust_customer_addresses ca
            ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
-         WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+         WHERE o.tenant_id=? AND o.store_id=? AND ${ownerClause} AND o.is_active=1
            AND (? IS NULL OR (
              CASE WHEN COALESCE(s.is_final, 0) = 1
                        OR LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
@@ -9370,7 +9167,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ?
          OFFSET ?`,
-        [tenantId, storeId, customer.id, statusIsFinal, statusIsFinal, fetchLimit, offset]
+        [tenantId, storeId, ownerValue, statusIsFinal, statusIsFinal, fetchLimit, offset]
       );
 
       const hasMore = rows.length > limit;
@@ -9433,21 +9230,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
-      const customer = await getCustomerByToken(tenantId, token);
-      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const customer = req.authGuest ? null : await getCustomerByToken(tenantId, token);
+      if (!customer && !req.authGuest) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const orderId = Number(req.params.id);
       if (!Number.isFinite(orderId) || orderId <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      if(req.authGuest){
+        const [[owned]]=await db.query('SELECT id FROM order_orders WHERE tenant_id=? AND store_id=? AND id=? AND guest_session_hash=? AND customer_id IS NULL',[tenantId,storeId,orderId,req.authGuest.token_hash]);
+        if(!owned)return res.status(404).json({ok:false,error:'NOT_FOUND'});
+      }
       const payload = await fetchOrderPayload(tenantId, storeId, orderId);
       if (!payload) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
       // Р СџРЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С, РЎвЂЎРЎвЂљР С• Р В·Р В°Р С”Р В°Р В· Р С—РЎР‚Р С‘Р Р…Р В°Р Т‘Р В»Р ВµР В¶Р С‘РЎвЂљ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљРЎС“
-      if (Number(payload.customer_id) !== Number(customer.id)) {
+      if (!req.authGuest && Number(payload.customer_id) !== Number(customer.id)) {
         return res.status(403).json({ ok: false, error: 'FORBIDDEN' });
       }
 
@@ -23858,6 +23659,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (submissionId) {
         const existingSubmission = await findOrderSubmission(tenantId, storeId, submissionId);
         if (existingSubmission) {
+          await authorizeCustomerOrder(req,existingSubmission,{allowPaymentToken:true,allowSubmissionScope:true,submissionReplay:true});
           if (String(existingSubmission.submission_fingerprint || '') !== submissionFingerprint) {
             return res.status(409).json({ ok: false, error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
           }
@@ -23897,6 +23699,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       // auth customer (optional)
       const token = str(req.headers['x-customer-token']);
       const authCustomer = token ? await getCustomerByToken(tenantId, token) : null;
+      const authGuest=token.startsWith('g_')?await customerAuth.getGuest(db,tenantId,token,false,storeId):null;
+      if(token.startsWith('g_')&&!authGuest)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+      if(authCustomer?.auth_strength!=='strong'&&(Number(req.body.bonus_redeem_amount)>0||['true','1'].includes(String(req.body.bonus_redeem_enabled))))return res.status(403).json({ok:false,error:'AUTH_REQUIRED_FOR_BONUSES'});
 
       const items = Array.isArray(req.body.items) ? req.body.items : [];
       if (!items.length) return res.status(400).json({ ok: false, error: 'EMPTY_ITEMS' });
@@ -23963,7 +23768,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
 
       // ensure customer exists if not authed
-      if (!customerId && customerPhone) {
+      if (authCustomer && requireClientData && !helpers.normalizePhone(authCustomer.phone)) {
+        return res.status(409).json({ ok: false, error: 'PHONE_VERIFICATION_REQUIRED' });
+      }
+      if (!customerId && customerPhone && req.user && !token.startsWith('g_')) {
         const [ex] = await db.query(
           `SELECT id FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 1`,
           [tenantId, customerPhone]
@@ -25753,7 +25561,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             { promoCode }
           );
       const discountsJson = storedDiscountEntries.length > 0 ? JSON.stringify(storedDiscountEntries) : null;
-      const benefitsMetaJson = buildOrderBenefitsMetaJsonFromDraft({
+      if(authCustomer?.auth_strength!=='strong'&&(getOrderBonusRedeemAmount(discountsJson)>0
+        ||normItems.some(item=>Number(item.bonus_redeem_line_amount)>0))){
+        return res.status(403).json({ok:false,error:'AUTH_REQUIRED_FOR_BONUSES'});
+      }
+      let benefitsMetaJson = buildOrderBenefitsMetaJsonFromDraft({
         selected_discount_id: selectedDiscountId,
         selected_discount_source: selectedDiscountSource,
         selected_promo_source: selectedPromoSource,
@@ -25773,11 +25585,18 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
       let deliveryCost = 0;
       const isDeliveryMethod = str(methodCode).trim() === 'delivery';
-      const deliveryAddressId = (isDeliveryMethod && Number.isFinite(Number(req.body.delivery_address_id)) && Number(req.body.delivery_address_id) > 0)
+      let deliveryAddressId = (isDeliveryMethod && Number.isFinite(Number(req.body.delivery_address_id)) && Number(req.body.delivery_address_id) > 0)
         ? Number(req.body.delivery_address_id)
         : null;
+      let guestDeliveryAddress=null;
       if (isDeliveryMethod) {
         let resolvedDeliveryAddress = null;
+        if(deliveryAddressId&&authGuest){
+          resolvedDeliveryAddress=authGuest.addresses.find(a=>Number(a.id)===deliveryAddressId);
+          if(!resolvedDeliveryAddress)return res.status(404).json({ok:false,error:'ADDRESS_NOT_FOUND'});
+          guestDeliveryAddress=resolvedDeliveryAddress;
+          deliveryAddressId=null; // Guest IDs are not cust_customer_addresses foreign keys.
+        }
         if (deliveryAddressId && authCustomer) {
           resolvedDeliveryAddress = await loadSharedCustomerAddressById({
             db,
@@ -25864,7 +25683,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const storeTimezone = await getStoreTimezone(tenantId, orderStoreId);
 
       // Р С’Р Т‘РЎР‚Р ВµРЎРѓ Р С‘ РЎвЂљР С•РЎвЂЎР С”Р В° РЎРѓР В°Р СР С•Р Р†РЎвЂ№Р Р†Р С•Р В·Р В° Р Р…РЎС“Р В¶Р Р…РЎвЂ№ Р Т‘Р В»РЎРЏ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚Р С”Р С‘ Р Т‘РЎС“Р В±Р В»РЎРЏ (РЎвЂЎР С‘РЎвЂљР В°Р ВµР С Р Т‘Р С• Р Р…Р ВµРЎвЂ)
-      const deliveryAddress = helpers.strOrNull(req.body.delivery_address);
+      const deliveryAddress = guestDeliveryAddress
+        ? [guestDeliveryAddress.city,guestDeliveryAddress.street,guestDeliveryAddress.house,guestDeliveryAddress.apartment].filter(Boolean).join(', ')
+        : helpers.strOrNull(req.body.delivery_address);
       const pickupStoreId = Number.isFinite(Number(req.body.pickup_store_id)) ? Number(req.body.pickup_store_id) : null;
       const addrForDup = (deliveryAddress && String(deliveryAddress).trim()) ? String(deliveryAddress).trim() : '';
       const pickupIdForDup = (pickupStoreId && Number.isFinite(pickupStoreId)) ? pickupStoreId : 0;
@@ -25872,7 +25693,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       // Р РЋР ВµРЎР‚Р Р†Р ВµРЎР‚Р Р…Р В°РЎРЏ Р В·Р В°РЎвЂ°Р С‘РЎвЂљР В° Р С•РЎвЂљ Р Т‘РЎС“Р В±Р В»Р ВµР в„– (Р Т‘Р Р†Р С•Р в„–Р Р…Р В°РЎРЏ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†Р С”Р В° / Р С—Р С•Р Р†РЎвЂљР С•РЎР‚ Р В·Р В°Р С—РЎР‚Р С•РЎРѓР В°). Р С›Р С”Р Р…Р С• 60 РЎРѓР ВµР С”.
       // created_at Р Р† Р вЂР вЂќ РЎвЂ¦РЎР‚Р В°Р Р…Р С‘РЎвЂљРЎРѓРЎРЏ Р Р† UTC РІР‚вЂќ РЎРѓРЎР‚Р В°Р Р†Р Р…Р С‘Р Р†Р В°Р ВµР С РЎвЂљР С•Р В¶Р Вµ Р Р† UTC.
       const forceNew = req.body.force_new === true || req.body.force_new === 'true';
-      if (!forceNew) {
+      if (!forceNew && !authGuest) {
         const dupThresholdStr = helpers.formatUtcDateTime(Date.now() - 60000);
         const [recentDup] = await db.query(
           `SELECT id, public_id, total_price
@@ -25958,6 +25779,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       try {
         await conn.beginTransaction();
 
+        if(authGuest && !await customerAuth.getGuest(conn,tenantId,token,true,storeId))throw new MessengerAuthError('UNAUTHORIZED',401);
         if (stockDeductMode === 'on_create' && (!isOnline || total===0)) {
           const deductionResult = await applyStockDeductionForOrderItems({
             db: conn,
@@ -26032,6 +25854,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           orderDiscountAmount,
           discountsJson,
         ];
+        if(authGuest){
+          orderInsertColumns.push('guest_session_hash');
+          orderInsertParams.push(authGuest.token_hash);
+          const recipient=customerPhone?await customerBonus.ensureRecipient(conn,tenantId,orderStoreId,customerPhone):null;
+          const amount=recipient&&recipient.status==='active'?await customerBonus.calculateAccrual(conn,{
+            tenantId,customerId:recipient.customerId,levelId:recipient.levelId,items:normItems,
+          }):0;
+          benefitsMetaJson=JSON.stringify({...JSON.parse(benefitsMetaJson||'{}'),bonus_account_id:null,
+            bonus_level_id:recipient?.levelId||null,bonus_accrual_amount:amount,bonus_redeem_enabled:false,
+            bonus_redeem_amount:0,bonus_accrual_blocked_by_redeem:false});
+          orderInsertColumns.push('bonus_customer_id');
+          orderInsertParams.push(recipient?.customerId||null);
+        }
+        orderInsertColumns.push('auth_status_at_creation');
+        orderInsertParams.push(authCustomer?.auth_strength==='strong'?'verified':'unverified');
         if (isOnline) {
           orderInsertColumns.push('online_payment_required','online_payment_status','online_payment_total');
           orderInsertParams.push(1,total===0 ? 'not_required' : 'pending',total.toFixed(2));
@@ -26134,6 +25971,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (submissionId && String(txErr?.code || '') === 'ER_DUP_ENTRY') {
           const existingSubmission = await findOrderSubmission(tenantId, storeId, submissionId);
           if (!existingSubmission) throw txErr;
+          await authorizeCustomerOrder(req,existingSubmission,{allowPaymentToken:true,allowSubmissionScope:true,submissionReplay:true});
           if (String(existingSubmission.submission_fingerprint || '') !== submissionFingerprint) {
             return res.status(409).json({ ok: false, error: 'IDEMPOTENCY_PAYLOAD_MISMATCH' });
           }
@@ -26249,12 +26087,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 console.error('Order creation push failed:', err && err.message ? err.message : err);
               });
             }
-            const botToken = getEffectiveTelegramBotConfig().telegram_bot_token;
-            if (botToken) {
-              sendNewOrderNotification(tenantId, orderStoreId, payload, { db, botToken }).catch((err) =>
-                console.error('Telegram new order notify:', err)
-              );
-            }
+            sendNewOrderNotification(tenantId, orderStoreId, payload, { db }).catch((err) =>
+              console.error('Telegram new order notify:', err.code || err.name)
+            );
             sendNewOrderMaxNotification(tenantId, orderStoreId, payload, { db }).catch((err) =>
               console.error('MAX new order notify:', err)
             );
@@ -26268,7 +26103,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       return;
     } catch (e) {
       console.error(e);
-      res.status(e.status || 500).json({ ok: false, error: e.code && (['BAD_ITEMS','OUT_OF_STOCK'].includes(e.code) || e.code.startsWith('PAYMENT_')) ? e.code : 'DB_ERROR' });
+      res.status(e.status || 500).json({ ok: false, error: e.code && (['BAD_ITEMS','OUT_OF_STOCK','ORDER_NOT_FOUND','UNAUTHORIZED'].includes(e.code) || e.code.startsWith('PAYMENT_')) ? e.code : 'DB_ERROR' });
     }
   }
 

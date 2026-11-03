@@ -10501,10 +10501,7 @@ async function mountProductDetails(options = {}) {
   }
 
   function returnToProfileFromSheet() {
-    closeShopSheetIfOpen();
-    setTimeout(() => {
-      openProfileSheet({});
-    }, 0);
+    returnToProfileModalFromSubpage();
   }
 
   function clearProfileModalMenu() {
@@ -16660,7 +16657,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   function getCartBonusActiveLevel(config = null) {
     const data = config && typeof config === "object" ? config : state.homeBonusConfig;
     const account = data?.account && typeof data.account === "object" ? data.account : null;
-    if (!account?.joined_at || !(Number(account?.id || 0) > 0)) return null;
+    if (!account?.is_guest && (!account?.joined_at || !(Number(account?.id || 0) > 0))) return null;
     const levelId = Number(account?.level_id || 0);
     const levels = Array.isArray(data?.levels) ? data.levels : [];
     if (levelId > 0) {
@@ -16775,29 +16772,13 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         .filter((entry) => str(entry?.key || "").trim())
         .map((entry) => [str(entry.key).trim(), roundPrice(Math.max(0, Number(entry?.currentTotal || 0)))])
     );
-    const orderRangePercent = (Array.isArray(level?.order_bonus_ranges) ? level.order_bonus_ranges : [])
-      .map((row) => ({
-        amount: Math.max(0, Number(row?.amount || 0)),
-        percent: Math.max(0, Number(row?.percent || 0)),
-      }))
-      .filter((row) => row.amount > 0 && row.percent > 0 && Number(itemsTotal || 0) >= row.amount)
-      .sort((a, b) => b.amount - a.amount)[0]?.percent || 0;
-    const cashbackPercent = Math.max(0, Number(level?.cashback_percent || 0)) + orderRangePercent;
-    const selectedCategoryPercents = getCartBonusFavoriteCategoryPercents(level?.id);
-    let rawBonus = 0;
-
-    safeItems.forEach((item) => {
-      const key = str(item?.key || "").trim();
-      if (!key) return;
-      const lineTotal = roundPrice(Math.max(0, Number(lineTotalsByKey.get(key) || 0)));
-      if (!(lineTotal > 0)) return;
-      const favoritePercent = getCartBonusItemFavoritePercent(item, selectedCategoryPercents);
-      const percent = cashbackPercent + favoritePercent;
-      if (!(percent > 0)) return;
-      rawBonus += lineTotal * percent / 100;
-    });
-
-    return Math.floor(Math.max(0, rawBonus));
+    const selectedCategoryPercents = getCustomerToken().startsWith('g_')?new Map():getCartBonusFavoriteCategoryPercents(level?.id);
+    return window.ShopBonusAccrual.calculate({cashbackPercent:level?.cashback_percent,ranges:level?.order_bonus_ranges,
+      lines:safeItems.filter(item=>str(item?.key||'').trim()).map(item=>({
+        line_total:lineTotalsByKey.get(str(item.key).trim())||0,
+        is_gift_reward:item.is_gift_reward,
+        favorite_percent:getCartBonusItemFavoritePercent(item,selectedCategoryPercents),
+      }))});
   }
 
   async function ensureCartBonusPreviewLevel() {
@@ -16815,7 +16796,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     }
     const level = getCartBonusActiveLevel(config);
     if (!level) return null;
-    if (Number(level?.favorite_categories_bonus_percent || 0) > 0 && typeof loadHomeBonusFavoriteCategories === "function") {
+    if (!config?.account?.is_guest && Number(level?.favorite_categories_bonus_percent || 0) > 0 && typeof loadHomeBonusFavoriteCategories === "function") {
       try {
         await loadHomeBonusFavoriteCategories(level);
       } catch (error) {
@@ -16830,6 +16811,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       ? state.homeBonusConfig.account
       : null;
     const balance = Math.floor(Math.max(0, Number(account?.balance || 0)));
+    if(account?.can_redeem===false||getCustomerToken().startsWith('g_'))return 0;
     const redeemPercent = Math.max(0, Number(level?.redeem_percent || 0));
     if (!(balance > 0) || !(redeemPercent > 0)) return 0;
     const limit = Math.floor(Math.max(0, Number(itemsTotal || 0)) * redeemPercent / 100);
@@ -18343,6 +18325,15 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         && Number(summaryState.bonusAccrualAmount || 0) > 0
       );
     }
+    if(token.startsWith('g_')&&bonusLevel){
+      const lineTotals=new Map(summaryState.lineStates.map(line=>[str(line.key),Number(line.currentTotal)||0]));
+      const preview=await apiJson('/api/public/bonus/preview',{method:'POST',body:{customer_phone:draft.customer_phone||undefined,items:cartItems.map(item=>({
+        product_id:item.product_id||item.product?.id,combo_id:item.combo_id,category_id:item.category_id||item.product?.category_id,
+        category_ids:item.product?.category_ids,combo_category_id:item.combo_category_id,
+        line_total:lineTotals.get(str(item.key))||0,is_gift_reward:item.is_gift_reward,
+      }))}});
+      summaryState.bonusAccrualAmount=Number(preview.data.amount);
+    }
     if (str(methodCode || "").trim() !== "delivery") {
       return summaryState;
     }
@@ -18931,7 +18922,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     const token = typeof getCustomerToken === "function"
       ? str(getCustomerToken() || "").trim()
       : "";
-    if (!token) return null;
+    if (!token || token.startsWith('g_')) return null;
 
     const cacheKey = buildCheckoutBenefitsPreviewCacheKey(previewRequest);
     if (cacheKey) {
@@ -24443,7 +24434,14 @@ function openCartSheet() {
     return str(backMode || "").trim().toLowerCase() === "desktop-panel";
   }
 
-  function showInlineAddressToggle() {
+  function showInlineAddressToggle(inline = false) {
+    if(inline&&addressListView){
+      hideHeaderToggle();
+      addressListView.classList.add("shop-address-list-view--with-inline-toggle");
+      addressListView.prepend(deliveryToggleWrap);
+      deliveryToggleWrap.classList.remove("hidden");
+      return;
+    }
     if (addressListView) {
       addressListView.classList.remove("shop-address-list-view--with-inline-toggle");
     }
@@ -25949,13 +25947,7 @@ function applySheetAddressTitle(backMode = "cart") {
           if (typeof setActiveNav === "function") setActiveNav("profile");
           return;
         }
-        closeShopSheetIfOpen();
-        setTimeout(() => {
-          if (typeof openProfileSheet === "function") {
-            const forceModal = window.matchMedia?.("(min-width: 769px)").matches === true;
-            void openProfileSheet({ forceModal });
-          }
-        }, 0);
+        returnToProfileModalFromSubpage();
         return;
       }
       if (nextScreen === "nav" || nextScreen === "home-site-menu") {
@@ -26729,6 +26721,9 @@ function applySheetAddressTitle(backMode = "cart") {
       setShopModalHeaderShellMode(true);
       if (!useCartPage) showHeaderToggle();
       if (returnToProfile && typeof setProfileModalSubpageHeader === "function") {
+        hideHeaderToggle();
+        showInlineAddressToggle(true);
+        window.AppModal?.setTitle?.("Адреса");
         setProfileModalSubpageHeader();
       }
     }
@@ -28482,644 +28477,38 @@ function renderSheetAddressList() {
     }
   }
 
-  function buildLoginContent({ onSuccess }) {
-    const isKsoAuth = Boolean(document.body?.classList?.contains("page-kso"));
-    const wrap = document.createElement("div");
-    wrap.className = "shop-auth";
-    if (isKsoAuth) wrap.classList.add("shop-auth--kso");
-
-    const note = document.createElement("div");
-    note.className = "shop-auth-text muted";
-    note.textContent = "Введите телефон.";
-    wrap.appendChild(note);
-
-    const form = document.createElement("div");
-    form.className = "shop-auth-form";
-
-    const phoneLabel = document.createElement("label");
-    phoneLabel.className = "field-label";
-    phoneLabel.textContent = "Телефон";
-    const phone = document.createElement("input");
-    phone.className = "control";
-    phone.type = "tel";
-    phone.name = "shop-login-phone";
-    phone.autocomplete = "off";
-    phone.inputMode = "tel";
-    phone.autocorrect = "off";
-    phone.autocapitalize = "off";
-    phone.spellcheck = false;
-    phone.setAttribute("data-lpignore", "true");
-    phone.setAttribute("data-form-type", "other");
-    phone.value = "+7";
-    phone.placeholder = "+7 (999) 999-99-99";
-    form.appendChild(phoneLabel);
-    form.appendChild(phone);
-
-    const nextBtn = document.createElement("button");
-    nextBtn.type = "button";
-    nextBtn.className = "btn btn-primary";
-    nextBtn.style.width = "100%";
-    nextBtn.textContent = "Продолжить";
-    form.appendChild(nextBtn);
-
-    const ksoKeypad = document.createElement("div");
-    ksoKeypad.className = "shop-auth-kso-keypad";
-    if (!isKsoAuth) ksoKeypad.classList.add("hidden");
-    ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "backspace"].forEach((key) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "shop-auth-kso-key";
-      btn.dataset.key = key;
-      if (key === "backspace") {
-        btn.setAttribute("aria-label", "Удалить цифру");
-        btn.innerHTML = '<i class="fas fa-backspace" aria-hidden="true"></i>';
-      } else if (key === "clear") {
-        btn.setAttribute("aria-label", "Очистить номер");
-        btn.innerHTML = '<i class="fas fa-times" aria-hidden="true"></i>';
-      } else {
-        btn.textContent = key;
-      }
-      ksoKeypad.appendChild(btn);
-    });
-    form.appendChild(ksoKeypad);
-
-    const maxLoginBtn = document.createElement("button");
-    maxLoginBtn.type = "button";
-    maxLoginBtn.className = "shop-auth-social-btn shop-auth-social-btn--max";
-    maxLoginBtn.style.display = "none";
-    maxLoginBtn.setAttribute("aria-label", "Войти через MAX");
-    const maxIcon = document.createElement("img");
-    maxIcon.src = "/static/uploads/auth/max-auth.png";
-    maxIcon.alt = "MAX";
-    maxLoginBtn.appendChild(maxIcon);
-
-    const tgLoginBtn = document.createElement("button");
-    tgLoginBtn.type = "button";
-    tgLoginBtn.className = "shop-auth-social-btn shop-auth-social-btn--telegram";
-    tgLoginBtn.style.display = "none";
-    tgLoginBtn.setAttribute("aria-label", "Войти через Telegram");
-    const tgIcon = document.createElement("img");
-    tgIcon.src = "/static/uploads/auth/telegram-auth.png";
-    tgIcon.alt = "Telegram";
-    tgLoginBtn.appendChild(tgIcon);
-
-    const socialRow = document.createElement("div");
-    socialRow.className = "shop-auth-social-row";
-    socialRow.appendChild(maxLoginBtn);
-    socialRow.appendChild(tgLoginBtn);
-
-    (async function syncMaxLoginButtonVisibility() {
-      if (isKsoAuth) {
-        maxLoginBtn.style.display = "none";
-        socialRow.style.display = "none";
-        return;
-      }
-      try {
-        const probe = await apiJson("/api/public/max/auth-link");
-        const hasLink = !!(probe && probe.ok !== false && probe.link);
-        maxLoginBtn.style.display = hasLink ? "" : "none";
-        socialRow.style.display = (maxLoginBtn.style.display !== "none" || tgLoginBtn.style.display !== "none") ? "" : "none";
-      } catch {
-        maxLoginBtn.style.display = "none";
-        socialRow.style.display = (maxLoginBtn.style.display !== "none" || tgLoginBtn.style.display !== "none") ? "" : "none";
-      }
-    })();
-
-    (async function syncTgLoginButtonVisibility() {
-      if (isKsoAuth) {
-        tgLoginBtn.style.display = "none";
-        socialRow.style.display = "none";
-        return;
-      }
-      try {
-        const probe = await apiJson("/api/public/tg/auth-link");
-        const hasLink = !!(probe && probe.ok !== false && probe.link);
-        tgLoginBtn.style.display = hasLink ? "" : "none";
-        socialRow.style.display = (maxLoginBtn.style.display !== "none" || tgLoginBtn.style.display !== "none") ? "" : "none";
-      } catch {
-        tgLoginBtn.style.display = "none";
-        socialRow.style.display = (maxLoginBtn.style.display !== "none" || tgLoginBtn.style.display !== "none") ? "" : "none";
-      }
-    })();
-
-    const nameWrap = document.createElement("div");
-    nameWrap.style.display = "none";
-    nameWrap.style.gap = "8px";
-    const nameLabel = document.createElement("label");
-    nameLabel.className = "field-label";
-    nameLabel.textContent = "Имя";
-    const nameInput = document.createElement("input");
-    nameInput.className = "control";
-    nameInput.type = "text";
-    nameInput.autocomplete = "name";
-    nameInput.placeholder = "Введите имя";
-    nameWrap.appendChild(nameLabel);
-    nameWrap.appendChild(nameInput);
-    const nameError = document.createElement("div");
-    nameError.className = "shop-auth-error hidden";
-    nameWrap.appendChild(nameError);
-
-    const bWrap = document.createElement("div");
-    bWrap.style.display = "none";
-    bWrap.style.gap = "16px";
-
-    const bLabel = document.createElement("label");
-    bLabel.className = "field-label";
-    bLabel.textContent = "Дата рождения";
-    const bdayInputWrap = document.createElement("div");
-    bdayInputWrap.className = "shop-auth-bday-input-wrap";
-    const bday = document.createElement("input");
-    bday.className = "control";
-    bday.type = "text";
-    bday.placeholder = "дд.мм.гггг";
-    bday.inputMode = "numeric";
-    const bdayInfoBtn = document.createElement("button");
-    bdayInfoBtn.type = "button";
-    bdayInfoBtn.className = "shop-auth-bday-info-btn";
-    bdayInfoBtn.setAttribute("aria-label", "Подсказка по дате рождения");
-    bdayInfoBtn.innerHTML = '<i class="fas fa-info"></i>';
-    const bdayInfoHint = document.createElement("div");
-    bdayInfoHint.className = "shop-auth-bday-info-hint hidden";
-    bdayInfoHint.textContent = "Дата рождения используется как пароль для входа в учетную запись.";
-    const codeWrap = document.createElement("div");
-    codeWrap.className = "shop-auth-code-wrap hidden";
-    const codeInputs = [];
-    for (let i = 0; i < 4; i += 1) {
-      const codeCell = document.createElement("input");
-      codeCell.type = "text";
-      codeCell.inputMode = "numeric";
-      codeCell.maxLength = 1;
-      codeCell.className = "shop-auth-code-cell";
-      codeCell.autocomplete = i === 0 ? "one-time-code" : "off";
-      codeInputs.push(codeCell);
-      codeWrap.appendChild(codeCell);
-    }
-    bdayInputWrap.appendChild(bday);
-    bdayInputWrap.appendChild(bdayInfoBtn);
-    bdayInputWrap.appendChild(codeWrap);
-    bdayInputWrap.appendChild(bdayInfoHint);
-    bWrap.appendChild(bLabel);
-    bWrap.appendChild(bdayInputWrap);
-
-
-    const bdayError = document.createElement("div");
-    bdayError.className = "shop-auth-error hidden";
-    bWrap.appendChild(bdayError);
-
-    const loginBtn = document.createElement("button");
-    loginBtn.type = "button";
-    loginBtn.className = "btn btn-primary";
-    loginBtn.style.width = "100%";
-    loginBtn.textContent = "Войти";
-    bWrap.appendChild(loginBtn);
-
-    form.appendChild(nameWrap);
-    form.appendChild(bWrap);
-    form.appendChild(socialRow);
-    wrap.appendChild(form);
-
-    let authStepMode = "birthday";
-    let authNeedsNameInput = false;
-    const clearCodeInputs = () => codeInputs.forEach((cell) => { cell.value = ""; });
-    const getCodeValue = () => codeInputs.map((cell) => String(cell.value || "").replace(/\D/g, "")).join("");
-    const focusCodeIndex = (index) => {
-      const safe = Math.max(0, Math.min(codeInputs.length - 1, Number(index) || 0));
-      if (codeInputs[safe]) codeInputs[safe].focus();
-    };
-    const setNameError = (msg) => {
-      nameError.textContent = msg || "";
-      nameError.classList.toggle("hidden", !msg);
-      nameInput.classList.toggle("is-invalid", !!msg);
-    };
-    const getAuthNameValue = () => normalizeCompletedCustomerName(nameInput.value);
-
-    const setBirthdayStepUi = () => {
-      authStepMode = "birthday";
-      note.textContent = authNeedsNameInput
-        ? "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f \u0438 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433)."
-        : "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433).";
-      bLabel.textContent = "\u0414\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f";
-      bday.placeholder = "\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433";
-      bday.inputMode = "numeric";
-      bday.maxLength = 10;
-      bday.value = "";
-      bday.style.display = "";
-      bdayInfoBtn.classList.remove("hidden");
-      codeWrap.classList.add("hidden");
-      bdayInfoHint.classList.add("hidden");
-      clearCodeInputs();
-      setBirthdayError("");
-      setNameError("");
-      nameWrap.style.display = authNeedsNameInput ? "grid" : "none";
-    };
-
-    const setCodeStepUi = () => {
-      authStepMode = "code";
-      note.textContent = authNeedsNameInput
-        ? "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f \u0438 \u043a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430."
-        : "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430.";
-      bLabel.textContent = "\u041a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430";
-      bday.placeholder = "1234";
-      bday.inputMode = "numeric";
-      bday.maxLength = 4;
-      bday.value = "";
-      bday.style.display = "none";
-      bdayInfoBtn.classList.add("hidden");
-      codeWrap.classList.remove("hidden");
-      bdayInfoHint.classList.add("hidden");
-      clearCodeInputs();
-      setBirthdayError("");
-      setNameError("");
-      nameWrap.style.display = authNeedsNameInput ? "grid" : "none";
-    };
-
-    const revealSecondStep = ({ needsNameInput = false } = {}) => {
-      authNeedsNameInput = !!needsNameInput;
-      if (authStepMode === "code") setCodeStepUi();
-      else setBirthdayStepUi();
-      if (nextBtn.style.display === "none") return;
-      nextBtn.style.display = "none";
-      bWrap.style.display = "grid";
-      if (authNeedsNameInput) {
-        nameInput.focus();
-        if (typeof nameInput.select === "function" && nameInput.value) nameInput.select();
-        return;
-      }
-      if (authStepMode === "code") focusCodeIndex(0);
-      else bday.focus();
-    };
-    const checkPhoneStatus = async () => {
-      const json = await apiJson("/api/public/auth/phone-status", {
-        method: "POST",
-        body: { phone: phone.value },
-        headers: { "x-customer-token": "" },
-      });
-      return {
-        exists: Boolean(json && json.exists),
-        hasName: Boolean(json && json.has_name),
-        needsNameInput: Boolean(json && json.needs_name_input),
-        requiresMessengerLogin: Boolean(json && json.requires_messenger_login),
-      };
-    };
-    let autoContinueLockPhone = "";
-    phone.addEventListener("input", () => {
-      enforcePhonePrefix(phone);
-      if (isKsoAuth) return;
-      const n = normalizePhone(phone.value);
-      if (n && n.length === 11 && n.startsWith("7")) {
-        if (nextBtn.style.display !== "none" && !nextBtn.disabled && autoContinueLockPhone !== n) {
-          autoContinueLockPhone = n;
-          nextBtn.click();
-        }
-      } else {
-        autoContinueLockPhone = "";
-      }
-    });
-    phone.addEventListener("focus", () => enforcePhonePrefix(phone));
-    ksoKeypad.addEventListener("click", (event) => {
-      const btn = event.target?.closest?.(".shop-auth-kso-key");
-      if (!btn) return;
-      event.preventDefault();
-      enforcePhonePrefix(phone);
-      const key = String(btn.dataset.key || "");
-      const digits = normalizePhone(phone.value).replace(/^7/, "").slice(0, 10);
-      if (key === "clear") {
-        phone.value = "+7";
-      } else if (key === "backspace") {
-        phone.value = `+7${digits.slice(0, -1)}`;
-      } else if (/^\d$/.test(key) && digits.length < 10) {
-        phone.value = `+7${digits}${key}`;
-      }
-      enforcePhonePrefix(phone);
-      phone.focus();
-    });
-    nameInput.addEventListener("input", () => {
-      if (getAuthNameValue()) {
-        setNameError("");
-      }
-    });
-    nameInput.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter") return;
-      e.preventDefault();
-      if (authStepMode === "code") {
-        focusCodeIndex(0);
-      } else {
-        bday.focus();
-      }
-    });
-
-    const setBirthdayError = (msg) => {
-      bdayError.textContent = msg || "";
-      bdayError.classList.toggle("hidden", !msg);
-      bday.classList.toggle("is-invalid", !!msg);
-    };
-
-    const normalizeBirthdayField = () => {
-      if (authStepMode === "birthday") {
-        handleBirthdayInput(bday);
-        if (isValidBirthday(bday.value) && !loginBtn.disabled) {
-          loginBtn.click();
-        }
-      } else {
-        bday.value = String(bday.value || "").replace(/\D/g, "").slice(0, 4);
-      }
-      setBirthdayError("");
-    };
-
-    bday.addEventListener("input", normalizeBirthdayField);
-    bday.addEventListener("change", normalizeBirthdayField);
-    bday.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter") return;
-      e.preventDefault();
-      if (!loginBtn.disabled) loginBtn.click();
-    });
-    bday.addEventListener("blur", () => {
-      if (!str(bday.value).trim()) return;
-      if (authStepMode === "birthday") {
-        if (!isValidBirthday(bday.value)) {
-          setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f \u0432 \u0444\u043e\u0440\u043c\u0430\u0442\u0435 \u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433");
-        }
-      } else if (getCodeValue().length !== 4) {
-        setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 4-\u0437\u043d\u0430\u0447\u043d\u044b\u0439 \u043a\u043e\u0434");
-      }
-    });
-    codeInputs.forEach((cell, idx) => {
-      cell.addEventListener("input", () => {
-        const digit = String(cell.value || "").replace(/\D/g, "").slice(-1);
-        cell.value = digit;
-        setBirthdayError("");
-        if (digit && idx < codeInputs.length - 1) focusCodeIndex(idx + 1);
-        if (getCodeValue().length === 4 && authStepMode === "code" && !loginBtn.disabled) {
-          loginBtn.click();
-        }
-      });
-      cell.addEventListener("keydown", (e) => {
-        if (e.key === "Backspace") {
-          if (!cell.value && idx > 0) {
-            e.preventDefault();
-            codeInputs[idx - 1].value = "";
-            focusCodeIndex(idx - 1);
-          }
-          return;
-        }
-        if (e.key === "ArrowLeft" && idx > 0) {
-          e.preventDefault();
-          focusCodeIndex(idx - 1);
-        } else if (e.key === "ArrowRight" && idx < codeInputs.length - 1) {
-          e.preventDefault();
-          focusCodeIndex(idx + 1);
-        } else if (e.key === "Enter" && !loginBtn.disabled) {
-          e.preventDefault();
-          loginBtn.click();
-        }
-      });
-      cell.addEventListener("paste", (e) => {
-        const text = String(e.clipboardData?.getData("text") || "").replace(/\D/g, "").slice(0, 4);
-        if (!text) return;
-        e.preventDefault();
-        clearCodeInputs();
-        text.split("").forEach((ch, p) => {
-          if (codeInputs[p]) codeInputs[p].value = ch;
-        });
-        focusCodeIndex(Math.min(text.length, 3));
-        if (text.length === 4 && authStepMode === "code" && !loginBtn.disabled) {
-          loginBtn.click();
-        }
-      });
-    });
-
-
-    nextBtn.addEventListener("click", async () => {
-      enforcePhonePrefix(phone);
-      const n = normalizePhone(phone.value);
-      if (!n || n.length !== 11 || !n.startsWith("7")) {
-        alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u0435\u043b\u0435\u0444\u043e\u043d (\u0420\u0424): +7XXXXXXXXXX");
-        return;
-      }
-      nextBtn.disabled = true;
-      try {
-        if (isKsoAuth) {
-          const json = await apiJson("/api/public/auth/kso-login", {
-            method: "POST",
-            body: {
-              phone: phone.value,
-              chat_guest_client_id: getGuestChatClientIdForAuth(),
-            },
-            headers: { "x-customer-token": "" },
-          });
-          if (json.token) {
-            setCustomerToken(json.token);
-            fetchMeSafeVerifiedToken = String(json.token);
-          }
-          if (json.customer) setCustomerCache(json.customer);
-          if (typeof window.refreshShopHomeBonusConfigUi === "function") {
-            await window.refreshShopHomeBonusConfigUi({ force: true });
-          }
-          const me = json.customer || await fetchMeSafe();
-          await refreshAddressState({ force: true });
-          if (me && typeof onSuccess === "function") onSuccess(me);
-          else alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u043e\u0439\u0442\u0438");
-          return;
-        }
-        const status = await checkPhoneStatus();
-        const needsNameInput = Boolean(status.needsNameInput || !status.hasName);
-        if (status.requiresMessengerLogin) {
-          setCodeStepUi();
-          revealSecondStep({ needsNameInput });
-          await apiJson("/api/public/auth/messenger-code/send", {
-            method: "POST",
-            body: { phone: phone.value },
-            headers: { "x-customer-token": "" },
-          });
-          return;
-        }
-        setBirthdayStepUi();
-        revealSecondStep({ needsNameInput });
-      } catch (e) {
-        const err = String(e && e.message ? e.message : "");
-        if (err === "MESSENGER_NOT_LINKED") alert("\u041d\u043e\u043c\u0435\u0440 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d, \u043d\u043e \u0431\u043e\u0442 \u043d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d");
-        else alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0441\u0442\u0430\u0442\u0443\u0441 \u0432\u0445\u043e\u0434\u0430");
-      } finally {
-        if (nextBtn.style.display !== "none") nextBtn.disabled = false;
-      }
-    });
-
-    maxLoginBtn.addEventListener("click", async () => {
-      maxLoginBtn.disabled = true;
-      maxLoginBtn.classList.add("is-loading");
-      try {
-        const json = await apiJson("/api/public/max/auth-link");
-        if (!json || json.ok === false || !json.link) {
-          const errCode = json && json.error ? String(json.error) : "";
-          if (errCode === "MAX_LOGIN_DISABLED") {
-            alert("MAX login is disabled for this site");
-          } else if (errCode === "MAX_BOT_NOT_CONFIGURED") {
-            alert("Бот MAX не настроен для этого сайта");
-          } else {
-            alert("Не удалось открыть вход через MAX");
-          }
-          return;
-        }
-        const opened = window.open(String(json.link), "_blank", "noopener,noreferrer");
-        if (!opened) return;
-      } catch {
-        alert("Ошибка при открытии MAX");
-      } finally {
-        maxLoginBtn.disabled = false;
-        maxLoginBtn.classList.remove("is-loading");
-      }
-    });
-
-    tgLoginBtn.addEventListener("click", async () => {
-      tgLoginBtn.disabled = true;
-      tgLoginBtn.classList.add("is-loading");
-      try {
-        const json = await apiJson("/api/public/tg/auth-link");
-        if (!json || json.ok === false || !json.link) {
-          const errCode = json && json.error ? String(json.error) : "";
-          if (errCode === "TG_BOT_NOT_CONFIGURED") {
-            alert("\u0411\u043e\u0442 Telegram \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0441\u0430\u0439\u0442\u0430");
-          } else {
-            alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0432\u0445\u043e\u0434 \u0447\u0435\u0440\u0435\u0437 Telegram");
-          }
-          return;
-        }
-        const opened = window.open(String(json.link), "_blank", "noopener,noreferrer");
-        if (!opened) return;
-      } catch {
-        alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043e\u0442\u043a\u0440\u044b\u0442\u0438\u0438 Telegram");
-      } finally {
-        tgLoginBtn.disabled = false;
-        tgLoginBtn.classList.remove("is-loading");
-      }
-    });
-
-    bdayInfoBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      bdayInfoHint.classList.toggle("hidden");
-    });
-    document.addEventListener("click", (e) => {
-      if (!bdayInputWrap.contains(e.target)) bdayInfoHint.classList.add("hidden");
-    });
-
-    loginBtn.addEventListener("click", async () => {
-      if (isKsoAuth) {
-        nextBtn.click();
-        return;
-      }
-      enforcePhonePrefix(phone);
-      const n = normalizePhone(phone.value);
-      if (!n || n.length !== 11 || !n.startsWith("7")) {
-        alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u0435\u043b\u0435\u0444\u043e\u043d (\u0420\u0424): +7XXXXXXXXXX");
-        return;
-      }
-      const authName = authNeedsNameInput ? getAuthNameValue() : "";
-      if (authNeedsNameInput && !authName) {
-        setNameError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f");
-        nameInput.focus();
-        if (typeof nameInput.select === "function") nameInput.select();
-        return;
-      }
-      if (authStepMode === "birthday") {
-        if (!isValidBirthday(bday.value)) {
-          setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f \u0432 \u0444\u043e\u0440\u043c\u0430\u0442\u0435 \u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433");
-          return;
-        }
-      } else {
-        const code = getCodeValue().slice(0, 4);
-        if (code.length !== 4) {
-          setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 4-\u0437\u043d\u0430\u0447\u043d\u044b\u0439 \u043a\u043e\u0434");
-          return;
-        }
-      }
-
-      loginBtn.disabled = true;
-      loginBtn.textContent = "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c...";
-
-      try {
-        let json = null;
-        const guestChatClientId = getGuestChatClientIdForAuth();
-        if (authStepMode === "birthday") {
-          json = await apiJson("/api/public/auth/login", {
-            method: "POST",
-            body: {
-              name: authName || null,
-              phone: phone.value,
-              birthday: str(bday.value).trim(),
-              chat_guest_client_id: guestChatClientId,
-            },
-            headers: { "x-customer-token": "" },
-          });
-        } else {
-          json = await apiJson("/api/public/auth/messenger-code/verify", {
-            method: "POST",
-            body: {
-              name: authName || null,
-              phone: phone.value,
-              code: getCodeValue().slice(0, 4),
-              chat_guest_client_id: guestChatClientId,
-            },
-            headers: { "x-customer-token": "" },
-          });
-        }
-
-        if (json.token) {
-          setCustomerToken(json.token);
-          fetchMeSafeVerifiedToken = String(json.token);
-        }
-        if (json.customer) setCustomerCache(json.customer);
-        if (typeof window.refreshShopHomeBonusConfigUi === "function") {
-          await window.refreshShopHomeBonusConfigUi({ force: true });
-        }
-
-        const me = json.customer || await fetchMeSafe();
-        await refreshAddressState({ force: true });
-        if (me) {
-          if (hasCompletedCustomerName(me)) {
-            if (typeof onSuccess === "function") onSuccess(me);
-          } else {
-            openRequiredCustomerNamePrompt({
-              me,
-              note: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0438\u043c\u044f, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u0432\u0445\u043e\u0434.",
-              onSuccess: (me2) => {
-                if (typeof onSuccess === "function") onSuccess(me2 || me);
-              },
-            });
-          }
-        } else {
-          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u043e\u0439\u0442\u0438");
-        }
-      } catch (e) {
-        console.error(e);
-        const err = String(e.message || "");
-        if (err === "WRONG_BIRTHDAY") {
-          bday.value = "";
-          setBirthdayError("");
-          if (typeof showToast === "function") showToast("\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u0434\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f");
-          else alert("\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u0434\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f");
-        }
-        else if (err === "NAME_REQUIRED") {
-          setNameError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f");
-          nameInput.focus();
-          if (typeof nameInput.select === "function") nameInput.select();
-        }
-        else if (err === "MESSENGER_LOGIN_REQUIRED") alert("\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043d\u043e\u043c\u0435\u0440\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0442\u043e\u043b\u044c\u043a\u043e \u0432\u0445\u043e\u0434 \u0447\u0435\u0440\u0435\u0437 Telegram \u0438\u043b\u0438 MAX");
-        else if (err === "CODE_INVALID") alert("\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u043a\u043e\u0434");
-        else if (err === "CODE_EXPIRED") alert("\u041a\u043e\u0434 \u0438\u0441\u0442\u0435\u043a, \u0437\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u0435 \u043d\u043e\u0432\u044b\u0439");
-        else alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u0432\u0445\u043e\u0434\u0430: " + (e.message || "UNKNOWN"));
-      } finally {
-        loginBtn.disabled = false;
-        loginBtn.textContent = "\u0412\u043e\u0439\u0442\u0438";
-      }
-
-    });
-
-
-    return wrap;
+  function messengerErrorText(code) {
+    return ({
+      MESSENGER_NOT_LINKED: "Привязка не подтверждена. Войдите прежним способом и привяжите выбранный мессенджер в профиле.",
+      CUSTOMER_NOT_FOUND: "Сначала выполните обычный вход по телефону кнопкой «Продолжить», затем привяжите мессенджер в профиле.",
+      BIRTHDAY_LOGIN_REQUIRED: "Сначала войдите прежним способом и подтвердите телефон и мессенджер в профиле.",
+      CODE_NOT_REQUESTED: "Код ещё не отправлен. Откройте бот по ссылке из карточки и нажмите Start. Если запрос истёк — запросите новый.",
+      BOT_LINK_INVALID: "Не удалось открыть бота магазина. Обратитесь к владельцу.",
+      TELEGRAM_BOT_START_REQUIRED: "Сначала начните диалог с Telegram-ботом магазина. Если нет доступа к профилю, используйте другой подтверждённый способ входа или обратитесь к владельцу.",
+      CODE_DELIVERY_FAILED: "Не удалось доставить код. Можно повторить отправку или явно выбрать Telegram.",
+      CODE_RESEND_TOO_SOON: "Код уже отправлен. Подождите перед повторной отправкой.",
+      CODE_RATE_LIMITED: "Слишком много запросов. Попробуйте позже.",
+      CODE_INVALID: "Неверный код. Проверьте цифры.",
+      CODE_EXPIRED: "Срок действия кода истёк. Запросите новый.",
+      CODE_ATTEMPTS_EXCEEDED: "Лимит попыток исчерпан. Запросите новый код.",
+      CODE_ALREADY_USED: "Этот код уже использован. Запросите новый.",
+    })[code] || "Не удалось отправить код";
   }
 
-  function openLoginSheet({ onSuccess, fromCheckout = false, onCancel = null } = {}) {
+  function buildLoginContent({ onSuccess, phone }) {
+    return window.AuthCard.create({
+      context: "customer", onSuccess, phone,
+      dependencies: {
+        apiJson, normalizePhone, enforcePhonePrefix, normalizeCompletedCustomerName,
+        handleBirthdayInput, isValidBirthday, str, getGuestChatClientIdForAuth,
+        setCustomerToken, markCustomerTokenVerified: token => { fetchMeSafeVerifiedToken = token; },
+        setCustomerCache, fetchMeSafe, refreshAddressState, hasCompletedCustomerName,
+        openRequiredCustomerNamePrompt, showToast: typeof showToast === "function" ? showToast : undefined, messengerErrorText
+      }
+    });
+  }
+
+  function openLoginSheet({ onSuccess, fromCheckout = false, onCancel = null, phone } = {}) {
     if (!window.AppModal) return;
     let completedSuccessfully = false;
     const wrappedOnSuccess = (...args) => {
@@ -29129,8 +28518,9 @@ function renderSheetAddressList() {
       }
       return undefined;
     };
-    const wrap = buildLoginContent({ onSuccess: wrappedOnSuccess });
+    const wrap = buildLoginContent({ onSuccess: wrappedOnSuccess, phone });
     setAppModalMode("shop");
+    window.AppModal.body?.classList.remove("shop-profile-sheet-body", "shop-profile-orders-sheet-body", "shop-profile-return-sheet");
     if (fromCheckout && openCartSheetCtx) {
       setCartSheetFooterMode(openCartSheetCtx, "hidden");
     }
@@ -29178,6 +28568,7 @@ function renderSheetAddressList() {
       title: "Вход",
       content: wrap,
       onClose: () => {
+        wrap.dispose();
         if (fromCheckout && openCartSheetCtx) {
           const hasItems = cartItemsResolved().length > 0;
           setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
@@ -32304,8 +31695,66 @@ function renderSheetAddressList() {
   }
 
   function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false, returnToProfile = false } = {}) {
+    const showProfileWarning=message=>window.AppModal.confirm({appearance:"shop-warning",title:"Внимание",message,showCancel:false,saveText:"Понятно"});
     ensureShopOrdersCacheScope();
     host.innerHTML = "";
+    let backSettingsScreen = () => false;
+    let settingsSaved = () => {};
+    let syncSettingsSummary = () => {};
+    let guestProfileUpdated = () => {};
+    let guestConfirmation = null;
+    let guestConfirmationTimer = null;
+    let guestConfirmationBusy = false;
+    const guestConfirmationKey = `shop_guest_confirmation_${tenantId}`;
+    if(me?.is_guest){
+      try{guestConfirmation=JSON.parse(sessionStorage.getItem(guestConfirmationKey)||'null');}catch{sessionStorage.removeItem(guestConfirmationKey);}
+    }
+
+    async function pollGuestConfirmation(){
+      if(!guestConfirmation || guestConfirmationBusy)return;
+      if(!getCustomerToken().startsWith('g_')){guestConfirmation=null;clearInterval(guestConfirmationTimer);guestConfirmationTimer=null;return;}
+      guestConfirmationBusy=true;
+      const pending=guestConfirmation;
+      try{
+        const json=await apiJson('/api/public/auth/messenger-browser/status',{method:'POST',body:{request_id:pending.requestId},signal:AbortSignal.timeout(15000)});
+        if(json.state!=='confirmed')return;
+        if(!json.token || !json.customer)throw new Error('INVALID_CONFIRMATION_RESPONSE');
+        guestConfirmation=null;sessionStorage.removeItem(guestConfirmationKey);
+        clearInterval(guestConfirmationTimer);guestConfirmationTimer=null;
+        me=json.customer;
+        setCustomerToken(json.token);setCustomerCache(me);
+        fetchMeSafeVerifiedToken=json.token;
+        currentName=me.name||'';nameText.textContent=currentName||'Покупатель';nameInput.value=currentName;
+        if(me.photo){photoImg.src=me.photo;photoImg.classList.remove('hidden');photoPlaceholder.classList.add('hidden');}
+        guestProfileUpdated();syncSettingsSummary();
+        await loadSettingsBootstrap({force:true});
+        await refreshAddressState({force:true});
+        await window.refreshShopHomeBonusConfigUi({force:true,skipPendingModal:true});
+      }catch(error){
+        if(!guestConfirmation){
+          console.error('GUEST_PROFILE_REFRESH_FAILED',error);
+          await showProfileWarning('Номер подтверждён, но не удалось обновить данные профиля. Обновите страницу; повторный вход не требуется.');
+          return;
+        }
+        if(error.httpStatus===403 || error.httpStatus===409 || Date.now()>pending.expiresAt){
+          guestConfirmation=null;sessionStorage.removeItem(guestConfirmationKey);
+          clearInterval(guestConfirmationTimer);guestConfirmationTimer=null;
+          maxPendingLink='';tgPendingLink='';
+          setMaxLinkUi({linked:false});setTgLinkUi({linked:false});
+          await showProfileWarning('Подтверждение не завершено или истекло. Если номер уже принадлежит другому профилю, обратитесь в магазин. Чужие данные не перенесены.');
+        }
+      }finally{guestConfirmationBusy=false;}
+    }
+
+    function beginGuestConfirmation(json,provider){
+      if(provider==='max')tgPendingLink='';else maxPendingLink='';
+      guestConfirmation={requestId:json.request_id,provider,expiresAt:Date.parse(json.expires_at)};
+      sessionStorage.setItem(guestConfirmationKey,JSON.stringify(guestConfirmation));
+      if(json.link)window.AuthCard.openProviderWindow(json.link);
+      if(guestConfirmationTimer)clearInterval(guestConfirmationTimer);
+      guestConfirmationTimer=setInterval(pollGuestConfirmation,2500);
+      void pollGuestConfirmation();
+    }
 
     const wrap = document.createElement("div");
     wrap.className = "shop-profile";
@@ -32435,7 +31884,7 @@ function renderSheetAddressList() {
     nameLine.appendChild(nameValue);
     info.appendChild(nameLine);
 
-    addLine("Телефон", me?.phone ? formatPhonePlus7(me.phone) : "—");
+    if (!settingsPage) addLine("Телефон", me?.phone ? formatPhonePlus7(me.phone) : "—");
 
     const birthdayLine = document.createElement("div");
     birthdayLine.className = "shop-profile-line";
@@ -32459,7 +31908,7 @@ function renderSheetAddressList() {
     birthdayInput.autocomplete = "bday";
     birthdayInput.placeholder = "дд.мм.гггг";
     birthdayInput.maxLength = 10;
-    birthdayInput.value = formatBirthdayDisplay(me?.birthday || "");
+    birthdayInput.value = settingsPage&&!me?.birthday?"":formatBirthdayDisplay(me?.birthday || "");
     const birthdayActions = document.createElement("div");
     birthdayActions.className = "shop-profile-name-actions shop-address-form-actions hidden";
     const birthdaySave = document.createElement("button");
@@ -32991,15 +32440,20 @@ function renderSheetAddressList() {
       pushPreferencesSaving = true;
       setPushInputsDisabled(true);
       try {
-        if (nextPreferences.chat || nextPreferences.important || nextPreferences.orders) {
+        const enablingChannel = ['chat','important','orders'].some(key => nextPreferences[key] === true && pushPreferences[key] !== true);
+        if (enablingChannel) {
           const enabled = await notificationsApi.setEnabled(true);
           if (!enabled) {
+            await showProfileWarning('Браузер не разрешил push-уведомления. Разрешите уведомления для сайта в настройках браузера.');
             return;
           }
         }
         pushPreferences = await notificationsApi.savePreferences(nextPreferences);
-      } catch {
-        // Keep the last confirmed server state in the controls.
+      } catch (error) {
+        console.error('PUSH_PREFERENCES_SAVE_FAILED',error);
+        await showProfileWarning(String(error?.message||'')==='PUSH_SUBSCRIPTION_REQUIRED'
+          ?'Push-подписка ещё не зарегистрирована. Разрешите уведомления для сайта и повторите попытку после подключения подписки.'
+          :'Не удалось сохранить настройки уведомлений. Повторите попытку.');
       } finally {
         pushPreferencesSaving = false;
         notificationInputs.forEach((input) => {
@@ -33179,11 +32633,20 @@ function renderSheetAddressList() {
     let tgLoginEnabled = false;
     let settingsBootstrapLoaded = false;
     let settingsBootstrapPromise = null;
+    const settingsCacheKey=async()=>{
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(getCustomerToken()));
+      return `shop-auth-status:${tenantId}:${Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('')}`;
+    };
+    const invalidateSettingsCache=async()=>{
+      try{sessionStorage.removeItem(await settingsCacheKey());}catch(error){console.warn('AUTH_STATUS_CACHE_UNAVAILABLE');}
+    };
 
     function applyAuthSettingsVisibility() {
-      maxLinkRow.style.display = maxLoginEnabled ? "" : "none";
-      tgLinkRow.style.display = tgLoginEnabled ? "" : "none";
-      phoneVerifyRow.style.display = (maxLoginEnabled || tgLoginEnabled) ? "" : "none";
+      maxLinkRow.style.display = settingsPage || maxLoginEnabled ? "" : "none";
+      tgLinkRow.style.display = settingsPage || tgLoginEnabled ? "" : "none";
+      phoneVerifyRow.style.display = me?.is_guest || settingsPage || maxLoginEnabled || tgLoginEnabled ? "" : "none";
+      if(settingsPage&&!maxLoginEnabled){maxLinkHint.textContent="Недоступен: отключён магазином";maxLinkBtn.disabled=true;}
+      if(settingsPage&&!tgLoginEnabled){tgLinkHint.textContent="Недоступен: отключён магазином";tgLinkBtn.disabled=true;}
     }
 
     async function loadAuthSettingsVisibility() {
@@ -33202,21 +32665,31 @@ function renderSheetAddressList() {
     }
 
     async function loadSettingsBootstrap({ force = false } = {}) {
+      if(me?.is_guest&&guestConfirmation&&!guestConfirmationTimer){
+        guestConfirmationTimer=setInterval(pollGuestConfirmation,2500);
+        void pollGuestConfirmation();
+      }
       if (force) {
+        await invalidateSettingsCache();
         settingsBootstrapLoaded = false;
         settingsBootstrapPromise = null;
+        phoneVerifyStatusLoaded = false;
+        setPhoneVerifyUi();
       }
       if (settingsBootstrapLoaded) return true;
       if (settingsBootstrapPromise) return settingsBootstrapPromise;
 
       settingsBootstrapPromise = (async () => {
         try {
-          const json = await apiJson("/api/public/me/settings-bootstrap");
+          let cacheKey,cached;
+          try{cacheKey=await settingsCacheKey();cached=JSON.parse(sessionStorage.getItem(cacheKey)||'null');}catch(error){console.warn('AUTH_STATUS_CACHE_UNAVAILABLE');}
+          const json = cached || await apiJson("/api/public/me/settings-bootstrap");
           const data = (json && json.data) || {};
           const auth = data.auth_options || {};
           const maxData = data.max || {};
           const tgData = data.tg || {};
           const phoneData = data.phone_verification || {};
+          if(typeof phoneData.verified!=='boolean')throw new Error('INVALID_PHONE_VERIFICATION_STATUS');
 
           maxLoginEnabled = Boolean(auth.max_login_enabled);
           tgLoginEnabled = Boolean(auth.tg_login_enabled);
@@ -33225,18 +32698,22 @@ function renderSheetAddressList() {
 
           setMaxLinkUi({
             linked: Boolean(maxData.linked),
-            maxUserId: maxData.max_user_id || "",
+            destination: maxData.destination || "",
           });
           setTgLinkUi({
             linked: Boolean(tgData.linked),
-            tgUserId: tgData.telegram_user_id || "",
+            destination: tgData.destination || "",
           });
 
           phoneVerifyVerified = Boolean(phoneData.verified);
           phoneVerifyAwaitingCode = !phoneVerifyVerified && Boolean(phoneData.expires_at);
+          phoneVerifyRequestId = String(phoneData.request_id || "");
+          phoneVerifyProvider = String(phoneData.sent_via || "");
+          phoneVerifyStatusLoaded = true;
           setPhoneVerifyUi();
 
           settingsBootstrapLoaded = true;
+          if(cacheKey&&!phoneVerifyAwaitingCode)try{sessionStorage.setItem(cacheKey,JSON.stringify(json));}catch(error){console.warn('AUTH_STATUS_CACHE_UNAVAILABLE');}
           return true;
         } catch {
           settingsBootstrapLoaded = false;
@@ -33251,31 +32728,43 @@ function renderSheetAddressList() {
 
     let maxLinkBusy = false;
     let maxLinkPollTimer = null;
+    let maxPendingLink="",maxPendingLinkExpires=0;
+    let maxLinkRequestId='',maxLinkFailed=false;
 
     function setMaxLinkUi(state) {
+      if(settingsPage&&authOptionsLoaded&&!maxLoginEnabled){applyAuthSettingsVisibility();return;}
       const linked = Boolean(state && state.linked);
-      const maxUserId = state && state.maxUserId ? String(state.maxUserId) : "";
+      const destination = state && state.destination ? String(state.destination) : "";
+      maxLinkBtn.dataset.linked = linked ? "1" : "0";
       if (linked) {
+        maxPendingLink="";
         maxLinkBtn.disabled = false;
-        maxLinkBtn.textContent = "\u041f\u0435\u0440\u0435\u043f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
-        maxLinkHint.textContent = `ID: ${maxUserId}`;
+        maxLinkBtn.textContent = "Отвязать";
+        maxLinkHint.textContent = destination ? `Привязан профиль ${destination}` : "Привязан";
         return;
       }
+      if(maxLinkFailed){maxLinkHint.textContent='Не удалось привязать';maxLinkBtn.disabled=false;maxLinkBtn.textContent='Привязать';return;}
+      if(maxPendingLink&&Date.now()<maxPendingLinkExpires){maxLinkBtn.disabled=false;maxLinkBtn.textContent="Открыть MAX";return;}
+      maxPendingLink="";
       maxLinkBtn.disabled = Boolean(maxLinkBusy);
-      maxLinkBtn.textContent = maxLinkBusy ? "\u2026" : "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
+      maxLinkBtn.textContent = maxLinkBusy ? "\u2026" : me?.is_guest ? "Подключить MAX" : "Привязать";
       if (!maxLinkBusy) maxLinkHint.textContent = "\u041d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d";
     }
 
     async function loadMaxLinkStatus() {
+      if(me?.is_guest){await loadSettingsBootstrap();return false;}
+      if(settingsBootstrapLoaded&&!maxPendingLink)return maxLinkBtn.dataset.linked==='1';
       if (!settingsBootstrapLoaded) {
         const bootOk = await loadSettingsBootstrap();
-        if (bootOk) return Boolean(maxLinkHint.textContent && maxLinkHint.textContent.startsWith("ID:"));
+        if (bootOk) return maxLinkBtn.dataset.linked === "1";
       }
       try {
-        const json = await apiJson("/api/public/max/link-status");
+        const json = await apiJson("/api/public/max/link-status?request_id="+encodeURIComponent(maxLinkRequestId));
         if (!json || json.ok === false) return false;
-        if (json.linked && json.data && json.data.max_user_id) {
-          setMaxLinkUi({ linked: true, maxUserId: json.data.max_user_id });
+        if(json.failed){maxLinkFailed=true;maxPendingLink='';clearInterval(maxLinkPollTimer);maxLinkPollTimer=null;setMaxLinkUi({linked:false});return false;}
+        if (json.linked && json.data) {
+          setMaxLinkUi({ linked: true, destination: json.data.destination || "" });
+          await loadSettingsBootstrap({force:true});
           return true;
         }
         setMaxLinkUi({ linked: false });
@@ -33285,35 +32774,51 @@ function renderSheetAddressList() {
       }
     }
 
-    maxLinkBtn.addEventListener("click", async () => {
+    async function openMaxProfileLink() {
       if (maxLinkBusy) return;
+      await invalidateSettingsCache();
+      if(maxLinkBtn.dataset.linked!=="1"&&maxPendingLink&&Date.now()<maxPendingLinkExpires){window.AuthCard.openProviderWindow(maxPendingLink);return;}
       maxLinkBusy = true;
-      maxLinkHint.textContent = "\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0441\u0441\u044b\u043b\u043a\u0438\u2026";
-      setMaxLinkUi({ linked: false });
+      if (maxLinkBtn.dataset.linked === "1") {
+        maxLinkBtn.disabled = true;
+        try {
+          const confirmed=await window.AppModal.confirm({title:"Отвязать MAX?",message:"Вход и получение кодов через этот аккаунт MAX станут недоступны до повторной привязки.",saveText:"Отвязать"});
+          if(!confirmed)return;
+          maxLinkHint.textContent = "Отвязываем…";
+          await apiJson("/api/public/auth/messenger-links/max", { method: "DELETE", signal:AbortSignal.timeout(15000) });
+          settingsBootstrapLoaded = false;
+          maxLinkBusy = false;
+          maxPendingLink="";
+          setMaxLinkUi({ linked: false });
+        } catch {
+          maxLinkHint.textContent = "Не удалось отвязать MAX";
+          maxLinkBtn.disabled = false;
+          maxLinkBtn.textContent = "Отвязать";
+        } finally {
+          maxLinkBusy = false;
+          maxLinkBtn.disabled = false;
+        }
+        return;
+      }
+      maxLinkBtn.disabled = true;
+      maxLinkBtn.classList.add("is-opening");
+      maxLinkBtn.setAttribute("aria-busy","true");
+      maxLinkBtn.textContent="Открываем MAX…";
+      maxLinkHint.textContent = "";
       try {
         settingsBootstrapLoaded = false;
-        const json = await apiJson("/api/public/auth/link-token", { method: "POST", body: { provider: "max" } });
-        if (!json || json.ok === false || !json.link) {
-          const errCode = json && json.error ? String(json.error) : "";
-          if (errCode === "MAX_LOGIN_DISABLED") {
-            alert("MAX login is disabled for this site");
-          } else if (errCode === "MAX_BOT_NOT_CONFIGURED") {
-            alert("\u0411\u043e\u0442 MAX \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0441\u0430\u0439\u0442\u0430");
-          } else {
-            alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0441\u0441\u044b\u043b\u043a\u0443 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438");
-          }
-          return;
+        const json = await apiJson("/api/public/auth/link-token", { method: "POST", body: { provider: "max" }, signal: AbortSignal.timeout(15000) });
+        if(me?.is_guest&&json.request_id){
+          maxPendingLink=String(json.link||'');maxPendingLinkExpires=Date.parse(json.expires_at);
+          beginGuestConfirmation(json,'max');maxLinkHint.textContent='Откройте MAX, отправьте собственный контакт и нажмите в боте «Начать покупки»';return;
         }
-
-        const link = String(json.link);
-        try {
-          const opened = window.open(link, "_blank", "noopener,noreferrer");
-          if (!opened) return;
-        } catch {
-          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043d\u043e\u0432\u0443\u044e \u0432\u043a\u043b\u0430\u0434\u043a\u0443. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.");
-        }
+        if (!json.link) throw new Error("LINK_NOT_AVAILABLE");
+        maxPendingLink=String(json.link);maxPendingLinkExpires=Date.parse(json.expires_at);
+        maxLinkRequestId=json.request_id||'';maxLinkFailed=false;
+        const popup=window.AuthCard.openProviderWindow(maxPendingLink);
 
         maxLinkHint.textContent = "\u041e\u0436\u0438\u0434\u0430\u0435\u043c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0443\u2026";
+        if(!popup)maxLinkHint.textContent="Нажмите «Открыть MAX», чтобы продолжить привязку";
         if (maxLinkPollTimer) clearInterval(maxLinkPollTimer);
         maxLinkPollTimer = setInterval(async () => {
           const linked = await loadMaxLinkStatus();
@@ -33322,13 +32827,19 @@ function renderSheetAddressList() {
             maxLinkPollTimer = null;
           }
         }, 4000);
-      } catch {
-        alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0435 MAX");
+      } catch (error) {
+        maxPendingLink="";
+        maxLinkHint.textContent = String(error?.message || "") === "POPUP_BLOCKED"
+          ? "Разрешите всплывающие окна и повторите"
+          : "Не удалось начать привязку MAX";
       } finally {
         maxLinkBusy = false;
-        setMaxLinkUi({ linked: false });
+        maxLinkBtn.classList.remove("is-opening");maxLinkBtn.removeAttribute("aria-busy");
+        maxLinkBtn.disabled = false;
+        maxLinkBtn.textContent = maxPendingLink?"Открыть MAX":me?.is_guest?"Подключить MAX":"Привязать";
       }
-    });
+    }
+    maxLinkBtn.addEventListener("click", openMaxProfileLink);
 
     maxLinkRow.appendChild(maxLinkLeft);
     maxLinkRow.appendChild(maxLinkBtn);
@@ -33355,31 +32866,43 @@ function renderSheetAddressList() {
 
     let tgLinkBusy = false;
     let tgLinkPollTimer = null;
+    let tgPendingLink="",tgPendingLinkExpires=0;
+    let tgLinkRequestId='',tgLinkFailed=false;
 
     function setTgLinkUi(state) {
+      if(settingsPage&&authOptionsLoaded&&!tgLoginEnabled){applyAuthSettingsVisibility();return;}
       const linked = Boolean(state && state.linked);
-      const tgUserId = state && state.tgUserId ? String(state.tgUserId) : "";
+      const destination = state && state.destination ? String(state.destination) : "";
+      tgLinkBtn.dataset.linked = linked ? "1" : "0";
       if (linked) {
+        tgPendingLink="";
         tgLinkBtn.disabled = false;
-        tgLinkBtn.textContent = "\u041f\u0435\u0440\u0435\u043f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
-        tgLinkHint.textContent = `ID: ${tgUserId}`;
+        tgLinkBtn.textContent = "Отвязать";
+        tgLinkHint.textContent = destination ? `Привязан профиль ${destination}` : "Привязан";
         return;
       }
+      if(tgLinkFailed){tgLinkHint.textContent='Не удалось привязать';tgLinkBtn.disabled=false;tgLinkBtn.textContent='Привязать';return;}
+      if(tgPendingLink&&Date.now()<tgPendingLinkExpires){tgLinkBtn.disabled=false;tgLinkBtn.textContent="Открыть Telegram";return;}
+      tgPendingLink="";
       tgLinkBtn.disabled = Boolean(tgLinkBusy);
-      tgLinkBtn.textContent = tgLinkBusy ? "\u2026" : "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
+      tgLinkBtn.textContent = tgLinkBusy ? "\u2026" : me?.is_guest ? "Подключить Telegram" : "Привязать";
       if (!tgLinkBusy) tgLinkHint.textContent = "\u041d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d";
     }
 
     async function loadTgLinkStatus() {
+      if(me?.is_guest){await loadSettingsBootstrap();return false;}
+      if(settingsBootstrapLoaded&&!tgPendingLink)return tgLinkBtn.dataset.linked==='1';
       if (!settingsBootstrapLoaded) {
         const bootOk = await loadSettingsBootstrap();
-        if (bootOk) return Boolean(tgLinkHint.textContent && tgLinkHint.textContent.startsWith("ID:"));
+        if (bootOk) return tgLinkBtn.dataset.linked === "1";
       }
       try {
-        const json = await apiJson("/api/public/tg/link-status");
+        const json = await apiJson("/api/public/tg/link-status?request_id="+encodeURIComponent(tgLinkRequestId));
         if (!json || json.ok === false) return false;
-        if (json.linked && json.data && json.data.telegram_user_id) {
-          setTgLinkUi({ linked: true, tgUserId: json.data.telegram_user_id });
+        if(json.failed){tgLinkFailed=true;tgPendingLink='';clearInterval(tgLinkPollTimer);tgLinkPollTimer=null;setTgLinkUi({linked:false});return false;}
+        if (json.linked && json.data) {
+          setTgLinkUi({ linked: true, destination: json.data.destination || "" });
+          await loadSettingsBootstrap({force:true});
           return true;
         }
         setTgLinkUi({ linked: false });
@@ -33389,33 +32912,50 @@ function renderSheetAddressList() {
       }
     }
 
-    tgLinkBtn.addEventListener("click", async () => {
+    async function openTelegramProfileLink() {
       if (tgLinkBusy) return;
+      await invalidateSettingsCache();
+      if(tgLinkBtn.dataset.linked!=="1"&&tgPendingLink&&Date.now()<tgPendingLinkExpires){window.AuthCard.openProviderWindow(tgPendingLink);return;}
       tgLinkBusy = true;
-      tgLinkHint.textContent = "\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0441\u0441\u044b\u043b\u043a\u0438\u2026";
-      setTgLinkUi({ linked: false });
+      if (tgLinkBtn.dataset.linked === "1") {
+        tgLinkBtn.disabled = true;
+        try {
+          const confirmed=await window.AppModal.confirm({title:"Отвязать Telegram?",message:"Вход и получение кодов через этот аккаунт Telegram станут недоступны до повторной привязки.",saveText:"Отвязать"});
+          if(!confirmed)return;
+          tgLinkHint.textContent = "Отвязываем…";
+          await apiJson("/api/public/auth/messenger-links/tg", { method: "DELETE", signal:AbortSignal.timeout(15000) });
+          settingsBootstrapLoaded = false;
+          tgLinkBusy = false;
+          tgPendingLink="";
+          setTgLinkUi({ linked: false });
+        } catch {
+          tgLinkHint.textContent = "Не удалось отвязать Telegram";
+          tgLinkBtn.disabled = false;
+          tgLinkBtn.textContent = "Отвязать";
+        } finally {
+          tgLinkBusy = false;
+          tgLinkBtn.disabled = false;
+        }
+        return;
+      }
+      tgLinkBtn.disabled = true;
+      tgLinkBtn.classList.add("is-opening");tgLinkBtn.setAttribute("aria-busy","true");
+      tgLinkBtn.textContent="Открываем Telegram…";
+      tgLinkHint.textContent = "";
       try {
         settingsBootstrapLoaded = false;
-        const json = await apiJson("/api/public/auth/link-token", { method: "POST", body: { provider: "tg" } });
-        if (!json || json.ok === false || !json.link) {
-          const errCode = json && json.error ? String(json.error) : "";
-          if (errCode === "TG_BOT_NOT_CONFIGURED") {
-            alert("\u0411\u043e\u0442 Telegram \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0441\u0430\u0439\u0442\u0430");
-          } else {
-            alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0441\u0441\u044b\u043b\u043a\u0443 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438");
-          }
-          return;
+        const json = await apiJson("/api/public/auth/link-token", { method: "POST", body: { provider: "tg" }, signal: AbortSignal.timeout(15000) });
+        if(me?.is_guest&&json.request_id){
+          tgPendingLink=String(json.link||'');tgPendingLinkExpires=Date.parse(json.expires_at);
+          beginGuestConfirmation(json,'tg');tgLinkHint.textContent='Откройте Telegram и нажмите в боте «Начать покупки»';return;
         }
-
-        const link = String(json.link);
-        try {
-          const opened = window.open(link, "_blank", "noopener,noreferrer");
-          if (!opened) return;
-        } catch {
-          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043d\u043e\u0432\u0443\u044e \u0432\u043a\u043b\u0430\u0434\u043a\u0443. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.");
-        }
+        if (!json.link) throw new Error("LINK_NOT_AVAILABLE");
+        tgPendingLink=String(json.link);tgPendingLinkExpires=Date.parse(json.expires_at);
+        tgLinkRequestId=json.request_id||'';tgLinkFailed=false;
+        const popup=window.AuthCard.openProviderWindow(tgPendingLink);
 
         tgLinkHint.textContent = "\u041e\u0436\u0438\u0434\u0430\u0435\u043c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0443\u2026";
+        if(!popup)tgLinkHint.textContent="Нажмите «Открыть Telegram», чтобы продолжить привязку";
         if (tgLinkPollTimer) clearInterval(tgLinkPollTimer);
         tgLinkPollTimer = setInterval(async () => {
           const linked = await loadTgLinkStatus();
@@ -33424,20 +32964,26 @@ function renderSheetAddressList() {
             tgLinkPollTimer = null;
           }
         }, 4000);
-      } catch {
-        alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0435 Telegram");
+      } catch (error) {
+        tgPendingLink="";
+        tgLinkHint.textContent = String(error?.message || "") === "POPUP_BLOCKED"
+          ? "Разрешите всплывающие окна и повторите"
+          : "Не удалось начать привязку Telegram";
       } finally {
         tgLinkBusy = false;
-        setTgLinkUi({ linked: false });
+        tgLinkBtn.classList.remove("is-opening");tgLinkBtn.removeAttribute("aria-busy");
+        tgLinkBtn.disabled = false;
+        tgLinkBtn.textContent = tgPendingLink?"Открыть Telegram":me?.is_guest?"Подключить Telegram":"Привязать";
       }
-    });
+    }
+    tgLinkBtn.addEventListener("click", openTelegramProfileLink);
 
     tgLinkRow.appendChild(tgLinkLeft);
     tgLinkRow.appendChild(tgLinkBtn);
     settingsWrap.appendChild(tgLinkRow);
 
     const phoneVerifyRow = document.createElement("div");
-    phoneVerifyRow.className = "shop-profile-settings-row";
+    phoneVerifyRow.className = "shop-profile-settings-row shop-profile-phone-verification hidden";
     const phoneVerifyLeft = document.createElement("div");
     phoneVerifyLeft.style.display = "grid";
     phoneVerifyLeft.style.gap = "2px";
@@ -33454,6 +33000,8 @@ function renderSheetAddressList() {
     phoneVerifyAction.style.display = "flex";
     phoneVerifyAction.style.alignItems = "center";
     phoneVerifyAction.style.gap = "8px";
+    phoneVerifyAction.style.flexWrap = "wrap";
+    phoneVerifyAction.style.justifyContent = "flex-end";
 
     const phoneVerifyBtn = document.createElement("button");
     phoneVerifyBtn.type = "button";
@@ -33465,61 +33013,98 @@ function renderSheetAddressList() {
     phoneVerifyInput.inputMode = "numeric";
     phoneVerifyInput.maxLength = 4;
     phoneVerifyInput.placeholder = "\u041a\u043e\u0434";
-    phoneVerifyInput.className = "input";
-    phoneVerifyInput.style.width = "92px";
+    phoneVerifyInput.className = "control";
+    phoneVerifyInput.autocomplete = "one-time-code";
+    phoneVerifyInput.style.width = "112px";
     phoneVerifyInput.style.textAlign = "center";
     phoneVerifyInput.style.letterSpacing = "2px";
     phoneVerifyInput.style.display = "none";
 
+    const phoneVerifyFallbackBtn = document.createElement("button");
+    phoneVerifyFallbackBtn.type = "button";
+    phoneVerifyFallbackBtn.className = "btn btn-sm hidden";
+    phoneVerifyFallbackBtn.textContent = "В Telegram";
+
     phoneVerifyAction.appendChild(phoneVerifyBtn);
     phoneVerifyAction.appendChild(phoneVerifyInput);
+    phoneVerifyAction.appendChild(phoneVerifyFallbackBtn);
+    const phoneVerifiedMark=document.createElement("span");
+    phoneVerifiedMark.className="shop-profile-phone-verified-mark hidden";
+    phoneVerifiedMark.setAttribute("role","img");
+    phoneVerifiedMark.setAttribute("aria-label","Телефон подтверждён");
+    phoneVerifiedMark.innerHTML='<i class="fas fa-check" aria-hidden="true"></i>';
+    if(settingsPage)phoneVerifyAction.append(phoneVerifiedMark);
 
     let phoneVerifyBusy = false;
     let phoneVerifyVerified = false;
+    let phoneVerifyStatusLoaded = false;
     let phoneVerifyAwaitingCode = false;
+    let phoneVerifyRequestId = "";
+    let phoneVerifyProvider = "";
+    let phoneVerifyError = "";
 
     function applyPhoneVerifyInputStateInvalid(invalid) {
-      if (invalid) {
-        phoneVerifyInput.style.borderColor = "#e74c3c";
-      } else {
-        phoneVerifyInput.style.borderColor = "";
-      }
+      phoneVerifyInput.classList.toggle("is-invalid", Boolean(invalid));
     }
 
     function setPhoneVerifyUi() {
+      const isGuest=Boolean(me?.is_guest);
+      phoneVerifyRow.classList.remove('hidden');
+      phoneVerifyRow.classList.toggle('has-status-space',!isGuest);
+      phoneVerifyRow.classList.toggle('is-checking-phone',!isGuest&&!phoneVerifyStatusLoaded&&!phoneVerifyError);
+      phoneVerifyBtn.disabled = (!isGuest&&!phoneVerifyStatusLoaded) || phoneVerifyBusy;
+      if(!isGuest&&!phoneVerifyStatusLoaded){
+        phoneVerifyHint.classList.remove('hidden');
+        phoneVerifyHint.setAttribute('role','status');
+        phoneVerifyHint.textContent=phoneVerifyError||'Проверяем номер…';
+        phoneVerifiedMark.classList.add('hidden');phoneVerifyBtn.style.display='none';phoneVerifyInput.style.display='none';phoneVerifyFallbackBtn.classList.add('hidden');
+        return;
+      }
+      phoneVerifiedMark.classList.toggle("hidden",!settingsPage||!phoneVerifyVerified);
+      phoneVerifyHint.classList.toggle('hidden',settingsPage&&!phoneVerifyVerified&&!phoneVerifyAwaitingCode&&!phoneVerifyError);
+      if(me?.is_guest){
+        phoneVerifyHint.textContent='Номер не подтверждён';phoneVerifyBtn.textContent='Авторизоваться';phoneVerifyBtn.style.display='';phoneVerifyInput.style.display='none';phoneVerifyFallbackBtn.classList.add('hidden');return;
+      }
       if (phoneVerifyVerified) {
-        phoneVerifyHint.textContent = "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d";
-        phoneVerifyBtn.style.display = "";
+        phoneVerifyHint.textContent = settingsPage ? "Номер подтверждён" : "Подтвержден";
+        phoneVerifyBtn.style.display = settingsPage?"none":"";
         phoneVerifyBtn.disabled = false;
         phoneVerifyBtn.textContent = "\u041f\u0435\u0440\u0435\u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c";
         phoneVerifyInput.style.display = "none";
+        if(settingsPage)phoneVerifyFallbackBtn.classList.add("hidden");
         return;
       }
 
-      phoneVerifyHint.textContent = phoneVerifyAwaitingCode
-        ? "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 4-\u0445 \u0437\u043d\u0430\u0447\u043d\u044b\u0439 \u043a\u043e\u0434 \u0438\u0437 MAX"
-        : "\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d";
-      phoneVerifyBtn.style.display = phoneVerifyAwaitingCode ? "none" : "";
+      phoneVerifyHint.textContent = phoneVerifyError || (phoneVerifyAwaitingCode
+        ? `Введите 4-значный код из ${phoneVerifyProvider === "tg" ? "Telegram" : "MAX"}`
+        : "\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d");
+      phoneVerifyBtn.style.display = "";
       phoneVerifyBtn.disabled = phoneVerifyBusy;
-      phoneVerifyBtn.textContent = phoneVerifyBusy ? "\u2026" : "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c";
+      phoneVerifyBtn.textContent = phoneVerifyBusy ? "\u2026" : (phoneVerifyAwaitingCode ? "Повторить" : "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c");
       phoneVerifyInput.style.display = phoneVerifyAwaitingCode ? "" : "none";
       phoneVerifyInput.disabled = phoneVerifyBusy;
     }
 
+    setPhoneVerifyUi();
+
     async function loadPhoneVerifyStatus() {
+      if(settingsBootstrapLoaded)return;
       if (!settingsBootstrapLoaded) {
         const bootOk = await loadSettingsBootstrap();
         if (bootOk) return;
       }
       try {
         const json = await apiJson("/api/public/phone-verification/status");
+        if(typeof json?.data?.verified!=='boolean')throw new Error('INVALID_PHONE_VERIFICATION_STATUS');
         const verified = Boolean(json && json.data && json.data.verified);
+        phoneVerifyStatusLoaded = true;
         phoneVerifyVerified = verified;
         phoneVerifyAwaitingCode = !verified && Boolean(json && json.data && json.data.expires_at);
+        phoneVerifyRequestId = String(json?.data?.request_id || "");
+        phoneVerifyProvider = String(json?.data?.sent_via || "");
         setPhoneVerifyUi();
       } catch {
-        phoneVerifyVerified = false;
-        phoneVerifyAwaitingCode = false;
+        phoneVerifyStatusLoaded = false;
         setPhoneVerifyUi();
       }
     }
@@ -33528,12 +33113,13 @@ function renderSheetAddressList() {
       const code = String(phoneVerifyInput.value || "").replace(/\D/g, "").slice(0, 4);
       if (code.length !== 4 || phoneVerifyBusy) return;
       phoneVerifyBusy = true;
+      phoneVerifyError = "";
       applyPhoneVerifyInputStateInvalid(false);
       setPhoneVerifyUi();
       try {
         const json = await apiJson("/api/public/phone-verification/verify", {
           method: "POST",
-          body: { code },
+          body: { request_id: phoneVerifyRequestId, code },
         });
         if (json && json.ok !== false) {
           phoneVerifyVerified = true;
@@ -33545,8 +33131,9 @@ function renderSheetAddressList() {
           applyPhoneVerifyInputStateInvalid(true);
           phoneVerifyInput.focus();
         }
-      } catch {
+      } catch (error) {
         phoneVerifyInput.value = "";
+        phoneVerifyError = messengerErrorText(String(error?.message || ""));
         applyPhoneVerifyInputStateInvalid(true);
         phoneVerifyInput.focus();
       } finally {
@@ -33555,34 +33142,55 @@ function renderSheetAddressList() {
       }
     }
 
-    phoneVerifyBtn.addEventListener("click", async () => {
+    async function requestPhoneVerifyCode(provider = "") {
       if (phoneVerifyBusy) return;
+      await invalidateSettingsCache();
       phoneVerifyBusy = true;
+      phoneVerifyError = "";
+      phoneVerifyFallbackBtn.classList.add("hidden");
       setPhoneVerifyUi();
       try {
         settingsBootstrapLoaded = false;
-        const json = await apiJson("/api/public/phone-verification/send", { method: "POST", body: {} });
+        const json = await apiJson("/api/public/phone-verification/send", { method: "POST", body: { provider: provider || undefined } });
         if (json && json.ok !== false) {
           phoneVerifyAwaitingCode = true;
           phoneVerifyVerified = false;
+          phoneVerifyRequestId = String(json.data?.request_id || "");
+          phoneVerifyProvider = String(json.data?.sent_via || "");
           phoneVerifyInput.value = "";
           applyPhoneVerifyInputStateInvalid(false);
           setPhoneVerifyUi();
           phoneVerifyInput.focus();
-        } else {
-          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043a\u043e\u0434 \u0432 MAX");
         }
       } catch (e) {
-        if (String(e && e.message || "") === "MAX_NOT_LINKED") {
-          alert("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u0438\u0432\u044f\u0436\u0438\u0442\u0435 MAX");
-        } else {
-          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043a\u043e\u0434 \u0432 MAX");
-        }
+        phoneVerifyError = messengerErrorText(String(e?.message || ""));
+        phoneVerifyFallbackBtn.classList.toggle("hidden", !e?.payload?.fallback_available);
       } finally {
         phoneVerifyBusy = false;
         setPhoneVerifyUi();
       }
-    });
+    }
+
+    async function openPhoneConfirmation({ chooseProvider = false, confirmationOptions = {} } = {}) {
+      if(me?.is_guest){openLoginSheet({phone:me.phone});return;}
+      if(!me?.is_guest&&!settingsPage&&!chooseProvider){void requestPhoneVerifyCode(phoneVerifyProvider === 'tg' ? 'tg' : '');return;}
+      if(!await loadSettingsBootstrap()||!phoneVerifyStatusLoaded){
+        await showProfileWarning('Не удалось получить статус номера. Повторите попытку.');return;
+      }
+      if(phoneVerifyVerified)return;
+      await window.AppModal.confirm({appearance:'shop-warning',title:'Подтвердить номер',message:'Выберите мессенджер для подтверждения номера телефона.',...confirmationOptions,keepChoiceOpen:true,onChoice:async provider=>{
+        const button=provider==='max'?maxLinkBtn:tgLinkBtn;
+        if(!me?.is_guest&&button.dataset.linked==='1')await requestPhoneVerifyCode(provider);
+        else await (provider==='max'?openMaxProfileLink():openTelegramProfileLink());
+        const ready=Boolean(provider==='max'?maxPendingLink:tgPendingLink);
+        return {ready,message:provider==='max'?maxLinkHint.textContent:tgLinkHint.textContent};
+      },choices:[
+        {label:'MAX',value:'max',icon:'/static/uploads/auth/max-auth.png',disabled:!maxLoginEnabled},
+        {label:'Telegram',value:'tg',icon:'/static/uploads/auth/telegram-auth.png',disabled:!tgLoginEnabled},
+      ]});
+    }
+    phoneVerifyBtn.addEventListener("click", openPhoneConfirmation);
+    phoneVerifyFallbackBtn.addEventListener("click", () => requestPhoneVerifyCode("tg"));
 
     phoneVerifyInput.addEventListener("input", () => {
       const normalized = String(phoneVerifyInput.value || "").replace(/\D/g, "").slice(0, 4);
@@ -33615,9 +33223,214 @@ function renderSheetAddressList() {
       wrap.appendChild(ordersPanel);
     }
     if (settingsPage) {
+      wrap.classList.add("shop-profile-settings-redesign");
       Array.from(settingsWrap.children).forEach((row) => {
-        if (!pushNotificationRows.includes(row) && row !== orderStatusRowsWrap) row.remove();
+        if (!pushNotificationRows.includes(row) && row !== orderStatusRowsWrap
+          && ![maxLinkRow, tgLinkRow, phoneVerifyRow].includes(row)) row.remove();
       });
+      const menu = document.createElement("div");
+      menu.className = "shop-profile-settings-menu";
+      const toolbar=document.createElement("div");toolbar.className="shop-profile-settings-toolbar";
+      const close=document.createElement("button");close.type="button";close.className="btn btn-icon";close.setAttribute("aria-label","Назад к профилю");close.innerHTML='<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      close.addEventListener("click",()=>{if(backSettingsScreen())return;if(window.AppModal?.body?.contains(wrap))document.getElementById("shopProfileModalBackBtn")?.click();else if(host.classList.contains("shop-profile-chat-modal-content"))openDesktopChatProfileModal(getCustomerCache()||me);else elProfileSettingsBackBtn?.click();});
+      const toolbarTitle=document.createElement("h2");toolbarTitle.textContent="Настройки";
+      const editButton=document.createElement("button");editButton.type="button";editButton.className="btn btn-icon shop-profile-settings-edit";editButton.textContent="Изм.";
+      toolbar.append(close,toolbarTitle,editButton);wrap.prepend(toolbar);
+      const heroName=document.createElement("div");heroName.className="shop-profile-settings-hero-name";heroName.textContent=me?.name||"Покупатель";
+      const heroPhone=document.createElement("div");heroPhone.className="shop-profile-settings-hero-phone";heroPhone.textContent=me?.phone?formatPhonePlus7(me.phone):"";
+      heroName.replaceChildren(nameValue);
+      nameLine.remove();
+      nameInput.placeholder="Имя";
+      nameInput.setAttribute("aria-label","Имя");
+      nameInput.autocomplete="name";
+      birthdayInput.placeholder="Дата рождения";
+      const nameFieldLabel=document.createElement("span");
+      nameFieldLabel.className="shop-profile-field-label";
+      nameFieldLabel.textContent="Имя";
+      nameFieldLabel.setAttribute("aria-hidden","true");
+      nameValue.append(nameFieldLabel);
+      heroPhone.setAttribute("aria-label","Подтверждённый телефон");
+      birthdayLine.classList.add("shop-profile-birthday-field");
+      birthdayEditBtn.classList.add("shop-profile-birthday-add");
+      birthdayEditBtn.setAttribute("aria-label","Добавить день рождения");
+      birthdayEditBtn.innerHTML='<i class="fas fa-gift" aria-hidden="true"></i><span>Добавить день рождения</span>';
+      birthdayLine.prepend(birthdayEditBtn);
+      const edit=document.createElement("section");edit.className="shop-profile-settings-screen shop-profile-settings-editor hidden";edit.dataset.settingsScreen="edit";photoWrap.append(photoActions);edit.append(info);
+      phoneVerifyRow.classList.add('shop-profile-phone-summary');
+      phoneVerifyTitle.classList.add('hidden');
+      phoneVerifyLeft.prepend(phoneVerifiedMark);
+      top.append(heroName,heroPhone,phoneVerifyRow,edit);photoActions.classList.add("hidden");
+      const personal=document.createElement("div");personal.className="shop-profile-settings-menu shop-profile-settings-personal";
+      const notifications = document.createElement("section");
+      notifications.className = "shop-profile-settings-screen hidden";
+      notifications.dataset.settingsScreen = "notifications";
+      notifications.append(pushNotificationRows[0], orderStatusRowsWrap, ...pushNotificationRows.slice(1));
+      const messengers = document.createElement("section");
+      messengers.className = "shop-profile-settings-screen hidden";
+      messengers.dataset.settingsScreen = "messengers";
+      messengers.append(maxLinkRow, tgLinkRow);
+      const screenHeader = document.createElement("div");
+      screenHeader.className = "shop-profile-settings-screen-header hidden";
+      const screenBack = document.createElement("button");
+      screenBack.type = "button";
+      screenBack.className = "btn btn-icon";
+      screenBack.setAttribute("aria-label", "Назад к настройкам профиля");
+      screenBack.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      const screenTitle = document.createElement("h3");
+      screenHeader.append(screenBack, screenTitle);
+      let currentSettingsScreen = "main";
+      const showSettingsScreen = (screen, trigger = null) => {
+        top.classList.remove("is-photo-expanded");photo.setAttribute("aria-expanded","false");
+        const wasMain=currentSettingsScreen==="main";
+        currentSettingsScreen = screen;
+        wrap.dataset.settingsView=screen;
+        top.classList.toggle("hidden", screen !== "main" && screen !== "edit");
+        menu.classList.toggle("hidden", screen !== "main");
+        edit.classList.toggle("hidden",screen!=="edit");
+        toolbar.classList.toggle("hidden",screen!=="main"&&screen!=="edit");
+        toolbarTitle.textContent=screen==="edit"?"Изменить профиль":"Настройки";
+        editButton.classList.toggle("hidden",screen==="edit");
+        photoActions.classList.toggle("hidden",screen!=="edit");
+        notifications.classList.toggle("hidden", screen !== "notifications");
+        messengers.classList.toggle("hidden", screen !== "messengers");
+        screenHeader.classList.toggle("hidden", screen === "main"||screen==="edit");
+        screenTitle.textContent = screen === "notifications" ? "Уведомления" : screen === "edit" ? "Изменить профиль" : "Мессенджеры";
+        photo.setAttribute("aria-label",screen==="edit"?"Изменить фотографию профиля":"Развернуть фотографию профиля");
+        if(screen==="edit"){
+          setBirthdayEditingMode(false);
+          nameInput.style.setProperty("--profile-label-width",`${nameFieldLabel.offsetWidth+8}px`);
+          birthdayInput.style.setProperty("--profile-label-width",`${birthdayTitle.offsetWidth+8}px`);
+        }
+        if(screen!=="edit"&&!wasMain){setEditingMode(false);setBirthdayEditingMode(false);}
+        if (screen === "main") menu.querySelector(`[data-settings-target="${trigger || 'notifications'}"]`)?.focus({ preventScroll: true });
+        else if(screen==="edit")photo.focus({preventScroll:true});
+        else screenBack.focus({ preventScroll: true });
+      };
+      guestProfileUpdated=()=>{heroPhone.textContent=me?.phone?formatPhonePlus7(me.phone):'';};
+      backSettingsScreen = () => {
+        if (currentSettingsScreen === "main") return false;
+        const previous = currentSettingsScreen;
+        showSettingsScreen("main", previous);
+        return true;
+      };
+      screenBack.addEventListener("click", backSettingsScreen);
+      editButton.addEventListener("click",()=>showSettingsScreen("edit"));
+      photo.tabIndex=0;photo.setAttribute("role","button");photo.setAttribute("aria-label","Развернуть фотографию профиля");photo.setAttribute("aria-expanded","false");
+      const photoCamera=document.createElement("span");photoCamera.className="shop-profile-photo-camera";photoCamera.setAttribute("aria-hidden","true");
+      photoCamera.innerHTML='<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16h6l3-5h10l3 5h6a5 5 0 0 1 5 5v15a5 5 0 0 1-5 5H19M5 29v-8a5 5 0 0 1 5-5"/><circle cx="25" cy="27" r="8"/><path d="M8 34v12M2 40h12"/></svg>';photo.append(photoCamera);
+      let coverTextFrame=0;
+      const syncCoverText=()=>{
+        if(currentSettingsScreen!=="main"||!wrap.isConnected){
+          [nameText,heroPhone].forEach(element=>element.removeAttribute("data-cover-text"));
+          return;
+        }
+        const cover=photoWrap.getBoundingClientRect();
+        const radius=getComputedStyle(photoWrap).borderTopLeftRadius.replace(/-\s+/g,"-");
+        const resolveRadius=size=>Array.from(radius.matchAll(/(-?\d*\.?\d+)(%|px)/g)).reduce((sum,match)=>sum+Number(match[1])*(match[2]==="%"?size/100:1),0);
+        const rx=resolveRadius(photoWrap.offsetWidth)*cover.width/photoWrap.offsetWidth;
+        const ry=resolveRadius(photoWrap.offsetHeight)*cover.height/photoWrap.offsetHeight;
+        [nameText,heroPhone].forEach(element=>{
+          const rect=element.getBoundingClientRect();
+          element.dataset.coverText=element.textContent;
+          element.style.setProperty("--cover-text-clip",`inset(${cover.top-rect.top}px ${rect.right-cover.right}px ${rect.bottom-cover.bottom}px ${cover.left-rect.left}px round ${rx}px / ${ry}px)`);
+        });
+        if(photoWrap.getAnimations().some(animation=>animation.playState==="running"))coverTextFrame=requestAnimationFrame(syncCoverText);
+      };
+      const toggleProfileCover=()=>{
+        if(currentSettingsScreen==="edit"){startPhotoUpload();return;}
+        if(currentSettingsScreen!=="main")return;
+        if(photoImg.classList.contains("hidden")){showSettingsScreen("edit");return;}
+        const textFrames=[nameText,heroPhone].map(element=>{
+          const rect=element.getBoundingClientRect();
+          element.getAnimations().forEach(animation=>animation.cancel());
+          return {element,rect};
+        });
+        photoWrap.getAnimations().forEach(animation=>animation.cancel());
+        photo.getAnimations().forEach(animation=>animation.cancel());
+        const from=photoWrap.getBoundingClientRect();
+        if(!top.classList.contains("is-photo-expanded")){
+          top.style.setProperty("--profile-cover-height",`${top.getBoundingClientRect().height}px`);
+          top.style.setProperty("--profile-cover-header",`${Math.max(0,top.getBoundingClientRect().top-toolbar.getBoundingClientRect().top)}px`);
+          const container=wrap.closest('.app-modal');
+          top.style.setProperty("--profile-cover-radius",window.matchMedia('(max-width:768px)').matches?"22px":container?getComputedStyle(container).borderTopLeftRadius:"34px");
+        }
+        const expanded=top.classList.toggle("is-photo-expanded");
+        if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+          const textTargets=textFrames.map(frame=>({...frame,target:frame.element.getBoundingClientRect()}));
+          const animationStart=document.timeline.currentTime;
+          textTargets.forEach(({element,rect,target})=>{
+            const animation=element.animate([
+              {transform:`translate(${rect.left-target.left}px,${rect.top-target.top}px)`},
+              {transform:'none'}
+            ],{duration:320,easing:'cubic-bezier(.2,.8,.2,1)'});
+            animation.startTime=animationStart;
+          });
+          const to=photoWrap.getBoundingClientRect();
+          if(from.width&&from.height&&to.width&&to.height){
+            photoWrap.animate([
+              {transform:`translate(${from.left-to.left}px,${from.top-to.top}px) scale(${from.width/to.width},${from.height/to.height})`,borderRadius:expanded?'50%':'var(--profile-cover-radius,22px)'},
+              {transform:'none',borderRadius:expanded?'var(--profile-cover-radius,22px)':'50%'}
+            ],{duration:320,easing:'cubic-bezier(.2,.8,.2,1)'});
+            if(!expanded)photo.animate([{borderRadius:'0'},{borderRadius:'50%'}],{duration:320,easing:'cubic-bezier(.2,.8,.2,1)'});
+          }
+        }
+        cancelAnimationFrame(coverTextFrame);
+        syncCoverText();
+        photo.setAttribute("aria-expanded",String(expanded));
+        photo.setAttribute("aria-label",expanded?"Свернуть фотографию профиля":"Развернуть фотографию профиля");
+      };
+      photo.addEventListener("click",toggleProfileCover);
+      photo.addEventListener("keydown",event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();toggleProfileCover();}});
+      syncSettingsSummary=()=>{photoPlaceholder.textContent=(nameText.textContent.match(/\S+/g)||[]).slice(0,2).map(word=>word[0]).join("").toUpperCase();};
+      settingsSaved=()=>{syncSettingsSummary();showSettingsScreen("main","edit");};
+      for(const [label,icon,action]of [["Изменить фотографию","fa-camera",()=>{}],["Имя","fa-user",()=>nameEditBtn.click()],["Дата рождения","fa-calendar",()=>birthdayEditBtn.click()]]){
+        const button=document.createElement("button");button.type="button";button.className="shop-profile-settings-row shop-profile-settings-nav";
+        const symbol=document.createElement("i");symbol.className=`fas ${icon}`;symbol.setAttribute("aria-hidden","true");
+        const text=document.createElement("span");text.textContent=label;
+        const arrow=document.createElement("i");arrow.className="fas fa-chevron-right";arrow.setAttribute("aria-hidden","true");button.append(symbol,text,arrow);
+        button.addEventListener("click",()=>{showSettingsScreen("edit");action();});personal.append(button);
+      }
+      syncSettingsSummary();
+      maxLinkTitle.textContent="MAX";tgLinkTitle.textContent="Telegram";
+      for (const [left, provider] of [[maxLinkLeft, "max"], [tgLinkLeft, "telegram"]]) {
+        left.classList.add("shop-profile-messenger-info");
+        const icon = document.createElement("img");
+        icon.className = "shop-profile-messenger-icon";
+        icon.src = `/static/uploads/auth/${provider}-auth.png`;
+        icon.alt = "";
+        icon.width = 32;
+        icon.height = 32;
+        left.prepend(icon);
+      }
+      for (const [screen, label, icon] of [["notifications", "Уведомления", "fa-bell"], ["messengers", "Мессенджеры", "fa-link"]]) {
+        if(me?.is_guest&&screen==="messengers")continue;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "shop-profile-settings-row shop-profile-settings-nav";
+        button.dataset.settingsTarget = screen;
+        const symbol = document.createElement("i");symbol.className = `fas ${icon}`;symbol.setAttribute("aria-hidden", "true");
+        const text = document.createElement("span");text.textContent = label;
+        const arrow = document.createElement("i");arrow.className = "fas fa-chevron-right";arrow.setAttribute("aria-hidden", "true");
+        button.append(symbol, text, arrow);
+        button.addEventListener("click", () => showSettingsScreen(screen));
+        menu.append(button);
+      }
+      if(typeof onLogout==="function"){
+        const logoutButton=document.createElement("button");
+        logoutButton.type="button";
+        logoutButton.className="shop-profile-settings-logout";
+        logoutButton.textContent="Выйти";
+        logoutButton.addEventListener("click",async()=>{
+          if(logoutButton.disabled)return;
+          logoutButton.disabled=true;
+          try{
+            const confirmed=await window.AppModal.confirm({title:"Выйти из аккаунта?",message:"Для покупок под своим профилем потребуется войти снова.",saveText:"Выйти"});
+            if(confirmed)await onLogout();
+          }finally{logoutButton.disabled=false;}
+        });
+        menu.append(logoutButton);
+      }
+      settingsWrap.append(menu, screenHeader, notifications, messengers);
       settingsPanel.classList.add("is-active");
       wrap.appendChild(settingsPanel);
     }
@@ -34702,7 +34515,7 @@ function renderSheetAddressList() {
     }
 
     let currentName = str(me?.name || "");
-    let currentBirthday = formatBirthdayDisplay(me?.birthday || "");
+    let currentBirthday = settingsPage&&!me?.birthday?"":formatBirthdayDisplay(me?.birthday || "");
     let isEditing = false;
     let isBirthdayEditing = false;
 
@@ -34738,6 +34551,7 @@ function renderSheetAddressList() {
     setProfilePhoto(me?.photo || "");
 
     nameEditBtn.addEventListener("click", () => setEditingMode(true));
+    if(settingsPage)nameInput.addEventListener("focus",()=>{if(!isEditing)setEditingMode(true);});
 
     function setEditingMode(next) {
       isEditing = Boolean(next);
@@ -34746,7 +34560,7 @@ function renderSheetAddressList() {
       nameText.classList.toggle("hidden", isEditing);
       nameEditBtn.classList.toggle("hidden", isEditing);
       nameInput.classList.toggle("hidden", !isEditing);
-      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      const isMobile = !settingsPage && window.matchMedia("(max-width: 768px)").matches;
       nameActions.classList.toggle("hidden", !isEditing || isMobile);
       if (isMobile && elMobileAddressActions) {
         if (isEditing) {
@@ -34766,7 +34580,7 @@ function renderSheetAddressList() {
         }
       }
       if (isEditing) {
-        nameInput.value = currentName;
+        if(!settingsPage)nameInput.value = currentName;
         setTimeout(() => nameInput.focus(), 0);
       }
     }
@@ -34774,14 +34588,19 @@ function renderSheetAddressList() {
     setEditingMode(false);
 
     birthdayEditBtn.addEventListener("click", () => setBirthdayEditingMode(true));
+    if(settingsPage)birthdayInput.addEventListener("focus",()=>{if(!isBirthdayEditing)setBirthdayEditingMode(true);});
 
     function setBirthdayEditingMode(next) {
       isBirthdayEditing = Boolean(next);
+      if(settingsPage){
+        birthdayLine.classList.toggle("is-birthday-empty",! /\d/.test(currentBirthday));
+        birthdayLine.classList.toggle("is-birthday-editing",isBirthdayEditing);
+      }
       if (isBirthdayEditing) setEditingMode(false);
       birthdayText.classList.toggle("hidden", isBirthdayEditing);
       birthdayEditBtn.classList.toggle("hidden", isBirthdayEditing);
       birthdayInput.classList.toggle("hidden", !isBirthdayEditing);
-      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      const isMobile = !settingsPage && window.matchMedia("(max-width: 768px)").matches;
       birthdayActions.classList.toggle("hidden", !isBirthdayEditing || isMobile);
       if (isMobile && mobileEditActions) {
         if (isBirthdayEditing) {
@@ -34801,7 +34620,8 @@ function renderSheetAddressList() {
         }
       }
       if (isBirthdayEditing) {
-        birthdayInput.value = currentBirthday;
+        if(settingsPage)birthdayInput.style.setProperty("--profile-label-width",`${birthdayTitle.offsetWidth+8}px`);
+        if(!settingsPage)birthdayInput.value = currentBirthday;
         setTimeout(() => birthdayInput.focus(), 0);
       }
     }
@@ -34823,14 +34643,20 @@ function renderSheetAddressList() {
     }
 
     async function removePhoto() {
-      if (!window.confirm("Удалить фото профиля?")) return;
+      if(photoRemoveBtn.disabled)return;
       photoRemoveBtn.disabled = true;
       try {
+        const confirmed=settingsPage
+          ?await window.AppModal.confirm({title:"Удалить фото профиля?",message:"Фотографию можно будет загрузить снова.",saveText:"Удалить"})
+          :window.confirm("Удалить фото профиля?");
+        if(!confirmed)return;
         await apiJson("/api/public/me/photo", { method: "DELETE" });
         setProfilePhoto("");
+        me.photo="";
         setCustomerCache({ ...me, photo: "" });
+        if(settingsPage)settingsSaved();
       } catch (e) {
-        alert("Не удалось удалить фото");
+        showProfileWarning("Не удалось удалить фото");
       } finally {
         photoRemoveBtn.disabled = false;
       }
@@ -34846,11 +34672,11 @@ function renderSheetAddressList() {
 
       const allowed = ["image/jpeg", "image/png", "image/webp"];
       if (!allowed.includes(file.type)) {
-        alert("Можно загрузить только JPG, PNG или WEBP");
+        showProfileWarning("Можно загрузить только JPG, PNG или WEBP");
         return;
       }
       if (file.size > 5 * 1024 * 1024) {
-        alert("Размер файла не должен превышать 5MB");
+        showProfileWarning("Размер файла не должен превышать 5MB");
         return;
       }
 
@@ -34875,9 +34701,11 @@ function renderSheetAddressList() {
         }
         const finalUrl = `${json.photoUrl}?t=${Date.now()}`;
         setProfilePhoto(finalUrl);
+        me.photo=json.photoUrl;
         setCustomerCache({ ...me, photo: json.photoUrl });
+        if(settingsPage)settingsSaved();
       } catch (e) {
-        alert("Не удалось загрузить фото");
+        showProfileWarning("Не удалось загрузить фото");
         setProfilePhoto(me?.photo || "");
       } finally {
         photoBtn.disabled = false;
@@ -34926,14 +34754,36 @@ function renderSheetAddressList() {
       await removePhoto();
     });
 
+    if(settingsPage){
+      for(const [input,save,current] of [[nameInput,nameSave,()=>currentName],[birthdayInput,birthdaySave,()=>currentBirthday]]){
+        input.addEventListener("blur",()=>{
+          const value=str(input.value).trim();
+          if(save.disabled)return;
+          if(value===current()){
+            if(input===birthdayInput&&!value)setBirthdayEditingMode(false);
+            return;
+          }
+          if(!value&&input!==birthdayInput){input.setAttribute("aria-invalid","true");return;}
+          input.removeAttribute("aria-invalid");
+          save.click();
+        });
+        input.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();input.blur();}});
+      }
+      wrap.addEventListener("pointerdown",event=>{
+        const active=document.activeElement;
+        if((active===nameInput||active===birthdayInput)&&event.target!==active)active.blur();
+      });
+    }
+
     nameSave.addEventListener("click", async () => {
       const v = str(nameInput.value).trim();
       if (!v) {
-        alert("Введите имя");
+        showProfileWarning("Введите имя");
         return;
       }
-      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      const isMobile = !settingsPage && window.matchMedia("(max-width: 768px)").matches;
       nameSave.disabled = true;
+      if(settingsPage)nameInput.disabled=true;
       nameSave.textContent = "Сохраняем…";
       if (isMobile && elMobileAddressSaveBtn) {
         elMobileAddressSaveBtn.disabled = true;
@@ -34941,17 +34791,20 @@ function renderSheetAddressList() {
       }
       try {
         await apiJson("/api/public/me", { method: "PUT", body: { name: v } });
-        const me2 = await fetchMeSafe();
+        const me2 = await fetchMeSafe({ force: true });
         if (me2) {
           currentName = str(me2.name || "");
+          me.name=currentName;
           nameText.textContent = currentName || "—";
           nameInput.value = currentName;
         }
         setEditingMode(false);
+        if(settingsPage)syncSettingsSummary();
       } catch (e) {
-        alert("Не удалось сохранить имя");
+        showProfileWarning("Не удалось сохранить имя");
       } finally {
         nameSave.disabled = false;
+        if(settingsPage)nameInput.disabled=false;
         nameSave.textContent = "Сохранить";
         if (isMobile && elMobileAddressSaveBtn) {
           elMobileAddressSaveBtn.disabled = false;
@@ -34967,29 +34820,39 @@ function renderSheetAddressList() {
 
     birthdaySave.addEventListener("click", async () => {
       const v = str(birthdayInput.value || "").trim();
-      if (!v) {
-        alert("Укажите дату рождения");
+      if(birthdaySave.disabled)return;
+      if (!v&&!settingsPage) {
+        showProfileWarning("Укажите дату рождения");
         return;
       }
-      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      if(!v&&currentBirthday&&!await window.AppModal.confirm({title:"Удалить дату рождения?",message:"Вход по дате рождения станет недоступен, пока вы снова её не укажете. Вход через Telegram/MAX сохранится.",saveText:"Удалить"})){
+        birthdayInput.value=currentBirthday;
+        setBirthdayEditingMode(false);
+        return;
+      }
+      const isMobile = !settingsPage && window.matchMedia("(max-width: 768px)").matches;
       birthdaySave.disabled = true;
+      if(settingsPage)birthdayInput.disabled=true;
       birthdaySave.textContent = "Сохраняем…";
       if (isMobile && elMobileAddressSaveBtn) {
         elMobileAddressSaveBtn.disabled = true;
         elMobileAddressSaveBtn.textContent = "Сохраняем…";
       }
       try {
-        await apiJson("/api/public/me", { method: "PUT", body: { birthday: v } });
+        await apiJson("/api/public/me", { method: "PUT", body: { birthday: v||null } });
         const me2 = await fetchMeSafe({ force: true });
-        currentBirthday = formatBirthdayDisplay(me2?.birthday || v);
+        const savedBirthday=me2?me2.birthday:v;
+        currentBirthday = settingsPage&&!savedBirthday?"":formatBirthdayDisplay(savedBirthday);
         if (me2) setCustomerCache(me2);
         birthdayInput.value = currentBirthday;
         birthdayText.textContent = formatBirthdayDisplay(currentBirthday);
         setBirthdayEditingMode(false);
+        if(settingsPage)syncSettingsSummary();
       } catch (e) {
-        alert("Не удалось сохранить дату рождения");
+        showProfileWarning("Не удалось сохранить дату рождения");
       } finally {
         birthdaySave.disabled = false;
+        if(settingsPage)birthdayInput.disabled=false;
         birthdaySave.textContent = "Сохранить";
         if (isMobile && elMobileAddressSaveBtn) {
           elMobileAddressSaveBtn.disabled = false;
@@ -35006,6 +34869,8 @@ function renderSheetAddressList() {
     if (ordersOnly) {
       reloadOrders({ reset: true });
     }
+
+    if (settingsPage) setActiveTab("settings");
 
     // Устанавливаем начальную вкладку, если указана
     if (ordersOnly && initialTab) {
@@ -35024,6 +34889,9 @@ function renderSheetAddressList() {
         refreshProfileOrderRowStatus: (orderId) => refreshProfileOrderRowStatus(orderId),
         showOrdersList: () => showOrdersList(),
       setActiveTab: (tab) => setActiveTab(tab),
+      backSettingsScreen: () => backSettingsScreen(),
+      confirmPhone: openPhoneConfirmation,
+      customerToken: getCustomerToken(),
     };
   }
 
@@ -35082,6 +34950,7 @@ function renderSheetAddressList() {
     const me = meOverride || await fetchMeSafe();
     if (!me) {
       const closeLoginPanel = () => {
+        profileHost.querySelector('.shop-auth')?.dispose?.();
         if (typeof onLoginCancel === "function") {
           onLoginCancel();
         }
@@ -35089,6 +34958,7 @@ function renderSheetAddressList() {
       };
       const loginWrap = buildLoginContent({
         onSuccess: (me2) => {
+          profileHost.querySelector('.shop-auth')?.dispose?.();
           if (typeof onLoginSuccess === "function") {
             onLoginSuccess(me2);
             return;
@@ -35096,6 +34966,7 @@ function renderSheetAddressList() {
           openProfilePanel(me2, { forceOpen: true });
         },
       });
+      profileHost.querySelector('.shop-auth')?.dispose?.();
       profileHost.innerHTML = "";
       profileHost.appendChild(loginWrap);
       if (elProfileHeaderActions) elProfileHeaderActions.classList.add("hidden");
@@ -35162,6 +35033,7 @@ function renderSheetAddressList() {
   }
 
   let activeProfileModalPage = null;
+  let restoreProfileSettingsPage = () => {};
 
   function showProfileModalHeader(me) {
     const header = document.querySelector(".app-modal-header");
@@ -35179,22 +35051,42 @@ function renderSheetAddressList() {
     actions.insertBefore(settingsBtn, closeBtn || actions.lastElementChild);
   }
 
-  async function openProfileSettingsPage(meOverride) {
-    const me = meOverride || await fetchMeSafe();
+  async function openProfileSettingsPage(meOverride, { confirmNumber = false, preserveBackground = false, confirmationOptions = {} } = {}) {
+    const me = meOverride?.is_guest && !getCustomerToken().startsWith('g_')
+      ? await fetchMeSafe() : meOverride || await fetchMeSafe();
+    if(confirmNumber&&preserveBackground){
+      if(!me)return;
+      let context=window._profileContext;
+      if(!context||context.customerToken!==getCustomerToken()){
+        if(!elProfilePageContent)throw new Error('PROFILE_CONTENT_NOT_AVAILABLE');
+        context=buildProfileContent({host:elProfilePageContent,me});
+        window._profileContext=context;
+      }
+      await context.confirmPhone({chooseProvider:true,confirmationOptions});
+      return;
+    }
     const isDesktopModal = window.matchMedia?.("(min-width: 769px)").matches === true
       && window.AppModal?.isOpen?.()
       && !!window.AppModal?.body;
     if (isDesktopModal && window.AppModal?.body) {
       if (!me) return;
+      restoreProfileSettingsPage();
       const settingsPage = document.getElementById("shopProfileSettingsPage");
       const settingsContent = document.getElementById("shopProfileSettingsPageContent");
       if (!settingsPage || !settingsContent) return;
       const settingsPageParent = settingsPage.parentElement;
       const settingsPageNextSibling = settingsPage.nextSibling;
+      restoreProfileSettingsPage = () => {
+        settingsPage.classList.add("hidden");
+        settingsPage.classList.remove("shop-profile-content", "shop-profile-settings-page-in-modal");
+        settingsPage.querySelector(".shop-profile-settings-page-header")?.classList.remove("hidden");
+        if(settingsPageParent)settingsPageParent.insertBefore(settingsPage,settingsPageNextSibling?.parentNode===settingsPageParent?settingsPageNextSibling:null);
+        restoreProfileSettingsPage = () => {};
+      };
       settingsPage.classList.remove("hidden");
       settingsPage.classList.add("shop-profile-content", "shop-profile-settings-page-in-modal");
       settingsPage.querySelector(".shop-profile-settings-page-header")?.classList.add("hidden");
-      buildProfileContent({
+      const settingsUi = buildProfileContent({
         host: settingsContent,
         me,
         onLogout: async () => {
@@ -35228,8 +35120,19 @@ function renderSheetAddressList() {
           header.insertBefore(backBtn, title);
         }
         backBtn.onclick = () => {
+          if (settingsUi.backSettingsScreen()) return;
           const profilePage = activeProfileModalPage || document.getElementById("shopProfilePage");
           if (!profilePage || !window.AppModal?.body) return;
+          if(me.is_guest&&!getCustomerToken().startsWith('g_')){
+            const profileContent=profilePage.querySelector('#shopProfilePageContent');
+            if(!profileContent)return;
+            window._profileContext=buildProfileContent({
+              host:profileContent,
+              me:getCustomerCache(),
+              onLogout:()=>handleProfileLogout({closeModal:true}),
+            });
+          }
+          restoreProfileSettingsPage();
           sheetNavigationState.type = "profile";
           sheetNavigationState.screen = null;
           sheetNavigationState.data = null;
@@ -35250,7 +35153,7 @@ function renderSheetAddressList() {
           if (currentSettingsBtn && settingsBtn) currentSettingsBtn.replaceWith(settingsBtn);
           if (settingsBtn) {
             settingsBtn.classList.remove("hidden");
-            settingsBtn.onclick = () => void openProfileSettingsPage(me);
+            settingsBtn.onclick = () => void openProfileSettingsPage(getCustomerCache()||me);
           }
         };
         let logoutBtn = actions.querySelector("#shopProfileModalLogoutBtn");
@@ -35264,14 +35167,12 @@ function renderSheetAddressList() {
         }
         logoutBtn.onclick = () => void handleProfileLogout({ closeModal: true });
       }
+      if(confirmNumber)void settingsUi.confirmPhone();
       return;
     }
     if (!me || !elProfileSettingsPageContent) return;
     showProfileSettingsView();
-    if (elProfileSettingsBackBtn) {
-      elProfileSettingsBackBtn.onclick = () => void openProfilePanel(me, { forceOpen: true });
-    }
-    buildProfileContent({
+    const settingsUi = buildProfileContent({
       host: elProfileSettingsPageContent,
       me,
       onLogout: async () => {
@@ -35281,6 +35182,11 @@ function renderSheetAddressList() {
       initialTab: "settings",
       settingsPage: true,
     });
+    if (elProfileSettingsBackBtn) {
+      elProfileSettingsBackBtn.onclick = () => {
+        if (!settingsUi.backSettingsScreen()) void openProfilePanel(getCustomerCache()||me, { forceOpen: true });
+      };
+    }
     const tabs = elProfileSettingsPageContent.querySelector(".shop-profile-tabs");
     if (tabs) tabs.classList.add("hidden");
     if (elProfileSettingsLogoutBtn) {
@@ -35290,6 +35196,7 @@ function renderSheetAddressList() {
       };
     }
     window.history.pushState({ profileSettings: true }, "", window.location.href);
+    if(confirmNumber)void settingsUi.confirmPhone();
   }
 
   function mountProfileModalMenu({ onEdit, onLogout }) {
@@ -35433,7 +35340,7 @@ function renderSheetAddressList() {
     if (!chatModal || !me) return;
     const settingsWrap = document.createElement("div");
     settingsWrap.className = "shop-profile-content shop-profile-chat-modal-content";
-    buildProfileContent({
+    const settingsUi = buildProfileContent({
       host: settingsWrap,
       me,
       settingsPage: true,
@@ -35442,7 +35349,7 @@ function renderSheetAddressList() {
     chatModal.updateCustom({
       title: "Настройки профиля",
       content: settingsWrap,
-      back: () => openDesktopChatProfileModal(me),
+      back: () => { if (!settingsUi.backSettingsScreen()) openDesktopChatProfileModal(me); },
       logout: () => void handleProfileLogout({ closeModal: true }),
     });
   }
@@ -35468,7 +35375,8 @@ function renderSheetAddressList() {
       pageParent.appendChild(page);
     }
 
-    const closePage = () => {
+    page.classList.toggle("shop-orders-from-profile",returnToProfile||sourceScreen==="profile");
+    const closePage = ({ restoreNavigation = true } = {}) => {
       document.body.classList.remove("shop-orders-page-active");
       document.body.classList.remove("shop-orders-details-active");
       resetOrderDetailsTransientUi();
@@ -35486,10 +35394,10 @@ function renderSheetAddressList() {
         window.removeEventListener("popstate", page._shopOrdersPopHandler, true);
         page._shopOrdersPopHandler = null;
       }
-      if (returnToProfile || sourceScreen === "profile") {
+      if (restoreNavigation && (returnToProfile || sourceScreen === "profile")) {
         if (typeof showProfileView === "function") showProfileView();
         if (typeof setActiveNav === "function") setActiveNav("profile");
-      } else if (typeof setActiveNav === "function") {
+      } else if (restoreNavigation && typeof setActiveNav === "function") {
         setActiveNav("menu");
       }
       sheetNavigationState.type = null;
@@ -35594,7 +35502,7 @@ function renderSheetAddressList() {
     const pageParent = page?.parentElement || null;
     const pageNextSibling = page?.nextSibling || null;
     const wrap = page || document.createElement("div");
-    if (!page) wrap.className = "shop-profile-content";
+    if (!page) wrap.className = ordersOnly ? "shop-profile-content" : "shop-profile-content shop-profile-page-in-modal";
     wrap.classList.toggle("shop-profile-orders-sheet-content", !!ordersOnly);
     wrap.classList.remove("hidden");
     if (page) {
@@ -35630,6 +35538,7 @@ function renderSheetAddressList() {
       content: wrap,
       onClose: () => {
         shopPaymentWidgetSession?.finish();
+        restoreProfileSettingsPage();
         cleanupOrdersPageState();
         clearProfileModalMenu();
         activeProfileModalPage = null;
@@ -35657,8 +35566,7 @@ function renderSheetAddressList() {
           showCartView();
         }
         if (ordersOnly && (returnToProfile || sourceScreen === "profile")) {
-          if (typeof showProfileView === "function") showProfileView();
-          setActiveNav("profile");
+          returnToProfileModalFromSubpage();
         } else {
           setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "menu");
         }
@@ -42535,6 +42443,8 @@ function setBottomNavActive(tab) {
             return "Подарок уже недоступен.";
           case "BONUS_ACCOUNT_NOT_FOUND":
             return "Бонусная карта недоступна.";
+          case "PHONE_VERIFICATION_REQUIRED":
+            return "Перед оформлением заказа заполните и подтвердите телефон в профиле покупателя.";
           case "BONUS_BALANCE_NOT_ENOUGH":
             return "Недостаточно бонусов для списания.";
           default:
@@ -42722,6 +42632,9 @@ function setBottomNavActive(tab) {
   }
 
 function initShopLate() {
+  if(window.AuthCard?.hasPendingRequest('customer')&&(!getCustomerToken()||getCustomerToken().startsWith('g_'))){
+    openLoginSheet({onSuccess:()=>{if(window.AppModal?.isOpen())window.AppModal.close('auth-success');}});
+  }
   try {
     const paymentReturnUrl=new URL(window.location.href);
     const takePendingPaymentReturn=()=>{
@@ -43072,6 +42985,11 @@ function initShopLate() {
       }
       const elNavOrders = document.getElementById("shopNavOrders");
       const elNavOrdersBadge = document.getElementById("shopNavOrdersBadge");
+      document.querySelector(".shop-mobile-bottom-container")?.addEventListener("click",event=>{
+        const target=event.target.closest(".shop-nav-btn");
+        if(!target||target.id==="shopNavOrders"||!document.body.classList.contains("shop-orders-page-active"))return;
+        document.getElementById("shopProfileOrdersPage")?._shopOrdersClosePage?.({restoreNavigation:false});
+      },true);
       if (elNavOrders) {
         elNavOrders.addEventListener("click", async () => {
           if (!isShopPage()) return;

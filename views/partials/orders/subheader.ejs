@@ -22,6 +22,14 @@
   </div>
 
   <div class="toolbar-right">
+    <% if (activePage === 'orders') { %>
+    <form class="cl-search-wrap" id="ordersPhoneSearch" role="search">
+      <input class="cl-search-input" id="ordersPhoneSearchInput" type="search" placeholder="№ заказа / телефон" aria-label="Поиск по номеру заказа, контактному телефону или телефону владельца" autocomplete="off" tabindex="-1" />
+      <button id="ordersSearchToggle" class="icon-btn cl-search-toggle" type="button" aria-label="Поиск" title="Поиск" aria-controls="ordersPhoneSearchInput" aria-expanded="false">
+        <i class="fas fa-search" aria-hidden="true"></i>
+      </button>
+    </form>
+    <% } %>
     <% if (activePage !== 'orders') { %>
     <button class="btn btn-ghost btn-icon" type="button" id="ordersNotifyBtn" title="Включить уведомления о новых заказах" aria-label="Уведомления">
       <i class="fas fa-bell"></i>

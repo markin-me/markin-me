@@ -12,7 +12,7 @@ const os = require('os');
 const { execFile } = require('child_process');
 const { domainToASCII, domainToUnicode } = require('url');
 const chatTempRuntime = require('../chatTemp');
-const { getEffectiveTelegramBotConfig } = require('../../data/system-settings');
+const { getTenantBotConfig } = require('../messengerDelivery');
 const { geocodeStoreAddress } = require('../../data/map-geocoder');
 const {
   ensureTenantMapConfigColumns,
@@ -47,6 +47,21 @@ const {
 
 module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can }) {
   const router = express.Router();
+  router.get('/customer-auth',async(req,res,next)=>{
+    try{
+      if(!await requireTenantPermissions(req,res,['settings.site.read']))return;
+      const tenantId=helpers.getTenantId(req),access=await can(req.user,'settings.site.update',{tenant_id:tenantId});
+      res.json({ok:true,settings:await require('../helpers/customerAuth').settings(db,tenantId),can_update:access.allowed});
+    }catch(error){next(error);}
+  });
+  router.put('/customer-auth',async(req,res,next)=>{
+    try{
+      if(!await requireTenantPermissions(req,res,['settings.site.update']))return;
+      const settings=require('../helpers/customerAuth').validateSettings(req.body);
+      await db.query('UPDATE ten_tenants SET customer_auth_config_json=? WHERE id=?',[JSON.stringify(settings),helpers.getTenantId(req)]);
+      res.json({ok:true,settings});
+    }catch(error){if(error.status)return res.status(error.status).json({ok:false,error:error.code});next(error);}
+  });
   const devPwaTunnelStatePath = path.resolve(__dirname, '../../tmp/dev-pwa-tunnel.json');
   const DEV_PWA_TUNNEL_VALIDATE_CACHE_MS = 30_000;
   let devPwaTunnelValidationCache = {
@@ -3339,7 +3354,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, url, tenant: serializeTenantForClient(rows[0] || null) });
     } catch (err) {
-      console.error('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё tenant Р°СЃСЃРµС‚Р°:', err);
+      console.error('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё tenant Р°СЃСЃРµС‚Р°:', err.code || err.name);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
     }
   });
@@ -3503,7 +3518,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         })
       });
     } catch (err) {
-      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ tenant РїСЂРѕС„РёР»СЏ:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ tenant РїСЂРѕС„РёР»СЏ:', err.code || err.name);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -4302,7 +4317,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, tenant: await buildTenantResponse(rows[0] || null, req) });
     } catch (err) {
-      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ tenant РїСЂРѕС„РёР»СЏ:', err);
+      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ tenant РїСЂРѕС„РёР»СЏ:', err.code || err.name);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -6505,7 +6520,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true });
     } catch (err) {
-      console.error('РћС€РёР±РєР° СЃРјРµРЅС‹ РїР°СЂРѕР»СЏ tenant:', err);
+      console.error('РћС€РёР±РєР° СЃРјРµРЅС‹ РїР°СЂРѕР»СЏ tenant:', err.code || err.name);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -6531,6 +6546,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       );
       if (!storeRows.length) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
 
+      const bot = await getTenantBotConfig(db, tenantId, 'tg', { allowDisabled: true });
       const token = crypto.randomBytes(24).toString('hex');
       const secretKey = crypto.randomBytes(16).toString('hex');
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -6540,7 +6556,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
         [tenantId, storeId, token, expiresAt, secretKey]
       );
 
-      const botUsername = getEffectiveTelegramBotConfig().telegram_bot_username;
+      const botUsername = bot.identifier;
       const link = botUsername ? `https://t.me/${botUsername}?start=${token}` : null;
 
       res.json({ ok: true, token, link, expires_at: expiresAt.toISOString() });
@@ -7346,7 +7362,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       return res.send(svg);
     } catch (err) {
-      console.error('tenant pwa-install-qr error:', err);
+      console.error('tenant pwa-install-qr error:', err.code || err.name);
       return res.status(500).json({ ok: false, error: 'PWA_INSTALL_QR_FAILED' });
     }
   });

@@ -275,6 +275,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     if (context === 'orders') return 'orders.list.read';
     if (String(headers['x-rbac-node'] || '').trim() === 'settings.delivery') return 'settings.delivery.read';
   }
+  if (route === '/tenant/customer-auth') return byAction('settings.site');
   if (route.startsWith('/tenant/telegram') || route.startsWith('/tenant/map-provider')) return 'settings.system.integrations';
   if (route === '/tenant/current-time' || route === '/tenant/password') return null;
   if (route.startsWith('/system')) {

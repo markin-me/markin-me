@@ -909,7 +909,7 @@
   function getCartBonusAccountLevel() {
     const config = state.homeBonusConfig && typeof state.homeBonusConfig === "object" ? state.homeBonusConfig : null;
     const account = config?.account && typeof config.account === "object" ? config.account : null;
-    if (!account?.joined_at || !(Number(account?.id || 0) > 0)) return null;
+    if (!account?.is_guest && (!account?.joined_at || !(Number(account?.id || 0) > 0))) return null;
     const levelId = Number(account?.level_id || 0);
     const levels = Array.isArray(config?.levels) ? config.levels : [];
     if (levelId > 0) {
@@ -963,6 +963,7 @@
     section.className = "shop-cart-bonus-redeem-section shop-cart-bonus-join-section";
     section.innerHTML = `
       <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card shop-cart-bonus-join-card">
+        ${buildGuestBonusBalanceHtml()}
         <div class="shop-cart-bonus-join-copy">
           <div class="shop-cart-bonus-join-title">Присоединитесь к бонусной программе</div>
           <div class="shop-cart-bonus-join-text">и получайте бонусы за заказы</div>
@@ -984,7 +985,7 @@
     const level = getCartBonusAccountLevel();
     if (!level) return buildCartBonusJoinSection();
     const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
-    const canRedeem = balance > 0;
+    const canRedeem = balance > 0 && state.homeBonusConfig?.account?.can_redeem !== false;
     const allowRedeemAndAccrue = Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) === 1;
     const redeemLabel = allowRedeemAndAccrue ? "Списать и начислить" : "Списать";
     if (!canRedeem && state.cartBonusRedeemEnabled) {
@@ -1006,6 +1007,7 @@
           </div>
         </div>
         <div class="shop-cart-bonus-redeem-actions">
+          ${state.homeBonusConfig?.account?.is_guest?`<div class="shop-cart-bonus-join-text">${escapeHtml(state.homeBonusConfig.account.notice)}</div>`:''}
           <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? "" : " is-active"}${emptyCart ? " is-disabled" : ""}" type="button" data-cart-bonus-accrual-button ${emptyCart ? "disabled" : ""}>
             <span class="shop-cart-bonus-action-pill__label">Начислить</span>
             ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>+${formatShopBonusMoney(0)}</span>`}
@@ -1133,6 +1135,7 @@
   }
 
   function buildBonusLevelPreviewCardHtml(level, options = {}) {
+    const guestCard = options.guestCard === true;
     const isHomeCard = options.homeCard === true;
     const stackedTitle = options.stackedTitle !== false;
     const showQr = options.showQr !== false;
@@ -1143,7 +1146,7 @@
     const cashbackValue = normalizeShopCardPercent(level?.cashback_percent, 1);
     const favoriteCategoryBonusText = formatShopBonusFavoriteCategoriesRange(level);
     const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
-    const favoriteCategoryPreviewHtml = buildBonusLevelPreviewFavoriteCategoriesHtml(level, contentColor, favoriteCategoryLimit);
+    const favoriteCategoryPreviewHtml = guestCard?'':buildBonusLevelPreviewFavoriteCategoriesHtml(level, contentColor, favoriteCategoryLimit);
     const showTitle = level?.show_title_on_card !== false;
     const titleStyle = level?.title_background_enabled === false
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
@@ -1171,6 +1174,7 @@
           <div class="bonus-level-preview-title${stackedTitle ? " shop-home-bonus-card__title" : ""}" style="${titleStyle}">${titleHtml}</div>
           <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">${escapeHtml(coinName)}</div>
           <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">${formatShopBonusMoney(getBonusLevelPreviewBalance(level))}</div>
+          ${guestCard ? `<div class="shop-guest-bonus-balance" style="color:${escapeHtml(contentColor)};">${escapeHtml(state.homeBonusConfig?.account?.notice || "")}</div><button class="shop-home-bonus-card__action" type="button">Как списать?</button>` : ""}
           ${showQr ? `<div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>` : ""}
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
@@ -1180,7 +1184,7 @@
           </div>
           <div class="bonus-level-preview-category-side${favoriteCategoryLimit > 0 ? "" : " hidden"}" role="button" tabindex="0" data-open-bonus-preview-favorite-categories>
             ${favoriteCategoryPreviewHtml}
-            <div class="bonus-level-preview-category-value" data-bonus-level-preview-favorites-value="${escapeHtml(String(Number(level?.id || 0)))}" style="color:${escapeHtml(contentColor)};">${buildBonusLevelPreviewFavoriteCategoriesValueHtml(level, contentColor)}</div>
+            <div class="bonus-level-preview-category-value" data-bonus-level-preview-favorites-value="${escapeHtml(String(Number(level?.id || 0)))}" style="color:${escapeHtml(contentColor)};">${guestCard?escapeHtml(favoriteCategoryBonusText):buildBonusLevelPreviewFavoriteCategoriesValueHtml(level, contentColor)}</div>
           </div>
         </div>
       </div>
@@ -2068,17 +2072,21 @@
           const reason = getBonusTransactionReasonText(item, meta);
           const dateText = formatShopBonusDateTime(item?.created_at);
           const amountText = amount > 0 ? `${meta.sign}${formatShopBonusMoney(amount)}` : `0 ${getShopBonusCoinIconHtml()}`;
+          const orderAccrual=item.order_accrual===true;
+          const orderId=orderAccrual?Number(item.order_id||0):0;
+          const tag=orderId>0?'button':'div';
+          const title=orderAccrual?`+${formatShopBonusNumber(amount)} бонусов за заказ${orderId>0?` №${orderId}`:''}`:meta.label;
           return `
-            <div class="shop-bonus-accrual-row">
+            <${tag} class="shop-bonus-accrual-row${orderId>0?' shop-bonus-accrual-order':''}" ${orderId>0?`type="button" data-bonus-order-id="${orderId}"`:''}>
               <div class="shop-bonus-accrual-main">
-                <div class="shop-bonus-accrual-title">${escapeHtml(meta.label)}</div>
-                <div class="shop-bonus-accrual-subtitle">${escapeHtml(reason)}</div>
+                <div class="shop-bonus-accrual-title">${escapeHtml(title)}</div>
+                ${orderAccrual?'':`<div class="shop-bonus-accrual-subtitle">${escapeHtml(reason)}</div>`}
               </div>
               <div class="shop-bonus-accrual-side">
                 <div class="shop-bonus-accrual-amount is-${escapeHtml(meta.tone)}">${amountText}</div>
                 <div class="shop-bonus-accrual-date">${escapeHtml(dateText)}</div>
               </div>
-            </div>
+            </${tag}>
           `;
         }).join("")}
       </div>
@@ -2158,6 +2166,12 @@
         btn.addEventListener("click", () => {
           activeFilter = String(btn.dataset.bonusTransactionFilter || "all");
           render();
+        });
+      });
+      wrap.querySelectorAll('[data-bonus-order-id]').forEach(button=>{
+        button.addEventListener('click',async()=>{
+          await ensureShopLateLoaded();
+          await window.openShopActiveOrderDetails(Number(button.dataset.bonusOrderId));
         });
       });
     };
@@ -3286,20 +3300,32 @@
     }
   }
 
-  function returnToProfileModalFromSubpage() {
-    if (window.AppModal?.isOpen?.()) {
-      window.AppModal.close("navigate");
-    }
-    setTimeout(() => {
+  let profileReturnInProgress=false;
+  async function returnToProfileModalFromSubpage() {
+    if(profileReturnInProgress)return;
+    profileReturnInProgress=true;
+    const shell=document.querySelector("#appModal");
+    const backdrop=document.querySelector(".modal-backdrop");
+    try{
       const isMobile = window.matchMedia?.("(max-width: 768px)").matches === true;
+      const me=isMobile?null:await fetchMeSafe();
+      shell?.classList.add("shop-profile-instant-return");
+      backdrop?.classList.add("shop-profile-instant-return");
+      if(window.AppModal?.isOpen?.())window.AppModal.close("navigate");
       if (isMobile && typeof showProfileView === "function") {
         showProfileView();
-        return;
+      }else if(me){
+        openProfileModal(me);
+      }else{
+        await openProfileSheet({forceModal:true});
       }
-      if (typeof openProfileSheet === "function") {
-        void openProfileSheet({ forceModal: true });
-      }
-    }, 0);
+    }finally{
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{
+        shell?.classList.remove("shop-profile-instant-return");
+        backdrop?.classList.remove("shop-profile-instant-return");
+        profileReturnInProgress=false;
+      }));
+    }
   }
 
   function setProfileModalSubpageHeader(onBack = returnToProfileModalFromSubpage) {
@@ -3316,13 +3342,16 @@
     ).forEach((element) => element.remove());
     header.querySelector("#shopSheetBackBtn")?.remove();
     const title = header.querySelector(".app-modal-title, .modal-title, [data-modal-title]");
+    title?.classList.remove("hidden");
     const backBtn = document.createElement("button");
     backBtn.id = "shopProfileModalBackBtn";
     backBtn.type = "button";
     backBtn.className = "btn btn-icon shop-profile-modal-back-btn";
     backBtn.setAttribute("aria-label", "Назад");
     backBtn.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
-    backBtn.onclick = () => {
+    backBtn.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       if (typeof onBack === "function") onBack();
     };
     header.insertBefore(backBtn, title || header.firstChild);
@@ -3371,6 +3400,7 @@
           section: normalizedKey === "tasks" ? "progress" : "",
           returnContext: returnToProfile ? { returnToProfile: true } : null,
         });
+        if(returnToProfile&&normalizedKey==="tasks")window.AppModal?.setTitle?.("Задания");
         restoreHomeNavAfterHomeSiteMenuOpen();
       }
     } catch (err) {
@@ -3992,8 +4022,21 @@
       }
       return;
     }
+    if (token.startsWith("g_")) {
+      await ensureShopLateLoaded();
+      await openProfileSettingsPage(null, { confirmNumber: true, preserveBackground: true, confirmationOptions: {
+        title: "Подтвердите номер телефона",
+        message: "Чтобы присоединиться к бонусной системе, необходимо войти через Telegram или MAX",
+        cancelText: "Отмена",
+      } });
+      return;
+    }
     if (!joinOptions.confirmed) {
       const config = await loadHomeBonusConfig({ force: true, skipPendingModal: true });
+      if (isHomeBonusJoined(config)) {
+        if (joinOptions.reopenBonusSheet) openHomeBonusCardsSheet();
+        return;
+      }
       const levels = Array.isArray(config?.levels) ? config.levels : [];
       const level = levels.find((item) => String(item?.access_type || "") === "join") || getHomeBonusFirstLevel(config);
       openShopBonusProgramModal({
@@ -4016,7 +4059,7 @@
       if (joinOptions.reopenBonusSheet) {
         openHomeBonusCardsSheet();
       }
-      if ((joinedNow || joinOptions.showJoinModalAfterSuccess) && joinOptions.showJoinModalAfterSuccess) {
+      if (joinedNow && joinOptions.showJoinModalAfterSuccess) {
         openShopBonusProgramModal({
           modalKey: "join",
           level: getHomeBonusFirstLevel(state.homeBonusConfig),
@@ -4025,6 +4068,11 @@
       if (!joinJson?.data?.already_joined && typeof showToast === "function") showToast("Вы присоединились к бонусной программе");
     } catch (err) {
       const msg = String(err?.message || "");
+      if(err?.httpStatus===403&&msg==='CUSTOMER_VERIFICATION_REQUIRED'){
+        if(typeof showToast==='function')showToast('Подтвердите номер для доступа к бонусам. Гостевые адреса сохранены.');
+        if(typeof openLoginSheet==='function')openLoginSheet({onSuccess:customer=>{if(customer&&!customer.is_guest)void joinHomeBonusProgram({...joinOptions,confirmed:true});}});
+        return;
+      }
       if (err?.httpStatus === 401 || msg === "UNAUTHORIZED") {
         clearCustomer();
         if (typeof openProfileSheet === "function") {
@@ -5687,13 +5735,14 @@
     if (!active) return null;
     const raw = String(active.getAttribute("data-tab") || "").trim().toLowerCase();
     if (raw === "categories") return "menu";
-    if (raw === "home" || raw === "menu" || raw === "benefits" || raw === "cart" || raw === "fav" || raw === "chat" || raw === "profile") {
+    if (raw === "home" || raw === "menu" || raw === "orders" || raw === "benefits" || raw === "cart" || raw === "fav" || raw === "chat" || raw === "profile") {
       return raw;
     }
     return null;
   }
 
   function resolveMobilePanelSnapshot(sheetOpen, sheetType, sheetScreen, sheetData = null) {
+    if(document.body.classList.contains("shop-orders-page-active"))return document.body.classList.contains("shop-orders-details-active")?"profile-order-details":"orders";
     if (sheetOpen) {
       if (sheetType === "cart") {
         if (sheetScreen === "benefits") return "benefits";
@@ -5813,7 +5862,7 @@
     const normalizeTab = (rawTab) => {
       const t = String(rawTab || "").toLowerCase();
       if (t === "categories") return "menu";
-      if (t === "home" || t === "menu" || t === "benefits" || t === "cart" || t === "fav" || t === "chat" || t === "profile") return t;
+      if (t === "home" || t === "menu" || t === "orders" || t === "benefits" || t === "cart" || t === "fav" || t === "chat" || t === "profile") return t;
       return "menu";
     };
 
@@ -5969,8 +6018,10 @@
     } catch {}
 
     let tab = currentTab || "menu";
+    if(document.body.classList.contains("shop-orders-page-active"))tab="orders";
     if (!currentTab) {
-      if (panel === "categories") tab = "menu";
+      if (panel === "orders" || panel === "profile-order-details" && document.body.classList.contains("shop-orders-page-active")) tab = "orders";
+      else if (panel === "categories") tab = "menu";
       else if (panel === "benefits" || panel === "benefit-gift-claim" || panel === "benefit-apply") tab = "benefits";
       else if (panel === "cart" || panel === "checkout") tab = "cart";
       else if (panel === "profile") tab = "profile";
@@ -10385,8 +10436,18 @@
     return levels.find((level) => level && String(level.title || "").trim()) || null;
   }
 
+  function buildGuestBonusBalanceHtml() {
+    const account=state.homeBonusConfig?.account;
+    if(!account?.is_guest)return "";
+    return `<div class="shop-bonus-level-balance-main shop-guest-bonus-balance"><div class="shop-bonus-level-balance-label">${escapeHtml(state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы")}</div><div class="shop-bonus-level-balance-value">${formatShopBonusMoney(account.balance)}</div><div class="shop-cart-bonus-join-text">${escapeHtml(account.notice)}</div></div>`;
+  }
+
   function buildHomeGuestBonusCardHtml(level) {
     if (!level) return "";
+    if(state.homeBonusConfig?.account?.is_guest && Number(state.homeBonusConfig.account.level_id)>0){
+      return buildBonusLevelPreviewCardHtml(level,{homeCard:true,showQr:false,guestCard:true})
+        .replace('class="bonus-level-preview-card"','class="bonus-level-preview-card shop-home-bonus-card__preview"');
+    }
     const mainColor = "#f3f4f6";
     const baseColor = "#d1d5db";
     const contentColor = "#64748b";
@@ -10398,7 +10459,7 @@
     const titleStyle = level?.title_background_enabled === false
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
       : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
-    const actionText = getCustomerToken()
+    const actionText = getCustomerToken().startsWith("g_") ? "Как списать?" : getCustomerToken()
       ? "\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u0442\u044c\u0441\u044f"
       : "\u041d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e \u0432\u043e\u0439\u0442\u0438";
 
@@ -10418,6 +10479,7 @@
           <div class="bonus-level-preview-title shop-home-bonus-card__title" style="${titleStyle}">
             ${logoHtml}<span class="shop-home-bonus-card__title-text"><span class="shop-home-bonus-card__program-name">${escapeHtml(programName)}</span><span class="shop-home-bonus-card__level-name">${escapeHtml(levelTitle)}</span></span>
           </div>
+          ${buildGuestBonusBalanceHtml()}
           <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
@@ -10496,7 +10558,7 @@
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
       : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
     const qrStyle = level?.qr_enabled === false ? "display:none;" : "";
-    const actionText = getCustomerToken()
+    const actionText = getCustomerToken().startsWith("g_") ? "Как списать?" : getCustomerToken()
       ? "\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u0442\u044c\u0441\u044f"
       : "\u041d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e \u0432\u043e\u0439\u0442\u0438";
 
@@ -10510,12 +10572,13 @@
     const levelTitle = level?.title || "Уровень";
     const logoHtml = programLogo ? `<img class="shop-home-bonus-card__program-logo" src="${escapeHtml(programLogo)}" style="width:2.6em;height:2.6em;border-radius:2px;margin-right:0;object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
 
-    const bonusCardHtml = level ? `
+    const bonusCardHtml = level ? (state.homeBonusConfig?.account?.is_guest && Number(state.homeBonusConfig.account.level_id)>0 ? buildHomeGuestBonusCardHtml(level) : `
       <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
           <div class="bonus-level-preview-title shop-home-bonus-card__title" style="${titleStyle}">
             ${logoHtml}<span class="shop-home-bonus-card__title-text"><span class="shop-home-bonus-card__program-name">${escapeHtml(programName)}</span><span class="shop-home-bonus-card__level-name">${escapeHtml(levelTitle)}</span></span>
           </div>
+          ${buildGuestBonusBalanceHtml()}
           <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
@@ -10532,7 +10595,7 @@
           </div>
         </div>
       </div>
-    ` : "";
+    `) : "";
     elHomeBonusCard.innerHTML = `
       <div class="shop-home-cards-scroll no-scrollbar">
         <div class="shop-home-cards-track">
@@ -14159,6 +14222,8 @@ async function initAddresses() {
     // Core renders cart immediately; late bundle wires complex flows (checkout, clear with confirm, etc.).
     bindClickLazy(elCheckoutBtn);
     bindClickLazy(elCartClearBtn);
+    bindClickLazy(elHeaderProfileBtn);
+    bindClickLazy(elNavProfile);
 
     [elCompanyChatOpenBtn, document.getElementById("shopHeaderCompanyChatOpenBtn")].filter(Boolean).forEach((chatButton) => {
       chatButton.addEventListener(
@@ -20738,6 +20803,7 @@ async function initCore() {
     updateCartBadge();
     try { void preloadCartEnhancers(); } catch {}
     bindLateActionDelegates();
+    if(window.AuthCard?.hasPendingRequest('customer'))void ensureShopLateLoaded().catch(error=>console.error('SHOP_AUTH_RESUME_LOAD_FAILED',error.name));
     try { window.scrollTo(0, 0); } catch {}
 
     bindCategoryScrollSpy();

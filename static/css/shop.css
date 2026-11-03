@@ -16036,9 +16036,12 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
 }
 
 @media (max-width: 768px){
-  body.shop-orders-page-active .shop-mobile-bottom-container{
+  body.shop-orders-details-active .shop-mobile-bottom-container{
     display: none !important;
   }
+  body.shop-orders-page-active:not(.shop-orders-details-active) .shop-orders-page{z-index:139;}
+  body.shop-orders-page-active:not(.shop-orders-details-active) .shop-mobile-bottom-container{z-index:141;}
+  body.shop-orders-page-active:not(.shop-orders-details-active) .shop-orders-page .shop-orders-page-content{padding-bottom:calc(16px + var(--shop-bottomnav-h,68px) + 24px + env(safe-area-inset-bottom));}
 
   body.shop-orders-details-active .shop-orders-page > .shop-mobile-order-details-actions{
     --shop-mobile-action-h: 44px;
@@ -17835,6 +17838,24 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   min-width: 0;
   display: grid;
   gap: 4px;
+}
+
+.shop-bonus-accrual-order{
+  width:100%;
+  border:0;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
+}
+
+.bonus-level-preview-card:has(.shop-guest-bonus-balance){
+  aspect-ratio: auto;
+}
+
+.bonus-level-preview-main > .shop-guest-bonus-balance{
+  margin-top: 10px;
 }
 
 .shop-bonus-level-balance-label{
@@ -21279,180 +21300,6 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
    Auth sheet placeholder
    ========================================================================== */
 
-.shop-auth{
-  display: grid;
-  gap: 16px;
-  max-width: 320px;
-  margin: 40px auto 0;
-  text-align: center;
-}
-@media (max-width: 768px){
-  .app-modal-body .shop-auth{
-    margin-top: 196px;
-  }
-}
-
-.shop-auth-title{
-  font-weight: 700;
-  font-size: 20px;
-  color: var(--color-text);
-}
-
-.shop-auth-text{
-  font-size: 14px;
-}
-
-.shop-auth-form{
-  display: grid;
-  gap: 16px;
-}
-.shop-auth-error{
-  color: var(--color-danger, var(--shop-danger));
-  font-size: 12px;
-}
-.shop-auth .field-label{
-  display: none;
-}
-.shop-auth .control{
-  border-radius: 999px;
-  padding-left: 24px;
-  padding-right: 24px;
-  height: 52px;
-  font-size: 22px;
-  font-weight: 700;
-  text-align: left;
-  letter-spacing: 3px;
-  width: 100%;
-  box-sizing: border-box;
-}
-.shop-auth .btn{
-  border-radius: 999px;
-  height: 52px;
-  font-size: 18px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.shop-auth .control.is-invalid{
-  border-color: var(--color-danger, var(--shop-danger));
-  box-shadow: 0 0 0 2px var(--primary-14);
-}
-.shop-auth-bday-input-wrap{
-  position: relative;
-}
-.shop-auth-bday-input-wrap .control{
-  padding-right: 40px;
-}
-.shop-auth-bday-info-btn{
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  cursor: pointer;
-  z-index: 2;
-}
-.shop-auth-bday-info-btn i{
-  font-size: 11px;
-}
-.shop-auth-bday-info-btn:hover{
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-.shop-auth-bday-info-btn:focus-visible{
-  outline: 2px solid var(--color-primary);
-  outline-offset: 1px;
-}
-.shop-auth-bday-info-hint{
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  max-width: min(280px, calc(100vw - 48px));
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 1.3;
-  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
-  z-index: 5;
-  text-align: left;
-}
-.shop-auth-code-wrap{
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  gap:12px;
-}
-.shop-auth-code-wrap.hidden{
-  display:none;
-}
-.shop-auth-code-cell{
-  width:56px;
-  height:56px;
-  border-radius:16px;
-  border:1px solid var(--color-border);
-  background:var(--color-surface);
-  text-align:center;
-  font-size:26px;
-  font-weight:700;
-  line-height:1;
-  padding:0;
-  box-sizing:border-box;
-}
-.shop-auth-code-cell:focus{
-  outline:none;
-  border-color:var(--color-primary);
-  box-shadow:0 0 0 2px var(--primary-14);
-}
-.shop-auth-social-row{
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  gap:14px;
-  margin-top:4px;
-}
-.shop-auth-social-btn{
-  width:56px;
-  height:56px;
-  border-radius:16px;
-  border:1px solid var(--color-border);
-  background:var(--color-surface);
-  overflow:hidden;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:0;
-  cursor:pointer;
-  transition:transform var(--dur-fast, 220ms) var(--ease-smooth, cubic-bezier(.2,.8,.2,1)), box-shadow var(--dur-fast, 220ms) var(--ease-smooth, cubic-bezier(.2,.8,.2,1));
-}
-.shop-auth-social-btn:hover:not(:disabled){
-  transform:translateY(-1px);
-  box-shadow:0 8px 18px rgba(0,0,0,0.10);
-}
-.shop-auth-social-btn:disabled{
-  opacity:.7;
-  cursor:not-allowed;
-}
-.shop-auth-social-btn.is-loading{
-  opacity:.5;
-}
-.shop-auth-social-btn img{
-  width:100%;
-  height:100%;
-  object-fit:cover;
-  pointer-events:none;
-}
 
 body.page-kso .shop-auth--kso{
   max-width:420px;
@@ -24195,10 +24042,185 @@ body.page-kso .shop-checkout-customer-phone{
 .shop-profile-settings-title{
   font-weight: 700;
 }
+.shop-profile-settings-menu,.shop-profile-settings-screen{display:grid;gap:12px;min-width:0;}
+.shop-profile-settings-nav{width:100%;min-height:52px;padding:12px 14px;border:1px solid var(--color-border);border-radius:var(--radius-md,12px);background:var(--color-surface);color:var(--color-text);font:inherit;text-align:left;cursor:pointer;}
+.shop-profile-settings-nav > span{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere;}
+.shop-profile-settings-nav > i:first-child{width:20px;text-align:center;color:var(--color-text-muted);flex-shrink:0;}
+.shop-profile-settings-nav > i:last-child{font-size:12px;color:var(--color-text-muted);flex-shrink:0;}
+.shop-profile-settings-nav:hover{background:var(--color-surface-2);}
+.shop-profile-settings-nav:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px;}
+.shop-profile-settings-screen-header{display:flex;align-items:center;gap:12px;}
+.shop-profile-settings-screen-header h3{margin:0;font-size:16px;font-weight:700;}
+.shop-profile-settings-screen:not(.hidden){animation:shop-profile-settings-enter 160ms ease-out;}
+@keyframes shop-profile-settings-enter{from{opacity:0;transform:translateX(4px)}to{opacity:1;transform:translateX(0)}}
+@media(prefers-reduced-motion:reduce){.shop-profile-settings-screen:not(.hidden){animation:none;}}
+.shop-profile-settings-redesign{padding:0 0 24px;gap:20px;min-width:0;}
+.app-modal#appModal:has(> .app-modal-body.shop-profile-sheet-body):not(:has(.shop-profile-settings-redesign)) > .app-modal-header{padding:16px 16px 12px;min-height:72px;box-sizing:border-box;}
+.app-modal#appModal:has(.shop-profile-settings-redesign){background:var(--color-surface);}
+#shopProfileSettingsPage:has(.shop-profile-settings-redesign) > .shop-profile-settings-page-header{display:none;}
+.app-modal:has(.shop-profile-settings-redesign) > .app-modal-header,
+.app-modal:has(.shop-profile-settings-redesign) > .app-modal-footer{display:none;}
+.app-modal-body:has(.shop-profile-settings-redesign){padding:16px;background:var(--color-surface);overflow-y:auto;overscroll-behavior:contain;}
+#appModal .shop-profile-settings-page-in-modal:has(.shop-profile-settings-redesign) .shop-profile-settings-page-content{padding:0;}
+#shopProfileSettingsPage:not(.shop-profile-settings-page-in-modal):has(.shop-profile-settings-redesign) .shop-profile-settings-page-content{padding:16px 16px 32px;box-sizing:border-box;}
+.shop-profile-settings-redesign .shop-profile-settings-toolbar{display:flex;align-items:center;gap:12px;min-height:44px;margin-bottom:12px;}
+@media(min-width:769px){
+  #appModal:has(.shop-profile-settings-redesign),
+  #appModal .app-modal-body:has(.shop-profile-settings-redesign){background:var(--color-surface-2);}
+  #appModal .shop-profile-settings-redesign > .shop-profile-settings-toolbar{margin:-16px -16px 12px;padding:16px;min-height:72px;box-sizing:border-box;background:var(--color-surface);}
+  #appModal .shop-profile-settings-redesign:has(.is-photo-expanded) > .shop-profile-settings-toolbar{background:transparent;}
+}
+.shop-profile-settings-toolbar h2{margin:0;flex:1;text-align:left;font-family:inherit;font-size:20px;font-weight:700;line-height:1.2;}
+#appModal:has(> .app-modal-body.shop-profile-sheet-body) > .app-modal-header .app-modal-title,
+.shop-profile-settings-redesign .shop-profile-settings-screen-header h3,
+.shop-profile-page-header h1,
+.shop-profile-settings-page-header h1{font-family:inherit;font-size:20px;font-weight:700;line-height:1.2;}
+.shop-profile-settings-edit{border:0;background:var(--color-surface-2);color:var(--color-text);font:inherit;font-weight:600;cursor:pointer;}
+.shop-profile-settings-redesign .shop-profile-top{display:flex;flex-direction:column;align-items:center;gap:8px;margin:0;padding:12px 0 24px;background:transparent;border:0;}
+.shop-profile-settings-redesign .shop-profile-photo-wrap{align-items:center;justify-content:center;display:flex;flex-direction:column;gap:12px;}
+.shop-profile-settings-redesign .shop-profile-photo{width:168px;height:168px;border-radius:50%;overflow:hidden;flex-shrink:0;cursor:pointer;}
+.shop-profile-settings-redesign .shop-profile-photo:focus-visible{outline:2px solid var(--color-primary);outline-offset:4px;}
+.shop-profile-settings-redesign .shop-profile-top .shop-profile-photo-actions{display:none!important;}
+.shop-profile-settings-redesign .shop-profile-top.is-photo-expanded{position:relative;height:var(--profile-cover-height);min-height:0;box-sizing:border-box;justify-content:flex-end;align-items:flex-start;padding:24px 20px;border-radius:22px;overflow:visible;isolation:isolate;}
+.shop-profile-settings-redesign .is-photo-expanded .shop-profile-photo-wrap{position:absolute;inset:calc(-1 * var(--profile-cover-header,0px) - 8px) -8px 0;z-index:-2;border-radius:var(--profile-cover-radius,22px);overflow:hidden;background:var(--color-surface);}
+.shop-profile-settings-redesign .is-photo-expanded .shop-profile-photo{width:100%;height:100%;border-radius:0;border:0;margin:0;padding:0;background:var(--color-surface);}
+.shop-profile-settings-redesign .is-photo-expanded .shop-profile-photo-img{object-fit:cover;object-position:center;max-width:none;max-height:none;border-radius:0;margin:0;padding:0;}
+.shop-profile-settings-redesign:has(.is-photo-expanded) .shop-profile-settings-toolbar{position:relative;z-index:2;background:transparent;color:#fff;}
+.shop-profile-settings-redesign:has(.is-photo-expanded) .shop-profile-settings-toolbar .btn,
+.shop-profile-settings-redesign:has(.is-photo-expanded) .shop-profile-settings-edit{color:#fff;background:rgba(0,0,0,.25);border-radius:999px;}
+.shop-profile-settings-redesign:has(.is-photo-expanded) .shop-profile-settings-edit{color:var(--color-text);background:var(--color-surface-2);}
+.shop-profile-settings-redesign .shop-profile-settings-toolbar > .btn-icon{display:inline-flex;align-items:center;justify-content:center;align-self:center;flex:0 0 40px;width:40px;height:40px;min-height:40px;padding:0;border-radius:50%;box-sizing:border-box;}
+.shop-profile-settings-redesign .shop-profile-settings-toolbar > .shop-profile-settings-edit{flex:0 0 auto;width:auto;min-width:56px;padding:0 12px;border-radius:999px;text-align:center;line-height:1;gap:0;}
+.shop-profile-settings-redesign .is-photo-expanded .shop-profile-settings-hero-name{text-align:left;}
+.shop-profile-settings-redesign .is-photo-expanded .shop-profile-settings-hero-phone{text-align:left;}
+.shop-profile-settings-redesign .shop-profile-settings-hero-name,
+.shop-profile-settings-redesign .shop-profile-settings-hero-phone{position:relative;}
+.shop-profile-settings-redesign [data-cover-text]::after{content:attr(data-cover-text);position:absolute;inset:0;color:#fff;pointer-events:none;clip-path:var(--cover-text-clip,inset(100%));}
+.shop-profile-settings-redesign .shop-profile-photo-wrap{transform-origin:top left;}
+.shop-profile-settings-redesign .shop-profile-photo-img{width:100%;height:100%;object-fit:cover;}
+.shop-profile-settings-redesign .shop-profile-photo-placeholder{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700;color:var(--color-primary);background:var(--primary-14);}
+.shop-profile-settings-hero-name{font-size:24px;font-weight:700;line-height:1.2;text-align:center;max-width:100%;overflow-wrap:anywhere;}
+.shop-profile-settings-hero-phone{font-size:15px;color:var(--color-text-muted);text-align:center;}
+.shop-profile-settings-redesign .shop-profile-phone-summary{display:flex;flex-direction:column;align-items:center;gap:6px;margin:0;padding:0;border:0;background:transparent;min-height:0;max-width:100%;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-phone-summary{display:none;}
+.shop-profile-settings-redesign .shop-profile-phone-summary.has-status-space{min-height:32px;}
+.shop-profile-phone-verification.is-checking-phone .muted{display:flex;align-items:center;gap:6px;font-size:13px;}
+.shop-profile-phone-verification.is-checking-phone .muted::before{content:"";width:12px;height:12px;flex:0 0 12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:shop-profile-link-opening .8s linear infinite;}
+@media(prefers-reduced-motion:reduce){.shop-profile-phone-verification.is-checking-phone .muted::before{animation:none;}}
+.shop-profile-settings-redesign .shop-profile-phone-summary>div{display:flex!important;align-items:center;justify-content:center!important;gap:6px!important;width:auto;}
+.shop-profile-settings-redesign .shop-profile-phone-summary:has(.shop-profile-phone-verified-mark:not(.hidden)) .muted{color:var(--shop-success,#16a34a);font-size:13px;}
+.shop-profile-settings-redesign .shop-profile-phone-summary .shop-profile-phone-verified-mark{color:var(--shop-success,#16a34a);}
+.shop-profile-settings-redesign .shop-profile-settings{gap:18px;}
+.shop-profile.shop-profile-settings-redesign .shop-profile-settings-menu{gap:12px;padding:0;overflow:visible;border:0;border-radius:0;background:transparent;}
+.shop-profile.shop-profile-settings-redesign .shop-profile-settings-nav{position:relative;min-height:58px;height:auto;width:100%;margin:0;border:0;border-radius:22px;padding:15px 18px;gap:14px;font-size:16px;background:var(--color-surface);box-shadow:none;}
+.shop-profile.shop-profile-settings-redesign .shop-profile-settings-nav + .shop-profile-settings-nav{border-top:0;}
+.shop-profile.shop-profile-settings-redesign .shop-profile-settings-nav + .shop-profile-settings-nav::before{display:none;}
+.shop-profile.shop-profile-settings-redesign .shop-profile-settings-nav:hover{background:var(--color-surface);}
+.shop-profile.shop-profile-settings-redesign .shop-profile-settings-nav{transition:transform 320ms cubic-bezier(.2,.8,.2,1);}
+@media(hover:hover){.shop-profile.shop-profile-settings-redesign:not([data-settings-view="edit"]) .shop-profile-settings-nav:hover{transform:translateY(-2px);box-shadow:none;}}
+@media(prefers-reduced-motion:reduce){.shop-profile.shop-profile-settings-redesign .shop-profile-settings-nav{transition:none;}}
+.shop-profile-settings-redesign .shop-profile-settings-nav > i:first-child{color:var(--color-primary);}
+.shop-profile-settings-redesign .shop-profile-settings-logout{display:block;width:100%;min-height:48px;padding:10px 16px;border:0;background:transparent;color:var(--color-danger,#e53935);font:inherit;font-size:20px;font-weight:400;text-align:center;cursor:pointer;}
+.shop-profile-settings-redesign .shop-profile-settings-logout:disabled{opacity:.55;cursor:wait;}
+.shop-profile-settings-row .btn.is-opening::before,
+body.page-shop .app-modal-confirmation-choices button.is-opening::before{content:"";flex:0 0 14px;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:shop-profile-link-opening .8s linear infinite;}
+body.page-shop .app-modal-confirmation-choices button.is-opening{display:flex;align-items:center;justify-content:center;gap:8px;opacity:1;}
+@keyframes shop-profile-link-opening{to{transform:rotate(360deg)}}
+.shop-profile-settings-redesign .shop-profile-settings-screen{padding:16px;background:var(--color-surface);border-radius:22px;gap:0;}
+.shop-profile-settings-redesign .shop-profile-settings-screen > .shop-profile-settings-row{padding:14px 0;min-height:54px;box-sizing:border-box;}
+.shop-profile-settings-redesign .shop-profile-settings-screen > .shop-profile-settings-row + .shop-profile-settings-row{border-top:1px solid var(--color-border);}
+.shop-profile-settings-redesign .shop-profile-settings-title{font-size:15px;font-weight:600;}
+.shop-profile-settings-redesign .shop-profile-messenger-info{grid-template-columns:32px minmax(0,1fr);column-gap:10px!important;align-items:center;min-width:0;}
+.shop-profile-settings-redesign .shop-profile-messenger-icon{grid-row:1 / span 2;width:32px;height:32px;object-fit:contain;}
+.shop-profile-settings-redesign .shop-profile-settings-screen-header{min-height:44px;}
+.shop-profile-settings-redesign .shop-profile-settings-editor{gap:24px;}
+.shop-profile-settings-redesign .shop-profile-photo-camera{display:none;}
+.shop-profile-settings-redesign .shop-profile-photo{position:relative;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-photo-camera{display:flex;position:absolute;inset:0;align-items:center;justify-content:center;background:rgba(0,0,0,.16);color:#fff;pointer-events:none;}
+.shop-profile-settings-redesign .shop-profile-photo-camera svg{width:54px;height:54px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.25));}
+.shop-profile-settings-redesign .shop-profile-photo-camera svg{transition:transform 320ms cubic-bezier(.2,.8,.2,1);}
+@media(hover:hover){.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-photo:hover .shop-profile-photo-camera svg{transform:scale(1.15);}}
+@media(prefers-reduced-motion:reduce){.shop-profile-settings-redesign .shop-profile-photo-camera svg{transition:none;}}
+.shop-profile-settings-redesign .shop-profile-settings-hero-name .shop-profile-name-value{position:relative;justify-content:center;min-height:48px;flex-wrap:nowrap;}
+.shop-profile-settings-redesign .shop-profile-settings-hero-name .shop-profile-name-text{font:inherit;}
+.shop-profile-settings-redesign .shop-profile-name-text{position:relative;display:inline-block;}
+.shop-profile-settings-redesign:not([data-settings-view="edit"]) .shop-profile-name-edit{display:none;}
+.shop-profile-settings-redesign .is-photo-expanded .shop-profile-name-value{justify-content:flex-start;}
+.shop-profile-settings-redesign .shop-profile-settings-hero-name .shop-profile-name-actions{position:absolute;top:100%;left:0;z-index:3;padding:8px;background:var(--color-surface);border-radius:18px;box-shadow:var(--shadow-sm);}
+.shop-profile-settings-redesign .shop-profile-name-input{border:1px solid var(--color-border);border-radius:18px;min-height:48px;padding:12px 16px;font-size:16px;background:var(--color-surface);}
+.shop-profile-settings-redesign .shop-profile-settings-hero-name .shop-profile-name-input{width:100%;text-align:center;}
+.shop-profile-settings-redesign .shop-profile-settings-editor .shop-profile-line{min-height:76px;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value:has(input:placeholder-shown) > .shop-profile-name-input.hidden{display:block!important;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value:has(input:placeholder-shown) > :is(.shop-profile-name-text,.shop-profile-birthday-text,.shop-profile-name-edit){display:none;}
+.shop-profile-settings-redesign .shop-profile-settings-hero-name{width:100%;}
+.shop-profile-settings-redesign .shop-profile-settings-editor .shop-profile-name-value{min-height:48px;}
+.shop-profile-settings-redesign .shop-profile-settings-editor{order:0;}
+.shop-profile-settings-redesign .shop-profile-settings-editor:not(.hidden){animation:none;}
+.shop-profile-settings-redesign .shop-profile-settings-editor .shop-profile-photo-btn:not(.shop-profile-photo-btn--ghost){display:none;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-screen-header h3{flex:1;text-align:center;padding-right:44px;}
+.shop-profile-settings-redesign .shop-profile-settings-editor{background:transparent;padding:0;width:100%;box-sizing:border-box;margin-top:16px;}
+.shop-profile-settings-redesign .shop-profile-settings-editor .shop-profile-info{display:grid;gap:20px;min-width:0;width:100%;padding:0;background:transparent;box-sizing:border-box;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-editor{margin-top:8px;}
+.shop-profile-settings-redesign .shop-profile-line-value{overflow-wrap:anywhere;min-width:0;}
+.shop-profile-settings-redesign .shop-profile-settings-editor .control{max-width:100%;box-sizing:border-box;scroll-margin-block:20px;}
+.shop-profile-settings-redesign .shop-profile-settings-editor .shop-profile-photo-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;}
+.shop-profile-settings-redesign .shop-profile-field-label{display:none;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value{position:relative;display:flex;flex-wrap:wrap;gap:12px;width:100%;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value > .shop-profile-name-input.hidden{display:block!important;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value > :is(.shop-profile-name-text,.shop-profile-birthday-text,.shop-profile-name-edit){display:none;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value > .shop-profile-name-input{width:100%;height:56px;min-height:56px;padding:14px 16px;text-align:left;border-radius:18px;font-size:16px;font-weight:400;box-shadow:none;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-field-label{display:block;position:absolute;top:-7px;left:16px;z-index:1;padding:0 4px;background:var(--color-surface);color:var(--color-text-muted);font-size:12px;font-weight:400;line-height:14px;pointer-events:none;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value:focus-within .shop-profile-field-label{color:var(--color-primary);}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-input:focus{outline:none;border-color:var(--color-primary);}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-input:hover,
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone:hover{border-color:var(--color-primary);}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-name .shop-profile-name-actions{position:static;box-shadow:none;padding:0;width:100%;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-editor .shop-profile-line{position:relative;min-height:56px;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-editor .shop-profile-line-title{position:absolute;top:-7px;left:16px;z-index:1;padding:0 4px;background:var(--color-surface);font-size:12px;line-height:14px;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone{box-sizing:border-box;width:100%;min-height:56px;margin-top:16px;padding:16px;border:1px solid var(--color-border);border-radius:18px;text-align:left;font-size:16px;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone::before{content:"Телефон";position:absolute;top:-7px;left:16px;padding:0 4px;background:var(--color-surface);font-size:12px;line-height:14px;}
+.shop-profile-settings-redesign .shop-profile-birthday-field > .shop-profile-birthday-add{display:none;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone{margin-top:8px;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-birthday-field.is-birthday-empty:not(.is-birthday-editing) > :is(.shop-profile-line-title,.shop-profile-line-value){display:none;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-birthday-field.is-birthday-empty:not(.is-birthday-editing) > .shop-profile-birthday-add{display:flex!important;align-items:center;justify-content:center;gap:12px;width:100%;height:auto;min-height:68px;padding:16px 20px;border:0;border-radius:24px;background:var(--color-surface);color:var(--color-text);font-size:16px;font-weight:400;text-align:left;box-shadow:none;}
+.shop-profile-settings-redesign .shop-profile-birthday-add > i{display:flex;align-items:center;justify-content:center;flex:0 0 40px;width:40px;height:40px;line-height:1;border-radius:11px;background:var(--color-primary);color:#fff;font-size:23px;}
+.shop-profile-settings-redesign .shop-profile-birthday-add > span{min-width:0;white-space:normal;line-height:1.35;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-actions{display:none!important;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-input::placeholder{color:transparent;opacity:0;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-input:focus{caret-color:var(--color-text);}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-field-label,
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-editor .shop-profile-line-title{transform-origin:left center;transform:translate(0,0) scale(1);transition:transform 320ms cubic-bezier(.2,.8,.2,1),color 320ms cubic-bezier(.2,.8,.2,1),background-color 320ms cubic-bezier(.2,.8,.2,1);pointer-events:none;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value:has(input:placeholder-shown):not(:focus-within) .shop-profile-field-label,
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-line:has(input:placeholder-shown):not(:focus-within) > .shop-profile-line-title{transform:translate(-4px,28px) scale(1.333333);background-color:transparent;color:var(--color-text-muted);}
+@media(prefers-reduced-motion:reduce){.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-field-label,.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-editor .shop-profile-line-title{transition:none;}}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-input[aria-invalid="true"]{border-color:var(--color-danger,var(--shop-danger));}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-field-label,
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-editor .shop-profile-line-title,
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone::before{background:transparent;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value > .shop-profile-name-input,
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone{background:transparent;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone{border-style:none;padding:17px;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone::after{content:"";position:absolute;inset:0;border:1px solid var(--color-border);border-radius:inherit;pointer-events:none;clip-path:polygon(0 0,12px 0,12px 8px,76px 8px,76px 0,100% 0,100% 100%,0 100%);}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone:hover::after{border-color:var(--color-primary);}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-input:not(:placeholder-shown),
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-input:focus{clip-path:polygon(0 0,12px 0,12px 8px,calc(12px + var(--profile-label-width,100px)) 8px,calc(12px + var(--profile-label-width,100px)) 0,100% 0,100% 100%,0 100%);}
+.shop-profile.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-name-value:has(.shop-profile-name-input:hover) .shop-profile-field-label,
+.shop-profile.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-line:has(.shop-profile-name-input:hover) > .shop-profile-line-title,
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-settings-hero-phone:hover::before{color:var(--color-primary);}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-photo-wrap{position:relative;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-top .shop-profile-photo-actions:not(.hidden){display:flex!important;position:absolute;right:0;bottom:0;width:auto;margin:0;padding:0;z-index:2;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-photo-actions .shop-profile-photo-btn:not(.shop-profile-photo-btn--ghost){display:none!important;}
+.shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-photo-actions .shop-profile-photo-btn--ghost{width:36px!important;min-width:36px!important;max-width:36px;height:36px;min-height:36px;flex:0 0 36px!important;padding:0;border-radius:50%;background:var(--color-surface);border:1px solid var(--color-border);box-shadow:var(--shadow-sm);}
+.shop-profile-phone-verification .control{font-size:16px;min-height:40px}
+.shop-profile-phone-verified-mark{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;color:var(--color-success,#16a34a);font-size:22px;}
+.shop-profile-phone-verification .control.is-invalid{border-color:var(--color-danger,var(--shop-danger))}
+.shop-profile-phone-verification>div{min-width:0}
+@media(max-width:600px){.shop-profile-phone-verification{flex-wrap:wrap}.shop-profile-phone-verification>div:last-child{width:100%;justify-content:flex-start!important}}
 
 .shop-profile-settings-row .switch-text{
   display: none;
 }
+.shop-profile-settings-redesign .shop-profile-settings-row .switch-ui::after{top:0;bottom:0;margin-block:auto;border-radius:50%;}
 
 .shop-profile-push-status-row{
   justify-content: flex-start;
@@ -26645,7 +26667,9 @@ body.page-shop .app-modal-body::after{
 
 .app-modal-body.shop-profile-sheet-body{
   padding: 12px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -30691,13 +30715,13 @@ body.page-kso .shop-products-panel{
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
-  min-height: 84px;
+  min-height: 58px;
   margin: 0;
-  padding: 12px 14px;
-  border: 1px solid rgba(229, 231, 235, .95);
-  border-radius: 16px;
+  padding: 15px 18px;
+  border: 0;
+  border-radius: 22px;
   background: #ffffff;
   color: #111827;
   text-align: left;
@@ -30712,15 +30736,15 @@ body.page-kso .shop-products-panel{
 .shop-company-messages-branch__icon{
   position: relative;
   display: inline-flex;
-  flex: 0 0 40px;
+  flex: 0 0 20px;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: rgba(59, 130, 246, .08);
+  width: 20px;
+  height: 20px;
+  border-radius: 0;
+  background: transparent;
   color: #f97316;
-  font-size: 22px;
+  font-size: 16px;
 }
 
 .shop-company-messages-branch__dot{
@@ -30740,14 +30764,14 @@ body.page-kso .shop-products-panel{
   min-width: 0;
   color: #111827;
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.25;
 }
 
 .shop-company-messages-branch__chevron{
   flex: 0 0 auto;
   color: #9ca3af;
-  font-size: 18px;
+  font-size: 12px;
 }
 
 .shop-important-messages-view,
@@ -31429,6 +31453,12 @@ body.page-kso .shop-products-panel{
 
   .shop-company-chat-overlay.is-messages-home .shop-company-chat-modal__header{
     display:flex;
+    align-items:center;
+    gap:12px;
+    min-height:72px;
+    box-sizing:border-box;
+    padding:16px;
+    box-shadow:none;
   }
 
   .shop-company-chat-overlay.is-messages-home .shop-company-chat-modal__title{
@@ -31439,6 +31469,11 @@ body.page-kso .shop-products-panel{
     clip:auto;
     clip-path:none;
     white-space:nowrap;
+    text-align:left;
+    font-family:inherit;
+    font-size:20px;
+    font-weight:700;
+    line-height:1.2;
   }
 
   .shop-company-chat-overlay.is-messages-home .shop-company-messages-home__title{
@@ -31473,11 +31508,23 @@ body.page-kso .shop-products-panel{
   }
 
   .shop-company-chat-overlay.is-messages-home .shop-company-chat-modal__header{
-    display: none;
+    display:flex;
+    align-items:center;
+    gap:12px;
+    min-height:64px;
+    box-sizing:border-box;
+    padding:0 16px;
+    background:var(--color-surface);
+    border:0;
+    border-radius:0;
+    box-shadow:none;
   }
 
+  .shop-company-chat-overlay.is-messages-home .shop-company-chat-modal__title{position:static;flex:1;width:auto;height:auto;margin:0;overflow:visible;clip:auto;clip-path:none;white-space:normal;text-align:left;font-family:inherit;font-size:20px;font-weight:700;line-height:1.2;}
+  .shop-company-chat-overlay.is-messages-home .shop-company-messages-home__title{display:none;}
+
   .shop-company-chat-overlay.is-messages-home .shop-company-messages-home{
-    padding-top: calc(20px + env(safe-area-inset-top));
+    padding-top:16px;
   }
 
   body:has(.shop-company-chat-overlay.is-messages-home.is-open) .shop-mobile-bottom-container::before{
@@ -31696,4 +31743,50 @@ body.shop-payment-choice-open #appModalBackdrop { z-index: 10055; }
     padding-left: 12px;
     padding-right: 12px;
   }
+}
+
+/* Profile subpages share the settings header and existing back navigation. */
+#appModal:has(> .app-modal-body.shop-profile-return-sheet) > .app-modal-header{display:flex;align-items:center;justify-content:flex-start;gap:12px;min-height:72px;padding:16px;box-sizing:border-box;background:var(--color-surface);box-shadow:none;border-bottom:0;}
+#appModal:has(> .app-modal-body.shop-profile-return-sheet) > .app-modal-header .app-modal-title{position:static;flex:1;min-width:0;margin:0;padding:0;transform:none;text-align:left;font-family:inherit;font-size:20px;font-weight:700;line-height:1.2;}
+#appModal:has(> .app-modal-body.shop-profile-return-sheet) > .app-modal-header #shopProfileModalBackBtn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;width:40px;height:40px;min-height:40px;margin:0;padding:0;border:0;border-radius:50%;background:var(--color-surface-2);color:var(--color-text-muted);}
+#appModal:has(> .app-modal-body.shop-profile-return-sheet) .shop-address-list-view--with-inline-toggle > .shop-delivery-toggle-wrap{display:flex;justify-content:center;margin:0 0 16px;}
+.shop-orders-page .shop-orders-page-header{display:flex;align-items:center;justify-content:flex-start;flex:0 0 64px;min-height:64px;gap:12px;margin:0;padding:0 16px;box-sizing:border-box;background:var(--color-surface);border:0;border-radius:0;box-shadow:none;}
+.shop-orders-page .shop-orders-page-header h1{flex:1;margin:0;text-align:left;font-family:inherit;font-size:20px;font-weight:700;line-height:1.2;}
+.shop-orders-page .shop-orders-page-header [data-orders-page-back]{display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;width:40px;height:40px;padding:0;border:0;border-radius:50%;background:var(--color-surface-2);color:var(--color-text-muted);}
+.shop-orders-page .shop-orders-page-header-spacer{display:none;}
+body.page-shop #shopProfileBtn:has(.shop-header-profile-img:not(.hidden)){background:transparent;border:0;box-shadow:none;}
+.app-modal.shop-profile-instant-return,.modal-backdrop.shop-profile-instant-return{transition:none!important;animation:none!important;}
+body.page-shop #appModal.team-unsaved-modal{top:50%;left:50%;right:auto;bottom:auto;display:flex;flex-direction:column;width:340px;min-height:min(300px,calc(100dvh - 32px));height:auto;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);transform:translate(-50%,-50%);border:0;border-radius:36px;background:var(--color-surface);overflow:hidden;box-shadow:0 8px 28px rgba(0,0,0,.18);}
+body.page-shop #appModal.team-unsaved-modal .app-modal-header{flex:0 0 auto;min-height:0;padding:24px 24px 8px;border:0;background:transparent;box-shadow:none;}
+body.page-shop #appModal.team-unsaved-modal .app-modal-title{margin:0;text-align:left;font:inherit;font-size:20px;font-weight:700;line-height:1.3;}
+body.page-shop #appModal.team-unsaved-modal .app-modal-body{flex:1 1 auto;min-height:0;padding:8px 24px 20px;overflow-x:hidden;overflow-y:auto;}
+body.page-shop #appModal.team-unsaved-modal .team-unsaved-message{display:block;color:var(--color-text);font-size:16px;line-height:1.4;white-space:pre-line;overflow-wrap:anywhere;}
+body.page-shop #appModal.team-unsaved-modal .app-modal-footer{display:flex;flex:0 0 auto;justify-content:flex-end;align-items:center;gap:12px;padding:0 20px 16px;border:0;background:transparent;}
+body.page-shop #appModal.team-unsaved-modal .app-modal-footer .btn{flex:0 0 auto;width:auto;min-width:0;min-height:44px;height:auto;padding:10px 12px;border:0;border-radius:12px;background:transparent;box-shadow:none;color:var(--color-primary);font-size:14px;font-weight:600;text-transform:uppercase;}
+body.page-shop #appModal.team-unsaved-modal .app-modal-footer .btn:hover{background:var(--color-surface-2);transform:none;}
+body.page-shop > .app-modal-confirmation{position:fixed;inset:0;display:grid;place-items:center;padding:16px;box-sizing:border-box;background:rgba(0,0,0,.28);animation:shop-profile-confirmation-in var(--dur-med) var(--ease-smooth);}
+@keyframes shop-profile-confirmation-in{from{opacity:0}to{opacity:1}}
+@keyframes shop-profile-confirmation-panel-in{from{opacity:0;transform:scale(1.15)}to{opacity:1;transform:scale(1)}}
+@media(prefers-reduced-motion:reduce){body.page-shop > .app-modal-confirmation,body.page-shop > .app-modal-confirmation .app-modal-confirmation-panel{animation:none;}}
+body.page-shop .app-modal-confirmation-panel{display:flex;flex-direction:column;box-sizing:border-box;width:340px;max-width:100%;min-height:min(280px,100%);max-height:100%;padding:24px;border-radius:36px;background:var(--color-surface);color:var(--color-text);box-shadow:0 8px 28px rgba(0,0,0,.18);overflow-y:auto;animation:shop-profile-confirmation-panel-in var(--dur-med) var(--ease-smooth);}
+body.page-shop .app-modal-confirmation-panel h2{margin:0 0 16px;font-size:20px;font-weight:700;line-height:1.3;text-align:left;}
+body.page-shop .app-modal-confirmation-panel p{display:flex;align-items:center;flex:1;margin:0 0 20px;font-size:16px;line-height:1.4;white-space:pre-line;overflow-wrap:anywhere;}
+body.page-shop .app-modal-confirmation-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:auto;}
+body.page-shop .app-modal-confirmation-actions button{min-height:44px;padding:10px 12px;border:0;border-radius:12px;background:transparent;color:var(--color-text);font:inherit;font-size:16px;font-weight:600;text-transform:uppercase;cursor:pointer;}
+body.page-shop .app-modal-confirmation-actions button:last-child{color:var(--color-primary);}
+body.page-shop .app-modal-confirmation-actions button:hover{background:var(--color-surface-2);}
+body.page-shop .app-modal-confirmation-choices{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 20px;}
+body.page-shop .app-modal-confirmation-choices button[hidden]{display:none;}
+body.page-shop .app-modal-confirmation-choices.has-selected-provider button:not([hidden]){grid-column:1 / -1;justify-self:center;min-width:calc((100% - 12px) / 2);max-width:100%;}
+body.page-shop .app-modal-confirmation-choices button{min-height:48px;padding:12px;border:1px solid var(--color-border);border-radius:16px;background:var(--color-surface-2);color:var(--color-text);font:inherit;font-size:16px;font-weight:600;cursor:pointer;}
+body.page-shop .app-modal-confirmation-choices button:disabled{opacity:.5;cursor:default;}
+body.page-shop .app-modal-confirmation-choices button:has(img){display:flex;align-items:center;justify-content:center;gap:8px;}
+body.page-shop .app-modal-confirmation-choices button img{width:24px;height:24px;object-fit:contain;flex-shrink:0;}
+body.page-shop .app-modal-confirmation-choices button:not(:disabled):hover{border-color:var(--color-primary);color:var(--color-primary);}
+#appModal:has(> .app-modal-body.shop-profile-return-sheet) .shop-profile-orders-sheet-content,
+.shop-orders-page .shop-orders-page-content{padding:16px;box-sizing:border-box;}
+@media(max-width:768px){
+  body:not(.shop-orders-details-active) .shop-orders-page-header [data-orders-page-back],
+  .shop-company-chat-overlay.is-messages-home #shopCompanyChatBackBtn,
+  .shop-company-chat-overlay.is-messages-home #shopCompanyChatCloseBtn{display:none;}
 }

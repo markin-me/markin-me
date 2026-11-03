@@ -125,7 +125,7 @@ async function issuePendingKeys(db, botToken, maxUserId) {
   );
 }
 
-async function processUpdate(db, botToken, update) {
+async function processUpdate(db, botToken, update, options = {}) {
   const parsed = parseUpdate(update);
   if (!parsed.userId) return;
 
@@ -133,6 +133,22 @@ async function processUpdate(db, botToken, update) {
   const startPayload = isStartEvent ? (parsed.payload || extractStartPayload(parsed.text)) : '';
   try {
     if (startPayload) {
+      if (startPayload.startsWith('a_') && typeof options.onAuthLink === 'function') {
+        const result = await options.onAuthLink({
+          provider: 'max',
+          providerUserId: parsed.userId,
+          token: startPayload,
+        });
+        await sendSystemMaxText(
+          botToken,
+          parsed.userId,
+          result?.ok
+            ? 'MAX успешно привязан к выбранной учётной записи.'
+            : 'Ссылка недействительна или истекла. Получите новую в профиле.'
+        );
+        return;
+      }
+
       const connected = await completeStoreConnect(db, botToken, parsed.userId, startPayload);
       if (!connected) {
         await sendSystemMaxText(
@@ -148,7 +164,8 @@ async function processUpdate(db, botToken, update) {
       await issuePendingKeys(db, botToken, parsed.userId);
     }
   } catch (err) {
-    console.error('System MAX bot processUpdate:', err);
+    console.error('System MAX bot processUpdate:', err.code || err.name);
+    if (typeof options.onAuthLink === 'function') throw err;
     try {
       await sendSystemMaxText(
         botToken,
@@ -212,17 +229,21 @@ function startPolling(db, token) {
   };
 }
 
-async function handleWebhookUpdate(db, token, update) {
+async function handleWebhookUpdate(db, token, update, options = {}) {
   const botToken = String(token || '').trim();
   if (!botToken || !update) return;
-  await processUpdate(db, botToken, update);
+  await processUpdate(db, botToken, update, options);
 }
 
 async function setWebhook(token, webhookUrl, secret = '') {
   const botToken = String(token || '').trim();
   const url = String(webhookUrl || '').trim();
   const apiBase = String(process.env.MAX_API_BASE_URL || '').trim().replace(/\/+$/, '');
-  if (!botToken || !url || !apiBase) return null;
+  if (!botToken || !url || !apiBase) {
+    const error = new Error('MAX_WEBHOOK_NOT_CONFIGURED');
+    error.code = 'MAX_WEBHOOK_NOT_CONFIGURED';
+    throw error;
+  }
 
   const payload = {
     url,

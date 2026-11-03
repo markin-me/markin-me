@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><%= mode === 'register' ? 'Регистрация' : 'Вход' %></title>
     <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css') %>">
+    <link rel="stylesheet" href="<%= assetUrl('/static/css/auth-card.css') %>">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
     <style>
         body {
@@ -173,12 +174,22 @@
         .auth-role-card:hover { border-color: var(--color-primary, #f97316); }
         .auth-role-name { display: block; font-weight: 700; margin-bottom: 4px; }
         .auth-role-description, .auth-role-route { display: block; color: var(--color-text-muted, #4b5563); font-size: 13px; }
+        .auth-button:disabled { cursor: wait; opacity: .7; transform: none; }
+        .auth-secondary { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--color-border, #e5e7eb); border-radius: var(--radius-md, 12px); background: var(--color-surface, #fff); color: var(--color-text, #1f2937); font: inherit; font-weight: 500; cursor: pointer; }
+        .auth-secondary:hover { border-color: var(--color-primary, #f97316); color: var(--color-primary, #f97316); }
+        .auth-login-options { display: grid; gap: 10px; margin-top: 12px; }
+        .auth-link-button { border: 0; background: none; color: var(--color-primary, #f97316); font: inherit; cursor: pointer; padding: 5px; }
+        @media (max-width: 480px) {
+            body { align-items: flex-start; padding: 12px; }
+            .auth-container { padding: 28px 20px; margin-top: max(12px, env(safe-area-inset-top)); }
+            .auth-container h2 { margin-bottom: 24px; font-size: 22px; }
+        }
     </style>
 </head>
 <body>
 
     <div class="auth-container">
-        <h2><%= mode === 'register' ? 'Регистрация магазина' : 'Вход в систему' %></h2>
+        <h2><%= mode === 'register' ? 'Регистрация магазина' : 'Вход' %></h2>
         
         <div class="error-message" id="errorMsg"></div>
         <div class="success-message" id="successMsg"></div>
@@ -210,16 +221,14 @@
                 <button type="submit" class="auth-button" id="registerSubmitBtn">Зарегистрироваться</button>
             </form>
         <% } else { %>
-            <form id="loginForm">
-                <input type="text" name="login" placeholder="Логин сотрудника@компания или email владельца" class="auth-input" required autocomplete="username" autocapitalize="off">
-                <div class="password-field-wrapper">
-                    <input type="password" name="password" id="loginPasswordInput" placeholder="Пароль" class="auth-input" required>
-                    <button type="button" class="password-toggle" data-target="loginPasswordInput" aria-label="Показать пароль">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                </div>
-                <button type="submit" class="auth-button">Войти</button>
-            </form>
+            <div class="auth-login-options" id="authLoginOptions">
+                <button type="button" class="auth-secondary" data-messenger-purpose="login">Выбрать способ входа</button>
+                <button type="button" class="auth-link-button" data-messenger-purpose="password_reset">Восстановить пароль</button>
+            </div>
+            <div class="auth-stage" id="messengerAuthStage">
+                <div id="employeeAuthCardMount"></div>
+                <button type="button" class="auth-password-cancel auth-link-button" data-messenger-purpose="password_reset">Восстановить пароль</button>
+            </div>
             <div class="auth-stage" id="passwordChangeStage">
                 <div class="auth-stage-copy">Смена пароля добровольная. Введите текущий пароль и задайте новый.</div>
                 <form id="passwordChangeForm">
@@ -245,6 +254,7 @@
         </div>
     </div>
 
+    <script src="<%= assetUrl('/static/js/auth-card.js') %>"></script>
     <script>
         const mode = '<%= mode %>';
         let requestedPasswordChange = mode === 'login' && new URLSearchParams(window.location.search).get('change-password') === '1';
@@ -253,10 +263,30 @@
         const successMsg = document.getElementById('successMsg');
         const authTitle = document.querySelector('.auth-container h2');
         const authSwitch = document.querySelector('.auth-switch');
+        const authLoginOptions = document.getElementById('authLoginOptions');
+        let employeeAuthCard = null;
 
         function showError(text) { errorMsg.textContent = text; errorMsg.classList.add('show'); successMsg.classList.remove('show'); }
         function showSuccess(text) { successMsg.textContent = text; successMsg.classList.add('show'); errorMsg.classList.remove('show'); }
         function errorText(code) {
+            const messengerErrors = {
+                MESSENGER_RECOVERY_UNAVAILABLE:'Вход по этому номеру пока недоступен. Войдите с паролем, привяжите мессенджер и подтвердите свой номер в профиле. Если это невозможно — обратитесь к администратору.',
+                MESSENGER_NOT_LINKED:'К учётной записи не привязан MAX или Telegram.',
+                CODE_DELIVERY_FAILED:'Не удалось доставить код. Попробуйте ещё раз или явно выберите Telegram, если он привязан.',
+                CODE_RESEND_TOO_SOON:'Код уже отправлен. Повторная отправка станет доступна после паузы.',
+                CODE_RATE_LIMITED:'Слишком много запросов кода. Попробуйте позже.',
+                CODE_INVALID:'Неверный код. Проверьте цифры и повторите попытку.',
+                CODE_EXPIRED:'Срок действия кода истёк. Запросите новый.',
+                CODE_ALREADY_USED:'Этот код уже использован. Запросите новый.',
+                CODE_ATTEMPTS_EXCEEDED:'Лимит попыток исчерпан. Запросите новый код.',
+                CODE_NOT_REQUESTED:'Код ещё не отправлен. Откройте бота по ссылке из карточки и нажмите Start. Если запрос истёк — запросите новый.',
+                MESSENGER_PROVIDER_REQUIRED:'Выберите MAX или Telegram.',
+                BOT_LINK_INVALID:'Не удалось открыть бота магазина. Обратитесь к владельцу.',
+                BOT_NOT_CONFIGURED:'Бот магазина пока не настроен.',
+                TELEGRAM_BOT_START_REQUIRED:'Сначала начните диалог с Telegram-ботом магазина. Используйте другой подтверждённый способ входа или обратитесь к владельцу.',
+                PASSWORD_RESET_CONFLICT:'Пароль уже изменён в другой сессии. Начните восстановление заново.'
+            };
+            if (messengerErrors[code]) return messengerErrors[code];
             if (document.getElementById('passwordChangeStage')?.classList.contains('is-active') && code === 'PASSWORD_TOO_SHORT') return 'Новый пароль должен содержать минимум 12 символов.';
             if (code === 'PASSWORD_TOO_WEAK') return 'Добавьте латинские буквы обоих регистров и цифры.';
             if (code === 'PASSWORD_TOO_LONG') return 'Пароль не должен превышать 72 байта.';
@@ -275,11 +305,17 @@
         }
         function escapeHtml(value) { return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;'); }
         function showStage(id, title) {
+            if (id !== 'messengerAuthStage') employeeAuthCard?.dispose();
             if (form) form.style.display = 'none';
+            if (authLoginOptions) authLoginOptions.style.display = 'none';
             document.querySelectorAll('.auth-stage').forEach(stage => stage.classList.toggle('is-active', stage.id === id));
             if (authTitle) authTitle.textContent = title;
+            if (authTitle) authTitle.style.display = id === 'messengerAuthStage' ? 'none' : '';
             if (authSwitch) authSwitch.style.display = 'none';
             errorMsg.classList.remove('show'); successMsg.classList.remove('show');
+        }
+        function showLoginStage() {
+            return openMessengerStage('login');
         }
         function continueAuth(result) {
             saveAuth(result);
@@ -303,6 +339,51 @@
             icon.classList.toggle('fa-eye', input.type === 'password'); icon.classList.toggle('fa-eye-slash', input.type !== 'password');
         }));
 
+        async function employeeCardApi(url, options = {}) {
+            const response = await fetch(url, {
+                method: options.method || 'GET',
+                signal: options.signal,
+                headers: { 'Content-Type': 'application/json' },
+                body: options.body ? JSON.stringify(options.body) : undefined
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+                const error = new Error(result.error || 'REQUEST_FAILED');
+                error.httpStatus = response.status;
+                error.payload = result;
+                throw error;
+            }
+            return result;
+        }
+
+        function openMessengerStage(purpose) {
+            employeeAuthCard?.dispose();
+            employeeAuthCard = window.AuthCard.create({
+                context: 'employee',
+                purpose,
+                dependencies: {
+                    apiJson: employeeCardApi, messengerErrorText: errorText,
+                    normalizePhone: value => String(value || '').replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7'),
+                    enforcePhonePrefix: input => { if (!input.value) input.value = '+7'; }
+                },
+                onSuccess: result => {
+                    if (purpose === 'password_reset') {
+                        employeeAuthCard?.dispose();
+                        showSuccess('Пароль изменён. Теперь войдите с новым паролем.');
+                        setTimeout(showLoginStage, 900);
+                        return;
+                    }
+                    continueAuth(result);
+                }
+            });
+            document.getElementById('employeeAuthCardMount').replaceChildren(employeeAuthCard);
+            showStage('messengerAuthStage', purpose === 'password_reset' ? 'Восстановить пароль' : 'Вход для сотрудников');
+        }
+
+        document.querySelectorAll('[data-messenger-purpose]').forEach(button => button.addEventListener('click', () => openMessengerStage(button.dataset.messengerPurpose)));
+        document.getElementById('messengerCancelButton')?.addEventListener('click', showLoginStage);
+        if (mode === 'login' && !requestedPasswordChange) openMessengerStage('login');
+
         if (mode === 'register') {
             const passwordInput = document.getElementById('passwordInput');
             const passwordConfirmInput = document.getElementById('passwordConfirmInput');
@@ -311,7 +392,7 @@
             passwordInput.addEventListener('input', check); passwordConfirmInput.addEventListener('input', check);
         }
 
-        form.addEventListener('submit', async event => {
+        form?.addEventListener('submit', async event => {
             event.preventDefault(); errorMsg.classList.remove('show'); successMsg.classList.remove('show');
             const data = Object.fromEntries(new FormData(form));
             if (mode === 'register' && data.password !== data.password_confirm) return showError('Пароли не совпадают');
