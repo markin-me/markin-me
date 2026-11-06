@@ -12916,7 +12916,7 @@
       <div class="new-order-option-sheet new-order-right-address-sheet">
         <div class="new-order-option-sheet-head">
           <div class="new-order-option-sheet-title">Введите адрес</div>
-          <button class="new-order-option-sheet-back" type="button" data-action="right-address-overlay-close"><i class="fas fa-times"></i></button>
+          <button class="new-order-option-sheet-back" type="button" data-action="right-address-overlay-close" aria-label="Назад"><i class="fas fa-arrow-left"></i></button>
         </div>
         <div class="new-order-option-sheet-list no-scrollbar new-order-right-address-body" id="newOrderRightAddressBody">
           <div class="new-order-right-address-list-wrap hidden" id="newOrderRightAddressListWrap">
@@ -13749,10 +13749,33 @@
   function closeRightAddressOverlay() {
     const { backdrop } = getRightAddressOverlayElements();
     if (!backdrop) return;
+    closeNewOrderMobileOverlayPage(backdrop);
     closeRightAddressLookupPopover();
     rightAddressLookupState.orderId=0;
     backdrop.classList.add("hidden");
     backdrop.onclick = null;
+  }
+
+  function showRightAddressPage(page) {
+    const { backdrop, formBody } = getRightAddressOverlayElements();
+    if (!backdrop) return;
+    backdrop.dataset.addressPage = page;
+    if (page === "list") state.rightAddressEditingIdByOrder.set(Number(rightAddressLookupState.orderId || 0), 0);
+    closeRightAddressLookupPopover();
+    const title = page === "list" ? "Адреса" : "Адрес";
+    backdrop.querySelector(".new-order-option-sheet-title").textContent = title;
+    if (formBody) formBody.scrollTop = 0;
+    openNewOrderMobileOverlayPage(backdrop, title, closeRightAddressOverlay, () => {
+      if (backdrop.dataset.addressPage !== "form") return true;
+      showRightAddressPage("list");
+      return false;
+    });
+  }
+
+  function backRightAddressPage() {
+    const { backdrop } = getRightAddressOverlayElements();
+    if (backdrop?.dataset.addressPage === "form") showRightAddressPage("list");
+    else closeRightAddressOverlay();
   }
 
   function getDefaultRightAddressCity() {
@@ -13989,7 +14012,8 @@
     backdrop.onclick = (e) => {
       const closeBtn = e.target.closest("[data-action='right-address-overlay-close']");
       if (closeBtn || e.target === backdrop) {
-        closeRightAddressOverlay();
+        if (closeBtn) backRightAddressPage();
+        else closeRightAddressOverlay();
         return;
       }
       const selectBtn = e.target.closest("[data-action='right-address-select'][data-address-id]");
@@ -14010,6 +14034,7 @@
         state.rightAddressSelectedIdByOrder.set(id, addrId);
         fillRightAddressInputs(getAddressDraftFromClientAddress(row, getDefaultRightAddressCity()), id);
         renderRightAddressList(id);
+        showRightAddressPage("form");
         return;
       }
       const delBtn = e.target.closest("[data-action='right-address-del-item'][data-address-id]");
@@ -14036,13 +14061,21 @@
         state.rightAddressSelectedIdByOrder.set(id, 0);
         fillRightAddressInputs(createBlankRightAddressDraft(), id);
         renderRightAddressList(id);
+        showRightAddressPage("form");
       };
     }
 
+    showRightAddressPage("list");
     cancelBtn.onclick = () => {
-      closeRightAddressOverlay();
+      backRightAddressPage();
     };
     saveBtn.onclick = async () => {
+      if (backdrop.dataset.addressPage === "list") {
+        const rows = state.rightClientAddressesByOrder.get(id) || [];
+        const selected = rows.find((row) => Number(row.id) === Number(state.rightAddressSelectedIdByOrder.get(id)));
+        if (!selected) return;
+        fillRightAddressInputs(getAddressDraftFromClientAddress(selected, getDefaultRightAddressCity()), id);
+      }
       const next = readRightAddressInputs();
       if (!next.street || !next.house) {
         if (rightAddressMapModeEnabled) {
@@ -14089,8 +14122,8 @@
           const selectedDraft = getAddressDraftFromClientAddress(updated, next.city || getDefaultRightAddressCity());
           state.rightAddressDraftByOrder.set(id, selectedDraft);
           updateRightOrderFormField(id, "address", buildRightAddressLine(selectedDraft));
-          closeRightAddressOverlay();
-          renderRightOrderTabs();
+          renderRightAddressList(id);
+          showRightAddressPage("list");
           return;
         }
       } else if (selectedAddressId > 0) {
@@ -14136,8 +14169,8 @@
           const createdDraft = getAddressDraftFromClientAddress(created, next.city || getDefaultRightAddressCity());
           state.rightAddressDraftByOrder.set(id, createdDraft);
           updateRightOrderFormField(id, "address", buildRightAddressLine(createdDraft));
-          closeRightAddressOverlay();
-          renderRightOrderTabs();
+          renderRightAddressList(id);
+          showRightAddressPage("list");
           return;
         }
       }
@@ -16513,10 +16546,38 @@
 
   let productOverlayRequestGeneration = 0;
 
+  function openNewOrderMobileOverlayPage(backdrop, title, onBack, beforeBack = null) {
+    if (!document.body.classList.contains("page-new-order") || !window.matchMedia("(max-width: 768px)").matches) return;
+    if (!window.__adminMobilePages?.openSubview(title, onBack, { beforeBack })) return;
+    backdrop.dataset.mobilePage = "1";
+    document.body.classList.add("new-order-mobile-subpage");
+    if (backdrop.dataset.swipeBound) return;
+    backdrop.dataset.swipeBound = "1";
+    let start = null;
+    backdrop.addEventListener("touchstart", (event) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : null;
+      start = touch && touch.clientX <= 28 ? { x: touch.clientX, y: touch.clientY } : null;
+    }, { passive: true });
+    backdrop.addEventListener("touchcancel", () => { start = null; }, { passive: true });
+    backdrop.addEventListener("touchend", (event) => {
+      const touch = event.changedTouches[0];
+      if (start && touch && touch.clientX - start.x > 80 && Math.abs(touch.clientY - start.y) < 60 && backdrop.dataset.mobilePage === "1") window.__adminMobilePages.back();
+      start = null;
+    }, { passive: true });
+  }
+
+  function closeNewOrderMobileOverlayPage(backdrop) {
+    if (backdrop.dataset.mobilePage !== "1") return;
+    delete backdrop.dataset.mobilePage;
+    document.body.classList.remove("new-order-mobile-subpage");
+    window.__adminMobilePages?.closeSubview();
+  }
+
   function closeProductOverlay() {
     productOverlayRequestGeneration += 1;
     const { backdrop, list } = getProductOverlayElements();
     if (!backdrop) return;
+    closeNewOrderMobileOverlayPage(backdrop);
     backdrop.classList.add("hidden");
     backdrop.onclick = null;
     if (list) list.innerHTML = "";
@@ -16996,6 +17057,7 @@
       }
     };
     renderProductOverlay();
+    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), closeProductOverlay);
     if (list) list.scrollTop = 0;
 
     void (async () => {
@@ -20358,6 +20420,7 @@
       if (rawCategoryId === CHECKOUT_SCREEN_ID) {
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
         state.activeProductCategoryId = null;
+        if (document.body.classList.contains("page-new-order")) window.__adminMobilePages?.openCenter("Каталог");
         schedulePersistBootstrapSnapshot(0);
         void loadCheckoutProductsForSelectedCategories().then(() => {
           const ids = [...state.checkoutCategoryProducts.values()]
@@ -20371,6 +20434,7 @@
       }
       const cid = Number(rawCategoryId);
       if (!Number.isFinite(cid) || cid <= 0) return;
+      if (document.body.classList.contains("page-new-order")) window.__adminMobilePages?.openCenter("Каталог");
       if (state.checkoutEditMode) {
         state.checkoutEditMode = false;
         state.checkoutDraft = null;

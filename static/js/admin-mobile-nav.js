@@ -21,8 +21,12 @@
   const hasDedicatedMobileNavigation = activePage === "chat";
   const activeNav = sidebar.querySelector('.nav-item[data-nav-key="' + activePage + '"]');
   const rootTitle = readText(activeNav && activeNav.querySelector(".nav-text")) || readText(titleNode) || "Админка";
-  const viewStack = [{ level: "left", title: rootTitle }];
-  let currentLevel = "left";
+  const isNewOrder = activePage === "new-order";
+  const rootLevel = isNewOrder ? "center" : "left";
+  const catalogTabs = document.getElementById("newOrderMobileTabs");
+  const catalogOpen = document.getElementById("newOrderMobileOpen");
+  const viewStack = [{ level: rootLevel, title: rootTitle }];
+  let currentLevel = rootLevel;
   let mobileSubview = null;
   let actionOrigin = null;
   let movedActions = null;
@@ -35,9 +39,9 @@
   const brandOrigin = brand ? document.createComment("admin-brand-origin") : null;
   const themeOrigin = themeButton ? document.createComment("theme-toggle-origin") : null;
   const accountOrigin = accountMenu ? document.createComment("user-menu-origin") : null;
-  const hasOrderTabs = activePage === "orders" || activePage === "courier-screen" || activePage === "products" || activePage === "cash" || activePage === "clients" || activePage === "marketing" || activePage === "settings";
+  const hasOrderTabs = isNewOrder || activePage === "orders" || activePage === "courier-screen" || activePage === "products" || activePage === "cash" || activePage === "clients" || activePage === "marketing" || activePage === "settings";
   const orderTabs = hasOrderTabs
-    ? Array.prototype.slice.call(document.querySelectorAll("#orderTabs, #orderTabsCheckout, #productTabs, #cashOrderTabs, #clientTabs, #settingsRightTabs, #settingsDeliveryTabs"))
+    ? Array.prototype.slice.call(document.querySelectorAll(isNewOrder ? "#newOrderTabs" : "#orderTabs, #orderTabsCheckout, #productTabs, #cashOrderTabs, #clientTabs, #settingsRightTabs, #settingsDeliveryTabs"))
     : [];
   const orderTabOrigins = orderTabs.map(function () {
     return document.createComment("order-tabs-origin");
@@ -84,7 +88,7 @@
     const selectionActions = selectingOrders ? document.getElementById('ordersBulkActions') : null;
     body.classList.toggle('orders-mobile-selection', Boolean(selectionActions && (level === 'center' || showOrdersActionsOnRoot)));
     const candidates = Array.prototype.slice.call(centerColumn.querySelectorAll(".toolbar-right"));
-    const actions = selectionActions || candidates.find(visible);
+    const actions = isNewOrder ? document.getElementById("newOrderToolbar") : selectionActions || candidates.find(visible);
     if (!actions) return;
     actionOrigin = document.createComment("mobile-toolbar-actions-origin");
     actions.parentNode.insertBefore(actionOrigin, actions);
@@ -128,6 +132,7 @@
 
   function syncOrderTabsHeader() {
     if (!mobileOrderTabs) return;
+    if (isNewOrder && catalogOpen) catalogOpen.disabled = !orderTabs.some(function (tabs) { return !!tabs.querySelector(".product-tab"); });
     const keepSubviewOrderTabs = Boolean(mobileSubview?.keepOrderTabs);
     const showTabs = isMobile()
       && currentLevel === "right"
@@ -141,9 +146,10 @@
   function moveOrderTabs() {
     if (!mobileOrderTabs || !isMobile() || !hasOrderTabs) return;
     orderTabs.forEach(function (tabs, index) {
-      if (tabs.parentNode === mobileOrderTabs) return;
-      tabs.parentNode.insertBefore(orderTabOrigins[index], tabs);
-      mobileOrderTabs.appendChild(tabs);
+      const destination = isNewOrder && currentLevel !== "right" ? catalogTabs : mobileOrderTabs;
+      if (!destination || tabs.parentNode === destination) return;
+      if (!orderTabOrigins[index].parentNode) tabs.parentNode.insertBefore(orderTabOrigins[index], tabs);
+      destination.appendChild(tabs);
     });
     if (!orderTabsObserver) {
       orderTabsObserver = new MutationObserver(syncOrderTabsHeader);
@@ -199,13 +205,14 @@
     body.classList.remove("admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");
     body.classList.add("admin-mobile-pages", "admin-mobile-view-" + nextLevel);
     titleNode.textContent = String(title || rootTitle).trim() || rootTitle;
-    const isRoot = nextLevel === "left";
+    const isRoot = nextLevel === rootLevel;
     menuButton.classList.toggle("hidden", !isRoot);
     backButton.classList.toggle("hidden", isRoot);
     moveContextActions(nextLevel);
     moveOrderTabs();
     syncOrderTabsHeader();
-    if (push) viewStack.push({ level: nextLevel, title: titleNode.textContent });
+    if (isNewOrder && nextLevel === rootLevel) viewStack.splice(0, viewStack.length, { level: rootLevel, title: titleNode.textContent });
+    else if (push) viewStack.push({ level: nextLevel, title: titleNode.textContent });
 
     window.requestAnimationFrame(function () {
       const column = nextLevel === "right" ? rightColumn : nextLevel === "center" ? centerColumn : leftColumn;
@@ -217,6 +224,7 @@
 
   function goBack() {
     if (mobileSubview) {
+      if (mobileSubview.beforeBack && mobileSubview.beforeBack() === false) return;
       const subview = mobileSubview;
       mobileSubview = null;
       if (viewStack.length > 1 && viewStack[viewStack.length - 1]?.subview) viewStack.pop();
@@ -262,7 +270,7 @@
   if (overlay) overlay.addEventListener("click", closeSidebar);
 
   leftColumn.addEventListener("click", function (event) {
-    if (!isMobile() || hasDedicatedMobileNavigation) return;
+    if (!isMobile() || hasDedicatedMobileNavigation || isNewOrder) return;
     const item = isLeftNavigationTarget(event.target);
     if (!item) return;
     const title = itemTitle(item) || rootTitle;
@@ -274,7 +282,7 @@
   });
 
   centerColumn.addEventListener("click", function (event) {
-    if (!isMobile() || hasDedicatedMobileNavigation) return;
+    if (!isMobile() || hasDedicatedMobileNavigation || isNewOrder) return;
     const item = isCenterDetailTarget(event.target);
     if (!item) return;
     const title = itemTitle(item) || readText(centerColumn.querySelector(".toolbar-title")) || rootTitle;
@@ -284,6 +292,11 @@
       }
     }, 40);
   });
+
+  if (isNewOrder) {
+    document.getElementById("newOrderMobileCategories")?.addEventListener("click", function () { showLevel("left", "Категории", true); });
+    catalogOpen?.addEventListener("click", function () { window.__adminMobilePages.openRight("Новый заказ"); });
+  }
 
   function syncViewport() {
     if (isMobile()) {
@@ -341,12 +354,14 @@
         title: String(title || "").trim() || rootTitle,
         onBack: typeof onBack === "function" ? onBack : null,
         keepOrderTabs: options?.keepOrderTabs === true,
+        beforeBack: typeof options?.beforeBack === "function" ? options.beforeBack : null,
       };
       if (!viewStack[viewStack.length - 1]?.subview) {
         viewStack.push({ level: sourceLevel, title: mobileSubview.title, subview: true });
       }
       titleNode.textContent = mobileSubview.title;
       titleNode.classList.remove("hidden");
+      if (headerCopy) headerCopy.classList.remove("hidden");
       if (mobileOrderTabs) mobileOrderTabs.classList.toggle("hidden", !mobileSubview.keepOrderTabs);
       menuButton.classList.add("hidden");
       backButton.classList.remove("hidden");
