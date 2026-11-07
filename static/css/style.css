@@ -11701,7 +11701,7 @@ body.page-cash #ordersRightPane .orders-info > #cashPaymentFooter{
   order:2;
   margin-top:0;
   padding:8px 8px 0;
-  border-top:1px solid var(--color-border);
+  border-top:0;
   background:transparent;
   display:block;
   justify-content:initial;
@@ -11768,14 +11768,14 @@ body.page-cash #ordersRightPane .orders-info > #cashPaymentFooter{
   border-color:var(--color-border);
 }
 
-.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout{
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-order-entry{
   display:grid;
   grid-template-columns:repeat(6,minmax(0,1fr));
   gap:8px;
   align-items:stretch;
 }
 
-.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout > :is(.shop-cart-clear,.new-order-right-footer-benefits-btn){
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-order-entry > :is(.shop-cart-clear,.new-order-right-footer-benefits-btn,.new-order-right-footer-cancel-space){
   grid-column:span 2;
   width:100%;
   height:44px;
@@ -11786,7 +11786,7 @@ body.page-cash #ordersRightPane .orders-info > #cashPaymentFooter{
   gap:7px;
 }
 
-.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout > .shop-checkout-btn{
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-order-entry > .shop-checkout-btn{
   grid-column:span 3;
   width:100%;
   min-height:52px;
@@ -11800,13 +11800,13 @@ body.page-cash #ordersRightPane .orders-info > #cashPaymentFooter{
 }
 
 .panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout .shop-cart-clear.is-edit-cancel span,
-.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout .new-order-right-footer-label{
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-order-entry .new-order-right-footer-label{
   font-size:13px;
   line-height:1;
   font-weight:800;
 }
 
-.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout .new-order-right-footer-benefits-btn > span[aria-hidden="true"]{
+.panel-footer.new-order-right-footer .shop-cart-footer-actions.is-order-entry .new-order-right-footer-benefits-btn > span[aria-hidden="true"]{
   font-size:17px;
 }
 
@@ -35393,6 +35393,20 @@ body.page-cash #cashJournalList.orders-list .order-row.shared-order-summary-row 
 .order-print-popover > button{width:100%}
 
 .new-order-mobile-dock{display:none}
+.new-order-checkout-enabled-setting{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border-bottom:1px solid var(--color-border)}
+#newOrderCategoriesList [data-category-id="__checkout_screen__"]{position:relative}
+#newOrderCategoriesList .new-order-checkout-settings{flex:0 0 28px;width:28px;height:28px;padding:0}
+#newOrderCategoriesList .is-checkout-disabled > .stage-text{color:var(--color-text-muted)}
+@media(max-width:768px){
+  #newOrderCategoriesList .new-order-checkout-settings{position:absolute;right:2px;top:2px}
+}
+body.page-new-order #newOrderTabs .product-tab{background:var(--color-surface-2)}
+body.page-new-order #newOrderTabs .product-tab.is-active{background:linear-gradient(var(--primary-14),var(--primary-14)),var(--color-surface)}
+.new-order-product-flight{position:fixed;z-index:10000;pointer-events:none;object-fit:contain;border-radius:14px;filter:drop-shadow(0 4px 8px #0003);will-change:transform,opacity}
+body.page-new-order #newOrderProductsGrid.is-shared-catalog{display:block}
+#newOrderProductOverlay.is-shared-product .new-order-product-sheet-list{padding:0;display:block;overflow:hidden;flex:1 1 0;min-height:0}
+#newOrderProductOverlay.is-shared-product .new-order-shared-product-host{height:100%;min-height:0}
+#newOrderProductOverlay.is-shared-product .new-order-product-sheet-footer{display:none}
 #newOrderRightAddressOverlay[data-address-page="list"] #newOrderRightAddressListWrap{display:grid!important}
 #newOrderRightAddressOverlay[data-address-page="list"] #newOrderRightAddressBody > :not(#newOrderRightAddressListWrap){display:none!important}
 #newOrderRightAddressOverlay[data-address-page="form"] #newOrderRightAddressListWrap{display:none!important}
@@ -35449,13 +35463,11 @@ body.page-cash #cashJournalList.orders-list .order-row.shared-order-summary-row 
   body.page-new-order #adminMobileOrderTabs .product-tab{flex:0 0 auto}
   body.page-new-order.admin-mobile-pages #newOrderRightPanel{flex:1 1 0;max-height:100%;overflow:hidden;display:grid;grid-template-rows:minmax(0,1fr) auto}
   body.page-new-order.admin-mobile-pages #newOrderRightPanel > .panel-body{flex:1 1 0;display:block;overflow-x:hidden!important;overflow-y:auto!important;overscroll-behavior-y:contain;touch-action:pan-y}
-  body.page-new-order #newOrderRightFooter .shop-cart-footer-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:stretch}
-  body.page-new-order #newOrderRightFooter .new-order-right-footer-benefits-btn{width:44px;min-width:44px;height:44px;justify-self:start}
-  body.page-new-order #newOrderRightFooter .new-order-right-footer-benefits-btn:nth-of-type(2){justify-self:end}
+  body.page-new-order #newOrderRightFooter .shop-cart-footer-actions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;align-items:stretch}
+  body.page-new-order #newOrderRightFooter .new-order-right-footer-benefits-btn{width:100%;min-width:0;height:44px;justify-self:stretch}
   body.page-new-order #newOrderRightFooter .shop-checkout-btn{width:100%;height:auto;min-height:48px;max-height:none;padding:8px;line-height:1.2;overflow:visible}
-  body.page-new-order #newOrderRightFooter [data-action="right-cart-clear"]{grid-column:1/-1}
-  body.page-new-order #newOrderRightFooter .shop-cart-footer-actions.is-edit-checkout > .new-order-right-footer-benefits-btn,
-  body.page-new-order #newOrderRightFooter .shop-cart-footer-actions.is-edit-checkout > .shop-checkout-btn{grid-column:span 1}
+  body.page-new-order #newOrderRightFooter .shop-cart-footer-actions.is-order-entry > :is(.shop-cart-clear,.new-order-right-footer-benefits-btn,.new-order-right-footer-cancel-space){grid-column:span 2}
+  body.page-new-order #newOrderRightFooter .shop-cart-footer-actions.is-order-entry > .shop-checkout-btn{grid-column:span 3}
   body.page-new-order #newOrderRightFooter,
   body.page-new-order #newOrderRightFooter > .shop-cart-footer{position:static;transform:none;background:#fff;opacity:1}
   body.page-new-order #newOrderRightFooter > .shop-cart-footer{border-top:0;padding-top:0}

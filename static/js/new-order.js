@@ -7,6 +7,8 @@
   const cancelEditBtnEl = document.getElementById("newOrderCancelEditBtn");
   const checkoutEditorEl = document.getElementById("newOrderCheckoutEditor");
   const checkoutContentEl = document.getElementById("newOrderCheckoutContent");
+  const checkoutEnabledSettingEl = document.getElementById("newOrderCheckoutEnabledSetting");
+  const checkoutEnabledInputEl = document.getElementById("newOrderCheckoutEnabled");
   const checkoutAddCategoryBtnEl = document.getElementById("newOrderCheckoutAddCategoryBtn");
   const checkoutBlockChipsEl = document.getElementById("newOrderCheckoutBlockChips");
   const newOrderToolbarEl = document.getElementById("newOrderToolbar");
@@ -156,7 +158,7 @@
 
   startUtf8MojibakeRepair();
   const CHECKOUT_SCREEN_ID = "__checkout_screen__";
-  const CHECKOUT_DRAFT_CACHE_VERSION = 2;
+  const CHECKOUT_DRAFT_CACHE_VERSION = 3;
   const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const DURABLE_CREATE_DRAFT_VERSION = 1;
   const DURABLE_CREATE_DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -211,6 +213,7 @@
     checkoutEditingBlockId: null,
     checkoutCartEdit: null,
     checkoutEditMode: false,
+    checkoutScreenEnabled: true,
     checkoutDraft: null,
     rightOrders: [],
     rightActiveOrderId: null,
@@ -372,6 +375,10 @@
 
   function updateEditControls() {
     if (!settingsBtnEl) return;
+    settingsBtnEl.classList.toggle("hidden", !state.checkoutEditMode);
+    document.getElementById("newOrderAddBtn")?.classList.toggle("hidden", state.checkoutEditMode);
+    checkoutEnabledSettingEl?.classList.toggle("hidden", !state.checkoutEditMode);
+    if (checkoutEnabledInputEl) checkoutEnabledInputEl.checked = state.checkoutDraft?.enabled !== false;
     const icon = settingsBtnEl.querySelector("i");
     if (state.checkoutEditMode) {
       if (icon) icon.className = "fas fa-check";
@@ -411,7 +418,15 @@
     updateEditControls();
   }
 
+  function getRightOrderTabTitle(order) {
+    const name = String(order?.form?.name || "").trim();
+    const phone = String(order?.form?.phone || "").trim();
+    return name || (phone.replace(/\D/g, "").length > 1 ? formatPhoneRuInput(phone) : "")
+      || String(order?.title || "Новый заказ");
+  }
+
   function renderRightOrderTabs() {
+    syncNewOrderSharedCards();
     if (!rightTabsEl || !rightContentEl) return;
     const orders = Array.isArray(state.rightOrders) ? state.rightOrders : [];
     if (!orders.length) {
@@ -439,7 +454,7 @@
       const isActive = orderId === Number(state.rightActiveOrderId || 0);
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-action="right-order-tab-select" data-order-id="${orderId}">
-          <span class="product-tab-title">${escapeHtml(String(order?.title || "РќРѕРІС‹Р№ Р·Р°РєР°Р·"))}</span>
+          <span class="product-tab-title" title="${escapeHtml(getRightOrderTabTitle(order))}">${escapeHtml(getRightOrderTabTitle(order))}</span>
           <button class="product-tab-close" type="button" data-action="right-order-tab-close" data-order-id="${orderId}" aria-label="Р—Р°РєСЂС‹С‚СЊ">×</button>
         </div>
       `;
@@ -636,7 +651,7 @@
         </div>
       </div>
       <div class="shop-cart-footer">
-        <div class="shop-cart-footer-actions ${isEditCheckout ? "is-edit-checkout" : ""}">
+        <div class="shop-cart-footer-actions is-order-entry ${isEditCheckout ? "is-edit-checkout" : ""}">
           ${isEditCheckout ? `
           <button
             class="${clearBtnClass}"
@@ -646,7 +661,7 @@
             title="${clearBtnTitle}"
             aria-label="${clearBtnLabel}"
           >${clearBtnText}</button>
-          ` : ""}
+          ` : `<span class="new-order-right-footer-cancel-space" aria-hidden="true"></span>`}
           <button
             class="new-order-right-footer-benefits-btn"
             type="button"
@@ -656,7 +671,7 @@
             title="Выгоды"
           >
             <i class="fas fa-tags" aria-hidden="true"></i>
-            ${isEditCheckout ? `<span class="new-order-right-footer-label">Выгоды</span>` : ""}
+            <span class="new-order-right-footer-label">Выгоды</span>
           </button>
           <button
             class="new-order-right-footer-benefits-btn"
@@ -667,7 +682,7 @@
             title="Бонусы"
           >
             <span aria-hidden="true">Б</span>
-            ${isEditCheckout ? `<span class="new-order-right-footer-label">Бонусы</span>` : ""}
+            <span class="new-order-right-footer-label">Бонусы</span>
           </button>
           <button
             class="shop-checkout-btn shop-checkout-btn--secondary"
@@ -8005,7 +8020,7 @@
         },
         unitConversions: Array.isArray(state.unitConversions) ? state.unitConversions : [],
         checkoutSavedDraft: state.checkoutSavedDraft && typeof state.checkoutSavedDraft === "object"
-          ? { blocks: Array.isArray(state.checkoutSavedDraft.blocks) ? state.checkoutSavedDraft.blocks : [] }
+          ? { blocks: Array.isArray(state.checkoutSavedDraft.blocks) ? state.checkoutSavedDraft.blocks : [], enabled: state.checkoutScreenEnabled }
           : { blocks: [] },
         checkoutDraftReady: state.checkoutDraftReady === true,
         checkoutDraftCacheVersion: CHECKOUT_DRAFT_CACHE_VERSION,
@@ -8131,8 +8146,9 @@
     state.autoAddLoadPromise = null;
     state.unitConversions = Array.isArray(snapshot.unitConversions) ? snapshot.unitConversions : [];
     state.checkoutSavedDraft = snapshot.checkoutSavedDraft && typeof snapshot.checkoutSavedDraft === "object"
-      ? { blocks: Array.isArray(snapshot.checkoutSavedDraft.blocks) ? snapshot.checkoutSavedDraft.blocks : [] }
+      ? { blocks: Array.isArray(snapshot.checkoutSavedDraft.blocks) ? snapshot.checkoutSavedDraft.blocks : [], enabled: snapshot.checkoutSavedDraft.enabled !== false }
       : { blocks: [] };
+    state.checkoutScreenEnabled = state.checkoutSavedDraft.enabled !== false;
     state.checkoutDraftReady = snapshot.checkoutDraftReady === true
       && Number(snapshot.checkoutDraftCacheVersion || 0) === CHECKOUT_DRAFT_CACHE_VERSION;
     state.categoryWorkingSetComplete = new Set();
@@ -8580,6 +8596,13 @@
       form[key] = value;
     }
     state.rightOrders[index] = { ...order, form };
+    if (key === "phone" || key === "name") {
+      const title = rightTabsEl?.querySelector(`[data-order-id="${id}"] .product-tab-title`);
+      if (title) {
+        title.textContent = getRightOrderTabTitle(state.rightOrders[index]);
+        title.title = title.textContent;
+      }
+    }
     invalidateRightOrderLiveSummary(id);
     if (key === "pickupMethod" || key === "address" || key === "clientId") {
       invalidateRightDeliveryQuote(id);
@@ -14283,10 +14306,11 @@
     return `new_order_checkout_draft_v${CHECKOUT_DRAFT_CACHE_VERSION}_t${getTenantIdFromStorage()}`;
   }
 
-  function writeDraftCache(blocks) {
+  function writeDraftCache(blocks, enabled) {
     try {
       const payload = {
         ts: Date.now(),
+        enabled: enabled !== false,
         blocks: (Array.isArray(blocks) ? blocks : []).map(normalizeBlock).filter(Boolean),
       };
       localStorage.setItem(checkoutDraftCacheKey(), JSON.stringify(payload));
@@ -14301,7 +14325,8 @@
       const ts = Number(parsed?.ts || 0);
       if (!ts || Date.now() - ts > CHECKOUT_DRAFT_CACHE_MAX_AGE_MS) return null;
       const blocks = (Array.isArray(parsed?.blocks) ? parsed.blocks : []).map(normalizeBlock).filter(Boolean);
-      return { blocks };
+      if (typeof parsed.enabled !== "boolean") return null;
+      return { blocks, enabled: parsed.enabled };
     } catch {
       return null;
     }
@@ -15542,6 +15567,7 @@
     const { backdrop, list } = getComboOverlayElements();
     if (!backdrop) return;
     backdrop.classList.add("hidden");
+    backdrop.classList.remove("is-shared-product");
     backdrop.onclick = null;
     if (list) list.innerHTML = "";
     resetComboModalState();
@@ -16579,6 +16605,7 @@
     if (!backdrop) return;
     closeNewOrderMobileOverlayPage(backdrop);
     backdrop.classList.add("hidden");
+    backdrop.classList.remove("is-shared-product");
     backdrop.onclick = null;
     if (list) list.innerHTML = "";
     state.productModal.productId = 0;
@@ -16964,6 +16991,7 @@
 
   function renderProductOverlay() {
     const { backdrop, list, qtyValue, addBtn } = getProductOverlayElements();
+    if (backdrop?.classList.contains("is-shared-product")) return;
     const pid = Number(state.productModal.productId || 0);
     const qty = Math.max(1, Number(state.productModal.qty || 1));
     const product = getProductById(pid);
@@ -17018,6 +17046,59 @@
     `;
   }
 
+  function applyNewOrderSharedSelection(pid, selection) {
+    const optionItems = (selection.option_items || []).map((row) => {
+      const groupEntry = [...state.optionGroupDetails.entries()].find(([, details]) => (details.items || []).some((item) => Number(item.id) === Number(row.id)));
+      if (!groupEntry) throw new Error("OPTION_GROUP_UNAVAILABLE");
+      return { ...row, group_id: groupEntry[0], label: row.title || row.label, basePrice: Number(row.price || 0) - Number(row.variant_price_diff || 0), variantDiff: Number(row.variant_price_diff || 0), variantIndex: row.variant_value_index };
+    });
+    applyProductOverlayStateFromCartItem(pid, {
+      variant: { selected_index: selection.variant_value_index },
+      ingredients: (selection.ingredients || []).map((row) => ({ ...row, qty: row.quantity ?? row.qty })),
+      option_items: optionItems,
+    });
+  }
+
+  function commitProductOverlay() {
+    const pid = Number(state.productModal.productId || 0);
+    const qty = Math.max(1, Number(state.productModal.qty || 1));
+    const mode = String(state.productModal.mode || "add");
+    const cartItem = buildCartItemFromProduct(pid, qty);
+    if (!cartItem) return;
+    if (mode === "edit") {
+      const orderId = Number(state.productModal.editOrderId || 0);
+      const cartItemId = Number(state.productModal.editCartItemId || 0);
+      if (orderId > 0 && cartItemId > 0) {
+        const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+        if (orderIndex >= 0) {
+          const order = state.rightOrders[orderIndex] || {};
+          const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((x) => ({ ...x })) : [];
+          const idx = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
+          if (idx >= 0) {
+            cartItem.id = cartItemId;
+            const limited = enforceProductStockLimitForCartItem(cartItems, cartItem, {
+              excludeCartItemId: cartItemId,
+              showAlert: true,
+            });
+            if (!limited.ok || !limited.item) return;
+            cartItems[idx] = limited.item;
+            updateRightOrderCartItems(orderId, cartItems, { render: true });
+            closeProductOverlay();
+            return;
+          }
+        }
+      }
+    }
+    if (!state.rightActiveOrderId) openRightNewOrderTab();
+    if (!state.rightActiveOrderId) return;
+    const added = addCartItemToRightOrder(state.rightActiveOrderId, cartItem);
+    if (!added) return;
+    renderRightOrderTabs();
+    closeProductOverlay();
+  }
+
+
   async function openProductOverlayTask(productId, opts = {}) {
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
@@ -17056,6 +17137,44 @@
         closeProductOverlay();
       }
     };
+    if (document.body.classList.contains("page-new-order") && !isCheckoutScreenActive()) {
+      backdrop.classList.add("is-shared-product");
+    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), closeProductOverlay);
+      list.replaceChildren();
+      const host = document.createElement("div");
+      host.className = "new-order-shared-product-host";
+      list.appendChild(host);
+      try {
+        const passports = await getNewOrderSharedPassports([pid]);
+        if (generation !== productOverlayRequestGeneration || !host.isConnected) return;
+        const initialValue = mode === "edit" && sourceCartItem ? {
+          ...sourceCartItem,
+          variant_value_index: sourceCartItem.variant?.selected_index,
+          variant_group_id: (state.productVariants.get(pid) || [])[0]?.id,
+          ingredients: (sourceCartItem.ingredients || []).map((row) => ({ ...row, quantity: row.qty ?? row.quantity })),
+          option_item_ids: (sourceCartItem.option_items || []).map((row) => Number(row.id)),
+          option_items: (sourceCartItem.option_items || []).map((row) => ({ ...row, variant_value_index: row.variantIndex })),
+        } : null;
+        await window.SharedProductDetails.mount({
+          container: host, productId: pid, product: getProductById(pid), passports,
+          mode: "admin-order", initialValue, onBack: closeProductOverlay,
+          isCurrent: () => generation === productOverlayRequestGeneration && host.isConnected,
+          cartContext: getNewOrderSharedCartContext(mode === "edit" ? editCartItemId : 0),
+          onSave: (selection) => {
+            if (generation !== productOverlayRequestGeneration) return;
+            state.productModal.qty = Number(selection.qty || 1);
+            applyNewOrderSharedSelection(pid, selection);
+            commitProductOverlay();
+          },
+        });
+      } catch (error) {
+        if (generation !== productOverlayRequestGeneration || !host.isConnected) return;
+        console.error("Shared product rendering failed", error);
+        host.textContent = "Не удалось загрузить карточку товара";
+      }
+      return;
+    }
+    backdrop.classList.remove("is-shared-product");
     renderProductOverlay();
     openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), closeProductOverlay);
     if (list) list.scrollTop = 0;
@@ -17428,6 +17547,7 @@
   }
 
   async function loadCheckoutProductsForSelectedCategories() {
+    if (!state.checkoutScreenEnabled && !state.checkoutEditMode) return;
     const selectedIds = getAllCategoryIdsFromBlocks(getCheckoutBlocks());
     if (!selectedIds.length) {
       state.checkoutCategoryProducts.clear();
@@ -17509,7 +17629,8 @@
   async function loadCheckoutDraftFromApi(force = false) {
     const cached = force ? null : readDraftCache();
     if (cached && Array.isArray(cached.blocks)) {
-      state.checkoutSavedDraft = { blocks: cached.blocks };
+      state.checkoutSavedDraft = { blocks: cached.blocks, enabled: cached.enabled };
+      state.checkoutScreenEnabled = cached.enabled;
       state.checkoutDraftReady = true;
       schedulePersistBootstrapSnapshot();
       return;
@@ -17517,19 +17638,21 @@
     const json = await apiJson("/api/checkout-constructor/draft");
     const blocks = Array.isArray(json?.data?.blocks) ? json.data.blocks : [];
     const normalized = blocks.map(normalizeBlock).filter(Boolean);
-    state.checkoutSavedDraft = { blocks: normalized };
+    state.checkoutSavedDraft = { blocks: normalized, enabled: json?.data?.enabled !== false };
+    state.checkoutScreenEnabled = state.checkoutSavedDraft.enabled;
     state.checkoutDraftReady = true;
-    writeDraftCache(normalized);
+    writeDraftCache(normalized, state.checkoutScreenEnabled);
     schedulePersistBootstrapSnapshot();
   }
 
   async function saveCheckoutDraftToApi(sourceDraft) {
     const payload = toCheckoutBlocksPayload(Array.isArray(sourceDraft?.blocks) ? sourceDraft.blocks : []);
+    payload.enabled = sourceDraft?.enabled !== false;
     await apiJson("/api/checkout-constructor/draft", {
       method: "PUT",
       body: JSON.stringify(payload),
     });
-    writeDraftCache(payload.blocks);
+    writeDraftCache(payload.blocks, payload.enabled);
     schedulePersistBootstrapSnapshot();
   }
 
@@ -18746,14 +18869,22 @@
       .filter((cat) => cat?.parent_id == null);
 
     const checkoutScreenActive = String(state.activeCategoryId) === CHECKOUT_SCREEN_ID;
-    const checkoutRow = document.createElement("button");
-    checkoutRow.type = "button";
+    const checkoutRow = document.createElement("div");
+    checkoutRow.setAttribute("role", "button");
+    checkoutRow.tabIndex = 0;
+    checkoutRow.addEventListener("keydown", (event) => {
+      if (event.target !== checkoutRow || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      checkoutRow.click();
+    });
     checkoutRow.className = `stage-item ${checkoutScreenActive ? "is-active" : ""}`;
+    checkoutRow.classList.toggle("is-checkout-disabled", !state.checkoutScreenEnabled);
     checkoutRow.setAttribute("data-category-id", CHECKOUT_SCREEN_ID);
     checkoutRow.innerHTML = `
       <span class="stage-icon"><i class="fas fa-desktop"></i></span>
       <span class="stage-meta stage-text"><b>Р­РєСЂР°РЅ РѕС„РѕСЂРјР»РµРЅРёСЏ</b></span>
       <span class="acc-spacer"></span>
+      <button class="btn btn-ghost btn-icon new-order-checkout-settings" type="button" data-action="checkout-screen-settings" aria-label="Настройки экрана оформления" title="Настройки экрана оформления"><i class="fas fa-cog"></i></button>
     `;
     categoriesListEl.appendChild(checkoutRow);
 
@@ -18778,7 +18909,205 @@
     });
   }
 
+  let sharedCatalogCards = [];
+
+  function getNewOrderSharedCartItems() {
+    const order = state.rightOrders.find((row) => Number(row.id) === Number(state.rightActiveOrderId));
+    return Array.isArray(order?.form?.cartItems) ? order.form.cartItems : [];
+  }
+
+  function getNewOrderPresentationProduct(id) {
+    const productId = Number(id);
+    return state.productByIdCache.get(productId)
+      || window.CatalogRepository?.getProduct(productId)
+      || state.currentProducts.find(product => Number(product.id) === productId)
+      || null;
+  }
+
+  function getNewOrderSharedAggregate(product) {
+    return getNewOrderSharedCartItems().filter((item) => Number(item.product_id) === Number(product.id) && String(item.type) !== "combo")
+      .reduce((result, item) => ({ qty: result.qty + Number(item.qty || 0), total: result.total + Number(item.sum || 0), oldTotal: result.oldTotal + Number(item.old_line_total || item.sum || 0) }), { qty: 0, total: 0, oldTotal: 0 });
+  }
+
+  function getNewOrderSharedCartContext(excludeItemId = 0) {
+    const items = () => getNewOrderSharedCartItems().filter((item) => Number(item.id) !== Number(excludeItemId));
+    const getConsumed = (id) => getRightOrderProductStockUsageInCart(items(), Number(id));
+    return {
+      getConsumed,
+      getRemaining: (id) => {
+        const qty = state.inventoryByProductId.get(Number(id))?.stock_qty;
+        return qty == null ? Infinity : Math.max(0, Number(qty) - getConsumed(id));
+      },
+      getItems: () => items().map((item) => ({
+        ...item,
+        product: getNewOrderPresentationProduct(item.product_id) || item,
+        ingredients: (item.ingredients || []).map((row) => ({ ...row, quantity: row.qty ?? row.quantity })),
+        options: (item.option_items || []).map((row) => ({ ...row, price: Number(row.basePrice || 0) + Number(row.variantDiff || 0) })),
+      })),
+    };
+  }
+
+  function animateNewOrderProductToTab(source, orderId) {
+    if (!source || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const findTab = () => rightTabsEl?.querySelector(`[data-action="right-order-tab-select"][data-order-id="${Number(orderId)}"]`);
+    const tab = findTab();
+    if (!tab || !tab.getClientRects().length) return;
+    tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const target = tab.getBoundingClientRect();
+    const size = Math.min(72, source.width, source.height);
+    if (!(size > 0 && target.width > 0 && target.height > 0)) return;
+    const photo = document.createElement("img");
+    photo.className = "new-order-product-flight";
+    photo.src = source.src;
+    photo.alt = "";
+    photo.setAttribute("aria-hidden", "true");
+    const left = source.left + (source.width - size) / 2;
+    const top = source.top + (source.height - size) / 2;
+    Object.assign(photo.style, { left: `${left}px`, top: `${top}px`, width: `${size}px`, height: `${size}px` });
+    document.body.appendChild(photo);
+    const x = target.left + target.width / 2 - left - size / 2;
+    const y = target.top + target.height / 2 - top - size / 2;
+    const flight = photo.animate([
+      { transform: "translate(0,0) scale(1)", opacity: 1 },
+      { transform: `translate(${x * .45}px,${Math.min(-45, y * .3)}px) scale(.75)`, opacity: 1, offset: .4 },
+      { transform: `translate(${x}px,${y}px) scale(.2)`, opacity: .3 },
+    ], { duration: 560, easing: "cubic-bezier(.3,.05,.65,1)" });
+    flight.finished.then(() => {
+      const currentTab = findTab();
+      if (currentTab?.isConnected) currentTab.animate([
+        { transform: "translateY(0)" }, { transform: "translateY(-5px)", offset: .4 }, { transform: "translateY(0)" },
+      ], { duration: 240, easing: "ease-out" });
+    }).catch(() => {}).finally(() => photo.remove());
+  }
+
+  function getNewOrderSharedCardContext() {
+    return {
+      getQty: (id) => getNewOrderSharedAggregate({ id }).qty,
+      getAggregate: getNewOrderSharedAggregate,
+      isAvailable: isProductAvailableFlag,
+      getRemaining: (id) => {
+        const stock = state.inventoryByProductId.get(Number(id));
+        return stock?.stock_qty == null ? Infinity : Math.max(0, Number(stock.stock_qty) - getRightOrderProductStockUsageInCart(getNewOrderSharedCartItems(), Number(id)));
+      },
+      isIngredientBlocked: (id) => state.effectiveStockConfigByProductId.get(Number(id))?.is_fulfillable === false,
+      onError: (error) => { console.error("Shared product action failed", error); showNewOrderAlert("Не удалось добавить товар"); },
+      onOpen: (product) => { void openProductOverlay(Number(product.id)); },
+      onAdd: async (product, card) => {
+        const id = Number(product.id);
+        const image = card?.querySelector(".sp-media img");
+        const rect = image?.getBoundingClientRect();
+        const source = rect && image ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height, src: image.currentSrc || image.src } : null;
+        await getNewOrderSharedPassports([id]);
+        resetProductCardToDefault(id);
+        const config = window.CatalogRepository.getProductPassport(id)?.defaultConfig;
+        if (!config) throw new Error("PRODUCT_DEFAULT_CONFIGURATION_UNAVAILABLE");
+        applyNewOrderSharedSelection(id, config);
+        const item = buildCartItemFromProduct(id, 1);
+        if (!item) throw new Error("PRODUCT_CONFIGURATION_UNAVAILABLE");
+        if (!state.rightActiveOrderId) openRightNewOrderTab();
+        const added = addCartItemToRightOrder(state.rightActiveOrderId, item);
+        if (added) {
+          renderRightOrderTabs();
+          animateNewOrderProductToTab(source, state.rightActiveOrderId);
+        }
+        return added;
+      },
+      onRemove: (product) => {
+        const items = getNewOrderSharedCartItems().map((item) => ({ ...item }));
+        const index = items.findLastIndex((item) => Number(item.product_id) === Number(product.id) && String(item.type) !== "combo" && !isRightOrderAutoAddItem(item));
+        if (index < 0) return;
+        if (Number(items[index].qty) <= 1) items.splice(index, 1);
+        else items[index] = recalculateCartItemTotals({ ...items[index], qty: Number(items[index].qty) - 1 });
+        updateRightOrderCartItems(state.rightActiveOrderId, items, { render: true });
+      },
+    };
+  }
+
+  function syncNewOrderSharedCards(productIds = null) {
+    if (!window.SharedProductDetails || !sharedCatalogCards.length) return;
+    const ids = productIds ? new Set(productIds.map(Number)) : null;
+    const context = getNewOrderSharedCardContext();
+    sharedCatalogCards.forEach(({ card, product }) => {
+      if (ids && !ids.has(Number(product.id))) return;
+      if (card.isConnected && !card.hasAttribute("data-combo-id")) window.SharedProductDetails.syncCard(card, product, context.getQty(product.id), context);
+    });
+  }
+
+  async function getNewOrderSharedPassports(ids) {
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      await window.CatalogRepository.ensureProducts(ids.slice(offset, offset + 100), {
+        requiredCompleteness: "order-ready",
+        loader: loadNewOrderCatalogPassports,
+      });
+    }
+    ids.forEach((id) => {
+      const passport = window.CatalogRepository.getProductPassport(id);
+      if (passport) applyCatalogPassportToNewOrder(passport);
+    });
+    await ensureNewOrderProductDetails(ids);
+    const passports = {};
+    ids.forEach((id) => {
+      const passport = window.CatalogRepository?.getProductPassport(id);
+      if (!passport) throw new Error("PRODUCT_PASSPORT_UNAVAILABLE");
+      passports[id] = { ...passport, product: { ...passport.product, ...getProductById(id) } };
+      const targetIds = [
+        ...(passport.ingredients || []).map((row) => Number(row.ingredient_id)),
+        ...(passport.options || []).flatMap((group) => (group.items || []).map((row) => Number(row.target_product_id || row.product_id))),
+      ];
+      targetIds.forEach((targetId) => {
+        const target = window.CatalogRepository?.getProductPassport(targetId);
+        const product = getProductById(targetId) || window.CatalogRepository?.getProduct(targetId);
+        if (target) passports[targetId] = target;
+        else if (product) passports[targetId] = { product };
+      });
+    });
+    return passports;
+  }
+
+  function renderNewOrderSharedCatalog(products, changedIds = null, changedComboIds = null) {
+    const list = Array.isArray(products) ? products : [];
+    productsGridEl.classList.add("is-shared-catalog");
+    productsEmptyEl?.classList.toggle("hidden", list.length > 0);
+    let host = productsGridEl.querySelector("[data-shared-product-catalog]");
+    if (!host) {
+      host = document.createElement("div");
+      host.dataset.sharedProductCatalog = "1";
+      productsGridEl.replaceChildren(host);
+      sharedCatalogCards = [];
+    }
+    const grid = window.SharedProductDetails.createCatalogSurface(host);
+    const previous = new Map(sharedCatalogCards.map(entry => [entry.key, entry]));
+    const context = getNewOrderSharedCardContext();
+    const next = [];
+    list.forEach((listed, index) => {
+      const isCombo = String(listed.type) === "combo" || Number(listed.is_combo) === 1;
+      const id = Number(isCombo ? listed.combo_id : listed.id);
+      const key = `${isCombo ? "combo" : "product"}:${id}`;
+      const product = listed;
+      let entry = previous.get(key);
+      const explicitlyChanged = isCombo ? changedComboIds?.has(id) : changedIds?.has(id);
+      if (!entry || explicitlyChanged || (!changedIds && entry.product !== product)) {
+        const card = isCombo
+          ? window.SharedProductDetails.createComboCard({ ...product, id }, { onOpen: () => { void openComboOverlay(id, { comboCategoryId: Number(product.combo_category_id || 0) }); } })
+          : window.SharedProductDetails.createCard(product, context);
+        if (entry) entry.card.replaceWith(card);
+        entry = { key, card, product, isCombo };
+      } else if (!isCombo) {
+        window.SharedProductDetails.syncCard(entry.card, product, context.getQty(id), context);
+      }
+      if (grid.children[index] !== entry.card) grid.insertBefore(entry.card, grid.children[index] || null);
+      previous.delete(key);
+      next.push(entry);
+    });
+    previous.forEach(entry => entry.card.remove());
+    sharedCatalogCards = next;
+  }
+
   function renderProducts(products, options = {}) {
+    if (document.body.classList.contains("page-new-order") && !options.container && !isCheckoutScreenActive()) {
+      void renderNewOrderSharedCatalog(products);
+      return;
+    }
     const targetGrid = options.container || productsGridEl;
     const manageEmpty = options.manageEmpty !== false;
     const prevScrollByProduct = new Map();
@@ -20038,6 +20367,10 @@
       : state.categoryProductsCache.get(activeCategoryId);
     const orderedProducts = Array.isArray(payload?.currentProducts) ? payload.currentProducts : [];
     state.currentProducts = orderedProducts;
+    if (document.body.classList.contains("page-new-order")) {
+      renderNewOrderSharedCatalog(orderedProducts, new Set(productIds.map(Number)), new Set(comboIds.map(Number)));
+      return;
+    }
 
     productIds.forEach((productId) => {
       const pid = Number(productId || 0);
@@ -20413,11 +20746,17 @@
     }
 
     categoriesListEl.addEventListener("click", (e) => {
+      if (e.target.closest('[data-action="checkout-screen-settings"]')) {
+        if (!state.checkoutEditMode) settingsBtnEl?.click();
+        if (document.body.classList.contains("page-new-order")) window.__adminMobilePages?.openCenter("Экран оформления");
+        return;
+      }
       const btn = e.target.closest("[data-category-id]");
       if (!btn) return;
       const rawCategoryId = String(btn.getAttribute("data-category-id") || "").trim();
       if (!rawCategoryId) return;
       if (rawCategoryId === CHECKOUT_SCREEN_ID) {
+        if (!state.checkoutScreenEnabled && !state.checkoutEditMode) return;
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
         state.activeProductCategoryId = null;
         if (document.body.classList.contains("page-new-order")) window.__adminMobilePages?.openCenter("Каталог");
@@ -21294,10 +21633,17 @@
       if (shouldRenderRight) renderRightOrderTabs();
     });
 
+    if (checkoutEnabledInputEl) {
+      checkoutEnabledInputEl.addEventListener("change", () => {
+        if (state.checkoutEditMode && state.checkoutDraft) state.checkoutDraft.enabled = checkoutEnabledInputEl.checked;
+      });
+    }
+
     if (settingsBtnEl) {
       settingsBtnEl.addEventListener("click", async () => {
         if (state.checkoutEditMode) {
           const draftToSave = {
+            enabled: state.checkoutDraft?.enabled !== false,
             blocks: Array.isArray(state.checkoutDraft?.blocks)
               ? state.checkoutDraft.blocks.map((block) => ({
                 id: Number(block?.id || 0),
@@ -21314,17 +21660,22 @@
             return;
           }
           state.checkoutSavedDraft = draftToSave;
+          state.checkoutScreenEnabled = state.checkoutDraft?.enabled !== false;
           state.checkoutDraftReady = true;
           schedulePersistBootstrapSnapshot(0);
           state.checkoutEditMode = false;
           state.checkoutDraft = null;
+          ensureValidActiveCategory();
+          renderCategories();
           renderMainContentMode();
+          if (!state.checkoutScreenEnabled) void renderActiveCategoryContent();
           return;
         }
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
         state.activeProductCategoryId = null;
         state.checkoutEditMode = true;
         state.checkoutDraft = {
+          enabled: state.checkoutScreenEnabled,
           blocks: Array.isArray(state.checkoutSavedDraft?.blocks)
             ? state.checkoutSavedDraft.blocks.map((block) => ({ id: Number(block?.id || 0), title: String(block?.title || ""), categoryIds: Array.isArray(block?.categoryIds) ? [...block.categoryIds] : [], requireAll: block?.requireAll == null ? true : Boolean(block.requireAll) }))
             : [],
@@ -21345,7 +21696,10 @@
         };
         state.checkoutEditMode = false;
         state.checkoutDraft = null;
+        ensureValidActiveCategory();
+        renderCategories();
         renderMainContentMode();
+        if (!state.checkoutScreenEnabled) void renderActiveCategoryContent();
       });
     }
 
@@ -22191,41 +22545,7 @@
         return;
       }
       if (action === "product-overlay-add") {
-        const qty = Math.max(1, Number(state.productModal.qty || 1));
-        const mode = String(state.productModal.mode || "add");
-        const cartItem = buildCartItemFromProduct(pid, qty);
-        if (!cartItem) return;
-        if (mode === "edit") {
-          const orderId = Number(state.productModal.editOrderId || 0);
-          const cartItemId = Number(state.productModal.editCartItemId || 0);
-          if (orderId > 0 && cartItemId > 0) {
-            const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
-            if (orderIndex >= 0) {
-              const order = state.rightOrders[orderIndex] || {};
-              const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
-              const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((x) => ({ ...x })) : [];
-              const idx = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
-              if (idx >= 0) {
-                cartItem.id = cartItemId;
-                const limited = enforceProductStockLimitForCartItem(cartItems, cartItem, {
-                  excludeCartItemId: cartItemId,
-                  showAlert: true,
-                });
-                if (!limited.ok || !limited.item) return;
-                cartItems[idx] = limited.item;
-                updateRightOrderCartItems(orderId, cartItems, { render: true });
-                closeProductOverlay();
-                return;
-              }
-            }
-          }
-        }
-        if (!state.rightActiveOrderId) openRightNewOrderTab();
-        if (!state.rightActiveOrderId) return;
-        const added = addCartItemToRightOrder(state.rightActiveOrderId, cartItem);
-        if (!added) return;
-        renderRightOrderTabs();
-        closeProductOverlay();
+        commitProductOverlay();
         return;
       }
       if (action === "ingredient-minus" || action === "ingredient-plus") {
@@ -22391,6 +22711,7 @@
   }
 
   function patchVisibleProductInventory(productId) {
+    if (document.body.classList.contains("page-new-order")) syncNewOrderSharedCards([productId]);
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
     const product = getProductById(pid);
@@ -22626,9 +22947,10 @@
 
       const blocks = Array.isArray(data.checkout?.blocks) ? data.checkout.blocks : [];
       const normalizedBlocks = blocks.map(normalizeBlock).filter(Boolean);
-      state.checkoutSavedDraft = { blocks: normalizedBlocks };
+      state.checkoutSavedDraft = { blocks: normalizedBlocks, enabled: data.checkout?.enabled !== false };
+      state.checkoutScreenEnabled = state.checkoutSavedDraft.enabled;
       state.checkoutDraftReady = true;
-      writeDraftCache(normalizedBlocks);
+      writeDraftCache(normalizedBlocks, state.checkoutScreenEnabled);
       schedulePersistBootstrapSnapshot(0);
       return true;
     } catch {
@@ -22661,7 +22983,13 @@
   }
 
   function ensureValidActiveCategory() {
-    if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) return;
+    if (isCheckoutScreenActive() && (state.checkoutScreenEnabled || state.checkoutEditMode)) return;
+    if (!state.checkoutScreenEnabled && (isCheckoutScreenActive() || !getCategoryById(state.activeCategoryId))) {
+      const first = state.categories.find(category => category.parent_id == null);
+      state.activeCategoryId = first ? Number(first.id) : null;
+      state.activeProductCategoryId = state.activeCategoryId;
+      return;
+    }
     const activeId = Number(state.activeCategoryId || 0);
     const activeCategory = getCategoryById(activeId);
     if (!activeCategory) {
@@ -24083,7 +24411,7 @@
   };
 
   function renderStartupShell() {
-    if (!state.activeCategoryId) state.activeCategoryId = CHECKOUT_SCREEN_ID;
+    if (!state.activeCategoryId && state.checkoutScreenEnabled) state.activeCategoryId = CHECKOUT_SCREEN_ID;
     renderCategories();
     renderMainContentMode();
     if (!state.rightActiveOrderId) openRightNewOrderTab();
@@ -24277,6 +24605,43 @@
     }
   }
 
+  if (document.body.classList.contains("page-new-order") && window.SharedProductDetails) {
+    window.SharedProductDetails.configure({
+      getPassport: id => window.CatalogRepository?.getProductPassport(id),
+      getProduct: getNewOrderPresentationProduct,
+      ensurePassports: getNewOrderSharedPassports,
+      getUnitConversions: () => state.unitConversions,
+      getRounding: getPriceRoundingSettings,
+      isAvailable: isProductAvailableFlag,
+      getStock: id => {
+        const entry = state.inventoryByProductId.get(Number(id));
+        const passport = entry ? null : window.CatalogRepository?.getProductPassport(id);
+        const qty = entry ? entry.stock_qty : passport?.stock?.stock_qty;
+        return qty === undefined && !passport && !entry ? null : { qty, isUnlimited: qty == null, isAvailable: entry ? entry.is_available : passport?.availability?.is_available !== false };
+      },
+      request: (url, options) => apiJson(url, { ...options, body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body }),
+      showToast: showNewOrderAlert,
+      openBenefit: async product => {
+        const discountId = Number(product.buy_x_get_y_badge?.id || product.buy_x_get_y_badge?.discount_id || 0);
+        if (!(discountId > 0)) return false;
+        const json = await apiJson(`/api/public/discounts/${discountId}/buy-x-get-y-detail`);
+        if (!json?.data) throw new Error("EMPTY_BUY_X_GET_Y_DETAIL");
+        const modal = window.AdminBenefitsModal;
+        if (!modal) throw new Error("BENEFITS_MODAL_UNAVAILABLE");
+        const onClose = () => {
+          modal.hide({ clearBody: false });
+          const { backdrop } = getProductOverlayElements();
+          if (backdrop && !backdrop.classList.contains("hidden")) {
+            openNewOrderMobileOverlayPage(backdrop, String(product.name || product.title || "Товар"), closeProductOverlay);
+          }
+        };
+        modal.show({ title: json.data.title || "Акция", showBack: false, showModeToggle: false, onClose });
+        const { body } = modal.getElements();
+        body.replaceChildren(modal.buildDiscountDetailContent(json.data, { moneyFormatter: money }));
+        return true;
+      },
+    });
+  }
   bindEvents();
   let catalogRepositoryFrame = null;
   const pendingRepositoryProductIds = new Set();

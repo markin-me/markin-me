@@ -792,6 +792,11 @@
     })();
   </script>
 
+  <% if (appPageScripts.some(function (src) { return src.includes('/shared-product-details.js'); })) { %>
+    <script src="<%= assetUrl('/static/js/shared-product-runtime.js') %>"></script>
+    <script src="<%= assetUrl('/static/js/shared-product-pricing.js') %>"></script>
+    <script src="<%= assetUrl('/static/js/shared-product-card.js') %>"></script>
+  <% } %>
   <% if (appPageScripts.length) { %>
     <% appPageScripts.forEach(function (src) { %>
       <script src="<%= assetUrl(src) %>"></script>

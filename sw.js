@@ -258,6 +258,10 @@ var CORE_ASSETS = [
   "/static/js/appModal.js",
   "/static/js/shared-order-panel.js",
   "/static/js/shared-order-payment.js",
+  "/static/js/shared-product-details-content.js?v=components-v2",
+  "/static/js/shared-product-configurator.js?v=components-v2",
+  "/static/css/shared-product-components.css?v=components-v2",
+  "/static/css/shared-product-details.css?v=components-v2",
 ];
 
 function isSameOrigin(url) {
