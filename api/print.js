@@ -26,7 +26,8 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
   }
 
   async function fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone) {
-    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !(Number(orderId) > 0)) return [];
+    const ids=Array.isArray(orderId)?orderId:[orderId];
+    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !ids.length || ids.some(id=>!(Number(id)>0))) return [];
     try {
       const [rows] = await db.query(
         `
@@ -57,10 +58,10 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
           ON ri.tenant_id=r.tenant_id
          AND ri.store_id=r.store_id
          AND ri.refund_id=r.id
-        WHERE r.tenant_id=? AND r.store_id=? AND r.order_id=?
+        WHERE r.tenant_id=? AND r.store_id=? AND r.order_id IN (${ids.map(()=>'?').join(',')})
         ORDER BY r.created_at DESC, r.id DESC, ri.id ASC
         `,
-        [tenantId, storeId, orderId]
+        [tenantId, storeId, ...ids]
       );
 
       const refunds = [];
@@ -131,12 +132,15 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     };
   }
 
-  async function buildOrderTemplateHtml(tenantId, storeId, orderId) {
-    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !(Number(orderId) > 0)) {
+  async function buildOrderTemplateHtml(tenantId, storeId, orderId, options = {}) {
+    const ids=Array.isArray(orderId)?orderId:[orderId];
+    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !ids.length || ids.some(id=>!(Number(id)>0))) {
       return null;
     }
+    const printData=options.printData;
+    if(printData && (Number(printData.tenantId)!==Number(tenantId) || Number(printData.storeId)!==Number(storeId)))throw new Error('PRINT_SCOPE_CHANGED');
 
-    const [orderRows] = await db.query(
+    const [orderRows] = printData ? [printData.orders.has(Number(orderId))?[structuredClone(printData.preparedOrders.get(Number(orderId)) || printData.orders.get(Number(orderId)))]:[]] : await db.query(
       `
       SELECT
         o.id, o.public_id,
@@ -144,6 +148,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         o.customer_id, o.customer_name, o.customer_phone,
         o.address, o.comment, o.address_comment, o.cutlery_qty,
         o.change_from, o.total_price, o.delivery_cost,
+        o.is_paid, o.payment_projection, o.manual_paid_at, o.online_payment_total, o.online_payment_required, o.online_payment_status,
         o.discount_amount, o.discounts_json, o.benefits_meta_json, o.items, o.promo_code,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id, o.payment_id, o.time_option_id, o.status_id,
@@ -155,7 +160,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         t.code AS timeOptionCode, t.title AS timeOptionTitle,
         c.telegram_user_id AS customerTelegramId,
         ps.name AS pickupStoreName, ps.address AS pickupStoreAddress,
-        ca.comment AS address_comment_from_cust
+        ca.comment AS address_comment_from_cust, ca.entrance AS address_entrance, ca.floor AS address_floor, ca.apartment AS address_apartment
       FROM order_orders o
       LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
       LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
@@ -164,17 +169,34 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       LEFT JOIN cust_customers c ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
       LEFT JOIN ten_stores ps ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
       LEFT JOIN cust_customer_addresses ca ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
-      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? LIMIT 1
+      WHERE o.tenant_id=? AND o.store_id=? AND o.id IN (${ids.map(()=>'?').join(',')})
       `,
-      [tenantId, storeId, orderId]
+      [tenantId, storeId, ...ids]
     );
+
+    if(Array.isArray(orderId)){
+      const orders=new Map(orderRows.map(order=>[Number(order.id),order]));
+      if(ids.some(id=>!orders.has(Number(id))))throw new Error('ORDER_NOT_FOUND');
+      const storeTimezone=await getStoreTimezone(tenantId,storeId);
+      const refunds=await fetchRefundRecordsForOrder(tenantId,storeId,ids,storeTimezone);
+      const refundsByOrder=new Map();
+      for(const refund of refunds){const id=Number(refund.order_id);if(!refundsByOrder.has(id))refundsByOrder.set(id,[]);refundsByOrder.get(id).push(refund);}
+      const templateIds=options.templateIds || [];
+      if(!templateIds.length)throw new Error('BAD_PRINT_SELECTION');
+      const [templates]=await db.query(`SELECT id,document_type,template_html FROM print_templates WHERE tenant_id=? AND is_active=1 AND id IN (${templateIds.map(()=>'?').join(',')})`,[tenantId,...templateIds]);
+      const zoneProducts=new Map();
+      for(const product of options.productZones || []){const zone=Number(product.production_zone_id);if(!zoneProducts.has(zone))zoneProducts.set(zone,new Set());zoneProducts.get(zone).add(Number(product.id));}
+      return {tenantId,storeId,orders,preparedOrders:new Map(),storeTimezone,refundsByOrder,templates:new Map(templates.map(template=>[Number(template.id),template])),zoneProducts};
+    }
 
     if (!orderRows.length) {
       return null;
     }
 
     const order = orderRows[0];
+    const storeTimezone = printData ? printData.storeTimezone : await getStoreTimezone(tenantId, storeId);
 
+    if(!printData?.preparedOrders.has(Number(orderId))){
     let items = [];
     try {
       const parsed = order.items ? JSON.parse(order.items) : [];
@@ -189,7 +211,6 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
 
     order.items = items;
     order.discounts_json = discountsJson;
-    const storeTimezone = await getStoreTimezone(tenantId, storeId);
     order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
     order.scheduled_at = normalizeScheduledAtForPrint(order, storeTimezone) || order.scheduled_at;
     order.address_comment = (order.address_comment && String(order.address_comment).trim())
@@ -209,15 +230,43 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       order,
       buildOrderRefundState(
         order,
-        await fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone)
+        printData ? structuredClone(printData.refundsByOrder.get(Number(orderId)) || []) : await fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone)
       )
     );
-
-    const templateHtml = await getActivePrintTemplateHtml(tenantId, "receipt");
-    if (!templateHtml) {
-      throw new Error("PRINT_RECEIPT_TEMPLATE_NOT_CONFIGURED");
+    if(printData)printData.preparedOrders.set(Number(orderId),structuredClone(order));
     }
-    return generateReceiptHtmlForOrder(order, storeTimezone, templateHtml);
+
+    if (options.dataOnly) return { order, storeTimezone };
+    const [templates] = printData ? [[printData.templates.get(Number(options.templateId))].filter(Boolean)] : await db.query(`SELECT id, document_type, template_html FROM print_templates
+      WHERE tenant_id=? AND is_active=1 AND ${options.templateId ? 'id=?' : "document_type='receipt'"} ORDER BY id LIMIT 1`,
+      [tenantId, ...(options.templateId ? [options.templateId] : [])]);
+    const template = templates[0];
+    if (!template?.template_html) throw new Error("PRINT_TEMPLATE_NOT_CONFIGURED");
+    if (options.zoneId && ['assembly','label'].includes(template.document_type)) {
+      let allowed=printData?.zoneProducts.get(Number(options.zoneId));
+      if(!printData){
+        const [products] = await db.query('SELECT id FROM prod_products WHERE tenant_id=? AND production_zone_id=?', [tenantId, options.zoneId]);
+        allowed=new Set(products.map(product=>Number(product.id)));
+      }
+      if(!allowed)allowed=new Set();
+      order.items = getDisplayOrder(order).items.flatMap(item => {
+        if (item.type === 'combo') { const selections=(item.selections || []).filter(selection => allowed.has(Number(selection.product_id))); return selections.length ? [{...item,selections}] : []; }
+        return allowed.has(Number(item.product_id)) ? [item] : [];
+      });
+      delete order.remaining_order;
+      if (!order.items.length) return null;
+    }
+    if (template.document_type === 'delivery' && order.method_code !== 'delivery') return null;
+    const rendered=generateReceiptHtmlForOrder(order, storeTimezone, template.template_html, { ...options, documentType: template.document_type });
+    const statusCode=String(order.statusCode || '').trim().toLowerCase();
+    if(options.individualPrint && ['delivered','canceled','cancelled'].includes(statusCode)){
+      const canceled=statusCode!=='delivered';
+      const text=!canceled?'ВЫПОЛНЕН · ПОВТОРНАЯ ПЕЧАТЬ':template.document_type==='delivery'?'ОТМЕНЁН · НЕ ДОСТАВЛЯТЬ':['assembly','label'].includes(template.document_type)?'ОТМЕНЁН · НЕ ГОТОВИТЬ':'ЗАКАЗ ОТМЕНЁН';
+      const badge=`<div style="text-align:center;font-weight:bold;font-size:${template.document_type==='label'?'7pt':'13px'};border-bottom:1px solid #000;padding-bottom:1mm;margin-bottom:1mm">${escapeHtml(text)}</div>`;
+      const mark=html=>String(html).replace(/<body\b[^>]*>/i,tag=>tag+badge);
+      return Array.isArray(rendered)?rendered.map(part=>({...part,html:mark(part.html)})):mark(rendered);
+    }
+    return rendered;
   }
 
   async function getActivePrintTemplateHtml(tenantId, documentType) {
@@ -634,7 +683,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     });
   }
 
-  function generateReceiptHtmlForOrder(order, storeTimezone, templateHtml = "") {
+  function generateReceiptHtmlForOrder(order, storeTimezone, templateHtml = "", options = {}) {
     const receiptOrder = getDisplayOrder(order) || order;
     const hasRefunds = hasOrderRefunds(order);
     const createdAtStr = String(receiptOrder.created_at || "").replace(" ", "T");
@@ -671,8 +720,9 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       return Math.round(numeric) === numeric ? String(Math.round(numeric)) : numeric.toFixed(2);
     }
 
-    const receiptItems = Array.isArray(receiptOrder.items)
-      ? receiptOrder.items.slice().sort((a, b) => {
+    const sourceItems = options.items || receiptOrder.items;
+    const receiptItems = Array.isArray(sourceItems)
+      ? sourceItems.slice().sort((a, b) => {
           const aAuto = isAutoAddItem(a);
           const bAuto = isAutoAddItem(b);
           if (aAuto && !bAuto) return 1;
@@ -758,7 +808,11 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         : receiptTotalStr(lineTotal);
     }
 
-    function renderComboItem(item) {
+    function assemblyRow(name, composition, qty) {
+      const details = composition.replace(/receipt-composition-item--sub/g, 'sub').replace(/receipt-composition-item--group/g, 'group').replace(/receipt-composition-item/g, 'detail');
+      return `<tr><td class="check"><span class="box"></span></td><td><b>${name}</b>${details}</td><td class="qty">${escapeHtml(qty)}</td></tr>`;
+    }
+    function renderComboItem(item, assembly = false) {
       const name = escapeHtml(item?.name || item?.combo_title || "Комбо");
       const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
       const qtyStr = `${qty} x`;
@@ -789,6 +843,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
         : "";
 
+      if (assembly) return assemblyRow(name, compositionHtml, qty);
       return `
         <div class="receipt-item">
           <div class="receipt-item-row">
@@ -801,7 +856,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       `;
     }
 
-    function renderProductItem(item) {
+    function renderProductItem(item, assembly = false) {
       const rawName = String(item?.product_name || item?.name || "Товар").trim() || "Товар";
       const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
       const basePrice = parseFloat(item?.price || 0);
@@ -860,6 +915,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
         : "";
 
+      if (assembly) return assemblyRow(name, compositionHtml, qty);
       return `
         <div class="receipt-item">
           <div class="receipt-item-row">
@@ -920,6 +976,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       order: {
         id: receiptOrder.id,
         created_at: dateStr,
+        created_at_short: dateStr,
         schedule_text: scheduleText || (isUrgent ? "Быстрее" : ""),
         address_comment: receiptOrder.address_comment || "",
         comment: receiptOrder.comment || "",
@@ -971,6 +1028,112 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
       },
     };
 
+    if (['assembly','assembly_batch','delivery','label'].includes(options.documentType)) {
+      const comment = value => String(value || '').trim() ? `<div class="note">${escapeHtml(String(value).trim())}</div>` : '';
+      const comments = [...new Set([receiptOrder.address_comment, receiptOrder.comment].map(value => String(value || '').trim()).filter(Boolean))];
+      const payment = require('./helpers/orderPaymentSummary').getOrderPaymentSummary(receiptOrder);
+      const moneyMinor = value => (Number(value) / 100).toLocaleString('ru-RU', {maximumFractionDigits:2}) + ' ₽';
+      const due = payment.paymentSatisfied ? 0 : Math.max(0, payment.amount - payment.paidAmount);
+      const paymentRows = [];
+      if (payment.paidAmount > 0) paymentRows.push(`<div class="pay"><span>Оплачено</span><span>${escapeHtml(moneyMinor(payment.paidAmount))}</span></div>`);
+      const collectionMethod = ({cash:'Наличными',card:'Картой'})[payment.method] || paymentTitle;
+      paymentRows.push(`<div class="pay"><span>${escapeHtml(collectionMethod)} · К получению</span><span>${escapeHtml(moneyMinor(due))}</span></div>`);
+      const data = { ...templateData,
+        assembly: { comment_html: comment(receiptOrder.comment), items_html: receiptItems.map(item => item.type === 'combo' ? renderComboItem(item, true) : renderProductItem(item, true)).join('') },
+        delivery: { ...templateData.delivery, comment_html: comment(comments.join('\n')) },
+        payment: { ...templateData.payment, summary_html: paymentRows.join('') }
+      };
+      const scheduleDate = String(receiptOrder.scheduled_at || receiptOrder.created_at || '').slice(0,10);
+      const needsDate = options.documentType === 'delivery' || (receiptOrder.scheduled_at && scheduleDate !== toDateKey(getStoreDateNow(storeTimezone)));
+      if (needsDate && !/\d{2}\.\d{2}\.\d{4}/.test(data.order.schedule_text)) data.order.schedule_text = `${scheduleDate.split('-').reverse().join('.')} · ${data.order.schedule_text}`;
+      if(['assembly','label','delivery'].includes(options.documentType)){
+        const scheduled=String(receiptOrder.scheduled_at || '').match(/^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2})/);
+        const asap=['asap','urgent'].includes(String(receiptOrder.time_option_code || '').toLowerCase());
+        data.order={...data.order,schedule_date:scheduleDate.split('-').reverse().join('.'),schedule_text:scheduled && !asap ? `Ко времени: ${scheduled[1]}` : (asap && ['label','delivery'].includes(options.documentType)?'Быстрее':receiptOrder.time_option_title || (asap?'Как можно быстрее':''))};
+      }
+      if(options.documentType==='assembly_batch' && options.assemblyGroups){
+        const groups=options.assemblyGroups;
+        const orderIds=groups.flatMap(group=>group.orders.map(order=>order.id));
+        // Batch metadata belongs to the whole selection, not to the anchor order.
+        data.order={...data.order,id:orderIds.join(', '),schedule_text:''};
+        data.assembly.comment_html='';
+        const heading=title=>`<tr><td colspan="3" style="padding:12px 3px 8px;text-align:center;border-top:2px solid #000;border-bottom:2px solid #000;break-after:avoid"><b style="font-size:calc(13px + 1pt)">${escapeHtml(title)}</b></td></tr>`;
+        const days=new Map();
+        for(const group of groups){if(!days.has(group.date))days.set(group.date,[]);days.get(group.date).push(group);}
+        data.assembly.items_html=[...days].map(([date,dayGroups])=>{
+          const title=`Общий лист сборки · ${date.split('-').reverse().join('.')}`;
+          const dayHeading=`<tr><td colspan="3" style="text-align:left;padding:10px 0;border:0;break-after:avoid"><b style="font-size:15px">${escapeHtml(title)}</b></td></tr>`;
+          const content=dayGroups.map(group=>{
+            const items=group.items.slice().sort((a,b)=>Number(isAutoAddItem(a))-Number(isAutoAddItem(b)));
+            return heading(group.title)+items.map(item=>(item.type==='combo'?renderComboItem(item,true):renderProductItem(item,true)).replace(/<td>/g,'<td style="text-align:left">')).join('');
+          }).join('');
+          const tear='<tr><td colspan="3" style="padding:6mm 0 2mm;border:0"><div style="border-top:1px dashed #000"></div></td></tr>';
+          return dayHeading+content+tear;
+        }).join('');
+      }
+      if (options.documentType === 'delivery') {
+        const canceled=['canceled','cancelled'].includes(String(receiptOrder.statusCode || receiptOrder.status_code || '').trim().toLowerCase());
+        if(canceled){
+          const rows=[];
+          if(payment.paidAmount>0)rows.push(`<div class="pay"><span>Оплачено</span><span>${escapeHtml(moneyMinor(payment.paidAmount))}</span></div>`);
+          if(payment.refundedAmount>0)rows.push(`<div class="pay"><span>Возвращено</span><span>${escapeHtml(moneyMinor(payment.refundedAmount))}</span></div>`);
+          data.payment.summary_html=rows.join('');
+        }else if(payment.paymentSatisfied){
+          data.payment.summary_html='<div style="margin-top:12px;text-align:center;font-size:18px;font-weight:bold">ОПЛАЧЕНО</div>';
+        }else{
+          const deliveryPaymentMethod=['cash','card'].includes(receiptOrder.payment_code)?receiptOrder.payment_code:payment.method;
+          const methodText=({cash:'Наличными',card:'Картой'})[deliveryPaymentMethod] || collectionMethod;
+          const rows=[`<div style="margin-top:12px">${escapeHtml(methodText)}</div>`];
+          const tendered=Math.round(changeFrom*100);
+          if(deliveryPaymentMethod==='cash' && tendered>0){
+            rows.push(`<div class="pay"><span>Сдача с</span><span>${escapeHtml(moneyMinor(tendered))}</span></div>`);
+            rows.push(`<div class="pay"><span>Сдача</span><span>${escapeHtml(moneyMinor(Math.max(0,tendered-due)))}</span></div>`);
+          }
+          rows.push(`<div style="margin-top:12px;text-align:center;font-size:20px;font-weight:bold;break-inside:avoid">ПРИНЯТЬ: ${escapeHtml(moneyMinor(due))}</div>`);
+          data.payment.summary_html=rows.join('');
+        }
+        data.delivery.tear_line_html=require('./helpers/printTemplateSamples').getDeliveryTearLineHtml();
+        const parts = [String(data.delivery.address || '').trim()];
+        for (const [value,label,pattern] of [[receiptOrder.address_apartment,'кв.',/кв[.\s]|квартира|офис/i],[receiptOrder.address_entrance,'подъезд',/подъезд/i],[receiptOrder.address_floor,'этаж',/этаж/i]]) {
+          if (String(value || '').trim() && !pattern.test(parts[0])) parts.push(`${label} ${String(value).trim()}`);
+        }
+        data.delivery.address = parts.filter(Boolean).join(', ');
+      }
+      if (options.documentType === 'label') {
+        const labelTemplate=String(templateHtml).replace(/<div class="label-header">\s*<span class="label-order">№\{\{\s*order.id\s*\}\}<\/span>\s*<span class="label-datetime">\{\{\s*order.created_at_short\s*\}\}<\/span>\s*<\/div>\s*<div class="label-schedule">\{\{\s*order.schedule_text\s*\}\}<\/div>/,require('./helpers/printTemplateSamples').getLabelHeaderHtml());
+        return receiptItems.map(item => {
+          const quantity = Math.max(1, Number(item.quantity || item.qty || 1));
+          const unit = { ...item, quantity: 1, qty: 1 };
+          const content = item.type === 'combo' ? renderComboItem(unit, true) : renderProductItem(unit, true);
+          const name = (content.match(/<b>([\s\S]*?)<\/b>/) || [,''])[1];
+          const composition = (content.match(/<div class="receipt-composition">([\s\S]*)<\/div><\/td>/) || [,''])[1];
+          const labelData = {...data, item:{...data.item, name, composition_html:composition.replace(/class="detail(?: sub| group)?"/g,'class="label-composition-item"'), variant_label:'', ingredient_quantity:'', ingredient_unit:'', ingredient_name:'', option_variant:'', option_title:'', client_composition:''}, composition:{html:composition}, gift:{name:'',html:''}};
+          const html = renderPrintTemplate(labelTemplate, labelData, new Set(["item.name"]));
+          return { html, copies: quantity };
+        });
+      }
+      let documentTemplate = ['assembly','assembly_batch'].includes(options.documentType)
+        ? String(templateHtml).replace(/<thead\b[^>]*>[\s\S]*?<\/thead\s*>/gi, '')
+        : templateHtml;
+      if(options.documentType==='assembly_batch'){
+        if(options.assemblyGroups)documentTemplate=documentTemplate.replace(/<header\b[^>]*>\s*Общий лист сборки\s*<\/header>/i,'');
+        documentTemplate=documentTemplate.replace(/<table\b([^>]*)>([\s\S]*?\{\{\s*assembly.items_html\s*\}\}[\s\S]*?)<\/table>/i,(match,attributes,body)=>{
+          const columns='<colgroup><col style="width:22px"><col><col style="width:43px"></colgroup>';
+          return `<table${attributes}>${/<colgroup\b/i.test(body)?'':columns}${body}</table>`;
+        });
+      }
+      if(options.documentType==='assembly'){
+        documentTemplate=String(documentTemplate).replace('<header>№{{ order.id }} · {{ order.schedule_text }} · {{ delivery.type }}</header>',require('./helpers/printTemplateSamples').getAssemblyHeaderHtml());
+      }
+      if(options.documentType==='delivery'){
+        documentTemplate=String(documentTemplate).replace('<header>№{{ order.id }} · {{ order.schedule_text }}</header>',require('./helpers/printTemplateSamples').getAssemblyHeaderHtml());
+        if(!/\{\{\s*delivery.tear_line_html\s*\}\}/.test(documentTemplate)){
+          documentTemplate=documentTemplate.replace(/<\/body\s*>/i,'{{ delivery.tear_line_html }}</body>');
+        }
+      }
+      const rendered = renderPrintTemplate(documentTemplate, data);
+      return rendered + `<script>addEventListener('load',async()=>{await document.fonts.ready;const height=Math.ceil(document.body.scrollHeight*25.4/96+1);const style=document.createElement('style');style.textContent='@page{size:80mm '+height+'mm;margin:0}';document.head.append(style);});</script>`;
+    }
     if (String(templateHtml || "").trim()) {
       return renderPrintTemplate(templateHtml, templateData, new Set(["receipt.items_html", "receipt.summary_html", "item.total"]));
     }
@@ -1194,8 +1357,37 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
   };
 }
 
-function makePrintApiRouter({ db, helpers }) {
+function makePrintApiRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+  const presenceExpiry=new Map(),printerSnapshots=new Map();
+  function publishPrintChange(scope,kind){ordersEvents.publish(scope.tenant_id,0,'print.changed',{kind,store_id:scope.store_id,connection_id:scope.id});}
+  router.use((req,res,next)=>{
+    const json=res.json.bind(res);
+    res.json=payload=>{
+      const scope=req.printScope;
+      if(scope&&payload?.ok!==false&&res.statusCode<400){
+        if(req.path==='/agent/heartbeat'&&req.printAgent){
+          const agent=req.printAgent,key=String(agent.id),running=!(req.body.running===false||req.body.running===0||req.body.running==='0'||req.body.running==='false');
+          const online=Number(agent.agent_running)===1&&Date.now()-new Date(agent.last_heartbeat_at).getTime()<15000;
+          const signature=JSON.stringify([req.body.agent_name||null,req.body.agent_version||null,req.body.printer_name||null]);
+          const previous=JSON.stringify([agent.device_name||null,agent.agent_version||null,agent.printer_name||null]);
+          if(online!==running)publishPrintChange(scope,'presence');
+          else if(signature!==previous)publishPrintChange(scope,'devices');
+          if(req.printControlChanged)publishPrintChange(scope,'control');
+          clearTimeout(presenceExpiry.get(key));presenceExpiry.delete(key);
+          if(running){const timer=setTimeout(()=>{presenceExpiry.delete(key);publishPrintChange(scope,'presence');},15050);timer.unref?.();presenceExpiry.set(key,timer);}
+        }else if(req.path==='/printers/sync'){
+          const key=scope.id+':'+String(req.body.installation_id||'legacy');
+          const value=JSON.stringify((req.body.printers||[]).map(item=>[item.system_name,item.display_name,item.status,Boolean(item.is_default)]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
+          if(printerSnapshots.get(key)!==value){printerSnapshots.set(key,value);publishPrintChange(scope,'devices');}
+        }else if(req.path==='/agent/control'&&req.printControlChanged)publishPrintChange(scope,'control');
+        else if(req.path==='/agent/register'||req.path==='/printers/rename')publishPrintChange(scope,'devices');
+        else if((req.path==='/poll'&&payload?.data?.job)||(req.path==='/jobs/next'&&payload?.data?.job_id)||(/^\/jobs\/\d+\/(ack|fail|release|progress)$/.test(req.path)&&req.method==='POST'&&req.printJobChanged!==false))publishPrintChange(scope,'queue');
+      }
+      return json(payload);
+    };next();
+  });
+
   const HTML_JOB_PREFIX = "__HTML_BASE64__:";
   const orderPrintTemplateBuilder = createOrderPrintTemplateBuilder({ db, helpers });
 
@@ -1247,7 +1439,7 @@ function makePrintApiRouter({ db, helpers }) {
     return null;
   }
 
-  async function resolveToken(token) {
+  async function resolveToken(token, request) {
     let rows;
     try {
       [rows] = await db.query(
@@ -1276,6 +1468,7 @@ function makePrintApiRouter({ db, helpers }) {
     if (!rows.length) return null;
     const row = rows[0];
     if (!Number(row.is_active)) return null;
+    if(request)request.printScope=row;
     return row;
   }
 
@@ -1404,6 +1597,40 @@ function makePrintApiRouter({ db, helpers }) {
     };
   }
 
+  async function readPrintControl(tokenRow) {
+    const [rows]=await db.query('SELECT printing_paused,print_control_version FROM print_api_tokens WHERE id=? AND tenant_id=? AND store_id=?',[tokenRow.id,tokenRow.tenant_id,tokenRow.store_id]);
+    if(!rows.length)throw new Error('PRINT_CONNECTION_NOT_FOUND');
+    return {paused:Number(rows[0].printing_paused)===1,version:Number(rows[0].print_control_version)};
+  }
+
+  router.post('/agent/register',async(req,res)=>{
+    try{
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
+      if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
+      const installationId=String(req.body?.installation_id||'').trim();
+      if(!installationId)return res.status(400).json({ok:false,error:'INSTALLATION_REQUIRED'});
+      const [rows]=await db.query('SELECT id,token_id FROM print_agents WHERE tenant_id=? AND store_id=? AND installation_id=?',[tokenRow.tenant_id,tokenRow.store_id,installationId]);
+      if(rows.length&&Number(rows[0].token_id)!==Number(tokenRow.id))return res.status(409).json({ok:false,error:'PRINT_AGENT_CONNECTION_MISMATCH'});
+      if(rows.length)await db.query('UPDATE print_agents SET removed_at=NULL,updated_at=NOW() WHERE id=?',[rows[0].id]);
+      else await resolvePrintContext(tokenRow,installationId);
+      return res.json({ok:true});
+    }catch(error){console.error(error);return res.status(500).json({ok:false,error:'PRINT_AGENT_REGISTER_FAILED'});}
+  });
+
+  router.post('/agent/control',async(req,res)=>{
+    try{
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
+      if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
+      if(typeof req.body?.paused!=='boolean')return res.status(400).json({ok:false,error:'BAD_PRINT_CONTROL'});
+      const context=await resolvePrintContext(tokenRow,req.body.installation_id);
+      if(!context)return res.status(409).json({ok:false,error:'PRINT_AGENT_CONNECTION_MISMATCH'});
+      const [changed]=await db.query(`UPDATE print_api_tokens SET printing_paused=?,print_control_version=print_control_version+1,updated_at=NOW()
+        WHERE id=? AND tenant_id=? AND store_id=? AND printing_paused<>?`,[req.body.paused?1:0,tokenRow.id,tokenRow.tenant_id,tokenRow.store_id,req.body.paused?1:0]);
+      req.printControlChanged=changed.affectedRows>0;
+      return res.json({ok:true,data:{print_control:await readPrintControl(tokenRow)}});
+    }catch(error){console.error('Print control failed:',error);return res.status(500).json({ok:false,error:'PRINT_CONTROL_FAILED'});}
+  });
+
   async function claimNextPrintJob(tokenRow, context = null) {
     const tenantId = Number(tokenRow.tenant_id);
     const storeId = Number(tokenRow.store_id);
@@ -1415,15 +1642,17 @@ function makePrintApiRouter({ db, helpers }) {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      const [controls]=await conn.query('SELECT printing_paused FROM print_api_tokens WHERE id=? AND tenant_id=? AND store_id=? FOR UPDATE',[tokenId,tenantId,storeId]);
+      if(!controls.length||Number(controls[0].printing_paused)===1){await conn.commit();return null;}
       const [rows] = await conn.query(
         `
         SELECT j.id, j.order_id, j.public_id, j.job_name, j.pdf_base64, j.attempts,
-               j.target_printer_id, j.target_agent_id, p.system_name AS target_printer_system_name
+               j.target_printer_id, j.target_agent_id, j.retry_of_job_id, j.printed_copies, p.system_name AS target_printer_system_name
         FROM print_jobs j
         LEFT JOIN print_printers p ON p.tenant_id=j.tenant_id AND p.store_id=j.store_id AND p.id=j.target_printer_id
-        WHERE j.tenant_id=? AND j.store_id=? AND j.token_id=?
+        WHERE j.tenant_id=? AND j.store_id=? AND j.token_id=? AND j.deleted_at IS NULL
           AND (j.target_agent_id IS NULL OR j.target_agent_id=? )
-          AND (j.target_printer_id IS NULL OR (p.agent_id=? AND p.token_id=j.token_id))
+          AND (j.target_printer_id IS NULL OR (p.agent_id=? AND p.token_id=j.token_id AND p.removed_at IS NULL))
           AND (
             j.status='pending'
             OR (j.status='processing' AND j.locked_at < ?)
@@ -1505,7 +1734,11 @@ function makePrintApiRouter({ db, helpers }) {
       );
       [rows] = await db.query(lookupSql, lookupParams);
     }
-    if (!rows.length) return null;
+    if (!rows.length) {
+      throw new Error("PRINT_AGENT_REGISTRATION_FAILED: check print_agents unique indexes; apply the legacy_token_id repair from 2026-09-06_print_api_connections_agents_foundation.sql");
+    }
+    if (Number(rows[0].token_id) !== tokenId) return null;
+    if(rows[0].removed_at)return null;
     return { token: tokenRow, agent: rows[0] };
   }
 
@@ -1766,7 +1999,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -1817,7 +2050,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -1840,6 +2073,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
       }
 
+      req.printAgent=context.agent;
       await db.query(
         `UPDATE print_agents
          SET device_name=?, agent_version=?, printer_name=?, last_heartbeat_at=NOW(),
@@ -1880,7 +2114,59 @@ function makePrintApiRouter({ db, helpers }) {
         ]
       );
 
-      return res.json({ ok: true });
+      const control=await readPrintControl(tokenRow);
+      if(Number.isSafeInteger(req.body?.applied_print_control_version) && req.body.applied_print_control_version===control.version){
+        req.printControlChanged=Number(context.agent.applied_print_control_version)!==control.version;
+        await db.query('UPDATE print_agents SET applied_print_control_version=? WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?',[control.version,context.agent.id,tokenRow.tenant_id,tokenRow.store_id,tokenRow.id]);
+      }
+      return res.json({ ok: true, data:{print_control:control} });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  async function selectConnectionPrinters(tokenRow, agentId) {
+    const [printers] = await db.query(
+      `SELECT p.id, p.agent_id, p.system_name, p.display_name, p.is_default,
+              p.status, p.last_seen_at, a.device_name,
+              IF(p.agent_id=?,1,0) AS is_local,
+              IF(a.agent_running=1 AND a.last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),1,0) AS agent_online,
+              COALESCE(q.queue_count,0) AS queue_count, COALESCE(q.failed_count,0) AS failed_count
+       FROM print_printers p
+       JOIN print_agents a ON a.id=p.agent_id AND a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.token_id=p.token_id
+       LEFT JOIN (
+         SELECT target_printer_id, SUM(status IN ('pending','processing')) AS queue_count,
+                SUM(status='failed') AS failed_count
+         FROM print_jobs WHERE tenant_id=? AND store_id=? AND token_id=?
+           AND deleted_at IS NULL AND status IN ('pending','processing','failed') AND target_printer_id IS NOT NULL
+         GROUP BY target_printer_id
+       ) q ON q.target_printer_id=p.id
+       WHERE p.tenant_id=? AND p.store_id=? AND p.token_id=? AND p.removed_at IS NULL AND a.removed_at IS NULL
+       ORDER BY is_local DESC, p.agent_id ASC, p.is_default DESC, p.display_name ASC, p.id ASC`,
+      [agentId, tokenRow.tenant_id, tokenRow.store_id, tokenRow.id,
+        tokenRow.tenant_id, tokenRow.store_id, tokenRow.id]
+    );
+    const [unassigned] = await db.query(
+      `SELECT COUNT(*) AS queue_count FROM print_jobs
+       WHERE tenant_id=? AND store_id=? AND token_id=?
+         AND deleted_at IS NULL AND status IN ('pending','processing') AND target_printer_id IS NULL`,
+      [tokenRow.tenant_id, tokenRow.store_id, tokenRow.id]
+    );
+    return { printers, unassigned_queue_count: Number(unassigned[0]?.queue_count || 0) };
+  }
+
+  // Read CRM names/default selection without rewriting unchanged device state.
+  router.get("/printers", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key");
+      if (!apiKey) return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
+      if (!tokenRow) return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      const context = await resolvePrintContext(tokenRow, req.query.installation_id);
+      if (!context) return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
+      const data = await selectConnectionPrinters(tokenRow, Number(context.agent.id));
+      return res.json({ ok: true, data });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: "DB_ERROR" });
@@ -1895,7 +2181,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, success: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, success: false, error: "API_KEY_INVALID" });
       }
@@ -1930,12 +2216,15 @@ function makePrintApiRouter({ db, helpers }) {
       const agentId = Number(context.agent.id);
       const printerNames = Array.from(printersByName.keys());
 
+      const [defaultRows] = await db.query(
+        "SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND agent_id=? AND is_default=1 AND removed_at IS NULL LIMIT 1",
+        [tenantId, storeId, agentId]
+      );
+      let hasDefaultPrinter = defaultRows.length > 0;
+      const [existingRows]=await db.query('SELECT system_name FROM print_printers WHERE tenant_id=? AND store_id=? AND agent_id=?',[tenantId,storeId,agentId]);
+      const existingNames=new Set(existingRows.map(item=>String(item.system_name).toLowerCase()));
       for (const printer of printersByName.values()) {
-        const [defaultRows] = await db.query(
-          "SELECT id FROM print_printers WHERE tenant_id=? AND store_id=? AND agent_id=? AND is_default=1 LIMIT 1",
-          [tenantId, storeId, agentId]
-        );
-        const hasDefaultPrinter = defaultRows.length > 0;
+        if(printer.status!=='online'&&!existingNames.has(printer.systemName.toLowerCase()))continue;
         await db.query(
           `
           INSERT INTO print_printers
@@ -1949,6 +2238,8 @@ function makePrintApiRouter({ db, helpers }) {
             agent_id=VALUES(agent_id),
             display_name=VALUES(display_name),
             is_default=IF(?, is_default, VALUES(is_default)),
+            removed_at=IF(removed_at IS NOT NULL AND rediscovery_armed=1 AND VALUES(status)='online',NULL,removed_at),
+            rediscovery_armed=IF(removed_at IS NULL,0,IF(VALUES(status)='offline',1,rediscovery_armed)),
             status=VALUES(status),
             last_seen_at=NOW(),
             updated_at=NOW()
@@ -1965,13 +2256,14 @@ function makePrintApiRouter({ db, helpers }) {
             hasDefaultPrinter ? 1 : 0
           ]
         );
+        if (printer.isDefault) hasDefaultPrinter = true;
       }
 
       if (printerNames.length > 0) {
         await db.query(
           `
           UPDATE print_printers
-          SET status='offline', updated_at=NOW()
+          SET status='offline', rediscovery_armed=IF(removed_at IS NOT NULL,1,rediscovery_armed), updated_at=NOW()
           WHERE tenant_id=? AND store_id=? AND agent_id=?
             AND system_name NOT IN (?)
           `,
@@ -1981,25 +2273,16 @@ function makePrintApiRouter({ db, helpers }) {
         await db.query(
           `
           UPDATE print_printers
-          SET status='offline', updated_at=NOW()
+          SET status='offline', rediscovery_armed=IF(removed_at IS NOT NULL,1,rediscovery_armed), updated_at=NOW()
           WHERE tenant_id=? AND store_id=? AND agent_id=?
           `,
           [tenantId, storeId, agentId]
         );
       }
 
-      const [syncedPrinters] = await db.query(
-        `
-        SELECT system_name, display_name, is_default, status, last_seen_at
-        FROM print_printers
-        WHERE tenant_id=? AND store_id=? AND agent_id=?
-        ORDER BY is_default DESC, display_name ASC, system_name ASC
-        `,
-        [tenantId, storeId, agentId]
-      );
-
+      const data = await selectConnectionPrinters(tokenRow, agentId);
       await touchTokenUsage(tokenId);
-      return res.json({ ok: true, success: true, data: { printers: syncedPrinters || [] } });
+      return res.json({ ok: true, success: true, data });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, success: false, error: "DB_ERROR" });
@@ -2014,7 +2297,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, success: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, success: false, error: "API_KEY_INVALID" });
       }
@@ -2071,7 +2354,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2086,7 +2369,7 @@ function makePrintApiRouter({ db, helpers }) {
 
       let jobPayload = job.pdf_base64 || "";
       const jobOrderId = Number(job.order_id || 0);
-      if (jobOrderId > 0 && String(jobPayload).startsWith(HTML_JOB_PREFIX)) {
+      if (!job.retry_of_job_id && jobOrderId > 0 && String(jobPayload).startsWith(HTML_JOB_PREFIX)) {
         const freshHtml = await buildOrderTemplateHtml(
           Number(tokenRow.tenant_id),
           Number(tokenRow.store_id),
@@ -2123,6 +2406,8 @@ function makePrintApiRouter({ db, helpers }) {
           job_id: Number(job.id),
           job_name: job.job_name || "CRM Receipt",
           attempts: Number(job.attempts || 0),
+          retry_of_job_id: Number(job.retry_of_job_id || 0) || null,
+          printed_copies: Number(job.printed_copies || 0),
           target_printer_id: Number(job.target_printer_id || 0) || null,
           printer_name: job.target_printer_system_name || null,
           order: {
@@ -2147,7 +2432,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2205,7 +2490,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2215,12 +2500,15 @@ function makePrintApiRouter({ db, helpers }) {
 
       const context = await resolvePrintContext(tokenRow, req.query?.installation_id);
       if (!context) return res.status(409).json({ ok: false, error: "PRINT_AGENT_CONNECTION_MISMATCH" });
-      const job = await claimNextPrintJob(tokenRow, context);
+      const rawAfterMessageId = Number(req.query.after_message_id ?? req.query.after_id ?? 0);
+      const initCursorMode = Number.isFinite(rawAfterMessageId) && rawAfterMessageId < 0;
+      // Cursor initialization must not claim and discard a print job.
+      const job = initCursorMode || req.query.accept_jobs==='0' ? null : await claimNextPrintJob(tokenRow, context);
       let jobData = null;
       if (job) {
         let jobPayload = job.pdf_base64 || "";
         const jobOrderId = Number(job.order_id || 0);
-        if (jobOrderId > 0 && String(jobPayload).startsWith(HTML_JOB_PREFIX)) {
+        if (!job.retry_of_job_id && jobOrderId > 0 && String(jobPayload).startsWith(HTML_JOB_PREFIX)) {
           const freshHtml = await buildOrderTemplateHtml(tenantId, storeId, jobOrderId);
           const freshPayload = encodeHtmlJobPayload(freshHtml);
           if (freshPayload) {
@@ -2243,6 +2531,8 @@ function makePrintApiRouter({ db, helpers }) {
           job_id: Number(job.id),
           job_name: job.job_name || "CRM Receipt",
           attempts: Number(job.attempts || 0),
+          retry_of_job_id: Number(job.retry_of_job_id || 0) || null,
+          printed_copies: Number(job.printed_copies || 0),
           target_printer_id: Number(job.target_printer_id || 0) || null,
           printer_name: job.target_printer_system_name || null,
           order: {
@@ -2253,8 +2543,6 @@ function makePrintApiRouter({ db, helpers }) {
         };
       }
 
-      const rawAfterMessageId = Number(req.query.after_message_id ?? req.query.after_id ?? 0);
-      const initCursorMode = Number.isFinite(rawAfterMessageId) && rawAfterMessageId < 0;
       const afterMessageId = Number.isFinite(rawAfterMessageId) && rawAfterMessageId > 0 ? rawAfterMessageId : 0;
 
       let messageEvent = null;
@@ -2298,6 +2586,7 @@ function makePrintApiRouter({ db, helpers }) {
         ok: true,
         data: {
           job: jobData,
+          print_control: await readPrintControl(tokenRow),
           message_event: messageEvent,
           message_cursor: messageCursor
         }
@@ -2316,7 +2605,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2346,7 +2635,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2374,6 +2663,48 @@ function makePrintApiRouter({ db, helpers }) {
     }
   });
 
+  // Revalidate the claim immediately before sending a document to Windows.
+  router.get('/jobs/:id/ready',async(req,res)=>{
+    try{
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
+      if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
+      const context=await resolvePrintContext(tokenRow,req.query.installation_id);
+      if(!context)return res.status(409).json({ok:false,error:'PRINT_AGENT_CONNECTION_MISMATCH'});
+      const [rows]=await db.query(`SELECT id FROM print_jobs WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?
+        AND status='processing' AND deleted_at IS NULL AND claimed_by_agent_id=?`,[Number(req.params.id),tokenRow.tenant_id,tokenRow.store_id,tokenRow.id,context.agent.id]);
+      return res.json({ok:true,data:{ready:rows.length>0,print_control:await readPrintControl(tokenRow)}});
+    }catch(error){console.error(error);return res.status(500).json({ok:false,error:'PRINT_JOB_VALIDATION_FAILED'});}
+  });
+  router.post('/jobs/:id/progress',async(req,res)=>{
+    try{
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
+      if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
+      const context=await resolvePrintContext(tokenRow,req.body?.installation_id);
+      const copies=Number(req.body?.printed_copies);
+      if(!context||!Number.isSafeInteger(copies)||copies<1)return res.status(400).json({ok:false,error:'BAD_PRINT_PROGRESS'});
+      const [result]=await db.query(`UPDATE print_jobs SET printed_copies=GREATEST(printed_copies,?),updated_at=NOW()
+        WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing' AND claimed_by_agent_id=? AND printed_copies<?`,[copies,Number(req.params.id),tokenRow.tenant_id,tokenRow.store_id,tokenRow.id,context.agent.id,copies]);
+      req.printJobChanged=result.affectedRows>0;
+      if(!req.printJobChanged){
+        const [existing]=await db.query(`SELECT id FROM print_jobs WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing' AND claimed_by_agent_id=? AND printed_copies>=?`,[Number(req.params.id),tokenRow.tenant_id,tokenRow.store_id,tokenRow.id,context.agent.id,copies]);
+        return res.status(existing.length?200:409).json({ok:existing.length>0});
+      }
+      return res.json({ok:true});
+    }catch(error){console.error(error);return res.status(500).json({ok:false,error:'PRINT_PROGRESS_FAILED'});}
+  });
+  router.post('/jobs/:id/release',async(req,res)=>{
+    try{
+      const tokenRow=await resolveToken(String(req.get('X-Api-Key')||'').trim(),req);
+      if(!tokenRow)return res.status(403).json({ok:false,error:'API_KEY_INVALID'});
+      const context=await resolvePrintContext(tokenRow,req.body?.installation_id);
+      if(!context)return res.status(409).json({ok:false,error:'PRINT_AGENT_CONNECTION_MISMATCH'});
+      const [changed]=await db.query(`UPDATE print_jobs SET status='pending',locked_at=NULL,claimed_by_agent_id=NULL,attempts=GREATEST(0,attempts-1),updated_at=NOW()
+        WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing' AND claimed_by_agent_id=?`,[Number(req.params.id),tokenRow.tenant_id,tokenRow.store_id,tokenRow.id,context.agent.id]);
+      req.printJobChanged=changed.affectedRows>0;
+      return res.json({ok:true});
+    }catch(error){console.error(error);return res.status(500).json({ok:false,error:'PRINT_JOB_RELEASE_FAILED'});}
+  });
+
   router.post("/jobs/:id/ack", async (req, res) => {
     try {
       const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
@@ -2381,7 +2712,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2440,7 +2771,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2460,14 +2791,14 @@ function makePrintApiRouter({ db, helpers }) {
         `
         UPDATE print_jobs
         SET
-          status=CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+          status=CASE WHEN ? OR attempts >= 5 THEN 'failed' ELSE 'pending' END,
           locked_at=NULL,
           last_error=?,
           updated_at=?
         WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing'
           AND ((target_agent_id IS NULL AND claimed_by_agent_id=?) OR claimed_by_agent_id=?)
         `,
-        [errorText, nowSql, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id), agentId, agentId]
+        [req.body?.terminal===true?1:0, errorText, nowSql, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id), agentId, agentId]
       );
 
       if (!Number(result.affectedRows || 0)) {
@@ -2522,7 +2853,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }
@@ -2996,7 +3327,7 @@ function makePrintApiRouter({ db, helpers }) {
         return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
       }
 
-      const tokenRow = await resolveToken(String(apiKey).trim());
+      const tokenRow = await resolveToken(String(apiKey).trim(),req);
       if (!tokenRow) {
         return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
       }

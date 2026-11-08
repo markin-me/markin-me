@@ -40,6 +40,17 @@
       </div>
     `;
     document.body.appendChild(wrap);
+    let swipeStart = null;
+    wrap.addEventListener("touchstart", (event) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : null;
+      swipeStart = touch && touch.clientX <= 28 ? { x: touch.clientX, y: touch.clientY } : null;
+    }, { passive: true });
+    wrap.addEventListener("touchcancel", () => { swipeStart = null; }, { passive: true });
+    wrap.addEventListener("touchend", (event) => {
+      const touch = event.changedTouches[0];
+      if (swipeStart && touch && touch.clientX - swipeStart.x > 80 && Math.abs(touch.clientY - swipeStart.y) < 60 && wrap.dataset.mobilePage === "1") window.__adminMobilePages?.back();
+      swipeStart = null;
+    }, { passive: true });
 
     wrap.addEventListener("click", (event) => {
       if (event.target !== wrap) return;
@@ -124,10 +135,28 @@
     modeToggle.classList.toggle("hidden", config.showModeToggle === false);
     setModeToggleState(config.mode || "customer");
     if (config.clearBody !== false) body.innerHTML = "";
+    if (document.body.matches('.page-new-order, .new-order-editor-active') && window.matchMedia("(max-width: 768px)").matches) {
+      const opened = window.__adminMobilePages?.openSubview(title.textContent, () => state.handlers.onClose?.(), {
+        beforeBack: () => {
+          if (config.showBack !== true || !state.handlers.onBack) return true;
+          state.handlers.onBack();
+          return false;
+        },
+      });
+      if (opened) {
+        backdrop.dataset.mobilePage = "1";
+        document.body.classList.add("new-order-mobile-subpage");
+      }
+    }
   }
 
   function hide(options = {}) {
     const { backdrop, body } = getElements();
+    if (backdrop?.dataset.mobilePage === "1") {
+      delete backdrop.dataset.mobilePage;
+      document.body.classList.remove("new-order-mobile-subpage");
+      window.__adminMobilePages?.closeSubview();
+    }
     if (backdrop) backdrop.classList.add("hidden");
     if (body && options.clearBody !== false) body.innerHTML = "";
     state.handlers.onClose = null;

@@ -884,7 +884,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     const settings = await loadBonusProgramSettings(queryable, normalizedTenantId);
     const blockedByRedeem = Boolean(benefitsMeta?.bonus_accrual_blocked_by_redeem)
       || (redeemAmount > 0 && !settings.allowRedeemAndAccrue);
-    const storedAccrualAmount = Number.isFinite(Number(benefitsMeta?.bonus_accrual_amount))
+    const storedAccrualAmount = benefitsMeta?.bonus_accrual_amount != null && Number.isFinite(Number(benefitsMeta.bonus_accrual_amount))
       ? Number(benefitsMeta.bonus_accrual_amount)
       : null;
     const recalculatedAccrualAmount = blockedByRedeem || storedAccrualAmount != null
@@ -1736,8 +1736,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
 
   async function fetchOrderPayload(tenantId, storeId, id, opts = {}) {
     const storeTimezone = opts.storeTimezone ?? await getStoreTimezone(tenantId, storeId);
-    const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
-    const [rows] = await db.query(
+    const hasBenefitsMetaColumn = opts.hasBenefitsMetaColumn ?? await ensureOrderBenefitsMetaColumn();
+    const [rows] = opts.prefetchedRow ? [[opts.prefetchedRow]] : await db.query(
       `
       SELECT
         o.id,
@@ -1833,22 +1833,35 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
       LEFT JOIN ten_delivery_zones dz
         ON dz.tenant_id=o.tenant_id AND dz.id=ca.delivery_zone_id
-      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
-      LIMIT 1
+      WHERE o.tenant_id=? AND o.store_id=? AND o.id ${Array.isArray(id) ? `IN (${id.map(()=>"?").join(",")})` : "=?"} AND o.is_active=1
+      ${Array.isArray(id) ? "" : "LIMIT 1"}
       `,
-      [tenantId, storeId, id]
+      [tenantId, storeId, ...(Array.isArray(id) ? id : [id])]
     );
 
+    if(Array.isArray(id)){
+      const allItems=rows.flatMap(row=>parseOrderItemsJson(row.items));
+      const productIds=[...new Set(allItems.map(item=>Number(item?.product_id)).filter(id=>id>0))];
+      const [productRows]=productIds.length ? await db.query(`SELECT id,production_zone_id FROM prod_products WHERE tenant_id=? AND id IN (${productIds.map(()=>'?').join(',')})`,[tenantId,...productIds]) : [[]];
+      const productZoneById=new Map(productRows.map(row=>[Number(row.id),Number(row.production_zone_id)]));
+      await enrichOrderItemsWithBuyXGetYBadges(tenantId,storeId,allItems);
+      // The same parsed item objects carry the enriched badges into each payload.
+      const itemsById=new Map();let offset=0;
+      for(const row of rows){const count=parseOrderItemsJson(row.items).length;itemsById.set(Number(row.id),allItems.slice(offset,offset+count));offset+=count;}
+      const payloads=[];
+      for(const row of rows)payloads.push(await fetchOrderPayload(tenantId,storeId,row.id,{storeTimezone,hasBenefitsMetaColumn,prefetchedRow:row,productZoneById,prefetchedItems:itemsById.get(Number(row.id)),skipRefunds:true}));
+      return attachRefundDataToOrders(db,tenantId,storeId,payloads,{storeTimezone});
+    }
     if (!rows.length) return null;
     const r = rows[0];
 
-    const items = parseOrderItemsJson(r.items);
+    const items = opts.prefetchedItems || parseOrderItemsJson(r.items);
 
     const itemProductIds = [...new Set(items
       .map((item) => Number(item?.product_id || 0))
       .filter((productId) => productId > 0))];
     if (itemProductIds.length) {
-      const [productRows] = await db.query(
+      const [productRows] = opts.productZoneById ? [[...opts.productZoneById].map(([id,production_zone_id])=>({id,production_zone_id}))] : await db.query(
         `SELECT id, production_zone_id
            FROM prod_products
           WHERE tenant_id=? AND id IN (${itemProductIds.map(() => "?").join(",")})`,
@@ -1871,7 +1884,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       });
     }
 
-    await enrichOrderItemsWithBuyXGetYBadges(tenantId, storeId, items);
+    if(!opts.prefetchedItems)await enrichOrderItemsWithBuyXGetYBadges(tenantId, storeId, items);
     const discountsJson = parseOrderDiscountsJson(r.discounts_json);
     const benefitsMeta = parseOrderBenefitsMetaJson(r.benefits_meta_json);
     const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
@@ -1962,6 +1975,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       delivery_zone_id: Number.isFinite(Number(r.deliveryZoneId)) && Number(r.deliveryZoneId) > 0 ? Number(r.deliveryZoneId) : null,
       delivery_zone_name: helpers.strOrNull(r.deliveryZoneName),
     };
+    if(opts.skipRefunds)return basePayload;
     const [payload] = await attachRefundDataToOrders(db, tenantId, storeId, [basePayload], { storeTimezone });
     return payload || basePayload;
   }
@@ -2676,6 +2690,37 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
   // ---------------------------
   // print template
   // ---------------------------
+  router.get('/print/options', async (req,res) => {
+    try { const {getPrintChoices}=require('../printPush');res.json({ok:true,data:await getPrintChoices(db,helpers.getTenantId(req),helpers.getStoreId(req))}); }
+    catch(error) {console.error('Print choices:',error);res.status(500).json({ok:false,error:'PRINT_OPTIONS_FAILED'});}
+  });
+  router.post('/print/documents', async (req,res) => {
+    const errorId=crypto.randomUUID();
+    const started=process.hrtime.bigint();
+    let preparationMs=0;
+    try {
+      const {preparePrintDocuments,enqueueDocuments}=require('../printPush');
+      const tenantId=helpers.getTenantId(req),storeId=helpers.getStoreId(req);
+      if (!Array.isArray(req.body?.order_ids)) return res.status(400).json({ok:false,error:'BAD_ORDER_IDS'});
+      const orderIds=[...new Set(req.body.order_ids)];
+      const printContext=req.body.print_context || (orderIds.length>1?'bulk':'order');
+      if(!['bulk','order'].includes(printContext) || (printContext==='order' && orderIds.length!==1))return res.status(400).json({ok:false,error:'BAD_PRINT_CONTEXT'});
+      if (!['agent','browser'].includes(req.body?.destination)) return res.status(400).json({ok:false,error:'BAD_PRINT_DESTINATION'});
+      const documents=await preparePrintDocuments(db,{tenantId,storeId,orderIds,selections:req.body?.selections,destination:req.body.destination,bulk:printContext==='bulk'});
+      preparationMs=Number(process.hrtime.bigint()-started)/1e6;
+      res.setHeader('Server-Timing',`print_prepare;dur=${preparationMs.toFixed(1)}`);
+      if (documents.length>500) return res.status(400).json({ok:false,error:'TOO_MANY_DOCUMENTS'});
+      if (req.body.destination==='browser') return res.json({ok:true,data:{documents:documents.map(({html,copies,type,title})=>({html,copies,type,title}))}});
+      const count=await enqueueDocuments(db,{tenantId,storeId,documents,requestId:req.body?.request_id});
+      const queueMs=Number(process.hrtime.bigint()-started)/1e6-preparationMs;
+      res.setHeader('Server-Timing',`print_prepare;dur=${preparationMs.toFixed(1)}, print_enqueue;dur=${queueMs.toFixed(1)}`);
+      res.json({ok:true,data:{queued:count}});
+    } catch(error) {
+      console.error('Print documents:',{errorId,tenantId:helpers.getTenantId(req),storeId:helpers.getStoreId(req),destination:req.body?.destination,orderIds:req.body?.order_ids,selections:req.body?.selections,context:error.printContext},error);
+      res.status(400).json({ok:false,error:error.code==='ER_BAD_FIELD_ERROR'?'PRINT_MIGRATION_REQUIRED':/^[A-Z_]+$/.test(error.message)?error.message:'PRINT_FAILED',error_id:errorId});
+    }
+  });
+
   // GET /api/admin/orders/:id/print-template
   router.get("/:id/print-template", async (req, res) => {
     try {
@@ -3453,7 +3498,193 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     }
   };
 
-  router.put("/:id/status", async (req, res) => {
+  // Shared business operations; callers own transaction boundaries.
+  async function prepareOrderStatusChange(conn, {req,tenantId,storeId,id,statusId,orderRow,statusRows,statuses,tenantRows,visitedStatusIds=[],expectedStatusId=req.body.expected_status_id}) {
+      if(Number(orderRow.online_payment_required) && ['canceled','cancelled'].includes(String(statusRows[0]?.code))) {
+        const bridge=createOrderOnlinePayment({db,client:req.app.get('paymentServiceClient')});
+        const financial=await bridge.snapshot(orderRow);
+        if(financial.activePayment) {
+        throw Object.assign(new Error("ORDER_HAS_ACTIVE_ONLINE_PAYMENT"), {status:409});
+        }
+      }
+      if (!isOrderEligibleForFulfillment(orderRow) && !["canceled","cancelled","new"].includes(String(statusRows[0]?.code))) {
+        throw Object.assign(new Error("ORDER_AWAITING_ONLINE_PAYMENT"), {status:409});
+      }
+      const currentStatusId = Number(orderRow?.status_id || 0);
+      if(expectedStatusId !== undefined && Number(expectedStatusId)!==currentStatusId){
+        throw Object.assign(new Error("ORDER_STATUS_CONFLICT"), {status:409});
+      }
+      let currentStatusCode = "";
+      let currentStatusIsFinal = false;
+      if (currentStatusId > 0) {
+        const currentStatusRows = statuses.filter(status=>Number(status.id)===currentStatusId);
+        currentStatusCode = String(currentStatusRows[0]?.code || "").trim().toLowerCase();
+        currentStatusIsFinal = Number(currentStatusRows[0]?.is_final || 0) === 1;
+      }
+      const targetStatusCode = String(statusRows[0]?.code || "").trim().toLowerCase();
+      const isCanceledTarget = targetStatusCode === "canceled" || targetStatusCode === "cancelled";
+      const isSuccessfulFinalTarget = Number(statusRows[0]?.is_final || 0) === 1 && !isCanceledTarget;
+      const isCurrentSuccessfulFinal = currentStatusIsFinal && currentStatusCode !== "canceled" && currentStatusCode !== "cancelled";
+      if (isCurrentSuccessfulFinal && isCanceledTarget) {
+        throw Object.assign(new Error("INVALID_STATUS_TRANSITION"), {status:409});
+      }
+
+      const deductMode = String(tenantRows[0]?.order_stock_deduct_mode || "on_create").trim();
+      let deductStatusId = Number(tenantRows[0]?.order_stock_deduct_status_id || 0) || null;
+
+      if (deductMode === "on_status" && !deductStatusId) {
+        const fallbackRows=statuses.filter(status=>Number(status.is_active)===1 && (status.code==='delivered' || (Number(status.is_final)===1 && status.code!=='canceled'))).sort((a,b)=>(b.code==='delivered')-(a.code==='delivered') || Number(a.sort)-Number(b.sort) || Number(a.id)-Number(b.id));
+        if (fallbackRows.length) {
+          deductStatusId = Number(fallbackRows[0].id);
+        }
+      }
+
+      let stockDeductedAt = orderRow.stock_deducted_at || null;
+      let stockDocumentId = orderRow.stock_document_id != null ? Number(orderRow.stock_document_id) : null;
+      let stockChangedProductIds = [];
+      const shouldDeductNow =
+        isOrderEligibleForFulfillment(orderRow) &&
+        deductMode === "on_status" &&
+        !stockDeductedAt &&
+        deductStatusId != null &&
+        (Number(statusId) === Number(deductStatusId) || (visitedStatusIds.includes(Number(deductStatusId)) && !isCanceledTarget));
+
+      if (shouldDeductNow) {
+        let orderItems = [];
+        try {
+          const parsed = orderRow.items ? JSON.parse(orderRow.items) : [];
+          if (Array.isArray(parsed)) orderItems = parsed;
+        } catch {
+          orderItems = [];
+        }
+
+        try {
+          const deductionResult = await applyStockDeductionForOrderItems({
+            db: conn,
+            tenantId,
+            storeId,
+            items: orderItems,
+            orderId: Number(orderRow.id),
+            publicId: orderRow.public_id || null,
+            createdBy: req.user?.userId || null,
+          });
+          stockDeductedAt = deductionResult?.stockDeductedAt || helpers.formatUtcDateTime(Date.now());
+          stockDocumentId = deductionResult?.stockDocumentId || null;
+          stockChangedProductIds = Array.from(
+            new Set(
+              (Array.isArray(deductionResult?.deductions) ? deductionResult.deductions : [])
+                .map((d) => Number(d?.productId))
+                .filter((pid) => Number.isFinite(pid) && pid > 0)
+            )
+          );
+        } catch (stockErr) {
+          if (stockErr && stockErr.code === "OUT_OF_STOCK") {
+        throw Object.assign(new Error("OUT_OF_STOCK"), {status:409});
+          }
+          throw stockErr;
+        }
+      }
+
+      return {stockDeductedAt,stockDocumentId,stockChangedProductIds,isCanceledTarget,isSuccessfulFinalTarget};
+  }
+
+  async function applyOrderStatusEffects(conn, {tenantId,storeId,id,statusId,orderRow,isCanceledTarget,isSuccessfulFinalTarget}) {
+      if (isCanceledTarget) {
+        await releaseCanceledOrderResources(conn,tenantId,orderRow);
+      } else if (isSuccessfulFinalTarget) {
+        await settleOrderBonus(conn, {
+          tenantId,
+          orderId: id,
+          customerId: Number(orderRow?.customer_id || 0) || null,
+          discountsJson: orderRow?.discounts_json || null,
+          benefitsMetaRaw: orderRow?.benefits_meta_json || null,
+        });
+      } else {
+        await reserveOrderBonusRedeem(conn, {
+          tenantId,
+          orderId: id,
+          customerId: Number(orderRow?.customer_id || 0) || null,
+          discountsJson: orderRow?.discounts_json || null,
+          benefitsMetaRaw: orderRow?.benefits_meta_json || null,
+        });
+      }
+
+      await accrueOrderBenefitsIfAvailable({
+        conn,
+        tenantId,
+        storeId,
+        orderId: id,
+      });
+
+      await syncDeliveredOrderDiscountUsage(conn, {
+        tenantId,
+        storeId,
+        orderId: id,
+        statusId,
+        customerId: Number(orderRow?.customer_id || 0) || null,
+        discountsJson: orderRow?.discounts_json || null,
+        orderPromoCode: orderRow?.promo_code || null,
+        benefitsMetaRaw: orderRow?.benefits_meta_json || null,
+      });
+      await syncDeliveredOrderRewardPromoUsage(conn, {
+        tenantId,
+        storeId,
+        statusId,
+        customerId: Number(orderRow?.customer_id || 0) || null,
+        benefitsMetaRaw: orderRow?.benefits_meta_json || null,
+      });
+
+  }
+
+  async function publishOrderStatusChange(tenantId,storeId,id,payload,stockChangedProductIds) {
+      if (payload) {
+        if (ordersEvents && typeof ordersEvents.publish === "function") {
+          ordersEvents.publish(tenantId, storeId, "order.updated", payload);
+        }
+        const payloadStatusCode = String(payload?.status_code || "").trim().toLowerCase();
+        const payloadStatusTitle = String(payload?.status_title || "").trim().toLowerCase();
+        const shouldTryPrintEnqueue = payloadStatusCode === "new" || payloadStatusTitle.startsWith("нов");
+        try {
+          if (shouldTryPrintEnqueue) {
+            const pushed = await sendOrderToPrintBot({
+              db,
+              order: payload,
+              tenantId,
+              storeId,
+              silentSkipReasons: ["ORDER_STATUS_NOT_NEW"],
+            });
+            if (!pushed) {
+              console.warn("Print enqueue returned false (admin/orders status update)", {
+                orderId: Number(payload?.id || id),
+                tenantId: Number(tenantId),
+                storeId: Number(storeId),
+              });
+            }
+          }
+        } catch (err) {
+          console.error("Print enqueue failed (admin/orders status update):", {
+            orderId: Number(payload?.id || id),
+            tenantId: Number(tenantId),
+            storeId: Number(storeId),
+            error: String(err?.message || err || "unknown_error"),
+          });
+        }
+        if (typeof chatTempRuntime.sendOrderStatusPush === "function") {
+          chatTempRuntime.sendOrderStatusPush(tenantId, storeId, payload).catch((err) => {
+            console.error("Order status push failed:", err && err.message ? err.message : err);
+          });
+        }
+      }
+      if (stockChangedProductIds.length) {
+        await publishStockChanged(tenantId, storeId, {
+          source: "order.status_update",
+          order_id: Number(id),
+          product_ids: stockChangedProductIds,
+        });
+      }
+  }
+
+  async function handleOrderStatusChange(req, res) {
     let conn = null;
     let transactionStarted = false;
     let connectionReleased = false;
@@ -3535,116 +3766,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
 
       const orderRow = orderRows[0];
-      if(Number(orderRow.online_payment_required) && ['canceled','cancelled'].includes(String(statusRows[0]?.code))) {
-        const bridge=createOrderOnlinePayment({db,client:req.app.get('paymentServiceClient')});
-        const financial=await bridge.snapshot(orderRow);
-        if(financial.activePayment) {
-          await conn.rollback();transactionStarted=false;safeRelease();
-          return res.status(409).json({ok:false,error:'ORDER_HAS_ACTIVE_ONLINE_PAYMENT'});
-        }
-      }
-      if (!isOrderEligibleForFulfillment(orderRow) && !["canceled","cancelled","new"].includes(String(statusRows[0]?.code))) {
-        await conn.rollback();transactionStarted=false;safeRelease();
-        return res.status(409).json({ok:false,error:"ORDER_AWAITING_ONLINE_PAYMENT"});
-      }
-      const currentStatusId = Number(orderRow?.status_id || 0);
-      let currentStatusCode = "";
-      let currentStatusIsFinal = false;
-      if (currentStatusId > 0) {
-        const [currentStatusRows] = await conn.query(
-          `SELECT code, is_final
-           FROM order_statuses
-           WHERE tenant_id=? AND store_id=? AND id=?
-           LIMIT 1`,
-          [tenantId, storeId, currentStatusId]
-        );
-        currentStatusCode = String(currentStatusRows[0]?.code || "").trim().toLowerCase();
-        currentStatusIsFinal = Number(currentStatusRows[0]?.is_final || 0) === 1;
-      }
-      const targetStatusCode = String(statusRows[0]?.code || "").trim().toLowerCase();
-      const isCanceledTarget = targetStatusCode === "canceled" || targetStatusCode === "cancelled";
-      const isSuccessfulFinalTarget = Number(statusRows[0]?.is_final || 0) === 1 && !isCanceledTarget;
-      const isCurrentSuccessfulFinal = currentStatusIsFinal && currentStatusCode !== "canceled" && currentStatusCode !== "cancelled";
-      if (isCurrentSuccessfulFinal && isCanceledTarget) {
-        await conn.rollback();
-        transactionStarted = false;
-        safeRelease();
-        return res.status(409).json({ ok: false, error: "INVALID_STATUS_TRANSITION" });
-      }
-
-      const [tenantRows] = await conn.query(
-        `SELECT order_stock_deduct_mode, order_stock_deduct_status_id
-         FROM ten_tenants
-         WHERE id=?
-         LIMIT 1`,
-        [tenantId]
-      );
-      const deductMode = String(tenantRows[0]?.order_stock_deduct_mode || "on_create").trim();
-      let deductStatusId = Number(tenantRows[0]?.order_stock_deduct_status_id || 0) || null;
-
-      if (deductMode === "on_status" && !deductStatusId) {
-        const [fallbackRows] = await conn.query(
-          `SELECT id
-           FROM order_statuses
-           WHERE tenant_id=? AND store_id=? AND is_active=1
-             AND (code='delivered' OR (is_final=1 AND code<>'canceled'))
-           ORDER BY (code='delivered') DESC, sort ASC, id ASC
-           LIMIT 1`,
-          [tenantId, storeId]
-        );
-        if (fallbackRows.length) {
-          deductStatusId = Number(fallbackRows[0].id);
-        }
-      }
-
-      let stockDeductedAt = orderRow.stock_deducted_at || null;
-      let stockDocumentId = orderRow.stock_document_id != null ? Number(orderRow.stock_document_id) : null;
-      let stockChangedProductIds = [];
-      const shouldDeductNow =
-        isOrderEligibleForFulfillment(orderRow) &&
-        deductMode === "on_status" &&
-        !stockDeductedAt &&
-        deductStatusId != null &&
-        Number(statusId) === Number(deductStatusId);
-
-      if (shouldDeductNow) {
-        let orderItems = [];
-        try {
-          const parsed = orderRow.items ? JSON.parse(orderRow.items) : [];
-          if (Array.isArray(parsed)) orderItems = parsed;
-        } catch {
-          orderItems = [];
-        }
-
-        try {
-          const deductionResult = await applyStockDeductionForOrderItems({
-            db: conn,
-            tenantId,
-            storeId,
-            items: orderItems,
-            orderId: Number(orderRow.id),
-            publicId: orderRow.public_id || null,
-            createdBy: req.user?.userId || null,
-          });
-          stockDeductedAt = deductionResult?.stockDeductedAt || helpers.formatUtcDateTime(Date.now());
-          stockDocumentId = deductionResult?.stockDocumentId || null;
-          stockChangedProductIds = Array.from(
-            new Set(
-              (Array.isArray(deductionResult?.deductions) ? deductionResult.deductions : [])
-                .map((d) => Number(d?.productId))
-                .filter((pid) => Number.isFinite(pid) && pid > 0)
-            )
-          );
-        } catch (stockErr) {
-          if (stockErr && stockErr.code === "OUT_OF_STOCK") {
-            await conn.rollback();
-            transactionStarted = false;
-            safeRelease();
-            return res.status(409).json({ ok: false, error: "OUT_OF_STOCK" });
-          }
-          throw stockErr;
-        }
-      }
+      const [statuses]=await conn.query('SELECT id,code,is_final,is_active,sort FROM order_statuses WHERE tenant_id=? AND store_id=?',[tenantId,storeId]);
+      const [tenantRows]=await conn.query('SELECT order_stock_deduct_mode,order_stock_deduct_status_id FROM ten_tenants WHERE id=?',[tenantId]);
+      const prepared=await prepareOrderStatusChange(conn,{req,tenantId,storeId,id,statusId,orderRow,statusRows,statuses,tenantRows});
+      const {stockDeductedAt,stockDocumentId,stockChangedProductIds}=prepared;
 
       await conn.query(
         `UPDATE order_orders
@@ -3655,50 +3780,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         [statusId, stockDeductedAt, stockDocumentId, tenantId, storeId, id]
       );
 
-      if (isCanceledTarget) {
-        await releaseCanceledOrderResources(conn,tenantId,orderRow);
-      } else if (isSuccessfulFinalTarget) {
-        await settleOrderBonus(conn, {
-          tenantId,
-          orderId: id,
-          customerId: Number(orderRow?.customer_id || 0) || null,
-          discountsJson: orderRow?.discounts_json || null,
-          benefitsMetaRaw: orderRow?.benefits_meta_json || null,
-        });
-      } else {
-        await reserveOrderBonusRedeem(conn, {
-          tenantId,
-          orderId: id,
-          customerId: Number(orderRow?.customer_id || 0) || null,
-          discountsJson: orderRow?.discounts_json || null,
-          benefitsMetaRaw: orderRow?.benefits_meta_json || null,
-        });
-      }
-
-      await accrueOrderBenefitsIfAvailable({
-        conn,
-        tenantId,
-        storeId,
-        orderId: id,
-      });
-
-      await syncDeliveredOrderDiscountUsage(conn, {
-        tenantId,
-        storeId,
-        orderId: id,
-        statusId,
-        customerId: Number(orderRow?.customer_id || 0) || null,
-        discountsJson: orderRow?.discounts_json || null,
-        orderPromoCode: orderRow?.promo_code || null,
-        benefitsMetaRaw: orderRow?.benefits_meta_json || null,
-      });
-      await syncDeliveredOrderRewardPromoUsage(conn, {
-        tenantId,
-        storeId,
-        statusId,
-        customerId: Number(orderRow?.customer_id || 0) || null,
-        benefitsMetaRaw: orderRow?.benefits_meta_json || null,
-      });
+      await applyOrderStatusEffects(conn,{tenantId,storeId,id,statusId,orderRow,...prepared});
 
       await completeOrderMutationIdempotency(conn, claim, 200, { ok: true, order_id: id });
       await conn.commit();
@@ -3710,51 +3792,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
 
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if(payload && req.headers['idempotency-key'])payload.status_mutation_id=String(req.headers['idempotency-key']);
-      if (payload) {
-        if (ordersEvents && typeof ordersEvents.publish === "function") {
-          ordersEvents.publish(tenantId, storeId, "order.updated", payload);
-        }
-        const payloadStatusCode = String(payload?.status_code || "").trim().toLowerCase();
-        const payloadStatusTitle = String(payload?.status_title || "").trim().toLowerCase();
-        const shouldTryPrintEnqueue = payloadStatusCode === "new" || payloadStatusTitle.startsWith("нов");
-        try {
-          if (shouldTryPrintEnqueue) {
-            const pushed = await sendOrderToPrintBot({
-              db,
-              order: payload,
-              tenantId,
-              storeId,
-              silentSkipReasons: ["ORDER_STATUS_NOT_NEW"],
-            });
-            if (!pushed) {
-              console.warn("Print enqueue returned false (admin/orders status update)", {
-                orderId: Number(payload?.id || id),
-                tenantId: Number(tenantId),
-                storeId: Number(storeId),
-              });
-            }
-          }
-        } catch (err) {
-          console.error("Print enqueue failed (admin/orders status update):", {
-            orderId: Number(payload?.id || id),
-            tenantId: Number(tenantId),
-            storeId: Number(storeId),
-            error: String(err?.message || err || "unknown_error"),
-          });
-        }
-        if (typeof chatTempRuntime.sendOrderStatusPush === "function") {
-          chatTempRuntime.sendOrderStatusPush(tenantId, storeId, payload).catch((err) => {
-            console.error("Order status push failed:", err && err.message ? err.message : err);
-          });
-        }
-      }
-      if (stockChangedProductIds.length) {
-        await publishStockChanged(tenantId, storeId, {
-          source: "order.status_update",
-          order_id: Number(id),
-          product_ids: stockChangedProductIds,
-        });
-      }
+      await publishOrderStatusChange(tenantId,storeId,id,payload,stockChangedProductIds);
 
       res.json(payload ? { ok: true, data: payload } : { ok: true });
     } catch (e) {
@@ -3764,11 +3802,87 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         } catch {}
       }
       safeRelease();
+      if(e?.status)return res.status(e.status).json({ok:false,error:e.message});
       console.error(e);
       if (e?.code === "IDEMPOTENCY_KEY_INVALID") {
         return res.status(400).json({ ok: false, error: e.code });
       }
       res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  }
+  router.put("/:id/status", handleOrderStatusChange);
+
+  // One final status per order, shared reads and one status UPDATE per batch.
+  router.put('/status-batch', async (req,res)=>{
+    const changes=req.body?.changes;
+    if(!Array.isArray(changes) || !changes.length || changes.length>100 || changes.some(change=>!change || typeof change!=='object') || new Set(changes.map(change=>change.order_id)).size!==changes.length
+      || changes.some(change=>!Number.isSafeInteger(change.order_id)||change.order_id<=0||!Number.isSafeInteger(change.expected_status_id)||!Array.isArray(change.steps)||change.steps.length!==1
+        || (change.visited_status_ids!==undefined && (!Array.isArray(change.visited_status_ids)||change.visited_status_ids.length>100||change.visited_status_ids.some(id=>!Number.isSafeInteger(id)||id<=0)))
+        || change.steps.some(step=>!step || !Number.isSafeInteger(step.status_id)||step.status_id<=0||!/^[a-zA-Z0-9_-]{8,80}$/.test(String(step.mutation_id || ''))))) return res.status(400).json({ok:false,error:'BAD_STATUS_BATCH'});
+    const tenantId=helpers.getTenantId(req),storeId=helpers.getStoreId(req),results=[],prepared=[],claims=[];
+    let conn,committed=false;
+    try{
+      const hasBenefitsMetaColumn=await ensureOrderBenefitsMetaColumn();
+      const provider=getOrderBenefitsAccrualProvider();
+      if(typeof provider?.prepare==='function')await provider.prepare();
+      conn=await db.getConnection();await conn.beginTransaction();
+      const ids=changes.map(change=>change.order_id).sort((a,b)=>a-b);
+      const [orders]=await conn.query(`SELECT id,tenant_id,store_id,assigned_user_id,created_by_user_id,total_price,payment_projection,public_id,customer_id,promo_code,items,discounts_json,${hasBenefitsMetaColumn?'benefits_meta_json':'NULL AS benefits_meta_json'},status_id,stock_deducted_at,stock_document_id,online_payment_required,online_payment_status FROM order_orders WHERE tenant_id=? AND store_id=? AND is_active=1 AND id IN (${ids.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`,[tenantId,storeId,...ids]);
+      const orderById=new Map(orders.map(order=>[Number(order.id),order]));
+      const [statuses]=await conn.query('SELECT id,code,title,color,is_final,is_active,sort FROM order_statuses WHERE tenant_id=? AND store_id=?',[tenantId,storeId]);
+      const [tenantRows]=await conn.query('SELECT order_stock_deduct_mode,order_stock_deduct_status_id FROM ten_tenants WHERE id=?',[tenantId]);
+      for(const change of changes){
+        const id=change.order_id,step=change.steps[0],orderRow=orderById.get(id),statusRows=statuses.filter(status=>Number(status.id)===step.status_id);
+        if(!orderRow){results.push({order_id:id,ok:false,error:'NOT_FOUND'});continue;}
+        const access=await can(req.user,'orders.status',orderRow);
+        if(!access.allowed){results.push({order_id:id,ok:false,error:'RESOURCE_FORBIDDEN'});continue;}
+        if(!statusRows.length){results.push({order_id:id,ok:false,error:'BAD_STATUS_ID'});continue;}
+        await conn.query('SAVEPOINT order_status_item');
+        try{
+          const mutationReq={user:req.user,headers:{'idempotency-key':step.mutation_id}};
+          const body={status_id:step.status_id,expected_status_id:change.expected_status_id,visited_status_ids:change.visited_status_ids || []};
+          const claim=await claimOrderMutationIdempotency(conn,mutationReq,{tenantId,storeId,orderId:id,operation:'order.status.batch',body});
+          if(claim.conflict || claim.inProgress)throw Object.assign(new Error(claim.code),{status:409});
+          if(claim.replay){results.push({order_id:id,ok:true,replay:true});await conn.query('RELEASE SAVEPOINT order_status_item');continue;}
+          const item=await prepareOrderStatusChange(conn,{req,tenantId,storeId,id,statusId:step.status_id,orderRow,statusRows,statuses,tenantRows,visitedStatusIds:body.visited_status_ids,expectedStatusId:change.expected_status_id});
+          prepared.push({id,statusId:step.status_id,mutationId:step.mutation_id,orderRow,...item});claims.push(claim);
+          await conn.query('RELEASE SAVEPOINT order_status_item');
+        }catch(error){
+          await conn.query('ROLLBACK TO SAVEPOINT order_status_item');await conn.query('RELEASE SAVEPOINT order_status_item');
+          if(!error.status)throw error;
+          results.push({order_id:id,ok:false,error:error.message});
+        }
+      }
+      if(prepared.length){
+        const cases=prepared.map(()=>`WHEN ? THEN ?`).join(' ');
+        const values=field=>prepared.flatMap(item=>[item.id,item[field]]);
+        await conn.query(`UPDATE order_orders SET status_id=CASE id ${cases} ELSE status_id END,stock_deducted_at=COALESCE(CASE id ${cases} END,stock_deducted_at),stock_document_id=COALESCE(CASE id ${cases} END,stock_document_id) WHERE tenant_id=? AND store_id=? AND id IN (${prepared.map(()=>'?').join(',')})`,[...values('statusId'),...values('stockDeductedAt'),...values('stockDocumentId'),tenantId,storeId,...prepared.map(item=>item.id)]);
+        for(let index=0;index<prepared.length;index++){
+          const item=prepared[index];
+          await applyOrderStatusEffects(conn,{tenantId,storeId,...item});
+          await completeOrderMutationIdempotency(conn,claims[index],200,{ok:true,order_id:item.id});
+          results.push({order_id:item.id,ok:true});
+        }
+      }
+      await conn.commit();committed=true;conn.release();conn=null;
+      const storeTimezone=await getStoreTimezone(tenantId,storeId);
+      const successful=results.filter(item=>item.ok);
+      const payloads=successful.length ? await fetchOrderPayload(tenantId,storeId,successful.map(item=>item.order_id),{storeTimezone}) : [];
+      const payloadById=new Map(payloads.map(payload=>[Number(payload.id),payload]));
+      for(const result of successful){
+        result.data=payloadById.get(result.order_id);
+        const item=prepared.find(item=>item.id===result.order_id);
+        if(result.data && item){
+          result.data.status_mutation_id=item.mutationId;
+          await publishOrderStatusChange(tenantId,storeId,item.id,result.data,item.stockChangedProductIds);
+        }
+      }
+      void pruneCompletedOrderMutationIdempotency(tenantId,storeId).catch(error=>console.warn('Status batch idempotency cleanup:',error));
+      res.json({ok:true,data:{results}});
+    }catch(error){
+      if(conn){try{await conn.rollback();}finally{conn.release();}}
+      console.error('Status batch:',error);
+      res.status(500).json({ok:false,error:committed?'STATUS_BATCH_RESPONSE_FAILED':'STATUS_BATCH_FAILED'});
     }
   });
 

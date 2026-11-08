@@ -1,3 +1,79 @@
+  let sharedShopProductRuntime = null;
+  function getSharedShopProductRuntime() {
+    if (!sharedShopProductRuntime) sharedShopProductRuntime = window.SharedProductRuntime.create({
+      get $() { return $; },
+      get COMBO_GRID_IMAGE_READY_LIMIT() { return COMBO_GRID_IMAGE_READY_LIMIT; },
+      get OPTIMIZED_IMAGE_TEMPLATE_LIMIT() { return OPTIMIZED_IMAGE_TEMPLATE_LIMIT; },
+      get RegExp() { return RegExp; },
+      get addUpsellToCart() { return addUpsellToCart; },
+      get apiJson() { return apiJson; },
+      get appendUpsellToList() { return appendUpsellToList; },
+      get applyAutoAddRules() { return applyAutoAddRules; },
+      get bindFavoriteButtonsForCartRow() { return bindFavoriteButtonsForCartRow; },
+      get calcProductStockConsumed() { return calcProductStockConsumed; },
+      get cartCountTotal() { return cartCountTotal; },
+      get cartItemsResolved() { return cartItemsResolved; },
+      get cartQty() { return cartQty; },
+      get changeQty() { return changeQty; },
+      get checkStockForItemsPayload() { return checkStockForItemsPayload; },
+      get clearAllAutoAddDismissed() { return clearAllAutoAddDismissed; },
+      get clearAutoAddDismissedIfCartEmpty() { return clearAutoAddDismissedIfCartEmpty; },
+      get comboGridImageReadyCache() { return comboGridImageReadyCache; },
+      get defaultPriceCache() { return defaultPriceCache; },
+      get elActiveOrdersSheetCollapsed() { return elActiveOrdersSheetCollapsed; },
+      get elCartList() { return elCartList; },
+      get elMobileAddToCartBtn() { return elMobileAddToCartBtn; },
+      get elMobileAddressActions() { return elMobileAddressActions; },
+      get elMobileCartActions() { return elMobileCartActions; },
+      get elMobileCartActionsCart() { return elMobileCartActionsCart; },
+      get elMobileCartActionsCheckout() { return elMobileCartActionsCheckout; },
+      get elMobileProductActions() { return elMobileProductActions; },
+      get elMobileProductLabel() { return elMobileProductLabel; },
+      get elMobileProductPrice() { return elMobileProductPrice; },
+      get elMobileQtyWrap() { return elMobileQtyWrap; },
+      get ensureProduct() { return ensureProduct; },
+      get getAvailableStock() { return getAvailableStock; },
+      get getCartItemByKey() { return getCartItemByKey; },
+      get getCatalogProductCartAggregate() { return getCatalogProductCartAggregate; },
+      get getConversionFactor() { return getConversionFactor; },
+      get getProductPassport() { return getProductPassport; },
+      get getStockLevelEntry() { return getStockLevelEntry; },
+      get isKsoCatalogCache() { return isKsoCatalogCache; },
+      get isProductAvailable() { return isProductAvailable; },
+      get isProductBlockedByIngredientRequirements() { return isProductBlockedByIngredientRequirements; },
+      get mobileProductActionsState() { return mobileProductActionsState; },
+      get moneyFmt() { return moneyFmt; },
+      get openCartSheetCtx() { return openCartSheetCtx; },
+      get openComboDetails() { return openComboDetails; },
+      get openProductBuyXGetYBenefitDetail() { return openProductBuyXGetYBenefitDetail; },
+      get openProductCtx() { return openProductCtx; },
+      set openProductCtx(value) { openProductCtx = value; },
+      get openProductDetails() { return openProductDetails; },
+      get optimizedImageTemplateCache() { return optimizedImageTemplateCache; },
+      get preloadedImages() { return preloadedImages; },
+      get priceRoundingRuntime() { return priceRoundingRuntime; },
+      set priceRoundingRuntime(value) { priceRoundingRuntime = value; },
+      get queueCartStockRecheck() { return queueCartStockRecheck; },
+      get refreshCartUiAfterMutation() { return refreshCartUiAfterMutation; },
+      get refreshNextRegularCartItemLimitLocal() { return refreshNextRegularCartItemLimitLocal; },
+      get renderCart() { return renderCart; },
+      get renderCartInto() { return renderCartInto; },
+      get resolveProductDetailsConfig() { return resolveProductDetailsConfig; },
+      get resolveProductVariants() { return resolveProductVariants; },
+      get resolveProductOptionGroups() { return resolveProductOptionGroups; },
+      get saveCart() { return saveCart; },
+      get scheduleComboDetailsPrefetch() { return scheduleComboDetailsPrefetch; },
+      get scheduleSyncAllProductCardsFromCart() { return scheduleSyncAllProductCardsFromCart; },
+      get setSheetHeaderMode() { return setSheetHeaderMode; },
+      get showCartView() { return showCartView; },
+      get showToast() { return showToast; },
+      get state() { return state; },
+      get syncAllProductCardsFromCart() { return syncAllProductCardsFromCart; },
+      get updateCartBadge() { return updateCartBadge; },
+    });
+    return sharedShopProductRuntime;
+  }
+
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isShopPage = () => document.body && document.body.classList.contains("page-shop");
@@ -380,9 +456,71 @@
   const ADDRESS_DRAFT_KEY = `shop_address_draft_t${tenantId}`;
   const AUTO_ADD_DISMISSED_KEY = `shop_auto_add_dismissed_t${tenantId}_s${getActiveStoreId()}`;
   const CATALOG_SNAPSHOT_VERSION = 2;
-  const CATALOG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+  const isKsoCatalogCache = document.body.classList.contains('page-kso');
+  const CATALOG_SNAPSHOT_MAX_AGE_MS = (isKsoCatalogCache ? 7 * 24 : 6) * 60 * 60 * 1000;
   const CATALOG_SNAPSHOT_KEY = `shop_catalog_snapshot_v${CATALOG_SNAPSHOT_VERSION}_t${tenantId}_s${getActiveStoreId()}`;
   let catalogSnapshotSaveTimer = null;
+  let catalogLastScrollAt = 0;
+  let catalogTouchActive = false;
+  let catalogCacheRestoring = false;
+  let catalogCacheWriting = false;
+  let catalogCacheMigrating = false;
+  const catalogDirtyCategories = new Set();
+  const catalogCompleteCategories = new Set();
+  const catalogDirtyPassports = new Set();
+  const catalogCacheScope = () => `kso:v${CATALOG_SNAPSHOT_VERSION}:${tenantId}:${getActiveStoreId()}:`;
+  const catalogInitialScope = catalogCacheScope();
+  const catalogResources = new Map();
+  const catalogDirtyResources = new Set();
+  const catalogResourceInflight = new Map();
+  const catalogEffectiveInflight = new Map();
+  let catalogRevision = '0';
+  let catalogPersistedRevision = '0';
+  let catalogGeneration = 0;
+  let catalogStartupReady = false;
+  let catalogSyncPending = false;
+  let catalogSyncWanted = false;
+  let catalogSyncApplying = false;
+  let catalogSyncTimer = null;
+  let catalogWarmupPromise = null;
+  let catalogWarmupCompleteGeneration = -1;
+
+  function ksoCatalogResourceKey(url, opts) {
+    if (!isKsoCatalogCache || catalogCacheScope() !== catalogInitialScope || (opts.method || 'GET') !== 'GET') return null;
+    // Public catalog data only; customer, order and payment responses must never enter this cache.
+    return /^\/api\/public\/(?:shop\/bootstrap\?kso=1|categories|unit-conversions|auto-add|cart-upsell|combos\/\d+)$/.test(url) ? url : null;
+  }
+
+  function waitForKsoCatalogIdle() {
+    if (!isKsoCatalogCache) return Promise.resolve();
+    return new Promise(resolve => {
+      const check = () => {
+        if (catalogTouchActive || Date.now() - catalogLastScrollAt < 600) { setTimeout(check, 200); return; }
+        if (typeof requestIdleCallback === 'function') requestIdleCallback(() => {
+          if (catalogTouchActive || Date.now() - catalogLastScrollAt < 600) check(); else resolve();
+        });
+        else resolve();
+      };
+      check();
+    });
+  }
+
+  async function forEachKsoCatalogChunk(items, apply) {
+    await waitForKsoCatalogIdle();
+    let startedAt = performance.now();
+    let count = 0;
+    for (const item of items) {
+      if (count >= 4 || performance.now() - startedAt >= 4) {
+        // Yield a browser task so new touch/scroll events can run before the next portion.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await waitForKsoCatalogIdle();
+        count = 0;
+        startedAt = performance.now();
+      }
+      apply(item);
+      count += 1;
+    }
+  }
   const ORDER_ROUNDING_CACHE_VERSION = 1;
   const ORDER_ROUNDING_CACHE_KEY = `shop_order_rounding_cache_v${ORDER_ROUNDING_CACHE_VERSION}_t${tenantId}`;
 
@@ -474,14 +612,155 @@
     return applyPriceRoundingSettings(config, { persist });
   }
 
-  function setShopOrderConfigSnapshot(config, { persistRounding = true } = {}) {
+  // Local weekly intervals; include the previous day's overnight interval.
+  function checkoutScheduleIntervals(hours,date) {
+    const weekday=date.getUTCDay(),rows=[];
+    const minutes=value=>{const match=String(value || '').match(/^(\d{1,2}):(\d{2})/);return match?Number(match[1])*60+Number(match[2]):null;};
+    for(const shift of [-1,0]) {
+      const day=(weekday+shift+7)%7;
+      for(const entry of (Array.isArray(hours)?hours:[]).filter(row=>Number(row.day_of_week)===day && Number(row.is_closed)!==1)) {
+        const start=minutes(entry.opens_at),end=minutes(entry.closes_at);
+        if(start==null || end==null)continue;
+        rows.push([start+shift*1440,(end<=start?end+1440:end)+shift*1440]);
+      }
+    }
+    return rows;
+  }
+  function checkoutScheduleAllows(schedule,date,minute) {
+    return (schedule.sets || [schedule.hours]).every(hours=>checkoutScheduleIntervals(hours,date).some(([start,end])=>minute>=start && minute<end));
+  }
+  function checkoutScheduleNextDelay(schedule,options=[]) {
+    const offset=(Number(schedule.timezone)||0)*3600000,now=Date.now()+offset;
+    const date=new Date(now),midnight=Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate());
+    let next=midnight+86400000;
+    for(let day=0;day<8;day++) {
+      const target=new Date(midnight+day*86400000);
+      for(const hours of schedule.sets || [schedule.hours])for(const [start,end] of checkoutScheduleIntervals(hours,target)) {
+        for(const value of [start,end]) {const at=midnight+day*86400000+value*60000;if(at>now)next=Math.min(next,at);}
+      }
+    }
+    // Slot expiry also changes today's selectable times without a server request.
+    for(const option of options) {
+      const start=String(option.starts_at || '00:00').split(':').map(Number);
+      const step=Math.max(1,Number(option.step_minutes)||30),lead=Math.max(0,Number(option.lead_minutes)||0);
+      const base=midnight+((start[0]*60+(start[1]||0))-lead+1)*60000;
+      const boundary=base+(Math.floor((now-base)/(step*60000))+1)*step*60000;
+      if(boundary>now)next=Math.min(next,boundary);
+    }
+    return Math.max(100,Math.min(2147483647,next-now+50));
+  }
+  window.ShopCheckoutSchedule={intervals:checkoutScheduleIntervals,allows:checkoutScheduleAllows,nextDelay:checkoutScheduleNextDelay};
+
+  let checkoutSettingsDbPromise = null;
+  const checkoutSettingsRequests = new Map();
+  const checkoutSettingsWantedVersions = new Map();
+  function checkoutSettingsScope() { return `${tenantId}:${getActiveStoreId()}:site:v1`; }
+  function checkoutSettingsDb() {
+    if(checkoutSettingsDbPromise)return checkoutSettingsDbPromise;
+    checkoutSettingsDbPromise=new Promise((resolve,reject)=>{
+      if(!window.indexedDB){reject(new Error('INDEXEDDB_UNAVAILABLE'));return;}
+      const request=indexedDB.open('shop-checkout-settings',2);
+      request.onupgradeneeded=()=>{for(const name of ['settings','catalog'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name);};
+      request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();checkoutSettingsDbPromise=null;};resolve(request.result);};
+      request.onerror=()=>{checkoutSettingsDbPromise=null;reject(request.error);};
+      request.onblocked=()=>console.error('Checkout settings IndexedDB upgrade blocked');
+    });
+    return checkoutSettingsDbPromise;
+  }
+  async function checkoutSettingsStorage(mode,key,value) {
+    const db=await checkoutSettingsDb();
+    return new Promise((resolve,reject)=>{
+      const transaction=db.transaction('settings',mode),store=transaction.objectStore('settings');
+      const request=mode==='readonly'?store.get(key):store.put(value,key);
+      transaction.oncomplete=()=>resolve(request.result || null);
+      transaction.onerror=()=>reject(transaction.error);
+      transaction.onabort=()=>reject(transaction.error || new Error('SETTINGS_CACHE_ABORTED'));
+    });
+  }
+  async function ensureShopCheckoutSettings({refresh=false}={}) {
+    if(document.body?.classList.contains('page-kso'))return getShopOrderConfigSnapshot();
+    const scope=checkoutSettingsScope();
+    const current=getShopOrderConfigSnapshot();
+    if(!refresh && current?.settingsSchema===1 && Number(current.settingsStoreId)===Number(getActiveStoreId()) && Number(current.settingsTenantId)===Number(tenantId))return current;
+    if(checkoutSettingsRequests.has(scope))return checkoutSettingsRequests.get(scope);
+    const task=(async()=>{
+      if(!refresh){
+        try {
+          const cached=await checkoutSettingsStorage('readonly',scope);
+          if(scope!==checkoutSettingsScope())throw new Error('CHECKOUT_SCOPE_CHANGED');
+          if(cached?.settingsSchema===1)return setShopOrderConfigSnapshot(cached,{persistSettings:false});
+        }catch(error){console.error('Checkout settings cache read failed:',error);}
+      }
+      const storeId=getActiveStoreId();
+      const response=await fetch('/api/public/order-config',{headers:{'x-tenant-id':String(tenantId),'x-store-id':String(storeId)},cache:'no-store'});
+      const json=await response.json();
+      if(!response.ok || !json?.ok || !json.data)throw new Error(json?.error || 'CHECKOUT_SETTINGS_LOAD_FAILED');
+      if(scope!==checkoutSettingsScope())throw new Error('CHECKOUT_SCOPE_CHANGED');
+      return setShopOrderConfigSnapshot(json.data);
+    })().finally(()=>checkoutSettingsRequests.delete(scope));
+    checkoutSettingsRequests.set(scope,task);
+    return task;
+  }
+  window.ensureShopCheckoutSettings=ensureShopCheckoutSettings;
+
+  function setShopOrderConfigSnapshot(config, { persistRounding = true, persistSettings = true } = {}) {
     const normalizedConfig = config && typeof config === "object" ? config : null;
+    if(normalizedConfig?.settingsSchema===1 && (Number(normalizedConfig.settingsStoreId)!==Number(getActiveStoreId()) || Number(normalizedConfig.settingsTenantId)!==Number(tenantId)))return getShopOrderConfigSnapshot();
+    const previous=getShopOrderConfigSnapshot();
+    if(previous?.settingsSchema===1 && normalizedConfig?.settingsSchema===1
+      && Number(previous.settingsStoreId)===Number(normalizedConfig.settingsStoreId)
+      && Number(previous.settingsTenantId)===Number(normalizedConfig.settingsTenantId)
+      && String(previous.settingsRevision)===String(normalizedConfig.settingsRevision))return previous;
+    if(normalizedConfig?.settingsSchema===1 && previous?.settingsSchema===1
+      && Number(previous.settingsStoreId)===Number(normalizedConfig.settingsStoreId)
+      && /^\d+$/.test(String(previous.settingsRevision)) && /^\d+$/.test(String(normalizedConfig.settingsRevision))
+      && BigInt(String(normalizedConfig.settingsRevision))<BigInt(String(previous.settingsRevision))
+      && !(String(normalizedConfig.settingsRevision)==='0' && checkoutSettingsWantedVersions.get(checkoutSettingsScope())==='0'))return previous;
     window.__shopOrderConfig = normalizedConfig;
     if (normalizedConfig) {
       applyPriceRoundingSettingsFromOrderConfig(normalizedConfig, { persist: persistRounding });
+      if(normalizedConfig.settingsSchema===1 && !document.body?.classList.contains('page-kso')) {
+        if(Number(normalizedConfig.settingsStoreId)!==Number(getActiveStoreId()) || Number(normalizedConfig.settingsTenantId)!==Number(tenantId))return null;
+        if(persistSettings)void checkoutSettingsStorage('readwrite',checkoutSettingsScope(),normalizedConfig).catch(error=>console.error('Checkout settings cache write failed:',error));
+        window.dispatchEvent(new CustomEvent('shop:checkout-settings',{detail:normalizedConfig}));
+      }
     }
     return window.__shopOrderConfig || null;
   }
+
+  let storefrontScheduleTimer = null;
+  function syncStorefrontSchedules() {
+    const config = window.__shopOrderConfig;
+    if (!Array.isArray(config?.checkoutStores) || document.body.classList.contains('page-kso')) return;
+    const addressPickupVisible = elAddressPickupList && elAddressPickupList.getClientRects().length > 0;
+    const pickupVisible = elPickupList && elPickupList.getClientRects().length > 0;
+    const previous = window._pickupStores || [];
+    window._pickupStores = config.checkoutStores.map(store => {
+      const merged = { ...previous.find(row => Number(row.id) === Number(store.id)), ...store };
+      const date = new Date(Date.now() + (Number(store.timezone) || 0) * 3600000);
+      const minute = date.getUTCHours() * 60 + date.getUTCMinutes();
+      merged.isOpen = checkoutScheduleAllows({ hours: store.storeHours }, date, minute);
+      return merged;
+    });
+    syncImmediateCartHeaderHoursText(window._deliveryMode);
+    updateCartModeHeaderUi();
+    updateCartHeaderStoreStatus();
+    updateMobileHeaderStoreStatus();
+    if (addressPickupVisible) void renderAddressPickupList();
+    if (pickupVisible) renderPickupList();
+    window.dispatchEvent(new CustomEvent('shop:storefront-schedules'));
+    clearTimeout(storefrontScheduleTimer);
+    const delays = config.checkoutStores.map(store => checkoutScheduleNextDelay({
+      timezone: store.timezone,
+      sets: [store.storeHours || [], ...(Number(store.use_delivery_hours) === 1 ? [store.delivery_hours || []] : [])],
+    }));
+    if (delays.length) storefrontScheduleTimer = setTimeout(syncStorefrontSchedules, Math.min(...delays));
+  }
+  window.addEventListener('shop:checkout-settings', syncStorefrontSchedules);
+  const resumeStorefrontSchedules = () => { if (!document.hidden) syncStorefrontSchedules(); };
+  window.addEventListener('focus', resumeStorefrontSchedules);
+  window.addEventListener('pageshow', resumeStorefrontSchedules);
+  document.addEventListener('visibilitychange', resumeStorefrontSchedules);
 
   function getShopOrderConfigSnapshot() {
     return window.__shopOrderConfig && typeof window.__shopOrderConfig === "object"
@@ -501,6 +780,12 @@
 
   window.setShopOrderConfigSnapshot = setShopOrderConfigSnapshot;
   window.getShopOrderConfigSnapshot = getShopOrderConfigSnapshot;
+  if(!document.body?.classList.contains('page-kso')) {
+    const startupScope=checkoutSettingsScope();
+    void checkoutSettingsStorage('readonly',startupScope).then(cached=>{
+      if(cached?.settingsSchema===1 && startupScope===checkoutSettingsScope() && !getShopOrderConfigSnapshot()?.settingsSchema)setShopOrderConfigSnapshot(cached,{persistSettings:false});
+    }).catch(error=>console.error('Checkout settings startup cache failed:',error));
+  }
 
   function parseBooleanFlag(value) {
     if (typeof value === "boolean") return value;
@@ -529,45 +814,31 @@
   }
 
   function getPriceRoundingSettings() {
-    return { ...priceRoundingRuntime };
+    return getSharedShopProductRuntime().getPriceRoundingSettings(...arguments);
   }
 
-  function roundPrice(value) {
-    const n = Number(value || 0);
-    if (!Number.isFinite(n)) return 0;
-    const { mode, precision } = getPriceRoundingSettings();
-    if (!mode || mode === "none") return n;
-    const factor = precision > 0 ? Math.pow(10, precision) : 1;
-    if (mode === "up") return Math.ceil(n * factor) / factor;
-    if (mode === "down") return Math.floor(n * factor) / factor;
-    return Math.round(n * factor) / factor;
+  function roundPrice() {
+    return getSharedShopProductRuntime().roundPrice(...arguments);
   }
 
-  function money(v) {
-    const n = roundPrice(Number(v || 0));
-    return moneyFmt.format(Number.isFinite(n) ? n : 0) + " ₽";
+  function money() {
+    return getSharedShopProductRuntime().money(...arguments);
   }
 
-  function moneyNoSign(v) {
-    const n = roundPrice(Number(v || 0));
-    return moneyFmt.format(Number.isFinite(n) ? n : 0);
+  function moneyNoSign() {
+    return getSharedShopProductRuntime().moneyNoSign(...arguments);
   }
 
-  function str(v) {
-    return v === undefined || v === null ? "" : String(v);
+  function str() {
+    return getSharedShopProductRuntime().str(...arguments);
   }
 
-  function toFiniteNumberOrNull(v) {
-    if (v === undefined || v === null || v === "") return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+  function toFiniteNumberOrNull() {
+    return getSharedShopProductRuntime().toFiniteNumberOrNull(...arguments);
   }
 
-  function escapeHtml(s) {
-    if (s === null || s === undefined) return "";
-    const div = document.createElement("div");
-    div.textContent = String(s);
-    return div.innerHTML;
+  function escapeHtml() {
+    return getSharedShopProductRuntime().escapeHtml(...arguments);
   }
 
   function normalizeShopHexColor(value, fallback) {
@@ -920,6 +1191,7 @@
   }
 
   function refreshCartBonusSectionAfterConfigLoad(listEl = null, totalEl = null) {
+    if(document.body?.classList.contains('page-kso'))return;
     const targetList = listEl || openCartSheetCtx?.listEl || elCartList;
     const targetTotal = totalEl || openCartSheetCtx?.totalEl || elCartTotal;
     if (!targetList || !targetTotal) return;
@@ -982,6 +1254,7 @@
   }
 
   function buildCartBonusRedeemSection({ emptyCart = false } = {}) {
+    if(document.body?.classList.contains('page-kso'))return null;
     const level = getCartBonusAccountLevel();
     if (!level) return buildCartBonusJoinSection();
     const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
@@ -4159,205 +4432,43 @@
    * @param {boolean} options.priority - ??????? ????????? ???????? (hero / ?????? ????????)
    * @returns {HTMLImageElement|HTMLPictureElement}
    */
-  function createOptimizedImage(imageUrl, options = {}) {
-    const {
-      type = 'product-grid',
-      sizes: customSizes,
-      srcset: customSrcset,
-      usePicture = false,
-      alt = '',
-      className = '',
-      priority = false,
-    } = options;
-
-    // ????????? sizes ??? ?????? ????? ???????????
-    const sizesMap = {
-      'product-grid': '(max-width: 768px) 50vw, (max-width: 1200px) 33vw, 25vw',
-      'product-hero': '(max-width: 768px) 100vw, 350px',
-      'cart-thumb': '92px',
-      'thumb': '52px',
-      'custom': customSizes || '100vw'
-    };
-
-    const finalUrl = imageUrl || '/static/img/placeholder.png';
-    const finalSizes = sizesMap[type] || sizesMap['custom'];
-    const cacheKey = [
-      usePicture ? "1" : "0",
-      finalUrl,
-      String(customSrcset || ""),
-      finalSizes,
-      className,
-      alt,
-      priority ? "1" : "0",
-    ].join("|");
-    const cachedTemplate = getOptimizedImageTemplate(cacheKey);
-    if (cachedTemplate) return cachedTemplate;
-
-    // Picture ? WebP ?????? ????? URL ??? ????? ?? .webp (???? ???? ?? ???????).
-    // ??? ?????? .jpg/.png ?????????? ???? img, ????? ?? ??????????? ?????????????? .webp.
-    if (usePicture && finalUrl.endsWith('.webp')) {
-      const picture = document.createElement('picture');
-      const webpSource = document.createElement('source');
-      webpSource.type = 'image/webp';
-      webpSource.srcset = finalUrl;
-      picture.appendChild(webpSource);
-      const img = document.createElement('img');
-      if (className) img.className = className;
-      img.alt = alt;
-      img.loading = priority ? 'eager' : 'lazy';
-      if (priority && 'fetchPriority' in img) {
-        img.fetchPriority = 'high';
-      }
-      img.src = finalUrl;
-      if (customSrcset) img.srcset = customSrcset;
-      img.sizes = finalSizes;
-      picture.appendChild(img);
-      setOptimizedImageTemplate(cacheKey, picture);
-      return picture.cloneNode(true);
-    }
-
-    // ??????? img ??????? ? ??????????? ??????????
-    const img = document.createElement('img');
-    if (className) img.className = className;
-    img.alt = alt;
-    img.loading = priority ? 'eager' : 'lazy';
-    if (priority && 'fetchPriority' in img) {
-      img.fetchPriority = 'high';
-    }
-
-    if (customSrcset) {
-      img.srcset = customSrcset;
-      img.sizes = finalSizes;
-      // src ???????????? ??? fallback ??? ?????? ?????????
-      img.src = finalUrl;
-    } else {
-      // ???? ?????????? ???? URL, ?? ? ?????????? sizes ??В корзине пусто??????
-      img.src = finalUrl;
-      img.sizes = finalSizes;
-    }
-
-    setOptimizedImageTemplate(cacheKey, img);
-    return img.cloneNode(true);
+  function createOptimizedImage() {
+    return getSharedShopProductRuntime().createOptimizedImage(...arguments);
   }
 
   const optimizedImageTemplateCache = new Map();
   const OPTIMIZED_IMAGE_TEMPLATE_LIMIT = 300;
 
-  function getOptimizedImageTemplate(key) {
-    const cacheKey = String(key || "");
-    if (!cacheKey || !optimizedImageTemplateCache.has(cacheKey)) return null;
-    const node = optimizedImageTemplateCache.get(cacheKey);
-    optimizedImageTemplateCache.delete(cacheKey);
-    optimizedImageTemplateCache.set(cacheKey, node);
-    return node.cloneNode(true);
+  function getOptimizedImageTemplate() {
+    return getSharedShopProductRuntime().getOptimizedImageTemplate(...arguments);
   }
 
-  function setOptimizedImageTemplate(key, node) {
-    const cacheKey = String(key || "");
-    if (!cacheKey || !node || !node.cloneNode) return;
-    if (optimizedImageTemplateCache.has(cacheKey)) {
-      optimizedImageTemplateCache.delete(cacheKey);
-    }
-    optimizedImageTemplateCache.set(cacheKey, node.cloneNode(true));
-    while (optimizedImageTemplateCache.size > OPTIMIZED_IMAGE_TEMPLATE_LIMIT) {
-      const oldestKey = optimizedImageTemplateCache.keys().next().value;
-      if (!oldestKey) break;
-      optimizedImageTemplateCache.delete(oldestKey);
-    }
+  function setOptimizedImageTemplate() {
+    return getSharedShopProductRuntime().setOptimizedImageTemplate(...arguments);
   }
 
   const preloadedImages = new Set();
-  function preloadImageOnce(url, opts = {}) {
-    if (!url || preloadedImages.has(url)) return;
-    preloadedImages.add(url);
-    try {
-      const link = document.createElement('link');
-      link.rel = 'preload';
-      link.as = 'image';
-      link.href = url;
-      if (opts.fetchPriority && 'fetchPriority' in link) {
-        link.fetchPriority = opts.fetchPriority;
-      }
-      document.head.appendChild(link);
-    } catch {
-      // fallback: warm cache without blocking render
-      try {
-        const img = new Image();
-        img.src = url;
-      } catch {}
-    }
+  function preloadImageOnce() {
+    return getSharedShopProductRuntime().preloadImageOnce(...arguments);
   }
 
   const comboGridImageReadyCache = new Map();
   const COMBO_GRID_IMAGE_READY_LIMIT = 240;
 
-  function rememberComboGridImageReady(url, promise) {
-    const key = str(url || "").trim();
-    if (!key || !promise) return promise;
-    if (comboGridImageReadyCache.has(key)) comboGridImageReadyCache.delete(key);
-    comboGridImageReadyCache.set(key, promise);
-    while (comboGridImageReadyCache.size > COMBO_GRID_IMAGE_READY_LIMIT) {
-      const oldestKey = comboGridImageReadyCache.keys().next().value;
-      if (!oldestKey) break;
-      comboGridImageReadyCache.delete(oldestKey);
-    }
-    return promise;
+  function rememberComboGridImageReady() {
+    return getSharedShopProductRuntime().rememberComboGridImageReady(...arguments);
   }
 
-  function preloadComboGridImage(url) {
-    const key = str(url || "").trim();
-    if (!key) return Promise.resolve(false);
-    const cached = comboGridImageReadyCache.get(key);
-    if (cached) return cached;
-
-    const readyPromise = new Promise((resolve) => {
-      try {
-        const img = new Image();
-        const done = (ok) => resolve(!!ok);
-        img.onload = () => {
-          if (img.decode) {
-            img.decode().then(() => done(true)).catch(() => done(true));
-          } else {
-            done(true);
-          }
-        };
-        img.onerror = () => done(false);
-        img.src = key;
-        if (img.complete && img.naturalWidth > 0) {
-          if (img.decode) {
-            img.decode().then(() => done(true)).catch(() => done(true));
-          } else {
-            done(true);
-          }
-        }
-      } catch {
-        resolve(false);
-      }
-    }).then((ok) => {
-      if (!ok) comboGridImageReadyCache.delete(key);
-      return ok;
-    });
-
-    return rememberComboGridImageReady(key, readyPromise);
+  function preloadComboGridImage() {
+    return getSharedShopProductRuntime().preloadComboGridImage(...arguments);
   }
 
-  function preloadComboGridImagesInBackground(urls) {
-    const uniqueUrls = normalizeComboGridPhotoUrls(urls);
-    if (!uniqueUrls.length) return;
-    const run = () => uniqueUrls.forEach((url) => { preloadComboGridImage(url); });
-    if (window.requestIdleCallback) {
-      window.requestIdleCallback(run, { timeout: 1800 });
-    } else {
-      setTimeout(run, 0);
-    }
+  function preloadComboGridImagesInBackground() {
+    return getSharedShopProductRuntime().preloadComboGridImagesInBackground(...arguments);
   }
 
-  function waitForComboGridImage(url, timeoutMs = 1400) {
-    const imageReady = preloadComboGridImage(url);
-    const timeout = new Promise((resolve) => {
-      setTimeout(() => resolve(false), timeoutMs);
-    });
-    return Promise.race([imageReady, timeout]).then(Boolean).catch(() => false);
+  function waitForComboGridImage() {
+    return getSharedShopProductRuntime().waitForComboGridImage(...arguments);
   }
 
   function prioritizeAboveFoldCardImages(maxCards = 16, extraPx = 200) {
@@ -4403,17 +4514,8 @@
     setTimeout(fn, timeout);
   }
 
-  function safePhotos(p) {
-    if (Array.isArray(p?.photos)) return p.photos.filter(Boolean);
-    if (typeof p?.photos_json === "string") {
-      try {
-        const arr = JSON.parse(p.photos_json);
-        return Array.isArray(arr) ? arr.filter(Boolean) : [];
-      } catch {
-        return [];
-      }
-    }
-    return [];
+  function safePhotos() {
+    return getSharedShopProductRuntime().safePhotos(...arguments);
   }
 
   function normalizePhone(v) {
@@ -4615,6 +4717,25 @@
   window.submitShopOrder = submitShopOrder;
 
   async function apiJson(url, opts = {}) {
+    const key = ksoCatalogResourceKey(url, opts);
+    if (!key) return fetchShopJson(url, opts);
+    if (catalogResources.has(key)) return clonePassportValue(catalogResources.get(key));
+    if (catalogResourceInflight.has(key)) return clonePassportValue(await catalogResourceInflight.get(key));
+    const generation = catalogGeneration;
+    const task = fetchShopJson(url, opts).then(json => {
+      if (generation !== catalogGeneration) throw new Error('CATALOG_CHANGED_DURING_REQUEST');
+      catalogResources.set(key, clonePassportValue(json));
+      catalogDirtyResources.add(key);
+      scheduleCatalogSnapshotSave();
+      return json;
+    });
+    catalogResourceInflight.set(key, task);
+    try { return clonePassportValue(await task); }
+    finally { if (catalogResourceInflight.get(key) === task) catalogResourceInflight.delete(key); }
+  }
+
+  async function fetchShopJson(url, opts = {}) {
+    const catalogRequestGeneration = catalogGeneration;
     const token = getCustomerToken();
     const referralCode = getStoredReferralCode();
     const headers = {
@@ -4633,7 +4754,10 @@
       signal: opts.signal,
     });
 
+    if (isKsoCatalogCache && /^\/api\/public\/(?:products(?:\/|\?)|options\/|combos\/)/.test(url)) await waitForKsoCatalogIdle();
     const json = await res.json().catch(() => null);
+    if (isKsoCatalogCache && /^\/api\/public\/(?:products(?:\/|\?)|options\/|combos\/)/.test(url)
+      && catalogRequestGeneration !== catalogGeneration) throw new Error('CATALOG_CHANGED_DURING_REQUEST');
     if (!json || json.ok !== true) {
       const err = json?.error || `API_ERROR (${res.status})`;
       const e = new Error(err);
@@ -5047,7 +5171,8 @@
     });
     mergeProductPassport(pid, { product, defaultConfig: config });
 
-    if (elProductsGrid) {
+    if (isKsoCatalogCache) scheduleSyncAllProductCardsFromCart([pid]);
+    if (elProductsGrid && !isKsoCatalogCache) {
       elProductsGrid.querySelectorAll(`.sp-card[data-product-id="${pid}"]`).forEach((card) => {
         syncProductCardStaticContent(card, product);
         const price = card.querySelector(".sp-current-price");
@@ -5092,6 +5217,7 @@
     const ids = Array.isArray(productIds) ? productIds : [];
     ids.forEach((rawId) => {
       const pid = Number(rawId || 0);
+      if (isKsoCatalogCache && getProductPassport(pid)?.defaultConfig?.is_fulfillable != null) return;
       if (Number.isFinite(pid) && pid > 0) stockAvailabilityBatchPendingIds.add(pid);
     });
     if (!stockAvailabilityBatchPendingIds.size) return;
@@ -5119,6 +5245,9 @@
     const requestGenerations = new Map(ids.map((id) => [id, getStockConfigGeneration(id)]));
     stockAvailabilityBatchInFlight = true;
     try {
+      if (isKsoCatalogCache) {
+        await refreshKsoEffectiveConfigs(ids);
+      } else {
       const json = await apiJson('/api/public/products/batch/default-cart-config', {
         method: 'POST',
         body: { ids },
@@ -5127,6 +5256,7 @@
       Object.entries(configs).forEach(([productId, config]) => {
         applyEffectiveStockConfigRow(productId, config, requestGenerations.get(Number(productId)));
       });
+      }
       pruneUnavailableCartItems();
       updateCartBadge();
     } catch (err) {
@@ -5359,6 +5489,10 @@
           stockReconnectAttempt = 0;
           shopRealtimeReady = payload.order_commands === true;
           if (token) socket.send(JSON.stringify({ type: "auth", customer_token: token }));
+          if(isKsoCatalogCache){
+            catalogSyncPending = false;
+            requestKsoCatalogSync();
+          }
         }
         if (payload.type === "customer.ready") shopRealtimeCustomerReady = true;
         if (payload.type === "customer.expired") shopRealtimeCustomerReady = false;
@@ -5376,12 +5510,30 @@
             }
           }
         }
+        if(payload.type==='checkout.settings.changed' || payload.type==='checkout.settings.version') {
+          const scope=checkoutSettingsScope();
+          checkoutSettingsWantedVersions.set(scope,String(payload.revision));
+          void ensureShopCheckoutSettings().then(config=>{
+            if(scope===checkoutSettingsScope() && String(config?.settingsRevision)!==String(payload.revision) && socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'checkout.settings.get'}));
+          }).catch(error=>console.error('Checkout settings sync failed:',error));
+        }
+        if(payload.type==='checkout.settings.snapshot') {
+          setShopOrderConfigSnapshot(payload.data);
+          const desired=checkoutSettingsWantedVersions.get(checkoutSettingsScope());
+          if(desired && desired!=='resync' && /^\d+$/.test(desired) && BigInt(desired)>BigInt(String(payload.data?.settingsRevision || '0')) && socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'checkout.settings.get'}));
+          else checkoutSettingsWantedVersions.delete(checkoutSettingsScope());
+        }
         shopRealtimeListeners.forEach((listener) => {
           try { listener(payload); }
           catch (error) { console.error("Shop realtime subscriber failed:", error); }
         });
-        if (payload.type === "stock.changed") void applyStockChangedEvent(payload);
+        if (isKsoCatalogCache && payload.type === 'catalog.changed') requestKsoCatalogSync();
+        if (isKsoCatalogCache && payload.type === 'catalog.changes') {
+          void applyKsoCatalogChanges(payload, socket);
+        }
+        if (payload.type === "stock.changed" && !isKsoCatalogCache) void applyStockChangedEvent(payload);
         if (payload.type === "stock.resync") {
+          if (isKsoCatalogCache) { requestKsoCatalogSync(); return; }
           const visibleIds = collectVisibleProductIdsForStock();
           visibleIds.forEach((id) => {
             advanceStockConfigGeneration(id);
@@ -5538,7 +5690,8 @@
 
     const wakeup = () => {
       ensurePublicStockEventsConnection();
-      queueStockAvailabilityRefresh("stock_sync_wakeup", 200);
+      if (isKsoCatalogCache) requestKsoCatalogSync();
+      else queueStockAvailabilityRefresh("stock_sync_wakeup", 200);
     };
 
     document.addEventListener("visibilitychange", () => {
@@ -5633,7 +5786,7 @@
   }
 
   function updateCategoriesActiveUi() {
-    $$(".shop-cat-item", elCatsList).forEach((x) => {
+    (isKsoCatalogCache?[]:$$(".shop-cat-item", elCatsList)).forEach((x) => {
       const id = Number(x.getAttribute("data-cat-id"));
       x.classList.toggle("is-active", Number(state.activeCategoryId) === id);
     });
@@ -5657,6 +5810,7 @@
   }
 
   function syncCategoryFocusPadding() {
+    if(isKsoCatalogCache)return;
     if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
     const host = getCategoriesScrollHost();
     if (!host) return;
@@ -5670,6 +5824,7 @@
 
   function scheduleCategoryFocusUpdate() {
     if (!document.body?.classList.contains("page-kso")) return;
+    if(isKsoCatalogCache)return;
     if (categoryFocusRaf) return;
     categoryFocusRaf = requestAnimationFrame(() => {
       categoryFocusRaf = null;
@@ -5680,6 +5835,7 @@
 
   function scrollActiveCategoryToCenter() {
     if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
+    if(isKsoCatalogCache)return;
     const host = getCategoriesScrollHost();
     const active = elCatsList.querySelector(".shop-cat-item.is-active");
     if (!host || !active) return;
@@ -5695,6 +5851,7 @@
   }
 
   function updateCategoryFocusState() {
+    if(isKsoCatalogCache)return;
     if (!document.body?.classList.contains("page-kso") || !elCatsList) return;
     const host = getCategoriesScrollHost();
     if (!host) return;
@@ -5722,6 +5879,7 @@
   }
 
   function bindMobileHeaderCollapseOnScroll() {
+    if (isKsoCatalogCache) return;
     if (bindMobileHeaderCollapseOnScroll._bound) return;
     bindMobileHeaderCollapseOnScroll._bound = true;
     const update = () => {
@@ -6911,67 +7069,8 @@
     return hasUnavailable;
   }
 
-  function makeCartKey(productId, optionItemsOrIds, ingredients = [], variantSelection = null) {
-    const entries = (Array.isArray(optionItemsOrIds) ? optionItemsOrIds : [])
-      .map((opt) => {
-        if (typeof opt === "number") return { id: opt, qty: 1, variant_group_id: null, variant_value_index: null };
-        if (!opt || typeof opt !== "object") return null;
-        const id = Number(opt.id);
-        if (!Number.isFinite(id)) return null;
-        const qty = Math.max(0, Number(opt.qty || opt.quantity || 1)) || 1;
-        // ????????? ???????? ????? ? ?????
-        const variantGroupId = Number(opt.variant_group_id);
-        const variantIndex = Number(opt.variant_value_index);
-        const hasVariant = Number.isFinite(variantGroupId) && Number.isFinite(variantIndex);
-        return { 
-          id, 
-          qty, 
-          variant_group_id: hasVariant ? variantGroupId : null, 
-          variant_value_index: hasVariant ? variantIndex : null 
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => {
-        // ????????? ??????? ?? id, ????? ?? ????????
-        if (a.id !== b.id) return a.id - b.id;
-        if (a.variant_group_id !== b.variant_group_id) {
-          const aVg = a.variant_group_id ?? 0;
-          const bVg = b.variant_group_id ?? 0;
-          return aVg - bVg;
-        }
-        const aVi = a.variant_value_index ?? 0;
-        const bVi = b.variant_value_index ?? 0;
-        return aVi - bVi;
-      });
-    const optionPart = entries.map((entry) => {
-      let part = `${entry.id}${entry.qty !== 1 ? `x${entry.qty}` : ""}`;
-      // ????????В корзине пусто ? ????, ???? ?? ????
-      if (entry.variant_group_id != null && entry.variant_value_index != null) {
-        part += `v${entry.variant_group_id}-${entry.variant_value_index}`;
-      }
-      return part;
-    }).join(",");
-    
-    // ????????? ??????????? ? ???? ??? ?????????? ????????
-    const ingEntries = (Array.isArray(ingredients) ? ingredients : [])
-      .map((ing) => {
-        const id = Number(ing.ingredient_id || ing.id);
-        const qty = Number(ing.quantity ?? ing.qty ?? 1);
-        if (!Number.isFinite(id)) return null;
-        return { id, qty };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.id - b.id);
-    const ingPart = ingEntries.map((entry) => `${entry.id}x${entry.qty}`).join(",");
-    
-    const variantGroupId = Number(variantSelection?.group_id);
-    const variantIndex = Number(variantSelection?.value_index);
-    const variantPart = Number.isFinite(variantGroupId) && Number.isFinite(variantIndex)
-      ? `v${variantGroupId}-${variantIndex}`
-      : "";
-
-    const keyParts = [Number(productId), optionPart || "", ingPart || "", variantPart || ""].filter(Boolean).join(":");
-    return keyParts;
+  function makeCartKey() {
+    return getSharedShopProductRuntime().makeCartKey(...arguments);
   }
 
   function cartQty(productId) {
@@ -7042,29 +7141,8 @@
    *   variantUnitId — unit_id группы вариантов
    * Возвращает число (по умолчанию product.base_qty || 1).
    */
-  function calcConsumedPerUnit(product, variantLabel, variantUnitId) {
-    if (!product) return 1;
-    // Пробуем распарсить числовое значение из варианта
-    if (variantLabel != null && variantLabel !== "") {
-      const numericValue = parseVariantValueNumber(variantLabel);
-      if (Number.isFinite(numericValue) && numericValue > 0) {
-        const baseUnitId = Number(product.base_unit_id || product.unit_id || 0);
-        const fromUnitId = Number(variantUnitId || 0);
-        if (fromUnitId > 0 && baseUnitId > 0) {
-          if (fromUnitId === baseUnitId) return numericValue;
-          const factor = getConversionFactor(fromUnitId, baseUnitId);
-          if (factor != null) {
-            const inBase = numericValue * factor;
-            if (Number.isFinite(inBase) && inBase > 0) return inBase;
-          }
-        }
-        // Если нет конверсии но есть числовое значение — возвращаем как есть
-        return numericValue;
-      }
-    }
-    // Фолбэк: base_qty продукта (по умолчанию 1)
-    const bq = Number(product.base_qty || 1);
-    return Number.isFinite(bq) && bq > 0 ? bq : 1;
+  function calcConsumedPerUnit() {
+    return getSharedShopProductRuntime().calcConsumedPerUnit(...arguments);
   }
 
   /**
@@ -7476,84 +7554,16 @@
     return items;
   }
 
-  function cloneCartState(cartItems = state.cart) {
-    try {
-      if (typeof structuredClone === "function") {
-        return structuredClone(Array.isArray(cartItems) ? cartItems : []);
-      }
-    } catch {}
-    try {
-      return JSON.parse(JSON.stringify(Array.isArray(cartItems) ? cartItems : []));
-    } catch {
-      return Array.isArray(cartItems) ? cartItems.map((it) => ({ ...it })) : [];
-    }
+  function cloneCartState() {
+    return getSharedShopProductRuntime().cloneCartState(...arguments);
   }
 
-  function toStockVariantValue(rawLabel) {
-    const text = str(rawLabel || "").trim();
-    if (!text) return "";
-    const colonPos = text.indexOf(":");
-    if (colonPos >= 0) {
-      const right = text.slice(colonPos + 1).trim();
-      return right || text;
-    }
-    return text;
+  function toStockVariantValue() {
+    return getSharedShopProductRuntime().toStockVariantValue(...arguments);
   }
 
-  function buildStockCheckItemsPayloadFromResolved(resolvedItems) {
-    const safeItems = Array.isArray(resolvedItems) ? resolvedItems : [];
-    return safeItems.map((item) => {
-      if (item?.type === "combo") {
-        const selections = Array.isArray(item.selections) ? item.selections : [];
-        return {
-          cart_key: item.key || null,
-          type: "combo",
-          combo_id: item.combo_id || null,
-          qty: Math.max(1, Number(item.qty || 1)),
-          selections: selections.map((sel) => ({
-            product_id: Number(sel.product_id || 0) || null,
-            variant_group_id: sel.variant_group_id != null ? Number(sel.variant_group_id) : null,
-            variant_value_index: sel.variant_value_index != null ? Number(sel.variant_value_index) : null,
-            variant_label: str(sel.variant_label || ""),
-            unit_id: sel.unit_id != null ? Number(sel.unit_id) : null,
-            ingredients_display: Array.isArray(sel.ingredients_display)
-              ? sel.ingredients_display.map((ing) => ({
-                  ingredient_id: ing.ingredient_id != null ? Number(ing.ingredient_id) : null,
-                  product_id: ing.product_id != null ? Number(ing.product_id) : null,
-                  quantity: ing.quantity != null ? Number(ing.quantity) : null,
-                  qty: ing.qty != null ? Number(ing.qty) : null,
-                  unit_id: ing.unit_id != null ? Number(ing.unit_id) : null,
-                }))
-              : [],
-          })),
-        };
-      }
-
-      const variantGroupId = toFiniteNumberOrNull(item?.variant_group_id);
-      const variantValueIndex = toFiniteNumberOrNull(item?.variant_value_index);
-      const variantLabel = toStockVariantValue(item?.variant_label || "");
-      const hasVariant = variantGroupId !== null && variantValueIndex !== null && !!variantLabel;
-
-      return {
-        cart_key: item?.key || null,
-        product_id: Number(item?.product?.id || item?.product_id || 0) || null,
-        qty: Math.max(1, Number(item?.qty || 1)),
-        option_item_ids: Array.isArray(item?.option_item_ids) ? item.option_item_ids : [],
-        option_items: Array.isArray(item?.option_items) ? item.option_items : [],
-        ingredients: Array.isArray(item?.ingredients) ? item.ingredients : [],
-        variant_group_id: hasVariant ? variantGroupId : null,
-        variant_value_index: hasVariant ? variantValueIndex : null,
-        variant_label: hasVariant ? variantLabel : null,
-        variants: hasVariant
-          ? [{
-              variant_group_id: variantGroupId,
-              variant_value_index: variantValueIndex,
-              value: variantLabel,
-              label: variantLabel,
-            }]
-          : undefined,
-      };
-    });
+  function buildStockCheckItemsPayloadFromResolved() {
+    return getSharedShopProductRuntime().buildStockCheckItemsPayloadFromResolved(...arguments);
   }
 
   function extractStockShortagesFromError(err) {
@@ -7997,21 +8007,12 @@
     if (changed) refreshQtyLimitUi();
   }
 
-  function optionItemsTotal(optionItems) {
-    return (Array.isArray(optionItems) ? optionItems : []).reduce((sum, opt) => {
-      const qty = Math.max(0, Number(opt?.qty || opt?.quantity || 1)) || 1;
-      return sum + Number(opt?.price || 0) * qty;
-    }, 0);
+  function optionItemsTotal() {
+    return getSharedShopProductRuntime().optionItemsTotal(...arguments);
   }
 
-  function getAutoRuleByProductId(productId) {
-    const pid = Number(productId);
-    if (!Number.isFinite(pid)) return null;
-    const rule = state.autoAdd?.byProductId?.get(pid) || null;
-    if (rule && !rule.group && state.autoAdd?.byGroupId) {
-      rule.group = state.autoAdd.byGroupId.get(Number(rule.group_id)) || null;
-    }
-    return rule;
+  function getAutoRuleByProductId() {
+    return getSharedShopProductRuntime().getAutoRuleByProductId(...arguments);
   }
 
   function makeAutoAddDismissKey(groupId, productId) {
@@ -8093,176 +8094,28 @@
     return !hasOptions && !hasIngredients && !hasVariant;
   }
 
-  function parseRuleAmount(val) {
-    if (val == null || val === "") return 0;
-    const n = Number(val);
-    if (Number.isFinite(n)) return n;
-    const s = String(val).trim().replace(",", ".");
-    const n2 = Number(s);
-    return Number.isFinite(n2) ? n2 : 0;
+  function parseRuleAmount() {
+    return getSharedShopProductRuntime().parseRuleAmount(...arguments);
   }
 
-  function calcAutoFreeQty(rule, baseTotal) {
-    if (!rule) return 0;
-    let freeQty = Math.max(0, parseRuleAmount(rule.free_first_qty));
-    const amountStep = parseRuleAmount(rule.free_per_amount);
-    const stepQty = Math.max(0, parseRuleAmount(rule.free_per_amount_qty));
-    if (amountStep > 0 && stepQty > 0 && baseTotal > 0) {
-      freeQty += Math.floor(baseTotal / amountStep) * stepQty;
-    }
-    const maxFree = rule.max_free_qty != null ? Number(rule.max_free_qty) : null;
-    if (maxFree != null && Number.isFinite(maxFree)) {
-      freeQty = Math.min(freeQty, Math.max(0, maxFree));
-    }
-    return freeQty;
+  function calcAutoFreeQty() {
+    return getSharedShopProductRuntime().calcAutoFreeQty(...arguments);
   }
 
-  function getItemUnitParts(item) {
-    // ????? ????: unit_price_override ??? ????????? variant_unit_price; ????? ? ???? ???????? (????? ??? ?????????????? ? variant_unit_price: 0)
-    const ov = item?.unit_price_override != null ? Number(item.unit_price_override) : null;
-    const vp = item?.variant_unit_price != null ? Number(item.variant_unit_price) : null;
-    const baseProductUnit = Number(
-      (ov != null ? ov : (vp != null && vp !== 0 ? vp : null)) ?? item?.product?.price ?? 0
-    );
-    const optionTotal = optionItemsTotal(item?.option_items || []);
-    const ingredientDiff = Number(item?.ingredient_price_diff || 0);
-    const baseUnit = baseProductUnit + optionTotal + ingredientDiff;
-    return { baseProductUnit, optionTotal, ingredientDiff, baseUnit };
+  function getItemUnitParts() {
+    return getSharedShopProductRuntime().getItemUnitParts(...arguments);
   }
 
-  function computeNonAutoTotal(items) {
-    return (Array.isArray(items) ? items : []).reduce((sum, item) => {
-      if (Number(item?.auto_add || 0) === 1) return sum;
-      const qty = Math.max(0, Number(item?.qty || 0));
-      if (!qty) return sum;
-      const { baseUnit } = getItemUnitParts(item);
-      const unitPrice = roundPrice(baseUnit);
-      const lineTotal = roundPrice(unitPrice * qty);
-      return sum + lineTotal;
-    }, 0);
+  function computeNonAutoTotal() {
+    return getSharedShopProductRuntime().computeNonAutoTotal(...arguments);
   }
 
-  function computeAutoEligibleTotal(items) {
-    return (Array.isArray(items) ? items : []).reduce((sum, item) => {
-      const qty = Math.max(0, Number(item?.qty || 0));
-      if (!qty) return sum;
-      const isAuto = Number(item?.auto_add || 0) === 1;
-      if (!isAuto) {
-        const parts = getItemUnitParts(item);
-        const unitPrice = roundPrice(parts.baseUnit);
-        const lineTotal = roundPrice(unitPrice * qty);
-        return sum + lineTotal;
-      }
-      const rule = getAutoRuleByProductId(item?.product?.id || item?.product_id);
-      const parts = getItemUnitParts(item);
-      if (!rule) {
-        const unitPrice = roundPrice(parts.baseUnit);
-        const lineTotal = roundPrice(unitPrice * qty);
-        return sum + lineTotal;
-      }
-      // ????????В корзине пусто?????????: ???? ? ??????? ?? ?????? ???? (null/0) ? ????? ???? ??????
-      const priceOverride = (rule.price_override != null && Number(rule.price_override) > 0)
-        ? Number(rule.price_override)
-        : parts.baseProductUnit;
-      const unitPrice = roundPrice(priceOverride + parts.optionTotal + parts.ingredientDiff);
-      const lineTotal = roundPrice(unitPrice * qty);
-      return sum + lineTotal;
-    }, 0);
+  function computeAutoEligibleTotal() {
+    return getSharedShopProductRuntime().computeAutoEligibleTotal(...arguments);
   }
 
-  function computeItemPricing(item, totals) {
-    const qty = Math.max(0, Number(item?.qty || 0));
-    const rule = getAutoRuleByProductId(item?.product?.id || item?.product_id);
-    const isAuto = Number(item?.auto_add || 0) === 1;
-    const parts = getItemUnitParts(item);
-    let unitPrice = parts.baseUnit;
-    let paidQty = qty;
-    let freeQty = 0;
-    let isAutoItem = false;
-    let discountAmount = 0;
-    let discountInfo = null;
-
-    if (rule && isAuto) {
-      const group = rule.group || null;
-      const nonAutoTotal = totals?.nonAutoTotal ?? 0;
-      const autoEligibleTotal = totals?.autoEligibleTotal ?? nonAutoTotal;
-      const baseTotal = group && Number(group.include_auto_in_total || 0) === 1 ? autoEligibleTotal : nonAutoTotal;
-      // ????????В корзине пусто?????????: ???? ? ??????? ?? ?????? ???? (null/0) ? ????? ???? ??????
-      const priceOverride = (rule.price_override != null && Number(rule.price_override) > 0)
-        ? Number(rule.price_override)
-        : parts.baseProductUnit;
-      unitPrice = priceOverride + parts.optionTotal + parts.ingredientDiff;
-      freeQty = calcAutoFreeQty(rule, baseTotal);
-      paidQty = Math.max(0, qty - freeQty);
-      isAutoItem = true;
-    }
-
-    unitPrice = roundPrice(unitPrice);
-    let lineTotal = roundPrice(unitPrice * paidQty);
-
-    function calculateProductDiscountAmount(price, discount) {
-      const srcPrice = Number(price || 0);
-      if (!(srcPrice > 0) || !discount) return 0;
-
-      const discType = String(discount.discount_type || "").trim();
-      const discValue = Number(discount.discount_value || 0);
-      if (!(discValue > 0)) return 0;
-
-      let amount = 0;
-      if (discType === "percent") {
-        amount = srcPrice * (discValue / 100);
-      } else if (discType === "fixed") {
-        amount = discValue;
-      } else if (discType === "special_price") {
-        amount = Math.max(0, srcPrice - discValue);
-      } else {
-        return 0;
-      }
-
-      const maxDiscountAmount = Number(discount.max_discount_amount);
-      if (Number.isFinite(maxDiscountAmount) && maxDiscountAmount > 0 && amount > maxDiscountAmount) {
-        amount = maxDiscountAmount;
-      }
-      if (amount > srcPrice) amount = srcPrice;
-      return Math.round(amount * 100) / 100;
-    }
-
-    // Применяем скидку если есть
-    const product = item?.product;
-    const buyXGetYRule = !isAutoItem ? getCatalogBuyXGetYRule(product) : null;
-    const buyXGetYApplication = calculateCatalogBuyXGetYApplication(paidQty, buyXGetYRule);
-    const buyXGetYFreeQty = buyXGetYApplication.freeQty;
-    let benefitsExcludedLineTotal = 0;
-    if (buyXGetYFreeQty > 0) {
-      const buyXGetYDiscountAmount = roundPrice(unitPrice * buyXGetYFreeQty);
-      if (buyXGetYDiscountAmount > 0) {
-        discountAmount = roundPrice(discountAmount + buyXGetYDiscountAmount);
-        discountInfo = {
-          id: buyXGetYRule.id,
-          title: buyXGetYRule.title,
-          discount_type: "buy_x_get_y",
-          discount_value: buyXGetYRule.rewardQty,
-          discount_amount: buyXGetYDiscountAmount,
-        };
-        lineTotal = roundPrice(Math.max(0, lineTotal - buyXGetYDiscountAmount));
-      }
-      if (buyXGetYRule && !buyXGetYRule.isStackable) {
-        benefitsExcludedLineTotal = roundPrice(unitPrice * Math.max(0, Number(buyXGetYApplication.paidParticipatingQty || 0)));
-      }
-    }
-    if (product?.discount && product.discount.discount_amount > 0 && !isAutoItem) {
-      discountInfo = discountInfo || product.discount;
-      // Рассчитываем скидку на lineTotal
-      const simpleDiscountBase = benefitsExcludedLineTotal > 0
-        ? roundPrice(unitPrice * Math.max(0, paidQty - Number(buyXGetYApplication.participatingQty || 0)))
-        : lineTotal;
-      const simpleDiscountAmount = calculateProductDiscountAmount(simpleDiscountBase, product.discount);
-      discountAmount = roundPrice(discountAmount + simpleDiscountAmount);
-      lineTotal = roundPrice(lineTotal - simpleDiscountAmount);
-    }
-
-    benefitsExcludedLineTotal = roundPrice(Math.min(lineTotal, Math.max(0, benefitsExcludedLineTotal)));
-    return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts, discountAmount, discountInfo, benefitsExcludedLineTotal };
+  function computeItemPricing() {
+    return getSharedShopProductRuntime().computeItemPricing(...arguments);
   }
 
   function computeCartTotals(items) {
@@ -8400,23 +8253,8 @@
     return `${cleanLabel} ${cleanUnit}`.trim();
   }
 
-  function extractVariantValueForOrder(labelRaw, groupTitleRaw) {
-    const rawLabel = str(labelRaw || "").trim();
-    if (!rawLabel) return "";
-
-    const groupTitle = str(groupTitleRaw || "").trim();
-    let value = rawLabel;
-    if (groupTitle) {
-      const escapedGroupTitle = groupTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      value = value.replace(new RegExp(`^${escapedGroupTitle}(?:\\s*\\([^)]*\\))?\\s*:\\s*`, "i"), "").trim();
-    }
-    if (!value) value = rawLabel;
-
-    if (value.includes(":")) {
-      const right = str(value.split(":").slice(1).join(":")).trim();
-      if (right) value = right;
-    }
-    return value.trim();
+  function extractVariantValueForOrder() {
+    return getSharedShopProductRuntime().extractVariantValueForOrder(...arguments);
   }
 
   function isDefaultVariantLabelForOrder(valueRaw) {
@@ -8454,30 +8292,12 @@
   window.extractVariantValueForOrder = extractVariantValueForOrder;
   window.buildVariantDisplayLineForOrder = buildVariantDisplayLineForOrder;
 
-  function formatQtyUnitNameForOrder(qtyRaw, unitRaw, nameRaw) {
-    const qtyNum = Number(qtyRaw);
-    const qtyText = Number.isFinite(qtyNum)
-      ? String(Number.isInteger(qtyNum) ? qtyNum : Number(qtyNum.toFixed(3)))
-      : str(qtyRaw ?? "").trim();
-    const unitText = str(unitRaw || "").trim();
-    const nameText = str(nameRaw || "").trim();
-    return [qtyText, unitText, nameText].filter(Boolean).join(" ").trim();
+  function formatQtyUnitNameForOrder() {
+    return getSharedShopProductRuntime().formatQtyUnitNameForOrder(...arguments);
   }
 
-  function formatIngredientLineForOrder(ing) {
-    const rawQty = ing?.qty ?? ing?.quantity;
-    const numQty = Number(rawQty);
-    if (!Number.isFinite(numQty) || numQty <= 0) return "";
-    const unitText = str(
-      ing?.unit ||
-      ing?.unit_label ||
-      ing?.unitLabel ||
-      ing?.unit_short_title ||
-      ing?.unit_title ||
-      ""
-    ).trim();
-    const nameText = str(ing?.name || ing?.ingredient_name || ing?.ingredientName || "").trim();
-    return formatQtyUnitNameForOrder(rawQty, unitText, nameText);
+  function formatIngredientLineForOrder() {
+    return getSharedShopProductRuntime().formatIngredientLineForOrder(...arguments);
   }
 
   function formatOptionLineForOrder(opt) {
@@ -8493,212 +8313,16 @@
   }
 
   // ?????????????? ?????? ?????? - ???????? ? ?????????? ??????? ??? ????????????? ? bottom sheet
-  function normalizeFavoriteOptionItemsFromCart(optionItems) {
-    const items = Array.isArray(optionItems) ? optionItems : [];
-    return items
-      .map((opt) => {
-        const id = Number(opt?.id || 0);
-        if (!Number.isFinite(id) || id <= 0) return null;
-        const qty = Math.max(1, Number(opt?.qty ?? opt?.quantity ?? 1));
-        const targetProductId = toFiniteNumberOrNull(opt?.target_product_id ?? opt?.product_id);
-        return {
-          id,
-          title: str(opt?.title || opt?.name || ""),
-          name: str(opt?.name || opt?.title || ""),
-          price: Number(opt?.price || 0),
-          qty,
-          quantity: qty,
-          target_product_id: targetProductId,
-          product_id: targetProductId,
-          variant_group_id: toFiniteNumberOrNull(opt?.variant_group_id),
-          variant_value_index: toFiniteNumberOrNull(opt?.variant_value_index),
-          variant_label: str(opt?.variant_label || ""),
-          variant_group_title: str(opt?.variant_group_title || opt?.group_title || ""),
-          variant_unit: str(opt?.variant_unit || opt?.unit || ""),
-          unit_id: toFiniteNumberOrNull(opt?.unit_id),
-          variant_price_diff: Number(opt?.variant_price_diff || 0),
-        };
-      })
-      .filter(Boolean);
+  function normalizeFavoriteOptionItemsFromCart() {
+    return getSharedShopProductRuntime().normalizeFavoriteOptionItemsFromCart(...arguments);
   }
 
-  function normalizeFavoriteIngredientsFromCart(ingredients) {
-    const list = Array.isArray(ingredients) ? ingredients : [];
-    return list
-      .map((ing) => {
-        const ingredientId = Number(ing?.ingredient_id || 0);
-        if (!Number.isFinite(ingredientId) || ingredientId <= 0) return null;
-        const quantityRaw = Number(ing?.quantity ?? ing?.qty ?? 0);
-        const quantity = Number.isFinite(quantityRaw) ? quantityRaw : 0;
-        return {
-          ingredient_id: ingredientId,
-          ingredient_name: str(ing?.ingredient_name || ing?.name || ""),
-          name: str(ing?.name || ing?.ingredient_name || ""),
-          quantity,
-          qty: quantity,
-          unit_id: toFiniteNumberOrNull(ing?.unit_id),
-          unit_label: str(ing?.unit_label || ing?.unit || ""),
-          unit: str(ing?.unit || ing?.unit_label || ""),
-        };
-      })
-      .filter(Boolean);
+  function normalizeFavoriteIngredientsFromCart() {
+    return getSharedShopProductRuntime().normalizeFavoriteIngredientsFromCart(...arguments);
   }
 
-  function buildFavoriteSnapshotFromResolvedItem(resolvedItem, { pricing = null, oldLineTotal = null } = {}) {
-    if (!resolvedItem || typeof resolvedItem !== "object") return null;
-
-    if (String(resolvedItem.type || "") === "combo") {
-      const comboId = Number(resolvedItem.combo_id || 0);
-      if (!Number.isFinite(comboId) || comboId <= 0) return null;
-      const qty = Math.max(1, Number(resolvedItem.qty || 1));
-      const unitPrice = Number(resolvedItem.unit_price_override || 0);
-      const lineTotal = roundPrice(unitPrice * qty);
-      const oldLine = oldLineTotal != null
-        ? roundPrice(Number(oldLineTotal || 0))
-        : roundPrice((Number(resolvedItem.unit_price_before_discount || 0) || unitPrice) * qty);
-      const selections = (Array.isArray(resolvedItem.selections) ? resolvedItem.selections : []).map((sel) => ({
-        product_id: toFiniteNumberOrNull(sel?.product_id),
-        product_name: str(sel?.product_name || ""),
-        product_photo: str(sel?.product_photo || ""),
-        variant_label: str(sel?.variant_label || ""),
-        variant_group_id: toFiniteNumberOrNull(sel?.variant_group_id),
-        variant_value_index: toFiniteNumberOrNull(sel?.variant_value_index),
-        variant_group_title: str(sel?.variant_group_title || ""),
-        variant_unit: str(sel?.variant_unit || ""),
-        unit_id: toFiniteNumberOrNull(sel?.unit_id),
-        unit_price_override: sel?.unit_price_override != null ? Number(sel.unit_price_override) : null,
-        unit_price_before_discount: sel?.unit_price_before_discount != null ? Number(sel.unit_price_before_discount) : null,
-        ingredients_display: (Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : []).map((ing) => ({
-          ingredient_id: toFiniteNumberOrNull(ing?.ingredient_id),
-          name: str(ing?.name || ing?.ingredient_name || ""),
-          quantity: Number(ing?.quantity ?? ing?.qty ?? 0),
-          qty: Number(ing?.qty ?? ing?.quantity ?? 0),
-          unit_id: toFiniteNumberOrNull(ing?.unit_id),
-          unit: str(ing?.unit || ing?.unit_label || ""),
-        })),
-      }));
-      const photos = selections.map((sel) => str(sel.product_photo || "")).filter(Boolean);
-
-      return {
-        type: "combo",
-        combo_id: comboId,
-        combo_title: str(resolvedItem.combo_title || "Комбо"),
-        name: str(resolvedItem.combo_title || resolvedItem.name || "Комбо"),
-        qty,
-        price: Number(unitPrice || 0),
-        line_total: Number(lineTotal || 0),
-        old_line_total: oldLine > lineTotal ? Number(oldLine) : 0,
-        unit_price_before_discount: Number(resolvedItem.unit_price_before_discount || 0),
-        photos,
-        selections,
-      };
-    }
-
-    const product = resolvedItem.product || null;
-    const productId = Number(resolvedItem.product_id || product?.id || 0);
-    if (!Number.isFinite(productId) || productId <= 0) return null;
-    const qty = Math.max(1, Number(resolvedItem.qty || 1));
-    const selectedOptionItems = normalizeFavoriteOptionItemsFromCart(
-      Array.isArray(resolvedItem.option_items) ? resolvedItem.option_items : []
-    );
-    const ingredients = normalizeFavoriteIngredientsFromCart(
-      Array.isArray(resolvedItem.ingredients) ? resolvedItem.ingredients : []
-    );
-    const variantGroupId = toFiniteNumberOrNull(resolvedItem.variant_group_id);
-    const variantValueIndex = toFiniteNumberOrNull(resolvedItem.variant_value_index);
-    const variantGroupTitle = str(
-      resolvedItem.variant_group_title ||
-      resolvedItem?.variant?.group_title ||
-      resolvedItem?.variant?.variant_group_title ||
-      ""
-    ).trim();
-    const variantUnit = str(
-      resolvedItem.variant_unit ||
-      resolvedItem?.variant?.unit ||
-      resolvedItem?.variant?.unit_label ||
-      ""
-    ).trim();
-    const variantLabel = extractVariantValueForOrder(
-      resolvedItem.variant_label || resolvedItem?.variant?.label || resolvedItem?.variant?.value || "",
-      variantGroupTitle
-    );
-    const hasVariant = variantLabel || (variantGroupId != null && variantValueIndex != null);
-    const variantDiff = Number(resolvedItem.variant_unit_price || 0) - Number(product?.price || 0);
-
-    let pricingData = pricing;
-    if (!pricingData) {
-      const resolvedItems = cartItemsResolved();
-      const totals = {
-        nonAutoTotal: computeNonAutoTotal(resolvedItems),
-        autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
-      };
-      pricingData = computeItemPricing(
-        {
-          product,
-          qty,
-          option_items: selectedOptionItems,
-          ingredients,
-          ingredient_price_diff: Number(resolvedItem.ingredient_price_diff || 0),
-          variant_label: variantLabel,
-          variant_unit_price: Number(resolvedItem.variant_unit_price || 0),
-          unit_price_override:
-            resolvedItem.unit_price_override != null
-              ? Number(resolvedItem.unit_price_override)
-              : null,
-          auto_add: Number(resolvedItem.auto_add || 0),
-          auto_add_group_id: toFiniteNumberOrNull(resolvedItem.auto_add_group_id),
-        },
-        totals
-      );
-    }
-
-    const lineTotal = roundPrice(Number(pricingData?.lineTotal || 0));
-    const unitPrice = roundPrice(Number(pricingData?.unitPrice || (qty > 0 ? lineTotal / qty : 0)));
-    const oldLineFromArg = oldLineTotal != null ? roundPrice(Number(oldLineTotal || 0)) : 0;
-    const oldPricePerUnit = scaleProductBasePriceForCurrentUnit(
-      product,
-      Number(pricingData?.parts?.baseProductUnit || unitPrice || 0),
-      Number(product?.old_price || 0)
-    );
-    const oldLineFromProduct = oldPricePerUnit > 0 ? roundPrice(oldPricePerUnit * qty) : 0;
-    const originalLineTotal = oldLineFromArg > 0 ? oldLineFromArg : oldLineFromProduct;
-    const showOldLine = originalLineTotal > lineTotal;
-
-    const variantEntries = hasVariant
-      ? [{
-        variant_group_id: variantGroupId,
-        variant_value_index: variantValueIndex,
-        group_title: variantGroupTitle,
-        variant_group_title: variantGroupTitle,
-        value: variantLabel,
-        label: variantLabel,
-        unit: variantUnit,
-        price_diff: Number.isFinite(variantDiff) ? variantDiff : 0,
-      }]
-      : [];
-
-    return {
-      type: "product",
-      product_id: productId,
-      name: str(product?.name || resolvedItem.name || "Товар"),
-      qty,
-      price: Number(unitPrice || 0),
-      old_price: showOldLine ? roundPrice(originalLineTotal / qty) : Number(oldPricePerUnit || 0),
-      line_total: Number(lineTotal || 0),
-      photos: safePhotos(product),
-      option_item_ids: selectedOptionItems.map((opt) => Number(opt.id)),
-      options: selectedOptionItems,
-      option_items: selectedOptionItems,
-      ingredients,
-      variant_group_id: variantGroupId,
-      variant_value_index: variantValueIndex,
-      variant_label: variantLabel,
-      variant_group_title: variantGroupTitle,
-      variant_unit: variantUnit,
-      variant_unit_price: Number(resolvedItem.variant_unit_price || 0),
-      variants: variantEntries,
-      discount: showOldLine ? { original_line_total: Number(originalLineTotal) } : null,
-    };
+  function buildFavoriteSnapshotFromResolvedItem() {
+    return getSharedShopProductRuntime().buildFavoriteSnapshotFromResolvedItem(...arguments);
   }
 
   window.formatOrderItem = function formatOrderItem(item) {
@@ -8990,6 +8614,7 @@
     });
     if (patch.updated_at != null) entry.updated_at = patch.updated_at;
     entry.ts = Date.now();
+    if(isKsoCatalogCache&&!catalogCacheRestoring)catalogDirtyPassports.add(Number(productId));
     if (typeof scheduleCatalogSnapshotSave === "function") scheduleCatalogSnapshotSave();
     return entry;
   }
@@ -10109,7 +9734,8 @@
         const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
         const data = await resp.json().catch(() => null);
         if (resp.ok && data?.ok && Array.isArray(data.stores)) {
-          window._pickupStores = data.stores;
+          window._pickupStores = Array.isArray(window.__shopOrderConfig?.checkoutStores)
+            ? window._pickupStores : data.stores;
           return data.stores;
         }
       } catch (e) {
@@ -10215,6 +9841,7 @@
   let cartHeaderOrderConfigPromise = null;
 
   async function ensureOrderConfigForHeader() {
+    if(!document.body?.classList.contains('page-kso'))return ensureShopCheckoutSettings();
     const existingConfig = getShopOrderConfigSnapshot();
     if (existingConfig) {
       applyPriceRoundingSettingsFromOrderConfig(existingConfig, { persist: true });
@@ -11870,7 +11497,8 @@ async function showAddressFormView(prefill, editingId, backMode) {
       if (tenantId) {
         const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
         const data = await resp.json();
-        if (data?.ok && Array.isArray(data.stores)) window._pickupStores = data.stores;
+        if (data?.ok && Array.isArray(data.stores)) window._pickupStores = Array.isArray(window.__shopOrderConfig?.checkoutStores)
+            ? window._pickupStores : data.stores;
       }
     } catch {}
   }
@@ -12231,29 +11859,17 @@ function showProductView() {
   function getStoreStatusInfoForList(store) {
     if (!Array.isArray(store?.storeHours) || !store.storeHours.length) return null;
     const tz = Number.isNaN(Number(store.timezone)) ? 0 : Number(store.timezone);
-    const now = new Date();
-    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
-    const localMs = utcMs + tz * 60 * 60 * 1000;
-    const localDate = new Date(localMs);
-    const currentDay = localDate.getDay();
-    const entry = store.storeHours.find((h) => Number(h.day_of_week) === currentDay);
-    if (!entry || Number(entry.is_closed) === 1) return { open: false, text: "Закрыто - выходной" };
-
-    const opens = entry.opens_at ? String(entry.opens_at).slice(0, 5) : "";
-    const closes = entry.closes_at ? String(entry.closes_at).slice(0, 5) : "";
-    if (!opens || !closes) return null;
-
-    const hhmm = localDate.getHours() * 60 + localDate.getMinutes();
-    const [oh, om] = opens.split(":").map(Number);
-    const [ch, cm] = closes.split(":").map(Number);
-    const openMin = oh * 60 + om;
-    const closeMin = ch * 60 + cm;
-
-    if (hhmm >= openMin && hhmm < closeMin) {
-      return { open: true, text: `Открыто до ${closes}` };
+    const date = new Date(Date.now() + tz * 3600000);
+    const minute = date.getUTCHours() * 60 + date.getUTCMinutes();
+    const interval = checkoutScheduleIntervals(store.storeHours, date).find(([start, end]) => minute >= start && minute < end);
+    if (interval) {
+      const end = ((interval[1] % 1440) + 1440) % 1440;
+      return { open: true, text: `\u041e\u0442\u043a\u0440\u044b\u0442\u043e \u0434\u043e ${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}` };
     }
-    return { open: false, text: `Закрыто до ${opens}` };
+    const next = findNextStoreOpeningForList(store.storeHours, store.timezone);
+    return { open: false, text: next?.time ? `\u0417\u0430\u043a\u0440\u044b\u0442\u043e \u0434\u043e ${next.time}` : '\u0417\u0430\u043a\u0440\u044b\u0442\u043e - \u0432\u044b\u0445\u043e\u0434\u043d\u043e\u0439' };
   }
+  window.getShopStoreScheduleStatus = getStoreStatusInfoForList;
 
   function ensureValidPickupStoreIdForAddressList(stores) {
     const ids = (Array.isArray(stores) ? stores : [])
@@ -12308,7 +11924,8 @@ function showProductView() {
       const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
       const data = await resp.json();
       if (data?.ok && Array.isArray(data.stores)) {
-        window._pickupStores = data.stores;
+        window._pickupStores = Array.isArray(window.__shopOrderConfig?.checkoutStores)
+            ? window._pickupStores : data.stores;
         ensureValidPickupStoreIdForAddressList(window._pickupStores);
         return window._pickupStores;
       }
@@ -13081,46 +12698,8 @@ async function initAddresses() {
   // -----------------------------
   // UI: qty animation (photo overlay)
   // -----------------------------
-  function animateNumber(el, newValue, dir) {
-    const prev = el.getAttribute("data-v") || el.textContent.trim() || "0";
-    const next = String(newValue);
-    el.setAttribute("data-v", next);
-
-    if (!prev || prev === next) {
-      el.textContent = next;
-      return;
-    }
-
-    el.innerHTML = "";
-    const oldSpan = document.createElement("span");
-    oldSpan.className = "qty-num qty-old";
-    oldSpan.textContent = prev;
-
-    const newSpan = document.createElement("span");
-    newSpan.className = "qty-num qty-new";
-    newSpan.textContent = next;
-
-    el.appendChild(oldSpan);
-    el.appendChild(newSpan);
-
-    oldSpan.style.transform = "translateX(0)";
-    oldSpan.style.opacity = "1";
-    newSpan.style.transform = "translateX(0) scale(0.8)";
-    newSpan.style.opacity = "0";
-
-    void el.offsetWidth;
-
-    requestAnimationFrame(() => {
-      oldSpan.style.transform = dir === "inc" ? "translateX(-105%) scale(0.9)" : "translateX(105%) scale(0.9)";
-      oldSpan.style.opacity = "0";
-      newSpan.style.transform = "translateX(0) scale(1)";
-      newSpan.style.opacity = "1";
-    });
-
-    setTimeout(() => {
-      el.innerHTML = "";
-      el.textContent = next;
-    }, 320);
+  function animateNumber() {
+    return getSharedShopProductRuntime().animateNumber(...arguments);
   }
 
   // -----------------------------
@@ -13218,7 +12797,9 @@ async function initAddresses() {
         const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
         if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
           const targetCenterOffset = Math.max(0, (scroller.clientHeight / 2) - (scrollTarget.offsetHeight / 2) - 200);
-          const top = scrollTarget.offsetTop - Math.max(0, padTop || 0) - targetCenterOffset;
+          const top = document.body.classList.contains('page-kso')
+            ? scroller.scrollTop + header.getBoundingClientRect().top - scroller.getBoundingClientRect().top - scroller.clientTop
+            : scrollTarget.offsetTop - Math.max(0, padTop || 0) - targetCenterOffset;
           elProductsScroller.scrollTo({
             top: Math.max(0, top),
             behavior: document.body?.classList.contains("page-kso") ? "auto" : "smooth",
@@ -13248,6 +12829,7 @@ async function initAddresses() {
 
   function updateStickySubcategoryRows() {
     if (!elProductsGrid) return;
+    if(isKsoCatalogCache&&!isMobileViewport())return;
     const rows = Array.from(elProductsGrid.querySelectorAll(".shop-category-subcategory-row"));
     if (!rows.length) return;
     if (!isMobileViewport()) {
@@ -13307,6 +12889,7 @@ async function initAddresses() {
     if (!categoryHeaders.length) return;
     if (isProgrammaticCategoryScroll) return;
     const isKsoPage = document.body?.classList.contains("page-kso");
+    if (isKsoPage && (catalogTouchActive || Date.now() - catalogLastScrollAt < 180)) return;
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     let containerTop = 0;
@@ -13360,7 +12943,29 @@ async function initAddresses() {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     const scroller = isMobile ? window : (elProductsScroller || window);
     if (!scroller || !scroller.addEventListener) return;
+    let settledTimer = null;
+    let ksoKineticMoving = false;
+    const hasNativeScrollEnd = 'onscrollend' in scroller;
+    const settleKsoCategory = () => {
+      clearTimeout(settledTimer);
+      settledTimer = null;
+      if (ksoKineticMoving) return;
+      if (catalogTouchActive || Date.now() - catalogLastScrollAt < 180) {
+        settledTimer = setTimeout(settleKsoCategory, 180);
+        return;
+      }
+      updateActiveCategoryFromScroll();
+    };
+    const onKsoScroll = () => {
+      catalogLastScrollAt = Date.now();
+      if (!hasNativeScrollEnd && !ksoKineticMoving) {
+        clearTimeout(settledTimer);
+        settledTimer = setTimeout(settleKsoCategory, 180);
+      }
+    };
+    if (isKsoCatalogCache && hasNativeScrollEnd) scroller.addEventListener('scrollend', settleKsoCategory, { passive: true });
     scroller.addEventListener("scroll", () => {
+        if (isKsoCatalogCache) { onKsoScroll(); return; }
         if (categoryScrollRaf) return;
         categoryScrollRaf = requestAnimationFrame(() => {
           categoryScrollRaf = null;
@@ -13372,6 +12977,12 @@ async function initAddresses() {
     // Desktop fallback: also listen on window in case scroll container changes
     if (!isMobile && scroller !== window) {
       window.addEventListener("scroll", () => {
+        if (isKsoCatalogCache) {
+          catalogLastScrollAt = Date.now();
+          clearTimeout(settledTimer);
+          settledTimer = setTimeout(settleKsoCategory, 180);
+          return;
+        }
         if (categoryScrollRaf) return;
         categoryScrollRaf = requestAnimationFrame(() => {
           categoryScrollRaf = null;
@@ -13381,17 +12992,201 @@ async function initAddresses() {
       });
     }
 
-    if (document.body?.classList.contains("page-kso")) {
-      const host = getCategoriesScrollHost();
-      if (host && !host.dataset.categoryFocusBound) {
-        host.addEventListener("scroll", scheduleCategoryFocusUpdate, { passive: true });
-        window.addEventListener("resize", scheduleCategoryFocusUpdate);
-        host.dataset.categoryFocusBound = "1";
-      }
+    if (isKsoCatalogCache) {
+      // Touch-only vertical motion. Wheel, mouse and horizontal chip scrolling stay native.
+      let catalogGesture = null;
+      let suppressCatalogClickUntil = 0;
+      let motionFrame = 0;
+      let velocity = 0;
+      let position = 0;
+      let motionNode = null;
+      let maxScroll = 0;
+      let lastFrameAt = 0;
+      let releaseOffset = 0;
+      const maxVelocity = 1.15; // CSS pixels/ms; cap a fast flick on a large touchscreen.
+      const decayMs = 300;
+      const stopMotion = () => {
+        cancelAnimationFrame(motionFrame);
+        motionFrame = 0;
+        velocity = 0;
+        releaseOffset = 0;
+        ksoKineticMoving = false;
+      };
+      const resetCatalogGesture = () => {
+        stopMotion();
+        catalogGesture = null;
+        catalogTouchActive = false;
+        motionNode = null;
+        maxScroll = 0;
+        lastFrameAt = 0;
+      };
+      const writePosition = next => {
+        position = Math.max(0, Math.min(maxScroll, next));
+        motionNode.scrollTop = position;
+        catalogLastScrollAt = Date.now();
+        return position === next;
+      };
+      const animateMotion = now => {
+        motionFrame = 0;
+        if (!motionNode?.isConnected || !document.body.classList.contains('shop-main')
+          || document.body.matches('.shop-cart-page-active, .shop-details-page-active, .shop-categories-page-active, .modal-open') || document.hidden) {
+          resetCatalogGesture();
+          return;
+        }
+        const elapsed = Math.min(32, Math.max(0, now - lastFrameAt));
+        lastFrameAt = now;
+        const follow = 1 - Math.exp(-elapsed / 18);
+        if (catalogGesture?.axis === 'y') {
+          const target = Math.max(0, Math.min(maxScroll, catalogGesture.targetTop));
+          if (Math.abs(target - position) > 0.05) writePosition(position + (target - position) * follow);
+          motionFrame = requestAnimationFrame(animateMotion);
+          return;
+        }
+        const attenuation = Math.exp(-Math.max(0, elapsed) / decayMs);
+        const distance = velocity * decayMs * (1 - attenuation);
+        velocity *= attenuation;
+        const catchUp = releaseOffset * follow;
+        releaseOffset -= catchUp;
+        if (!writePosition(position + distance + catchUp) || (Math.abs(velocity) < 0.015 && Math.abs(releaseOffset) < 0.1)) {
+          stopMotion();
+          settleKsoCategory();
+          return;
+        }
+        motionFrame = requestAnimationFrame(animateMotion);
+      };
+      elProductsScroller?.classList.add('kso-touch-scroll');
+      const trackCatalogMovement = touches => {
+        if (!catalogGesture) return;
+        for (const touch of touches) {
+          if (touch.identifier !== catalogGesture.id) continue;
+          const dx = touch.clientX - catalogGesture.x;
+          const dy = touch.clientY - catalogGesture.y;
+          if (dx * dx + dy * dy >= 8 * 8) catalogGesture.moved = true;
+          break;
+        }
+      };
+      const chooseCatalogAxis = (gesture, dx, dy) => {
+        if (gesture.axis) return;
+        if (gesture.horizontalStrip && Math.abs(dx) >= 8 && Math.abs(dx) > Math.abs(dy) * 1.5) gesture.axis = 'x';
+        else if (Math.abs(dy) >= 4 && (!gesture.horizontalStrip || Math.abs(dy) >= Math.abs(dx) * 0.75)) gesture.axis = 'y';
+      };
+      scroller.addEventListener('touchstart', event => {
+        catalogTouchActive = true;
+        suppressCatalogClickUntil = 0;
+        const carryVelocity = velocity;
+        stopMotion();
+        if (event.touches.length !== 1) {
+          catalogGesture = null;
+          suppressCatalogClickUntil = Date.now() + 250;
+          return;
+        }
+        const touch = event.touches[0];
+        const panelScrolls = elProductsScroller && elProductsScroller.clientHeight > 0
+          && elProductsScroller.scrollHeight > elProductsScroller.clientHeight
+          && /auto|scroll/.test(getComputedStyle(elProductsScroller).overflowY);
+        motionNode = panelScrolls ? elProductsScroller : document.scrollingElement;
+        position = motionNode?.scrollTop || 0;
+        maxScroll = motionNode ? Math.max(0, motionNode.scrollHeight - motionNode.clientHeight) : 0;
+        const now = performance.now();
+        const strip = event.target.closest?.('.shop-subcategory-chips, .shop-cat-chips');
+        catalogGesture = elProductsGrid?.contains(event.target)
+          ? { id: touch.identifier, x: touch.clientX, y: touch.clientY, moved: false,
+              horizontalStrip: Boolean(strip && strip.scrollWidth > strip.clientWidth),
+              axis: null, startTop: position, targetTop: position, carryVelocity,
+              samples: [{ y: touch.clientY, at: now }], lastMoveAt: now, lastY: touch.clientY }
+          : null;
+      }, { passive: true });
+      scroller.addEventListener('touchmove', event => {
+        trackCatalogMovement(event.touches);
+        if (!catalogGesture || event.touches.length !== 1 || !motionNode) return;
+        const touch = event.touches[0];
+        if (touch.identifier !== catalogGesture.id) return;
+        const dx = touch.clientX - catalogGesture.x;
+        const dy = touch.clientY - catalogGesture.y;
+        chooseCatalogAxis(catalogGesture, dx, dy);
+        if (catalogGesture.axis !== 'y') return;
+        if (event.cancelable) event.preventDefault();
+        catalogGesture.moved = true;
+        ksoKineticMoving = true;
+        const now = performance.now();
+        if (touch.clientY !== catalogGesture.lastY) catalogGesture.lastMoveAt = now;
+        catalogGesture.lastY = touch.clientY;
+        catalogGesture.samples.push({ y: touch.clientY, at: now });
+        while (catalogGesture.samples.length > 2 && catalogGesture.samples[0].at < now - 100) catalogGesture.samples.shift();
+        catalogGesture.targetTop = catalogGesture.startTop - dy;
+        if (!motionFrame) { lastFrameAt = now; motionFrame = requestAnimationFrame(animateMotion); }
+      }, { passive: false });
+      const finishTouch = event => {
+        trackCatalogMovement(event.changedTouches);
+        catalogTouchActive = event.touches.length > 0;
+        if (!catalogTouchActive) {
+          if (catalogGesture && event.type === 'touchend') {
+            for (const touch of event.changedTouches) {
+              if (touch.identifier !== catalogGesture.id) continue;
+              const dy = touch.clientY - catalogGesture.y;
+              const dx = touch.clientX - catalogGesture.x;
+              chooseCatalogAxis(catalogGesture, dx, dy);
+              if (catalogGesture.axis === 'y') {
+                catalogGesture.moved = true;
+                catalogGesture.targetTop = catalogGesture.startTop - dy;
+                if (touch.clientY !== catalogGesture.lastY) {
+                  catalogGesture.lastMoveAt = performance.now();
+                  catalogGesture.samples.push({ y: touch.clientY, at: catalogGesture.lastMoveAt });
+                }
+              }
+              break;
+            }
+          }
+          if (catalogGesture && (catalogGesture.moved || event.type === 'touchcancel')) {
+            suppressCatalogClickUntil = Date.now() + 250;
+          }
+          const gesture = catalogGesture;
+          catalogGesture = null;
+          cancelAnimationFrame(motionFrame);
+          motionFrame = 0;
+          if (gesture?.axis === 'y' && event.type !== 'touchcancel' && motionNode) {
+            releaseOffset = Math.max(0, Math.min(maxScroll, gesture.targetTop)) - position;
+            const now = performance.now();
+            const first = gesture.samples[0];
+            const last = gesture.samples[gesture.samples.length - 1];
+            const sampleVelocity = now - gesture.lastMoveAt <= 90
+              ? (first.y - last.y) / Math.max(16, last.at - first.at) : 0;
+            const carry = Math.sign(sampleVelocity) === Math.sign(gesture.carryVelocity) ? gesture.carryVelocity * 0.2 : 0;
+            velocity = Math.max(-maxVelocity, Math.min(maxVelocity, sampleVelocity * 0.65 + carry));
+            if (Math.abs(velocity) >= 0.025 || Math.abs(releaseOffset) >= 0.1) {
+              ksoKineticMoving = true;
+              lastFrameAt = now;
+              motionFrame = requestAnimationFrame(animateMotion);
+            } else { stopMotion(); settleKsoCategory(); }
+          } else { stopMotion(); settleKsoCategory(); }
+        }
+      };
+      window.addEventListener('touchend', finishTouch, { passive: true });
+      window.addEventListener('touchcancel', finishTouch, { passive: true });
+      scroller.addEventListener('wheel', stopMotion, { passive: true });
+      elProductsGrid?.addEventListener('pointerdown', event => {
+        if (event.pointerType !== 'touch') { stopMotion(); suppressCatalogClickUntil = 0; }
+      }, { passive: true });
+      elProductsGrid?.addEventListener('click', event => {
+        // Capture before card and quantity handlers; keyboard/programmatic clicks remain intact.
+        if (event.detail === 0 || Date.now() >= suppressCatalogClickUntil) return;
+        if (event.pointerType && event.pointerType !== 'touch') return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+      window.addEventListener('blur', () => {
+        resetCatalogGesture();
+        suppressCatalogClickUntil = 0;
+      }, { passive: true });
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) resetCatalogGesture();
+      });
+      window.addEventListener('resize', resetCatalogGesture, { passive: true });
     }
   }
 
   function renderCategories() {
+    if(isKsoCatalogCache)return;
     elCatsList.innerHTML = "";
 
     getVisibleCategories().forEach((c) => {
@@ -13532,415 +13327,92 @@ async function initAddresses() {
   // -----------------------------
   // Pills
   // -----------------------------
-  function createQtyPill({
-    variant = "buy",
-    big = false,
-    centerText = "",
-    centerHtml = "",
-    minusEnabled = true,
-    plusEnabled = true,
-  } = {}) {
-    const pill = document.createElement("div");
-    pill.className = "qty-pill";
-    if (variant === "muted") pill.classList.add("qty-pill--muted");
-    if (big) pill.classList.add("qty-pill--big");
-
-    const btnMinus = document.createElement("button");
-    btnMinus.type = "button";
-    btnMinus.className = "qty-pill__btn qty-pill__btn--minus";
-    btnMinus.textContent = "−";
-    if (!minusEnabled) {
-      btnMinus.classList.add("is-disabled");
-      btnMinus.disabled = true;
-    }
-
-    const center = document.createElement("div");
-    center.className = "qty-pill__center";
-    if (centerHtml) center.innerHTML = centerHtml;
-    else center.textContent = centerText;
-
-    const btnPlus = document.createElement("button");
-    btnPlus.type = "button";
-    btnPlus.className = "qty-pill__btn qty-pill__btn--plus";
-    btnPlus.textContent = "+";
-    if (!plusEnabled) {
-      btnPlus.classList.add("is-disabled");
-      btnPlus.disabled = true;
-    }
-
-    pill.appendChild(btnMinus);
-    pill.appendChild(center);
-    pill.appendChild(btnPlus);
-
-    return { pill, btnMinus, btnPlus, center };
+  function createQtyPill() {
+    return getSharedShopProductRuntime().createQtyPill(...arguments);
   }
 
-  function formatCatalogDiscountBadgeAmount(amount) {
-    const value = roundPrice(Number(amount || 0));
-    if (!(value > 0)) return "";
-    return `-${moneyNoSign(value)} ₽`;
+  function formatCatalogDiscountBadgeAmount() {
+    return getSharedShopProductRuntime().formatCatalogDiscountBadgeAmount(...arguments);
   }
 
-  function catalogMoneyNoKopeks(value) {
-    const n = Number(value || 0);
-    return moneyNoSign(Number.isFinite(n) ? Math.round(n) : 0);
+  function catalogMoneyNoKopeks() {
+    return getSharedShopProductRuntime().catalogMoneyNoKopeks(...arguments);
   }
 
-  function getCatalogProductDiscountBadge(product, calculatedPrice = null) {
-    if (!product || typeof product !== "object") return "";
-
-    const apiDiscount = product.discount;
-    const apiDiscountAmount = roundPrice(Number(apiDiscount?.discount_amount || 0));
-    if (apiDiscount && apiDiscountAmount > 0) {
-      const discountType = str(apiDiscount.discount_type || "").trim().toLowerCase();
-      const discountValue = Number(apiDiscount.discount_value || 0);
-      if (discountType === "percent" && discountValue > 0) {
-        return `-${Math.round(discountValue)}%`;
-      }
-      return formatCatalogDiscountBadgeAmount(apiDiscountAmount);
-    }
-
-    const currentPriceRaw = calculatedPrice != null
-      ? Number(calculatedPrice)
-      : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
-    const currentPrice = roundPrice(Number.isFinite(currentPriceRaw) ? currentPriceRaw : 0);
-    const originalPriceRaw = product.original_price != null
-      ? Number(product.original_price)
-      : scaleProductBasePriceForCurrentUnit(product, currentPrice, Number(product.old_price || 0));
-    const originalPrice = roundPrice(Number.isFinite(originalPriceRaw) ? originalPriceRaw : 0);
-    if (!(originalPrice > currentPrice && currentPrice >= 0)) return "";
-
-    const percent = Math.round(((originalPrice - currentPrice) / originalPrice) * 100);
-    if (percent > 0) return `-${percent}%`;
-    return formatCatalogDiscountBadgeAmount(originalPrice - currentPrice);
+  function getCatalogProductDiscountBadge() {
+    return getSharedShopProductRuntime().getCatalogProductDiscountBadge(...arguments);
   }
 
-  function getCatalogComboDiscountBadge(combo) {
-    const discountPercent = Number(combo?.discount_percent || 0) || 0;
-    if (!(discountPercent > 0)) return "";
-    return `-${Math.round(discountPercent)}%`;
+  function getCatalogComboDiscountBadge() {
+    return getSharedShopProductRuntime().getCatalogComboDiscountBadge(...arguments);
   }
 
-  function createCatalogDiscountBadge(badgeText) {
-    const text = str(badgeText || "").trim();
-    if (!text) return null;
-    const badge = document.createElement("div");
-    badge.className = "sp-card-discount-badge sp-combo-discount";
-    badge.textContent = text;
-    return badge;
+  function createCatalogDiscountBadge() {
+    return getSharedShopProductRuntime().createCatalogDiscountBadge(...arguments);
   }
 
-  function getCatalogBuyXGetYBadgeText(product) {
-    const source = product?.buy_x_get_y_badge;
-    if (!source || typeof source !== "object") return "";
-    const directText = str(source.badge_text || "").trim();
-    const plusMatch = directText.match(/^(\d+)\s*\+\s*(\d+)$/);
-    const equalsMatch = directText.match(/^(\d+)\s*=\s*(\d+)$/);
-    const hasQty = source.buy_qty != null || source.reward_qty != null || !!plusMatch || !!equalsMatch;
-    if (!hasQty) return directText;
-    const buyQty = Math.max(1, Math.floor(Number(source.buy_qty ?? plusMatch?.[1] ?? equalsMatch?.[2] ?? 0)) || 1);
-    const rewardQtyFromEquals = equalsMatch ? Math.max(1, Number(equalsMatch[1] || 0) - Number(equalsMatch[2] || 0)) : 0;
-    const rewardQty = Math.max(1, Math.floor(Number(source.reward_qty ?? plusMatch?.[2] ?? rewardQtyFromEquals ?? 0)) || 1);
-    if (buyQty > 0 && rewardQty > 0) return `${buyQty + rewardQty}=${buyQty}`;
-    return directText;
+  function getCatalogBuyXGetYBadgeText() {
+    return getSharedShopProductRuntime().getCatalogBuyXGetYBadgeText(...arguments);
   }
 
-  function createCatalogBuyXGetYBadge(product) {
-    const text = getCatalogBuyXGetYBadgeText(product);
-    if (!text) return null;
-    const badge = document.createElement("div");
-    badge.className = "sp-card-bogo-badge";
-    badge.textContent = text;
-    return badge;
+  function createCatalogBuyXGetYBadge() {
+    return getSharedShopProductRuntime().createCatalogBuyXGetYBadge(...arguments);
   }
 
-  function createComboGridImageNode(src, isCriticalCard = false) {
-    return createOptimizedImage(src, {
-      type: "product-grid",
-      className: "sp-img sp-img-full sp-combo-grid__img is-visible",
-      alt: "",
-      priority: isCriticalCard,
-    });
+  function createComboGridImageNode() {
+    return getSharedShopProductRuntime().createComboGridImageNode(...arguments);
   }
 
-  function normalizeComboGridPhotoUrls(photoUrls) {
-    const photos = Array.from(new Set((Array.isArray(photoUrls) ? photoUrls : [])
-      .map((url) => str(url || "").trim())
-      .filter(Boolean)));
-    return photos;
+  function normalizeComboGridPhotoUrls() {
+    return getSharedShopProductRuntime().normalizeComboGridPhotoUrls(...arguments);
   }
 
-  function startComboGridRotation(cells) {
-    const rotators = (Array.isArray(cells) ? cells : [])
-      .map((entry) => {
-        const cell = entry?.cell || null;
-        const photos = normalizeComboGridPhotoUrls(entry?.photos || []);
-        if (!cell || photos.length < 2) return null;
-        cell.dataset.comboSlideDir = entry?.direction || "up";
-        return {
-          cell,
-          photos,
-          index: 0,
-          isCriticalCard: !!entry?.isCriticalCard,
-        };
-      })
-      .filter(Boolean);
-    if (!rotators.length) return;
-    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-    const intervalMs = 6800;
-    preloadComboGridImagesInBackground(rotators.flatMap((entry) => entry.photos));
-    let isSwitching = false;
-    const timer = setInterval(async () => {
-      if (isSwitching) return;
-      const active = rotators.filter((entry) => document.body.contains(entry.cell));
-      if (!active.length) {
-        clearInterval(timer);
-        return;
-      }
-      isSwitching = true;
-      const candidates = active.map((entry) => {
-        const current = entry.cell.querySelector(".sp-combo-grid__img.is-visible");
-        let nextIndex = entry.index;
-        if (entry.photos.length > 1) {
-          nextIndex = Math.floor(Math.random() * entry.photos.length);
-          if (nextIndex === entry.index) nextIndex = (nextIndex + 1) % entry.photos.length;
-        }
-        return {
-          entry,
-          cell: entry.cell,
-          current,
-          nextIndex,
-          nextUrl: entry.photos[nextIndex],
-        };
-      });
-      const readiness = await Promise.all(candidates.map((item) => waitForComboGridImage(item.nextUrl)));
-      const nextEntries = candidates
-        .filter((item, index) => readiness[index] && document.body.contains(item.cell))
-        .map((item) => {
-          item.entry.index = item.nextIndex;
-          const next = createComboGridImageNode(item.nextUrl, item.entry.isCriticalCard);
-          next.classList.remove("is-visible");
-          next.classList.add("is-entering");
-          return { ...item.entry, current: item.current, next };
-        });
-      preloadComboGridImagesInBackground(active.flatMap((entry) => entry.photos));
-      if (!nextEntries.length) {
-        isSwitching = false;
-        return;
-      }
-      nextEntries.forEach(({ cell, next }) => {
-        if (!document.body.contains(cell)) return;
-        cell.appendChild(next);
-      });
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          nextEntries.forEach(({ cell, current }) => {
-            if (!document.body.contains(cell)) return;
-            if (current) {
-              current.classList.add("is-leaving");
-              current.classList.remove("is-visible");
-            }
-          });
-          setTimeout(() => {
-            nextEntries.forEach(({ cell, current }) => {
-              if (!document.body.contains(cell)) return;
-              if (current && current.parentNode === cell) current.remove();
-            });
-            requestAnimationFrame(() => {
-              nextEntries.forEach(({ cell, next }) => {
-                if (!document.body.contains(cell)) return;
-                next.classList.add("is-visible");
-                next.classList.remove("is-entering");
-              });
-              setTimeout(() => {
-                isSwitching = false;
-              }, 920);
-            });
-          }, 920);
-        });
-      });
-    }, intervalMs);
+  function startComboGridRotation() {
+    return getSharedShopProductRuntime().startComboGridRotation(...arguments);
   }
 
-  function isCatalogProductConfigurable(product) {
-    const cfg = product?.blocks_config && typeof product.blocks_config === "object"
-      ? product.blocks_config
-      : null;
-    return Boolean(
-      cfg?.variants ||
-      cfg?.options ||
-      cfg?.ingredients ||
-      (Array.isArray(product?.variants) && product.variants.length) ||
-      (Array.isArray(product?.options) && product.options.length) ||
-      (Array.isArray(product?.ingredients) && product.ingredients.length)
-    );
+  function isCatalogProductConfigurable() {
+    return getSharedShopProductRuntime().isCatalogProductConfigurable(...arguments);
   }
 
-  function getCatalogMediaPillLabel(product, availableForAdd = true, qty = 0) {
-    if (!availableForAdd) return Number(qty || 0) > 0 ? "Больше нет" : "Раскупили";
-    return isCatalogProductConfigurable(product) ? "Настроить" : "";
+  function getCatalogMediaPillLabel() {
+    return getSharedShopProductRuntime().getCatalogMediaPillLabel(...arguments);
   }
 
-  function createCatalogMediaPill(product, availableForAdd = true) {
-    const label = getCatalogMediaPillLabel(product, availableForAdd);
-    if (!label) return null;
-    const pill = document.createElement("div");
-    pill.className = "sp-media-pill";
-    pill.setAttribute("data-media-pill", "1");
-    pill.classList.toggle("is-sold-out", label === "Раскупили");
-    pill.innerHTML = `<span class="sp-media-pill__text">${escapeHtml(label)}</span>${label === "Настроить" ? '<span class="sp-media-pill__chevron" aria-hidden="true">›</span>' : ""}`;
-    return pill;
+  function createCatalogMediaPill() {
+    return getSharedShopProductRuntime().createCatalogMediaPill(...arguments);
   }
 
-  function getCatalogProductTitle(product) {
-    const name = str(product?.name || "").trim();
-    const variantLabel = str(product?.default_variant?.variant_label || "").trim();
-    return [variantLabel, name].filter(Boolean).join(" ") || name;
+  function getCatalogProductTitle() {
+    return getSharedShopProductRuntime().getCatalogProductTitle(...arguments);
   }
 
-  function getCatalogProductDefaultLines(product) {
-    return (Array.isArray(product?.catalog_default_lines) ? product.catalog_default_lines : [])
-      .map((line) => str(line || "").trim())
-      .filter(Boolean)
-      .slice(0, 2);
+  function getCatalogProductDefaultLines() {
+    return getSharedShopProductRuntime().getCatalogProductDefaultLines(...arguments);
   }
 
-  function getCatalogBuyXGetYRule(product) {
-    const source = product?.buy_x_get_y_badge;
-    if (!source || typeof source !== "object") return null;
-    const badgeText = str(source.badge_text || "").trim();
-    const plusMatch = badgeText.match(/^(\d+)\s*\+\s*(\d+)$/);
-    const equalsMatch = badgeText.match(/^(\d+)\s*=\s*(\d+)$/);
-    const hasQty = source.buy_qty != null || source.reward_qty != null || !!plusMatch || !!equalsMatch;
-    if (!hasQty) return null;
-    const buyQty = Math.max(1, Math.floor(Number(source.buy_qty ?? plusMatch?.[1] ?? equalsMatch?.[2] ?? 0)) || 1);
-    const rewardQtyFromEquals = equalsMatch ? Math.max(1, Number(equalsMatch[1] || 0) - Number(equalsMatch[2] || 0)) : 0;
-    const rewardQty = Math.max(1, Math.floor(Number(source.reward_qty ?? plusMatch?.[2] ?? rewardQtyFromEquals ?? 0)) || 1);
-    const repeatMode = str(source.repeat_mode || "").trim().toLowerCase() === "repeat" ? "repeat" : "single";
-    return {
-      id: Number(source.id || 0) || null,
-      title: str(source.title || source.badge_text || "1+1").trim() || "1+1",
-      buyQty,
-      rewardQty,
-      repeatMode,
-      isStackable: Number(source.is_stackable || 0) === 1 || source.is_stackable === true,
-    };
+  function getCatalogBuyXGetYRule() {
+    return getSharedShopProductRuntime().getCatalogBuyXGetYRule(...arguments);
   }
 
-  function calculateCatalogBuyXGetYApplication(qty, rule) {
-    const itemQty = Math.max(0, Math.floor(Number(qty || 0)));
-    if (!rule) {
-      return {
-        applications: 0,
-        freeQty: 0,
-        participatingQty: 0,
-        paidParticipatingQty: 0,
-      };
-    }
-    const buyQty = Math.max(1, Math.floor(Number(rule?.buyQty || 0)) || 1);
-    const rewardQty = Math.max(1, Math.floor(Number(rule?.rewardQty || 0)) || 1);
-    const groupQty = buyQty + rewardQty;
-    if (!(itemQty >= groupQty)) {
-      return {
-        applications: 0,
-        freeQty: 0,
-        participatingQty: 0,
-        paidParticipatingQty: 0,
-      };
-    }
-    const applications = rule?.repeatMode === "repeat" ? Math.floor(itemQty / groupQty) : 1;
-    const freeQty = Math.min(itemQty, applications * rewardQty);
-    const participatingQty = Math.min(itemQty, applications * groupQty);
-    return {
-      applications,
-      freeQty,
-      participatingQty,
-      paidParticipatingQty: Math.max(0, participatingQty - freeQty),
-    };
+  function calculateCatalogBuyXGetYApplication() {
+    return getSharedShopProductRuntime().calculateCatalogBuyXGetYApplication(...arguments);
   }
 
   function calculateCatalogBuyXGetYFreeQty(qty, rule) {
     return calculateCatalogBuyXGetYApplication(qty, rule).freeQty;
   }
 
-  function syncCatalogProductDiscountBadge(card, product, calculatedPrice = null) {
-    if (!card || !product) return;
-    const media = $(".sp-media", card);
-    if (!media) return;
-    const badgeText = getCatalogProductDiscountBadge(product, calculatedPrice);
-    const currentBadge = media.querySelector(".sp-card-discount-badge");
-    if (!badgeText) {
-      if (currentBadge) currentBadge.remove();
-      return;
-    }
-    if (currentBadge) {
-      currentBadge.textContent = badgeText;
-      return;
-    }
-    const badge = createCatalogDiscountBadge(badgeText);
-    if (badge) media.appendChild(badge);
+  function syncCatalogProductDiscountBadge() {
+    return getSharedShopProductRuntime().syncCatalogProductDiscountBadge(...arguments);
   }
 
-  function catalogCenterHtml(product, qty, calculatedPrice = null, cartAggregate = null) {
-    const old = Number(product.old_price || 0);
-    let price = calculatedPrice != null
-      ? calculatedPrice
-      : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
-    const scaledOld = scaleProductBasePriceForCurrentUnit(product, price, old);
-    let showOld = scaledOld > 0 && scaledOld > price;
-
-    // Обработка скидок из API (бейдж теперь на картинке, здесь только цена)
-    if (product.discount && product.discount.discount_amount > 0) {
-      const originalPrice = Number(product.original_price || price);
-      const discountedPrice = Number(product.discounted_price || price);
-      
-      // Отображаем старую цену зачёркнутой
-      if (!showOld && originalPrice > discountedPrice) {
-        showOld = true;
-        price = discountedPrice;
-      }
-    }
-
-    if (qty > 0) {
-      const aggregate = cartAggregate && typeof cartAggregate === "object"
-        ? cartAggregate
-        : getCatalogProductCartAggregate(product);
-      const total = Number(aggregate?.total || 0);
-      const displayTotal = total > 0 ? total : price;
-      const oldTotal = Number(aggregate?.oldTotal || 0);
-      const totalText = `${catalogMoneyNoKopeks(displayTotal)} ₽`;
-      const totalClass = String(Math.round(displayTotal)).length > 5 ? " sp-cart-total--compact" : "";
-      if (oldTotal > displayTotal) {
-        const oldTotalText = `${catalogMoneyNoKopeks(oldTotal)} ₽`;
-        return `<span class="sp-cart-total-stack${totalClass}"><span class="sp-cart-old-total">${escapeHtml(oldTotalText)}</span><span class="sp-cart-total">${escapeHtml(totalText)}</span></span>`;
-      }
-      return `<span class="sp-cart-total${totalClass}">${escapeHtml(totalText)}</span>`;
-    }
-    if (showOld) {
-      const oldPrice = product.discount ? Number(product.original_price) : scaledOld;
-      return `<span class="sp-price-stack"><span class="sp-old-price">${catalogMoneyNoKopeks(oldPrice)} ₽</span><span class="sp-current-price">${catalogMoneyNoKopeks(price)} ₽</span></span>`;
-    }
-    return `<span class="sp-current-price">${catalogMoneyNoKopeks(price)} ₽</span>`;
+  function catalogCenterHtml() {
+    return getSharedShopProductRuntime().catalogCenterHtml(...arguments);
   }
 
-  function syncCatalogUnitPriceLabel(pill, product, qty, calculatedPrice = null) {
-    if (!pill) return;
-    let label = pill.querySelector(".sp-unit-price-label");
-    const shouldShow = Number(qty || 0) > 0;
-    if (!shouldShow) {
-      if (label) label.remove();
-      return;
-    }
-    if (!label) {
-      label = document.createElement("div");
-      label.className = "sp-unit-price-label";
-      pill.appendChild(label);
-    }
-    const price = calculatedPrice != null
-      ? calculatedPrice
-      : (product?.display_price != null ? Number(product.display_price) : Number(product?.price || 0));
-    label.textContent = `${catalogMoneyNoKopeks(price)} ₽`;
+  function syncCatalogUnitPriceLabel() {
+    return getSharedShopProductRuntime().syncCatalogUnitPriceLabel(...arguments);
   }
 
   function isProductAvailable(product) {
@@ -13976,79 +13448,8 @@ async function initAddresses() {
   /**
    * ???????????? ???? ?????? ? ?????? ???????? ? ????? ?? ?????????
    */
-  async function calculateDefaultPrice(product) {
-    const productId = product.id;
-
-    if (product.display_price != null && Number.isFinite(Number(product.display_price))) {
-      return Number(product.display_price);
-    }
-    
-    // ????????? ???
-    if (defaultPriceCache.has(productId)) {
-      return defaultPriceCache.get(productId);
-    }
-
-    let price = Number(product.price || 0);
-
-    try {
-      // ????????? ????????
-      const variants = await resolveProductVariants(productId);
-      
-      // ???? ???? ????????, ????? ???? ???????? ?? ????????? (?????????????? ??? ?????????)
-      if (variants.length > 0 && variants[0].values?.length > 0) {
-        const variant = variants[0];
-        // ?????????? default_value_index (?????????????? ??? ?????????), ???? ?????, ????? 0
-        const defaultIndex = variant.default_value_index != null 
-          ? Number(variant.default_value_index) 
-          : 0;
-        // ????????? ??? ?????? ????????
-        const validIndex = defaultIndex >= 0 && defaultIndex < variant.values.length ? defaultIndex : 0;
-        const variantState = {
-          selectedIndex: validIndex,
-          value: variant.values[validIndex],
-          label: String(variant.values[validIndex]),
-        };
-        price = getVariantUnitPrice(product, variants, variantState);
-      }
-
-      // ????????? ?????
-      const optionGroups = await resolveProductOptionGroups(productId);
-      
-      // ????????? ????????? ???????????? ????? ?? ?????????
-      for (const group of optionGroups) {
-        const groupType = getOptionGroupUiType(group);
-        
-        if (groupType === "single" && group.is_required && group.items?.length > 0) {
-          // ??? single ? is_required ? ????? ?????? ??????? ??? ?????????
-          const defaultItem = group.items[0];
-          const defaultItemPrice = getOptionItemResolvedDefaultPrice(defaultItem);
-          if (Number.isFinite(defaultItemPrice)) {
-            price += defaultItemPrice;
-          }
-        } else if (groupType === "multiple_item" || groupType === "multiple_group") {
-          const minSelect = Math.max(0, Number(group?.min_select ?? 0));
-          if (minSelect <= 0) continue;
-
-          let selectedCount = 0;
-          for (const item of (group.items || [])) {
-            if (selectedCount >= minSelect) break;
-            const qtyMin = Number(item?.qty_min ?? 0);
-            const defaultQty = qtyMin > 0 ? qtyMin : 1;
-            if (item.price) {
-              price += Number(item.price || 0) * defaultQty;
-            }
-            selectedCount += 1;
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Error calculating default price:", e);
-    }
-
-    // ????????? ? ???
-    price = roundPrice(price);
-    defaultPriceCache.set(productId, price);
-    return price;
+  async function calculateDefaultPrice() {
+    return getSharedShopProductRuntime().calculateDefaultPrice(...arguments);
   }
 
   /**
@@ -14169,6 +13570,7 @@ async function initAddresses() {
   }
 
   function bindShopWarmups() {
+    if (isKsoCatalogCache) return; // KSO warms only missing records after startup, never on a swipe.
     if (bindShopWarmups._bound) return;
     bindShopWarmups._bound = true;
 
@@ -14285,6 +13687,7 @@ async function initAddresses() {
   const INITIAL_CATALOG_WARM_TIMEOUT_MS = 1400;
 
   function renderCategoriesSkeleton(count = INITIAL_CATALOG_SKELETON_CATEGORIES) {
+    if(isKsoCatalogCache)return;
     if (!elCatsList) return;
     const n = Math.max(1, Number(count || 0));
     const frag = document.createDocumentFragment();
@@ -14413,6 +13816,7 @@ async function initAddresses() {
   }
 
   async function warmInitialCatalogInteractionData(opts = {}) {
+    if (isKsoCatalogCache) return;
     const productLimit = Math.max(1, Number(opts.productLimit || INITIAL_CATALOG_PREFETCH_PRODUCTS));
     const comboLimit = Math.max(0, Number(opts.comboLimit || INITIAL_CATALOG_PREFETCH_COMBOS));
     const { productIds, comboIds } = collectInitialCatalogWarmIds({
@@ -14577,6 +13981,7 @@ async function initAddresses() {
   }
 
   function scheduleComboDetailsPrefetch(comboIds, opts = {}) {
+    if (isKsoCatalogCache) return;
     const ids = Array.isArray(comboIds)
       ? comboIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
       : [];
@@ -14622,6 +14027,14 @@ async function initAddresses() {
   // -----------------------------
   // Products (???????? ?? ??????)
   // -----------------------------
+  function createCatalogProductCard() {
+    return getSharedShopProductRuntime().createCatalogProductCard(...arguments);
+  }
+
+  function createCatalogComboCard() {
+    return getSharedShopProductRuntime().createCatalogComboCard(...arguments);
+  }
+
   function renderProducts(opts = {}) {
     const appendOnly = !!opts.appendOnly;
     const allowCritical = !appendOnly;
@@ -14697,147 +14110,9 @@ async function initAddresses() {
         if (appendOnly && existingProductIds && existingProductIds.has(id)) return;
         const p = state.productCache.get(id) || listedProduct;
         prefetchProductIds.push(id);
-        const qty = cartQty(id);
-        const available = isProductAvailable(p);
-        const photos = safePhotos(p);
-        const mainPhoto = photos[0] || "";
-        const gridPhoto = p.photo_thumb || mainPhoto || "";
-        const previewPhoto = p.photo_lqip || p.photo_thumb || mainPhoto || "/static/img/placeholder.png";
 
-        const card = document.createElement("article");
-        card.className = "sp-card";
-        card.setAttribute("data-product-id", String(id));
-        card.setAttribute("data-qty", String(qty));
-        if (qty > 0) card.classList.add("is-in-cart");
-
-        const media = document.createElement("div");
-        media.className = "sp-media";
-
-        const isCriticalCard = allowCritical && globalCardIndex < CRITICAL_PRODUCT_CARDS;
-        if (isCriticalCard) {
-          preloadImageOnce(gridPhoto || mainPhoto || "/static/img/placeholder.png", { fetchPriority: 'high' });
-        }
-
-        // LQIP-?????? (????? ???????????? ????????? previewPhoto, ???? ?????? ??? ??????)
-        const imgPreview = createOptimizedImage(previewPhoto, {
-          type: 'product-grid',
-          className: 'sp-img sp-img-lqip',
-          alt: '',
-          usePicture: false,
-          priority: isCriticalCard,
-        });
-        media.appendChild(imgPreview);
-
-        // ??????????? ??????????? ?????? (createOptimizedImage ????? ??????? <picture> ??? .webp)
-        const imgFull = createOptimizedImage(gridPhoto || mainPhoto || "/static/img/placeholder.png", {
-          type: 'product-grid',
-          className: 'sp-img sp-img-full',
-          alt: '',
-          usePicture: true,
-          priority: isCriticalCard,
-        });
-        const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
-        if (fullImgEl) {
-          fullImgEl.addEventListener("load", () => media.classList.add("is-loaded"));
-          fullImgEl.addEventListener("error", () => media.classList.add("is-loaded"));
-        }
-        media.appendChild(imgFull);
-        if (fullImgEl && fullImgEl.complete) media.classList.add("is-loaded");
-
-        const overlay = document.createElement("div");
-        overlay.className = "sp-qtyOverlay";
-        if (qty <= 0) overlay.classList.add("hidden");
-
-        const qBox = document.createElement("div");
-        qBox.className = "qty-carousel";
-        qBox.textContent = String(qty || "");
-        qBox.setAttribute("data-v", String(qty || 0));
-
-        overlay.appendChild(qBox);
-        media.appendChild(overlay);
-
-        const productDiscountBadge = createCatalogDiscountBadge(getCatalogProductDiscountBadge(p));
-        if (productDiscountBadge) media.appendChild(productDiscountBadge);
-        const productBuyXGetYBadge = createCatalogBuyXGetYBadge(p);
-        if (productBuyXGetYBadge) media.appendChild(productBuyXGetYBadge);
-        const mediaPill = createCatalogMediaPill(p, available);
-        if (mediaPill) media.appendChild(mediaPill);
-
-        card.appendChild(media);
-
-        const info = document.createElement("div");
-        info.className = "sp-info";
-
-        const title = document.createElement("div");
-        title.className = "sp-title";
-        title.textContent = getCatalogProductTitle(p);
-        info.appendChild(title);
-
-        const sub = document.createElement("div");
-        sub.className = "sp-sub";
-        const defaultLines = getCatalogProductDefaultLines(p);
-        if (defaultLines.length) {
-          sub.classList.add("sp-sub--defaults");
-          defaultLines.forEach((lineText) => {
-            const line = document.createElement("div");
-            line.className = "sp-sub-line";
-            line.textContent = "\u2022 " + lineText;
-            sub.appendChild(line);
-          });
-        } else {
-          sub.textContent = str(p.description_short || "");
-        }
-        info.appendChild(sub);
-
-        const bottom = document.createElement("div");
-        bottom.className = "sp-bottom";
-
-        const cartAggregate = getCatalogProductCartAggregate(p);
-        const { pill, btnMinus, btnPlus, center } = createQtyPill({
-          variant: available ? "buy" : "muted",
-          centerHtml: catalogCenterHtml(p, qty, null, cartAggregate),
-          minusEnabled: qty > 0,
-          plusEnabled: available,
-        });
-        syncCatalogUnitPriceLabel(pill, p, qty);
-
-        if (qty <= 0) pill.classList.add("is-empty");
-        else pill.classList.add("has-qty");
-        if (!available && qty > 0) pill.classList.add("qty-pill--cart-unavailable");
-        if (!available && qty <= 0) pill.classList.add("qty-pill--no-action");
-        if (!available) card.classList.add("is-unavailable");
-
-        bottom.appendChild(pill);
-        info.appendChild(bottom);
-        card.appendChild(info);
-
-        btnPlus.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          if (btnPlus.disabled || btnPlus.classList.contains("is-disabled")) return;
-          btnPlus.disabled = true;
-          btnPlus.classList.add("is-disabled");
-          let added = false;
-          try {
-            await addUpsellToCart(p, elCartList);
-            added = true;
-          } finally {
-            const nextQty = cartQty(id);
-            if (added) syncAllProductCardsFromCart();
-            elProductsGrid
-              .querySelectorAll(`.sp-card[data-product-id="${id}"]`)
-              .forEach((cardEl) => applyCardState(cardEl, p, nextQty, added ? "inc" : null));
-          }
-        });
-
-        btnMinus.addEventListener("click", (e) => {
-          e.stopPropagation();
-          changeQty(id, -1);
-        });
-
-        card.addEventListener("click", () => openProductDetails(id));
-
+        const card = createCatalogProductCard(p, { isCriticalCard: allowCritical && globalCardIndex < CRITICAL_PRODUCT_CARDS });
         frag.appendChild(card);
-        applyCardState(card, p, qty, null);
 
         // ???? ? ??????? ?? ?????? display_price ? ?????????? ?????????? ???????? ? ????????? ????
         // display_price calculation is deferred for performance (handled in shop-late/product details)
@@ -14860,165 +14135,7 @@ async function initAddresses() {
         if (appendOnly && existingComboIds && existingComboIds.has(comboId)) return;
         if (!isComboCatalogEntryAvailable(combo)) return;
         prefetchComboIds.push(comboId);
-        const card = document.createElement("article");
-        card.className = "sp-card sp-card--combo";
-        card.setAttribute("data-combo-id", String(comboId));
-
-        const media = document.createElement("div");
-        media.className = "sp-media sp-media--combo";
-
-        const gridPhotos = Array.isArray(combo.grid_photos) ? combo.grid_photos : [];
-        const gridThumbs = Array.isArray(combo.grid_photos_thumb) ? combo.grid_photos_thumb : [];
-        const singleImage = (combo.image_url || "").trim();
-        const singleImageThumb = (combo.image_thumb || "").trim();
-        // ??????? ???? ? ????? 2?2: ?????? 0,1,2,3 ? ???? 1, 3, 4, 2 (??????? 0, 2, 3, 1)
-        const comboGridOrder = [0, 2, 3, 1];
-        const isCriticalCard = allowCritical && globalCardIndex < CRITICAL_PRODUCT_CARDS;
-
-        if (singleImage) {
-          const finalImage = singleImageThumb || singleImage;
-          const previewUrl = combo.image_lqip || finalImage;
-          if (isCriticalCard) {
-            preloadImageOnce(finalImage, { fetchPriority: 'high' });
-          }
-
-          const imgPreview = createOptimizedImage(previewUrl, {
-            type: "product-grid",
-            className: "sp-img sp-img-lqip",
-            alt: "",
-            priority: isCriticalCard,
-          });
-          media.appendChild(imgPreview);
-
-          const imgFull = createOptimizedImage(finalImage, {
-            type: "product-grid",
-            className: "sp-img sp-img-full",
-            alt: "",
-            priority: isCriticalCard,
-          });
-          const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
-          if (fullImgEl) {
-            fullImgEl.addEventListener("load", () => media.classList.add("is-loaded"));
-            fullImgEl.addEventListener("error", () => media.classList.add("is-loaded"));
-          }
-          media.appendChild(imgFull);
-          if (fullImgEl && fullImgEl.complete) media.classList.add("is-loaded");
-        } else if (gridPhotos.length > 0) {
-          const grid = document.createElement("div");
-          grid.className = "sp-combo-grid";
-          const gridPhotoSets = Array.isArray(combo.grid_photo_sets) ? combo.grid_photo_sets : [];
-          const comboSlideDirections = ["up", "right", "left", "down"];
-          const comboGridRotators = [];
-          for (let i = 0; i < 4; i++) {
-            const cell = document.createElement("div");
-            cell.className = "sp-combo-grid__cell";
-            const src = gridPhotos[comboGridOrder[i]] || "";
-            const thumb = gridThumbs[comboGridOrder[i]] || "";
-            const finalSrc = thumb || src;
-            if (finalSrc) {
-              if (isCriticalCard) {
-                preloadImageOnce(finalSrc, { fetchPriority: 'high' });
-              }
-              const imgFull = createComboGridImageNode(finalSrc, isCriticalCard);
-              const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
-              if (fullImgEl) {
-                fullImgEl.addEventListener("load", () => cell.classList.add("is-loaded"));
-                fullImgEl.addEventListener("error", () => cell.classList.add("is-loaded"));
-              }
-              cell.appendChild(imgFull);
-              if (fullImgEl && fullImgEl.complete) cell.classList.add("is-loaded");
-              const alternatives = Array.isArray(gridPhotoSets[comboGridOrder[i]])
-                ? gridPhotoSets[comboGridOrder[i]]
-                : [];
-              comboGridRotators.push({
-                cell,
-                photos: [finalSrc, ...alternatives],
-                direction: comboSlideDirections[i],
-                isCriticalCard,
-              });
-            } else {
-              cell.classList.add("sp-combo-grid__cell--empty");
-            }
-            grid.appendChild(cell);
-          }
-          startComboGridRotation(comboGridRotators);
-          media.appendChild(grid);
-        } else {
-          const imgPreview = createOptimizedImage("/static/img/placeholder.png", {
-            type: "product-grid",
-            className: "sp-img sp-img-lqip",
-            alt: "",
-            priority: isCriticalCard,
-          });
-          media.appendChild(imgPreview);
-
-          const imgFull = createOptimizedImage("/static/img/placeholder.png", {
-            type: "product-grid",
-            className: "sp-img sp-img-full",
-            alt: "",
-            priority: isCriticalCard,
-          });
-          const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
-          if (fullImgEl) {
-            fullImgEl.addEventListener("load", () => media.classList.add("is-loaded"));
-            fullImgEl.addEventListener("error", () => media.classList.add("is-loaded"));
-          }
-          media.appendChild(imgFull);
-          if (fullImgEl && fullImgEl.complete) media.classList.add("is-loaded");
-        }
-
-        const comboDiscountBadge = createCatalogDiscountBadge(getCatalogComboDiscountBadge(combo));
-        if (comboDiscountBadge) media.appendChild(comboDiscountBadge);
-        const comboMediaPill = document.createElement("div");
-        comboMediaPill.className = "sp-media-pill";
-        comboMediaPill.innerHTML = '<span class="sp-media-pill__text">Собрать комбо</span><span class="sp-media-pill__chevron" aria-hidden="true">›</span>';
-        media.appendChild(comboMediaPill);
-
-        card.appendChild(media);
-
-        const info = document.createElement("div");
-        info.className = "sp-info";
-
-        const title = document.createElement("div");
-        title.className = "sp-title sp-title--two-lines";
-        title.textContent = str(combo.title);
-        info.appendChild(title);
-
-        const sub = document.createElement("div");
-        sub.className = "sp-sub sp-sub--one-line";
-        sub.textContent = str(combo.description || "");
-        info.appendChild(sub);
-
-        const bottom = document.createElement("div");
-        bottom.className = "sp-bottom";
-        const minPrice = Number(combo.min_price) || 0;
-        const { pill, btnPlus } = createQtyPill({
-          variant: "buy",
-          centerHtml: `<span class="sp-current-price">от ${catalogMoneyNoKopeks(minPrice)} ₽</span>`,
-          minusEnabled: false,
-          plusEnabled: true,
-        });
-        pill.classList.add("is-empty", "sp-combo-pill");
-        bottom.appendChild(pill);
-        info.appendChild(bottom);
-        card.appendChild(info);
-
-        btnPlus.addEventListener("click", (e) => {
-          e.stopPropagation();
-          openComboDetails(comboId);
-        });
-        card.addEventListener("click", (e) => {
-          if (!e.target.closest(".qty-pill")) {
-            openComboDetails(comboId);
-          }
-        });
-        const warmComboDetailsOnIntent = () => {
-          scheduleComboDetailsPrefetch([comboId], { limit: 1, delayMs: 0 });
-        };
-        card.addEventListener("pointerenter", warmComboDetailsOnIntent, { passive: true, once: true });
-        card.addEventListener("touchstart", warmComboDetailsOnIntent, { passive: true, once: true });
-        btnPlus.addEventListener("focus", warmComboDetailsOnIntent, { once: true });
-
+        const card = createCatalogComboCard(combo, { isCriticalCard: allowCritical && globalCardIndex < CRITICAL_PRODUCT_CARDS });
         frag.appendChild(card);
         totalProducts += 1;
         globalCardIndex += 1;
@@ -15048,91 +14165,8 @@ async function initAddresses() {
     queueVisibleProductStockRefresh("render_products", appendOnly ? 120 : 40);
   }
 
-  function applyCardState(card, product, qty, dir) {
-    const media = $(".sp-media", card);
-    const overlay = $(".sp-qtyOverlay", card);
-    const qtyBox = $(".qty-carousel", card);
-
-    const pill = $(".qty-pill", card);
-    const btnMinus = $(".qty-pill__btn--minus", card);
-    const btnPlus = $(".qty-pill__btn--plus", card);
-    const center = $(".qty-pill__center", card);
-    let mediaPill = media ? $("[data-media-pill]", media) : null;
-    const stockAvailable = isProductAvailable(product);
-    const pid = Number(product?.id || 0);
-    const remaining = Number.isFinite(pid) && pid > 0 ? getAvailableStock(pid) : Infinity;
-    const plusBlockedByLimit = stockAvailable && Number.isFinite(remaining) && remaining <= 0;
-    const plusBlockedByIngredients =
-      stockAvailable && Number.isFinite(pid) && pid > 0 ? isProductBlockedByIngredientRequirements(pid) : false;
-    const availableForAdd = stockAvailable && !plusBlockedByLimit && !plusBlockedByIngredients;
-
-    const hasCartQty = Number(qty || 0) > 0;
-    const unavailableOnly = !availableForAdd && !hasCartQty;
-
-    card.setAttribute("data-qty", String(qty));
-    card.classList.toggle("is-unavailable", unavailableOnly);
-
-    if (hasCartQty) {
-      card.classList.add("is-in-cart");
-      if (overlay) overlay.classList.remove("hidden");
-      if (qtyBox) {
-        if (dir) animateNumber(qtyBox, qty, dir);
-        else {
-          qtyBox.textContent = String(qty);
-          qtyBox.setAttribute("data-v", String(qty));
-        }
-      }
-      if (media) media.classList.add("is-dim");
-    } else {
-      card.classList.remove("is-in-cart");
-      if (overlay) overlay.classList.add("hidden");
-      if (qtyBox) {
-        qtyBox.textContent = "";
-        qtyBox.setAttribute("data-v", "0");
-      }
-      if (media) media.classList.toggle("is-dim", unavailableOnly);
-    }
-
-    if (pill) {
-      pill.classList.toggle("is-empty", qty <= 0);
-      pill.classList.toggle("has-qty", qty > 0);
-      pill.classList.toggle("qty-pill--muted", !stockAvailable);
-      pill.classList.toggle("qty-pill--cart-unavailable", qty > 0 && !availableForAdd);
-      pill.classList.toggle("qty-pill--no-action", qty <= 0 && !availableForAdd);
-    }
-    if (btnMinus) {
-      const minusDisabled = qty <= 0;
-      btnMinus.innerHTML = qty === 1 ? '<i class="fas fa-trash" aria-hidden="true"></i>' : "-";
-      btnMinus.setAttribute("aria-label", qty === 1 ? "Удалить" : "Уменьшить");
-      btnMinus.classList.toggle("is-disabled", minusDisabled);
-      btnMinus.disabled = minusDisabled;
-    }
-    if (btnPlus) {
-      const plusDisabled = !availableForAdd;
-      btnPlus.classList.toggle("is-disabled", plusDisabled);
-      btnPlus.disabled = plusDisabled;
-    }
-    if (center) {
-      syncCatalogProductDiscountBadge(card, product, defaultPriceCache.get(product.id));
-      const cachedPrice = defaultPriceCache.get(product.id);
-      const cartAggregate = getCatalogProductCartAggregate(product);
-      center.innerHTML = catalogCenterHtml(product, qty, cachedPrice, cartAggregate);
-      syncCatalogUnitPriceLabel(pill, product, qty, cachedPrice);
-    }
-    if (media) {
-      const mediaPillLabel = getCatalogMediaPillLabel(product, availableForAdd, qty);
-      if (mediaPillLabel) {
-        if (!mediaPill) {
-          mediaPill = createCatalogMediaPill(product, availableForAdd);
-          if (mediaPill) media.appendChild(mediaPill);
-        } else {
-          mediaPill.classList.toggle("is-sold-out", mediaPillLabel === "Раскупили");
-          mediaPill.innerHTML = `<span class="sp-media-pill__text">${escapeHtml(mediaPillLabel)}</span>${mediaPillLabel === "Настроить" ? '<span class="sp-media-pill__chevron" aria-hidden="true">›</span>' : ""}`;
-        }
-      } else if (mediaPill) {
-        mediaPill.remove();
-      }
-    }
+  function applyCardState() {
+    return getSharedShopProductRuntime().applyCardState(...arguments);
   }
 
   // -----------------------------
@@ -17004,6 +16038,17 @@ function removeFromCartByKey(cartKey, productId) {
 
   function ensureKsoFloatingCartButton() {
     if (!document.body || !document.body.classList.contains("page-kso")) return null;
+    if(!document.getElementById('shopKsoCategoriesBtn')){
+      const categoriesButton=document.createElement('button');categoriesButton.id='shopKsoCategoriesBtn';categoriesButton.type='button';categoriesButton.className='shop-kso-categories-btn';
+      categoriesButton.innerHTML='<i class="fas fa-th-large" aria-hidden="true"></i><span>Категории</span>';
+      categoriesButton.addEventListener('click',async()=>{
+        categoriesButton.disabled=true;
+        try{await ensureShopLateLoaded();window.openCategoriesSheet();}
+        catch(error){console.error(error);showToast('Не удалось открыть категории. Повторите попытку.');}
+        finally{categoriesButton.disabled=false;}
+      });
+      document.body.appendChild(categoriesButton);
+    }
     let wrap = document.getElementById("shopKsoFloatingCartWrap");
     if (!wrap) {
       wrap = document.createElement("div");
@@ -17029,26 +16074,25 @@ function removeFromCartByKey(cartKey, productId) {
       clearBtn.type = "button";
       clearBtn.id = "shopKsoFloatingCartClearBtn";
       clearBtn.className = "shop-kso-floating-cart-clear hidden";
-      clearBtn.innerHTML = '<i class="fas fa-trash-can" aria-hidden="true"></i>';
+      clearBtn.innerHTML = '<i class="fas fa-trash-can" aria-hidden="true"></i><span>Очистить корзину</span>';
       clearBtn.title = "Очистить корзину";
       clearBtn.setAttribute("aria-label", "Очистить корзину");
       wrap.appendChild(clearBtn);
-      if (typeof attachTwoStepClear === "function") {
-        attachTwoStepClear(clearBtn, async () => {
+      clearBtn.addEventListener('click', async () => {
+        const modal=document.getElementById('appModal');
+        const content=document.createElement('p');content.className='shop-kso-confirm-message';content.textContent='Очистить корзину?';
+        modal.classList.add('shop-kso-action-modal');
+        window.AppModal.open({title:'Очистить корзину?',content,cancelText:'Отмена',saveText:'Очистить',onClose:()=>modal.classList.remove('shop-kso-action-modal'),onSave:async()=>{
           const cleared = await clearCartAll();
-          if (cleared === false) return;
+          if (cleared === false) return false;
           if (typeof closeShopSheetIfOpen === "function") {
             closeShopSheetIfOpen();
           } else if (window.AppModal?.isOpen?.()) {
             window.AppModal.close("sheet");
           }
-        }, {
-          defaultHtml: '<i class="fas fa-trash-can" aria-hidden="true"></i>',
-          confirmText: "Очистить корзину?",
-          compactCheckout: false,
-          resetMs: 5000,
-        });
-      }
+          return true;
+        }});
+      });
     }
     let btn = document.getElementById("shopKsoFloatingCartBtn");
     if (!btn) {
@@ -17071,6 +16115,13 @@ function removeFromCartByKey(cartKey, productId) {
     const wrap = document.getElementById("shopKsoFloatingCartWrap");
     const homeBtn = document.getElementById("shopKsoFloatingCartHomeBtn");
     const clearBtn = document.getElementById("shopKsoFloatingCartClearBtn");
+    const cartPageActions = document.body.classList.contains("shop-cart-page-active")
+      ? document.querySelector("#shopCartPageHeaderContent")
+      : null;
+    const actionsHost = cartPageActions || wrap;
+    for (const button of [homeBtn, clearBtn]) {
+      if (button && actionsHost && button.parentElement !== actionsHost) actionsHost.appendChild(button);
+    }
     const items = cartItemsResolved();
     const total = computeCartTotals(items).total;
     const badge = btn.querySelector("#shopKsoFloatingCartBadge");
@@ -17078,9 +16129,9 @@ function removeFromCartByKey(cartKey, productId) {
       badge.textContent = money(total);
       badge.classList.toggle("hidden", total <= 0);
     }
-    const isCartOpen = !!window.AppModal?.isOpen?.()
+    const isCartOpen = document.body.classList.contains("shop-cart-page-active") || (!!window.AppModal?.isOpen?.()
       && !!openCartSheetCtx
-      && !!window.AppModal?.body?.classList?.contains("shop-cart-sheet-body");
+      && !!window.AppModal?.body?.classList?.contains("shop-cart-sheet-body"));
     const shouldShowCart = total > 0;
     const shouldShowClear = shouldShowCart && isCartOpen;
     btn.classList.toggle("hidden", !shouldShowCart);
@@ -17091,10 +16142,11 @@ function removeFromCartByKey(cartKey, productId) {
       clearBtn.classList.toggle("is-confirm", shouldShowClear && clearBtn.classList.contains("is-confirm"));
       if (!shouldShowClear && typeof clearBtn.reset === "function") clearBtn.reset();
     }
+    window.refreshKsoBonusRecipient?.();
   }
   window.syncKsoFloatingCartButton = syncKsoFloatingCartButton;
 
-  const KSO_IDLE_RESET_MS = 5 * 60 * 1000;
+  const KSO_IDLE_RESET_MS = 3 * 60 * 1000;
   const KSO_IDLE_WARNING_MS = 30 * 1000;
   let ksoIdleResetTimer = 0;
   let ksoIdleWarningTimer = 0;
@@ -17290,6 +16342,7 @@ function removeFromCartByKey(cartKey, productId) {
       try {
         if (typeof clearCustomer === "function") clearCustomer({ fullReset: true });
       } catch {}
+      if (typeof closeShopSheetIfOpen === 'function') closeShopSheetIfOpen({ resetSession: true });
       showKsoMethodGate();
     } finally {
       ksoIdleResetInProgress = false;
@@ -17312,6 +16365,11 @@ function removeFromCartByKey(cartKey, productId) {
   function handleKsoIdleActivity(event) {
     const target = event?.target;
     if (target?.closest?.("#shopKsoIdleWarning")) return;
+    if(event.type==='scroll'){
+      const now=Date.now();
+      if(now-(handleKsoIdleActivity.lastScrollReset||0)<1000)return;
+      handleKsoIdleActivity.lastScrollReset=now;
+    }
     resetKsoIdleTimer();
   }
 
@@ -17403,6 +16461,7 @@ function updateCartBadge() {
       }
 
       state.cart = [];
+      if(document.body?.classList.contains('page-kso'))window.clearKsoBonusRecipient?.();
       clearAllAutoAddDismissed();
       applyAutoAddRules();
       saveCart();
@@ -17583,6 +16642,10 @@ function updateCartBadge() {
   }
 
   function syncAllProductCardsFromCart() {
+    if (isKsoCatalogCache) {
+      scheduleSyncAllProductCardsFromCart();
+      return;
+    }
     if (!elProductsGrid) return;
     const cards = elProductsGrid.querySelectorAll(".sp-card[data-product-id]");
     cards.forEach((card) => {
@@ -17595,12 +16658,49 @@ function updateCartBadge() {
     });
   }
 
-  function scheduleSyncAllProductCardsFromCart() {
+  const ksoPendingCardIds = new Set();
+  let ksoSyncAllCards = false;
+  let ksoCardSyncRunning = false;
+
+  async function flushKsoProductCardSync() {
+    if (ksoCardSyncRunning) return;
+    ksoCardSyncRunning = true;
+    const all = ksoSyncAllCards;
+    const ids = new Set(ksoPendingCardIds);
+    ksoSyncAllCards = false;
+    ksoPendingCardIds.clear();
+    try {
+      await waitForKsoCatalogIdle();
+      const cards = Array.from(elProductsGrid?.querySelectorAll('.sp-card[data-product-id]') || [])
+        .filter(card => all || ids.has(Number(card.dataset.productId)));
+      await forEachKsoCatalogChunk(cards, card => {
+        if (!card.isConnected) return;
+        const id = Number(card.dataset.productId);
+        const product = state.productCache.get(id);
+        if (!product || Number(product.site_visibility) === 0) { card.remove(); return; }
+        syncProductCardStaticContent(card, product);
+        applyCardState(card, product, cartQty(id));
+      });
+    } catch (error) {
+      console.error('KSO catalog card update failed:', error);
+    } finally {
+      ksoCardSyncRunning = false;
+      if (ksoSyncAllCards || ksoPendingCardIds.size) scheduleSyncAllProductCardsFromCart([]);
+    }
+  }
+
+  function scheduleSyncAllProductCardsFromCart(productIds = null) {
+    if (isKsoCatalogCache) {
+      if (productIds == null) ksoSyncAllCards = true;
+      else productIds.forEach(id => ksoPendingCardIds.add(Number(id)));
+      if (ksoCardSyncRunning) return;
+    }
     if (__syncAllCardsTimer) return;
     __syncAllCardsTimer = setTimeout(() => {
       __syncAllCardsTimer = null;
-      syncAllProductCardsFromCart();
-    }, 0);
+      if (isKsoCatalogCache) void flushKsoProductCardSync();
+      else syncAllProductCardsFromCart();
+    }, isKsoCatalogCache ? (catalogTouchActive ? 200 : Math.max(0, 650 - (Date.now() - catalogLastScrollAt))) : 0);
   }
 
   function buildCartKeySignature(cartItems = state.cart) {
@@ -18048,6 +17148,7 @@ function updateCartBadge() {
     __categoryLoadLimit.set(cid, reqLimit);
     try {
       await loadProductsForCategory(cid, { limit: reqLimit, lite: true });
+      await waitForKsoCatalogIdle();
       renderProducts({ appendOnly: true });
       prioritizeAboveFoldCardImages();
       void warmInitialCatalogInteractionData({
@@ -18091,6 +17192,7 @@ function updateCartBadge() {
   }
 
   function saveCatalogSnapshotFromState() {
+    if(isKsoCatalogCache){scheduleCatalogSnapshotSave();return;}
     try {
       const payload = {
         v: CATALOG_SNAPSHOT_VERSION,
@@ -18106,11 +17208,315 @@ function updateCartBadge() {
   }
 
   function scheduleCatalogSnapshotSave() {
+    if(isKsoCatalogCache&&catalogCacheRestoring)return;
     if (catalogSnapshotSaveTimer) return;
     catalogSnapshotSaveTimer = setTimeout(() => {
       catalogSnapshotSaveTimer = null;
-      saveCatalogSnapshotFromState();
+      if(isKsoCatalogCache){
+        if(catalogTouchActive||Date.now()-catalogLastScrollAt<600||catalogCacheWriting){scheduleCatalogSnapshotSave();return;}
+        const persist=()=>{
+          if(catalogTouchActive||Date.now()-catalogLastScrollAt<600){scheduleCatalogSnapshotSave();return;}
+          void persistKsoCatalogCache();
+        };
+        if(typeof requestIdleCallback==='function')requestIdleCallback(persist);else setTimeout(persist,0);
+      }else saveCatalogSnapshotFromState();
     }, 700);
+  }
+
+  function requestKsoCatalogSync() {
+    if (!isKsoCatalogCache) return;
+    catalogSyncWanted = true;
+    if (!catalogStartupReady || catalogSyncPending || catalogSyncApplying || stockEventsSource?.readyState !== WebSocket.OPEN) return;
+    catalogSyncWanted = false;
+    catalogSyncPending = true;
+    clearTimeout(catalogSyncTimer);
+    stockEventsSource.send(JSON.stringify({ type: 'catalog.sync', since: catalogRevision }));
+    catalogSyncTimer = setTimeout(() => {
+      catalogSyncPending = false;
+      requestKsoCatalogSync();
+    }, 30000);
+  }
+
+  function invalidateKsoCatalogResources(predicate) {
+    catalogResources.forEach((value, key) => {
+      if (predicate(key, value)) { catalogResources.delete(key); catalogDirtyResources.add(key); }
+    });
+    catalogResourceInflight.clear();
+  }
+
+  function invalidateKsoProductData(ids) {
+    ids.forEach(id => {
+      advanceStockConfigGeneration(id);
+      upsellDefaultConfigCache.delete(id);
+      state.productOptionsCache.delete(id);
+      productIngredientRequirementsCache.delete(id);
+      const passport = getProductPassport(id);
+      if (passport) {
+        ['ingredients', 'variants', 'optionAssignments', 'optionGroups', 'defaultConfig'].forEach(key => { passport[key] = null; });
+        catalogDirtyPassports.add(id);
+      }
+    });
+    if (ids.length) state.optionGroupCache.clear();
+    window.dispatchEvent(new CustomEvent('shop:kso-catalog-invalidated', { detail: { productIds: ids } }));
+  }
+
+  async function applyKsoCatalogChanges(page, socket) {
+    if (socket !== stockEventsSource || catalogSyncApplying) return;
+    clearTimeout(catalogSyncTimer);
+    catalogSyncApplying = true;
+    let applied = false;
+    try {
+      await waitForKsoCatalogIdle();
+      if (socket !== stockEventsSource || catalogCacheScope() !== catalogInitialScope) return;
+      const hadMissingCategories = collectCatalogCategoryIds().some(id => !state.productsByCategory.has(id)
+        || !catalogCompleteCategories.has(id));
+      if (hadMissingCategories) {
+        await loadProductsByCategory();
+        await waitForKsoCatalogIdle();
+        renderProducts({ appendOnly: true });
+      }
+      const changes = (Array.isArray(page.changes) ? page.changes : []).filter(change => change.entity_type !== 'checkout_settings');
+      const reset = page.reset_required === true;
+      if (reset || changes.length) {
+        catalogGeneration += 1;
+        const productIds = new Set();
+        let structureChanged = reset;
+        let referencesChanged = reset;
+        let combosChanged = reset;
+        let membershipChanged = false;
+        changes.forEach(change => {
+          if (change.entity_type === 'checkout_settings') return;
+          const id = Number(change.entity_id);
+          if (change.entity_type === 'product' || change.operation === 'stock') {
+            if (id > 0) productIds.add(id);
+          } else if (change.entity_type === 'category') structureChanged = true;
+          else if (change.entity_type === 'combo' || change.entity_type === 'combo-block') combosChanged = true;
+          else referencesChanged = true;
+        });
+        if (reset || referencesChanged) state.productCache.forEach((_, id) => productIds.add(id));
+        const ids = [...productIds];
+        let enhancersChanged = reset || referencesChanged;
+        if (ids.length || structureChanged || referencesChanged || combosChanged) invalidateKsoProductData(ids);
+        invalidateKsoCatalogResources((key, value) => {
+          if (reset || referencesChanged) return true;
+          if (structureChanged && (key.includes('/bootstrap') || key.endsWith('/categories'))) return true;
+          if (key.includes('/combos/')) return combosChanged || structureChanged
+            || (ids.length && (typeof collectComboProductIds !== 'function'
+              || collectComboProductIds(value?.data).some(id => productIds.has(id))));
+          if (/\/(?:auto-add|cart-upsell)$/.test(key)) {
+            const rows = key.endsWith('/auto-add') ? value?.data?.items : value?.data;
+            const affected = (Array.isArray(rows) ? rows : []).some(row => productIds.has(Number(row.product_id || row.product?.id || row.id)));
+            enhancersChanged = enhancersChanged || affected;
+            return affected;
+          }
+          return false;
+        });
+        if (structureChanged || referencesChanged || combosChanged) {
+          await loadShopBootstrap();
+          await loadProductsByCategory({ force: true });
+        }
+        for (let offset = 0; offset < ids.length; offset += 24) {
+          await waitForKsoCatalogIdle();
+          membershipChanged = (await refreshCatalogPassportBatch(ids.slice(offset, offset + 24))) || membershipChanged;
+        }
+        if (enhancersChanged) {
+          autoAddLoaded = false;
+          upsellLoaded = false;
+          await loadCartEnhancersData();
+          if (!autoAddLoaded || !upsellLoaded) throw new Error('KSO_CART_CATALOG_INCOMPLETE');
+        }
+        await waitForKsoCatalogIdle();
+        if (socket !== stockEventsSource) return;
+        // Structural changes need a new grid. Price/stock changes patch existing cards.
+        if (structureChanged || referencesChanged || combosChanged || membershipChanged) {
+          renderCategories();
+          renderCategoryChips();
+          renderProducts();
+        } else {
+          scheduleSyncAllProductCardsFromCart(ids);
+        }
+        if (ids.length || structureChanged || referencesChanged || combosChanged) {
+          window.invalidateShopCartPricingSnapshotCache?.();
+          pruneUnavailableCartItems();
+          await refreshCartAfterEnhancersLoaded({ force: true });
+          if (document.body.classList.contains('shop-cart-page-active')) {
+            await window.syncShopCartPricingSummaryUi?.({ reason: 'kso.catalog.changed' });
+          }
+        }
+      }
+      if (socket !== stockEventsSource) return;
+      catalogRevision = String(page.next_revision || catalogRevision);
+      applied = true;
+      scheduleCatalogSnapshotSave();
+      if (page.has_more) catalogSyncWanted = true;
+    } catch (error) {
+      console.error('KSO catalog synchronization failed; checkpoint retained:', error);
+      catalogSyncWanted = false;
+      clearTimeout(catalogSyncTimer);
+      catalogSyncTimer = setTimeout(requestKsoCatalogSync, 5000);
+    } finally {
+      catalogSyncApplying = false;
+      catalogSyncPending = false;
+      if (catalogSyncWanted) requestKsoCatalogSync();
+      else if (applied) void warmMissingKsoCatalogData();
+    }
+  }
+
+  async function refreshKsoEffectiveConfigs(productIds) {
+    const ids = [...new Set(productIds)].filter(id => state.productCache.has(id)
+      && Number(state.productCache.get(id)?.site_visibility) !== 0
+      && getProductPassport(id)?.defaultConfig?.is_fulfillable == null);
+    const pending = [...new Set(ids.map(id => catalogEffectiveInflight.get(id)).filter(Boolean))];
+    if (pending.length) await Promise.all(pending);
+    const missing = ids.filter(id => getProductPassport(id)?.defaultConfig?.is_fulfillable == null);
+    if (!missing.length) return;
+    const generations = new Map(missing.map(id => [id, getStockConfigGeneration(id)]));
+    const task = (async () => {
+      const json = await apiJson('/api/public/products/batch/default-cart-config', {
+        method: 'POST', body: { ids: missing },
+      });
+      await waitForKsoCatalogIdle();
+      await forEachKsoCatalogChunk(missing, id => {
+        const config = json?.data?.[id];
+        if (!config) throw new Error('KSO_EFFECTIVE_CONFIG_MISSING:' + id);
+        applyEffectiveStockConfigRow(id, config, generations.get(id));
+      });
+    })();
+    missing.forEach(id => catalogEffectiveInflight.set(id, task));
+    try { await task; }
+    finally { missing.forEach(id => { if (catalogEffectiveInflight.get(id) === task) catalogEffectiveInflight.delete(id); }); }
+  }
+
+  function warmMissingKsoCatalogData() {
+    if (!isKsoCatalogCache || catalogWarmupPromise) return catalogWarmupPromise;
+    if (catalogWarmupCompleteGeneration === catalogGeneration) return;
+    const generation = catalogGeneration;
+    catalogWarmupPromise = (async () => {
+      let warmed = false;
+      await waitForKsoCatalogIdle();
+      await ensureShopLateLoaded();
+      const ids = [...state.productCache.keys()].filter(id => {
+        const p = getProductPassport(id);
+        return p?.product && Number(p.product.site_visibility) !== 0 && (!Array.isArray(p.ingredients) || !Array.isArray(p.variants)
+          || !Array.isArray(p.optionAssignments) || !Array.isArray(p.optionGroups) || !p.defaultConfig);
+      });
+      for (let offset = 0; offset < ids.length; offset += 24) {
+        await waitForKsoCatalogIdle();
+        if (catalogSyncApplying) return;
+        warmed = true;
+        await window.preloadProductPassportsBatch(ids.slice(offset, offset + 24), { details: true });
+      }
+      const effectiveIds = [...state.productCache.keys()].filter(id => Number(state.productCache.get(id)?.site_visibility) !== 0
+        && getProductPassport(id)?.defaultConfig?.is_fulfillable == null);
+      for (let offset = 0; offset < effectiveIds.length; offset += 24) {
+        await waitForKsoCatalogIdle();
+        if (catalogSyncApplying) return;
+        warmed = true;
+        await refreshKsoEffectiveConfigs(effectiveIds.slice(offset, offset + 24));
+      }
+      const comboIds = new Set();
+      state.combosByCategory.forEach(list => list.forEach(combo => comboIds.add(Number(combo.id))));
+      for (const id of comboIds) {
+        if (!(id > 0) || catalogResources.has('/api/public/combos/' + id)) continue;
+        await waitForKsoCatalogIdle();
+        if (catalogSyncApplying) return;
+        warmed = true;
+        await apiJson('/api/public/combos/' + id);
+      }
+      // Options/ingredients and combo replacements can reference products outside the visible catalog.
+      const references = new Set();
+      const collectReferences = passport => {
+        (passport?.ingredients || []).forEach(row => references.add(Number(row.ingredient_id)));
+        (passport?.optionGroups || []).forEach(group => (group.items || []).forEach(row => {
+          references.add(Number(row.target_product_id || row.product_id));
+        }));
+      };
+      state.productPassports.forEach(collectReferences);
+      if (typeof collectComboProductIds === 'function') catalogResources.forEach((value, key) => {
+        if (key.includes('/combos/')) collectComboProductIds(value?.data).forEach(id => references.add(id));
+      });
+      const visited = new Set();
+      while (references.size) {
+        const batch = [...references].filter(id => id > 0 && !visited.has(id)).slice(0, 24);
+        if (!batch.length) break;
+        batch.forEach(id => { references.delete(id); visited.add(id); });
+        await waitForKsoCatalogIdle();
+        if (catalogSyncApplying) return;
+        if (batch.some(id => {
+          const p = getProductPassport(id);
+          return !p?.product || !Array.isArray(p.ingredients) || !Array.isArray(p.variants)
+            || !Array.isArray(p.optionAssignments) || !Array.isArray(p.optionGroups) || !p.defaultConfig;
+        })) warmed = true;
+        await window.preloadProductPassportsBatch(batch, { details: true });
+        batch.forEach(id => collectReferences(getProductPassport(id)));
+        await refreshKsoEffectiveConfigs(batch);
+      }
+      if (warmed) scheduleSyncAllProductCardsFromCart();
+      catalogWarmupCompleteGeneration = generation;
+    })().catch(error => console.error('KSO missing catalog data load failed:', error))
+      .finally(() => {
+        catalogWarmupPromise = null;
+        if (generation !== catalogGeneration && !catalogSyncApplying) void warmMissingKsoCatalogData();
+      });
+    return catalogWarmupPromise;
+  }
+
+  async function persistKsoCatalogCache() {
+    if(catalogCacheWriting||(!state.categories?.length&&!catalogStartupReady))return;
+    const scope=catalogCacheScope();
+    if(scope!==catalogInitialScope)return;
+    const categoryIds=[...catalogDirtyCategories].slice(0,8);
+    const passportIds=[...catalogDirtyPassports].slice(0,32);
+    const resourceKeys=[...catalogDirtyResources].slice(0,8);
+    categoryIds.forEach(id=>catalogDirtyCategories.delete(id));
+    passportIds.forEach(id=>catalogDirtyPassports.delete(id));
+    resourceKeys.forEach(key=>catalogDirtyResources.delete(key));
+    // Persist the checkpoint only after the entire update has reached IndexedDB.
+    const revisionToSave = !catalogSyncApplying && !catalogDirtyCategories.size && !catalogDirtyPassports.size && !catalogDirtyResources.size
+      ? catalogRevision : catalogPersistedRevision;
+    catalogCacheWriting=true;
+    try{
+      const db=await checkoutSettingsDb();
+      if(scope!==catalogCacheScope())throw new Error('CATALOG_SCOPE_CHANGED');
+      if(catalogTouchActive||Date.now()-catalogLastScrollAt<600){categoryIds.forEach(id=>catalogDirtyCategories.add(id));passportIds.forEach(id=>catalogDirtyPassports.add(id));resourceKeys.forEach(key=>catalogDirtyResources.add(key));scheduleCatalogSnapshotSave();return;}
+      await new Promise((resolve,reject)=>{
+        const tx=db.transaction('catalog','readwrite'),store=tx.objectStore('catalog'),ts=Date.now();
+        store.put({ts,v:CATALOG_SNAPSHOT_VERSION,revision:revisionToSave,activeCategoryId:state.activeCategoryId,categories:state.categories},scope+'meta');
+        for(const id of categoryIds){if(state.productsByCategory.has(id))store.put({ts,id,complete:catalogCompleteCategories.has(id),limit:__categoryLoadLimit.get(id)||0,products:state.productsByCategory.get(id)||[],combos:state.combosByCategory.get(id)||[]},scope+'category:'+id);else store.delete(scope+'category:'+id);}
+        for(const id of passportIds){const value=state.productPassports.get(id);if(value)store.put({ts,id,value},scope+'passport:'+id);else store.delete(scope+'passport:'+id);}
+        for(const key of resourceKeys){if(catalogResources.has(key))store.put({ts,key,value:catalogResources.get(key)},scope+'resource:'+key);else store.delete(scope+'resource:'+key);}
+        tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('CATALOG_CACHE_ABORTED'));
+      });
+      catalogPersistedRevision=revisionToSave;
+      if(catalogCacheMigrating&&!catalogDirtyCategories.size&&!catalogDirtyPassports.size){localStorage.removeItem(CATALOG_SNAPSHOT_KEY);catalogCacheMigrating=false;}
+    }catch(error){
+      categoryIds.forEach(id=>catalogDirtyCategories.add(id));passportIds.forEach(id=>catalogDirtyPassports.add(id));
+      console.error('KSO catalog cache write failed:',error);
+      resourceKeys.forEach(key=>catalogDirtyResources.add(key));
+      return;
+    }finally{catalogCacheWriting=false;}
+    if(catalogDirtyCategories.size||catalogDirtyPassports.size||catalogDirtyResources.size||catalogPersistedRevision!==catalogRevision)scheduleCatalogSnapshotSave();
+  }
+
+  async function readKsoCatalogCache() {
+    const scope=catalogCacheScope(),db=await checkoutSettingsDb();
+    const records=await new Promise((resolve,reject)=>{
+      const tx=db.transaction('catalog','readwrite'),store=tx.objectStore('catalog'),rows=[];
+      const request=store.openCursor(IDBKeyRange.bound(scope,scope+'\uffff'));
+      request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value;if(Date.now()-Number(value?.ts||0)>CATALOG_SNAPSHOT_MAX_AGE_MS)cursor.delete();else rows.push({key:cursor.key,value});cursor.continue();};
+      tx.oncomplete=()=>resolve(rows);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('CATALOG_CACHE_ABORTED'));
+    });
+    if(scope!==catalogCacheScope())return null;
+    const meta=records.find(row=>row.key===scope+'meta')?.value;
+    if(!meta||meta.v!==CATALOG_SNAPSHOT_VERSION)return null;
+    const snapshot={...meta,productsByCategory:{},combosByCategory:{},productPassports:{},categoryLimits:{},categoryComplete:{}};
+    catalogRevision = catalogPersistedRevision = String(meta.revision || '0');
+    for(const {key,value} of records){
+      if(key.startsWith(scope+'category:')){snapshot.productsByCategory[value.id]=value.products;snapshot.combosByCategory[value.id]=value.combos;snapshot.categoryLimits[value.id]=value.limit;snapshot.categoryComplete[value.id]=value.complete===true;}
+      if(key.startsWith(scope+'passport:'))snapshot.productPassports[value.id]=value.value;
+      if(key.startsWith(scope+'resource:'))catalogResources.set(value.key,value.value);
+    }
+    return snapshot;
   }
 
   function loadCatalogSnapshotFromStorage() {
@@ -18131,7 +17537,7 @@ function updateCartBadge() {
 
   function applyCatalogSnapshot(snapshot) {
     const categories = Array.isArray(snapshot?.categories) ? snapshot.categories : [];
-    if (!categories.length) return false;
+    if (!categories.length && (!isKsoCatalogCache || snapshot?.revision == null)) return false;
 
     state.categories = categories;
     state.productsByCategory = new Map();
@@ -18160,6 +17566,8 @@ function updateCartBadge() {
         mergeProductPassport(pid, { product: p });
       });
       state.productsByCategory.set(cid, list);
+      if(isKsoCatalogCache)__categoryLoadLimit.set(cid,Number(snapshot?.categoryLimits?.[cid]||0));
+      if (isKsoCatalogCache && snapshot?.categoryComplete?.[cid]) catalogCompleteCategories.add(cid);
     });
 
     const productPassports = snapshot?.productPassports && typeof snapshot.productPassports === "object"
@@ -18186,6 +17594,12 @@ function updateCartBadge() {
         defaultConfig: entry.defaultConfig || null,
         updated_at: entry.updated_at || null,
       });
+      if (isKsoCatalogCache && entry.defaultConfig) {
+        window.cacheUpsellDefaultConfig(pid, entry.defaultConfig);
+        if (entry.defaultConfig.is_fulfillable != null) productIngredientRequirementsCache.set(pid, {
+          status: 'ready', requirements: buildIngredientRequirementsMap(entry.defaultConfig.ingredients || []),
+        });
+      }
     });
 
     const combosByCategory = snapshot?.combosByCategory && typeof snapshot.combosByCategory === "object"
@@ -18212,7 +17626,7 @@ function updateCartBadge() {
     renderCategoryChips();
     renderProducts();
     updateCartBadge();
-    queueCatalogPassportRefresh();
+    if (!isKsoCatalogCache) queueCatalogPassportRefresh();
     return true;
   }
 
@@ -18240,7 +17654,9 @@ function updateCartBadge() {
       body: { ids: productIds },
     });
     const data = json?.data && typeof json.data === "object" ? json.data : {};
-    productIds.forEach((id) => {
+    if (isKsoCatalogCache) await waitForKsoCatalogIdle();
+    const changedCategories = new Set();
+    const applyPassport = (id) => {
       const payload = data[id] || data[String(id)] || null;
       if (!payload || typeof payload !== "object") {
         const cached = state.productCache.get(id);
@@ -18249,6 +17665,12 @@ function updateCartBadge() {
           cached.site_visibility = 0;
           mergeProductPassport(id, { product: cached });
         }
+        if (isKsoCatalogCache) state.productsByCategory.forEach((list, cid) => {
+          if (!list.some(p => Number(p.id) === id)) return;
+          state.productsByCategory.set(cid, list.filter(p => Number(p.id) !== id));
+          catalogDirtyCategories.add(cid);
+          changedCategories.add(cid);
+        });
         return;
       }
       const product = payload.product && typeof payload.product === "object" ? payload.product : null;
@@ -18270,14 +17692,43 @@ function updateCartBadge() {
         window.cacheUpsellDefaultConfig(id, payload.defaultConfig);
       }
       mergeProductPassport(id, patch);
-    });
+      if (isKsoCatalogCache) {
+        const memberships = new Set((product.category_ids || []).map(Number));
+        state.productsByCategory.forEach((list, cid) => {
+          const index = list.findIndex(p => Number(p.id) === id);
+          const belongs = Number(product.site_visibility) !== 0 && memberships.has(Number(cid));
+          if (index >= 0 && belongs) {
+            list[index] = state.productCache.get(id);
+            catalogDirtyCategories.add(cid);
+          } else if ((index >= 0) !== belongs) changedCategories.add(cid);
+        });
+      }
+    };
+    if (isKsoCatalogCache) await forEachKsoCatalogChunk(productIds, applyPassport);
+    else productIds.forEach(applyPassport);
+    if (isKsoCatalogCache) {
+      await forEachKsoCatalogChunk(productIds, id => {
+        if (data[id]) window.__applySharedProductPassportPayloads?.({ [id]: data[id] });
+      });
+      await refreshKsoEffectiveConfigs(productIds);
+      if (changedCategories.size) await loadProductsByCategory({ categoryIds: [...changedCategories] });
+      return changedCategories.size > 0;
+    }
     scheduleSyncAllProductCardsFromCart();
   }
 
-  function restoreCatalogSnapshotForFastPaint() {
-    const snapshot = loadCatalogSnapshotFromStorage();
+  async function restoreCatalogSnapshotForFastPaint() {
+    let snapshot;
+    if(isKsoCatalogCache){
+      try{snapshot=await readKsoCatalogCache();}catch(error){console.error('KSO catalog cache read failed:',error);}
+      if(!snapshot){snapshot=loadCatalogSnapshotFromStorage();catalogCacheMigrating=!!snapshot;}
+    }else snapshot=loadCatalogSnapshotFromStorage();
     if (!snapshot) return false;
-    return applyCatalogSnapshot(snapshot);
+    catalogCacheRestoring=true;
+    try{return applyCatalogSnapshot(snapshot);}finally{
+      catalogCacheRestoring=false;
+      if(catalogCacheMigrating){for(const id of state.productsByCategory.keys())catalogDirtyCategories.add(id);for(const id of state.productPassports.keys())catalogDirtyPassports.add(id);scheduleCatalogSnapshotSave();}
+    }
   }
 
   async function loadCategories() {
@@ -18291,6 +17742,17 @@ function updateCartBadge() {
     if (!data || typeof data !== "object") return null;
     if (Array.isArray(data.categories)) {
       state.categories = data.categories;
+      if (isKsoCatalogCache) {
+        const validIds = new Set(collectCatalogCategoryIds());
+        for (const id of state.productsByCategory.keys()) {
+          if (validIds.has(id)) continue;
+          state.productsByCategory.delete(id);
+          state.combosByCategory.delete(id);
+          catalogCompleteCategories.delete(id);
+          __categoryLoadLimit.delete(id);
+          catalogDirtyCategories.add(id);
+        }
+      }
     }
     if (data.orderConfig && typeof data.orderConfig === "object") {
       setShopOrderConfigSnapshot(data.orderConfig, { persistRounding: true });
@@ -18491,6 +17953,13 @@ function updateCartBadge() {
       }
 
       await warmupCartProducts();
+      if (isKsoCatalogCache && !document.body.classList.contains('shop-cart-page-active')) {
+        // Keep cart data current; its existing opening path will render the visible page.
+        markCartUiDirty();
+        updateCartBadge();
+        cartEnhancersLastRefreshSignature = getCartEnhancersRefreshSignature();
+        return autoChanged;
+      }
       renderCart(true);
       updateCartBadge();
 
@@ -19593,6 +19062,7 @@ function updateCartBadge() {
 
   function appendUpsellToList(listEl) {
     if (!listEl) return;
+    if (document.body?.classList.contains("page-kso")) return;
     var allProducts = state.upsellProducts || [];
     if (allProducts.length === 0) {
       var old = listEl.querySelector(".shop-cart-upsell") || (
@@ -20152,159 +19622,40 @@ function updateCartBadge() {
     return null;
   }
 
-  function parseVariantValueNumber(value) {
-    const s = String(value ?? "").replace(",", ".");
-    const match = s.match(/-?\d+(?:\.\d+)?/);
-    return match ? Number(match[0]) : NaN;
+  function parseVariantValueNumber() {
+    return getSharedShopProductRuntime().parseVariantValueNumber(...arguments);
   }
 
-  function getOptionItemDefaultVariantIndex(optionItem) {
-    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
-    const variantGroup = variants[0];
-    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
-    if (!values.length) return null;
-    const rawIndex = variantGroup?.default_value_index != null ? Number(variantGroup.default_value_index) : 0;
-    if (!Number.isFinite(rawIndex) || rawIndex < 0 || rawIndex >= values.length) return 0;
-    return rawIndex;
+  function getOptionItemDefaultVariantIndex() {
+    return getSharedShopProductRuntime().getOptionItemDefaultVariantIndex(...arguments);
   }
 
   /**
    * ???? ??????-????? ? ?????? ?????????? ???????? (?????? ?????).
    * ???????????? ??? ????? ?????? (??/?, ?/?? ? ?.?.): ?????????? ??????????? ??? ??? ????????? ???????? ??????.
    */
-  function getOptionItemVariantUnitPrice(optionItem, variantGroup, selectedIndex) {
-    const fallbackPrice = Number(optionItem?.price || 0);
-    const idx = Number(selectedIndex);
-    if (!Number.isFinite(idx) || idx < 0) return fallbackPrice;
-    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
-    if (!values.length) return fallbackPrice;
-
-    const numericValue = parseVariantValueNumber(values[idx]);
-    if (!Number.isFinite(numericValue) || numericValue <= 0) return fallbackPrice;
-
-    const productId = Number(optionItem?.target_product_id || 0);
-    const product = productId > 0 ? state.productCache.get(productId) : null;
-
-    let unitPrice = null;
-
-    if (product) {
-      const basePrice = Number(product.price || 0);
-      const baseUnitId = Number(product.base_unit_id || product.unit_id || variantGroup?.unit_id || 0);
-      const baseQty = Number(product.base_qty || 1) || 1;
-      const variantUnitId = Number(variantGroup?.unit_id || baseUnitId);
-
-      if (basePrice > 0 && baseUnitId && variantUnitId) {
-        const factor = getConversionFactor(variantUnitId, baseUnitId);
-        if (factor != null) {
-          const qtyInBase = numericValue * Number(factor || 0);
-          if (Number.isFinite(qtyInBase) && qtyInBase > 0) {
-            unitPrice = basePrice * (qtyInBase / baseQty);
-          }
-        }
-      }
-    }
-
-    // ???? ?В корзине пусто???? ????? ?????/??????????? ? ?????????В корзине пусто???? ?? ???? ?????
-    if (unitPrice == null) {
-      const baseValue = parseVariantValueNumber(values[0]);
-      if (!Number.isFinite(baseValue) || baseValue <= 0) return fallbackPrice;
-      unitPrice = fallbackPrice * (numericValue / baseValue);
-    }
-
-    const tiers = Array.isArray(variantGroup?.discount_tiers) ? variantGroup.discount_tiers : [];
-    const tier = tiers.find((t) => Number(t.sort_order) === idx);
-    const discountPercent = Number(tier?.discount_percent || 0) || 0;
-    const baseValue = parseVariantValueNumber(values[0]);
-    const shouldApplyTier =
-      Number.isFinite(baseValue) &&
-      baseValue > 0 &&
-      Math.abs(numericValue - baseValue) > 0.000001;
-    if (shouldApplyTier && discountPercent !== 0) {
-      unitPrice = unitPrice * (1 - discountPercent / 100);
-    }
-    return unitPrice;
+  function getOptionItemVariantUnitPrice() {
+    return getSharedShopProductRuntime().getOptionItemVariantUnitPrice(...arguments);
   }
 
-  function getOptionItemVariantPriceDiff(optionItem, variantGroup, selectedIndex) {
-    const unitPrice = Number(getOptionItemVariantUnitPrice(optionItem, variantGroup, selectedIndex) || 0);
-    const productId = Number(optionItem?.target_product_id || 0);
-    const targetProduct = productId > 0 ? state.productCache.get(productId) : null;
-    const basePrice = targetProduct
-      ? Number(targetProduct.price || 0)
-      : Number(optionItem?.price || 0);
-    if (!Number.isFinite(unitPrice) || !Number.isFinite(basePrice)) return 0;
-    return unitPrice - basePrice;
+  function getOptionItemVariantPriceDiff() {
+    return getSharedShopProductRuntime().getOptionItemVariantPriceDiff(...arguments);
   }
 
-  function getOptionItemResolvedDefaultPrice(optionItem) {
-    const basePrice = Number(optionItem?.price || 0);
-    if (!Number.isFinite(basePrice)) return 0;
-    const variants = Array.isArray(optionItem?.variants) ? optionItem.variants : [];
-    const variantGroup = variants[0];
-    const defaultVariantIndex = getOptionItemDefaultVariantIndex(optionItem);
-    if (!variantGroup || !Number.isFinite(Number(defaultVariantIndex))) {
-      return basePrice;
-    }
-    return basePrice + getOptionItemVariantPriceDiff(optionItem, variantGroup, Number(defaultVariantIndex));
+  function getOptionItemResolvedDefaultPrice() {
+    return getSharedShopProductRuntime().getOptionItemResolvedDefaultPrice(...arguments);
   }
 
-  function getVariantUnitPrice(product, variants, variantState) {
-    if (!product) return 0;
-    const basePrice = Number(product.price || 0);
-    if (!Array.isArray(variants) || !variants.length) return basePrice;
-    const selectedIndex = Number(variantState?.selectedIndex);
-    if (!Number.isFinite(selectedIndex)) return basePrice;
-
-    const group = variants[0];
-    const baseUnitId = Number(product.base_unit_id || product.unit_id || group.unit_id || 0);
-    const baseQty = Number(product.base_qty || 1) || 1;
-    const variantUnitId = Number(group.unit_id || 0);
-    if (!Number.isFinite(baseUnitId) || !Number.isFinite(variantUnitId)) return basePrice;
-
-    const value = Array.isArray(group.values) ? group.values[selectedIndex] : null;
-    const numericValue = parseVariantValueNumber(value);
-    if (!Number.isFinite(numericValue)) return basePrice;
-
-    const factor = getConversionFactor(variantUnitId, baseUnitId);
-    const effectiveFactor = factor != null ? Number(factor || 0) : 1;
-    const qtyInBase = numericValue * effectiveFactor;
-    if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) return basePrice;
-
-    let unitPrice = basePrice * (qtyInBase / baseQty);
-
-    const tiers = Array.isArray(group.discount_tiers) ? group.discount_tiers : [];
-    const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
-    const discountPercent = Number(tier?.discount_percent || 0) || 0;
-    const shouldApplyTier = Math.abs(qtyInBase - baseQty) > 0.000001;
-    if (shouldApplyTier && discountPercent !== 0) {
-      unitPrice = unitPrice * (1 - discountPercent / 100);
-    }
-    return unitPrice;
+  function getVariantUnitPrice() {
+    return getSharedShopProductRuntime().getVariantUnitPrice(...arguments);
   }
 
-  function scaleProductBasePriceForCurrentUnit(product, currentUnitPrice, basePriceRaw) {
-    const basePrice = Number(basePriceRaw || 0);
-    if (!(basePrice > 0)) return 0;
-    const currentUnit = Number(currentUnitPrice || 0);
-    const productBasePrice = Number(product?.price || 0);
-    if (currentUnit > 0 && productBasePrice > 0) {
-      return roundPrice(basePrice * (currentUnit / productBasePrice));
-    }
-    return roundPrice(basePrice);
+  function scaleProductBasePriceForCurrentUnit() {
+    return getSharedShopProductRuntime().scaleProductBasePriceForCurrentUnit(...arguments);
   }
 
-  function getQtyInBase(ing, qty) {
-    const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id;
-    const fromUnitId = Number(ing.unit_id || 0);
-    if (!baseUnitId || !fromUnitId) return null;
-    if (Number(fromUnitId) === Number(baseUnitId)) return Number(qty || 0);
-    
-    // ??? ????????? ????? pcs ?????????? ingredient_pcs_factor ???? ????
-    // ????????? ????? ??? ???????, ??? ??? ??? ??????? ? ?????? ?????? ? ??????
-    // ?????? ????? ?????????? ????? ????????? ????? getConversionFactor
-    
-    const factor = getConversionFactor(fromUnitId, baseUnitId);
-    return factor != null ? Number(qty || 0) * factor : null;
+  function getQtyInBase() {
+    return getSharedShopProductRuntime().getQtyInBase(...arguments);
   }
 
   function ensureCachedProductCategoryIds(product, fallbackCategoryId = 0) {
@@ -20322,12 +19673,15 @@ function updateCartBadge() {
     return product;
   }
 
-  async function loadProductsByCategory() {
+  async function loadProductsByCategory(opts = {}) {
     const categories = getVisibleCategories();
-    const categoryIds = collectCatalogCategoryIds(categories);
+    const categoryIds = collectCatalogCategoryIds(categories).filter(id => (!opts.categoryIds || opts.categoryIds.includes(id)) && (!isKsoCatalogCache || opts.force || opts.categoryIds
+      || !state.productsByCategory.has(id) || !catalogCompleteCategories.has(id)));
+    if (!categoryIds.length) return;
 
     let productsByCategory = {};
     let combosByCategory = {};
+    const refreshedCategoryIds=new Set();
 
     try {
       for (let index = 0; index < categoryIds.length; index += 50) {
@@ -20338,6 +19692,7 @@ function updateCartBadge() {
         });
         productsByCategory = { ...productsByCategory, ...(json.data || {}) };
         combosByCategory = { ...combosByCategory, ...(json.combos || {}) };
+        chunk.forEach(id=>refreshedCategoryIds.add(Number(id)));
       }
     } catch (e) {
       console.warn("loadProductsByCategory: batch failed, falling back", e);
@@ -20347,8 +19702,10 @@ function updateCartBadge() {
           try {
             const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(categoryId)}`);
             combosByCategory[categoryId] = Array.isArray(json.combos) ? json.combos : [];
+            refreshedCategoryIds.add(Number(categoryId));
             return [Number(categoryId), Array.isArray(json.data) ? json.data : []];
           } catch (e2) {
+            if(isKsoCatalogCache){console.error('KSO category refresh failed; retaining saved data:',categoryId,e2);combosByCategory[categoryId]=state.combosByCategory.get(Number(categoryId))||[];return [Number(categoryId),state.productsByCategory.get(Number(categoryId))||[]];}
             combosByCategory[categoryId] = [];
             return [Number(categoryId), []];
           }
@@ -20359,6 +19716,7 @@ function updateCartBadge() {
 
     const entries = categoryIds.map(id => {
       const list = Array.isArray(productsByCategory[id]) ? productsByCategory[id] : [];
+      if(isKsoCatalogCache&&!refreshedCategoryIds.has(Number(id)))return [id,list];
       for (const p of list) {
         ensureCachedProductCategoryIds(p, id);
         if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
@@ -20367,11 +19725,15 @@ function updateCartBadge() {
         mergeProductIntoCache(p, "products_by_category");
       }
       state.combosByCategory.set(id, Array.isArray(combosByCategory[id]) ? combosByCategory[id] : []);
+      if(isKsoCatalogCache){catalogDirtyCategories.add(id);catalogCompleteCategories.add(id);__categoryLoadLimit.set(id,200);}
       return [id, list];
     });
 
-    state.productsByCategory = new Map(entries);
+    state.productsByCategory = isKsoCatalogCache ? new Map([...state.productsByCategory, ...entries]) : new Map(entries);
     saveCatalogSnapshotFromState();
+    if (isKsoCatalogCache && categoryIds.some(id => !refreshedCategoryIds.has(Number(id)))) {
+      throw new Error('KSO_CATALOG_CATEGORIES_INCOMPLETE');
+    }
     if (pruneUnavailableCartItems()) {
       renderCart();
       updateCartBadge();
@@ -20418,11 +19780,13 @@ function updateCartBadge() {
       }
       if (!(state.productsByCategory instanceof Map)) state.productsByCategory = new Map();
       state.productsByCategory.set(cid, list);
+      if(isKsoCatalogCache){catalogDirtyCategories.add(cid);if(lite)catalogCompleteCategories.delete(cid);else catalogCompleteCategories.add(cid);}
       saveCatalogSnapshotFromState();
       try { if (lite) __categoryLoadLimit.set(cid, limit); } catch {}
       return list;
     } catch (e) {
       console.warn("loadProductsForCategory: failed for category", cid, e);
+      if (isKsoCatalogCache) { __categoryLoadLimit.delete(cid); throw e; }
 
       // ?????????? ????????????, ??? ??????? ?? ??????????
       try {
@@ -20562,6 +19926,7 @@ function updateCartBadge() {
   }
 
   function bindShopPullToRefresh() {
+    if (isKsoCatalogCache) return;
     if (shopPullRefreshState) return;
     shopPullRefreshState = {
       startX: 0,
@@ -20677,6 +20042,7 @@ function withShopSplashTimeout(promise, timeoutMs) {
 }
 
 function scheduleAllProductIngredientBatch() {
+  if (isKsoCatalogCache) return; // Full missing passports are loaded once by the KSO cache warmup.
   const allProductIds = [];
   if (state.productsByCategory instanceof Map) {
     state.productsByCategory.forEach(function(products) {
@@ -20704,7 +20070,7 @@ async function initCore() {
       document.body.classList.remove("shop-main");
     }
 
-    const hasSnapshotPaint = restoreCatalogSnapshotForFastPaint();
+    const hasSnapshotPaint = await restoreCatalogSnapshotForFastPaint();
     if (hasSnapshotPaint) {
       try {
         if (typeof updateStoreStatus === "function") updateStoreStatus();
@@ -20768,18 +20134,19 @@ async function initCore() {
 
     if (productsReadyForFirstPaint) {
       if (hasSnapshotPaint && elProductsGrid?.querySelector(".sp-card[data-product-id]")) {
+        if (isKsoCatalogCache) renderProducts({ appendOnly: true });
         syncAllProductCardsFromCart();
       } else {
         renderProducts();
       }
-      queueVisibleProductStockRefresh("first_paint", 0);
+      if (!isKsoCatalogCache) queueVisibleProductStockRefresh("first_paint", 0);
       prioritizeAboveFoldCardImages();
       scheduleAllProductIngredientBatch();
     } else {
       productsLoadPromise.then((ok) => {
         if (!ok) return;
         renderProducts();
-        queueVisibleProductStockRefresh("first_products_loaded", 0);
+        if (!isKsoCatalogCache) queueVisibleProductStockRefresh("first_products_loaded", 0);
         prioritizeAboveFoldCardImages();
         scheduleAllProductIngredientBatch();
       }).catch(() => {});
@@ -20828,6 +20195,13 @@ async function initCore() {
     bindShopPullToRefresh();
     syncStorefrontChatWidgetStateOnBoot().catch(function () {});
     startStockSync();
+    if (isKsoCatalogCache) {
+      // Do not race startup fetches with change replay, even if the splash timed out.
+      void productsLoadPromise.then(() => {
+        catalogStartupReady = true;
+        requestKsoCatalogSync();
+      });
+    }
 
   } catch (e) {
     console.error(e);

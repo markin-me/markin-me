@@ -1806,6 +1806,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
             orderPaymentsStamp,
             orderDeliveryStamp,
             orderTimeOptionsStamp,
+            checkoutEnabled,
           ] = await Promise.all([
             readTableStamp("prod_categories", "tenant_id=?", [tenantId]),
             readTableStamp("prod_checkout_constructor_blocks", "tenant_id=?", [tenantId]),
@@ -1835,6 +1836,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
             readTableStamp("order_payments", "tenant_id=?", [tenantId]),
             readTableStamp("order_delivery_types", "tenant_id=?", [tenantId]),
             readTableStamp("order_time_options", "tenant_id=?", [tenantId]),
+            readCheckoutScreenEnabled(tenantId),
           ]);
 
           const domains = {
@@ -1842,7 +1844,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
               token: makeStampToken([categoriesStamp]),
             },
             checkout: {
-              token: makeStampToken([checkoutBlocksStamp, checkoutBlockCategoriesStamp]),
+              token: makeStampToken([checkoutBlocksStamp, checkoutBlockCategoriesStamp, checkoutEnabled]),
             },
             products: {
               token: makeStampToken([
@@ -1918,6 +1920,30 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
   // GET /api/checkout-constructor/draft
   // PUT /api/checkout-constructor/draft
   // ------------------------------
+  let checkoutScreenEnabledColumnPromise = null;
+  function ensureCheckoutScreenEnabledColumn() {
+    if (!checkoutScreenEnabledColumnPromise) {
+      checkoutScreenEnabledColumnPromise = (async () => {
+        const [columns] = await db.query("SHOW COLUMNS FROM ten_tenants LIKE 'new_order_checkout_enabled'");
+        if (!columns.length) {
+          try {
+            await db.query('ALTER TABLE ten_tenants ADD COLUMN new_order_checkout_enabled TINYINT(1) NOT NULL DEFAULT 1');
+          } catch (error) {
+            if (error.code !== 'ER_DUP_FIELDNAME') throw error;
+          }
+        }
+      })().catch(error => { checkoutScreenEnabledColumnPromise = null; throw error; });
+    }
+    return checkoutScreenEnabledColumnPromise;
+  }
+
+  async function readCheckoutScreenEnabled(tenantId) {
+    await ensureCheckoutScreenEnabledColumn();
+    const [rows] = await db.query('SELECT new_order_checkout_enabled FROM ten_tenants WHERE id=?', [tenantId]);
+    if (!rows.length) throw new Error('TENANT_NOT_FOUND');
+    return Number(rows[0].new_order_checkout_enabled) === 1;
+  }
+
   router.get('/checkout-constructor/draft', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -1965,7 +1991,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
               categoryIds: categoriesByBlock.get(id) || [],
             };
           });
-          return { ok: true, data: { blocks } };
+          const enabled = await readCheckoutScreenEnabled(tenantId);
+          return { ok: true, data: { blocks, enabled } };
         }
       );
       res.set("x-admin-cache", cacheState);
@@ -1980,6 +2007,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     const conn = await db.getConnection();
     try {
       const tenantId = helpers.getTenantId(req);
+      if (req.body?.enabled !== undefined && typeof req.body.enabled !== 'boolean') {
+        return res.status(400).json({ ok: false, error: 'INVALID_CHECKOUT_ENABLED' });
+      }
+      await ensureCheckoutScreenEnabledColumn();
       const inputBlocks = Array.isArray(req.body?.blocks) ? req.body.blocks : [];
       const normalizedBlocks = inputBlocks
         .map((block, index) => {
@@ -2000,6 +2031,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         .filter(Boolean);
 
       await conn.beginTransaction();
+
+      if (typeof req.body?.enabled === 'boolean') {
+        await conn.query('UPDATE ten_tenants SET new_order_checkout_enabled=? WHERE id=?', [req.body.enabled ? 1 : 0, tenantId]);
+      }
 
       await conn.query('DELETE FROM prod_checkout_constructor_block_categories WHERE tenant_id=?', [tenantId]);
       await conn.query('DELETE FROM prod_checkout_constructor_blocks WHERE tenant_id=?', [tenantId]);
@@ -2035,6 +2070,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       await conn.commit();
       invalidateAdminCacheByPrefix("checkout-constructor-draft::");
+      invalidateAdminCacheByPrefix("new-order-bootstrap::");
+      invalidateAdminCacheByPrefix("new-order-manifest::");
       res.json({ ok: true });
     } catch (e) {
       try { await conn.rollback(); } catch {}
@@ -5593,10 +5630,10 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const [[existing]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, id]);
       if (!existing) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       const title = helpers.strOrNull(req.body.title);
-      const description = helpers.strOrNull(req.body.description);
+      const description = req.body.description !== undefined ? helpers.strOrNull(req.body.description) : undefined;
       const discountPercent = req.body.discount_percent !== undefined ? (helpers.numOrNull(req.body.discount_percent) ?? 0) : null;
-      const categoryCode = req.body.category_code !== undefined ? (helpers.strOrNull(req.body.category_code) || null) : null;
-      const imageUrl = req.body.image_url !== undefined ? (helpers.strOrNull(req.body.image_url) || null) : null;
+      const categoryCode = req.body.category_code !== undefined ? (helpers.strOrNull(req.body.category_code) || null) : undefined;
+      const imageUrl = req.body.image_url !== undefined ? (helpers.strOrNull(req.body.image_url) || null) : undefined;
       const isActive = req.body.is_active !== undefined ? (req.body.is_active === false || req.body.is_active === '0' || req.body.is_active === 0 ? 0 : 1) : null;
       const sortOrder = req.body.sort_order !== undefined ? (helpers.numOrNull(req.body.sort_order) ?? 0) : null;
       const updates = [];
@@ -6188,6 +6225,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
             timeOptionsRows,
             orderStatusesRows,
             storesRows,
+            checkoutEnabled,
           ] = await Promise.all([
             helpers.ensureDefaultCategories(db, tenantId),
             db.query(
@@ -6239,6 +6277,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
                ORDER BY id ASC`,
               [tenantId]
             ),
+            readCheckoutScreenEnabled(tenantId),
           ]);
 
           const blocksRows = Array.isArray(checkoutBlocksRows?.[0]) ? checkoutBlocksRows[0] : [];
@@ -6276,7 +6315,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
             ok: true,
             data: {
               categories: Array.isArray(categories) ? categories : [],
-              checkout: { blocks: checkoutBlocks },
+              checkout: { blocks: checkoutBlocks, enabled: checkoutEnabled },
               refs: {
                 unit_conversions: Array.isArray(unitConversionsRows?.[0]) ? unitConversionsRows[0] : [],
                 delivery_types: Array.isArray(deliveryTypesRows?.[0]) ? deliveryTypesRows[0] : [],

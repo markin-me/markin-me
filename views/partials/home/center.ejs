@@ -248,8 +248,14 @@
     <div class="panel orders-center-panel hidden" id="apiPanel">
       <div class="panel-body no-scrollbar">
         <div class="orders-list settings-cards" id="apiPanelCards">
-          <div class="settings-api-cards-header hidden" id="settingsApiCardsHeader">
-            <div class="settings-list-title">API для печати на удалённом принтере</div>
+          <div class="product-list-header settings-api-table-header" id="settingsApiCardsHeader" role="row">
+            <span role="columnheader" aria-label="Включено"></span>
+            <span role="columnheader">Название</span>
+            <span role="columnheader">Филиал</span>
+            <span role="columnheader">Принтеры</span>
+            <span role="columnheader">Очередь</span>
+            <span role="columnheader">Ошибки</span>
+            <span role="columnheader" aria-label="Пауза печати"></span>
           </div>
         </div>
       </div>
@@ -278,6 +284,13 @@
               <span class="badge">Открыть</span>
             </div>
           </button>
+          <% for (const [type, title] of [['assembly', 'Лист сборки заказа'], ['assembly_batch', 'Общий лист сборки'], ['delivery', 'Лист доставки']]) { %>
+          <button class="settings-home-card settings-card" id="settingsPrintTemplate-<%= type %>-Card" type="button">
+            <div class="product-avatar"><i class="fas fa-print"></i></div>
+            <div class="order-col"><div class="product-title"><%= title %></div><div class="muted">HTML-шаблон · лента 80 мм</div></div>
+            <div class="order-col"><span class="badge">Открыть</span></div>
+          </button>
+          <% } %>
         </div>
       </div>
     </div>

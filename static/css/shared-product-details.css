@@ -1,4 +1,6 @@
-@import url('/static/css/shop.css?v=20260806-shared-product-details');
+@import url('/static/css/shared-product-components.css?v=components-v2');
+
+:host{display:block;min-width:0;font-family:var(--font-main)}
 
 .shared-product-details-root{
   width:100%;
@@ -11,4 +13,23 @@
 .shared-product-details-root>.shop-pd{
   height:100%;
   min-height:0;
+}
+
+.shared-product-details-root--admin-order .shop-pd-scroll{
+  padding-inline:12px;
+}
+
+.shared-product-catalog{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:12px;
+  min-width:0;
+}
+.shared-product-catalog > .sp-card{min-width:0;zoom:.8}
+@media(max-width:768px){
+  .shared-product-catalog{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .shared-product-catalog > .sp-card{zoom:1}
+  .shared-product-details-root--admin-order .shop-pd-footer{display:flex}
+  .shared-product-details-root--admin-order .shop-pd-back{display:none}
+  .shared-product-details-root--admin-order .shop-pd-scroll{padding-bottom:12px}
 }

@@ -27,6 +27,13 @@
       <div class="new-order-products-grid" id="newOrderProductsGrid"></div>
       <div class="empty-hint hidden" id="newOrderProductsEmpty">Здесь будет список товаров</div>
       <div class="new-order-checkout-editor hidden" id="newOrderCheckoutEditor">
+        <label class="new-order-checkout-enabled-setting hidden" id="newOrderCheckoutEnabledSetting">
+          <span>Экран оформления включён</span>
+          <span class="switch">
+            <input class="switch-input" type="checkbox" id="newOrderCheckoutEnabled" checked />
+            <span class="switch-ui"></span>
+          </span>
+        </label>
         <div class="new-order-checkout-content" id="newOrderCheckoutContent"></div>
         <button class="new-order-checkout-add-btn" type="button" id="newOrderCheckoutAddCategoryBtn" aria-label="Добавить категорию">
           <i class="fas fa-plus"></i>
@@ -35,3 +42,9 @@
     </div>
   </div>
 </div>
+
+<nav class="new-order-mobile-dock" aria-label="Категории и открытые заказы">
+  <button class="btn btn-icon" id="newOrderMobileCategories" type="button" aria-label="Категории"><i class="fas fa-th-large" aria-hidden="true"></i></button>
+  <div id="newOrderMobileTabs" class="no-scrollbar" aria-label="Открытые заказы"><div class="product-tabs" id="newOrderCatalogTabs"></div></div>
+  <button class="btn btn-icon" id="newOrderMobileOpen" type="button" aria-label="Открыть активный заказ" disabled><i class="fas fa-arrow-right" aria-hidden="true"></i></button>
+</nav>

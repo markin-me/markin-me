@@ -259,6 +259,15 @@ var CORE_ASSETS = [
   "/static/js/appModal.js",
   "/static/js/shared-order-panel.js",
   "/static/js/shared-order-payment.js",
+  "/static/js/shared-product-runtime.js",
+  "/static/js/shared-product-pricing.js",
+  "/static/js/shared-product-card.js",
+  "/static/js/shared-product-details.js",
+  "/static/js/new-order.js",
+  "/static/js/shared-product-details-content.js?v=components-v2",
+  "/static/js/shared-product-configurator.js?v=components-v2",
+  "/static/css/shared-product-components.css?v=components-v2",
+  "/static/css/shared-product-details.css?v=components-v2",
 ];
 
 function isSameOrigin(url) {
@@ -288,20 +297,30 @@ function isCacheableImageRequest(requestUrl, request) {
   return /\/(?:uploads|static\/uploads)\//i.test(requestUrl.pathname);
 }
 
+var imageRequestsInFlight = new Map();
+
 async function cacheImageRequest(request) {
   var cache = await caches.open(IMAGE_CACHE_NAME);
   var cachedResponse = await cache.match(request);
   if (cachedResponse) return cachedResponse;
 
-  var networkResponse = await fetch(request);
-  if (
-    networkResponse
-    && networkResponse.status === 200
-    && networkResponse.type === "basic"
-  ) {
-    cache.put(request, networkResponse.clone()).catch(function () {});
+  var key = request.url + '|' + request.credentials + '|' + request.mode;
+  var pending = imageRequestsInFlight.get(key);
+  if (!pending) {
+    pending = (async function () {
+      var networkResponse = await fetch(request);
+      if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+        await cache.put(request, networkResponse.clone()).catch(function () {});
+      }
+      return networkResponse;
+    })();
+    imageRequestsInFlight.set(key, pending);
   }
-  return networkResponse;
+  try {
+    return (await pending).clone();
+  } finally {
+    if (imageRequestsInFlight.get(key) === pending) imageRequestsInFlight.delete(key);
+  }
 }
 
 async function networkFirst(request, cacheName) {

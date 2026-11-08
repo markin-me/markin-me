@@ -1263,130 +1263,12 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPrintApiPanel">
-        <div class="settings-list-header">
-          <div class="settings-list-title">API для печати на удалённом принтере</div>
-          <div class="settings-list-subtitle">Настройки выбранного подключения к серверу печати.</div>
-        </div>
-        <div class="settings-site-form settings-panel-scroll no-scrollbar">
-          <div class="settings-site-field" id="settingsPrintApiStoreField">
-            <label class="field-label">ФИЛИАЛ</label>
-            <select class="control" id="settingsPrintApiStore"></select>
-            <div class="settings-print-api-store-value hidden" id="settingsPrintApiStoreValue"></div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">НАЗВАНИЕ ПОДКЛЮЧЕНИЯ</label>
-            <input class="control" type="text" id="settingsPrintApiName" placeholder="Основное подключение" />
-          </div>
-          <div class="settings-site-field settings-site-inline-switch">
-            <span class="field-label">ПОДКЛЮЧЕНИЕ АКТИВНО</span>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" id="settingsPrintApiActive" />
-              <span class="switch-ui" aria-hidden="true"></span>
-            </label>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">ТОКЕН (X-Api-Key)</label>
-            <input class="control" type="password" id="settingsPrintApiToken" readonly />
-            <div class="settings-print-api-token-actions">
-              <button class="btn btn-link btn-sm" type="button" id="settingsPrintApiRevealToken">Показать</button>
-              <button class="btn btn-link btn-sm" type="button" id="settingsPrintApiCopyToken">Скопировать токен</button>
-              <button class="btn btn-primary btn-sm" type="button" id="settingsPrintApiGenerateBtn">Сгенерировать токен</button>
-            </div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">СОЕДИНЕНИЕ С СЕРВЕРОМ ПЕЧАТИ</label>
-            <input class="hidden" type="text" id="settingsPrintApiPrinterStatus" readonly />
-            <div class="settings-print-api-connection-status" id="settingsPrintApiPrinterStatusValue"></div>
-            <div class="settings-print-api-token-actions">
-              <button class="btn btn-link btn-sm" type="button" id="settingsPrintApiCheckBtn">Проверить подключение</button>
-            </div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">ПРИНТЕР ДЛЯ ЧЕКОВ ПО УМОЛЧАНИЮ</label>
-            <select class="control" id="settingsPrintApiPrinterName"></select>
-            <div class="field-hint">Общая настройка филиала. Можно выбрать принтер из любого подключения.</div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">КОМПЬЮТЕРЫ И ПРИНТЕРЫ</label>
-            <div id="settingsPrintApiHierarchy" class="settings-print-api-hierarchy"></div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;">
-            <div class="settings-site-field" style="margin:0;">
-              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field" style="margin:0 0 4px 0;">
-                <div class="settings-system-telegram-switch-copy">
-                  <span class="field-label" style="margin:0;">Звук нового заказа</span>
-                </div>
-                <label class="switch">
-                  <input class="switch-input" type="checkbox" id="settingsPrintApiNotifyNewOrder" checked />
-                  <span class="switch-ui" aria-hidden="true"></span>
-                </label>
-              </div>
-              <div class="settings-sound-box" style="margin-top:6px;">
-                <span class="settings-sound-label" id="settingsPrintApiOrderSoundLabel">Файл не выбран</span>
-                <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" id="settingsPrintApiOrderSoundPlayBtn" aria-label="Прослушать">
-                  <i class="fas fa-play"></i>
-                </button>
-              </div>
-              <div class="settings-sound-actions" style="margin-top:6px;">
-                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" id="settingsPrintApiOrderSoundUploadBtn">
-                  <i class="fas fa-upload"></i>
-                </button>
-                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" id="settingsPrintApiOrderSoundClearBtn">
-                  <i class="fas fa-trash"></i>
-                </button>
-              </div>
-              <input class="control hidden" type="file" id="settingsPrintApiOrderSoundFile" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" />
-              <input class="hidden" type="text" id="settingsPrintApiOrderSoundUrl" readonly />
-            </div>
-            <div class="settings-site-field" style="margin:0;">
-              <div class="settings-site-field settings-site-inline-switch settings-system-telegram-switch-field" style="margin:0 0 4px 0;">
-                <div class="settings-system-telegram-switch-copy">
-                  <span class="field-label" style="margin:0;">Звук нового сообщения</span>
-                </div>
-                <label class="switch">
-                  <input class="switch-input" type="checkbox" id="settingsPrintApiNotifyNewMessage" checked />
-                  <span class="switch-ui" aria-hidden="true"></span>
-                </label>
-              </div>
-              <div class="settings-sound-box" style="margin-top:6px;">
-                <span class="settings-sound-label" id="settingsPrintApiMessageSoundLabel">Файл не выбран</span>
-                <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" id="settingsPrintApiMessageSoundPlayBtn" aria-label="Прослушать">
-                  <i class="fas fa-play"></i>
-                </button>
-              </div>
-              <div class="settings-sound-actions" style="margin-top:6px;">
-                <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" id="settingsPrintApiMessageSoundUploadBtn">
-                  <i class="fas fa-upload"></i>
-                </button>
-                <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" id="settingsPrintApiMessageSoundClearBtn">
-                  <i class="fas fa-trash"></i>
-                </button>
-              </div>
-              <input class="control hidden" type="file" id="settingsPrintApiMessageSoundFile" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" />
-              <input class="hidden" type="text" id="settingsPrintApiMessageSoundUrl" readonly />
-            </div>
-          </div>
-        </div>
-        <div class="panel-footer">
-          <div class="product-footer-actions">
-            <div class="product-footer-view" id="settingsPrintApiFooterView">
-              <button class="product-footer-btn product-footer-edit" type="button" id="settingsPrintApiEditBtn">Редактировать</button>
-            </div>
-            <div class="product-footer-edit-mode hidden" id="settingsPrintApiFooterEdit">
-              <button class="product-footer-btn product-footer-cancel" type="button" id="settingsPrintApiCancelBtn" title="Отменить" aria-label="Отменить">
-                <i class="fas fa-times"></i>
-              </button>
-              <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintApiSaveSettingsBtn">Сохранить</button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <%- include('../shared-print-api-panel') %>
 
       <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsProductionZonePanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Производственная зона</div>
-          <div class="settings-list-subtitle">Принтер для этикеток товаров в филиале.</div>
+          <div class="settings-list-subtitle">Принтер и документы для печати заказов в филиале.</div>
         </div>
         <div class="settings-site-form settings-panel-scroll no-scrollbar settings-production-zone-form">
           <div class="settings-site-field">
@@ -1395,19 +1277,22 @@
           </div>
           <div class="settings-site-field">
             <label class="field-label">ФИЛИАЛ</label>
-            <select class="control" id="settingsProductionZoneStore"></select>
+            <select class="control production-zone-select" id="settingsProductionZoneStore"></select>
           </div>
           <div class="settings-site-field">
-            <label class="field-label">ПРИНТЕР ЭТИКЕТОК</label>
-            <select class="control" id="settingsProductionZonePrinter"></select>
+            <label class="field-label">ПРИНТЕР</label>
+            <select class="control production-zone-select" id="settingsProductionZonePrinter"></select>
           </div>
-          <div class="settings-site-field">
-            <label class="field-label">ШАБЛОН ПЕЧАТИ</label>
-            <select class="control" id="settingsProductionZoneTemplate"></select>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">КОЛИЧЕСТВО КОПИЙ</label>
-            <input class="control" type="number" id="settingsProductionZoneCopies" min="1" step="1" inputmode="numeric" />
+          <div class="settings-site-field production-zone-print-settings">
+            <label class="products-bulk-toggle-all"><input class="products-bulk-toggle-all-input" type="checkbox" id="settingsProductionZoneAutoPrint" /><span class="products-bulk-toggle-all-box" aria-hidden="true"></span><span>Автопечать заказов</span></label>
+            <label class="field-label" for="settingsProductionZoneDateScope">КАКИЕ ЗАКАЗЫ ПЕЧАТАТЬ АВТОМАТИЧЕСКИ</label>
+            <select class="control production-zone-select" id="settingsProductionZoneDateScope"><option value="today">Только на текущий день</option><option value="all">Все заказы</option></select>
+            <label class="products-bulk-toggle-all"><input class="products-bulk-toggle-all-input" type="checkbox" id="settingsProductionZoneScheduled" /><span class="products-bulk-toggle-all-box" aria-hidden="true"></span><span>Печать накопленных заказов по времени</span></label>
+            <label class="production-zone-schedule-time">Время торговой точки <input class="control" type="time" id="settingsProductionZoneScheduledTime" value="08:00" /></label>
+            <div class="muted">После закрытия торговой точки заказы накапливаются до указанного времени следующего рабочего дня. После запуска новые заказы печатаются по колонке «Сразу».</div>
+            <div class="production-zone-document-head"><span>Шаблон</span><span>Копии</span><span>Сразу</span><span>По времени</span></div>
+            <div id="settingsProductionZoneDocuments"></div>
+            <div class="muted">«Сразу» — при поступлении заказа. «По времени» — один запуск для накопленных заказов. Общий лист сборки доступен вручную и по времени. Этикетки — на каждую единицу товара; лист доставки — только для доставки.</div>
           </div>
         </div>
         <div class="panel-footer">
@@ -1425,16 +1310,16 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPrintTemplateReceiptPanel">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer settings-print-template-panel hidden" id="settingsPrintTemplateReceiptPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Шаблон для печати</div>
           <div class="settings-list-subtitle">Чек заказа</div>
         </div>
-        <div class="settings-site-form settings-panel-scroll no-scrollbar">
+        <div class="settings-site-form settings-panel-scroll">
           <div class="settings-site-field">
             <label class="field-label">ПРИМЕР ЧЕКА</label>
-            <div style="display:flex;justify-content:center;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:12px;">
-              <div style="width:260px;background:#fff;color:#111;border:1px solid #d1d5db;border-radius:4px;padding:12px;font-family:'Courier New',monospace;font-size:12px;font-weight:700;line-height:1.35;box-shadow:0 8px 18px rgba(15,23,42,.08);">
+            <div class="settings-print-template-preview">
+              <div class="settings-print-template-paper" style="background:#fff;color:#111;border:1px solid #d1d5db;border-radius:4px;padding:12px;font-family:'Courier New',monospace;font-size:12px;font-weight:700;line-height:1.35;box-shadow:0 8px 18px rgba(15,23,42,.08);">
                 <div style="text-align:center;font-weight:700;font-size:16px;">ЗАКАЗ #{{ order.id }}</div>
                 <div style="text-align:center;margin:4px 0 8px;border-bottom:1px dashed #111;padding-bottom:8px;">{{ order.created_at }}</div>
                 <div style="border-top:1px dashed #111;margin:8px 0;"></div>
@@ -1487,9 +1372,9 @@
               </div>
             </div>
           </div>
-          <div class="settings-site-field">
-            <label class="field-label">HTML</label>
-            <textarea class="control" id="settingsPrintTemplateReceiptHtml" readonly spellcheck="false" style="min-height:520px;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.45;resize:none;white-space:pre;"><!DOCTYPE html>
+          <details class="settings-print-template-html">
+            <summary>HTML</summary>
+            <textarea class="control settings-print-template-code" id="settingsPrintTemplateReceiptHtml" readonly spellcheck="false"><!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
@@ -1576,7 +1461,7 @@
   <div class="receipt-footer">Спасибо за заказ!</div>
 </body>
 </html></textarea>
-          </div>
+          </details>
         </div>
         <div class="panel-footer">
           <div class="product-footer-actions">
@@ -1593,19 +1478,19 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsPrintTemplateLabelPanel">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer settings-print-template-panel hidden" id="settingsPrintTemplateLabelPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Шаблон для печати</div>
           <div class="settings-list-subtitle">Этикетка товара 58 x 60 мм</div>
         </div>
-        <div class="settings-site-form settings-panel-scroll no-scrollbar">
+        <div class="settings-site-form settings-panel-scroll">
           <div class="settings-site-field">
             <label class="field-label">ПРИМЕР ЭТИКЕТКИ</label>
-            <div style="display:flex;justify-content:center;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:12px;overflow:auto;">
-              <div style="width:58mm;height:60mm;background:#fff;color:#111;border:1px solid #d1d5db;border-radius:3px;padding:3mm;font-family:'Courier New',monospace;font-size:8.5pt;font-weight:700;line-height:1.18;box-shadow:0 8px 18px rgba(15,23,42,.08);box-sizing:border-box;overflow:hidden;">
+            <div class="settings-print-template-preview">
+              <div class="settings-print-template-paper" style="background:#fff;color:#111;border:1px solid #d1d5db;border-radius:3px;padding:3mm;font-family:'Courier New',monospace;font-size:8.5pt;font-weight:700;line-height:1.18;box-shadow:0 8px 18px rgba(15,23,42,.08);box-sizing:border-box;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;gap:2mm;font-size:9pt;">
-                  <span style="white-space:nowrap;">№{{ order.id }}</span>
-                  <span style="white-space:nowrap;text-align:right;">{{ order.created_at_short }}</span>
+                  <span style="">№{{ order.id }}</span>
+                  <span style="text-align:right;">{{ order.created_at_short }}</span>
                 </div>
                 <div style="margin-top:1mm;font-size:8pt;font-weight:700;">{{ order.schedule_text }}</div>
                 <div style="margin-top:1.25mm;font-size:9pt;font-weight:700;word-wrap:break-word;">{{ item.name }}</div>
@@ -1621,9 +1506,9 @@
               </div>
             </div>
           </div>
-          <div class="settings-site-field">
-            <label class="field-label">HTML</label>
-            <textarea class="control" id="settingsPrintTemplateLabelHtml" readonly spellcheck="false" style="min-height:520px;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.45;resize:none;white-space:pre;"><!DOCTYPE html>
+          <details class="settings-print-template-html">
+            <summary>HTML</summary>
+            <textarea class="control settings-print-template-code" id="settingsPrintTemplateLabelHtml" readonly spellcheck="false"><!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
@@ -1660,7 +1545,7 @@
   </div>
 </body>
 </html></textarea>
-          </div>
+          </details>
         </div>
         <div class="panel-footer">
           <div class="product-footer-actions">
@@ -1676,6 +1561,38 @@
           </div>
         </div>
       </div>
+
+      <% for (const [type, title] of [['assembly', 'Лист сборки заказа'], ['assembly_batch', 'Общий лист сборки'], ['delivery', 'Лист доставки']]) { %>
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer settings-print-template-panel hidden" id="settingsPrintTemplate-<%= type %>-Panel">
+        <div class="settings-list-header"><div class="settings-list-title"><%= title %></div><div class="settings-list-subtitle">Лента 80 мм</div></div>
+        <div class="settings-site-form settings-panel-scroll">
+          <div class="settings-site-field">
+            <label class="field-label">ПРИМЕР ШАБЛОНА</label>
+            <div id="settingsPrintTemplate-<%= type %>-Error" role="alert" class="hidden"></div>
+            <div class="settings-print-template-preview">
+              <iframe id="settingsPrintTemplate-<%= type %>-Preview" title="Предпросмотр: <%= title %>" sandbox="allow-same-origin allow-modals" referrerpolicy="no-referrer" scrolling="no" style="display:block;width:100%;height:1px;border:0;background:white;"></iframe>
+            </div>
+
+          </div>
+          <details class="settings-print-template-html">
+            <summary>HTML</summary>
+            <textarea class="control settings-print-template-code" id="settingsPrintTemplate-<%= type %>-Html" readonly spellcheck="false"></textarea>
+            <div class="muted"><% if (type === 'delivery') { %>{{ order.id }}, {{ order.schedule_text }}, {{ customer.name }}, {{ customer.phone }}, {{ delivery.address }}, {{ delivery.comment_html }}, {{ payment.summary_html }}<% } else { %>{{ order.id }}, {{ order.schedule_text }}, {{ delivery.type }}, {{ assembly.comment_html }}, {{ assembly.items_html }}<% } %></div>
+          </details>
+          <div class="settings-site-field">
+            <button class="btn" type="button" id="settingsPrintTemplate-<%= type %>-Print">Пробная печать</button>
+            <div class="muted">Системный диалог браузера, без агента и очереди заказов. Выберите ленту 80 мм, масштаб 100%, отключите колонтитулы.</div>
+          </div>
+        </div>
+        <div class="panel-footer"><div class="product-footer-actions">
+          <div class="product-footer-view" id="settingsPrintTemplate-<%= type %>-FooterView"><button class="product-footer-btn product-footer-edit" type="button" id="settingsPrintTemplate-<%= type %>-EditBtn">Редактировать</button></div>
+          <div class="product-footer-edit-mode hidden" id="settingsPrintTemplate-<%= type %>-FooterEdit">
+            <button class="product-footer-btn product-footer-cancel" type="button" id="settingsPrintTemplate-<%= type %>-CancelBtn" aria-label="Отменить"><i class="fas fa-times"></i></button>
+            <button class="product-footer-btn product-footer-save" type="button" id="settingsPrintTemplate-<%= type %>-SaveBtn">Сохранить</button>
+          </div>
+        </div></div>
+      </div>
+      <% } %>
 
       <div class="info-card settings-right-panel hidden" id="settingsImagesPanel">
         <div class="settings-list-header">

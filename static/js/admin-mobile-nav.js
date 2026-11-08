@@ -21,8 +21,32 @@
   const hasDedicatedMobileNavigation = activePage === "chat";
   const activeNav = sidebar.querySelector('.nav-item[data-nav-key="' + activePage + '"]');
   const rootTitle = readText(activeNav && activeNav.querySelector(".nav-text")) || readText(titleNode) || "Админка";
-  const viewStack = [{ level: "left", title: rootTitle }];
-  let currentLevel = "left";
+  const isNewOrderPage = activePage === "new-order";
+  function isEditorNavigation() { return isNewOrderPage || body.classList.contains('new-order-editor-active'); }
+  function usesDedicatedMobileNavigation() { return hasDedicatedMobileNavigation && !isEditorNavigation(); }
+  function getRootLevel() { return isEditorNavigation() || activePage === "orders" || activePage === "courier-screen" ? "center" : "left"; }
+  const ordersStages = ['orders', 'courier-screen'].includes(activePage) ? document.getElementById('ordersStagesList') : null;
+  const ordersStagesOrigin = ordersStages ? document.createComment('orders-stages-origin') : null;
+  function syncOrdersStagesPlacement() {
+    if (!ordersStages) return;
+    const destination = document.querySelector('#ordersCenterPane > .center-stack');
+    if (isMobile() && destination) {
+      if (!ordersStagesOrigin.parentNode) ordersStages.parentNode.insertBefore(ordersStagesOrigin, ordersStages);
+      if (ordersStages.parentNode !== destination) destination.prepend(ordersStages);
+    } else if (ordersStagesOrigin.parentNode) {
+      ordersStagesOrigin.parentNode.insertBefore(ordersStages, ordersStagesOrigin);
+      ordersStagesOrigin.remove();
+    }
+  }
+  const catalogTabs = document.getElementById("newOrderMobileTabs");
+  const catalogOpen = document.getElementById("newOrderMobileOpen");
+  if (['orders', 'courier-screen'].includes(activePage) && catalogTabs) {
+    const dock = catalogTabs.closest('.new-order-mobile-dock');
+    if (dock) centerColumn.appendChild(dock);
+    if (activePage === 'courier-screen') document.getElementById('newOrderMobileCategories')?.classList.add('hidden');
+  }
+  const viewStack = [{ level: getRootLevel(), title: rootTitle }];
+  let currentLevel = getRootLevel();
   let mobileSubview = null;
   let actionOrigin = null;
   let movedActions = null;
@@ -35,9 +59,9 @@
   const brandOrigin = brand ? document.createComment("admin-brand-origin") : null;
   const themeOrigin = themeButton ? document.createComment("theme-toggle-origin") : null;
   const accountOrigin = accountMenu ? document.createComment("user-menu-origin") : null;
-  const hasOrderTabs = activePage === "orders" || activePage === "courier-screen" || activePage === "products" || activePage === "cash" || activePage === "clients" || activePage === "marketing" || activePage === "settings";
+  const hasOrderTabs = isEditorNavigation() || activePage === "orders" || activePage === "courier-screen" || activePage === "products" || activePage === "cash" || activePage === "clients" || activePage === "marketing" || activePage === "settings" || activePage === "chat";
   const orderTabs = hasOrderTabs
-    ? Array.prototype.slice.call(document.querySelectorAll("#orderTabs, #orderTabsCheckout, #productTabs, #cashOrderTabs, #clientTabs, #settingsRightTabs, #settingsDeliveryTabs"))
+    ? Array.prototype.slice.call(document.querySelectorAll("#newOrderTabs, #orderTabs, #orderTabsCheckout, #chatRightTabs, #productTabs, #cashOrderTabs, #clientTabs, #settingsRightTabs, #settingsDeliveryTabs"))
     : [];
   const orderTabOrigins = orderTabs.map(function () {
     return document.createComment("order-tabs-origin");
@@ -75,12 +99,17 @@
 
   function moveContextActions(level) {
     restoreContextActions();
+    body.classList.remove('orders-mobile-selection');
     const showOrdersActionsOnRoot = activePage === "orders" && level === "left";
     const showCourierActionsOnRoot = activePage === "courier-screen" && level === "left";
     const showCashActionsOnRoot = activePage === "cash" && level === "left";
     if (!isMobile() || (level !== "center" && !showOrdersActionsOnRoot && !showCourierActionsOnRoot && !showCashActionsOnRoot) || !mobileActions) return;
+    const selectingOrders = activePage === 'orders' && body.classList.contains('orders-selection-mode');
+    const selectionActions = selectingOrders ? document.getElementById('ordersBulkActions') : null;
+    body.classList.toggle('orders-mobile-selection', Boolean(selectionActions && (level === 'center' || showOrdersActionsOnRoot)));
     const candidates = Array.prototype.slice.call(centerColumn.querySelectorAll(".toolbar-right"));
-    const actions = candidates.find(visible);
+    const actions = isEditorNavigation() ? document.getElementById("newOrderToolbar")
+      : selectionActions || (activePage === 'orders' ? document.querySelector('#ordersToolbar .toolbar-right') : candidates.find(visible));
     if (!actions) return;
     actionOrigin = document.createComment("mobile-toolbar-actions-origin");
     actions.parentNode.insertBefore(actionOrigin, actions);
@@ -123,7 +152,17 @@
   }
 
   function syncOrderTabsHeader() {
+    const categoriesButton = document.getElementById('newOrderMobileCategories');
+    if (categoriesButton) {
+      const addOrder = activePage === 'orders' && !isEditorNavigation();
+      const label = addOrder ? '\u041d\u043e\u0432\u044b\u0439 \u0437\u0430\u043a\u0430\u0437' : '\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438';
+      if (categoriesButton.getAttribute('aria-label') !== label) categoriesButton.setAttribute('aria-label', label);
+      const icon = categoriesButton.querySelector('i');
+      const iconClass = addOrder ? 'fas fa-plus' : 'fas fa-th-large';
+      if (icon && icon.className !== iconClass) icon.className = iconClass;
+    }
     if (!mobileOrderTabs) return;
+    if (catalogOpen) catalogOpen.disabled = !catalogTabs?.querySelector('.product-tab.is-active');
     const keepSubviewOrderTabs = Boolean(mobileSubview?.keepOrderTabs);
     const showTabs = isMobile()
       && currentLevel === "right"
@@ -137,9 +176,19 @@
   function moveOrderTabs() {
     if (!mobileOrderTabs || !isMobile() || !hasOrderTabs) return;
     orderTabs.forEach(function (tabs, index) {
-      if (tabs.parentNode === mobileOrderTabs) return;
-      tabs.parentNode.insertBefore(orderTabOrigins[index], tabs);
-      mobileOrderTabs.appendChild(tabs);
+      const hostOrderTabs = ['orders','courier-screen','chat'].includes(activePage);
+      if (hostOrderTabs) {
+        const headerTabsId = activePage === 'chat' ? 'chatRightTabs' : (isEditorNavigation() ? 'orderTabsCheckout' : 'orderTabs');
+        if (tabs.id !== headerTabsId) {
+          const origin = orderTabOrigins[index];
+          if (origin?.parentNode) { origin.parentNode.insertBefore(tabs, origin); origin.remove(); }
+          return;
+        }
+      } else if (isEditorNavigation() !== (tabs.id === 'newOrderTabs')) return;
+      const destination = mobileOrderTabs;
+      if (!destination || tabs.parentNode === destination) return;
+      if (!orderTabOrigins[index].parentNode) tabs.parentNode.insertBefore(orderTabOrigins[index], tabs);
+      destination.appendChild(tabs);
     });
     if (!orderTabsObserver) {
       orderTabsObserver = new MutationObserver(syncOrderTabsHeader);
@@ -194,14 +243,16 @@
     currentLevel = nextLevel;
     body.classList.remove("admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");
     body.classList.add("admin-mobile-pages", "admin-mobile-view-" + nextLevel);
+    if (isEditorNavigation()) document.dispatchEvent(new CustomEvent('neworder:editor-view'));
     titleNode.textContent = String(title || rootTitle).trim() || rootTitle;
-    const isRoot = nextLevel === "left";
+    const isRoot = nextLevel === getRootLevel();
     menuButton.classList.toggle("hidden", !isRoot);
     backButton.classList.toggle("hidden", isRoot);
     moveContextActions(nextLevel);
     moveOrderTabs();
     syncOrderTabsHeader();
-    if (push) viewStack.push({ level: nextLevel, title: titleNode.textContent });
+    if (isEditorNavigation() && nextLevel === getRootLevel()) viewStack.splice(0, viewStack.length, { level: getRootLevel(), title: titleNode.textContent });
+    else if (push) viewStack.push({ level: nextLevel, title: titleNode.textContent });
 
     window.requestAnimationFrame(function () {
       const column = nextLevel === "right" ? rightColumn : nextLevel === "center" ? centerColumn : leftColumn;
@@ -213,6 +264,7 @@
 
   function goBack() {
     if (mobileSubview) {
+      if (mobileSubview.beforeBack && mobileSubview.beforeBack() === false) return;
       const subview = mobileSubview;
       mobileSubview = null;
       if (viewStack.length > 1 && viewStack[viewStack.length - 1]?.subview) viewStack.pop();
@@ -221,6 +273,7 @@
       showLevel(previousSubviewView.level, previousSubviewView.title, false);
       return;
     }
+    if (isEditorNavigation() && currentLevel === 'center') return;
     if (viewStack.length > 1) viewStack.pop();
     const previous = viewStack[viewStack.length - 1] || { level: "left", title: rootTitle };
     showLevel(previous.level, previous.title, false);
@@ -258,7 +311,7 @@
   if (overlay) overlay.addEventListener("click", closeSidebar);
 
   leftColumn.addEventListener("click", function (event) {
-    if (!isMobile() || hasDedicatedMobileNavigation) return;
+    if (!isMobile() || usesDedicatedMobileNavigation() || isEditorNavigation()) return;
     const item = isLeftNavigationTarget(event.target);
     if (!item) return;
     const title = itemTitle(item) || rootTitle;
@@ -270,7 +323,7 @@
   });
 
   centerColumn.addEventListener("click", function (event) {
-    if (!isMobile() || hasDedicatedMobileNavigation) return;
+    if (!isMobile() || usesDedicatedMobileNavigation() || isEditorNavigation()) return;
     const item = isCenterDetailTarget(event.target);
     if (!item) return;
     const title = itemTitle(item) || readText(centerColumn.querySelector(".toolbar-title")) || rootTitle;
@@ -281,10 +334,21 @@
     }, 40);
   });
 
+  if (catalogTabs) {
+    document.getElementById("newOrderMobileCategories")?.addEventListener("click", function () {
+      if (activePage === 'orders' && !isEditorNavigation()) return;
+      showLevel("left", "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438", true);
+    });
+    catalogOpen?.addEventListener("click", function () {
+      window.__adminMobilePages.openRight(activePage === 'courier-screen' ? "Заказ" : "Новый заказ");
+    });
+  }
+
   function syncViewport() {
+    syncOrdersStagesPlacement();
     if (isMobile()) {
       moveAccountControls();
-      if (hasDedicatedMobileNavigation) {
+      if (usesDedicatedMobileNavigation()) {
         restoreContextActions();
         restoreOrderTabs();
         body.classList.remove("admin-mobile-pages", "admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");
@@ -298,6 +362,7 @@
       return;
     }
     restoreContextActions();
+    body.classList.remove('orders-mobile-selection');
     moveAccountControls();
     restoreOrderTabs();
     closeSidebar();
@@ -306,11 +371,12 @@
     backButton.classList.add("hidden");
   }
 
+  document.addEventListener('ordersSelectionModeChanged', function () { moveContextActions(currentLevel); });
   window.addEventListener("resize", syncViewport);
   window.addEventListener("pageshow", syncViewport);
   window.__adminMobilePages = {
     openCenter: function (title) {
-      if (!isMobile() || hasDedicatedMobileNavigation) return false;
+      if (!isMobile() || usesDedicatedMobileNavigation()) return false;
       if (currentLevel !== "center") {
         showLevel("center", title || rootTitle, true);
       } else {
@@ -319,7 +385,7 @@
       return true;
     },
     openRight: function (title) {
-      if (!isMobile() || hasDedicatedMobileNavigation) return false;
+      if (!isMobile() || usesDedicatedMobileNavigation()) return false;
       if (currentLevel !== "right") {
         showLevel("right", resolveRightTitle(title), true);
       } else {
@@ -329,18 +395,20 @@
       return true;
     },
     openSubview: function (title, onBack, options) {
-      if (!isMobile() || hasDedicatedMobileNavigation || (currentLevel !== "center" && currentLevel !== "right")) return false;
+      if (!isMobile() || usesDedicatedMobileNavigation() || (currentLevel !== "center" && currentLevel !== "right")) return false;
       const sourceLevel = currentLevel;
       mobileSubview = {
         title: String(title || "").trim() || rootTitle,
         onBack: typeof onBack === "function" ? onBack : null,
         keepOrderTabs: options?.keepOrderTabs === true,
+        beforeBack: typeof options?.beforeBack === "function" ? options.beforeBack : null,
       };
       if (!viewStack[viewStack.length - 1]?.subview) {
         viewStack.push({ level: sourceLevel, title: mobileSubview.title, subview: true });
       }
       titleNode.textContent = mobileSubview.title;
       titleNode.classList.remove("hidden");
+      if (headerCopy) headerCopy.classList.remove("hidden");
       if (mobileOrderTabs) mobileOrderTabs.classList.toggle("hidden", !mobileSubview.keepOrderTabs);
       menuButton.classList.add("hidden");
       backButton.classList.remove("hidden");
@@ -354,7 +422,36 @@
       showLevel(previous.level, previous.title, false);
       return true;
     },
+    getEditorView: function () { return { level: currentLevel, title: titleNode.textContent }; },
+    restoreEditorView: function (view) {
+      if (!isMobile() || !isEditorNavigation() || !view || !['left','center','right'].includes(view.level)) return;
+      viewStack.splice(0, viewStack.length, { level: 'center', title: 'Каталог' });
+      if (view.level !== 'center') viewStack.push({ level: view.level, title: view.title });
+      showLevel(view.level, view.title, false);
+    },
     back: goBack,
   };
+  let editorReturnView = null;
+  document.addEventListener('neworder:editor-layout', function (event) {
+    if (isNewOrderPage) return;
+    restoreContextActions();
+    restoreOrderTabs();
+    if (event.detail?.active) {
+      if (editorReturnView) return;
+      editorReturnView = { level: currentLevel, stack: viewStack.slice() };
+      viewStack.splice(0, viewStack.length, { level: 'center', title: 'Каталог' }, { level: 'right', title: 'Заказ' });
+      currentLevel = 'right';
+    } else if (editorReturnView) {
+      currentLevel = 'right';
+      viewStack.splice(0, viewStack.length, { level: 'center', title: rootTitle }, { level: 'right', title: rootTitle });
+      editorReturnView = null;
+    }
+    syncViewport();
+  });
+  window.addEventListener('popstate', function () {
+    if (!window.NewOrderBridge?.hasEditingOrders() || !isEditorNavigation()) return;
+    goBack();
+    history.pushState({ ...history.state, orderEditor: true }, '', location.href);
+  });
   syncViewport();
 })();

@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS print_agents (
   token_id BIGINT UNSIGNED NOT NULL,
   installation_id VARCHAR(128) NULL,
   is_legacy TINYINT(1) NOT NULL DEFAULT 0,
+  legacy_token_id BIGINT UNSIGNED GENERATED ALWAYS AS (CASE WHEN is_legacy=1 THEN token_id ELSE NULL END) STORED,
   device_name VARCHAR(255) NULL,
   agent_version VARCHAR(64) NULL,
   printer_name VARCHAR(255) NULL,
@@ -16,7 +17,7 @@ CREATE TABLE IF NOT EXISTS print_agents (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_print_agents_installation (tenant_id, store_id, installation_id),
-  UNIQUE KEY uq_print_agents_legacy_connection (tenant_id, store_id, token_id, is_legacy),
+  UNIQUE KEY uq_print_agents_legacy_connection (tenant_id, store_id, legacy_token_id),
   KEY idx_print_agents_connection (tenant_id, store_id, token_id),
   KEY idx_print_agents_heartbeat (tenant_id, store_id, last_heartbeat_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -66,3 +67,15 @@ LEFT JOIN print_printers p
 SET j.target_agent_id=p.agent_id
 WHERE j.target_printer_id IS NOT NULL
   AND j.target_agent_id IS NULL;
+
+-- Repair installations created with the original legacy uniqueness constraint.
+-- This block can be run separately on an existing database.
+SET @repair_print_agents = IF(
+  EXISTS(SELECT 1 FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='print_agents'
+      AND INDEX_NAME='uq_print_agents_legacy_connection' AND COLUMN_NAME='is_legacy'),
+  'ALTER TABLE print_agents ADD COLUMN legacy_token_id BIGINT UNSIGNED GENERATED ALWAYS AS (CASE WHEN is_legacy=1 THEN token_id ELSE NULL END) STORED, DROP INDEX uq_print_agents_legacy_connection, ADD UNIQUE KEY uq_print_agents_legacy_connection (tenant_id, store_id, legacy_token_id)',
+  'SELECT 1');
+PREPARE repair_print_agents_stmt FROM @repair_print_agents;
+EXECUTE repair_print_agents_stmt;
+DEALLOCATE PREPARE repair_print_agents_stmt;

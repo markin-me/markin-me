@@ -1,3 +1,7 @@
+const {accumulationWindow,nextRelease,loadStorePrintHours}=require('./helpers/storePrintWindow');
+let printEventsHub=null;
+function setPrintEventsHub(hub){printEventsHub=hub;}
+function notifyPrintChanged(tenantId,storeId){printEventsHub?.publish(tenantId,0,'print.changed',{kind:'queue',store_id:storeId});}
 ﻿const http = require("http");
 const https = require("https");
 const { URL } = require("url");
@@ -382,7 +386,7 @@ async function buildProductionLabelJobs(db, { tenantId, storeId, order }) {
       printer_id: rule.printer_id,
       agent_id: rule.agent_id,
       token_id: rule.token_id,
-      copies: qty,
+      copies: qty * rule.copies,
       kind: "label",
     });
   }
@@ -485,6 +489,7 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, targetPrinterId
       createdAtValue,
     ]
   );
+  notifyPrintChanged(tenantId,storeId);
   return true;
 }
 
@@ -493,7 +498,7 @@ async function getDefaultPrintRoute(db, tenantId, storeId) {
     `SELECT p.id, p.agent_id, p.token_id FROM print_printers p
      INNER JOIN ten_stores s ON s.tenant_id=p.tenant_id AND s.id=p.store_id
       AND s.default_receipt_printer_id=p.id
-     WHERE p.tenant_id=? AND p.store_id=?
+     WHERE p.tenant_id=? AND p.store_id=? AND p.removed_at IS NULL
      ORDER BY p.id ASC LIMIT 1`,
     [tenantId, storeId]
   );
@@ -555,6 +560,7 @@ async function enqueueLabelPrintJobs(db, { tenantId, storeId, tokenId, order, re
       ]
     );
   }
+  if(jobs.length)notifyPrintChanged(tenantId,storeId);
   return jobs.length;
 }
 
@@ -637,6 +643,39 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
   const isNewStatus = (newStatusId && statusId === Number(newStatusId)) || isNewByCode || isNewByTitle;
   if (!isNewStatus) return fail("ORDER_STATUS_NOT_NEW", { statusId, statusCode, statusTitle, newStatusId: Number(newStatusId || 0) || null });
 
+  const [configured] = await db.query('SELECT id FROM prod_store_print_rules WHERE tenant_id=? AND store_id=? AND config_version=2 LIMIT 1',[resolvedTenantId,resolvedStoreId]);
+  if (configured.length) {
+    const choices=await getPrintChoices(db,resolvedTenantId,resolvedStoreId);
+    const autoTimezone=await getStoreTimezone(db,resolvedTenantId,resolvedStoreId);
+    const today=getStoreNowDateTime(autoTimezone).slice(0,10);
+    const [dateRows]=await db.query("SELECT DATE_FORMAT(scheduled_at,'%Y-%m-%d') AS scheduled_day,DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s') AS created_at FROM order_orders WHERE tenant_id=? AND store_id=? AND id=?",[resolvedTenantId,resolvedStoreId,Number(order.id || order.order_id || order.orderId)]);
+    if(!dateRows.length)return fail('ORDER_NOT_FOUND');
+    const createdLocal=require('./helpers').utcToStoreDateTime(dateRows[0].created_at,autoTimezone);
+    const orderDay=dateRows[0].scheduled_day || createdLocal.slice(0,10);
+    const scheduledRules=choices.rules.filter(rule=>Number(rule.zone_auto_print)===1&&Number(rule.scheduled_auto_print)===1);
+    const hours=scheduledRules.length?await loadStorePrintHours(db,resolvedTenantId,resolvedStoreId):null;
+    const windows=new Map(scheduledRules.map(rule=>[Number(rule.id),accumulationWindow(hours,rule.scheduled_auto_print_time,createdLocal)]));
+    const timedRules=scheduledRules.filter(rule=>Number(rule.scheduled_print)===1&&(windows.get(Number(rule.id))||(rule.auto_print_date_scope==='today'&&orderDay>createdLocal.slice(0,10))));
+    if(timedRules.length){
+      const deferred=timedRules.map(rule=>{
+        let due=windows.get(Number(rule.id))?.dueDate||orderDay;
+        if(rule.auto_print_date_scope==='today'&&orderDay>due)due=orderDay;
+        due=nextRelease(hours,rule.scheduled_auto_print_time,due+' 00:00:00').slice(0,10);
+        return [resolvedTenantId,resolvedStoreId,Number(order.id||order.order_id||order.orderId),rule.id,due];
+      });
+      await db.query(`INSERT INTO print_auto_deferred (tenant_id,store_id,order_id,rule_id,due_date) VALUES ${deferred.map(()=>'(?,?,?,?,?)').join(',')} ON DUPLICATE KEY UPDATE due_date=IF(state='pending',VALUES(due_date),due_date)`,deferred.flat());
+      notifyPrintChanged(resolvedTenantId,resolvedStoreId);
+    }
+    const rules=choices.rules.filter(rule=>Number(rule.zone_auto_print)===1&&Number(rule.auto_print)===1&&rule.template_type!=='assembly_batch'&&!windows.get(Number(rule.id))&&(rule.auto_print_date_scope==='all'||(rule.auto_print_date_scope==='today'&&orderDay===today)));
+    if (!rules.length) return true;
+    const documents=[];
+    for (const rule of rules) {
+      const prepared=await preparePrintDocuments(db,{tenantId:resolvedTenantId,storeId:resolvedStoreId,orderIds:[Number(order.id || order.order_id || order.orderId)],automatic:true,selections:[{template_id:Number(rule.template_id),copies:Number(rule.copies),rule_id:Number(rule.id)}]});
+      documents.push(...prepared);
+    }
+    await enqueueDocuments(db,{tenantId:resolvedTenantId,storeId:resolvedStoreId,documents,automatic:true,requestId:'new-order'});
+    return true;
+  }
   const tokenRow = await getPrintTokenRow(db, resolvedTenantId, resolvedStoreId);
   if (!tokenRow?.token) return fail("PRINT_TOKEN_NOT_FOUND");
 
@@ -699,5 +738,180 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId, silentSkipRea
   return true;
 }
 
-module.exports = { sendOrderToPrintBot, enqueueSingleLabelPrintJob };
+// Shared real-document preparation for automatic, manual and browser printing.
+async function getPrintChoices(db, tenantId, storeId) {
+  const [templates] = await db.query("SELECT id,title,document_type FROM print_templates WHERE tenant_id=? AND is_active=1 AND document_type IN ('receipt','assembly','assembly_batch','delivery','label') ORDER BY id",[tenantId]);
+  const [rules] = await db.query(`SELECT r.*,t.document_type AS template_type,z.name AS zone_name,p.system_name AS printer_name,p.agent_id,p.token_id,tok.is_active AS connection_active
+    FROM prod_store_print_rules r JOIN print_templates t ON t.tenant_id=r.tenant_id AND t.id=r.template_id AND t.is_active=1
+    JOIN prod_production_zones z ON z.tenant_id=r.tenant_id AND z.id=r.production_zone_id AND z.is_active=1
+    LEFT JOIN print_printers p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.printer_id AND p.removed_at IS NULL
+    LEFT JOIN print_api_tokens tok ON tok.tenant_id=p.tenant_id AND tok.store_id=p.store_id AND tok.id=p.token_id
+    WHERE r.tenant_id=? AND r.store_id=? AND r.is_enabled=1 ORDER BY r.sort_order,r.id`,[tenantId,storeId]);
+  const [products] = await db.query('SELECT id,production_zone_id FROM prod_products WHERE tenant_id=? AND production_zone_id IS NOT NULL',[tenantId]);
+  return {templates,rules,product_zones:products};
+}
+function mergeAssemblyItems(items) {
+  const rows = new Map();
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])) : value;
+  for (const item of items) {
+    const configuration = {...item};
+    for (const key of ['quantity','qty','price','total','total_price','line_total','old_line_total','id','order_id','discount']) delete configuration[key];
+    const key = JSON.stringify(canonical(configuration));
+    const quantity = Number(item.quantity || item.qty || 1);
+    if (rows.has(key)) { rows.get(key).quantity += quantity; rows.get(key).qty = rows.get(key).quantity; }
+    else rows.set(key,{...item,quantity,qty:quantity});
+  }
+  return [...rows.values()];
+}
+async function preparePrintDocuments(db, {tenantId,storeId,orderIds,selections,automatic=false,destination="browser",bulk=false}) {
+  if (!Array.isArray(orderIds) || !orderIds.length || orderIds.length > 100 || orderIds.some(id=>!Number.isSafeInteger(id)||id<=0)) throw new Error('BAD_ORDER_IDS');
+  if (!Array.isArray(selections) || !selections.length || selections.length > 5 || new Set(selections.map(selection=>Number(selection.template_id))).size !== selections.length) throw new Error('BAD_PRINT_SELECTION');
+  const choices = await getPrintChoices(db,tenantId,storeId);
+  if(selections.some(selection=>!Number.isSafeInteger(selection.template_id) || !choices.templates.some(template=>Number(template.id)===selection.template_id)))throw new Error('BAD_PRINT_SELECTION');
+  const builder = require('./print').createOrderPrintTemplateBuilder({db,helpers:require('./helpers')});
+  const printData=await builder.buildOrderTemplateHtml(tenantId,storeId,orderIds,{dataOnly:true,templateIds:selections.map(selection=>Number(selection.template_id)),productZones:choices.product_zones});
+  if(bulk){
+    orderIds=orderIds.filter(id=>!['delivered','canceled','cancelled'].includes(String(printData.orders.get(Number(id))?.statusCode || '').trim().toLowerCase()));
+    if(!orderIds.length)throw new Error('NO_MATCHING_DOCUMENTS');
+  }
+  const documents=[];
+  for (const selection of selections) {
+    const template = choices.templates.find(t=>Number(t.id)===Number(selection.template_id));
+    if (!template || (!automatic && destination === 'agent' ? false : !Number.isSafeInteger(selection.copies) || selection.copies < 1 || selection.copies > 100)) throw new Error('BAD_PRINT_SELECTION');
+    const routes = automatic
+      ? choices.rules.filter(rule=>Number(rule.id)===Number(selection.rule_id) && Number(rule.template_id)===Number(template.id))
+      : destination === 'agent'
+        ? choices.rules.filter(rule=>Number(rule.template_id)===Number(template.id) && rule.printer_name && Number(rule.agent_id)>0 && Number(rule.token_id)>0 && Number(rule.connection_active)===1)
+        : [null];
+    if (!routes.length) throw new Error('PRINT_RULE_NOT_FOUND');
+    for (const route of routes) {
+      const copies = route ? Number(route.copies) : selection.copies;
+      if (!Number.isSafeInteger(copies) || copies<1 || copies>100) throw new Error('BAD_PRINT_SELECTION');
+      const scope = route?.item_scope === 'zone' && ['assembly','label'].includes(template.document_type) ? Number(route.production_zone_id) : 0;
+      let batchItems,assemblyGroups;
+      if (template.document_type==='assembly_batch') {
+        const groups=new Map();
+        for (const id of orderIds) {
+          const data=await builder.buildOrderTemplateHtml(tenantId,storeId,id,{dataOnly:true,printData});
+          if (!data) throw new Error('ORDER_NOT_FOUND');
+          const order=data.order;
+          const code=String(order.time_option_code || '').trim().toLowerCase();
+          const scheduled=String(order.scheduled_at || '').match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+          const asap=['asap','urgent'].includes(code) || (!order.scheduled_at && !['at_time','on_date'].includes(code));
+          const date=scheduled?.[1] || String(order.created_at || '').match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+          if(!date)throw new Error('BAD_ORDER_SCHEDULE');
+          const key=`${date}:${asap?'0:asap':scheduled?'1:'+scheduled[2]:'2:unscheduled'}`;
+          if(!groups.has(key))groups.set(key,{key,date,title:asap?'Как можно быстрее':scheduled?`Ко времени ${scheduled[2]}`:'Время не указано',orders:[],items:[]});
+          const group=groups.get(key);
+          group.orders.push({id:Number(order.id),comment:String(order.comment || '').trim()});
+          group.items.push(...(order.remaining_order?.items || order.items));
+        }
+        assemblyGroups=[...groups.values()].sort((a,b)=>a.key.localeCompare(b.key)).map(group=>({...group,items:mergeAssemblyItems(group.items)}));
+        batchItems=assemblyGroups.flatMap(group=>group.items);
+      }
+      const ids = batchItems ? [orderIds[0]] : orderIds;
+      for (const id of ids) {
+        let result;
+        try{
+          result=await builder.buildOrderTemplateHtml(tenantId,storeId,id,{templateId:template.id,zoneId:scope,items:batchItems,assemblyGroups,printData,individualPrint:!automatic && !bulk && orderIds.length===1});
+        }catch(error){error.printContext={orderId:id,templateId:template.id,documentType:template.document_type};throw error;}
+        if (result===null) {
+          const exists=printData.orders.has(Number(id));
+          if (!exists) throw new Error('ORDER_NOT_FOUND');
+          // Delivery sheets do not apply to pickup/dine-in orders; keep other selected documents.
 
+          continue;
+        }
+        const parts=Array.isArray(result)?result:[{html:result,copies:1}];
+        parts.forEach((part,index)=>documents.push({html:part.html,copies:copies*part.copies,orderId:id,templateId:template.id,type:template.document_type,title:template.title,route,part:index}));
+      }
+    }
+  }
+  if (!automatic && !documents.length) throw new Error('NO_MATCHING_DOCUMENTS');
+  return documents;
+}
+async function enqueueDocuments(db, {tenantId,storeId,documents,requestId,automatic=false,deferredIds=[]}) {
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(String(requestId || ''))) throw new Error('BAD_PRINT_REQUEST');
+  if (documents.some(doc=>!doc.route?.printer_name || !Number(doc.route?.agent_id) || !Number(doc.route?.token_id) || Number(doc.route?.connection_active)!==1)) throw new Error('PRINT_ROUTE_NOT_CONFIGURED');
+  const connection=await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    let pending=[],pendingBytes=0;
+    const writePending=async()=>{
+      if(!pending.length)return;
+      await connection.query(`INSERT INTO print_jobs (tenant_id,store_id,token_id,target_printer_id,target_agent_id,order_id,job_key,job_name,pdf_base64,status)
+        VALUES ${pending.map(()=>"(?,?,?,?,?,?,?,?,?,'pending')").join(',')} ON DUPLICATE KEY UPDATE id=id`,pending.flat());
+      pending=[];pendingBytes=0;
+    };
+    for (let index=0;index<documents.length;index++) {
+      const doc=documents[index];
+      const jobKey=`${automatic?'auto':'manual'}:${requestId}:${doc.orderId}:${doc.route.id}:${doc.templateId}:${doc.part}`;
+      const payload=encodeMetaJobPayload({kind:doc.type,html:doc.html,copies:doc.copies,printer_name:doc.route.printer_name,job_key:jobKey,notify_order:automatic && index===0,job_name:doc.title});
+      const bytes=Buffer.byteLength(payload,'utf8');
+      if(pending.length && (pending.length>=50 || pendingBytes+bytes>512*1024))await writePending();
+      pending.push([tenantId,storeId,doc.route.token_id,doc.route.printer_id,doc.route.agent_id,doc.orderId,jobKey,doc.title,payload]);pendingBytes+=bytes;
+    }
+    await writePending();
+    if(deferredIds.length)await connection.query(`UPDATE print_auto_deferred SET state='completed' WHERE tenant_id=? AND store_id=? AND state='pending' AND id IN (${deferredIds.map(()=>'?').join(',')})`,[tenantId,storeId,...deferredIds]);
+    await connection.commit();
+    if(documents.length)notifyPrintChanged(tenantId,storeId);
+    return documents.length;
+  } catch(error) {await connection.rollback();throw error;} finally {connection.release();}
+}
+let scheduledAutoPrintTimer=null,scheduledAutoPrintRunning=false;
+const scheduledAutoCursors=new Map();
+function startScheduledAutoPrint(db){
+  if(scheduledAutoPrintTimer)return;
+  const tick=async()=>{
+    if(scheduledAutoPrintRunning)return;
+    scheduledAutoPrintRunning=true;
+    try{
+      const [rules]=await db.query(`SELECT DISTINCT r.* FROM prod_store_print_rules r JOIN print_auto_deferred d ON d.tenant_id=r.tenant_id AND d.store_id=r.store_id AND d.rule_id=r.id AND d.state='pending' JOIN prod_production_zones z ON z.tenant_id=r.tenant_id AND z.id=r.production_zone_id AND z.is_active=1 WHERE r.is_enabled=1 AND r.zone_auto_print=1 AND r.scheduled_auto_print=1 AND r.scheduled_print=1 AND d.due_date<=DATE_ADD(UTC_DATE(),INTERVAL 1 DAY)`);
+      const timezones=new Map(),hoursByStore=new Map();
+      for(const rule of rules){
+        const key=`${rule.tenant_id}:${rule.store_id}`;
+        if(!timezones.has(key))timezones.set(key,await getStoreTimezone(db,rule.tenant_id,rule.store_id));
+        const timezone=timezones.get(key),now=getStoreNowDateTime(timezone),today=now.slice(0,10);
+        try{if(!hoursByStore.has(key))hoursByStore.set(key,await loadStorePrintHours(db,rule.tenant_id,rule.store_id));}
+        catch(error){console.error('Scheduled print store hours:',{tenantId:rule.tenant_id,storeId:rule.store_id,error:error.message});continue;}
+        const hours=hoursByStore.get(key);
+        if(now.slice(11,16)<String(rule.scheduled_auto_print_time).slice(0,5))continue;
+        const lockName=`print-auto:${key}:${rule.id}`;
+        const connection=await db.getConnection();let locked=false;
+        try{
+          const [locks]=await connection.query('SELECT GET_LOCK(?,0) AS acquired',[lockName]);
+          if(Number(locks[0]?.acquired)!==1)continue;
+          locked=true;
+          const cursor=scheduledAutoCursors.get(lockName) || 0;
+          const [pending]=await connection.query(`SELECT d.id AS dispatch_id,d.order_id,DATE_FORMAT(d.due_date,'%Y-%m-%d') AS due_date,o.is_active,o.online_payment_required,o.online_payment_status,o.payment_projection,o.is_paid,o.total_price,DATE_FORMAT(o.scheduled_at,'%Y-%m-%d') AS scheduled_day,DATE_FORMAT(o.created_at,'%Y-%m-%d %H:%i:%s') AS created_at,s.code AS status_code FROM print_auto_deferred d LEFT JOIN order_orders o ON o.tenant_id=d.tenant_id AND o.store_id=d.store_id AND o.id=d.order_id LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id WHERE d.tenant_id=? AND d.store_id=? AND d.rule_id=? AND d.state='pending' AND d.due_date<=? AND d.id>? ORDER BY d.id LIMIT 100`,[rule.tenant_id,rule.store_id,rule.id,today,cursor]);
+          if(!pending.length){scheduledAutoCursors.set(lockName,0);continue;}
+          scheduledAutoCursors.set(lockName,Number(pending[pending.length-1].dispatch_id));
+          const ready=[],skipped=[];
+          for(const order of pending){
+            const due=String(order.due_date instanceof Date?order.due_date.toISOString().slice(0,10):order.due_date).slice(0,10);
+            if(now<nextRelease(hours,rule.scheduled_auto_print_time,due+' 00:00:00'))continue;
+            if(!Number(order.is_active) || ['delivered','canceled','cancelled'].includes(String(order.status_code))){skipped.push(order.dispatch_id);continue;}
+            const day=order.scheduled_day || due;
+            if(rule.auto_print_date_scope==='today' && day>today){await connection.query('UPDATE print_auto_deferred SET due_date=? WHERE id=? AND state=\'pending\'',[day,order.dispatch_id]);continue;}
+            if(rule.auto_print_date_scope==='today' && day<today){skipped.push(order.dispatch_id);continue;}
+            if(isOrderEligibleForFulfillment(order))ready.push(order);
+          }
+          if(skipped.length)await connection.query(`UPDATE print_auto_deferred SET state='skipped' WHERE tenant_id=? AND store_id=? AND id IN (${skipped.map(()=>'?').join(',')})`,[rule.tenant_id,rule.store_id,...skipped]);
+          if(skipped.length)notifyPrintChanged(rule.tenant_id,rule.store_id);
+          if(!ready.length)continue;
+          const orderIds=ready.map(order=>Number(order.order_id));
+          let documents;
+          try{documents=await preparePrintDocuments(db,{tenantId:rule.tenant_id,storeId:rule.store_id,orderIds,automatic:true,bulk:true,selections:[{template_id:Number(rule.template_id),copies:Number(rule.copies),rule_id:Number(rule.id)}]});}
+          catch(error){if(error.message!=='NO_MATCHING_DOCUMENTS')throw error;documents=[];}
+          await enqueueDocuments(db,{tenantId:rule.tenant_id,storeId:rule.store_id,documents,automatic:true,requestId:`scheduled_${rule.id}_${ready[0].dispatch_id}`,deferredIds:ready.map(order=>Number(order.dispatch_id))});
+        }catch(error){console.error('Scheduled auto-print rule:',{tenantId:rule.tenant_id,storeId:rule.store_id,ruleId:rule.id},error);}
+        finally{try{if(locked)await connection.query('SELECT RELEASE_LOCK(?)',[lockName]);}finally{connection.release();}}
+      }
+    }catch(error){console.error('Scheduled auto-print:',error);}
+    finally{scheduledAutoPrintRunning=false;}
+  };
+  scheduledAutoPrintTimer=setInterval(()=>void tick(),30000);
+  scheduledAutoPrintTimer.unref?.();
+  void tick();
+}
+module.exports = { setPrintEventsHub, encodeMetaJobPayload, sendOrderToPrintBot, enqueueSingleLabelPrintJob, getPrintChoices, preparePrintDocuments, enqueueDocuments, startScheduledAutoPrint };

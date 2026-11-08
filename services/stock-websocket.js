@@ -8,7 +8,7 @@ function positiveId(value) {
   return Number.isFinite(number) && number > 0 ? Math.trunc(number) : null;
 }
 
-function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer, submitOrder }) {
+function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer, submitOrder, loadCheckoutSettings }) {
   const rooms = new Map();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
@@ -37,19 +37,23 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
         });
       }
     }) || null;
+    room.unsubscribeSettings = catalogSync.subscribe(tenantId,storeId,change=>{
+      if(change.entity_type==='checkout_settings') broadcast(room,{type:'checkout.settings.changed',revision:change.revision});
+    });
     rooms.set(key, room);
     return room;
   }
   function destroyRoom(room) {
     if (room.sockets.size) return;
     try { room.unsubscribe?.(); } catch (_) {}
+    room.unsubscribeSettings?.();
     rooms.delete(roomKey(room.tenantId, room.storeId));
   }
 
   server.on("upgrade", async (request, socket, head) => {
     let url;
     try { url = new URL(request.url, "http://localhost"); } catch (_) { socket.destroy(); return; }
-    if (url.pathname === "/api/orders-ws") return;
+    if (url.pathname === "/api/orders-ws" || url.pathname === "/api/admin/orders-ws") return;
     if (url.pathname !== "/api/stock-ws") { socket.destroy(); return; }
     if (request.headers.origin) {
       try {
@@ -71,9 +75,14 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
     socket.isAlive = true;
     room.sockets.add(socket);
     send(socket, { type: "ready", revision: room.revision, order_commands: Boolean(submitOrder) });
+    void db.query("SELECT COALESCE(MAX(id),0) AS revision FROM catalog_changes WHERE tenant_id=? AND store_id=? AND entity_type='checkout_settings'",[room.tenantId,room.storeId])
+      .then(([rows])=>send(socket,{type:'checkout.settings.version',revision:String(rows[0]?.revision || '0')}))
+      .catch(error=>console.error('CHECKOUT_SETTINGS_VERSION_FAILED:',error));
     socket.on("pong", () => { socket.isAlive = true; });
     let authVersion = 0;
     let commandRunning = false;
+    let settingsLoading = false;
+    let catalogLoading = false;
     socket.customerId = null;
     socket.customerToken = "";
     socket.on("error", () => socket.terminate());
@@ -102,6 +111,21 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
       }
       try {
         if (message.type === "ping") send(socket, { type: "pong", ts: Date.now() });
+        if (message.type === "catalog.sync") {
+          if (catalogLoading) return;
+          catalogLoading = true;
+          socket.catalogSubscribed = true;
+          try {
+            const page = await catalogSync.getChanges({
+              db, tenantId: room.tenantId, storeId: room.storeId, since: message.since, limit: 500,
+            });
+            if (page.reset_required) page.next_revision = await catalogSync.getManifest({
+              db, tenantId: room.tenantId, storeId: room.storeId,
+            });
+            send(socket, { type: "catalog.changes", ...page });
+          } finally { catalogLoading = false; }
+          return;
+        }
         if (message.type === "auth") {
           const version = ++authVersion;
           socket.customerId = null;
@@ -111,6 +135,15 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
           if (version !== authVersion || socket.readyState !== WebSocket.OPEN) return;
           socket.customerId = customer ? Number(customer.id) : null;
           send(socket, { type: customer ? "customer.ready" : "customer.expired" });
+        }
+        if(message.type==='checkout.settings.get' && loadCheckoutSettings) {
+          if(settingsLoading)return;
+          settingsLoading=true;
+          try {
+            const settings=await loadCheckoutSettings({tenantId:room.tenantId,storeId:room.storeId});
+            send(socket,{type:'checkout.settings.snapshot',data:settings});
+          } finally { settingsLoading=false; }
+          return;
         }
         if (message.type !== "order.create" || !submitOrder) return;
         const requestId = String(message.request_id || "");
@@ -173,12 +206,21 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
         if (page.reset_required) {
           room.revision = await catalogSync.getManifest({ db, tenantId: room.tenantId, storeId: room.storeId });
           broadcast(room, { type: "stock.resync", revision: room.revision });
+          room.sockets.forEach(client => {
+            if (client.catalogSubscribed) send(client, { type: "catalog.changed", revision: room.revision });
+          });
+          broadcast(room,{type:'checkout.settings.changed',revision:'resync'});
           return;
         }
         const ids = [...new Set((page.changes || [])
           .filter((change) => String(change.operation || "") === "stock")
           .map((change) => positiveId(change.entity_id)).filter(Boolean))];
+        const settingsChanges=(page.changes || []).filter(change=>change.entity_type==='checkout_settings');
+        if(settingsChanges.length)broadcast(room,{type:'checkout.settings.changed',revision:settingsChanges[settingsChanges.length-1].revision});
         room.revision = page.next_revision || room.revision;
+        if (page.changes?.length) room.sockets.forEach(client => {
+          if (client.catalogSubscribed) send(client, { type: "catalog.changed", revision: room.revision });
+        });
         if (ids.length) broadcast(room, {
           type: "stock.changed", revision: room.revision,
           changed_product_ids: ids, affected_product_ids: ids, product_ids: ids,
@@ -294,4 +336,101 @@ function createOrdersWebSocketHub({ server, db, ordersEvents, authenticateCustom
   return { wss };
 }
 
-module.exports = { createStockWebSocketHub, createOrdersWebSocketHub };
+// Admin commands use the existing authenticated HTTP handlers through a response adapter.
+function createAdminOrderCommandsHub({ server, dispatch, ordersEvents }) {
+  const { EventEmitter } = require('events');
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  server.on('upgrade', (request, socket, head) => {
+    let url;
+    try { url = new URL(request.url, 'http://localhost'); } catch (_) { return; }
+    if (url.pathname !== '/api/admin/orders-ws') return;
+    try {
+      if (!request.headers.origin || new URL(request.headers.origin).host !== request.headers.host) { socket.destroy(); return; }
+    } catch (_) { socket.destroy(); return; }
+    wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws));
+  });
+  wss.on('connection', socket => {
+    socket.isAlive = true;
+    let running = false,printUnsubscribe=null,printAuthorizing=false;
+    socket.on('close',()=>printUnsubscribe?.());
+    const send = value => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); };
+    socket.on('error', () => socket.terminate());
+    socket.on('pong', () => { socket.isAlive = true; });
+    send({ type: 'ready' });
+    socket.on('message', async raw => {
+      let message;
+      try { message = JSON.parse(String(raw)); } catch (_) { socket.close(1008, 'Invalid command'); return; }
+      if(message?.type==='print.subscribe'){
+        if(printAuthorizing||printUnsubscribe)return;
+        if(typeof message.token!=='string'||message.token.length>8192){socket.close(1008,'Invalid authentication');return;}
+        printAuthorizing=true;
+        const response=new EventEmitter();response.statusCode=200;response.headersSent=false;
+        response.status=code=>{response.statusCode=code;return response;};
+        response.setHeader=()=>{};response.getHeader=()=>undefined;
+        response.json=payload=>{
+          response.headersSent=true;
+          const tenantId=Number(payload?.data?.tenant_id);
+          if(response.statusCode>=400||!payload?.ok||!tenantId){socket.close(1008,'Unauthorized');response.emit('finish');return response;}
+          if(socket.readyState===WebSocket.OPEN){
+            printUnsubscribe=ordersEvents.subscribe(tenantId,0,event=>{
+              if(event.event==='print.changed')send({type:'print.changed',cursor:event.id,...event.data});
+            });
+            // Token expiry closes the subscription; reconnect must authenticate again.
+            const expiry=Number(JSON.parse(Buffer.from(message.token.split('.')[1],'base64url').toString()).exp||0);
+            if(expiry){const timer=setTimeout(()=>socket.close(1008,'Session expired'),Math.max(0,Math.min(2147483647,expiry*1000-Date.now())));timer.unref?.();socket.once('close',()=>clearTimeout(timer));}
+            send({type:'print.ready',cursor:ordersEvents.getCurrentCursor(tenantId,0)});
+          }
+          response.emit('finish');return response;
+        };
+        response.end=()=>response.json({ok:false});
+        try{await dispatch(message,response);}catch(error){console.error('Print subscription failed:',error);socket.close(1011,'Authentication failed');}
+        finally{printAuthorizing=false;}
+        return;
+      }
+      if (!message || !['order.create', 'order.update'].includes(message.type)
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(message.request_id || ''))
+          || !message.body || typeof message.body !== 'object' || Array.isArray(message.body)
+          || !positiveId(message.store_id) || (message.type === 'order.update' && !positiveId(message.order_id))) {
+        socket.close(1008, 'Invalid command'); return;
+      }
+      const reply = (status, payload) => send({ type: 'order.result', request_id: message.request_id, status, payload });
+      if (running) { reply(429, { ok: false, error: 'ORDER_SUBMISSION_BUSY' }); return; }
+      running = true;
+      const response = new EventEmitter();
+      response.statusCode = 200;
+      response.headersSent = false;
+      response.status = code => { response.statusCode = code; return response; };
+      const headers = new Map();
+      response.setHeader = (key, value) => headers.set(String(key).toLowerCase(), value);
+      response.getHeader = key => headers.get(String(key).toLowerCase());
+      response.json = payload => {
+        if (response.headersSent) return response;
+        response.headersSent = true;
+        reply(response.statusCode, payload);
+        response.emit('finish');
+        return response;
+      };
+      response.end = () => response.json({ ok: false, error: 'SESSION_CLOSED' });
+      try {
+        await dispatch(message, response);
+      } catch (error) {
+        console.error('Admin order command failed:', error);
+        response.status(500).json({ ok: false, error: 'ORDER_COMMAND_FAILED' });
+      } finally {
+        running = false;
+      }
+    });
+  });
+  const heartbeat = setInterval(() => {
+    wss.clients.forEach(socket => {
+      if (!socket.isAlive) { socket.terminate(); return; }
+      socket.isAlive = false;
+      socket.ping();
+    });
+  }, 30000);
+  heartbeat.unref?.();
+  wss.on('close', () => clearInterval(heartbeat));
+  return { wss };
+}
+
+module.exports = { createStockWebSocketHub, createOrdersWebSocketHub, createAdminOrderCommandsHub };

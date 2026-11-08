@@ -143,6 +143,7 @@
     }) || null;
   }
   function loadOrdersFeatureScript(name) {
+    if (name === "newOrder" && window.SharedOrderPanel?.ensureAdminAsset) return window.SharedOrderPanel.ensureAdminAsset(name);
     if (name === "clients" && window.SharedOrderPanel && typeof window.SharedOrderPanel.ensureAdminAsset === "function") {
       return window.SharedOrderPanel.ensureAdminAsset("clients");
     }
@@ -224,6 +225,7 @@
       const apiError = new Error(json?.error || `API_ERROR (${res.status})`);
       apiError.status = Number(res.status || 0);
       apiError.code = String(json?.error || "API_ERROR");
+      apiError.printErrorId = json?.error_id || null;
       apiError.retryAfter = String(res.headers.get("Retry-After") || "").trim() || null;
       throw apiError;
     }
@@ -538,7 +540,7 @@
   const orderTabsHeader = $("#orderTabsHeader");
   const orderTabsHeaderCheckout = $("#orderTabsHeaderCheckout");
   const orderTabsHeaders = [orderTabsHeader, orderTabsHeaderCheckout].filter(Boolean);
-  const orderTabsEls = [$("#orderTabs"), $("#orderTabsCheckout")].filter(Boolean);
+  const orderTabsEls = [$("#orderTabs"), $("#orderTabsCheckout"), $("#newOrderCatalogTabs")].filter(Boolean);
   const orderInfoFooter = $("#orderInfoFooter");
   const orderInfoPaymentBtn = $("#orderInfoPaymentBtn");
   const ordersLeftPane = $("#ordersLeftPane");
@@ -767,8 +769,12 @@
   let mountedCheckoutTabKey = null;
   const orderStatusSyncStates = new Map();
   let orderStatusScopeRevision=0;
+  let orderStageCountersRevision=0;
+  let orderStageCountersQueryKey=null;
   const orderStatusQueue=sharedOrderPanel.createStatusQueue({
     scope:()=>orderStatusScopeRevision+':'+orderDetailsContext(0).runtimeKey,
+    storage:()=>window.AdminPersistentCache?.scope({domain:'orders:status-outbox',version:1}),
+    saveBatch:async changes=>(await apiJson('/api/admin/orders/status-batch',{method:'PUT',body:{changes}})).data.results,
     apply:(order,localOnly)=>handleOrderEvent(order,{localOnly}),
     onState:setOrderStatusSyncState,
     save:async(id,statusId,mutationId)=>(await apiJson(`/api/admin/orders/${id}/status`,{method:'PUT',headers:{'Idempotency-Key':mutationId},body:{status_id:statusId}})).data,
@@ -1797,33 +1803,42 @@
 
   let ordersBulkLoading = false;
 
-  function syncOrdersBulkFooter() {
-    const footer = document.getElementById("ordersBulkFooter");
-    if (!footer || isCourierWorkspace) return;
+  function syncOrdersSelectionToolbar() {
+    const actions = document.getElementById("ordersBulkActions");
+    if (!actions || isCourierWorkspace) return;
     const orders = getOrdersForActiveStage();
     const count = orders.filter((order) => isOrderMultiSelected(order.id)).length;
-    footer.classList.toggle("hidden", count === 0 && !ordersBulkLoading);
+    const selecting = count > 0 || ordersBulkLoading;
+    const changed = document.body.classList.contains('orders-selection-mode') !== selecting;
+    actions.classList.toggle("hidden", !selecting);
+    document.body.classList.toggle('orders-selection-mode', selecting);
+    document.getElementById('ordersToolbar')?.classList.toggle('is-selecting', selecting);
+    if (selecting) closeDatePopover();
+    if (changed) document.dispatchEvent(new CustomEvent('ordersSelectionModeChanged'));
     document.getElementById("ordersBulkSelectedCount").textContent = String(count);
-    const toggle = document.getElementById("ordersBulkToggleAll");
-    toggle.checked = orders.length > 0 && count === orders.length;
-    toggle.indeterminate = count > 0 && count < orders.length;
-    toggle.disabled = ordersBulkLoading;
+    for (const toggle of [document.getElementById("ordersBulkToggleAll"), document.getElementById("ordersStageToggleAll")]) {
+      if (!toggle) continue;
+      toggle.checked = orders.length > 0 && count === orders.length;
+      toggle.indeterminate = count > 0 && count < orders.length;
+      toggle.disabled = ordersBulkLoading || (orders.length === 0 && !state.ordersPagination.hasMore);
+    }
     document.getElementById("ordersBulkClear").disabled = ordersBulkLoading;
   }
 
   document.getElementById("ordersBulkClear")?.addEventListener("click", () => {
     state.selectedOrderIds.clear();
     elOrdersList?.querySelectorAll(".js-order").forEach((row) => applyOrderMultiSelectionState(row));
-    syncOrdersBulkFooter();
+    syncOrdersSelectionToolbar();
   });
 
-  document.getElementById("ordersBulkToggleAll")?.addEventListener("change", async (event) => {
+  async function handleOrdersSelectAllChange(event) {
+    if (ordersBulkLoading) return;
     const selectAll = event.target.checked;
     const queryKey = currentOrdersQueryKey();
     const stageId = state.activeStatusId;
     const isCurrent = () => queryKey === currentOrdersQueryKey() && stageId === state.activeStatusId;
     ordersBulkLoading = true;
-    syncOrdersBulkFooter();
+    syncOrdersSelectionToolbar();
     try {
       if (selectAll) {
         while (state.ordersPagination.loading && isCurrent()) {
@@ -1849,9 +1864,13 @@
       alert("Не удалось загрузить все заказы для выделения: " + err.message);
     } finally {
       ordersBulkLoading = false;
-      syncOrdersBulkFooter();
+      syncOrdersSelectionToolbar();
     }
-  });
+  }
+
+  for (const id of ["ordersBulkToggleAll", "ordersStageToggleAll"]) {
+    document.getElementById(id)?.addEventListener("change", handleOrdersSelectAllChange);
+  }
 
   function toggleOrderMultiSelection(orderId) {
     const id = Number(orderId || 0);
@@ -1908,6 +1927,8 @@
     ordersCheckoutLeftPane?.classList.toggle("hidden", !checkout);
     ordersCheckoutCenterPane?.classList.toggle("hidden", !checkout);
     ordersCheckoutRightPane?.classList.toggle("hidden", !checkout);
+    if (document.body.classList.contains("page-chat")) document.dispatchEvent(new CustomEvent("orders:checkout-layout"));
+    window.NewOrderBridge?.setEmbeddedEditing(checkout);
   }
 
   function getNewOrderBridge() {
@@ -1930,6 +1951,12 @@
     return bridge;
   }
 
+  function isMatchingEditSession(session, orderId) {
+    const rows = Array.isArray(session?.rightOrders) ? session.rightOrders : [];
+    return rows.some(row => row.mode === 'edit' && Number(row.editOrderId) === Number(orderId)
+      && Array.isArray(row.form?.cartItems) && row.form.cartItems.length > 0);
+  }
+
   function captureCheckoutSessionForTab(tab) {
     if (!isCheckoutTab(tab)) return;
     if (tab.checkoutSessionHydrating) return;
@@ -1938,6 +1965,7 @@
     try {
       const snapshot = bridge.captureSession();
       if (snapshot && typeof snapshot === "object") {
+        if (normalizeTabMode(tab.mode) === 'edit' && !isMatchingEditSession(snapshot, tab.orderId)) return;
         tab.checkoutSession = snapshot;
       }
     } catch (err) {
@@ -1951,24 +1979,37 @@
     if (!bridge) return null;
     const mode = normalizeTabMode(tab.mode);
     const forceRebuildFromOrder = mode === "edit" && tab.checkoutSessionHydrating === true;
-    if (!forceRebuildFromOrder && tab.checkoutSession && typeof tab.checkoutSession === "object") return tab.checkoutSession;
+    if (mode === 'edit') {
+      const workspace = await bridge.readWorkspace();
+      const stored = workspace?.rightOrders?.find(row => row.mode === 'edit' && Number(row.editOrderId) === Number(tab.orderId));
+      if (stored) {
+        tab.checkoutSession = { ...workspace, rightActiveOrderId: stored.id };
+        if (!isMatchingEditSession(tab.checkoutSession, tab.orderId)) throw new Error('ORDER_EDIT_SESSION_INVALID');
+        tab.checkoutSessionHydrating = false;
+        return tab.checkoutSession;
+      }
+    }
+    if (!forceRebuildFromOrder && tab.checkoutSession && (mode !== 'edit' || isMatchingEditSession(tab.checkoutSession, tab.orderId))) return tab.checkoutSession;
 
     if (mode === "edit") {
-      const sourceOrder = tab.order || state.orders.find((o) => Number(o.id) === Number(tab.orderId)) || null;
+      const sourceOrder = await ensureFullOrderById(Number(tab.orderId), { strict: true });
       if (sourceOrder && typeof bridge.createSessionFromOrder === "function") {
+        if (isOrderEditPaymentLocked(sourceOrder)) throw new Error('ORDER_EDIT_PAYMENT_LOCKED');
         try {
           tab.checkoutSession = await bridge.createSessionFromOrder(sourceOrder, {
             title: tab.title,
             orderId: Number(sourceOrder.id || 0),
             preserveStoredLineTotals: true,
           });
+          if (!isMatchingEditSession(tab.checkoutSession, tab.orderId)) throw new Error('ORDER_EDIT_SESSION_INVALID');
           tab.checkoutSessionHydrating = false;
           return tab.checkoutSession;
         } catch (err) {
-          console.error(err);
           tab.checkoutSessionHydrating = false;
+          throw err;
         }
       }
+      throw new Error('ORDER_EDIT_SOURCE_UNAVAILABLE');
     }
 
     if (typeof bridge.createBlankSession === "function") {
@@ -1992,7 +2033,7 @@
       return;
     }
 
-    setOrdersCheckoutLayoutEnabled(true);
+    if (mode !== 'edit') setOrdersCheckoutLayoutEnabled(true);
     const bridge = await getReadyNewOrderBridge();
     if (!bridge) return;
     if (activationRevision !== checkoutTabActivationRevision || tabsState.activeKey !== tab.key) return;
@@ -2006,7 +2047,10 @@
       const restoredSession = await bridge.restoreSession(session, {
         isCurrent: isCurrentActivation,
         onApplied: () => {
-          if (isCurrentActivation()) mountedCheckoutTabKey = tab.key;
+          if (isCurrentActivation()) {
+            mountedCheckoutTabKey = tab.key;
+            setOrdersCheckoutLayoutEnabled(true);
+          }
         },
       });
       if (activationRevision !== checkoutTabActivationRevision || tabsState.activeKey !== tab.key) return;
@@ -2015,7 +2059,8 @@
       try {
         const restored = bridge.captureSession && bridge.captureSession();
         const rightOrders = Array.isArray(restored?.rightOrders) ? restored.rightOrders : [];
-        if (!rightOrders.length && typeof bridge.createBlankSession === "function") {
+        if (mode === 'edit' && !isMatchingEditSession(restored, tab.orderId)) throw new Error('ORDER_EDIT_SESSION_INVALID');
+        if (mode !== 'edit' && !rightOrders.length && typeof bridge.createBlankSession === "function") {
           const fallbackSession = bridge.createBlankSession({ title: tab.title });
           if (fallbackSession && typeof fallbackSession === "object") {
             tab.checkoutSession = fallbackSession;
@@ -2067,14 +2112,76 @@
     });
   }
 
+  let ordersPrintPanel=null;
+  const ordersPrintStores={loaded:false,items:[]};
+  function syncOrdersPrintTabs(){
+    for(const element of orderTabsEls)for(const tab of element.querySelectorAll('[data-order-tab-key]')){const key=tab.getAttribute('data-order-tab-key');if(ordersPrintPanel?.isPrintApiTabId(key))tab.setAttribute('data-right-tab',key);}
+  }
+  function showOrdersPrintPanel(visible){
+    document.getElementById('ordersPrintApiHost')?.classList.toggle('hidden',!visible);
+    document.querySelector('#ordersRightPane .orders-info > .panel-body')?.classList.toggle('hidden',visible);
+    if(visible)document.getElementById('orderInfoFooter')?.classList.add('hidden');
+    ordersPrintPanel?.printApiPanel?.classList.toggle('hidden',!visible);
+    if(!visible)for(const audio of ordersPrintPanel?.printApiAudioStates?.values()||[])audio.audio?.pause();
+  }
+  function renderOrdersPrintButton(){
+    const button=document.getElementById('ordersPrintQueueBtn');if(!button||!ordersPrintPanel)return;
+    if(!ordersPrintPanel.printApiListLoaded){
+      const menu=document.getElementById('ordersPrintConnections');menu.replaceChildren();
+      const status=document.createElement('p');status.textContent='Данные подключений ещё не получены';
+      const retry=document.createElement('button');retry.type='button';retry.className='btn btn-link';retry.textContent='Повторить загрузку';retry.addEventListener('click',()=>ordersPrintPanel.loadPrintApiCards());menu.append(status,retry);return;
+    }
+    const connections=ordersPrintPanel.printApiListItems.filter(item=>Number(item.store_id)===getStoreIdFromStorage()&&Number(item.token_id)>0);
+    const queue=connections.reduce((sum,item)=>sum+Number(item.queue_count||0),0),errors=connections.reduce((sum,item)=>sum+Number(item.failed_count||0),0);
+    document.getElementById('ordersPrintQueueCount').textContent=String(queue);document.getElementById('ordersPrintErrorCount').textContent=String(errors);button.title=`Очередь печати: ${queue}. Ошибки: ${errors}`;
+    const menu=document.getElementById('ordersPrintConnections');menu.replaceChildren();
+    if(!connections.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='У выбранного филиала нет подключений печати';menu.append(empty);}
+    for(const connection of connections){
+      const row=document.createElement('button');row.type='button';row.className='btn btn-link orders-print-connection';row.setAttribute('role','menuitem');
+      const dot=document.createElement('span');dot.className='orders-print-dot '+(Number(connection.agent_online)===1?'is-online':'is-offline');
+      const name=document.createElement('span');name.textContent=connection.display_name||`Подключение #${connection.token_id}`;
+      const counts=document.createElement('span');counts.textContent=`${Number(connection.queue_count||0)} / ${Number(connection.failed_count||0)}`;counts.title='Очередь / ошибки';row.append(dot,name,counts);
+      row.addEventListener('click',async()=>{
+        menu.hidePopover();button.setAttribute('aria-expanded','false');
+        await ordersPrintPanel.openPrintApiForStore(Number(connection.store_id),connection.display_name,Number(connection.token_id));
+        ordersPrintPanel.showPrintQueueView('all');
+      });menu.append(row);
+    }
+  }
+  document.addEventListener('tenantStoreChanged',()=>{document.getElementById('ordersPrintConnections')?.hidePopover();renderOrdersPrintButton();});
+  async function initOrdersPrintPanel(){
+    if(!document.getElementById('ordersPrintApiHost'))return;
+    ordersPrintPanel=window.SharedPrintApiPanel.create({
+      get activeRightTabId(){return tabsState.activeKey||'';},get rightTabs(){return document.getElementById('orderTabs');},rightDefault:null,apiPanelCards:null,settingsApiCardsHeader:null,
+      storesState:ordersPrintStores,extraPrintTemplates:{},productionZonePanel:null,productionZoneStoreSelect:null,
+      async loadStores(){const result=await apiJson('/api/admin/tenant/stores');if(!result.ok)throw new Error('LOAD_STORES_FAILED');ordersPrintStores.items=result.stores||[];ordersPrintStores.loaded=true;},
+      ensureTab(key,title){let tab=tabsState.tabs.find(item=>item.key===key);if(!tab){const current=ordersPrintPanel.getPrintApiTabState(key);tab={key,type:'print',title,storeId:Number(current?.storeId||current?.store_id||0),connectionId:Number(current?.connectionId||0)};tabsState.tabs.push(tab);}else tab.title=title;renderOrderTabs();},
+      setActiveRightTab(key){if(key)setActiveOrderTab(key,{openMobile:true});else goToOrdersHomeView();},
+      async uploadTenantSound(field,file){const form=new FormData();form.append('field',field);form.append('file',file);const response=await fetch('/api/admin/tenant/upload-sound',{method:'POST',headers:{Authorization:'Bearer '+localStorage.getItem('authToken')},body:form});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'SOUND_UPLOAD_FAILED');return result;},
+      onConnectionsChanged:renderOrdersPrintButton,
+    });
+    const button=document.getElementById('ordersPrintQueueBtn'),menu=document.getElementById('ordersPrintConnections');
+    button.addEventListener('click',()=>{
+      if(menu.matches(':popover-open')){menu.hidePopover();button.setAttribute('aria-expanded','false');return;}
+      renderOrdersPrintButton();menu.showPopover();const rect=button.getBoundingClientRect();menu.style.width='min(360px,calc(100vw - 24px))';menu.style.left=Math.max(12,Math.min(rect.left,innerWidth-menu.offsetWidth-12))+'px';menu.style.top=rect.bottom+6+'px';button.setAttribute('aria-expanded','true');
+    });
+    document.addEventListener('click',event=>{if(menu.matches(':popover-open')&&!menu.contains(event.target)&&!button.contains(event.target)){menu.hidePopover();button.setAttribute('aria-expanded','false');}});
+    menu.addEventListener('keydown',event=>{if(event.key==='Escape'){menu.hidePopover();button.setAttribute('aria-expanded','false');button.focus();}});
+    await ordersPrintPanel.loadPrintApiCards();
+  }
+
   function renderOrderTabs() {
+    tabsState.tabs.forEach(tab => { if (tab.type === "order" && Number(tab.orderId) > 0) tab.title = buildOrderTabTitle({ id: tab.orderId }); });
     if (sharedOrderPanel) {
       sharedOrderPanel.renderTabs({
         headers: orderTabsHeaders,
         tabsEls: orderTabsEls,
         tabs: tabsState.tabs,
         activeKey: tabsState.activeKey,
+        isEditingTab: isCheckoutTab,
       });
+      syncOrdersPrintTabs();
+      document.dispatchEvent(new CustomEvent("orders:tabs-updated"));
       return;
     }
     if (!orderTabsEls.length) return;
@@ -2088,15 +2195,19 @@
       const isActive = tab.key === tabsState.activeKey;
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-order-tab-key="${escapeHtml(tab.key)}">
+          ${isCheckoutTab(tab) ? '<i class="fas fa-pen product-tab-edit-icon" aria-hidden="true"></i>' : ""}
           <span class="product-tab-title">${escapeHtml(tab.title || (tab.type === "client" ? "Клиент" : "Заказ"))}</span>
           <button class="product-tab-close" type="button" data-order-tab-close="${escapeHtml(tab.key)}" aria-label="Закрыть">&times;</button>
         </div>
       `;
     }).join("");
     orderTabsEls.forEach((el) => { el.innerHTML = html; });
+    syncOrdersPrintTabs();
+    document.dispatchEvent(new CustomEvent("orders:tabs-updated"));
   }
 
   function setActiveOrderTab(key, { openMobile = false } = {}) {
+    if(ordersPrintPanel?.isPrintApiTabId(tabsState.activeKey))ordersPrintPanel.persistActivePrintApiTabState();
     const mountedTab = tabsState.tabs.find((t) => t.key === mountedCheckoutTabKey) || null;
     if (mountedTab) captureCheckoutSessionForTab(mountedTab);
 
@@ -2112,6 +2223,14 @@
     }
     tabsState.activeKey = key;
     const activationRevision = ++checkoutTabActivationRevision;
+    if(ordersPrintPanel?.isPrintApiTabId(key)){
+      mountedCheckoutTabKey=null;state.activeOrderId=null;setOrdersCheckoutLayoutEnabled(false);renderOrderTabs();showOrdersPrintPanel(true);
+      if(ordersPrintPanel.getPrintApiTabState(key)){ordersPrintPanel.renderActivePrintApiTab();ordersPrintPanel.ensurePrintApiReady();}
+      else void ordersPrintPanel.openPrintApiForStore(tab.storeId,tab.title,tab.connectionId).then(()=>ordersPrintPanel.showPrintQueueView('all'));
+      if(openMobile&&isMobile())openSheet();schedulePersistOrdersCache();return;
+    }
+    showOrdersPrintPanel(false);
+
 
     if (tab.type === "order") {
       tab.mode = normalizeTabMode(tab.mode);
@@ -2132,7 +2251,7 @@
       state.activeOrderId = null;
       renderOrderTabs();
       syncActiveOrderRowState();
-      applyTabModeLayout(tab, activationRevision)
+      return applyTabModeLayout(tab, activationRevision)
         .then(() => {
           if (openMobile && shouldUseMobileSheet()) openSheet();
         })
@@ -2140,7 +2259,6 @@
         .finally(() => {
           schedulePersistOrdersCache();
         });
-      return;
     }
 
     setOrdersCheckoutLayoutEnabled(false);
@@ -2184,6 +2302,8 @@
   }
 
   function goToOrdersHomeView() {
+    if(ordersPrintPanel?.isPrintApiTabId(tabsState.activeKey))ordersPrintPanel.persistActivePrintApiTabState();
+    showOrdersPrintPanel(false);
     const mountedTab = tabsState.tabs.find((tab) => tab.key === mountedCheckoutTabKey) || null;
     if (mountedTab) captureCheckoutSessionForTab(mountedTab);
     tabsState.activeKey = null;
@@ -2429,12 +2549,31 @@
 
     const tab = ensureOrderTab(baseOrder, { activate: false });
     if (!tab) return;
+    if (!isMatchingEditSession(tab.checkoutSession, id)) {
+      const editButtons = [...document.querySelectorAll('[data-action="order-edit"]')];
+      editButtons.forEach(button => { button.disabled = true; button.setAttribute('aria-busy', 'true'); });
+      try {
+        const bridge = await getReadyNewOrderBridge();
+        if (!bridge?.createSessionFromOrder) throw new Error('ORDER_EDITOR_UNAVAILABLE');
+        const session = await bridge.createSessionFromOrder(baseOrder, {
+          title: `\u2116${id}`, orderId: id, preserveStoredLineTotals: true,
+        });
+        if (!isMatchingEditSession(session, id)) throw new Error('ORDER_EDIT_SESSION_INVALID');
+        if (tabsState.activeKey !== tab.key || !tabsState.tabs.includes(tab)) return;
+        tab.checkoutSession = session;
+      } catch (error) {
+        console.error('Order editor preparation failed:', error);
+        alert('\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u0442\u044c \u0437\u0430\u043a\u0430\u0437 \u043a \u0440\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044e: ' + error.message);
+        return;
+      } finally {
+        editButtons.forEach(button => { button.disabled = false; button.removeAttribute('aria-busy'); });
+      }
+    }
     tab.mode = "edit";
     tab.title = `\u2116${id}`;
     tab.order = { ...tab.order, ...baseOrder };
-    tab.checkoutSession = null;
-    tab.checkoutSessionHydrating = true;
-    setActiveOrderTab(tab.key, { openMobile: true });
+    tab.checkoutSessionHydrating = false;
+    await setActiveOrderTab(tab.key, { openMobile: true });
     schedulePersistOrdersCache();
   }
 
@@ -2683,10 +2822,15 @@
     schedulePersistOrdersCache();
   }
 
-  function closeOrderTab(key) {
+  function closeOrderTab(key, { editorExit = false } = {}) {
     const idx = tabsState.tabs.findIndex((tab) => tab.key === key);
     if (idx < 0) return;
     const tabToClose = tabsState.tabs[idx];
+    if (!editorExit && normalizeTabMode(tabToClose.mode) === 'edit') {
+      void getReadyNewOrderBridge().then(bridge => bridge.cancelEditingOrder(Number(tabToClose.orderId))).catch(console.error);
+      return;
+    }
+    if(tabToClose.type==='print'){ordersPrintPanel?.clearPrintApiTabState(key);if(tabsState.activeKey===key)showOrdersPrintPanel(false);}
     if (tabToClose.key === mountedCheckoutTabKey) captureCheckoutSessionForTab(tabToClose);
     const wasActive = tabsState.activeKey === key;
     tabsState.tabs.splice(idx, 1);
@@ -3465,6 +3609,7 @@
   function serializeTabForCache(tab) {
     if (!tab || typeof tab !== "object") return null;
     const type = String(tab.type || "");
+    if(type==='print')return {key:tab.key,type,title:tab.title,storeId:tab.storeId,connectionId:tab.connectionId};
     if (type !== "order" && type !== "client") return null;
     const out = {
       key: String(tab.key || ""),
@@ -3487,6 +3632,11 @@
     return out.key ? out : null;
   }
 
+  function restoreCachedOrderTabMode(row) {
+    const mode = normalizeTabMode(row.mode);
+    return mode === 'edit' && performance.getEntriesByType('navigation')[0]?.type === 'reload' ? 'view' : mode;
+  }
+
   function restoreTabsFromCache(payload) {
     const rows = Array.isArray(payload?.tabs) ? payload.tabs : [];
     const restored = rows
@@ -3494,16 +3644,17 @@
         if (!row || typeof row !== "object") return null;
         const type = String(row.type || "");
         const key = String(row.key || "").trim();
+        if(type==='print'&&key&&Number(row.storeId)>0&&Number(row.connectionId)>0)return {key,type,title:String(row.title||'Очередь печати'),storeId:Number(row.storeId),connectionId:Number(row.connectionId)};
         if (!key || (type !== "order" && type !== "client")) return null;
         if (type === "order") {
           return {
             key,
             type: "order",
-            mode: normalizeTabMode(row.mode),
+            mode: restoreCachedOrderTabMode(row),
             orderId: Number.isFinite(Number(row.orderId)) && Number(row.orderId) > 0 ? Number(row.orderId) : null,
             title: String(row.title || "").trim() || "Заказ",
             order: row.order && typeof row.order === "object" ? row.order : null,
-            checkoutSession: row.checkoutSession && typeof row.checkoutSession === "object" ? row.checkoutSession : null,
+            checkoutSession: restoreCachedOrderTabMode(row) !== "view" && row.checkoutSession && typeof row.checkoutSession === "object" ? row.checkoutSession : null,
           };
         }
         return {
@@ -3541,6 +3692,7 @@
         if (!row || typeof row !== "object") return null;
         const type = String(row.type || "");
         const key = String(row.key || "").trim();
+        if(type==='print'&&key&&Number(row.storeId)>0&&Number(row.connectionId)>0)return {key,type,title:String(row.title||'Очередь печати'),storeId:Number(row.storeId),connectionId:Number(row.connectionId)};
         if (!key || (type !== "order" && type !== "client")) return null;
         if (type === "order") {
           const orderId = Number(row.orderId || 0);
@@ -3548,7 +3700,7 @@
           return {
             key,
             type: "order",
-            mode: normalizeTabMode(row.mode),
+            mode: restoreCachedOrderTabMode(row),
             orderId,
             title: String(row.title || "").trim() || buildOrderTabTitle({ id: orderId }),
             order: null,
@@ -4726,7 +4878,7 @@
   }
 
   function isOrderEditPaymentLocked(order) {
-    return Boolean(order && (isPaidOrder(order) || Number(order.paymentSummary?.paidAmount)>0 || order.paymentSummary?.activePayment || order.paymentSummary?.attentionRequired));
+    return window.SharedOrderPayment.isEditLocked(order);
   }
 
   function canCourierAcceptPayment(order) {
@@ -4758,7 +4910,7 @@
     orderInfoPaymentButtons.forEach((node) => node.classList.toggle("hidden", !capabilities.payment));
     $$('[data-action="order-status-next"], [data-action="order-status-menu-toggle"]').forEach((node) => node.classList.toggle("hidden", !capabilities.status));
     $$('[data-action="order-edit"]').forEach((node) => node.classList.toggle("hidden", !capabilities.edit));
-    $$('[data-action="order-print"], [data-action="order-print-item-label"]').forEach((node) => node.classList.toggle("hidden", !capabilities.print));
+    $$('[data-action="order-print"], [data-action="order-print-item-label"], #ordersBulkPrint').forEach((node) => node.classList.toggle("hidden", !capabilities.print));
     return capabilities;
   }
 
@@ -4770,6 +4922,16 @@
     orderInfoPaymentButtons.forEach((button) => {
       if (!button) return;
       button.disabled = !capabilities.payment || !hasOrder || isOrderFullyRefunded(order);
+      if (orderPaymentPreparingId > 0 && Number(order?.id) === orderPaymentPreparingId) {
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        if (!button.querySelector('.fa-spinner')) button.insertAdjacentHTML('afterbegin', '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i>');
+        const preparingLabel = button.querySelector('span');
+        if (preparingLabel) preparingLabel.textContent = '\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430\u2026';
+        return;
+      }
+      button.removeAttribute('aria-busy');
+      button.querySelector('.fa-spinner')?.remove();
       const labelEl = button.querySelector("span");
       if (labelEl) labelEl.textContent = label;
       else button.textContent = label;
@@ -4831,20 +4993,6 @@
     const error = new Error(item.error || "COURIER_MUTATION_FAILED");
     error.code = item.lastError?.code || "COURIER_MUTATION_FAILED";
     throw error;
-  }
-
-  let mobilePaymentModalOrigin = null;
-
-  function mountMobilePaymentPage() {
-    const modal = document.getElementById("appModal");
-    if (!modal || mobilePaymentModalOrigin) return;
-    const activeColumn = document.body.classList.contains("admin-mobile-view-right")
-      ? document.querySelector(".page-col-right")
-      : document.querySelector(".page-col-center");
-    if (!activeColumn || !modal.parentNode) return;
-    mobilePaymentModalOrigin = document.createComment("mobile-payment-modal-origin");
-    modal.parentNode.insertBefore(mobilePaymentModalOrigin, modal);
-    activeColumn.appendChild(modal);
   }
 
   function ordersPersistentCacheKey() {
@@ -4914,6 +5062,7 @@
     state.orders = snapshot.orders.filter(shouldKeepOrderInState);
     if (Array.isArray(snapshot.statuses)) {
       state.statuses = snapshot.statuses.map((status) => ({ ...status }));
+      orderStageCountersQueryKey=currentOrdersQueryKey();
     }
     state.ordersPagination = {
       hasMore: snapshot.pagination?.hasMore === true,
@@ -4960,16 +5109,23 @@
     });
   }
 
-  function restoreMobilePaymentModal() {
-    const modal = document.getElementById("appModal");
-    if (modal && mobilePaymentModalOrigin?.parentNode) {
-      mobilePaymentModalOrigin.parentNode.insertBefore(modal, mobilePaymentModalOrigin);
-      mobilePaymentModalOrigin.remove();
+  let orderPaymentOpening = false;
+  let orderPaymentPreparingId = 0;
+  async function openOrderPaymentDialog(order) {
+    if (orderPaymentOpening) return;
+    orderPaymentOpening = true;
+    orderPaymentPreparingId = Number(order?.id || 0);
+    syncOrderPaymentFooter(getActiveOrder());
+    try {
+      return await runOrderPaymentDialog(order);
+    } finally {
+      orderPaymentOpening = false;
+      orderPaymentPreparingId = 0;
+      syncOrderPaymentFooter(getActiveOrder());
     }
-    mobilePaymentModalOrigin = null;
   }
 
-  async function openOrderPaymentDialog(order) {
+  async function runOrderPaymentDialog(order) {
     if (!workspaceCapabilities.payment || !canCourierAcceptPayment(order)) return;
     if (!isCourierWorkspace && !getActiveOrderCapabilities().payment) return;
     const orderId = Number(order?.id || 0);
@@ -5018,24 +5174,18 @@
     const offlineCapable = isCourierWorkspace && !isPaidOrder(order);
     const useOfflineCollection = offlineCapable && !courierOfflineState.online;
     const useMobilePaymentPage = isMobile() && document.body.classList.contains("admin-mobile-pages");
-    const paymentPageOptions = useMobilePaymentPage
-      ? {
-          onOpen() {
-            const paymentOrderNumber = String(getOrderNumber(order) || orderId).trim();
-            document.body.classList.add("admin-payment-page-open");
-            mountMobilePaymentPage();
-            window.__adminMobilePages?.openSubview?.(
-              `Принять оплату №${paymentOrderNumber}`,
-              () => window.AppModal?.close?.("back")
-            );
-          },
-          onClose() {
-            window.__adminMobilePages?.closeSubview?.();
-            restoreMobilePaymentModal();
-            document.body.classList.remove("admin-payment-page-open");
-          },
-        }
+    const mobilePaymentPageOptions = useMobilePaymentPage
+      ? sharedOrderPayment.mobilePageOptions(`\u041f\u0440\u0438\u043d\u044f\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0443 \u2116${String(getOrderNumber(order) || orderId).trim()}`)
       : {};
+
+    const paymentPageOptions = {
+      ...mobilePaymentPageOptions,
+      onOpen() {
+        orderPaymentPreparingId = 0;
+        syncOrderPaymentFooter(getActiveOrder());
+        mobilePaymentPageOptions.onOpen?.();
+      },
+    };
 
     if (!offlineCapable) {
       return sharedOrderPayment.open({
@@ -5938,6 +6088,7 @@
   }
 
   function closeSheet() {
+    if (document.body.classList.contains('new-order-editor-active') && window.NewOrderBridge?.hasEditingOrders()) return;
     if (!sheet || !backdrop) return;
     focusOutsideSheetBeforeHide();
     sheet.classList.remove("is-open");
@@ -6601,7 +6752,7 @@
     elOrdersList.innerHTML = "";
 
     normalizeSelectedOrderIds();
-    syncOrdersBulkFooter();
+    syncOrdersSelectionToolbar();
     const filtered = getOrdersForActiveStage();
     if (!filtered.length) {
       if (elEmptyHint) {
@@ -6689,6 +6840,10 @@
   // Data loading
   // -----------------------------
   async function loadStatuses({ context = null } = {}) {
+    const countersRevision=orderStageCountersRevision;
+    const scopeRevision=orderStatusScopeRevision;
+    const dateKey=currentOrdersQueryKey();
+    const hadPendingStatuses=!isCourierWorkspace && orderStatusQueue.hasPendingChanges();
     const qs = new URLSearchParams();
     if (state.date.start && state.date.end) {
       qs.set("start_date", toDateKey(state.date.start));
@@ -6696,7 +6851,11 @@
     }
     const json = await apiJson(`/api/admin/orders/statuses?${qs.toString()}`);
     if (context && !isCurrentCourierSyncContext(context)) return false;
-    state.statuses = Array.isArray(json.data) ? json.data : [];
+    if(scopeRevision!==orderStatusScopeRevision || dateKey!==currentOrdersQueryKey())return false;
+    const preserveCounts=!isCourierWorkspace && orderStageCountersQueryKey===dateKey && (hadPendingStatuses || orderStatusQueue.hasPendingChanges() || countersRevision!==orderStageCountersRevision);
+    const currentCounts=new Map(state.statuses.map(status=>[Number(status.id),status.count]));
+    state.statuses = (Array.isArray(json.data) ? json.data : []).map(status=>preserveCounts && currentCounts.has(Number(status.id)) ? {...status,count:currentCounts.get(Number(status.id))} : status);
+    orderStageCountersQueryKey=dateKey;
     return true;
   }
 
@@ -6764,9 +6923,9 @@
     const json = await apiJson(`/api/admin/orders?${qs.toString()}`);
     if (queryGeneration !== ordersQueryGeneration
       || (context && !isCurrentCourierSyncContext(context))) return false;
-    const rows = Array.isArray(json.data) ? json.data : [];
+    const rows = (Array.isArray(json.data) ? json.data : []).map(order=>isCourierWorkspace ? order : orderStatusQueue.overlay(order));
     if (resetPagination && (!ordersPersistentCacheRestored || !state.orders.length)) {
-      state.orders = rows.map(order=>isCourierWorkspace?order:orderStatusQueue.overlay(order)).filter(shouldKeepOrderInState);
+      state.orders = rows.filter(shouldKeepOrderInState);
     } else {
       const existingIds = new Set(state.orders.map((order) => Number(order?.id || 0)));
       rows.filter(shouldKeepOrderInState).forEach((order) => {
@@ -7167,6 +7326,7 @@
       }
     }
 
+    if(changed)orderStageCountersRevision++;
     return changed;
   }
 
@@ -7235,7 +7395,7 @@
       reconcileOrderListDom(prevOrder || order, { prevVisible, nextVisible: false });
       emitOrderUpdated(order, { removed: true, localOnly: !!localOnly });
       schedulePersistOrdersCache();
-      syncOrdersBulkFooter();
+      syncOrdersSelectionToolbar();
       if (persistList && (isCourierWorkspace || !localOnly)) void persistOrdersListCache();
       return null;
     }
@@ -7286,7 +7446,7 @@
     emitOrderUpdated(nextOrder, { localOnly: !!localOnly });
     schedulePersistOrdersCache();
     if (persistList && (isCourierWorkspace || !localOnly)) void persistOrdersListCache();
-    syncOrdersBulkFooter();
+    syncOrdersSelectionToolbar();
     if (isCourierWorkspace && navigator.onLine !== false && getCourierBucketId(nextOrder)) {
       void detailMergePromise.then(() => prewarmCourierOrderDetail(nextOrder, { highPriority: true }));
     }
@@ -7609,6 +7769,7 @@
   }
 
   function startOrdersPolling() {
+    if(!isCourierWorkspace)void orderStatusQueue.restore();
     if (ordersLongPollActive) return;
     if (isCourierWorkspace && courierOfflineState.reconciling) return;
     if (document.visibilityState && document.visibilityState !== "visible") return;
@@ -7620,6 +7781,7 @@
 
     const tickChanges = async () => {
       while (ordersLongPollActive && token === ordersLongPollToken) {
+        warmOrderPrintOptions();
         try {
           const waited = await waitOrdersChanges(state.lastEventId || 0, 20000);
           if (!ordersLongPollActive || token !== ordersLongPollToken) return;
@@ -7713,6 +7875,7 @@
       stopOrdersPolling();
       return;
     }
+    warmOrderPrintOptions();
     Promise.resolve()
       .finally(() => {
         if (isCourierWorkspace) {
@@ -7757,11 +7920,22 @@
     const tabEl = e.target.closest("[data-order-tab-key]");
     if (tabEl) {
       const key = tabEl.getAttribute("data-order-tab-key");
-      if (key) setActiveOrderTab(key, { openMobile: true });
+      if (key) {
+        const tab = tabsState.tabs.find(row => row.key === key);
+        await setActiveOrderTab(key, { openMobile: true });
+        if (tab && isCheckoutTab(tab) && tabsState.activeKey === key && isMobile()
+          && document.body.classList.contains('new-order-editor-active')) {
+          window.__adminMobilePages?.openCenter?.("Каталог");
+        } else if (tab && tabsState.activeKey === key && isMobile()) {
+          window.__adminMobilePages?.openRight?.(tab.title);
+        }
+      }
       return;
     }
 
-    const addNewDraftBtn = e.target.closest("#ordersAddBtn");
+    const addNewDraftBtn = e.target.closest("#ordersAddBtn")
+      || (document.body.classList.contains('page-orders') && !document.body.classList.contains('new-order-editor-active')
+        && e.target.closest('#newOrderMobileCategories'));
     if (addNewDraftBtn) {
       e.preventDefault();
       e.stopPropagation();
@@ -8020,7 +8194,7 @@
       toggleOrderMultiSelection(orderId);
       const row = multiSelectToggle.closest(".js-order");
       if (row) applyOrderMultiSelectionState(row, orderId);
-      syncOrdersBulkFooter();
+      syncOrdersSelectionToolbar();
       return;
     }
 
@@ -8032,22 +8206,24 @@
     await openOrderDetailsById(orderId, { openMobile: true });
   });
 
+  document.addEventListener('neworder:tabs-updated', event => {
+    const tab = tabsState.tabs.find(row => row.key === tabsState.activeKey);
+    if (!tab || !isCheckoutTab(tab)) return;
+    const title = Number(tab.orderId) > 0 ? buildOrderTabTitle({ id: tab.orderId }) : event.detail?.title;
+    if (title && tab.title !== title) { tab.title = title; renderOrderTabs(); schedulePersistOrdersCache(); }
+  });
+
   document.addEventListener("neworder:right-tabs-empty", () => {
+    if (window.NewOrderBridge?.hasEditingOrders()) return;
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     if (!activeTab || !isCheckoutTab(activeTab)) return;
-    closeOrderTab(activeTab.key);
+    closeOrderTab(activeTab.key, { editorExit: true });
   });
 
   document.addEventListener("neworder:edit-cancel", (evt) => {
     const editOrderId = Number(evt?.detail?.orderId || 0);
-    let targetTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
-    if (!targetTab || !isCheckoutTab(targetTab) || normalizeTabMode(targetTab.mode) !== "edit") {
-      targetTab = tabsState.tabs.find((tab) => (
-        tab?.type === "order"
-        && normalizeTabMode(tab?.mode) === "edit"
-        && Number(tab?.orderId || 0) === editOrderId
-      )) || null;
-    }
+    const targetTab = tabsState.tabs.find(tab => tab.type === 'order'
+      && normalizeTabMode(tab.mode) === 'edit' && Number(tab.orderId) === editOrderId);
     if (!targetTab || !Number(targetTab?.orderId || 0)) return;
     targetTab.mode = "view";
     targetTab.checkoutSession = null;
@@ -8057,13 +8233,17 @@
       targetTab.order = { ...targetTab.order, ...currentOrder };
       targetTab.title = buildOrderTabTitle(targetTab.order);
     }
-    setActiveOrderTab(targetTab.key, { openMobile: true });
+    if (tabsState.activeKey === targetTab.key) setActiveOrderTab(targetTab.key, { openMobile: true });
+    else { renderOrderTabs(); schedulePersistOrdersCache(); }
   });
 
-  document.addEventListener("neworder:order-submitted", () => {
-    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+  document.addEventListener("neworder:order-submitted", (evt) => {
+    const updatedId = Number(evt.detail?.updatedOrderId || 0);
+    const activeTab = updatedId > 0
+      ? tabsState.tabs.find(tab => Number(tab.orderId) === updatedId && normalizeTabMode(tab.mode) === 'edit')
+      : tabsState.tabs.find(tab => tab.key === tabsState.activeKey);
     if (!activeTab || !isCheckoutTab(activeTab)) return;
-    closeOrderTab(activeTab.key);
+    closeOrderTab(activeTab.key, { editorExit: true });
     bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) }).catch(console.error);
   });
 
@@ -8187,6 +8367,14 @@
   }
 
   window.__ordersDashboardApi = {
+    getOrderTabMode(orderId) {
+      return normalizeTabMode(tabsState.tabs.find(tab => tab.type === 'order' && Number(tab.orderId) === Number(orderId))?.mode);
+    },
+    async cancelEditingOrder(orderId) {
+      const bridge = await getReadyNewOrderBridge();
+      return bridge.cancelEditingOrder(Number(orderId));
+    },
+    suspendCheckout() { goToOrdersHomeView(); },
     openOrderPassport(orderId, context = {}) {
       return openOrderDetailsById(orderId, context);
     },
@@ -8195,6 +8383,11 @@
     },
     async openOrderById(orderId, options = {}) {
       return openOrderDetailsById(orderId, options);
+    },
+    async openActiveOrderPayment() {
+      const order = getActiveOrder();
+      if (!order) throw new Error('ACTIVE_ORDER_NOT_FOUND');
+      return openOrderPaymentDialog(order);
     },
     async cycleActiveOrderStatus() {
       await cycleActiveOrderStatus();
@@ -8249,7 +8442,7 @@
     if (!order) return;
     if (!isOrderPrintable(order)) return;
     
-    printOrderReceipt(order);
+    openOrderPrintSelector(btn, [Number(order.id)]);
   });
 
   document.addEventListener("click", async (e) => {
@@ -8285,6 +8478,367 @@
     } finally {
       btn.disabled = false;
     }
+  });
+
+  function printOptionsScopeKey() {
+    return `${getTenantIdFromStorage()}:${getStoreIdFromStorage()}`;
+  }
+
+  function getOrderPrintOptions() {
+    const scopeKey = printOptionsScopeKey();
+    if (!window.AdminReferenceCache) return Promise.reject(new Error('PRINT_REFERENCE_CACHE_UNAVAILABLE'));
+    return window.AdminReferenceCache.getOrLoadReference('print-options', {
+      load: async () => {
+        if (scopeKey !== printOptionsScopeKey()) throw new Error('PRINT_SCOPE_CHANGED');
+        const result = await apiJson('/api/admin/orders/print/options');
+        if (scopeKey !== printOptionsScopeKey()) throw new Error('PRINT_SCOPE_CHANGED');
+        return result.data;
+      },
+      validate: data => Boolean(data && Array.isArray(data.templates) && Array.isArray(data.rules) && Array.isArray(data.product_zones)),
+    });
+  }
+
+  let printOptionsWarmScope = '';
+  let printOptionsWarmAt = 0;
+  function warmOrderPrintOptions() {
+    if (!workspaceCapabilities.print || navigator.onLine === false || document.visibilityState === 'hidden') return;
+    const scopeKey = printOptionsScopeKey();
+    if (scopeKey === printOptionsWarmScope && Date.now() - printOptionsWarmAt < 60000) return;
+    printOptionsWarmScope = scopeKey;
+    printOptionsWarmAt = Date.now();
+    void getOrderPrintOptions().catch(error => {
+      console.error('Не удалось обновить настройки печати:', error);
+    });
+  }
+
+  let orderPrintSelector = null;
+  const orderPrintTasks=[];
+  let refreshOrderPrintActivity=null;
+  function removeOrderPrintTask(task){
+    if(task.state==='pending' || task.statusSaving)return;
+    clearTimeout(task.cleanupTimer);
+    const index=orderPrintTasks.indexOf(task);
+    if(index>=0)orderPrintTasks.splice(index,1);
+    syncOrderPrintActivity();
+  }
+  function scheduleOrderPrintTaskCleanup(task){
+    if(task.state!=='sent' || task.statusError || task.statusSaving)return;
+    clearTimeout(task.cleanupTimer);
+    task.cleanupTimer=setTimeout(()=>removeOrderPrintTask(task),Math.max(0,3000-(Date.now()-task.sentAt)));
+  }
+  function syncOrderPrintActivity(){
+    const tasks=orderPrintTasks.filter(task=>task.scope===printOptionsScopeKey());
+    const pending=tasks.some(task=>task.state==='pending');
+    const failed=tasks.some(task=>task.state==='error' || task.statusError);
+    const showSuccess=tasks.some(task=>task.state==='sent' && Date.now()-task.sentAt<3000);
+    document.querySelectorAll('[data-order-print-activity]').forEach(button=>{
+      button.classList.toggle('hidden',!pending && !failed && !showSuccess);
+      button.setAttribute('aria-label',pending?'Подготовка документов — посмотреть задания':'Посмотреть задания печати');
+      button.title=tasks.map(task=>task.message+(task.statusError?' · '+task.statusError:'')).join('\n');
+      button.querySelector('i').className=pending?'fas fa-circle-notch fa-spin':failed?'fas fa-exclamation-circle':'fas fa-check';
+      button.setAttribute('aria-busy',String(pending));
+    });
+    refreshOrderPrintActivity?.();
+  }
+  document.querySelectorAll('[data-order-print-activity]').forEach(button=>button.addEventListener('click',()=>openOrderPrintSelector(button,[],true)));
+  warmOrderPrintOptions();
+  async function openOrderPrintSelector(anchor, orderIds, activity=false) {
+    const bulk=anchor.id==='ordersBulkPrint';
+    if (!getActiveOrderCapabilities().print || (!activity && !orderIds.length)) return;
+    if (!orderPrintSelector) {
+      orderPrintSelector=document.createElement('div');
+      orderPrintSelector.className='order-print-popover';
+      orderPrintSelector.setAttribute('popover','auto');
+      document.body.append(orderPrintSelector);
+    }
+    const panel=orderPrintSelector;
+    if (panel.matches(':popover-open')) panel.hidePopover();
+    const opening = crypto.randomUUID(); panel.dataset.printOpening=opening;
+    panel.onclick=null;
+    panel.replaceChildren();
+    const title=document.createElement('strong');title.textContent=orderIds.length===1?`Печать заказа №${orderIds[0]}`:`Печать выбранных заказов: ${orderIds.length}`;
+    const status=document.createElement('div');status.setAttribute('role','status');status.textContent='Загрузка…';
+    const heading=document.createElement('div');heading.className='order-print-heading';
+    const headingTitle=document.createElement('div');headingTitle.className='order-print-heading-title';
+    const allLabel=document.createElement('label');allLabel.className='products-bulk-toggle-all';allLabel.title='Выбрать все шаблоны / снять всё';
+    const allTemplates=document.createElement('input');allTemplates.type='checkbox';allTemplates.className='products-bulk-toggle-all-input';allTemplates.disabled=true;allTemplates.setAttribute('aria-label','Выбрать все шаблоны / снять всё');
+    const allUi=document.createElement('span');allUi.className='products-bulk-toggle-all-box';allUi.setAttribute('aria-hidden','true');allLabel.append(allTemplates,allUi);
+    headingTitle.append(allLabel,title);heading.append(headingTitle);
+    panel.append(heading,status);panel.showPopover();
+    const positionPrintPopover=()=>{
+      if(panel.dataset.printOpening!==opening || !panel.matches(':popover-open'))return;
+      const bounds=anchor.getBoundingClientRect();
+      const center=(anchor.id==='ordersBulkPrint' || anchor.hasAttribute('data-order-print-activity')) && !isMobile()
+        ? document.getElementById('ordersCenterPane')?.getBoundingClientRect()
+        : null;
+      const leftEdge=Math.max(8,center ? center.left+8 : 8);
+      const rightEdge=Math.min(window.innerWidth-8,center ? center.right-8 : window.innerWidth-8);
+      panel.style.maxWidth=`${Math.max(1,rightEdge-leftEdge)}px`;
+      const width=panel.offsetWidth,height=panel.offsetHeight,gap=8;
+      const below=window.innerHeight-bounds.bottom-gap;
+      const above=bounds.top-gap;
+      const top=below>=height || below>=above ? bounds.bottom+gap : bounds.top-height-gap;
+      panel.style.left=`${Math.max(leftEdge,Math.min(center ? bounds.left : bounds.right-width,rightEdge-width))}px`;
+      panel.style.top=`${Math.max(8,Math.min(top,window.innerHeight-height-8))}px`;
+    };
+    positionPrintPopover();
+    if(activity){
+      heading.replaceChildren(title);title.textContent='Задания печати';status.textContent='';
+      const scope=printOptionsScopeKey();
+      const tasks=orderPrintTasks.filter(task=>task.scope===scope).slice().reverse();
+      const labels=new Map();
+      for(const task of tasks){
+        const item=document.createElement('div');
+        const name=document.createElement('strong');name.textContent=`Заказы: ${task.orderIds.join(', ')}`;
+        const documents=document.createElement('div');documents.textContent=task.documents.join('; ');
+        const target=document.createElement('div');target.className='muted';target.textContent=task.destination==='agent'?'Через агент':'Через браузер';
+        if(task.statusTitle)target.textContent+=` · Статус: ${task.statusTitle}`;
+        const progress=document.createElement('div');progress.setAttribute('role','status');
+        const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='btn btn-ghost btn-sm hidden';dismiss.textContent='Закрыть ошибку';
+        dismiss.addEventListener('click',()=>removeOrderPrintTask(task));
+        item.append(name,documents,target,progress,dismiss);panel.append(item);labels.set(task,{item,progress,dismiss});
+      }
+      if(!tasks.length)status.textContent='Нет заданий печати.';
+      refreshOrderPrintActivity=()=>{
+        if(panel.dataset.printOpening!==opening || scope!==printOptionsScopeKey())return;
+        for(const [task,nodes] of labels){
+          if(!orderPrintTasks.includes(task)){nodes.item.remove();labels.delete(task);continue;}
+          nodes.progress.textContent=task.message+(task.statusError?' · '+task.statusError:'');
+          nodes.dismiss.classList.toggle('hidden',task.state==='pending' || task.statusSaving || !(task.state==='error' || task.statusError));
+        }
+        if(!labels.size){if(panel.matches(':popover-open'))panel.hidePopover();refreshOrderPrintActivity=null;return;}
+        positionPrintPopover();
+      };
+      refreshOrderPrintActivity();return;
+    }
+    refreshOrderPrintActivity=null;
+    try {
+      const scopeKey = printOptionsScopeKey();
+      const {templates,rules,product_zones}=await getOrderPrintOptions();
+      if(panel.dataset.printOpening!==opening || scopeKey !== printOptionsScopeKey()) return;
+      status.textContent='';
+      let printOrders=await Promise.all(orderIds.map(id=>ensureFullOrderById(id,{strict:true})));
+      if(panel.dataset.printOpening!==opening || scopeKey!==printOptionsScopeKey())return;
+      if(printOrders.some(order=>!order))throw new Error('ORDER_NOT_FOUND');
+      let excludedMessage='';
+      const currentPrintOrder=order=>orderStatusQueue.overlay(state.orders.find(row=>Number(row.id)===Number(order.id)) || tabsState.tabs.find(tab=>Number(tab.orderId)===Number(order.id))?.order || order);
+      const excludedFromBulk=order=>{
+        const current=currentPrintOrder(order);
+        const code=String(current.status_code || getStatusMetaById(Number(current.status_id))?.code || current.statusCode || '').trim().toLowerCase();
+        return ['delivered','canceled','cancelled'].includes(code)?code:'';
+      };
+      if(bulk){
+        const delivered=printOrders.filter(order=>excludedFromBulk(order)==='delivered').length;
+        const canceled=printOrders.filter(order=>['canceled','cancelled'].includes(excludedFromBulk(order))).length;
+        if(delivered || canceled)excludedMessage=`Исключены из печати: доставленных — ${delivered}, отменённых — ${canceled}.`;
+        printOrders=printOrders.filter(order=>!excludedFromBulk(order));
+        orderIds=printOrders.map(order=>Number(order.id));
+        title.textContent=`Печать выбранных заказов: ${orderIds.length}`;
+        if(!orderIds.length){status.textContent=excludedMessage+' Нет заказов для массовой печати. Откройте нужный заказ в правой колонке для индивидуальной печати.';allLabel.classList.add('hidden');positionPrintPopover();return;}
+      }
+      const zoneByProduct=new Map((product_zones || []).map(product=>[Number(product.id),Number(product.production_zone_id)]));
+      const hasDelivery=printOrders.some(order=>String(order.method_code || '').trim().toLowerCase()==='delivery');
+      const hasZoneItems=zoneId=>printOrders.some(order=>(order.remaining_order?.items || order.items || []).some(item=>item.type==='combo'
+        ? (item.selections || []).some(selection=>zoneByProduct.get(Number(selection.product_id))===Number(zoneId))
+        : zoneByProduct.get(Number(item.product_id))===Number(zoneId)));
+      const routeAvailable=rule=>rule.printer_name && Number(rule.agent_id)>0 && Number(rule.token_id)>0 && Number(rule.connection_active)===1
+        && (!['assembly','label'].includes(rule.template_type) || rule.item_scope!=='zone' || hasZoneItems(rule.production_zone_id));
+      const mode=document.createElement('label');mode.className='switch order-print-mode';
+      const viaAgent=document.createElement('input');viaAgent.type='checkbox';viaAgent.className='switch-input';viaAgent.checked=true;
+      const switchUi=document.createElement('span');switchUi.className='switch-ui';switchUi.setAttribute('aria-hidden','true');
+      const modeText=document.createElement('span');modeText.className='switch-text';modeText.textContent='Через агент';mode.append(modeText,viaAgent,switchUi);
+      const rows=document.createElement('div');rows.className='order-print-documents';
+      const hint=document.createElement('div');hint.className='order-print-help muted hidden';hint.id=`print-help-${opening}`;hint.setAttribute('role','note');
+      const printButton=document.createElement('button');printButton.type='button';printButton.className='btn btn-primary';printButton.textContent='Печатать выбранное';
+      heading.append(mode);
+      const actions=document.createElement('div');actions.className='order-print-actions';
+      const info=document.createElement('button');info.type='button';info.className='icon-btn order-print-info';info.textContent='i';info.setAttribute('aria-label','Информация о способе печати');info.setAttribute('aria-expanded','false');info.setAttribute('aria-controls',hint.id);
+      const closeHelp=()=>{hint.classList.add('hidden');info.setAttribute('aria-expanded','false');};
+      info.addEventListener('click',()=>{const open=hint.classList.contains('hidden');hint.classList.toggle('hidden',!open);info.setAttribute('aria-expanded',String(open));});
+      actions.addEventListener('keydown',event=>{if(event.key==='Escape' && !hint.classList.contains('hidden')){event.preventDefault();event.stopPropagation();closeHelp();info.focus();}});
+      panel.onclick=event=>{if(!actions.contains(event.target))closeHelp();};
+      actions.append(printButton,info,hint);
+      const statusChoice=document.createElement('div');statusChoice.className='new-order-right-select-wrap order-print-status-choice';
+      const statusTrigger=document.createElement('button');statusTrigger.type='button';statusTrigger.className='new-order-right-select-trigger';statusTrigger.setAttribute('aria-haspopup','listbox');statusTrigger.setAttribute('aria-expanded','false');
+      const statusLabel=document.createElement('span');statusLabel.textContent='Не менять статус';
+      const chevron=document.createElement('i');chevron.className='fas fa-chevron-down';statusTrigger.append(statusLabel,chevron);
+      const statusMenu=document.createElement('div');statusMenu.className='new-order-right-select-menu hidden';statusMenu.setAttribute('role','listbox');statusMenu.setAttribute('aria-label','Статус после отправки на печать');
+      let printTargetStatusId=0;
+      const printStatusOptions=[[0,'Не менять статус'],...state.statuses.filter(item=>Number(item.id)>0 && Number(item.is_active ?? 1)!==0).slice().sort((a,b)=>Number(a.sort || 0)-Number(b.sort || 0)).map(item=>[Number(item.id),String(item.title || item.code || item.id)])];
+      for(const [value,text] of printStatusOptions){
+        const option=document.createElement('button');option.type='button';option.className='new-order-right-select-option'+(!value?' is-selected':'');option.textContent=text;option.setAttribute('role','option');option.setAttribute('aria-selected',String(!value));
+        option.disabled=Boolean(value) && !getActiveOrderCapabilities().status;
+        option.addEventListener('click',()=>{if(statusTrigger.disabled)return;printTargetStatusId=value;statusLabel.textContent=text;statusMenu.classList.add('hidden');statusChoice.classList.remove('is-open');statusTrigger.setAttribute('aria-expanded','false');statusMenu.querySelectorAll('button').forEach(button=>{button.classList.toggle('is-selected',button===option);button.setAttribute('aria-selected',String(button===option));});positionPrintPopover();});
+        statusMenu.append(option);
+      }
+      statusTrigger.addEventListener('click',()=>{const open=statusMenu.classList.contains('hidden');statusMenu.classList.toggle('hidden',!open);statusChoice.classList.toggle('is-open',open);statusTrigger.setAttribute('aria-expanded',String(open));positionPrintPopover();});
+      statusChoice.addEventListener('keydown',event=>{if(event.key==='Escape'){statusMenu.classList.add('hidden');statusChoice.classList.remove('is-open');statusTrigger.setAttribute('aria-expanded','false');event.stopPropagation();statusTrigger.focus();}});
+      const previousPanelClick=panel.onclick;
+      panel.onclick=event=>{previousPanelClick?.(event);if(!statusChoice.contains(event.target)){statusMenu.classList.add('hidden');statusChoice.classList.remove('is-open');statusTrigger.setAttribute('aria-expanded','false');}};
+      statusChoice.append(statusTrigger,statusMenu);
+      panel.append(rows,statusChoice,actions);
+      const templateSelections=new Map();
+      printButton.setAttribute('aria-live','polite');
+      let requestId=crypto.randomUUID();
+      const syncTemplateSelection=()=>{
+        const checks=[...rows.querySelectorAll('input[type=checkbox]')];
+        const selected=checks.filter(check=>check.checked).length;
+        allTemplates.checked=checks.length>0 && selected===checks.length;
+        allTemplates.indeterminate=selected>0 && selected<checks.length;
+        allTemplates.disabled=checks.length===0;
+        printButton.disabled=selected===0;
+      };
+      const remember=()=>{
+        for(const row of rows.children){
+          const id=Number(row.dataset.templateId);
+          templateSelections.set(id,{checked:row.querySelector('input[type=checkbox]').checked,copies:Number(row.querySelector('input[type=number]')?.value || templateSelections.get(id)?.copies || 1)});
+        }
+      };
+      const renderRows=()=>{
+        rows.replaceChildren();
+        for(const template of templates){
+          if(template.document_type==='assembly_batch' && orderIds.length<2)continue;
+          if(template.document_type==='delivery' && !hasDelivery)continue;
+          const routes=rules.filter(rule=>Number(rule.template_id)===Number(template.id) && routeAvailable(rule));
+          if(viaAgent.checked && !routes.length)continue;
+          const previous=templateSelections.get(Number(template.id));
+          const row=document.createElement('div');row.className='order-print-document';row.dataset.templateId=String(template.id);
+          const label=document.createElement('label');label.className='products-bulk-toggle-all';
+          const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.className='products-bulk-toggle-all-input';checkbox.checked=previous?.checked ?? false;checkbox.setAttribute('aria-label',template.title);
+          const checkUi=document.createElement('span');checkUi.className='products-bulk-toggle-all-box';checkUi.setAttribute('aria-hidden','true');label.append(checkbox,checkUi);
+          const text=document.createElement('label');text.textContent=template.title;checkbox.id=`print-template-${opening}-${template.id}`;text.htmlFor=checkbox.id;
+          row.append(label,text);
+          if(viaAgent.checked){
+            const assignments=document.createElement('div');assignments.className='order-print-assignments muted';
+            assignments.textContent=routes.map(rule=>`${rule.zone_name} · ${rule.copies} коп.`).join('; ');
+            assignments.title=routes.map(rule=>`${rule.zone_name} · ${rule.copies} коп.${rule.item_scope==='zone' && ['assembly','label'].includes(template.document_type)?' · товары зоны':''}`).join('; ');
+            row.append(assignments);
+          }else{
+            const stepper=document.createElement('div');stepper.className='discount-stepper order-print-copies';
+            const input=document.createElement('input');input.type='number';input.min='1';input.max='100';input.step='1';input.value=String(previous?.copies || 1);input.className='discount-stepper-input';input.setAttribute('aria-label','Копий: '+template.title);
+            const button=(title,delta)=>{const btn=document.createElement('button');btn.type='button';btn.className='discount-stepper-btn';btn.textContent=delta<0?'−':'+';btn.setAttribute('aria-label',title);btn.addEventListener('click',()=>{input.value=String(Math.max(1,Math.min(100,(Number(input.value)||1)+delta)));input.dispatchEvent(new Event('change',{bubbles:true}));});return btn;};
+            stepper.append(button('Уменьшить копии',-1),input,button('Увеличить копии',1));row.append(stepper);
+          }
+          rows.append(row);
+        }
+        hint.textContent=viaAgent.checked?'Принтеры и копии — по правилам производственных зон. Этикетки — на каждую единицу товара.':'Принтер выбирается в системном диалоге браузера. Этикетки — на каждую единицу товара.';
+        status.textContent=[excludedMessage,rows.children.length?'':'Нет доступных шаблонов для выбранных заказов и способа печати.'].filter(Boolean).join(' ');
+        syncTemplateSelection();
+        positionPrintPopover();
+      };
+      viaAgent.addEventListener('change',()=>{remember();closeHelp();renderRows();requestId=crypto.randomUUID();});
+      rows.addEventListener('change',()=>{remember();syncTemplateSelection();requestId=crypto.randomUUID();});
+      allTemplates.addEventListener('change',()=>{
+        rows.querySelectorAll('input[type=checkbox]').forEach(check=>check.checked=allTemplates.checked);
+        remember();syncTemplateSelection();requestId=crypto.randomUUID();
+      });
+      renderRows();
+      printButton.addEventListener('click',async()=>{
+        if(printButton.disabled)return;
+        if(scopeKey!==printOptionsScopeKey()){status.textContent='Филиал изменился. Откройте печать заново.';return;}
+        const destination=viaAgent.checked?'agent':'browser';
+        const submittedOrders=bulk?printOrders.filter(order=>!excludedFromBulk(order)):printOrders;
+        if(!submittedOrders.length){status.textContent='Нет заказов для массовой печати: заказы уже доставлены или отменены.';return;}
+        const printStatusChanges=printTargetStatusId>0
+          ? submittedOrders.flatMap(order=>{
+            const current=orderStatusQueue.overlay(state.orders.find(row=>Number(row.id)===Number(order.id)) || order);
+            return Number(current.status_id)!==printTargetStatusId
+              ? [{order_id:Number(order.id),expected_status_id:Number(current.status_id),steps:[{status_id:printTargetStatusId,mutation_id:crypto.randomUUID()}]}]
+              : [];
+          })
+          : [];
+        const selections=[...rows.children].filter(row=>row.querySelector('input[type=checkbox]').checked).map(row=>({template_id:Number(row.dataset.templateId),...(destination==='browser'?{copies:Number(row.querySelector('input[type=number]').value)}:{})}));
+        if(!selections.length){status.textContent='Выберите хотя бы один документ.';return;}
+        let popup=null;
+        if(destination==='browser'){
+          popup=window.open('','_blank','width=600,height=800');
+          if(!popup){status.textContent='Разрешите всплывающие окна для печати.';return;}
+          popup.document.title='Подготовка печати';
+        }
+        const task={scope:scopeKey,orderIds:submittedOrders.map(order=>Number(order.id)),destination,state:'pending',message:'Подготовка документов…',
+          documents:[...rows.children].filter(row=>row.querySelector('input[type=checkbox]').checked).map(row=>{
+            const template=templates.find(template=>Number(template.id)===Number(row.dataset.templateId));
+            return `${template.title} · ${destination==='agent'?row.querySelector('.order-print-assignments').textContent:Number(row.querySelector('input[type=number]').value)+' коп.'}`;
+          }),statusTitle:printTargetStatusId>0?statusLabel.textContent:''};
+        const submittedRequestId=requestId;requestId=crypto.randomUUID();
+        orderPrintTasks.push(task);
+        printButton.disabled=true;
+        if(panel.matches(':popover-open'))panel.hidePopover();
+        state.selectedOrderIds.clear();
+        elOrdersList?.querySelectorAll('.js-order').forEach(row=>applyOrderMultiSelectionState(row));
+        syncOrdersSelectionToolbar();
+        syncOrderPrintActivity();
+        if(printStatusChanges.length){
+          const changes=printStatusChanges.flatMap(change=>{
+            const previous=orderStatusQueue.overlay(state.orders.find(order=>Number(order.id)===change.order_id)
+              || tabsState.tabs.find(tab=>Number(tab.orderId)===change.order_id)?.order
+              || printOrders.find(order=>Number(order.id)===change.order_id));
+            const optimistic=buildOptimisticOrderStatusSnapshot(previous,change.steps[0].status_id);
+            return optimistic?[{previous,optimistic}]:[];
+          });
+          // enqueueMany updates the UI synchronously; persistence and print preparation run independently.
+          task.statusSaving=true;
+          void orderStatusQueue.enqueueMany(changes).catch(error=>{task.statusError='Не удалось сохранить очередь статусов на устройстве';}).finally(()=>{task.statusSaving=false;scheduleOrderPrintTaskCleanup(task);syncOrderPrintActivity();});
+        }
+        try{
+          const result=await apiJson('/api/admin/orders/print/documents',{method:'POST',body:{order_ids:task.orderIds,selections,request_id:submittedRequestId,destination,print_context:bulk?'bulk':'order'}});
+          if(destination==='browser'){await printPreparedDocuments(popup,result.data.documents);task.message='Документы переданы в диалог браузера.';}
+          else task.message=`Отправлено на печать: ${result.data.queued}`;
+          task.state='sent';
+          task.sentAt=Date.now();
+          scheduleOrderPrintTaskCleanup(task);
+        }catch(error){
+          if(popup&&!popup.closed)popup.close();task.state='error';
+          task.message=({PRINT_FAILED:'Не удалось подготовить документы для печати.',PRINT_RULE_NOT_FOUND:'Назначения шаблонов изменились. Проверьте производственные зоны.',NO_MATCHING_DOCUMENTS:'Нет подходящих документов для выбранных заказов.',PRINT_MIGRATION_REQUIRED:'Сначала примените миграцию печати от 19.10.2026.',PRINT_ROUTE_NOT_CONFIGURED:'У зоны не настроен принтер или агент.',ORDER_NOT_FOUND:'Заказ недоступен.'})[error.message] || `Ошибка печати: ${error.message}`;
+          if(error.printErrorId)task.message+=` · Номер ошибки: ${error.printErrorId}`;
+        }finally{syncOrderPrintActivity();}
+
+      });
+    }catch(error){status.textContent=`Не удалось загрузить настройки печати: ${error.message}`;}
+  }
+
+  async function printPreparedDocuments(popup, documents) {
+    if(popup.closed)throw new Error('Окно печати закрыто');
+    popup.document.open();popup.document.write('<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src &apos;none&apos;; style-src &apos;unsafe-inline&apos;"><title>Печать заказов</title></head><body></body></html>');popup.document.close();
+    const printDoc=popup.document;
+    const reset=printDoc.createElement('style');reset.textContent='html,body{margin:0;padding:0} .print-document{display:flow-root;break-after:page} .print-document:last-child{break-after:auto}';printDoc.head.append(reset);
+    let index=0;
+    for(const document of documents){
+      for(let copy=0;copy<document.copies;copy++){
+        const parsed=new DOMParser().parseFromString(document.html,'text/html');
+        parsed.querySelectorAll('script,iframe,object,embed,link,meta,base,form').forEach(el=>el.remove());
+        parsed.querySelectorAll('*').forEach(el=>{for(const attribute of [...el.attributes]){if(/^on/i.test(attribute.name)||['href','src','srcset','action','formaction','xlink:href'].includes(attribute.name))el.removeAttribute(attribute.name);}});
+        const name=`printDocument${index++}`, selector='.'+name;
+        const section=printDoc.createElement('section');section.className='print-document '+name;section.style.page=name;
+        const styles=[...parsed.querySelectorAll('style')];styles.forEach(style=>style.remove());
+        section.append(...[...parsed.body.childNodes].map(node=>printDoc.importNode(node,true)));
+        printDoc.body.append(section);
+        let pageRules='';
+        const scopeRules=rules=>[...rules].map(rule=>{
+          if(rule.type===1){const selectors=rule.selectorText.split(',').map(value=>{const trimmed=value.trim();if(trimmed==='*')return `${selector},${selector} *`;return /^(html|body)(?=[\s.:#[]|$)/.test(trimmed)?trimmed.replace(/^(?:html\s+)?body|^html/,selector):`${selector} ${trimmed}`;});return `${selectors.join(',')}{${rule.style.cssText}}`;}
+          if(rule.type===6){pageRules=rule.style.cssText;return '';}
+          if(rule.type===4)return `@media ${rule.conditionText}{${scopeRules(rule.cssRules)}}`;
+          return '';
+        }).join('');
+        for(const source of styles){const temporary=printDoc.createElement('style');temporary.textContent=source.textContent;printDoc.head.append(temporary);const scoped=scopeRules(temporary.sheet.cssRules);temporary.textContent=scoped;}
+        const page=printDoc.createElement('style');
+        page.textContent=`@page ${name}{${pageRules || 'margin:0;'}}`;
+        printDoc.head.append(page);
+        // Roll documents have no fixed length; labels retain their explicit size.
+        if(document.type!=='label'){
+          section.style.width='80mm';
+          const height=Math.ceil(section.getBoundingClientRect().height*25.4/96+1);
+          page.textContent=`@page ${name}{size:80mm ${height}mm;margin:0}`;
+        }
+      }
+    }
+    await printDoc.fonts.ready;
+    popup.addEventListener('afterprint',()=>popup.close(),{once:true});popup.focus();popup.print();
+  }
+
+  document.getElementById('ordersBulkPrint')?.addEventListener('click',event=>{
+    const orderIds=[...state.selectedOrderIds].map(Number);
+    openOrderPrintSelector(event.currentTarget,orderIds);
   });
 
   // Функция печати чека через системную печать браузера
@@ -9096,6 +9650,10 @@
   });
   // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
+    if (orderPrintSelector?.matches(':popover-open')) orderPrintSelector.hidePopover();
+    if (orderPrintSelector) orderPrintSelector.dataset.printOpening = '';
+    warmOrderPrintOptions();
+    syncOrderPrintActivity();
     console.log('Филиал изменен:', event.detail.store);
     stopOrdersPolling();
     courierSyncGeneration += 1;
@@ -9106,6 +9664,7 @@
     courierPassportCacheStates.clear();
     orderStatusSyncStates.clear();
     orderStatusScopeRevision++;
+    orderStageCountersQueryKey=null;
     state.clientsCache.clear();
     state.statuses = [];
     state.orders = [];
@@ -9174,8 +9733,29 @@
         }
         return null;
       })
-      .then(() => {
+      .then(async () => {
         if (!isCourierWorkspace) startOrdersPolling();
+        if (isCourierWorkspace || document.body.classList.contains('new-order-editor-active')) return;
+        const activeTab = tabsState.tabs.find(tab => tab.key === tabsState.activeKey);
+        const scope = window.AdminPersistentCache?.scope({ domain: 'orders:editor', version: 1 });
+        if (!scope?.complete) return;
+        const workspace = await scope.get('workspace');
+        if (performance.getEntriesByType('navigation')[0]?.type === 'reload'
+          && workspace?.rightOrders?.some(row => row.mode === 'edit')) {
+          const bridge = await getReadyNewOrderBridge();
+          if (!bridge) throw new Error('ORDER_EDITOR_UNAVAILABLE');
+          await bridge.readWorkspace();
+          return;
+        }
+        if (tabsState.tabs.length && !isCheckoutTab(activeTab)) return;
+        if (workspace?.editorOrigin !== location.pathname) return;
+        const active = workspace.rightOrders?.find(order => Number(order.id) === Number(workspace.rightActiveOrderId));
+        if (active?.mode === 'edit') {
+          if (document.body.classList.contains('page-chat')) document.body.classList.add('chat-right-order-mode');
+          await openOrderDetailsById(Number(active.editOrderId));
+          await openEditOrderTab(Number(active.editOrderId));
+          window.__adminMobilePages?.restoreEditorView?.(workspace.editorView);
+        }
       })
       .catch((err) => {
         console.error(err);
@@ -9186,5 +9766,6 @@
         }
       });
   });
+  void initOrdersPrintPanel().catch(error=>console.error('Не удалось подключить панель печати:',error));
 })();
 

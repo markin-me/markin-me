@@ -354,7 +354,7 @@
     }
     return root;
   }
-  function createRecoveryCard({ context = "customer", onSuccess, purpose = "login", dependencies = {} } = {}) {
+  function createRecoveryCard({ context = "customer", onSuccess, phone: initialPhone, onPhoneSave, purpose = "login", dependencies = {} } = {}) {
     if (!["customer", "employee"].includes(context)) throw new Error("INVALID_AUTH_CONTEXT");
     const isEmployee = context === "employee";
     const {
@@ -396,7 +396,7 @@
     phone.spellcheck = false;
     phone.setAttribute("data-lpignore", "true");
     phone.setAttribute("data-form-type", "other");
-    phone.value = "+7";
+    phone.value = initialPhone || "+7";
     phone.placeholder = "+7 (999) 999-99-99";
     phone.setAttribute("aria-label", phoneLabel.textContent);
     form.appendChild(phoneLabel);
@@ -879,6 +879,7 @@
       }
       nextBtn.disabled = true;
       try {
+        if (typeof onPhoneSave === 'function') { await onPhoneSave(n); return; }
         if (isKsoAuth) {
           const json = await apiJson("/api/public/auth/kso-login", {
             method: "POST",

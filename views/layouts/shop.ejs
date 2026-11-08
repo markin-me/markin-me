@@ -175,6 +175,12 @@
   <script src="<%= assetUrl('/static/js/shop-pwa-presence.js?v=20260407a') %>" defer></script>
 
   <script src="<%= assetUrl('/static/js/shared-bonus-accrual.js') %>" defer></script>
+  <script src="<%= assetUrl('/static/js/shared-product-runtime.js') %>" defer></script>
+  <script src="<%= assetUrl('/static/js/shared-product-pricing.js') %>" defer></script>
+  <script src="<%= assetUrl('/static/js/shared-product-card.js') %>" defer></script>
+  <% if (!Array.isArray(pageScripts) || !pageScripts.some(function (src) { return src.includes('/shared-product-details.js'); })) { %>
+    <script src="<%= assetUrl('/static/js/shared-product-details.js?v=components-v2') %>" defer></script>
+  <% } %>
   <% if (Array.isArray(pageScripts)) { %>
     <% pageScripts.forEach(function (src) { %>
       <script src="<%= assetUrl(src) %>" defer></script>

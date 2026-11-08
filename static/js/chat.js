@@ -546,6 +546,8 @@
     selectedMessageIds: new Set(),
     store: loadStore(),
     orderDetailsCache: new Map(),
+    messageOrderCards: new Map(),
+    messageOrderCardJobs: new Map(),
     clientProfileCache: new Map(),
     clientOrdersCache: new Map(),
     remoteThreadUpdatedAt: {},
@@ -3361,6 +3363,7 @@
       document.body.classList.remove("chat-mobile-left-open", "chat-mobile-right-open");
       return "center";
     }
+    if (document.body.classList.contains('new-order-editor-active')) return String(view || 'right');
     const requestedView = String(view || "").trim().toLowerCase();
     let nextView = requestedView === "clients" || requestedView === "right" ? requestedView : "center";
     if (nextView === "center" && Number(state.activeClientId || 0) <= 0) {
@@ -3888,6 +3891,7 @@
   function getChatRightTabsHeaderHost(mode) {
     const nextMode = String(mode || "").trim().toLowerCase() === "order" ? "order" : "client";
     if (nextMode === "order") {
+      if (document.body.classList.contains("orders-checkout-mode")) return document.getElementById("ordersCheckoutRightPane");
       const ordersPane = document.getElementById("ordersRightPane");
       if (!ordersPane) return null;
       return ordersPane.querySelector(".panel") || ordersPane;
@@ -3905,8 +3909,41 @@
     host.insertBefore(header, host.firstChild || null);
   }
 
+  const chatCheckoutPlacements = [];
+  function syncChatCheckoutLayout() {
+    if (!document.body.classList.contains('page-chat')) return;
+    const editing = document.body.classList.contains('orders-checkout-mode') && document.body.classList.contains('chat-right-order-mode');
+    if (editing) document.body.classList.remove('chat-mobile-left-open', 'chat-mobile-right-open');
+    if (!chatCheckoutPlacements.length && editing) {
+      for (const [id, selector] of [['ordersCheckoutLeftPane', '.page-col-left'], ['ordersCheckoutCenterPane', '.page-col-center']]) {
+        const node = document.getElementById(id), host = document.querySelector(selector);
+        if (!node || !host) continue;
+        const anchor = document.createComment('chat checkout panel position');
+        node.before(anchor);
+        chatCheckoutPlacements.push({node, host, anchor, hiddenChildren: []});
+      }
+    }
+    for (const placement of chatCheckoutPlacements) {
+      const {node, host, anchor} = placement;
+      if (editing && node.parentElement !== host) {
+        placement.hiddenChildren = [...host.children].filter(child => !child.classList.contains('hidden'));
+        placement.hiddenChildren.forEach(child => child.classList.add('hidden'));
+        host.append(node);
+        node.classList.remove('hidden');
+      } else if (!editing && node.parentElement === host) {
+        anchor.after(node);
+        placement.hiddenChildren.forEach(child => child.classList.remove('hidden'));
+        placement.hiddenChildren = [];
+      }
+    }
+    placeChatRightTabsHeader(document.body.classList.contains('chat-right-order-mode') ? 'order' : 'client');
+  }
+  document.addEventListener('orders:checkout-layout', syncChatCheckoutLayout);
+  document.addEventListener('orders:tabs-updated', renderChatRightTabs);
+
   function showChatRightPane(mode) {
     const nextMode = String(mode || "").trim().toLowerCase() === "order" ? "order" : "client";
+    if (nextMode === 'client' && document.body.classList.contains('orders-checkout-mode')) getOrdersRightApi()?.suspendCheckout();
     const host = document.querySelector(".page-chat .page-col-right");
     const storage = document.getElementById("chatRightPaneStorage");
     const clientPane = document.querySelector(".client-info-panel");
@@ -3924,6 +3961,7 @@
       }
     }
     document.body.classList.toggle("chat-right-order-mode", nextMode === "order");
+    syncChatCheckoutLayout();
     placeChatRightTabsHeader(nextMode);
     hideLegacyRightPaneHeadersForChat();
   }
@@ -3943,6 +3981,7 @@
       moveChatRightPaneNode(tabsHeader, clientPane || storage);
     }
     document.body.classList.remove("chat-right-order-mode");
+    syncChatCheckoutLayout();
     if (tabsHeader) {
       tabsHeader.classList.add("hidden");
       tabsHeader.setAttribute("aria-hidden", "true");
@@ -3981,23 +4020,21 @@
       header.classList.toggle("hidden", !hasTabs);
       header.setAttribute("aria-hidden", hasTabs ? "false" : "true");
     }
-    wrap.innerHTML = tabs.map((t) => {
-      const key = buildChatRightTabKey(t.kind, t.id);
-      const selected = key && key === String(state.activeRightTabKey || "");
-      const title = t.kind === "order"
-        ? `${isChatMobileViewport() ? "№" : "#"}${t.id}`
-        : (String(t.title || "").trim() || "Клиент");
-      const safeTitle = escapeHtml(title);
-      return `
-        <div class="product-tab ${selected ? "is-active" : ""}" role="tab"
-          data-chat-right-tab="${escapeHtml(key)}"
-          aria-selected="${selected ? "true" : "false"}"
-          title="${safeTitle}">
-          <span class="product-tab-title">${safeTitle}</span>
-          <button class="product-tab-close" type="button" data-chat-right-tab-close="${escapeHtml(key)}" aria-label="Закрыть вкладку">&times;</button>
-        </div>
-      `;
-    }).join("");
+    const shared = getSharedOrderPanel();
+    if (!shared?.renderTabs) throw new Error('ORDER_TABS_RENDERER_UNAVAILABLE');
+    shared.renderTabs({
+      headers: header ? [header] : [],
+      tabsEls: [wrap, document.getElementById('newOrderCatalogTabs')].filter(Boolean),
+      tabs: tabs.map(tab => ({
+        key: buildChatRightTabKey(tab.kind, tab.id),
+        title: tab.kind === 'order' ? `№${tab.id}` : (String(tab.title || '').trim() || 'Клиент'),
+        mode: tab.kind === 'order' ? getOrdersRightApi()?.getOrderTabMode(tab.id) : 'view',
+      })),
+      activeKey: state.activeRightTabKey,
+      isEditingTab: tab => tab.mode === 'edit' || tab.mode === 'new',
+      tabKeyAttribute: 'data-chat-right-tab',
+      tabCloseAttribute: 'data-chat-right-tab-close',
+    });
   }
 
   function upsertChatRightTab(kind, id, title = "") {
@@ -4021,6 +4058,12 @@
   function closeChatRightTab(key) {
     const k = String(key || "").trim();
     if (!k || !Array.isArray(state.rightTabs)) return;
+    const editingTab = state.rightTabs.find(tab => buildChatRightTabKey(tab.kind, tab.id) === k);
+    if (editingTab?.kind === 'order' && getOrdersRightApi()?.getOrderTabMode(editingTab.id) === 'edit') {
+      void getOrdersRightApi().cancelEditingOrder(editingTab.id).then(renderChatRightTabs).catch(console.error);
+      return;
+    }
+
     state.rightTabs = state.rightTabs.filter((t) => buildChatRightTabKey(t.kind, t.id) !== k);
     if (String(state.activeRightTabKey || "") === k) {
       const last = state.rightTabs[state.rightTabs.length - 1] || null;
@@ -4067,7 +4110,9 @@
       const previousTab = activeTabIndex > 0 ? state.rightTabs[activeTabIndex - 1] : null;
       await openCanonicalChatOrder(id, { backToClient: previousTab?.kind === "client" });
       if (activationToken !== state.rightTabActivationToken) return;
-      syncMobileChatView("right");
+      if (isChatMobileViewport() && getOrdersRightApi()?.getOrderTabMode(id) === 'edit') {
+        window.__adminMobilePages?.openCenter?.('Каталог');
+      } else syncMobileChatView("right");
       return;
     }
 
@@ -5104,6 +5149,8 @@
     const signature = buildActiveOrdersSignature(list);
     const changed = signature !== state.activeOrdersSignature;
     state.activeOrders = list;
+    const cardScope=getMessageOrderCardScope();
+    list.forEach(order => state.messageOrderCards.set(`${cardScope}:${Number(order.id)}`, {...state.messageOrderCards.get(`${cardScope}:${Number(order.id)}`),...order,cardState:null}));
     state.activeOrdersSignature = signature;
     if (!list.length) {
       state.activeOrdersHydratedClientId = 0;
@@ -10060,6 +10107,9 @@
     const id = toPositiveOrderId(orderId);
     if (!id) return null;
 
+    const messageSnapshot = state.messageOrderCards.get(getMessageOrderCardScope() + ':' + id);
+    if (messageSnapshot) return messageSnapshot;
+
     const fromActiveList = (Array.isArray(state.activeOrders) ? state.activeOrders : [])
       .find((order) => toPositiveOrderId(order?.id) === id);
     if (fromActiveList && typeof fromActiveList === "object") return fromActiveList;
@@ -10068,27 +10118,85 @@
       ? state.orderDetailsCache.get(id)
       : null;
     if (fromDetailsCache && typeof fromDetailsCache === "object") return fromDetailsCache;
-    return null;
+    return state.messageOrderCards.get(getMessageOrderCardScope() + ':' + id) || null;
+  }
+
+  function getMessageOrderCardScope() {
+    return `${getTenantId()}:${localStorage.getItem('activeStoreId') || '1'}:${localStorage.getItem('authToken') || ''}:${state.activeClientId}`;
+  }
+
+  function patchMessageOrderCards() {
+    if (!dom.center.messagesWrap) return;
+    dom.center.messagesWrap.querySelectorAll('[data-chat-order-card-id]').forEach(node => {
+      const id = Number(node.getAttribute('data-chat-order-card-id'));
+      const next = buildMessageOrderCardMarkup(buildMessageOrderCardModel(id));
+      const template = document.createElement('template');
+      template.innerHTML = next.trim();
+      const replacement = template.content.firstElementChild;
+      if (replacement && !node.isEqualNode(replacement)) node.replaceWith(replacement);
+    });
+  }
+
+  function hydrateMessageOrderCards(thread) {
+    const clientId = Number(state.activeClientId);
+    if (!(clientId > 0)) return;
+    const scope = getMessageOrderCardScope();
+    const ids = [...new Set(thread.flatMap(resolveAssistantOrderCardIds))];
+    const now = Date.now();
+    const missing = ids.filter(id => now - (state.messageOrderCardJobs.get(`${scope}:${id}`) || 0) > 60000);
+    for (let offset=0; offset<missing.length; offset+=50) {
+      const batch=missing.slice(offset,offset+50);
+      batch.forEach(id => state.messageOrderCardJobs.set(`${scope}:${id}`, now));
+      void (async () => {
+        const passport = window.AdminPersistentCache?.orderPassport;
+        const cache = passport?.scope();
+        for (let at=0; at<batch.length; at+=10) {
+          const entries=await Promise.all(batch.slice(at,at+10).map(async id => {
+            try { return {id,entry:await passport?.read(id,{cache,allowStale:true})}; }
+            catch(error) { console.error('Chat order cache read failed:',error); return {id,entry:null}; }
+          }));
+          if (scope !== getMessageOrderCardScope()) return;
+          entries.forEach(({id,entry}) => {if(entry?.order)state.messageOrderCards.set(`${scope}:${id}`,{...entry.order,...findKnownOrderById(id)});});
+          patchMessageOrderCards();
+        }
+        const json=await apiJson(`/api/admin/clients/${clientId}/orders?ids=${batch.join(',')}`,{cache:'no-store'});
+        if (scope !== getMessageOrderCardScope()) return;
+        const returned = new Set((json?.data || []).map(row=>Number(row.id)));
+        batch.forEach(id=>{if(!returned.has(Number(id)))state.messageOrderCards.set(`${scope}:${id}`,{id,cardState:'unavailable'});});
+        for (const row of (Array.isArray(json?.data)?json.data:[])) {
+          const key=`${scope}:${Number(row.id)}`;
+          state.messageOrderCards.set(key,{...state.messageOrderCards.get(key),...row,cardState:null});
+          // Update summary fields only; a list response is not a complete order passport.
+          if (passport?.merge) void passport.merge({id:row.id,status_id:row.status_id,status_title:row.status_title,status_color:row.status_color,total_price:row.total_price},{cache}).catch(error=>console.error('Chat order cache update failed:',error));
+        }
+        patchMessageOrderCards();
+      })().catch(error => {
+        batch.forEach(id => state.messageOrderCardJobs.delete(`${scope}:${id}`));
+        if (!isAbortError(error)) {
+          console.error('Chat message order hydration failed:',error);
+          if(scope === getMessageOrderCardScope()) {
+            batch.forEach(id=>{if(!findKnownOrderById(id))state.messageOrderCards.set(`${scope}:${id}`,{id,cardState:'error'});});
+            patchMessageOrderCards();
+          }
+        }
+      });
+    }
   }
 
   function buildMessageOrderCardModels(message) {
     const ids = resolveAssistantOrderCardIds(message);
     if (!ids.length) return [];
 
-    return ids.map((orderId) => {
-      const knownOrder = findKnownOrderById(orderId);
-      const statusTitle = String(knownOrder?.status_title || knownOrder?.statusTitle || CHAT_ORDER_CARD_STATUS_FALLBACK).trim()
-        || CHAT_ORDER_CARD_STATUS_FALLBACK;
-      const totalRaw = knownOrder ? (knownOrder.total_price ?? knownOrder.total ?? null) : null;
-      const totalLabel = totalRaw === null || totalRaw === undefined ? "" : fmtOrderAmount(totalRaw);
+    return ids.map(buildMessageOrderCardModel);
+  }
 
-      return {
-        orderId,
-        orderLabel: `#${orderId}`,
-        statusTitle,
-        totalLabel,
-      };
-    });
+  function buildMessageOrderCardModel(orderId) {
+    const knownOrder = findKnownOrderById(orderId);
+    const statusTitle = knownOrder?.cardState === 'error' ? '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c'
+      : knownOrder?.cardState === 'unavailable' ? '\u0417\u0430\u043a\u0430\u0437 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d'
+      : String(knownOrder?.status_title || knownOrder?.statusTitle || (knownOrder ? CHAT_ORDER_CARD_STATUS_FALLBACK : '\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430\u2026')).trim() || CHAT_ORDER_CARD_STATUS_FALLBACK;
+    const totalRaw = knownOrder ? (knownOrder.total_price ?? knownOrder.total ?? null) : null;
+    return {orderId,orderLabel:`#${orderId}`,statusTitle,totalLabel:totalRaw == null ? '' : fmtOrderAmount(totalRaw)};
   }
 
   function buildMessageOrderCardMarkup(model) {
@@ -12745,7 +12853,7 @@
       setCachedActiveClientProfile(clientId, state.activeClient);
       syncClientIdentityIntoList(clientId, state.activeClient);
     }
-    // Header orders must come from fresh API only (no shared-cache hydration).
+    // Order cards hydrate from the shared store-scoped passport cache.
     return true;
   }
 
@@ -15077,6 +15185,7 @@
 
     setRenderedThreadClientKey(state.activeClientId);
     const thread = getVisibleThread(state.activeClientId);
+    hydrateMessageOrderCards(thread);
     const validIds = new Set(thread.map((msg) => String(msg.id)));
     Array.from(state.selectedMessageIds).forEach((id) => {
       if (!validIds.has(id)) state.selectedMessageIds.delete(id);
@@ -17287,11 +17396,14 @@
       const rowBtn = event.target && event.target.closest
         ? event.target.closest('[data-action="order-row-status-next"]')
         : null;
-      if (!cycleBtn && !rowBtn) return;
+      const paymentBtn = event.target && event.target.closest
+        ? event.target.closest('[data-action="order-mark-paid"]')
+        : null;
+      if (!cycleBtn && !rowBtn && !paymentBtn) return;
 
       const rightPane = document.querySelector("#ordersRightPane");
       if (!rightPane) return;
-      const targetBtn = cycleBtn || rowBtn;
+      const targetBtn = cycleBtn || rowBtn || paymentBtn;
       if (!rightPane.contains(targetBtn)) return;
 
       event.preventDefault();
@@ -17302,6 +17414,11 @@
       const ordersRightApi = getOrdersRightApi();
       if (!ordersRightApi) return;
       try {
+        if (paymentBtn) {
+          if (typeof ordersRightApi.openActiveOrderPayment !== 'function') throw new Error('ORDER_PAYMENT_API_UNAVAILABLE');
+          await ordersRightApi.openActiveOrderPayment();
+          return;
+        }
         if (cycleBtn && typeof ordersRightApi.cycleActiveOrderStatus === "function") {
           await ordersRightApi.cycleActiveOrderStatus();
           return;
@@ -17565,6 +17682,8 @@
       // Stale-while-revalidate: show cache instantly, but always revalidate from API.
       const shouldFetchClientProfile = true;
       const shouldFetchOrdersFromNetwork = shouldFetchOrders === true;
+      const ordersRequest = shouldFetchOrdersFromNetwork
+        ? fetchClientOrdersFresh(clientId).then(data => ({data}), error => ({error})) : null;
 
       const clientJson = shouldFetchClientProfile
         ? await apiJson(`/api/admin/clients/${clientId}`)
@@ -17603,7 +17722,9 @@
       }
       if (shouldFetchOrdersFromNetwork) {
         try {
-          const ordersJson = await fetchClientOrdersFresh(clientId);
+          const ordersResult = await ordersRequest;
+          if (ordersResult.error) throw ordersResult.error;
+          const ordersJson = ordersResult.data;
           if (state.requestToken !== requestId) return;
           if (Number(state.activeClientId || 0) !== Number(clientId)) return;
           const freshOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];

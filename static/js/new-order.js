@@ -7,11 +7,15 @@
   const cancelEditBtnEl = document.getElementById("newOrderCancelEditBtn");
   const checkoutEditorEl = document.getElementById("newOrderCheckoutEditor");
   const checkoutContentEl = document.getElementById("newOrderCheckoutContent");
+  const checkoutEnabledSettingEl = document.getElementById("newOrderCheckoutEnabledSetting");
+  const checkoutEnabledInputEl = document.getElementById("newOrderCheckoutEnabled");
   const checkoutAddCategoryBtnEl = document.getElementById("newOrderCheckoutAddCategoryBtn");
   const checkoutBlockChipsEl = document.getElementById("newOrderCheckoutBlockChips");
   const newOrderToolbarEl = document.getElementById("newOrderToolbar");
   const rightTabsHeaderEl = document.getElementById("newOrderTabsHeader");
   const rightTabsEl = document.getElementById("newOrderTabs");
+  const catalogTabsEl = document.getElementById("newOrderCatalogTabs");
+  const ownsCatalogTabs = !document.getElementById("orderTabs");
   const rightContentEl = document.getElementById("newOrderRightContent");
   const rightEmptyEl = document.getElementById("newOrderRightEmpty");
   const rightPanelEl = document.getElementById("newOrderRightPanel");
@@ -156,7 +160,7 @@
 
   startUtf8MojibakeRepair();
   const CHECKOUT_SCREEN_ID = "__checkout_screen__";
-  const CHECKOUT_DRAFT_CACHE_VERSION = 2;
+  const CHECKOUT_DRAFT_CACHE_VERSION = 3;
   const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   const DURABLE_CREATE_DRAFT_VERSION = 1;
   const DURABLE_CREATE_DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -201,6 +205,7 @@
     checkoutCategoryLoading: new Set(),
     checkoutCategoryErrors: new Set(),
     categoryWorkingSetComplete: new Set(),
+    categoryComboListsComplete: new Set(),
     checkoutSelectedProductByCategory: new Map(),
     checkoutProductsScrollByCategory: new Map(),
     checkoutVariantsScrollByCategory: new Map(),
@@ -211,6 +216,7 @@
     checkoutEditingBlockId: null,
     checkoutCartEdit: null,
     checkoutEditMode: false,
+    checkoutScreenEnabled: true,
     checkoutDraft: null,
     rightOrders: [],
     rightActiveOrderId: null,
@@ -336,7 +342,133 @@
     resolveLoadReady = resolve;
   });
   let bootstrapDataReadyPromise = Promise.resolve();
+  let checkoutSettingsRevision = "";
+  let checkoutSettingsWantedRevision = "";
+  let checkoutSettingsRequestPending = false;
+  const rightDeliveryQuotePending = new Map();
+  const rightBenefitsPreviewPending = new Map();
+  const rightBenefitsPreviewUpdatedAt = new Map();
+  let resolveLocalEditorDataReady;
+  const localEditorDataReadyPromise = new Promise(resolve => { resolveLocalEditorDataReady = resolve; });
+
+  let adminOrderSocket = null;
+  let adminOrderSocketReady = null;
+  const adminOrderCommands = new Map();
+
   let checkoutSessionRevision = 0;
+  let editorWorkspaceReady = false;
+  let editorWorkspaceWrites = Promise.resolve();
+  let editorWorkspaceErrorShown = false;
+  let editorWorkspaceIdentity = null;
+  const cancelEditsAfterReload = performance.getEntriesByType('navigation')[0]?.type === 'reload';
+  const reloadEditCancellations = new Map();
+
+  function isNewOrderEditorSurface() {
+    return document.body.matches('.page-new-order, .new-order-editor-active');
+  }
+
+  function editorWorkspaceScope() {
+    const scope = window.AdminPersistentCache?.scope({ domain: 'orders:editor', version: 1 });
+    if (!scope?.complete) throw new Error('ORDER_EDITOR_STORAGE_SCOPE_UNAVAILABLE');
+    if (editorWorkspaceIdentity && editorWorkspaceIdentity !== scope.namespace) throw new Error('ORDER_EDITOR_STORAGE_SCOPE_CHANGED');
+    editorWorkspaceIdentity = scope.namespace;
+    return scope;
+  }
+
+  function hasEditingOrders() {
+    return state.rightOrders.some(order => order.mode === 'edit' && Number(order.editOrderId) > 0);
+  }
+
+  async function persistEditorWorkspace({ background = false } = {}) {
+    if (!editorWorkspaceReady || (!background && !isNewOrderEditorSurface())) return editorWorkspaceWrites;
+    const scope = editorWorkspaceScope();
+    const session = captureCheckoutSession();
+    editorWorkspaceWrites = editorWorkspaceWrites.catch(() => {}).then(async () => {
+      if (session.rightOrders.length) await scope.set('workspace', session);
+      else await scope.remove('workspace');
+      editorWorkspaceErrorShown = false;
+    });
+    return editorWorkspaceWrites;
+  }
+
+  function reportEditorWorkspaceError(error) {
+    console.error('ORDER_EDITOR_WORKSPACE_SAVE_FAILED', error);
+    if (!editorWorkspaceErrorShown) {
+      editorWorkspaceErrorShown = true;
+      showNewOrderAlert('Не удалось сохранить черновик в IndexedDB. Не закрывайте страницу до сохранения заказа.');
+    }
+  }
+
+  async function readEditorWorkspace() {
+    await editorWorkspaceWrites;
+    const scope = editorWorkspaceScope();
+    if (cancelEditsAfterReload && !reloadEditCancellations.has(scope.namespace)) {
+      const cancellation = (async () => {
+        const workspace = await scope.get('workspace');
+        const editing = workspace?.rightOrders?.filter(row => row.mode === 'edit' && Number(row.editOrderId) > 0) || [];
+        if (!editing.length) return;
+        await bootstrapDataReadyPromise;
+        if (editorWorkspaceScope().namespace !== scope.namespace) throw new Error('ORDER_EDITOR_STORAGE_SCOPE_CHANGED');
+        await restoreCheckoutSession(workspace, { deferCatalog: true });
+        editorWorkspaceReady = true;
+        for (const draft of editing) {
+          await cancelRightOrderEditing(Number(draft.id));
+          if (state.rightOrders.some(row => Number(row.id) === Number(draft.id) && row.mode === 'edit')) {
+            throw new Error('ORDER_EDIT_RELOAD_CANCEL_FAILED');
+          }
+        }
+      })();
+      reloadEditCancellations.set(scope.namespace, cancellation);
+      cancellation.catch(() => { reloadEditCancellations.delete(scope.namespace); });
+    }
+    if (cancelEditsAfterReload) await reloadEditCancellations.get(scope.namespace);
+    return scope.get('workspace');
+  }
+
+  async function cancelRightOrderEditing(orderId) {
+    const order = state.rightOrders.find(row => Number(row.id) === Number(orderId));
+    if (!order || order.mode !== 'edit' || !(Number(order.editOrderId) > 0)) return;
+    const cartItems = Array.isArray(order.form?.cartItems) ? order.form.cartItems : [];
+    const giftItems = cartItems.filter(item => Number(item?.is_gift_reward || 0) === 1);
+    if (giftItems.length && !await restoreRightOrderGiftRewardsFromItems(orderId, giftItems)) return;
+    resetRightCartClearState(orderId, { render: false });
+    if (await finishEditingOrder(orderId) === false) return;
+    document.dispatchEvent(new CustomEvent('neworder:edit-cancel', { detail: { orderId: Number(order.editOrderId) } }));
+  }
+
+  async function finishEditingOrder(draftId) {
+    const previous = captureCheckoutSession();
+    state.rightOrders = state.rightOrders.filter(order => Number(order.id) !== Number(draftId));
+    for (const map of [state.rightAddressDraftByOrder, state.rightAddressSelectedIdByOrder,
+      state.rightBonusRedeemEnabledByOrder, state.rightBonusRedeemAmountByOrder, state.rightBonusRedeemAccountIdByOrder]) {
+      map.delete(Number(draftId));
+    }
+    if (!state.rightOrders.some(order => Number(order.id) === Number(state.rightActiveOrderId))) {
+      state.rightActiveOrderId = state.rightOrders[0]?.id || null;
+    }
+    try {
+      await persistEditorWorkspace({ background: true });
+    } catch (error) {
+      state.rightOrders = previous.rightOrders;
+      state.rightActiveOrderId = previous.rightActiveOrderId;
+      for (const key of ['rightAddressDraftByOrder','rightAddressSelectedIdByOrder','rightBonusRedeemEnabledByOrder','rightBonusRedeemAmountByOrder','rightBonusRedeemAccountIdByOrder']) {
+        state[key] = objectToMap(previous[key] || {});
+      }
+      reportEditorWorkspaceError(error);
+      return false;
+    }
+    if (state.rightOrders.length) renderRightOrderTabs();
+    else if (document.body.classList.contains('page-new-order')) openRightNewOrderTab();
+    if (document.body.classList.contains('page-new-order') && !hasEditingOrders()) setEmbeddedEditing(false);
+    return true;
+  }
+
+  function setEmbeddedEditing(enabled) {
+    if (document.body.classList.contains('new-order-editor-active') === Boolean(enabled)) return;
+    document.body.classList.toggle('new-order-editor-active', Boolean(enabled));
+    if (enabled) history.pushState({ ...history.state, orderEditor: true }, '', location.href);
+    document.dispatchEvent(new CustomEvent('neworder:editor-layout', { detail: { active: Boolean(enabled) } }));
+  }
   let durableCreateDraftSaveTimer = null;
   let durableCreateDraftUserRevision = 0;
   let durableCreateDraftRestoring = false;
@@ -365,6 +497,10 @@
 
   function updateEditControls() {
     if (!settingsBtnEl) return;
+    settingsBtnEl.classList.toggle("hidden", !state.checkoutEditMode);
+    document.getElementById("newOrderAddBtn")?.classList.toggle("hidden", state.checkoutEditMode);
+    checkoutEnabledSettingEl?.classList.toggle("hidden", !state.checkoutEditMode);
+    if (checkoutEnabledInputEl) checkoutEnabledInputEl.checked = state.checkoutDraft?.enabled !== false;
     const icon = settingsBtnEl.querySelector("i");
     if (state.checkoutEditMode) {
       if (icon) icon.className = "fas fa-check";
@@ -404,11 +540,21 @@
     updateEditControls();
   }
 
+  function getRightOrderTabTitle(order) {
+    if (Number(order?.editOrderId) > 0) return `\u2116${Number(order.editOrderId)}`;
+    const name = String(order?.form?.name || "").trim();
+    const phone = String(order?.form?.phone || "").trim();
+    return name || (phone.replace(/\D/g, "").length > 1 ? formatPhoneRuInput(phone) : "")
+      || String(order?.title || "Новый заказ");
+  }
+
   function renderRightOrderTabs() {
+    syncNewOrderSharedCards();
     if (!rightTabsEl || !rightContentEl) return;
     const orders = Array.isArray(state.rightOrders) ? state.rightOrders : [];
     if (!orders.length) {
       rightTabsEl.innerHTML = "";
+      if (ownsCatalogTabs && catalogTabsEl) catalogTabsEl.innerHTML = "";
       rightContentEl.innerHTML = "";
       rightContentEl.classList.add("hidden");
       if (rightFooterEl) {
@@ -432,11 +578,15 @@
       const isActive = orderId === Number(state.rightActiveOrderId || 0);
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-action="right-order-tab-select" data-order-id="${orderId}">
-          <span class="product-tab-title">${escapeHtml(String(order?.title || "РќРѕРІС‹Р№ Р·Р°РєР°Р·"))}</span>
+          <span class="product-tab-title" title="${escapeHtml(getRightOrderTabTitle(order))}">${escapeHtml(getRightOrderTabTitle(order))}</span>
           <button class="product-tab-close" type="button" data-action="right-order-tab-close" data-order-id="${orderId}" aria-label="Р—Р°РєСЂС‹С‚СЊ">×</button>
         </div>
       `;
     }).join("");
+    if (ownsCatalogTabs && catalogTabsEl) catalogTabsEl.innerHTML = rightTabsEl.innerHTML;
+    document.dispatchEvent(new CustomEvent('neworder:tabs-updated', { detail: {
+      title: getRightOrderTabTitle(orders.find(row => Number(row.id) === Number(state.rightActiveOrderId)))
+    } }));
     rightContentEl.classList.remove("hidden");
     const requestedActiveId = Number(state.rightActiveOrderId || 0);
     let activeIndex = orders.findIndex((order) => Number(order?.id || 0) === requestedActiveId);
@@ -446,7 +596,7 @@
     const activeMode = String(active?.mode || "add").toLowerCase();
     const isEditCheckout = activeMode === "edit" && Number(active?.editOrderId || 0) > 0;
     if (rightTabsHeaderEl) {
-      rightTabsHeaderEl.classList.toggle("hidden", isEditCheckout);
+      rightTabsHeaderEl.classList.toggle("hidden", isEditCheckout && !isNewOrderEditorSurface());
     }
     if (rightEmptyEl) rightEmptyEl.classList.add("hidden");
     let form = active?.form && typeof active.form === "object" ? active.form : {};
@@ -521,7 +671,6 @@
     const cartLineStates = Number.isFinite(snapshotItemsTotalAfterDiscount)
       ? baseCartLineStates
       : buildRightOrderBonusRedeemDisplayLineStates(baseCartLineStates, cartSummary?.bonusRedeemAmount || 0);
-    const orderPayableTotal = cartSummary.payableTotal;
     const asapEtaLabel = cartSummary.isDeliveryMethod && Number(cartSummary.etaMinutes || 0) > 0
       ? `${Math.round(Number(cartSummary.etaMinutes || 0))} мин`
       : "40-80 мин";
@@ -629,41 +778,12 @@
         </div>
       </div>
       <div class="shop-cart-footer">
-        <div class="shop-cart-footer-actions ${isEditCheckout ? "is-edit-checkout" : ""}">
-          ${isEditCheckout ? `
-          <button
-            class="${clearBtnClass}"
-            data-action="right-cart-clear"
-            data-order-id="${Number(active?.id || 0)}"
-            type="button"
-            title="${clearBtnTitle}"
-            aria-label="${clearBtnLabel}"
-          >${clearBtnText}</button>
-          ` : ""}
-          <button
-            class="new-order-right-footer-benefits-btn"
-            type="button"
-            data-action="right-order-benefits-open"
-            data-order-id="${Number(active?.id || 0)}"
-            aria-label="Выгоды"
-            title="Выгоды"
-          >
-            <i class="fas fa-tags" aria-hidden="true"></i>
-            ${isEditCheckout ? `<span class="new-order-right-footer-label">Выгоды</span>` : ""}
+        <div class="shop-cart-footer-actions is-order-entry ${isEditCheckout ? "is-edit-checkout" : ""}">
+          <button class="shop-checkout-btn new-order-right-menu-btn" type="button" data-action="right-order-catalog-open">
+            <i class="fas fa-arrow-left" aria-hidden="true"></i><span>Меню</span>
           </button>
           <button
-            class="new-order-right-footer-benefits-btn"
-            type="button"
-            data-action="right-order-bonus-open"
-            data-order-id="${Number(active?.id || 0)}"
-            aria-label="Бонусы"
-            title="Бонусы"
-          >
-            <span aria-hidden="true">Б</span>
-            ${isEditCheckout ? `<span class="new-order-right-footer-label">Бонусы</span>` : ""}
-          </button>
-          <button
-            class="shop-checkout-btn shop-checkout-btn--secondary"
+            class="shop-checkout-btn"
             data-action="right-cart-checkout"
             data-order-id="${Number(active?.id || 0)}"
             type="button"
@@ -671,16 +791,6 @@
           >${checkoutSubmitting
             ? checkoutSubmittingLabel
             : checkoutActionLabel
-          }</button>
-          <button
-            class="shop-checkout-btn shop-checkout-btn--payment"
-            data-action="right-cart-checkout-paid"
-            data-order-id="${Number(active?.id || 0)}"
-            type="button"
-            ${checkoutDisabled ? "disabled" : ""}
-          >${checkoutSubmitting
-            ? "Принимаем оплату..."
-            : (isEditCheckout ? "Принять оплату и сохранить" : "Принять оплату и оформить")
           }</button>
         </div>
       </div>
@@ -726,7 +836,6 @@
     const timeSlots = buildTimeSlotsForOptionWithDate(resolvedCookWhen, effectiveDateForTime);
     const resolvedDateTime = timeSlots.includes(currentTime) ? currentTime : (timeSlots[0] || "18:00");
 
-    const minChangeAmount = Math.max(0, roundPrice(orderPayableTotal)) + 1;
 
     const selectValues = {
       pickupMethod: resolvedPickupMethod,
@@ -736,7 +845,6 @@
       paymentMethod: resolvedPaymentMethod,
       changeType: form.changeType || "no_change",
     };
-    const isCashPayment = isCashPaymentCode(selectValues.paymentMethod);
     const labels = {
       pickupMethod: pickupMethodLabels,
       cookWhen: cookWhenLabels,
@@ -868,44 +976,6 @@
               ${renderSelect("dateTime", Number(active?.id || 0))}
             </div>
           `}
-        </div>
-
-        <div class="new-order-right-form-row ${isCashPayment && String(selectValues.changeType) === "other" ? "is-payment-three-cols" : ""}">
-          <div class="new-order-right-form-field">
-            <span class="new-order-right-form-label">РЎРїРѕСЃРѕР± РѕРїР»Р°С‚С‹</span>
-            ${renderSelect("paymentMethod", Number(active?.id || 0))}
-          </div>
-          ${isCashPayment ? `
-            <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">РЎРґР°С‡Р°</span>
-              ${String(selectValues.changeType) === "other" ? `
-                ${renderSelect("changeType", Number(active?.id || 0))}
-              ` : renderSelect("changeType", Number(active?.id || 0))}
-            </div>
-          ` : `<div class="new-order-right-form-field"></div>`}
-          ${isCashPayment && String(selectValues.changeType) === "other" ? `
-            <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">РЎСѓРјРјР°</span>
-              <input
-                class="control new-order-right-change-input"
-                type="number"
-                min="${minChangeAmount}"
-                step="1"
-                value="${escapeHtml(String(form.changeAmount || ""))}"
-                data-action="right-input-change"
-                data-order-id="${Number(active?.id || 0)}"
-                data-field="changeAmount"
-                placeholder="Р‘РѕР»СЊС€Рµ ${escapeHtml(String(roundPrice(orderPayableTotal)))}"
-                autocomplete="new-password"
-                autocorrect="off"
-                autocapitalize="off"
-                spellcheck="false"
-                readonly
-                data-no-autofill="1"
-                name="noaf_change_${Number(active?.id || 0)}"
-              />
-            </div>
-          ` : ""}
         </div>
 
         <label class="new-order-right-form-field is-comment">
@@ -1448,6 +1518,7 @@
       id: Number(item?.id || 0),
       code: String(item?.code || "").trim(),
       title: String(item?.title || "").trim(),
+      icon: String(item?.icon || "").trim(),
       is_active: Number(item?.is_active ?? 1),
       sort: Number(item?.sort || 0),
     };
@@ -1484,8 +1555,23 @@
 
   async function loadRightPaymentTypes() {
     try {
-      const json = await apiJson("/api/admin/tenant/order-payments");
-      const items = Array.isArray(json?.items) ? json.items : [];
+      const load = () => apiJson("/api/admin/tenant/order-payments");
+      const items = window.AdminReferenceCache
+        ? await window.AdminReferenceCache.getOrLoadReference("payment-methods", {
+          load,
+          normalize: json => {
+            if (!Array.isArray(json?.items)) throw new Error("INVALID_PAYMENT_METHODS_RESPONSE");
+            return json.items;
+          },
+          validate: Array.isArray,
+          onUpdate: items => {
+            state.rightPaymentTypes = items.map(normalizeRightPaymentTypeRef).filter(item => item.code);
+            sharedOrderPayment?.clearCache?.();
+            schedulePersistBootstrapSnapshot();
+            queueRenderRightOrderTabs();
+          },
+        })
+        : (await load()).items;
       state.rightPaymentTypes = items
         .map(normalizeRightPaymentTypeRef)
         .filter((item) => item.code)
@@ -1811,31 +1897,64 @@
     return Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
   }
 
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void ensureRightDeliverySettingsLoaded();
+  });
+  let rightDeliverySettingsScope = '';
+  let rightDeliverySettingsCheckedAt = 0;
+  function applyRightDeliverySettings(settings, scope) {
+    if (scope !== newOrderCacheScopeKey()) return;
+    const changed = JSON.stringify(state.rightDeliverySettings) !== JSON.stringify(settings);
+    state.rightDeliverySettings = settings;
+    state.rightDeliverySettingsReady = true;
+    rightDeliverySettingsScope = scope;
+    if (!changed) return;
+    for (const order of state.rightOrders) {
+      invalidateRightDeliveryQuote(Number(order.id));
+      scheduleRightDeliveryQuoteRefresh(Number(order.id), { immediate: true });
+    }
+    schedulePersistBootstrapSnapshot();
+    queueRenderRightOrderTabs();
+  }
+
   async function ensureRightDeliverySettingsLoaded() {
-    const currentSettings = state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
-      ? state.rightDeliverySettings
-      : null;
-    const hasLocalQuoteConfig = !!currentSettings
-      && Array.isArray(currentSettings?.zones)
-      && Array.isArray(currentSettings?.price_tiers);
-    if (state.rightDeliverySettingsReady && hasLocalQuoteConfig) return currentSettings;
-    if (state.rightDeliverySettingsPromise) return state.rightDeliverySettingsPromise;
+    const scope = newOrderCacheScopeKey();
+    if (rightDeliverySettingsScope === scope && state.rightDeliverySettingsReady
+      && Date.now() - rightDeliverySettingsCheckedAt < 60000) return state.rightDeliverySettings;
+    if (state.rightDeliverySettingsPromise && rightDeliverySettingsScope === scope) return state.rightDeliverySettingsPromise;
+    rightDeliverySettingsScope = scope;
     state.rightDeliverySettingsLoading = true;
-    state.rightDeliverySettingsPromise = (async () => {
+    const load = async () => {
+      if (scope !== newOrderCacheScopeKey()) throw new Error('DELIVERY_SCOPE_CHANGED');
+      const json = await apiJson('/api/public/delivery-settings');
+      if (scope !== newOrderCacheScopeKey()) throw new Error('DELIVERY_SCOPE_CHANGED');
+      return json.data;
+    };
+    const promise = (async () => {
       try {
-        const json = await apiJson("/api/public/delivery-settings");
-        state.rightDeliverySettings = json?.data || null;
-      } catch {
-        state.rightDeliverySettings = null;
+        const settings = window.AdminReferenceCache
+          ? await window.AdminReferenceCache.getOrLoadReference('delivery-settings', {
+            load,
+            validate: data => Boolean(data && Array.isArray(data.zones) && Array.isArray(data.price_tiers)),
+            onUpdate: data => applyRightDeliverySettings(data, scope),
+          })
+          : await load();
+        if (scope !== newOrderCacheScopeKey()) return null;
+        rightDeliverySettingsCheckedAt = Date.now();
+        applyRightDeliverySettings(settings, scope);
+        return settings;
+      } catch (error) {
+        console.warn('Не удалось обновить условия доставки:', error);
+        return scope === newOrderCacheScopeKey() ? state.rightDeliverySettings : null;
       } finally {
-        state.rightDeliverySettingsLoading = false;
-        state.rightDeliverySettingsReady = true;
-        state.rightDeliverySettingsPromise = null;
-        schedulePersistBootstrapSnapshot();
+        if (state.rightDeliverySettingsPromise === promise) {
+          state.rightDeliverySettingsLoading = false;
+          state.rightDeliverySettingsPromise = null;
+        }
       }
-      return state.rightDeliverySettings;
     })();
-    return state.rightDeliverySettingsPromise;
+    state.rightDeliverySettingsPromise = promise;
+    return promise;
   }
 
   function normalizeRightDeliveryMoney(value) {
@@ -2374,6 +2493,16 @@
   }
 
   async function ensureRightDeliveryQuoteFresh(order, summary, opts = {}) {
+    const request = buildRightOrderDeliveryQuoteRequest(order, summary);
+    const key = `${newOrderCacheScopeKey()}:${checkoutSettingsRevision}:${request?.orderId}:${request?.key}`;
+    if (rightDeliveryQuotePending.has(key)) return rightDeliveryQuotePending.get(key);
+    const task = ensureRightDeliveryQuoteFreshTask(order, summary, opts);
+    rightDeliveryQuotePending.set(key, task);
+    try { return await task; }
+    finally { if (rightDeliveryQuotePending.get(key) === task) rightDeliveryQuotePending.delete(key); }
+  }
+
+  async function ensureRightDeliveryQuoteFreshTask(order, summary, opts = {}) {
     const request = buildRightOrderDeliveryQuoteRequest(order, summary);
     const orderId = Number(request?.orderId || order?.id || 0);
     if (!(orderId > 0) || !request) return null;
@@ -4625,6 +4754,7 @@
       if (!slot) return;
       state.rightBenefitsPreviewByOrder.delete(slot);
       state.rightBenefitsPreviewKeyByOrder.delete(slot);
+      rightBenefitsPreviewUpdatedAt.delete(slot);
       state.rightBenefitsLoadingByOrder.delete(slot);
       state.rightBenefitsReqSeqByOrder.delete(slot);
     });
@@ -4853,11 +4983,18 @@
       || (Array.isArray(form.cartItems) ? form.cartItems : []).some((item) => Number(item?.is_gift_reward || 0) === 1)
     );
     if (!shouldRefresh) return null;
+    const mode = getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode());
+    const slot = getRightOrderBenefitsCacheSlot(id, mode);
+    const expectedKey = buildRightOrderBenefitsPreviewKey(order, mode);
+    const freshness = rightBenefitsPreviewUpdatedAt.get(slot);
+    if (state.rightBenefitsPreviewKeyByOrder.get(slot) === expectedKey && freshness?.key === expectedKey
+      && Date.now() - Number(freshness.updatedAt || 0) < 30000
+      && state.rightBenefitsPreviewByOrder.has(slot)) return state.rightBenefitsPreviewByOrder.get(slot);
     return loadRightOrderBenefitsPreview(id, {
       force: true,
       render: opts?.render !== false,
       renderOverlay: opts?.renderOverlay === true,
-      mode: getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode()),
+      mode,
     });
   }
 
@@ -5004,6 +5141,16 @@
   }
 
   async function loadRightOrderBenefitsPreview(orderId, opts = {}) {
+    const order = state.rightOrders.find(row => Number(row.id) === Number(orderId));
+    const key = `${newOrderCacheScopeKey()}:${checkoutSettingsRevision}:${orderId}:${buildRightOrderBenefitsPreviewKey(order, opts.mode)}`;
+    if (!opts.prefetchedData && rightBenefitsPreviewPending.has(key)) return rightBenefitsPreviewPending.get(key);
+    const task = loadRightOrderBenefitsPreviewTask(orderId, opts);
+    rightBenefitsPreviewPending.set(key, task);
+    try { return await task; }
+    finally { if (rightBenefitsPreviewPending.get(key) === task) rightBenefitsPreviewPending.delete(key); }
+  }
+
+  async function loadRightOrderBenefitsPreviewTask(orderId, opts = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
     let index = getRightOrderIndexById(id);
@@ -5088,6 +5235,8 @@
       invalidateRightOrderLiveSummary(id);
       state.rightBenefitsPreviewByOrder.set(cacheSlot, nextData || {});
       state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
+      rightBenefitsPreviewUpdatedAt.set(cacheSlot, { key: requestKey, updatedAt: Date.now() });
+      schedulePersistBootstrapSnapshot();
       if (clientCacheSlot) {
         state.rightBenefitsPreviewByClientMode.set(
           clientCacheSlot,
@@ -5140,12 +5289,9 @@
         || (Array.isArray(form.cartItems) ? form.cartItems : []).some((item) => Number(item?.is_gift_reward || 0) === 1)
       );
       if (!shouldRefresh) return;
-      const refreshMode = getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode());
-      void loadRightOrderBenefitsPreview(id, {
-        force: true,
+      void ensureRightOrderBenefitsPreviewFresh(id, {
         render: opts?.render !== false,
         renderOverlay: opts?.renderOverlay === true,
-        mode: refreshMode,
       }).catch(() => {});
     }, delay);
     state.rightBenefitsRefreshTimerByOrder.set(id, timer);
@@ -6267,9 +6413,9 @@
       ? ` <span class="shop-cart-bonus-action-pill__delta">+${escapeHtml(toMoney(bonusAccrualAmount))}</span>`
       : "";
     return `
-      <section class="shop-cart-bonus-redeem-section right-order-shop-bonus-section">
+      <section class="shop-cart-bonus-redeem-section right-order-shop-bonus-section" data-action="right-order-bonus-open" data-order-id="${orderId}">
         <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card">
-          <div class="shop-cart-bonus-redeem-head">
+          <button type="button" class="shop-cart-bonus-redeem-head new-order-right-bonus-open">
             <div class="shop-bonus-level-balance-main">
               <div class="shop-bonus-level-balance-label">${escapeHtml(coinName)}</div>
               <div class="shop-bonus-level-balance-value">${escapeHtml(toMoney(bonusBalance))}</div>
@@ -6278,7 +6424,7 @@
               <div class="shop-cart-bonus-redeem-available-label">Можно списать</div>
               <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${escapeHtml(toMoney(bonusRedeemAvailableAmount))}</div>
             </div>
-          </div>
+          </button>
           <div class="shop-cart-bonus-redeem-actions">
             <button
               class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${bonusRedeemEnabled ? "" : " is-active"}"
@@ -6436,6 +6582,9 @@
         </div>
       </div>
       ${renderRightOrderShopBonusRedeemHtml(orderId, cartSummary)}
+      <button class="new-order-right-benefits-open" type="button" data-action="right-order-benefits-open" data-order-id="${orderId}">
+        <i class="fas fa-tags" aria-hidden="true"></i><span>Выгоды</span>
+      </button>
     `;
   }
 
@@ -7146,11 +7295,15 @@
     }
     const summary = getRightOrderLiveSummary(order);
     return sharedOrderPayment.open({
+      ...(window.matchMedia('(max-width: 768px)').matches && document.body.classList.contains('admin-mobile-pages')
+        ? sharedOrderPayment.mobilePageOptions('\u041f\u0440\u0438\u043d\u044f\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0443') : {}),
       order: buildRightPaymentModalOrder(order, summary),
       apiJson,
       money: toMoney,
       formatDateTimeNumeric: formatRightPaymentModalDateTime,
       collectPayloadOnly: true,
+      paymentMethods: state.rightPaymentTypes,
+      confirmText: String(order?.mode || "") === "edit" ? "Сохранить" : "Оформить",
       getOrderId: () => 0,
       isPaidOrder: () => false,
       onError: (err) => {
@@ -7159,8 +7312,8 @@
     });
   }
 
-  async function submitRightOrderTask(orderId, options = {}) {
-    const withPayment = options?.withPayment === true;
+  async function submitRightOrderTask(orderId) {
+    let paymentDeferred = false;
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     if (state.rightCheckoutSubmittingByOrder.get(id)) return;
@@ -7218,21 +7371,33 @@
     const timeOptionCode = cookWhenOptions.includes(rawTimeOptionCode) ? rawTimeOptionCode : fallbackCookWhenCode;
     const isDeliveryMethod = isDeliveryMethodCode(methodCode);
     const isPickupMethod = isPickupLikeMethod(methodCode);
-    setRightOrderSubmitFeedback(id, true, { overlay: !withPayment });
-    if (isDeliveryMethod) {
-      const refreshBaseSummary = getRightOrderLiveSummary(order, { force: true });
-      await ensureRightDeliveryQuoteFresh(order, refreshBaseSummary, { force: true, render: true });
-      order = state.rightOrders[index] || order;
-    }
+    setRightOrderSubmitFeedback(id, true, { overlay: false });
+    clearRightOrderBenefitsRefreshTimer(id);
+    const deliveryTimer = state.rightDeliveryQuoteTimerByOrder.get(id);
+    if (deliveryTimer) clearTimeout(deliveryTimer);
+    state.rightDeliveryQuoteTimerByOrder.delete(id);
     try {
-      await ensureRightOrderBenefitsPreviewFresh(id, {
-        render: true,
-        renderOverlay: Number(state.benefitsModal.orderId || 0) === id,
-      });
+      const clientId = Number(order?.form?.clientId || 0);
+      // These requests use independent inputs; reuse their existing in-flight work.
+      await Promise.all([
+        ensureRightOrderBenefitsPreviewFresh(id, {
+          render: true,
+          renderOverlay: Number(state.benefitsModal.orderId || 0) === id,
+        }),
+        clientId > 0 ? ensureRightBonusCardLoaded(clientId) : Promise.resolve(null),
+        isDeliveryMethod
+          ? ensureRightDeliveryQuoteFresh(order, getRightOrderLiveSummary(order, { force: true }), { render: true })
+          : Promise.resolve(null),
+      ]);
       order = state.rightOrders[index] || order;
       const resolvedClientId = Number(order?.form?.clientId || 0);
       if (resolvedClientId > 0 && !state.rightBonusCardByClientId.has(resolvedClientId)) {
         await ensureRightBonusCardLoaded(resolvedClientId);
+        order = state.rightOrders[index] || order;
+      }
+      // Benefits can change the subtotal used by delivery pricing.
+      if (isDeliveryMethod) {
+        await ensureRightDeliveryQuoteFresh(order, getRightOrderLiveSummary(order, { force: true }), { render: true });
         order = state.rightOrders[index] || order;
       }
     } catch (error) {
@@ -7305,29 +7470,7 @@
       scheduledAt = `${dateValue} ${timeValue}:00`;
     }
 
-    let changeFrom = null;
-    if (isCashPaymentCode(paymentCode)) {
-      const changeType = String(form.changeType || "no_change").trim();
-      if (changeType !== "no_change") {
-        if (changeType === "other") {
-          const numeric = Number(String(form.changeAmount || "").replace(/[^\d]/g, ""));
-          if (!Number.isFinite(numeric) || numeric <= 0) {
-            setRightOrderSubmitFeedback(id, false);
-            showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0434\u043b\u044f \u0441\u0434\u0430\u0447\u0438");
-            return;
-          }
-          changeFrom = numeric;
-        } else {
-          const numeric = Number(String(changeType).replace(/[^\d]/g, ""));
-          changeFrom = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-        }
-      }
-      if (changeFrom != null && changeFrom <= summary.payableTotal) {
-        setRightOrderSubmitFeedback(id, false);
-        showNewOrderAlert(`\u0421\u0443\u043c\u043c\u0430 \u0434\u043b\u044f \u0441\u0434\u0430\u0447\u0438 \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u0431\u043e\u043b\u044c\u0448\u0435 ${toMoney(summary.payableTotal)}`);
-        return;
-      }
-    }
+    const changeFrom = null;
 
     const baseDisplayedLineStates = buildRightOrderCartLineStates(
       cartItems,
@@ -7511,12 +7654,13 @@
       payload.delivery_store_id = deliveryAddressDraft.delivery_store_id;
     }
 
-    if (withPayment) {
+    {
       const paymentPayload = await openRightOrderPaymentDraft(order);
       if (!paymentPayload) {
         setRightOrderSubmitFeedback(id, false);
         return;
       }
+      paymentDeferred = Number(paymentPayload.is_paid) === 0;
       payload.payment_code = String(paymentPayload.payment_code || payload.payment_code || "").trim() || payload.payment_code;
       payload.change_from = isCashPaymentCode(payload.payment_code)
         ? (Number(paymentPayload.change_from || 0) > 0 ? Number(paymentPayload.change_from || 0) : null)
@@ -7559,7 +7703,7 @@
         submittedStockLevels = Array.isArray(json?.data?.stock_levels) ? json.data.stock_levels : [];
       }
       if (!isEditSubmit && submittedStockLevels.length) applyAuthoritativeOrderStockLevels(submittedStockLevels);
-      if (withPayment && submittedId > 0) {
+      if (!paymentDeferred && submittedId > 0) {
         try {
           await apiJson(`/api/admin/orders/${submittedId}/paid`, {
             method: "PUT",
@@ -7593,6 +7737,7 @@
         writeDurableCreateDraftNow();
       }
       resetRightCartClearState(id, { render: false });
+      if (isEditSubmit && await finishEditingOrder(id) === false) return;
       if (typeof window.updateActiveOrdersBadge === "function") {
         Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {});
       }
@@ -7798,6 +7943,7 @@
   }
 
   function writeDurableCreateDraftNow() {
+    if (editorWorkspaceReady) void persistEditorWorkspace().catch(reportEditorWorkspaceError);
     if (durableCreateDraftSaveTimer) clearTimeout(durableCreateDraftSaveTimer);
     durableCreateDraftSaveTimer = null;
     if (durableCreateDraftRestoring) return;
@@ -7940,7 +8086,11 @@
       if (!(cid > 0)) return;
       const source = repositoryOwnsProducts ? [] : (Array.isArray(payload?.source) ? payload.source : []).map(toStableCatalogProduct);
       const combos = Array.isArray(payload?.combos) ? payload.combos : [];
-      categoryProductsById[String(cid)] = { source, combos };
+      categoryProductsById[String(cid)] = {
+        source, combos,
+        productIds: (Array.isArray(payload?.source) ? payload.source : []).map(row => Number(row.id)).filter(id => id > 0),
+        complete: state.categoryWorkingSetComplete.has(cid),
+      };
     });
 
     const snapshot = {
@@ -7953,6 +8103,12 @@
         productCategories: Array.isArray(state.productCategories) ? state.productCategories : [],
         rightDeliveryTypes: Array.isArray(state.rightDeliveryTypes) ? state.rightDeliveryTypes : [],
         rightPaymentTypes: Array.isArray(state.rightPaymentTypes) ? state.rightPaymentTypes : [],
+        checkoutSettingsRevision,
+        benefitsPreviewCache: [...rightBenefitsPreviewUpdatedAt.entries()]
+          .filter(([slot, entry]) => Date.now() - entry.updatedAt < 30000
+            && state.rightBenefitsPreviewKeyByOrder.get(slot) === entry.key
+            && state.rightBenefitsPreviewByOrder.has(slot))
+          .map(([slot, entry]) => ({ slot, ...entry, data: state.rightBenefitsPreviewByOrder.get(slot) })),
         rightTimeOptions: Array.isArray(state.rightTimeOptions) ? state.rightTimeOptions : [],
         rightOrderStatuses: Array.isArray(state.rightOrderStatuses) ? state.rightOrderStatuses : [],
         rightDeliverySettings: state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
@@ -7964,8 +8120,9 @@
           items: Array.isArray(state.autoAdd?.items) ? state.autoAdd.items : [],
         },
         unitConversions: Array.isArray(state.unitConversions) ? state.unitConversions : [],
+        tenantRounding: state.tenantRoundingLoaded ? state.tenantRounding : null,
         checkoutSavedDraft: state.checkoutSavedDraft && typeof state.checkoutSavedDraft === "object"
-          ? { blocks: Array.isArray(state.checkoutSavedDraft.blocks) ? state.checkoutSavedDraft.blocks : [] }
+          ? { blocks: Array.isArray(state.checkoutSavedDraft.blocks) ? state.checkoutSavedDraft.blocks : [], enabled: state.checkoutScreenEnabled }
           : { blocks: [] },
         checkoutDraftReady: state.checkoutDraftReady === true,
         checkoutDraftCacheVersion: CHECKOUT_DRAFT_CACHE_VERSION,
@@ -8039,11 +8196,23 @@
 
   function hydrateStateFromBootstrapSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== "object") return false;
+    checkoutSettingsRevision = String(snapshot.checkoutSettingsRevision || "");
+    for (const entry of (Array.isArray(snapshot.benefitsPreviewCache) ? snapshot.benefitsPreviewCache : [])) {
+      const age = Date.now() - Number(entry.updatedAt || 0);
+      if (age < 0 || age >= 30000 || !entry.slot || !entry.key || !entry.data) continue;
+      state.rightBenefitsPreviewByOrder.set(entry.slot, entry.data);
+      state.rightBenefitsPreviewKeyByOrder.set(entry.slot, entry.key);
+      rightBenefitsPreviewUpdatedAt.set(entry.slot, { key: entry.key, updatedAt: entry.updatedAt });
+    }
     if (snapshot.manifest && typeof snapshot.manifest === "object") {
       state.cacheManifest = snapshot.manifest;
       writeNewOrderManifestCache(snapshot.manifest);
     }
 
+    if (snapshot.tenantRounding && typeof snapshot.tenantRounding === 'object') {
+      state.tenantRounding = normalizePriceRoundingSettings(snapshot.tenantRounding);
+      state.tenantRoundingLoaded = true;
+    }
     state.categories = Array.isArray(snapshot.categories) ? snapshot.categories : [];
     state.productCategories = Array.isArray(snapshot.productCategories) ? snapshot.productCategories : [];
     state.activeProductCategoryId = Number(snapshot.activeProductCategoryId || 0) || null;
@@ -8091,8 +8260,9 @@
     state.autoAddLoadPromise = null;
     state.unitConversions = Array.isArray(snapshot.unitConversions) ? snapshot.unitConversions : [];
     state.checkoutSavedDraft = snapshot.checkoutSavedDraft && typeof snapshot.checkoutSavedDraft === "object"
-      ? { blocks: Array.isArray(snapshot.checkoutSavedDraft.blocks) ? snapshot.checkoutSavedDraft.blocks : [] }
+      ? { blocks: Array.isArray(snapshot.checkoutSavedDraft.blocks) ? snapshot.checkoutSavedDraft.blocks : [], enabled: snapshot.checkoutSavedDraft.enabled !== false }
       : { blocks: [] };
+    state.checkoutScreenEnabled = state.checkoutSavedDraft.enabled !== false;
     state.checkoutDraftReady = snapshot.checkoutDraftReady === true
       && Number(snapshot.checkoutDraftCacheVersion || 0) === CHECKOUT_DRAFT_CACHE_VERSION;
     state.categoryWorkingSetComplete = new Set();
@@ -8107,6 +8277,13 @@
       if (!(categoryId > 0)) return;
       const raw = categoryProductsById[key] || {};
       const payload = buildCategoryPayload(raw.source, raw.combos, categoryId);
+      if (raw.complete === true && Array.isArray(raw.productIds)
+        && (window.CatalogRepository
+          ? hasCompleteRepositoryCategoryIndex(raw.productIds, [categoryId])
+          : Array.isArray(raw.source) && raw.productIds.every(id => raw.source.some(row => Number(row.id) === Number(id))))) {
+        state.categoryWorkingSetComplete.add(categoryId);
+      }
+
       setNewOrderCategoryPayload(categoryId, payload);
       state.checkoutCategoryProducts.set(categoryId, payload.activeOnly);
       if (window.CatalogRepository) {
@@ -8231,6 +8408,138 @@
     return buildRightAddressLine(getAddressDraftFromClientAddress(address, getDefaultRightAddressCity()));
   }
 
+  function clientLocalScope() {
+    return window.AdminPersistentCache?.scope({domain:'admin:checkout-clients',version:1});
+  }
+  const clientLocalRequests = new Map();
+  async function readClientLocal(key) {
+    const cache=clientLocalScope();
+    if(!cache?.complete)return null;
+    try{return (await cache.getEntry(key,{allowStale:true}))?.data || null;}
+    catch(error){console.warn('Client IndexedDB read:',error);return null;}
+  }
+  async function writeClientLocal(cache,key,value) {
+    if(!cache?.complete)return;
+    try{await cache.set(key,value);}
+    catch(error){console.warn('Client IndexedDB write:',error);}
+  }
+  async function fetchClientAddressSnapshot(clientId) {
+    const cache=clientLocalScope(),key=`${cache?.namespace}:${clientId}`;
+    if(clientLocalRequests.has(key))return clientLocalRequests.get(key);
+    const task=(async()=>{
+      const json=await apiJson(`/api/admin/clients/${clientId}/addresses`);
+      const rows=(Array.isArray(json.data)?json.data:[]).map(normalizeClientAddressRow).filter(row=>row.id>0);
+      await applyClientAddressSnapshot(cache,clientId,rows);
+      return rows;
+    })().finally(()=>clientLocalRequests.delete(key));
+    clientLocalRequests.set(key,task);return task;
+  }
+  async function applyClientAddressSnapshot(cache,clientId,rows) {
+    if(cache?.namespace!==clientLocalScope()?.namespace)return;
+    await writeClientLocal(cache,`addresses:${clientId}`,rows);
+    if(cache?.namespace!==clientLocalScope()?.namespace)return;
+    setBoundedRuntimeCache(state.rightClientAddressesByClientId,clientId,rows);
+    for(const order of state.rightOrders){
+      if(Number(order.form?.clientId)!==clientId)continue;
+      state.rightClientAddressesByOrder.set(Number(order.id),rows);
+      if(rightAddressLookupState.orderId===Number(order.id))renderRightAddressList(order.id);
+    }
+  }
+  async function refreshLocalClient(clientId) {
+    const cache=clientLocalScope();
+    const previous=await readClientLocal(`client:${clientId}`);
+    let row;
+    try { row=(await apiJson(`/api/admin/clients/${clientId}`)).data; }
+    catch(error) {
+      if(Number(error.status)!==404)throw error;
+      row=null;
+    }
+    if(cache?.namespace!==clientLocalScope()?.namespace)return;
+    const phone=row?normalizePhoneRu(row.phone):'';
+    if(previous?.phone && previous.phone!==phone)await cache.remove(`phone:${previous.phone}`);
+    if(!row || Number(row.is_active)===0){
+      if(previous?.phone)await cache.remove(`phone:${previous.phone}`);
+      await cache.remove(`client:${clientId}`);
+      await cache.remove(`addresses:${clientId}`);
+      state.rightClientAddressesByClientId.delete(clientId);
+      return;
+    }
+    const payload={found:true,clientId,name:String(row.name || '')};
+    if(phone.length===11)await writeClientLocal(cache,`phone:${phone}`,payload);
+    await writeClientLocal(cache,`client:${clientId}`,{phone});
+    await fetchClientAddressSnapshot(clientId);
+  }
+  let clientWarmGeneration=0;
+  async function warmLocalClients() {
+    const generation=++clientWarmGeneration,cache=clientLocalScope();
+    if(!cache?.complete || navigator.onLine===false)return;
+    const previous=await readClientLocal("directory") || [];
+    const directory=[];
+    for(let offset=0;generation===clientWarmGeneration;offset+=100){
+      const json=await apiJson(`/api/admin/clients?mode=lightweight&include_addresses=1&limit=100&offset=${offset}`);
+      if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
+      const rows=Array.isArray(json.data)?json.data:[];
+      for(const row of rows){
+        if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
+        const phone=normalizePhoneRu(row.phone);
+        directory.push({id:Number(row.id),phone});
+        if(phone.length===11){
+          await writeClientLocal(cache,`phone:${phone}`,{found:true,clientId:Number(row.id),name:String(row.name || '')});
+          await writeClientLocal(cache,`client:${row.id}`,{phone});
+        }
+        if(!Array.isArray(row.addresses))throw new Error('CLIENT_ADDRESSES_SNAPSHOT_MISSING');
+        const addresses=row.addresses.map(normalizeClientAddressRow).filter(address=>address.id>0);
+        await applyClientAddressSnapshot(cache,Number(row.id),addresses);
+      }
+      if(rows.length<100)break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
+    const phones=new Set(directory.map(row=>row.phone));
+    const ids=new Set(directory.map(row=>row.id));
+    for(const old of previous){
+      if(!phones.has(old.phone))await cache.remove(`phone:${old.phone}`);
+      if(!ids.has(old.id)){await cache.remove(`addresses:${old.id}`);await cache.remove(`client:${old.id}`);state.rightClientAddressesByClientId.delete(old.id);}
+    }
+    await writeClientLocal(cache,'directory',directory);
+    state.rightClientLookupCache.clear();
+  }
+  let clientSyncAbort=null;
+  async function connectClientSync() {
+    clientSyncAbort?.abort();
+    const controller=new AbortController();clientSyncAbort=controller;
+    const scope=clientLocalScope()?.namespace;
+    try{
+      const token=localStorage.getItem('authToken');
+      const response=await fetch('/api/admin/clients/sync/events',{signal:controller.signal,headers:{Authorization:`Bearer ${token}`,'x-store-id':String(getStoreIdFromStorage())}});
+      if(!response.ok || !response.body)throw new Error(`CLIENT_SYNC_${response.status}`);
+      const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
+      while(!controller.signal.aborted){
+        const {value,done}=await reader.read();if(done)break;
+        buffer+=decoder.decode(value,{stream:true});
+        let boundary;
+        while((boundary=buffer.indexOf('\n\n'))>=0){
+          const message=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);
+          const line=message.split('\n').find(line=>line.startsWith('data: '));
+          if(!line){if(document.visibilityState!=='hidden')void ensureRightDeliverySettingsLoaded();continue;}
+          if(scope!==clientLocalScope()?.namespace)return;
+          const event=JSON.parse(line.slice(6));
+          void ensureRightDeliverySettingsLoaded();
+          if(event.resync || !event.client_id){
+            void warmLocalClients().catch(error=>console.warn('Client warmup:',error));
+            for(const id of new Set(state.rightOrders.map(order=>Number(order.form?.clientId || 0)).filter(Boolean)))void refreshLocalClient(id).catch(error=>console.warn('Client resync:',error));
+          }
+          else{
+            state.rightClientLookupCache.clear();
+            void refreshLocalClient(Number(event.client_id)).catch(error=>console.warn('Client refresh:',error));
+          }
+        }
+      }
+    }catch(error){if(!controller.signal.aborted)console.warn('Client realtime:',error);}
+    if(!controller.signal.aborted && scope===clientLocalScope()?.namespace)setTimeout(connectClientSync,3000);
+  }
+  setTimeout(()=>{void connectClientSync();},0);
+
   async function lookupClientByPhoneForRightOrder(orderId, phoneValue, opts = {}) {
     const normalizedDigits = normalizePhoneRu(phoneValue);
     if (normalizedDigits.length !== 11) return;
@@ -8238,7 +8547,9 @@
     const reqSeq = Number(state.rightClientLookupReqSeqByOrder.get(id) || 0) + 1;
     state.rightClientLookupReqSeqByOrder.set(id, reqSeq);
     const cacheKey = normalizedDigits;
-    let payload = state.rightClientLookupCache.get(cacheKey) || null;
+    const localScope = clientLocalScope();
+    let payload = state.rightClientLookupCache.get(cacheKey) || await readClientLocal(`phone:${cacheKey}`);
+    if(localScope?.namespace!==clientLocalScope()?.namespace)return;
 
     if (!payload) {
       let lookupPromise = state.rightClientLookupPromiseByPhone.get(cacheKey) || null;
@@ -8259,6 +8570,8 @@
       }
       try {
         payload = await lookupPromise;
+        if(localScope?.namespace!==clientLocalScope()?.namespace)return;
+        if(payload.found)await writeClientLocal(localScope,`phone:${cacheKey}`,payload);
         setBoundedRuntimeCache(state.rightClientLookupCache, cacheKey, payload);
       } catch {
         return;
@@ -8342,10 +8655,10 @@
     state.rightClientAddressReqSeqByOrder.set(id, reqSeq);
     const orderBefore = state.rightOrders.find((row) => Number(row?.id || 0) === id) || null;
     const addressBefore = String(orderBefore?.form?.address || "");
-    const [addresses] = await Promise.all([
-      loadClientAddressesForRightOrder(id, { clientId: selectedClientId }),
-      ensureRightClientDiscountsLoaded(selectedClientId),
-    ]);
+    void ensureRightClientDiscountsLoaded(selectedClientId).then(()=>{
+      if(Number(state.rightOrders.find(row=>Number(row.id)===id)?.form?.clientId)===selectedClientId)renderRightOrderTabs();
+    });
+    const addresses = await loadClientAddressesForRightOrder(id, { clientId: selectedClientId });
     if (Number(state.rightClientAddressReqSeqByOrder.get(id) || 0) !== reqSeq) return;
     const index = state.rightOrders.findIndex((row) => Number(row?.id || 0) === id);
     if (index < 0) return;
@@ -8406,6 +8719,13 @@
       form[key] = value;
     }
     state.rightOrders[index] = { ...order, form };
+    if (key === "phone" || key === "name") {
+      const title = rightTabsEl?.querySelector(`[data-order-id="${id}"] .product-tab-title`);
+      if (title) {
+        title.textContent = getRightOrderTabTitle(state.rightOrders[index]);
+        title.title = title.textContent;
+      }
+    }
     invalidateRightOrderLiveSummary(id);
     if (key === "pickupMethod" || key === "address" || key === "clientId") {
       invalidateRightDeliveryQuote(id);
@@ -12742,7 +13062,7 @@
       <div class="new-order-option-sheet new-order-right-address-sheet">
         <div class="new-order-option-sheet-head">
           <div class="new-order-option-sheet-title">Введите адрес</div>
-          <button class="new-order-option-sheet-back" type="button" data-action="right-address-overlay-close"><i class="fas fa-times"></i></button>
+          <button class="new-order-option-sheet-back" type="button" data-action="right-address-overlay-close" aria-label="Назад"><i class="fas fa-arrow-left"></i></button>
         </div>
         <div class="new-order-option-sheet-list no-scrollbar new-order-right-address-body" id="newOrderRightAddressBody">
           <div class="new-order-right-address-list-wrap hidden" id="newOrderRightAddressListWrap">
@@ -13039,6 +13359,7 @@
 
   async function loadClientAddressesForRightOrder(orderId, opts = {}) {
     const id = Number(orderId || 0);
+    const addressScope=clientLocalScope()?.namespace;
     const clientId = Number(opts?.clientId || 0) || await getClientIdByOrder(id);
     if (!(clientId > 0)) {
       state.rightClientAddressesByOrder.set(id, []);
@@ -13051,12 +13372,22 @@
     }
     let requestPromise = state.rightClientAddressesPromiseByClientId.get(clientId) || null;
     if (!requestPromise) {
-      requestPromise = apiJson(`/api/admin/clients/${clientId}/addresses`)
-        .then((json) => (Array.isArray(json?.data) ? json.data : []).map(normalizeClientAddressRow).filter((a) => a.id > 0));
+      if(!opts?.force){
+        const cached=await readClientLocal(`addresses:${clientId}`);
+        if(addressScope!==clientLocalScope()?.namespace)return [];
+        if(cached){
+          setBoundedRuntimeCache(state.rightClientAddressesByClientId,clientId,cached);
+          state.rightClientAddressesByOrder.set(id,cached);
+          void fetchClientAddressSnapshot(clientId).catch(error=>console.warn('Address revalidation:',error));
+          return cached;
+        }
+      }
+      requestPromise = fetchClientAddressSnapshot(clientId);
       state.rightClientAddressesPromiseByClientId.set(clientId, requestPromise);
     }
     try {
       const list = await requestPromise;
+      if(addressScope!==clientLocalScope()?.namespace)return [];
       setBoundedRuntimeCache(state.rightClientAddressesByClientId, clientId, list);
       const currentOrder = state.rightOrders.find((row) => Number(row?.id || 0) === id) || null;
       if (Number(currentOrder?.form?.clientId || 0) !== clientId) return list;
@@ -13169,8 +13500,13 @@
     if (!forceReload && rightAddressMapModePromise) return rightAddressMapModePromise;
     rightAddressMapModePromise = (async () => {
       try {
-        const json = await apiJson("/api/admin/tenant/map-provider-config");
-        rightAddressMapModeEnabled = parseRightAddressBooleanFlag(json?.data?.store_address_map_enabled);
+        const scope=clientLocalScope()?.namespace;
+        const load=async()=> (await apiJson("/api/admin/tenant/map-provider-config")).data;
+        const config=window.AdminReferenceCache
+          ? await window.AdminReferenceCache.getOrLoadReference('checkout-address-mode',{load,validate:data=>Boolean(data && Object.hasOwn(data,'store_address_map_enabled'))})
+          : await load();
+        if(scope!==clientLocalScope()?.namespace)return null;
+        rightAddressMapModeEnabled = parseRightAddressBooleanFlag(config.store_address_map_enabled);
       } catch {
         rightAddressMapModeEnabled = false;
       } finally {
@@ -13559,9 +13895,33 @@
   function closeRightAddressOverlay() {
     const { backdrop } = getRightAddressOverlayElements();
     if (!backdrop) return;
+    closeNewOrderMobileOverlayPage(backdrop);
     closeRightAddressLookupPopover();
+    rightAddressLookupState.orderId=0;
     backdrop.classList.add("hidden");
     backdrop.onclick = null;
+  }
+
+  function showRightAddressPage(page) {
+    const { backdrop, formBody } = getRightAddressOverlayElements();
+    if (!backdrop) return;
+    backdrop.dataset.addressPage = page;
+    if (page === "list") state.rightAddressEditingIdByOrder.set(Number(rightAddressLookupState.orderId || 0), 0);
+    closeRightAddressLookupPopover();
+    const title = page === "list" ? "Адреса" : "Адрес";
+    backdrop.querySelector(".new-order-option-sheet-title").textContent = title;
+    if (formBody) formBody.scrollTop = 0;
+    openNewOrderMobileOverlayPage(backdrop, title, closeRightAddressOverlay, () => {
+      if (backdrop.dataset.addressPage !== "form") return true;
+      showRightAddressPage("list");
+      return false;
+    });
+  }
+
+  function backRightAddressPage() {
+    const { backdrop } = getRightAddressOverlayElements();
+    if (backdrop?.dataset.addressPage === "form") showRightAddressPage("list");
+    else closeRightAddressOverlay();
   }
 
   function getDefaultRightAddressCity() {
@@ -13680,12 +14040,20 @@
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     ensureRightAddressOverlay();
-    rightAddressMapModeEnabled = await ensureRightAddressMapMode(true);
+    const mapModePromise = ensureRightAddressMapMode();
     const { backdrop, newBtn, saveBtn, cancelBtn, lookup, street, house, lookupWrap } = getRightAddressOverlayElements();
     if (!backdrop || !saveBtn || !cancelBtn) return;
     rightAddressLookupState.orderId = id;
 
-    await loadClientAddressesForRightOrder(id);
+    const addressLoad = loadClientAddressesForRightOrder(id);
+    void addressLoad.then(()=>{
+      if(rightAddressLookupState.orderId===id)renderRightAddressList(id);
+    });
+    void mapModePromise.then(()=>{
+      if(rightAddressLookupState.orderId!==id)return;
+      if(lookupWrap)lookupWrap.classList.toggle('hidden',!rightAddressMapModeEnabled);
+      syncRightAddressMapLayout(rightAddressMapModeEnabled);
+    });
     const rows = Array.isArray(state.rightClientAddressesByOrder.get(id)) ? state.rightClientAddressesByOrder.get(id) : [];
 
     const existingSelectedId = Number(state.rightAddressSelectedIdByOrder.get(id) || 0);
@@ -13790,11 +14158,13 @@
     backdrop.onclick = (e) => {
       const closeBtn = e.target.closest("[data-action='right-address-overlay-close']");
       if (closeBtn || e.target === backdrop) {
-        closeRightAddressOverlay();
+        if (closeBtn) backRightAddressPage();
+        else closeRightAddressOverlay();
         return;
       }
-      const selectBtn = e.target.closest("[data-action='right-address-select'][data-address-id]");
-      if (selectBtn) {
+      const selectBtn = e.target.closest(".new-order-right-address-row[data-address-id]");
+      const addressAction = e.target.closest(".new-order-right-address-row-actions");
+      if (selectBtn && !addressAction) {
         const addrId = Number(selectBtn.getAttribute("data-address-id") || 0);
         state.rightAddressSelectedIdByOrder.set(id, addrId);
         state.rightAddressEditingIdByOrder.set(id, 0);
@@ -13811,6 +14181,7 @@
         state.rightAddressSelectedIdByOrder.set(id, addrId);
         fillRightAddressInputs(getAddressDraftFromClientAddress(row, getDefaultRightAddressCity()), id);
         renderRightAddressList(id);
+        showRightAddressPage("form");
         return;
       }
       const delBtn = e.target.closest("[data-action='right-address-del-item'][data-address-id]");
@@ -13837,13 +14208,21 @@
         state.rightAddressSelectedIdByOrder.set(id, 0);
         fillRightAddressInputs(createBlankRightAddressDraft(), id);
         renderRightAddressList(id);
+        showRightAddressPage("form");
       };
     }
 
+    showRightAddressPage("list");
     cancelBtn.onclick = () => {
-      closeRightAddressOverlay();
+      backRightAddressPage();
     };
     saveBtn.onclick = async () => {
+      if (backdrop.dataset.addressPage === "list") {
+        const rows = state.rightClientAddressesByOrder.get(id) || [];
+        const selected = rows.find((row) => Number(row.id) === Number(state.rightAddressSelectedIdByOrder.get(id)));
+        if (!selected) return;
+        fillRightAddressInputs(getAddressDraftFromClientAddress(selected, getDefaultRightAddressCity()), id);
+      }
       const next = readRightAddressInputs();
       if (!next.street || !next.house) {
         if (rightAddressMapModeEnabled) {
@@ -13890,8 +14269,8 @@
           const selectedDraft = getAddressDraftFromClientAddress(updated, next.city || getDefaultRightAddressCity());
           state.rightAddressDraftByOrder.set(id, selectedDraft);
           updateRightOrderFormField(id, "address", buildRightAddressLine(selectedDraft));
-          closeRightAddressOverlay();
-          renderRightOrderTabs();
+          renderRightAddressList(id);
+          showRightAddressPage("list");
           return;
         }
       } else if (selectedAddressId > 0) {
@@ -13937,8 +14316,8 @@
           const createdDraft = getAddressDraftFromClientAddress(created, next.city || getDefaultRightAddressCity());
           state.rightAddressDraftByOrder.set(id, createdDraft);
           updateRightOrderFormField(id, "address", buildRightAddressLine(createdDraft));
-          closeRightAddressOverlay();
-          renderRightOrderTabs();
+          renderRightAddressList(id);
+          showRightAddressPage("list");
           return;
         }
       }
@@ -14051,10 +14430,11 @@
     return `new_order_checkout_draft_v${CHECKOUT_DRAFT_CACHE_VERSION}_t${getTenantIdFromStorage()}`;
   }
 
-  function writeDraftCache(blocks) {
+  function writeDraftCache(blocks, enabled) {
     try {
       const payload = {
         ts: Date.now(),
+        enabled: enabled !== false,
         blocks: (Array.isArray(blocks) ? blocks : []).map(normalizeBlock).filter(Boolean),
       };
       localStorage.setItem(checkoutDraftCacheKey(), JSON.stringify(payload));
@@ -14069,7 +14449,8 @@
       const ts = Number(parsed?.ts || 0);
       if (!ts || Date.now() - ts > CHECKOUT_DRAFT_CACHE_MAX_AGE_MS) return null;
       const blocks = (Array.isArray(parsed?.blocks) ? parsed.blocks : []).map(normalizeBlock).filter(Boolean);
-      return { blocks };
+      if (typeof parsed.enabled !== "boolean") return null;
+      return { blocks, enabled: parsed.enabled };
     } catch {
       return null;
     }
@@ -15235,14 +15616,24 @@
   async function resolveComboDetailsTask(comboId) {
     const id = Number(comboId || 0);
     if (!(id > 0)) return null;
-    const local = window.CatalogRepository?.getComboForOrder?.(id) || null;
-    if (local && window.CatalogRepository?.isComboReady?.(id, { requiredCompleteness: "order-ready" })) return local;
+    if (window.CatalogRepository) {
+      await window.CatalogRepository.ensureCombos([id], { requiredCompleteness: "order-ready" });
+      const combo = window.CatalogRepository.getComboForOrder(id);
+      if (!combo) return null;
+      if (!combo.blocks.length || !Number(combo.is_available)) throw new Error("COMBO_UNAVAILABLE");
+      const ids = [...new Set(combo.blocks.flatMap((block) => block.products.map((product) => Number(product.product_id))))];
+      ids.forEach((productId) => {
+        const passport = window.CatalogRepository.getProductPassport(productId);
+        if (!window.CatalogRepository.isOrderReadyPassport(passport)) throw new Error("COMBO_PRODUCT_PASSPORT_UNAVAILABLE");
+        applyCatalogPassportToNewOrder(passport);
+      });
+      return combo;
+    }
     try {
       if (state.comboDetailsCache.has(id)) return state.comboDetailsCache.get(id);
       const json = await apiJson(`/api/public/combos/${id}`);
       const combo = json?.data || null;
       state.comboDetailsCache.set(id, combo);
-      if (combo && window.CatalogRepository) queueMicrotask(() => window.CatalogRepository.upsertComboBundle(combo));
       return combo;
     } catch {
       state.comboDetailsCache.delete(id);
@@ -15306,10 +15697,39 @@
     state.comboModal.pickerRenderToken = 0;
   }
 
+  let comboOverlayRequestGeneration = 0;
+  let comboMainScrollTop = 0;
+
+  function returnToComboMain() {
+    state.comboModal.view = "main";
+    state.comboModal.pickerBlockIndex = -1;
+    state.comboModal.expandedPickerProductIndex = null;
+    state.comboModal.pickerRenderToken += 1;
+    renderComboOverlay();
+    const { list } = getComboOverlayElements();
+    if (list) list.scrollTop = comboMainScrollTop;
+  }
+
+  function syncComboMobilePage() {
+    const { backdrop } = getComboOverlayElements();
+    if (!backdrop) return;
+    const picker = state.comboModal.view === "picker";
+    const block = state.comboModal.combo?.blocks?.[state.comboModal.pickerBlockIndex];
+    const title = picker ? (block?.block_title || "Замена блюда") : (state.comboModal.combo?.title || "Комбо");
+    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(title)), closeComboOverlay, () => {
+      if (state.comboModal.view !== "picker") return true;
+      returnToComboMain();
+      return false;
+    });
+  }
+
   function closeComboOverlay() {
+    comboOverlayRequestGeneration += 1;
     const { backdrop, list } = getComboOverlayElements();
     if (!backdrop) return;
+    closeNewOrderMobileOverlayPage(backdrop);
     backdrop.classList.add("hidden");
+    backdrop.classList.remove("is-shared-product");
     backdrop.onclick = null;
     if (list) list.innerHTML = "";
     resetComboModalState();
@@ -15416,6 +15836,7 @@
   async function hydrateComboBlockSelection(blockIndex, opts = {}) {
     const combo = state.comboModal.combo;
     if (!combo) return;
+    const generation = comboOverlayRequestGeneration;
     const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
     const block = blocks[Number(blockIndex)];
     if (!block) return;
@@ -15429,9 +15850,10 @@
     const productId = Number(selected?.product_id || 0);
     if (!(productId > 0)) return;
     const product = await ensureProductById(productId);
+    if (generation !== comboOverlayRequestGeneration) return;
     const productLike = product || { id: productId, price: Number(selected?.price || 0) };
-    await loadVariantsForProducts([productLike]);
-    await loadIngredientsForProducts([productLike]);
+    await Promise.all([loadVariantsForProducts([productLike]), loadIngredientsForProducts([productLike])]);
+    if (generation !== comboOverlayRequestGeneration) return;
     const variants = state.productVariants.get(productId) || [];
     const ingredients = state.productIngredients.get(productId) || [];
     const discountPercent = Number(combo?.discount_percent || 0);
@@ -15667,11 +16089,15 @@
     const lineRows = [];
     const variantLabel = String(selection?.variant_label || "").trim();
     if (variantLabel) {
-      lineRows.push(`• ${escapeHtml(variantLabel)}`);
+      const variantUnit = String(selection?.variant_unit || "").trim();
+      const variantTitle = String(selection?.variant_group_title || "").trim();
+      const variantText = [formatVariantValueWithUnit(variantLabel, variantUnit), variantTitle].filter(Boolean).join(" ");
+      lineRows.push(`• ${escapeHtml(variantText)}`);
     }
     const ingredients = Array.isArray(selection?.ingredients_display) ? selection.ingredients_display : [];
     ingredients.forEach((ing) => {
       const qty = Number(ing?.qty ?? ing?.quantity ?? 0);
+      if (!Number.isFinite(qty) || qty === 0) return;
       const name = String(ing?.name || ing?.ingredient_name || "").trim();
       if (!name) return;
       const unit = String(ing?.unit || ing?.unit_label || "").trim();
@@ -15679,6 +16105,7 @@
       lineRows.push(`• ${escapeHtml(`${qtyLabel}${unit ? ` ${unit}` : ""} ${name}`.trim())}`);
     });
     if (!lineRows.length) {
+      if (ingredients.length) return "";
       const fallback = String(selection?.product_description_short || "").trim();
       if (!fallback) return "";
       return `<div class="cart-sub-details"><div class="cart-sub-detail-item">${escapeHtml(fallback)}</div></div>`;
@@ -15760,8 +16187,14 @@
     const variants = state.productVariants.get(productId) || [];
     const ingredients = state.productIngredients.get(productId) || [];
     const variantValues = Array.isArray(variants?.[0]?.values) ? variants[0].values : [];
-    const hasVariants = variantValues.length > 0;
-    const hasIngredients = ingredients.length > 0;
+    const hasVariants = variantValues.length > 1;
+    const hasIngredients = ingredients.some((ingredient) => {
+      const minQty = Number(ingredient.quantity_min ?? 0);
+      const maxRaw = Number(ingredient.quantity_max);
+      const maxQty = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : Infinity;
+      const step = Number(ingredient.quantity_step ?? 1) || 1;
+      return step > 0 && maxQty > minQty;
+    });
     return {
       productId,
       product,
@@ -15776,6 +16209,7 @@
   async function selectComboPickerProduct(blockIndexRaw, productIndexRaw, opts = {}) {
     const combo = state.comboModal.combo;
     if (!combo) return false;
+    const generation = comboOverlayRequestGeneration;
     const blockIndex = Number(blockIndexRaw);
     const productIndex = Number(productIndexRaw);
     const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
@@ -15795,7 +16229,7 @@
         preferSavedState: changed ? false : opts?.preferSavedState !== false,
       });
     }
-    return true;
+    return generation === comboOverlayRequestGeneration && state.comboModal.view === "picker";
   }
 
   function renderComboOverlayPicker(blockIndexRaw) {
@@ -15842,17 +16276,20 @@
     }
 
     const renderToken = Number(state.comboModal.pickerRenderToken || 0) + 1;
+    const generation = comboOverlayRequestGeneration;
     state.comboModal.pickerRenderToken = renderToken;
     list.innerHTML = `<div class="shop-combo-picker-empty">Р—Р°РіСЂСѓР·РєР°...</div>`;
 
     void (async () => {
       const configs = await Promise.all(products.map((prod) => ensureComboPickerProductConfig(prod)));
+      if (generation !== comboOverlayRequestGeneration) return;
       if (Number(state.comboModal.pickerRenderToken || 0) !== renderToken) return;
       if (String(state.comboModal.view || "") !== "picker") return;
       if (Number(state.comboModal.pickerBlockIndex) !== blockIndex) return;
 
       const rowStateRaw = state.comboModal.selectionStateByBlock[blockIndex] || {};
-      let expandedIndex = Number(state.comboModal.expandedPickerProductIndex);
+      let expandedIndex = state.comboModal.expandedPickerProductIndex == null
+        ? null : Number(state.comboModal.expandedPickerProductIndex);
       if (!Number.isFinite(expandedIndex) || expandedIndex < 0 || expandedIndex >= products.length) expandedIndex = null;
       if (expandedIndex != null && expandedIndex !== selectedIdx) expandedIndex = null;
       state.comboModal.expandedPickerProductIndex = expandedIndex;
@@ -15861,9 +16298,25 @@
         const pid = Number(prod?.product_id || 0);
         const config = configs[idx] || {};
         const isSelected = idx === selectedIdx;
+        const previewGroup = config.variants?.[0];
+        const previewValues = Array.isArray(previewGroup?.values) ? previewGroup.values : [];
+        const defaultIndex = Number(previewGroup?.default_value_index ?? 0);
+        const previewIndex = previewValues.length
+          ? Math.max(0, Math.min(previewValues.length - 1, Number.isFinite(defaultIndex) ? defaultIndex : 0)) : 0;
         const stateRow = isSelected && Number(rowStateRaw?.product_id || 0) === pid
           ? rowStateRaw
-          : makeEmptyComboBlockState();
+          : {
+            ...makeEmptyComboBlockState(),
+            variant_label: previewValues.length ? toVariantLabel(previewValues[previewIndex]) : "",
+            variant_value_index: previewIndex,
+            variant_unit: getVariantUnitLabel(previewGroup),
+            variant_group_title: String(previewGroup?.title || previewGroup?.title_label || ""),
+            ingredients_display: (config.ingredients || []).map((ingredient) => ({
+              ...ingredient,
+              name: ingredient.ingredient_name || ingredient.name || "",
+              unit: ingredient.unit_short_title || ingredient.unit_title || ingredient.unit_code || "",
+            })),
+          };
         const photo = resolveMediaUrl(prod?.product_photo || "");
         const title = String(prod?.product_name || "РўРѕРІР°СЂ");
         const oldPrice = isSelected && stateRow.unit_price_before_discount != null
@@ -15875,6 +16328,8 @@
 
         const detailsHtml = renderComboDetailsLinesHtml({
           variant_label: String(stateRow?.variant_label || ""),
+          variant_unit: String(stateRow?.variant_unit || ""),
+          variant_group_title: String(stateRow?.variant_group_title || ""),
           ingredients_display: Array.isArray(stateRow?.ingredients_display) ? stateRow.ingredients_display : [],
           product_description_short: String(prod?.product_description_short || ""),
         });
@@ -15905,8 +16360,7 @@
             <div class="shop-combo-picker-variants-row">
               ${values.map((value, variantIndex) => {
                 const valueLabel = toVariantLabel(value);
-                const hasLetters = /[a-zР°-СЏ]/i.test(valueLabel);
-                const chip = vUnit && !hasLetters ? `${valueLabel} ${vUnit}` : valueLabel;
+                const chip = formatVariantValueWithUnit(valueLabel, vUnit);
                 return `<button
                   type="button"
                   class="shop-combo-picker-variant-btn ${variantIndex === safeVariantIdx ? "is-active" : ""}"
@@ -16066,6 +16520,12 @@
     if (!backdrop || backdrop.classList.contains("hidden")) return;
     const combo = state.comboModal.combo;
     if (!combo) return;
+    syncComboMobilePage();
+    const footer = backdrop.querySelector(".new-order-product-sheet-footer");
+    if (footer) {
+      if (state.comboModal.view === "picker") footer.style.setProperty("display", "none", "important");
+      else footer.style.removeProperty("display");
+    }
     const qty = Math.max(1, Number(state.comboModal.qty || 1));
     state.comboModal.qty = qty;
     if (qtyValue) qtyValue.textContent = String(qty);
@@ -16203,17 +16663,35 @@
   async function openComboOverlayTask(comboId, opts = {}) {
     const id = Number(comboId || 0);
     if (!(id > 0)) return;
+    closeProductOverlay();
+    closeComboOverlay();
+    const generation = ++comboOverlayRequestGeneration;
+    comboMainScrollTop = 0;
     ensureComboOverlay();
     const { backdrop, list } = getComboOverlayElements();
     if (!backdrop) return;
-    const combo = await resolveComboDetails(id);
+    backdrop.classList.remove("hidden");
+    if (list) list.textContent = "Загрузка…";
+    const { addBtn } = getComboOverlayElements();
+    if (addBtn) addBtn.disabled = true;
+    syncComboMobilePage();
+    let combo;
+    try {
+      combo = await resolveComboDetails(id);
+    } catch (error) {
+      if (generation !== comboOverlayRequestGeneration) return;
+      console.error("Combo loading failed", error);
+      if (list) list.textContent = "Не удалось загрузить комбо";
+      return;
+    }
+    if (generation !== comboOverlayRequestGeneration) return;
     if (!combo) {
+      if (list) list.textContent = "Не удалось загрузить комбо";
       showNewOrderAlert(window.CatalogRepository?.getCombo?.(id)
         ? "Данные комбо сохранены не полностью"
         : "Не удалось загрузить комбо");
       return;
     }
-    closeProductOverlay();
     const comboCategoryId = Number(opts?.comboCategoryId || opts?.categoryId || combo?.combo_category_id || combo?.category_id || opts?.cartItem?.combo_category_id || opts?.cartItem?.category_id || 0) || 0;
     if (comboCategoryId > 0) {
       combo.combo_category_id = comboCategoryId;
@@ -16269,6 +16747,8 @@
     };
     if (list) list.innerHTML = `<div class="shop-combo-picker-empty">Р—Р°РіСЂСѓР·РєР°...</div>`;
     await hydrateComboSelectionsFromDefaults();
+    if (generation !== comboOverlayRequestGeneration) return;
+    if (addBtn) addBtn.disabled = false;
     renderComboOverlay();
     if (list) list.scrollTop = 0;
   }
@@ -16314,11 +16794,40 @@
 
   let productOverlayRequestGeneration = 0;
 
+  function openNewOrderMobileOverlayPage(backdrop, title, onBack, beforeBack = null) {
+    if (!isNewOrderEditorSurface() || !window.matchMedia("(max-width: 768px)").matches) return;
+    if (!window.__adminMobilePages?.openSubview(title, onBack, { beforeBack })) return;
+    backdrop.dataset.mobilePage = "1";
+    document.body.classList.add("new-order-mobile-subpage");
+    if (backdrop.dataset.swipeBound) return;
+    backdrop.dataset.swipeBound = "1";
+    let start = null;
+    backdrop.addEventListener("touchstart", (event) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : null;
+      start = touch && touch.clientX <= 28 ? { x: touch.clientX, y: touch.clientY } : null;
+    }, { passive: true });
+    backdrop.addEventListener("touchcancel", () => { start = null; }, { passive: true });
+    backdrop.addEventListener("touchend", (event) => {
+      const touch = event.changedTouches[0];
+      if (start && touch && touch.clientX - start.x > 80 && Math.abs(touch.clientY - start.y) < 60 && backdrop.dataset.mobilePage === "1") window.__adminMobilePages.back();
+      start = null;
+    }, { passive: true });
+  }
+
+  function closeNewOrderMobileOverlayPage(backdrop) {
+    if (backdrop.dataset.mobilePage !== "1") return;
+    delete backdrop.dataset.mobilePage;
+    document.body.classList.remove("new-order-mobile-subpage");
+    window.__adminMobilePages?.closeSubview();
+  }
+
   function closeProductOverlay() {
     productOverlayRequestGeneration += 1;
     const { backdrop, list } = getProductOverlayElements();
     if (!backdrop) return;
+    closeNewOrderMobileOverlayPage(backdrop);
     backdrop.classList.add("hidden");
+    backdrop.classList.remove("is-shared-product");
     backdrop.onclick = null;
     if (list) list.innerHTML = "";
     state.productModal.productId = 0;
@@ -16704,6 +17213,7 @@
 
   function renderProductOverlay() {
     const { backdrop, list, qtyValue, addBtn } = getProductOverlayElements();
+    if (backdrop?.classList.contains("is-shared-product")) return;
     const pid = Number(state.productModal.productId || 0);
     const qty = Math.max(1, Number(state.productModal.qty || 1));
     const product = getProductById(pid);
@@ -16758,6 +17268,59 @@
     `;
   }
 
+  function applyNewOrderSharedSelection(pid, selection) {
+    const optionItems = (selection.option_items || []).map((row) => {
+      const groupEntry = [...state.optionGroupDetails.entries()].find(([, details]) => (details.items || []).some((item) => Number(item.id) === Number(row.id)));
+      if (!groupEntry) throw new Error("OPTION_GROUP_UNAVAILABLE");
+      return { ...row, group_id: groupEntry[0], label: row.title || row.label, basePrice: Number(row.price || 0) - Number(row.variant_price_diff || 0), variantDiff: Number(row.variant_price_diff || 0), variantIndex: row.variant_value_index };
+    });
+    applyProductOverlayStateFromCartItem(pid, {
+      variant: { selected_index: selection.variant_value_index },
+      ingredients: (selection.ingredients || []).map((row) => ({ ...row, qty: row.quantity ?? row.qty })),
+      option_items: optionItems,
+    });
+  }
+
+  function commitProductOverlay() {
+    const pid = Number(state.productModal.productId || 0);
+    const qty = Math.max(1, Number(state.productModal.qty || 1));
+    const mode = String(state.productModal.mode || "add");
+    const cartItem = buildCartItemFromProduct(pid, qty);
+    if (!cartItem) return;
+    if (mode === "edit") {
+      const orderId = Number(state.productModal.editOrderId || 0);
+      const cartItemId = Number(state.productModal.editCartItemId || 0);
+      if (orderId > 0 && cartItemId > 0) {
+        const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+        if (orderIndex >= 0) {
+          const order = state.rightOrders[orderIndex] || {};
+          const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((x) => ({ ...x })) : [];
+          const idx = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
+          if (idx >= 0) {
+            cartItem.id = cartItemId;
+            const limited = enforceProductStockLimitForCartItem(cartItems, cartItem, {
+              excludeCartItemId: cartItemId,
+              showAlert: true,
+            });
+            if (!limited.ok || !limited.item) return;
+            cartItems[idx] = limited.item;
+            updateRightOrderCartItems(orderId, cartItems, { render: true });
+            closeProductOverlay();
+            return;
+          }
+        }
+      }
+    }
+    if (!state.rightActiveOrderId) openRightNewOrderTab();
+    if (!state.rightActiveOrderId) return;
+    const added = addCartItemToRightOrder(state.rightActiveOrderId, cartItem);
+    if (!added) return;
+    renderRightOrderTabs();
+    closeProductOverlay();
+  }
+
+
   async function openProductOverlayTask(productId, opts = {}) {
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
@@ -16796,7 +17359,46 @@
         closeProductOverlay();
       }
     };
+    if (isNewOrderEditorSurface() && !isCheckoutScreenActive()) {
+      backdrop.classList.add("is-shared-product");
+    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), closeProductOverlay);
+      list.replaceChildren();
+      const host = document.createElement("div");
+      host.className = "new-order-shared-product-host";
+      list.appendChild(host);
+      try {
+        const passports = await getNewOrderSharedPassports([pid]);
+        if (generation !== productOverlayRequestGeneration || !host.isConnected) return;
+        const initialValue = mode === "edit" && sourceCartItem ? {
+          ...sourceCartItem,
+          variant_value_index: sourceCartItem.variant?.selected_index,
+          variant_group_id: (state.productVariants.get(pid) || [])[0]?.id,
+          ingredients: (sourceCartItem.ingredients || []).map((row) => ({ ...row, quantity: row.qty ?? row.quantity })),
+          option_item_ids: (sourceCartItem.option_items || []).map((row) => Number(row.id)),
+          option_items: (sourceCartItem.option_items || []).map((row) => ({ ...row, variant_value_index: row.variantIndex })),
+        } : null;
+        await window.SharedProductDetails.mount({
+          container: host, productId: pid, product: getProductById(pid), passports,
+          mode: "admin-order", initialValue, onBack: closeProductOverlay,
+          isCurrent: () => generation === productOverlayRequestGeneration && host.isConnected,
+          cartContext: getNewOrderSharedCartContext(mode === "edit" ? editCartItemId : 0),
+          onSave: (selection) => {
+            if (generation !== productOverlayRequestGeneration) return;
+            state.productModal.qty = Number(selection.qty || 1);
+            applyNewOrderSharedSelection(pid, selection);
+            commitProductOverlay();
+          },
+        });
+      } catch (error) {
+        if (generation !== productOverlayRequestGeneration || !host.isConnected) return;
+        console.error("Shared product rendering failed", error);
+        host.textContent = "Не удалось загрузить карточку товара";
+      }
+      return;
+    }
+    backdrop.classList.remove("is-shared-product");
     renderProductOverlay();
+    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), closeProductOverlay);
     if (list) list.scrollTop = 0;
 
     void (async () => {
@@ -17167,6 +17769,7 @@
   }
 
   async function loadCheckoutProductsForSelectedCategories() {
+    if (!state.checkoutScreenEnabled && !state.checkoutEditMode) return;
     const selectedIds = getAllCategoryIdsFromBlocks(getCheckoutBlocks());
     if (!selectedIds.length) {
       state.checkoutCategoryProducts.clear();
@@ -17248,7 +17851,8 @@
   async function loadCheckoutDraftFromApi(force = false) {
     const cached = force ? null : readDraftCache();
     if (cached && Array.isArray(cached.blocks)) {
-      state.checkoutSavedDraft = { blocks: cached.blocks };
+      state.checkoutSavedDraft = { blocks: cached.blocks, enabled: cached.enabled };
+      state.checkoutScreenEnabled = cached.enabled;
       state.checkoutDraftReady = true;
       schedulePersistBootstrapSnapshot();
       return;
@@ -17256,20 +17860,98 @@
     const json = await apiJson("/api/checkout-constructor/draft");
     const blocks = Array.isArray(json?.data?.blocks) ? json.data.blocks : [];
     const normalized = blocks.map(normalizeBlock).filter(Boolean);
-    state.checkoutSavedDraft = { blocks: normalized };
+    state.checkoutSavedDraft = { blocks: normalized, enabled: json?.data?.enabled !== false };
+    state.checkoutScreenEnabled = state.checkoutSavedDraft.enabled;
     state.checkoutDraftReady = true;
-    writeDraftCache(normalized);
+    writeDraftCache(normalized, state.checkoutScreenEnabled);
     schedulePersistBootstrapSnapshot();
   }
 
   async function saveCheckoutDraftToApi(sourceDraft) {
     const payload = toCheckoutBlocksPayload(Array.isArray(sourceDraft?.blocks) ? sourceDraft.blocks : []);
+    payload.enabled = sourceDraft?.enabled !== false;
     await apiJson("/api/checkout-constructor/draft", {
       method: "PUT",
       body: JSON.stringify(payload),
     });
-    writeDraftCache(payload.blocks);
+    writeDraftCache(payload.blocks, payload.enabled);
     schedulePersistBootstrapSnapshot();
+  }
+
+  function adminOrderTransportError(sent = false) {
+    const error = new Error(sent ? 'ORDER_RESULT_UNKNOWN' : 'ORDER_SOCKET_UNAVAILABLE');
+    error.transportUnavailable = true;
+    error.commandSent = sent;
+    error.responseReceived = false;
+    return error;
+  }
+
+  function ensureAdminOrderSocket() {
+    if (adminOrderSocketReady) return adminOrderSocketReady;
+    if (typeof WebSocket !== 'function') return Promise.reject(adminOrderTransportError());
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${protocol}//${location.host}/api/admin/orders-ws`);
+    adminOrderSocket = socket;
+    adminOrderSocketReady = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { reject(adminOrderTransportError()); socket.close(); }, 3000);
+      const fail = () => { clearTimeout(timer); reject(adminOrderTransportError()); };
+      socket.addEventListener('error', fail, { once: true });
+      socket.addEventListener('close', fail, { once: true });
+      socket.addEventListener('message', event => {
+        let message;
+        try { message = JSON.parse(event.data); } catch (_) { return; }
+        if (message.type === 'ready') { clearTimeout(timer); resolve(socket); return; }
+        if (message.type !== 'order.result') return;
+        const pending = adminOrderCommands.get(message.request_id);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        adminOrderCommands.delete(message.request_id);
+        if (message.payload?.ok === true) pending.resolve(message.payload);
+        else {
+          const error = new Error(message.payload?.error || `API_ERROR_${message.status}`);
+          error.httpStatus = message.status;
+          error.responseReceived = true;
+          pending.reject(error);
+        }
+      });
+    });
+    socket.addEventListener('close', () => {
+      if (adminOrderSocket === socket) { adminOrderSocket = null; adminOrderSocketReady = null; }
+      for (const [id, pending] of adminOrderCommands) {
+        if (pending.socket !== socket) continue;
+        clearTimeout(pending.timer);
+        adminOrderCommands.delete(id);
+        pending.reject(adminOrderTransportError(true));
+      }
+    });
+    return adminOrderSocketReady;
+  }
+
+  async function sendAdminOrderCommand(url, opts, headers) {
+    const token = localStorage.getItem('authToken');
+    const storeId = String(headers['x-store-id']);
+    const socket = await ensureAdminOrderSocket();
+    if (token !== localStorage.getItem('authToken') || storeId !== String(localStorage.getItem('activeStoreId') || '1')) throw new Error('ORDER_SCOPE_CHANGED');
+    if (socket.readyState !== WebSocket.OPEN) throw adminOrderTransportError();
+    const creating = url === '/api/public/orders';
+    const requestId = creating ? headers['Idempotency-Key'] : createOrderSubmissionId();
+    if (adminOrderCommands.has(requestId)) throw new Error('ORDER_SUBMISSION_BUSY');
+    const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body;
+    return new Promise((resolve, reject) => {
+      const pending = {resolve, reject, socket, timer: setTimeout(() => {
+        adminOrderCommands.delete(requestId);
+        reject(adminOrderTransportError(true));
+      }, 120000)};
+      adminOrderCommands.set(requestId, pending);
+      try {
+        socket.send(JSON.stringify({type: creating ? 'order.create' : 'order.update', request_id: requestId,
+          order_id: creating ? null : Number(url.split('/').pop()), token, store_id: Number(storeId), body}));
+      } catch (_) {
+        clearTimeout(pending.timer);
+        adminOrderCommands.delete(requestId);
+        reject(adminOrderTransportError());
+      }
+    });
   }
 
   async function apiJson(url, opts = {}) {
@@ -17282,6 +17964,27 @@
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       "x-store-id": storeId,
     };
+    const orderCommand = (opts.method === 'PUT' && /^\/api\/admin\/orders\/\d+$/.test(url))
+      || (opts.method === 'POST' && url === '/api/public/orders' && headers['Idempotency-Key']);
+    if (orderCommand) {
+      const requestToken = localStorage.getItem('authToken');
+      const requestStore = localStorage.getItem('activeStoreId') || '1';
+      const isCurrentScope = () => requestToken === localStorage.getItem('authToken') && requestStore === (localStorage.getItem('activeStoreId') || '1');
+      try {
+        const result = await sendAdminOrderCommand(url, opts, headers);
+        if (!isCurrentScope()) throw new Error('ORDER_SCOPE_CHANGED');
+        return result;
+      }
+      catch (error) {
+        if (!error.transportUnavailable) throw error;
+        if (!isCurrentScope()) throw new Error('ORDER_SCOPE_CHANGED');
+        // Creation is persistently idempotent. An already-sent edit must not be replayed blindly.
+        if (error.commandSent && opts.method === 'PUT') {
+          error.message = '\u0421\u0432\u044f\u0437\u044c \u043f\u043e\u0442\u0435\u0440\u044f\u043d\u0430. \u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0451\u043d. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0437\u0430\u043a\u0430\u0437 \u043f\u0435\u0440\u0435\u0434 \u043f\u043e\u0432\u0442\u043e\u0440\u043e\u043c.';
+          throw error;
+        }
+      }
+    }
     const res = await fetch(url, { method: opts.method || "GET", headers, body: opts.body });
     const data = await res.json().catch(() => null);
     if (!data || data.ok !== true) {
@@ -17412,7 +18115,13 @@
       products.forEach((product) => hydratedProductIds.add(Number(product?.id || 0)));
       const previous = state.categoryProductsCache.get(cid);
       const localCombos = repositoryCombosForCategory(cid);
-      const payload = buildCategoryPayload(products, localCombos.length ? localCombos : (previous?.combos || []), cid);
+      const combosById = new Map((previous?.combos || []).map((combo) => [Number(combo.id), combo]));
+      localCombos.forEach((combo) => {
+        if (window.CatalogRepository.isComboReady(combo.id, { requiredCompleteness: "order-ready" })) {
+          combosById.set(Number(combo.id), combo);
+        }
+      });
+      const payload = buildCategoryPayload(products, [...combosById.values()], cid);
       setNewOrderCategoryPayload(cid, payload);
       state.checkoutCategoryProducts.set(cid, payload.activeOnly);
     });
@@ -17498,6 +18207,7 @@
       let combos = Array.isArray(previous?.combos) ? previous.combos.slice() : [];
       let touched = false;
       changed.forEach((combo, comboId) => {
+        if (combo && !window.CatalogRepository.isComboReady(comboId, { requiredCompleteness: "order-ready" })) return;
         const existingIndex = combos.findIndex((row) => Number(row?.id || 0) === comboId);
         const belongs = Boolean(combo && categoryCode && String(combo?.category_code || "").trim() === categoryCode);
         if (existingIndex >= 0 && !belongs) {
@@ -17547,7 +18257,10 @@
     const tracked = new Set(window.CatalogRepository.getTrackedCoverageCategoryIds());
     const activeId = getActiveProductCategoryId();
     if (activeId > 0) tracked.add(window.CatalogRepository.getRootCategoryId(activeId));
-    for (const categoryId of tracked) await discoverNewOrderCatalogTarget(categoryId);
+    for (const categoryId of tracked) {
+      window.CatalogRepository.getDescendantCategoryIds(categoryId).forEach(id => state.categoryWorkingSetComplete.delete(Number(id)));
+      await discoverNewOrderCatalogTarget(categoryId);
+    }
     hydrateNewOrderFromCatalogRepository({ categoryIds: [...tracked] });
     ensureValidActiveCategory();
     renderCategories();
@@ -17559,9 +18272,12 @@
     const rootId = window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId || 0);
     const categoryIds = window.CatalogRepository.getDescendantCategoryIds(rootId);
     let targetIds = window.CatalogRepository.getCoverageTargetIds({ categoryId: rootId });
-    const hasCompleteRuntimeSet = Array.isArray(targetIds)
-      && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds);
-    if (!hasCompleteRuntimeSet && navigator.onLine) {
+    const hasCompleteRuntimeSet = (categoryIds.length > 0
+      && categoryIds.every(id => state.categoryWorkingSetComplete.has(Number(id)) && state.categoryProductsCache.has(Number(id))))
+      || (Array.isArray(targetIds) && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds));
+    const hasCompleteComboLists = (categoryIds.length ? categoryIds : [rootId])
+      .every((id) => state.categoryComboListsComplete.has(Number(id)));
+    if ((!hasCompleteRuntimeSet || !hasCompleteComboLists) && navigator.onLine) {
       const loaded = await preloadAllCategoryProducts(categoryIds.length ? categoryIds : [rootId]);
       if (!loaded) throw new Error("NEW_ORDER_WORKING_SET_FAILED");
       if (!Array.isArray(targetIds)) {
@@ -17590,11 +18306,12 @@
 
   function isRepositoryCategoryWorkingSetComplete(categoryId) {
     const cid = Number(categoryId || 0);
-    if (state.categoryWorkingSetComplete.has(cid) && state.categoryProductsCache.has(cid)) return true;
-    if (!window.CatalogRepository) return false;
+    if (navigator.onLine && !getProductCategoryLoadIds(cid).every((id) => state.categoryComboListsComplete.has(Number(id)))) return false;
+    if (!window.CatalogRepository) return state.categoryWorkingSetComplete.has(cid) && state.categoryProductsCache.has(cid);
     const rootId = window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId || 0);
     const categoryIds = window.CatalogRepository.getDescendantCategoryIds(rootId);
     const targetIds = window.CatalogRepository.getCoverageTargetIds({ categoryId: rootId });
+    if (categoryIds.length > 0 && categoryIds.every(id => state.categoryWorkingSetComplete.has(Number(id)) && state.categoryProductsCache.has(Number(id)))) return true;
     return Array.isArray(targetIds)
       && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds);
   }
@@ -18388,14 +19105,22 @@
       .filter((cat) => cat?.parent_id == null);
 
     const checkoutScreenActive = String(state.activeCategoryId) === CHECKOUT_SCREEN_ID;
-    const checkoutRow = document.createElement("button");
-    checkoutRow.type = "button";
+    const checkoutRow = document.createElement("div");
+    checkoutRow.setAttribute("role", "button");
+    checkoutRow.tabIndex = 0;
+    checkoutRow.addEventListener("keydown", (event) => {
+      if (event.target !== checkoutRow || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      checkoutRow.click();
+    });
     checkoutRow.className = `stage-item ${checkoutScreenActive ? "is-active" : ""}`;
+    checkoutRow.classList.toggle("is-checkout-disabled", !state.checkoutScreenEnabled);
     checkoutRow.setAttribute("data-category-id", CHECKOUT_SCREEN_ID);
     checkoutRow.innerHTML = `
       <span class="stage-icon"><i class="fas fa-desktop"></i></span>
       <span class="stage-meta stage-text"><b>Р­РєСЂР°РЅ РѕС„РѕСЂРјР»РµРЅРёСЏ</b></span>
       <span class="acc-spacer"></span>
+      <button class="btn btn-ghost btn-icon new-order-checkout-settings" type="button" data-action="checkout-screen-settings" aria-label="Настройки экрана оформления" title="Настройки экрана оформления"><i class="fas fa-cog"></i></button>
     `;
     categoriesListEl.appendChild(checkoutRow);
 
@@ -18420,7 +19145,210 @@
     });
   }
 
+  let sharedCatalogCards = [];
+
+  function getNewOrderSharedCartItems() {
+    const order = state.rightOrders.find((row) => Number(row.id) === Number(state.rightActiveOrderId));
+    return Array.isArray(order?.form?.cartItems) ? order.form.cartItems : [];
+  }
+
+  function getNewOrderPresentationProduct(id) {
+    const productId = Number(id);
+    return state.productByIdCache.get(productId)
+      || window.CatalogRepository?.getProduct(productId)
+      || state.currentProducts.find(product => Number(product.id) === productId)
+      || null;
+  }
+
+  function getNewOrderSharedAggregate(product) {
+    return getNewOrderSharedCartItems().filter((item) => Number(item.product_id) === Number(product.id) && String(item.type) !== "combo")
+      .reduce((result, item) => ({ qty: result.qty + Number(item.qty || 0), total: result.total + Number(item.sum || 0), oldTotal: result.oldTotal + Number(item.old_line_total || item.sum || 0) }), { qty: 0, total: 0, oldTotal: 0 });
+  }
+
+  function getNewOrderSharedCartContext(excludeItemId = 0) {
+    const items = () => getNewOrderSharedCartItems().filter((item) => Number(item.id) !== Number(excludeItemId));
+    const getConsumed = (id) => getRightOrderProductStockUsageInCart(items(), Number(id));
+    return {
+      getConsumed,
+      getRemaining: (id) => {
+        const qty = state.inventoryByProductId.get(Number(id))?.stock_qty;
+        return qty == null ? Infinity : Math.max(0, Number(qty) - getConsumed(id));
+      },
+      getItems: () => items().map((item) => ({
+        ...item,
+        product: getNewOrderPresentationProduct(item.product_id) || item,
+        ingredients: (item.ingredients || []).map((row) => ({ ...row, quantity: row.qty ?? row.quantity })),
+        options: (item.option_items || []).map((row) => ({ ...row, price: Number(row.basePrice || 0) + Number(row.variantDiff || 0) })),
+      })),
+    };
+  }
+
+  function animateNewOrderProductToTab(source, orderId) {
+    if (!source || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const findTab = () => {
+      const selector = `[data-action="right-order-tab-select"][data-order-id="${Number(orderId)}"], [data-order-tab-key].is-active, [data-chat-right-tab].is-active`;
+      return [...document.querySelectorAll('#newOrderCatalogTabs, #adminMobileOrderTabs, #newOrderTabs, #orderTabsCheckout')]
+        .flatMap(container => [...container.querySelectorAll(selector)])
+        .find(tab => tab.getClientRects().length && tab.getBoundingClientRect().width > 0);
+    };
+    const tab = findTab();
+    if (!tab || !tab.getClientRects().length) return;
+    tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const target = tab.getBoundingClientRect();
+    const size = Math.min(72, source.width, source.height);
+    if (!(size > 0 && target.width > 0 && target.height > 0)) return;
+    const photo = document.createElement("img");
+    photo.className = "new-order-product-flight";
+    photo.src = source.src;
+    photo.alt = "";
+    photo.setAttribute("aria-hidden", "true");
+    const left = source.left + (source.width - size) / 2;
+    const top = source.top + (source.height - size) / 2;
+    Object.assign(photo.style, { left: `${left}px`, top: `${top}px`, width: `${size}px`, height: `${size}px` });
+    document.body.appendChild(photo);
+    const x = target.left + target.width / 2 - left - size / 2;
+    const y = target.top + target.height / 2 - top - size / 2;
+    const flight = photo.animate([
+      { transform: "translate(0,0) scale(1)", opacity: 1 },
+      { transform: `translate(${x * .45}px,${Math.min(-45, y * .3)}px) scale(.75)`, opacity: 1, offset: .4 },
+      { transform: `translate(${x}px,${y}px) scale(.2)`, opacity: .3 },
+    ], { duration: 560, easing: "cubic-bezier(.3,.05,.65,1)" });
+    flight.finished.then(() => {
+      const currentTab = findTab();
+      if (currentTab?.isConnected) currentTab.animate([
+        { transform: "translateY(0)" }, { transform: "translateY(-5px)", offset: .4 }, { transform: "translateY(0)" },
+      ], { duration: 240, easing: "ease-out" });
+    }).catch(() => {}).finally(() => photo.remove());
+  }
+
+  function getNewOrderSharedCardContext() {
+    return {
+      getQty: (id) => getNewOrderSharedAggregate({ id }).qty,
+      getAggregate: getNewOrderSharedAggregate,
+      isAvailable: isProductAvailableFlag,
+      getRemaining: (id) => {
+        const stock = state.inventoryByProductId.get(Number(id));
+        return stock?.stock_qty == null ? Infinity : Math.max(0, Number(stock.stock_qty) - getRightOrderProductStockUsageInCart(getNewOrderSharedCartItems(), Number(id)));
+      },
+      isIngredientBlocked: (id) => state.effectiveStockConfigByProductId.get(Number(id))?.is_fulfillable === false,
+      onError: (error) => { console.error("Shared product action failed", error); showNewOrderAlert("Не удалось добавить товар"); },
+      onOpen: (product) => { void openProductOverlay(Number(product.id)); },
+      onAdd: async (product, card) => {
+        const id = Number(product.id);
+        const image = card?.querySelector(".sp-media img");
+        const rect = image?.getBoundingClientRect();
+        const source = rect && image ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height, src: image.currentSrc || image.src } : null;
+        await getNewOrderSharedPassports([id]);
+        resetProductCardToDefault(id);
+        const config = window.CatalogRepository.getProductPassport(id)?.defaultConfig;
+        if (!config) throw new Error("PRODUCT_DEFAULT_CONFIGURATION_UNAVAILABLE");
+        applyNewOrderSharedSelection(id, config);
+        const item = buildCartItemFromProduct(id, 1);
+        if (!item) throw new Error("PRODUCT_CONFIGURATION_UNAVAILABLE");
+        if (!state.rightActiveOrderId) openRightNewOrderTab();
+        const added = addCartItemToRightOrder(state.rightActiveOrderId, item);
+        if (added) {
+          renderRightOrderTabs();
+          animateNewOrderProductToTab(source, state.rightActiveOrderId);
+        }
+        return added;
+      },
+      onRemove: (product) => {
+        const items = getNewOrderSharedCartItems().map((item) => ({ ...item }));
+        const index = items.findLastIndex((item) => Number(item.product_id) === Number(product.id) && String(item.type) !== "combo" && !isRightOrderAutoAddItem(item));
+        if (index < 0) return;
+        if (Number(items[index].qty) <= 1) items.splice(index, 1);
+        else items[index] = recalculateCartItemTotals({ ...items[index], qty: Number(items[index].qty) - 1 });
+        updateRightOrderCartItems(state.rightActiveOrderId, items, { render: true });
+      },
+    };
+  }
+
+  function syncNewOrderSharedCards(productIds = null) {
+    if (!window.SharedProductDetails || !sharedCatalogCards.length) return;
+    const ids = productIds ? new Set(productIds.map(Number)) : null;
+    const context = getNewOrderSharedCardContext();
+    sharedCatalogCards.forEach(({ card, product }) => {
+      if (ids && !ids.has(Number(product.id))) return;
+      if (card.isConnected && !card.hasAttribute("data-combo-id")) window.SharedProductDetails.syncCard(card, product, context.getQty(product.id), context);
+    });
+  }
+
+  async function getNewOrderSharedPassports(ids) {
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      await window.CatalogRepository.ensureProducts(ids.slice(offset, offset + 100), {
+        requiredCompleteness: "order-ready",
+        loader: loadNewOrderCatalogPassports,
+      });
+    }
+    ids.forEach((id) => {
+      const passport = window.CatalogRepository.getProductPassport(id);
+      if (passport) applyCatalogPassportToNewOrder(passport);
+    });
+    await ensureNewOrderProductDetails(ids);
+    const passports = {};
+    ids.forEach((id) => {
+      const passport = window.CatalogRepository?.getProductPassport(id);
+      if (!passport) throw new Error("PRODUCT_PASSPORT_UNAVAILABLE");
+      passports[id] = { ...passport, product: { ...passport.product, ...getProductById(id) } };
+      const targetIds = [
+        ...(passport.ingredients || []).map((row) => Number(row.ingredient_id)),
+        ...(passport.options || []).flatMap((group) => (group.items || []).map((row) => Number(row.target_product_id || row.product_id))),
+      ];
+      targetIds.forEach((targetId) => {
+        const target = window.CatalogRepository?.getProductPassport(targetId);
+        const product = getProductById(targetId) || window.CatalogRepository?.getProduct(targetId);
+        if (target) passports[targetId] = target;
+        else if (product) passports[targetId] = { product };
+      });
+    });
+    return passports;
+  }
+
+  function renderNewOrderSharedCatalog(products, changedIds = null, changedComboIds = null) {
+    const list = Array.isArray(products) ? products : [];
+    productsGridEl.classList.add("is-shared-catalog");
+    productsEmptyEl?.classList.toggle("hidden", list.length > 0);
+    let host = productsGridEl.querySelector("[data-shared-product-catalog]");
+    if (!host) {
+      host = document.createElement("div");
+      host.dataset.sharedProductCatalog = "1";
+      productsGridEl.replaceChildren(host);
+      sharedCatalogCards = [];
+    }
+    const grid = window.SharedProductDetails.createCatalogSurface(host);
+    const previous = new Map(sharedCatalogCards.map(entry => [entry.key, entry]));
+    const context = getNewOrderSharedCardContext();
+    const next = [];
+    list.forEach((listed, index) => {
+      const isCombo = String(listed.type) === "combo" || Number(listed.is_combo) === 1;
+      const id = Number(isCombo ? listed.combo_id : listed.id);
+      const key = `${isCombo ? "combo" : "product"}:${id}`;
+      const product = listed;
+      let entry = previous.get(key);
+      const explicitlyChanged = isCombo ? changedComboIds?.has(id) : changedIds?.has(id);
+      if (!entry || explicitlyChanged || (!changedIds && entry.product !== product)) {
+        const card = isCombo
+          ? window.SharedProductDetails.createComboCard({ ...product, id }, { onOpen: () => { void openComboOverlay(id, { comboCategoryId: Number(product.combo_category_id || 0) }); } })
+          : window.SharedProductDetails.createCard(product, { ...context, isCriticalCard: index < (window.matchMedia("(max-width: 768px)").matches ? 4 : 5) });
+        if (entry) entry.card.replaceWith(card);
+        entry = { key, card, product, isCombo };
+      } else if (!isCombo) {
+        window.SharedProductDetails.syncCard(entry.card, product, context.getQty(id), context);
+      }
+      if (grid.children[index] !== entry.card) grid.insertBefore(entry.card, grid.children[index] || null);
+      previous.delete(key);
+      next.push(entry);
+    });
+    previous.forEach(entry => entry.card.remove());
+    sharedCatalogCards = next;
+  }
+
   function renderProducts(products, options = {}) {
+    if (isNewOrderEditorSurface() && !options.container && !isCheckoutScreenActive()) {
+      void renderNewOrderSharedCatalog(products);
+      return;
+    }
     const targetGrid = options.container || productsGridEl;
     const manageEmpty = options.manageEmpty !== false;
     const prevScrollByProduct = new Map();
@@ -19680,6 +20608,10 @@
       : state.categoryProductsCache.get(activeCategoryId);
     const orderedProducts = Array.isArray(payload?.currentProducts) ? payload.currentProducts : [];
     state.currentProducts = orderedProducts;
+    if (isNewOrderEditorSurface()) {
+      renderNewOrderSharedCatalog(orderedProducts, new Set(productIds.map(Number)), new Set(comboIds.map(Number)));
+      return;
+    }
 
     productIds.forEach((productId) => {
       const pid = Number(productId || 0);
@@ -19847,8 +20779,11 @@
         apiJson("/api/public/products/batch/categories", {
           method: "POST",
           body: JSON.stringify({ category_ids: ids }),
-        }).catch(() => ({ data: {}, combos: {} })),
+        }),
       ]);
+      if (!publicPayload?.combos || typeof publicPayload.combos !== "object" || Array.isArray(publicPayload.combos)) {
+        throw new Error("INVALID_CATEGORY_COMBO_LIST_RESPONSE");
+      }
       const productsByCategory = {};
       ids.forEach((id) => { productsByCategory[String(id)] = []; });
       adminPayloads.forEach((payload) => {
@@ -19868,13 +20803,20 @@
         state.checkoutCategoryProducts.set(cid, payload.activeOnly);
         seedRightOrderProductsByIdCache(payload.activeOnly);
         state.categoryWorkingSetComplete.add(cid);
+        state.categoryComboListsComplete.add(cid);
       });
       if (window.CatalogRepository) {
-        queueMicrotask(() => {
-          ids.forEach((cid) => {
-            const payload = state.categoryProductsCache.get(cid);
-            if (payload) window.CatalogRepository.upsertProducts(payload.source, { categoryId: cid, completeness: "summary" });
-          });
+        ids.forEach((cid) => {
+          const payload = state.categoryProductsCache.get(cid);
+          if (payload) window.CatalogRepository.upsertProducts(payload.source, { categoryId: cid, completeness: "summary" });
+        });
+        const loadedIds = new Set(ids);
+        const roots = new Set(ids.map(id => window.CatalogRepository.getRootCategoryId(id) || id));
+        roots.forEach(rootId => {
+          const descendants = window.CatalogRepository.getDescendantCategoryIds(rootId);
+          if (!descendants.length || !descendants.every(id => loadedIds.has(Number(id)))) return;
+          const productIds = descendants.flatMap(id => (state.categoryProductsCache.get(Number(id))?.source || []).map(row => Number(row.id)));
+          window.CatalogRepository.setCoverageTarget([...new Set(productIds.filter(id => id > 0))], { categoryId: rootId, source: "admin-category-working-set" });
         });
       }
       schedulePersistBootstrapSnapshot(0);
@@ -19940,6 +20882,21 @@
         } else if (productsEmptyEl) {
           productsEmptyEl.textContent = "Загрузка товаров…";
           productsEmptyEl.classList.remove("hidden");
+        }
+        if (localPayloadReady && preferCache) {
+          if (!isRepositoryCategoryWorkingSetComplete(cid)) {
+            void ensureRepositoryCategoryProducts(cid).then(() => {
+              if (getActiveProductCategoryId() !== cid || isCheckoutScreenActive()) return;
+              const payload = loadIds.length > 1 ? buildCombinedCategoryPayload(loadIds) : state.categoryProductsCache.get(cid);
+              state.currentProducts = Array.isArray(payload?.currentProducts) ? payload.currentProducts : [];
+              seedRightOrderProductsByIdCache(payload?.activeOnly || []);
+              renderProducts(state.currentProducts);
+            }).catch(error => console.error('New Order category refresh failed:', error));
+          }
+          void warmRightOrderProductPricingContext(localPayload.activeOnly || [], {
+            includeOptionDetails: true, includeOptionTargets: true,
+          });
+          return;
         }
         try {
           await ensureRepositoryCategoryProducts(cid);
@@ -20055,13 +21012,20 @@
     }
 
     categoriesListEl.addEventListener("click", (e) => {
+      if (e.target.closest('[data-action="checkout-screen-settings"]')) {
+        if (!state.checkoutEditMode) settingsBtnEl?.click();
+        if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Экран оформления");
+        return;
+      }
       const btn = e.target.closest("[data-category-id]");
       if (!btn) return;
       const rawCategoryId = String(btn.getAttribute("data-category-id") || "").trim();
       if (!rawCategoryId) return;
       if (rawCategoryId === CHECKOUT_SCREEN_ID) {
+        if (!state.checkoutScreenEnabled && !state.checkoutEditMode) return;
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
         state.activeProductCategoryId = null;
+        if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Каталог");
         schedulePersistBootstrapSnapshot(0);
         void loadCheckoutProductsForSelectedCategories().then(() => {
           const ids = [...state.checkoutCategoryProducts.values()]
@@ -20075,6 +21039,7 @@
       }
       const cid = Number(rawCategoryId);
       if (!Number.isFinite(cid) || cid <= 0) return;
+      if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Каталог");
       if (state.checkoutEditMode) {
         state.checkoutEditMode = false;
         state.checkoutDraft = null;
@@ -20154,23 +21119,13 @@
           return;
         }
 
-        const addressEditBtn = e.target.closest(".new-order-right-address-edit");
-        if (addressEditBtn) {
-          const formRoot = addressEditBtn.closest(".new-order-right-form[data-order-id]");
+        const addressWrap = e.target.closest(".new-order-right-address-wrap");
+        if (addressWrap) {
+          e.preventDefault();
+          const formRoot = addressWrap.closest(".new-order-right-form[data-order-id]");
           const orderId = Number(formRoot?.getAttribute("data-order-id") || 0);
           if (orderId > 0) void openRightAddressOverlay(orderId);
           return;
-        }
-
-        const addressInput = e.target.closest("[data-action='right-input-change'][data-field='address'][data-order-id]");
-        if (addressInput) {
-          const currentAddress = String(addressInput.value || "").trim();
-          if (!currentAddress) {
-            const orderId = Number(addressInput.getAttribute("data-order-id") || 0);
-            if (orderId > 0) void openRightAddressOverlay(orderId);
-            e.preventDefault();
-            return;
-          }
         }
 
         const cartVariantBtn = e.target.closest("[data-action='right-cart-variant-select'][data-order-id][data-cart-item-id][data-row-kind][data-variant-index]");
@@ -20621,17 +21576,7 @@
           const armedUntil = Number(state.rightCartClearConfirmUntilByOrder.get(orderId) || 0);
           const armed = armedUntil > Date.now();
           if (isEditCancelMode) {
-            const giftItems = cartItems.filter((item) => Number(item?.is_gift_reward || 0) === 1);
-            if (giftItems.length) {
-              const restored = await restoreRightOrderGiftRewardsFromItems(orderId, giftItems);
-              if (!restored) return;
-            }
-            resetRightCartClearState(orderId, { render: false });
-            document.dispatchEvent(
-              new CustomEvent("neworder:edit-cancel", {
-                detail: { orderId: editOrderId },
-              })
-            );
+            await cancelRightOrderEditing(orderId);
             return;
           }
           if (!cartItems.length) return;
@@ -20650,6 +21595,12 @@
           return;
         }
 
+        const catalogBtn = e.target.closest("[data-action='right-order-catalog-open']");
+        if (catalogBtn) {
+          window.__adminMobilePages?.openCenter?.("Каталог");
+          return;
+        }
+
         const benefitsBtn = e.target.closest("[data-action='right-order-benefits-open'][data-order-id]");
         if (benefitsBtn) {
           const orderId = Number(benefitsBtn.getAttribute("data-order-id") || 0);
@@ -20659,7 +21610,7 @@
         }
 
         const bonusBtn = e.target.closest("[data-action='right-order-bonus-open'][data-order-id]");
-        if (bonusBtn) {
+        if (bonusBtn && !e.target.closest("[data-cart-bonus-accrual-button], [data-cart-bonus-redeem-button], [data-cart-bonus-redeem-toggle]")) {
           const orderId = Number(bonusBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
           void openRightBonusCardOverlay(orderId);
@@ -20695,14 +21646,6 @@
           const orderId = Number(checkoutBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
           void submitRightOrder(orderId);
-          return;
-        }
-
-        const checkoutPaidBtn = e.target.closest("[data-action='right-cart-checkout-paid'][data-order-id]");
-        if (checkoutPaidBtn) {
-          const orderId = Number(checkoutPaidBtn.getAttribute("data-order-id") || 0);
-          if (!(orderId > 0)) return;
-          void submitRightOrder(orderId, { withPayment: true });
           return;
         }
 
@@ -20934,10 +21877,17 @@
       if (shouldRenderRight) renderRightOrderTabs();
     });
 
+    if (checkoutEnabledInputEl) {
+      checkoutEnabledInputEl.addEventListener("change", () => {
+        if (state.checkoutEditMode && state.checkoutDraft) state.checkoutDraft.enabled = checkoutEnabledInputEl.checked;
+      });
+    }
+
     if (settingsBtnEl) {
       settingsBtnEl.addEventListener("click", async () => {
         if (state.checkoutEditMode) {
           const draftToSave = {
+            enabled: state.checkoutDraft?.enabled !== false,
             blocks: Array.isArray(state.checkoutDraft?.blocks)
               ? state.checkoutDraft.blocks.map((block) => ({
                 id: Number(block?.id || 0),
@@ -20954,17 +21904,22 @@
             return;
           }
           state.checkoutSavedDraft = draftToSave;
+          state.checkoutScreenEnabled = state.checkoutDraft?.enabled !== false;
           state.checkoutDraftReady = true;
           schedulePersistBootstrapSnapshot(0);
           state.checkoutEditMode = false;
           state.checkoutDraft = null;
+          ensureValidActiveCategory();
+          renderCategories();
           renderMainContentMode();
+          if (!state.checkoutScreenEnabled) void renderActiveCategoryContent();
           return;
         }
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
         state.activeProductCategoryId = null;
         state.checkoutEditMode = true;
         state.checkoutDraft = {
+          enabled: state.checkoutScreenEnabled,
           blocks: Array.isArray(state.checkoutSavedDraft?.blocks)
             ? state.checkoutSavedDraft.blocks.map((block) => ({ id: Number(block?.id || 0), title: String(block?.title || ""), categoryIds: Array.isArray(block?.categoryIds) ? [...block.categoryIds] : [], requireAll: block?.requireAll == null ? true : Boolean(block.requireAll) }))
             : [],
@@ -20985,7 +21940,10 @@
         };
         state.checkoutEditMode = false;
         state.checkoutDraft = null;
+        ensureValidActiveCategory();
+        renderCategories();
         renderMainContentMode();
+        if (!state.checkoutScreenEnabled) void renderActiveCategoryContent();
       });
     }
 
@@ -21042,14 +22000,18 @@
         });
       }
 
-      if (rightTabsEl) {
-        rightTabsEl.addEventListener("click", (e) => {
+      [rightTabsEl, ...(ownsCatalogTabs ? [catalogTabsEl] : [])].filter(Boolean).forEach(tabsEl => {
+        tabsEl.addEventListener("click", async (e) => {
           const closeBtn = e.target.closest("[data-action='right-order-tab-close'][data-order-id]");
           if (closeBtn) {
             const orderId = Number(closeBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
           const idx = state.rightOrders.findIndex((o) => Number(o?.id || 0) === orderId);
           if (idx < 0) return;
+          if (state.rightOrders[idx].mode === 'edit') {
+            await cancelRightOrderEditing(orderId);
+            return;
+          }
           resetRightCartClearState(orderId, { render: false });
           state.rightDiscountBreakdownOpenByOrder.delete(orderId);
           state.rightCheckoutSubmittingByOrder.delete(orderId);
@@ -21081,8 +22043,9 @@
           state.rightOpenSelect = null;
           closeRightAddressOverlay();
           renderRightOrderTabs();
+          scheduleDurableCreateDraftSave();
         });
-      }
+      });
 
       checkoutContentEl.addEventListener("dragstart", (e) => {
         const handle = e.target.closest("[data-action='checkout-block-drag-handle'][data-block-id]");
@@ -21470,21 +22433,14 @@
       if (!actionNode) return;
       const action = String(actionNode.getAttribute("data-action") || "");
       if (!action.startsWith("combo-overlay-")) return;
+      const actionGeneration = comboOverlayRequestGeneration;
       const closePickerToMain = () => {
-        state.comboModal.view = "main";
-        state.comboModal.pickerBlockIndex = -1;
-        state.comboModal.expandedPickerProductIndex = null;
-        renderComboOverlay();
-        const { list } = getComboOverlayElements();
-        if (list) list.scrollTop = 0;
+        returnToComboMain();
       };
 
       if (action === "combo-overlay-back") {
         if (String(state.comboModal.view || "main") === "picker") {
-          state.comboModal.view = "main";
-          state.comboModal.pickerBlockIndex = -1;
-          state.comboModal.expandedPickerProductIndex = null;
-          renderComboOverlay();
+          returnToComboMain();
           return;
         }
         closeComboOverlay();
@@ -21495,10 +22451,10 @@
         const blockIndex = Number(actionNode.getAttribute("data-block-index") || 0);
         void (async () => {
           const safeBlockIndex = Number.isFinite(blockIndex) ? blockIndex : 0;
+          comboMainScrollTop = getComboOverlayElements().list?.scrollTop || 0;
           state.comboModal.view = "picker";
           state.comboModal.pickerBlockIndex = safeBlockIndex;
           state.comboModal.expandedPickerProductIndex = null;
-          await hydrateComboBlockSelection(safeBlockIndex, { preferSavedState: true });
           renderComboOverlay();
           const { list } = getComboOverlayElements();
           if (list) list.scrollTop = 0;
@@ -21519,7 +22475,8 @@
             preferSavedState: true,
           });
           if (!selected) return;
-          const currentExpanded = Number(state.comboModal.expandedPickerProductIndex);
+          const currentExpanded = state.comboModal.expandedPickerProductIndex == null
+            ? null : Number(state.comboModal.expandedPickerProductIndex);
           state.comboModal.expandedPickerProductIndex = Number.isFinite(currentExpanded) && currentExpanded === productIndex
             ? null
             : productIndex;
@@ -21566,6 +22523,7 @@
           rowState.variant_label = String(values[variantIndex] || "");
           state.comboModal.selectionStateByBlock[blockIndex] = rowState;
           await hydrateComboBlockSelection(blockIndex, { preferSavedState: true });
+          if (actionGeneration !== comboOverlayRequestGeneration || state.comboModal.view !== "picker") return;
           state.comboModal.view = "picker";
           state.comboModal.pickerBlockIndex = blockIndex;
           state.comboModal.expandedPickerProductIndex = productIndex;
@@ -21629,6 +22587,7 @@
           rowState.ingredients_display[idx].quantity = nextQty;
           state.comboModal.selectionStateByBlock[blockIndex] = rowState;
           await hydrateComboBlockSelection(blockIndex, { preferSavedState: true });
+          if (actionGeneration !== comboOverlayRequestGeneration || state.comboModal.view !== "picker") return;
           state.comboModal.view = "picker";
           state.comboModal.pickerBlockIndex = blockIndex;
           state.comboModal.expandedPickerProductIndex = productIndex;
@@ -21683,10 +22642,7 @@
       if (!overlay || overlay.classList.contains("hidden")) return;
       if (e.key !== "Escape") return;
       if (String(state.comboModal.view || "main") === "picker") {
-        state.comboModal.view = "main";
-        state.comboModal.pickerBlockIndex = -1;
-        state.comboModal.expandedPickerProductIndex = null;
-        renderComboOverlay();
+        returnToComboMain();
         return;
       }
       closeComboOverlay();
@@ -21831,41 +22787,7 @@
         return;
       }
       if (action === "product-overlay-add") {
-        const qty = Math.max(1, Number(state.productModal.qty || 1));
-        const mode = String(state.productModal.mode || "add");
-        const cartItem = buildCartItemFromProduct(pid, qty);
-        if (!cartItem) return;
-        if (mode === "edit") {
-          const orderId = Number(state.productModal.editOrderId || 0);
-          const cartItemId = Number(state.productModal.editCartItemId || 0);
-          if (orderId > 0 && cartItemId > 0) {
-            const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
-            if (orderIndex >= 0) {
-              const order = state.rightOrders[orderIndex] || {};
-              const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
-              const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((x) => ({ ...x })) : [];
-              const idx = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
-              if (idx >= 0) {
-                cartItem.id = cartItemId;
-                const limited = enforceProductStockLimitForCartItem(cartItems, cartItem, {
-                  excludeCartItemId: cartItemId,
-                  showAlert: true,
-                });
-                if (!limited.ok || !limited.item) return;
-                cartItems[idx] = limited.item;
-                updateRightOrderCartItems(orderId, cartItems, { render: true });
-                closeProductOverlay();
-                return;
-              }
-            }
-          }
-        }
-        if (!state.rightActiveOrderId) openRightNewOrderTab();
-        if (!state.rightActiveOrderId) return;
-        const added = addCartItemToRightOrder(state.rightActiveOrderId, cartItem);
-        if (!added) return;
-        renderRightOrderTabs();
-        closeProductOverlay();
+        commitProductOverlay();
         return;
       }
       if (action === "ingredient-minus" || action === "ingredient-plus") {
@@ -21938,7 +22860,7 @@
     const scopeKey = newOrderCacheScopeKey();
     const run = () => {
       if (generation !== idleWarmupGeneration || newOrderCacheScopeKey() !== scopeKey) return;
-      if (state.rightDeliverySettingsReady || state.rightDeliverySettingsPromise) return;
+      if (state.rightDeliverySettingsPromise) return;
       void ensureRightDeliverySettingsLoaded().catch(() => {});
     };
     if (typeof window.requestIdleCallback === "function") {
@@ -22031,6 +22953,7 @@
   }
 
   function patchVisibleProductInventory(productId) {
+    if (isNewOrderEditorSurface()) syncNewOrderSharedCards([productId]);
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
     const product = getProductById(pid);
@@ -22052,8 +22975,13 @@
   function patchVisibleProductCatalog(product) {
     const pid = Number(product?.id || 0);
     if (!(pid > 0)) return;
+    const cards = getVisibleNewOrderProductNodes(pid);
+    if (!cards.length) {
+      patchVisibleProductInventory(pid);
+      return;
+    }
     const pricing = getCurrentProductUnitPricing(product, pid);
-    getVisibleNewOrderProductNodes(pid).forEach((card) => {
+    cards.forEach((card) => {
       const title = card.querySelector(".new-order-product-title, .new-order-checkout-product-name");
       if (title) {
         title.textContent = String(product?.name || "Товар");
@@ -22266,9 +23194,10 @@
 
       const blocks = Array.isArray(data.checkout?.blocks) ? data.checkout.blocks : [];
       const normalizedBlocks = blocks.map(normalizeBlock).filter(Boolean);
-      state.checkoutSavedDraft = { blocks: normalizedBlocks };
+      state.checkoutSavedDraft = { blocks: normalizedBlocks, enabled: data.checkout?.enabled !== false };
+      state.checkoutScreenEnabled = state.checkoutSavedDraft.enabled;
       state.checkoutDraftReady = true;
-      writeDraftCache(normalizedBlocks);
+      writeDraftCache(normalizedBlocks, state.checkoutScreenEnabled);
       schedulePersistBootstrapSnapshot(0);
       return true;
     } catch {
@@ -22301,7 +23230,13 @@
   }
 
   function ensureValidActiveCategory() {
-    if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) return;
+    if (isCheckoutScreenActive() && (state.checkoutScreenEnabled || state.checkoutEditMode)) return;
+    if (!state.checkoutScreenEnabled && (isCheckoutScreenActive() || !getCategoryById(state.activeCategoryId))) {
+      const first = state.categories.find(category => category.parent_id == null);
+      state.activeCategoryId = first ? Number(first.id) : null;
+      state.activeProductCategoryId = state.activeCategoryId;
+      return;
+    }
     const activeId = Number(state.activeCategoryId || 0);
     const activeCategory = getCategoryById(activeId);
     if (!activeCategory) {
@@ -22336,10 +23271,10 @@
       const checkoutIds = [...state.checkoutCategoryProducts.values()]
         .flatMap((products) => Array.isArray(products) ? products : [])
         .map((product) => Number(product?.id || 0));
-      await refreshNewOrderEffectiveStockConfigs(checkoutIds);
+      void refreshNewOrderEffectiveStockConfigs(checkoutIds);
     } else if (state.activeCategoryId) {
       await loadProductsForCategory(getActiveProductCategoryId(), { preferCache: true });
-      await refreshNewOrderEffectiveStockConfigs(
+      void refreshNewOrderEffectiveStockConfigs(
         state.currentProducts.map((product) => Number(product?.id || 0))
       );
     } else if (productsEmptyEl) {
@@ -22358,6 +23293,7 @@
     state.checkoutCategoryLoading.clear();
     state.checkoutCategoryErrors.clear();
     state.categoryWorkingSetComplete.clear();
+    state.categoryComboListsComplete.clear();
     state.productVariants.clear();
     state.productIngredients.clear();
     state.ingredientStateByProduct.clear();
@@ -23579,6 +24515,13 @@
 
   function captureCheckoutSession() {
     return {
+      editorOrigin: location.pathname,
+      editorView: window.__adminMobilePages?.getEditorView?.() || null,
+      editorScroll: {
+        categories: categoriesListEl.parentElement?.scrollTop || 0,
+        catalog: productsGridEl.parentElement?.scrollTop || 0,
+        order: rightContentEl?.parentElement?.scrollTop || 0,
+      },
       activeCategoryId: state.activeCategoryId,
       activeProductCategoryId: state.activeProductCategoryId,
       quantities: mapToObject(state.quantities),
@@ -23679,8 +24622,14 @@
     renderCategories();
     renderRightOrderTabs();
     if (typeof opts?.onApplied === "function") opts.onApplied();
-    await renderActiveCategoryContent();
+    if (!opts.deferCatalog) await renderActiveCategoryContent();
     if (isCurrent && !isCurrent()) return false;
+    requestAnimationFrame(() => {
+      if (isCurrent && !isCurrent()) return;
+      if (categoriesListEl.parentElement) categoriesListEl.parentElement.scrollTop = Number(src.editorScroll?.categories || 0);
+      if (productsGridEl.parentElement) productsGridEl.parentElement.scrollTop = Number(src.editorScroll?.catalog || 0);
+      if (rightContentEl?.parentElement) rightContentEl.parentElement.scrollTop = Number(src.editorScroll?.order || 0);
+    });
     renderRightOrderTabs();
     state.rightOrders.forEach((row) => {
       const orderId = Number(row?.id || 0);
@@ -23702,7 +24651,39 @@
     };
   }
 
+  function mergeEditorWorkspace(cached, session) {
+    if (!cached?.rightOrders?.length) return session;
+    const requested = session?.rightOrders?.find(row => Number(row.id) === Number(session.rightActiveOrderId));
+    const stored = requested && cached.rightOrders.find(row => requested.mode === 'edit'
+      ? row.mode === 'edit' && Number(row.editOrderId) === Number(requested.editOrderId)
+      : Number(row.id) === Number(requested.id));
+    const merged = { ...cached, ...session,
+      rightOrders: [...cached.rightOrders, ...(requested && !stored ? [requested] : [])],
+      rightActiveOrderId: stored?.id || requested?.id || cached.rightActiveOrderId };
+    for (const key of ['rightAddressDraftByOrder','rightAddressSelectedIdByOrder','rightBonusRedeemEnabledByOrder','rightBonusRedeemAmountByOrder','rightBonusRedeemAccountIdByOrder']) {
+      merged[key] = { ...session[key], ...cached[key] };
+    }
+    return merged;
+  }
+
   window.NewOrderBridge = {
+    setEmbeddedEditing,
+    hasEditingOrders,
+    cancelEditingOrder: async (orderId) => {
+      await loadReadyPromise;
+      let draft = state.rightOrders.find(row => row.mode === 'edit' && Number(row.editOrderId) === Number(orderId));
+      if (!draft) {
+        const cached = await readEditorWorkspace();
+        if (cached?.rightOrders?.some(row => row.mode === 'edit' && Number(row.editOrderId) === Number(orderId))) {
+          await restoreCheckoutSession(cached);
+          editorWorkspaceReady = true;
+          draft = state.rightOrders.find(row => row.mode === 'edit' && Number(row.editOrderId) === Number(orderId));
+        }
+      }
+      if (draft) await cancelRightOrderEditing(Number(draft.id));
+    },
+    persist: persistEditorWorkspace,
+    readWorkspace: readEditorWorkspace,
     ready: () => loadReadyPromise,
     captureSession: () => {
       writeDurableCreateDraftNow();
@@ -23712,17 +24693,34 @@
       checkoutSessionRevision += 1;
       await loadReadyPromise;
       if (typeof opts?.isCurrent === "function" && !opts.isCurrent()) return false;
-      return restoreCheckoutSession(session, opts);
+      editorWorkspaceScope();
+      editorWorkspaceReady = true;
+      const cached = await readEditorWorkspace();
+      if (typeof opts?.isCurrent === 'function' && !opts.isCurrent()) return false;
+      session = mergeEditorWorkspace(cached, session);
+      const applied = await restoreCheckoutSession(session, opts);
+      if (applied !== false) {
+        try { await persistEditorWorkspace(); }
+        catch (error) { reportEditorWorkspaceError(error); throw error; }
+        window.__adminMobilePages?.restoreEditorView?.(session.editorView);
+      }
+      return applied;
     },
     createBlankSession: (opts = {}) => buildBlankDraftSession(opts),
     createSessionFromOrder: async (order, opts = {}) => {
-      await bootstrapDataReadyPromise;
-      return buildDraftSessionFromOrder(order, opts);
+      const locallyReady = await Promise.race([localEditorDataReadyPromise, bootstrapDataReadyPromise.then(() => false)]);
+      if (!locallyReady) await bootstrapDataReadyPromise;
+      if (editorWorkspaceReady && isNewOrderEditorSurface()) await persistEditorWorkspace();
+      const cached = await readEditorWorkspace();
+      const stored = cached?.rightOrders?.find(row => row.mode === 'edit' && Number(row.editOrderId) === Number(order.id));
+      if (stored) return { ...cached, rightActiveOrderId: stored.id };
+      const session = await buildDraftSessionFromOrder(order, opts);
+      return mergeEditorWorkspace(cached, session);
     },
   };
 
   function renderStartupShell() {
-    if (!state.activeCategoryId) state.activeCategoryId = CHECKOUT_SCREEN_ID;
+    if (!state.activeCategoryId && state.checkoutScreenEnabled) state.activeCategoryId = CHECKOUT_SCREEN_ID;
     renderCategories();
     renderMainContentMode();
     if (!state.rightActiveOrderId) openRightNewOrderTab();
@@ -23805,6 +24803,7 @@
   }
 
   async function load() {
+    void ensureAdminOrderSocket().catch(() => {});
     renderStartupShell();
     markLoadReady();
     startupInventoryPromise = null;
@@ -23841,7 +24840,7 @@
         repositoryReady = hydrateNewOrderFromCatalogRepository() || repositoryReady;
       }
       if (activeSession) {
-        await restoreCheckoutSession(activeSession);
+        await restoreCheckoutSession(activeSession, { deferCatalog: true });
       } else if (hydrated) {
         renderCachedStartupContent();
       }
@@ -23853,7 +24852,13 @@
         startupInventoryPromise = inventoryPromise;
       }
 
-      await ensureTenantPriceRoundingSettings();
+      const roundingPromise = ensureTenantPriceRoundingSettings();
+      const localEditorReady = state.categories.length > 0 && state.checkoutDraftReady
+        && state.rightDeliveryTypes.length > 0 && state.rightPaymentTypes.length > 0 && state.rightTimeOptions.length > 0
+        && state.unitConversions.length > 0 && state.tenantRoundingLoaded
+        && (Boolean(window.CatalogRepository?.getAllProducts().length) || [...state.categoryProductsCache.values()].some(payload => payload?.source?.length));
+      resolveLocalEditorDataReady(Boolean(localEditorReady));
+      await roundingPromise;
       const hasLocalProducts = Boolean(window.CatalogRepository?.getAllProducts().length)
         || [...state.categoryProductsCache.values()].some((payload) => Array.isArray(payload?.source) && payload.source.length > 0);
       const needsBootstrap = (
@@ -23868,7 +24873,11 @@
         ? await loadNewOrderBootstrapFromApi()
         : false;
       if (bootstrapped && !hasLocalProducts) {
-        await preloadAllCategoryProducts(getPreloadCategoryIds());
+        ensureValidActiveCategory();
+        const initialCategoryIds = isCheckoutScreenActive()
+          ? getAllCategoryIdsFromBlocks(getCheckoutBlocks())
+          : getProductCategoryLoadIds(getActiveProductCategoryId());
+        if (initialCategoryIds.length) await preloadAllCategoryProducts(initialCategoryIds);
       }
       if (window.CatalogRepository) {
         repositoryReady = hydrateNewOrderFromCatalogRepository() || repositoryReady || bootstrapped;
@@ -23888,6 +24897,15 @@
 
     try {
       const startup = await bootstrapDataReadyPromise;
+      if (document.body.classList.contains('page-new-order') && checkoutSessionRevision === 0) {
+        const workspace = await readEditorWorkspace();
+        if (workspace?.rightOrders?.length) {
+          await restoreCheckoutSession(workspace);
+          if (hasEditingOrders()) setEmbeddedEditing(true);
+          window.__adminMobilePages?.restoreEditorView?.(workspace.editorView);
+        }
+      }
+      editorWorkspaceReady = true;
       await refreshNewOrderData(startup);
     } catch (e) {
       const offlineCatalogEmpty = !navigator.onLine
@@ -23910,6 +24928,43 @@
     }
   }
 
+  if (window.SharedProductDetails) {
+    window.SharedProductDetails.configure({
+      getPassport: id => window.CatalogRepository?.getProductPassport(id),
+      getProduct: getNewOrderPresentationProduct,
+      ensurePassports: getNewOrderSharedPassports,
+      getUnitConversions: () => state.unitConversions,
+      getRounding: getPriceRoundingSettings,
+      isAvailable: isProductAvailableFlag,
+      getStock: id => {
+        const entry = state.inventoryByProductId.get(Number(id));
+        const passport = entry ? null : window.CatalogRepository?.getProductPassport(id);
+        const qty = entry ? entry.stock_qty : passport?.stock?.stock_qty;
+        return qty === undefined && !passport && !entry ? null : { qty, isUnlimited: qty == null, isAvailable: entry ? entry.is_available : passport?.availability?.is_available !== false };
+      },
+      request: (url, options) => apiJson(url, { ...options, body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body }),
+      showToast: showNewOrderAlert,
+      openBenefit: async product => {
+        const discountId = Number(product.buy_x_get_y_badge?.id || product.buy_x_get_y_badge?.discount_id || 0);
+        if (!(discountId > 0)) return false;
+        const json = await apiJson(`/api/public/discounts/${discountId}/buy-x-get-y-detail`);
+        if (!json?.data) throw new Error("EMPTY_BUY_X_GET_Y_DETAIL");
+        const modal = window.AdminBenefitsModal;
+        if (!modal) throw new Error("BENEFITS_MODAL_UNAVAILABLE");
+        const onClose = () => {
+          modal.hide({ clearBody: false });
+          const { backdrop } = getProductOverlayElements();
+          if (backdrop && !backdrop.classList.contains("hidden")) {
+            openNewOrderMobileOverlayPage(backdrop, String(product.name || product.title || "Товар"), closeProductOverlay);
+          }
+        };
+        modal.show({ title: json.data.title || "Акция", showBack: false, showModeToggle: false, onClose });
+        const { body } = modal.getElements();
+        body.replaceChildren(modal.buildDiscountDetailContent(json.data, { moneyFormatter: money }));
+        return true;
+      },
+    });
+  }
   bindEvents();
   let catalogRepositoryFrame = null;
   const pendingRepositoryProductIds = new Set();
@@ -23962,6 +25017,55 @@
     }, 40);
   }
 
+  async function applyNewOrderCheckoutSettings(data, socket, scope) {
+    await bootstrapDataReadyPromise;
+    if (newOrderStockSocket !== socket || scope !== newOrderCacheScopeKey()) return;
+    if (Number(data?.settingsTenantId) !== getTenantIdFromStorage()
+      || Number(data?.settingsStoreId) !== getStoreIdFromStorage()) throw new Error("CHECKOUT_SETTINGS_SCOPE_MISMATCH");
+    const revision = String(data?.settingsRevision || "");
+    if (!/^\d+$/.test(revision)) throw new Error("INVALID_CHECKOUT_SETTINGS_REVISION");
+    if (/^\d+$/.test(checkoutSettingsWantedRevision) && BigInt(revision) < BigInt(checkoutSettingsWantedRevision)) {
+      socket.send(JSON.stringify({ type: "checkout.settings.get" }));
+      return;
+    }
+    if (revision !== checkoutSettingsRevision || checkoutSettingsWantedRevision === "resync") {
+      // Public delivery methods are site-filtered; keep the full admin list.
+      const [deliveryTypes, timeOptions, statuses, stores] = await Promise.all([
+        apiJson("/api/admin/tenant/order-delivery-types"),
+        apiJson("/api/admin/tenant/order-time-options"),
+        apiJson("/api/admin/orders/statuses"),
+        apiJson(`/api/public/tenant/stores?tenant_id=${getTenantIdFromStorage()}`),
+      ]);
+      if (newOrderStockSocket !== socket || scope !== newOrderCacheScopeKey()) return;
+      if (/^\d+$/.test(checkoutSettingsWantedRevision) && BigInt(revision) < BigInt(checkoutSettingsWantedRevision)) {
+        socket.send(JSON.stringify({ type: "checkout.settings.get" }));
+        return;
+      }
+      if (!Array.isArray(data.payments) || !Array.isArray(deliveryTypes.items)
+        || !Array.isArray(timeOptions.items) || !Array.isArray(statuses.data)
+        || !data.deliverySettings || !Array.isArray(data.deliverySettings.zones)) throw new Error("INVALID_CHECKOUT_SETTINGS_SNAPSHOT");
+      const storeRows = stores.stores;
+      if (!Array.isArray(storeRows)) throw new Error("INVALID_CHECKOUT_STORES_SNAPSHOT");
+      state.rightPaymentTypes = data.payments.map(normalizeRightPaymentTypeRef);
+      state.rightDeliveryTypes = deliveryTypes.items.map(normalizeRightDeliveryTypeRef);
+      state.rightTimeOptions = timeOptions.items.map(normalizeRightTimeOptionRef);
+      state.rightOrderStatuses = statuses.data;
+      state.rightPickupStores = storeRows.filter(row => Number(row.is_active) === 1);
+      await Promise.all([
+        window.AdminReferenceCache?.setReference("payment-methods", state.rightPaymentTypes),
+        window.AdminReferenceCache?.setReference("delivery-settings", data.deliverySettings),
+      ]);
+      if (newOrderStockSocket !== socket || scope !== newOrderCacheScopeKey()) return;
+      sharedOrderPayment?.clearCache?.();
+      rightBenefitsPreviewUpdatedAt.clear();
+      applyRightDeliverySettings(data.deliverySettings, scope);
+      checkoutSettingsRevision = revision;
+      schedulePersistBootstrapSnapshot(0);
+      queueRenderRightOrderTabs();
+    }
+    checkoutSettingsRequestPending = false;
+  }
+
   function ensureNewOrderStockSocket() {
     const tenantId = getTenantIdFromStorage();
     const storeId = getStoreIdFromStorage();
@@ -23975,6 +25079,23 @@
       if (newOrderStockSocket !== socket) return;
       try {
         const payload = JSON.parse(String(event.data || ""));
+        if (payload?.type === "checkout.settings.version" || payload?.type === "checkout.settings.changed") {
+          checkoutSettingsWantedRevision = String(payload.revision || "resync");
+          void bootstrapDataReadyPromise.then(() => {
+            if (newOrderStockSocket !== socket || checkoutSettingsRequestPending) return;
+            if (checkoutSettingsWantedRevision === checkoutSettingsRevision) return;
+            checkoutSettingsRequestPending = true;
+            socket.send(JSON.stringify({ type: "checkout.settings.get" }));
+          }).catch(error => console.error("Checkout settings revision:", error));
+          return;
+        }
+        if (payload?.type === "checkout.settings.snapshot") {
+          void applyNewOrderCheckoutSettings(payload.data, socket, newOrderCacheScopeKey()).catch(error => {
+            checkoutSettingsRequestPending = false;
+            console.error("Checkout settings sync:", error);
+          });
+          return;
+        }
         if (payload?.type === "stock.resync") {
           const visibleIds = [...new Set([
             ...state.currentProducts.map((product) => Number(product?.id || 0)),
@@ -23993,6 +25114,8 @@
     });
     socket.addEventListener("close", () => {
       if (newOrderStockSocket !== socket) return;
+      checkoutSettingsRequestPending = false;
+      rightBenefitsPreviewUpdatedAt.clear();
       newOrderStockSocket = null;
       newOrderStockReconnectTimer = setTimeout(ensureNewOrderStockSocket, 1200 + Math.floor(Math.random() * 800));
     });
@@ -24049,7 +25172,7 @@
           productIds.forEach((productId) => state.effectiveStockConfigByProductId.delete(Number(productId)));
           applyNewOrderRepositoryProductChanges(productIds);
           productIds.forEach((productId) => {
-            const product = getProductById(productId);
+            const product = getNewOrderPresentationProduct(productId);
             if (product) patchVisibleProductCatalog(product);
             else getVisibleNewOrderProductNodes(productId).forEach((node) => node.remove());
           });
@@ -24073,7 +25196,7 @@
             return Number(products[Number(state.comboModal.selectedIndexByBlock[index] || 0)]?.product_id || 0);
           });
           const nextCombo = window.CatalogRepository.getComboForOrder(openComboId);
-          if (nextCombo) {
+          if (nextCombo && window.CatalogRepository.isComboReady(openComboId, { requiredCompleteness: "order-ready" })) {
             state.comboModal.combo = nextCombo;
             state.comboModal.selectedIndexByBlock = nextCombo.blocks.map((block, index) => {
               const products = Array.isArray(block?.products) ? block.products : [];
@@ -24092,11 +25215,66 @@
     if (!window.CatalogRepository) applyKnownProductUpdate(event?.detail);
   });
   window.addEventListener("pagehide", writeDurableCreateDraftNow);
-  window.addEventListener("beforeunload", () => {
+  window.addEventListener("pagehide", () => {
     unsubscribeCatalogRepository?.();
     closeNewOrderStockSocket();
   }, { once: true });
+  window.addEventListener('beforeunload', event => {
+    writeDurableCreateDraftNow();
+    if (hasEditingOrders() && isNewOrderEditorSurface()) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+  document.addEventListener('click', event => {
+    if (event.target.closest('.header-city-option') && isNewOrderEditorSurface()) {
+      if (hasEditingOrders()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        showNewOrderAlert('Сначала сохраните заказ или отмените редактирование.');
+      } else void persistEditorWorkspace().catch(reportEditorWorkspaceError);
+      return;
+    }
+    if (!hasEditingOrders() || !isNewOrderEditorSurface()) return;
+    const link = event.target.closest('a[href]');
+    if (!link) return;
+    const url = new URL(link.href, location.href);
+    if (url.origin === location.origin && url.pathname.startsWith('/dashboard') && url.pathname !== location.pathname) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      showNewOrderAlert('Сначала сохраните заказ или отмените редактирование.');
+    }
+  }, true);
+  document.addEventListener('neworder:editor-view', () => {
+    if (editorWorkspaceReady && isNewOrderEditorSurface()) scheduleDurableCreateDraftSave();
+  });
+  document.addEventListener('scroll', event => {
+    if (editorWorkspaceReady && isNewOrderEditorSurface()
+      && [categoriesListEl.parentElement, productsGridEl.parentElement, rightContentEl?.parentElement].includes(event.target)) {
+      scheduleDurableCreateDraftSave();
+    }
+  }, true);
   document.addEventListener("tenantStoreChanged", () => {
+    editorWorkspaceReady = false;
+    editorWorkspaceIdentity = null;
+    state.rightOrders = [];
+    state.rightActiveOrderId = null;
+    rightDeliverySettingsScope = '';
+    rightDeliverySettingsCheckedAt = 0;
+    state.rightDeliverySettings = null;
+    state.rightDeliverySettingsReady = false;
+    state.rightDeliverySettingsPromise = null;
+    state.rightDeliverySettingsLoading = false;
+    clientWarmGeneration++;
+    state.rightClientLookupCache.clear();
+    state.rightClientLookupPromiseByPhone.clear();
+    state.rightClientAddressesByClientId.clear();
+    state.rightClientAddressesPromiseByClientId.clear();
+    state.rightClientAddressesByOrder.clear();
+    rightAddressMapModeEnabled=null;
+    rightAddressMapModePromise=null;
+    closeRightAddressOverlay();
+    void connectClientSync();
     closeNewOrderStockSocket();
     idleWarmupGeneration += 1;
     inventoryRequestGeneration += 1;
@@ -24141,6 +25319,9 @@
       renderStartupShell();
       await renderActiveCategoryContent();
       await window.CatalogRepository.startSync();
+      const workspace = await readEditorWorkspace();
+      if (workspace?.rightOrders?.length) await restoreCheckoutSession(workspace);
+      editorWorkspaceReady = true;
     })();
   });
   if (window.CatalogRepository?.withForegroundWork) {

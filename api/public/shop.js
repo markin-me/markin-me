@@ -3793,7 +3793,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const token = str(req.headers['x-customer-token']);
       const guest=token.startsWith('g_')?await customerAuth.getGuest(db,tenantId,token,false,storeId):null;
       if(token.startsWith('g_')&&!guest)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
-      const customer = token ? await getCustomerByToken(tenantId, token) : null;
+      let customer = token ? await getCustomerByToken(tenantId, token) : null;
+      const ksoPhone = req.query.kso_phone != null ? helpers.normalizePhone(req.query.kso_phone) : null;
+      if(req.query.kso_phone != null && !/^7\d{10}$/.test(ksoPhone))return res.status(400).json({ok:false,error:'INVALID_PHONE'});
+      if(ksoPhone){const [rows]=await db.query('SELECT id FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 1',[tenantId,ksoPhone]);customer=rows[0]||null;}
       const [[settingsRow]] = await db.query(
         `SELECT bonus_program_enabled, referral_program_enabled,
                 bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
@@ -3862,6 +3865,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         });
       });
       const loadedAccount = await loadPublicBonusAccount(tenantId, customer);
+      if(ksoPhone){
+        const account=mapPublicBonusAccountRow(loadedAccount);
+        const level=levelRows.find(row=>Number(row.id)===Number(account?.level_id));
+        const favoritePercents=[];
+        if(level&&customer){
+          const {group,enabled}=await loadBonusFavoriteCategoryGroupForLevel(tenantId,level.id);
+          if(enabled){
+            const [selected]=await db.query("SELECT category_id FROM mkt_customer_bonus_favorite_categories WHERE tenant_id=? AND customer_id=? AND period_key=DATE_FORMAT(CURDATE(), '%Y-%m') ORDER BY id ASC",[tenantId,customer.id]);
+            const selectedIds=new Set(selected.map(row=>Number(row.category_id)).slice(0,group.categoriesLimit));
+            for(const category of group.categoryItems||[]){const id=Number(category.id||category.categoryId);if(selectedIds.has(id))favoritePercents.push([id,Number(category.bonus_percent||category.bonusPercent||0)]);}
+          }
+        }
+        return res.json({ok:true,data:{enabled:Number(settingsRow?.bonus_program_enabled||0)===1,level:level?mapPublicBonusLevelRow(level,{rangesByLevel,activeFavoriteGroup}):null,favorite_percents:favoritePercents}});
+      }
       const promotedAccount = await promotePublicBonusAccountIfEligible(db, tenantId, customer, loadedAccount, levelRows);
       let account = mapPublicBonusAccountRow(promotedAccount);
       if(guest){
@@ -19203,46 +19220,53 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return Date.now() + offsetMinutes * 60 * 1000;
   }
 
-  function isStoreDeliveryOpenNow(hours, timezoneOffset) {
-    if (!Array.isArray(hours) || !hours.length) return false;
-    if (!timezoneOffset && timezoneOffset !== 0) timezoneOffset = "+0";
-    const ts = getStoreLocalTimestamp(timezoneOffset);
-    const local = new Date(ts);
-    const day = local.getUTCDay();
-    const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
-    const entry = hours.find((row) => Number(row.day_of_week) === day);
-    if (!entry) return false;
-    if (Number(entry.is_closed) === 1) return false;
-    const opens = parseDeliveryTimeMinutes(entry.opens_at);
-    const closes = parseDeliveryTimeMinutes(entry.closes_at);
-    if (opens === null || closes === null) return false;
-    return minutes >= opens && minutes < closes;
-  }
+  function isStoreDeliveryOpenNow(hours, timezoneOffset) { return isStoreOpenNow(hours,timezoneOffset); }
 
   /**
    * Check if store is currently open (based on regular hours, not delivery hours)
    */
   function isStoreOpenNow(hours, timezoneOffset) {
-    if (!Array.isArray(hours) || !hours.length) return false;
-    if (!timezoneOffset && timezoneOffset !== 0) timezoneOffset = "+0";
-    const ts = getStoreLocalTimestamp(timezoneOffset);
-    const local = new Date(ts);
-    const day = local.getUTCDay();
-    const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
-    const entry = hours.find((row) => Number(row.day_of_week) === day);
-    if (!entry) return false;
-    if (Number(entry.is_closed) === 1) return false;
-    const opens = parseDeliveryTimeMinutes(entry.opens_at);
-    const closes = parseDeliveryTimeMinutes(entry.closes_at);
-    if (opens === null || closes === null) return false;
-    return minutes >= opens && minutes < closes;
+    const local=new Date(getStoreLocalTimestamp(timezoneOffset || '+0'));
+    const minute=local.getUTCHours()*60+local.getUTCMinutes(),day=local.getUTCDay();
+    for(const shift of [-1,0])for(const row of (Array.isArray(hours)?hours:[])) {
+      if(Number(row.day_of_week)!==(day+shift+7)%7 || Number(row.is_closed)===1)continue;
+      const start=parseDeliveryTimeMinutes(row.opens_at),end=parseDeliveryTimeMinutes(row.closes_at);
+      if(start==null || end==null)continue;
+      if(minute>=start+shift*1440 && minute<(end<=start?end+1440:end)+shift*1440)return true;
+    }
+    return false;
   }
 
   // ------------------------------
   // order-config (Р Т‘Р В»РЎРЏ Р С•РЎвЂћР С•РЎР‚Р СР В»Р ВµР Р…Р С‘РЎРЏ)
   // Р вЂ™Р С’Р вЂ“Р СњР С›: РЎвЂљР Р†Р С•Р в„– РЎвЂћРЎР‚Р С•Р Р…РЎвЂљ Р В¶Р Т‘РЎвЂРЎвЂљ methods / payments / timeOptions
   // ------------------------------
+  async function loadCheckoutSettingsRevision(tenantId, storeId) {
+    const [rows] = await db.query("SELECT COALESCE(MAX(id),0) AS revision FROM catalog_changes WHERE tenant_id=? AND store_id=? AND entity_type='checkout_settings'",[tenantId,storeId]);
+    return String(rows[0]?.revision || '0');
+  }
+
+  async function loadCheckoutStores(tenantId) {
+    const [[stores],[hours],[delivery]] = await Promise.all([
+      db.query('SELECT id,name,address,city,timezone,is_active,use_delivery_hours FROM ten_stores WHERE tenant_id=? AND is_active=1 ORDER BY id',[tenantId]),
+      db.query('SELECT store_id,day_of_week,opens_at,closes_at,is_closed FROM ten_store_hours WHERE tenant_id=?',[tenantId]),
+      db.query('SELECT store_id,day_of_week,opens_at,closes_at,is_closed FROM ten_store_delivery_hours WHERE tenant_id=?',[tenantId]),
+    ]);
+    return stores.map(store=>({...store,storeHours:hours.filter(row=>Number(row.store_id)===Number(store.id)),delivery_hours:delivery.filter(row=>Number(row.store_id)===Number(store.id))}));
+  }
+
   async function loadPublicOrderConfigPayload(req) {
+    const tenant=helpers.getTenantId(req),store=helpers.getStoreId(req);
+    for(let attempt=0;attempt<3;attempt++) {
+      const before=await loadCheckoutSettingsRevision(tenant,store);
+      const data=await readPublicOrderConfigPayload(req);
+      if(before===await loadCheckoutSettingsRevision(tenant,store))return {...data,settingsRevision:before};
+    }
+    throw new Error('CHECKOUT_SETTINGS_CHANGING');
+  }
+  router.loadCheckoutSettings=({tenantId,storeId})=>loadPublicOrderConfigPayload({headers:{'x-tenant-id':String(tenantId),'x-store-id':String(storeId)},query:{}});
+
+  async function readPublicOrderConfigPayload(req) {
     const tenantId = helpers.getTenantId(req);
     const storeId = helpers.getStoreId(req);
     const isKsoConfig = String(req.query?.kso || '').trim() === '1';
@@ -19318,6 +19342,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId]
       );
 
+      const [checkoutStores,deliverySettings,settingsRevision] = await Promise.all([
+        loadCheckoutStores(tenantId),loadPublicDeliverySettingsPayload(req),loadCheckoutSettingsRevision(tenantId,storeId),
+      ]);
       const storeIsOpen = isStoreOpenNow(storeHours, storeTimezone);
       const deliveryIsOpen = isStoreDeliveryOpenNow(deliveryHours, storeTimezone);
       const tenantMapConfig = await getTenantMapConfig(db, tenantId);
@@ -19329,6 +19356,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       timeOptions,
       storeHours,
       storeDeliveryHours: deliveryHours,
+      checkoutStores,deliverySettings,settingsRevision,settingsSchema:1,settingsStoreId:storeId,settingsTenantId:tenantId,
       storeTimezone,
       storeIsOpen,
       deliveryIsOpen,
@@ -23698,7 +23726,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       // auth customer (optional)
       const token = str(req.headers['x-customer-token']);
-      const authCustomer = token ? await getCustomerByToken(tenantId, token) : null;
+      const isKsoOrder = req.body?.kso === true;
+      const authCustomer = !isKsoOrder && token ? await getCustomerByToken(tenantId, token) : null;
+      if(isKsoOrder){
+        if(!['cash','card'].includes(String(req.body.payment_code||'')))return res.status(400).json({ok:false,error:'INVALID_PAYMENT_METHOD'});
+        if(req.body.bonus_redeem_enabled===true||Number(req.body.bonus_redeem_amount||0)>0||(Array.isArray(req.body.items)?req.body.items:[]).some(item=>Number(item?.bonus_redeem_line_amount||item?.bonusRedeemLineAmount||0)>0))return res.status(400).json({ok:false,error:'KSO_BONUS_ACCRUAL_ONLY'});
+        req.body.bonus_redeem_enabled=false;req.body.bonus_redeem_amount=0;
+        req.body.bonus_accrual_amount=null;req.body.bonus_accrual_blocked_by_redeem=false;
+        req.body.bonus_account_id=null;req.body.bonus_level_id=null;req.body.change_from=null;
+      }
       const authGuest=token.startsWith('g_')?await customerAuth.getGuest(db,tenantId,token,false,storeId):null;
       if(token.startsWith('g_')&&!authGuest)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
       if(authCustomer?.auth_strength!=='strong'&&(Number(req.body.bonus_redeem_amount)>0||['true','1'].includes(String(req.body.bonus_redeem_enabled))))return res.status(403).json({ok:false,error:'AUTH_REQUIRED_FOR_BONUSES'});
@@ -23751,7 +23787,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId, deliveryTypeId]
       );
       const selectedDeliveryType = Array.isArray(deliveryTypeRows) ? deliveryTypeRows[0] : null;
-      const requireClientData = Number(selectedDeliveryType?.require_client_data ?? 1) !== 0;
+      const requireClientData = !isKsoOrder && Number(selectedDeliveryType?.require_client_data ?? 1) !== 0;
 
       // customer data:
       let customerId = authCustomer?.id || null;
@@ -25565,6 +25601,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ||normItems.some(item=>Number(item.bonus_redeem_line_amount)>0))){
         return res.status(403).json({ok:false,error:'AUTH_REQUIRED_FOR_BONUSES'});
       }
+      if(isKsoOrder&&getOrderBonusRedeemAmount(discountsJson)>0)return res.status(400).json({ok:false,error:'KSO_BONUS_ACCRUAL_ONLY'});
       let benefitsMetaJson = buildOrderBenefitsMetaJsonFromDraft({
         selected_discount_id: selectedDiscountId,
         selected_discount_source: selectedDiscountSource,
@@ -26226,8 +26263,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
    * GET /api/public/delivery-settings
    * Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”Р С‘ Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р С‘ Р Т‘Р В»РЎРЏ РЎвЂљР ВµР С”РЎС“РЎвЂ°Р ВµР С–Р С• РЎвЂћР С‘Р В»Р С‘Р В°Р В»Р В°
    */
-  router.get('/delivery-settings', async (req, res) => {
-    try {
+  async function loadPublicDeliverySettingsPayload(req) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const tenantMapConfig = await getTenantMapConfig(db, tenantId);
@@ -26244,9 +26280,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         zones: deliveryZones,
         storeAddressMapEnabled,
       });
-      return res.json({
-        ok: true,
-        data: {
+      return {
           delivery_cost: Number(defaultSettings.delivery_cost || 0),
           min_order_amount: Number(defaultSettings.min_order_amount || 0),
           free_delivery_from: defaultSettings.free_delivery_from != null ? Number(defaultSettings.free_delivery_from) : null,
@@ -26257,14 +26291,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           has_settings: Boolean(defaultSettings.has_settings),
           delivery_revision: deliveryRevision,
           store_address_map_enabled: storeAddressMapEnabled,
-        }
-      });
-
-        // Р СњР ВµРЎвЂљ Р Р…Р В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР С” - Р Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р С”Р В° Р В±Р ВµРЎРѓР С—Р В»Р В°РЎвЂљР Р…Р В°РЎРЏ, Р В±Р ВµР В· Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘Р в„–
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
+        };
+  }
+  router.get('/delivery-settings', async (req, res) => {
+    try { res.json({ok:true,data:await loadPublicDeliverySettingsPayload(req)}); }
+    catch(error) { console.error(error);res.status(500).json({ok:false,error:'DB_ERROR'}); }
   });
 
   registerCheckoutBenefitsPreviewProvider({

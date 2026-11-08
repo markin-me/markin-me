@@ -176,536 +176,84 @@
     }
   }
 
-  function getOptionItemPrice(item) {
-    if (!item) return 0;
-    if (item.price_mode === "fixed") return Number(item.price_value || 0);
-    return Number(item.product_price || 0);
+  function getOptionItemPrice() {
+    return getSharedShopProductRuntime().getOptionItemPrice(...arguments);
   }
 
-  function getOptionItemTargetProduct(item) {
-    const targetProductId = Number(item?.target_product_id || item?.product_id || 0);
-    return Number.isFinite(targetProductId) && targetProductId > 0
-      ? state.productCache.get(targetProductId) || null
-      : null;
+  function getOptionItemTargetProduct() {
+    return getSharedShopProductRuntime().getOptionItemTargetProduct(...arguments);
   }
 
-  function getOptionItemDefaultVariantMeta(item, product = null) {
-    const variants = Array.isArray(item?.variants) ? item.variants : [];
-    const productDefaultGroupId = Number(product?.default_variant?.variant_group_id || 0);
-    const productDefaultIndex = Number(product?.default_variant?.variant_value_index);
-
-    for (const group of variants) {
-      const values = Array.isArray(group?.values) ? group.values : [];
-      if (!values.length) continue;
-      const groupId = Number(group?.variant_group_id || group?.id || 0);
-      if (
-        groupId > 0 &&
-        productDefaultGroupId > 0 &&
-        groupId === productDefaultGroupId &&
-        Number.isFinite(productDefaultIndex) &&
-        productDefaultIndex >= 0 &&
-        productDefaultIndex < values.length
-      ) {
-        return { group, index: productDefaultIndex };
-      }
-      const defaultIndex = group?.default_value_index != null ? Number(group.default_value_index) : 0;
-      if (Number.isFinite(defaultIndex) && defaultIndex >= 0 && defaultIndex < values.length) {
-        return { group, index: defaultIndex };
-      }
-    }
-    return null;
+  function getOptionItemDefaultVariantMeta() {
+    return getSharedShopProductRuntime().getOptionItemDefaultVariantMeta(...arguments);
   }
 
-  function getOptionItemResolvedDisplayBasePrice(item, product = null) {
-    if (item?.price_mode === "fixed") {
-      return roundPrice(Number(item?.price_value || 0));
-    }
-    const productDefaultVariantPrice = Number(product?.default_variant?.variant_unit_price || 0);
-    if (productDefaultVariantPrice > 0) return roundPrice(productDefaultVariantPrice);
-    const defaultVariant = getOptionItemDefaultVariantMeta(item, product);
-    if (defaultVariant?.group && Number.isFinite(defaultVariant.index)) {
-      const resolvedDefaultVariantPrice = Number(
-        getOptionItemVariantUnitPrice(item, defaultVariant.group, defaultVariant.index) || 0
-      );
-      if (resolvedDefaultVariantPrice > 0) return roundPrice(resolvedDefaultVariantPrice);
-    }
-    const productDisplayPrice = Number(product?.display_price || product?.discounted_price || 0);
-    if (productDisplayPrice > 0) return roundPrice(productDisplayPrice);
-    const productBasePrice = Number(product?.price || 0);
-    if (productBasePrice > 0) return roundPrice(productBasePrice);
-    const itemDisplayPrice = Number(item?.product_price || item?.price || item?.discounted_price || 0);
-    if (itemDisplayPrice > 0) return roundPrice(itemDisplayPrice);
-    return 0;
+  function getOptionItemResolvedDisplayBasePrice() {
+    return getSharedShopProductRuntime().getOptionItemResolvedDisplayBasePrice(...arguments);
   }
 
-  function getOptionItemResolvedOriginalBasePrice(item, product = null) {
-    if (item?.price_mode === "fixed") return 0;
-    const discountOriginalPrice = Number(product?.original_price ?? item?.original_price ?? 0);
-    if (discountOriginalPrice > 0) return roundPrice(discountOriginalPrice);
-    const adminOldPrice = Number(product?.old_price ?? item?.old_price ?? 0);
-    if (adminOldPrice > 0) {
-      const defaultCurrentPrice = getOptionItemResolvedDisplayBasePrice(item, product);
-      if (
-        defaultCurrentPrice > 0 &&
-        typeof scaleProductBasePriceForCurrentUnit === "function" &&
-        product
-      ) {
-        const scaledOldPrice = scaleProductBasePriceForCurrentUnit(product, defaultCurrentPrice, adminOldPrice);
-        if (scaledOldPrice > 0) return roundPrice(scaledOldPrice);
-      }
-      return roundPrice(adminOldPrice);
-    }
-    return 0;
+  function getOptionItemResolvedOriginalBasePrice() {
+    return getSharedShopProductRuntime().getOptionItemResolvedOriginalBasePrice(...arguments);
   }
 
-  function getDiscountBadgeTextForPricePair(currentPrice, originalPrice) {
-    const current = roundPrice(Number(currentPrice || 0));
-    const original = roundPrice(Number(originalPrice || 0));
-    if (!(original > current && current >= 0)) return "";
-    const percent = Math.round(((original - current) / original) * 100);
-    if (percent > 0) return `-${percent}%`;
-    const amountDiff = roundPrice(original - current);
-    return amountDiff > 0 ? `-${moneyNoSign(amountDiff)} ₽` : "";
+  function getDiscountBadgeTextForPricePair() {
+    return getSharedShopProductRuntime().getDiscountBadgeTextForPricePair(...arguments);
   }
 
-  function getOptionItemPriceScaleRatio(item, variantData = null, product = null) {
-    const targetProduct = product || getOptionItemTargetProduct(item);
-    const baseDisplayPrice = getOptionItemResolvedDisplayBasePrice(item, targetProduct);
-    if (!(baseDisplayPrice > 0) || item?.price_mode === "fixed") {
-      return 1;
-    }
-
-    const variantGroups = Array.isArray(item?.variants) ? item.variants : [];
-    const explicitVariantGroupId = Number(variantData?.variant_group_id || 0);
-    const explicitVariantIndex = Number(variantData?.variant_value_index);
-    const explicitGroup = explicitVariantGroupId > 0
-      ? variantGroups.find((group) => Number(group?.variant_group_id || group?.id || 0) === explicitVariantGroupId) || null
-      : null;
-
-    const resolvedVariant = explicitGroup && Number.isFinite(explicitVariantIndex) && explicitVariantIndex >= 0
-      ? { group: explicitGroup, index: explicitVariantIndex }
-      : getOptionItemDefaultVariantMeta(item, targetProduct);
-
-    if (!resolvedVariant?.group || !Number.isFinite(resolvedVariant.index)) {
-      return 1;
-    }
-
-    const rawSelectedPrice = Number(getOptionItemVariantUnitPrice(item, resolvedVariant.group, resolvedVariant.index) || 0);
-    if (!(rawSelectedPrice > 0)) {
-      return 1;
-    }
-
-    const defaultVariant = getOptionItemDefaultVariantMeta(item, targetProduct);
-    const rawDefaultPrice = defaultVariant?.group
-      ? Number(getOptionItemVariantUnitPrice(item, defaultVariant.group, defaultVariant.index) || 0)
-      : baseDisplayPrice;
-    if (!(rawDefaultPrice > 0)) {
-      return 1;
-    }
-
-    const ratio = rawSelectedPrice / rawDefaultPrice;
-    return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  function getOptionItemPriceScaleRatio() {
+    return getSharedShopProductRuntime().getOptionItemPriceScaleRatio(...arguments);
   }
 
-  function getOptionItemCurrentDisplayPrice(item, variantData = null, product = null) {
-    const targetProduct = product || getOptionItemTargetProduct(item);
-    const baseDisplayPrice = getOptionItemResolvedDisplayBasePrice(item, targetProduct);
-    if (item?.price_mode === "fixed") {
-      return roundPrice(baseDisplayPrice + Number(variantData?.variant_price_diff || 0));
-    }
-    const ratio = getOptionItemPriceScaleRatio(item, variantData, targetProduct);
-    return roundPrice(baseDisplayPrice * ratio);
+  function getOptionItemCurrentDisplayPrice() {
+    return getSharedShopProductRuntime().getOptionItemCurrentDisplayPrice(...arguments);
   }
 
-  function getOptionItemPhotos(item, cachedProduct = null) {
-    const directPhotos = Array.isArray(item?.photos)
-      ? item.photos
-      : (
-        typeof item?.product_photos_json === "string"
-          ? (() => {
-              try {
-                return JSON.parse(item.product_photos_json);
-              } catch {
-                return [];
-              }
-            })()
-          : (Array.isArray(item?.product_photos_json) ? item.product_photos_json : [])
-      );
-    const normalizedDirect = Array.isArray(directPhotos)
-      ? directPhotos.map((photo) => str(photo || "").trim()).filter(Boolean)
-      : [];
-    if (normalizedDirect.length) return normalizedDirect;
-    if (cachedProduct) {
-      return safePhotos(cachedProduct).map((photo) => str(photo || "").trim()).filter(Boolean);
-    }
-    return [];
+  function getOptionItemPhotos() {
+    return getSharedShopProductRuntime().getOptionItemPhotos(...arguments);
   }
 
-  function normalizeOptionItemForDisplay(item) {
-    if (!item || typeof item !== "object") return item;
-    const targetProductId = Number(item.target_product_id || item.product_id || 0);
-    const cachedProduct = getOptionItemTargetProduct(item);
-    const photos = getOptionItemPhotos(item, cachedProduct);
-    const photo = str(item.photo || item.product_photo || photos[0] || "").trim();
-    return {
-      ...item,
-      target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
-      product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
-      title: str(item.title || item.product_name || item.name || ""),
-      name: str(item.name || item.product_name || item.title || ""),
-      price: getOptionItemResolvedDisplayBasePrice(item, cachedProduct) || getOptionItemPrice(item),
-      product_price: Number(item.product_price || cachedProduct?.price || 0),
-      product_photos_json: photos,
-      photos,
-      photo,
-      old_price: Number(item.old_price || cachedProduct?.old_price || 0),
-      original_price: item.original_price != null
-        ? Number(item.original_price || 0)
-        : Number(cachedProduct?.original_price || 0),
-      discounted_price: item.discounted_price != null
-        ? Number(item.discounted_price || 0)
-        : Number(cachedProduct?.discounted_price || 0),
-      discount: item.discount && typeof item.discount === "object"
-        ? { ...item.discount }
-        : (cachedProduct?.discount && typeof cachedProduct.discount === "object" ? { ...cachedProduct.discount } : null),
-      buy_x_get_y_badge: item.buy_x_get_y_badge || cachedProduct?.buy_x_get_y_badge || null,
-      variants: Array.isArray(item?.variants) ? item.variants : [],
-    };
+  function normalizeOptionItemForDisplay() {
+    return getSharedShopProductRuntime().normalizeOptionItemForDisplay(...arguments);
   }
 
-  function normalizeProductOptionGroups(optionGroups) {
-    return (Array.isArray(optionGroups) ? optionGroups : []).map((group) => ({
-      ...group,
-      items: (Array.isArray(group?.items) ? group.items : []).map((item) => normalizeOptionItemForDisplay(item)),
-    }));
+  function normalizeProductOptionGroups() {
+    return getSharedShopProductRuntime().normalizeProductOptionGroups(...arguments);
   }
 
-  function getOptionItemDisplayPricing(item, variantData = null) {
-    const product = getOptionItemTargetProduct(item);
-    const currentPrice = getOptionItemCurrentDisplayPrice(item, variantData, product);
-    const baseOriginalPrice = getOptionItemResolvedOriginalBasePrice(item, product);
-    const priceScaleRatio = getOptionItemPriceScaleRatio(item, variantData, product);
-    const originalPrice = baseOriginalPrice > 0
-      ? roundPrice(baseOriginalPrice * priceScaleRatio)
-      : 0;
-    const showOld = originalPrice > currentPrice;
-    const badgeText = showOld ? getDiscountBadgeTextForPricePair(currentPrice, originalPrice) : "";
-    return {
-      currentPrice,
-      originalPrice: showOld ? originalPrice : 0,
-      showOld,
-      badgeText,
-    };
+  function getOptionItemDisplayPricing() {
+    return getSharedShopProductRuntime().getOptionItemDisplayPricing(...arguments);
   }
 
-  function renderOptionItemPrice(priceEl, item, variantData = null) {
-    if (!priceEl) return;
-    const pricing = getOptionItemDisplayPricing(item, variantData);
-    const oldText = pricing.showOld ? money(pricing.originalPrice) : "";
-    const currentText = money(pricing.currentPrice);
-    const badgeHtml = pricing.badgeText
-      ? `<span class="sp-discount-badge sp-discount-badge--cart cart-discount-badge">${escapeHtml(pricing.badgeText)}</span>`
-      : "";
-    const oldHtml = pricing.showOld
-      ? `<span class="cart-old">${escapeHtml(oldText)}</span>`
-      : "";
-    priceEl.innerHTML = `<span class="cart-price-group"><span class="cart-price-stack"><span class="cart-price">${escapeHtml(currentText)}</span>${oldHtml}</span>${badgeHtml}</span>`;
+  function renderOptionItemPrice() {
+    return getSharedShopProductRuntime().renderOptionItemPrice(...arguments);
   }
 
-  function getSelectedOptionItemVariantData(item) {
-    if (!item || typeof item !== "object") return null;
-    const groupId = Number(item?.variant_group_id || 0);
-    const valueIndex = Number(item?.variant_value_index);
-    if (!(groupId > 0) || !Number.isFinite(valueIndex) || valueIndex < 0) return null;
-    return {
-      variant_group_id: groupId,
-      variant_value_index: valueIndex,
-      variant_label: str(item?.variant_label || "").trim(),
-      variant_group_title: str(item?.variant_group_title || "").trim(),
-      variant_unit: str(item?.variant_unit || "").trim(),
-      unit_id:
-        item?.unit_id != null && Number.isFinite(Number(item.unit_id))
-          ? Number(item.unit_id)
-          : null,
-      variant_price_diff: Number(item?.variant_price_diff || 0),
-    };
+  function getSelectedOptionItemVariantData() {
+    return getSharedShopProductRuntime().getSelectedOptionItemVariantData(...arguments);
   }
 
-  function getSelectedOptionItemsPricingTotals(optionItems) {
-    return (Array.isArray(optionItems) ? optionItems : []).reduce((totals, item) => {
-      const qty = Math.max(0, Number(item?.qty || item?.quantity || 1)) || 1;
-      const pricing = getOptionItemDisplayPricing(item, getSelectedOptionItemVariantData(item));
-      const currentLine = roundPrice(Number(pricing.currentPrice || 0) * qty);
-      const originalComparableUnit = pricing.showOld
-        ? Number(pricing.originalPrice || 0)
-        : Number(pricing.currentPrice || 0);
-      const originalComparableLine = roundPrice(originalComparableUnit * qty);
-      totals.currentTotal = roundPrice(Number(totals.currentTotal || 0) + currentLine);
-      totals.originalComparableTotal = roundPrice(Number(totals.originalComparableTotal || 0) + originalComparableLine);
-      return totals;
-    }, {
-      currentTotal: 0,
-      originalComparableTotal: 0,
-    });
+  function getSelectedOptionItemsPricingTotals() {
+    return getSharedShopProductRuntime().getSelectedOptionItemsPricingTotals(...arguments);
   }
 
-  function decorateOptionItemThumb(thumbHost, item, variantData = null) {
-    if (!thumbHost || !thumbHost.appendChild) return;
-    const product = getOptionItemTargetProduct(item);
-    if (!product) return;
-
-    thumbHost.style.position = "relative";
-
-    const existingDiscountBadge = thumbHost.querySelector(".sp-card-discount-badge");
-    if (existingDiscountBadge) existingDiscountBadge.remove();
-    const existingBogoBadge = thumbHost.querySelector(".sp-card-bogo-badge");
-    if (existingBogoBadge) existingBogoBadge.remove();
-
-    if (typeof createCatalogBuyXGetYBadge === "function") {
-      const bogoBadge = createCatalogBuyXGetYBadge(product);
-      if (bogoBadge) {
-        bogoBadge.style.position = "absolute";
-        bogoBadge.style.top = "4px";
-        bogoBadge.style.left = "4px";
-        thumbHost.appendChild(bogoBadge);
-      }
-    }
+  function decorateOptionItemThumb() {
+    return getSharedShopProductRuntime().decorateOptionItemThumb(...arguments);
   }
 
-  function syncProductHeroBadges(mediaEl, product, currentPrice = null, originalPrice = 0) {
-    if (!mediaEl || !product) return;
-
-    const currentDiscountBadge = mediaEl.querySelector(".shop-product-hero-discount-badge");
-    if (currentDiscountBadge) currentDiscountBadge.remove();
-
-    const currentBogoBadge = mediaEl.querySelector(".shop-product-hero-bogo-badge");
-    if (currentBogoBadge) currentBogoBadge.remove();
-
-    const resolvedCurrentPrice = currentPrice != null
-      ? roundPrice(Number(currentPrice || 0))
-      : roundPrice(Number(product?.display_price != null ? product.display_price : product?.price || 0));
-    const resolvedOriginalPrice = roundPrice(Number(originalPrice || 0));
-    const badgeText = getDiscountBadgeTextForPricePair(resolvedCurrentPrice, resolvedOriginalPrice);
-
-    if (badgeText && typeof createCatalogDiscountBadge === "function") {
-      const discountBadge = createCatalogDiscountBadge(badgeText);
-      if (discountBadge) {
-        discountBadge.classList.add("shop-product-hero-discount-badge");
-        mediaEl.appendChild(discountBadge);
-      }
-    }
-
-    if (typeof createCatalogBuyXGetYBadge === "function") {
-      const bogoBadge = createCatalogBuyXGetYBadge(product);
-      if (bogoBadge) {
-        bogoBadge.classList.add("shop-product-hero-bogo-badge");
-        if (badgeText) {
-          bogoBadge.style.left = "12px";
-          bogoBadge.style.right = "auto";
-        }
-        mediaEl.appendChild(bogoBadge);
-      }
-    }
+  function syncProductHeroBadges() {
+    return getSharedShopProductRuntime().syncProductHeroBadges(...arguments);
   }
 
-  function getOptionGroupUiType(group) {
-    if (!group) return "single";
-    
-    // Проверяем selection_type: если "multiple", определяем подтип по лимитам товаров
-    const selectionType = group.selection_type || "single";
-    if (selectionType !== "multiple") return "single";
-    
-    const items = Array.isArray(group.items) ? group.items : [];
-    // Проверяем, есть ли у товаров возможность выбора количества > 1
-    // Если max > 1 у любого товара — это multiple_item (с контролами количества)
-    // Иначе — multiple_group (просто чекбоксы, каждый товар = 1 шт)
-    const hasQtyControls = items.some((item) => {
-      const max = item.qty_max ?? 1;
-      return max > 1;
-    });
-    return hasQtyControls ? "multiple_item" : "multiple_group";
+  function getOptionGroupUiType() {
+    return getSharedShopProductRuntime().getOptionGroupUiType(...arguments);
   }
 
-  function buildOptionItemVariantState(item, variantGroup, valueIndex, valueRaw = null) {
-    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
-    const safeIndex = Number(valueIndex);
-    const targetProduct = getOptionItemTargetProduct(item);
-    const baseDisplayPrice = getOptionItemResolvedDisplayBasePrice(item, targetProduct);
-    const unitPrice = getOptionItemCurrentDisplayPrice(item, {
-      variant_group_id: Number(variantGroup?.variant_group_id || variantGroup?.id || 0),
-      variant_value_index: safeIndex,
-    }, targetProduct);
-    const priceDiff = unitPrice - baseDisplayPrice;
-    const unitLabel = str(
-      variantGroup?.unit_short_title ||
-      variantGroup?.unit_code ||
-      variantGroup?.unit_title ||
-      ""
-    ).trim();
-    const groupTitle = str(variantGroup?.title || variantGroup?.title_label || "").trim();
-    const rawValue = valueRaw != null
-      ? str(valueRaw)
-      : (
-        Number.isFinite(safeIndex) &&
-        safeIndex >= 0 &&
-        safeIndex < values.length
-          ? str(values[safeIndex])
-          : ""
-      );
-    const hasLetters = (value) => /[a-zа-я]/i.test(String(value || ""));
-    const variantLabel = unitLabel && !hasLetters(rawValue) ? `${rawValue} ${unitLabel}` : rawValue;
-    return {
-      variant_group_id: Number(variantGroup?.variant_group_id || variantGroup?.id || 0),
-      variant_value_index: Number.isFinite(safeIndex) ? safeIndex : null,
-      variant_label: str(variantLabel || "").trim(),
-      variant_group_title: groupTitle,
-      variant_unit: unitLabel,
-      unit_id:
-        variantGroup?.unit_id != null && Number.isFinite(Number(variantGroup.unit_id))
-          ? Number(variantGroup.unit_id)
-          : null,
-      variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-    };
+  function buildOptionItemVariantState() {
+    return getSharedShopProductRuntime().buildOptionItemVariantState(...arguments);
   }
 
-  function collectSelectedOptionItems(optionGroups, selectionState) {
-    const selectedItems = [];
-    optionGroups.forEach((group) => {
-      const state = selectionState.get(group.id);
-      if (!state) return;
-      const itemsById = new Map((group.items || []).map((item) => [Number(item.id), item]));
-      
-      // Функция для получения цены с учётом варианта
-      const getPriceWithVariant = (item, itemId) => {
-        const basePrice = Number(item.price || 0);
-        const variantData = state.variantByItemId?.get(itemId);
-        if (variantData && Number.isFinite(variantData.variant_price_diff)) {
-          return basePrice + variantData.variant_price_diff;
-        }
-        return basePrice;
-      };
-      
-      // Функция для добавления данных о варианте
-      const getVariantData = (itemId) => {
-        const variantData = state.variantByItemId?.get(itemId);
-        if (variantData) {
-          return {
-            variant_group_id: variantData.variant_group_id,
-            variant_value_index: variantData.variant_value_index,
-            variant_label: variantData.variant_label || "",
-            variant_group_title: variantData.variant_group_title || "",
-            variant_unit: variantData.variant_unit || "",
-            unit_id:
-              variantData.unit_id != null && Number.isFinite(Number(variantData.unit_id))
-                ? Number(variantData.unit_id)
-                : null,
-            variant_price_diff: variantData.variant_price_diff || 0,
-          };
-        }
-        return null;
-      };
-      
-      if (state.type === "single") {
-        const itemId = Number(state.selectedId);
-        const item = itemsById.get(itemId);
-        if (item) {
-          const targetProductId = Number(item.target_product_id || item.product_id || 0);
-          const entry = {
-            id: item.id,
-            title: item.title,
-            price: getPriceWithVariant(item, itemId),
-            qty: 1,
-            target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
-            product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
-            nutrition_per_100g: item.nutrition_per_100g || null,
-            nutrition_per_portion: item.nutrition_per_portion || null,
-            base_qty_grams: item.base_qty_grams,
-            nutrition_portion_grams: item.nutrition_portion_grams,
-            unit_to_grams_factor: item.unit_to_grams_factor,
-            variants: Array.isArray(item.variants) ? item.variants : [],
-            old_price: Number(item.old_price || 0),
-            original_price: Number(item.original_price || 0),
-            discounted_price: Number(item.discounted_price || 0),
-            discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
-            buy_x_get_y_badge: item.buy_x_get_y_badge || null,
-            price_mode: item.price_mode,
-            price_value: item.price_value,
-          };
-          const variant = getVariantData(itemId);
-          if (variant) Object.assign(entry, variant);
-          selectedItems.push(entry);
-        }
-        return;
-      }
-      if (state.type === "multiple_group") {
-        state.selectedIds.forEach((id) => {
-          const itemId = Number(id);
-          const item = itemsById.get(itemId);
-          if (item) {
-            const targetProductId = Number(item.target_product_id || item.product_id || 0);
-            const entry = {
-              id: item.id,
-              title: item.title,
-              price: getPriceWithVariant(item, itemId),
-              qty: 1,
-              target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
-              product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
-              nutrition_per_100g: item.nutrition_per_100g || null,
-              nutrition_per_portion: item.nutrition_per_portion || null,
-              base_qty_grams: item.base_qty_grams,
-              nutrition_portion_grams: item.nutrition_portion_grams,
-              unit_to_grams_factor: item.unit_to_grams_factor,
-              variants: Array.isArray(item.variants) ? item.variants : [],
-              old_price: Number(item.old_price || 0),
-              original_price: Number(item.original_price || 0),
-              discounted_price: Number(item.discounted_price || 0),
-              discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
-              buy_x_get_y_badge: item.buy_x_get_y_badge || null,
-              price_mode: item.price_mode,
-              price_value: item.price_value,
-            };
-            const variant = getVariantData(itemId);
-            if (variant) Object.assign(entry, variant);
-            selectedItems.push(entry);
-          }
-        });
-        return;
-      }
-      if (state.type === "multiple_item") {
-        state.qtyById.forEach((qty, id) => {
-          const itemId = Number(id);
-          const item = itemsById.get(itemId);
-          if (item && qty > 0) {
-            const targetProductId = Number(item.target_product_id || item.product_id || 0);
-            const entry = {
-              id: item.id,
-              title: item.title,
-              price: getPriceWithVariant(item, itemId),
-              qty,
-              target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
-              product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
-              nutrition_per_100g: item.nutrition_per_100g || null,
-              nutrition_per_portion: item.nutrition_per_portion || null,
-              base_qty_grams: item.base_qty_grams,
-              nutrition_portion_grams: item.nutrition_portion_grams,
-              unit_to_grams_factor: item.unit_to_grams_factor,
-              variants: Array.isArray(item.variants) ? item.variants : [],
-              old_price: Number(item.old_price || 0),
-              original_price: Number(item.original_price || 0),
-              discounted_price: Number(item.discounted_price || 0),
-              discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
-              buy_x_get_y_badge: item.buy_x_get_y_badge || null,
-              price_mode: item.price_mode,
-              price_value: item.price_value,
-            };
-            const variant = getVariantData(itemId);
-            if (variant) Object.assign(entry, variant);
-            selectedItems.push(entry);
-          }
-        });
-      }
-    });
-    return selectedItems;
+  function collectSelectedOptionItems() {
+    return getSharedShopProductRuntime().collectSelectedOptionItems(...arguments);
   }
 
 const comboProductIngredientsCache = new Map();
@@ -724,6 +272,23 @@ let productDetailsPrefetchTimer = null;
 let comboDetailsPrefetchTimer = null;
 const COMBO_DETAILS_CACHE_TTL_MS = 5 * 60 * 1000;
 const COMBO_PREVIEW_SHARED_TTL_MS = 5 * 60 * 1000;
+
+// The existing KSO change stream invalidates the same caches used by product/combo screens.
+window.addEventListener('shop:kso-catalog-invalidated', event => {
+  if (!document.body.classList.contains('page-kso')) return;
+  const ids = event.detail?.productIds || [];
+  ids.forEach(id => {
+    comboProductIngredientsCache.delete(id);
+    comboProductVariantsCache.delete(id);
+    productDetailsConfigCache.delete(id);
+    productBuyXGetYDetailCache.delete(id);
+    comboProductBatchWarmupCache.delete(id);
+  });
+  comboDetailsCache.clear();
+  comboProductPreviewSharedCache.clear();
+  comboBlockPreviewWarmCache.clear();
+  comboBlockPreviewResolvedCache.clear();
+});
 
 function normalizeProductDetailIds(productIds, limit = 0) {
   const ids = Array.isArray(productIds)
@@ -757,6 +322,9 @@ function productPassportHasDetails(productId) {
 function applyProductPassportPayload(productId, payload) {
   const pid = Number(productId || 0);
   if (!Number.isFinite(pid) || pid <= 0 || !payload || typeof payload !== "object") return;
+  productDetailsConfigCache.delete(pid);
+  defaultPriceCache.delete(pid);
+  if (Array.isArray(payload.unitConversions)) state.unitConversions = payload.unitConversions;
 
   const product = payload.product && typeof payload.product === "object" ? payload.product : null;
   if (product) {
@@ -1210,25 +778,9 @@ function prefetchComboDetails(comboIds, opts = {}) {
   }, delayMs);
 }
 
-function normalizeComboVariantList(rawList) {
-  const variants = Array.isArray(rawList) ? rawList : [];
-  return variants.map((v) => {
-    const groupId = Number(v.id ?? v.variant_group_id ?? 0);
-    return {
-      id: Number.isFinite(groupId) && groupId > 0 ? groupId : null,
-      variant_group_id: Number.isFinite(groupId) && groupId > 0 ? groupId : null,
-      title: str(v.title || ""),
-      unit_id: v.unit_id ? Number(v.unit_id) : null,
-      unit_code: str(v.unit_code || ""),
-      unit_title: str(v.unit_title || ""),
-      unit_short_title: str(v.unit_short_title || ""),
-      values: Array.isArray(v.values) ? v.values : [],
-      discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
-      default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
-      unit_to_grams_factor: v.unit_to_grams_factor,
-    };
-  });
-}
+function normalizeComboVariantList() {
+    return getSharedShopProductRuntime().normalizeComboVariantList(...arguments);
+  }
 
 async function preloadComboProductsData(productIds) {
   const ids = Array.isArray(productIds)
@@ -1323,66 +875,9 @@ async function warmComboProductConfigById(productId) {
   return task;
 }
 
-function buildProductOptionGroupsFromBatch(productId, assignments, optionGroupsById) {
-  const activeAssignments = (Array.isArray(assignments) ? assignments : [])
-    .filter((a) => Number(a?.is_active || 0) === 1);
-  const groups = [];
-
-  activeAssignments.forEach((assignment) => {
-    const groupId = Number(assignment?.group_id || 0);
-    if (!Number.isFinite(groupId) || groupId <= 0) return;
-    const details = optionGroupsById[groupId] || optionGroupsById[String(groupId)] || null;
-    const items = Array.isArray(details?.items) ? details.items : [];
-    const activeItems = items.filter((item) => Number(item?.is_active || 0) === 1);
-    if (!activeItems.length) return;
-
-    const groupSelectionType = details?.group?.selection_type || assignment.selection_type || "single";
-    const groupMinSelect = details?.group?.min_select ?? assignment.min_select ?? 0;
-    const groupMaxSelect = details?.group?.max_select ?? assignment.max_select ?? null;
-
-    groups.push({
-      id: groupId,
-      title: str(assignment.title || details?.group?.title || ""),
-      selection_type: groupSelectionType,
-      min_select: groupMinSelect,
-      max_select: groupMaxSelect,
-      allow_variants: Boolean(details?.group?.allow_variants),
-      is_required:
-        groupSelectionType === "single"
-          ? (Number(details?.group?.is_required ?? 1) === 1)
-          : false,
-      items: activeItems.map((item) => {
-        return normalizeOptionItemForDisplay({
-          id: Number(item.id),
-          target_product_id: Number(item.target_product_id || 0),
-          title: str(item.product_name || item.name || ""),
-          product_price: Number(item.product_price || 0),
-          product_base_qty: Number(item.product_base_qty || 1) || 1,
-          product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
-          product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
-          qty_min: item.qty_min ?? 1,
-          qty_max: item.qty_max ?? 1,
-          nutrition_per_100g: item.nutrition_per_100g || null,
-          nutrition_per_portion: item.nutrition_per_portion || null,
-          base_qty_grams: item.base_qty_grams,
-          nutrition_portion_grams: item.nutrition_portion_grams,
-          unit_to_grams_factor: item.unit_to_grams_factor,
-          variants: Array.isArray(item?.variants) ? item.variants : [],
-          product_photos_json: item.product_photos_json,
-          old_price: item.old_price,
-          original_price: item.original_price,
-          discounted_price: item.discounted_price,
-          discount: item.discount,
-          buy_x_get_y_badge: item.buy_x_get_y_badge,
-          price_mode: item.price_mode,
-          price_value: item.price_value,
-        });
-      }),
-    });
-  });
-
-  return groups;
-}
+function buildProductOptionGroupsFromBatch() {
+    return getSharedShopProductRuntime().buildProductOptionGroupsFromBatch(...arguments);
+  }
 
 async function preloadProductDetailsConfigBatch(productIds) {
   let ids = normalizeProductDetailIds(productIds)
@@ -1970,3197 +1465,9 @@ function getIngredientUnitPricing(ing) {
   };
 }
 
-function buildProductDetailsContent(
-  product,
-  optionGroups,
-  selectionState,
-  ingredients,
-  ingredientState,
-  variants,
-  variantState,
-  {
-    onBack,
-    mode,
-    onSelectionChange,
-    onIngredientChange,
-    onVariantChange,
-    canSelectVariantIndex = null,
-    canDraftMutationApply = null,
-    qtyPill,
-    onQtyMinus,
-    onQtyPlus,
-    onQtyCenterClick,
-    setDefaultVariantForOptionItem = () => {},
-    guardDraftMutation = null,
-  } = {}
-) {
-  const wrap = document.createElement("div");
-  wrap.className = "shop-pd";
-
-  const scroll = document.createElement("div");
-  scroll.className = "shop-pd-scroll";
-
-  const productBlocksConfig = product?.blocks_config && typeof product.blocks_config === "object"
-    ? product.blocks_config
-    : {};
-
-  function formatProductNutritionValue(value) {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return "0";
-    const rounded = Math.round(num * 100) / 100;
-    return String(rounded).replace(".", ",");
+function buildProductDetailsContent() {
+    return getSharedShopProductRuntime().buildProductDetailsContent(...arguments);
   }
-
-  function readProductNutritionNumber(value) {
-    if (value === null || value === undefined || value === "") return null;
-    const num = Number(String(value).replace(",", "."));
-    return Number.isFinite(num) ? num : null;
-  }
-
-  function calcProductNutritionKcal(values) {
-    const protein = readProductNutritionNumber(values?.protein);
-    const fat = readProductNutritionNumber(values?.fat);
-    const carbs = readProductNutritionNumber(values?.carbs);
-    if (protein == null || fat == null || carbs == null) return null;
-    return Math.round((protein * 4 + fat * 9 + carbs * 4) * 100) / 100;
-  }
-
-  function normalizeProductNutrition(values) {
-    const protein = readProductNutritionNumber(values?.protein);
-    const fat = readProductNutritionNumber(values?.fat);
-    const carbs = readProductNutritionNumber(values?.carbs);
-    const kcal = readProductNutritionNumber(values?.kcal);
-    return {
-      kcal: kcal != null ? kcal : calcProductNutritionKcal({ protein, fat, carbs }),
-      protein,
-      fat,
-      carbs,
-    };
-  }
-
-  function addNutritionPortion(target, source, grams, multiplier = 1) {
-    const nutrition = normalizeProductNutrition(source);
-    const qtyGrams = Number(grams);
-    const qtyMultiplier = Number(multiplier || 1);
-    if (!Number.isFinite(qtyGrams) || qtyGrams === 0 || !Number.isFinite(qtyMultiplier) || qtyMultiplier <= 0) return 0;
-    ["protein", "fat", "carbs"].forEach((key) => {
-      const value = nutrition[key];
-      if (value != null) target[key] += value * qtyGrams / 100 * qtyMultiplier;
-    });
-    return qtyGrams * qtyMultiplier;
-  }
-
-  function addNutritionValues(target, source, multiplier = 1) {
-    const nutrition = normalizeProductNutrition(source);
-    const qtyMultiplier = Number(multiplier || 1);
-    if (!Number.isFinite(qtyMultiplier) || qtyMultiplier <= 0) return;
-    ["protein", "fat", "carbs"].forEach((key) => {
-      const value = nutrition[key];
-      if (value != null) target[key] += value * qtyMultiplier;
-    });
-  }
-
-  function cloneNutritionTotals(values = {}) {
-    const nutrition = normalizeProductNutrition(values);
-    return {
-      protein: nutrition.protein != null ? nutrition.protein : 0,
-      fat: nutrition.fat != null ? nutrition.fat : 0,
-      carbs: nutrition.carbs != null ? nutrition.carbs : 0,
-    };
-  }
-
-  function nutritionPer100FromTotals(totals, grams) {
-    const qtyGrams = readProductNutritionNumber(grams);
-    if (qtyGrams == null || qtyGrams <= 0) return null;
-    return normalizeProductNutrition({
-      protein: Number(totals?.protein || 0) / qtyGrams * 100,
-      fat: Number(totals?.fat || 0) / qtyGrams * 100,
-      carbs: Number(totals?.carbs || 0) / qtyGrams * 100,
-    });
-  }
-
-  function parseProductNutritionVariantValue(value) {
-    const match = String(value ?? "").replace(",", ".").match(/-?\d+(?:\.\d+)?/);
-    return match ? Number(match[0]) : NaN;
-  }
-
-  function getSelectedVariantGrams(variantGroups, stateEntry) {
-    const groups = Array.isArray(variantGroups) ? variantGroups : [];
-    const group = groups[0] || null;
-    const idx = Number(stateEntry?.selectedIndex ?? stateEntry?.variant_value_index ?? group?.default_value_index);
-    const values = Array.isArray(group?.values) ? group.values : [];
-    if (!group || !Number.isFinite(idx) || idx < 0 || idx >= values.length) return null;
-    const value = parseProductNutritionVariantValue(values[idx]);
-    const factor = readProductNutritionNumber(group.unit_to_grams_factor);
-    if (!Number.isFinite(value) || value <= 0 || factor == null || factor <= 0) return null;
-    return value * factor;
-  }
-
-  function getProductBaseNutritionGrams(sourceProduct) {
-    return readProductNutritionNumber(sourceProduct?.nutrition_portion_grams ?? sourceProduct?.base_qty_grams);
-  }
-
-  function addConfiguredProductNutrition(target, sourceProduct, sourceVariants, sourceVariantState, multiplier = 1) {
-    const selectedGrams = getSelectedVariantGrams(sourceVariants, sourceVariantState);
-    const baseGrams = getProductBaseNutritionGrams(sourceProduct);
-    const grams = selectedGrams != null ? selectedGrams : baseGrams;
-    const per100 = sourceProduct?.nutrition_per_100g && typeof sourceProduct.nutrition_per_100g === "object"
-      ? sourceProduct.nutrition_per_100g
-      : null;
-    const portion = sourceProduct?.nutrition_per_portion && typeof sourceProduct.nutrition_per_portion === "object"
-      ? sourceProduct.nutrition_per_portion
-      : null;
-    const qtyMultiplier = Number(multiplier || 1);
-    if (grams != null && per100) {
-      return addNutritionPortion(target, per100, grams, qtyMultiplier);
-    }
-    if (portion) {
-      addNutritionValues(target, portion, qtyMultiplier);
-      return baseGrams != null ? baseGrams * qtyMultiplier : 0;
-    }
-    return 0;
-  }
-
-  function getCurrentProductNutritionTotals() {
-    const totals = { protein: 0, fat: 0, carbs: 0 };
-    let totalGrams = 0;
-    const activeIngredients = Array.isArray(ingredients) ? ingredients : [];
-    if (activeIngredients.length) {
-      const basePortion = product?.nutrition_per_portion && typeof product.nutrition_per_portion === "object"
-        ? product.nutrition_per_portion
-        : null;
-      const recipeTotals = basePortion
-        ? cloneNutritionTotals(basePortion)
-        : { protein: 0, fat: 0, carbs: 0 };
-      let recipeGrams = getProductBaseNutritionGrams(product) || 0;
-      activeIngredients.forEach((ing) => {
-        const ingId = Number(ing.ingredient_id || 0);
-        const stateEntry = ingredientState?.get(ingId);
-        const qty = stateEntry && stateEntry.quantity !== undefined ? Number(stateEntry.quantity) : Number(ing.quantity ?? 1);
-        const baseQty = Number(ing.quantity ?? 1);
-        const calcQty = basePortion ? qty - baseQty : qty;
-        const unitToGrams = readProductNutritionNumber(ing.unit_to_grams_factor);
-        const diffGrams = unitToGrams != null ? calcQty * unitToGrams : null;
-        recipeGrams += addNutritionPortion(recipeTotals, ing.nutrition_per_100g, diffGrams);
-      });
-      const recipePer100 = nutritionPer100FromTotals(recipeTotals, recipeGrams);
-      const selectedVariantGrams = getSelectedVariantGrams(variants, variantState);
-      const selectedGrams = selectedVariantGrams != null ? selectedVariantGrams : recipeGrams;
-      if (recipePer100 && selectedGrams > 0) {
-        totalGrams += addNutritionPortion(totals, recipePer100, selectedGrams);
-      } else {
-        addNutritionValues(totals, recipeTotals);
-        totalGrams += recipeGrams;
-      }
-    } else {
-      totalGrams += addConfiguredProductNutrition(totals, product, variants, variantState);
-    }
-
-    collectSelectedOptionItems(optionGroups, selectionState).forEach((item) => {
-      const itemQty = Number(item.qty || 1) || 1;
-      totalGrams += addConfiguredProductNutrition(totals, item, item.variants, item, itemQty);
-    });
-
-    totals.kcal = calcProductNutritionKcal(totals);
-    return { totals, totalGrams };
-  }
-
-  let nutritionMode = "per100";
-  let refreshNutritionCard = () => {};
-
-  function appendProductNutritionCard() {
-    if (productBlocksConfig.nutrition !== true) return;
-    const nutrition = product?.nutrition_per_100g && typeof product.nutrition_per_100g === "object"
-      ? product.nutrition_per_100g
-      : null;
-    if (!nutrition) return;
-    const hasAnyValue = ["kcal", "protein", "fat", "carbs"].some((key) => Number.isFinite(Number(nutrition[key])));
-    if (!hasAnyValue) return;
-
-    const card = document.createElement("div");
-    card.className = "shop-pd-nutrition-card";
-    card.innerHTML = `
-      <div class="shop-pd-nutrition-head">
-        <div>
-          <div class="shop-pd-nutrition-title">КБЖУ</div>
-          <div class="shop-pd-nutrition-subtitle" data-nutrition-subtitle>Значения на 100 г</div>
-        </div>
-        <div class="shop-pd-nutrition-actions" role="group" aria-label="Режим КБЖУ">
-          <button class="shop-pd-nutrition-mode is-active" type="button" data-nutrition-mode="per100">100 г</button>
-          <button class="shop-pd-nutrition-mode" type="button" data-nutrition-mode="portion">Порция</button>
-        </div>
-      </div>
-      <div class="shop-pd-nutrition-grid">
-        <div class="shop-pd-nutrition-cell"><span>Ккал</span><strong data-nutrition-value="kcal">${escapeHtml(formatProductNutritionValue(nutrition.kcal))}</strong></div>
-        <div class="shop-pd-nutrition-cell"><span>Белки</span><strong data-nutrition-value="protein">${escapeHtml(formatProductNutritionValue(nutrition.protein))}</strong></div>
-        <div class="shop-pd-nutrition-cell"><span>Жиры</span><strong data-nutrition-value="fat">${escapeHtml(formatProductNutritionValue(nutrition.fat))}</strong></div>
-        <div class="shop-pd-nutrition-cell"><span>Углеводы</span><strong data-nutrition-value="carbs">${escapeHtml(formatProductNutritionValue(nutrition.carbs))}</strong></div>
-      </div>
-    `;
-    const subtitle = card.querySelector("[data-nutrition-subtitle]");
-    const valueEls = {
-      kcal: card.querySelector('[data-nutrition-value="kcal"]'),
-      protein: card.querySelector('[data-nutrition-value="protein"]'),
-      fat: card.querySelector('[data-nutrition-value="fat"]'),
-      carbs: card.querySelector('[data-nutrition-value="carbs"]'),
-    };
-    refreshNutritionCard = () => {
-      const current = getCurrentProductNutritionTotals();
-      const values = nutritionMode === "portion"
-        ? current.totals
-        : (
-            current.totalGrams > 0
-              ? normalizeProductNutrition({
-                  protein: current.totals.protein / current.totalGrams * 100,
-                  fat: current.totals.fat / current.totalGrams * 100,
-                  carbs: current.totals.carbs / current.totalGrams * 100,
-                })
-              : nutrition
-          );
-      if (subtitle) subtitle.textContent = nutritionMode === "portion" ? "Значения на порцию" : "Значения на 100 г";
-      Object.keys(valueEls).forEach((key) => {
-        if (valueEls[key]) valueEls[key].textContent = formatProductNutritionValue(values[key]);
-      });
-      card.querySelectorAll("[data-nutrition-mode]").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.nutritionMode === nutritionMode);
-      });
-    };
-    card.querySelectorAll("[data-nutrition-mode]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        nutritionMode = btn.dataset.nutritionMode === "portion" ? "portion" : "per100";
-        refreshNutritionCard();
-      });
-    });
-    scroll.appendChild(card);
-    refreshNutritionCard();
-  }
-
-  function appendProductDescriptionCard() {
-    if (productBlocksConfig.description !== true) return;
-    const text = str(product?.description || "").trim();
-    if (!text) return;
-
-    const card = document.createElement("div");
-    card.className = "shop-pd-info-card shop-pd-description-card";
-    const title = document.createElement("div");
-    title.className = "shop-pd-info-card-title";
-    title.textContent = "Описание";
-    const body = document.createElement("div");
-    body.className = "shop-pd-info-card-body";
-    body.textContent = text;
-    card.appendChild(title);
-    card.appendChild(body);
-    scroll.appendChild(card);
-  }
-
-  function appendProductClientCompositionCard() {
-    if (productBlocksConfig.ingredients !== true) return;
-    const text = str(product?.client_composition || "").trim();
-    if (!text) return;
-
-    const card = document.createElement("div");
-    card.className = "shop-pd-info-card shop-pd-composition-card";
-    const title = document.createElement("div");
-    title.className = "shop-pd-info-card-title";
-    title.textContent = "Состав";
-    const body = document.createElement("div");
-    body.className = "shop-pd-info-card-body";
-    body.textContent = text;
-    card.appendChild(title);
-    card.appendChild(body);
-    scroll.appendChild(card);
-  }
-
-  // Умный скролл: при раскрытии секций (например, опций) доскролливаем так,
-  // чтобы блок оказался сразу под хедером на мобильных.
-  function smartScrollIntoView(targetEl) {
-    try {
-      if (!targetEl || !scroll) return;
-
-      // Только мобильный режим — на десктопе и так всё видно.
-      if (!window.matchMedia || !window.matchMedia("(max-width: 768px)").matches) {
-        return;
-      }
-
-      const header = document.querySelector("header");
-      let offset = 0;
-      if (header) {
-        const headerRect = header.getBoundingClientRect();
-        const headerH =
-          headerRect.height ||
-          header.offsetHeight ||
-          parseFloat(getComputedStyle(header).height) ||
-          0;
-        // Немного запаса под хедером
-        offset = headerH + 8;
-      }
-
-      const scrollRect = scroll.getBoundingClientRect();
-      const targetRect = targetEl.getBoundingClientRect();
-
-      // Положение верха блока относительно начала скролл-контейнера
-      const currentTop = targetRect.top - scrollRect.top;
-      const desiredTop = offset;
-      const delta = currentTop - desiredTop;
-
-      // Если и так почти на месте — ничего не делаем
-      if (Math.abs(delta) < 4) return;
-
-      scroll.scrollBy({
-        top: delta,
-        behavior: "smooth",
-      });
-    } catch {
-      // В случае ошибки просто не скроллим, чтобы не ломать UX
-    }
-  }
-
-  // Плавное открытие/закрытие списка (аккордеон по высоте),
-  // чтобы не было резких "схлопываний"
-  function slideDown(listEl, duration = 180) {
-    if (!listEl) return;
-    listEl.classList.remove("hidden");
-    listEl.style.overflow = "hidden";
-    listEl.style.maxHeight = "0px";
-
-    // Следующий кадр — анимируем до полной высоты
-    const run = () => {
-      const full = listEl.scrollHeight || 0;
-      listEl.style.transition = `max-height ${duration}ms ease`;
-      listEl.style.maxHeight = `${full}px`;
-    };
-    if (window.requestAnimationFrame) {
-      requestAnimationFrame(run);
-    } else {
-      run();
-    }
-
-    const onEnd = () => {
-      listEl.style.maxHeight = "";
-      listEl.style.overflow = "";
-      listEl.style.transition = "";
-      listEl.removeEventListener("transitionend", onEnd);
-    };
-    listEl.addEventListener("transitionend", onEnd);
-  }
-
-  function slideUp(listEl, duration = 180, afterHide) {
-    if (!listEl) {
-      if (typeof afterHide === "function") afterHide();
-      return;
-    }
-    const full = listEl.scrollHeight || 0;
-    listEl.style.overflow = "hidden";
-    listEl.style.maxHeight = `${full}px`;
-    listEl.style.transition = `max-height ${duration}ms ease`;
-
-    // Следующий кадр — анимируем до 0
-    const run = () => {
-      listEl.style.maxHeight = "0px";
-    };
-    if (window.requestAnimationFrame) {
-      requestAnimationFrame(run);
-    } else {
-      run();
-    }
-
-    const onEnd = () => {
-      listEl.classList.add("hidden");
-      listEl.style.maxHeight = "";
-      listEl.style.overflow = "";
-      listEl.style.transition = "";
-      listEl.removeEventListener("transitionend", onEnd);
-      if (typeof afterHide === "function") afterHide();
-    };
-    listEl.addEventListener("transitionend", onEnd);
-  }
-
-  function setOptionVariantAccordionState(accordionEl, open, duration = 220) {
-    if (!accordionEl) return;
-    const willOpen = !!open;
-    const OPEN_PADDING_TOP_PX = 8;
-    const OPEN_MARGIN_TOP_PX = 8;
-    const OPEN_BORDER_TOP_WIDTH_PX = 1;
-    const currentTeardown = accordionEl.__variantAccordionTeardown;
-    if (typeof currentTeardown === "function") {
-      try { currentTeardown(); } catch {}
-      accordionEl.__variantAccordionTeardown = null;
-    }
-
-    if (willOpen) {
-      accordionEl.classList.add("is-open");
-      accordionEl.style.display = "block";
-      const full = accordionEl.scrollHeight || 0;
-      accordionEl.style.overflow = "hidden";
-      accordionEl.style.maxHeight = "0px";
-      accordionEl.style.opacity = "0";
-      accordionEl.style.paddingTop = "0px";
-      accordionEl.style.marginTop = "0px";
-      accordionEl.style.borderTopWidth = "0px";
-      accordionEl.style.transition = `max-height ${duration}ms ease, opacity ${duration}ms ease, padding-top ${duration}ms ease, margin-top ${duration}ms ease, border-top-width ${duration}ms ease`;
-      const run = () => {
-        const target = accordionEl.scrollHeight || full;
-        accordionEl.style.maxHeight = `${target}px`;
-        accordionEl.style.opacity = "1";
-        accordionEl.style.paddingTop = `${OPEN_PADDING_TOP_PX}px`;
-        accordionEl.style.marginTop = `${OPEN_MARGIN_TOP_PX}px`;
-        accordionEl.style.borderTopWidth = `${OPEN_BORDER_TOP_WIDTH_PX}px`;
-      };
-      if (window.requestAnimationFrame) requestAnimationFrame(run);
-      else run();
-      const onEnd = () => {
-        accordionEl.style.maxHeight = "";
-        accordionEl.style.overflow = "";
-        accordionEl.style.transition = "";
-        accordionEl.removeEventListener("transitionend", onEnd);
-        accordionEl.__variantAccordionTeardown = null;
-      };
-      accordionEl.__variantAccordionTeardown = onEnd;
-      accordionEl.addEventListener("transitionend", onEnd);
-      return;
-    }
-
-    if (!accordionEl.classList.contains("is-open")) {
-      accordionEl.style.display = "none";
-      return;
-    }
-    const full = accordionEl.scrollHeight || 0;
-    accordionEl.style.display = "block";
-    accordionEl.style.overflow = "hidden";
-    accordionEl.style.maxHeight = `${full}px`;
-    accordionEl.style.opacity = "1";
-    const computed = window.getComputedStyle(accordionEl);
-    accordionEl.style.paddingTop = computed.paddingTop || `${OPEN_PADDING_TOP_PX}px`;
-    accordionEl.style.marginTop = computed.marginTop || `${OPEN_MARGIN_TOP_PX}px`;
-    accordionEl.style.borderTopWidth = computed.borderTopWidth || `${OPEN_BORDER_TOP_WIDTH_PX}px`;
-    accordionEl.style.transition = `max-height ${duration}ms ease, opacity ${duration}ms ease, padding-top ${duration}ms ease, margin-top ${duration}ms ease, border-top-width ${duration}ms ease`;
-    const run = () => {
-      accordionEl.style.maxHeight = "0px";
-      accordionEl.style.opacity = "0";
-      accordionEl.style.paddingTop = "0px";
-      accordionEl.style.marginTop = "0px";
-      accordionEl.style.borderTopWidth = "0px";
-    };
-    if (window.requestAnimationFrame) requestAnimationFrame(run);
-    else run();
-    const onEnd = () => {
-      accordionEl.classList.remove("is-open");
-      accordionEl.style.display = "none";
-      accordionEl.style.maxHeight = "";
-      accordionEl.style.opacity = "";
-      accordionEl.style.paddingTop = "";
-      accordionEl.style.marginTop = "";
-      accordionEl.style.borderTopWidth = "";
-      accordionEl.style.overflow = "";
-      accordionEl.style.transition = "";
-      accordionEl.removeEventListener("transitionend", onEnd);
-      accordionEl.__variantAccordionTeardown = null;
-    };
-    accordionEl.__variantAccordionTeardown = onEnd;
-    accordionEl.addEventListener("transitionend", onEnd);
-  }
-
-  /* ================= HERO (ФОТО + СТРЕЛКИ DESKTOP + СВАЙП MOBILE + DOTS) ================= */
-
-  const photos = safePhotos(product);
-  let activeIndex = 0;
-
-  const hero = document.createElement("div");
-  hero.className = "shop-product-hero";
-
-  const media = document.createElement("div");
-  media.className = "shop-product-hero-media";
-
-  const img = createOptimizedImage(photos[0] || "/static/img/placeholder.png", {
-    type: 'product-hero',
-    className: 'shop-product-hero-image',
-    alt: '',
-    priority: true,
-  });
-  img.style.objectFit = "cover";
-  media.appendChild(img);
-  const bogoBadge = typeof createCatalogBuyXGetYBadge === "function"
-    ? createCatalogBuyXGetYBadge(product)
-    : null;
-  if (bogoBadge) {
-    bogoBadge.classList.add("shop-product-hero-bogo-badge");
-    media.appendChild(bogoBadge);
-  }
-
-  hero.appendChild(media);
-
-  let dots = null;
-
-  function setActive(nextIndex) {
-    if (!photos.length) return;
-
-    const len = photos.length;
-    let i = Number(nextIndex);
-
-    if (!Number.isFinite(i)) i = 0;
-    i = (i % len + len) % len;
-
-    if (activeIndex === i) return;
-    activeIndex = i;
-
-    img.src = photos[i] || "/static/img/placeholder.png";
-
-    if (dots) {
-      dots.querySelectorAll(".shop-product-hero-dot").forEach((d, idx) => {
-        d.classList.toggle("is-active", idx === i);
-      });
-    }
-  }
-
-  // стрелки (desktop; на мобилке скрываются CSS-ом)
-  if (photos.length > 1) {
-    const btnPrev = document.createElement("button");
-    btnPrev.type = "button";
-    btnPrev.className = "shop-product-hero-arrow is-prev";
-    btnPrev.innerHTML = `<i class="fas fa-chevron-left"></i>`;
-    btnPrev.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setActive(activeIndex - 1);
-    });
-
-    const btnNext = document.createElement("button");
-    btnNext.type = "button";
-    btnNext.className = "shop-product-hero-arrow is-next";
-    btnNext.innerHTML = `<i class="fas fa-chevron-right"></i>`;
-    btnNext.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setActive(activeIndex + 1);
-    });
-
-    hero.appendChild(btnPrev);
-    hero.appendChild(btnNext);
-  }
-
-  // dots + клики по точкам
-  if (photos.length > 1) {
-    dots = document.createElement("div");
-    dots.className = "shop-product-hero-dots";
-
-    photos.forEach((_, i) => {
-      const dot = document.createElement("button");
-      dot.type = "button";
-      dot.className =
-        "shop-product-hero-dot" + (i === 0 ? " is-active" : "");
-
-      dot.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setActive(i);
-      });
-
-      dots.appendChild(dot);
-    });
-
-    hero.appendChild(dots);
-  }
-
-  // свайп (mobile)
-  if (photos.length > 1) {
-    let startX = 0;
-    let startY = 0;
-    let tracking = false;
-
-    media.addEventListener(
-      "touchstart",
-      (e) => {
-        const t = e.touches && e.touches[0];
-        if (!t) return;
-        tracking = true;
-        startX = t.clientX;
-        startY = t.clientY;
-      },
-      { passive: true }
-    );
-
-    media.addEventListener(
-      "touchend",
-      (e) => {
-        if (!tracking) return;
-        tracking = false;
-
-        const t = e.changedTouches && e.changedTouches[0];
-        if (!t) return;
-
-        const dx = t.clientX - startX;
-        const dy = t.clientY - startY;
-
-        if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
-          if (dx < 0) setActive(activeIndex + 1);
-          else setActive(activeIndex - 1);
-        }
-      },
-      { passive: true }
-    );
-  }
-
-  scroll.appendChild(hero);
-
-  const runGuardedMutation = (mutator, opts = {}) => {
-    if (typeof mutator !== "function") return false;
-    if (typeof guardDraftMutation !== "function") {
-      mutator();
-      return true;
-    }
-    return !!guardDraftMutation(mutator, opts);
-  };
-
-  const canApplyDraftMutation = (mutator) => {
-    if (typeof mutator !== "function") return true;
-    if (typeof canDraftMutationApply === "function") {
-      try {
-        return canDraftMutationApply(mutator) !== false;
-      } catch {
-        return true;
-      }
-    }
-    return true;
-  };
-
-  const variantAvailabilityRefreshers = [];
-  const registerVariantAvailabilityRefresher = (refreshFn) => {
-    if (typeof refreshFn === "function") {
-      variantAvailabilityRefreshers.push(refreshFn);
-    }
-  };
-  const refreshVariantAvailability = ({ showToastOnOut = false, forceNow = false } = {}) => {
-    if (!variantAvailabilityRefreshers.length) return Promise.resolve();
-    return Promise.all(
-      variantAvailabilityRefreshers.map((refreshFn) =>
-        Promise.resolve(refreshFn({ showToastOnOut, forceNow })).catch(() => {})
-      )
-    ).then(() => {});
-  };
-
-  const createOptionVariantAvailabilityController = ({
-    values = [],
-    getSelectedIndex,
-    setDraftForIndex,
-    isOptionItemSelected,
-  } = {}) => {
-    const buttonsByIndex = new Map();
-    const availabilityByIndex = new Map();
-    let refreshSeq = 0;
-    let refreshTimer = null;
-
-    const applyButtonState = (idx) => {
-      const btn = buttonsByIndex.get(Number(idx));
-      if (!btn) return;
-      const selectedIdx = Number(typeof getSelectedIndex === "function" ? getSelectedIndex() : -1);
-      const isSelected = selectedIdx === Number(idx);
-      const knownAvailable = availabilityByIndex.has(Number(idx))
-        ? availabilityByIndex.get(Number(idx)) !== false
-        : true;
-      const shouldDisable = !knownAvailable && !isSelected;
-      btn.classList.toggle("is-unavailable", shouldDisable);
-      btn.disabled = shouldDisable;
-      btn.setAttribute("aria-disabled", shouldDisable ? "true" : "false");
-    };
-
-    const refreshNow = () => {
-      if (!Array.isArray(values) || !values.length) return;
-
-      const selectedNow = typeof isOptionItemSelected === "function" ? !!isOptionItemSelected() : true;
-      if (!selectedNow) {
-        values.forEach((_, idx) => {
-          availabilityByIndex.set(Number(idx), true);
-          applyButtonState(idx);
-        });
-        return;
-      }
-
-      values.forEach((_, idx) => {
-        const allowed = canApplyDraftMutation(() => {
-          if (typeof setDraftForIndex === "function") {
-            setDraftForIndex(idx);
-          }
-        });
-        availabilityByIndex.set(Number(idx), allowed);
-        applyButtonState(idx);
-      });
-    };
-
-    const scheduleRefresh = ({ forceNow = false } = {}) => {
-      if (refreshTimer) {
-        clearTimeout(refreshTimer);
-        refreshTimer = null;
-      }
-      if (forceNow) {
-        refreshNow();
-        return;
-      }
-      refreshTimer = setTimeout(() => {
-        refreshTimer = null;
-        refreshNow();
-      }, 20);
-    };
-
-    const registerButton = (idx, btn) => {
-      if (!btn) return;
-      const key = Number(idx);
-      buttonsByIndex.set(key, btn);
-      availabilityByIndex.set(key, true);
-      applyButtonState(key);
-    };
-
-    return {
-      applyButtonState,
-      scheduleRefresh,
-      registerButton,
-    };
-  };
-
-  /* ================= META ПОД ФОТО ================= */
-
-  const meta = document.createElement("div");
-  meta.className = "shop-pd-meta";
-
-  const title = document.createElement("div");
-  title.className = "shop-pd-title";
-  title.textContent = str(product.name);
-
-  // Цена отображается только в кнопке «В корзину» (shop-pd-action-price)
-
-  const shortDescText = str(product.description_short || "").trim();
-  const shortDesc = document.createElement("div");
-  shortDesc.className = "shop-pd-short";
-  if (shortDescText) shortDesc.textContent = shortDescText;
-
-  meta.appendChild(title);
-  if (shortDescText) meta.appendChild(shortDesc);
-
-  scroll.appendChild(meta);
-
-  /* ================= VARIANTS (SHOP) ================= */
-  if (Array.isArray(variants) && variants.length) {
-    const variantGroup = variants[0];
-    const values = Array.isArray(variantGroup.values) ? variantGroup.values : [];
-    const unitLabel =
-      str(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || "").trim();
-
-    const variantWrap = document.createElement("div");
-    variantWrap.className = "shop-pd-options";
-
-    const variantSectionTitle = document.createElement("div");
-    variantSectionTitle.className = "shop-pd-section-title shop-pd-variants-title";
-    variantSectionTitle.textContent = "Варианты товара:";
-    variantWrap.appendChild(variantSectionTitle);
-
-    const variantTitle = document.createElement("div");
-    variantTitle.className = "shop-pd-variant-group-title";
-    variantTitle.textContent = variantGroup.title || "Варианты";
-    variantWrap.appendChild(variantTitle);
-
-    const valuesWrap = document.createElement("div");
-    valuesWrap.className = "shop-pd-option-cards";
-    valuesWrap.style.display = "flex";
-    valuesWrap.style.gap = "8px";
-    valuesWrap.style.overflowX = "auto";
-    valuesWrap.style.flexWrap = "nowrap";
-    valuesWrap.style.paddingBottom = "4px";
-
-    const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
-    const formatValueLabel = (val) => {
-      const valueText = str(val);
-      if (!valueText) return "";
-      if (!unitLabel || hasLetters(valueText)) return valueText;
-      return `${valueText} ${unitLabel}`;
-    };
-
-    const variantButtonsByIndex = new Map();
-    const variantAvailabilityByIndex = new Map();
-    let variantAvailabilityRefreshSeq = 0;
-    let variantAvailabilityRefreshTimer = null;
-
-    const applyVariantButtonState = (idx) => {
-      const btn = variantButtonsByIndex.get(Number(idx));
-      if (!btn) return;
-      const selectedIdx = Number(variantState.selectedIndex);
-      const isSelected = selectedIdx === Number(idx);
-      const knownAvailable = variantAvailabilityByIndex.has(Number(idx))
-        ? variantAvailabilityByIndex.get(Number(idx)) !== false
-        : true;
-      const shouldDisable = !knownAvailable && !isSelected;
-      btn.classList.toggle("is-unavailable", shouldDisable);
-      btn.disabled = shouldDisable;
-      btn.setAttribute("aria-disabled", shouldDisable ? "true" : "false");
-    };
-
-    const applySelectedIndex = (idx) => {
-      variantState.selectedIndex = idx;
-      variantState.value = values[idx];
-      variantState.label = formatValueLabel(values[idx]);
-      valuesWrap.querySelectorAll("[data-variant-index]").forEach((btn) => {
-        const buttonIndex = Number(btn.dataset.variantIndex);
-        btn.classList.toggle("is-selected", buttonIndex === idx);
-        applyVariantButtonState(buttonIndex);
-      });
-    };
-
-    const setSelectedIndex = async (
-      idx,
-      { showToastOnOut = true, guard = true } = {}
-    ) => {
-      if (!Number.isFinite(Number(idx))) return false;
-      const nextIdx = Number(idx);
-      const mutator = () => applySelectedIndex(nextIdx);
-      const applied = guard
-        ? await runGuardedMutation(mutator, { showToastOnOut })
-        : (mutator(), true);
-      if (!applied) return false;
-      if (typeof onVariantChange === "function") {
-        refreshNutritionCard();
-        onVariantChange();
-      }
-      return true;
-    };
-
-    const getDraftQtyForVariantCheck = () => {
-      const centerText = str(qtyPill?.center?.textContent || "").trim();
-      const qtyNum = Number(centerText);
-      if (!Number.isFinite(qtyNum) || qtyNum <= 0) return 1;
-      return qtyNum;
-    };
-
-    const refreshVariantAvailabilityNow = () => {
-      if (typeof canSelectVariantIndex !== "function" || !values.length) return;
-      const desiredQty = getDraftQtyForVariantCheck();
-
-      values.forEach((_, idx) => {
-        const available = canSelectVariantIndex(idx, { desiredQty }) !== false;
-        variantAvailabilityByIndex.set(Number(idx), available);
-        applyVariantButtonState(idx);
-      });
-
-      const selectedIdx = Number(variantState.selectedIndex);
-      const selectedAvailable =
-        !Number.isFinite(selectedIdx) ||
-        selectedIdx < 0 ||
-        variantAvailabilityByIndex.get(selectedIdx) !== false;
-
-      if (!selectedAvailable) {
-        const fallbackIdx = values.findIndex((_, idx) =>
-          variantAvailabilityByIndex.get(Number(idx)) !== false
-        );
-        if (fallbackIdx >= 0 && fallbackIdx !== selectedIdx) {
-          setSelectedIndex(fallbackIdx, { showToastOnOut: false, guard: false });
-        }
-      }
-    };
-
-    const scheduleVariantAvailabilityRefresh = ({ forceNow = false } = {}) => {
-      if (variantAvailabilityRefreshTimer) {
-        clearTimeout(variantAvailabilityRefreshTimer);
-        variantAvailabilityRefreshTimer = null;
-      }
-      if (forceNow) {
-        refreshVariantAvailabilityNow();
-        return;
-      }
-      variantAvailabilityRefreshTimer = setTimeout(() => {
-        variantAvailabilityRefreshTimer = null;
-        refreshVariantAvailabilityNow();
-      }, 20);
-    };
-
-    registerVariantAvailabilityRefresher(scheduleVariantAvailabilityRefresh);
-
-    values.forEach((value, idx) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "shop-pd-option-card is-clickable";
-      btn.style.width = "auto";
-      btn.style.flex = "0 0 auto";
-      btn.dataset.variantIndex = String(idx);
-      btn.textContent = formatValueLabel(value);
-      if (variantState.selectedIndex === idx) {
-        btn.classList.add("is-selected");
-      }
-      variantButtonsByIndex.set(Number(idx), btn);
-      variantAvailabilityByIndex.set(Number(idx), true);
-      applyVariantButtonState(idx);
-      btn.addEventListener("click", async () => {
-        if (btn.disabled) return;
-        await setSelectedIndex(idx, { showToastOnOut: true, guard: true });
-      });
-      valuesWrap.appendChild(btn);
-    });
-
-    variantWrap.appendChild(valuesWrap);
-    scroll.appendChild(variantWrap);
-
-    // Инициализируем выбранный вариант: используем default_value_index из API (индивидуальный или групповой)
-    if (Number.isFinite(variantState.selectedIndex) && !variantState.label) {
-      void setSelectedIndex(variantState.selectedIndex, {
-        showToastOnOut: false,
-        guard: false,
-      });
-    } else if (!Number.isFinite(variantState.selectedIndex) && values.length) {
-      // Используем default_value_index (индивидуальный или групповой), если задан, иначе 0
-      const defaultIndex = variantGroup.default_value_index != null 
-        ? Number(variantGroup.default_value_index) 
-        : 0;
-      // Проверяем что индекс валидный
-      const validIndex = defaultIndex >= 0 && defaultIndex < values.length ? defaultIndex : 0;
-      void setSelectedIndex(validIndex, {
-        showToastOnOut: false,
-        guard: false,
-      });
-    }
-
-    scheduleVariantAvailabilityRefresh({ showToastOnOut: false, forceNow: true });
-  }
-
-  /* ================= OPTIONS (БЕЗ ИЗМЕНЕНИЙ) ================= */
-
-  let optionsWrap = null;
-  if (optionGroups.length) {
-    optionsWrap = document.createElement("div");
-    optionsWrap.className = "shop-pd-options";
-
-    const optionsTitle = document.createElement("div");
-    optionsTitle.className = "shop-pd-section-title shop-pd-options-title";
-    optionsTitle.textContent = "Опции товара:";
-    optionsWrap.appendChild(optionsTitle);
-
-    const getOptionWord = (count) => {
-      const abs = Math.abs(Number(count || 0));
-      const mod10 = abs % 10;
-      const mod100 = abs % 100;
-      if (mod10 === 1 && mod100 !== 11) return "опции";
-      if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "опций";
-      return "опций";
-    };
-
-    const getOptionGroupSelectedCount = (groupState, groupType) => {
-      if (!groupState) return 0;
-      if (groupType === "single") return Number(groupState.selectedId || 0) > 0 ? 1 : 0;
-      if (groupType === "multiple_group") return groupState.selectedIds?.size || 0;
-      if (groupType === "multiple_item") {
-        let count = 0;
-        groupState.qtyById?.forEach((qty) => {
-          if (Number(qty || 0) > 0) count += 1;
-        });
-        return count;
-      }
-      return 0;
-    };
-
-    const getOptionGroupMaxCount = (group, groupState, groupType) => {
-      const stateMax = Number(groupState?.maxSelect);
-      if (Number.isFinite(stateMax) && stateMax > 0) return stateMax;
-      const groupMax = Number(group?.max_select);
-      if (Number.isFinite(groupMax) && groupMax > 0) return groupMax;
-      if (groupType === "single") return 1;
-      if (groupType === "multiple_item") {
-        const totalMax = (group.items || []).reduce((sum, item) => {
-          const max = Number(item?.qty_max ?? 1);
-          return sum + (Number.isFinite(max) && max > 0 ? 1 : 0);
-        }, 0);
-        return totalMax || 1;
-      }
-      return Math.max(1, (group.items || []).length);
-    };
-
-    const getOptionGroupHint = (group, groupState, groupType) => {
-      const maxCount = getOptionGroupMaxCount(group, groupState, groupType);
-      if (group?.is_required) {
-        const selectedCount = getOptionGroupSelectedCount(groupState, groupType);
-        return `Выбрано ${selectedCount} из ${maxCount} ${getOptionWord(maxCount)}`;
-      }
-      return `Выберите до ${maxCount} ${getOptionWord(maxCount)}`;
-    };
-    const expandedOptionGroups = renderProductDetailsInto._expandedOptionGroups || new Map();
-    renderProductDetailsInto._expandedOptionGroups = expandedOptionGroups;
-
-    const getOptionVariantContext = (item, groupState, allowVariants) => {
-      const itemId = Number(item?.id);
-      const variantGroup = allowVariants && Array.isArray(item?.variants) ? item.variants[0] : null;
-      const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
-      const hasVariants = Boolean(variantGroup && values.length);
-      const unitLabel = str(
-        variantGroup?.unit_short_title ||
-        variantGroup?.unit_code ||
-        variantGroup?.unit_title ||
-        ""
-      ).trim();
-      const hasLetters = (value) => /[a-zа-я]/i.test(String(value || ""));
-      const formatValueLabel = (value) => {
-        const valueText = str(value);
-        if (!valueText) return "";
-        if (!unitLabel || hasLetters(valueText)) return valueText;
-        return `${valueText} ${unitLabel}`;
-      };
-      const currentVariant = groupState?.variantByItemId?.get(itemId);
-      const defaultIdx = variantGroup?.default_value_index != null
-        ? Number(variantGroup.default_value_index)
-        : (values.length ? 0 : null);
-      const selectedIdx = Number.isFinite(Number(currentVariant?.variant_value_index))
-        ? Number(currentVariant.variant_value_index)
-        : defaultIdx;
-
-      if (
-        hasVariants &&
-        !currentVariant &&
-        Number.isFinite(selectedIdx) &&
-        selectedIdx >= 0 &&
-        selectedIdx < values.length
-      ) {
-        groupState.variantByItemId.set(
-          itemId,
-          buildOptionItemVariantState(item, variantGroup, selectedIdx, values[selectedIdx])
-        );
-      }
-
-      return {
-        hasVariants,
-        variantGroup,
-        values,
-        selectedIdx: Number.isFinite(Number(selectedIdx)) ? Number(selectedIdx) : null,
-        formatValueLabel,
-      };
-    };
-
-    const createOptionProductSpinSide = (side, enabled, onClick) => {
-      if (!enabled) {
-        const placeholder = document.createElement("span");
-        placeholder.className = `shop-pd-option-product-spin-placeholder is-${side}`;
-        return placeholder;
-      }
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = `shop-pd-option-product-spin-btn is-${side}`;
-      btn.textContent = side === "minus" ? "−" : "+";
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (typeof onClick === "function") onClick(e);
-      });
-      return btn;
-    };
-
-    const renderOptionProductSpinCenter = (center, item, variantData, variantLabel, qtyMultiplier = 1) => {
-      if (!center) return;
-      const pricing = getOptionItemDisplayPricing(item, variantData);
-      const qty = Math.max(1, Number(qtyMultiplier || 1));
-      const currentTotal = roundPrice(Number(pricing.currentPrice || 0) * qty);
-      const oldTotal = pricing.showOld
-        ? roundPrice(Number(pricing.originalPrice || 0) * qty)
-        : 0;
-      center.innerHTML = "";
-
-      const oldPrice = document.createElement("div");
-      oldPrice.className = "shop-pd-option-product-old";
-      oldPrice.textContent = pricing.showOld ? money(oldTotal) : "";
-      center.appendChild(oldPrice);
-
-      const price = document.createElement("div");
-      price.className = "shop-pd-option-product-price";
-      price.textContent = money(currentTotal);
-      center.appendChild(price);
-
-      const value = document.createElement("div");
-      value.className = "shop-pd-option-product-value";
-      value.textContent = variantLabel || "";
-      center.appendChild(value);
-    };
-
-    const createOptionProductCard = ({
-      item,
-      groupState,
-      groupType,
-      allowVariants,
-      isSelected,
-      isUnavailable,
-      onCardClick,
-      onVariantChange,
-      selectForSpin,
-      resetQty,
-      selectedQty = 0,
-      qtyText = "",
-      canQtyMinus = false,
-      canQtyPlus = false,
-      onQtyMinus,
-      onQtyPlus,
-    }) => {
-      const itemId = Number(item.id);
-      const variantCtx = getOptionVariantContext(item, groupState, allowVariants);
-      const currentVariant = groupState.variantByItemId.get(itemId);
-      const variantLabel = variantCtx.hasVariants && variantCtx.selectedIdx != null
-        ? variantCtx.formatValueLabel(variantCtx.values[variantCtx.selectedIdx])
-        : "";
-      const photoQty = Number(selectedQty || 0);
-      const pricing = getOptionItemDisplayPricing(item, currentVariant);
-
-      const card = document.createElement("div");
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      card.className = "shop-pd-option-product-card";
-      card.classList.toggle("is-selected", !!isSelected);
-      card.classList.toggle("is-unavailable", !!isUnavailable);
-      card.addEventListener("click", (e) => {
-        e.preventDefault();
-        if (typeof onCardClick === "function") onCardClick(e);
-      });
-      card.addEventListener("keydown", (e) => {
-        if (e.key !== "Enter" && e.key !== " ") return;
-        e.preventDefault();
-        if (typeof onCardClick === "function") onCardClick(e);
-      });
-
-      const photoWrap = document.createElement("div");
-      photoWrap.className = "shop-pd-option-product-photo";
-      if (item.photo) {
-        photoWrap.appendChild(createOptimizedImage(item.photo, {
-          type: "thumb",
-          className: "shop-pd-option-product-img",
-          alt: "",
-        }));
-      } else {
-        const placeholder = document.createElement("div");
-        placeholder.className = "shop-pd-option-product-img is-placeholder";
-        placeholder.textContent = "—";
-        photoWrap.appendChild(placeholder);
-      }
-      if (isSelected && photoQty > 0) {
-        const qtyOverlay = document.createElement("div");
-        qtyOverlay.className = "shop-pd-option-product-photo-qty";
-        qtyOverlay.textContent = variantLabel || String(photoQty);
-        photoWrap.appendChild(qtyOverlay);
-      }
-      card.appendChild(photoWrap);
-
-      if (pricing.badgeText) {
-        const badge = document.createElement("span");
-        badge.className = "shop-pd-option-product-discount";
-        badge.textContent = pricing.badgeText;
-        card.appendChild(badge);
-      }
-
-      if (groupType === "multiple_item" && isSelected && typeof resetQty === "function") {
-        const reset = document.createElement("button");
-        reset.type = "button";
-        reset.className = "shop-pd-option-product-reset";
-        reset.textContent = "×";
-        reset.setAttribute("aria-label", "Сбросить количество");
-        reset.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          resetQty();
-        });
-        card.appendChild(reset);
-      }
-
-      const name = document.createElement("div");
-      name.className = "shop-pd-option-product-name";
-      name.textContent = str(item.title);
-      card.appendChild(name);
-
-      const spin = document.createElement("div");
-      spin.className = "shop-pd-option-product-spin";
-      const center = document.createElement("div");
-      center.className = "shop-pd-option-product-spin-center";
-
-      const canSwitchVariant = (nextIdx) => {
-        if (!variantCtx.hasVariants) return false;
-        if (!Number.isFinite(nextIdx) || nextIdx < 0 || nextIdx >= variantCtx.values.length) return false;
-        if (!isSelected) return true;
-        return canApplyDraftMutation(() => {
-          groupState.variantByItemId.set(
-            itemId,
-            buildOptionItemVariantState(item, variantCtx.variantGroup, nextIdx, variantCtx.values[nextIdx])
-          );
-        });
-      };
-      const currentIdx = variantCtx.selectedIdx;
-      const prevIdx = Number.isFinite(currentIdx) ? currentIdx - 1 : null;
-      const nextIdx = Number.isFinite(currentIdx) ? currentIdx + 1 : null;
-      const hasPrevVariant = variantCtx.hasVariants && canSwitchVariant(prevIdx);
-      const hasNextVariant = variantCtx.hasVariants && canSwitchVariant(nextIdx);
-
-      const applyVariantIdx = (idx) => {
-        if (!canSwitchVariant(idx)) return;
-        const mutator = () => {
-          if (!isSelected && typeof selectForSpin === "function" && selectForSpin() === false) {
-            return;
-          }
-          groupState.variantByItemId.set(
-            itemId,
-            buildOptionItemVariantState(item, variantCtx.variantGroup, idx, variantCtx.values[idx])
-          );
-        };
-        const applied = runGuardedMutation(mutator, { showToastOnOut: true });
-        if (!applied) return;
-        if (typeof onVariantChange === "function") onVariantChange();
-      };
-
-      const useQtyButtons = groupType !== "multiple_item";
-      const leftEnabled = variantCtx.hasVariants ? hasPrevVariant : (useQtyButtons && canQtyMinus);
-      const rightEnabled = variantCtx.hasVariants ? hasNextVariant : (useQtyButtons && canQtyPlus);
-      const leftAction = variantCtx.hasVariants ? () => applyVariantIdx(prevIdx) : onQtyMinus;
-      const rightAction = variantCtx.hasVariants ? () => applyVariantIdx(nextIdx) : onQtyPlus;
-
-      spin.appendChild(createOptionProductSpinSide("minus", leftEnabled, leftAction));
-      renderOptionProductSpinCenter(
-        center,
-        item,
-        currentVariant,
-        variantLabel,
-        groupType === "multiple_item" ? selectedQty : 1
-      );
-      spin.appendChild(center);
-      spin.appendChild(createOptionProductSpinSide("plus", rightEnabled, rightAction));
-      card.appendChild(spin);
-
-      return card;
-    };
-
-    const renderProductOptionCardsGroup = (group, groupState, groupType, titleText, { append = true } = {}) => {
-      if (!["single", "multiple_group", "multiple_item"].includes(groupType)) return false;
-
-      const allowVariants = Boolean(group.allow_variants);
-      const block = document.createElement("div");
-      block.className = "shop-pd-option-block shop-pd-option-product-block";
-
-      const titleRow = document.createElement("div");
-      titleRow.className = "shop-pd-option-product-head";
-      const minSelect = groupState.minSelect ?? group.min_select ?? 0;
-      const maxSelect = groupState.maxSelect ?? group.max_select ?? null;
-      const titleName = document.createElement("div");
-      titleName.className = "shop-pd-section-title shop-pd-option-product-title";
-      titleName.textContent = titleText;
-      const titleHint = document.createElement("div");
-      titleHint.className = "shop-pd-option-product-hint";
-      titleHint.textContent = getOptionGroupHint(group, groupState, groupType);
-      titleRow.appendChild(titleName);
-      titleRow.appendChild(titleHint);
-      block.appendChild(titleRow);
-
-      const itemsWrap = document.createElement("div");
-      itemsWrap.className = "shop-pd-option-product-cards";
-      block.appendChild(itemsWrap);
-
-      const rerender = () => {
-        const nextBlock = renderProductOptionCardsGroup(group, groupState, groupType, titleText, { append: false });
-        if (nextBlock && block.parentNode) block.replaceWith(nextBlock);
-      };
-      const notifyChanged = () => {
-        refreshNutritionCard();
-        if (typeof onSelectionChange === "function") onSelectionChange();
-      };
-
-      if (groupType === "single" && group?.is_required && (!groupState.selectedId || Number(groupState.selectedId) <= 0)) {
-        const firstAvailable = (group.items || []).find((item) => {
-          const itemId = Number(item.id);
-          const optionProductId = Number(item.target_product_id || 0);
-          if (!(Number.isFinite(optionProductId) && optionProductId > 0)) return true;
-          return canApplyDraftMutation(() => {
-            groupState.selectedId = itemId;
-          });
-        });
-        if (firstAvailable?.id) groupState.selectedId = Number(firstAvailable.id);
-      }
-
-      const groupKey = Number(group?.id || 0) || titleText;
-      const isExpanded = expandedOptionGroups.get(groupKey) === true;
-      let availableCardCount = 0;
-
-      (group.items || []).forEach((item) => {
-        const itemId = Number(item.id);
-        const optionProductId = Number(item.target_product_id || 0);
-        const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
-
-        let selected = false;
-        let unavailable = false;
-        let qtyText = "";
-        let canQtyMinus = false;
-        let canQtyPlus = false;
-        let onQtyMinus = null;
-        let onQtyPlus = null;
-
-        if (groupType === "single") {
-          selected = Number(groupState.selectedId || 0) === itemId;
-          unavailable = !selected && hasOptionProductId && !canApplyDraftMutation(() => {
-            groupState.selectedId = itemId;
-          });
-          if (unavailable) return;
-        } else if (groupType === "multiple_group") {
-          selected = groupState.selectedIds.has(itemId);
-          unavailable = !selected && hasOptionProductId && !canApplyDraftMutation(() => {
-            groupState.selectedIds.add(itemId);
-          });
-          if (unavailable) return;
-        } else if (groupType === "multiple_item") {
-          const itemMin = Number(item.qty_min ?? 1);
-          const itemMax = Number(item.qty_max ?? 1);
-          const currentQty = Number(groupState.qtyById.get(itemId) || 0);
-          selected = currentQty > 0;
-          const canApplyOptionQtyMutation = (nextQty) => {
-            if (!hasOptionProductId) return true;
-            const safeQty = Math.max(0, Number(nextQty || 0));
-            return canApplyDraftMutation(() => {
-              if (safeQty > 0) groupState.qtyById.set(itemId, safeQty);
-              else groupState.qtyById.delete(itemId);
-            });
-          };
-          const targetQty = Math.max(currentQty, itemMin, 1);
-          unavailable = !selected && !canApplyOptionQtyMutation(targetQty);
-          if (unavailable) return;
-          qtyText = currentQty > 0 ? `${currentQty} шт` : "";
-          canQtyMinus = currentQty > itemMin;
-          canQtyPlus = currentQty < itemMax && canApplyOptionQtyMutation(currentQty > 0 ? currentQty + 1 : Math.max(itemMin, 1));
-          onQtyMinus = () => {
-            const current = Number(groupState.qtyById.get(itemId) || 0);
-            const nextQty = Math.max(itemMin, current - 1);
-            groupState.qtyById.set(itemId, nextQty);
-            rerender();
-            notifyChanged();
-          };
-          onQtyPlus = () => {
-            const current = Number(groupState.qtyById.get(itemId) || 0);
-            const nextQty = current > 0 ? Math.min(itemMax, current + 1) : Math.max(itemMin, 1);
-            const applied = runGuardedMutation(() => {
-              groupState.qtyById.set(itemId, nextQty);
-              if (allowVariants && typeof setDefaultVariantForOptionItem === "function") {
-                setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-              }
-            }, { showToastOnOut: true });
-            if (!applied) return;
-            rerender();
-            notifyChanged();
-          };
-        }
-
-        availableCardCount += 1;
-        if (!isExpanded && availableCardCount > 3) return;
-
-        const card = createOptionProductCard({
-          item,
-          groupState,
-          groupType,
-          allowVariants,
-          isSelected: selected,
-          isUnavailable: unavailable,
-          qtyText,
-          selectedQty: groupType === "multiple_item"
-            ? Number(groupState.qtyById.get(itemId) || 0)
-            : (selected ? 1 : 0),
-          canQtyMinus,
-          canQtyPlus,
-          onQtyMinus,
-          onQtyPlus,
-          resetQty: () => {
-            groupState.qtyById.delete(itemId);
-            rerender();
-            notifyChanged();
-          },
-          selectForSpin: () => {
-            if (selected) return true;
-            if (groupType === "single") {
-              groupState.selectedId = itemId;
-              return true;
-            }
-            if (groupType === "multiple_group") {
-              const count = groupState.selectedIds.size;
-              if (maxSelect != null && count >= maxSelect) return false;
-              groupState.selectedIds.add(itemId);
-              return true;
-            }
-            if (groupType === "multiple_item") {
-              const itemMin = Number(item.qty_min ?? 1);
-              groupState.qtyById.set(itemId, Math.max(itemMin, 1));
-              return true;
-            }
-            return true;
-          },
-          onVariantChange: () => {
-            rerender();
-            notifyChanged();
-          },
-          onCardClick: () => {
-            if (groupType === "single") {
-              if (selected && !group?.is_required) {
-                groupState.selectedId = 0;
-              } else if (!selected) {
-                const applied = runGuardedMutation(() => {
-                  groupState.selectedId = itemId;
-                  if (allowVariants && typeof setDefaultVariantForOptionItem === "function") {
-                    setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-                  }
-                }, { showToastOnOut: true });
-                if (!applied) return;
-              }
-            } else if (groupType === "multiple_group") {
-              const count = groupState.selectedIds.size;
-              if (selected) {
-                if (minSelect > 0 && count <= minSelect) return;
-                groupState.selectedIds.delete(itemId);
-              } else {
-                if (maxSelect != null && count >= maxSelect) return;
-                const applied = runGuardedMutation(() => {
-                  groupState.selectedIds.add(itemId);
-                  if (allowVariants && typeof setDefaultVariantForOptionItem === "function") {
-                    setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-                  }
-                }, { showToastOnOut: true });
-                if (!applied) return;
-              }
-            } else if (groupType === "multiple_item") {
-              const current = Number(groupState.qtyById.get(itemId) || 0);
-              const itemMin = Number(item.qty_min ?? 1);
-              const itemMax = Number(item.qty_max ?? 1);
-              const nextQty = current > 0 ? Math.min(itemMax, current + 1) : Math.max(itemMin, 1);
-              if (nextQty <= current) return;
-              const applied = runGuardedMutation(() => {
-                groupState.qtyById.set(itemId, nextQty);
-                if (allowVariants && typeof setDefaultVariantForOptionItem === "function") {
-                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-                }
-              }, { showToastOnOut: true });
-              if (!applied) return;
-            }
-            rerender();
-            notifyChanged();
-          },
-        });
-        itemsWrap.appendChild(card);
-      });
-
-      if (availableCardCount > 3) {
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "shop-pd-option-product-more";
-        toggle.textContent = isExpanded ? "Показать меньше" : "Показать все";
-        toggle.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          expandedOptionGroups.set(groupKey, !isExpanded);
-          rerender();
-        });
-        block.appendChild(toggle);
-      }
-
-      if (append) optionsWrap.appendChild(block);
-      return block;
-    };
-
-    optionGroups.forEach((group) => {
-      const groupState = selectionState.get(group.id);
-      const groupType = groupState?.type || getOptionGroupUiType(group);
-      const titleText = group.title || "Опция";
-      if (renderProductOptionCardsGroup(group, groupState, groupType, titleText)) return;
-
-      if (groupType === "single") {
-        if (
-          group?.is_required &&
-          (!groupState.selectedId || Number(groupState.selectedId) <= 0)
-        ) {
-          const first = (group.items || [])[0];
-          if (first?.id) groupState.selectedId = Number(first.id);
-        }
-
-        const block = document.createElement("div");
-        block.className = "shop-pd-option-accordion";
-
-        const titleRow = document.createElement("div");
-        titleRow.className = "shop-pd-option-summary";
-        titleRow.innerHTML = `<span>${titleText}</span><span></span>`;
-        block.appendChild(titleRow);
-
-        const slotWrap = document.createElement("div");
-        slotWrap.className = "shop-pd-option-cards";
-        block.appendChild(slotWrap);
-
-        const list = document.createElement("div");
-        list.className = "shop-pd-option-cards hidden";
-        block.appendChild(list);
-
-        const findSelected = () =>
-          (group.items || []).find(
-            (it) => Number(it.id) === Number(groupState.selectedId)
-          ) || null;
-
-        const openList = () => {
-          slotWrap.classList.add("hidden");
-          list.classList.remove("hidden");
-          // При раскрытии прокручиваем карточку так, чтобы блок опции оказался под хедером
-          if (block) {
-            if (window.requestAnimationFrame) {
-              requestAnimationFrame(() => smartScrollIntoView(block));
-            } else {
-              smartScrollIntoView(block);
-            }
-          }
-        };
-        const closeList = () => {
-          // Если уже закрыто — ничего не делаем
-          if (list.classList.contains("hidden")) return;
-
-          // Плавно схлопываем список по высоте за 300мс.
-          // Скролл не трогаем — остаёмся на том же месте.
-          slideUp(list, 300, () => {
-            slotWrap.classList.remove("hidden");
-          });
-        };
-
-        function renderSlot() {
-          slotWrap.innerHTML = "";
-          const selected = findSelected();
-          const selectedId = selected ? Number(selected.id) : null;
-          
-          // Варианты выбранной опции
-          const itemVariants = selected && Array.isArray(selected.variants) ? selected.variants : [];
-          const hasVariants = itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
-          
-          // Функция для расчёта цены с учётом варианта
-          const getPriceWithVariant = () => {
-            const basePrice = Number(selected?.price || 0);
-            if (!selectedId) return basePrice;
-            const variantData = groupState.variantByItemId.get(selectedId);
-            if (variantData && Number.isFinite(variantData.variant_price_diff)) {
-              return basePrice + variantData.variant_price_diff;
-            }
-            return basePrice;
-          };
-
-          const card = document.createElement("div");
-          card.className = "shop-pd-option-card is-clickable";
-          card.style.position = "relative";
-          if (hasVariants) {
-            card.classList.add("has-variants");
-          }
-
-          // Основной контент карточки
-          const cardContent = document.createElement("div");
-          cardContent.className = "shop-pd-option-card-content";
-
-          const thumbWrap = document.createElement("div");
-          thumbWrap.className = "shop-pd-option-thumb-wrap";
-          const thumb = document.createElement(
-            selected?.photo ? "img" : "div"
-          );
-          thumb.className = "shop-pd-option-thumb";
-          if (selected?.photo) thumb.src = selected.photo;
-          else thumb.textContent = "—";
-          thumbWrap.appendChild(thumb);
-          if (selected) {
-            decorateOptionItemThumb(thumbWrap, selected, groupState.variantByItemId.get(selectedId));
-          }
-          cardContent.appendChild(thumbWrap);
-
-          const info = document.createElement("div");
-          info.className = "shop-pd-option-info";
-          info.style.flex = "1";
-          info.style.minWidth = "0";
-          
-          // Первая строка: вариант + название
-          const firstLine = document.createElement("div");
-          firstLine.className = "shop-pd-option-name";
-          
-          let variantLabelEl = null;
-          if (selected && hasVariants) {
-            variantLabelEl = document.createElement("span");
-            const savedVariant = groupState.variantByItemId.get(selectedId);
-            if (savedVariant && savedVariant.variant_label) {
-              variantLabelEl.textContent = savedVariant.variant_label + " ";
-            }
-          }
-          
-          const nameEl = document.createElement("span");
-          nameEl.textContent = selected ? str(selected.title) : "Выбрать";
-          
-          if (variantLabelEl && variantLabelEl.textContent) {
-            firstLine.appendChild(variantLabelEl);
-          }
-          firstLine.appendChild(nameEl);
-          info.appendChild(firstLine);
-          
-          // Вторая строка: цена
-          const priceEl = document.createElement("div");
-          priceEl.className = "shop-pd-option-price";
-          if (selected) {
-            renderOptionItemPrice(priceEl, selected, groupState.variantByItemId.get(selectedId));
-          }
-          info.appendChild(priceEl);
-          
-          cardContent.appendChild(info);
-
-          // ВАЖНО: для single шестерёнка НЕ должна быть на выбранной карточке.
-          // Её показываем только внутри списка после "Изменить".
-
-          card.appendChild(cardContent);
-
-          // Кнопка "Изменить" в правом верхнем углу
-          const edit = document.createElement("button");
-          edit.type = "button";
-          edit.className = "shop-pd-option-edit";
-          edit.textContent = "Изменить >";
-          edit.style.cssText = `
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            background: none;
-            border: none;
-            padding: 4px 8px;
-            color: var(--text-muted, #888);
-            font-size: 13px;
-            cursor: pointer;
-            z-index: 10;
-          `;
-          edit.addEventListener("click", (e) => {
-            e.stopPropagation();
-            openList();
-          });
-          card.appendChild(edit);
-          card.addEventListener("click", openList);
-          slotWrap.appendChild(card);
-        }
-
-        // ===== ДОБАВИЛИ "ПУСТУЮ" КАРТОЧКУ ДЛЯ НЕОБЯЗАТЕЛЬНОЙ ОПЦИИ =====
-        if (!group?.is_required) {
-          const emptyCard = document.createElement("div");
-          emptyCard.className = "shop-pd-option-card is-clickable";
-          emptyCard.addEventListener("click", () => {
-            groupState.selectedId = 0; // сброс выбора
-            renderSlot();
-            closeList();
-            refreshNutritionCard();
-            if (onSelectionChange) onSelectionChange();
-          });
-
-          emptyCard.innerHTML = `
-            <div class="shop-pd-option-thumb">—</div>
-            <div class="shop-pd-option-info">
-              <div class="shop-pd-option-name">Не выбирать</div>
-            </div>
-          `;
-          list.appendChild(emptyCard);
-        }
-        // =================================================================
-
-        // Контроллеры аккордеонов вариантов внутри этой группы,
-        // чтобы одновременно был открыт только один.
-        const singleVariantControllers = [];
-
-        (group.items || []).forEach((item) => {
-          const itemId = Number(item.id);
-          const optionProductId = Number(item.target_product_id || 0);
-          const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
-          const isOptionUnavailableNow = () => {
-            if (!hasOptionProductId) return false;
-            const allowed = canApplyDraftMutation(() => {
-              groupState.selectedId = itemId;
-            });
-            return !allowed;
-          };
-          const isSelectedNow = () => Number(groupState.selectedId || 0) === itemId;
-          const shouldHideCardNow = () => !isSelectedNow() && isOptionUnavailableNow();
-          if (shouldHideCardNow()) return;
-          const allowVariants = Boolean(group.allow_variants);
-          const itemVariants = Array.isArray(item.variants) ? item.variants : [];
-          const hasVariants = allowVariants && itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
-
-          const card = document.createElement("div");
-          card.className = "shop-pd-option-card is-clickable";
-          if (hasVariants) card.classList.add("has-variants");
-          const refreshOptionCardState = () => {
-            const isSelected = isSelectedNow();
-            const unavailable = !isSelected && isOptionUnavailableNow();
-            card.classList.toggle("is-unavailable", unavailable);
-            card.style.display = unavailable ? "none" : "";
-          };
-          refreshOptionCardState();
-
-          // content row
-          const row = document.createElement("div");
-          row.className = "shop-pd-option-card-content";
-
-          const thumbWrap = document.createElement("div");
-          thumbWrap.className = "shop-pd-option-thumb-wrap";
-          if (item.photo) {
-            const img = createOptimizedImage(item.photo, {
-              type: 'thumb',
-              className: 'shop-pd-option-thumb',
-              alt: ''
-            });
-            thumbWrap.appendChild(img);
-          } else {
-            const placeholder = document.createElement("div");
-            placeholder.className = "shop-pd-option-thumb";
-            placeholder.textContent = "—";
-            thumbWrap.appendChild(placeholder);
-          }
-          row.appendChild(thumbWrap);
-
-          const infoWrap = document.createElement("div");
-          infoWrap.className = "shop-pd-option-info";
-
-          const nameWrap = document.createElement("div");
-          nameWrap.className = "shop-pd-option-name";
-          nameWrap.textContent = str(item.title);
-          infoWrap.appendChild(nameWrap);
-
-          if (hasVariants) {
-            const variantLabel = document.createElement("div");
-            variantLabel.className = "shop-pd-option-variant-label";
-            variantLabel.style.display = "none";
-            infoWrap.appendChild(variantLabel);
-          }
-
-          const initialPriceEl = document.createElement("div");
-          initialPriceEl.className = "shop-pd-option-price";
-          infoWrap.appendChild(initialPriceEl);
-
-          row.appendChild(infoWrap);
-
-          let variantLabelEl = hasVariants ? row.querySelector(".shop-pd-option-variant-label") : null;
-          const priceEl = row.querySelector(".shop-pd-option-price");
-          if (priceEl) {
-            renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
-          }
-          decorateOptionItemThumb(thumbWrap, item, groupState.variantByItemId.get(itemId));
-          const savedVariant = groupState.variantByItemId.get(itemId);
-          
-          // Автоматически выбираем дефолтный вариант при рендере, если он ещё не выбран
-          if (hasVariants && !savedVariant) {
-            const variantGroup = itemVariants[0];
-            const values = variantGroup.values || [];
-            if (values.length > 0) {
-              const unitLabel = str(
-                variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || ""
-              ).trim();
-              const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
-              const formatValueLabel = (val) => {
-                const valueText = str(val);
-                if (!valueText) return "";
-                if (!unitLabel || hasLetters(valueText)) return valueText;
-                return `${valueText} ${unitLabel}`;
-              };
-              
-              // Определяем дефолтный индекс: сначала из группы, потом первый (0)
-              const defaultIdx = variantGroup.default_value_index != null 
-                ? Number(variantGroup.default_value_index) 
-                : (values.length > 0 ? 0 : null);
-              
-              if (defaultIdx != null && defaultIdx >= 0 && defaultIdx < values.length) {
-                // Рассчитываем цену дефолтного варианта
-                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
-                const priceDiff = unitPrice - Number(item.price || 0);
-                
-                // Сохраняем дефолтный вариант в state
-                groupState.variantByItemId.set(
-                  itemId,
-                  buildOptionItemVariantState(item, variantGroup, defaultIdx, values[defaultIdx])
-                );
-                
-                // Обновляем отображение цены и лейбла варианта
-                if (priceEl) {
-                  renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
-                }
-                decorateOptionItemThumb(thumbWrap, item, groupState.variantByItemId.get(itemId));
-                if (variantLabelEl) {
-                  variantLabelEl.textContent = formatValueLabel(values[defaultIdx]);
-                  variantLabelEl.style.display = "block";
-                }
-              }
-            }
-          } else if (variantLabelEl && savedVariant?.variant_label) {
-            // Если вариант уже выбран, обновляем отображение
-            variantLabelEl.textContent = savedVariant.variant_label;
-            variantLabelEl.style.display = "block";
-            if (priceEl) {
-              renderOptionItemPrice(priceEl, item, savedVariant);
-            }
-            decorateOptionItemThumb(thumbWrap, item, savedVariant);
-          }
-
-          // gear + accordion (only inside list for single)
-          let gearBtn = null;
-          let variantAccordion = null;
-          let accordionOpen = false;
-
-          const setGearState = (open) => {
-            accordionOpen = !!open;
-            if (!gearBtn || !variantAccordion) return;
-            setOptionVariantAccordionState(variantAccordion, accordionOpen);
-            gearBtn.classList.toggle("is-open", accordionOpen);
-          };
-
-          if (hasVariants) {
-            gearBtn = document.createElement("button");
-            gearBtn.type = "button";
-            gearBtn.className = "shop-pd-option-gear-btn";
-            gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-            gearBtn.addEventListener("click", (e) => {
-              e.stopPropagation();
-              if (accordionOpen) {
-                setGearState(false);
-              } else {
-                singleVariantControllers.forEach((ctrl) => {
-                  if (ctrl.itemId !== itemId) ctrl.setOpen(false);
-                });
-                if (typeof setDefaultVariantForOptionItem === "function") {
-                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-                }
-                groupState.selectedId = itemId;
-                refreshNutritionCard();
-                if (typeof onSelectionChange === "function") onSelectionChange();
-                setGearState(true);
-              }
-            });
-
-            variantAccordion = document.createElement("div");
-            variantAccordion.className = "shop-pd-option-variant-accordion";
-
-            const variantScroll = document.createElement("div");
-            variantScroll.className = "shop-pd-option-variant-scroll";
-
-            // Drag-to-scroll
-            let isDown = false;
-            let startX;
-            let scrollLeft;
-            variantScroll.addEventListener("mousedown", (e) => {
-              isDown = true;
-              variantScroll.style.cursor = "grabbing";
-              startX = e.pageX - variantScroll.offsetLeft;
-              scrollLeft = variantScroll.scrollLeft;
-            });
-            variantScroll.addEventListener("mouseleave", () => {
-              isDown = false;
-              variantScroll.style.cursor = "grab";
-            });
-            variantScroll.addEventListener("mouseup", () => {
-              isDown = false;
-              variantScroll.style.cursor = "grab";
-            });
-            variantScroll.addEventListener("mousemove", (e) => {
-              if (!isDown) return;
-              e.preventDefault();
-              const x = e.pageX - variantScroll.offsetLeft;
-              const walk = (x - startX) * 1.5;
-              variantScroll.scrollLeft = scrollLeft - walk;
-            });
-
-            const variantGroup = itemVariants[0];
-            const values = variantGroup.values || [];
-            const unitLabel = str(
-              variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || ""
-            ).trim();
-            const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
-            const formatValueLabel = (val) => {
-              const valueText = str(val);
-              if (!valueText) return "";
-              if (!unitLabel || hasLetters(valueText)) return valueText;
-              return `${valueText} ${unitLabel}`;
-            };
-
-            const currentVariant = groupState.variantByItemId.get(itemId);
-            // Определяем дефолтный индекс: сначала из привязки, потом из группы, потом первый (0)
-            const defaultIdx = variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 
-                              (values.length > 0 ? 0 : null);
-            let selectedIdx = currentVariant?.variant_value_index ?? defaultIdx;
-            
-            // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
-            if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
-              const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
-              const priceDiff = unitPrice - Number(item.price || 0);
-              groupState.variantByItemId.set(
-                itemId,
-                buildOptionItemVariantState(item, variantGroup, defaultIdx, values[defaultIdx])
-              );
-            }
-
-            const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
-              values,
-              getSelectedIndex: () => Number(groupState.variantByItemId.get(itemId)?.variant_value_index),
-              setDraftForIndex: (idx) => {
-                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
-                const priceDiff = unitPrice - Number(item.price || 0);
-                groupState.variantByItemId.set(
-                  itemId,
-                  buildOptionItemVariantState(item, variantGroup, idx, values[idx])
-                );
-              },
-              isOptionItemSelected: () => Number(groupState.selectedId || 0) === itemId,
-            });
-            registerVariantAvailabilityRefresher(optionVariantAvailabilityCtrl.scheduleRefresh);
-
-            values.forEach((value, idx) => {
-              const variantBtn = document.createElement("button");
-              variantBtn.type = "button";
-              variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
-              variantBtn.textContent = formatValueLabel(value);
-              variantBtn.dataset.variantIndex = String(idx);
-              optionVariantAvailabilityCtrl.registerButton(idx, variantBtn);
-              if (selectedIdx === idx) {
-                variantBtn.style.background = "var(--accent-color, #ff7a00)";
-                variantBtn.style.color = "#fff";
-                variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
-              }
-
-              variantBtn.addEventListener("click", async (e) => {
-                e.stopPropagation();
-                if (variantBtn.disabled) return;
-
-                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
-                const priceDiff = unitPrice - Number(item.price || 0);
-                const applied = await runGuardedMutation(() => {
-
-                // 1) Фиксируем выбранный вариант для этой опции
-                groupState.variantByItemId.set(
-                  itemId,
-                  buildOptionItemVariantState(item, variantGroup, idx, value)
-                );
-
-                // 2) Сразу считаем, что выбран именно этот товар-опция
-                //    (последний кликнутый вариант = актуальный выбор группы)
-                groupState.selectedId = itemId;
-                }, { showToastOnOut: true });
-                if (!applied) return;
-
-                // 3) Мгновенно обновляем цену и вариант в карточке списка
-                if (priceEl) {
-                  renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
-                }
-
-                // 4) Перекрашиваем кнопки вариантов в скролле
-                variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
-                  const btnIdx = Number(btn.dataset.variantIndex);
-                  const isSel = btnIdx === idx;
-                  btn.classList.toggle("is-selected", isSel);
-                  if (isSel) {
-                    btn.style.background = "var(--accent-color, #ff7a00)";
-                    btn.style.color = "#fff";
-                    btn.style.borderColor = "var(--accent-color, #ff7a00)";
-                  } else {
-                    btn.style.background = "var(--bg-secondary, #f5f5f5)";
-                    btn.style.color = "var(--text-primary, #333)";
-                    btn.style.borderColor = "var(--border-color, #ddd)";
-                  }
-                  optionVariantAvailabilityCtrl.applyButtonState(btnIdx);
-                });
-
-                // 5) Обновляем подпись варианта в первой строке (вариант + название)
-                if (variantLabelEl) {
-                  variantLabelEl.textContent = formatValueLabel(value) + " ";
-                }
-
-                // 6) Обновляем summary-карточку, чтобы сверху сразу отобразился новый вариант
-                renderSlot();
-
-                // 7) Уведомляем об изменении — пересчёт цены на кнопке "В корзину" и т.п.
-                refreshNutritionCard();
-                if (typeof onSelectionChange === "function") onSelectionChange();
-              });
-
-              variantScroll.appendChild(variantBtn);
-            });
-
-            optionVariantAvailabilityCtrl.scheduleRefresh({ forceNow: true });
-
-            variantAccordion.appendChild(variantScroll);
-            row.appendChild(gearBtn);
-
-            // Регистрируем контроллер для управления открытым аккордеоном
-            singleVariantControllers.push({
-              itemId,
-              setOpen: setGearState,
-            });
-          }
-
-          card.appendChild(row);
-          if (variantAccordion) card.appendChild(variantAccordion);
-
-          // Выбор товара (клик по карточке) — но не по шестерёнке/вариантам
-          card.addEventListener("click", async (e) => {
-            if (e.target.closest(".shop-pd-option-gear-btn") || e.target.closest(".shop-pd-option-variant-accordion")) {
-              return;
-            }
-            if (Number(groupState.selectedId || 0) !== itemId && isOptionUnavailableNow()) {
-              showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-              return;
-            }
-            const applied = runGuardedMutation(() => {
-              groupState.selectedId = itemId;
-              if (hasVariants && typeof setDefaultVariantForOptionItem === "function") {
-                setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-              }
-            }, { showToastOnOut: true });
-            if (!applied) return;
-            renderSlot();
-            closeList();
-            refreshNutritionCard();
-            if (typeof onSelectionChange === "function") onSelectionChange();
-          });
-
-          // Доступность рассчитывается локально в isOptionUnavailableNow()
-
-          list.appendChild(card);
-        });
-
-        renderSlot();
-        optionsWrap.appendChild(block);
-        return;
-      }
-
-      // Обработка типа "multiple_group" - несколько товаров с общим лимитом группы
-      if (groupType === "multiple_group") {
-        const allowVariants = Boolean(group.allow_variants);
-        const block = document.createElement("div");
-        block.className = "shop-pd-option-block";
-
-        const titleRow = document.createElement("div");
-        titleRow.className = "shop-pd-section-title";
-        const minSelect = groupState.minSelect ?? group.min_select ?? 0;
-        const maxSelect = groupState.maxSelect ?? group.max_select ?? null;
-        const limitText = minSelect > 0 || maxSelect != null 
-          ? ` (${minSelect > 0 ? `мин: ${minSelect}` : ""}${minSelect > 0 && maxSelect != null ? ", " : ""}${maxSelect != null ? `макс: ${maxSelect}` : ""})`
-          : "";
-        titleRow.textContent = `${titleText}${limitText}`;
-        block.appendChild(titleRow);
-
-        const itemsWrap = document.createElement("div");
-        itemsWrap.className = "shop-pd-option-cards";
-        block.appendChild(itemsWrap);
-
-        const updateSelectedCount = () => {
-          const selectedCount = groupState.selectedIds.size;
-          const isValid = (minSelect === 0 || selectedCount >= minSelect) && 
-                         (maxSelect == null || selectedCount <= maxSelect);
-          
-          // Обновляем состояние валидности (можно добавить визуальную индикацию)
-          return { count: selectedCount, isValid };
-        };
-
-        // Контроллеры аккордеонов вариантов для multiple_group,
-        // чтобы одновременно был открыт только один.
-        const multiVariantControllers = [];
-
-        (group.items || []).forEach((item) => {
-          const itemId = Number(item.id);
-          const optionProductId = Number(item.target_product_id || 0);
-          const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
-          const isOptionUnavailableNow = () => {
-            if (!hasOptionProductId) return false;
-            const allowed = canApplyDraftMutation(() => {
-              groupState.selectedIds.add(itemId);
-            });
-            return !allowed;
-          };
-          const isSelectedNow = () => groupState.selectedIds.has(itemId);
-          if (!isSelectedNow() && isOptionUnavailableNow()) return;
-          const isSelected = isSelectedNow();
-
-          // Варианты товара-опции
-          const itemVariants = Array.isArray(item.variants) ? item.variants : [];
-          const hasVariants = allowVariants && itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
-
-          const card = document.createElement("div");
-          card.className = `shop-pd-option-card is-clickable ${isSelected ? "is-selected" : ""}`;
-          card.classList.toggle("is-unavailable", !isSelected && isOptionUnavailableNow());
-          if (hasVariants) {
-            card.classList.add("has-variants");
-          }
-          
-          // Функция для расчёта цены с учётом варианта
-          const getPriceWithVariant = () => {
-            const basePrice = Number(item.price || 0);
-            const variantData = groupState.variantByItemId.get(itemId);
-            if (variantData && Number.isFinite(variantData.variant_price_diff)) {
-              return basePrice + variantData.variant_price_diff;
-            }
-            return basePrice;
-          };
-          
-          const checkbox = document.createElement("span");
-          checkbox.className = "shop-pd-option-radio" + (isSelected ? " is-checked" : "");
-          checkbox.checked = isSelected;
-          
-          // Элементы для обновления
-          let priceEl = null;
-          let variantLabelEl = null;
-          
-          const updateCard = () => {
-            const newIsSelected = isSelectedNow();
-            const unavailable = !newIsSelected && isOptionUnavailableNow();
-            card.classList.toggle("is-selected", newIsSelected);
-            card.classList.toggle("is-unavailable", unavailable);
-            card.style.display = unavailable ? "none" : "";
-            checkbox.checked = newIsSelected;
-            checkbox.classList.toggle("is-checked", newIsSelected);
-            if (priceEl) {
-              renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
-            }
-            if (thumbWrap) {
-              decorateOptionItemThumb(thumbWrap, item, groupState.variantByItemId.get(itemId));
-            }
-            if (variantLabelEl) {
-              const variantData = groupState.variantByItemId.get(itemId);
-              if (variantData && variantData.variant_label) {
-                variantLabelEl.textContent = variantData.variant_label + " ";
-              } else {
-                variantLabelEl.textContent = "";
-              }
-            }
-          };
-          
-          // Основной контент карточки
-          const cardContent = document.createElement("div");
-          cardContent.className = "shop-pd-option-card-content";
-
-          // Фото
-          const thumbWrap = document.createElement("div");
-          thumbWrap.className = "shop-pd-option-thumb-wrap";
-          if (item.photo) {
-            const img = createOptimizedImage(item.photo, {
-              type: 'thumb',
-              className: 'shop-pd-option-thumb',
-              alt: ''
-            });
-            thumbWrap.appendChild(img);
-          } else {
-            const placeholder = document.createElement("div");
-            placeholder.className = "shop-pd-option-thumb";
-            placeholder.textContent = "—";
-            thumbWrap.appendChild(placeholder);
-          }
-          decorateOptionItemThumb(thumbWrap, item, groupState.variantByItemId.get(itemId));
-          cardContent.appendChild(thumbWrap);
-
-          // Информация
-          const infoWrap = document.createElement("div");
-          infoWrap.className = "shop-pd-option-info";
-
-          // Первая строка: вариант + название
-          const firstLine = document.createElement("div");
-          firstLine.className = "shop-pd-option-name";
-          
-          if (hasVariants) {
-            variantLabelEl = document.createElement("span");
-            const savedVariant = groupState.variantByItemId.get(itemId);
-            if (savedVariant && savedVariant.variant_label) {
-              variantLabelEl.textContent = savedVariant.variant_label + " ";
-            }
-          }
-          
-          const nameEl = document.createElement("span");
-          nameEl.textContent = str(item.title);
-          
-          if (variantLabelEl && variantLabelEl.textContent) {
-            firstLine.appendChild(variantLabelEl);
-          }
-          firstLine.appendChild(nameEl);
-          infoWrap.appendChild(firstLine);
-
-          // Вторая строка: цена
-          priceEl = document.createElement("div");
-          priceEl.className = "shop-pd-option-price";
-          renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
-          infoWrap.appendChild(priceEl);
-
-          cardContent.appendChild(infoWrap);
-
-          // Шестерёнка для вариантов
-          let gearBtn = null;
-          let variantAccordion = null;
-          
-          if (hasVariants) {
-            gearBtn = document.createElement("button");
-            gearBtn.type = "button";
-            gearBtn.className = "shop-pd-option-gear-btn";
-            gearBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-            cardContent.appendChild(gearBtn);
-            cardContent.appendChild(checkbox);
-
-            // Аккордеон с вариантами
-            variantAccordion = document.createElement("div");
-            variantAccordion.className = "shop-pd-option-variant-accordion";
-
-            const variantScroll = document.createElement("div");
-            variantScroll.className = "shop-pd-option-variant-scroll";
-
-            // Drag-to-scroll
-            let isDown = false;
-            let startX;
-            let scrollLeft;
-            variantScroll.addEventListener("mousedown", (e) => {
-              isDown = true;
-              variantScroll.style.cursor = "grabbing";
-              startX = e.pageX - variantScroll.offsetLeft;
-              scrollLeft = variantScroll.scrollLeft;
-            });
-            variantScroll.addEventListener("mouseleave", () => {
-              isDown = false;
-              variantScroll.style.cursor = "grab";
-            });
-            variantScroll.addEventListener("mouseup", () => {
-              isDown = false;
-              variantScroll.style.cursor = "grab";
-            });
-            variantScroll.addEventListener("mousemove", (e) => {
-              if (!isDown) return;
-              e.preventDefault();
-              const x = e.pageX - variantScroll.offsetLeft;
-              const walk = (x - startX) * 1.5;
-              variantScroll.scrollLeft = scrollLeft - walk;
-            });
-
-            const variantGroup = itemVariants[0];
-            const values = variantGroup.values || [];
-            const unitLabel = str(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || "").trim();
-            
-            const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
-            const formatValueLabel = (val) => {
-              const valueText = str(val);
-              if (!valueText) return "";
-              if (!unitLabel || hasLetters(valueText)) return valueText;
-              return `${valueText} ${unitLabel}`;
-            };
-
-            const currentVariant = groupState.variantByItemId.get(itemId);
-            // Определяем дефолтный индекс: сначала из привязки, потом из группы, потом первый (0)
-            const defaultIdx = variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 
-                              (values.length > 0 ? 0 : null);
-            let selectedIdx = currentVariant?.variant_value_index ?? defaultIdx;
-            
-            // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
-            if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
-              const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
-              const priceDiff = unitPrice - Number(item.price || 0);
-              groupState.variantByItemId.set(
-                itemId,
-                buildOptionItemVariantState(item, variantGroup, defaultIdx, values[defaultIdx])
-              );
-            }
-
-            const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
-              values,
-              getSelectedIndex: () => Number(groupState.variantByItemId.get(itemId)?.variant_value_index),
-              setDraftForIndex: (idx) => {
-                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
-                const priceDiff = unitPrice - Number(item.price || 0);
-                groupState.variantByItemId.set(
-                  itemId,
-                  buildOptionItemVariantState(item, variantGroup, idx, values[idx])
-                );
-              },
-              isOptionItemSelected: () => groupState.selectedIds.has(itemId),
-            });
-            registerVariantAvailabilityRefresher(optionVariantAvailabilityCtrl.scheduleRefresh);
-
-            values.forEach((value, idx) => {
-              const variantBtn = document.createElement("button");
-              variantBtn.type = "button";
-              variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
-              variantBtn.textContent = formatValueLabel(value);
-              variantBtn.dataset.variantIndex = String(idx);
-              optionVariantAvailabilityCtrl.registerButton(idx, variantBtn);
-
-              variantBtn.addEventListener("click", async (e) => {
-                e.stopPropagation();
-                if (variantBtn.disabled) return;
-                
-                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
-                const priceDiff = unitPrice - Number(item.price || 0);
-                const applyVariantChange = () => {
-                  groupState.variantByItemId.set(
-                    itemId,
-                    buildOptionItemVariantState(item, variantGroup, idx, value)
-                  );
-                };
-                if (groupState.selectedIds.has(itemId)) {
-                  const applied = await runGuardedMutation(applyVariantChange, {
-                    showToastOnOut: true,
-                  });
-                  if (!applied) return;
-                } else {
-                  applyVariantChange();
-                }
-
-                variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
-                  const btnIdx = Number(btn.dataset.variantIndex);
-                  btn.classList.toggle("is-selected", btnIdx === idx);
-                  optionVariantAvailabilityCtrl.applyButtonState(btnIdx);
-                });
-
-                updateCard();
-                refreshNutritionCard();
-                if (onSelectionChange) onSelectionChange();
-              });
-
-              variantScroll.appendChild(variantBtn);
-            });
-
-            optionVariantAvailabilityCtrl.scheduleRefresh({ forceNow: true });
-
-            variantAccordion.appendChild(variantScroll);
-
-            let accordionOpen = false;
-            gearBtn.addEventListener("click", (e) => {
-              e.stopPropagation();
-              accordionOpen = !accordionOpen;
-              if (accordionOpen) {
-                // Перед открытием закрываем другие аккордеоны в группе
-                multiVariantControllers.forEach((ctrl) => {
-                  if (ctrl.itemId !== itemId) ctrl.close();
-                });
-                // Дефолтный подсвеченный вариант
-                if (typeof setDefaultVariantForOptionItem === "function") {
-                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-                }
-                setOptionVariantAccordionState(variantAccordion, true);
-                gearBtn.classList.add("is-open");
-                updateCard();
-                refreshNutritionCard();
-                if (typeof onSelectionChange === "function") onSelectionChange();
-              } else {
-                setOptionVariantAccordionState(variantAccordion, false);
-                gearBtn.classList.remove("is-open");
-              }
-            });
-
-            // Регистрируем контроллер, чтобы можно было закрыть этот аккордеон при открытии другого
-            multiVariantControllers.push({
-              itemId,
-              close: () => {
-                accordionOpen = false;
-                setOptionVariantAccordionState(variantAccordion, false);
-                gearBtn.classList.remove("is-open");
-              },
-            });
-          }
-
-          // Если нет вариантов — чекбокс добавляем после инфо (справа)
-          if (!hasVariants) {
-            cardContent.appendChild(checkbox);
-          }
-
-          card.appendChild(cardContent);
-
-          if (variantAccordion) {
-            card.appendChild(variantAccordion);
-          }
-
-          card.addEventListener("click", async (e) => {
-            // Не переключаем если кликнули на шестерёнку или вариант
-            if (e.target.closest(".shop-pd-option-gear-btn") || e.target.closest(".shop-pd-option-variant-accordion")) {
-              return;
-            }
-
-            const { count } = updateSelectedCount();
-            const currentlySelected = groupState.selectedIds.has(itemId);
-            const maxReached = maxSelect != null && count >= maxSelect && !currentlySelected;
-            
-            if (maxReached) {
-              return;
-            }
-
-            if (currentlySelected) {
-              groupState.selectedIds.delete(itemId);
-            } else {
-              if (isOptionUnavailableNow()) {
-                showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-                return;
-              }
-              const applied = runGuardedMutation(() => {
-                groupState.selectedIds.add(itemId);
-                if (hasVariants && typeof setDefaultVariantForOptionItem === "function") {
-                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-                }
-              }, { showToastOnOut: true });
-              if (!applied) return;
-            }
-
-            updateCard();
-            refreshNutritionCard();
-            if (onSelectionChange) onSelectionChange();
-          });
-          
-          itemsWrap.appendChild(card);
-
-        });
-
-        optionsWrap.appendChild(block);
-        return;
-      }
-
-      // Обработка типа "multiple_item" - несколько товаров с индивидуальными лимитами
-      if (groupType === "multiple_item") {
-        const allowVariants = Boolean(group.allow_variants);
-        const block = document.createElement("div");
-        block.className = "shop-pd-option-block";
-
-        const titleRow = document.createElement("div");
-        titleRow.className = "shop-pd-section-title";
-        titleRow.textContent = titleText;
-        block.appendChild(titleRow);
-
-        const itemsWrap = document.createElement("div");
-        itemsWrap.className = "shop-pd-option-cards";
-        block.appendChild(itemsWrap);
-
-        (group.items || []).forEach((item) => {
-          const itemId = Number(item.id);
-          const optionProductId = Number(item.target_product_id || 0);
-          const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
-          const itemMin = item.qty_min ?? 1;
-          const itemMax = item.qty_max ?? 1;
-          const canApplyOptionQtyMutation = (nextQty) => {
-            if (!hasOptionProductId) return true;
-            const safeQty = Math.max(0, Number(nextQty || 0));
-            return canApplyDraftMutation(() => {
-              if (safeQty > 0) groupState.qtyById.set(itemId, safeQty);
-              else groupState.qtyById.delete(itemId);
-            });
-          };
-          const isOptionUnavailableNow = () => {
-            const currentOptQty = groupState.qtyById.get(itemId) || 0;
-            const targetQty = Math.max(currentOptQty, 1);
-            return !canApplyOptionQtyMutation(targetQty);
-          };
-          const isOptionUnavailableForPlus = () => {
-            const currentOptQty = groupState.qtyById.get(itemId) || 0;
-            const nextQty = currentOptQty === 0
-              ? Math.max(itemMin, 1)
-              : Math.min(itemMax, currentOptQty + 1);
-            if (nextQty <= currentOptQty) return false;
-            return !canApplyOptionQtyMutation(nextQty);
-          };
-          const isSelectedNow = () => (Number(groupState.qtyById.get(itemId)) || 0) > 0;
-          if (!isSelectedNow() && isOptionUnavailableNow()) return;
-          // Текущее количество из state
-          const currentQty = groupState.qtyById.get(itemId) || 0;
-          const isSelected = currentQty > 0;
-          
-          // Варианты товара-опции
-          const itemVariants = Array.isArray(item.variants) ? item.variants : [];
-          const hasVariants = allowVariants && itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
-
-          const card = document.createElement("div");
-          card.className = `shop-pd-option-card ${isSelected ? "is-selected" : ""}`;
-          card.classList.toggle("is-unavailable", !isSelected && isOptionUnavailableNow());
-
-          const qtyControls = document.createElement("div");
-          qtyControls.className = "shop-pd-option-qty-controls";
-          qtyControls.style.display = "flex";
-          qtyControls.style.gap = "8px";
-          qtyControls.style.alignItems = "center";
-          qtyControls.style.marginLeft = "auto";
-
-          const btnMinus = document.createElement("button");
-          btnMinus.type = "button";
-          btnMinus.className = "btn btn-sm shop-pd-option-qty-btn";
-          btnMinus.textContent = "−";
-          // Кнопка "-" отключена если qty <= itemMin (обязательные опции нельзя убрать)
-          btnMinus.disabled = currentQty <= itemMin;
-          btnMinus.addEventListener("click", (e) => {
-            e.stopPropagation();
-            const current = groupState.qtyById.get(itemId) || 0;
-            // Уменьшаем, но не ниже itemMin
-            const newQty = Math.max(itemMin, current - 1);
-            if (newQty > 0) {
-              groupState.qtyById.set(itemId, newQty);
-              if (hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-            } else {
-              groupState.qtyById.delete(itemId);
-            }
-            updateItemCard();
-            refreshNutritionCard();
-            if (onSelectionChange) onSelectionChange();
-          });
-
-          const qtyDisplay = document.createElement("span");
-          qtyDisplay.style.minWidth = "24px";
-          qtyDisplay.style.textAlign = "center";
-          qtyDisplay.textContent = String(currentQty);
-
-          const btnPlus = document.createElement("button");
-          btnPlus.type = "button";
-          btnPlus.className = "btn btn-sm shop-pd-option-qty-btn";
-          btnPlus.textContent = "+";
-          btnPlus.disabled = currentQty >= itemMax || isOptionUnavailableForPlus();
-
-          const bindPressFx = (btn) => {
-            if (!btn) return;
-            const pressOn = () => {
-              if (btn.disabled) return;
-              btn.classList.add("is-pressed");
-            };
-            const pressOff = () => btn.classList.remove("is-pressed");
-            btn.addEventListener("pointerdown", pressOn);
-            btn.addEventListener("pointerup", pressOff);
-            btn.addEventListener("pointercancel", pressOff);
-            btn.addEventListener("pointerleave", pressOff);
-            btn.addEventListener("blur", pressOff);
-          };
-          bindPressFx(btnMinus);
-          bindPressFx(btnPlus);
-          btnPlus.addEventListener("click", (e) => {
-            e.stopPropagation();
-            if (isOptionUnavailableForPlus()) {
-              btnPlus.disabled = true;
-              showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-              return;
-            }
-            const current = groupState.qtyById.get(itemId) || 0;
-            let newQty;
-            if (current === 0) {
-              newQty = Math.max(itemMin, 1);
-            } else {
-              newQty = Math.min(itemMax, current + 1);
-            }
-            const applied = runGuardedMutation(() => {
-              groupState.qtyById.set(itemId, newQty);
-              if (newQty > 0 && hasVariants && typeof setDefaultVariantForOptionItem === "function") {
-                setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-              }
-            }, { showToastOnOut: true });
-            if (!applied) {
-              btnPlus.disabled = true;
-              return;
-            }
-            updateItemCard();
-            refreshNutritionCard();
-            if (onSelectionChange) onSelectionChange();
-          });
-
-          qtyControls.appendChild(btnMinus);
-          qtyControls.appendChild(qtyDisplay);
-          qtyControls.appendChild(btnPlus);
-
-          // Функция для расчёта цены опции с учётом варианта
-          const getItemPriceWithVariant = () => {
-            const basePrice = Number(item.price || 0);
-            const variantData = groupState.variantByItemId.get(itemId);
-            if (variantData && Number.isFinite(variantData.variant_price_diff)) {
-              return basePrice + variantData.variant_price_diff;
-            }
-            return basePrice;
-          };
-
-          // Элемент для отображения выбранного варианта
-          let variantLabelEl = null;
-          let priceEl = null;
-          let _optionVariantCtrl = null;
-
-          const updateItemCard = () => {
-            const newQty = groupState.qtyById.get(itemId) || 0;
-            const newIsSelected = newQty > 0;
-            const unavailable = !newIsSelected && isOptionUnavailableNow();
-            card.classList.toggle("is-selected", newIsSelected);
-            card.classList.toggle("is-unavailable", unavailable);
-            card.style.display = unavailable ? "none" : "";
-            qtyDisplay.textContent = String(newQty);
-            // Кнопка "-" отключена если qty <= itemMin (обязательные опции нельзя убрать)
-            btnMinus.disabled = newQty <= itemMin;
-            btnPlus.disabled = newQty >= itemMax || isOptionUnavailableForPlus();
-
-            // Обновляем цену с учётом варианта
-            if (priceEl) {
-              renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
-            }
-
-            // Обновляем отображение выбранного варианта
-            if (variantLabelEl) {
-              const variantData = groupState.variantByItemId.get(itemId);
-              if (variantData && variantData.variant_label) {
-                variantLabelEl.textContent = variantData.variant_label + " ";
-              } else {
-                variantLabelEl.textContent = "";
-              }
-            }
-
-            // Обновляем доступность вариантов при изменении qty
-            if (_optionVariantCtrl) {
-              _optionVariantCtrl.scheduleRefresh();
-            }
-          };
-
-          // Создаём основной контент карточки
-          const cardContent = document.createElement("div");
-          cardContent.className = "shop-pd-option-card-content";
-          cardContent.style.display = "flex";
-          cardContent.style.alignItems = "center";
-          cardContent.style.width = "100%";
-          cardContent.style.gap = "8px";
-
-          // Фото
-          if (item.photo) {
-            const img = createOptimizedImage(item.photo, {
-              type: 'thumb',
-              className: 'shop-pd-option-thumb',
-              alt: ''
-            });
-            cardContent.appendChild(img);
-          } else {
-            const placeholder = document.createElement("div");
-            placeholder.className = "shop-pd-option-thumb";
-            placeholder.textContent = "—";
-            cardContent.appendChild(placeholder);
-          }
-
-          // Информация (название, вариант, цена)
-          const infoWrap = document.createElement("div");
-          infoWrap.className = "shop-pd-option-info";
-
-          // Первая строка: вариант + название
-          const firstLine = document.createElement("div");
-          firstLine.className = "shop-pd-option-name";
-          
-          variantLabelEl = document.createElement("span");
-          variantLabelEl.style.fontSize = "inherit";
-          variantLabelEl.style.fontWeight = "inherit";
-          variantLabelEl.style.color = "inherit";
-          const savedVariant = groupState.variantByItemId.get(itemId);
-          if (savedVariant && savedVariant.variant_label) {
-            variantLabelEl.textContent = savedVariant.variant_label + " ";
-          }
-          
-          const nameEl = document.createElement("span");
-          nameEl.textContent = str(item.title);
-          
-          if (variantLabelEl.textContent) {
-            firstLine.appendChild(variantLabelEl);
-          }
-          firstLine.appendChild(nameEl);
-          infoWrap.appendChild(firstLine);
-
-          // Вторая строка: цена
-          priceEl = document.createElement("div");
-          priceEl.className = "shop-pd-option-price";
-          renderOptionItemPrice(priceEl, item, groupState.variantByItemId.get(itemId));
-          infoWrap.appendChild(priceEl);
-
-          cardContent.appendChild(infoWrap);
-
-          // Шестерёнка для вариантов (если есть варианты)
-          let gearBtn = null;
-          let variantAccordion = null;
-          
-          if (hasVariants) {
-            gearBtn = document.createElement("button");
-            gearBtn.type = "button";
-            gearBtn.className = "shop-pd-option-gear-btn";
-            gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-
-            // Аккордеон с вариантами
-            variantAccordion = document.createElement("div");
-            variantAccordion.className = "shop-pd-option-variant-accordion";
-
-            const variantScroll = document.createElement("div");
-            variantScroll.className = "shop-pd-option-variant-scroll";
-
-            // Drag-to-scroll для мыши
-            let isDown = false;
-            let startX;
-            let scrollLeft;
-            variantScroll.addEventListener("mousedown", (e) => {
-              isDown = true;
-              variantScroll.style.cursor = "grabbing";
-              startX = e.pageX - variantScroll.offsetLeft;
-              scrollLeft = variantScroll.scrollLeft;
-            });
-            variantScroll.addEventListener("mouseleave", () => {
-              isDown = false;
-              variantScroll.style.cursor = "grab";
-            });
-            variantScroll.addEventListener("mouseup", () => {
-              isDown = false;
-              variantScroll.style.cursor = "grab";
-            });
-            variantScroll.addEventListener("mousemove", (e) => {
-              if (!isDown) return;
-              e.preventDefault();
-              const x = e.pageX - variantScroll.offsetLeft;
-              const walk = (x - startX) * 1.5;
-              variantScroll.scrollLeft = scrollLeft - walk;
-            });
-
-            // Рендерим варианты (берём первую группу)
-            const variantGroup = itemVariants[0];
-            const values = variantGroup.values || [];
-            const unitLabel = str(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || "").trim();
-            
-            const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
-            const formatValueLabel = (val) => {
-              const valueText = str(val);
-              if (!valueText) return "";
-              if (!unitLabel || hasLetters(valueText)) return valueText;
-              return `${valueText} ${unitLabel}`;
-            };
-
-            // Текущий выбранный индекс
-            const currentVariant = groupState.variantByItemId.get(itemId);
-            // Определяем дефолтный индекс: сначала из привязки, потом из группы, потом первый (0)
-            const defaultIdx = variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 
-                              (values.length > 0 ? 0 : null);
-            let selectedIdx = currentVariant?.variant_value_index ?? defaultIdx;
-            
-            // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
-            if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
-              const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
-              const priceDiff = unitPrice - Number(item.price || 0);
-              groupState.variantByItemId.set(
-                itemId,
-                buildOptionItemVariantState(item, variantGroup, defaultIdx, values[defaultIdx])
-              );
-            }
-
-            const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
-              values,
-              getSelectedIndex: () => Number(groupState.variantByItemId.get(itemId)?.variant_value_index),
-              setDraftForIndex: (idx) => {
-                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
-                const priceDiff = unitPrice - Number(item.price || 0);
-                groupState.variantByItemId.set(
-                  itemId,
-                  buildOptionItemVariantState(item, variantGroup, idx, values[idx])
-                );
-              },
-              isOptionItemSelected: () => (Number(groupState.qtyById.get(itemId)) || 0) > 0,
-            });
-            _optionVariantCtrl = optionVariantAvailabilityCtrl;
-            registerVariantAvailabilityRefresher(optionVariantAvailabilityCtrl.scheduleRefresh);
-
-            values.forEach((value, idx) => {
-              const variantBtn = document.createElement("button");
-              variantBtn.type = "button";
-              variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
-              variantBtn.textContent = formatValueLabel(value);
-              variantBtn.dataset.variantIndex = String(idx);
-              optionVariantAvailabilityCtrl.registerButton(idx, variantBtn);
-
-              variantBtn.addEventListener("click", async (e) => {
-                e.stopPropagation();
-                if (variantBtn.disabled) return;
-
-                // Обновляем выбранный вариант в state
-                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
-                const priceDiff = unitPrice - Number(item.price || 0);
-
-                const applyVariantChange = () => {
-                  groupState.variantByItemId.set(
-                    itemId,
-                    buildOptionItemVariantState(item, variantGroup, idx, value)
-                  );
-                };
-                if ((Number(groupState.qtyById.get(itemId)) || 0) > 0) {
-                  const applied = await runGuardedMutation(applyVariantChange, {
-                    showToastOnOut: true,
-                  });
-                  if (!applied) return;
-                } else {
-                  applyVariantChange();
-                }
-
-                // Обновляем UI всех кнопок вариантов
-                variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
-                  const btnIdx = Number(btn.dataset.variantIndex);
-                  btn.classList.toggle("is-selected", btnIdx === idx);
-                  optionVariantAvailabilityCtrl.applyButtonState(btnIdx);
-                });
-
-                // Обновляем карточку (цена, лейбл варианта)
-                updateItemCard();
-                refreshNutritionCard();
-                if (onSelectionChange) onSelectionChange();
-              });
-
-              variantScroll.appendChild(variantBtn);
-            });
-
-            optionVariantAvailabilityCtrl.scheduleRefresh({ forceNow: true });
-
-            variantAccordion.appendChild(variantScroll);
-
-            let accordionOpen = false;
-            gearBtn.addEventListener("click", (e) => {
-              e.stopPropagation();
-              accordionOpen = !accordionOpen;
-              if (accordionOpen) {
-                if (typeof setDefaultVariantForOptionItem === "function") {
-                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-                }
-                refreshNutritionCard();
-                if (typeof onSelectionChange === "function") onSelectionChange();
-              }
-              setOptionVariantAccordionState(variantAccordion, accordionOpen);
-              gearBtn.classList.toggle("is-open", accordionOpen);
-            });
-
-            cardContent.appendChild(gearBtn);
-          }
-
-          cardContent.appendChild(qtyControls);
-          card.appendChild(cardContent);
-          
-          // Добавляем аккордеон после основного контента
-          if (variantAccordion) {
-            card.appendChild(variantAccordion);
-          }
-
-          if (hasVariants) {
-            card.classList.add("has-variants");
-          }
-
-          itemsWrap.appendChild(card);
-
-        });
-
-        optionsWrap.appendChild(block);
-        return;
-      }
-    });
-
-  }
-
-  /* ================= INGREDIENTS ================= */
-  if (ingredients && ingredients.length > 0) {
-    const ingredientsWrap = document.createElement("div");
-    ingredientsWrap.className = "shop-pd-ingredients";
-
-    const title = document.createElement("div");
-    title.className = "shop-pd-section-title shop-pd-ingredient-title";
-    title.textContent = "Состав товара:";
-    ingredientsWrap.appendChild(title);
-
-    const ingredientsCards = document.createElement("div");
-    ingredientsCards.className = "shop-pd-ingredient-cards";
-    ingredientsWrap.appendChild(ingredientsCards);
-
-    ingredients.forEach((ing) => {
-      const ingId = Number(ing.ingredient_id);
-      const hasIngredientProductId = Number.isFinite(ingId) && ingId > 0;
-      const isIngUnavailableForPlus = () => {
-        if (!hasIngredientProductId) return false;
-        const currentIngQty = Number(ingredientState?.get(ingId)?.quantity ?? ing.quantity ?? 1);
-        const step = Number(ing.quantity_step || 1) || 1;
-        const nextQty = currentIngQty + step;
-        const allowed = canApplyDraftMutation(() => {
-          const stateEntry = ingredientState.get(ingId);
-          const nextState = stateEntry && typeof stateEntry === "object"
-            ? { ...stateEntry, quantity: nextQty }
-            : { quantity: nextQty };
-          ingredientState.set(ingId, nextState);
-        });
-        return !allowed;
-      };
-      const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
-      const state = (() => {
-        const entry = ingredientState?.get(ingId);
-        if (entry && typeof entry === "object") return { ...entry };
-        return {
-        quantity: Number(ing.quantity ?? 1),
-        };
-      })();
-
-      // Получаем min/max/step из данных ингредиента (для переменного: null/не число min = 0, иначе defaultQty)
-      const defaultQty = Number(ing.quantity ?? 1);
-      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
-      const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
-      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
-      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-      
-      // Начальное количество: берем из state или из ing.quantity, затем ограничиваем и округляем до шага
-      let initialQty = isVariable ? (state.quantity ?? defaultQty) : defaultQty;
-      initialQty = Math.max(min, Math.min(max, initialQty));
-      
-      // Округляем до шага при инициализации (относительно min)
-      let currentQty = initialQty;
-      if (step > 0) {
-        // Формула: min + round((value - min) / step) * step
-        const stepsFromMin = Math.round((initialQty - min) / step);
-        currentQty = min + (stepsFromMin * step);
-        // Убеждаемся, что после округления значение все еще в пределах min/max
-        currentQty = Math.max(min, Math.min(max, currentQty));
-      }
-      
-      // Сохраняем округленное значение в state
-      state.quantity = currentQty;
-      ingredientState?.set(ingId, state);
-      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
-      
-      const block = document.createElement("div");
-      block.className = "shop-pd-option-card shop-pd-ingredient-card";
-      block.setAttribute("data-ingredient-id", ingId);
-
-      const cardContent = document.createElement("div");
-      cardContent.className = "shop-pd-option-card-content shop-pd-ingredient-card-content";
-
-      const photo = document.createElement("div");
-      photo.className = "shop-pd-option-thumb shop-pd-ingredient-photo";
-      if (ing.ingredient_photos && ing.ingredient_photos.length > 0) {
-        const img = createOptimizedImage(ing.ingredient_photos[0], {
-          type: 'thumb',
-          className: '',
-          alt: ''
-        });
-        photo.appendChild(img);
-      } else {
-        photo.textContent = "—";
-      }
-
-      const info = document.createElement("div");
-      info.className = "shop-pd-option-info shop-pd-ingredient-info";
-
-      const name = document.createElement("div");
-      name.className = "shop-pd-option-name shop-pd-ingredient-name";
-      name.textContent = ing.ingredient_name || "";
-
-      const qtyDisplay = document.createElement("div");
-      qtyDisplay.className = "shop-pd-ingredient-qty-value";
-      qtyDisplay.textContent = `${currentQty} ${unitLabel}`.trim();
-      const createIngredientQtyPlaceholder = (side) => {
-        const placeholder = document.createElement("span");
-        placeholder.className = `shop-pd-ingredient-qty-placeholder shop-pd-ingredient-qty-placeholder--${side}`;
-        placeholder.setAttribute("aria-hidden", "true");
-        return placeholder;
-      };
-
-      if (isVariable) {
-        const controls = document.createElement("div");
-        controls.className = "shop-pd-ingredient-controls";
-        const canMinus = currentQty > min;
-        const canPlus = currentQty < max && !isIngUnavailableForPlus();
-
-        let btnMinus = null;
-        if (canMinus) {
-          btnMinus = document.createElement("button");
-          btnMinus.type = "button";
-          btnMinus.className = "shop-pd-ingredient-qty-btn shop-pd-ingredient-qty-btn--minus";
-          btnMinus.setAttribute("data-action", "ingredient-minus");
-          btnMinus.textContent = "−";
-        }
-
-        let btnPlus = null;
-        if (canPlus) {
-          btnPlus = document.createElement("button");
-          btnPlus.type = "button";
-          btnPlus.className = "shop-pd-ingredient-qty-btn shop-pd-ingredient-qty-btn--plus";
-          btnPlus.setAttribute("data-action", "ingredient-plus");
-          btnPlus.textContent = "+";
-        }
-
-        const bindPressFx = (btn) => {
-          if (!btn) return;
-          const pressOn = () => {
-            if (btn.disabled) return;
-            btn.classList.add("is-pressed");
-          };
-          const pressOff = () => btn.classList.remove("is-pressed");
-          btn.addEventListener("pointerdown", pressOn);
-          btn.addEventListener("pointerup", pressOff);
-          btn.addEventListener("pointercancel", pressOff);
-          btn.addEventListener("pointerleave", pressOff);
-          btn.addEventListener("blur", pressOff);
-        };
-        bindPressFx(btnMinus);
-        bindPressFx(btnPlus);
-
-        controls.appendChild(btnMinus || createIngredientQtyPlaceholder("minus"));
-        controls.appendChild(qtyDisplay);
-        controls.appendChild(btnPlus || createIngredientQtyPlaceholder("plus"));
-
-        info.appendChild(name);
-        info.appendChild(controls);
-        
-        cardContent.appendChild(photo);
-        cardContent.appendChild(info);
-
-        // Handlers: минус — вычитаем шаг, округляем до шага от min, ограничиваем min..max
-        if (btnMinus) btnMinus.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
-          let newQty = currentStateQty - step;
-          // Для переменного: если после вычитания получилось ≤0 — разрешаем 0 (на случай если min в данных не 0)
-          if (isVariable && newQty <= 0) {
-            newQty = 0;
-          } else {
-            if (step > 0) {
-              const stepsFromMin = Math.round((newQty - min) / step);
-              newQty = min + (stepsFromMin * step);
-            }
-            newQty = Math.max(min, Math.min(max, newQty));
-          }
-          if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
-            const prevState = ingredientState?.get(ingId);
-            const nextState = prevState && typeof prevState === "object"
-              ? { ...prevState, quantity: newQty }
-              : { quantity: newQty };
-            ingredientState?.set(ingId, nextState);
-            refreshNutritionCard();
-            onIngredientChange();
-          }
-        });
-
-        if (btnPlus) btnPlus.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (isIngUnavailableForPlus()) {
-            showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-            return;
-          }
-          const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
-          let newQty = currentStateQty + step;
-          if (step > 0) {
-            const stepsFromMin = Math.round((newQty - min) / step);
-            newQty = min + (stepsFromMin * step);
-          }
-          newQty = Math.max(min, Math.min(max, newQty));
-          if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
-            const applied = runGuardedMutation(() => {
-              const prevState = ingredientState?.get(ingId);
-              const nextState = prevState && typeof prevState === "object"
-                ? { ...prevState, quantity: newQty }
-                : { quantity: newQty };
-              ingredientState?.set(ingId, nextState);
-            }, { showToastOnOut: true });
-            if (!applied) {
-              return;
-            }
-            refreshNutritionCard();
-            onIngredientChange();
-          }
-        });
-
-      } else {
-        const controls = document.createElement("div");
-        controls.className = "shop-pd-ingredient-controls shop-pd-ingredient-controls--fixed";
-        controls.appendChild(qtyDisplay);
-
-        info.appendChild(name);
-        info.appendChild(controls);
-        
-        cardContent.appendChild(photo);
-        cardContent.appendChild(info);
-      }
-
-      block.appendChild(cardContent);
-
-      ingredientsCards.appendChild(block);
-    });
-
-    ingredientsCards.addEventListener("click", (e) => {
-      const btn = e.target && e.target.closest
-        ? e.target.closest('[data-action="ingredient-minus"], [data-action="ingredient-plus"]')
-        : null;
-      if (!btn || !ingredientsCards.contains(btn)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
-
-      const block = btn.closest("[data-ingredient-id]");
-      const ingId = Number(block?.getAttribute("data-ingredient-id") || 0);
-      if (!Number.isFinite(ingId) || ingId <= 0) return;
-      const ing = ingredients.find((item) => Number(item?.ingredient_id || 0) === ingId);
-      if (!ing) return;
-
-      const isVariableIng = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
-      if (!isVariableIng) return;
-
-      const defaultQty = Number(ing.quantity ?? 1);
-      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
-      const min = rawMin !== null ? rawMin : 0;
-      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
-      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-      const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? defaultQty);
-      const isPlus = btn.getAttribute("data-action") === "ingredient-plus";
-
-      let newQty = currentStateQty + (isPlus ? step : -step);
-      if (!isPlus && newQty <= 0) {
-        newQty = 0;
-      } else {
-        if (step > 0) {
-          const stepsFromMin = Math.round((newQty - min) / step);
-          newQty = min + (stepsFromMin * step);
-        }
-        newQty = Math.max(min, Math.min(max, newQty));
-      }
-      if (newQty === currentStateQty) return;
-
-      const applyNextQty = () => {
-        const prevState = ingredientState?.get(ingId);
-        const nextState = prevState && typeof prevState === "object"
-          ? { ...prevState, quantity: newQty }
-          : { quantity: newQty };
-        ingredientState?.set(ingId, nextState);
-      };
-
-      if (isPlus) {
-        const applied = runGuardedMutation(applyNextQty, { showToastOnOut: true });
-        if (!applied) return;
-      } else {
-        applyNextQty();
-      }
-
-      refreshNutritionCard();
-      if (typeof onIngredientChange === "function") onIngredientChange();
-    }, true);
-
-    scroll.appendChild(ingredientsWrap);
-  }
-
-  if (optionsWrap) {
-    scroll.appendChild(optionsWrap);
-  }
-
-  appendProductDescriptionCard();
-  appendProductNutritionCard();
-  appendProductClientCompositionCard();
-
-  const actionCard = createProductBuyXGetYActionCard(product);
-  if (actionCard) scroll.appendChild(actionCard);
-
-  wrap.appendChild(scroll);
-
-  const footer = document.createElement("div");
-  footer.className = "shop-pd-footer";
-
-  const qtyWrap = document.createElement("div");
-  qtyWrap.className = "qty-pill-wrap";
-  if (qtyPill?.pill) qtyWrap.appendChild(qtyPill.pill);
-
-  // ===== qty pill handlers (ТОЛЬКО ПОДКЛЮЧИЛИ КЛИКИ) =====
-  if (qtyPill?.btnMinus && typeof onQtyMinus === "function") {
-    qtyPill.btnMinus.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      onQtyMinus();
-    });
-  }
-
-  if (qtyPill?.btnPlus && typeof onQtyPlus === "function") {
-    qtyPill.btnPlus.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      onQtyPlus();
-    });
-  }
-
-  if (qtyPill?.center && typeof onQtyCenterClick === "function") {
-    qtyPill.center.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      onQtyCenterClick();
-    });
-  }
-  // =======================================================
-
-  const actionBtn = document.createElement("button");
-  actionBtn.type = "button";
-  actionBtn.className = "shop-checkout-btn shop-pd-action";
-
-  footer.appendChild(qtyWrap);
-  footer.appendChild(actionBtn);
-  wrap.appendChild(footer);
-
-  return { wrap, actionBtn, qtyWrap, basePriceEl: null, refreshVariantAvailability, heroMedia: media };
-}
 
 
 function buildShopProductHero(product, { onBack } = {}) {
@@ -5260,72 +1567,9 @@ function buildShopProductHero(product, { onBack } = {}) {
   return hero;
 }
 
-function createProductBuyXGetYActionCard(product) {
-  const source = product?.buy_x_get_y_badge;
-  if (!source || typeof source !== "object") return null;
-  const badgeText = str(source.badge_text || "").trim();
-  if (!badgeText) return null;
-  const titleText = str(source.title || badgeText).trim() || badgeText;
-
-  const card = document.createElement("div");
-  card.className = "shop-product-action-card";
-  card.tabIndex = 0;
-  card.setAttribute("role", "button");
-  card.setAttribute("aria-label", `${titleText}. Акция ${badgeText}`);
-
-  const content = document.createElement("div");
-  content.className = "shop-product-action-card__content";
-
-  const title = document.createElement("div");
-  title.className = "shop-product-action-card__title";
-  title.textContent = titleText;
-
-  const type = document.createElement("div");
-  type.className = "shop-product-action-card__type";
-  type.textContent = `Акция ${badgeText}`;
-
-  const badge = document.createElement("span");
-  badge.className = "shop-product-action-card__badge";
-  badge.textContent = badgeText;
-
-  content.appendChild(title);
-  content.appendChild(type);
-  card.appendChild(content);
-  card.appendChild(badge);
-
-  const openDetails = async (event = null) => {
-    if (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-    if (card.__isOpeningActionDetails) return;
-    card.__isOpeningActionDetails = true;
-    card.classList.add("is-loading");
-    try {
-      const opened = await openProductBuyXGetYBenefitDetail(product);
-      if (!opened && typeof showToast === "function") {
-        showToast("Не удалось открыть детали акции");
-      }
-    } catch (err) {
-      console.error("Failed to open product action details:", err);
-      if (typeof showToast === "function") {
-        showToast("Не удалось открыть детали акции");
-      }
-    } finally {
-      card.__isOpeningActionDetails = false;
-      card.classList.remove("is-loading");
-    }
-  };
-
-  card.addEventListener("click", openDetails);
-  card.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      void openDetails(event);
-    }
-  });
-
-  return card;
-}
+function createProductBuyXGetYActionCard() {
+    return getSharedShopProductRuntime().createProductBuyXGetYActionCard(...arguments);
+  }
 
 async function loadProductBuyXGetYBenefitDetail(source) {
   const discountId = Number(source?.id || source?.discount_id || 0);
@@ -5417,1839 +1661,10 @@ async function openProductBuyXGetYBenefitDetail(product) {
 }
 
 
-async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton, mode, onSave } = {}) {
-  if (!container) return;
-  const renderGeneration = Number(container.__shopProductRenderGeneration || 0) + 1;
-  container.__shopProductRenderGeneration = renderGeneration;
-  const isSubscriptionMode = mode === 'subscription';
-  const productIdForRender = Number(product?.id || 0);
-  if (!openProductCtx || Number(openProductCtx.productId || 0) !== productIdForRender
-    || Number(container.dataset.stockSelectionProductId || 0) !== productIdForRender) {
-    container.dataset.stockSelectionMode = "auto";
-    container.dataset.stockSelectionProductId = String(productIdForRender || "");
+async function renderProductDetailsInto() {
+    await window.SharedProductDetails.ensureDetails();
+    return getSharedShopProductRuntime().renderProductDetailsInto(...arguments);
   }
-  const isMobileViewport = window.matchMedia("(max-width: 768px)").matches;
-  const isStaticProductView = !cartKey && !prefillItem;
-  const canReuseStaticProductView =
-    !isMobileViewport &&
-    isStaticProductView &&
-    Number.isFinite(productIdForRender) &&
-    productIdForRender > 0 &&
-    container.__shopRenderedViewType === "product" &&
-    Number(container.__shopRenderedProductId || 0) === productIdForRender;
-  if (canReuseStaticProductView) return;
-
-  if (!isStaticProductView) {
-    container.__shopRenderedViewType = "";
-    container.__shopRenderedProductId = "";
-    container.__shopRenderedComboId = "";
-    container.__shopRenderedComboMain = false;
-  }
-
-  container.innerHTML = "";
-
-  const productDetailsConfig = await resolveProductDetailsConfig(product.id);
-  if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
-  let optionGroups = normalizeProductOptionGroups(productDetailsConfig?.optionGroups);
-  const ingredients = Array.isArray(productDetailsConfig?.ingredients) ? productDetailsConfig.ingredients : [];
-  const variants = Array.isArray(productDetailsConfig?.variants) ? productDetailsConfig.variants : [];
-  const ingredientProductIds = ingredients
-    .map((ing) => Number(ing?.ingredient_id || 0))
-    .filter((id) => id > 0 && !state.productCache.has(id));
-  const optionTargetProductIds = optionGroups
-    .flatMap((group) => Array.isArray(group?.items) ? group.items : [])
-    .map((item) => Number(item?.target_product_id || item?.product_id || 0))
-    .filter((id) => id > 0 && !state.productCache.has(id));
-  if (ingredientProductIds.length > 0) {
-    await Promise.all(ingredientProductIds.map((ingredientPid) => ensureProduct(ingredientPid).catch(() => null)));
-  }
-  if (optionTargetProductIds.length > 0) {
-    await Promise.all(optionTargetProductIds.map((optionPid) => ensureProduct(optionPid).catch(() => null)));
-    optionGroups = normalizeProductOptionGroups(optionGroups);
-  }
-  const selectionState = new Map();
-  const ingredientState = new Map();
-  const variantState = {
-    groupId: variants[0]?.id ?? variants[0]?.variant_group_id ?? null,
-    selectedIndex: null,
-    value: null,
-    label: "",
-  };
-  
-  // TODO: Интегрировать варианты в UI (отображение выбора варианта, расчет цены с учетом варианта и скидок)
-  // Варианты доступны в переменной variants, но пока не отображаются в UI
-
-  // Initialize ingredient state with proper min/max/step handling
-  ingredients.forEach(ing => {
-    const defaultQty = Number(ing.quantity ?? 1);
-    const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
-    const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
-    const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
-    const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
-    const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-    
-    // Начальное количество: ограничиваем min/max и округляем до шага (относительно min)
-    let initialQty = isVariable ? defaultQty : defaultQty;
-    initialQty = Math.max(min, Math.min(max, initialQty));
-    
-    // Округляем до шага (относительно min)
-    if (step > 0) {
-      const stepsFromMin = Math.round((initialQty - min) / step);
-      initialQty = min + (stepsFromMin * step);
-      initialQty = Math.max(min, Math.min(max, initialQty));
-    }
-    
-    ingredientState.set(Number(ing.ingredient_id), {
-      quantity: initialQty,
-    });
-  });
-
-  const isReadOnlyView = readOnly === true;
-  const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
-  const productId = Number(product?.id || 0);
-  let effectiveDefaultConfig = !editingItem && !prefillItem && typeof getProductPassport === "function"
-    ? getProductPassport(productId)?.defaultConfig
-    : null;
-  if (!editingItem && !prefillItem && !effectiveDefaultConfig && productId > 0) {
-    try {
-      const response = await apiJson('/api/public/products/batch/default-cart-config', {
-        method: 'POST', body: { ids: [productId] },
-      });
-      effectiveDefaultConfig = response?.data?.[productId] || null;
-    } catch (error) {
-      console.error('Failed to load product default option configuration', error);
-    }
-  }
-  const seedItem =
-    editingItem && typeof editingItem === "object"
-      ? editingItem
-      : (prefillItem && typeof prefillItem === "object"
-        ? prefillItem
-        : (effectiveDefaultConfig && typeof effectiveDefaultConfig === "object" ? effectiveDefaultConfig : null));
-  const editMode = !isReadOnlyView && !!editingItem;
-  const stockAvailable = isProductAvailable(product);
-  const remainingStockForProduct =
-    Number.isFinite(productId) &&
-    productId > 0 &&
-    typeof getAvailableStock === "function"
-      ? getAvailableStock(productId)
-      : Infinity;
-  const blockedByProductStockLimit =
-    !editMode &&
-    Number.isFinite(remainingStockForProduct) &&
-    remainingStockForProduct <= 0;
-  const blockedByIngredientRequirements =
-    !editMode &&
-    Number.isFinite(productId) &&
-    productId > 0 &&
-    typeof isProductBlockedByIngredientRequirements === "function"
-      ? isProductBlockedByIngredientRequirements(productId)
-      : false;
-  const available = stockAvailable && !blockedByProductStockLimit && !blockedByIngredientRequirements;
-
-  const editVariantGroupIdRaw = seedItem?.variant_group_id ?? seedItem?.variant?.variant_group_id;
-  const editVariantValueIndexRaw = seedItem?.variant_value_index ?? seedItem?.variant?.variant_value_index;
-  const editVariantGroupId =
-    editVariantGroupIdRaw === undefined || editVariantGroupIdRaw === null || editVariantGroupIdRaw === ""
-      ? null
-      : Number(editVariantGroupIdRaw);
-  const editVariantValueIndex =
-    editVariantValueIndexRaw === undefined || editVariantValueIndexRaw === null || editVariantValueIndexRaw === ""
-      ? null
-      : Number(editVariantValueIndexRaw);
-
-  if (
-    seedItem &&
-    Number.isFinite(editVariantGroupId) &&
-    editVariantGroupId > 0 &&
-    Number.isFinite(editVariantValueIndex) &&
-    editVariantValueIndex >= 0
-  ) {
-    variantState.groupId = editVariantGroupId;
-    variantState.selectedIndex = editVariantValueIndex;
-    variantState.label = str(seedItem.variant_label || seedItem?.variant?.label || seedItem?.variant?.value || "");
-  }
-
-  // Restore ingredient quantities from cart if editing
-  if (seedItem && Array.isArray(seedItem.ingredients)) {
-    seedItem.ingredients.forEach(cartIng => {
-      const ingId = Number(cartIng.ingredient_id);
-      if (ingredientState.has(ingId)) {
-        const ing = ingredients.find(i => Number(i.ingredient_id) === ingId);
-        if (!ing) return;
-        
-        const defaultQty = Number(ing.quantity ?? 1);
-        const isVariableIng = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
-        const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
-        const min = rawMin !== null ? rawMin : (isVariableIng ? 0 : defaultQty);
-        const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
-        const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-        
-        // Берем количество из корзины, нормализуем до допустимого (кратное шагу от min)
-        let qty = Number(cartIng.quantity ?? 1);
-        qty = Math.max(min, Math.min(max, qty));
-        
-        // Округляем до шага (относительно min)
-        if (step > 0) {
-          const stepsFromMin = Math.round((qty - min) / step);
-          qty = min + (stepsFromMin * step);
-          qty = Math.max(min, Math.min(max, qty));
-        }
-        
-        ingredientState.set(ingId, {
-          quantity: qty,
-        });
-      }
-    });
-  }
-
-  // qty: default 1, в edit — из корзины
-  let qty = seedItem ? Math.max(1, Number(seedItem?.qty || seedItem?.quantity || 1)) : 1;
-
-  // предзаполнение опций из корзины (как было)
-  const editOptionIds = new Set((seedItem?.option_item_ids || []).map(Number).filter(Number.isFinite));
-  const editOptionQty = new Map();
-  (seedItem?.option_items || []).forEach((opt) => {
-    const id = Number(opt?.id);
-    if (!Number.isFinite(id)) return;
-    const q = Math.max(0, Number(opt?.qty || opt?.quantity || 1)) || 1;
-    editOptionQty.set(id, q);
-  });
-
-  // Варианты опций из корзины (для восстановления при редактировании)
-  const editOptionVariants = new Map();
-  (seedItem?.option_items || []).forEach((opt) => {
-    const id = Number(opt?.id);
-    if (!Number.isFinite(id)) return;
-    if (opt.variant_group_id != null && opt.variant_value_index != null) {
-      editOptionVariants.set(id, {
-        variant_group_id: Number(opt.variant_group_id),
-        variant_value_index: Number(opt.variant_value_index),
-        variant_label: str(opt.variant_label || ""),
-        variant_group_title: str(opt.variant_group_title || ""),
-        variant_unit: str(opt.variant_unit || ""),
-        unit_id:
-          opt.unit_id != null && Number.isFinite(Number(opt.unit_id))
-            ? Number(opt.unit_id)
-            : null,
-        variant_price_diff: Number(opt.variant_price_diff || 0),
-      });
-    }
-  });
-
-  // Устанавливает дефолтный вариант для опции с вариантами (если ещё не задан)
-  function setDefaultVariantForOptionItem(item, variantByItemIdMap) {
-    const itemId = Number(item.id);
-    if (!Number.isFinite(itemId) || variantByItemIdMap.has(itemId)) return;
-    const itemVariants = Array.isArray(item.variants) ? item.variants : [];
-    if (itemVariants.length === 0 || !(itemVariants[0]?.values?.length)) return;
-    const vg = itemVariants[0];
-    const values = Array.isArray(vg.values) ? vg.values : [];
-    const defaultIdx = vg.default_value_index != null ? Number(vg.default_value_index) : (values.length ? 0 : null);
-    if (defaultIdx == null || defaultIdx < 0 || defaultIdx >= values.length) return;
-    variantByItemIdMap.set(itemId, buildOptionItemVariantState(item, vg, defaultIdx, values[defaultIdx]));
-  }
-
-optionGroups.forEach((group) => {
-  const type = getOptionGroupUiType(group);
-  const minSelect = Math.max(0, Number(group?.min_select ?? 0));
-  const isEditingSeed = !!seedItem;
-
-  const stateEntry = {
-    type,
-    selectedId: null,
-    selectedIds: new Set(),
-    qtyById: new Map(),
-    // NEW: Варианты для каждого item (itemId -> { variant_group_id, variant_value_index, label, price_diff })
-    variantByItemId: new Map(),
-    minSelect: group.min_select ?? 0,
-    maxSelect: group.max_select ?? null,
-  };
-
-  if (type === "single") {
-    const preselected = (seedItem?.option_item_ids || []).find((id) =>
-      group.items.some((item) => Number(item.id) === Number(id))
-    );
-
-    const required = !!group.is_required; // NEW
-    const fallback = required ? (group.items[0]?.id ?? null) : null;
-
-    stateEntry.selectedId = preselected || fallback || null;
-  } else if (type === "multiple_group") {
-    group.items.forEach((item) => {
-      if (editOptionIds.has(Number(item.id))) stateEntry.selectedIds.add(Number(item.id));
-    });
-    if (!isEditingSeed && stateEntry.selectedIds.size === 0 && minSelect > 0) {
-      const toSelect = Math.min(minSelect, group.items.length);
-      for (let i = 0; i < toSelect; i += 1) {
-        const id = Number(group.items[i]?.id);
-        if (Number.isFinite(id) && id > 0) stateEntry.selectedIds.add(id);
-      }
-    }
-  } else if (type === "multiple_item") {
-    group.items.forEach((item) => {
-      const id = Number(item.id);
-      const itemMin = Number(item?.qty_min ?? 0);
-      // В режиме редактирования берём сохранённое значение
-      const savedQty = editOptionQty.get(id) || (editOptionIds.has(id) ? Math.max(1, itemMin || 1) : 0);
-      const q = savedQty > 0 ? savedQty : 0;
-      if (q > 0) stateEntry.qtyById.set(id, q);
-    });
-    if (!isEditingSeed && stateEntry.qtyById.size === 0 && minSelect > 0) {
-      const toSelect = Math.min(minSelect, group.items.length);
-      for (let i = 0; i < toSelect; i += 1) {
-        const item = group.items[i];
-        const id = Number(item?.id);
-        if (!Number.isFinite(id) || id <= 0) continue;
-        const itemMin = Number(item?.qty_min ?? 0);
-        const q = itemMin > 0 ? itemMin : 1;
-        stateEntry.qtyById.set(id, q);
-      }
-    }
-  }
-
-  // Восстанавливаем варианты из корзины для всех items
-  group.items.forEach((item) => {
-    const itemId = Number(item.id);
-    const savedVariant = editOptionVariants.get(itemId);
-    if (savedVariant) {
-      stateEntry.variantByItemId.set(itemId, savedVariant);
-    }
-  });
-
-  selectionState.set(group.id, stateEntry);
-});
-
-  // Для выбранных опций с вариантами сразу выставляем дефолтный вариант, чтобы цена отображалась верно
-  optionGroups.forEach((group) => {
-    const stateEntry = selectionState.get(group.id);
-    if (!stateEntry || !group.items?.length) return;
-    if (stateEntry.type === "single" && stateEntry.selectedId) {
-      const item = group.items.find((it) => Number(it.id) === Number(stateEntry.selectedId));
-      if (item) setDefaultVariantForOptionItem(item, stateEntry.variantByItemId);
-    } else if (stateEntry.type === "multiple_group") {
-      stateEntry.selectedIds.forEach((itemId) => {
-        const item = group.items.find((it) => Number(it.id) === Number(itemId));
-        if (item) setDefaultVariantForOptionItem(item, stateEntry.variantByItemId);
-      });
-    } else if (stateEntry.type === "multiple_item") {
-      stateEntry.qtyById.forEach((qty, itemId) => {
-        if (qty <= 0) return;
-        const item = group.items.find((it) => Number(it.id) === Number(itemId));
-        if (item) setDefaultVariantForOptionItem(item, stateEntry.variantByItemId);
-      });
-    }
-  });
-
-  // qty pill UI
-  const qtyPill = createQtyPill({
-    variant: available ? "buy" : "muted",
-    big: true,
-    centerText: String(qty),
-    minusEnabled: available && qty > 1,
-    plusEnabled: available,
-  });
-
-  let qtyPlusBlockedByStock = !isSubscriptionMode && available && cartCountTotal() > 0;
-  let updateQtyUi = () => {
-    if (qtyPill?.center) qtyPill.center.textContent = String(qty);
-    // минус блокируем визуально на 1
-    if (qtyPill?.btnMinus) {
-      const minusDisabled = qty <= 1 || !available;
-      qtyPill.btnMinus.classList.toggle("is-disabled", minusDisabled);
-      qtyPill.btnMinus.disabled = minusDisabled;
-    }
-    if (qtyPill?.btnPlus) {
-      const plusDisabled = !available || qtyPlusBlockedByStock;
-      qtyPill.btnPlus.classList.toggle("is-disabled", plusDisabled);
-      qtyPill.btnPlus.disabled = plusDisabled;
-    }
-  };
-
-  let actionBtnRef = null;
-  let basePriceElRef = null;
-  let heroMediaRef = null;
-
-  // Рассчитывает цену базовых ингредиентов (по ing.quantity из БД)
-  const calculateBaseIngredientPrice = () => {
-    let total = 0;
-    ingredients.forEach(ing => {
-      const baseQty = Number(ing.quantity ?? 1); // Базовое количество из БД
-      
-      // Рассчитываем цену за единицу с учетом base_qty
-      const { currentPricePerUnit: pricePerUnit } = getIngredientUnitPricing(ing);
-      
-      // Конверсия базового количества в базовые единицы
-      const qtyInBase = getQtyInBase(ing, baseQty);
-      const ingredientTotal = qtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * qtyInBase : 0;
-      total += ingredientTotal;
-    });
-    return total;
-  };
-
-  function getIngredientUnitPricing(ing) {
-    const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
-    const cachedProduct = state.productCache.get(Number(ing.ingredient_id || 0)) || null;
-    const ingredientCurrentBasePrice = Number(
-      cachedProduct?.price != null && Number(cachedProduct.price || 0) > 0
-        ? cachedProduct.price
-        : ing.ingredient_price || 0
-    );
-    const currentPricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0
-      ? Number(ing.price_override)
-      : (
-          ingredientBaseQty > 0 && ingredientCurrentBasePrice > 0
-            ? ingredientCurrentBasePrice / ingredientBaseQty
-            : (ingredientCurrentBasePrice > 0 ? ingredientCurrentBasePrice : 0)
-        );
-
-    if (ing.price_override != null && Number(ing.price_override) >= 0) {
-      return {
-        currentPricePerUnit,
-        originalPricePerUnit: currentPricePerUnit,
-      };
-    }
-
-    const ingredientOriginalBasePrice = Number(
-      cachedProduct?.original_price != null && Number(cachedProduct.original_price || 0) > 0
-        ? cachedProduct.original_price
-        : (
-            cachedProduct?.old_price != null && Number(cachedProduct.old_price || 0) > 0
-              ? cachedProduct.old_price
-              : 0
-          )
-    );
-    const originalPricePerUnit =
-      ingredientBaseQty > 0 && ingredientOriginalBasePrice > 0
-        ? ingredientOriginalBasePrice / ingredientBaseQty
-        : (ingredientOriginalBasePrice > 0 ? ingredientOriginalBasePrice : currentPricePerUnit);
-
-    return {
-      currentPricePerUnit,
-      originalPricePerUnit,
-    };
-  }
-
-  function calculateIngredientPricing() {
-    let currentTotal = 0;
-    let baseCurrentTotal = 0;
-    let originalTotal = 0;
-    let baseOriginalTotal = 0;
-
-    ingredients.forEach((ing) => {
-      const state = ingredientState.get(Number(ing.ingredient_id));
-      const currentQty = state ? (state.quantity ?? Number(ing.quantity ?? 1)) : Number(ing.quantity ?? 1);
-      const baseQty = Number(ing.quantity ?? 1);
-      const { currentPricePerUnit, originalPricePerUnit } = getIngredientUnitPricing(ing);
-      const currentQtyInBase = getQtyInBase(ing, currentQty);
-      const baseQtyInBase = getQtyInBase(ing, baseQty);
-
-      const currentIngredientTotal = currentQtyInBase != null && Number.isFinite(currentPricePerUnit)
-        ? currentPricePerUnit * currentQtyInBase
-        : 0;
-      const baseIngredientCurrentTotal = baseQtyInBase != null && Number.isFinite(currentPricePerUnit)
-        ? currentPricePerUnit * baseQtyInBase
-        : 0;
-      const currentIngredientOriginalTotal = currentQtyInBase != null && Number.isFinite(originalPricePerUnit)
-        ? originalPricePerUnit * currentQtyInBase
-        : currentIngredientTotal;
-      const baseIngredientOriginalTotal = baseQtyInBase != null && Number.isFinite(originalPricePerUnit)
-        ? originalPricePerUnit * baseQtyInBase
-        : baseIngredientCurrentTotal;
-
-      currentTotal += currentIngredientTotal;
-      baseCurrentTotal += baseIngredientCurrentTotal;
-      originalTotal += currentIngredientOriginalTotal;
-      baseOriginalTotal += baseIngredientOriginalTotal;
-    });
-
-    return {
-      currentDiff: currentTotal - baseCurrentTotal,
-      originalDiff: originalTotal - baseOriginalTotal,
-    };
-  }
-
-  // Рассчитывает разницу цены ингредиентов от базового состава
-  const calculateIngredientPrice = () => {
-    return calculateIngredientPricing().currentDiff;
-  };
-
-  // Повторяем backend-логику расчёта скидки (без tenant-round внутри скидки):
-  // 1) считаем сумму скидки
-  // 2) ограничиваем max_discount_amount/ценой
-  // 3) округляем скидку до 2 знаков
-  const calculateProductDiscountAmount = (price, discount) => {
-    const srcPrice = Number(price || 0);
-    if (!(srcPrice > 0) || !discount) return 0;
-
-    const discType = String(discount.discount_type || "").trim();
-    const discValue = Number(discount.discount_value || 0);
-    let discountAmount = 0;
-
-    if (discType === "percent") {
-      if (!(discValue > 0)) return 0;
-      discountAmount = srcPrice * (discValue / 100);
-    } else if (discType === "fixed") {
-      if (!(discValue > 0)) return 0;
-      discountAmount = discValue;
-    } else if (discType === "special_price") {
-      discountAmount = Math.max(0, srcPrice - discValue);
-    } else {
-      return 0;
-    }
-
-    const maxDiscountAmount = Number(discount.max_discount_amount);
-    if (Number.isFinite(maxDiscountAmount) && maxDiscountAmount > 0 && discountAmount > maxDiscountAmount) {
-      discountAmount = maxDiscountAmount;
-    }
-    if (discountAmount > srcPrice) discountAmount = srcPrice;
-
-    return Math.round(discountAmount * 100) / 100;
-  };
-
-  let updateActionText = () => {
-    if (!actionBtnRef) return;
-    if (!available) {
-      actionBtnRef.innerHTML = `<span class="shop-pd-action-label">Нет в наличии</span>`;
-      actionBtnRef.disabled = true;
-      if (elMobileProductPrice) elMobileProductPrice.textContent = "";
-      const mobileOldPrice = elMobileAddToCartBtn?.querySelector(".shop-pd-action-old");
-      if (mobileOldPrice) {
-        mobileOldPrice.textContent = "";
-        mobileOldPrice.classList.add("hidden");
-      }
-      return;
-    }
-    actionBtnRef.disabled = false;
-
-    const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
-    const optionPricingTotals = getSelectedOptionItemsPricingTotals(selectedItems);
-    const optionTotal = Number(optionPricingTotals.currentTotal || 0);
-    const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
-    const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
-    const basePrice = Number(variantUnitPrice || 0) + optionTotal;
-    const ingredientPricing = calculateIngredientPricing();
-    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0); // Разница от базового состава
-    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
-    const unitPrice = roundPrice(basePrice + ingredientsPriceDiff);
-
-    // Скидка считается как на бэке, tenant-round применяется к итоговой цене.
-    const discountAmount = calculateProductDiscountAmount(unitPrice, product.discount);
-    const discountedUnitPrice = roundPrice(Math.max(0, unitPrice - discountAmount));
-
-    // total = unit * qty
-    const totalPrice = roundPrice(discountedUnitPrice * Number(qty || 1));
-    const totalBeforeDiscount = roundPrice(unitPrice * Number(qty || 1));
-    
-    // Зачёркнутая цена: либо скидка, либо product.old_price из БД
-    const oldBase = scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
-    const baseOriginalComparable = oldBase > Number(variantUnitPrice || 0)
-      ? roundPrice(oldBase + ingredientsOriginalPriceDiff)
-      : roundPrice(Number(variantUnitPrice || 0) + ingredientsOriginalPriceDiff);
-    const totalOldFromDb = roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * Number(qty || 1));
-    
-    // Приоритет: если есть скидка — показываем цену до скидки, иначе old_price
-    const hasApiDiscount = discountAmount > 0;
-    const optionOldDelta = Math.max(0, optionOriginalComparableTotal - optionTotal);
-    const totalOld = hasApiDiscount
-      ? roundPrice(totalBeforeDiscount + optionOldDelta * Number(qty || 1))
-      : totalOldFromDb;
-    const showOld = totalOld > 0 && totalOld > totalPrice;
-    const originalUnitComparable = hasApiDiscount
-      ? roundPrice(unitPrice + optionOldDelta)
-      : roundPrice(baseOriginalComparable + optionOriginalComparableTotal);
-
-    actionBtnRef.innerHTML = `
-      <span class="shop-pd-action-prices">
-        ${showOld ? `<span class="shop-pd-action-old">${money(totalOld)}</span>` : ""}
-        <span class="shop-checkout-total shop-pd-action-price">${money(totalPrice)}</span>
-      </span>
-      <span class="shop-pd-action-label">${editMode ? "Сохранить" : "в корзину"}</span>
-    `;
-    if (isSubscriptionMode) {
-      const label = actionBtnRef.querySelector('.shop-pd-action-label');
-      if (label) label.textContent = 'сохранить';
-    }
-
-    if (basePriceElRef) {
-      const variantLabel = str(variantState?.label || "").trim();
-      if (variantLabel) {
-        basePriceElRef.textContent = `${variantLabel} — ${money(variantUnitPrice)}`;
-      } else {
-        basePriceElRef.textContent = money(product.price || 0);
-      }
-    }
-    if (heroMediaRef) {
-      syncProductHeroBadges(heroMediaRef, product, discountedUnitPrice, showOld ? originalUnitComparable : 0);
-    }
-    // Синхронизация с мобильной кнопкой «В корзину»
-    if (elMobileProductPrice) {
-      const priceEl = actionBtnRef.querySelector(".shop-pd-action-price");
-      if (priceEl) elMobileProductPrice.textContent = priceEl.textContent;
-    }
-    const oldPriceEl = actionBtnRef.querySelector(".shop-pd-action-old");
-    const mobileOldPrice = elMobileAddToCartBtn?.querySelector(".shop-pd-action-old");
-    if (mobileOldPrice) {
-      if (oldPriceEl && oldPriceEl.textContent.trim()) {
-        mobileOldPrice.textContent = oldPriceEl.textContent;
-        mobileOldPrice.classList.remove("hidden");
-      } else {
-        mobileOldPrice.textContent = "";
-        mobileOldPrice.classList.add("hidden");
-      }
-    }
-  };
-
-  let ingredientsWrapRef = null;
-  let refreshVariantAvailabilityUi = () => {};
-  
-  const onIngredientChange = () => {
-    updateActionText();
-    refreshQtyPlusStockGate();
-    refreshVariantAvailabilityUi();
-    // Update ingredient prices in UI
-    if (!ingredientsWrapRef) return;
-    
-    ingredients.forEach(ing => {
-      const ingId = Number(ing.ingredient_id);
-      const hasIngredientProductId = Number.isFinite(ingId) && ingId > 0;
-      const state = ingredientState.get(ingId);
-      if (!state) return;
-      
-      const block = ingredientsWrapRef.querySelector(`[data-ingredient-id="${ingId}"]`);
-      if (!block) return;
-      
-      const defaultQtyNum = Number(ing.quantity ?? 1);
-      const isVariableIng = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
-      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
-      const min = rawMin !== null ? rawMin : (isVariableIng ? 0 : defaultQtyNum);
-      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQtyNum;
-      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-      let currentQty = state.quantity ?? Number(ing.quantity ?? 1);
-      const isIngUnavailableForPlus = () => {
-        if (!hasIngredientProductId) return false;
-        if (currentQty >= max) return false;
-        const snapshot = snapshotDraftState();
-        const stateEntry = ingredientState.get(ingId);
-        const nextQty = Math.min(max, currentQty + (step > 0 ? step : 1));
-        const nextState = stateEntry && typeof stateEntry === "object"
-          ? { ...stateEntry, quantity: nextQty }
-          : { quantity: nextQty };
-        ingredientState.set(ingId, nextState);
-        const allowed = canUseDraftQtyLocal(Math.max(1, Number(qty || 1)));
-        restoreDraftState(snapshot);
-        return !allowed;
-      };
-      // Round to step (относительно min)
-      if (step > 0) {
-        const stepsFromMin = Math.round((currentQty - min) / step);
-        currentQty = min + (stepsFromMin * step);
-      }
-      currentQty = Math.max(min, Math.min(max, currentQty));
-      state.quantity = currentQty;
-      
-      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
-
-      const qtyDisplay = block.querySelector(".shop-pd-ingredient-qty-value");
-      if (qtyDisplay) qtyDisplay.textContent = `${currentQty} ${unitLabel}`.trim();
-
-      const controls = block.querySelector(".shop-pd-ingredient-controls");
-      if (controls && isVariableIng) {
-        controls.querySelector(".shop-pd-ingredient-qty-btn--minus")?.remove();
-        controls.querySelector(".shop-pd-ingredient-qty-btn--plus")?.remove();
-        controls.querySelector(".shop-pd-ingredient-qty-placeholder--minus")?.remove();
-        controls.querySelector(".shop-pd-ingredient-qty-placeholder--plus")?.remove();
-        const canMinus = currentQty > min;
-        const canPlus = currentQty < max && !isIngUnavailableForPlus();
-        controls.classList.remove("shop-pd-ingredient-controls--fixed");
-        const createIngredientQtyPlaceholder = (side) => {
-          const placeholder = document.createElement("span");
-          placeholder.className = `shop-pd-ingredient-qty-placeholder shop-pd-ingredient-qty-placeholder--${side}`;
-          placeholder.setAttribute("aria-hidden", "true");
-          return placeholder;
-        };
-        let btnMinus = null;
-        let btnPlus = null;
-
-        if (canMinus) {
-          btnMinus = document.createElement("button");
-          btnMinus.type = "button";
-          btnMinus.className = "shop-pd-ingredient-qty-btn shop-pd-ingredient-qty-btn--minus";
-          btnMinus.setAttribute("data-action", "ingredient-minus");
-          btnMinus.textContent = "−";
-          btnMinus.addEventListener("click", (e) => {
-            e.stopPropagation();
-            const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
-            let newQty = currentStateQty - step;
-            if (isVariableIng && newQty <= 0) {
-              newQty = 0;
-            } else {
-              if (step > 0) {
-                const stepsFromMin = Math.round((newQty - min) / step);
-                newQty = min + (stepsFromMin * step);
-              }
-              newQty = Math.max(min, Math.min(max, newQty));
-            }
-            if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
-              const prevState = ingredientState?.get(ingId);
-              const nextState = prevState && typeof prevState === "object"
-                ? { ...prevState, quantity: newQty }
-                : { quantity: newQty };
-              ingredientState?.set(ingId, nextState);
-              refreshNutritionCard();
-              onIngredientChange();
-            }
-          });
-        }
-
-        if (canPlus) {
-          btnPlus = document.createElement("button");
-          btnPlus.type = "button";
-          btnPlus.className = "shop-pd-ingredient-qty-btn shop-pd-ingredient-qty-btn--plus";
-          btnPlus.setAttribute("data-action", "ingredient-plus");
-          btnPlus.textContent = "+";
-          btnPlus.addEventListener("click", (e) => {
-            e.stopPropagation();
-            if (isIngUnavailableForPlus()) {
-              showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-              return;
-            }
-            const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
-            let newQty = currentStateQty + step;
-            if (step > 0) {
-              const stepsFromMin = Math.round((newQty - min) / step);
-              newQty = min + (stepsFromMin * step);
-            }
-            newQty = Math.max(min, Math.min(max, newQty));
-            if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
-              const applied = runGuardedMutation(() => {
-                const prevState = ingredientState?.get(ingId);
-                const nextState = prevState && typeof prevState === "object"
-                  ? { ...prevState, quantity: newQty }
-                  : { quantity: newQty };
-                ingredientState?.set(ingId, nextState);
-              }, { showToastOnOut: true });
-              if (!applied) return;
-              refreshNutritionCard();
-              onIngredientChange();
-            }
-          });
-        }
-        if (qtyDisplay) {
-          controls.insertBefore(btnMinus || createIngredientQtyPlaceholder("minus"), qtyDisplay);
-          controls.appendChild(btnPlus || createIngredientQtyPlaceholder("plus"));
-        }
-      }
-    });
-  };
-
-  function buildCurrentIngredientQuantities() {
-    const ingredientQuantities = [];
-    ingredients.forEach((ing) => {
-      const ingId = Number(ing.ingredient_id);
-      const stateEntry = ingredientState.get(ingId);
-      const quantity = (stateEntry && stateEntry.quantity !== undefined)
-        ? stateEntry.quantity
-        : Number(ing.quantity ?? 1);
-      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
-      ingredientQuantities.push({
-        ingredient_id: ingId,
-        quantity,
-        ingredient_name: ing.ingredient_name || "",
-        unit_label: unitLabel,
-      });
-    });
-    return ingredientQuantities;
-  }
-
-  function formatVariantValueLabelByIndex(variantIndex) {
-    if (!Array.isArray(variants) || !variants.length) return "";
-    const group = variants[0] || null;
-    const values = Array.isArray(group?.values) ? group.values : [];
-    const idx = Number(variantIndex);
-    if (!Number.isFinite(idx) || idx < 0 || idx >= values.length) return "";
-
-    const unitLabel = str(group?.unit_short_title || group?.unit_code || group?.unit_title || "").trim();
-    const valueText = str(values[idx]);
-    if (!valueText) return "";
-    if (!unitLabel || /[a-zа-я]/i.test(valueText)) return valueText;
-    return `${valueText} ${unitLabel}`;
-  }
-
-  function buildDraftStockItem(desiredQty, variantOverrides = null) {
-    const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
-    const optionItemIds = selectedItems.map((item) => item.id);
-    const overrides = variantOverrides && typeof variantOverrides === "object" ? variantOverrides : null;
-    const hasGroupOverride = !!(overrides && Object.prototype.hasOwnProperty.call(overrides, "variantGroupId"));
-    const hasIndexOverride = !!(overrides && Object.prototype.hasOwnProperty.call(overrides, "variantIndex"));
-    const hasLabelOverride = !!(overrides && Object.prototype.hasOwnProperty.call(overrides, "variantLabel"));
-
-    const selectedVariantGroupIdRaw = hasGroupOverride ? overrides.variantGroupId : variantState.groupId;
-    const selectedVariantIndexRaw = hasIndexOverride ? overrides.variantIndex : variantState.selectedIndex;
-    const selectedVariantGroupId =
-      selectedVariantGroupIdRaw === undefined || selectedVariantGroupIdRaw === null || selectedVariantGroupIdRaw === ""
-        ? null
-        : Number(selectedVariantGroupIdRaw);
-    const selectedVariantIndex =
-      selectedVariantIndexRaw === undefined || selectedVariantIndexRaw === null || selectedVariantIndexRaw === ""
-        ? null
-        : Number(selectedVariantIndexRaw);
-    const selectedVariantLabel = hasLabelOverride
-      ? str(overrides.variantLabel || "")
-      : (
-          hasIndexOverride
-            ? formatVariantValueLabelByIndex(selectedVariantIndex)
-            : (str(variantState.label || "") || formatVariantValueLabelByIndex(selectedVariantIndex))
-        );
-    const variantValue = toStockVariantValue(selectedVariantLabel || "");
-    const hasVariantSelection =
-      Array.isArray(variants) &&
-      variants.length > 0 &&
-      Number.isFinite(selectedVariantGroupId) &&
-      selectedVariantGroupId > 0 &&
-      Number.isFinite(selectedVariantIndex) &&
-      selectedVariantIndex >= 0 &&
-      !!variantValue;
-
-    return {
-      cart_key: editMode && editingItem ? editingItem.key : null,
-      product_id: Number(product.id),
-      qty: Math.max(1, Number(desiredQty || 1)),
-      option_item_ids: optionItemIds,
-      option_items: selectedItems,
-      ingredients: buildCurrentIngredientQuantities(),
-      variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
-      variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
-      variant_label: hasVariantSelection ? variantValue : null,
-      variants: hasVariantSelection
-        ? [{
-            variant_group_id: selectedVariantGroupId,
-            variant_value_index: selectedVariantIndex,
-            value: variantValue,
-            label: variantValue,
-          }]
-        : undefined,
-    };
-  }
-
-  function buildDraftStockItemsPayload(desiredQty, variantOverrides = null) {
-    const cartPayload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved());
-    const filtered = (editMode && editingItem)
-      ? cartPayload.filter((item) => String(item?.cart_key || "") !== String(editingItem.key || ""))
-      : cartPayload.slice();
-    filtered.push(buildDraftStockItem(desiredQty, variantOverrides));
-    return filtered;
-  }
-
-  // --- Локальный расчёт остатков для draft (без обращения к API) ---
-  function canUseDraftQtyLocal(desiredQty, variantOverrides) {
-    const dQty = Math.max(1, Number(desiredQty || 1));
-    // Собираем потребление draft по каждому productId
-    const draftConsumption = new Map();
-    const addC = (pid, amount) => {
-      if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(amount) || amount <= 0) return;
-      draftConsumption.set(pid, (draftConsumption.get(pid) || 0) + amount);
-    };
-
-    // 1. Основной товар
-    const mainPid = Number(product.id || 0);
-    if (mainPid > 0) {
-      const overrides = variantOverrides && typeof variantOverrides === "object" ? variantOverrides : null;
-      let vLabel, vUnitId;
-      if (overrides && Object.prototype.hasOwnProperty.call(overrides, "variantIndex")) {
-        const idx = Number(overrides.variantIndex);
-        const group = Array.isArray(variants) && variants.length ? variants[0] : null;
-        const values = group && Array.isArray(group.values) ? group.values : [];
-        const unitLabel = str(group?.unit_short_title || group?.unit_code || group?.unit_title || "").trim();
-        const rawVal = idx >= 0 && idx < values.length ? str(values[idx]) : "";
-        const hasLetters = /[a-zа-я]/i.test(rawVal);
-        vLabel = rawVal && unitLabel && !hasLetters ? rawVal + " " + unitLabel : rawVal;
-        vUnitId = Number(group?.unit_id || 0);
-      } else {
-        vLabel = str(variantState.label || "") || formatVariantValueLabelByIndex(variantState.selectedIndex);
-        const group = Array.isArray(variants) && variants.length ? variants[0] : null;
-        vUnitId = Number(group?.unit_id || 0);
-      }
-      addC(mainPid, calcConsumedPerUnit(product, vLabel, vUnitId) * dQty);
-    }
-
-    // 2. Выбранные опции
-    for (const group of optionGroups) {
-      const gState = selectionState.get(group.id);
-      if (!gState) continue;
-      for (const item of (group.items || [])) {
-        const tpid = Number(item.target_product_id || 0);
-        if (tpid <= 0) continue;
-        const iid = Number(item.id);
-        let optQty = 0;
-        if (gState.type === "single" && Number(gState.selectedId || 0) === iid) optQty = 1;
-        else if (gState.type === "multiple_group" && gState.selectedIds && gState.selectedIds.has(iid)) optQty = 1;
-        else if (gState.type === "multiple_item" && gState.qtyById) optQty = Number(gState.qtyById.get(iid) || 0);
-        if (optQty <= 0) continue;
-
-        const optProduct = state.productCache.get(tpid);
-        const vData = gState.variantByItemId ? gState.variantByItemId.get(iid) : null;
-        const optVLabel = vData ? (vData.variant_label || "") : "";
-        const itemVars = Array.isArray(item.variants) ? item.variants : [];
-        const optVUnitId = Number(itemVars.length ? (itemVars[0].unit_id || 0) : 0);
-        addC(tpid, calcConsumedPerUnit(optProduct, optVLabel, optVUnitId) * optQty * dQty);
-      }
-    }
-
-    // 3. Ингредиенты
-    for (const ing of ingredients) {
-      const ingPid = Number(ing.ingredient_id || 0);
-      if (ingPid <= 0) continue;
-      const stateEntry = ingredientState.get(ingPid);
-      const ingQty = Number(stateEntry && stateEntry.quantity !== undefined ? stateEntry.quantity : (ing.quantity ?? 1));
-      if (ingQty <= 0) continue;
-      const ingProduct = state.productCache.get(ingPid);
-      const ingUnitId = Number(ing.unit_id || 0);
-      let consumed = ingQty;
-      if (ingProduct && ingUnitId) {
-        const baseUnitId = Number(ingProduct.base_unit_id || ingProduct.unit_id || 0);
-        if (baseUnitId && ingUnitId !== baseUnitId) {
-          const factor = getConversionFactor(ingUnitId, baseUnitId);
-          if (factor != null) consumed = ingQty * factor;
-        }
-      }
-      addC(ingPid, consumed * dQty);
-    }
-
-    // Проверка по каждому затронутому продукту
-    for (const [pid, draftAmount] of draftConsumption) {
-      const entry = getStockLevelEntry(pid);
-      if (!entry || entry.qty === null || entry.qty === undefined || entry.isUnlimited) continue;
-      const stockQty = Number(entry.qty);
-      if (!Number.isFinite(stockQty)) continue;
-      let cartConsumed = isSubscriptionMode ? 0 : calcProductStockConsumed(pid);
-      // В режиме редактирования вычитаем потребление редактируемого элемента
-      if (editMode && editingItem) {
-        cartConsumed -= calcProductStockConsumed(pid, [editingItem]);
-      }
-      if (cartConsumed + draftAmount > stockQty) return false;
-    }
-    return true;
-  }
-
-  function canUseDraftQtyWithVariantLocal(variantIndex, desiredQty) {
-    if (!Array.isArray(variants) || !variants.length) return true;
-    const idx = Number(variantIndex);
-    if (!Number.isFinite(idx) || idx < 0) return false;
-    const qtyForCheck = Math.max(1, Number(desiredQty || qty || 1));
-    return canUseDraftQtyLocal(qtyForCheck, { variantIndex: idx });
-  }
-
-  async function canUseDraftQty(
-    desiredQty,
-    {
-      showToastOnOut = true,
-      refreshOnOut = false,
-      variantOverrides = null,
-    } = {}
-  ) {
-    const payloadItems = buildDraftStockItemsPayload(desiredQty, variantOverrides);
-    const check = await checkStockForItemsPayload(payloadItems, {
-      showToastOnOut,
-      toastMessage: "\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
-      refreshOnOut,
-    });
-    return check.available;
-  }
-
-  async function canUseDraftQtyWithVariant(
-    variantIndex,
-    {
-      desiredQty = null,
-      showToastOnOut = false,
-      refreshOnOut = false,
-    } = {}
-  ) {
-    if (!Array.isArray(variants) || !variants.length) return true;
-    const group = variants[0] || null;
-    const groupId = Number(group?.id || variantState.groupId || 0);
-    const idx = Number(variantIndex);
-    if (!Number.isFinite(idx) || idx < 0) return false;
-    const qtyForCheck = Math.max(1, Number(desiredQty || qty || 1));
-
-    return canUseDraftQty(qtyForCheck, {
-      showToastOnOut,
-      refreshOnOut,
-      variantOverrides: {
-        variantGroupId: Number.isFinite(groupId) && groupId > 0 ? groupId : null,
-        variantIndex: idx,
-      },
-    });
-  }
-
-  function cloneDraftValue(value) {
-    if (value instanceof Map) {
-      const out = new Map();
-      value.forEach((v, k) => out.set(k, cloneDraftValue(v)));
-      return out;
-    }
-    if (value instanceof Set) {
-      const out = new Set();
-      value.forEach((v) => out.add(cloneDraftValue(v)));
-      return out;
-    }
-    if (Array.isArray(value)) return value.map((v) => cloneDraftValue(v));
-    if (value && typeof value === "object") {
-      const out = {};
-      Object.keys(value).forEach((k) => {
-        out[k] = cloneDraftValue(value[k]);
-      });
-      return out;
-    }
-    return value;
-  }
-
-  function snapshotDraftState() {
-    return {
-      selectionState: cloneDraftValue(selectionState),
-      ingredientState: cloneDraftValue(ingredientState),
-      variantState: cloneDraftValue(variantState),
-    };
-  }
-
-  function isPlainDraftObject(value) {
-    return !!value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Map) && !(value instanceof Set);
-  }
-
-  function restoreDraftValueInPlace(target, source) {
-    if (source instanceof Map) {
-      if (!(target instanceof Map)) return cloneDraftValue(source);
-      const keysToDelete = [];
-      target.forEach((_, key) => {
-        if (!source.has(key)) keysToDelete.push(key);
-      });
-      keysToDelete.forEach((key) => target.delete(key));
-      source.forEach((srcValue, key) => {
-        if (target.has(key)) {
-          const tgtValue = target.get(key);
-          target.set(key, restoreDraftValueInPlace(tgtValue, srcValue));
-        } else {
-          target.set(key, cloneDraftValue(srcValue));
-        }
-      });
-      return target;
-    }
-
-    if (source instanceof Set) {
-      if (!(target instanceof Set)) return cloneDraftValue(source);
-      target.clear();
-      source.forEach((v) => target.add(cloneDraftValue(v)));
-      return target;
-    }
-
-    if (Array.isArray(source)) {
-      if (!Array.isArray(target)) return cloneDraftValue(source);
-      target.length = 0;
-      source.forEach((v) => target.push(cloneDraftValue(v)));
-      return target;
-    }
-
-    if (isPlainDraftObject(source)) {
-      if (!isPlainDraftObject(target)) return cloneDraftValue(source);
-      Object.keys(target).forEach((k) => {
-        if (!(k in source)) delete target[k];
-      });
-      Object.keys(source).forEach((k) => {
-        target[k] = restoreDraftValueInPlace(target[k], source[k]);
-      });
-      return target;
-    }
-
-    return source;
-  }
-
-  function restoreDraftState(snapshot) {
-    const selectionSnapshot = snapshot?.selectionState instanceof Map ? snapshot.selectionState : new Map();
-    restoreDraftValueInPlace(selectionState, selectionSnapshot);
-
-    const ingredientSnapshot = snapshot?.ingredientState instanceof Map ? snapshot.ingredientState : new Map();
-    restoreDraftValueInPlace(ingredientState, ingredientSnapshot);
-
-    const variantSnapshot = snapshot?.variantState && typeof snapshot.variantState === "object" ? snapshot.variantState : {};
-    restoreDraftValueInPlace(variantState, variantSnapshot);
-  }
-
-  function guardDraftMutation(mutator, { showToastOnOut = true } = {}) {
-    if (typeof mutator !== "function") return false;
-    const snapshot = snapshotDraftState();
-    mutator();
-    const allowed = canUseDraftQtyLocal(Math.max(1, Number(qty || 1)));
-    if (allowed) return true;
-    restoreDraftState(snapshot);
-    if (showToastOnOut) showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-    return false;
-  }
-
-  function canDraftMutationApplyPreview(mutator) {
-    if (typeof mutator !== "function") return true;
-    const snapshot = snapshotDraftState();
-    mutator();
-    const allowed = canUseDraftQtyLocal(Math.max(1, Number(qty || 1)));
-    restoreDraftState(snapshot);
-    return allowed;
-  }
-
-  function refreshQtyPlusStockGate() {
-    if (!available) {
-      qtyPlusBlockedByStock = true;
-      updateQtyUi();
-      return false;
-    }
-    const desiredQty = Math.max(1, Number(qty || 1)) + 1;
-    const allowed = canUseDraftQtyLocal(desiredQty);
-    qtyPlusBlockedByStock = !allowed;
-    updateQtyUi();
-    return allowed;
-  }
-
-  const onQtyMinus = () => {
-    if (!available) return;
-    if (qty <= 1) return;
-    qty -= 1;
-    updateQtyUi();
-    updateActionText();
-    refreshQtyPlusStockGate();
-    refreshVariantAvailabilityUi();
-  };
-
-  const onQtyPlus = () => {
-    if (!available) return;
-    if (qtyPlusBlockedByStock) {
-      showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-      return;
-    }
-    const desiredQty = qty + 1;
-    const allowed = canUseDraftQtyLocal(desiredQty);
-    if (!allowed) {
-      qtyPlusBlockedByStock = true;
-      updateQtyUi();
-      showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-      return;
-    }
-    qty = desiredQty;
-    qtyPlusBlockedByStock = false;
-    updateQtyUi();
-    updateActionText();
-    refreshQtyPlusStockGate();
-    refreshVariantAvailabilityUi();
-  };
-
-  const { wrap, actionBtn, basePriceEl, refreshVariantAvailability, heroMedia } = buildProductDetailsContent(
-    product,
-    optionGroups,
-    selectionState,
-    ingredients,
-    ingredientState,
-    variants,
-    variantState,
-    {
-      onBack,
-      mode: editMode ? "edit" : "add",
-      onSelectionChange: () => {
-        updateActionText();
-        refreshQtyPlusStockGate();
-        refreshVariantAvailabilityUi();
-      },
-      onIngredientChange,
-      onVariantChange: () => {
-        updateActionText();
-        refreshQtyPlusStockGate();
-        refreshVariantAvailabilityUi();
-      },
-      canSelectVariantIndex: canUseDraftQtyWithVariantLocal,
-      canDraftMutationApply: canDraftMutationApplyPreview,
-      qtyPill,
-      onQtyMinus,
-      onQtyPlus,
-      setDefaultVariantForOptionItem,
-      guardDraftMutation,
-    }
-  );
-
-  actionBtnRef = actionBtn;
-  basePriceElRef = basePriceEl;
-  heroMediaRef = heroMedia || null;
-  ingredientsWrapRef = wrap.querySelector(".shop-pd-ingredients");
-  refreshVariantAvailabilityUi = () => {
-    if (typeof refreshVariantAvailability !== "function") return;
-    try {
-      Promise
-        .resolve(refreshVariantAvailability({ showToastOnOut: false }))
-        .catch(() => {});
-    } catch {}
-  };
-
-  updateQtyUi();
-  updateActionText();
-  refreshQtyPlusStockGate();
-  refreshVariantAvailabilityUi();
-
-  // На мобильных: синхронизируем кнопки с единым блоком
-  const isMobile = window.matchMedia("(max-width: 768px)").matches;
-  if (isMobile && elMobileProductActions) {
-    elMobileProductActions.classList.remove("is-read-only-back");
-  }
-  if (isMobile && !isReadOnlyView && elMobileProductActions && elMobileQtyWrap && elMobileAddToCartBtn) {
-    // Скрываем footer на мобильных
-    const footer = wrap.querySelector(".shop-pd-footer");
-    if (footer) footer.style.display = "none";
-
-    // Показываем мобильные кнопки
-    elMobileProductActions.classList.remove("hidden");
-    if (elMobileAddressActions) {
-      elMobileAddressActions.classList.add("hidden");
-    }
-    if (elMobileCartActions) {
-      elMobileCartActions.classList.add("hidden");
-      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
-      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
-    }
-    const mobilePricesWrap = elMobileAddToCartBtn.querySelector(".shop-pd-action-prices");
-    if (mobilePricesWrap) mobilePricesWrap.classList.remove("hidden");
-
-    // Клонируем qtyPill в мобильный блок
-    if (elMobileQtyWrap && qtyPill?.pill) {
-      elMobileQtyWrap.innerHTML = "";
-      const clonedPill = qtyPill.pill.cloneNode(true);
-      elMobileQtyWrap.appendChild(clonedPill);
-      
-      // Подключаем обработчики
-      const clonedMinus = clonedPill.querySelector(".qty-pill__btn--minus");
-      const clonedPlus = clonedPill.querySelector(".qty-pill__btn--plus");
-      if (clonedMinus) clonedMinus.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); onQtyMinus(); });
-      if (clonedPlus) clonedPlus.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); onQtyPlus(); });
-    }
-    
-    // Обновляем функцию updateActionText для синхронизации с мобильной кнопкой
-    const originalUpdateActionText = updateActionText;
-    updateActionText = () => {
-      originalUpdateActionText();
-      if (elMobileProductPrice && elMobileProductLabel) {
-        if (!available) {
-          elMobileProductLabel.textContent = "Нет в наличии";
-          elMobileProductPrice.textContent = "";
-          const mobileOldPrice = elMobileAddToCartBtn?.querySelector(".shop-pd-action-old");
-          if (mobileOldPrice) {
-            mobileOldPrice.textContent = "";
-            mobileOldPrice.classList.add("hidden");
-          }
-          if (elMobileAddToCartBtn) elMobileAddToCartBtn.disabled = true;
-        } else {
-          if (elMobileAddToCartBtn) elMobileAddToCartBtn.disabled = false;
-          const priceEl = actionBtnRef?.querySelector(".shop-pd-action-price");
-          if (priceEl) {
-            elMobileProductPrice.textContent = priceEl.textContent;
-          }
-          elMobileProductLabel.textContent = isSubscriptionMode ? "сохранить" : (editMode ? "Сохранить" : "в корзину");
-        }
-      }
-      // Обновляем qty в клонированном pill
-      if (elMobileQtyWrap) {
-        const clonedCenter = elMobileQtyWrap.querySelector(".qty-pill__center");
-        if (clonedCenter) clonedCenter.textContent = String(qty);
-        const clonedMinus = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
-        if (clonedMinus) {
-          const minusDisabled = qty <= 1 || !available;
-          clonedMinus.classList.toggle("is-disabled", minusDisabled);
-          clonedMinus.disabled = minusDisabled;
-        }
-        const clonedPlus = elMobileQtyWrap.querySelector(".qty-pill__btn--plus");
-        if (clonedPlus) {
-          const plusDisabled = !available || qtyPlusBlockedByStock;
-          clonedPlus.classList.toggle("is-disabled", plusDisabled);
-          clonedPlus.disabled = plusDisabled;
-        }
-      }
-    };
-    
-    // Обновляем функцию updateQtyUi для синхронизации
-    const originalUpdateQtyUi = updateQtyUi;
-    updateQtyUi = () => {
-      originalUpdateQtyUi();
-      if (elMobileQtyWrap) {
-        const clonedCenter = elMobileQtyWrap.querySelector(".qty-pill__center");
-        if (clonedCenter) clonedCenter.textContent = String(qty);
-        const clonedMinus = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
-        if (clonedMinus) {
-          const minusDisabled = qty <= 1 || !available;
-          clonedMinus.classList.toggle("is-disabled", minusDisabled);
-          clonedMinus.disabled = minusDisabled;
-        }
-        const clonedPlus = elMobileQtyWrap.querySelector(".qty-pill__btn--plus");
-        if (clonedPlus) {
-          const plusDisabled = !available || qtyPlusBlockedByStock;
-          clonedPlus.classList.toggle("is-disabled", plusDisabled);
-          clonedPlus.disabled = plusDisabled;
-        }
-      }
-    };
-    
-    // Подключаем обработчик к мобильной кнопке (снимаем предыдущий, чтобы не копились)
-    if (mobileProductActionsState.onAddToCart) {
-      elMobileAddToCartBtn.removeEventListener("click", mobileProductActionsState.onAddToCart);
-    }
-    mobileProductActionsState.onAddToCart = () => {
-      actionBtn.click();
-    };
-    elMobileAddToCartBtn.addEventListener("click", mobileProductActionsState.onAddToCart);
-    
-    // Обновляем сразу
-    updateActionText();
-    updateQtyUi();
-    
-    // Скрываем ботомщит активного заказа при открытии карточки товара
-    if (elActiveOrdersSheetCollapsed) {
-      elActiveOrdersSheetCollapsed.classList.add("hidden");
-    }
-  }
-
-  function composeVariantLabelValueFirst(rawLabel, rawGroupTitle) {
-    if (typeof window.extractVariantValueForOrder === "function") {
-      return str(window.extractVariantValueForOrder(rawLabel, rawGroupTitle)).trim();
-    }
-    const raw = str(rawLabel || "").trim();
-    if (!raw) return "";
-    const colonPos = raw.indexOf(":");
-    if (colonPos >= 0) {
-      const right = raw.slice(colonPos + 1).trim();
-      if (right) return right;
-    }
-    return raw;
-  }
-
-  function buildCurrentProductFavoriteSnapshot() {
-    const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
-    const ingredientQuantities = buildCurrentIngredientQuantities();
-    const optionItemIds = selectedItems
-      .map((item) => Number(item.id))
-      .filter((id) => Number.isFinite(id) && id > 0);
-
-    const selectedVariantGroupIdRaw = variantState.groupId;
-    const selectedVariantIndexRaw = variantState.selectedIndex;
-    const selectedVariantGroupId =
-      selectedVariantGroupIdRaw === undefined || selectedVariantGroupIdRaw === null || selectedVariantGroupIdRaw === ""
-        ? null
-        : Number(selectedVariantGroupIdRaw);
-    const selectedVariantIndex =
-      selectedVariantIndexRaw === undefined || selectedVariantIndexRaw === null || selectedVariantIndexRaw === ""
-        ? null
-        : Number(selectedVariantIndexRaw);
-    const hasVariantSelection =
-      Array.isArray(variants) &&
-      variants.length > 0 &&
-      Number.isFinite(selectedVariantGroupId) &&
-      selectedVariantGroupId > 0 &&
-      Number.isFinite(selectedVariantIndex) &&
-      selectedVariantIndex >= 0;
-    const variantGroupTitle = str(variants?.[0]?.title || variants?.[0]?.title_label || "").trim();
-    const variantUnit = str(
-      variants?.[0]?.unit_short_title ||
-      variants?.[0]?.unit_title ||
-      variants?.[0]?.unit_code ||
-      ""
-    ).trim();
-    const variantValueLabel = str(variantState.label || "").trim() || formatVariantValueLabelByIndex(selectedVariantIndex);
-    const variantLabel = hasVariantSelection
-      ? composeVariantLabelValueFirst(variantValueLabel, variantGroupTitle)
-      : "";
-    const variantUnitPrice = hasVariantSelection
-      ? getVariantUnitPrice(product, variants, variantState)
-      : Number(product.price || 0);
-    const safeQty = Math.max(1, Number(qty || 1));
-    const ingredientPricing = calculateIngredientPricing();
-    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0);
-    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
-
-    const draftResolvedItem = {
-      product,
-      product_id: Number(product.id || 0),
-      qty: safeQty,
-      option_item_ids: optionItemIds,
-      option_items: selectedItems,
-      ingredients: ingredientQuantities,
-      ingredient_price_diff: Number(ingredientsPriceDiff || 0),
-      variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
-      variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
-      variant_label: variantLabel,
-      variant_group_title: hasVariantSelection ? variantGroupTitle : "",
-      variant_unit: hasVariantSelection ? variantUnit : "",
-      variant_unit_price: Number(variantUnitPrice || 0),
-      unit_price_override: null,
-      auto_add: 0,
-      auto_add_group_id: null,
-    };
-
-    const resolvedItems = cartItemsResolved();
-    const totals = {
-      nonAutoTotal: computeNonAutoTotal(resolvedItems),
-      autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
-    };
-    const pricing = computeItemPricing(draftResolvedItem, totals);
-    const optionPricingTotals = getSelectedOptionItemsPricingTotals(selectedItems);
-    const optionCurrentTotal = Number(optionPricingTotals.currentTotal || 0);
-    const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
-    const oldUnitBase = scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
-    const parts = pricing?.parts || {};
-    const baseOriginalComparable = oldUnitBase > Number(variantUnitPrice || 0)
-      ? roundPrice(oldUnitBase + ingredientsOriginalPriceDiff)
-      : roundPrice(Number(variantUnitPrice || 0) + ingredientsOriginalPriceDiff);
-    const hasDiscount = Number(pricing?.discountAmount || 0) > 0;
-    const showOld =
-      !pricing?.isAuto &&
-      (
-        hasDiscount ||
-        roundPrice(baseOriginalComparable + optionOriginalComparableTotal) > Number(pricing?.unitPrice || 0)
-      );
-    const originalLineTotal = hasDiscount
-      ? roundPrice((Number(pricing?.unitPrice || 0) + Math.max(0, optionOriginalComparableTotal - optionCurrentTotal)) * safeQty)
-      : roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * safeQty);
-
-    return buildFavoriteSnapshotFromResolvedItem(draftResolvedItem, {
-      pricing,
-      oldLineTotal: showOld ? originalLineTotal : null,
-    });
-  }
-
-  if (window.AppModal?.isOpen && window.AppModal.isOpen()) {
-    setSheetHeaderMode("product", {
-      onBack,
-      favoriteBuildSnapshot: buildCurrentProductFavoriteSnapshot,
-    });
-  }
-
-  // Привязка избранного к десктопной кнопке в хедере правой панели
-  const desktopFavBtn = document.getElementById("shopCartFavBtn");
-  if (desktopFavBtn) {
-    const freshBtn = desktopFavBtn.cloneNode(true);
-    desktopFavBtn.replaceWith(freshBtn);
-    freshBtn.classList.remove("is-active", "is-busy");
-    delete freshBtn.dataset.favoriteId;
-    bindFavoriteButtonsForCartRow(
-      [freshBtn],
-      () => buildCurrentProductFavoriteSnapshot()
-    );
-  }
-
-  if (favoriteButton) {
-    favoriteButton.classList.remove("is-active", "is-busy");
-    delete favoriteButton.dataset.favoriteId;
-    bindFavoriteButtonsForCartRow(
-      [favoriteButton],
-      () => buildCurrentProductFavoriteSnapshot()
-    );
-  }
-
-  container.appendChild(wrap);
-
-  actionBtn.addEventListener("click", async () => {
-    if (isReadOnlyView || !available) return;
-    const previousCartSnapshot = cloneCartState(state.cart);
-    const wasEmpty = cartCountTotal() === 0;
-    const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
-    const optionItemIds = selectedItems.map((item) => item.id);
-    const selectedVariantGroupIdRaw = variantState.groupId;
-    const selectedVariantIndexRaw = variantState.selectedIndex;
-    const selectedVariantGroupId =
-      selectedVariantGroupIdRaw === undefined || selectedVariantGroupIdRaw === null || selectedVariantGroupIdRaw === ""
-        ? null
-        : Number(selectedVariantGroupIdRaw);
-    const selectedVariantIndex =
-      selectedVariantIndexRaw === undefined || selectedVariantIndexRaw === null || selectedVariantIndexRaw === ""
-        ? null
-        : Number(selectedVariantIndexRaw);
-    const hasVariantSelection =
-      Array.isArray(variants) &&
-      variants.length > 0 &&
-      Number.isFinite(selectedVariantGroupId) &&
-      selectedVariantGroupId > 0 &&
-      Number.isFinite(selectedVariantIndex) &&
-      selectedVariantIndex >= 0;
-    const variantSelection = hasVariantSelection
-      ? { group_id: selectedVariantGroupId, value_index: selectedVariantIndex }
-      : null;
-    const variantGroupTitle = str(variants?.[0]?.title || variants?.[0]?.title_label || "").trim();
-    const variantUnit = str(
-      variants?.[0]?.unit_short_title ||
-      variants?.[0]?.unit_title ||
-      variants?.[0]?.unit_code ||
-      ""
-    ).trim();
-    const variantValueLabel = str(variantState.label || "").trim() || formatVariantValueLabelByIndex(selectedVariantIndex);
-    const variantLabel = hasVariantSelection
-      ? composeVariantLabelValueFirst(variantValueLabel, variantGroupTitle)
-      : "";
-    const variantUnitPrice = hasVariantSelection
-      ? getVariantUnitPrice(product, variants, variantState)
-      : Number(product.price || 0);
-
-    const safeQty = Math.max(1, Number(qty || 1));
-
-    if (!canUseDraftQtyLocal(safeQty)) {
-      showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-      return;
-    }
-
-    // Collect ingredient quantities with names and units for display
-    // ВАЖНО: сохраняем ВСЕ ингредиенты, даже если они не изменены (для отображения в админке)
-    const ingredientQuantities = buildCurrentIngredientQuantities();
-
-    const nextKey = makeCartKey(product.id, selectedItems, ingredientQuantities, variantSelection);
-    
-    // Рассчитываем разницу цены ингредиентов для сохранения в корзину
-    const ingredientPricing = calculateIngredientPricing();
-    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0);
-    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
-    const draftResolvedItem = {
-      product,
-      product_id: Number(product.id || 0),
-      qty: safeQty,
-      option_item_ids: optionItemIds,
-      option_items: selectedItems,
-      ingredients: ingredientQuantities,
-      ingredient_price_diff: Number(ingredientsPriceDiff || 0),
-      variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
-      variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
-      variant_label: variantLabel,
-      variant_group_title: hasVariantSelection ? variantGroupTitle : "",
-      variant_unit: hasVariantSelection ? variantUnit : "",
-      variant_unit_price: Number(variantUnitPrice || 0),
-      unit_price_override: null,
-      auto_add: 0,
-      auto_add_group_id: null,
-    };
-    const resolvedItems = cartItemsResolved();
-    const pricingTotals = {
-      nonAutoTotal: computeNonAutoTotal(resolvedItems),
-      autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
-    };
-    const pricing = computeItemPricing(draftResolvedItem, pricingTotals);
-    const optionPricingTotals = getSelectedOptionItemsPricingTotals(selectedItems);
-    const optionCurrentTotal = Number(optionPricingTotals.currentTotal || 0);
-    const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
-    const oldUnitBase = scaleProductBasePriceForCurrentUnit(
-      product,
-      variantUnitPrice || Number(product.price || 0),
-      Number(product.old_price || 0)
-    );
-    const pricingParts = pricing?.parts || {};
-    const baseOriginalComparable = oldUnitBase > Number(variantUnitPrice || 0)
-      ? roundPrice(oldUnitBase + ingredientsOriginalPriceDiff)
-      : roundPrice(Number(variantUnitPrice || 0) + ingredientsOriginalPriceDiff);
-    const hasDiscount = Number(pricing?.discountAmount || 0) > 0;
-    const showOld =
-      !pricing?.isAuto &&
-      (
-        hasDiscount ||
-        roundPrice(baseOriginalComparable + optionOriginalComparableTotal) > Number(pricing?.unitPrice || 0)
-      );
-    const originalLineTotal = hasDiscount
-      ? roundPrice((Number(pricing?.unitPrice || 0) + Math.max(0, optionOriginalComparableTotal - optionCurrentTotal)) * safeQty)
-      : roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * safeQty);
-    const cartPricingSnapshot = buildFavoriteSnapshotFromResolvedItem(draftResolvedItem, {
-      pricing,
-      oldLineTotal: showOld ? originalLineTotal : null,
-    });
-    const cartOldPrice = Number(cartPricingSnapshot?.old_price || 0);
-    const cartUnitPriceBeforeDiscount = showOld && safeQty > 0
-      ? roundPrice(originalLineTotal / safeQty)
-      : null;
-    const cartDiscount = cartPricingSnapshot?.discount && typeof cartPricingSnapshot.discount === "object"
-      ? {
-          ...cartPricingSnapshot.discount,
-          original_line_total: cartPricingSnapshot.discount?.original_line_total != null
-            ? Number(cartPricingSnapshot.discount.original_line_total)
-            : null,
-        }
-      : null;
-
-    if (isSubscriptionMode) {
-      if (typeof onSave === 'function') {
-        onSave({
-          type: 'product',
-          product_id: Number(product.id || 0),
-          id: Number(product.id || 0),
-          title: String(product.name || product.title || '').trim(),
-          photo: (Array.isArray(product.photos) ? product.photos.filter(Boolean)[0] : '') || '',
-          photos: Array.isArray(product.photos) ? product.photos.filter(Boolean) : [],
-          sku: String(product.sku || '').trim(),
-          qty: safeQty,
-          price: Number(pricing?.unitPrice || 0),
-          old_price: cartOldPrice,
-          unit_price_before_discount: cartUnitPriceBeforeDiscount,
-          discount: cartDiscount,
-          option_item_ids: optionItemIds,
-          option_items: selectedItems,
-          ingredients: ingredientQuantities,
-          ingredient_price_diff: ingredientsPriceDiff || 0,
-          variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
-          variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
-          variant_label: variantLabel,
-          variant_group_title: hasVariantSelection ? variantGroupTitle : '',
-          variant_unit: hasVariantSelection ? variantUnit : '',
-          variant_unit_price: Number(variantUnitPrice || 0),
-        });
-      }
-      return;
-    }
-    if (editMode && editingItem) {
-      // режим редактирования: обновляем qty и конфигурацию, с merge если совпало
-      const sameItem = getCartItemByKey(nextKey);
-
-      if (sameItem && sameItem.key !== editingItem.key) {
-        // merge: прибавляем qty текущей редактируемой строки в найденную
-        sameItem.qty = Number(sameItem.qty || 0) + safeQty;
-        sameItem.ingredients = ingredientQuantities; // Обновляем ингредиенты с названиями
-        sameItem.ingredient_price_diff = ingredientsPriceDiff || 0;
-        sameItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
-        sameItem.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
-        sameItem.variant_label = variantLabel;
-        sameItem.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
-        sameItem.variant_unit = hasVariantSelection ? variantUnit : "";
-        sameItem.variant_unit_price = Number(variantUnitPrice || 0);
-        sameItem.old_price = cartOldPrice;
-        sameItem.unit_price_before_discount = cartUnitPriceBeforeDiscount;
-        sameItem.discount = cartDiscount;
-
-        // удаляем старую строку
-        state.cart = state.cart.filter((it) => it.key !== editingItem.key);
-      } else {
-        // обновляем текущую строку (сохраняем ингредиенты с названиями)
-        editingItem.key = nextKey;
-        editingItem.option_item_ids = optionItemIds;
-        editingItem.option_items = selectedItems;
-        editingItem.ingredients = ingredientQuantities; // Уже содержит названия и единицы
-        editingItem.ingredient_price_diff = ingredientsPriceDiff || 0;
-        editingItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
-        editingItem.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
-        editingItem.variant_label = variantLabel;
-        editingItem.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
-        editingItem.variant_unit = hasVariantSelection ? variantUnit : "";
-        editingItem.variant_unit_price = Number(variantUnitPrice || 0);
-        editingItem.old_price = cartOldPrice;
-        editingItem.unit_price_before_discount = cartUnitPriceBeforeDiscount;
-        editingItem.discount = cartDiscount;
-        editingItem.qty = safeQty;
-        if (editingItem.auto_add == null) editingItem.auto_add = 0;
-        if (editingItem.auto_add_group_id == null) editingItem.auto_add_group_id = null;
-      }
-    } else {
-      // режим добавления: merge по конфигурации
-      const existing = getCartItemByKey(nextKey);
-      if (existing) {
-        existing.qty = Number(existing.qty || 0) + safeQty;
-        existing.ingredients = ingredientQuantities; // Уже содержит названия и единицы
-        existing.ingredient_price_diff = ingredientsPriceDiff || 0;
-        existing.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
-        existing.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
-        existing.variant_label = variantLabel;
-        existing.variant_group_title = hasVariantSelection ? variantGroupTitle : "";
-        existing.variant_unit = hasVariantSelection ? variantUnit : "";
-        existing.variant_unit_price = Number(variantUnitPrice || 0);
-        existing.old_price = cartOldPrice;
-        existing.unit_price_before_discount = cartUnitPriceBeforeDiscount;
-        existing.discount = cartDiscount;
-        if (existing.auto_add == null) existing.auto_add = 0;
-        if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
-      } else {
-        state.cart.push({
-          key: nextKey,
-          product_id: product.id,
-          qty: safeQty,
-          option_item_ids: optionItemIds,
-          option_items: selectedItems,
-          ingredients: ingredientQuantities,
-          ingredient_price_diff: ingredientsPriceDiff || 0,
-          variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
-          variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
-          variant_label: variantLabel,
-          variant_group_title: hasVariantSelection ? variantGroupTitle : "",
-          variant_unit: hasVariantSelection ? variantUnit : "",
-          variant_unit_price: Number(variantUnitPrice || 0),
-          old_price: cartOldPrice,
-          unit_price_before_discount: cartUnitPriceBeforeDiscount,
-          discount: cartDiscount,
-          auto_add: 0,
-          auto_add_group_id: null,
-        });
-      }
-    }
-
-    if (wasEmpty) {
-      clearAllAutoAddDismissed();
-    }
-    applyAutoAddRules();
-    clearAutoAddDismissedIfCartEmpty();
-    saveCart();
-    if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-    if (typeof refreshCartUiAfterMutation === "function") {
-      refreshCartUiAfterMutation({
-        reason: "productDetails.add",
-        changedCartKeys: [nextKey],
-      });
-    } else {
-      renderCart();
-      updateCartBadge();
-    }
-
-    // обновление моб. шита корзины, если открыт
-    if (typeof refreshCartUiAfterMutation !== "function" && openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
-      const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
-      if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
-      if (openCartSheetCtx.checkoutBtn) {
-        openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
-        const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
-        if (tspan) tspan.textContent = money(total);
-      }
-      appendUpsellToList(openCartSheetCtx.listEl);
-    }
-
-    queueCartStockRecheck(previousCartSnapshot, {
-      toastMessage: "Больше нет в наличии",
-    });
-    const savedItemForLimit = getCartItemByKey(nextKey);
-    const savedQtyForLimit = Number(savedItemForLimit?.qty || 0);
-    if (savedItemForLimit && savedQtyForLimit > 0) {
-      if (typeof refreshNextRegularCartItemLimitLocal === "function") {
-        refreshNextRegularCartItemLimitLocal(Number(product.id || 0), nextKey, savedQtyForLimit);
-      }
-    }
-
-    // На мобильных: скрываем мобильные кнопки при закрытии карточки
-    const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && elMobileProductActions) {
-      elMobileProductActions.classList.add("hidden");
-      // Обновляем ботомщит активного заказа
-      if (typeof window.updateActiveOrdersBadge === "function") {
-        window.updateActiveOrdersBadge();
-      }
-    }
-
-    // Закрываем карточку и показываем корзину
-    if (onBack && typeof onBack === "function") {
-      onBack();
-    } else {
-      showCartView();
-    }
-  });
-
-  if (isReadOnlyView) {
-    wrap.classList.add("shop-pd-read-only-gift");
-    if (Array.isArray(variants) && variants.length) {
-      const topVariantSection = wrap.querySelector(".shop-pd-scroll > .shop-pd-options");
-      if (topVariantSection) {
-        const variantNodes = Array.from(topVariantSection.querySelectorAll("[data-variant-index]"));
-        const selectedNode = variantNodes.find((node) => node.classList.contains("is-selected")) || variantNodes[0] || null;
-        variantNodes.forEach((node) => {
-          if (node !== selectedNode) {
-            node.remove();
-            return;
-          }
-          node.classList.remove("is-clickable");
-          node.style.pointerEvents = "none";
-          if ("disabled" in node) node.disabled = true;
-        });
-      }
-    }
-    wrap.querySelectorAll(".shop-pd-option-edit, .shop-pd-option-gear-btn").forEach((node) => node.remove());
-    wrap.querySelectorAll(".shop-pd-option-card.is-clickable, .shop-pd-option-summary, .shop-pd-option-variant-btn").forEach((node) => {
-      node.classList.remove("is-clickable");
-      node.style.pointerEvents = "none";
-      if ("disabled" in node) node.disabled = true;
-    });
-    wrap.querySelectorAll(".shop-pd-ingredient-controls .qty-btn").forEach((node) => {
-      node.style.display = "none";
-      if ("disabled" in node) node.disabled = true;
-    });
-    wrap.querySelectorAll(".shop-pd-option-qty-btn").forEach((node) => {
-      node.style.display = "none";
-      if ("disabled" in node) node.disabled = true;
-    });
-    const footer = wrap.querySelector(".shop-pd-footer");
-    if (footer) footer.style.display = "none";
-    if (mobileProductActionsState.onAddToCart && elMobileAddToCartBtn) {
-      elMobileAddToCartBtn.removeEventListener("click", mobileProductActionsState.onAddToCart);
-      mobileProductActionsState.onAddToCart = null;
-    }
-    if (isMobile && elMobileProductActions && elMobileAddToCartBtn) {
-      elMobileProductActions.classList.remove("hidden");
-      elMobileProductActions.classList.add("is-read-only-back");
-      if (elMobileAddressActions) {
-        elMobileAddressActions.classList.add("hidden");
-      }
-      if (elMobileCartActions) {
-        elMobileCartActions.classList.add("hidden");
-        if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
-        if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
-      }
-      if (elMobileQtyWrap) {
-        elMobileQtyWrap.innerHTML = "";
-      }
-      const mobilePricesWrap = elMobileAddToCartBtn.querySelector(".shop-pd-action-prices");
-      if (mobilePricesWrap) mobilePricesWrap.classList.add("hidden");
-      const mobileOldPrice = elMobileAddToCartBtn.querySelector(".shop-pd-action-old");
-      if (mobileOldPrice) {
-        mobileOldPrice.textContent = "";
-        mobileOldPrice.classList.add("hidden");
-      }
-      if (elMobileProductPrice) {
-        elMobileProductPrice.textContent = "";
-      }
-      if (elMobileProductLabel) {
-        elMobileProductLabel.textContent = "Вернуться в корзину";
-      }
-      elMobileAddToCartBtn.disabled = false;
-      mobileProductActionsState.onAddToCart = () => {
-        if (typeof onBack === "function") {
-          onBack();
-          return;
-        }
-        showCartView();
-      };
-      elMobileAddToCartBtn.addEventListener("click", mobileProductActionsState.onAddToCart);
-      if (elActiveOrdersSheetCollapsed) {
-        elActiveOrdersSheetCollapsed.classList.add("hidden");
-      }
-    } else if (elMobileProductActions) {
-      elMobileProductActions.classList.add("hidden");
-    }
-  }
-
-  openProductCtx = {
-    productId: product.id,
-    onBack: typeof onBack === "function" ? onBack : null,
-    readOnly: isReadOnlyView,
-    container,
-    product,
-    stockSelectionMode: container.dataset.stockSelectionMode || "auto",
-    refreshAvailability: refreshVariantAvailability,
-  };
-  if (!container.dataset.stockSelectionMode) container.dataset.stockSelectionMode = "auto";
-  if (container.dataset.stockSelectionBound !== "1") {
-    container.dataset.stockSelectionBound = "1";
-    container.addEventListener("click", (event) => {
-      const control = event.target?.closest?.(
-        '[data-action="ingredient-minus"], [data-action="ingredient-plus"], .shop-pd-variant-btn, [data-variant-index]'
-      );
-      if (!control || !container.contains(control)) return;
-      container.dataset.stockSelectionMode = "manual";
-      if (openProductCtx && Number(openProductCtx.productId) === Number(product.id)) {
-        openProductCtx.stockSelectionMode = "manual";
-      }
-    }, true);
-  }
-
-  if (isStaticProductView && Number.isFinite(productIdForRender) && productIdForRender > 0) {
-    container.__shopRenderedViewType = "product";
-    container.__shopRenderedProductId = productIdForRender;
-    container.__shopRenderedComboId = "";
-    container.__shopRenderedComboMain = false;
-  }
-}
 
 window.applyEffectiveStockConfigToOpenProduct = function applyEffectiveStockConfigToOpenProduct(productId, config) {
   const ctx = openProductCtx;
@@ -7323,7 +1738,7 @@ async function mountProductDetails(options = {}) {
     return freshButton;
   }
 
-  function finishStandaloneDetailsClose() {
+  function finishStandaloneDetailsClose({ restore = true } = {}) {
     standaloneComboLoadSeq += 1;
     standaloneComboLoadingId = null;
     const backHandler = standaloneDetailsBackHandler;
@@ -7339,9 +1754,9 @@ async function mountProductDetails(options = {}) {
     openProductCtx = null;
     if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
     if (typeof setActiveNav === "function") {
-      setActiveNav(returnTarget === "cart" ? "cart" : "menu");
+      setActiveNav(restore && returnTarget === "cart" ? "cart" : "menu");
     }
-    if (typeof backHandler === "function") backHandler();
+    if (restore && typeof backHandler === "function") backHandler();
   }
 
   function closeStandaloneDetailsPage() {
@@ -7395,7 +1810,66 @@ async function mountProductDetails(options = {}) {
     if (typeof stepBackHandler === "function") stepBackHandler();
   }
 
+  function bindKsoPageBackSwipe(page, onBack) {
+    if (!document.body.classList.contains('page-kso') || !page) return;
+    page._ksoBackSwipeAction = onBack;
+    if (page.dataset.ksoBackSwipeBound) return;
+    page.dataset.ksoBackSwipeBound = '1';
+    let gesture = null;
+    let suppressClickUntil = 0;
+    page.addEventListener('touchstart', event => {
+      gesture = null;
+      suppressClickUntil = 0;
+      if (event.touches.length !== 1 || window.AppModal?.isOpen?.()
+        || event.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      let target = event.target;
+      while (target && target !== page) {
+        if (target.scrollWidth > target.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(target).overflowX)) return;
+        target = target.parentElement;
+      }
+      const touch = event.touches[0];
+      gesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, dx: 0, dy: 0, horizontal: false };
+    }, { passive: true, capture: true });
+    const track = touches => {
+      if (!gesture) return;
+      for (const touch of touches) {
+        if (touch.identifier !== gesture.id) continue;
+        gesture.dx = touch.clientX - gesture.x;
+        gesture.dy = touch.clientY - gesture.y;
+        if (!gesture.horizontal && (gesture.dx < -12 || (Math.abs(gesture.dy) > 12 && Math.abs(gesture.dy) > Math.abs(gesture.dx)))) {
+          gesture = null;
+          return;
+        }
+        if (gesture.dx >= 8 && gesture.dx > Math.abs(gesture.dy) * 1.5) gesture.horizontal = true;
+        break;
+      }
+    };
+    page.addEventListener('touchmove', event => {
+      if (event.touches.length !== 1) { gesture = null; return; }
+      track(event.touches);
+      if (gesture?.horizontal) {
+        if (event.cancelable) event.preventDefault();
+        event.stopPropagation();
+      }
+    }, { passive: false, capture: true });
+    page.addEventListener('touchend', event => {
+      track(event.changedTouches);
+      const completed = gesture;
+      gesture = null;
+      if (!completed?.horizontal) return;
+      suppressClickUntil = Date.now() + 250;
+      if (!event.touches.length && completed.dx >= 80 && completed.dx > Math.abs(completed.dy) * 1.8) page._ksoBackSwipeAction?.();
+    }, { passive: true, capture: true });
+    page.addEventListener('touchcancel', () => { gesture = null; }, { passive: true, capture: true });
+    page.addEventListener('click', event => {
+      if (event.detail === 0 || Date.now() >= suppressClickUntil) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  }
+
   standaloneDetailsBackBtn?.addEventListener("click", closeStandaloneDetailsPage);
+  bindKsoPageBackSwipe(standaloneDetailsPage, () => standaloneDetailsBackBtn?.click());
   window.addEventListener("popstate", (event) => {
     if (!document.body?.classList.contains("shop-details-page-active")) return;
     event.stopImmediatePropagation();
@@ -7449,7 +1923,7 @@ async function mountProductDetails(options = {}) {
     const hasCustomOnBack = typeof onBack === "function";
     const resolvedOnBack = hasCustomOnBack ? onBack : showCartView;
 
-    if (isMobile && !isKsoPage) {
+    if (isMobile || isKsoPage) {
       await openStandaloneProductPage(p, {
         cartKey,
         prefillItem,
@@ -7850,7 +2324,7 @@ async function mountProductDetails(options = {}) {
       updateFooterAction();
 
       // На мобилке привязываем футер комбо к блоку над навигацией (как у товаров)
-      const isMobileCombo = window.matchMedia("(max-width: 768px)").matches;
+      const isMobileCombo = window.matchMedia("(max-width: 768px)").matches || (document.body?.classList.contains("page-kso") && container === standaloneDetailsContent);
       if (isMobileCombo && (openCartSheetCtx || container === standaloneDetailsContent) && elMobileProductActions && elMobileQtyWrap && elMobileAddToCartBtn) {
         footer.style.display = "none";
         elMobileCartActions.classList.add("hidden");
@@ -10202,7 +4676,7 @@ async function mountProductDetails(options = {}) {
     let standaloneFavoriteButton = null;
     let standaloneLoadSeq = null;
 
-    if (isMobile && !isKsoPage) {
+    if (isMobile || isKsoPage) {
       if (
         standaloneComboLoadingId === safeComboId &&
         document.body?.classList.contains("shop-details-page-active")
@@ -10265,7 +4739,7 @@ async function mountProductDetails(options = {}) {
       return;
     }
 
-    if (isMobile && !isKsoPage) {
+    if (isMobile || isKsoPage) {
       if (
         standaloneLoadSeq !== standaloneComboLoadSeq ||
         !document.body?.classList.contains("shop-details-page-active")
@@ -10475,7 +4949,26 @@ async function mountProductDetails(options = {}) {
     }
   }
 
-  function closeShopSheetIfOpen() {
+  function closeShopSheetIfOpen(options = {}) {
+    if (document.body?.classList.contains('page-kso') && options.resetSession === true) {
+      if (document.body.classList.contains('shop-details-page-active')) finishStandaloneDetailsClose({ restore: false });
+      if (document.body.classList.contains('shop-categories-page-active') && categoriesPageClose) categoriesPageClose({ immediate: true });
+      openCartSheetCtx = null;
+      const nextState = { ...(window.history.state || {}) };
+      ['shopDetailsPage', 'shopDetailsStep', 'shopCategoriesPage', 'sheet', 'shopBack', 'shopCartCheckout'].forEach(key => delete nextState[key]);
+      window.history.replaceState(nextState, '', window.location.href);
+    }
+    if (document.body?.classList.contains("page-kso") && document.body.classList.contains("shop-cart-page-active")) {
+      document.getElementById("shopCartPage")?.classList.add("hidden");
+      document.body.classList.remove("shop-cart-page-active", "shop-checkout-overlay-open");
+      cleanupCheckoutViewSubscriptions();
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
+      openProductCtx = null;
+      if (typeof setActiveNav === "function") setActiveNav("menu");
+      window.syncKsoFloatingCartButton?.();
+    }
     if (!window.AppModal) return;
     resetShopModalHeaderUi();
     if (window.AppModal.isOpen()) {
@@ -10589,7 +5082,7 @@ function openCategoriesSheet() {
   const list = cache.list;
   syncCategoriesSheetActiveRow(list);
 
-  if (window.matchMedia("(max-width: 768px)").matches) {
+  if (window.matchMedia("(max-width: 768px)").matches || document.body.classList.contains('page-kso')) {
     categoriesPagePendingSelection = null;
     const profilePage = document.getElementById("shopProfilePage");
     const pageParent = profilePage?.parentElement || document.body;
@@ -10631,7 +5124,8 @@ function openCategoriesSheet() {
         selectCategory(pendingSelection.id, pendingSelection.title, { alignFirstCard: true });
       }
     };
-    const requestBack = () => {
+    const requestBack = (options = {}) => {
+      if (options.immediate === true) { closePage(); return; }
       if (window.history.state?.shopCategoriesPage === true) {
         window.history.back();
         return;
@@ -10641,6 +5135,7 @@ function openCategoriesSheet() {
 
     categoriesPageClose = requestBack;
     page.querySelector("[data-categories-page-back]").onclick = requestBack;
+    bindKsoPageBackSwipe(page, () => page.querySelector('[data-categories-page-back]')?.click());
     sheetNavigationState.type = "categories";
     sheetNavigationState.screen = "list";
     sheetNavigationState.data = null;
@@ -16764,7 +11259,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     return Array.from(productCategoryIds).reduce((max, id) => Math.max(max, Number(selectedCategoryPercents.get(id) || 0)), 0);
   }
 
-  function calculateCartBonusPreview(cartItems, lineStates, itemsTotal, level) {
+  function calculateCartBonusPreview(cartItems, lineStates, itemsTotal, level, favoritePercents = null) {
     const safeItems = Array.isArray(cartItems) ? cartItems : [];
     const safeLineStates = Array.isArray(lineStates) ? lineStates : [];
     const lineTotalsByKey = new Map(
@@ -16895,6 +11390,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   }
 
   function mountCartPageCheckoutActionInSummary(sectionEl) {
+    if (document.body?.classList.contains("page-kso")) return;
     if (!document.body?.classList.contains("shop-cart-page-active")) return;
     if (!sectionEl || sectionEl.closest(".shop-cart-list") !== openCartSheetCtx?.listEl) return;
     const card = sectionEl.querySelector(".shop-cart-pricing-summary-card");
@@ -18546,6 +13042,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
     applyCartPricingStateToSummarySections(effectiveSummaryState);
     applyCartPricingLineStatesToConnectedRows(effectiveSummaryState);
     updateCartBonusRedeemSections(effectiveSummaryState);
+    if(document.body?.classList.contains('page-kso'))refreshKsoBonusRecipient(effectiveSummaryState);
     return effectiveSummaryState;
   }
 
@@ -24296,12 +18793,40 @@ function clearCheckoutRouteHistoryState() {
   window.history.replaceState(nextState, "", window.location.href);
 }
 
+  let ksoBonusRecipient = null;
+  function refreshKsoBonusRecipient(pricingSnapshot = null) {
+    const summary=document.querySelector('#shopCartPage [data-kso-bonus-summary]');
+    if(!summary)return;
+    document.querySelector('#shopCartPage .shop-kso-bonus-phone-button')?.classList.toggle('hidden',!!ksoBonusRecipient);
+    if(!ksoBonusRecipient){summary.textContent='';summary.classList.add('hidden');return;}
+    const snapshot=pricingSnapshot||buildCartPricingSnapshot();
+    const amount=ksoBonusRecipient.config.enabled&&ksoBonusRecipient.config.level
+      ? calculateCartBonusPreview(cartItemsResolved(),snapshot.lineStates,snapshot.itemsTotal,ksoBonusRecipient.config.level,new Map(ksoBonusRecipient.config.favorite_percents||[])):0;
+    const markup=`<div class="shop-kso-bonus-recipient-number">${escapeHtml(formatPhonePlus7(ksoBonusRecipient.phone))}</div><div class="shop-kso-bonus-recipient-amount">+${amount} ${getShopBonusCoinIconHtml('1em','2px')}</div><div class="shop-kso-bonus-recipient-note">Доступно только начисление бонусов.</div>`;
+    if(summary.innerHTML!==markup)summary.innerHTML=markup;
+    summary.classList.remove('hidden');
+  }
+  window.refreshKsoBonusRecipient=refreshKsoBonusRecipient;
+  window.clearKsoBonusRecipient=()=>{ksoBonusRecipient=null;refreshKsoBonusRecipient();};
+  function openKsoBonusPhone() {
+    const content=buildLoginContent({initialPhone:ksoBonusRecipient?.phone,onPhoneSave:async phone=>{
+        const result=await apiJson('/api/public/bonus/config?kso_phone='+encodeURIComponent(phone));
+        if(!result.ok)throw new Error(result.error||'Не удалось получить данные бонусов');
+        if(!content.isConnected)return;
+        ksoBonusRecipient={phone,config:result.data};refreshKsoBonusRecipient();window.AppModal.close('saved');
+    }});
+    const modal=document.getElementById('appModal');
+    setAppModalMode('shop');
+    modal?.classList.add('shop-kso-bonus-phone-modal');
+    window.AppModal.open({title:'Бонусы',content,showSave:false,showCancel:false,onClose:()=>modal?.classList.remove('shop-kso-bonus-phone-modal')});
+  }
 function openCartSheet() {
   if (!window.AppModal) return;
+  if(document.body.classList.contains('page-kso')&&state.cartBonusRedeemEnabled){state.cartBonusRedeemEnabled=false;invalidateCartPricingSnapshotCache();}
   const cartPage = document.getElementById("shopCartPage");
   const cartPageContent = document.getElementById("shopCartPageContent");
   const cartPageHeaderContent = document.getElementById("shopCartPageHeaderContent");
-  const useCartPage = window.matchMedia("(max-width: 768px)").matches && !!cartPage && !!cartPageContent;
+  const useCartPage = (window.matchMedia("(max-width: 768px)").matches || document.body?.classList.contains("page-kso")) && !!cartPage && !!cartPageContent;
   const buildCartSheetRenderSignature = () => {
     const rows = cartItemsResolved().map((item) => {
       const key = str(item?.key || "");
@@ -24350,6 +18875,21 @@ function openCartSheet() {
     cartPageContent.replaceChildren(wrapEl);
     cartPage.classList.remove("hidden");
     document.body.classList.add("shop-cart-page-active");
+    bindKsoPageBackSwipe(cartPage, () => cartPageHeaderContent?.querySelector('.shop-page-header-btn')?.click());
+    if (document.body.classList.contains("page-kso")) {
+      if(!cartPageHeaderContent.querySelector('.shop-page-header-btn')){
+      const backButton = document.createElement("button");
+      backButton.type = "button";
+      backButton.className = "shop-page-header-btn";
+      backButton.setAttribute("aria-label", "Назад в каталог");
+      backButton.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      backButton.addEventListener("click", closeShopSheetIfOpen);
+      const title = document.createElement("strong");
+      title.textContent = "Корзина";
+      cartPageHeaderContent.append(backButton, title);
+      }
+    }
+    window.syncKsoFloatingCartButton?.();
     return true;
   }
 
@@ -25408,6 +19948,11 @@ function openCartSheet() {
   cartActions.appendChild(clearBtn);
   cartActions.appendChild(btn);
   footer.appendChild(cartActions);
+  if(document.body.classList.contains('page-kso')){
+    const bonusSummary=document.createElement('div');bonusSummary.dataset.ksoBonusSummary='';bonusSummary.className='shop-kso-bonus-summary hidden';
+    const bonusButton=document.createElement('button');bonusButton.type='button';bonusButton.className='control shop-kso-bonus-phone-button';bonusButton.textContent='Указать номер для начисления бонусов';bonusButton.addEventListener('click',openKsoBonusPhone);
+    footer.insertBefore(bonusSummary,cartActions);footer.insertBefore(bonusButton,cartActions);
+  }
 
   const checkoutActions = document.createElement("div");
   checkoutActions.className = "shop-checkout-footer-actions hidden";
@@ -25582,7 +20127,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function moveCartPageUpsellToCheckoutFooter() {
-    if (!useCartPage) return;
+    if (!useCartPage || document.body?.classList.contains("page-kso")) return;
     const upsell = list.querySelector(".shop-cart-upsell")
       || checkoutOverlayFooterHost.querySelector(".shop-cart-upsell");
     if (!upsell) return;
@@ -25629,6 +20174,12 @@ function applySheetAddressTitle(backMode = "cart") {
     showSheetBenefits,
     showSheetAddressList,
     showSheetPickupList,
+    refreshPickupSchedules() {
+      const sheetVisible = pickupSheetWrap.isConnected && !pickupSheetWrap.closest('.hidden');
+      const inlineVisible = pickupInlineList.isConnected && !pickupInlineList.closest('.hidden');
+      if (sheetVisible) renderSheetPickupList();
+      if (inlineVisible) void renderInlinePickupList();
+    },
     lastRenderSignature: initialRenderSignature,
     benefitsOverlayHostEl: null,
     benefitsSourceScreen: "checkout",
@@ -25673,6 +20224,25 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   async function showSheetCheckout() {
+    if(document.body.classList.contains('page-kso')){
+      invalidateAddressSheetUiState();
+      cleanupCheckoutViewSubscriptions();
+      setSheetCheckoutOverlayActive(false);
+      const content=document.createElement('div');content.className='shop-kso-payment-content';
+      checkoutWrap.classList.remove('hidden','shop-checkout-content--overlay');
+      checkoutActions.classList.remove('hidden');
+      content.append(checkoutWrap,checkoutActions);
+      const modal=document.getElementById('appModal');modal.classList.add('shop-kso-action-modal','shop-kso-payment-modal');
+      setAppModalMode('shop');
+      window.AppModal.open({title:'Способ оплаты',content,hideFooter:true,onClose:()=>{
+        modal.classList.remove('shop-kso-action-modal','shop-kso-payment-modal');
+        checkoutOverlayPanel.insertBefore(checkoutWrap,checkoutOverlayFooterHost);footer.append(checkoutActions);
+        showSheetCart();
+      }});
+      await openCheckoutView({container:checkoutWrap,onBack:()=>window.AppModal.close('back'),onShowBenefits:showSheetBenefits,hasAddressEditor:true,isSheet:true,actions:{submitBtn,backBtn}});
+      return;
+    }
+    if(document.body.classList.contains('page-kso')){footer.querySelector('.shop-kso-bonus-phone-button')?.classList.add('hidden');footer.querySelector('[data-kso-bonus-summary]')?.classList.add('hidden');checkoutOverlayTitle.textContent='Способ оплаты';}
     document.body.classList.remove("shop-address-page-active", "shop-address-form-page-active");
     const isKsoCheckout = Boolean(document.body?.classList?.contains("page-kso"));
     invalidateAddressSheetUiState();
@@ -25683,12 +20253,13 @@ function applySheetAddressTitle(backMode = "cart") {
     hideInlineAddressToggle();
     showHeaderToggle();
     setCartSheetScreenMode("cart");
-    if (isKsoCheckout && checkoutWrap.parentElement !== wrap) {
+    const useInlineKsoCheckout = isKsoCheckout && !useCartPage;
+    if (useInlineKsoCheckout && checkoutWrap.parentElement !== wrap) {
       wrap.insertBefore(checkoutWrap, benefitsWrap);
-    } else if (!isKsoCheckout && checkoutWrap.parentElement !== checkoutOverlayPanel) {
+    } else if (!useInlineKsoCheckout && checkoutWrap.parentElement !== checkoutOverlayPanel) {
       checkoutOverlayPanel.insertBefore(checkoutWrap, checkoutOverlayFooterHost);
     }
-    setSheetCheckoutOverlayActive(!isKsoCheckout);
+    setSheetCheckoutOverlayActive(!useInlineKsoCheckout);
     moveCartPageUpsellToCheckoutFooter();
     if (useCartPage && window.history.state?.shopCartCheckout !== true) {
       window.history.pushState(
@@ -26410,6 +20981,7 @@ function applySheetAddressTitle(backMode = "cart") {
 
   function showSheetCart() {
     cancelPendingCheckoutFlow();
+    if(document.body.classList.contains('page-kso'))refreshKsoBonusRecipient();
     clearCheckoutRouteHistoryState();
     document.body.classList.remove("shop-address-page-active", "shop-address-form-page-active");
     invalidateAddressSheetUiState();
@@ -27018,7 +21590,8 @@ function applySheetAddressTitle(backMode = "cart") {
       const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
       const data = await resp.json();
       if (data?.ok && Array.isArray(data.stores)) {
-        window._pickupStores = data.stores;
+        window._pickupStores = Array.isArray(window.__shopOrderConfig?.checkoutStores)
+            ? window._pickupStores : data.stores;
         ensureValidSelectedPickupStoreId(window._pickupStores);
       }
     } catch {}
@@ -27181,6 +21754,10 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function showSheetProduct(product, { cartKey, prefillItem, onBack, readOnly } = {}) {
+    if (document.body?.classList.contains("page-kso")) {
+      void openStandaloneProductPage(product, { cartKey, prefillItem, readOnly, onBack: typeof onBack === "function" ? onBack : showSheetCart, returnTarget: "cart" });
+      return;
+    }
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
@@ -27238,6 +21815,10 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function showSheetCombo(comboData, { cartKey, prefillItem, onBack } = {}) {
+    if (document.body?.classList.contains("page-kso")) {
+      openStandaloneComboPage(comboData, { cartKey, prefillItem, onBack: typeof onBack === "function" ? onBack : showSheetCart, returnTarget: "cart" });
+      return;
+    }
     invalidateAddressSheetUiState();
     cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
@@ -27723,27 +22304,7 @@ function renderSheetAddressList() {
     return "";
   }
   function getStoreStatusInfo(store) {
-    if (!Array.isArray(store.storeHours) || !store.storeHours.length) return null;
-    const tz = Number.isNaN(Number(store.timezone)) ? 0 : Number(store.timezone);
-    const now = new Date();
-    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
-    const localMs = utcMs + tz * 60 * 60 * 1000;
-    const localDate = new Date(localMs);
-    const currentDay = localDate.getDay();
-    const entry = store.storeHours.find(h => Number(h.day_of_week) === currentDay);
-    if (!entry || Number(entry.is_closed) === 1) return { open: false, text: "Закрыто — выходной" };
-    const opens = entry.opens_at ? entry.opens_at.slice(0, 5) : "";
-    const closes = entry.closes_at ? entry.closes_at.slice(0, 5) : "";
-    if (!opens || !closes) return null;
-    const hhmm = localDate.getHours() * 60 + localDate.getMinutes();
-    const [oh, om] = opens.split(":").map(Number);
-    const [ch, cm] = closes.split(":").map(Number);
-    const openMin = oh * 60 + om;
-    const closeMin = ch * 60 + cm;
-    if (hhmm >= openMin && hhmm < closeMin) {
-      return { open: true, text: `Открыто до ${closes}` };
-    }
-    return { open: false, text: `Закрыто до ${opens}` };
+    return window.getShopStoreScheduleStatus(store);
   }
 
   let mobileSelectedPickupCity = null;
@@ -27970,6 +22531,7 @@ function renderSheetAddressList() {
 
   // events
   btn.addEventListener("click", async () => {
+    if(document.body.classList.contains('page-kso')){state.cartBonusRedeemEnabled=false;await showSheetCheckout();return;}
     const authorized = await requireAuthForCheckout({ isSheet: true });
     if (!authorized) return;
     await startCheckoutFlow({ isSheet: true, forceAddressRefresh: false });
@@ -28493,9 +23055,9 @@ function renderSheetAddressList() {
     })[code] || "Не удалось отправить код";
   }
 
-  function buildLoginContent({ onSuccess, phone }) {
+  function buildLoginContent({ onSuccess, phone, initialPhone, onPhoneSave }) {
     return window.AuthCard.create({
-      context: "customer", onSuccess, phone,
+      context: "customer", onSuccess, phone: phone || initialPhone, onPhoneSave,
       dependencies: {
         apiJson, normalizePhone, enforcePhonePrefix, normalizeCompletedCustomerName,
         handleBirthdayInput, isValidBirthday, str, getGuestChatClientIdForAuth,
@@ -29757,6 +24319,7 @@ function renderSheetAddressList() {
   }
 
   async function startCheckoutFlow({ isSheet, forceAddressRefresh = true } = {}) {
+    if (document.body?.classList.contains("page-kso") && document.body.classList.contains("shop-cart-page-active")) isSheet = true;
     const runId = ++checkoutFlowRunId;
     try { void preloadCartEnhancers(); } catch {}
     Promise.resolve(queueCheckoutOpenPrewarm("start-checkout", {
@@ -35863,6 +30426,7 @@ function setBottomNavActive(tab) {
   let orderConfigPromise = null;
 
   async function getOrderConfig() {
+    if(window.ensureShopCheckoutSettings && !document.body?.classList.contains('page-kso')) {orderConfigCache=await window.ensureShopCheckoutSettings();return orderConfigCache;}
     if (!orderConfigCache && typeof window.getShopOrderConfigSnapshot === "function") {
       orderConfigCache = window.getShopOrderConfigSnapshot();
     }
@@ -35888,6 +30452,19 @@ function setBottomNavActive(tab) {
     return orderConfigPromise;
   }
 
+  window.addEventListener('shop:storefront-schedules', () => {
+    openCartSheetCtx?.refreshPickupSchedules();
+    void updateStoreStatus();
+  });
+
+  window.addEventListener('shop:checkout-settings',event=>{
+    const config=event.detail;
+    if(!config)return;
+    orderConfigCache=config;
+    if(config.deliverySettings)commitDeliverySettingsCache(config.deliverySettings,{validatedAt:Date.now()});
+    clearDeliveryQuoteMemoryCache();
+  });
+
   const DELIVERY_SETTINGS_PERSISTENT_CACHE_KEY = "shop_delivery_settings_cache_v1";
   const DELIVERY_SETTINGS_PERSISTENT_CACHE_MAX_ENTRIES = 8;
   const DELIVERY_SETTINGS_PERSISTENT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -35912,9 +30489,10 @@ function setBottomNavActive(tab) {
     const scopeKey = buildDeliveryCacheScopeKey();
     const cachedSettings = getCachedDeliverySettingsForCurrentScope();
     if (cachedSettings) {
-      void ensureFreshDeliverySettingsInBackground("delivery-settings-cache");
+
       return cachedSettings;
     }
+    if(window.ensureShopCheckoutSettings){const config=await window.ensureShopCheckoutSettings();if(config?.deliverySettings)return commitDeliverySettingsCache(config.deliverySettings,{scopeKey,validatedAt:Date.now()});}
     if (deliverySettingsPromise) return deliverySettingsPromise;
     if (deliverySettingsValidationPromise) return deliverySettingsValidationPromise;
     deliverySettingsPromise = apiJson("/api/public/delivery-settings")
@@ -36081,6 +30659,8 @@ function setBottomNavActive(tab) {
       price_tiers: priceTiers,
       default_store_id: normalizeDeliveryCacheId(source.default_store_id),
       delivery_revision: normalizeDeliveryRevisionValue(source.delivery_revision),
+      zones: Array.isArray(source.zones) ? source.zones : null,
+      store_address_map_enabled: source.store_address_map_enabled !== false,
     };
   }
 
@@ -36142,6 +30722,34 @@ function setBottomNavActive(tab) {
         : (normalized.free_delivery_from != null ? Number(normalized.free_delivery_from) : null),
       price_tiers: priceTiers,
     };
+  }
+
+  function buildLocalDeliveryQuoteForAddress(settings,subtotal,address) {
+    const fallback=buildLocalDeliveryQuoteFromSettings(settings,subtotal);
+    const lat=Number(address?.lat),lng=Number(address?.lng);
+    if(address?.lat==null || address?.lng==null || !Number.isFinite(lat) || !Number.isFinite(lng) || settings.store_address_map_enabled===false)return fallback;
+    const inRing=ring=>{
+      if(!Array.isArray(ring) || ring.length<4)return false;
+      let inside=false;
+      for(let index=0,previous=ring.length-1;index<ring.length;previous=index++) {
+        const [x,y]=ring[index],[px,py]=ring[previous];
+        const cross=(lng-x)*(py-y)-(lat-y)*(px-x);
+        if(Math.abs(cross)<=1e-10 && (lng-x)*(lng-px)+(lat-y)*(lat-py)<=1e-10)return true;
+        if((y>lat)!==(py>lat) && lng<(px-x)*(lat-y)/(py-y)+x)inside=!inside;
+      }
+      return inside;
+    };
+    const zone=settings.zones.find(row=>{
+      if(Number(row.is_active)!==1 || !row.geometry)return false;
+      const polygons=row.geometry.type==='Polygon'?[row.geometry.coordinates]:row.geometry.coordinates;
+      return Array.isArray(polygons) && polygons.some(polygon=>Array.isArray(polygon) && inRing(polygon[0]) && !polygon.slice(1).some(inRing));
+    });
+    if(!zone)return fallback;
+    const storeIds=(zone.store_ids || []).map(Number).filter(id=>id>0).sort((a,b)=>a-b);
+    return buildLocalDeliveryQuoteFromCachedCondition({source:'zone',has_settings:true,
+      delivery_zone_id:Number(zone.id),delivery_zone_name:zone.name,price_tiers:zone.price_tiers || [],
+      eta_minutes:zone.eta_minutes,delivery_store_id:storeIds[0] || fallback.delivery_store_id,
+      default_store_id:fallback.default_store_id,delivery_revision:settings.delivery_revision},subtotal);
   }
 
   function buildLocalDeliveryQuoteFromSettings(rawSettings, subtotal) {
@@ -36696,6 +31304,7 @@ function setBottomNavActive(tab) {
   }
 
   function ensureFreshDeliverySettingsInBackground(reason = "background") {
+    if(window.ensureShopCheckoutSettings)return window.ensureShopCheckoutSettings().then(config=>config?.deliverySettings?commitDeliverySettingsCache(config.deliverySettings,{validatedAt:Date.now()}):getCachedDeliverySettingsForCurrentScope());
     if (!reason) {
       // keep signature flexible for warm callers
     }
@@ -36906,6 +31515,11 @@ function setBottomNavActive(tab) {
     }
 
     let defaultSettings = getCachedDeliverySettingsForCurrentScope();
+    if(window.ensureShopCheckoutSettings && !Array.isArray(defaultSettings?.zones)) {
+      const config=await window.ensureShopCheckoutSettings();
+      if(config?.deliverySettings)defaultSettings=commitDeliverySettingsCache(config.deliverySettings,{scopeKey:cacheMeta.scopeKey,validatedAt:Date.now()});
+    }
+    if(Array.isArray(defaultSettings?.zones))return storeDeliveryQuoteInMemory(cacheMeta,buildLocalDeliveryQuoteForAddress(defaultSettings,amount,address));
     if (!hasUsableDeliveryAddressCoordinates(cacheMeta.addressMeta)) {
       if (!defaultSettings) {
         defaultSettings = await getDeliverySettings();
@@ -37589,7 +32203,8 @@ function setBottomNavActive(tab) {
 
       const { storeIsOpen, storeHours, storeTimezone } = config;
 
-      if (storeIsOpen) {
+      const now = new Date(Date.now() + (Number(storeTimezone) || 0) * 3600000);
+      if (window.ShopCheckoutSchedule.allows({ hours: storeHours }, now, now.getUTCHours() * 60 + now.getUTCMinutes())) {
         setStatus(statusEl, false);
         return;
       }
@@ -38089,7 +32704,7 @@ function setBottomNavActive(tab) {
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   }
 
-  function buildTimeSlots(option, targetDate, storeTimezone) {
+  function buildTimeSlots(option, targetDate, storeTimezone, schedule = null) {
     if (!option) return [];
     let start = parseTimeToMinutes(option.starts_at);
     let end = parseTimeToMinutes(option.ends_at);
@@ -38125,7 +32740,8 @@ function setBottomNavActive(tab) {
     const slots = [];
     const limit = Math.min(end, 24 * 60 - 1);
     while (slot <= limit) {
-      slots.push(formatMinutesToTime(slot));
+      const localDay=new Date(`${targetKey}T00:00:00Z`);
+      if(!schedule || window.ShopCheckoutSchedule.allows(schedule,localDay,slot))slots.push(formatMinutesToTime(slot));
       slot += stepMinutes;
     }
     return slots;
@@ -38474,7 +33090,7 @@ function setBottomNavActive(tab) {
       delayMs: 0,
     })).catch(() => {});
 
-    const cfg = orderConfigCache || await getOrderConfig();
+    const cfg = await getOrderConfig();
     let defaultDeliverySettings = getCartPricingCachedDeliverySettings();
     const initialPricingSnapshot = buildCartPricingSnapshot();
     const initialDeliverySubtotal = initialPricingSnapshot && initialPricingSnapshot.visible !== false
@@ -39894,6 +34510,9 @@ function setBottomNavActive(tab) {
     wrap.appendChild(timeLabel);
 
     const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
+    for(const [code,title] of [['asap','\u0411\u044b\u0441\u0442\u0440\u0435\u0435'],['at_time','\u041a\u043e \u0432\u0440\u0435\u043c\u0435\u043d\u0438'],['on_date','\u041d\u0430 \u0434\u0430\u0442\u0443']]) {
+      if(!timeOptions.some(option=>option.code===code))timeOptions.push({code,title});
+    }
     const storeTimezone = cfg.storeTimezone || "+0";
     const timeOptionByCodeInitial = (cfg.timeOptions || []).reduce((acc, option) => {
       if (option && option.code) acc[option.code] = option;
@@ -39924,30 +34543,18 @@ function setBottomNavActive(tab) {
     }
 
     function getCheckoutTimeScheduleContext() {
-      const methodCode = String(methodSelect?.getValue?.() || methodDefault || "takeaway").trim();
-      if (methodCode === "delivery") {
-        const deliveryStore = findCheckoutStoreById(state.selectedAddress?.delivery_store_id);
-        const hours = Array.isArray(deliveryStore?.delivery_hours) && deliveryStore.delivery_hours.length
-          ? deliveryStore.delivery_hours
-          : (Array.isArray(cfg.storeDeliveryHours) && cfg.storeDeliveryHours.length ? cfg.storeDeliveryHours : cfg.storeHours || []);
-        const timezone = String(deliveryStore?.timezone || storeTimezone || "+0").trim() || "+0";
-        return {
-          hours,
-          timezone,
-          isOpen: deliveryStore ? isHoursOpenNow(hours, timezone) : Boolean(cfg.deliveryIsOpen),
-        };
-      }
-
-      const pickupStore = findCheckoutStoreById(selectedPickupStoreId);
-      const hours = Array.isArray(pickupStore?.storeHours) && pickupStore.storeHours.length
-        ? pickupStore.storeHours
-        : (Array.isArray(cfg.storeHours) ? cfg.storeHours : []);
-      const timezone = String(pickupStore?.timezone || storeTimezone || "+0").trim() || "+0";
-      return {
-        hours,
-        timezone,
-        isOpen: pickupStore ? isHoursOpenNow(hours, timezone) : Boolean(cfg.storeIsOpen),
-      };
+      const methodCode=String(methodSelect?.getValue?.() || methodDefault || 'takeaway');
+      const storeId=methodCode==='delivery' ? (deliveryQuote?.delivery_store_id || state.selectedAddress?.delivery_store_id || cfg.deliverySettings?.default_store_id || cfg.settingsStoreId) : (selectedPickupStoreId || cfg.settingsStoreId);
+      const store=(cfg.checkoutStores || []).find(row=>Number(row.id)===Number(storeId));
+      const pointHours=store?.storeHours || (Number(storeId)===Number(cfg.settingsStoreId)?cfg.storeHours:[]);
+      const deliveryHours=store?.delivery_hours || cfg.storeDeliveryHours || [];
+      const sets=[pointHours || []];
+      if(methodCode==='delivery' && Number(store?.use_delivery_hours ?? 1)===1)sets.push(deliveryHours);
+      const timezone=String(store?.timezone || cfg.storeTimezone || '+0');
+      const now=getStoreDateNow(timezone);
+      const schedule={hours:pointHours || [],sets,timezone};
+      schedule.isOpen=window.ShopCheckoutSchedule.allows(schedule,now,now.getUTCHours()*60+now.getUTCMinutes());
+      return schedule;
     }
 
     function getCheckoutTimeTimezone() {
@@ -39955,35 +34562,19 @@ function setBottomNavActive(tab) {
     }
 
     function getCheckoutAvailableTimeState() {
+      const selectedMethod=methodSelect.getValue() || methodDefault || 'takeaway';
+      if(!(cfg.methods || []).some(method=>method.code===selectedMethod))return {availableOptions:[],fallbackCode:''};
       const schedule = getCheckoutTimeScheduleContext();
-      const timeSegment = getTimeSegment(schedule.isOpen, schedule.timezone, schedule.hours);
-      let filteredTimeOptions = timeOptions;
-      let defaultFallback = "asap";
-
-      if (timeSegment === "OPEN") {
-        filteredTimeOptions = timeOptions;
-        defaultFallback = "asap";
-      } else if (timeSegment === "CLOSED_BEFORE_MIDNIGHT") {
-        filteredTimeOptions = timeOptions.filter(opt => opt.code === "on_date");
-        defaultFallback = "on_date";
-      } else if (timeSegment === "CLOSED_AFTER_MIDNIGHT") {
-        filteredTimeOptions = timeOptions.filter(opt => opt.code === "at_time" || opt.code === "on_date");
-        defaultFallback = "at_time";
-      }
-
-      const atTimeOption = timeOptionByCodeInitial.at_time;
-      if (atTimeOption && Number(atTimeOption.has_time_window) === 1) {
-        const atTimeSlots = buildTimeSlots(atTimeOption, null, schedule.timezone);
-        if (!atTimeSlots.length) {
-          filteredTimeOptions = filteredTimeOptions.filter(opt => opt.code !== "at_time");
-          if (defaultFallback === "at_time") defaultFallback = "on_date";
-        }
-      }
-
-      const availableOptions = filteredTimeOptions.length ? filteredTimeOptions : timeOptions;
+      const atTimeOption=timeOptionByCodeInitial.at_time;
+      const todaySlots=atTimeOption?buildTimeSlots(atTimeOption,null,schedule.timezone,schedule):[];
+      const onDateOption=timeOptionByCodeInitial.on_date;
+      const futureSlots=onDateOption && getCheckoutSelectableDates(7).some(date=>buildTimeSlots(onDateOption,date,schedule.timezone,schedule).length>0);
+      const configured=new Set((cfg.timeOptions || []).map(option=>option.code));
+      const availableOptions=timeOptions.filter(option=>configured.has(option.code) && (option.code==='asap'?schedule.isOpen:option.code==='at_time'?todaySlots.length>0:option.code==='on_date' && futureSlots));
+      const defaultFallback=schedule.isOpen?'asap':todaySlots.length?'at_time':'on_date';
       const fallbackCode = availableOptions.some(opt => opt.code === defaultFallback)
         ? defaultFallback
-        : (availableOptions[0]?.code || defaultFallback);
+        : (availableOptions[0]?.code || '');
       return { availableOptions, fallbackCode };
     }
 
@@ -40158,39 +34749,6 @@ function setBottomNavActive(tab) {
     const checkoutMainSection = document.createElement("section");
     checkoutMainSection.className = "shop-checkout-card-section shop-checkout-card-section--combined";
 
-    if (isKsoCheckout && me) {
-      const customerSection = createCheckoutCardSection("Клиент");
-      customerSection.root.classList.add("shop-checkout-card-subsection", "shop-checkout-customer-section");
-      const customerCard = document.createElement("div");
-      customerCard.className = "shop-checkout-customer-card";
-      const customerName = document.createElement("div");
-      customerName.className = "shop-checkout-customer-name";
-      customerName.textContent = hasCompletedCustomerName(me) ? str(me.name || "").trim() : "Клиент";
-      const customerPhone = document.createElement("div");
-      customerPhone.className = "shop-checkout-customer-phone";
-      customerPhone.textContent = me?.phone ? formatPhonePlus7(me.phone) : str(phone.value || "");
-      customerCard.appendChild(customerName);
-      customerCard.appendChild(customerPhone);
-      customerSection.root.appendChild(customerCard);
-      checkoutMainSection.appendChild(customerSection.root);
-    }
-
-    if (isKsoCheckout && typeof buildCartBonusRedeemSection === "function") {
-      const bonusRedeemSection = buildCartBonusRedeemSection();
-      if (bonusRedeemSection) {
-        bonusRedeemSection.classList.add("shop-checkout-card-subsection", "shop-checkout-kso-bonus-section");
-        checkoutMainSection.appendChild(bonusRedeemSection);
-        if (typeof bindCartBonusRedeemSection === "function") {
-          bindCartBonusRedeemSection(bonusRedeemSection);
-        }
-        if (typeof window.refreshShopCartBonusRedeemUi === "function") {
-          try {
-            window.refreshShopCartBonusRedeemUi();
-          } catch {}
-        }
-      }
-    }
-
     const timeSection = createCheckoutCardSection("Дата и время получения");
     timeSection.root.classList.add("shop-checkout-card-subsection");
     if (isKsoCheckout) timeSection.root.classList.add("hidden");
@@ -40223,6 +34781,11 @@ function setBottomNavActive(tab) {
       timeModesGrid.appendChild(card);
     });
     timeSection.root.appendChild(timeModesGrid);
+    const timeUnavailableNote=document.createElement('div');
+    timeUnavailableNote.className='muted hidden';
+    timeUnavailableNote.setAttribute('role','status');
+    timeUnavailableNote.textContent='\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u0432\u0440\u0435\u043c\u0435\u043d\u0438 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u044f';
+    timeSection.root.appendChild(timeUnavailableNote);
     checkoutMainSection.appendChild(timeSection.root);
 
     // --- Рендер календаря ---
@@ -40394,6 +34957,7 @@ function setBottomNavActive(tab) {
       }
       const nextState = getCheckoutAvailableTimeState();
       currentAvailableTimeOptions = nextState.availableOptions;
+      timeUnavailableNote.classList.toggle('hidden',currentAvailableTimeOptions.length>0);
       currentAvailableTimeCodes = new Set(currentAvailableTimeOptions.map((option) => option.code));
 
       const selectedCode = timeSelect.getValue();
@@ -40413,7 +34977,7 @@ function setBottomNavActive(tab) {
       if (!currentAvailableTimeCodes.has("at_time")) return;
       const config = timeOptionByCode.at_time;
       timeSelect.setValue("at_time", false);
-      const initialSlots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
+      const initialSlots = buildTimeSlots(config, null, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
       let selectedSlot = initialSlots.includes(timeInput.value)
         ? timeInput.value
         : (initialSlots[0] || "");
@@ -40440,7 +35004,7 @@ function setBottomNavActive(tab) {
           body.appendChild(scroll);
 
           const renderSlots = () => {
-            const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
+            const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
             slotsGrid.innerHTML = "";
             if (!slots.length) {
               const empty = document.createElement("div");
@@ -40545,7 +35109,7 @@ function setBottomNavActive(tab) {
           };
 
           const renderSlots = () => {
-            const slots = buildTimeSlots(config, sheetDate, getCheckoutTimeTimezone());
+            const slots = buildTimeSlots(config, sheetDate, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
             slotsGrid.innerHTML = "";
             if (!slots.length) {
               const empty = document.createElement("div");
@@ -40672,7 +35236,7 @@ function setBottomNavActive(tab) {
         }
         dateSlotsWrap.style.display = "";
         dateRow2.classList.add("is-combined");
-        const slots = buildTimeSlots(config, selectedDate, getCheckoutTimeTimezone());
+        const slots = buildTimeSlots(config, selectedDate, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
         const slotOptions = slots.map(value => ({ code: value, title: value }));
         const preferred = timeInput.value || storedDraftTime || "";
         const defaultSlot = slotOptions.find(slot => slot.code === preferred)
@@ -40692,7 +35256,7 @@ function setBottomNavActive(tab) {
         return;
       }
       dateRow2.classList.remove("is-combined");
-      const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone());
+      const slots = buildTimeSlots(config, null, getCheckoutTimeTimezone(), getCheckoutTimeScheduleContext());
       const slotOptions = slots.map(value => ({ code: value, title: value }));
       const preferred = timeInput.value || storedDraftTime || "";
       const defaultSlot = slotOptions.find(slot => slot.code === preferred)
@@ -40718,6 +35282,45 @@ function setBottomNavActive(tab) {
       updateTimeSlotsOptions();
     });
     refreshCheckoutTimeAvailability();
+    let checkoutTimeTimer=0;
+    let checkoutTimeSignature='';
+    function syncCheckoutClock(force=false) {
+      if(isKsoCheckout || !isCheckoutViewCurrent())return;
+      const schedule=getCheckoutTimeScheduleContext();
+      const stateNow=getCheckoutAvailableTimeState();
+      const option=timeOptionByCode[timeSelect.getValue()];
+      const slots=option?buildTimeSlots(option,timeSelect.getValue()==='on_date'?selectedDate:null,schedule.timezone,schedule):[];
+      const signature=JSON.stringify([schedule.isOpen,stateNow.availableOptions.map(row=>row.code),slots]);
+      if(force || signature!==checkoutTimeSignature) {
+        checkoutTimeSignature=signature;
+        refreshCheckoutTimeAvailability();
+      }
+      clearTimeout(checkoutTimeTimer);
+      checkoutTimeTimer=setTimeout(()=>syncCheckoutClock(),window.ShopCheckoutSchedule.nextDelay(schedule,cfg.timeOptions || []));
+    }
+    const resumeCheckoutClock=()=>{if(!document.hidden)syncCheckoutClock();};
+    const updateCheckoutSettings=event=>{
+      if(!isCheckoutViewCurrent() || isKsoCheckout)return;
+      Object.assign(cfg,event.detail);
+      Object.keys(timeOptionByCode).forEach(key=>delete timeOptionByCode[key]);
+      Object.keys(timeOptionByCodeInitial).forEach(key=>delete timeOptionByCodeInitial[key]);
+      (cfg.timeOptions || []).forEach(option=>{timeOptionByCode[option.code]=option;timeOptionByCodeInitial[option.code]=option;});
+      defaultDeliverySettings=cfg.deliverySettings || defaultDeliverySettings;
+      syncCheckoutClock(true);
+      void refreshCheckoutDeliveryRulesInBackground({reason:'settings-change'});
+    };
+    window.addEventListener('shop:checkout-settings',updateCheckoutSettings);
+    document.addEventListener('visibilitychange',resumeCheckoutClock);
+    window.addEventListener('focus',resumeCheckoutClock);
+    window.addEventListener('pageshow',resumeCheckoutClock);
+    registerCheckoutCleanup(()=>{
+      clearTimeout(checkoutTimeTimer);
+      window.removeEventListener('shop:checkout-settings',updateCheckoutSettings);
+      document.removeEventListener('visibilitychange',resumeCheckoutClock);
+      window.removeEventListener('focus',resumeCheckoutClock);
+      window.removeEventListener('pageshow',resumeCheckoutClock);
+    });
+    syncCheckoutClock(true);
 
     function getDeliveryCostForTotal(baseTotal) {
       if (Array.isArray(deliveryRules.priceTiers) && deliveryRules.priceTiers.length) {
@@ -40735,9 +35338,9 @@ function setBottomNavActive(tab) {
 
     let currentPayableTotal = getPayableTotalForMethod(methodSelect.getValue());
 
-    const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
+    const payments = (cfg.payments || []).filter(x=>!isKsoCheckout||['cash','card'].includes(x.code)).map(x => ({ code: x.code, title: isKsoCheckout?(x.code==='cash'?'Наличные':'Картой'):x.title, icon: x.icon }));
     let onlineAvailable = false, onlineAvailabilitySequence = 0;
-    const payDefault = str(draft?.payment_code || "").trim();
+    const payDefault = isKsoCheckout ? '' : str(draft?.payment_code || "").trim();
     function getPaymentOptionIconElement(code, iconRaw) {
       const fallbackIcons = {
         cash: "fas fa-money-bill-wave",
@@ -40778,7 +35381,7 @@ function setBottomNavActive(tab) {
         icon: getPaymentOptionIconElement(payment.code, payment.icon),
         onClick: () => {
           if (payment.code === "online" && !onlineAvailable) return;
-          if (payment.code === "cash") {
+          if (payment.code === "cash" && !isKsoCheckout) {
             openCashChangeSelectionSheet();
             return;
           }
@@ -40849,9 +35452,11 @@ function setBottomNavActive(tab) {
 
     function syncPaymentCards() {
       const selectedCode = paySelect.getValue();
+      if(isKsoCheckout&&actions?.submitBtn)actions.submitBtn.disabled=!['cash','card'].includes(selectedCode);
       paymentCards.forEach((card, code) => {
         card.classList.toggle("is-active", code === selectedCode);
         card.setAttribute("aria-pressed", code === selectedCode ? "true" : "false");
+        if(isKsoCheckout){setCheckoutCardOptionContent(card,{title:code==='cash'?'Наличные':'Картой',value:'',meta:''});return;}
         if (code === "cash") {
           setCheckoutCardOptionContent(card, {
             title: card.dataset.baseTitle || "",
@@ -41607,6 +36212,7 @@ function setBottomNavActive(tab) {
       }
       deliveryQuote = needsDeliveryQuote ? (nextDeliveryQuote || deliveryQuote) : null;
       deliveryRules = buildCheckoutDeliveryRules(deliveryQuote);
+      syncCheckoutClock();
       updateDeliveryPricing();
       void refreshOnlinePaymentAvailability();
     }
@@ -41628,6 +36234,7 @@ function setBottomNavActive(tab) {
     void refreshCheckoutDeliveryRulesInBackground({ reason: "checkout-open" });
 
     function getChangeFromValue() {
+      if(isKsoCheckout)return null;
       if (paySelect.getValue() !== "cash") return null;
       if (changeMode === "none") return null;
       if (changeMode === "custom") {
@@ -41992,6 +36599,12 @@ function setBottomNavActive(tab) {
 
     if (actions?.submitBtn) {
       actions.submitBtn.onclick = async () => {
+        if(!isKsoCheckout) {
+          syncCheckoutClock();
+          if(!getCheckoutAvailableTimeState().availableOptions.some(option=>option.code===timeSelect.getValue())) {
+            showCheckoutToast('\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0433\u043e \u0432\u0440\u0435\u043c\u0435\u043d\u0438 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u044f');return;
+          }
+        }
         let resolvedItems = cartItemsResolved();
         if (!resolvedItems.length) {
           alert("В корзине нет доступных товаров для оформления");
@@ -42147,8 +36760,9 @@ function setBottomNavActive(tab) {
               .filter(Boolean)
           : snapshotDiscountBreakdown;
       const payload = {
+        kso: isKsoCheckout,
         customer_name: null,
-        customer_phone: str(phone.value).trim(),
+        customer_phone: isKsoCheckout?(ksoBonusRecipient?.phone||null):str(phone.value).trim(),
         promo_code: normalizedPromoCode || null,
         selected_discount_id: normalizedSelectedDiscountId,
         selected_discount_source: normalizedSelectedDiscountSource,
@@ -42333,7 +36947,7 @@ function setBottomNavActive(tab) {
       const isAuthed = !!(getCustomerToken() && me);
       const requireClientData = isMethodClientDataRequired(payload.method_code);
 
-      if (!isAuthed) {
+      if (!isAuthed && !isKsoCheckout) {
         const authorized = await requireAuthForCheckout({ isSheet: !!isSheet });
         if (!authorized) return;
         return;
@@ -42385,6 +36999,17 @@ function setBottomNavActive(tab) {
         return;
       }
 
+      if(!isKsoCheckout) {
+        const available=getCheckoutAvailableTimeState().availableOptions;
+        const validCode=available.some(option=>option.code===payload.time_option_code);
+        const option=timeOptionByCode[payload.time_option_code];
+        const schedule=getCheckoutTimeScheduleContext();
+        const validSlot=payload.time_option_code==='asap' || (option && buildTimeSlots(option,payload.time_option_code==='on_date'?selectedDate:null,schedule.timezone,schedule).includes(timeInput.value));
+        if(!validCode || !validSlot) {
+          syncCheckoutClock(true);
+          showCheckoutToast('\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0435 \u0432\u0440\u0435\u043c\u044f \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u043e\u0441\u044c. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0432\u044b\u0431\u043e\u0440.');return;
+        }
+      }
       if ((payload.time_option_code === "at_time" || payload.time_option_code === "on_date")) {
         if (!timeInput.value) {
           alert("Укажите время");
@@ -44371,6 +38996,7 @@ window.__mountSharedProductDetails = async function mountSharedProductDetails(op
   state.productCache.set(productId, product);
   await renderProductDetailsInto(container, product, {
     mode: options.mode || 'cart',
+    cartContext: options.cartContext || null,
     cartKey: options.cartKey || null,
     prefillItem: options.initialValue || options.prefillItem || null,
     readOnly: options.mode === 'readonly' || options.readOnly === true,
