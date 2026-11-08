@@ -2,7 +2,7 @@
 const crypto=require('crypto');
 const {MessengerAuthError}=require('../messengerAuth');
 const {normalizePhone,parseTimezoneOffsetToMinutes}=require('../helpers');
-const defaults=Object.freeze({birthday:true,tg:true,max:true});
+const defaults=Object.freeze({birthday:false,tg:true,max:true});
 const fail=(code,status=400)=>{throw new MessengerAuthError(code,status);};
 async function settings(db,tenantId){
   const [[row]]=await db.query('SELECT customer_auth_config_json FROM ten_tenants WHERE id=? AND is_active=1',[tenantId]);
@@ -12,7 +12,7 @@ async function settings(db,tenantId){
 }
 function validateSettings(value){
   if(!value || ['birthday','tg','max'].some(k=>typeof value[k]!=='boolean'))fail('INVALID_CUSTOMER_AUTH_SETTINGS');
-  return {birthday:value.birthday,tg:value.tg,max:value.max};
+  return {birthday:false,tg:value.tg,max:value.max};
 }
 function phone(value){const result=normalizePhone(value);if(!/^[0-9]{10,15}$/.test(result || ''))fail('PHONE_REQUIRED');return result;}
 async function byPhone(db,tenantId,value){
