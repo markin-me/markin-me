@@ -4482,6 +4482,13 @@
       const scope = window.AdminPersistentCache?.scope({ domain: 'orders:editor', version: 1 });
       if (!scope?.complete) return;
       const workspace = await scope.get('workspace');
+      if (performance.getEntriesByType('navigation')[0]?.type === 'reload'
+        && workspace?.rightOrders?.some(row => row.mode === 'edit')) {
+        await window.SharedOrderPanel.ensureAdminAsset('newOrder');
+        await window.NewOrderBridge.ready();
+        await window.NewOrderBridge.readWorkspace();
+        return;
+      }
       if (workspace?.editorOrigin !== location.pathname) return;
       const active = workspace.rightOrders?.find(order => Number(order.id) === Number(workspace.rightActiveOrderId));
       if (active?.mode === 'edit') {

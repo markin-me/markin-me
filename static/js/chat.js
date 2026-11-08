@@ -3363,6 +3363,7 @@
       document.body.classList.remove("chat-mobile-left-open", "chat-mobile-right-open");
       return "center";
     }
+    if (document.body.classList.contains('new-order-editor-active')) return String(view || 'right');
     const requestedView = String(view || "").trim().toLowerCase();
     let nextView = requestedView === "clients" || requestedView === "right" ? requestedView : "center";
     if (nextView === "center" && Number(state.activeClientId || 0) <= 0) {
@@ -3912,6 +3913,7 @@
   function syncChatCheckoutLayout() {
     if (!document.body.classList.contains('page-chat')) return;
     const editing = document.body.classList.contains('orders-checkout-mode') && document.body.classList.contains('chat-right-order-mode');
+    if (editing) document.body.classList.remove('chat-mobile-left-open', 'chat-mobile-right-open');
     if (!chatCheckoutPlacements.length && editing) {
       for (const [id, selector] of [['ordersCheckoutLeftPane', '.page-col-left'], ['ordersCheckoutCenterPane', '.page-col-center']]) {
         const node = document.getElementById(id), host = document.querySelector(selector);
@@ -3937,9 +3939,11 @@
     placeChatRightTabsHeader(document.body.classList.contains('chat-right-order-mode') ? 'order' : 'client');
   }
   document.addEventListener('orders:checkout-layout', syncChatCheckoutLayout);
+  document.addEventListener('orders:tabs-updated', renderChatRightTabs);
 
   function showChatRightPane(mode) {
     const nextMode = String(mode || "").trim().toLowerCase() === "order" ? "order" : "client";
+    if (nextMode === 'client' && document.body.classList.contains('orders-checkout-mode')) getOrdersRightApi()?.suspendCheckout();
     const host = document.querySelector(".page-chat .page-col-right");
     const storage = document.getElementById("chatRightPaneStorage");
     const clientPane = document.querySelector(".client-info-panel");
@@ -4016,23 +4020,21 @@
       header.classList.toggle("hidden", !hasTabs);
       header.setAttribute("aria-hidden", hasTabs ? "false" : "true");
     }
-    wrap.innerHTML = tabs.map((t) => {
-      const key = buildChatRightTabKey(t.kind, t.id);
-      const selected = key && key === String(state.activeRightTabKey || "");
-      const title = t.kind === "order"
-        ? `${isChatMobileViewport() ? "№" : "#"}${t.id}`
-        : (String(t.title || "").trim() || "Клиент");
-      const safeTitle = escapeHtml(title);
-      return `
-        <div class="product-tab ${selected ? "is-active" : ""}" role="tab"
-          data-chat-right-tab="${escapeHtml(key)}"
-          aria-selected="${selected ? "true" : "false"}"
-          title="${safeTitle}">
-          <span class="product-tab-title">${safeTitle}</span>
-          <button class="product-tab-close" type="button" data-chat-right-tab-close="${escapeHtml(key)}" aria-label="Закрыть вкладку">&times;</button>
-        </div>
-      `;
-    }).join("");
+    const shared = getSharedOrderPanel();
+    if (!shared?.renderTabs) throw new Error('ORDER_TABS_RENDERER_UNAVAILABLE');
+    shared.renderTabs({
+      headers: header ? [header] : [],
+      tabsEls: [wrap, document.getElementById('newOrderCatalogTabs')].filter(Boolean),
+      tabs: tabs.map(tab => ({
+        key: buildChatRightTabKey(tab.kind, tab.id),
+        title: tab.kind === 'order' ? `№${tab.id}` : (String(tab.title || '').trim() || 'Клиент'),
+        mode: tab.kind === 'order' ? getOrdersRightApi()?.getOrderTabMode(tab.id) : 'view',
+      })),
+      activeKey: state.activeRightTabKey,
+      isEditingTab: tab => tab.mode === 'edit' || tab.mode === 'new',
+      tabKeyAttribute: 'data-chat-right-tab',
+      tabCloseAttribute: 'data-chat-right-tab-close',
+    });
   }
 
   function upsertChatRightTab(kind, id, title = "") {
@@ -4056,6 +4058,12 @@
   function closeChatRightTab(key) {
     const k = String(key || "").trim();
     if (!k || !Array.isArray(state.rightTabs)) return;
+    const editingTab = state.rightTabs.find(tab => buildChatRightTabKey(tab.kind, tab.id) === k);
+    if (editingTab?.kind === 'order' && getOrdersRightApi()?.getOrderTabMode(editingTab.id) === 'edit') {
+      void getOrdersRightApi().cancelEditingOrder(editingTab.id).then(renderChatRightTabs).catch(console.error);
+      return;
+    }
+
     state.rightTabs = state.rightTabs.filter((t) => buildChatRightTabKey(t.kind, t.id) !== k);
     if (String(state.activeRightTabKey || "") === k) {
       const last = state.rightTabs[state.rightTabs.length - 1] || null;
@@ -4102,7 +4110,9 @@
       const previousTab = activeTabIndex > 0 ? state.rightTabs[activeTabIndex - 1] : null;
       await openCanonicalChatOrder(id, { backToClient: previousTab?.kind === "client" });
       if (activationToken !== state.rightTabActivationToken) return;
-      syncMobileChatView("right");
+      if (isChatMobileViewport() && getOrdersRightApi()?.getOrderTabMode(id) === 'edit') {
+        window.__adminMobilePages?.openCenter?.('Каталог');
+      } else syncMobileChatView("right");
       return;
     }
 

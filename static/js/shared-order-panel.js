@@ -744,16 +744,18 @@
       return;
     }
 
+    var tabKeyAttribute = options?.tabKeyAttribute || 'data-order-tab-key';
+    var tabCloseAttribute = options?.tabCloseAttribute || 'data-order-tab-close';
     var isEditingTab = typeof options?.isEditingTab === "function" ? options.isEditingTab : function () { return false; };
     var html = tabs.map(function (tab) {
       var key = String(tab && tab.key || "");
       var title = String(tab && tab.title || "").trim() || fallbackTitle(tab);
       var isActive = key === activeKey;
       return (
-        '<div class="product-tab ' + (isActive ? "is-active" : "") + '" data-order-tab-key="' + escapeHtml(key) + '">' +
+        '<div class="product-tab ' + (isActive ? "is-active" : "") + '" ' + tabKeyAttribute + '="' + escapeHtml(key) + '">' +
           (isEditingTab(tab) ? '<i class="fas fa-pen product-tab-edit-icon" aria-label="&#1056;&#1077;&#1076;&#1072;&#1082;&#1090;&#1080;&#1088;&#1086;&#1074;&#1072;&#1085;&#1080;&#1077;"></i>' : '') +
           '<span class="product-tab-title">' + escapeHtml(title) + "</span>" +
-          '<button class="product-tab-close" type="button" data-order-tab-close="' + escapeHtml(key) + '" aria-label="Закрыть">&times;</button>' +
+          '<button class="product-tab-close" type="button" ' + tabCloseAttribute + '="' + escapeHtml(key) + '" aria-label="Закрыть">&times;</button>' +
         "</div>"
       );
     }).join("");

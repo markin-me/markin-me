@@ -35420,7 +35420,7 @@ body.page-cash #cashJournalList.orders-list .order-row.shared-order-summary-row 
 .new-order-mobile-dock{display:none}
 body.new-order-editor-active #orderTabsHeader{display:none}
 body.new-order-editor-active.orders-checkout-mode #newOrderTabsHeader{display:none!important}
-body.new-order-editor-active #chatRightTabsHeader{display:none!important}
+body.new-order-editor-active.admin-mobile-pages #chatRightTabsHeader{display:none!important}
 body.new-order-editor-active .admin-mobile-header-copy .courier-connection-banner{display:none!important}
 body.cash-checkout-mode .page-col-left > :not(#cashCheckoutLeftPane),
 body.cash-checkout-mode .page-col-center > :not(#cashCheckoutCenterPane),
@@ -35438,8 +35438,8 @@ body.new-order-editor-active #ordersCheckoutRightPane > #newOrderRightPanel{flex
 @media(max-width:768px){
   #newOrderCategoriesList .new-order-checkout-settings{position:absolute;right:2px;top:2px}
 }
-body:is(.page-new-order,.new-order-editor-active,.page-orders) :is(#newOrderTabs,#newOrderCatalogTabs,#orderTabs,#orderTabsCheckout) .product-tab{background:var(--color-surface-2)}
-body:is(.page-new-order,.new-order-editor-active,.page-orders) :is(#newOrderTabs,#newOrderCatalogTabs,#orderTabs,#orderTabsCheckout) .product-tab.is-active{background:linear-gradient(var(--primary-14),var(--primary-14)),var(--color-surface)}
+body:is(.page-new-order,.new-order-editor-active,.page-orders) :is(#newOrderTabs,#newOrderCatalogTabs,#orderTabs,#orderTabsCheckout,#chatRightTabs) .product-tab{background:var(--color-surface-2)}
+body:is(.page-new-order,.new-order-editor-active,.page-orders) :is(#newOrderTabs,#newOrderCatalogTabs,#orderTabs,#orderTabsCheckout,#chatRightTabs) .product-tab.is-active{background:linear-gradient(var(--primary-14),var(--primary-14)),var(--color-surface)}
 .product-tab-edit-icon{flex:0 0 auto;font-size:10px}
 .new-order-product-flight{position:fixed;z-index:10000;pointer-events:none;object-fit:contain;border-radius:14px;filter:drop-shadow(0 4px 8px #0003);will-change:transform,opacity}
 body:is(.page-new-order,.new-order-editor-active) #newOrderProductsGrid.is-shared-catalog{display:block}
@@ -35482,6 +35482,15 @@ body:is(.page-new-order,.new-order-editor-active) #newOrderProductsGrid.is-share
   #newOrderMobileTabs{flex:1;min-width:0;overflow-x:auto;touch-action:pan-x}
   #newOrderMobileTabs .product-tabs{display:flex;flex-wrap:nowrap;width:max-content;min-width:100%}
   #newOrderMobileTabs .product-tab{flex:none}
+  body.page-chat.new-order-editor-active.admin-mobile-pages > header{
+    display:flex;box-shadow:var(--shadow-sm);
+  }
+  body.page-chat.new-order-editor-active.admin-mobile-pages .main-container{
+    margin-top:var(--header-height);padding:0;
+  }
+  body.page-chat.new-order-editor-active.admin-mobile-pages .page-col{
+    visibility:visible;transition:none;
+  }
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-view-right #newOrderTabsHeader{display:none}
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages .page-col-left,
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages .page-col-right{padding:0;height:calc(100dvh - var(--header-height));min-height:0;overflow:hidden}
@@ -35500,7 +35509,7 @@ body:is(.page-new-order,.new-order-editor-active) #newOrderProductsGrid.is-share
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages #newOrderRightFooter{flex:0 0 auto;margin:0;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-view-right .admin-mobile-header-nav{width:100%;overflow:hidden}
   body:is(.page-new-order,.new-order-editor-active) #adminMobileOrderTabs{max-width:100%;overflow-x:auto;min-width:0}
-  body:is(.page-new-order,.new-order-editor-active) #adminMobileOrderTabs > :is(#newOrderTabs,#orderTabs,#orderTabsCheckout){flex:0 0 auto;width:max-content;max-width:none;flex-wrap:nowrap;overflow:visible}
+  body:is(.page-new-order,.new-order-editor-active) #adminMobileOrderTabs > :is(#newOrderTabs,#orderTabs,#orderTabsCheckout,#chatRightTabs){flex:0 0 auto;width:max-content;max-width:none;flex-wrap:nowrap;overflow:visible}
   body:is(.page-new-order,.new-order-editor-active) #adminMobileOrderTabs .product-tab{flex:0 0 auto}
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages #newOrderRightPanel{flex:1 1 0;max-height:100%;overflow:hidden;display:grid;grid-template-rows:minmax(0,1fr) auto}
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages #newOrderRightPanel > .panel-body{flex:1 1 0;display:block;overflow-x:hidden!important;overflow-y:auto!important;overscroll-behavior-y:contain;touch-action:pan-y}

@@ -353,6 +353,8 @@
   let editorWorkspaceWrites = Promise.resolve();
   let editorWorkspaceErrorShown = false;
   let editorWorkspaceIdentity = null;
+  const cancelEditsAfterReload = performance.getEntriesByType('navigation')[0]?.type === 'reload';
+  const reloadEditCancellations = new Map();
 
   function isNewOrderEditorSurface() {
     return document.body.matches('.page-new-order, .new-order-editor-active');
@@ -392,7 +394,28 @@
 
   async function readEditorWorkspace() {
     await editorWorkspaceWrites;
-    return editorWorkspaceScope().get('workspace');
+    const scope = editorWorkspaceScope();
+    if (cancelEditsAfterReload && !reloadEditCancellations.has(scope.namespace)) {
+      const cancellation = (async () => {
+        const workspace = await scope.get('workspace');
+        const editing = workspace?.rightOrders?.filter(row => row.mode === 'edit' && Number(row.editOrderId) > 0) || [];
+        if (!editing.length) return;
+        await bootstrapDataReadyPromise;
+        if (editorWorkspaceScope().namespace !== scope.namespace) throw new Error('ORDER_EDITOR_STORAGE_SCOPE_CHANGED');
+        await restoreCheckoutSession(workspace, { deferCatalog: true });
+        editorWorkspaceReady = true;
+        for (const draft of editing) {
+          await cancelRightOrderEditing(Number(draft.id));
+          if (state.rightOrders.some(row => Number(row.id) === Number(draft.id) && row.mode === 'edit')) {
+            throw new Error('ORDER_EDIT_RELOAD_CANCEL_FAILED');
+          }
+        }
+      })();
+      reloadEditCancellations.set(scope.namespace, cancellation);
+      cancellation.catch(() => { reloadEditCancellations.delete(scope.namespace); });
+    }
+    if (cancelEditsAfterReload) await reloadEditCancellations.get(scope.namespace);
+    return scope.get('workspace');
   }
 
   async function cancelRightOrderEditing(orderId) {
@@ -8097,7 +8120,11 @@
       if (!(cid > 0)) return;
       const source = repositoryOwnsProducts ? [] : (Array.isArray(payload?.source) ? payload.source : []).map(toStableCatalogProduct);
       const combos = Array.isArray(payload?.combos) ? payload.combos : [];
-      categoryProductsById[String(cid)] = { source, combos };
+      categoryProductsById[String(cid)] = {
+        source, combos,
+        productIds: (Array.isArray(payload?.source) ? payload.source : []).map(row => Number(row.id)).filter(id => id > 0),
+        complete: state.categoryWorkingSetComplete.has(cid),
+      };
     });
 
     const snapshot = {
@@ -8121,6 +8148,7 @@
           items: Array.isArray(state.autoAdd?.items) ? state.autoAdd.items : [],
         },
         unitConversions: Array.isArray(state.unitConversions) ? state.unitConversions : [],
+        tenantRounding: state.tenantRoundingLoaded ? state.tenantRounding : null,
         checkoutSavedDraft: state.checkoutSavedDraft && typeof state.checkoutSavedDraft === "object"
           ? { blocks: Array.isArray(state.checkoutSavedDraft.blocks) ? state.checkoutSavedDraft.blocks : [], enabled: state.checkoutScreenEnabled }
           : { blocks: [] },
@@ -8201,6 +8229,10 @@
       writeNewOrderManifestCache(snapshot.manifest);
     }
 
+    if (snapshot.tenantRounding && typeof snapshot.tenantRounding === 'object') {
+      state.tenantRounding = normalizePriceRoundingSettings(snapshot.tenantRounding);
+      state.tenantRoundingLoaded = true;
+    }
     state.categories = Array.isArray(snapshot.categories) ? snapshot.categories : [];
     state.productCategories = Array.isArray(snapshot.productCategories) ? snapshot.productCategories : [];
     state.activeProductCategoryId = Number(snapshot.activeProductCategoryId || 0) || null;
@@ -8265,6 +8297,13 @@
       if (!(categoryId > 0)) return;
       const raw = categoryProductsById[key] || {};
       const payload = buildCategoryPayload(raw.source, raw.combos, categoryId);
+      if (raw.complete === true && Array.isArray(raw.productIds)
+        && (window.CatalogRepository
+          ? hasCompleteRepositoryCategoryIndex(raw.productIds, [categoryId])
+          : Array.isArray(raw.source) && raw.productIds.every(id => raw.source.some(row => Number(row.id) === Number(id))))) {
+        state.categoryWorkingSetComplete.add(categoryId);
+      }
+
       setNewOrderCategoryPayload(categoryId, payload);
       state.checkoutCategoryProducts.set(categoryId, payload.activeOnly);
       if (window.CatalogRepository) {
@@ -18131,7 +18170,10 @@
     const tracked = new Set(window.CatalogRepository.getTrackedCoverageCategoryIds());
     const activeId = getActiveProductCategoryId();
     if (activeId > 0) tracked.add(window.CatalogRepository.getRootCategoryId(activeId));
-    for (const categoryId of tracked) await discoverNewOrderCatalogTarget(categoryId);
+    for (const categoryId of tracked) {
+      window.CatalogRepository.getDescendantCategoryIds(categoryId).forEach(id => state.categoryWorkingSetComplete.delete(Number(id)));
+      await discoverNewOrderCatalogTarget(categoryId);
+    }
     hydrateNewOrderFromCatalogRepository({ categoryIds: [...tracked] });
     ensureValidActiveCategory();
     renderCategories();
@@ -18143,8 +18185,9 @@
     const rootId = window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId || 0);
     const categoryIds = window.CatalogRepository.getDescendantCategoryIds(rootId);
     let targetIds = window.CatalogRepository.getCoverageTargetIds({ categoryId: rootId });
-    const hasCompleteRuntimeSet = Array.isArray(targetIds)
-      && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds);
+    const hasCompleteRuntimeSet = (categoryIds.length > 0
+      && categoryIds.every(id => state.categoryWorkingSetComplete.has(Number(id)) && state.categoryProductsCache.has(Number(id))))
+      || (Array.isArray(targetIds) && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds));
     if (!hasCompleteRuntimeSet && navigator.onLine) {
       const loaded = await preloadAllCategoryProducts(categoryIds.length ? categoryIds : [rootId]);
       if (!loaded) throw new Error("NEW_ORDER_WORKING_SET_FAILED");
@@ -18174,11 +18217,11 @@
 
   function isRepositoryCategoryWorkingSetComplete(categoryId) {
     const cid = Number(categoryId || 0);
-    if (state.categoryWorkingSetComplete.has(cid) && state.categoryProductsCache.has(cid)) return true;
-    if (!window.CatalogRepository) return false;
+    if (!window.CatalogRepository) return state.categoryWorkingSetComplete.has(cid) && state.categoryProductsCache.has(cid);
     const rootId = window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId || 0);
     const categoryIds = window.CatalogRepository.getDescendantCategoryIds(rootId);
     const targetIds = window.CatalogRepository.getCoverageTargetIds({ categoryId: rootId });
+    if (categoryIds.length > 0 && categoryIds.every(id => state.categoryWorkingSetComplete.has(Number(id)) && state.categoryProductsCache.has(Number(id)))) return true;
     return Array.isArray(targetIds)
       && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds);
   }
@@ -19053,7 +19096,7 @@
   function animateNewOrderProductToTab(source, orderId) {
     if (!source || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const findTab = () => {
-      const selector = `[data-action="right-order-tab-select"][data-order-id="${Number(orderId)}"], [data-order-tab-key].is-active`;
+      const selector = `[data-action="right-order-tab-select"][data-order-id="${Number(orderId)}"], [data-order-tab-key].is-active, [data-chat-right-tab].is-active`;
       return [...document.querySelectorAll('#newOrderCatalogTabs, #adminMobileOrderTabs, #newOrderTabs, #orderTabsCheckout')]
         .flatMap(container => [...container.querySelectorAll(selector)])
         .find(tab => tab.getClientRects().length && tab.getBoundingClientRect().width > 0);
@@ -19197,7 +19240,7 @@
       if (!entry || explicitlyChanged || (!changedIds && entry.product !== product)) {
         const card = isCombo
           ? window.SharedProductDetails.createComboCard({ ...product, id }, { onOpen: () => { void openComboOverlay(id, { comboCategoryId: Number(product.combo_category_id || 0) }); } })
-          : window.SharedProductDetails.createCard(product, context);
+          : window.SharedProductDetails.createCard(product, { ...context, isCriticalCard: index < (window.matchMedia("(max-width: 768px)").matches ? 4 : 5) });
         if (entry) entry.card.replaceWith(card);
         entry = { key, card, product, isCombo };
       } else if (!isCombo) {
@@ -20669,11 +20712,17 @@
         state.categoryWorkingSetComplete.add(cid);
       });
       if (window.CatalogRepository) {
-        queueMicrotask(() => {
-          ids.forEach((cid) => {
-            const payload = state.categoryProductsCache.get(cid);
-            if (payload) window.CatalogRepository.upsertProducts(payload.source, { categoryId: cid, completeness: "summary" });
-          });
+        ids.forEach((cid) => {
+          const payload = state.categoryProductsCache.get(cid);
+          if (payload) window.CatalogRepository.upsertProducts(payload.source, { categoryId: cid, completeness: "summary" });
+        });
+        const loadedIds = new Set(ids);
+        const roots = new Set(ids.map(id => window.CatalogRepository.getRootCategoryId(id) || id));
+        roots.forEach(rootId => {
+          const descendants = window.CatalogRepository.getDescendantCategoryIds(rootId);
+          if (!descendants.length || !descendants.every(id => loadedIds.has(Number(id)))) return;
+          const productIds = descendants.flatMap(id => (state.categoryProductsCache.get(Number(id))?.source || []).map(row => Number(row.id)));
+          window.CatalogRepository.setCoverageTarget([...new Set(productIds.filter(id => id > 0))], { categoryId: rootId, source: "admin-category-working-set" });
         });
       }
       schedulePersistBootstrapSnapshot(0);
@@ -20739,6 +20788,21 @@
         } else if (productsEmptyEl) {
           productsEmptyEl.textContent = "Загрузка товаров…";
           productsEmptyEl.classList.remove("hidden");
+        }
+        if (localPayloadReady && preferCache) {
+          if (!isRepositoryCategoryWorkingSetComplete(cid)) {
+            void ensureRepositoryCategoryProducts(cid).then(() => {
+              if (getActiveProductCategoryId() !== cid || isCheckoutScreenActive()) return;
+              const payload = loadIds.length > 1 ? buildCombinedCategoryPayload(loadIds) : state.categoryProductsCache.get(cid);
+              state.currentProducts = Array.isArray(payload?.currentProducts) ? payload.currentProducts : [];
+              seedRightOrderProductsByIdCache(payload?.activeOnly || []);
+              renderProducts(state.currentProducts);
+            }).catch(error => console.error('New Order category refresh failed:', error));
+          }
+          void warmRightOrderProductPricingContext(localPayload.activeOnly || [], {
+            includeOptionDetails: true, includeOptionTargets: true,
+          });
+          return;
         }
         try {
           await ensureRepositoryCategoryProducts(cid);
@@ -23132,10 +23196,10 @@
       const checkoutIds = [...state.checkoutCategoryProducts.values()]
         .flatMap((products) => Array.isArray(products) ? products : [])
         .map((product) => Number(product?.id || 0));
-      await refreshNewOrderEffectiveStockConfigs(checkoutIds);
+      void refreshNewOrderEffectiveStockConfigs(checkoutIds);
     } else if (state.activeCategoryId) {
       await loadProductsForCategory(getActiveProductCategoryId(), { preferCache: true });
-      await refreshNewOrderEffectiveStockConfigs(
+      void refreshNewOrderEffectiveStockConfigs(
         state.currentProducts.map((product) => Number(product?.id || 0))
       );
     } else if (productsEmptyEl) {
@@ -24482,7 +24546,7 @@
     renderCategories();
     renderRightOrderTabs();
     if (typeof opts?.onApplied === "function") opts.onApplied();
-    await renderActiveCategoryContent();
+    if (!opts.deferCatalog) await renderActiveCategoryContent();
     if (isCurrent && !isCurrent()) return false;
     requestAnimationFrame(() => {
       if (isCurrent && !isCurrent()) return;
@@ -24700,7 +24764,7 @@
         repositoryReady = hydrateNewOrderFromCatalogRepository() || repositoryReady;
       }
       if (activeSession) {
-        await restoreCheckoutSession(activeSession);
+        await restoreCheckoutSession(activeSession, { deferCatalog: true });
       } else if (hydrated) {
         renderCachedStartupContent();
       }
@@ -24712,12 +24776,13 @@
         startupInventoryPromise = inventoryPromise;
       }
 
-      await ensureTenantPriceRoundingSettings();
+      const roundingPromise = ensureTenantPriceRoundingSettings();
       const localEditorReady = state.categories.length > 0 && state.checkoutDraftReady
         && state.rightDeliveryTypes.length > 0 && state.rightPaymentTypes.length > 0 && state.rightTimeOptions.length > 0
-        && state.unitConversions.length > 0
+        && state.unitConversions.length > 0 && state.tenantRoundingLoaded
         && (Boolean(window.CatalogRepository?.getAllProducts().length) || [...state.categoryProductsCache.values()].some(payload => payload?.source?.length));
       resolveLocalEditorDataReady(Boolean(localEditorReady));
+      await roundingPromise;
       const hasLocalProducts = Boolean(window.CatalogRepository?.getAllProducts().length)
         || [...state.categoryProductsCache.values()].some((payload) => Array.isArray(payload?.source) && payload.source.length > 0);
       const needsBootstrap = (
@@ -24732,7 +24797,11 @@
         ? await loadNewOrderBootstrapFromApi()
         : false;
       if (bootstrapped && !hasLocalProducts) {
-        await preloadAllCategoryProducts(getPreloadCategoryIds());
+        ensureValidActiveCategory();
+        const initialCategoryIds = isCheckoutScreenActive()
+          ? getAllCategoryIdsFromBlocks(getCheckoutBlocks())
+          : getProductCategoryLoadIds(getActiveProductCategoryId());
+        if (initialCategoryIds.length) await preloadAllCategoryProducts(initialCategoryIds);
       }
       if (window.CatalogRepository) {
         repositoryReady = hydrateNewOrderFromCatalogRepository() || repositoryReady || bootstrapped;
@@ -24752,7 +24821,6 @@
 
     try {
       const startup = await bootstrapDataReadyPromise;
-      await refreshNewOrderData(startup);
       if (document.body.classList.contains('page-new-order') && checkoutSessionRevision === 0) {
         const workspace = await readEditorWorkspace();
         if (workspace?.rightOrders?.length) {
@@ -24762,6 +24830,7 @@
         }
       }
       editorWorkspaceReady = true;
+      await refreshNewOrderData(startup);
     } catch (e) {
       const offlineCatalogEmpty = !navigator.onLine
         && (!window.CatalogRepository || window.CatalogRepository.getAllProducts().length === 0);

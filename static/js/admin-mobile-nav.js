@@ -60,7 +60,7 @@
   const accountOrigin = accountMenu ? document.createComment("user-menu-origin") : null;
   const hasOrderTabs = isEditorNavigation() || activePage === "orders" || activePage === "courier-screen" || activePage === "products" || activePage === "cash" || activePage === "clients" || activePage === "marketing" || activePage === "settings" || activePage === "chat";
   const orderTabs = hasOrderTabs
-    ? Array.prototype.slice.call(document.querySelectorAll("#newOrderTabs, #orderTabs, #orderTabsCheckout, #productTabs, #cashOrderTabs, #clientTabs, #settingsRightTabs, #settingsDeliveryTabs"))
+    ? Array.prototype.slice.call(document.querySelectorAll("#newOrderTabs, #orderTabs, #orderTabsCheckout, #chatRightTabs, #productTabs, #cashOrderTabs, #clientTabs, #settingsRightTabs, #settingsDeliveryTabs"))
     : [];
   const orderTabOrigins = orderTabs.map(function () {
     return document.createComment("order-tabs-origin");
@@ -177,7 +177,7 @@
     orderTabs.forEach(function (tabs, index) {
       const hostOrderTabs = ['orders','courier-screen','chat'].includes(activePage);
       if (hostOrderTabs) {
-        const headerTabsId = isEditorNavigation() ? 'orderTabsCheckout' : 'orderTabs';
+        const headerTabsId = activePage === 'chat' ? 'chatRightTabs' : (isEditorNavigation() ? 'orderTabsCheckout' : 'orderTabs');
         if (tabs.id !== headerTabsId) {
           const origin = orderTabOrigins[index];
           if (origin?.parentNode) { origin.parentNode.insertBefore(tabs, origin); origin.remove(); }
