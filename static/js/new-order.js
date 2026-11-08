@@ -21119,23 +21119,13 @@
           return;
         }
 
-        const addressEditBtn = e.target.closest(".new-order-right-address-edit");
-        if (addressEditBtn) {
-          const formRoot = addressEditBtn.closest(".new-order-right-form[data-order-id]");
+        const addressWrap = e.target.closest(".new-order-right-address-wrap");
+        if (addressWrap) {
+          e.preventDefault();
+          const formRoot = addressWrap.closest(".new-order-right-form[data-order-id]");
           const orderId = Number(formRoot?.getAttribute("data-order-id") || 0);
           if (orderId > 0) void openRightAddressOverlay(orderId);
           return;
-        }
-
-        const addressInput = e.target.closest("[data-action='right-input-change'][data-field='address'][data-order-id]");
-        if (addressInput) {
-          const currentAddress = String(addressInput.value || "").trim();
-          if (!currentAddress) {
-            const orderId = Number(addressInput.getAttribute("data-order-id") || 0);
-            if (orderId > 0) void openRightAddressOverlay(orderId);
-            e.preventDefault();
-            return;
-          }
         }
 
         const cartVariantBtn = e.target.closest("[data-action='right-cart-variant-select'][data-order-id][data-cart-item-id][data-row-kind][data-variant-index]");
