@@ -33,6 +33,8 @@
   const dirtyComboRelations = new Set();
   const removedProductIds = new Set();
   const pendingByComboId = new Map();
+  let allComboDefinitionsLoaded = false;
+  const loadedComboCategoryCodes = new Set();
   const mutationVersions = new Map();
   const mutationFieldVersions = new Map();
   const pendingMutationFields = new Map();
@@ -1804,13 +1806,17 @@
     if (!getAllCombos().length && options.force !== true && uniqueIds(manifest.comboIds).length) {
       await ensureCombos(manifest.comboIds, options);
     }
-    if (getAllCombos().length && options.force !== true) {
+    if ((allComboDefinitionsLoaded || !navigator.onLine) && options.force !== true) {
       await ensureCombos(getAllCombos().map((row) => row.id), options);
       return getAllCombos();
     }
     if (typeof configuredRequest !== "function") return [];
+    const targetScope = scope;
+    const generation = scopeGeneration;
     const response = await configuredRequest("/api/admin/catalog/combos");
-    const bundles = Array.isArray(response?.data) ? response.data : [];
+    if (!scopeIsCurrent(targetScope, generation)) return [];
+    if (!Array.isArray(response?.data)) throw new Error("INVALID_COMBO_LIST_RESPONSE");
+    const bundles = response.data;
     if (options.force === true) {
       const nextComboIds = new Set(uniqueIds(bundles.map((row) => row?.combo?.id ?? row?.id)));
       const nextBlockIds = new Set(uniqueIds((response?.blocks || []).map((row) => row?.id)));
@@ -1819,6 +1825,7 @@
     }
     (Array.isArray(response?.blocks) ? response.blocks : []).forEach((block) => upsertComboBlock(block, { notify: false }));
     upsertComboBundles(bundles);
+    allComboDefinitionsLoaded = true;
     await ensureCombos(bundles.map((row) => row?.combo?.id ?? row?.id), options);
     return getAllCombos();
   }
@@ -1827,14 +1834,22 @@
     await init();
     const codes = [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").trim()).filter(Boolean))];
     if (!codes.length || typeof configuredRequest !== "function") return [];
+    if (!navigator.onLine && uniqueIds(manifest.comboIds).length) {
+      await ensureCombos(manifest.comboIds, { requiredCompleteness: "definition" });
+    }
     const localIds = getAllCombos().filter((combo) => codes.includes(String(combo.category_code || "").trim())).map((combo) => combo.id);
-    if (localIds.length && options.force !== true) {
+    if ((allComboDefinitionsLoaded || codes.every((code) => loadedComboCategoryCodes.has(code)) || !navigator.onLine) && options.force !== true) {
       await ensureCombos(localIds, options);
       return localIds.map((id) => getCombo(id)).filter(Boolean);
     }
+    const targetScope = scope;
+    const generation = scopeGeneration;
     const response = await configuredRequest(`/api/admin/catalog/combos?category_codes=${encodeURIComponent(codes.join(","))}`);
-    const bundles = Array.isArray(response?.data) ? response.data : [];
+    if (!scopeIsCurrent(targetScope, generation)) return [];
+    if (!Array.isArray(response?.data)) throw new Error("INVALID_COMBO_LIST_RESPONSE");
+    const bundles = response.data;
     upsertComboBundles(bundles);
+    codes.forEach((code) => loadedComboCategoryCodes.add(code));
     const ids = bundles.map((row) => row?.combo?.id ?? row?.id);
     await ensureCombos(ids, options);
     return ids.map((id) => getCombo(id)).filter(Boolean);
@@ -2342,6 +2357,8 @@
     pendingByProductId.clear();
     pendingPersistentReads.clear();
     pendingByComboId.clear();
+    allComboDefinitionsLoaded = false;
+    loadedComboCategoryCodes.clear();
     mutationVersions.clear();
     mutationFieldVersions.clear();
     pendingMutationFields.clear();

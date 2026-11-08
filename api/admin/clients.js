@@ -1596,6 +1596,24 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
 
       if (lightweight) {
         const data = rows.slice(0, limit);
+        if (String(req.query.include_addresses || '') === '1') {
+          const clientIds = data.map(row => Number(row.id));
+          const addressesByClient = new Map(clientIds.map(id => [id, []]));
+          if (clientIds.length) {
+            await ensureCustomerAddressIdentityColumns(db);
+            const [addresses] = await db.query(
+              `SELECT ${customerAddressSelectFields}
+               FROM cust_customer_addresses
+               WHERE tenant_id=? AND customer_id IN (${clientIds.map(() => '?').join(',')}) AND is_active=1
+               ORDER BY customer_id, is_default DESC, updated_at DESC, id DESC`,
+              [tenantId, ...clientIds]
+            );
+            for (const address of addresses) {
+              addressesByClient.get(Number(address.customer_id)).push(serializeCustomerAddress(helpers, address));
+            }
+          }
+          for (const row of data) row.addresses = addressesByClient.get(Number(row.id));
+        }
         return res.json({ ok: true, data, has_more: rows.length > limit, next_offset: offset + data.length, limit, offset });
       }
 

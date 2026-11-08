@@ -205,6 +205,7 @@
     checkoutCategoryLoading: new Set(),
     checkoutCategoryErrors: new Set(),
     categoryWorkingSetComplete: new Set(),
+    categoryComboListsComplete: new Set(),
     checkoutSelectedProductByCategory: new Map(),
     checkoutProductsScrollByCategory: new Map(),
     checkoutVariantsScrollByCategory: new Map(),
@@ -341,6 +342,12 @@
     resolveLoadReady = resolve;
   });
   let bootstrapDataReadyPromise = Promise.resolve();
+  let checkoutSettingsRevision = "";
+  let checkoutSettingsWantedRevision = "";
+  let checkoutSettingsRequestPending = false;
+  const rightDeliveryQuotePending = new Map();
+  const rightBenefitsPreviewPending = new Map();
+  const rightBenefitsPreviewUpdatedAt = new Map();
   let resolveLocalEditorDataReady;
   const localEditorDataReadyPromise = new Promise(resolve => { resolveLocalEditorDataReady = resolve; });
 
@@ -664,7 +671,6 @@
     const cartLineStates = Number.isFinite(snapshotItemsTotalAfterDiscount)
       ? baseCartLineStates
       : buildRightOrderBonusRedeemDisplayLineStates(baseCartLineStates, cartSummary?.bonusRedeemAmount || 0);
-    const orderPayableTotal = cartSummary.payableTotal;
     const asapEtaLabel = cartSummary.isDeliveryMethod && Number(cartSummary.etaMinutes || 0) > 0
       ? `${Math.round(Number(cartSummary.etaMinutes || 0))} мин`
       : "40-80 мин";
@@ -773,40 +779,11 @@
       </div>
       <div class="shop-cart-footer">
         <div class="shop-cart-footer-actions is-order-entry ${isEditCheckout ? "is-edit-checkout" : ""}">
-          ${isEditCheckout ? `
-          <button
-            class="${clearBtnClass}"
-            data-action="right-cart-clear"
-            data-order-id="${Number(active?.id || 0)}"
-            type="button"
-            title="${clearBtnTitle}"
-            aria-label="${clearBtnLabel}"
-          >${clearBtnText}</button>
-          ` : `<span class="new-order-right-footer-cancel-space" aria-hidden="true"></span>`}
-          <button
-            class="new-order-right-footer-benefits-btn"
-            type="button"
-            data-action="right-order-benefits-open"
-            data-order-id="${Number(active?.id || 0)}"
-            aria-label="Выгоды"
-            title="Выгоды"
-          >
-            <i class="fas fa-tags" aria-hidden="true"></i>
-            <span class="new-order-right-footer-label">Выгоды</span>
+          <button class="shop-checkout-btn new-order-right-menu-btn" type="button" data-action="right-order-catalog-open">
+            <i class="fas fa-arrow-left" aria-hidden="true"></i><span>Меню</span>
           </button>
           <button
-            class="new-order-right-footer-benefits-btn"
-            type="button"
-            data-action="right-order-bonus-open"
-            data-order-id="${Number(active?.id || 0)}"
-            aria-label="Бонусы"
-            title="Бонусы"
-          >
-            <span aria-hidden="true">Б</span>
-            <span class="new-order-right-footer-label">Бонусы</span>
-          </button>
-          <button
-            class="shop-checkout-btn shop-checkout-btn--secondary"
+            class="shop-checkout-btn"
             data-action="right-cart-checkout"
             data-order-id="${Number(active?.id || 0)}"
             type="button"
@@ -814,16 +791,6 @@
           >${checkoutSubmitting
             ? checkoutSubmittingLabel
             : checkoutActionLabel
-          }</button>
-          <button
-            class="shop-checkout-btn shop-checkout-btn--payment"
-            data-action="right-cart-checkout-paid"
-            data-order-id="${Number(active?.id || 0)}"
-            type="button"
-            ${checkoutDisabled ? "disabled" : ""}
-          >${checkoutSubmitting
-            ? "Принимаем оплату..."
-            : (isEditCheckout ? "Принять оплату и сохранить" : "Принять оплату и оформить")
           }</button>
         </div>
       </div>
@@ -869,7 +836,6 @@
     const timeSlots = buildTimeSlotsForOptionWithDate(resolvedCookWhen, effectiveDateForTime);
     const resolvedDateTime = timeSlots.includes(currentTime) ? currentTime : (timeSlots[0] || "18:00");
 
-    const minChangeAmount = Math.max(0, roundPrice(orderPayableTotal)) + 1;
 
     const selectValues = {
       pickupMethod: resolvedPickupMethod,
@@ -879,7 +845,6 @@
       paymentMethod: resolvedPaymentMethod,
       changeType: form.changeType || "no_change",
     };
-    const isCashPayment = isCashPaymentCode(selectValues.paymentMethod);
     const labels = {
       pickupMethod: pickupMethodLabels,
       cookWhen: cookWhenLabels,
@@ -1011,44 +976,6 @@
               ${renderSelect("dateTime", Number(active?.id || 0))}
             </div>
           `}
-        </div>
-
-        <div class="new-order-right-form-row ${isCashPayment && String(selectValues.changeType) === "other" ? "is-payment-three-cols" : ""}">
-          <div class="new-order-right-form-field">
-            <span class="new-order-right-form-label">РЎРїРѕСЃРѕР± РѕРїР»Р°С‚С‹</span>
-            ${renderSelect("paymentMethod", Number(active?.id || 0))}
-          </div>
-          ${isCashPayment ? `
-            <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">РЎРґР°С‡Р°</span>
-              ${String(selectValues.changeType) === "other" ? `
-                ${renderSelect("changeType", Number(active?.id || 0))}
-              ` : renderSelect("changeType", Number(active?.id || 0))}
-            </div>
-          ` : `<div class="new-order-right-form-field"></div>`}
-          ${isCashPayment && String(selectValues.changeType) === "other" ? `
-            <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">РЎСѓРјРјР°</span>
-              <input
-                class="control new-order-right-change-input"
-                type="number"
-                min="${minChangeAmount}"
-                step="1"
-                value="${escapeHtml(String(form.changeAmount || ""))}"
-                data-action="right-input-change"
-                data-order-id="${Number(active?.id || 0)}"
-                data-field="changeAmount"
-                placeholder="Р‘РѕР»СЊС€Рµ ${escapeHtml(String(roundPrice(orderPayableTotal)))}"
-                autocomplete="new-password"
-                autocorrect="off"
-                autocapitalize="off"
-                spellcheck="false"
-                readonly
-                data-no-autofill="1"
-                name="noaf_change_${Number(active?.id || 0)}"
-              />
-            </div>
-          ` : ""}
         </div>
 
         <label class="new-order-right-form-field is-comment">
@@ -1591,6 +1518,7 @@
       id: Number(item?.id || 0),
       code: String(item?.code || "").trim(),
       title: String(item?.title || "").trim(),
+      icon: String(item?.icon || "").trim(),
       is_active: Number(item?.is_active ?? 1),
       sort: Number(item?.sort || 0),
     };
@@ -1627,8 +1555,23 @@
 
   async function loadRightPaymentTypes() {
     try {
-      const json = await apiJson("/api/admin/tenant/order-payments");
-      const items = Array.isArray(json?.items) ? json.items : [];
+      const load = () => apiJson("/api/admin/tenant/order-payments");
+      const items = window.AdminReferenceCache
+        ? await window.AdminReferenceCache.getOrLoadReference("payment-methods", {
+          load,
+          normalize: json => {
+            if (!Array.isArray(json?.items)) throw new Error("INVALID_PAYMENT_METHODS_RESPONSE");
+            return json.items;
+          },
+          validate: Array.isArray,
+          onUpdate: items => {
+            state.rightPaymentTypes = items.map(normalizeRightPaymentTypeRef).filter(item => item.code);
+            sharedOrderPayment?.clearCache?.();
+            schedulePersistBootstrapSnapshot();
+            queueRenderRightOrderTabs();
+          },
+        })
+        : (await load()).items;
       state.rightPaymentTypes = items
         .map(normalizeRightPaymentTypeRef)
         .filter((item) => item.code)
@@ -2550,6 +2493,16 @@
   }
 
   async function ensureRightDeliveryQuoteFresh(order, summary, opts = {}) {
+    const request = buildRightOrderDeliveryQuoteRequest(order, summary);
+    const key = `${newOrderCacheScopeKey()}:${checkoutSettingsRevision}:${request?.orderId}:${request?.key}`;
+    if (rightDeliveryQuotePending.has(key)) return rightDeliveryQuotePending.get(key);
+    const task = ensureRightDeliveryQuoteFreshTask(order, summary, opts);
+    rightDeliveryQuotePending.set(key, task);
+    try { return await task; }
+    finally { if (rightDeliveryQuotePending.get(key) === task) rightDeliveryQuotePending.delete(key); }
+  }
+
+  async function ensureRightDeliveryQuoteFreshTask(order, summary, opts = {}) {
     const request = buildRightOrderDeliveryQuoteRequest(order, summary);
     const orderId = Number(request?.orderId || order?.id || 0);
     if (!(orderId > 0) || !request) return null;
@@ -4801,6 +4754,7 @@
       if (!slot) return;
       state.rightBenefitsPreviewByOrder.delete(slot);
       state.rightBenefitsPreviewKeyByOrder.delete(slot);
+      rightBenefitsPreviewUpdatedAt.delete(slot);
       state.rightBenefitsLoadingByOrder.delete(slot);
       state.rightBenefitsReqSeqByOrder.delete(slot);
     });
@@ -5029,11 +4983,18 @@
       || (Array.isArray(form.cartItems) ? form.cartItems : []).some((item) => Number(item?.is_gift_reward || 0) === 1)
     );
     if (!shouldRefresh) return null;
+    const mode = getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode());
+    const slot = getRightOrderBenefitsCacheSlot(id, mode);
+    const expectedKey = buildRightOrderBenefitsPreviewKey(order, mode);
+    const freshness = rightBenefitsPreviewUpdatedAt.get(slot);
+    if (state.rightBenefitsPreviewKeyByOrder.get(slot) === expectedKey && freshness?.key === expectedKey
+      && Date.now() - Number(freshness.updatedAt || 0) < 30000
+      && state.rightBenefitsPreviewByOrder.has(slot)) return state.rightBenefitsPreviewByOrder.get(slot);
     return loadRightOrderBenefitsPreview(id, {
       force: true,
       render: opts?.render !== false,
       renderOverlay: opts?.renderOverlay === true,
-      mode: getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode()),
+      mode,
     });
   }
 
@@ -5180,6 +5141,16 @@
   }
 
   async function loadRightOrderBenefitsPreview(orderId, opts = {}) {
+    const order = state.rightOrders.find(row => Number(row.id) === Number(orderId));
+    const key = `${newOrderCacheScopeKey()}:${checkoutSettingsRevision}:${orderId}:${buildRightOrderBenefitsPreviewKey(order, opts.mode)}`;
+    if (!opts.prefetchedData && rightBenefitsPreviewPending.has(key)) return rightBenefitsPreviewPending.get(key);
+    const task = loadRightOrderBenefitsPreviewTask(orderId, opts);
+    rightBenefitsPreviewPending.set(key, task);
+    try { return await task; }
+    finally { if (rightBenefitsPreviewPending.get(key) === task) rightBenefitsPreviewPending.delete(key); }
+  }
+
+  async function loadRightOrderBenefitsPreviewTask(orderId, opts = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
     let index = getRightOrderIndexById(id);
@@ -5264,6 +5235,8 @@
       invalidateRightOrderLiveSummary(id);
       state.rightBenefitsPreviewByOrder.set(cacheSlot, nextData || {});
       state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
+      rightBenefitsPreviewUpdatedAt.set(cacheSlot, { key: requestKey, updatedAt: Date.now() });
+      schedulePersistBootstrapSnapshot();
       if (clientCacheSlot) {
         state.rightBenefitsPreviewByClientMode.set(
           clientCacheSlot,
@@ -5316,12 +5289,9 @@
         || (Array.isArray(form.cartItems) ? form.cartItems : []).some((item) => Number(item?.is_gift_reward || 0) === 1)
       );
       if (!shouldRefresh) return;
-      const refreshMode = getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode());
-      void loadRightOrderBenefitsPreview(id, {
-        force: true,
+      void ensureRightOrderBenefitsPreviewFresh(id, {
         render: opts?.render !== false,
         renderOverlay: opts?.renderOverlay === true,
-        mode: refreshMode,
       }).catch(() => {});
     }, delay);
     state.rightBenefitsRefreshTimerByOrder.set(id, timer);
@@ -6443,9 +6413,9 @@
       ? ` <span class="shop-cart-bonus-action-pill__delta">+${escapeHtml(toMoney(bonusAccrualAmount))}</span>`
       : "";
     return `
-      <section class="shop-cart-bonus-redeem-section right-order-shop-bonus-section">
+      <section class="shop-cart-bonus-redeem-section right-order-shop-bonus-section" data-action="right-order-bonus-open" data-order-id="${orderId}">
         <div class="shop-bonus-level-balance-card shop-cart-bonus-redeem-card">
-          <div class="shop-cart-bonus-redeem-head">
+          <button type="button" class="shop-cart-bonus-redeem-head new-order-right-bonus-open">
             <div class="shop-bonus-level-balance-main">
               <div class="shop-bonus-level-balance-label">${escapeHtml(coinName)}</div>
               <div class="shop-bonus-level-balance-value">${escapeHtml(toMoney(bonusBalance))}</div>
@@ -6454,7 +6424,7 @@
               <div class="shop-cart-bonus-redeem-available-label">Можно списать</div>
               <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${escapeHtml(toMoney(bonusRedeemAvailableAmount))}</div>
             </div>
-          </div>
+          </button>
           <div class="shop-cart-bonus-redeem-actions">
             <button
               class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${bonusRedeemEnabled ? "" : " is-active"}"
@@ -6612,6 +6582,9 @@
         </div>
       </div>
       ${renderRightOrderShopBonusRedeemHtml(orderId, cartSummary)}
+      <button class="new-order-right-benefits-open" type="button" data-action="right-order-benefits-open" data-order-id="${orderId}">
+        <i class="fas fa-tags" aria-hidden="true"></i><span>Выгоды</span>
+      </button>
     `;
   }
 
@@ -7329,6 +7302,8 @@
       money: toMoney,
       formatDateTimeNumeric: formatRightPaymentModalDateTime,
       collectPayloadOnly: true,
+      paymentMethods: state.rightPaymentTypes,
+      confirmText: String(order?.mode || "") === "edit" ? "Сохранить" : "Оформить",
       getOrderId: () => 0,
       isPaidOrder: () => false,
       onError: (err) => {
@@ -7337,8 +7312,8 @@
     });
   }
 
-  async function submitRightOrderTask(orderId, options = {}) {
-    const withPayment = options?.withPayment === true;
+  async function submitRightOrderTask(orderId) {
+    let paymentDeferred = false;
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     if (state.rightCheckoutSubmittingByOrder.get(id)) return;
@@ -7396,21 +7371,33 @@
     const timeOptionCode = cookWhenOptions.includes(rawTimeOptionCode) ? rawTimeOptionCode : fallbackCookWhenCode;
     const isDeliveryMethod = isDeliveryMethodCode(methodCode);
     const isPickupMethod = isPickupLikeMethod(methodCode);
-    setRightOrderSubmitFeedback(id, true, { overlay: !withPayment });
-    if (isDeliveryMethod) {
-      const refreshBaseSummary = getRightOrderLiveSummary(order, { force: true });
-      await ensureRightDeliveryQuoteFresh(order, refreshBaseSummary, { force: true, render: true });
-      order = state.rightOrders[index] || order;
-    }
+    setRightOrderSubmitFeedback(id, true, { overlay: false });
+    clearRightOrderBenefitsRefreshTimer(id);
+    const deliveryTimer = state.rightDeliveryQuoteTimerByOrder.get(id);
+    if (deliveryTimer) clearTimeout(deliveryTimer);
+    state.rightDeliveryQuoteTimerByOrder.delete(id);
     try {
-      await ensureRightOrderBenefitsPreviewFresh(id, {
-        render: true,
-        renderOverlay: Number(state.benefitsModal.orderId || 0) === id,
-      });
+      const clientId = Number(order?.form?.clientId || 0);
+      // These requests use independent inputs; reuse their existing in-flight work.
+      await Promise.all([
+        ensureRightOrderBenefitsPreviewFresh(id, {
+          render: true,
+          renderOverlay: Number(state.benefitsModal.orderId || 0) === id,
+        }),
+        clientId > 0 ? ensureRightBonusCardLoaded(clientId) : Promise.resolve(null),
+        isDeliveryMethod
+          ? ensureRightDeliveryQuoteFresh(order, getRightOrderLiveSummary(order, { force: true }), { render: true })
+          : Promise.resolve(null),
+      ]);
       order = state.rightOrders[index] || order;
       const resolvedClientId = Number(order?.form?.clientId || 0);
       if (resolvedClientId > 0 && !state.rightBonusCardByClientId.has(resolvedClientId)) {
         await ensureRightBonusCardLoaded(resolvedClientId);
+        order = state.rightOrders[index] || order;
+      }
+      // Benefits can change the subtotal used by delivery pricing.
+      if (isDeliveryMethod) {
+        await ensureRightDeliveryQuoteFresh(order, getRightOrderLiveSummary(order, { force: true }), { render: true });
         order = state.rightOrders[index] || order;
       }
     } catch (error) {
@@ -7483,29 +7470,7 @@
       scheduledAt = `${dateValue} ${timeValue}:00`;
     }
 
-    let changeFrom = null;
-    if (isCashPaymentCode(paymentCode)) {
-      const changeType = String(form.changeType || "no_change").trim();
-      if (changeType !== "no_change") {
-        if (changeType === "other") {
-          const numeric = Number(String(form.changeAmount || "").replace(/[^\d]/g, ""));
-          if (!Number.isFinite(numeric) || numeric <= 0) {
-            setRightOrderSubmitFeedback(id, false);
-            showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0434\u043b\u044f \u0441\u0434\u0430\u0447\u0438");
-            return;
-          }
-          changeFrom = numeric;
-        } else {
-          const numeric = Number(String(changeType).replace(/[^\d]/g, ""));
-          changeFrom = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-        }
-      }
-      if (changeFrom != null && changeFrom <= summary.payableTotal) {
-        setRightOrderSubmitFeedback(id, false);
-        showNewOrderAlert(`\u0421\u0443\u043c\u043c\u0430 \u0434\u043b\u044f \u0441\u0434\u0430\u0447\u0438 \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u0431\u043e\u043b\u044c\u0448\u0435 ${toMoney(summary.payableTotal)}`);
-        return;
-      }
-    }
+    const changeFrom = null;
 
     const baseDisplayedLineStates = buildRightOrderCartLineStates(
       cartItems,
@@ -7689,12 +7654,13 @@
       payload.delivery_store_id = deliveryAddressDraft.delivery_store_id;
     }
 
-    if (withPayment) {
+    {
       const paymentPayload = await openRightOrderPaymentDraft(order);
       if (!paymentPayload) {
         setRightOrderSubmitFeedback(id, false);
         return;
       }
+      paymentDeferred = Number(paymentPayload.is_paid) === 0;
       payload.payment_code = String(paymentPayload.payment_code || payload.payment_code || "").trim() || payload.payment_code;
       payload.change_from = isCashPaymentCode(payload.payment_code)
         ? (Number(paymentPayload.change_from || 0) > 0 ? Number(paymentPayload.change_from || 0) : null)
@@ -7737,7 +7703,7 @@
         submittedStockLevels = Array.isArray(json?.data?.stock_levels) ? json.data.stock_levels : [];
       }
       if (!isEditSubmit && submittedStockLevels.length) applyAuthoritativeOrderStockLevels(submittedStockLevels);
-      if (withPayment && submittedId > 0) {
+      if (!paymentDeferred && submittedId > 0) {
         try {
           await apiJson(`/api/admin/orders/${submittedId}/paid`, {
             method: "PUT",
@@ -8137,6 +8103,12 @@
         productCategories: Array.isArray(state.productCategories) ? state.productCategories : [],
         rightDeliveryTypes: Array.isArray(state.rightDeliveryTypes) ? state.rightDeliveryTypes : [],
         rightPaymentTypes: Array.isArray(state.rightPaymentTypes) ? state.rightPaymentTypes : [],
+        checkoutSettingsRevision,
+        benefitsPreviewCache: [...rightBenefitsPreviewUpdatedAt.entries()]
+          .filter(([slot, entry]) => Date.now() - entry.updatedAt < 30000
+            && state.rightBenefitsPreviewKeyByOrder.get(slot) === entry.key
+            && state.rightBenefitsPreviewByOrder.has(slot))
+          .map(([slot, entry]) => ({ slot, ...entry, data: state.rightBenefitsPreviewByOrder.get(slot) })),
         rightTimeOptions: Array.isArray(state.rightTimeOptions) ? state.rightTimeOptions : [],
         rightOrderStatuses: Array.isArray(state.rightOrderStatuses) ? state.rightOrderStatuses : [],
         rightDeliverySettings: state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
@@ -8224,6 +8196,14 @@
 
   function hydrateStateFromBootstrapSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== "object") return false;
+    checkoutSettingsRevision = String(snapshot.checkoutSettingsRevision || "");
+    for (const entry of (Array.isArray(snapshot.benefitsPreviewCache) ? snapshot.benefitsPreviewCache : [])) {
+      const age = Date.now() - Number(entry.updatedAt || 0);
+      if (age < 0 || age >= 30000 || !entry.slot || !entry.key || !entry.data) continue;
+      state.rightBenefitsPreviewByOrder.set(entry.slot, entry.data);
+      state.rightBenefitsPreviewKeyByOrder.set(entry.slot, entry.key);
+      rightBenefitsPreviewUpdatedAt.set(entry.slot, { key: entry.key, updatedAt: entry.updatedAt });
+    }
     if (snapshot.manifest && typeof snapshot.manifest === "object") {
       state.cacheManifest = snapshot.manifest;
       writeNewOrderManifestCache(snapshot.manifest);
@@ -8449,17 +8429,21 @@
     const task=(async()=>{
       const json=await apiJson(`/api/admin/clients/${clientId}/addresses`);
       const rows=(Array.isArray(json.data)?json.data:[]).map(normalizeClientAddressRow).filter(row=>row.id>0);
-      await writeClientLocal(cache,`addresses:${clientId}`,rows);
-      if(cache?.namespace!==clientLocalScope()?.namespace)return rows;
-      setBoundedRuntimeCache(state.rightClientAddressesByClientId,clientId,rows);
-      for(const order of state.rightOrders){
-        if(Number(order.form?.clientId)!==clientId)continue;
-        state.rightClientAddressesByOrder.set(Number(order.id),rows);
-        if(rightAddressLookupState.orderId===Number(order.id))renderRightAddressList(order.id);
-      }
+      await applyClientAddressSnapshot(cache,clientId,rows);
       return rows;
     })().finally(()=>clientLocalRequests.delete(key));
     clientLocalRequests.set(key,task);return task;
+  }
+  async function applyClientAddressSnapshot(cache,clientId,rows) {
+    if(cache?.namespace!==clientLocalScope()?.namespace)return;
+    await writeClientLocal(cache,`addresses:${clientId}`,rows);
+    if(cache?.namespace!==clientLocalScope()?.namespace)return;
+    setBoundedRuntimeCache(state.rightClientAddressesByClientId,clientId,rows);
+    for(const order of state.rightOrders){
+      if(Number(order.form?.clientId)!==clientId)continue;
+      state.rightClientAddressesByOrder.set(Number(order.id),rows);
+      if(rightAddressLookupState.orderId===Number(order.id))renderRightAddressList(order.id);
+    }
   }
   async function refreshLocalClient(clientId) {
     const cache=clientLocalScope();
@@ -8492,7 +8476,7 @@
     const previous=await readClientLocal("directory") || [];
     const directory=[];
     for(let offset=0;generation===clientWarmGeneration;offset+=100){
-      const json=await apiJson(`/api/admin/clients?mode=lightweight&limit=100&offset=${offset}`);
+      const json=await apiJson(`/api/admin/clients?mode=lightweight&include_addresses=1&limit=100&offset=${offset}`);
       if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
       const rows=Array.isArray(json.data)?json.data:[];
       for(const row of rows){
@@ -8503,11 +8487,9 @@
           await writeClientLocal(cache,`phone:${phone}`,{found:true,clientId:Number(row.id),name:String(row.name || '')});
           await writeClientLocal(cache,`client:${row.id}`,{phone});
         }
-      }
-      // Warm recent clients' addresses without flooding the server.
-      if(offset===0)for(const row of rows.slice(0,10)){
-        if(generation!==clientWarmGeneration)return;
-        await fetchClientAddressSnapshot(Number(row.id));
+        if(!Array.isArray(row.addresses))throw new Error('CLIENT_ADDRESSES_SNAPSHOT_MISSING');
+        const addresses=row.addresses.map(normalizeClientAddressRow).filter(address=>address.id>0);
+        await applyClientAddressSnapshot(cache,Number(row.id),addresses);
       }
       if(rows.length<100)break;
       await new Promise(resolve=>setTimeout(resolve,100));
@@ -15634,14 +15616,24 @@
   async function resolveComboDetailsTask(comboId) {
     const id = Number(comboId || 0);
     if (!(id > 0)) return null;
-    const local = window.CatalogRepository?.getComboForOrder?.(id) || null;
-    if (local && window.CatalogRepository?.isComboReady?.(id, { requiredCompleteness: "order-ready" })) return local;
+    if (window.CatalogRepository) {
+      await window.CatalogRepository.ensureCombos([id], { requiredCompleteness: "order-ready" });
+      const combo = window.CatalogRepository.getComboForOrder(id);
+      if (!combo) return null;
+      if (!combo.blocks.length || !Number(combo.is_available)) throw new Error("COMBO_UNAVAILABLE");
+      const ids = [...new Set(combo.blocks.flatMap((block) => block.products.map((product) => Number(product.product_id))))];
+      ids.forEach((productId) => {
+        const passport = window.CatalogRepository.getProductPassport(productId);
+        if (!window.CatalogRepository.isOrderReadyPassport(passport)) throw new Error("COMBO_PRODUCT_PASSPORT_UNAVAILABLE");
+        applyCatalogPassportToNewOrder(passport);
+      });
+      return combo;
+    }
     try {
       if (state.comboDetailsCache.has(id)) return state.comboDetailsCache.get(id);
       const json = await apiJson(`/api/public/combos/${id}`);
       const combo = json?.data || null;
       state.comboDetailsCache.set(id, combo);
-      if (combo && window.CatalogRepository) queueMicrotask(() => window.CatalogRepository.upsertComboBundle(combo));
       return combo;
     } catch {
       state.comboDetailsCache.delete(id);
@@ -15705,9 +15697,37 @@
     state.comboModal.pickerRenderToken = 0;
   }
 
+  let comboOverlayRequestGeneration = 0;
+  let comboMainScrollTop = 0;
+
+  function returnToComboMain() {
+    state.comboModal.view = "main";
+    state.comboModal.pickerBlockIndex = -1;
+    state.comboModal.expandedPickerProductIndex = null;
+    state.comboModal.pickerRenderToken += 1;
+    renderComboOverlay();
+    const { list } = getComboOverlayElements();
+    if (list) list.scrollTop = comboMainScrollTop;
+  }
+
+  function syncComboMobilePage() {
+    const { backdrop } = getComboOverlayElements();
+    if (!backdrop) return;
+    const picker = state.comboModal.view === "picker";
+    const block = state.comboModal.combo?.blocks?.[state.comboModal.pickerBlockIndex];
+    const title = picker ? (block?.block_title || "Замена блюда") : (state.comboModal.combo?.title || "Комбо");
+    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(title)), closeComboOverlay, () => {
+      if (state.comboModal.view !== "picker") return true;
+      returnToComboMain();
+      return false;
+    });
+  }
+
   function closeComboOverlay() {
+    comboOverlayRequestGeneration += 1;
     const { backdrop, list } = getComboOverlayElements();
     if (!backdrop) return;
+    closeNewOrderMobileOverlayPage(backdrop);
     backdrop.classList.add("hidden");
     backdrop.classList.remove("is-shared-product");
     backdrop.onclick = null;
@@ -15816,6 +15836,7 @@
   async function hydrateComboBlockSelection(blockIndex, opts = {}) {
     const combo = state.comboModal.combo;
     if (!combo) return;
+    const generation = comboOverlayRequestGeneration;
     const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
     const block = blocks[Number(blockIndex)];
     if (!block) return;
@@ -15829,9 +15850,10 @@
     const productId = Number(selected?.product_id || 0);
     if (!(productId > 0)) return;
     const product = await ensureProductById(productId);
+    if (generation !== comboOverlayRequestGeneration) return;
     const productLike = product || { id: productId, price: Number(selected?.price || 0) };
-    await loadVariantsForProducts([productLike]);
-    await loadIngredientsForProducts([productLike]);
+    await Promise.all([loadVariantsForProducts([productLike]), loadIngredientsForProducts([productLike])]);
+    if (generation !== comboOverlayRequestGeneration) return;
     const variants = state.productVariants.get(productId) || [];
     const ingredients = state.productIngredients.get(productId) || [];
     const discountPercent = Number(combo?.discount_percent || 0);
@@ -16067,11 +16089,15 @@
     const lineRows = [];
     const variantLabel = String(selection?.variant_label || "").trim();
     if (variantLabel) {
-      lineRows.push(`• ${escapeHtml(variantLabel)}`);
+      const variantUnit = String(selection?.variant_unit || "").trim();
+      const variantTitle = String(selection?.variant_group_title || "").trim();
+      const variantText = [formatVariantValueWithUnit(variantLabel, variantUnit), variantTitle].filter(Boolean).join(" ");
+      lineRows.push(`• ${escapeHtml(variantText)}`);
     }
     const ingredients = Array.isArray(selection?.ingredients_display) ? selection.ingredients_display : [];
     ingredients.forEach((ing) => {
       const qty = Number(ing?.qty ?? ing?.quantity ?? 0);
+      if (!Number.isFinite(qty) || qty === 0) return;
       const name = String(ing?.name || ing?.ingredient_name || "").trim();
       if (!name) return;
       const unit = String(ing?.unit || ing?.unit_label || "").trim();
@@ -16079,6 +16105,7 @@
       lineRows.push(`• ${escapeHtml(`${qtyLabel}${unit ? ` ${unit}` : ""} ${name}`.trim())}`);
     });
     if (!lineRows.length) {
+      if (ingredients.length) return "";
       const fallback = String(selection?.product_description_short || "").trim();
       if (!fallback) return "";
       return `<div class="cart-sub-details"><div class="cart-sub-detail-item">${escapeHtml(fallback)}</div></div>`;
@@ -16160,8 +16187,14 @@
     const variants = state.productVariants.get(productId) || [];
     const ingredients = state.productIngredients.get(productId) || [];
     const variantValues = Array.isArray(variants?.[0]?.values) ? variants[0].values : [];
-    const hasVariants = variantValues.length > 0;
-    const hasIngredients = ingredients.length > 0;
+    const hasVariants = variantValues.length > 1;
+    const hasIngredients = ingredients.some((ingredient) => {
+      const minQty = Number(ingredient.quantity_min ?? 0);
+      const maxRaw = Number(ingredient.quantity_max);
+      const maxQty = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : Infinity;
+      const step = Number(ingredient.quantity_step ?? 1) || 1;
+      return step > 0 && maxQty > minQty;
+    });
     return {
       productId,
       product,
@@ -16176,6 +16209,7 @@
   async function selectComboPickerProduct(blockIndexRaw, productIndexRaw, opts = {}) {
     const combo = state.comboModal.combo;
     if (!combo) return false;
+    const generation = comboOverlayRequestGeneration;
     const blockIndex = Number(blockIndexRaw);
     const productIndex = Number(productIndexRaw);
     const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
@@ -16195,7 +16229,7 @@
         preferSavedState: changed ? false : opts?.preferSavedState !== false,
       });
     }
-    return true;
+    return generation === comboOverlayRequestGeneration && state.comboModal.view === "picker";
   }
 
   function renderComboOverlayPicker(blockIndexRaw) {
@@ -16242,17 +16276,20 @@
     }
 
     const renderToken = Number(state.comboModal.pickerRenderToken || 0) + 1;
+    const generation = comboOverlayRequestGeneration;
     state.comboModal.pickerRenderToken = renderToken;
     list.innerHTML = `<div class="shop-combo-picker-empty">Р—Р°РіСЂСѓР·РєР°...</div>`;
 
     void (async () => {
       const configs = await Promise.all(products.map((prod) => ensureComboPickerProductConfig(prod)));
+      if (generation !== comboOverlayRequestGeneration) return;
       if (Number(state.comboModal.pickerRenderToken || 0) !== renderToken) return;
       if (String(state.comboModal.view || "") !== "picker") return;
       if (Number(state.comboModal.pickerBlockIndex) !== blockIndex) return;
 
       const rowStateRaw = state.comboModal.selectionStateByBlock[blockIndex] || {};
-      let expandedIndex = Number(state.comboModal.expandedPickerProductIndex);
+      let expandedIndex = state.comboModal.expandedPickerProductIndex == null
+        ? null : Number(state.comboModal.expandedPickerProductIndex);
       if (!Number.isFinite(expandedIndex) || expandedIndex < 0 || expandedIndex >= products.length) expandedIndex = null;
       if (expandedIndex != null && expandedIndex !== selectedIdx) expandedIndex = null;
       state.comboModal.expandedPickerProductIndex = expandedIndex;
@@ -16261,9 +16298,25 @@
         const pid = Number(prod?.product_id || 0);
         const config = configs[idx] || {};
         const isSelected = idx === selectedIdx;
+        const previewGroup = config.variants?.[0];
+        const previewValues = Array.isArray(previewGroup?.values) ? previewGroup.values : [];
+        const defaultIndex = Number(previewGroup?.default_value_index ?? 0);
+        const previewIndex = previewValues.length
+          ? Math.max(0, Math.min(previewValues.length - 1, Number.isFinite(defaultIndex) ? defaultIndex : 0)) : 0;
         const stateRow = isSelected && Number(rowStateRaw?.product_id || 0) === pid
           ? rowStateRaw
-          : makeEmptyComboBlockState();
+          : {
+            ...makeEmptyComboBlockState(),
+            variant_label: previewValues.length ? toVariantLabel(previewValues[previewIndex]) : "",
+            variant_value_index: previewIndex,
+            variant_unit: getVariantUnitLabel(previewGroup),
+            variant_group_title: String(previewGroup?.title || previewGroup?.title_label || ""),
+            ingredients_display: (config.ingredients || []).map((ingredient) => ({
+              ...ingredient,
+              name: ingredient.ingredient_name || ingredient.name || "",
+              unit: ingredient.unit_short_title || ingredient.unit_title || ingredient.unit_code || "",
+            })),
+          };
         const photo = resolveMediaUrl(prod?.product_photo || "");
         const title = String(prod?.product_name || "РўРѕРІР°СЂ");
         const oldPrice = isSelected && stateRow.unit_price_before_discount != null
@@ -16275,6 +16328,8 @@
 
         const detailsHtml = renderComboDetailsLinesHtml({
           variant_label: String(stateRow?.variant_label || ""),
+          variant_unit: String(stateRow?.variant_unit || ""),
+          variant_group_title: String(stateRow?.variant_group_title || ""),
           ingredients_display: Array.isArray(stateRow?.ingredients_display) ? stateRow.ingredients_display : [],
           product_description_short: String(prod?.product_description_short || ""),
         });
@@ -16305,8 +16360,7 @@
             <div class="shop-combo-picker-variants-row">
               ${values.map((value, variantIndex) => {
                 const valueLabel = toVariantLabel(value);
-                const hasLetters = /[a-zР°-СЏ]/i.test(valueLabel);
-                const chip = vUnit && !hasLetters ? `${valueLabel} ${vUnit}` : valueLabel;
+                const chip = formatVariantValueWithUnit(valueLabel, vUnit);
                 return `<button
                   type="button"
                   class="shop-combo-picker-variant-btn ${variantIndex === safeVariantIdx ? "is-active" : ""}"
@@ -16466,6 +16520,12 @@
     if (!backdrop || backdrop.classList.contains("hidden")) return;
     const combo = state.comboModal.combo;
     if (!combo) return;
+    syncComboMobilePage();
+    const footer = backdrop.querySelector(".new-order-product-sheet-footer");
+    if (footer) {
+      if (state.comboModal.view === "picker") footer.style.setProperty("display", "none", "important");
+      else footer.style.removeProperty("display");
+    }
     const qty = Math.max(1, Number(state.comboModal.qty || 1));
     state.comboModal.qty = qty;
     if (qtyValue) qtyValue.textContent = String(qty);
@@ -16603,17 +16663,35 @@
   async function openComboOverlayTask(comboId, opts = {}) {
     const id = Number(comboId || 0);
     if (!(id > 0)) return;
+    closeProductOverlay();
+    closeComboOverlay();
+    const generation = ++comboOverlayRequestGeneration;
+    comboMainScrollTop = 0;
     ensureComboOverlay();
     const { backdrop, list } = getComboOverlayElements();
     if (!backdrop) return;
-    const combo = await resolveComboDetails(id);
+    backdrop.classList.remove("hidden");
+    if (list) list.textContent = "Загрузка…";
+    const { addBtn } = getComboOverlayElements();
+    if (addBtn) addBtn.disabled = true;
+    syncComboMobilePage();
+    let combo;
+    try {
+      combo = await resolveComboDetails(id);
+    } catch (error) {
+      if (generation !== comboOverlayRequestGeneration) return;
+      console.error("Combo loading failed", error);
+      if (list) list.textContent = "Не удалось загрузить комбо";
+      return;
+    }
+    if (generation !== comboOverlayRequestGeneration) return;
     if (!combo) {
+      if (list) list.textContent = "Не удалось загрузить комбо";
       showNewOrderAlert(window.CatalogRepository?.getCombo?.(id)
         ? "Данные комбо сохранены не полностью"
         : "Не удалось загрузить комбо");
       return;
     }
-    closeProductOverlay();
     const comboCategoryId = Number(opts?.comboCategoryId || opts?.categoryId || combo?.combo_category_id || combo?.category_id || opts?.cartItem?.combo_category_id || opts?.cartItem?.category_id || 0) || 0;
     if (comboCategoryId > 0) {
       combo.combo_category_id = comboCategoryId;
@@ -16669,6 +16747,8 @@
     };
     if (list) list.innerHTML = `<div class="shop-combo-picker-empty">Р—Р°РіСЂСѓР·РєР°...</div>`;
     await hydrateComboSelectionsFromDefaults();
+    if (generation !== comboOverlayRequestGeneration) return;
+    if (addBtn) addBtn.disabled = false;
     renderComboOverlay();
     if (list) list.scrollTop = 0;
   }
@@ -18035,7 +18115,13 @@
       products.forEach((product) => hydratedProductIds.add(Number(product?.id || 0)));
       const previous = state.categoryProductsCache.get(cid);
       const localCombos = repositoryCombosForCategory(cid);
-      const payload = buildCategoryPayload(products, localCombos.length ? localCombos : (previous?.combos || []), cid);
+      const combosById = new Map((previous?.combos || []).map((combo) => [Number(combo.id), combo]));
+      localCombos.forEach((combo) => {
+        if (window.CatalogRepository.isComboReady(combo.id, { requiredCompleteness: "order-ready" })) {
+          combosById.set(Number(combo.id), combo);
+        }
+      });
+      const payload = buildCategoryPayload(products, [...combosById.values()], cid);
       setNewOrderCategoryPayload(cid, payload);
       state.checkoutCategoryProducts.set(cid, payload.activeOnly);
     });
@@ -18121,6 +18207,7 @@
       let combos = Array.isArray(previous?.combos) ? previous.combos.slice() : [];
       let touched = false;
       changed.forEach((combo, comboId) => {
+        if (combo && !window.CatalogRepository.isComboReady(comboId, { requiredCompleteness: "order-ready" })) return;
         const existingIndex = combos.findIndex((row) => Number(row?.id || 0) === comboId);
         const belongs = Boolean(combo && categoryCode && String(combo?.category_code || "").trim() === categoryCode);
         if (existingIndex >= 0 && !belongs) {
@@ -18188,7 +18275,9 @@
     const hasCompleteRuntimeSet = (categoryIds.length > 0
       && categoryIds.every(id => state.categoryWorkingSetComplete.has(Number(id)) && state.categoryProductsCache.has(Number(id))))
       || (Array.isArray(targetIds) && hasCompleteRepositoryCategoryIndex(targetIds, categoryIds));
-    if (!hasCompleteRuntimeSet && navigator.onLine) {
+    const hasCompleteComboLists = (categoryIds.length ? categoryIds : [rootId])
+      .every((id) => state.categoryComboListsComplete.has(Number(id)));
+    if ((!hasCompleteRuntimeSet || !hasCompleteComboLists) && navigator.onLine) {
       const loaded = await preloadAllCategoryProducts(categoryIds.length ? categoryIds : [rootId]);
       if (!loaded) throw new Error("NEW_ORDER_WORKING_SET_FAILED");
       if (!Array.isArray(targetIds)) {
@@ -18217,6 +18306,7 @@
 
   function isRepositoryCategoryWorkingSetComplete(categoryId) {
     const cid = Number(categoryId || 0);
+    if (navigator.onLine && !getProductCategoryLoadIds(cid).every((id) => state.categoryComboListsComplete.has(Number(id)))) return false;
     if (!window.CatalogRepository) return state.categoryWorkingSetComplete.has(cid) && state.categoryProductsCache.has(cid);
     const rootId = window.CatalogRepository.getRootCategoryId(categoryId) || Number(categoryId || 0);
     const categoryIds = window.CatalogRepository.getDescendantCategoryIds(rootId);
@@ -20689,8 +20779,11 @@
         apiJson("/api/public/products/batch/categories", {
           method: "POST",
           body: JSON.stringify({ category_ids: ids }),
-        }).catch(() => ({ data: {}, combos: {} })),
+        }),
       ]);
+      if (!publicPayload?.combos || typeof publicPayload.combos !== "object" || Array.isArray(publicPayload.combos)) {
+        throw new Error("INVALID_CATEGORY_COMBO_LIST_RESPONSE");
+      }
       const productsByCategory = {};
       ids.forEach((id) => { productsByCategory[String(id)] = []; });
       adminPayloads.forEach((payload) => {
@@ -20710,6 +20803,7 @@
         state.checkoutCategoryProducts.set(cid, payload.activeOnly);
         seedRightOrderProductsByIdCache(payload.activeOnly);
         state.categoryWorkingSetComplete.add(cid);
+        state.categoryComboListsComplete.add(cid);
       });
       if (window.CatalogRepository) {
         ids.forEach((cid) => {
@@ -21511,6 +21605,12 @@
           return;
         }
 
+        const catalogBtn = e.target.closest("[data-action='right-order-catalog-open']");
+        if (catalogBtn) {
+          window.__adminMobilePages?.openCenter?.("Каталог");
+          return;
+        }
+
         const benefitsBtn = e.target.closest("[data-action='right-order-benefits-open'][data-order-id]");
         if (benefitsBtn) {
           const orderId = Number(benefitsBtn.getAttribute("data-order-id") || 0);
@@ -21520,7 +21620,7 @@
         }
 
         const bonusBtn = e.target.closest("[data-action='right-order-bonus-open'][data-order-id]");
-        if (bonusBtn) {
+        if (bonusBtn && !e.target.closest("[data-cart-bonus-accrual-button], [data-cart-bonus-redeem-button], [data-cart-bonus-redeem-toggle]")) {
           const orderId = Number(bonusBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
           void openRightBonusCardOverlay(orderId);
@@ -21556,14 +21656,6 @@
           const orderId = Number(checkoutBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
           void submitRightOrder(orderId);
-          return;
-        }
-
-        const checkoutPaidBtn = e.target.closest("[data-action='right-cart-checkout-paid'][data-order-id]");
-        if (checkoutPaidBtn) {
-          const orderId = Number(checkoutPaidBtn.getAttribute("data-order-id") || 0);
-          if (!(orderId > 0)) return;
-          void submitRightOrder(orderId, { withPayment: true });
           return;
         }
 
@@ -22351,21 +22443,14 @@
       if (!actionNode) return;
       const action = String(actionNode.getAttribute("data-action") || "");
       if (!action.startsWith("combo-overlay-")) return;
+      const actionGeneration = comboOverlayRequestGeneration;
       const closePickerToMain = () => {
-        state.comboModal.view = "main";
-        state.comboModal.pickerBlockIndex = -1;
-        state.comboModal.expandedPickerProductIndex = null;
-        renderComboOverlay();
-        const { list } = getComboOverlayElements();
-        if (list) list.scrollTop = 0;
+        returnToComboMain();
       };
 
       if (action === "combo-overlay-back") {
         if (String(state.comboModal.view || "main") === "picker") {
-          state.comboModal.view = "main";
-          state.comboModal.pickerBlockIndex = -1;
-          state.comboModal.expandedPickerProductIndex = null;
-          renderComboOverlay();
+          returnToComboMain();
           return;
         }
         closeComboOverlay();
@@ -22376,10 +22461,10 @@
         const blockIndex = Number(actionNode.getAttribute("data-block-index") || 0);
         void (async () => {
           const safeBlockIndex = Number.isFinite(blockIndex) ? blockIndex : 0;
+          comboMainScrollTop = getComboOverlayElements().list?.scrollTop || 0;
           state.comboModal.view = "picker";
           state.comboModal.pickerBlockIndex = safeBlockIndex;
           state.comboModal.expandedPickerProductIndex = null;
-          await hydrateComboBlockSelection(safeBlockIndex, { preferSavedState: true });
           renderComboOverlay();
           const { list } = getComboOverlayElements();
           if (list) list.scrollTop = 0;
@@ -22400,7 +22485,8 @@
             preferSavedState: true,
           });
           if (!selected) return;
-          const currentExpanded = Number(state.comboModal.expandedPickerProductIndex);
+          const currentExpanded = state.comboModal.expandedPickerProductIndex == null
+            ? null : Number(state.comboModal.expandedPickerProductIndex);
           state.comboModal.expandedPickerProductIndex = Number.isFinite(currentExpanded) && currentExpanded === productIndex
             ? null
             : productIndex;
@@ -22447,6 +22533,7 @@
           rowState.variant_label = String(values[variantIndex] || "");
           state.comboModal.selectionStateByBlock[blockIndex] = rowState;
           await hydrateComboBlockSelection(blockIndex, { preferSavedState: true });
+          if (actionGeneration !== comboOverlayRequestGeneration || state.comboModal.view !== "picker") return;
           state.comboModal.view = "picker";
           state.comboModal.pickerBlockIndex = blockIndex;
           state.comboModal.expandedPickerProductIndex = productIndex;
@@ -22510,6 +22597,7 @@
           rowState.ingredients_display[idx].quantity = nextQty;
           state.comboModal.selectionStateByBlock[blockIndex] = rowState;
           await hydrateComboBlockSelection(blockIndex, { preferSavedState: true });
+          if (actionGeneration !== comboOverlayRequestGeneration || state.comboModal.view !== "picker") return;
           state.comboModal.view = "picker";
           state.comboModal.pickerBlockIndex = blockIndex;
           state.comboModal.expandedPickerProductIndex = productIndex;
@@ -22564,10 +22652,7 @@
       if (!overlay || overlay.classList.contains("hidden")) return;
       if (e.key !== "Escape") return;
       if (String(state.comboModal.view || "main") === "picker") {
-        state.comboModal.view = "main";
-        state.comboModal.pickerBlockIndex = -1;
-        state.comboModal.expandedPickerProductIndex = null;
-        renderComboOverlay();
+        returnToComboMain();
         return;
       }
       closeComboOverlay();
@@ -23218,6 +23303,7 @@
     state.checkoutCategoryLoading.clear();
     state.checkoutCategoryErrors.clear();
     state.categoryWorkingSetComplete.clear();
+    state.categoryComboListsComplete.clear();
     state.productVariants.clear();
     state.productIngredients.clear();
     state.ingredientStateByProduct.clear();
@@ -24941,6 +25027,55 @@
     }, 40);
   }
 
+  async function applyNewOrderCheckoutSettings(data, socket, scope) {
+    await bootstrapDataReadyPromise;
+    if (newOrderStockSocket !== socket || scope !== newOrderCacheScopeKey()) return;
+    if (Number(data?.settingsTenantId) !== getTenantIdFromStorage()
+      || Number(data?.settingsStoreId) !== getStoreIdFromStorage()) throw new Error("CHECKOUT_SETTINGS_SCOPE_MISMATCH");
+    const revision = String(data?.settingsRevision || "");
+    if (!/^\d+$/.test(revision)) throw new Error("INVALID_CHECKOUT_SETTINGS_REVISION");
+    if (/^\d+$/.test(checkoutSettingsWantedRevision) && BigInt(revision) < BigInt(checkoutSettingsWantedRevision)) {
+      socket.send(JSON.stringify({ type: "checkout.settings.get" }));
+      return;
+    }
+    if (revision !== checkoutSettingsRevision || checkoutSettingsWantedRevision === "resync") {
+      // Public delivery methods are site-filtered; keep the full admin list.
+      const [deliveryTypes, timeOptions, statuses, stores] = await Promise.all([
+        apiJson("/api/admin/tenant/order-delivery-types"),
+        apiJson("/api/admin/tenant/order-time-options"),
+        apiJson("/api/admin/orders/statuses"),
+        apiJson(`/api/public/tenant/stores?tenant_id=${getTenantIdFromStorage()}`),
+      ]);
+      if (newOrderStockSocket !== socket || scope !== newOrderCacheScopeKey()) return;
+      if (/^\d+$/.test(checkoutSettingsWantedRevision) && BigInt(revision) < BigInt(checkoutSettingsWantedRevision)) {
+        socket.send(JSON.stringify({ type: "checkout.settings.get" }));
+        return;
+      }
+      if (!Array.isArray(data.payments) || !Array.isArray(deliveryTypes.items)
+        || !Array.isArray(timeOptions.items) || !Array.isArray(statuses.data)
+        || !data.deliverySettings || !Array.isArray(data.deliverySettings.zones)) throw new Error("INVALID_CHECKOUT_SETTINGS_SNAPSHOT");
+      const storeRows = stores.stores;
+      if (!Array.isArray(storeRows)) throw new Error("INVALID_CHECKOUT_STORES_SNAPSHOT");
+      state.rightPaymentTypes = data.payments.map(normalizeRightPaymentTypeRef);
+      state.rightDeliveryTypes = deliveryTypes.items.map(normalizeRightDeliveryTypeRef);
+      state.rightTimeOptions = timeOptions.items.map(normalizeRightTimeOptionRef);
+      state.rightOrderStatuses = statuses.data;
+      state.rightPickupStores = storeRows.filter(row => Number(row.is_active) === 1);
+      await Promise.all([
+        window.AdminReferenceCache?.setReference("payment-methods", state.rightPaymentTypes),
+        window.AdminReferenceCache?.setReference("delivery-settings", data.deliverySettings),
+      ]);
+      if (newOrderStockSocket !== socket || scope !== newOrderCacheScopeKey()) return;
+      sharedOrderPayment?.clearCache?.();
+      rightBenefitsPreviewUpdatedAt.clear();
+      applyRightDeliverySettings(data.deliverySettings, scope);
+      checkoutSettingsRevision = revision;
+      schedulePersistBootstrapSnapshot(0);
+      queueRenderRightOrderTabs();
+    }
+    checkoutSettingsRequestPending = false;
+  }
+
   function ensureNewOrderStockSocket() {
     const tenantId = getTenantIdFromStorage();
     const storeId = getStoreIdFromStorage();
@@ -24954,6 +25089,23 @@
       if (newOrderStockSocket !== socket) return;
       try {
         const payload = JSON.parse(String(event.data || ""));
+        if (payload?.type === "checkout.settings.version" || payload?.type === "checkout.settings.changed") {
+          checkoutSettingsWantedRevision = String(payload.revision || "resync");
+          void bootstrapDataReadyPromise.then(() => {
+            if (newOrderStockSocket !== socket || checkoutSettingsRequestPending) return;
+            if (checkoutSettingsWantedRevision === checkoutSettingsRevision) return;
+            checkoutSettingsRequestPending = true;
+            socket.send(JSON.stringify({ type: "checkout.settings.get" }));
+          }).catch(error => console.error("Checkout settings revision:", error));
+          return;
+        }
+        if (payload?.type === "checkout.settings.snapshot") {
+          void applyNewOrderCheckoutSettings(payload.data, socket, newOrderCacheScopeKey()).catch(error => {
+            checkoutSettingsRequestPending = false;
+            console.error("Checkout settings sync:", error);
+          });
+          return;
+        }
         if (payload?.type === "stock.resync") {
           const visibleIds = [...new Set([
             ...state.currentProducts.map((product) => Number(product?.id || 0)),
@@ -24972,6 +25124,8 @@
     });
     socket.addEventListener("close", () => {
       if (newOrderStockSocket !== socket) return;
+      checkoutSettingsRequestPending = false;
+      rightBenefitsPreviewUpdatedAt.clear();
       newOrderStockSocket = null;
       newOrderStockReconnectTimer = setTimeout(ensureNewOrderStockSocket, 1200 + Math.floor(Math.random() * 800));
     });
@@ -25052,7 +25206,7 @@
             return Number(products[Number(state.comboModal.selectedIndexByBlock[index] || 0)]?.product_id || 0);
           });
           const nextCombo = window.CatalogRepository.getComboForOrder(openComboId);
-          if (nextCombo) {
+          if (nextCombo && window.CatalogRepository.isComboReady(openComboId, { requiredCompleteness: "order-ready" })) {
             state.comboModal.combo = nextCombo;
             state.comboModal.selectedIndexByBlock = nextCombo.blocks.map((block, index) => {
               const products = Array.isArray(block?.products) ? block.products : [];

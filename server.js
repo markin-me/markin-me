@@ -3133,7 +3133,8 @@ createAdminOrderCommandsHub({ server, ordersEvents, dispatch(message, res) {
       if (creating) {
         return requirePermission('new_order.create')(req, res, async () => {
           try {
-            if (!req.user.fullAccess && !await userHasStore(req.user, Number(message.store_id))) {
+            if (!req.user.fullAccess && req.permission?.accessRule !== 'all'
+                && !await userHasStore(req.user, Number(message.store_id))) {
               return res.status(403).json({ ok: false, error: 'STORE_FORBIDDEN' });
             }
             return await publicShopRouter.submitOrder(req, res);

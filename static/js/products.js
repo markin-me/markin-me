@@ -2874,21 +2874,21 @@
   }
 
   async function loadCombosForCategory(categoryId) {
+    const requestToken = productsRequestToken;
     const cat = state.categories.find((c) => Number(c.id) === Number(categoryId));
     const categoryCode =
       cat && cat.code && String(cat.code).trim() && cat.code !== "all"
         ? String(cat.code).trim()
         : null;
-    try {
-      const combosRes = await apiGetCombos();
-      const allCombos = Array.isArray(combosRes?.data) ? combosRes.data : [];
-      if (categoryCode) {
-        state.combosInCategory = allCombos.filter((c) => String(c.category_code || "").trim() === categoryCode);
-      } else {
-        state.combosInCategory = allCombos;
-      }
-    } catch (e) {
-      state.combosInCategory = [];
+    const combosRes = window.CatalogRepository && categoryCode
+      ? { data: await window.CatalogRepository.ensureCombosForCategoryCodes([categoryCode], { requiredCompleteness: "definition" }) }
+      : await apiGetCombos();
+    if (requestToken !== productsRequestToken || Number(categoryId) !== Number(state.currentCategoryId)) return;
+    const allCombos = Array.isArray(combosRes?.data) ? combosRes.data : [];
+    if (categoryCode) {
+      state.combosInCategory = allCombos.filter((c) => String(c.category_code || "").trim() === categoryCode);
+    } else {
+      state.combosInCategory = allCombos;
     }
     schedulePersistProductsCache();
   }
@@ -3068,6 +3068,10 @@
         state.productsLoading = false;
         state.combosInCategory = Array.isArray(cached.combosInCategory) ? cached.combosInCategory : [];
         renderProductsList();
+        await loadCombosForCategory(cid);
+        if (token !== productsRequestToken) return;
+        renderProductsList();
+        setCachedCategoryProducts(cid, { ...cached, combosInCategory: state.combosInCategory });
         schedulePersistProductsCache();
         return;
       }
@@ -3081,9 +3085,7 @@
     state.combosInCategory = [];
     renderProductsList();
 
-    const combosPromise = loadCombosForCategory(cid).catch(() => null);
-    await loadMoreProducts({ allowLocal: false });
-    await combosPromise;
+    await Promise.all([loadMoreProducts({ allowLocal: false }), loadCombosForCategory(cid)]);
     if (token !== productsRequestToken) return;
     renderProductsList();
     await ensureProductsScrollable();
@@ -6126,8 +6128,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
   function syncProductRowSelectionUI(root = productsList) {
     if (!root) return;
-    $$(".order-row.product-row[data-id]", root).forEach((row) => {
-      const id = Number(row.dataset.id);
+    $$(".order-row.product-row[data-id], .order-row.combo-row[data-combo-id]", root).forEach((row) => {
+      const id = row.dataset.comboId ? `combo:${Number(row.dataset.comboId)}` : Number(row.dataset.id);
       const selected = state.selectedProductIds.has(id);
       row.classList.toggle("is-selected", selected);
       const checkbox = row.querySelector(".product-row-select-input");
@@ -6138,7 +6140,12 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   function getCurrentProductGroupIds() {
     return filterProductsCollection(state.products)
       .map((product) => Number(product?.id))
-      .filter(Number.isFinite);
+      .filter(Number.isFinite)
+      .concat(shouldHideProductCombos() ? [] : (state.combosInCategory || []).map((combo) => `combo:${Number(combo.id)}`));
+  }
+
+  function hasSelectedCombos() {
+    return Array.from(state.selectedProductIds).some((id) => String(id).startsWith("combo:"));
   }
 
   function closeProductsBulkMenu() {
@@ -6317,13 +6324,16 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   }
 
   function syncProductsBulkActionsUi() {
+    const hasCombos = hasSelectedCombos();
+    const onlyCombos = hasCombos && !Array.from(state.selectedProductIds).some((id) => typeof id === "number");
     if (productsBulkMenu) {
       productsBulkMenu.querySelectorAll(".products-bulk-switch").forEach((group) => {
         const choices = Array.from(group.querySelectorAll("[data-bulk-choice]"));
         const selected = choices.find((button) => state.productsBulkActions?.[button.dataset.bulkChoice]);
         choices.forEach((button) => {
           button.setAttribute("aria-pressed", String(selected ? button === selected : !button.dataset.bulkChoice));
-          button.disabled = state.productsBulkApplying;
+          const activityGroup = choices.some((item) => item.dataset.bulkChoice === "activate");
+          button.disabled = state.productsBulkApplying || (onlyCombos && !activityGroup);
         });
       });
     }
@@ -6339,6 +6349,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (productsBulkCategoryMenu) {
       productsBulkCategoryMenu.querySelectorAll("[data-bulk-category-mode]").forEach((btn) => {
         btn.classList.toggle("is-active", String(btn.dataset.bulkCategoryMode || "none") === String(state.productsBulkCategory?.mode || "none"));
+        btn.disabled = state.productsBulkApplying || (hasCombos && ["add", "remove"].includes(btn.dataset.bulkCategoryMode));
       });
     }
     if (productsBulkCategoryPickerBtn) {
@@ -6349,13 +6360,15 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       productsBulkActionsSelectedCount.textContent = String(countSelectedProductsBulkActions());
     }
     if (productsBulkProductionZoneTrigger) {
-      productsBulkProductionZoneTrigger.disabled = state.productsBulkApplying;
+      productsBulkProductionZoneTrigger.disabled = state.productsBulkApplying || onlyCombos;
     }
     if (productsBulkProductionZoneId) {
-      productsBulkProductionZoneId.disabled = state.productsBulkApplying;
+      productsBulkProductionZoneId.disabled = state.productsBulkApplying || onlyCombos;
     }
     if (productsBulkApplyBtn) {
-      const hasAnyAction = Object.values(state.productsBulkActions || {}).some(Boolean) || hasValidProductsBulkCategoryAction() || hasProductsBulkProductionZoneSelected();
+      const hasAnyAction = (onlyCombos
+        ? state.productsBulkActions?.activate || state.productsBulkActions?.deactivate
+        : Object.values(state.productsBulkActions || {}).some(Boolean) || hasProductsBulkProductionZoneSelected()) || hasValidProductsBulkCategoryAction();
       productsBulkApplyBtn.disabled = state.productsBulkApplying || !hasAnyAction || state.selectedProductIds.size === 0;
     }
     if (productsBulkCancelBtn) {
@@ -6366,6 +6379,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     }
     if (productsBulkCategoryMode) {
       productsBulkCategoryMode.disabled = state.productsBulkApplying;
+      Array.from(productsBulkCategoryMode.options).forEach((option) => {
+        option.disabled = hasCombos && ["add", "remove"].includes(option.value);
+      });
     }
     renderProductsBulkProductionZoneOptions();
     syncProductsBulkProductionZoneSelect();
@@ -6596,10 +6612,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
             .filter((item) => Number(item.parent_id) === id)
             .forEach((item) => productsBulkCategoryPickerSelection.delete(Number(item.id)));
         } else {
+          if (hasSelectedCombos()) productsBulkCategoryPickerSelection.clear();
           productsBulkCategoryPickerSelection.add(id);
           const category = state.categories.find((item) => Number(item.id) === id);
           const parentId = Number(category?.parent_id || 0);
-          if (parentId > 0) productsBulkCategoryPickerSelection.add(parentId);
+          if (parentId > 0 && !hasSelectedCombos()) productsBulkCategoryPickerSelection.add(parentId);
         }
         renderProductsBulkCategoryPickerList(searchInput, listContent);
       });
@@ -6703,8 +6720,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   }
 
   function toggleProductCardSelection(productId, forceSelected = null) {
-    const id = Number(productId);
-    if (!Number.isFinite(id)) return;
+    const isCombo = String(productId).startsWith("combo:");
+    const numericId = Number(isCombo ? String(productId).slice(6) : productId);
+    if (!Number.isFinite(numericId) || numericId <= 0) return;
+    const id = isCombo ? `combo:${numericId}` : numericId;
     if (forceSelected === true) {
       state.selectedProductIds.add(id);
     } else if (forceSelected === false) {
@@ -6713,6 +6732,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       state.selectedProductIds.delete(id);
     } else {
       state.selectedProductIds.add(id);
+    }
+    if (hasSelectedCombos() && (state.productsBulkCategory.mode !== "replace" || state.productsBulkCategory.selectedCategoryIds.size > 1)) {
+      resetProductsBulkCategoryAction();
     }
     if (state.selectedProductIds.size === 0) {
       resetProductsBulkActions();
@@ -6738,6 +6760,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (allSelected) state.selectedProductIds.delete(id);
       else state.selectedProductIds.add(id);
     });
+    if (hasSelectedCombos() && (state.productsBulkCategory.mode !== "replace" || state.productsBulkCategory.selectedCategoryIds.size > 1)) {
+      resetProductsBulkCategoryAction();
+    }
     if (state.selectedProductIds.size === 0) {
       resetProductsBulkActions();
       resetProductsBulkCategoryAction();
@@ -6922,7 +6947,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const comboId = Number(combo?.id || 0);
     const gridPlaceholder = `<div class="combo-row-photo-grid" data-combo-grid-id="${comboId}">${buildComboRowPhotoGridHtml(getCachedComboRowPhotos(comboId) || [])}</div>`;
     return `
-        <div class="order-row combo-row" data-combo-id="${comboId}" draggable="false">
+        <div class="order-row combo-row ${state.selectedProductIds.has(`combo:${comboId}`) ? "is-selected" : ""}" data-combo-id="${comboId}" draggable="false">
+          <label class="product-row-select-control" aria-label="Выбрать комбо">
+            <input class="product-row-select-input" type="checkbox" ${state.selectedProductIds.has(`combo:${comboId}`) ? "checked" : ""} tabindex="-1" />
+            <span class="product-row-select-box" aria-hidden="true"></span>
+          </label>
           ${gridPlaceholder}
           <div class="combo-row-content">
             <span class="product-title">${escapeHtml(title)}</span>
@@ -7374,9 +7403,15 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     $$(".order-row.combo-row[data-combo-id]", root).forEach((row) => {
       if (row.dataset.boundClick === "1") return;
       row.dataset.boundClick = "1";
-      row.addEventListener("click", async () => {
+      row.addEventListener("click", async (event) => {
         const comboId = Number(row.dataset.comboId);
         if (!Number.isFinite(comboId)) return;
+        if (event.target.closest(".product-row-select-control")) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!state.productsBulkApplying) toggleProductCardSelection(`combo:${comboId}`);
+          return;
+        }
         const tabKey = buildTabKey("combo-set", String(comboId));
         if (tabsState.tabs.some((t) => t.key === tabKey)) {
           await setActiveTabKey(tabKey);
@@ -7655,21 +7690,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const visibleProducts = filterProductsCollection(state.products);
     const productRows = visibleProducts.map((product) => buildProductRowHtml(product, canSortProducts));
     const combos = shouldHideProductCombos() ? [] : (state.combosInCategory ?? []);
-    const comboRows = combos.map((c) => {
-      const title = (c.title || "").trim() || "Комбо";
-      const gridPlaceholder = `<div class="combo-row-photo-grid" data-combo-grid-id="${c.id}">${buildComboRowPhotoGridHtml([])}</div>`;
-      return `
-        <div class="order-row combo-row" data-combo-id="${c.id}" draggable="false">
-          ${gridPlaceholder}
-          <div class="combo-row-content">
-            <span class="product-title">${escapeHtml(title)}</span>
-            <span class="pill combo-row-pill">Комбо</span>
-            <span class="muted combo-row-muted">Комбо-набор</span>
-          </div>
-          <div class="product-right"></div>
-        </div>
-      `;
-    });
+    const comboRows = combos.map(buildComboRowHtml);
 
     productsList.innerHTML = productRows.join("") + comboRows.join("");
     bindProductRowClickHandlers(productsList);
@@ -22999,13 +23020,56 @@ const isViewMode = state.comboPanel.mode === "view";
         const hasBulkCategoryAction = hasValidProductsBulkCategoryAction();
         if (!Object.keys(payload).length && !hasBulkCategoryAction) return;
         const ids = Array.from(state.selectedProductIds).map((id) => Number(id)).filter(Number.isFinite);
-        if (!ids.length) return;
+        const comboIds = Array.from(state.selectedProductIds)
+          .filter((id) => String(id).startsWith("combo:"))
+          .map((id) => Number(String(id).slice(6)));
+        if (!ids.length && !comboIds.length) return;
+        let comboCategory = null;
+        if (comboIds.length && hasBulkCategoryAction) {
+          const categoryIds = Array.from(state.productsBulkCategory.selectedCategoryIds);
+          comboCategory = state.categories.find((category) => Number(category.id) === Number(categoryIds[0]));
+          if (categoryMode !== "replace" || categoryIds.length !== 1 || !comboCategory?.code || comboCategory.code === "all") {
+            showToast("Для комбо выберите одну категорию и действие «Переместить»");
+            return;
+          }
+        }
         state.productsBulkApplying = true;
         syncProductsBulkActionsUi();
         const skippedNoIngredients = [];
         const failedNames = [];
         let activeProductNeedsRefresh = false;
         try {
+          for (const id of comboIds) {
+            const combo = window.CatalogRepository?.getCombo(id)
+              || (state.combosInCategory || []).find((item) => Number(item.id) === id);
+            const comboPayload = {};
+            if (Object.prototype.hasOwnProperty.call(payload, "is_active")) comboPayload.is_active = payload.is_active;
+            if (comboCategory) comboPayload.category_code = comboCategory.code;
+            if (!Object.keys(comboPayload).length) continue;
+            try {
+              const response = await apiPatchCombo(id, comboPayload);
+              const saved = response?.data;
+              if (!saved) throw new Error("COMBO_UPDATE_RESPONSE_INVALID");
+              clearCachedComboSetDetails(id);
+              state.productsByCategoryCache.forEach((_cached, key) => {
+                const categoryId = Number(String(key).split("::")[0]);
+                const category = state.categories.find((item) => Number(item.id) === categoryId);
+                if (categoryId === Number(state.allCategoryId) || category?.code === combo?.category_code || category?.code === saved.category_code) {
+                  state.productsByCategoryCache.delete(key);
+                }
+              });
+              upsertSavedComboInList(saved);
+              if (Number(state.comboSetPanel?.comboId) === id && state.comboSetPanel.mode === "view") {
+                state.comboSetPanel.combo = { ...state.comboSetPanel.combo, ...saved };
+                const category = state.categories.find((item) => item.code === saved.category_code);
+                state.comboSetPanel.categoryIds = category ? [Number(category.id)] : [];
+                fillComboSetFormFromState();
+              }
+            } catch (error) {
+              console.error("Combo bulk update failed", error);
+              failedNames.push(combo?.title || `Комбо ${id}`);
+            }
+          }
           for (const id of ids) {
             const product = state.products.find((item) => Number(item?.id) === id);
             if (!product) {
@@ -23090,6 +23154,7 @@ const isViewMode = state.comboPanel.mode === "view";
             productsHasMore: state.productsHasMore,
             combosInCategory: state.combosInCategory,
           });
+          if (comboIds.length) schedulePersistProductsCache();
           if (skippedNoIngredients.length) {
             const suffix = skippedNoIngredients.length === 1 ? `: ${skippedNoIngredients[0]}` : ` (${skippedNoIngredients.length})`;
             showToast(`У товара не поменялся режим продажи, нужно заполнить состав${suffix}`);
@@ -25778,7 +25843,7 @@ const isViewMode = state.comboPanel.mode === "view";
           syncProductsListEmptyState();
         } else if (event?.type === "combos") {
           const category = state.categories.find((item) => Number(item?.id || 0) === Number(state.currentCategoryId || 0));
-          const categoryCode = String(category?.code || "").trim();
+          const categoryCode = category?.code === "all" ? "" : String(category?.code || "").trim();
           const changedComboIds = new Set((event.ids || []).map(Number));
           const affectedCurrentCategory = state.combosInCategory.some((combo) => changedComboIds.has(Number(combo?.id || 0)))
             || (event.ids || []).some((id) => {

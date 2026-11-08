@@ -724,6 +724,8 @@
     var draft = resolveCashPaymentDraft(order, paymentMethods);
     var host = document.createElement('div');
     var currentError = '';
+    var allowDeferredPayment = !!options.allowDeferredPayment;
+    var deferredPayment = allowDeferredPayment;
 
     function isChangeOptionDisabled(option) {
       if (!option || option.value === 'no_change' || option.value === 'other') return false;
@@ -797,6 +799,9 @@
             '<span class="cash-payment-method-spacer" aria-hidden="true"></span>' +
           '</div>' +
         '</div>' +
+        (allowDeferredPayment
+          ? '<label class="switch cash-payment-deferred"><input class="switch-input" type="checkbox" role="switch" data-cash-payment-deferred' + (deferredPayment ? ' checked' : '') + ' /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Оплатить при получении</span></label>'
+          : '') +
         '<div class="cash-payment-amount-grid">' +
           '<div class="cash-payment-amount-card cash-payment-amount-card-primary"><span>К оплате</span><strong>' + escapeHtml(money(totalDue)) + '</strong></div>' +
           '<div class="cash-payment-amount-card hidden" data-cash-payment-received-card><span>Получено</span><strong data-cash-payment-received>—</strong></div>' +
@@ -857,6 +862,13 @@
       }
     });
 
+    host.addEventListener('change', function (event) {
+      if (!event.target.matches('[data-cash-payment-deferred]')) return;
+      deferredPayment = event.target.checked;
+      setError('');
+      if (typeof options.onDeferredChange === 'function') options.onDeferredChange(deferredPayment);
+    });
+
     host.addEventListener('input', function (event) {
       var input = event.target && event.target.closest('[data-cash-change-input]');
       if (!input) return;
@@ -878,7 +890,7 @@
         }
         setError('');
         return {
-          is_paid: 1,
+          is_paid: deferredPayment ? 0 : 1,
           payment_code: String(draft.paymentCode || '').trim(),
           change_from: resolveCashPaymentChangeFrom(draft),
         };
@@ -1289,9 +1301,13 @@
         });
       }
 
-      return ensurePaymentMethodsLoaded(apiJson, resolvedOrder, {
+      var preparedMethods = collectPayloadOnly && Array.isArray(options.paymentMethods)
+        ? normalizePaymentMethodsPayload(options.paymentMethods).filter(function (item) { return Number(item.is_active) === 1; })
+        : [];
+      var methodsPromise = preparedMethods.length ? Promise.resolve(preparedMethods) : ensurePaymentMethodsLoaded(apiJson, resolvedOrder, {
         cacheOnly: cacheOnlyPaymentMethods,
-      }).then(function (paymentMethods) {
+      });
+      return methodsPromise.then(function (paymentMethods) {
         var methods = Array.isArray(paymentMethods) && paymentMethods.length ? paymentMethods : getActivePaymentMethods(resolvedOrder);
         var controller = mode === 'refund'
           ? createRefundModalController({
@@ -1302,6 +1318,11 @@
               getOrderNumber: getOrderNumberFn,
             })
           : createCashPaymentModalController({
+              allowDeferredPayment: !submitPayload,
+              onDeferredChange: function (deferred) {
+                var saveButton = document.getElementById('appModalSaveBtn');
+                if (saveButton) saveButton.textContent = options.confirmText || (deferred ? 'Сохранить без оплаты' : 'Принять оплату');
+              },
               order: resolvedOrder,
               paymentMethods: methods,
               money: money,
@@ -1320,7 +1341,7 @@
           toggleCashPaymentModalSkin(true);
           modal.open({
             title: mode === 'refund' ? 'Оформить возврат' : 'Принять оплату',
-            saveText: mode === 'refund' ? 'Оформить возврат' : 'Принять оплату',
+            saveText: mode === 'refund' ? 'Оформить возврат' : (options.confirmText || (!submitPayload ? 'Сохранить без оплаты' : 'Принять оплату')),
             cancelText: 'Отмена',
             content: controller.host,
             onSave: function () {

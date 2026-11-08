@@ -6446,6 +6446,9 @@ body.page-orders .order-id-select-hit{cursor:inherit;}
 
 /* РљРѕРјР±Рѕ-РЅР°Р±РѕСЂ РІ СЃРїРёСЃРєРµ вЂ” РѕРґРЅР° СЃС‚СЂРѕРєР°, СЃРµС‚РєР° 2Г—2 РєР°Рє РІ РєР°СЂС‚РѕС‡РєРµ */
 .order-row.combo-row{
+  position:relative;
+  width:calc(100% - 34px);
+  margin-left:28px;
   padding:8px 12px;
   grid-template-columns:52px 1fr auto;
   min-height:auto;
@@ -11790,6 +11793,54 @@ body.page-cash #ordersRightPane .orders-info > #cashPaymentFooter{
   grid-column:span 3;
   width:100%;
   min-height:52px;
+}
+
+.panel-footer.new-order-right-footer .shop-checkout-btn.new-order-right-menu-btn{
+  background:var(--color-surface);
+  color:var(--color-text);
+  border:1px solid var(--color-border);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+}
+
+@media (min-width:769px){
+  .panel-footer.new-order-right-footer .shop-checkout-btn.new-order-right-menu-btn{
+    display:none;
+  }
+  .panel-footer.new-order-right-footer .shop-cart-footer-actions.is-order-entry > .shop-checkout-btn:not(.new-order-right-menu-btn){
+    grid-column:1 / -1;
+  }
+}
+
+.new-order-right-benefits-open{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  width:100%;
+  min-height:44px;
+  margin-top:12px;
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:var(--color-surface);
+  color:var(--shop-buy);
+  font:inherit;
+  font-weight:800;
+  cursor:pointer;
+}
+
+.right-order-shop-bonus-section{cursor:pointer}
+.right-order-shop-bonus-section .new-order-right-bonus-open{
+  width:100%;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
 }
 
 .panel-footer.new-order-right-footer .shop-cart-footer-actions.is-edit-checkout .shop-cart-clear.is-edit-cancel{

@@ -108,6 +108,18 @@
     return scope ? scope.remove("value") : Promise.resolve(false);
   }
 
+  async function setReference(name, data) {
+    const definition = definitions[name];
+    if (!definition) throw new Error(`UNKNOWN_ADMIN_REFERENCE:${name}`);
+    const scope = getScope(name);
+    if (!scope) return false;
+    const key = runtimeKey(name, scope);
+    generations.set(key, (generations.get(key) || 0) + 1);
+    pending.delete(key);
+    memory.set(key, { data, stale: false, expiresAt: Date.now() + (definition.refreshAfterMs || definition.ttlMs) });
+    return scope.set("value", data, { ttlMs: definition.ttlMs });
+  }
+
   function resetRuntime() {
     runtimeGeneration += 1;
     memory.clear();
@@ -116,6 +128,7 @@
 
   window.AdminReferenceCache = {
     getOrLoadReference,
+    setReference,
     invalidateReference,
     resetRuntime,
     definitions: Object.freeze(Object.assign({}, definitions)),

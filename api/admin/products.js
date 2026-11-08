@@ -5630,10 +5630,10 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const [[existing]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, id]);
       if (!existing) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       const title = helpers.strOrNull(req.body.title);
-      const description = helpers.strOrNull(req.body.description);
+      const description = req.body.description !== undefined ? helpers.strOrNull(req.body.description) : undefined;
       const discountPercent = req.body.discount_percent !== undefined ? (helpers.numOrNull(req.body.discount_percent) ?? 0) : null;
-      const categoryCode = req.body.category_code !== undefined ? (helpers.strOrNull(req.body.category_code) || null) : null;
-      const imageUrl = req.body.image_url !== undefined ? (helpers.strOrNull(req.body.image_url) || null) : null;
+      const categoryCode = req.body.category_code !== undefined ? (helpers.strOrNull(req.body.category_code) || null) : undefined;
+      const imageUrl = req.body.image_url !== undefined ? (helpers.strOrNull(req.body.image_url) || null) : undefined;
       const isActive = req.body.is_active !== undefined ? (req.body.is_active === false || req.body.is_active === '0' || req.body.is_active === 0 ? 0 : 1) : null;
       const sortOrder = req.body.sort_order !== undefined ? (helpers.numOrNull(req.body.sort_order) ?? 0) : null;
       const updates = [];
