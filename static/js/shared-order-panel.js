@@ -29,7 +29,11 @@
     var loadedScript = findLoadedAdminAsset(src);
     if (loadedScript) return Promise.resolve(loadedScript);
 
-    var promise = new Promise(function (resolve, reject) {
+    var dependencies = name === 'newOrder'
+      ? ['sharedProductRuntime', 'sharedProductPricing', 'sharedProductCard', 'sharedProductDetails'] : [];
+    var promise = dependencies.reduce(function (pending, dependency) {
+      return pending.then(function () { return ensureAdminAsset(dependency); });
+    }, Promise.resolve()).then(function () { return new Promise(function (resolve, reject) {
       var script = document.createElement("script");
       script.src = src;
       script.async = true;
@@ -39,7 +43,7 @@
         reject(new Error("FAILED_TO_LOAD_ADMIN_ASSET_" + String(name || "")));
       };
       document.head.appendChild(script);
-    }).catch(function (error) {
+    }); }).catch(function (error) {
       adminAssetLoadPromises.delete(name);
       throw error;
     });
@@ -740,12 +744,14 @@
       return;
     }
 
+    var isEditingTab = typeof options?.isEditingTab === "function" ? options.isEditingTab : function () { return false; };
     var html = tabs.map(function (tab) {
       var key = String(tab && tab.key || "");
       var title = String(tab && tab.title || "").trim() || fallbackTitle(tab);
       var isActive = key === activeKey;
       return (
         '<div class="product-tab ' + (isActive ? "is-active" : "") + '" data-order-tab-key="' + escapeHtml(key) + '">' +
+          (isEditingTab(tab) ? '<i class="fas fa-pen product-tab-edit-icon" aria-label="&#1056;&#1077;&#1076;&#1072;&#1082;&#1090;&#1080;&#1088;&#1086;&#1074;&#1072;&#1085;&#1080;&#1077;"></i>' : '') +
           '<span class="product-tab-title">' + escapeHtml(title) + "</span>" +
           '<button class="product-tab-close" type="button" data-order-tab-close="' + escapeHtml(key) + '" aria-label="Закрыть">&times;</button>' +
         "</div>"

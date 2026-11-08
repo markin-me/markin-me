@@ -135,7 +135,7 @@
     modeToggle.classList.toggle("hidden", config.showModeToggle === false);
     setModeToggleState(config.mode || "customer");
     if (config.clearBody !== false) body.innerHTML = "";
-    if (document.body.classList.contains("page-new-order") && window.matchMedia("(max-width: 768px)").matches) {
+    if (document.body.matches('.page-new-order, .new-order-editor-active') && window.matchMedia("(max-width: 768px)").matches) {
       const opened = window.__adminMobilePages?.openSubview(title.textContent, () => state.handlers.onClose?.(), {
         beforeBack: () => {
           if (config.showBack !== true || !state.handlers.onBack) return true;

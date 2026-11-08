@@ -3616,8 +3616,8 @@ body.page-orders #clientAddresses .shop-address-actions{
     display:flex;align-items:center;justify-content:center;
     padding:0;height:44px;border-radius:12px;
   }
-  body.page-orders .stage-text,
-  body.page-orders .stage-count{display:none}
+  body.page-orders #ordersStagesList .stage-text,
+  body.page-orders #ordersStagesList .stage-count{display:none}
   body.page-orders .stage-icon{
     width:34px;height:34px;border-radius:12px;
     display:grid;place-items:center;margin:0;

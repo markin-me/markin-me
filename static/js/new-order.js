@@ -14,6 +14,8 @@
   const newOrderToolbarEl = document.getElementById("newOrderToolbar");
   const rightTabsHeaderEl = document.getElementById("newOrderTabsHeader");
   const rightTabsEl = document.getElementById("newOrderTabs");
+  const catalogTabsEl = document.getElementById("newOrderCatalogTabs");
+  const ownsCatalogTabs = !document.getElementById("orderTabs");
   const rightContentEl = document.getElementById("newOrderRightContent");
   const rightEmptyEl = document.getElementById("newOrderRightEmpty");
   const rightPanelEl = document.getElementById("newOrderRightPanel");
@@ -347,6 +349,96 @@
   const adminOrderCommands = new Map();
 
   let checkoutSessionRevision = 0;
+  let editorWorkspaceReady = false;
+  let editorWorkspaceWrites = Promise.resolve();
+  let editorWorkspaceErrorShown = false;
+  let editorWorkspaceIdentity = null;
+
+  function isNewOrderEditorSurface() {
+    return document.body.matches('.page-new-order, .new-order-editor-active');
+  }
+
+  function editorWorkspaceScope() {
+    const scope = window.AdminPersistentCache?.scope({ domain: 'orders:editor', version: 1 });
+    if (!scope?.complete) throw new Error('ORDER_EDITOR_STORAGE_SCOPE_UNAVAILABLE');
+    if (editorWorkspaceIdentity && editorWorkspaceIdentity !== scope.namespace) throw new Error('ORDER_EDITOR_STORAGE_SCOPE_CHANGED');
+    editorWorkspaceIdentity = scope.namespace;
+    return scope;
+  }
+
+  function hasEditingOrders() {
+    return state.rightOrders.some(order => order.mode === 'edit' && Number(order.editOrderId) > 0);
+  }
+
+  async function persistEditorWorkspace({ background = false } = {}) {
+    if (!editorWorkspaceReady || (!background && !isNewOrderEditorSurface())) return editorWorkspaceWrites;
+    const scope = editorWorkspaceScope();
+    const session = captureCheckoutSession();
+    editorWorkspaceWrites = editorWorkspaceWrites.catch(() => {}).then(async () => {
+      if (session.rightOrders.length) await scope.set('workspace', session);
+      else await scope.remove('workspace');
+      editorWorkspaceErrorShown = false;
+    });
+    return editorWorkspaceWrites;
+  }
+
+  function reportEditorWorkspaceError(error) {
+    console.error('ORDER_EDITOR_WORKSPACE_SAVE_FAILED', error);
+    if (!editorWorkspaceErrorShown) {
+      editorWorkspaceErrorShown = true;
+      showNewOrderAlert('Не удалось сохранить черновик в IndexedDB. Не закрывайте страницу до сохранения заказа.');
+    }
+  }
+
+  async function readEditorWorkspace() {
+    await editorWorkspaceWrites;
+    return editorWorkspaceScope().get('workspace');
+  }
+
+  async function cancelRightOrderEditing(orderId) {
+    const order = state.rightOrders.find(row => Number(row.id) === Number(orderId));
+    if (!order || order.mode !== 'edit' || !(Number(order.editOrderId) > 0)) return;
+    const cartItems = Array.isArray(order.form?.cartItems) ? order.form.cartItems : [];
+    const giftItems = cartItems.filter(item => Number(item?.is_gift_reward || 0) === 1);
+    if (giftItems.length && !await restoreRightOrderGiftRewardsFromItems(orderId, giftItems)) return;
+    resetRightCartClearState(orderId, { render: false });
+    if (await finishEditingOrder(orderId) === false) return;
+    document.dispatchEvent(new CustomEvent('neworder:edit-cancel', { detail: { orderId: Number(order.editOrderId) } }));
+  }
+
+  async function finishEditingOrder(draftId) {
+    const previous = captureCheckoutSession();
+    state.rightOrders = state.rightOrders.filter(order => Number(order.id) !== Number(draftId));
+    for (const map of [state.rightAddressDraftByOrder, state.rightAddressSelectedIdByOrder,
+      state.rightBonusRedeemEnabledByOrder, state.rightBonusRedeemAmountByOrder, state.rightBonusRedeemAccountIdByOrder]) {
+      map.delete(Number(draftId));
+    }
+    if (!state.rightOrders.some(order => Number(order.id) === Number(state.rightActiveOrderId))) {
+      state.rightActiveOrderId = state.rightOrders[0]?.id || null;
+    }
+    try {
+      await persistEditorWorkspace({ background: true });
+    } catch (error) {
+      state.rightOrders = previous.rightOrders;
+      state.rightActiveOrderId = previous.rightActiveOrderId;
+      for (const key of ['rightAddressDraftByOrder','rightAddressSelectedIdByOrder','rightBonusRedeemEnabledByOrder','rightBonusRedeemAmountByOrder','rightBonusRedeemAccountIdByOrder']) {
+        state[key] = objectToMap(previous[key] || {});
+      }
+      reportEditorWorkspaceError(error);
+      return false;
+    }
+    if (state.rightOrders.length) renderRightOrderTabs();
+    else if (document.body.classList.contains('page-new-order')) openRightNewOrderTab();
+    if (document.body.classList.contains('page-new-order') && !hasEditingOrders()) setEmbeddedEditing(false);
+    return true;
+  }
+
+  function setEmbeddedEditing(enabled) {
+    if (document.body.classList.contains('new-order-editor-active') === Boolean(enabled)) return;
+    document.body.classList.toggle('new-order-editor-active', Boolean(enabled));
+    if (enabled) history.pushState({ ...history.state, orderEditor: true }, '', location.href);
+    document.dispatchEvent(new CustomEvent('neworder:editor-layout', { detail: { active: Boolean(enabled) } }));
+  }
   let durableCreateDraftSaveTimer = null;
   let durableCreateDraftUserRevision = 0;
   let durableCreateDraftRestoring = false;
@@ -419,6 +511,7 @@
   }
 
   function getRightOrderTabTitle(order) {
+    if (Number(order?.editOrderId) > 0) return `\u2116${Number(order.editOrderId)}`;
     const name = String(order?.form?.name || "").trim();
     const phone = String(order?.form?.phone || "").trim();
     return name || (phone.replace(/\D/g, "").length > 1 ? formatPhoneRuInput(phone) : "")
@@ -431,6 +524,7 @@
     const orders = Array.isArray(state.rightOrders) ? state.rightOrders : [];
     if (!orders.length) {
       rightTabsEl.innerHTML = "";
+      if (ownsCatalogTabs && catalogTabsEl) catalogTabsEl.innerHTML = "";
       rightContentEl.innerHTML = "";
       rightContentEl.classList.add("hidden");
       if (rightFooterEl) {
@@ -459,6 +553,10 @@
         </div>
       `;
     }).join("");
+    if (ownsCatalogTabs && catalogTabsEl) catalogTabsEl.innerHTML = rightTabsEl.innerHTML;
+    document.dispatchEvent(new CustomEvent('neworder:tabs-updated', { detail: {
+      title: getRightOrderTabTitle(orders.find(row => Number(row.id) === Number(state.rightActiveOrderId)))
+    } }));
     rightContentEl.classList.remove("hidden");
     const requestedActiveId = Number(state.rightActiveOrderId || 0);
     let activeIndex = orders.findIndex((order) => Number(order?.id || 0) === requestedActiveId);
@@ -468,7 +566,7 @@
     const activeMode = String(active?.mode || "add").toLowerCase();
     const isEditCheckout = activeMode === "edit" && Number(active?.editOrderId || 0) > 0;
     if (rightTabsHeaderEl) {
-      rightTabsHeaderEl.classList.toggle("hidden", isEditCheckout);
+      rightTabsHeaderEl.classList.toggle("hidden", isEditCheckout && !isNewOrderEditorSurface());
     }
     if (rightEmptyEl) rightEmptyEl.classList.add("hidden");
     let form = active?.form && typeof active.form === "object" ? active.form : {};
@@ -7201,6 +7299,8 @@
     }
     const summary = getRightOrderLiveSummary(order);
     return sharedOrderPayment.open({
+      ...(window.matchMedia('(max-width: 768px)').matches && document.body.classList.contains('admin-mobile-pages')
+        ? sharedOrderPayment.mobilePageOptions('\u041f\u0440\u0438\u043d\u044f\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0443') : {}),
       order: buildRightPaymentModalOrder(order, summary),
       apiJson,
       money: toMoney,
@@ -7648,6 +7748,7 @@
         writeDurableCreateDraftNow();
       }
       resetRightCartClearState(id, { render: false });
+      if (isEditSubmit && await finishEditingOrder(id) === false) return;
       if (typeof window.updateActiveOrdersBadge === "function") {
         Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {});
       }
@@ -7853,6 +7954,7 @@
   }
 
   function writeDurableCreateDraftNow() {
+    if (editorWorkspaceReady) void persistEditorWorkspace().catch(reportEditorWorkspaceError);
     if (durableCreateDraftSaveTimer) clearTimeout(durableCreateDraftSaveTimer);
     durableCreateDraftSaveTimer = null;
     if (durableCreateDraftRestoring) return;
@@ -14039,8 +14141,9 @@
         else closeRightAddressOverlay();
         return;
       }
-      const selectBtn = e.target.closest("[data-action='right-address-select'][data-address-id]");
-      if (selectBtn) {
+      const selectBtn = e.target.closest(".new-order-right-address-row[data-address-id]");
+      const addressAction = e.target.closest(".new-order-right-address-row-actions");
+      if (selectBtn && !addressAction) {
         const addrId = Number(selectBtn.getAttribute("data-address-id") || 0);
         state.rightAddressSelectedIdByOrder.set(id, addrId);
         state.rightAddressEditingIdByOrder.set(id, 0);
@@ -16573,7 +16676,7 @@
   let productOverlayRequestGeneration = 0;
 
   function openNewOrderMobileOverlayPage(backdrop, title, onBack, beforeBack = null) {
-    if (!document.body.classList.contains("page-new-order") || !window.matchMedia("(max-width: 768px)").matches) return;
+    if (!isNewOrderEditorSurface() || !window.matchMedia("(max-width: 768px)").matches) return;
     if (!window.__adminMobilePages?.openSubview(title, onBack, { beforeBack })) return;
     backdrop.dataset.mobilePage = "1";
     document.body.classList.add("new-order-mobile-subpage");
@@ -17137,7 +17240,7 @@
         closeProductOverlay();
       }
     };
-    if (document.body.classList.contains("page-new-order") && !isCheckoutScreenActive()) {
+    if (isNewOrderEditorSurface() && !isCheckoutScreenActive()) {
       backdrop.classList.add("is-shared-product");
     openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), closeProductOverlay);
       list.replaceChildren();
@@ -18949,7 +19052,12 @@
 
   function animateNewOrderProductToTab(source, orderId) {
     if (!source || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const findTab = () => rightTabsEl?.querySelector(`[data-action="right-order-tab-select"][data-order-id="${Number(orderId)}"]`);
+    const findTab = () => {
+      const selector = `[data-action="right-order-tab-select"][data-order-id="${Number(orderId)}"], [data-order-tab-key].is-active`;
+      return [...document.querySelectorAll('#newOrderCatalogTabs, #adminMobileOrderTabs, #newOrderTabs, #orderTabsCheckout')]
+        .flatMap(container => [...container.querySelectorAll(selector)])
+        .find(tab => tab.getClientRects().length && tab.getBoundingClientRect().width > 0);
+    };
     const tab = findTab();
     if (!tab || !tab.getClientRects().length) return;
     tab.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -19104,7 +19212,7 @@
   }
 
   function renderProducts(products, options = {}) {
-    if (document.body.classList.contains("page-new-order") && !options.container && !isCheckoutScreenActive()) {
+    if (isNewOrderEditorSurface() && !options.container && !isCheckoutScreenActive()) {
       void renderNewOrderSharedCatalog(products);
       return;
     }
@@ -20367,7 +20475,7 @@
       : state.categoryProductsCache.get(activeCategoryId);
     const orderedProducts = Array.isArray(payload?.currentProducts) ? payload.currentProducts : [];
     state.currentProducts = orderedProducts;
-    if (document.body.classList.contains("page-new-order")) {
+    if (isNewOrderEditorSurface()) {
       renderNewOrderSharedCatalog(orderedProducts, new Set(productIds.map(Number)), new Set(comboIds.map(Number)));
       return;
     }
@@ -20748,7 +20856,7 @@
     categoriesListEl.addEventListener("click", (e) => {
       if (e.target.closest('[data-action="checkout-screen-settings"]')) {
         if (!state.checkoutEditMode) settingsBtnEl?.click();
-        if (document.body.classList.contains("page-new-order")) window.__adminMobilePages?.openCenter("Экран оформления");
+        if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Экран оформления");
         return;
       }
       const btn = e.target.closest("[data-category-id]");
@@ -20759,7 +20867,7 @@
         if (!state.checkoutScreenEnabled && !state.checkoutEditMode) return;
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
         state.activeProductCategoryId = null;
-        if (document.body.classList.contains("page-new-order")) window.__adminMobilePages?.openCenter("Каталог");
+        if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Каталог");
         schedulePersistBootstrapSnapshot(0);
         void loadCheckoutProductsForSelectedCategories().then(() => {
           const ids = [...state.checkoutCategoryProducts.values()]
@@ -20773,7 +20881,7 @@
       }
       const cid = Number(rawCategoryId);
       if (!Number.isFinite(cid) || cid <= 0) return;
-      if (document.body.classList.contains("page-new-order")) window.__adminMobilePages?.openCenter("Каталог");
+      if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Каталог");
       if (state.checkoutEditMode) {
         state.checkoutEditMode = false;
         state.checkoutDraft = null;
@@ -21320,17 +21428,7 @@
           const armedUntil = Number(state.rightCartClearConfirmUntilByOrder.get(orderId) || 0);
           const armed = armedUntil > Date.now();
           if (isEditCancelMode) {
-            const giftItems = cartItems.filter((item) => Number(item?.is_gift_reward || 0) === 1);
-            if (giftItems.length) {
-              const restored = await restoreRightOrderGiftRewardsFromItems(orderId, giftItems);
-              if (!restored) return;
-            }
-            resetRightCartClearState(orderId, { render: false });
-            document.dispatchEvent(
-              new CustomEvent("neworder:edit-cancel", {
-                detail: { orderId: editOrderId },
-              })
-            );
+            await cancelRightOrderEditing(orderId);
             return;
           }
           if (!cartItems.length) return;
@@ -21756,14 +21854,18 @@
         });
       }
 
-      if (rightTabsEl) {
-        rightTabsEl.addEventListener("click", (e) => {
+      [rightTabsEl, ...(ownsCatalogTabs ? [catalogTabsEl] : [])].filter(Boolean).forEach(tabsEl => {
+        tabsEl.addEventListener("click", async (e) => {
           const closeBtn = e.target.closest("[data-action='right-order-tab-close'][data-order-id]");
           if (closeBtn) {
             const orderId = Number(closeBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
           const idx = state.rightOrders.findIndex((o) => Number(o?.id || 0) === orderId);
           if (idx < 0) return;
+          if (state.rightOrders[idx].mode === 'edit') {
+            await cancelRightOrderEditing(orderId);
+            return;
+          }
           resetRightCartClearState(orderId, { render: false });
           state.rightDiscountBreakdownOpenByOrder.delete(orderId);
           state.rightCheckoutSubmittingByOrder.delete(orderId);
@@ -21795,8 +21897,9 @@
           state.rightOpenSelect = null;
           closeRightAddressOverlay();
           renderRightOrderTabs();
+          scheduleDurableCreateDraftSave();
         });
-      }
+      });
 
       checkoutContentEl.addEventListener("dragstart", (e) => {
         const handle = e.target.closest("[data-action='checkout-block-drag-handle'][data-block-id]");
@@ -22711,7 +22814,7 @@
   }
 
   function patchVisibleProductInventory(productId) {
-    if (document.body.classList.contains("page-new-order")) syncNewOrderSharedCards([productId]);
+    if (isNewOrderEditorSurface()) syncNewOrderSharedCards([productId]);
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
     const product = getProductById(pid);
@@ -22733,8 +22836,13 @@
   function patchVisibleProductCatalog(product) {
     const pid = Number(product?.id || 0);
     if (!(pid > 0)) return;
+    const cards = getVisibleNewOrderProductNodes(pid);
+    if (!cards.length) {
+      patchVisibleProductInventory(pid);
+      return;
+    }
     const pricing = getCurrentProductUnitPricing(product, pid);
-    getVisibleNewOrderProductNodes(pid).forEach((card) => {
+    cards.forEach((card) => {
       const title = card.querySelector(".new-order-product-title, .new-order-checkout-product-name");
       if (title) {
         title.textContent = String(product?.name || "Товар");
@@ -24267,6 +24375,13 @@
 
   function captureCheckoutSession() {
     return {
+      editorOrigin: location.pathname,
+      editorView: window.__adminMobilePages?.getEditorView?.() || null,
+      editorScroll: {
+        categories: categoriesListEl.parentElement?.scrollTop || 0,
+        catalog: productsGridEl.parentElement?.scrollTop || 0,
+        order: rightContentEl?.parentElement?.scrollTop || 0,
+      },
       activeCategoryId: state.activeCategoryId,
       activeProductCategoryId: state.activeProductCategoryId,
       quantities: mapToObject(state.quantities),
@@ -24369,6 +24484,12 @@
     if (typeof opts?.onApplied === "function") opts.onApplied();
     await renderActiveCategoryContent();
     if (isCurrent && !isCurrent()) return false;
+    requestAnimationFrame(() => {
+      if (isCurrent && !isCurrent()) return;
+      if (categoriesListEl.parentElement) categoriesListEl.parentElement.scrollTop = Number(src.editorScroll?.categories || 0);
+      if (productsGridEl.parentElement) productsGridEl.parentElement.scrollTop = Number(src.editorScroll?.catalog || 0);
+      if (rightContentEl?.parentElement) rightContentEl.parentElement.scrollTop = Number(src.editorScroll?.order || 0);
+    });
     renderRightOrderTabs();
     state.rightOrders.forEach((row) => {
       const orderId = Number(row?.id || 0);
@@ -24390,7 +24511,39 @@
     };
   }
 
+  function mergeEditorWorkspace(cached, session) {
+    if (!cached?.rightOrders?.length) return session;
+    const requested = session?.rightOrders?.find(row => Number(row.id) === Number(session.rightActiveOrderId));
+    const stored = requested && cached.rightOrders.find(row => requested.mode === 'edit'
+      ? row.mode === 'edit' && Number(row.editOrderId) === Number(requested.editOrderId)
+      : Number(row.id) === Number(requested.id));
+    const merged = { ...cached, ...session,
+      rightOrders: [...cached.rightOrders, ...(requested && !stored ? [requested] : [])],
+      rightActiveOrderId: stored?.id || requested?.id || cached.rightActiveOrderId };
+    for (const key of ['rightAddressDraftByOrder','rightAddressSelectedIdByOrder','rightBonusRedeemEnabledByOrder','rightBonusRedeemAmountByOrder','rightBonusRedeemAccountIdByOrder']) {
+      merged[key] = { ...session[key], ...cached[key] };
+    }
+    return merged;
+  }
+
   window.NewOrderBridge = {
+    setEmbeddedEditing,
+    hasEditingOrders,
+    cancelEditingOrder: async (orderId) => {
+      await loadReadyPromise;
+      let draft = state.rightOrders.find(row => row.mode === 'edit' && Number(row.editOrderId) === Number(orderId));
+      if (!draft) {
+        const cached = await readEditorWorkspace();
+        if (cached?.rightOrders?.some(row => row.mode === 'edit' && Number(row.editOrderId) === Number(orderId))) {
+          await restoreCheckoutSession(cached);
+          editorWorkspaceReady = true;
+          draft = state.rightOrders.find(row => row.mode === 'edit' && Number(row.editOrderId) === Number(orderId));
+        }
+      }
+      if (draft) await cancelRightOrderEditing(Number(draft.id));
+    },
+    persist: persistEditorWorkspace,
+    readWorkspace: readEditorWorkspace,
     ready: () => loadReadyPromise,
     captureSession: () => {
       writeDurableCreateDraftNow();
@@ -24400,13 +24553,29 @@
       checkoutSessionRevision += 1;
       await loadReadyPromise;
       if (typeof opts?.isCurrent === "function" && !opts.isCurrent()) return false;
-      return restoreCheckoutSession(session, opts);
+      editorWorkspaceScope();
+      editorWorkspaceReady = true;
+      const cached = await readEditorWorkspace();
+      if (typeof opts?.isCurrent === 'function' && !opts.isCurrent()) return false;
+      session = mergeEditorWorkspace(cached, session);
+      const applied = await restoreCheckoutSession(session, opts);
+      if (applied !== false) {
+        try { await persistEditorWorkspace(); }
+        catch (error) { reportEditorWorkspaceError(error); throw error; }
+        window.__adminMobilePages?.restoreEditorView?.(session.editorView);
+      }
+      return applied;
     },
     createBlankSession: (opts = {}) => buildBlankDraftSession(opts),
     createSessionFromOrder: async (order, opts = {}) => {
       const locallyReady = await Promise.race([localEditorDataReadyPromise, bootstrapDataReadyPromise.then(() => false)]);
       if (!locallyReady) await bootstrapDataReadyPromise;
-      return buildDraftSessionFromOrder(order, opts);
+      if (editorWorkspaceReady && isNewOrderEditorSurface()) await persistEditorWorkspace();
+      const cached = await readEditorWorkspace();
+      const stored = cached?.rightOrders?.find(row => row.mode === 'edit' && Number(row.editOrderId) === Number(order.id));
+      if (stored) return { ...cached, rightActiveOrderId: stored.id };
+      const session = await buildDraftSessionFromOrder(order, opts);
+      return mergeEditorWorkspace(cached, session);
     },
   };
 
@@ -24584,6 +24753,15 @@
     try {
       const startup = await bootstrapDataReadyPromise;
       await refreshNewOrderData(startup);
+      if (document.body.classList.contains('page-new-order') && checkoutSessionRevision === 0) {
+        const workspace = await readEditorWorkspace();
+        if (workspace?.rightOrders?.length) {
+          await restoreCheckoutSession(workspace);
+          if (hasEditingOrders()) setEmbeddedEditing(true);
+          window.__adminMobilePages?.restoreEditorView?.(workspace.editorView);
+        }
+      }
+      editorWorkspaceReady = true;
     } catch (e) {
       const offlineCatalogEmpty = !navigator.onLine
         && (!window.CatalogRepository || window.CatalogRepository.getAllProducts().length === 0);
@@ -24605,7 +24783,7 @@
     }
   }
 
-  if (document.body.classList.contains("page-new-order") && window.SharedProductDetails) {
+  if (window.SharedProductDetails) {
     window.SharedProductDetails.configure({
       getPassport: id => window.CatalogRepository?.getProductPassport(id),
       getProduct: getNewOrderPresentationProduct,
@@ -24781,7 +24959,7 @@
           productIds.forEach((productId) => state.effectiveStockConfigByProductId.delete(Number(productId)));
           applyNewOrderRepositoryProductChanges(productIds);
           productIds.forEach((productId) => {
-            const product = getProductById(productId);
+            const product = getNewOrderPresentationProduct(productId);
             if (product) patchVisibleProductCatalog(product);
             else getVisibleNewOrderProductNodes(productId).forEach((node) => node.remove());
           });
@@ -24824,11 +25002,50 @@
     if (!window.CatalogRepository) applyKnownProductUpdate(event?.detail);
   });
   window.addEventListener("pagehide", writeDurableCreateDraftNow);
-  window.addEventListener("beforeunload", () => {
+  window.addEventListener("pagehide", () => {
     unsubscribeCatalogRepository?.();
     closeNewOrderStockSocket();
   }, { once: true });
+  window.addEventListener('beforeunload', event => {
+    writeDurableCreateDraftNow();
+    if (hasEditingOrders() && isNewOrderEditorSurface()) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+  document.addEventListener('click', event => {
+    if (event.target.closest('.header-city-option') && isNewOrderEditorSurface()) {
+      if (hasEditingOrders()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        showNewOrderAlert('Сначала сохраните заказ или отмените редактирование.');
+      } else void persistEditorWorkspace().catch(reportEditorWorkspaceError);
+      return;
+    }
+    if (!hasEditingOrders() || !isNewOrderEditorSurface()) return;
+    const link = event.target.closest('a[href]');
+    if (!link) return;
+    const url = new URL(link.href, location.href);
+    if (url.origin === location.origin && url.pathname.startsWith('/dashboard') && url.pathname !== location.pathname) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      showNewOrderAlert('Сначала сохраните заказ или отмените редактирование.');
+    }
+  }, true);
+  document.addEventListener('neworder:editor-view', () => {
+    if (editorWorkspaceReady && isNewOrderEditorSurface()) scheduleDurableCreateDraftSave();
+  });
+  document.addEventListener('scroll', event => {
+    if (editorWorkspaceReady && isNewOrderEditorSurface()
+      && [categoriesListEl.parentElement, productsGridEl.parentElement, rightContentEl?.parentElement].includes(event.target)) {
+      scheduleDurableCreateDraftSave();
+    }
+  }, true);
   document.addEventListener("tenantStoreChanged", () => {
+    editorWorkspaceReady = false;
+    editorWorkspaceIdentity = null;
+    state.rightOrders = [];
+    state.rightActiveOrderId = null;
     rightDeliverySettingsScope = '';
     rightDeliverySettingsCheckedAt = 0;
     state.rightDeliverySettings = null;
@@ -24889,6 +25106,9 @@
       renderStartupShell();
       await renderActiveCategoryContent();
       await window.CatalogRepository.startSync();
+      const workspace = await readEditorWorkspace();
+      if (workspace?.rightOrders?.length) await restoreCheckoutSession(workspace);
+      editorWorkspaceReady = true;
     })();
   });
   if (window.CatalogRepository?.withForegroundWork) {

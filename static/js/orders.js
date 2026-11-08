@@ -142,6 +142,7 @@
     }) || null;
   }
   function loadOrdersFeatureScript(name) {
+    if (name === "newOrder" && window.SharedOrderPanel?.ensureAdminAsset) return window.SharedOrderPanel.ensureAdminAsset(name);
     if (name === "clients" && window.SharedOrderPanel && typeof window.SharedOrderPanel.ensureAdminAsset === "function") {
       return window.SharedOrderPanel.ensureAdminAsset("clients");
     }
@@ -538,7 +539,7 @@
   const orderTabsHeader = $("#orderTabsHeader");
   const orderTabsHeaderCheckout = $("#orderTabsHeaderCheckout");
   const orderTabsHeaders = [orderTabsHeader, orderTabsHeaderCheckout].filter(Boolean);
-  const orderTabsEls = [$("#orderTabs"), $("#orderTabsCheckout")].filter(Boolean);
+  const orderTabsEls = [$("#orderTabs"), $("#orderTabsCheckout"), $("#newOrderCatalogTabs")].filter(Boolean);
   const orderInfoFooter = $("#orderInfoFooter");
   const orderInfoPaymentBtn = $("#orderInfoPaymentBtn");
   const ordersLeftPane = $("#ordersLeftPane");
@@ -1926,6 +1927,7 @@
     ordersCheckoutCenterPane?.classList.toggle("hidden", !checkout);
     ordersCheckoutRightPane?.classList.toggle("hidden", !checkout);
     if (document.body.classList.contains("page-chat")) document.dispatchEvent(new CustomEvent("orders:checkout-layout"));
+    window.NewOrderBridge?.setEmbeddedEditing(checkout);
   }
 
   function getNewOrderBridge() {
@@ -1950,9 +1952,8 @@
 
   function isMatchingEditSession(session, orderId) {
     const rows = Array.isArray(session?.rightOrders) ? session.rightOrders : [];
-    return rows.length === 1 && String(rows[0]?.mode || '').toLowerCase() === 'edit'
-      && Number(rows[0]?.editOrderId) === Number(orderId)
-      && Array.isArray(rows[0]?.form?.cartItems) && rows[0].form.cartItems.length > 0;
+    return rows.some(row => row.mode === 'edit' && Number(row.editOrderId) === Number(orderId)
+      && Array.isArray(row.form?.cartItems) && row.form.cartItems.length > 0);
   }
 
   function captureCheckoutSessionForTab(tab) {
@@ -1977,11 +1978,22 @@
     if (!bridge) return null;
     const mode = normalizeTabMode(tab.mode);
     const forceRebuildFromOrder = mode === "edit" && tab.checkoutSessionHydrating === true;
+    if (mode === 'edit') {
+      const workspace = await bridge.readWorkspace();
+      const stored = workspace?.rightOrders?.find(row => row.mode === 'edit' && Number(row.editOrderId) === Number(tab.orderId));
+      if (stored) {
+        tab.checkoutSession = { ...workspace, rightActiveOrderId: stored.id };
+        if (!isMatchingEditSession(tab.checkoutSession, tab.orderId)) throw new Error('ORDER_EDIT_SESSION_INVALID');
+        tab.checkoutSessionHydrating = false;
+        return tab.checkoutSession;
+      }
+    }
     if (!forceRebuildFromOrder && tab.checkoutSession && (mode !== 'edit' || isMatchingEditSession(tab.checkoutSession, tab.orderId))) return tab.checkoutSession;
 
     if (mode === "edit") {
-      const sourceOrder = tab.order || state.orders.find((o) => Number(o.id) === Number(tab.orderId)) || null;
+      const sourceOrder = await ensureFullOrderById(Number(tab.orderId), { strict: true });
       if (sourceOrder && typeof bridge.createSessionFromOrder === "function") {
+        if (isOrderEditPaymentLocked(sourceOrder)) throw new Error('ORDER_EDIT_PAYMENT_LOCKED');
         try {
           tab.checkoutSession = await bridge.createSessionFromOrder(sourceOrder, {
             title: tab.title,
@@ -2158,12 +2170,14 @@
   }
 
   function renderOrderTabs() {
+    tabsState.tabs.forEach(tab => { if (tab.type === "order" && Number(tab.orderId) > 0) tab.title = buildOrderTabTitle({ id: tab.orderId }); });
     if (sharedOrderPanel) {
       sharedOrderPanel.renderTabs({
         headers: orderTabsHeaders,
         tabsEls: orderTabsEls,
         tabs: tabsState.tabs,
         activeKey: tabsState.activeKey,
+        isEditingTab: isCheckoutTab,
       });
       syncOrdersPrintTabs();
       return;
@@ -2179,6 +2193,7 @@
       const isActive = tab.key === tabsState.activeKey;
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-order-tab-key="${escapeHtml(tab.key)}">
+          ${isCheckoutTab(tab) ? '<i class="fas fa-pen product-tab-edit-icon" aria-hidden="true"></i>' : ""}
           <span class="product-tab-title">${escapeHtml(tab.title || (tab.type === "client" ? "Клиент" : "Заказ"))}</span>
           <button class="product-tab-close" type="button" data-order-tab-close="${escapeHtml(tab.key)}" aria-label="Закрыть">&times;</button>
         </div>
@@ -2233,7 +2248,7 @@
       state.activeOrderId = null;
       renderOrderTabs();
       syncActiveOrderRowState();
-      applyTabModeLayout(tab, activationRevision)
+      return applyTabModeLayout(tab, activationRevision)
         .then(() => {
           if (openMobile && shouldUseMobileSheet()) openSheet();
         })
@@ -2241,7 +2256,6 @@
         .finally(() => {
           schedulePersistOrdersCache();
         });
-      return;
     }
 
     setOrdersCheckoutLayoutEnabled(false);
@@ -2493,14 +2507,6 @@
           return ensureFullOrderById(orderId, { strict: true });
         },
         openTab(order, orderId, context = {}) {
-          if (context.source === 'chat') {
-            const existing = tabsState.tabs.find(tab => tab.key === buildOrderTabKey(Number(orderId)));
-            if (existing && normalizeTabMode(existing.mode) === 'edit') {
-              if (mountedCheckoutTabKey === existing.key) captureCheckoutSessionForTab(existing);
-              existing.mode = 'view';
-              if (mountedCheckoutTabKey === existing.key) mountedCheckoutTabKey = null;
-            }
-          }
           const tab = ensureOrderTab(order, {
             activate: true,
             openMobile: context.openMobile !== false,
@@ -2564,7 +2570,7 @@
     tab.title = `\u2116${id}`;
     tab.order = { ...tab.order, ...baseOrder };
     tab.checkoutSessionHydrating = false;
-    setActiveOrderTab(tab.key, { openMobile: true });
+    await setActiveOrderTab(tab.key, { openMobile: true });
     schedulePersistOrdersCache();
   }
 
@@ -2813,10 +2819,14 @@
     schedulePersistOrdersCache();
   }
 
-  function closeOrderTab(key) {
+  function closeOrderTab(key, { editorExit = false } = {}) {
     const idx = tabsState.tabs.findIndex((tab) => tab.key === key);
     if (idx < 0) return;
     const tabToClose = tabsState.tabs[idx];
+    if (!editorExit && normalizeTabMode(tabToClose.mode) === 'edit') {
+      void getReadyNewOrderBridge().then(bridge => bridge.cancelEditingOrder(Number(tabToClose.orderId))).catch(console.error);
+      return;
+    }
     if(tabToClose.type==='print'){ordersPrintPanel?.clearPrintApiTabState(key);if(tabsState.activeKey===key)showOrdersPrintPanel(false);}
     if (tabToClose.key === mountedCheckoutTabKey) captureCheckoutSessionForTab(tabToClose);
     const wasActive = tabsState.activeKey === key;
@@ -4860,7 +4870,7 @@
   }
 
   function isOrderEditPaymentLocked(order) {
-    return Boolean(order && (isPaidOrder(order) || Number(order.paymentSummary?.paidAmount)>0 || order.paymentSummary?.activePayment || order.paymentSummary?.attentionRequired));
+    return window.SharedOrderPayment.isEditLocked(order);
   }
 
   function canCourierAcceptPayment(order) {
@@ -4977,20 +4987,6 @@
     throw error;
   }
 
-  let mobilePaymentModalOrigin = null;
-
-  function mountMobilePaymentPage() {
-    const modal = document.getElementById("appModal");
-    if (!modal || mobilePaymentModalOrigin) return;
-    const activeColumn = document.body.classList.contains("admin-mobile-view-right")
-      ? document.querySelector(".page-col-right")
-      : document.querySelector(".page-col-center");
-    if (!activeColumn || !modal.parentNode) return;
-    mobilePaymentModalOrigin = document.createComment("mobile-payment-modal-origin");
-    modal.parentNode.insertBefore(mobilePaymentModalOrigin, modal);
-    activeColumn.appendChild(modal);
-  }
-
   function ordersPersistentCacheKey() {
     const dateKey = state.date.start && state.date.end
       ? `${toDateKey(state.date.start)}_${toDateKey(state.date.end)}` : "default";
@@ -5105,15 +5101,6 @@
     });
   }
 
-  function restoreMobilePaymentModal() {
-    const modal = document.getElementById("appModal");
-    if (modal && mobilePaymentModalOrigin?.parentNode) {
-      mobilePaymentModalOrigin.parentNode.insertBefore(modal, mobilePaymentModalOrigin);
-      mobilePaymentModalOrigin.remove();
-    }
-    mobilePaymentModalOrigin = null;
-  }
-
   let orderPaymentOpening = false;
   let orderPaymentPreparingId = 0;
   async function openOrderPaymentDialog(order) {
@@ -5180,22 +5167,7 @@
     const useOfflineCollection = offlineCapable && !courierOfflineState.online;
     const useMobilePaymentPage = isMobile() && document.body.classList.contains("admin-mobile-pages");
     const mobilePaymentPageOptions = useMobilePaymentPage
-      ? {
-          onOpen() {
-            const paymentOrderNumber = String(getOrderNumber(order) || orderId).trim();
-            document.body.classList.add("admin-payment-page-open");
-            mountMobilePaymentPage();
-            window.__adminMobilePages?.openSubview?.(
-              `Принять оплату №${paymentOrderNumber}`,
-              () => window.AppModal?.close?.("back")
-            );
-          },
-          onClose() {
-            window.__adminMobilePages?.closeSubview?.();
-            restoreMobilePaymentModal();
-            document.body.classList.remove("admin-payment-page-open");
-          },
-        }
+      ? sharedOrderPayment.mobilePageOptions(`\u041f\u0440\u0438\u043d\u044f\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0443 \u2116${String(getOrderNumber(order) || orderId).trim()}`)
       : {};
 
     const paymentPageOptions = {
@@ -6108,6 +6080,7 @@
   }
 
   function closeSheet() {
+    if (document.body.classList.contains('new-order-editor-active') && window.NewOrderBridge?.hasEditingOrders()) return;
     if (!sheet || !backdrop) return;
     focusOutsideSheetBeforeHide();
     sheet.classList.remove("is-open");
@@ -7889,11 +7862,22 @@
     const tabEl = e.target.closest("[data-order-tab-key]");
     if (tabEl) {
       const key = tabEl.getAttribute("data-order-tab-key");
-      if (key) setActiveOrderTab(key, { openMobile: true });
+      if (key) {
+        const tab = tabsState.tabs.find(row => row.key === key);
+        await setActiveOrderTab(key, { openMobile: true });
+        if (tab && isCheckoutTab(tab) && tabsState.activeKey === key && isMobile()
+          && document.body.classList.contains('new-order-editor-active')) {
+          window.__adminMobilePages?.openCenter?.("Каталог");
+        } else if (tab && tabsState.activeKey === key && isMobile()) {
+          window.__adminMobilePages?.openRight?.(tab.title);
+        }
+      }
       return;
     }
 
-    const addNewDraftBtn = e.target.closest("#ordersAddBtn");
+    const addNewDraftBtn = e.target.closest("#ordersAddBtn")
+      || (document.body.classList.contains('page-orders') && !document.body.classList.contains('new-order-editor-active')
+        && e.target.closest('#newOrderMobileCategories'));
     if (addNewDraftBtn) {
       e.preventDefault();
       e.stopPropagation();
@@ -8164,22 +8148,24 @@
     await openOrderDetailsById(orderId, { openMobile: true });
   });
 
+  document.addEventListener('neworder:tabs-updated', event => {
+    const tab = tabsState.tabs.find(row => row.key === tabsState.activeKey);
+    if (!tab || !isCheckoutTab(tab)) return;
+    const title = Number(tab.orderId) > 0 ? buildOrderTabTitle({ id: tab.orderId }) : event.detail?.title;
+    if (title && tab.title !== title) { tab.title = title; renderOrderTabs(); schedulePersistOrdersCache(); }
+  });
+
   document.addEventListener("neworder:right-tabs-empty", () => {
+    if (window.NewOrderBridge?.hasEditingOrders()) return;
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     if (!activeTab || !isCheckoutTab(activeTab)) return;
-    closeOrderTab(activeTab.key);
+    closeOrderTab(activeTab.key, { editorExit: true });
   });
 
   document.addEventListener("neworder:edit-cancel", (evt) => {
     const editOrderId = Number(evt?.detail?.orderId || 0);
-    let targetTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
-    if (!targetTab || !isCheckoutTab(targetTab) || normalizeTabMode(targetTab.mode) !== "edit") {
-      targetTab = tabsState.tabs.find((tab) => (
-        tab?.type === "order"
-        && normalizeTabMode(tab?.mode) === "edit"
-        && Number(tab?.orderId || 0) === editOrderId
-      )) || null;
-    }
+    const targetTab = tabsState.tabs.find(tab => tab.type === 'order'
+      && normalizeTabMode(tab.mode) === 'edit' && Number(tab.orderId) === editOrderId);
     if (!targetTab || !Number(targetTab?.orderId || 0)) return;
     targetTab.mode = "view";
     targetTab.checkoutSession = null;
@@ -8189,13 +8175,17 @@
       targetTab.order = { ...targetTab.order, ...currentOrder };
       targetTab.title = buildOrderTabTitle(targetTab.order);
     }
-    setActiveOrderTab(targetTab.key, { openMobile: true });
+    if (tabsState.activeKey === targetTab.key) setActiveOrderTab(targetTab.key, { openMobile: true });
+    else { renderOrderTabs(); schedulePersistOrdersCache(); }
   });
 
-  document.addEventListener("neworder:order-submitted", () => {
-    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+  document.addEventListener("neworder:order-submitted", (evt) => {
+    const updatedId = Number(evt.detail?.updatedOrderId || 0);
+    const activeTab = updatedId > 0
+      ? tabsState.tabs.find(tab => Number(tab.orderId) === updatedId && normalizeTabMode(tab.mode) === 'edit')
+      : tabsState.tabs.find(tab => tab.key === tabsState.activeKey);
     if (!activeTab || !isCheckoutTab(activeTab)) return;
-    closeOrderTab(activeTab.key);
+    closeOrderTab(activeTab.key, { editorExit: true });
     bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) }).catch(console.error);
   });
 
@@ -9677,8 +9667,22 @@
         }
         return null;
       })
-      .then(() => {
+      .then(async () => {
         if (!isCourierWorkspace) startOrdersPolling();
+        if (isCourierWorkspace || document.body.classList.contains('new-order-editor-active')) return;
+        const activeTab = tabsState.tabs.find(tab => tab.key === tabsState.activeKey);
+        if (tabsState.tabs.length && !isCheckoutTab(activeTab)) return;
+        const scope = window.AdminPersistentCache?.scope({ domain: 'orders:editor', version: 1 });
+        if (!scope?.complete) return;
+        const workspace = await scope.get('workspace');
+        if (workspace?.editorOrigin !== location.pathname) return;
+        const active = workspace.rightOrders?.find(order => Number(order.id) === Number(workspace.rightActiveOrderId));
+        if (active?.mode === 'edit') {
+          if (document.body.classList.contains('page-chat')) document.body.classList.add('chat-right-order-mode');
+          await openOrderDetailsById(Number(active.editOrderId));
+          await openEditOrderTab(Number(active.editOrderId));
+          window.__adminMobilePages?.restoreEditorView?.(workspace.editorView);
+        }
       })
       .catch((err) => {
         console.error(err);

@@ -1389,7 +1389,50 @@
     return '';
   }
 
+  let mobilePaymentModalOrigin = null;
+
+  function mountMobilePaymentPage() {
+    const modal = document.getElementById("appModal");
+    if (!modal || mobilePaymentModalOrigin) return;
+    const activeColumn = document.body.classList.contains("admin-mobile-view-right")
+      ? document.querySelector(".page-col-right")
+      : document.querySelector(".page-col-center");
+    if (!activeColumn || !modal.parentNode) return;
+    mobilePaymentModalOrigin = document.createComment("mobile-payment-modal-origin");
+    modal.parentNode.insertBefore(mobilePaymentModalOrigin, modal);
+    activeColumn.appendChild(modal);
+  }
+
+  function restoreMobilePaymentModal() {
+    const modal = document.getElementById("appModal");
+    if (modal && mobilePaymentModalOrigin?.parentNode) {
+      mobilePaymentModalOrigin.parentNode.insertBefore(modal, mobilePaymentModalOrigin);
+      mobilePaymentModalOrigin.remove();
+    }
+    mobilePaymentModalOrigin = null;
+  }
+
+  function mobilePageOptions(title) {
+    return {
+      onOpen: function () {
+        document.body.classList.add('admin-payment-page-open');
+        mountMobilePaymentPage();
+        window.__adminMobilePages?.openSubview?.(title, function () { window.AppModal?.close?.('back'); });
+      },
+      onClose: function () {
+        window.__adminMobilePages?.closeSubview?.();
+        restoreMobilePaymentModal();
+        document.body.classList.remove('admin-payment-page-open');
+      },
+    };
+  }
+
   window.SharedOrderPayment = {
+    mobilePageOptions,
+    isEditLocked: function (order) {
+      return Boolean(order && (isPaidOrder(order) || Number(order.paymentSummary?.paidAmount) > 0
+        || order.paymentSummary?.activePayment || order.paymentSummary?.attentionRequired));
+    },
     stateTitle: function(summary) {
       if(summary?.amountMismatch)return 'Сумма заказа отличается от оплаты';
       if(summary?.anomalies?.length)return 'Требуется проверка оплаты';

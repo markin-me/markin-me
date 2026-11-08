@@ -1934,6 +1934,44 @@
       return merged;
     }
 
+    var cashEditingOrderId = 0;
+    async function openCashOrderEditor(orderId) {
+      if (cashEditingOrderId) return;
+      const order = await ensureCashFullOrder(orderId);
+      if (!order) throw new Error('ORDER_NOT_FOUND');
+      if (window.SharedOrderPayment.isEditLocked(order)) throw new Error('Заказ оплачен или есть активный платёж. Редактирование недоступно.');
+      await window.SharedOrderPanel.ensureAdminAsset('newOrder');
+      const bridge = window.NewOrderBridge;
+      await bridge.ready();
+      const session = await bridge.createSessionFromOrder(order, { title: `№${orderId}`, orderId, preserveStoredLineTotals: true });
+      cashEditingOrderId = Number(orderId);
+      for (const id of ['cashCheckoutLeftPane','cashCheckoutCenterPane','cashCheckoutRightPane']) document.getElementById(id)?.classList.remove('hidden');
+      document.body.classList.add('cash-checkout-mode');
+      bridge.setEmbeddedEditing(true);
+      try { await bridge.restoreSession(session); }
+      catch (error) { closeCashOrderEditor(); throw error; }
+    }
+
+    function closeCashOrderEditor() {
+      if (!cashEditingOrderId) return;
+      cashEditingOrderId = 0;
+      document.body.classList.remove('cash-checkout-mode');
+      for (const id of ['cashCheckoutLeftPane','cashCheckoutCenterPane','cashCheckoutRightPane']) document.getElementById(id)?.classList.add('hidden');
+      window.NewOrderBridge?.setEmbeddedEditing(false);
+    }
+
+    document.addEventListener('neworder:edit-cancel', () => {
+      if (!window.NewOrderBridge?.hasEditingOrders()) closeCashOrderEditor();
+    });
+    document.addEventListener('neworder:order-submitted', async event => {
+      if (!cashEditingOrderId) return;
+      const id = Number(event.detail?.updatedOrderId || cashEditingOrderId);
+      if (!window.NewOrderBridge?.hasEditingOrders()) closeCashOrderEditor();
+      fullOrdersById.delete(id);
+      try { const order = await ensureCashFullOrder(id); if (order) await reconcileCashOrderMutation(order); }
+      catch (error) { console.error('CASH_EDIT_ORDER_REFRESH_FAILED', error); }
+    });
+
     function getActiveOrder() {
       var activeTab = getActiveTab();
       if (activeTab && Number(activeTab.orderId || 0) > 0) {
@@ -4268,6 +4306,12 @@
       if (editBtn && cashRightPaneEl && cashRightPaneEl.contains(editBtn)) {
         event.preventDefault();
         event.stopPropagation();
+        const order = getActiveOrder();
+        if (order) {
+          editBtn.disabled = true;
+          void openCashOrderEditor(getOrderId(order)).catch(error => { console.error(error); window.alert(error.message); })
+            .finally(() => { editBtn.disabled = false; });
+        }
         return;
       }
       if (cashRightPaneEl && !target.closest('[data-role="order-inline-status"]')) closeInlineStatusMenus();
@@ -4434,7 +4478,17 @@
       void refreshCashWorkspace(cashSyncContext());
     });
 
-    void bootstrapCashWorkspace();
+    void bootstrapCashWorkspace().then(async () => {
+      const scope = window.AdminPersistentCache?.scope({ domain: 'orders:editor', version: 1 });
+      if (!scope?.complete) return;
+      const workspace = await scope.get('workspace');
+      if (workspace?.editorOrigin !== location.pathname) return;
+      const active = workspace.rightOrders?.find(order => Number(order.id) === Number(workspace.rightActiveOrderId));
+      if (active?.mode === 'edit') {
+        await openCashOrderEditor(Number(active.editOrderId));
+        window.__adminMobilePages?.restoreEditorView?.(workspace.editorView);
+      }
+    }).catch(error => { console.error('CASH_EDITOR_RESTORE_FAILED', error); window.alert('Не удалось восстановить редактор заказа: ' + error.message); });
   } catch (err) {
     console.error('cash page init error:', err);
   }
