@@ -34210,30 +34210,30 @@ body:is(.page-new-order,.new-order-editor-active) .page-col-left > .panel:not(#c
     margin-left:auto;
   }
 
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList{
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList{
     display:flex;flex:0 0 auto;align-items:center;gap:8px;
     position:sticky;top:0;z-index:10;min-width:0;max-width:100%;
     padding:8px 10px;margin:0;background:var(--color-surface);
     overflow-x:auto;overflow-y:hidden;scrollbar-width:none;touch-action:pan-x;
   }
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList::-webkit-scrollbar{display:none}
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-item{
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList::-webkit-scrollbar{display:none}
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-item{
     flex:0 0 auto;width:auto;height:auto;min-height:36px;gap:6px;padding:6px 12px;
     border-radius:999px;white-space:nowrap;box-shadow:0 2px 8px rgba(31,42,58,.2);
   }
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-icon{
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-icon{
     flex:0 0 22px;width:22px;height:22px;border:0;background:transparent;color:inherit;font-size:14px;
   }
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-text{flex:0 0 auto}
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-text strong{color:inherit;font-size:13px}
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-count{
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-text{flex:0 0 auto}
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-text strong{color:inherit;font-size:13px}
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-count{
     flex:0 0 auto;min-width:22px;padding:2px 5px;margin:0;font-size:11px;color:inherit;
   }
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-item.is-active{
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-item.is-active{
     background:var(--color-primary);border-color:var(--color-primary);color:var(--on-primary);
     box-shadow:0 3px 10px rgba(255,106,18,.3);
   }
-  body.page-orders.admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-item.is-active .stage-count{background:rgba(255,255,255,.18);border-color:transparent}
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages #ordersCenterPane #ordersStagesList .stage-item.is-active .stage-count{background:rgba(255,255,255,.18);border-color:transparent}
 
   body.page-orders.admin-mobile-pages.admin-mobile-view-center #ordersCenterPane > .center-stack > .toolbar-island{
     display:none !important;
@@ -34577,9 +34577,9 @@ body:is(.page-new-order,.new-order-editor-active) .page-col-left > .panel:not(#c
   }
 
   body.page-courier-screen.admin-mobile-pages.admin-mobile-view-right #ordersRightPane .orders-info > .panel-body{
-    flex:1 1 auto;
+    flex:1 1 0;
     min-height:0;
-    padding-bottom:calc(88px + env(safe-area-inset-bottom));
+    padding-bottom:12px;
     overflow-x:hidden;
     overflow-y:auto !important;
     overscroll-behavior:contain;
@@ -34587,10 +34587,8 @@ body:is(.page-new-order,.new-order-editor-active) .page-col-left > .panel:not(#c
   }
 
   body.page-courier-screen.admin-mobile-pages.admin-mobile-view-right #ordersRightPane .orders-info > .order-info-footer:not(.hidden){
-    position:fixed;
-    left:0;
-    right:0;
-    bottom:0;
+    position:static;
+    flex:0 0 auto;
     z-index:82;
     display:block;
     margin:0;
@@ -35517,18 +35515,18 @@ body:is(.page-new-order,.new-order-editor-active) #newOrderProductsGrid.is-share
   body:is(.page-new-order,.new-order-editor-active) #adminMobileHeaderActions .new-order-toolbar-title{display:none}
   body:is(.page-new-order,.new-order-editor-active) #adminMobileHeaderActions .new-order-checkout-block-chips{max-width:100%;width:100%;min-width:0}
   body:is(.page-new-order,.new-order-editor-active) #adminMobileHeaderActions .new-order-toolbar-right{flex:none}
-  body:is(.page-new-order,.new-order-editor-active,.page-orders).admin-mobile-view-center .new-order-mobile-dock{
+  body:is(.page-new-order,.new-order-editor-active,.page-orders,.page-courier-screen).admin-mobile-view-center .new-order-mobile-dock{
     display:flex;position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));
     width:auto!important;z-index:40;align-items:center;gap:6px;padding:6px;
     background:transparent;border:0;border-radius:0;box-shadow:none;isolation:isolate;
   }
-  body:is(.page-new-order,.new-order-editor-active,.page-orders) .new-order-mobile-dock::before{
+  body:is(.page-new-order,.new-order-editor-active,.page-orders,.page-courier-screen) .new-order-mobile-dock::before{
     content:"";position:absolute;inset:-28px -8px calc(-14px - env(safe-area-inset-bottom));z-index:-1;pointer-events:none;
     background:linear-gradient(to bottom,transparent,rgba(100,105,115,.28));
     backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
     mask-image:linear-gradient(to bottom,transparent,#000 65%);-webkit-mask-image:linear-gradient(to bottom,transparent,#000 65%);
   }
-  body.page-orders.admin-mobile-pages:not(.new-order-editor-active) #ordersCenterPane .orders-center-panel > .panel-body{padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+  body:is(.page-orders,.page-courier-screen).admin-mobile-pages:not(.new-order-editor-active) #ordersCenterPane .orders-center-panel > .panel-body{padding-bottom:calc(76px + env(safe-area-inset-bottom))}
   .new-order-mobile-dock > button{flex:0 0 44px;width:44px;height:44px}
   #newOrderMobileTabs{flex:1;min-width:0;overflow-x:auto;touch-action:pan-x}
   #newOrderMobileTabs .product-tabs{display:flex;flex-wrap:nowrap;width:max-content;min-width:100%}

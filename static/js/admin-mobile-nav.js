@@ -24,8 +24,8 @@
   const isNewOrderPage = activePage === "new-order";
   function isEditorNavigation() { return isNewOrderPage || body.classList.contains('new-order-editor-active'); }
   function usesDedicatedMobileNavigation() { return hasDedicatedMobileNavigation && !isEditorNavigation(); }
-  function getRootLevel() { return isEditorNavigation() || activePage === "orders" ? "center" : "left"; }
-  const ordersStages = activePage === 'orders' ? document.getElementById('ordersStagesList') : null;
+  function getRootLevel() { return isEditorNavigation() || activePage === "orders" || activePage === "courier-screen" ? "center" : "left"; }
+  const ordersStages = ['orders', 'courier-screen'].includes(activePage) ? document.getElementById('ordersStagesList') : null;
   const ordersStagesOrigin = ordersStages ? document.createComment('orders-stages-origin') : null;
   function syncOrdersStagesPlacement() {
     if (!ordersStages) return;
@@ -40,9 +40,10 @@
   }
   const catalogTabs = document.getElementById("newOrderMobileTabs");
   const catalogOpen = document.getElementById("newOrderMobileOpen");
-  if (activePage === 'orders' && catalogTabs) {
+  if (['orders', 'courier-screen'].includes(activePage) && catalogTabs) {
     const dock = catalogTabs.closest('.new-order-mobile-dock');
     if (dock) centerColumn.appendChild(dock);
+    if (activePage === 'courier-screen') document.getElementById('newOrderMobileCategories')?.classList.add('hidden');
   }
   const viewStack = [{ level: getRootLevel(), title: rootTitle }];
   let currentLevel = getRootLevel();
@@ -338,7 +339,9 @@
       if (activePage === 'orders' && !isEditorNavigation()) return;
       showLevel("left", "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438", true);
     });
-    catalogOpen?.addEventListener("click", function () { window.__adminMobilePages.openRight("Новый заказ"); });
+    catalogOpen?.addEventListener("click", function () {
+      window.__adminMobilePages.openRight(activePage === 'courier-screen' ? "Заказ" : "Новый заказ");
+    });
   }
 
   function syncViewport() {
