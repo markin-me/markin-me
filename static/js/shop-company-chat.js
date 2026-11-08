@@ -312,6 +312,7 @@
   const IMPORTANT_MESSAGES_AUTO_OPEN_FALLBACK_PARAM = "open_promo_messages";
   const IMPORTANT_MESSAGES_AUTO_OPEN_ID_PARAM = "important_message_id";
   const IMPORTANT_MESSAGES_AUTO_OPEN_STORE_ID_PARAM = "important_store_id";
+  const IMPORTANT_MESSAGES_AUTO_OPEN_PRODUCT_ID_PARAM = "important_product_id";
   const CHAT_MESSAGE_JUMP_BOTTOM_GAP_PX = 14;
   const CHAT_ASSISTANT_GENDER_MALE = "m";
   const CHAT_ASSISTANT_GENDER_FEMALE = "f";
@@ -7409,11 +7410,13 @@
     const messageId = Number.isFinite(messageIdRaw) && messageIdRaw > 0 ? Math.trunc(messageIdRaw) : 0;
     const storeIdRaw = Number(source.store_id ?? source.storeId ?? source.important_store_id ?? 0);
     const storeId = Number.isFinite(storeIdRaw) && storeIdRaw > 0 ? Math.trunc(storeIdRaw) : 0;
+    const productIdRaw = Number(source.product_id ?? source.productId ?? source.important_product_id ?? 0);
+    const productId = Number.isFinite(productIdRaw) && productIdRaw > 0 ? Math.trunc(productIdRaw) : 0;
     const shouldOpen = messageId > 0
       || openRaw === true
       || openRaw === 1
       || ["1", "true"].includes(String(openRaw || "").trim().toLowerCase());
-    return shouldOpen ? { messageId: messageId, storeId: storeId } : null;
+    return shouldOpen ? { messageId: messageId, storeId: storeId, productId: productId } : null;
   }
 
   function readImportantMessagesOpenRequestFromLocation() {
@@ -7424,6 +7427,7 @@
         open_promo_messages: currentUrl.searchParams.get(IMPORTANT_MESSAGES_AUTO_OPEN_FALLBACK_PARAM),
         important_message_id: currentUrl.searchParams.get(IMPORTANT_MESSAGES_AUTO_OPEN_ID_PARAM),
         important_store_id: currentUrl.searchParams.get(IMPORTANT_MESSAGES_AUTO_OPEN_STORE_ID_PARAM),
+        important_product_id: currentUrl.searchParams.get(IMPORTANT_MESSAGES_AUTO_OPEN_PRODUCT_ID_PARAM),
       });
     } catch {
       return null;
@@ -7439,6 +7443,7 @@
         IMPORTANT_MESSAGES_AUTO_OPEN_FALLBACK_PARAM,
         IMPORTANT_MESSAGES_AUTO_OPEN_ID_PARAM,
         IMPORTANT_MESSAGES_AUTO_OPEN_STORE_ID_PARAM,
+        IMPORTANT_MESSAGES_AUTO_OPEN_PRODUCT_ID_PARAM,
       ].forEach(function (key) {
         if (!currentUrl.searchParams.has(key)) return;
         currentUrl.searchParams.delete(key);
@@ -7453,6 +7458,11 @@
     if (isAdminClientChatMode) return false;
     const request = normalizeImportantMessagesOpenRequest(rawRequest);
     if (!request) return false;
+    if (request.storeId > 0 && request.storeId !== getActiveStoreId()) {
+      localStorage.setItem('activeStoreId', String(request.storeId));
+      importantMessagesStoreId = request.storeId;
+      document.dispatchEvent(new CustomEvent('tenantStoreChanged', { detail: { storeId: request.storeId, source: 'important-message-link' } }));
+    }
     const opts = options || {};
     if (opts.clearLocation === true) clearImportantMessagesOpenRequestFromLocation();
     suspendedMessageCenterScreen = "";
@@ -7460,7 +7470,8 @@
     if (isSupportChatOpen()) leaveSupportChatForMessages();
     openMessagesHome();
     showImportantMessagesList();
-    if (request.messageId > 0) showImportantMessageDetails(request.messageId, { forceRefresh: true });
+    if (request.productId > 0) openImportantMessageProduct(request.productId);
+    else if (request.messageId > 0) showImportantMessageDetails(request.messageId, { forceRefresh: true });
     return true;
   }
 

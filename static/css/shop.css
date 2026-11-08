@@ -24042,6 +24042,16 @@ body.page-kso .shop-checkout-customer-phone{
 .shop-profile-settings-title{
   font-weight: 700;
 }
+.shop-profile-messenger-marketing-copy{
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.shop-profile-settings-hint{
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
 .shop-profile-settings-menu,.shop-profile-settings-screen{display:grid;gap:12px;min-width:0;}
 .shop-profile-settings-nav{width:100%;min-height:52px;padding:12px 14px;border:1px solid var(--color-border);border-radius:var(--radius-md,12px);background:var(--color-surface);color:var(--color-text);font:inherit;text-align:left;cursor:pointer;}
 .shop-profile-settings-nav > span{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere;}

@@ -383,6 +383,8 @@
             <i class="fas fa-times"></i>
           </button>
           <button class="product-footer-btn product-footer-save hidden" type="button" data-important-action="save" id="importantMessagesFooterSave">Сохранить</button>
+          <button class="product-footer-btn product-footer-save hidden" type="button" data-important-action="resume" id="importantMessagesFooterResume">Возобновить</button>
+          <button class="product-footer-btn product-footer-save hidden" type="button" data-important-action="copy" id="importantMessagesFooterCopy">Создать копию</button>
         </div>
       </div>
     </div>
@@ -2201,15 +2203,15 @@
 }
 
 .promo-messages-editor-shell {
-  background: var(--bg-primary, #ffffff);
-  border-radius: 16px;
-  border: 1px solid var(--border-color, #e5e7eb);
+  background: transparent;
+  border-radius: 0;
+  border: 0;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  padding: 18px;
+  padding: 8px 14px;
 }
 
 .promo-messages-editor-head {
@@ -2299,15 +2301,15 @@
 
 .promo-messages-editor-text-field {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   flex-direction: column;
-  min-height: 0;
+  min-height: 132px;
 }
 
 .promo-messages-editor-textarea {
-  flex: 1 1 auto;
-  height: 100%;
-  min-height: 0;
+  flex: 0 0 108px;
+  height: 108px;
+  min-height: 108px;
   resize: none;
 }
 

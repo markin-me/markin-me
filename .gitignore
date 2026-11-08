@@ -26,6 +26,7 @@ migrations/*
 !migrations/2026-10-29_guest_profile_data.js
 !migrations/2026-10-29_guest_order_bonus_scope.js
 !migrations/2026-11-02_messenger_service_cleanup.js
+!migrations/2026-11-03_bot_content_management.js
 a1186497_test.sql
 shop-1.localhost-1774347949861.log
 shop-2.localhost.har

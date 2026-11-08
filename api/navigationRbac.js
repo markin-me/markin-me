@@ -80,7 +80,9 @@ const NAVIGATION_RBAC_NODES = Object.freeze([
   node('marketing.subscription_history', 'marketing.subscriptions', 'clients', 'История подписок', 'marketing.subscription_history.access', { read: 'marketing.subscription_history.read' }),
   node('marketing.subscription_plans', 'marketing.subscriptions', 'clients', 'Настройка подписки', 'marketing.subscription_plans.access', { read: 'marketing.subscription_plans.read', create: 'marketing.subscription_plans.create', update: 'marketing.subscription_plans.update' }),
   node('marketing.subscription_info', 'marketing.subscriptions', 'clients', 'Информация', 'marketing.subscription_info.access', { read: 'marketing.subscription_info.read', update: 'marketing.subscription_info.update' }),
-  node('marketing.broadcasts', 'marketing', 'clients', 'Promo рассылки', 'marketing.broadcasts.access', { read: 'marketing.broadcasts.read', create: 'marketing.broadcasts.create', update: 'marketing.broadcasts.update', delete: 'marketing.broadcasts.delete' }),
+  node('marketing.broadcasts', 'marketing', 'clients', 'Promo рассылки', 'marketing.broadcasts.access', { read: 'marketing.broadcasts.read', create: 'marketing.broadcasts.create', update: 'marketing.broadcasts.update', delete: 'marketing.broadcasts.delete' }, [
+    { key: 'marketing.broadcasts.send', label: 'Массовая отправка в Telegram и MAX' },
+  ]),
 
   node('team', null, 'team', 'Команда', 'team.access'),
   node('team.employees', 'team', 'team', 'Сотрудники', 'team.employees.access', { read: 'team.employees.read', create: 'team.employees.create', update: 'team.employees.update' }, [
@@ -193,6 +195,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     return byAction('marketing.discounts');
   }
   if (route.startsWith('/important-messages')) {
+    if (route.endsWith('/launch') || route.endsWith('/cancel') || route.endsWith('/delete-deliveries')) return 'marketing.broadcasts.send';
     if (route.endsWith('/state')) return 'marketing.broadcasts.update';
     return byAction('marketing.broadcasts');
   }
@@ -276,6 +279,9 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
     if (String(headers['x-rbac-node'] || '').trim() === 'settings.delivery') return 'settings.delivery.read';
   }
   if (route === '/tenant/customer-auth') return byAction('settings.site');
+  if (route.startsWith('/tenant/bot-content/')) {
+    return action === 'read' ? 'settings.site.read' : 'settings.system.integrations';
+  }
   if (route.startsWith('/tenant/telegram') || route.startsWith('/tenant/map-provider')) return 'settings.system.integrations';
   if (route === '/tenant/current-time' || route === '/tenant/password') return null;
   if (route.startsWith('/system')) {

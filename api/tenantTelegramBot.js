@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { listTemplates, renderTemplate } = require('./botContentTemplates');
 const { connectStoreChat } = require('./telegramBot');
 const { keepCurrentOperationPending, markCurrentOperation, recordCurrentServiceMessage } = require('./messengerCleanup');
 
@@ -371,6 +372,25 @@ async function sendAuthLinksMessage(db, tenantBot, tgUserId, customerId, originB
   await sendTelegramMessage(tenantBot.token, tgUserId, text);
 }
 
+async function sendConfiguredWelcome(db, tenantBot, chatId) {
+  const storeId = Number(tenantBot.storeId || 1);
+  const templates = await listTemplates(db, tenantBot.tenantId, storeId, 'tg');
+  const welcome = templates.find((item) => item.key === 'welcome');
+  const origin = await inferTenantOrigin(db, tenantBot.tenantId);
+  const miniAppUrl = origin ? `${origin}/tg-app?tenant_id=${tenantBot.tenantId}` : '';
+  const [[tenant]] = await db.query('SELECT name,site_name FROM ten_tenants WHERE id=? LIMIT 1', [tenantBot.tenantId]);
+  const text = renderTemplate(welcome?.text || welcome?.default_text || '', {
+    store_name: String(tenant?.site_name || tenant?.name || '').trim(),
+    site_url: origin,
+    mini_app_url: miniAppUrl,
+  });
+  const keyboard = [];
+  if (origin && isAllowedPublicUrl(origin)) keyboard.push([{ text: 'Открыть магазин', url: origin }]);
+  if (miniAppUrl && isAllowedPublicUrl(miniAppUrl)) keyboard.push([{ text: 'Открыть mini app', web_app: { url: miniAppUrl } }]);
+  await sendTelegramMessage(tenantBot.token, chatId, text,
+    keyboard.length ? { reply_markup: { inline_keyboard: keyboard } } : null);
+}
+
 async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options = {}) {
   const callback=upd?.callback_query;
   if(callback && /^auth:(?:b_[A-Za-z0-9_-]{40}|r_[A-Za-z0-9_-]{43})$/.test(String(callback.data)) && options.onBrowserAuth){
@@ -401,14 +421,14 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
   )) return;
   if (msg.chat?.type !== 'private' || String(chatId) !== String(fromId)) return;
   if (options.loginEnabled === false) {
-    if (payload || isPlainStart(text)) {
+    if (payload) {
       await markCurrentOperation('error');
       const origin = await inferTenantOrigin(db, tenantBot.tenantId);
       const link = origin && options.miniAppEnabled !== false ? `${origin}/tg-app?tenant_id=${tenantBot.tenantId}` : '';
       await sendTelegramMessage(tenantBot.token, chatId, 'Вход через бота отключён в настройках магазина.',
         link && isAllowedPublicUrl(link) ? { reply_markup: { inline_keyboard: [[{ text: 'Открыть мини-приложение', web_app: { url: link } }]] } } : null);
     }
-    return;
+    if (payload) return;
   }
 
   if(payload.startsWith('b_') && options.onBrowserAuth){
@@ -535,13 +555,7 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
   }
 
   if (isPlainStart(text)) {
-    const pendingOrigin = await readPendingOrigin(db, tenantBot.tenantId, fromId);
-    const knownId = await findKnownCustomerByTelegram(db, tenantBot.tenantId, fromId);
-    if (knownId) {
-      await sendAuthLinksMessage(db, tenantBot, chatId, knownId, pendingOrigin);
-    } else {
-      await sendContactRequest(tenantBot.token, chatId);
-    }
+    await sendConfiguredWelcome(db, tenantBot, chatId);
   }
 }
 

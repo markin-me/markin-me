@@ -43,6 +43,7 @@ const {
 } = require('./api/messengerDelivery');
 const { handleTenantTelegramUpdate } = require('./api/tenantTelegramBot');
 const { handleTenantMaxUpdate } = require('./api/maxBotPolling');
+const { recordMessengerBotContact } = require('./api/messengerBotContacts');
 const {
   createServiceInteractionContext,
   createMessengerCleanupWorker,
@@ -51,6 +52,7 @@ const {
   resolveServiceOperation,
   runWithOperation,
 } = require('./api/messengerCleanup');
+const { createCampaignDeliveryWorker } = require('./api/campaignDelivery');
 const {
   readSystemSettings,
   writeSystemSettings,
@@ -96,6 +98,7 @@ const makeAdminTeamRouter = require('./api/admin/team');
 const makePublicShopRouter = require('./api/public/shop');
 const makePrintApiRouter = require('./api/print');
 const makeChatTempRouter = require('./api/chatTemp');
+const { sendImportantMessagePush } = require('./api/importantMessagePush');
 const {
   BASE_ACTION_LABELS,
   NAVIGATION_RBAC_NODES,
@@ -107,6 +110,16 @@ const { authMiddleware, requirePermission, userHasStore, can, isUserSessionActiv
 
 const app = express();
 const messengerCleanupWorker = createMessengerCleanupWorker(db);
+const campaignDeliveryWorker = createCampaignDeliveryWorker(db, {
+  onStorefrontStarted: ({ tenantId, storeId, message }) => sendImportantMessagePush({
+    db,
+    ensurePushSubscriptionsTable: makeChatTempRouter.ensurePushSubscriptionsTable,
+    sendPushToSubscriptions: makeChatTempRouter.sendPushToSubscriptions,
+    tenantId,
+    storeId,
+    message,
+  }),
+});
 // Only trusted reverse proxies may supply client IP/protocol for login limits and HTTPS checks.
 app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 app.use('/internal/v1/payment-events',require('./api/paymentEvents')());
@@ -2103,12 +2116,14 @@ async function handleTenantBotWebhook(req, res, provider) {
       };
       if (provider === 'tg') {
         await recordTenantTelegramContact(eventDb, config, req.body);
+        await recordMessengerBotContact(eventDb, config, req.body);
         await handleTenantTelegramUpdate(eventDb, helpers, {
-          tenantId: config.tenantId, token: config.token, username: config.identifier,
+          tenantId: config.tenantId, storeId: config.storeId, token: config.token, username: config.identifier,
         }, req.body, options);
       } else {
+        await recordMessengerBotContact(eventDb, config, req.body);
         await handleTenantMaxUpdate(eventDb, helpers, {
-          tenantId: config.tenantId, token: config.token,
+          tenantId: config.tenantId, storeId: config.storeId, token: config.token,
         }, req.body, options);
       }
       });
@@ -3255,7 +3270,16 @@ server.on('listening', () => {
   console.log(`🚀 Сервер запущен на ${PORT}`);
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
   // Webhook registration is an explicit operator action, never a startup side effect.
-  messengerCleanupWorker.start();
+  if (String(process.env.DISABLE_MESSENGER_CLEANUP || '').trim() !== '1') {
+    messengerCleanupWorker.start();
+  } else {
+    console.log('Messenger cleanup worker disabled for this process.');
+  }
+  if (String(process.env.ENABLE_CAMPAIGN_DELIVERY_WORKER || '').trim() === '1') {
+    campaignDeliveryWorker.start();
+  } else {
+    console.log('Campaign delivery worker disabled for this process.');
+  }
 
 });
 

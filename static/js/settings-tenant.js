@@ -24195,6 +24195,99 @@
 
     const maxFooterEdit = document.getElementById("settingsMaxFooterEdit");
 
+    function createBotContentEditor(provider) {
+      const root = document.querySelector(`[data-bot-content-provider="${provider}"]`);
+      if (!root) return null;
+      const select = root.querySelector("[data-bot-content-template-select]");
+      const description = root.querySelector("[data-bot-content-description]");
+      const textarea = root.querySelector("[data-bot-content-text]");
+      const variables = root.querySelector("[data-bot-content-variables]");
+      const lifetime = root.querySelector("[data-bot-content-lifetime]");
+      const reset = root.querySelector("[data-bot-content-reset]");
+      let original = [];
+      let draft = [];
+      let editable = false;
+      let activeKey = "";
+
+      const selected = () => draft.find((item) => item.key === activeKey) || draft[0] || null;
+      const keepText = () => {
+        const item = selected();
+        if (item) item.text = String(textarea.value || "");
+      };
+      const renderSelected = () => {
+        const item = selected();
+        textarea.value = item ? String(item.text || "") : "";
+        description.textContent = item ? String(item.description || "") : "";
+        variables.textContent = item && item.variables.length
+          ? `Переменные: ${item.variables.map((name) => `{${name}}`).join(", ")}`
+          : "Переменные не поддерживаются";
+        lifetime.textContent = item
+          ? (item.persistent ? "Сообщение остаётся в чате" : "Сервисное сообщение удаляется по серверному сроку сценария")
+          : "";
+      };
+      const renderList = () => {
+        const current = select.value;
+        select.innerHTML = "";
+        draft.forEach((item) => {
+          const option = document.createElement("option");
+          option.value = item.key;
+          option.textContent = item.title;
+          select.appendChild(option);
+        });
+        if (draft.some((item) => item.key === current)) select.value = current;
+        activeKey = select.value || draft[0]?.key || "";
+        renderSelected();
+      };
+      const request = async (options) => {
+        const response = await authFetch(`/api/admin/tenant/bot-content/${provider}`, options || {});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "BOT_CONTENT_REQUEST_FAILED");
+        return data.data.templates;
+      };
+      const load = async () => {
+        const templates = await request();
+        original = JSON.parse(JSON.stringify(templates));
+        draft = JSON.parse(JSON.stringify(templates));
+        renderList();
+      };
+      const setEditable = (value) => {
+        editable = Boolean(value);
+        select.disabled = false;
+        textarea.disabled = !editable;
+        reset.disabled = !editable;
+      };
+      select.addEventListener("change", () => { keepText(); activeKey = select.value; renderSelected(); });
+      textarea.addEventListener("input", keepText);
+      reset.addEventListener("click", () => {
+        const item = selected();
+        if (!editable || !item) return;
+        item.text = item.default_text;
+        renderSelected();
+      });
+      load().catch(() => {
+        description.textContent = "Не удалось загрузить сообщения бота.";
+      });
+      return {
+        begin() { draft = JSON.parse(JSON.stringify(original)); renderList(); setEditable(true); },
+        cancel() { draft = JSON.parse(JSON.stringify(original)); renderList(); setEditable(false); },
+        async save() {
+          keepText();
+          const templates = await request({
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ templates: draft.map((item) => ({ key: item.key, text: item.text, buttons: item.buttons || [] })) })
+          });
+          original = JSON.parse(JSON.stringify(templates));
+          draft = JSON.parse(JSON.stringify(templates));
+          renderList();
+          setEditable(false);
+        }
+      };
+    }
+
+    const telegramBotContentEditor = createBotContentEditor("tg");
+    const maxBotContentEditor = createBotContentEditor("max");
+
 
 
     const siteNameEl = document.querySelector('[data-site-input="site_name"]');
@@ -25115,6 +25208,8 @@
 
         resetMaxCancelButton();
 
+        if (maxBotContentEditor) maxBotContentEditor.cancel();
+
 
 
       } else {
@@ -25122,6 +25217,8 @@
 
 
         syncMaxLoginSwitchState();
+
+        if (maxBotContentEditor) maxBotContentEditor.begin();
 
 
 
@@ -25327,6 +25424,8 @@
 
         resetTelegramCancelButton();
 
+        if (telegramBotContentEditor) telegramBotContentEditor.cancel();
+
 
 
       } else {
@@ -25334,6 +25433,8 @@
 
 
         syncTgLoginSwitchState();
+
+        if (telegramBotContentEditor) telegramBotContentEditor.begin();
 
 
 
@@ -25575,6 +25676,13 @@
 
 
         applyTelegramFormValues(telegramOriginal);
+
+        try {
+          if (telegramBotContentEditor) await telegramBotContentEditor.save();
+        } catch (error) {
+          alert("Настройки подключения сохранены, но сообщения Telegram сохранить не удалось.");
+          return;
+        }
 
 
 
@@ -26214,6 +26322,13 @@
 
 
         applyMaxFormValues(maxOriginal);
+
+        try {
+          if (maxBotContentEditor) await maxBotContentEditor.save();
+        } catch (error) {
+          alert("Настройки подключения сохранены, но сообщения MAX сохранить не удалось.");
+          return;
+        }
 
 
 

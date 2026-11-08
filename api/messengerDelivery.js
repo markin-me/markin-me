@@ -74,7 +74,7 @@ async function getTenantBotConfig(db, tenantId, provider, options = {}) {
     throw new MessengerAuthError('INVALID_BOT_SCOPE', 400);
   }
   const [rows] = await db.query(
-    `SELECT id, is_active, name, site_name, telegram_bot_username, telegram_bot_token, tg_login_enabled,
+    `SELECT id, store_id, is_active, name, site_name, telegram_bot_username, telegram_bot_token, tg_login_enabled,
             tg_mini_app_enabled, max_bot_id, max_bot_token, max_login_enabled, max_mini_app_enabled
      FROM ten_tenants WHERE id=? LIMIT 1`, [Number(tenantId)]
   );
@@ -89,7 +89,7 @@ async function getTenantBotConfig(db, tenantId, provider, options = {}) {
     throw new MessengerAuthError('TENANT_BOT_UNAVAILABLE', 409);
   }
   // Shared bots are routed by a server-side one-time request, not by a browser tenant ID.
-  return { tenantId: Number(tenantId), provider, token, identifier, enabled, miniAppEnabled, brand: String(row.site_name || row.name || '').trim() };
+  return { tenantId: Number(tenantId), storeId: Number(row.store_id || 1), provider, token, identifier, enabled, miniAppEnabled, brand: String(row.site_name || row.name || '').trim() };
 }
 
 async function getTenantChannelAvailability(db, tenantId) {

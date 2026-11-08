@@ -2133,8 +2133,21 @@
   const elImportantMessagesFooterEdit = $("#importantMessagesFooterEdit");
   const elImportantMessagesFooterCancel = $("#importantMessagesFooterCancel");
   const elImportantMessagesFooterSave = $("#importantMessagesFooterSave");
+  const elImportantMessagesFooterPause = $("#importantMessagesFooterPause");
+  const elImportantMessagesFooterResume = $("#importantMessagesFooterResume");
+  const elImportantMessagesFooterComplete = $("#importantMessagesFooterComplete");
+  const elImportantMessagesFooterCopy = $("#importantMessagesFooterCopy");
   const elImportantMessagesList = $("#importantMessagesList");
   const elImportantMessagesEmptyHint = $("#importantMessagesEmptyHint");
+  const elImportantMessagesSearch = $("#importantMessagesSearch");
+  const elImportantMessagesSearchWrap = $("#importantMessagesSearchWrap");
+  const elImportantMessagesSearchToggle = $("#importantMessagesSearchToggle");
+  const elImportantMessagesFilterWrap = $("#importantMessagesFilterWrap");
+  const elImportantMessagesFilterBtn = $("#importantMessagesFilterBtn");
+  const elImportantMessagesFilterLabel = $("#importantMessagesFilterLabel");
+  const elImportantMessagesTotalCount = $("#importantMessagesTotalCount");
+  const elImportantMessagesPublishedCount = $("#importantMessagesPublishedCount");
+  const elImportantMessagesLaunchCount = $("#importantMessagesLaunchCount");
   const elBannersPlacementZone = $("#bannersPlacementZone");
   const elBannersPlacementTrack = $("#bannersPlacementTrack");
   const elBonusLevelsZone = $("#bonusLevelsZone");
@@ -2837,13 +2850,22 @@
     importantMessagesLoaded: false,
     importantMessagesLoading: false,
     importantMessagesEnabled: true,
+    importantMessagesSiteIconUrl: '',
+    importantMessagesTimezone: 'UTC',
     importantMessagesSettingsLoaded: false,
     importantMessagesSettingsLoading: false,
     importantMessagesSelectedId: null,
     importantMessagesEditingId: null,
     importantMessageDraft: null,
     importantMessagesAudienceCount: null,
+    importantMessagesAudience: null,
     importantMessagesAudienceCountLoading: false,
+    importantMessagesTypeFilters: new Set(),
+    importantMessagesChannelFilters: new Set(),
+    importantMessagesStatusFilters: new Set(),
+    importantMessagesVisibilityFilters: new Set(),
+    importantMessagesSort: 'storefront',
+    importantMessagesSearch: '',
     importantPromoSourcesLoading: false,
     importantPromoSourcePickerOpen: false,
     importantProductPickerTotal: 0,
@@ -7186,14 +7208,30 @@
   }
 
   function getImportantMessageStatus(message) {
-    const publishedAt = String(message?.published_at ?? message?.publishedAt ?? '').trim();
-    if (isImportantMessageHidden(message) || (publishedAt && !isImportantMessagePublished(message))) {
-      return { className: 'is-hidden', text: 'Скрыто' };
-    }
-    if (isImportantMessagePublished(message)) {
-      return { className: 'is-published', text: 'Опубликовано' };
-    }
-    return { className: 'is-unpublished', text: 'Не опубликовано' };
+    const lifecycle = String(message?.lifecycle_status || 'draft');
+    if (lifecycle === 'scheduled') return { className: 'is-scheduled', text: 'Запланирована' };
+    if (lifecycle === 'active') return { className: 'is-published', text: 'Активна' };
+    if (lifecycle === 'paused') return { className: 'is-paused', text: 'Приостановлена' };
+    if (lifecycle === 'completed') return { className: 'is-completed', text: 'Завершена' };
+    return { className: 'is-unpublished', text: 'Черновик' };
+  }
+
+  function formatImportantScheduleLocal(value, timezone = state.importantMessagesTimezone) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const timezoneText = String(timezone || 'UTC').trim();
+    const offsetMatch = timezoneText.match(/^([+-])(\d{1,2})(?::?(\d{2}))?$/);
+    const displayDate = offsetMatch
+      ? new Date(date.getTime() + (offsetMatch[1] === '-' ? -1 : 1)
+        * (Number(offsetMatch[2]) * 60 + Number(offsetMatch[3] || 0)) * 60000)
+      : date;
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: offsetMatch ? 'UTC' : timezoneText,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(displayDate).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
   }
 
   function normalizeImportantActionType(message) {
@@ -7214,6 +7252,7 @@
       title: '',
       body: '',
       image_url: '',
+      link_url: '',
       action_type: 'none',
       product_id: null,
       product_ids: [],
@@ -7226,6 +7265,11 @@
       promo_code_mode: 'none',
       promo_discount_id: null,
       promo_code_id: null,
+      publication_channels: ['storefront'],
+      web_push_enabled: true,
+      recipient_mode: 'all',
+      recipient_ids: [],
+      recipients: [],
       is_published: false,
       is_hidden: false,
       is_pinned: false,
@@ -7266,10 +7310,14 @@
     if (state.importantMessagesEditingId === null || !state.importantMessageDraft) return;
     const root = elImportantMessagesEditor;
     const promoCodeField = root?.querySelector('[data-important-field="promo_code"]');
+    const publicationChannels = Array.from(root?.querySelectorAll('[data-important-channel]:checked') || [])
+      .map((input) => String(input.getAttribute('data-important-channel') || '').trim())
+      .filter(Boolean);
     state.importantMessageDraft = {
       ...state.importantMessageDraft,
       title: root?.querySelector('[data-important-field="title"]')?.value || '',
       body: root?.querySelector('[data-important-field="body"]')?.value || '',
+      link_url: root?.querySelector('[data-important-field="link_url"]')?.value ?? state.importantMessageDraft.link_url ?? '',
       action_type: root?.querySelector('[data-important-field="action_type"]')?.value
         || normalizeImportantActionType(state.importantMessageDraft),
       product_id: Number(root?.querySelector('[data-important-field="product_id"]')?.value || 0)
@@ -7281,6 +7329,19 @@
       promo_code_mode: root?.querySelector('[data-important-field="promo_code_mode"]')?.value || 'none',
       promo_discount_id: Number(root?.querySelector('[data-important-field="promo_discount_id"]')?.value || 0) || null,
       promo_code_id: Number(root?.querySelector('[data-important-field="promo_code_id"]')?.value || 0) || null,
+      publication_channels: publicationChannels.length ? publicationChannels : ['storefront'],
+      web_push_enabled: root?.querySelector('[data-important-field="web_push_enabled"]')?.checked === true,
+      recipient_mode: state.importantMessageDraft.recipient_mode === 'selected' ? 'selected' : 'all',
+      recipient_ids: Array.isArray(state.importantMessageDraft.recipient_ids) ? state.importantMessageDraft.recipient_ids : [],
+      recipients: Array.isArray(state.importantMessageDraft.recipients) ? state.importantMessageDraft.recipients : [],
+      channel_schedules: collectImportantScheduleForm().map((schedule) => ({
+        channel: schedule.channel,
+        start_mode: schedule.start_mode,
+        start_local: schedule.start_local,
+        end_mode: schedule.end_mode,
+        end_local: schedule.end_local,
+        end_action: schedule.end_action,
+      })),
       is_pinned: String(root?.querySelector('[data-important-field="is_pinned"]')?.value || '').trim() === '1',
     };
   }
@@ -7302,14 +7363,17 @@
   let importantMessagesLoadRequestSeq = 0;
   const importantMessagePhotoUploadingIds = new Set();
 
-  async function loadImportantMessages() {
+  async function loadImportantMessages({ silent = false } = {}) {
     const requestSeq = ++importantMessagesLoadRequestSeq;
-    state.importantMessagesLoading = true;
-    renderImportantMessages();
+    if (!silent) {
+      state.importantMessagesLoading = true;
+      renderImportantMessages();
+    }
     try {
       const json = await apiJson('/api/admin/important-messages');
       if (requestSeq !== importantMessagesLoadRequestSeq) return;
       state.importantMessages = Array.isArray(json.data) ? json.data : [];
+      state.importantMessagesTimezone = String(json.timezone || 'UTC');
       state.importantMessagesLoaded = true;
     } catch (err) {
       if (requestSeq !== importantMessagesLoadRequestSeq) return;
@@ -7318,7 +7382,7 @@
       state.importantMessagesLoaded = true;
     } finally {
       if (requestSeq !== importantMessagesLoadRequestSeq) return;
-      state.importantMessagesLoading = false;
+      if (!silent) state.importantMessagesLoading = false;
       renderImportantMessages();
     }
   }
@@ -7330,6 +7394,7 @@
     try {
       const json = await apiJson('/api/admin/important-messages/audience-count');
       const count = Math.max(0, Number(json?.data?.count || 0));
+      state.importantMessagesAudience = json?.data || null;
       state.importantMessagesAudienceCount = count;
       return count;
     } catch (err) {
@@ -7482,9 +7547,13 @@
     const isPinned = isPinnedField?.type === 'checkbox'
       ? isPinnedField.checked === true
       : String(isPinnedField?.value || '').trim() === '1';
+    const publicationChannels = Array.from(root?.querySelectorAll('[data-important-channel]:checked') || [])
+      .map((input) => String(input.getAttribute('data-important-channel') || '').trim())
+      .filter(Boolean);
     return {
       title: root?.querySelector('[data-important-field="title"]')?.value || '',
       body: root?.querySelector('[data-important-field="body"]')?.value || '',
+      link_url: root?.querySelector('[data-important-field="link_url"]')?.value ?? draft.link_url ?? '',
       image_url: root?.querySelector('[data-important-field="image_url"]')?.value
         || draft.image_url
         || draft.imageUrl
@@ -7497,15 +7566,31 @@
       promo_code_mode: root?.querySelector('[data-important-field="promo_code_mode"]')?.value || 'none',
       promo_discount_id: Number(root?.querySelector('[data-important-field="promo_discount_id"]')?.value || 0) || null,
       promo_code_id: Number(root?.querySelector('[data-important-field="promo_code_id"]')?.value || 0) || null,
+      publication_channels: publicationChannels,
+      web_push_enabled: root?.querySelector('[data-important-field="web_push_enabled"]')?.checked === true,
+      recipient_mode: draft.recipient_mode === 'selected' ? 'selected' : 'all',
+      recipient_ids: Array.isArray(draft.recipient_ids) ? draft.recipient_ids : [],
       is_published: isPublishedField ? String(isPublishedField.value || '').trim() === '1' : false,
       is_pinned: isPinned,
-      send_push: root?.querySelector('[data-important-field="send_push"]')?.checked === true,
     };
   }
 
   async function saveImportantMessage(options = {}) {
     const id = Number(state.importantMessagesEditingId || 0);
     const payload = collectImportantMessageForm();
+    const existingDraft = getImportantMessageDraft(id);
+    const applySchedule = options.applySchedule === true
+      && id > 0
+      && ['scheduled', 'active'].includes(String(existingDraft?.lifecycle_status || 'draft'));
+    const schedules = applySchedule ? collectImportantScheduleForm() : [];
+    if (payload.link_url && !/^https:\/\//i.test(payload.link_url.trim())) {
+      alert('Ссылка должна начинаться с https://');
+      return;
+    }
+    if (!Array.isArray(payload.publication_channels) || !payload.publication_channels.length) {
+      alert('Выберите хотя бы один канал публикации');
+      return;
+    }
     if (payload.action_type === 'product' && !(Number(payload.product_id || 0) > 0)) {
       alert('Выберите товар для Promo рассылки');
       return;
@@ -7529,39 +7614,187 @@
       alert('Заполните заголовок и текст Promo рассылки');
       return;
     }
-    const existingDraft = getImportantMessageDraft(id);
-    const wasPublished = id > 0 && isImportantMessagePublished(existingDraft);
-    payload.is_published = options.publish === true
-      ? true
-      : wasPublished;
-    payload.reset_published_at = options.publish === true && wasPublished;
-    const sendPushValue = Object.prototype.hasOwnProperty.call(options, 'sendPush')
-      ? options.sendPush === true
-      : payload.send_push === true;
-    payload.send_push = options.publish === true && sendPushValue;
+    payload.is_published = id > 0 && isImportantMessagePublished(existingDraft);
     try {
       const json = await apiJson(id > 0 ? `/api/admin/important-messages/${id}` : '/api/admin/important-messages', {
         method: id > 0 ? 'PUT' : 'POST',
         body: payload,
       });
       const savedId = Number(json?.data?.id || id || 0);
+      if (applySchedule) {
+        try {
+          await apiJson(`/api/admin/important-messages/${savedId}/schedule`, {
+            method: 'POST',
+            body: { channels: schedules },
+          });
+        } catch (scheduleError) {
+          console.error('save campaign schedule error:', scheduleError);
+          await loadImportantMessages({ silent: true });
+          openImportantMessageEditor(savedId);
+          alert('Кампания сохранена, но изменения расписания применить не удалось.');
+          return savedId;
+        }
+      }
       clearImportantMessageDraft();
       state.importantMessagesEditingId = null;
       if (savedId > 0) state.importantMessagesSelectedId = savedId;
-      state.importantMessagesLoaded = false;
-      await loadImportantMessages();
+      await loadImportantMessages({ silent: true });
+      return savedId;
     } catch (err) {
       console.error('save important message error:', err);
       alert('Не удалось сохранить Promo рассылку');
     }
   }
 
+  async function openImportantRecipientPicker() {
+    syncImportantMessageDraftFromForm();
+    await openDiscountCustomerPicker('important_message_customers');
+  }
+
+  function collectImportantScheduleForm() {
+    return Array.from(elImportantMessagesEditor?.querySelectorAll('[data-important-schedule-channel]') || []).map((row) => ({
+      channel: row.getAttribute('data-important-schedule-channel'),
+      start_mode: row.querySelector('[data-important-schedule-start-mode]')?.value || 'immediate',
+      start_local: row.querySelector('[data-important-schedule-start]')?.value || '',
+      end_mode: row.querySelector('[data-important-schedule-end-mode]')?.value || 'none',
+      end_local: row.querySelector('[data-important-schedule-end]')?.value || '',
+      end_action: row.querySelector('[data-important-schedule-end-action]')?.value || 'keep',
+    }));
+  }
+
+  async function launchImportantMessage(id, scheduleOverride = null) {
+    const numericId = Number(id || 0);
+    const message = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+    if (!message) return;
+    const channels = (Array.isArray(message.publication_channels) ? message.publication_channels : [])
+      .filter((channel) => channel === 'storefront' || channel === 'telegram' || channel === 'max');
+    if (!channels.length) {
+      alert('Для кампании не выбраны каналы запуска.');
+      return;
+    }
+    if (channels.some((channel) => channel === 'telegram' || channel === 'max') && message.promo_code_mode === 'unique') {
+      alert('Индивидуальные промокоды пока нельзя безопасно отправлять в мессенджеры. Кампания не запущена.');
+      return;
+    }
+    let audience;
+    try {
+      audience = (await apiJson(`/api/admin/important-messages/audience-count?message_id=${numericId}`))?.data || {};
+    } catch (error) {
+      alert('Не удалось проверить аудиторию. Кампания не запущена.');
+      return;
+    }
+    const unavailableChannel = channels.filter((channel) => channel !== 'storefront').find((channel) => {
+      const data = channel === 'telegram' ? audience.telegram : audience.max;
+      return data?.connected !== true;
+    });
+    if (unavailableChannel) {
+      alert(`${unavailableChannel === 'telegram' ? 'Telegram' : 'MAX'}-бот не подключён. Канал недоступен для отправки.`);
+      return;
+    }
+    const details = channels.map((channel) => {
+      if (channel === 'storefront') return 'Сайт — опубликовать';
+      const data = channel === 'telegram' ? audience.telegram : audience.max;
+      return `${channel === 'telegram' ? 'Telegram' : 'MAX'} — ${Number(data?.recipients || 0)} получателей`;
+    }).concat(`Web push — ${channels.includes('storefront') && message.web_push_enabled ? 'включён' : 'выключен'}`).join('\n');
+    if (message.lifecycle_status === 'completed') {
+      alert('Завершённую кампанию нельзя возобновить. Создайте копию кампании.');
+      return;
+    }
+    const schedules = Array.isArray(scheduleOverride) && scheduleOverride.length
+      ? scheduleOverride
+      : channels.map((channel) => {
+        const existing = (Array.isArray(message.channel_schedules) ? message.channel_schedules : []).find((item) => item.channel === channel);
+        return existing ? {
+          channel,
+          start_mode: existing.start_mode,
+          start_local: formatImportantScheduleLocal(existing.start_at),
+          end_mode: existing.end_mode,
+          end_local: formatImportantScheduleLocal(existing.end_at),
+          end_action: existing.end_action,
+        } : { channel, start_mode: 'immediate', start_local: '', end_mode: 'none', end_local: '', end_action: 'keep' };
+      });
+    const repeated = Boolean(message.lifecycle_status !== 'draft' || Number(message.launch_count || 0) > 0);
+    let launching = false;
+    const execute = async () => {
+      if (launching) return false;
+      launching = true;
+      try {
+        const result = await apiJson(`/api/admin/important-messages/${numericId}/schedule`, {
+          method: 'POST',
+          body: { channels: schedules },
+        });
+        alert(result?.data?.lifecycle_status === 'scheduled' ? 'Кампания запланирована.' : 'Кампания утверждена к запуску.');
+        await loadImportantMessages({ silent: true });
+        return true;
+      } catch (error) {
+        alert('Не удалось запустить кампанию. Проверьте право массовой отправки и состояние аудитории.');
+        return false;
+      } finally {
+        launching = false;
+      }
+    };
+    if (window.AppModal?.confirm) {
+      const accepted = await window.AppModal.confirm({
+        title: repeated ? 'Изменить расписание кампании?' : 'Утвердить запуск кампании?',
+        message: `${message.title || 'Без названия'}\n\n${details}${repeated ? '\n\nУже запущенные каналы повторно отправлены не будут.' : ''}\n\nВремя рассчитывается в часовом поясе магазина: ${state.importantMessagesTimezone}.`,
+        cancelText: 'Отмена',
+        saveText: repeated ? 'Сохранить расписание' : 'Утвердить',
+      });
+      if (accepted) await execute();
+      return;
+    }
+    alert('Компонент подтверждения недоступен. Кампания не запущена.');
+  }
+
+  async function changeImportantCampaignLifecycle(id, action) {
+    const numericId = Number(id || 0);
+    const message = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+    if (!message) return;
+    const labels = { pause: 'Приостановить кампанию?', resume: 'Возобновить кампанию?', complete: 'Завершить кампанию?' };
+    const accepted = window.AppModal?.confirm ? await window.AppModal.confirm({
+      title: labels[action],
+      message: action === 'complete'
+        ? 'Будущие запуски и неотправленные задания будут отменены. Кампания останется в истории.'
+        : action === 'pause'
+          ? 'Будущие запуски и неотправленные задания будут временно остановлены.'
+          : 'Уже доставленные сообщения повторно отправлены не будут.',
+      cancelText: 'Отмена',
+      saveText: action === 'pause' ? 'Приостановить' : action === 'resume' ? 'Возобновить' : 'Завершить',
+    }) : false;
+    if (!accepted) return;
+    try {
+      await apiJson(`/api/admin/important-messages/${numericId}/${action}`, { method: 'POST', body: { confirmed: true } });
+      await loadImportantMessages({ silent: true });
+    } catch (error) {
+      alert('Не удалось изменить состояние кампании.');
+    }
+  }
+
+  function copyImportantCampaign(id) {
+    const message = state.importantMessages.find((item) => Number(item?.id || 0) === Number(id || 0));
+    if (!message) return;
+    ensureImportantMessageDraft(true, {
+      ...message,
+      id: 0,
+      title: `${message.title || 'Кампания'} — копия`,
+      lifecycle_status: 'draft',
+      channel_schedules: [],
+      is_published: false,
+      is_hidden: false,
+      is_pinned: false,
+      published_at: null,
+    });
+    state.importantMessagesSelectedId = null;
+    state.importantMessagesEditingId = 0;
+    renderImportantMessages();
+  }
+
   async function deleteImportantMessage(id) {
     const numericId = Number(id || 0);
     if (!numericId) return;
-    if (!confirm('Удалить Promo рассылку?')) return;
+    if (!confirm('Удалить кампанию из CRM? Ранее отправленные сообщения останутся у получателей, а история доставки будет сохранена.')) return;
     try {
-      await apiJson(`/api/admin/important-messages/${numericId}`, { method: 'DELETE' });
+      await apiJson(`/api/admin/important-messages/${numericId}?confirmed=1`, { method: 'DELETE' });
       state.importantMessages = state.importantMessages.filter((item) => Number(item?.id || 0) !== numericId);
       if (Number(state.importantMessagesSelectedId || 0) === numericId) state.importantMessagesSelectedId = null;
       if (Number(state.importantMessagesEditingId || 0) === numericId) state.importantMessagesEditingId = null;
@@ -7570,6 +7803,113 @@
       console.error('delete important message error:', err);
       alert('Не удалось удалить Promo рассылку');
     }
+  }
+
+  async function openImportantMessageManagement(id) {
+    const numericId = Number(id || 0);
+    const message = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+    if (!message || !window.AppModal?.open) return;
+    const response = await apiJson(`/api/admin/important-messages/${numericId}/management`);
+    const data = response?.data || {};
+    const runs = Array.isArray(data.runs) ? data.runs : [];
+    const stats = Array.isArray(data.stats) ? data.stats : [];
+    const active = runs.some((run) => run.status === 'queued' || run.status === 'sending');
+    const aggregate = (provider, state = '') => stats
+      .filter((row) => row.provider === provider && (!state || row.state === state))
+      .reduce((sum, row) => sum + Number(row.count || 0), 0);
+    const sentTg = aggregate('tg', 'sent');
+    const sentMax = aggregate('max', 'sent');
+    const deletable = (provider) => stats
+      .filter((row) => row.provider === provider && row.state === 'sent' && ['not_requested', 'failed'].includes(row.deletion_state))
+      .reduce((sum, row) => sum + Number(row.count || 0), 0);
+    const deletionSummary = (provider) => {
+      const count = (state) => stats.filter((row) => row.provider === provider && row.deletion_state === state).reduce((sum, row) => sum + Number(row.count || 0), 0);
+      return `Удалено: ${count('deleted')} · Обрабатывается: ${count('pending') + count('processing') + count('retry')} · Не удалось: ${count('failed')} · Недоступно: ${count('unavailable')}`;
+    };
+    const content = document.createElement('div');
+    content.className = 'important-campaign-management';
+    content.innerHTML = `
+      <div class="important-campaign-history">
+        ${['tg', 'max'].map((provider) => {
+          const label = provider === 'tg' ? 'Telegram' : 'MAX';
+          return `<div class="important-campaign-history-row"><strong>${label}</strong><span>Отправлено: ${aggregate(provider, 'sent')} · В очереди: ${aggregate(provider, 'pending') + aggregate(provider, 'processing') + aggregate(provider, 'retry')} · Ошибки: ${aggregate(provider, 'failed') + aggregate(provider, 'unknown')}</span><span>${deletionSummary(provider)}</span></div>`;
+        }).join('')}
+      </div>
+      <div class="important-campaign-management-actions">
+        ${active ? '<button class="product-footer-btn product-footer-cancel" type="button" data-campaign-management="cancel">Остановить отправку</button>' : ''}
+        ${deletable('tg') ? '<button class="product-footer-btn product-footer-cancel" type="button" data-campaign-management="delete-tg">Удалить сообщения в Telegram</button>' : ''}
+        ${deletable('max') ? '<button class="product-footer-btn product-footer-cancel" type="button" data-campaign-management="delete-max">Удалить сообщения в MAX</button>' : ''}
+        ${deletable('tg') && deletable('max') ? '<button class="product-footer-btn product-footer-cancel" type="button" data-campaign-management="delete-all">Удалить сообщения в Telegram и MAX</button>' : ''}
+        ${!active && !sentTg && !sentMax ? '<div class="field-hint">Для этой кампании пока нет активной очереди или управляемых отправленных сообщений.</div>' : ''}
+      </div>
+    `;
+    content.addEventListener('click', async (event) => {
+      const action = event.target.closest?.('[data-campaign-management]')?.getAttribute('data-campaign-management');
+      if (!action) return;
+      if (action === 'cancel') {
+        if (!await window.AppModal.confirm({ title: 'Остановить отправку?', message: 'Ожидающие задания будут отменены. Уже доставленные сообщения останутся у клиентов.', cancelText: 'Отмена', saveText: 'Остановить' })) return;
+        await apiJson(`/api/admin/important-messages/${numericId}/cancel`, { method: 'POST', body: {} });
+        alert('Ожидающие отправки остановлены.');
+        return;
+      }
+      const channels = action === 'delete-all' ? ['telegram', 'max'] : action === 'delete-tg' ? ['telegram'] : ['max'];
+      const summary = channels.map((channel) => `${channel === 'telegram' ? 'Telegram' : 'MAX'}: ${channel === 'telegram' ? sentTg : sentMax} сообщений`).join('\n');
+      if (!await window.AppModal.confirm({ title: 'Удалить отправленные сообщения?', message: `${summary}\n\nБот попытается удалить сообщения. Часть из них может остаться из-за ограничений мессенджера.`, cancelText: 'Отмена', saveText: 'Удалить сообщения' })) return;
+      const result = await apiJson(`/api/admin/important-messages/${numericId}/delete-deliveries`, { method: 'POST', body: { confirmed: true, channels } });
+      alert(`Удаление поставлено в очередь: ${Number(result?.data?.requested || 0)}.`);
+    });
+    window.AppModal.open({ title: 'Управление рассылкой', content, saveText: 'Закрыть' });
+  }
+
+  async function toggleImportantMessageChannelVisibility(id, channel) {
+    const numericId = Number(id || 0);
+    const normalizedChannel = String(channel || '').trim().toLowerCase();
+    const message = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
+    if (!message || !['storefront', 'telegram', 'max'].includes(normalizedChannel)) return;
+    if (normalizedChannel === 'storefront') {
+      const nextHidden = !isImportantMessageHidden(message);
+      await updateImportantMessageStateQuick(numericId, { is_hidden: nextHidden, is_published: !nextHidden });
+      return;
+    }
+    const label = normalizedChannel === 'telegram' ? 'Telegram' : 'MAX';
+    const schedule = (Array.isArray(message.channel_schedules) ? message.channel_schedules : [])
+      .find((entry) => entry.channel === normalizedChannel) || {};
+    const sentCount = Math.max(0, Number(schedule.successful_count || 0) - Number(schedule.deleted_count || 0));
+    const deletionPendingCount = Math.max(0, Number(schedule.deletion_pending_count || 0));
+    if (!sentCount) {
+      if (deletionPendingCount || Number(schedule.successful_count || 0) <= 0) return;
+      const confirmed = window.AppModal?.confirm
+        ? await window.AppModal.confirm({
+          title: `Отправить сообщение в ${label} снова?`,
+          message: 'Сообщение будет повторно поставлено в очередь для получателей этой кампании.',
+          cancelText: 'Отмена',
+          saveText: 'Отправить снова',
+        })
+        : window.confirm(`Отправить сообщение этой кампании в ${label} снова?`);
+      if (!confirmed) return;
+      const result = await apiJson(`/api/admin/important-messages/${numericId}/resend-channel`, {
+        method: 'POST',
+        body: { confirmed: true, channel: normalizedChannel, idempotency_key: crypto.randomUUID() },
+      });
+      alert(`Повторная отправка поставлена в очередь: ${Number(result?.data?.recipients || 0)}.`);
+      await loadImportantMessages({ silent: true });
+      return;
+    }
+    const confirmed = window.AppModal?.confirm
+      ? await window.AppModal.confirm({
+        title: `Удалить сообщения в ${label}?`,
+        message: `Будет поставлено в очередь удаление ${sentCount} отправленных сообщений этой кампании.`,
+        cancelText: 'Отмена',
+        saveText: 'Удалить сообщения',
+      })
+      : window.confirm(`Удалить ${sentCount} отправленных сообщений этой кампании в ${label}?`);
+    if (!confirmed) return;
+    const result = await apiJson(`/api/admin/important-messages/${numericId}/delete-deliveries`, {
+      method: 'POST',
+      body: { confirmed: true, channels: [normalizedChannel] },
+    });
+    alert(`Удаление поставлено в очередь: ${Number(result?.data?.requested || 0)}.`);
+    await loadImportantMessages({ silent: true });
   }
 
   async function updateImportantMessageStateQuick(id, patch = {}) {
@@ -7590,10 +7930,13 @@
       promo_code_mode: existing.promo_code_mode || existing.promoCodeMode || (existing.promo_code || existing.promoCode ? 'shared' : 'none'),
       promo_discount_id: existing.promo_discount_id || existing.promoDiscountId || null,
       promo_code_id: existing.promo_code_id || existing.promoCodeId || null,
+      publication_channels: Array.isArray(existing.publication_channels) ? existing.publication_channels : ['storefront'],
+      recipient_mode: existing.recipient_mode === 'selected' ? 'selected' : 'all',
+      recipient_ids: Array.isArray(existing.recipient_ids) ? existing.recipient_ids : [],
+      web_push_enabled: existing.web_push_enabled === true,
       is_published: isImportantMessagePublished(existing),
       is_hidden: isImportantMessageHidden(existing),
       is_pinned: isImportantMessagePinned(existing),
-      send_push: false,
       ...patch,
     };
     try {
@@ -7625,7 +7968,7 @@
       }
       if (json?.data) {
         state.importantMessages = state.importantMessages.map((item) => (
-          Number(item?.id || 0) === numericId ? json.data : item
+          Number(item?.id || 0) === numericId ? { ...item, ...json.data, channel_schedules: item.channel_schedules || [] } : item
         ));
         renderImportantMessages();
       }
@@ -7656,10 +7999,13 @@
       promo_code_mode: existing.promo_code_mode || existing.promoCodeMode || (existing.promo_code || existing.promoCode ? 'shared' : 'none'),
       promo_discount_id: existing.promo_discount_id || existing.promoDiscountId || null,
       promo_code_id: existing.promo_code_id || existing.promoCodeId || null,
+      publication_channels: Array.isArray(existing.publication_channels) ? existing.publication_channels : ['storefront'],
+      recipient_mode: existing.recipient_mode === 'selected' ? 'selected' : 'all',
+      recipient_ids: Array.isArray(existing.recipient_ids) ? existing.recipient_ids : [],
+      web_push_enabled: existing.web_push_enabled === true,
       is_published: isImportantMessagePublished(existing),
       is_hidden: isImportantMessageHidden(existing),
       is_pinned: isImportantMessagePinned(existing),
-      send_push: false,
       ...patch,
     };
     try {
@@ -7684,27 +8030,6 @@
       alert('Не удалось обновить Promo рассылку');
       renderImportantMessages();
     }
-  }
-
-  async function publishImportantMessageFromList(id, options = {}) {
-    const numericId = Number(id || 0);
-    const editingId = Number(state.importantMessagesEditingId || 0);
-    const sendPush = options.sendPush === true;
-    if (state.importantMessagesEditingId !== null && editingId === numericId) {
-      await saveImportantMessage({ publish: true, sendPush });
-      return;
-    }
-    const existing = state.importantMessages.find((item) => Number(item?.id || 0) === numericId);
-    if (!existing) return;
-    const wasPublished = isImportantMessagePublished(existing);
-    await updateImportantMessageQuick(numericId, {
-      is_published: true,
-      ...(wasPublished ? {} : { is_hidden: false }),
-      reset_published_at: wasPublished,
-      send_push: sendPush,
-    });
-    state.importantMessagesLoaded = false;
-    await loadImportantMessages();
   }
 
   function handleImportantMessagePhotoInputChange(photoInput) {
@@ -8070,15 +8395,24 @@
     const isEditing = state.importantMessagesEditingId !== null;
     const importantProductPickerOpen = state.discountPickerLevel === 'products'
       && (state.discountPickerTarget === 'important_message_product' || state.discountPickerTarget === 'important_message_products');
+    const importantCustomerPickerOpen = state.discountPickerLevel === 'customers'
+      && state.discountPickerTarget === 'important_message_customers';
+    const importantPickerOpen = importantProductPickerOpen || importantCustomerPickerOpen;
     if (elImportantMessagesRightWrap) {
-      elImportantMessagesRightWrap.classList.toggle('hidden', !isImportantMessagesView || importantProductPickerOpen);
+      elImportantMessagesRightWrap.classList.toggle('hidden', !isImportantMessagesView || importantPickerOpen);
     }
     if (elImportantMessagesFooter) {
-      elImportantMessagesFooter.classList.toggle('hidden', !isImportantMessagesView || importantProductPickerOpen || (!isEditing && !selected));
+      elImportantMessagesFooter.classList.toggle('hidden', !isImportantMessagesView || importantPickerOpen || (!isEditing && !selected));
     }
     if (elImportantMessagesFooterEdit) elImportantMessagesFooterEdit.classList.toggle('hidden', !isImportantMessagesView || isEditing || !selected);
     if (elImportantMessagesFooterCancel) elImportantMessagesFooterCancel.classList.toggle('hidden', !isImportantMessagesView || !isEditing);
     if (elImportantMessagesFooterSave) elImportantMessagesFooterSave.classList.toggle('hidden', !isImportantMessagesView || !isEditing);
+    const editorCampaign = isEditing ? getImportantMessageDraft(state.importantMessagesEditingId) : selected;
+    const lifecycle = String(editorCampaign?.lifecycle_status || 'draft');
+    if (elImportantMessagesFooterPause) elImportantMessagesFooterPause.classList.toggle('hidden', isEditing || !['scheduled', 'active'].includes(lifecycle));
+    if (elImportantMessagesFooterResume) elImportantMessagesFooterResume.classList.toggle('hidden', isEditing || lifecycle !== 'paused');
+    if (elImportantMessagesFooterComplete) elImportantMessagesFooterComplete.classList.toggle('hidden', isEditing || !['scheduled', 'active', 'paused'].includes(lifecycle));
+    if (elImportantMessagesFooterCopy) elImportantMessagesFooterCopy.classList.toggle('hidden', isEditing || lifecycle !== 'completed');
     if (state.currentView !== 'important-messages') return;
     if (!isEditing) {
       if (selected) {
@@ -8115,14 +8449,96 @@
     const uniqueAvailableCount = Math.max(0, Number(draftPromoSource?.available_codes_count || 0));
     const uniqueAudienceCount = Math.max(0, Number(state.importantMessagesAudienceCount || 0));
     const uniqueGenerateDefault = Math.max(1, Math.min(500, uniqueAudienceCount - uniqueAvailableCount));
+    const draftChannels = Array.isArray(draft.publication_channels) && draft.publication_channels.length
+      ? draft.publication_channels
+      : ['storefront'];
+    const channelAvailability = state.importantMessagesAudience || {};
+    const recipientMode = draft.recipient_mode === 'selected' ? 'selected' : 'all';
+    const selectedRecipientCount = Array.isArray(draft.recipient_ids) ? draft.recipient_ids.length : 0;
+    const siteAudienceCount = recipientMode === 'selected'
+      ? selectedRecipientCount
+      : Math.max(0, Number(channelAvailability.site?.recipients || 0));
+    const existingSchedules = Array.isArray(draft.channel_schedules) ? draft.channel_schedules : [];
+    const scheduleRowsHtml = draftChannels.map((channel) => {
+      const schedule = existingSchedules.find((item) => item.channel === channel) || {};
+      const label = channel === 'storefront' ? 'Сайт' : channel === 'telegram' ? 'Telegram' : 'MAX';
+      const icon = channel === 'storefront' ? 'fa-store' : channel === 'telegram' ? 'fa-paper-plane' : 'fa-comment';
+      const startMode = schedule.start_mode === 'scheduled' ? 'scheduled' : 'immediate';
+      const endMode = schedule.end_mode === 'scheduled' ? 'scheduled' : 'none';
+      return `
+        <div class="important-schedule-channel" data-important-schedule-channel="${channel}">
+          <button class="important-schedule-channel-toggle" type="button" data-important-schedule-toggle aria-expanded="false">
+            <span><i class="fas ${icon}" aria-hidden="true"></i>${label}</span><i class="fas fa-chevron-down" aria-hidden="true"></i>
+          </button>
+          <div class="important-schedule-channel-body">
+            <label><span>Начало</span><select class="control" data-important-schedule-start-mode><option value="immediate"${startMode === 'immediate' ? ' selected' : ''}>Сразу</option><option value="scheduled"${startMode === 'scheduled' ? ' selected' : ''}>По расписанию</option></select></label>
+            <label class="${startMode === 'scheduled' ? '' : 'hidden'}" data-important-schedule-start-wrap><span>Дата начала</span><input class="control" type="datetime-local" data-important-schedule-start value="${escapeHtml(schedule.start_local || formatImportantScheduleLocal(schedule.start_at))}" /></label>
+            <label><span>Завершение</span><select class="control" data-important-schedule-end-mode><option value="none"${endMode === 'none' ? ' selected' : ''}>Без даты</option><option value="scheduled"${endMode === 'scheduled' ? ' selected' : ''}>По расписанию</option></select></label>
+            <label class="${endMode === 'scheduled' ? '' : 'hidden'}" data-important-schedule-end-wrap><span>Дата завершения</span><input class="control" type="datetime-local" data-important-schedule-end value="${escapeHtml(schedule.end_local || formatImportantScheduleLocal(schedule.end_at))}" /></label>
+            ${channel === 'storefront' ? '' : `<label><span>После завершения</span><select class="control" data-important-schedule-end-action><option value="keep"${schedule.end_action !== 'delete' ? ' selected' : ''}>Оставить сообщения</option><option value="delete"${schedule.end_action === 'delete' ? ' selected' : ''}>Попытаться удалить</option></select></label>`}
+          </div>
+        </div>`;
+    }).join('');
     elImportantMessagesEditor.innerHTML = `
       <div class="promo-messages-editor-form">
-        <div class="settings-site-field">
+        <div class="important-editor-heading">
+          <div><strong>${Number(draft.id || 0) > 0 ? 'Редактор кампании' : 'Новая кампания'}</strong><span>Одна акция — несколько каналов</span></div>
+        </div>
+        <div class="settings-site-field important-editor-channels">
+          <label class="field-label">КАНАЛЫ ПУБЛИКАЦИИ</label>
+          <div class="important-action-type-row">
+            ${[
+              ['storefront', 'Сайт'],
+              ['telegram', 'Telegram'],
+              ['max', 'MAX']
+            ].map(([channel, label]) => {
+              const status = channel === 'storefront' ? { connected: true } : channelAvailability[channel];
+              const connected = status?.connected === true;
+              const hint = channel === 'storefront' ? '' : (status ? (connected ? '' : `${label}: бот не подключён`) : `${label}: проверка подключения…`);
+              if (channel === 'storefront') {
+                const selected = draftChannels.includes(channel);
+                return `
+                  <div class="shop-chip-btn important-channel-choice important-channel-choice-storefront${selected ? ' is-active' : ''}">
+                    <label class="important-channel-choice-main">
+                      <input type="checkbox" data-important-channel="${channel}"${selected ? ' checked' : ''} />
+                      ${label}
+                    </label>
+                    <label class="switch important-channel-push-switch">
+                      <input class="switch-input" data-important-field="web_push_enabled" type="checkbox"${draft.web_push_enabled ? ' checked' : ''}${selected ? '' : ' disabled'} />
+                      <span class="switch-ui"></span>
+                      <span class="switch-text">push</span>
+                    </label>
+                  </div>
+                `;
+              }
+              return `
+              <label class="shop-chip-btn important-channel-choice${draftChannels.includes(channel) && connected ? ' is-active' : ''}${connected ? '' : ' is-disabled'}"${hint ? ` title="${escapeHtml(hint)}"` : ''}>
+                <input type="checkbox" data-important-channel="${channel}"${draftChannels.includes(channel) && connected ? ' checked' : ''}${connected ? '' : ' disabled'} />
+                ${label}
+              </label>
+            `;
+            }).join('')}
+          </div>
+        </div>
+        <div class="settings-site-field important-editor-schedule">
+          <label class="field-label">РАСПИСАНИЕ ПУБЛИКАЦИИ</label>
+          <div class="field-hint">Время магазина: ${escapeHtml(state.importantMessagesTimezone)}</div>
+          <div class="important-schedule-list">${scheduleRowsHtml}</div>
+        </div>
+        <div class="settings-site-field important-editor-audience">
+          <label class="field-label">ПОЛУЧАТЕЛИ</label>
+          <div class="important-action-type-row">
+            <button type="button" class="shop-chip-btn important-recipient-mode-btn${recipientMode === 'all' ? ' is-active' : ''}" data-important-recipient-mode="all">Все подходящие</button>
+            <button type="button" class="shop-chip-btn important-recipient-mode-btn${recipientMode === 'selected' ? ' is-active' : ''}" data-important-action="recipient-picker">Выбрать клиентов${selectedRecipientCount ? ` (${selectedRecipientCount})` : ''}</button>
+          </div>
+        </div>
+        <div class="settings-site-field important-editor-types">
           <label class="field-label">ТИП ПУБЛИКАЦИИ</label>
           <div class="important-action-type-row">
             ${['none', 'promo_code', 'product', 'product_collection'].map((actionType) => `
               <button type="button" class="shop-chip-btn important-action-type-btn${draftActionType === actionType ? ' is-active' : ''}" data-important-action-type="${actionType}" aria-pressed="${draftActionType === actionType ? 'true' : 'false'}">
-                ${actionType === 'none' ? 'Информация' : actionType === 'promo_code' ? 'Промокод' : actionType === 'product' ? 'Товар' : 'Подборка'}
+                <i class="fas ${actionType === 'none' ? 'fa-info-circle' : actionType === 'promo_code' ? 'fa-percent' : actionType === 'product' ? 'fa-box' : 'fa-layer-group'}"></i>
+                <span>${actionType === 'none' ? 'Информация' : actionType === 'promo_code' ? 'Промокод' : actionType === 'product' ? 'Товар' : 'Подборка'}</span>
               </button>
             `).join('')}
           </div>
@@ -8191,6 +8607,11 @@
           <label class="field-label">ТЕКСТ</label>
           <textarea class="control promo-messages-editor-textarea" data-important-field="body" rows="12">${escapeHtml(draft.body || '')}</textarea>
         </div>
+        <div class="important-editor-counts">
+          <div><span>Telegram</span><strong>${draftChannels.includes('telegram') ? Number(channelAvailability.telegram?.recipients || 0) : '—'}</strong><small>получателей</small></div>
+          <div><span>MAX</span><strong>${draftChannels.includes('max') ? Number(channelAvailability.max?.recipients || 0) : '—'}</strong><small>получателей</small></div>
+          <div><span>Сайт</span><strong>${draftChannels.includes('storefront') ? siteAudienceCount : '—'}</strong><small>получателей</small></div>
+        </div>
         <input type="hidden" data-important-field="is_published" value="${isImportantMessagePublished(draft) ? '1' : '0'}" />
         <input type="hidden" data-important-field="is_pinned" value="${draftPinned ? '1' : '0'}" />
       </div>
@@ -8206,7 +8627,43 @@
       if (elImportantMessagesEmptyHint) elImportantMessagesEmptyHint.classList.add('hidden');
       return;
     }
-    const list = getImportantMessagesRenderList();
+    const sourceList = getImportantMessagesRenderList();
+    const search = String(state.importantMessagesSearch || '').trim().toLowerCase();
+    const list = sourceList.filter((item) => {
+      const actionType = normalizeImportantActionType(item);
+      const publicationChannels = Array.isArray(item.publication_channels) ? item.publication_channels : [];
+      if (state.importantMessagesTypeFilters.size && !state.importantMessagesTypeFilters.has(actionType)) return false;
+      if (state.importantMessagesChannelFilters.size && !publicationChannels.some((channel) => state.importantMessagesChannelFilters.has(channel))) return false;
+      if (state.importantMessagesStatusFilters.size && !state.importantMessagesStatusFilters.has(String(item.lifecycle_status || 'draft'))) return false;
+      if (state.importantMessagesVisibilityFilters.size) {
+        const visibility = isImportantMessagePublished(item) && !isImportantMessageHidden(item) ? 'visible' : 'hidden';
+        if (!state.importantMessagesVisibilityFilters.has(visibility)) return false;
+      }
+      if (search && !`${item.title || ''} ${item.body || ''}`.toLowerCase().includes(search)) return false;
+      return true;
+    });
+    const sort = state.importantMessagesSort || 'storefront';
+    list.sort((left, right) => {
+      if (sort === 'title') return String(left.title || '').localeCompare(String(right.title || ''), 'ru');
+      if (sort === 'newest' || sort === 'oldest') {
+        const delta = new Date(left.created_at || 0).getTime() - new Date(right.created_at || 0).getTime();
+        return sort === 'oldest' ? delta : -delta;
+      }
+      if (sort === 'nearest') {
+        const nextStart = (item) => Math.min(...(Array.isArray(item.channel_schedules) ? item.channel_schedules : [])
+          .filter((schedule) => schedule.state === 'pending' && schedule.start_at)
+          .map((schedule) => new Date(schedule.start_at).getTime())
+          .filter(Number.isFinite), Number.MAX_SAFE_INTEGER);
+        return nextStart(left) - nextStart(right);
+      }
+      return Number(left.storefront_sort_order || 0) - Number(right.storefront_sort_order || 0)
+        || Number(right.is_pinned || 0) - Number(left.is_pinned || 0)
+        || Number(right.id || 0) - Number(left.id || 0);
+    });
+    const savedMessages = (Array.isArray(state.importantMessages) ? state.importantMessages : []);
+    if (elImportantMessagesTotalCount) elImportantMessagesTotalCount.textContent = String(savedMessages.length);
+    if (elImportantMessagesPublishedCount) elImportantMessagesPublishedCount.textContent = String(savedMessages.filter((item) => isImportantMessagePublished(item) && !isImportantMessageHidden(item)).length);
+    if (elImportantMessagesLaunchCount) elImportantMessagesLaunchCount.textContent = String(savedMessages.reduce((sum, item) => sum + Number(item.launch_count || 0), 0));
     if (elImportantMessagesEmptyHint) elImportantMessagesEmptyHint.classList.toggle('hidden', list.length > 0);
     elImportantMessagesList.innerHTML = list.map((item) => {
       const isPublished = isImportantMessagePublished(item);
@@ -8218,84 +8675,114 @@
       const canEditPhoto = state.importantMessagesEditingId !== null && Number(state.importantMessagesEditingId || 0) === itemId;
       const imageUrl = String(item.image_url || item.imageUrl || '').trim();
       const actionType = normalizeImportantActionType(item);
-      const productTitle = getImportantProductSummaryText(item);
-      const collectionTitle = getImportantProductCollectionSummaryText(item);
-      const promoCode = String(item.promo_code || item.promoCode || '').trim();
-      const promoMode = actionType === 'promo_code'
-        ? normalizeImportantPromoMode(item.promo_code_mode || item.promoCodeMode || (promoCode ? 'shared' : 'none'))
-        : 'none';
-      const promoDisplayCode = promoMode === 'unique' && !promoCode ? '*****' : promoCode;
+      const publicationTypeLabel = actionType === 'promo_code'
+        ? 'Промокод'
+        : actionType === 'product'
+          ? 'Товар'
+          : actionType === 'product_collection'
+            ? 'Подборка'
+            : 'Информация';
+      const publicationTypeIcon = actionType === 'promo_code'
+        ? 'fa-percent'
+        : actionType === 'product'
+          ? 'fa-box'
+          : actionType === 'product_collection'
+            ? 'fa-layer-group'
+            : 'fa-info-circle';
+      const publicationChannels = Array.isArray(item.publication_channels) ? item.publication_channels : [];
+      const hasDeliveryErrors = (Array.isArray(item.channel_schedules) ? item.channel_schedules : [])
+        .some((schedule) => schedule.state === 'failed' || Number(schedule.failed_count || 0) > 0 || schedule.last_error_code);
+      const selectedAudienceCount = Array.isArray(item.recipient_ids) ? item.recipient_ids.length : 0;
+      const selectedAudienceMode = item.recipient_mode === 'selected';
+      const channelRows = ['storefront', 'telegram', 'max'].map((channel) => {
+        const isStorefront = channel === 'storefront';
+        const schedule = (Array.isArray(item.channel_schedules) ? item.channel_schedules : []).find((entry) => entry.channel === channel) || {};
+        const label = isStorefront ? 'Сайт' : channel === 'telegram' ? 'Telegram' : 'MAX';
+        const channelIcon = isStorefront
+          ? (state.importantMessagesSiteIconUrl
+            ? `<img class="important-message-channel-provider-icon" src="${escapeHtml(state.importantMessagesSiteIconUrl)}" alt="" />`
+            : '<i class="fas fa-store" aria-hidden="true"></i>')
+          : `<img class="important-message-channel-provider-icon" src="/static/uploads/auth/${channel === 'telegram' ? 'telegram' : 'max'}-auth.png" alt="" />`;
+        if (!publicationChannels.includes(channel)) {
+          return `<div class="important-message-channel-row is-unpublished">
+            <strong class="important-message-channel-name">${channelIcon}${label}</strong>
+            <b class="important-message-channel-audience" title="Потенциальных / получивших">—/—</b>
+            <div class="important-message-channel-dates"><span>Не запускался</span><small>—</small></div>
+            <button class="icon-btn important-message-channel-visibility" type="button" disabled title="Не включён в кампанию" aria-label="${label}: не включён в кампанию"><i class="fas fa-eye-slash"></i></button>
+          </div>`;
+        }
+        const startedAt = schedule.actual_started_at || schedule.start_at;
+        const stoppedAt = schedule.actual_ended_at || schedule.end_at;
+        const startDate = startedAt ? new Date(startedAt) : null;
+        const stopDate = stoppedAt ? new Date(stoppedAt) : null;
+        const startLabel = startDate && !Number.isNaN(startDate.getTime()) ? formatImportantScheduleLocal(startDate.toISOString()).replace('T', ' · ') : '—';
+        const stopLabel = stopDate && !Number.isNaN(stopDate.getTime()) ? formatImportantScheduleLocal(stopDate.toISOString()).replace('T', ' · ') : '—';
+        const audienceKey = isStorefront ? 'site' : channel;
+        const potentialCount = selectedAudienceMode
+          ? selectedAudienceCount
+          : Math.max(0, Number(state.importantMessagesAudience?.[audienceKey]?.recipients || 0));
+        const receivedCount = isStorefront ? 0 : Math.max(0, Number(schedule.successful_count || 0));
+        const messengerVisible = Number(schedule.successful_count || 0) > Number(schedule.deleted_count || 0);
+        const messengerDeletionPending = Number(schedule.deletion_pending_count || 0) > 0;
+        const messengerCanResend = Number(schedule.successful_count || 0) > 0 && !messengerVisible && !messengerDeletionPending;
+        const channelVisible = isStorefront ? isPublished && !isHidden : messengerVisible;
+        const channelActionTitle = isStorefront
+          ? (channelVisible ? 'Скрыть публикацию на сайте' : 'Показать публикацию на сайте')
+          : messengerDeletionPending
+            ? `Удаление сообщений в ${label} выполняется`
+            : channelVisible
+              ? `Удалить отправленные сообщения в ${label}`
+              : messengerCanResend ? `Отправить сообщение в ${label} снова` : `Сообщение в ${label} ещё не отправлялось`;
+        return `<div class="important-message-channel-row">
+          <strong class="important-message-channel-name">${channelIcon}${label}</strong>
+          <b class="important-message-channel-audience" title="Потенциальных / получивших">${potentialCount}/${receivedCount}</b>
+          <div class="important-message-channel-dates"><span>${escapeHtml(startLabel)}</span><small>${escapeHtml(stopLabel)}</small></div>
+          <button class="icon-btn important-message-channel-visibility" type="button" data-important-action="channel-visibility" data-important-channel="${channel}" ${!isStorefront && !channelVisible && !messengerCanResend ? 'disabled' : ''} title="${escapeHtml(channelActionTitle)}" aria-label="${escapeHtml(channelActionTitle)}"><i class="fas ${channelVisible ? 'fa-eye' : 'fa-eye-slash'}"></i></button>
+        </div>`;
+      }).join('');
+      const lifecycle = String(item.lifecycle_status || 'draft');
+      const lifecycleActions = lifecycle === 'completed'
+        ? '<button class="important-message-card-secondary" type="button" data-important-action="copy">Создать копию</button>'
+        : lifecycle === 'paused'
+          ? '<button class="important-message-card-secondary" type="button" data-important-action="resume"><i class="fas fa-play" aria-hidden="true"></i>Возобновить</button><button class="important-message-card-secondary" type="button" data-important-action="complete"><i class="fas fa-stop" aria-hidden="true"></i>Завершить</button>'
+          : lifecycle === 'scheduled' || lifecycle === 'active'
+            ? '<button class="important-message-card-secondary" type="button" data-important-action="pause"><i class="fas fa-pause" aria-hidden="true"></i>Приостановить</button><button class="important-message-card-secondary" type="button" data-important-action="complete"><i class="fas fa-stop" aria-hidden="true"></i>Завершить</button>'
+            : '<button class="important-message-card-launch" type="button" data-important-action="launch"><i class="fas fa-play" aria-hidden="true"></i>Запустить рассылку</button>';
       const isPhotoUploading = importantMessagePhotoUploadingIds.has(itemId);
-      const publishTitle = isPublished ? 'Опубликовать повторно' : 'Опубликовать';
-      const publishIcon = isPublished ? 'fa-sync-alt' : 'fa-bullhorn';
       return `
-      <div class="order-row important-message-preview-row" data-important-id="${itemId}">
-        <div class="important-message-preview-side">
-          <div class="important-message-preview-media ${isPhotoUploading ? 'is-loading' : ''}" title="${isPhotoUploading ? 'Загружается фото' : 'Открыть Promo рассылку'}">
-            ${isPhotoUploading ? '<div class="important-message-preview-media-loading" aria-hidden="true"><span></span></div>' : (imageUrl ? `<img class="important-message-preview-media-img" src="${escapeHtml(imageUrl)}" alt="" />` : '<div class="important-message-preview-media-fallback"><i class="fas fa-image"></i></div>')}
-            ${canEditPhoto ? `<div class="important-message-preview-media-actions" data-important-action="photo-upload" title="${imageUrl ? 'Заменить изображение' : 'Загрузить изображение'}" aria-label="${imageUrl ? 'Заменить изображение' : 'Загрузить изображение'}" role="button" tabindex="0">
-              ${isPhotoUploading ? '' : (imageUrl ? `
-                <button class="important-message-preview-media-action" type="button" data-important-action="photo-upload" title="Заменить изображение" aria-label="Заменить изображение">
-                  <i class="fas fa-download"></i>
-                </button>
-              ` : '<button class="important-message-preview-media-upload" type="button" data-important-action="photo-upload" title="Загрузить изображение" aria-label="Загрузить изображение"><i class="fas fa-download"></i></button>')}
-            </div>` : ''}
-            ${canEditPhoto && imageUrl && !isPhotoUploading ? `
-              <button class="important-message-preview-media-remove" type="button" data-important-action="photo-remove" title="Удалить изображение" aria-label="Удалить изображение">
-                <i class="fas fa-times"></i>
-              </button>
-            ` : ''}
+      <div class="order-row important-message-preview-row${itemId > 0 && itemId === Number(state.importantMessagesSelectedId || 0) ? ' is-selected' : ''}" data-important-id="${itemId}">
+        <div class="important-message-card-main"${itemId > 0 ? ' draggable="true"' : ''}>
+          <div class="important-message-card-summary">
+            <div class="important-message-preview-media ${isPhotoUploading ? 'is-loading' : ''}" title="${isPhotoUploading ? 'Загружается фото' : 'Открыть Promo рассылку'}">
+              ${isPhotoUploading ? '<div class="important-message-preview-media-loading" aria-hidden="true"><span></span></div>' : (imageUrl ? `<img class="important-message-preview-media-img" src="${escapeHtml(imageUrl)}" alt="" />` : '<div class="important-message-preview-media-fallback"><i class="fas fa-image"></i></div>')}
+              ${canEditPhoto ? `<div class="important-message-preview-media-actions" data-important-action="photo-upload" title="${imageUrl ? 'Заменить изображение' : 'Загрузить изображение'}" aria-label="${imageUrl ? 'Заменить изображение' : 'Загрузить изображение'}" role="button" tabindex="0">${isPhotoUploading ? '' : (imageUrl ? '<button class="important-message-preview-media-action" type="button" data-important-action="photo-upload" title="Заменить изображение" aria-label="Заменить изображение"><i class="fas fa-download"></i></button>' : '<button class="important-message-preview-media-upload" type="button" data-important-action="photo-upload" title="Загрузить изображение" aria-label="Загрузить изображение"><i class="fas fa-download"></i></button>')}</div>` : ''}
+              ${canEditPhoto && imageUrl && !isPhotoUploading ? '<button class="important-message-preview-media-remove" type="button" data-important-action="photo-remove" title="Удалить изображение" aria-label="Удалить изображение"><i class="fas fa-times"></i></button>' : ''}
+            </div>
+            <div class="important-message-preview-content">
+              <div class="important-message-preview-type"><i class="fas ${publicationTypeIcon}" aria-hidden="true"></i><span>${escapeHtml(publicationTypeLabel)}</span></div>
+              <div class="order-row-title important-message-preview-title"><span class="important-message-preview-title-text">${escapeHtml(item.title || 'Без заголовка')}</span>${isPublished && isPinned ? '<span class="important-message-preview-pin" title="Закреплено" aria-label="Закреплено"><i class="fas fa-thumbtack"></i></span>' : ''}</div>
+              <div class="order-row-subtitle important-message-preview-body">${escapeHtml(String(item.body || ''))}</div>
+              ${actionType === 'product_collection' ? `<div class="important-message-preview-selection">${escapeHtml(getImportantProductCollectionSummaryText(item))}</div>` : ''}
+            </div>
           </div>
-          <div class="important-message-preview-promo-slot${actionType === 'none' ? ' is-empty' : ''}${actionType === 'product_collection' ? ' is-collection' : ''}">
-            ${actionType === 'promo_code'
-              ? `<div class="important-message-preview-promo"><span>Промокод</span><strong>${escapeHtml(promoDisplayCode)}</strong></div>`
-              : actionType === 'product'
-                ? `<div class="important-message-preview-product" title="${escapeHtml(productTitle)}"><span>${escapeHtml(productTitle)}</span><button type="button" tabindex="-1" aria-disabled="true">Заказать</button></div>`
-                : actionType === 'product_collection'
-                  ? `<div class="important-message-preview-product" title="${escapeHtml(collectionTitle)}"><span>${escapeHtml(collectionTitle)}</span><button type="button" tabindex="-1" aria-disabled="true">Заказать</button></div>`
-                  : ''}
+          <input class="hidden" type="file" data-important-list-photo-input accept="image/png,image/jpeg,image/webp,image/*" />
+          <div class="important-message-preview-controls">
+            ${isDraftRow ? '' : `<button class="icon-btn important-message-preview-pin-btn ${isPinned ? 'is-active' : ''}" type="button" data-important-action="pin" title="${isPinned ? 'Открепить' : 'Закрепить'}" aria-label="${isPinned ? 'Открепить' : 'Закрепить'}"><i class="fas fa-thumbtack"></i></button>`}
+            <div class="important-message-preview-icon-actions">
+              ${isDraftRow ? '' : '<button class="icon-btn important-message-preview-edit-btn" type="button" data-important-action="edit" title="Редактировать" aria-label="Редактировать"><i class="fas fa-pen"></i></button>'}
+            </div>
           </div>
         </div>
-        <input class="hidden" type="file" data-important-list-photo-input accept="image/png,image/jpeg,image/webp,image/*" />
-        <div class="important-message-preview-content">
-          <div class="order-row-title important-message-preview-title">
-            <span class="important-message-preview-title-text">${escapeHtml(item.title || 'Без заголовка')}</span>
-            ${isPublished && isPinned ? '<span class="important-message-preview-pin" title="Закреплено" aria-label="Закреплено"><i class="fas fa-thumbtack"></i></span>' : ''}
+        <div class="important-message-card-publication">
+          <div class="important-message-publication-summary">
+            <div class="important-message-publication-status"><div class="important-message-preview-status ${status.className}"><span aria-hidden="true">●</span>${status.text}</div></div>
+            ${isDraftRow ? '' : `<div class="important-message-card-lifecycle-actions">${lifecycleActions}</div>`}
           </div>
-          <div class="order-row-subtitle important-message-preview-body">${escapeHtml(String(item.body || ''))}</div>
-        </div>
-        <div class="important-message-preview-controls">
-          <div class="important-message-preview-status ${status.className}">
-            ${status.text}
+          ${hasDeliveryErrors ? '<div class="important-message-delivery-warning"><i class="fas fa-exclamation-triangle" aria-hidden="true"></i>Есть ошибки доставки</div>' : ''}
+          <div class="important-message-channel-list">
+            <div class="important-message-channel-columns" aria-hidden="true"><span>Канал</span><span>Аудитория</span><span>Старт и окончание</span><span></span></div>
+            ${channelRows || '<div class="important-message-channel-empty">Каналы не выбраны</div>'}
           </div>
-          <div class="important-message-preview-icon-actions">
-            ${isPublished ? `
-              <button class="icon-btn" type="button" data-important-action="hide" title="${isHidden ? 'Показать' : 'Скрыть'}" aria-label="${isHidden ? 'Показать' : 'Скрыть'}">
-                <i class="fas ${isHidden ? 'fa-eye' : 'fa-eye-slash'}"></i>
-              </button>
-            ` : ''}
-            ${isDraftRow ? '' : `<button class="icon-btn" type="button" data-important-action="delete" title="Удалить" aria-label="Удалить">
-              <i class="fas fa-trash"></i>
-            </button>`}
-            <button class="icon-btn" type="button" data-important-action="publish" title="${publishTitle}" aria-label="${publishTitle}">
-              <i class="fas ${publishIcon}"></i>
-            </button>
-            ${isPublished ? `
-              <button class="icon-btn important-message-preview-pin-btn ${isPinned ? 'is-active' : ''}" type="button" data-important-action="pin" title="${isPinned ? 'Открепить' : 'Закрепить'}" aria-label="${isPinned ? 'Открепить' : 'Закрепить'}">
-                <i class="fas fa-thumbtack"></i>
-              </button>
-            ` : ''}
-            ${isDraftRow ? '' : `
-              <button class="icon-btn important-message-preview-edit-btn" type="button" data-important-action="edit" title="Редактировать" aria-label="Редактировать">
-                <i class="fas fa-pen"></i>
-              </button>
-            `}
-          </div>
-          <label class="switch important-message-preview-push-switch">
-            <input class="switch-input" data-important-push-input type="checkbox" checked />
-            <span class="switch-ui"></span>
-            <span class="switch-text">Отправить push</span>
-          </label>
         </div>
       </div>
     `;
@@ -8317,7 +8804,11 @@
       const tenant = json?.tenant && typeof json.tenant === 'object' ? json.tenant : null;
       if (tenant) {
         state.importantMessagesEnabled = normalizeImportantMessagesEnabled(tenant.important_messages_enabled);
+        const siteIconUrl = String(tenant.favicon_light_url || tenant.favicon_dark_url || '').trim();
+        const siteIconChanged = siteIconUrl !== state.importantMessagesSiteIconUrl;
+        state.importantMessagesSiteIconUrl = siteIconUrl;
         if (elImportantMessagesEnabledSwitch) elImportantMessagesEnabledSwitch.checked = state.importantMessagesEnabled;
+        if (siteIconChanged) renderImportantMessages();
       }
       state.importantMessagesSettingsLoaded = true;
       return state.importantMessagesEnabled;
@@ -21948,12 +22439,14 @@
   }
 
   // Открыть picker для клиентов
-  async function openDiscountCustomerPicker() {
+  async function openDiscountCustomerPicker(target = 'discount_customers') {
+    const isImportantMessageCustomerPicker = target === 'important_message_customers';
     const audienceMode = getDiscountAudienceMode();
-    if (audienceMode === 'all') return;
+    if (!isImportantMessageCustomerPicker && audienceMode === 'all') return;
 
     state.discountPickerLevel = 'customers';
-    state.discountCustomerPickerMode = audienceMode === 'category' ? 'category' : 'specific';
+    state.discountPickerTarget = target;
+    state.discountCustomerPickerMode = isImportantMessageCustomerPicker || audienceMode === 'category' ? 'category' : 'specific';
     state.discountPickerQuery = '';
     state.discountPickerCategoryId = state.discountCustomerPickerMode === 'category' ? 'categories' : null;
     if (elDiscountCustomerPickerSearch) {
@@ -21962,24 +22455,35 @@
     }
 
     // Копируем текущий выбор в Set
-    state.discountPickerSelection = new Set(
-      state.discountSelectedCustomers
+    const selectedCustomers = isImportantMessageCustomerPicker
+      ? []
+      : state.discountSelectedCustomers;
+    state.discountPickerSelection = isImportantMessageCustomerPicker
+      ? new Set([String(ensureImportantMessageDraft().recipient_segment_key || (ensureImportantMessageDraft().recipient_mode === 'all' ? 'segment:all' : ''))].filter(Boolean))
+      : new Set(
+      selectedCustomers
         .filter((item) => (
           state.discountCustomerPickerMode === 'category'
             ? String(item?.type || '').trim() === 'category'
             : String(item?.type || '').trim() !== 'category'
         ))
         .map(c => `${c.type}:${c.id}`)
-    );
+      );
 
     // Загружаем категории клиентов
     await loadCustomerCategories(true);
 
     // Показываем picker, скрываем форму
-    if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
-    if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
+    if (isImportantMessageCustomerPicker) {
+      if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.add('hidden');
+      if (elImportantMessagesFooter) elImportantMessagesFooter.classList.add('hidden');
+    } else {
+      if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
+      if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
+    }
     if (elDiscountCustomerPicker) elDiscountCustomerPicker.classList.remove('hidden');
     if (elDiscountPickerFooter) elDiscountPickerFooter.classList.remove('hidden');
+    if (elDiscountPickerApplyBtn) elDiscountPickerApplyBtn.textContent = 'Применить';
     syncDiscountPickerConfigModeUi();
 
     // Рендерим
@@ -21991,6 +22495,8 @@
   function closeDiscountPicker() {
     const wasImportantMessageProductPicker = state.discountPickerLevel === 'products'
       && (state.discountPickerTarget === 'important_message_product' || state.discountPickerTarget === 'important_message_products');
+    const wasImportantMessageCustomerPicker = state.discountPickerLevel === 'customers'
+      && state.discountPickerTarget === 'important_message_customers';
     importantProductPickerRequestSeq += 1;
     if (importantProductSearchDebounce) {
       clearTimeout(importantProductSearchDebounce);
@@ -22027,7 +22533,7 @@
     }
 
     // Показываем форму
-    if (wasImportantMessageProductPicker) {
+    if (wasImportantMessageProductPicker || wasImportantMessageCustomerPicker) {
       renderImportantMessages();
     } else {
       if (elDiscountEditorWrap) elDiscountEditorWrap.classList.remove('hidden');
@@ -22036,7 +22542,26 @@
   }
 
   // Применить выбор
-  function applyDiscountPickerSelection() {
+  async function loadImportantSegmentRecipients(key) {
+    const [type, idRaw] = String(key || '').split(':');
+    if (type === 'segment' && idRaw === 'all') return null;
+    const rows = [];
+    let offset = 0;
+    while (offset <= 5000) {
+      const query = new URLSearchParams({ limit: '200', offset: String(offset), mode: 'lightweight' });
+      if (type === 'segment' && idRaw === 'online') query.set('online', '1');
+      else if (type === 'category' && Number(idRaw) > 0) query.set('filter_id', String(Number(idRaw)));
+      else return [];
+      const json = await apiJson(`/api/admin/clients?${query.toString()}`);
+      const chunk = Array.isArray(json?.data) ? json.data : [];
+      rows.push(...chunk);
+      if (!chunk.length || json?.has_more !== true) break;
+      offset += chunk.length;
+    }
+    return Array.from(new Map(rows.map((item) => [Number(item?.id || 0), item])).values()).filter((item) => Number(item?.id || 0) > 0);
+  }
+
+  async function applyDiscountPickerSelection() {
     if (state.discountPickerLevel === 'products') {
       // Конвертируем Set обратно в массив объектов
       const newSelection = [];
@@ -22090,7 +22615,29 @@
       }
     } else if (state.discountPickerLevel === 'customers') {
       const newSelection = [];
-      const audienceMode = getDiscountAudienceMode();
+      const isImportantMessageCustomerPicker = state.discountPickerTarget === 'important_message_customers';
+      const audienceMode = isImportantMessageCustomerPicker ? 'specific' : getDiscountAudienceMode();
+      if (isImportantMessageCustomerPicker) {
+        const segmentKey = Array.from(state.discountPickerSelection)[0] || '';
+        if (!segmentKey) {
+          alert('Выберите аудиторию');
+          return;
+        }
+        const recipients = await loadImportantSegmentRecipients(segmentKey);
+        if (Array.isArray(recipients) && !recipients.length) {
+          alert('В выбранной аудитории нет клиентов');
+          return;
+        }
+        state.importantMessageDraft = {
+          ...ensureImportantMessageDraft(),
+          recipient_mode: recipients === null ? 'all' : 'selected',
+          recipient_ids: recipients === null ? [] : recipients.map((item) => Number(item.id)),
+          recipients: recipients === null ? [] : recipients,
+          recipient_segment_key: segmentKey,
+        };
+        closeDiscountPicker();
+        return;
+      }
       state.discountPickerSelection.forEach(key => {
         const [type, idStr] = key.split(':');
         const id = parseInt(idStr, 10);
@@ -22430,18 +22977,34 @@
     const categories = query
       ? state.customerCategories.filter((cat) => String(cat?.title || '').toLowerCase().includes(query))
       : state.customerCategories;
-    if (categories.length === 0) {
+    const isImportantMessageCustomerPicker = state.discountPickerTarget === 'important_message_customers';
+    const baseSegments = isImportantMessageCustomerPicker
+      ? [
+        { id: 'all', title: 'Все клиенты', count: state.totals.all },
+        { id: 'online', title: 'На сайте', count: state.onlineCount },
+      ].filter((item) => !query || item.title.toLowerCase().includes(query))
+      : [];
+    if (categories.length === 0 && baseSegments.length === 0) {
       elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Выборки не найдены</div>';
       return;
     }
 
-    elDiscountCustomerPickerList.innerHTML = categories.map(cat => {
+    elDiscountCustomerPickerList.innerHTML = baseSegments.map((segment) => {
+      const key = `segment:${segment.id}`;
+      const isChecked = state.discountPickerSelection.has(key);
+      return `<label class="option-picker-row${isChecked ? ' is-selected' : ''}">
+        <input type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
+        <span class="option-picker-title">${escapeHtml(segment.title)}</span>
+        <span class="option-picker-price">${segment.count == null ? '—' : escapeHtml(segment.count)}</span>
+      </label>`;
+    }).join('') + categories.map(cat => {
       const key = `category:${cat.id}`;
       const isChecked = state.discountPickerSelection.has(key);
       return `
         <label class="option-picker-row${isChecked ? ' is-selected' : ''}">
           <input type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
           <span class="option-picker-title">${escapeHtml(cat.title)}</span>
+          <span class="option-picker-price">${escapeHtml(cat.count || 0)}</span>
         </label>
       `;
     }).join('');
@@ -24022,7 +24585,7 @@
               <b>${escapeHtml(title)}</b>
             </button>
           `;
-        }).join('') : '<div class="option-picker-empty">Категории для витрины не найдены</div>'}
+        }).join('') : '<div class="option-picker-empty">Категории для сайта не найдены</div>'}
       </div>
     `;
   }
@@ -24161,7 +24724,7 @@
               <b>${escapeHtml(title)}</b>
             </button>
           `;
-        }).join('') : '<div class="option-picker-empty">Категории для витрины не найдены</div>'}
+        }).join('') : '<div class="option-picker-empty">Категории для сайта не найдены</div>'}
       </div>
     `;
   }
@@ -24896,6 +25459,8 @@
     if (elBannersEnabledSwitch) elBannersEnabledSwitch.checked = state.bannersEnabled === true;
     if (elImportantMessagesSwitchWrap) elImportantMessagesSwitchWrap.classList.toggle('hidden', viewName !== 'important-messages');
     if (elImportantMessagesEnabledSwitch) elImportantMessagesEnabledSwitch.checked = state.importantMessagesEnabled === true;
+    if (elImportantMessagesSearchWrap) elImportantMessagesSearchWrap.classList.toggle('hidden', viewName !== 'important-messages');
+    if (elImportantMessagesFilterWrap) elImportantMessagesFilterWrap.classList.toggle('hidden', viewName !== 'important-messages');
     if (elAddBtn) elAddBtn.classList.toggle('hidden', viewName === 'bonus-cards' || viewName === 'bonus-referrals' || viewName === 'bonus-settings' || viewName === 'subscription-history');
     if (elImportantMessagesRightWrap) elImportantMessagesRightWrap.classList.toggle('hidden', viewName !== 'important-messages');
 
@@ -28432,6 +28997,27 @@
         if (id > 0) openImportantMessageEditor(id);
         return;
       }
+      if (action === 'launch') {
+        const id = Number(actionTarget?.getAttribute('data-important-id') || state.importantMessagesSelectedId || 0);
+        if (state.importantMessagesEditingId !== null) {
+          const schedules = collectImportantScheduleForm();
+          saveImportantMessage({ publish: false })
+            .then((savedId) => savedId > 0 && launchImportantMessage(savedId, schedules))
+            .catch(console.error);
+        } else {
+          launchImportantMessage(id).catch(console.error);
+        }
+        return;
+      }
+      if (action === 'pause' || action === 'resume' || action === 'complete') {
+        const id = Number(state.importantMessagesSelectedId || 0);
+        changeImportantCampaignLifecycle(id, action).catch(console.error);
+        return;
+      }
+      if (action === 'copy') {
+        copyImportantCampaign(state.importantMessagesSelectedId);
+        return;
+      }
       if (action === 'cancel') {
         closeImportantMessageEditor();
         return;
@@ -28471,6 +29057,10 @@
         }
         return;
       }
+      if (action === 'recipient-picker') {
+        openImportantRecipientPicker().catch(console.error);
+        return;
+      }
       if (action === 'promo-clear') {
         clearImportantPromoSource();
         return;
@@ -28497,15 +29087,38 @@
         saveImportantMessage({ publish: true }).catch(console.error);
         return;
       }
-      if (action === 'save') saveImportantMessage({ publish: false }).catch(console.error);
+      if (action === 'save') saveImportantMessage({ publish: false, applySchedule: true }).catch(console.error);
     });
     elImportantMessagesRightWrap.addEventListener('change', (event) => {
+      const scheduleRow = event.target.closest?.('[data-important-schedule-channel]');
+      if (scheduleRow) {
+        if (event.target.matches('[data-important-schedule-start-mode]')) {
+          scheduleRow.querySelector('[data-important-schedule-start-wrap]')?.classList.toggle('hidden', event.target.value !== 'scheduled');
+        }
+        if (event.target.matches('[data-important-schedule-end-mode]')) {
+          scheduleRow.querySelector('[data-important-schedule-end-wrap]')?.classList.toggle('hidden', event.target.value !== 'scheduled');
+        }
+        return;
+      }
+      const channelInput = event.target.closest?.('[data-important-channel]');
+      if (channelInput) {
+        syncImportantMessageDraftFromForm();
+        renderImportantMessages();
+        return;
+      }
       const generateInput = event.target.closest?.('[data-important-field="promo_generate_count"]');
       if (!generateInput) return;
       const value = Math.max(1, Math.min(500, Number(generateInput.value || 0)));
       generateInput.value = String(value);
     });
     elImportantMessagesRightWrap.addEventListener('click', (event) => {
+      const scheduleToggle = event.target.closest?.('[data-important-schedule-toggle]');
+      if (scheduleToggle) {
+        const row = scheduleToggle.closest('[data-important-schedule-channel]');
+        const isOpen = row?.classList.toggle('is-open') === true;
+        scheduleToggle.setAttribute('aria-expanded', String(isOpen));
+        return;
+      }
       const actionTypeBtn = event.target.closest?.('[data-important-action-type]');
       if (actionTypeBtn) {
         applyImportantActionType(actionTypeBtn.getAttribute('data-important-action-type'));
@@ -28516,6 +29129,18 @@
         applyImportantPromoMode(modeBtn.getAttribute('data-important-promo-mode'));
         return;
       }
+      const recipientModeBtn = event.target.closest?.('[data-important-recipient-mode]');
+      if (recipientModeBtn) {
+        syncImportantMessageDraftFromForm();
+        state.importantMessageDraft = {
+          ...ensureImportantMessageDraft(),
+          recipient_mode: 'all',
+          recipient_ids: [],
+          recipients: [],
+        };
+        renderImportantMessages();
+        return;
+      }
       const sourceBtn = event.target.closest?.('[data-important-promo-source-key]');
       if (sourceBtn) {
         applyImportantPromoSource(sourceBtn.getAttribute('data-important-promo-source-key'));
@@ -28524,6 +29149,46 @@
   }
 
   if (elImportantMessagesList) {
+    let draggedImportantMessageId = 0;
+    elImportantMessagesList.addEventListener('dragstart', (event) => {
+      if (event.target.closest?.('.important-message-card-publication, button, input, [role="button"]')) {
+        draggedImportantMessageId = 0;
+        event.preventDefault();
+        return;
+      }
+      const row = event.target.closest?.('[data-important-id]');
+      draggedImportantMessageId = Number(row?.getAttribute('data-important-id') || 0);
+      if (!draggedImportantMessageId || state.importantMessagesSort !== 'storefront') {
+        event.preventDefault();
+        return;
+      }
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(draggedImportantMessageId));
+    });
+    elImportantMessagesList.addEventListener('dragover', (event) => {
+      if (!draggedImportantMessageId || !event.target.closest?.('[data-important-id]')) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    });
+    elImportantMessagesList.addEventListener('drop', (event) => {
+      const targetId = Number(event.target.closest?.('[data-important-id]')?.getAttribute('data-important-id') || 0);
+      if (!draggedImportantMessageId || !targetId || targetId === draggedImportantMessageId) return;
+      event.preventDefault();
+      const ids = Array.from(elImportantMessagesList.querySelectorAll('[data-important-id]')).map((row) => Number(row.getAttribute('data-important-id'))).filter(Boolean);
+      const fromIndex = ids.indexOf(draggedImportantMessageId);
+      const toIndex = ids.indexOf(targetId);
+      if (fromIndex < 0 || toIndex < 0) return;
+      ids.splice(toIndex, 0, ids.splice(fromIndex, 1)[0]);
+      const order = new Map(ids.map((id, index) => [id, (index + 1) * 10]));
+      state.importantMessages = state.importantMessages.map((item) => order.has(Number(item.id)) ? { ...item, storefront_sort_order: order.get(Number(item.id)) } : item);
+      renderImportantMessages();
+      apiJson('/api/admin/important-messages/storefront-order', { method: 'POST', body: { ids } }).catch((error) => {
+        console.error('campaign storefront order error:', error);
+        loadImportantMessages({ silent: true }).catch(console.error);
+      });
+      draggedImportantMessageId = 0;
+    });
+    elImportantMessagesList.addEventListener('dragend', () => { draggedImportantMessageId = 0; });
     elImportantMessagesList.addEventListener('click', (event) => {
       if (event.target.closest?.('[data-important-list-photo-input]')) {
         event.stopPropagation();
@@ -28533,6 +29198,31 @@
       const row = event.target.closest?.('[data-important-id]');
       const id = Number(row?.getAttribute('data-important-id') || 0);
       const action = event.target.closest?.('[data-important-action]')?.getAttribute('data-important-action') || '';
+      if (action === 'channel-visibility') {
+        event.preventDefault();
+        event.stopPropagation();
+        const channel = event.target.closest('[data-important-channel]')?.getAttribute('data-important-channel') || '';
+        toggleImportantMessageChannelVisibility(id, channel).catch((error) => {
+          console.error('campaign channel visibility error:', error);
+          alert('Не удалось изменить публикацию канала.');
+        });
+        return;
+      }
+      if (action === 'launch') {
+        event.stopPropagation();
+        launchImportantMessage(id).catch(console.error);
+        return;
+      }
+      if (action === 'pause' || action === 'resume' || action === 'complete') {
+        event.stopPropagation();
+        changeImportantCampaignLifecycle(id, action).catch(console.error);
+        return;
+      }
+      if (action === 'copy') {
+        event.stopPropagation();
+        copyImportantCampaign(id);
+        return;
+      }
       if (action === 'photo-remove') {
         event.preventDefault();
         event.stopPropagation();
@@ -28567,8 +29257,27 @@
       }
       if (event.target.closest?.('.important-message-preview-controls')) {
         event.stopPropagation();
+        if (action === 'launch') {
+          launchImportantMessage(id).catch(console.error);
+          return;
+        }
+        if (action === 'pause' || action === 'resume' || action === 'complete') {
+          changeImportantCampaignLifecycle(id, action).catch(console.error);
+          return;
+        }
+        if (action === 'copy') {
+          copyImportantCampaign(id);
+          return;
+        }
         if (action === 'edit') {
           openImportantMessageEditor(id);
+          return;
+        }
+        if (action === 'manage') {
+          openImportantMessageManagement(id).catch((error) => {
+            console.error('open campaign management error:', error);
+            alert('Не удалось загрузить историю рассылки');
+          });
           return;
         }
         if (action === 'hide') {
@@ -28578,11 +29287,6 @@
         }
         if (action === 'delete') {
           deleteImportantMessage(id).catch(console.error);
-          return;
-        }
-        if (action === 'publish') {
-          const sendPush = row?.querySelector('[data-important-push-input]')?.checked === true;
-          publishImportantMessageFromList(id, { sendPush }).catch(console.error);
           return;
         }
         if (action === 'pin') {
@@ -28597,8 +29301,11 @@
         return;
       }
       if (id > 0) {
-        openImportantMessagePreview(id);
-        openImportantMessageModal(id);
+        if (event.target.closest?.('.important-message-preview-media')) {
+          openImportantMessageModal(id);
+          return;
+        }
+        openImportantMessageEditor(id);
       }
     });
     elImportantMessagesList.addEventListener('keydown', (event) => {
@@ -28641,6 +29348,110 @@
       if (toggle === 'pinned') {
         updateImportantMessageStateQuick(id, { is_pinned: input.checked === true }).catch(console.error);
       }
+    });
+  }
+
+  let importantMessagesSearchTimer = null;
+  const closeImportantMessagesSearch = () => {
+    if (!elImportantMessagesSearchWrap || !elImportantMessagesSearch || !elImportantMessagesSearchToggle) return;
+    elImportantMessagesSearchWrap.classList.remove('is-open');
+    elImportantMessagesSearchToggle.setAttribute('aria-expanded', 'false');
+    elImportantMessagesSearch.setAttribute('tabindex', '-1');
+    elImportantMessagesSearch.value = '';
+    state.importantMessagesSearch = '';
+    renderImportantMessages();
+  };
+
+  if (elImportantMessagesSearchWrap && elImportantMessagesSearch && elImportantMessagesSearchToggle) {
+    elImportantMessagesSearchWrap.addEventListener('submit', (event) => event.preventDefault());
+    elImportantMessagesSearchToggle.addEventListener('click', () => {
+      if (elImportantMessagesSearchWrap.classList.contains('is-open')) {
+        closeImportantMessagesSearch();
+        return;
+      }
+      elImportantMessagesSearchWrap.classList.add('is-open');
+      elImportantMessagesSearchToggle.setAttribute('aria-expanded', 'true');
+      elImportantMessagesSearch.setAttribute('tabindex', '0');
+      elImportantMessagesSearch.focus();
+    });
+    elImportantMessagesSearch.addEventListener('input', () => {
+      window.clearTimeout(importantMessagesSearchTimer);
+      importantMessagesSearchTimer = window.setTimeout(() => {
+        state.importantMessagesSearch = elImportantMessagesSearch.value || '';
+        renderImportantMessages();
+      }, 200);
+    });
+    elImportantMessagesSearch.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeImportantMessagesSearch();
+      elImportantMessagesSearchToggle.focus();
+    });
+  }
+
+  if (elImportantMessagesFilterBtn && elImportantMessagesFilterWrap) {
+    elImportantMessagesFilterBtn.addEventListener('click', () => {
+      const isOpen = elImportantMessagesFilterWrap.classList.toggle('is-open');
+      elImportantMessagesFilterBtn.setAttribute('aria-expanded', String(isOpen));
+    });
+    elImportantMessagesFilterWrap.addEventListener('click', (event) => {
+      const sectionButton = event.target.closest?.('[data-important-filter-section]');
+      if (sectionButton) {
+        const group = sectionButton.closest('.important-messages-filter-group');
+        const isOpen = group?.classList.toggle('is-open') === true;
+        sectionButton.setAttribute('aria-expanded', String(isOpen));
+        return;
+      }
+      const typeButton = event.target.closest?.('[data-important-filter-type]');
+      const channelButton = event.target.closest?.('[data-important-filter-channel]');
+      const statusButton = event.target.closest?.('[data-important-filter-status]');
+      const visibilityButton = event.target.closest?.('[data-important-filter-visibility]');
+      const sortButton = event.target.closest?.('[data-important-sort]');
+      const resetButton = event.target.closest?.('[data-important-filter-reset]');
+      if (!typeButton && !channelButton && !statusButton && !visibilityButton && !sortButton && !resetButton) return;
+      if (sortButton) {
+        state.importantMessagesSort = sortButton.getAttribute('data-important-sort') || 'storefront';
+        const radio = sortButton.querySelector('input');
+        if (radio) radio.checked = true;
+        renderImportantMessages();
+        return;
+      }
+      if (resetButton) {
+        state.importantMessagesTypeFilters.clear();
+        state.importantMessagesChannelFilters.clear();
+        state.importantMessagesStatusFilters.clear();
+        state.importantMessagesVisibilityFilters.clear();
+        elImportantMessagesFilterWrap.querySelectorAll('.important-messages-filter-option input').forEach((input) => { input.checked = false; });
+      } else {
+        const button = typeButton || channelButton || statusButton || visibilityButton;
+        const value = typeButton
+          ? typeButton.getAttribute('data-important-filter-type')
+          : channelButton
+            ? channelButton.getAttribute('data-important-filter-channel')
+            : statusButton
+              ? statusButton.getAttribute('data-important-filter-status')
+              : visibilityButton.getAttribute('data-important-filter-visibility');
+        const filters = typeButton
+          ? state.importantMessagesTypeFilters
+          : channelButton
+            ? state.importantMessagesChannelFilters
+            : statusButton
+              ? state.importantMessagesStatusFilters
+              : state.importantMessagesVisibilityFilters;
+        if (filters.has(value)) filters.delete(value);
+        else filters.add(value);
+        const checkbox = button.querySelector('input');
+        if (checkbox) checkbox.checked = filters.has(value);
+      }
+      const activeCount = state.importantMessagesTypeFilters.size + state.importantMessagesChannelFilters.size
+        + state.importantMessagesStatusFilters.size + state.importantMessagesVisibilityFilters.size;
+      if (elImportantMessagesFilterLabel) elImportantMessagesFilterLabel.textContent = activeCount ? `Фильтр · ${activeCount}` : 'Фильтр';
+      renderImportantMessages();
+    });
+    document.addEventListener('click', (event) => {
+      if (elImportantMessagesFilterWrap.contains(event.target)) return;
+      elImportantMessagesFilterWrap.classList.remove('is-open');
+      elImportantMessagesFilterBtn.setAttribute('aria-expanded', 'false');
     });
   }
 
@@ -30503,7 +31314,12 @@
 
   // Применить picker
   if (elDiscountPickerApplyBtn) {
-    elDiscountPickerApplyBtn.addEventListener('click', applyDiscountPickerSelection);
+    elDiscountPickerApplyBtn.addEventListener('click', () => {
+      applyDiscountPickerSelection().catch((error) => {
+        console.error('apply customer selection error:', error);
+        alert('Не удалось применить выборку клиентов');
+      });
+    });
   }
 
   if (elDiscountPickerConfigMode) {
@@ -30700,6 +31516,12 @@
     elDiscountCustomerPickerList.addEventListener('change', (e) => {
       if (e.target.type !== 'checkbox') return;
       const key = e.target.dataset.key;
+      if (state.discountPickerTarget === 'important_message_customers') {
+        state.discountPickerSelection.clear();
+        if (e.target.checked) state.discountPickerSelection.add(key);
+        renderDiscountCustomerCategoryList();
+        return;
+      }
       if (e.target.checked) {
         state.discountPickerSelection.add(key);
       } else {

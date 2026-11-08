@@ -32539,6 +32539,83 @@ function renderSheetAddressList() {
     addPushPreferenceRow("От чата поддержки", "chat");
     addPushPreferenceRow("О важных сообщениях компании", "important");
 
+    const messengerMarketingRows = [];
+    const messengerMarketingInputs = new Map();
+    let messengerMarketingState = {
+      telegram: { linked: false, consented: false },
+      max: { linked: false, consented: false },
+    };
+
+    function createMessengerMarketingRow(labelText, provider) {
+      const row = document.createElement("div");
+      row.className = "shop-profile-settings-row shop-profile-messenger-marketing-row";
+      const copy = document.createElement("div");
+      copy.className = "shop-profile-messenger-marketing-copy";
+      const title = document.createElement("div");
+      title.className = "shop-profile-settings-title";
+      title.textContent = labelText;
+      const hint = document.createElement("div");
+      hint.className = "shop-profile-settings-hint";
+      hint.textContent = "Загрузка…";
+      copy.append(title, hint);
+      const label = document.createElement("label");
+      label.className = "switch";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.className = "switch-input";
+      input.disabled = true;
+      const ui = document.createElement("span");
+      ui.className = "switch-ui";
+      label.append(input, ui);
+      row.append(copy, label);
+      messengerMarketingInputs.set(provider, { input, hint });
+      messengerMarketingRows.push(row);
+      input.addEventListener("change", async () => {
+        const previous = messengerMarketingState[provider].consented === true;
+        input.disabled = true;
+        try {
+          const payload = await apiJson("/api/public/messenger-marketing-consents", {
+            method: "PUT",
+            body: { provider: provider === "telegram" ? "tg" : "max", consented: input.checked },
+          });
+          messengerMarketingState[provider].consented = payload?.data?.consented === true;
+          input.checked = messengerMarketingState[provider].consented;
+        } catch (error) {
+          input.checked = previous;
+          await showProfileWarning("Не удалось сохранить настройку рекламных сообщений.");
+        } finally {
+          input.disabled = messengerMarketingState[provider].linked !== true;
+        }
+      });
+    }
+
+    createMessengerMarketingRow("Акции в Telegram", "telegram");
+    createMessengerMarketingRow("Акции в MAX", "max");
+
+    async function loadMessengerMarketingConsents() {
+      if (me?.is_guest) return;
+      try {
+        const payload = await apiJson("/api/public/messenger-marketing-consents");
+        messengerMarketingState = payload?.data || messengerMarketingState;
+        for (const provider of ["telegram", "max"]) {
+          const controls = messengerMarketingInputs.get(provider);
+          const state = messengerMarketingState[provider] || {};
+          if (!controls) continue;
+          controls.input.checked = state.linked === true && state.consented === true;
+          controls.input.disabled = state.linked !== true;
+          controls.hint.textContent = state.linked === true
+            ? "Рекламные сообщения в привязанном мессенджере"
+            : "Сначала привяжите мессенджер в настройках профиля";
+        }
+      } catch (error) {
+        messengerMarketingInputs.forEach(({ input, hint }) => {
+          input.disabled = true;
+          hint.textContent = "Не удалось загрузить настройку";
+        });
+      }
+    }
+    if (!me?.is_guest) void loadMessengerMarketingConsents();
+
     async function loadPushPreferences() {
       const notificationsApi = window.shopCompanyChatNotifications;
       if (!notificationsApi?.getPreferences) return;
@@ -33264,7 +33341,7 @@ function renderSheetAddressList() {
       const notifications = document.createElement("section");
       notifications.className = "shop-profile-settings-screen hidden";
       notifications.dataset.settingsScreen = "notifications";
-      notifications.append(pushNotificationRows[0], orderStatusRowsWrap, ...pushNotificationRows.slice(1));
+      notifications.append(pushNotificationRows[0], orderStatusRowsWrap, ...pushNotificationRows.slice(1), ...messengerMarketingRows);
       const messengers = document.createElement("section");
       messengers.className = "shop-profile-settings-screen hidden";
       messengers.dataset.settingsScreen = "messengers";

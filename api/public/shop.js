@@ -68,6 +68,7 @@ const {
 const { buildProviderLink, deliverCode, getTenantBotConfig, assertBrowserProviderReady } = require('../messengerDelivery');
 const customerAuth=require('../helpers/customerAuth');
 const customerBonus=require('../helpers/customerBonus');
+const { setMarketingConsent } = require('../messengerMarketingConsent');
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, presenceService, paymentServiceClient }) {
   const router = express.Router();
@@ -4133,6 +4134,81 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     }
   });
 
+  router.get('/messenger-marketing-consents', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token, { refreshSession: false }) : null;
+      if (!customer || token.startsWith('g_')) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const [rows] = await db.query(
+        `SELECT mc.provider,consent.id AS consent_id,consent.consented
+           FROM auth_account_links al
+           JOIN auth_account_messenger_links aml ON aml.account_link_id=al.id
+           JOIN auth_messenger_channels mc
+             ON mc.id=aml.channel_id AND mc.provider=aml.provider AND mc.revoked_at IS NULL
+           LEFT JOIN mkt_messenger_marketing_consents consent
+             ON consent.tenant_id=al.tenant_id AND consent.store_id=?
+            AND consent.customer_id=al.account_id AND consent.provider=mc.provider
+          WHERE al.tenant_id=? AND al.account_type='customer' AND al.account_id=?`,
+        [storeId, tenantId, Number(customer.id)]
+      );
+      const byProvider = new Map((rows || []).map((row) => [String(row.provider), row]));
+      return res.json({
+        ok: true,
+        data: {
+          telegram: {
+            linked: byProvider.has('tg'),
+            consented: byProvider.has('tg') && byProvider.get('tg').consent_id != null && Number(byProvider.get('tg').consented) === 1,
+          },
+          max: {
+            linked: byProvider.has('max'),
+            consented: byProvider.has('max') && byProvider.get('max').consent_id != null && Number(byProvider.get('max').consented) === 1,
+          },
+        },
+      });
+    } catch (error) {
+      console.error('GET messenger marketing consents error:', error);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
+  router.put('/messenger-marketing-consents', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = token ? await getCustomerByToken(tenantId, token, { refreshSession: false }) : null;
+      if (!customer || token.startsWith('g_')) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const provider = String(req.body?.provider || '').trim().toLowerCase();
+      if (!['tg', 'max'].includes(provider) || typeof req.body?.consented !== 'boolean') {
+        return res.status(400).json({ ok: false, error: 'CONSENT_PAYLOAD_INVALID' });
+      }
+      const [links] = await db.query(
+        `SELECT 1
+           FROM auth_account_links al
+           JOIN auth_account_messenger_links aml ON aml.account_link_id=al.id AND aml.provider=?
+           JOIN auth_messenger_channels mc
+             ON mc.id=aml.channel_id AND mc.provider=aml.provider AND mc.revoked_at IS NULL
+          WHERE al.tenant_id=? AND al.account_type='customer' AND al.account_id=? LIMIT 1`,
+        [provider, tenantId, Number(customer.id)]
+      );
+      if (!links?.[0]) return res.status(409).json({ ok: false, error: 'MESSENGER_NOT_LINKED' });
+      await setMarketingConsent(db, {
+        tenantId,
+        storeId,
+        customerId: Number(customer.id),
+        provider,
+        consented: req.body.consented,
+        source: 'storefront',
+      });
+      return res.json({ ok: true, data: { provider, consented: req.body.consented } });
+    } catch (error) {
+      console.error('PUT messenger marketing consents error:', error);
+      return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
   router.get('/bonus/referrals', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -7635,9 +7711,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         `SELECT COALESCE(SUM(CASE WHEN is_published = 1 AND COALESCE(is_hidden, 0) = 0 THEN 1 ELSE 0 END), 0) AS message_count,
                 COALESCE(MAX(CASE WHEN is_published = 1 AND COALESCE(is_hidden, 0) = 0 THEN id ELSE 0 END), 0) AS last_visible_message_id,
                 COALESCE(MAX(CAST(UNIX_TIMESTAMP(COALESCE(updated_at, published_at, created_at)) * 1000 AS UNSIGNED)), 0) AS last_any_message_ts
-           FROM mkt_important_messages
-          WHERE tenant_id = ? AND store_id = ?`,
-        [tenantId, storeId]
+           FROM mkt_important_messages m
+          WHERE m.tenant_id = ? AND m.store_id = ?
+            AND (m.recipient_mode = 'all' OR (? > 0 AND EXISTS(
+              SELECT 1 FROM mkt_important_message_recipients mr
+               WHERE mr.tenant_id=m.tenant_id AND mr.store_id=m.store_id AND mr.message_id=m.id AND mr.customer_id=?
+            )))`,
+        [tenantId, storeId, customerId, customerId]
       );
       let lastClaimTs = 0;
       if (customerId > 0) {
@@ -7800,12 +7880,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const limitRaw = Number(req.query.limit || 50);
       const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.trunc(limitRaw))) : 50;
       const [rows] = await db.query(
-        `SELECT id, type, title, body, image_url, link_url, action_type, product_id, promo_code, promo_code_mode, promo_discount_id, promo_code_id, is_pinned, published_at, created_at, updated_at
-           FROM mkt_important_messages
-          WHERE tenant_id = ? AND store_id = ? AND is_published = 1 AND COALESCE(is_hidden, 0) = 0
+        `SELECT m.id, m.type, m.title, m.body, m.image_url, m.link_url, m.action_type, m.product_id, m.promo_code, m.promo_code_mode, m.promo_discount_id, m.promo_code_id, m.is_pinned, m.published_at, m.created_at, m.updated_at
+           FROM mkt_important_messages m
+          WHERE m.tenant_id = ? AND m.store_id = ? AND m.is_published = 1 AND COALESCE(m.is_hidden, 0) = 0
+            AND (m.recipient_mode = 'all' OR (? > 0 AND EXISTS(
+              SELECT 1 FROM mkt_important_message_recipients mr
+               WHERE mr.tenant_id=m.tenant_id AND mr.store_id=m.store_id AND mr.message_id=m.id AND mr.customer_id=?
+            )))
           ORDER BY is_pinned DESC, COALESCE(published_at, updated_at) DESC, id DESC
           LIMIT ?`,
-        [tenantId, storeId, limit]
+        [tenantId, storeId, customerId, customerId, limit]
       );
       const messageIds = (Array.isArray(rows) ? rows : [])
         .map((row) => Number(row?.id || 0))
@@ -7975,12 +8059,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await conn.beginTransaction();
 
       const [messageRows] = await conn.query(
-        `SELECT id, promo_code, promo_code_mode, promo_discount_id, promo_code_id
-           FROM mkt_important_messages
-          WHERE tenant_id = ? AND store_id = ? AND id = ? AND is_published = 1 AND COALESCE(is_hidden, 0) = 0
+        `SELECT m.id, m.promo_code, m.promo_code_mode, m.promo_discount_id, m.promo_code_id
+           FROM mkt_important_messages m
+          WHERE m.tenant_id = ? AND m.store_id = ? AND m.id = ? AND m.is_published = 1 AND COALESCE(m.is_hidden, 0) = 0
+            AND (m.recipient_mode = 'all' OR EXISTS(
+              SELECT 1 FROM mkt_important_message_recipients mr
+               WHERE mr.tenant_id=m.tenant_id AND mr.store_id=m.store_id AND mr.message_id=m.id AND mr.customer_id=?
+            ))
           LIMIT 1
           FOR UPDATE`,
-        [tenantId, storeId, messageId]
+        [tenantId, storeId, messageId, customerId]
       );
       const message = Array.isArray(messageRows) && messageRows.length ? messageRows[0] : null;
       if (!message) {
