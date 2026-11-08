@@ -18011,6 +18011,10 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   justify-content: stretch;
 }
 
+.shop-cart-bonus-redeem-actions > .shop-cart-bonus-join-text{
+  grid-column: 1 / -1;
+}
+
 .shop-cart-bonus-action-pill{
   width: 100%;
   min-height: 46px;
@@ -24103,7 +24107,7 @@ body.page-kso .shop-checkout-customer-phone{
 .shop-profile-settings-hero-phone{font-size:15px;color:var(--color-text-muted);text-align:center;}
 .shop-profile-settings-redesign .shop-profile-phone-summary{display:flex;flex-direction:column;align-items:center;gap:6px;margin:0;padding:0;border:0;background:transparent;min-height:0;max-width:100%;}
 .shop-profile-settings-redesign[data-settings-view="edit"] .shop-profile-phone-summary{display:none;}
-.shop-profile-settings-redesign .shop-profile-phone-summary.has-status-space{min-height:32px;}
+.shop-profile-settings-redesign .shop-profile-phone-summary.has-status-space{min-height:64px;}
 .shop-profile-phone-verification.is-checking-phone .muted{display:flex;align-items:center;gap:6px;font-size:13px;}
 .shop-profile-phone-verification.is-checking-phone .muted::before{content:"";width:12px;height:12px;flex:0 0 12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:shop-profile-link-opening .8s linear infinite;}
 @media(prefers-reduced-motion:reduce){.shop-profile-phone-verification.is-checking-phone .muted::before{animation:none;}}
@@ -24122,9 +24126,7 @@ body.page-kso .shop-checkout-customer-phone{
 .shop-profile-settings-redesign .shop-profile-settings-nav > i:first-child{color:var(--color-primary);}
 .shop-profile-settings-redesign .shop-profile-settings-logout{display:block;width:100%;min-height:48px;padding:10px 16px;border:0;background:transparent;color:var(--color-danger,#e53935);font:inherit;font-size:20px;font-weight:400;text-align:center;cursor:pointer;}
 .shop-profile-settings-redesign .shop-profile-settings-logout:disabled{opacity:.55;cursor:wait;}
-.shop-profile-settings-row .btn.is-opening::before,
-body.page-shop .app-modal-confirmation-choices button.is-opening::before{content:"";flex:0 0 14px;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:shop-profile-link-opening .8s linear infinite;}
-body.page-shop .app-modal-confirmation-choices button.is-opening{display:flex;align-items:center;justify-content:center;gap:8px;opacity:1;}
+.shop-profile-settings-row .btn.is-opening::before{content:"";flex:0 0 14px;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:shop-profile-link-opening .8s linear infinite;}
 @keyframes shop-profile-link-opening{to{transform:rotate(360deg)}}
 .shop-profile-settings-redesign .shop-profile-settings-screen{padding:16px;background:var(--color-surface);border-radius:22px;gap:0;}
 .shop-profile-settings-redesign .shop-profile-settings-screen > .shop-profile-settings-row{padding:14px 0;min-height:54px;box-sizing:border-box;}
@@ -31764,25 +31766,6 @@ body.page-shop #appModal.team-unsaved-modal .team-unsaved-message{display:block;
 body.page-shop #appModal.team-unsaved-modal .app-modal-footer{display:flex;flex:0 0 auto;justify-content:flex-end;align-items:center;gap:12px;padding:0 20px 16px;border:0;background:transparent;}
 body.page-shop #appModal.team-unsaved-modal .app-modal-footer .btn{flex:0 0 auto;width:auto;min-width:0;min-height:44px;height:auto;padding:10px 12px;border:0;border-radius:12px;background:transparent;box-shadow:none;color:var(--color-primary);font-size:14px;font-weight:600;text-transform:uppercase;}
 body.page-shop #appModal.team-unsaved-modal .app-modal-footer .btn:hover{background:var(--color-surface-2);transform:none;}
-body.page-shop > .app-modal-confirmation{position:fixed;inset:0;display:grid;place-items:center;padding:16px;box-sizing:border-box;background:rgba(0,0,0,.28);animation:shop-profile-confirmation-in var(--dur-med) var(--ease-smooth);}
-@keyframes shop-profile-confirmation-in{from{opacity:0}to{opacity:1}}
-@keyframes shop-profile-confirmation-panel-in{from{opacity:0;transform:scale(1.15)}to{opacity:1;transform:scale(1)}}
-@media(prefers-reduced-motion:reduce){body.page-shop > .app-modal-confirmation,body.page-shop > .app-modal-confirmation .app-modal-confirmation-panel{animation:none;}}
-body.page-shop .app-modal-confirmation-panel{display:flex;flex-direction:column;box-sizing:border-box;width:340px;max-width:100%;min-height:min(280px,100%);max-height:100%;padding:24px;border-radius:36px;background:var(--color-surface);color:var(--color-text);box-shadow:0 8px 28px rgba(0,0,0,.18);overflow-y:auto;animation:shop-profile-confirmation-panel-in var(--dur-med) var(--ease-smooth);}
-body.page-shop .app-modal-confirmation-panel h2{margin:0 0 16px;font-size:20px;font-weight:700;line-height:1.3;text-align:left;}
-body.page-shop .app-modal-confirmation-panel p{display:flex;align-items:center;flex:1;margin:0 0 20px;font-size:16px;line-height:1.4;white-space:pre-line;overflow-wrap:anywhere;}
-body.page-shop .app-modal-confirmation-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:auto;}
-body.page-shop .app-modal-confirmation-actions button{min-height:44px;padding:10px 12px;border:0;border-radius:12px;background:transparent;color:var(--color-text);font:inherit;font-size:16px;font-weight:600;text-transform:uppercase;cursor:pointer;}
-body.page-shop .app-modal-confirmation-actions button:last-child{color:var(--color-primary);}
-body.page-shop .app-modal-confirmation-actions button:hover{background:var(--color-surface-2);}
-body.page-shop .app-modal-confirmation-choices{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 20px;}
-body.page-shop .app-modal-confirmation-choices button[hidden]{display:none;}
-body.page-shop .app-modal-confirmation-choices.has-selected-provider button:not([hidden]){grid-column:1 / -1;justify-self:center;min-width:calc((100% - 12px) / 2);max-width:100%;}
-body.page-shop .app-modal-confirmation-choices button{min-height:48px;padding:12px;border:1px solid var(--color-border);border-radius:16px;background:var(--color-surface-2);color:var(--color-text);font:inherit;font-size:16px;font-weight:600;cursor:pointer;}
-body.page-shop .app-modal-confirmation-choices button:disabled{opacity:.5;cursor:default;}
-body.page-shop .app-modal-confirmation-choices button:has(img){display:flex;align-items:center;justify-content:center;gap:8px;}
-body.page-shop .app-modal-confirmation-choices button img{width:24px;height:24px;object-fit:contain;flex-shrink:0;}
-body.page-shop .app-modal-confirmation-choices button:not(:disabled):hover{border-color:var(--color-primary);color:var(--color-primary);}
 #appModal:has(> .app-modal-body.shop-profile-return-sheet) .shop-profile-orders-sheet-content,
 .shop-orders-page .shop-orders-page-content{padding:16px;box-sizing:border-box;}
 @media(max-width:768px){

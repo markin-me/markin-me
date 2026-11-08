@@ -7559,7 +7559,7 @@
   async function deleteImportantMessage(id) {
     const numericId = Number(id || 0);
     if (!numericId) return;
-    if (!confirm('Удалить Promo рассылку?')) return;
+    if (!await window.AppModal.confirm({ message: 'Удалить Promo рассылку?' })) return;
     try {
       await apiJson(`/api/admin/important-messages/${numericId}`, { method: 'DELETE' });
       state.importantMessages = state.importantMessages.filter((item) => Number(item?.id || 0) !== numericId);
@@ -10221,8 +10221,8 @@
     deleteBtn.style.padding = '0';
     deleteBtn.style.marginLeft = 'auto';
     deleteBtn.title = 'Сбросить подборку';
-    deleteBtn.addEventListener('click', () => {
-      if (confirm('Сбросить категории этого месяца?')) {
+    deleteBtn.addEventListener('click', async () => {
+      if (await window.AppModal.confirm({ message: 'Сбросить категории этого месяца?' })) {
         current.favoriteCategoryIds = [];
         current.categoryItems = [];
         current.favoriteCategoriesBonusPercent = 0;
@@ -25621,7 +25621,7 @@
     if (state.editingFilterId === 'new' || !state.editingFilterId) return;
 
     const filter = state.customFilters.find(f => f.id === state.editingFilterId);
-    if (!confirm('Удалить выборку "' + (filter?.title || '') + '"?')) return;
+    if (!await window.AppModal.confirm({ message: 'Удалить выборку "' + (filter?.title || '') + '"?' })) return;
 
     const tabKey = buildTabKey('category', state.editingFilterId);
 

@@ -175,7 +175,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         }
       }
       await db.query('UPDATE auth_browser_requests SET provider=?,code_challenge_id=?,expires_at=DATE_ADD(NOW(),INTERVAL 3 MINUTE) WHERE public_id=?',[provider,challenge.requestId,request.requestId]);
-      res.json({ok:true,mode:'code',request_id:request.requestId,provider,channels:available,link_channels:providers,expires_in:180,resend_after:60});
+      res.json({ok:true,mode:'code',request_id:request.requestId,provider,channels:available,link_channels:providers,expires_in:180,resend_after:0});
     }catch(error){sendCustomerMessengerError(res,error);}
   });
   router.post('/auth/phone-flow/verify',async(req,res)=>{

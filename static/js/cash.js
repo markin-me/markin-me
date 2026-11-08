@@ -4020,7 +4020,7 @@
       swipe.row.classList.toggle('is-delete-revealed', horizontalDistance < 0);
     }, { passive: true });
 
-    journalListEl.addEventListener('click', function (event) {
+    journalListEl.addEventListener('click', async function (event) {
       var expenseDocumentsRetry = event.target && event.target.closest('[data-expense-documents-retry]');
       if (expenseDocumentsRetry) {
         event.preventDefault();
@@ -4041,7 +4041,7 @@
         event.stopPropagation();
         var expenseDocumentDeleteId = Number(expenseDocumentDeleteBtn.getAttribute('data-expense-document-delete-id') || 0);
         if (!(expenseDocumentDeleteId > 0)) return;
-        if (!window.confirm('Удалить документ расхода?')) {
+        if (!await window.AppModal.confirm({ message: 'Удалить документ расхода?' })) {
           expenseDocumentDeleteBtn.closest('.cash-expense-document-row')?.classList.remove('is-delete-revealed');
           return;
         }

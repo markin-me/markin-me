@@ -28486,8 +28486,6 @@ function renderSheetAddressList() {
       BOT_LINK_INVALID: "Не удалось открыть бота магазина. Обратитесь к владельцу.",
       TELEGRAM_BOT_START_REQUIRED: "Сначала начните диалог с Telegram-ботом магазина. Если нет доступа к профилю, используйте другой подтверждённый способ входа или обратитесь к владельцу.",
       CODE_DELIVERY_FAILED: "Не удалось доставить код. Можно повторить отправку или явно выбрать Telegram.",
-      CODE_RESEND_TOO_SOON: "Код уже отправлен. Подождите перед повторной отправкой.",
-      CODE_RATE_LIMITED: "Слишком много запросов. Попробуйте позже.",
       CODE_INVALID: "Неверный код. Проверьте цифры.",
       CODE_EXPIRED: "Срок действия кода истёк. Запросите новый.",
       CODE_ATTEMPTS_EXCEEDED: "Лимит попыток исчерпан. Запросите новый код.",
@@ -33050,7 +33048,7 @@ function renderSheetAddressList() {
     function setPhoneVerifyUi() {
       const isGuest=Boolean(me?.is_guest);
       phoneVerifyRow.classList.remove('hidden');
-      phoneVerifyRow.classList.toggle('has-status-space',!isGuest);
+      phoneVerifyRow.classList.toggle('has-status-space',settingsPage||!isGuest);
       phoneVerifyRow.classList.toggle('is-checking-phone',!isGuest&&!phoneVerifyStatusLoaded&&!phoneVerifyError);
       phoneVerifyBtn.disabled = (!isGuest&&!phoneVerifyStatusLoaded) || phoneVerifyBusy;
       if(!isGuest&&!phoneVerifyStatusLoaded){
@@ -34646,9 +34644,11 @@ function renderSheetAddressList() {
       if(photoRemoveBtn.disabled)return;
       photoRemoveBtn.disabled = true;
       try {
-        const confirmed=settingsPage
-          ?await window.AppModal.confirm({title:"Удалить фото профиля?",message:"Фотографию можно будет загрузить снова.",saveText:"Удалить"})
-          :window.confirm("Удалить фото профиля?");
+        const confirmed=await window.AppModal.confirm({
+          title:"Удалить фото профиля?",
+          message:settingsPage?"Фотографию можно будет загрузить снова.":"",
+          saveText:"Удалить"
+        });
         if(!confirmed)return;
         await apiJson("/api/public/me/photo", { method: "DELETE" });
         setProfilePhoto("");
@@ -34941,6 +34941,13 @@ function renderSheetAddressList() {
       return;
     }
     if (!forceOpen) rememberPreviousPanel();
+    if (elProfilePage && (!elProfilePage.isConnected || elProfilePage.closest(".app-modal-body"))) {
+      const settingsPage = document.getElementById("shopProfileSettingsPage");
+      const pageParent = settingsPage?.parentElement || document.body;
+      pageParent.insertBefore(elProfilePage, settingsPage?.parentElement === pageParent ? settingsPage : null);
+    }
+    elProfilePage?.classList.remove("shop-profile-content", "shop-profile-page-in-modal", "shop-profile-orders-sheet-content");
+    elProfilePage?.querySelector(".shop-profile-page-header")?.classList.remove("hidden");
     showProfileView();
     const profileHost = isMobileProfile
       ? (elProfilePageContent || elProfileContent)

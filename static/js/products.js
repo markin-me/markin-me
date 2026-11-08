@@ -1312,7 +1312,7 @@
 
   async function clearProductsCatalogSavedData() {
     if (!window.CatalogRepository || state.catalogControlBusy) return;
-    if (!confirm("Очистить сохранённые товары текущего филиала с этого устройства?")) return;
+    if (!await window.AppModal.confirm({ message: "Очистить сохранённые товары текущего филиала с этого устройства?" })) return;
     state.catalogControlBusy = "clear";
     renderProductsCatalogStatus();
     try {
@@ -4080,7 +4080,7 @@
         if (!row) return;
         const id = Number(row.dataset.convId);
         if (!Number.isFinite(id)) return;
-        if (!confirm("Удалить конверсию?")) return;
+        if (!await window.AppModal.confirm({ message: "Удалить конверсию?" })) return;
         try {
           await api("/api/admin/unit-conversions/" + id, { method: "DELETE" });
           await loadUnitConversions();
@@ -23451,7 +23451,7 @@ const isViewMode = state.comboPanel.mode === "view";
         } else if (state.mode === "auto-add" && state.selectedAutoAddGroupId) {
           const groupId = state.selectedAutoAddGroupId;
           (async () => {
-            if (!confirm("Удалить условие и все товары в нем?")) return;
+            if (!await window.AppModal.confirm({ message: "Удалить условие и все товары в нем?" })) return;
             try {
               await apiDeleteAutoAddGroup(groupId);
               editingAutoAdds.delete(groupId);
@@ -23592,7 +23592,7 @@ const isViewMode = state.comboPanel.mode === "view";
         if (state.mode === "auto-add" && state.selectedAutoAddGroupId) {
           const groupId = state.selectedAutoAddGroupId;
           (async () => {
-            if (!confirm("Удалить условие и все товары в нем?")) return;
+            if (!await window.AppModal.confirm({ message: "Удалить условие и все товары в нем?" })) return;
             try {
               await apiDeleteAutoAddGroup(groupId);
               editingAutoAdds.delete(groupId);
@@ -23837,7 +23837,7 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         if (footerSaveBtn.dataset.pickerType === "stock-doc-post") {
           if (!state.stockDocDetail) return;
-          if (!confirm("Провести документ? Остатки будут обновлены.")) return;
+          if (!await window.AppModal.confirm({ message: "Провести документ? Остатки будут обновлены." })) return;
           try {
             await apiPostStockDocument(state.stockDocDetail.id);
             await openStockDocDetail(state.stockDocDetail.id);

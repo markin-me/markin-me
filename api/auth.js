@@ -10,8 +10,9 @@ const {
   getAccountChannels,
   unlinkAccountChannel,
   browserBinding, createBrowserRequest, consumeBrowserRequest, proveBrowserEmployee,
+  issueCodeChallenge, verifyEmployeeBrowserCode,
 } = require('./messengerAuth');
-const { buildProviderLink, getTenantChannelAvailability, getTenantBotConfig, assertBrowserProviderReady } = require('./messengerDelivery');
+const { buildProviderLink, deliverCode, getTenantChannelAvailability, getTenantBotConfig, assertBrowserProviderReady } = require('./messengerDelivery');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
@@ -22,14 +23,70 @@ module.exports = function makeAuthRouter({ db, helpers }) {
   router.use('/messenger-browser',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
   // Context is fixed by this employee router, never taken from the browser body.
   const browserTenant = req => Number(req._resolvedTenant?.id || (process.env.DB_NAME === 'a1186497_test' && ['localhost','127.0.0.1','::1'].includes(req.hostname) ? 1 : 0));
+  async function employeeByPhone(tenantId, phone) {
+    const [users]=await db.query(`SELECT u.*,t.name tenant_name,t.slug tenant_slug FROM app_users u
+      JOIN ten_tenants t ON t.id=u.tenant_id AND t.is_active=1
+      WHERE u.tenant_id=? AND u.is_active=1 AND u.employee_status='active'
+        AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)`,[tenantId]);
+    const matches=users.filter(user=>helpers.normalizePhone(user.phone)===phone);
+    return matches.length===1?matches[0]:null;
+  }
+  router.post('/phone-flow/start',async(req,res)=>{
+    try{
+      if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
+      const tenantId=browserTenant(req),phone=helpers.normalizePhone(req.body.phone);
+      if(!tenantId)throw new MessengerAuthError('TENANT_REQUIRED',400);
+      if(!/^7\d{10}$/.test(phone))throw new MessengerAuthError('PHONE_REQUIRED',400);
+      const providers=[];
+      for(const provider of ['max','tg'])try{await getTenantBotConfig(db,tenantId,provider);providers.push(provider);}catch(error){if(error.code!=='TENANT_BOT_UNAVAILABLE')throw error;}
+      const employee=await employeeByPhone(tenantId,phone);
+      if(!employee)throw new MessengerAuthError('EMPLOYEE_NOT_FOUND',404);
+      const channels=await getAccountChannels(db,{tenantId,accountType:'employee',accountId:employee.id},{includePrivate:true});
+      const available=providers.filter(provider=>channels.some(channel=>channel.provider===provider&&channel.verifiedAt));
+      if(!available.length)return res.json({ok:true,mode:'unverified',channels:providers,employee_exists:true,relink_required:true});
+      let provider=req.body.provider?String(req.body.provider):available[0];
+      if(!available.includes(provider))throw new MessengerAuthError('EMPLOYEE_CHANNEL_DISABLED',403);
+      const binding=browserBinding(req,res);
+      const request=await createBrowserRequest(db,{tenantId,accountType:'employee',provider,binding,ipAddress:req.ip,requestedPhone:phone});
+      await db.query('UPDATE auth_browser_requests SET account_id=? WHERE public_id=?',[employee.id,request.requestId]);
+      let challenge;
+      try{challenge=await issueCodeChallenge(db,{tenantId,accountType:'employee',accountId:employee.id,purpose:'login',provider,ipAddress:req.ip,deliver:payload=>deliverCode(db,payload)});}
+      catch(error){
+        const otherProvider=available.find(candidate=>candidate!==provider);
+        if(['CODE_DELIVERY_FAILED','TELEGRAM_BOT_START_REQUIRED'].includes(error.code)&&otherProvider){
+          provider=otherProvider;
+          challenge=await issueCodeChallenge(db,{tenantId,accountType:'employee',accountId:employee.id,purpose:'login',provider,ipAddress:req.ip,deliver:payload=>deliverCode(db,payload)});
+        }else throw error;
+      }
+      await db.query('UPDATE auth_browser_requests SET provider=?,code_challenge_id=?,expires_at=DATE_ADD(NOW(),INTERVAL 3 MINUTE) WHERE public_id=?',[provider,challenge.requestId,request.requestId]);
+      res.json({ok:true,mode:'code',request_id:request.requestId,provider,channels:available,link_channels:providers,expires_in:180,resend_after:0});
+    }catch(error){sendMessengerError(res,error);}
+  });
+  router.post('/phone-flow/verify',async(req,res)=>{
+    try{
+      if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
+      res.json(await verifyEmployeeBrowserCode(db,{tenantId:browserTenant(req),requestId:req.body.request_id,binding:req.cookies?.messenger_browser,code:req.body.code,onVerified:async(conn,r)=>{
+      const [users]=await conn.query('SELECT u.*,t.name tenant_name,t.slug tenant_slug FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id WHERE u.id=? AND u.tenant_id=?',[r.account_id,r.tenant_id]);
+      const auth=users[0]&&await buildSuccessfulAuth(users[0],{id:r.tenant_id,name:users[0].tenant_name,slug:users[0].tenant_slug},conn);
+      if(!auth?.body?.ok)throw new MessengerAuthError(auth?.body?.error||'ACCOUNT_NOT_AVAILABLE',auth?.status||403);
+      return auth.body;
+    }}));}catch(error){sendMessengerError(res,error);}
+  });
   router.post('/messenger-browser/start', async (req,res) => {
     try {
       if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
       const tenantId=browserTenant(req);
       if (!tenantId) throw new MessengerAuthError('TENANT_REQUIRED',400);
       const provider=String(req.body.provider || '');
+      const purpose=req.body.purpose||'login';
+      const requestedPhone=purpose==='login'?helpers.normalizePhone(req.body.phone):null;
+      if(purpose==='login'&&!/^7\d{10}$/.test(requestedPhone))throw new MessengerAuthError('PHONE_REQUIRED',400);
+      if(purpose==='login'){
+        const employee=await employeeByPhone(tenantId,requestedPhone);
+        if(employee&&(await getAccountChannels(db,{tenantId,accountType:'employee',accountId:employee.id},{includePrivate:true})).some(channel=>channel.provider===provider&&channel.verifiedAt))throw new MessengerAuthError('EMPLOYEE_CODE_REQUIRED',409);
+      }
       await assertBrowserProviderReady(await getTenantBotConfig(db,tenantId,provider));
-      const request=await createBrowserRequest(db,{tenantId,accountType:'employee',provider,binding:browserBinding(req,res),ipAddress:req.ip,purpose:req.body.purpose||'login'});
+      const request=await createBrowserRequest(db,{tenantId,accountType:'employee',provider,binding:browserBinding(req,res),ipAddress:req.ip,purpose,requestedPhone});
       res.json({ok:true,request_id:request.requestId,bot_link:await buildProviderLink(db,tenantId,provider,request.token)});
     } catch(e){sendMessengerError(res,e);}
   });
@@ -41,6 +98,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
           await getTenantBotConfig(conn,r.tenant_id,r.provider);
           const [users]=await conn.query(`SELECT u.*,t.name tenant_name,t.slug tenant_slug FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id WHERE u.id=? AND u.tenant_id=? AND t.is_active=1`,[r.account_id,r.tenant_id]);
           if(!users[0])throw new MessengerAuthError('ACCOUNT_NOT_AVAILABLE',403);
+          if(r.requested_phone&&helpers.normalizePhone(users[0].phone)!==r.requested_phone)throw new MessengerAuthError('EMPLOYEE_CONTACT_CONFLICT',403);
           if(r.purpose==='password_reset'){
             try{employeeIdentity.validatePassword(req.body.new_password);}catch(error){throw new MessengerAuthError(error.code,400);}
             const hash=await bcrypt.hash(req.body.new_password,10);
@@ -356,17 +414,6 @@ module.exports = function makeAuthRouter({ db, helpers }) {
   router.delete('/messenger-links/:provider', authMiddleware, async (req, res) => {
     try {
       const scope = currentEmployeeScope(req);
-      const currentPassword = typeof req.body.current_password === 'string' ? req.body.current_password : '';
-      if (!currentPassword) return res.status(400).json({ ok: false, error: 'CURRENT_PASSWORD_REQUIRED' });
-      const [rows] = await db.query(
-        `SELECT password_hash FROM app_users
-         WHERE id=? AND tenant_id=? AND is_active=1 AND employee_status='active'
-         LIMIT 1`,
-        [scope.accountId, scope.tenantId]
-      );
-      if (!rows[0]?.password_hash || !await bcrypt.compare(currentPassword, rows[0].password_hash)) {
-        return res.status(400).json({ ok: false, error: 'CURRENT_PASSWORD_INVALID' });
-      }
       await unlinkAccountChannel(db, scope, req.params.provider);
       return res.json({ ok: true });
     } catch (error) {

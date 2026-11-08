@@ -140,7 +140,7 @@ async function sendTelegramMessage(token, chatId, text, extra = null) {
 async function sendContactRequest(token, chatId) {
   keepCurrentOperationPending();
   await sendTelegramMessage(token, chatId,
-    'Начните вход кнопкой «Войти через Telegram» в исходной вкладке магазина или CRM. При первой привязке передайте свой контакт, а сотрудник затем один раз подтвердит логин и пароль в той же карточке. После этого подтвердите запрос кнопкой «Авторизоваться» в боте. Обычный Start сам по себе не предоставляет доступ.',
+    'Начните вход кнопкой «Войти через Telegram» в исходной вкладке. Передайте свой контакт системной кнопкой Telegram. Обычный Start сам по себе не предоставляет доступ.',
     { reply_markup: { remove_keyboard: true } });
 }
 
@@ -381,7 +381,7 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
     if(!response.ok || !answer?.ok)throw Object.assign(new Error('TG_CALLBACK_FAILED'),{code:'TG_CALLBACK_FAILED'});
     await sendTelegramMessage(tenantBot.token,callback.from.id,result.ok
       ? result.purpose==='password_reset'?'✅ Подтверждение смены пароля принято. Вернитесь в исходную вкладку CRM.':'Подтверждение принято. Вернитесь в исходную вкладку — CRM завершит вход там.'
-      :result.error==='EMPLOYEE_MESSENGER_NOT_LINKED'?'Вернитесь в исходную карточку входа и однократно подтвердите логин и пароль. Затем нажмите «Авторизоваться» здесь повторно.'
+      :result.error==='EMPLOYEE_MESSENGER_NOT_LINKED'?'Привязка не подтверждена. Начните вход заново в исходной карточке.'
       :result.error==='CUSTOMER_OWNERSHIP_PROOF_REQUIRED'?'По этому номеру уже есть карточка. Контакт не даёт доступа к её данным. Нужно подтверждение через ранее привязанный мессенджер или помощь администратора; дата рождения для новой привязки не подходит.'
       :'Вход не подтверждён. Запрос истёк, привязка конфликтует или требуется обновление CRM. Вернитесь в исходную карточку входа.');
     return;
@@ -414,11 +414,8 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
   if(payload.startsWith('b_') && options.onBrowserAuth){
     const result=await options.onBrowserAuth({providerUserId:String(fromId),token:payload,confirm:false});
     if(result.ok&&result.contactRequired){
-      const origin=await inferTenantOrigin(db,tenantBot.tenantId);
-      if(!origin)throw Object.assign(new Error('TENANT_SITE_NOT_CONFIGURED'),{code:'TENANT_SITE_NOT_CONFIGURED'});
-      const siteHost=require('url').domainToUnicode(new URL(origin).hostname);
-      await sendTelegramMessage(tenantBot.token,chatId,`Нажмите «Начать покупки», чтобы авторизироваться на сайте ${siteHost}.`,
-        {reply_markup:{keyboard:[[{text:'Начать покупки',request_contact:true}]],resize_keyboard:true,one_time_keyboard:true}});
+      await sendTelegramMessage(tenantBot.token,chatId,'Чтобы авторизоваться в системе, нажмите «Авторизоваться».',
+        {reply_markup:{keyboard:[[{text:'Авторизоваться',request_contact:true}]],resize_keyboard:true,one_time_keyboard:true}});
       return;
     }
     await sendTelegramMessage(tenantBot.token,chatId,result.ok?'Подтвердите вход в исходном браузере. Если вы не начинали вход, не нажимайте кнопку.':'Запрос истёк. Начните вход заново в магазине.',
@@ -445,7 +442,7 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
     await sendTelegramMessage(tenantBot.token, chatId, result?.ok
       ? result.context==='PROFILE_LINK'
         ? 'Telegram успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
-        : 'Telegram успешно привязан. Вернитесь в CRM. При следующем входе подтвердите его кнопкой «Авторизоваться» в боте.'
+        : 'Telegram успешно привязан. Вернитесь в CRM. Теперь вы можете получать коды для входа через этот бот.'
       : 'Ссылка недействительна, истекла или привязка конфликтует. Получите новую в профиле.',
       { reply_markup: { remove_keyboard: true } });
     return;
@@ -466,14 +463,12 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
         return;
       }
       if(browser.autoConfirmed){
-        await sendTelegramMessage(tenantBot.token,chatId,'Номер телефона подтверждён. Вход в магазин будет завершён автоматически',{reply_markup:{remove_keyboard:true}});
+        await sendTelegramMessage(tenantBot.token,chatId,'Номер телефона подтверждён. Вход будет завершён автоматически',{reply_markup:{remove_keyboard:true}});
         await sendTelegramMessage(tenantBot.token,chatId,'При последующих авторизациях вы будете получать код в этом боте');
         return;
       }
       if(browser.ok){
-        await sendTelegramMessage(tenantBot.token,chatId,browser.accountType==='employee'
-          ?'Контакт подтверждён. Вернитесь в исходную карточку CRM и однократно введите логин и пароль. После этого подтвердите вход кнопкой ниже.'
-          :'Контакт подтверждён. Нажмите «Авторизоваться». Если карточка уже существует, потребуется отдельное подтверждение доступа.',
+        await sendTelegramMessage(tenantBot.token,chatId,'Контакт подтверждён. Нажмите «Авторизоваться».',
           {reply_markup:{remove_keyboard:true}});
         await sendTelegramMessage(tenantBot.token,chatId,'Подтвердите именно начатый вами вход.',{reply_markup:{inline_keyboard:[[{text:'Авторизоваться',callback_data:`auth:${browser.reference}`}]]}});return;
       }

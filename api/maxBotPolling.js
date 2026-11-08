@@ -760,7 +760,7 @@ async function sendTenantMaxProfileHint(db, tenantId, token, userId, send) {
   const links = await getTenantReturnLinks(db, tenantId);
   const url = toMaxInlineLinkUrl(links.siteUrl);
   await send({ db, tenantId, botToken: token, maxUserId: userId,
-    text: 'Нажмите «Войти через MAX» в исходной карточке магазина или CRM. При первой привязке передайте свой контакт; сотрудник затем один раз подтвердит логин и пароль в той же карточке. Подтвердите новый запрос кнопкой «Авторизоваться» в боте. Обычный Start сам по себе не предоставляет доступ.',
+    text: 'Нажмите «Войти через MAX» в исходной карточке. Передайте свой контакт системной кнопкой MAX. Обычный Start сам по себе не предоставляет доступ.',
     extraPayload: url && isMaxInlineLinkUrl(url)
       ? { attachments: [{ type: 'inline_keyboard', payload: { buttons: [[{ type: 'link', text: 'Открыть сайт', url }]] } }] }
       : undefined });
@@ -811,9 +811,9 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, token }, u, option
         ?result.guestConfirmed?'Номер телефона подтверждён! MAX подключён к вашему профилю. Теперь вам доступны бонусы и вход по коду.':'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
         :result.error==='CONTACT_PHONE_MISMATCH'?'Не удалось привязать мессенджер, так как номер телефона не совпадает с учётной записью':'Не удалось привязать MAX. Начните привязку заново в профиле.'});return;
     }
-    if(result.autoConfirmed){await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Номер телефона подтверждён. Вход в магазин будет завершён автоматически'});return;}
+    if(result.autoConfirmed){await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Номер телефона подтверждён. Вход будет завершён автоматически'});return;}
     await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok
-      ? result.accountType==='employee'?'Контакт подтверждён. Введите логин и пароль в исходной карточке CRM, затем нажмите «Авторизоваться».':'Контакт подтверждён. Подтвердите начатый вами вход.'
+      ?'Контакт подтверждён. Подтвердите начатый вами вход.'
       :result.error==='CUSTOMER_RELINK_PROOF_REQUIRED'?'Для повторного подключения используйте прежний MAX-аккаунт. Если он недоступен, восстановите доступ через магазин.':result.error==='CONTACT_REQUEST_AMBIGUOUS'?'Открыто несколько запросов входа. Отмените лишние в исходных вкладках, затем отправьте контакт снова.':'Запрос отсутствует или истёк. Начните вход заново в исходной карточке.',extraPayload:result.ok?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'Авторизоваться',payload:`auth:${result.reference}`}]]}}]}:undefined});return;
   }
   if (startToken?.startsWith('l_') && parsed.userId && typeof options.onAuthLogin === 'function') {
@@ -827,7 +827,7 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, token }, u, option
   if(startToken?.startsWith('b_') && parsed.userId && options.onBrowserAuth){
     const result=await options.onBrowserAuth({providerUserId:parsed.userId,token:startToken,confirm:false});
     if(result.ok&&result.contactRequired){
-      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Для первого входа передайте собственный номер системной кнопкой MAX.',extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Поделиться контактом'}]]}}]}});return;
+      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Чтобы авторизоваться в системе, нажмите «Авторизоваться».',extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Авторизоваться'}]]}}]}});return;
     }
     await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok?'Подтвердите вход. Если вы его не начинали, не нажимайте кнопку.':'Запрос истёк. Начните заново в магазине.',
       extraPayload:result.ok&&!result.confirmed?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'✅ Авторизоваться',payload:`auth:${startToken}`}]]}}]}:undefined});
@@ -841,7 +841,7 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, token }, u, option
     await send({ db, tenantId, botToken: token, maxUserId: parsed.userId, text: result?.ok
       ? result.context==='PROFILE_LINK'
         ?'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
-        :'MAX успешно привязан. Вернитесь в CRM. При следующем входе подтвердите его кнопкой «Авторизоваться» в боте.'
+        :'MAX успешно привязан. Вернитесь в CRM. Теперь вы можете получать коды для входа через этот бот.'
       : 'Ссылка недействительна или истекла. Получите новую в профиле.' });
     return;
   }

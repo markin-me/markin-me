@@ -3,8 +3,66 @@
   if (!trigger) return;
 
   const labels = { max: 'MAX', tg: 'Telegram' };
-  const icons = { max: 'fa-comment', tg: 'fa-paper-plane' };
   let pollTimer = null;
+  let bindingsCache = null;
+  let bindingsRequest = null;
+  const pendingLinks = new Map();
+
+  document.getElementById('userMenuChangePassword')?.addEventListener('click', async event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const profile = document.getElementById('userMenuDropdown');
+    const profileNodes = Array.from(profile.childNodes);
+    const link = event.currentTarget;
+    if (link.getAttribute('aria-busy') === 'true') return;
+    link.setAttribute('aria-busy', 'true');
+    try {
+      const response = await fetch(link.href);
+      if (!response.ok) throw new Error('PASSWORD_FORM_LOAD_FAILED');
+      const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const stage = page.getElementById('passwordChangeStage');
+      if (!stage) throw new Error('PASSWORD_FORM_LOAD_FAILED');
+      const content = document.importNode(stage, true);
+      content.removeAttribute('id');
+      content.className = 'admin-profile-password-content';
+      const heading = document.createElement('h2');
+      heading.textContent = 'Сменить пароль';
+      content.prepend(heading);
+      const notice = document.createElement('p');
+      notice.setAttribute('role', 'status');
+      content.append(notice);
+      const restore = () => { profile.replaceChildren(...profileNodes); link.focus(); };
+      const cancel = content.querySelector('.auth-password-cancel');
+      cancel.textContent = 'ОТМЕНИТЬ';
+      cancel.removeAttribute('href');
+      cancel.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); restore(); });
+      content.querySelectorAll('.password-toggle').forEach(button => button.addEventListener('click', () => {
+        const input = content.querySelector('#' + button.dataset.target);
+        input.type = input.type === 'password' ? 'text' : 'password';
+      }));
+      const form = content.querySelector('form');
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const data = Object.fromEntries(new FormData(form));
+        if (data.new_password !== data.new_password_confirm) { notice.textContent = 'Пароли не совпадают'; return; }
+        const submit = form.querySelector('[type="submit"]');
+        submit.disabled = true;
+        try {
+          const result = await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: data.current_password, new_password: data.new_password }) });
+          if (result.token) localStorage.setItem('authToken', result.token);
+          if (result.user) localStorage.setItem('user', JSON.stringify(result.user));
+          if (result.tenant) localStorage.setItem('tenant', JSON.stringify(result.tenant));
+          restore();
+        } catch (error) {
+          notice.textContent = ({ CURRENT_PASSWORD_INVALID: 'Текущий пароль указан неверно.', PASSWORD_TOO_WEAK: 'Добавьте латинские буквы обоих регистров и цифры.', PASSWORD_TOO_SHORT: 'Минимум 12 символов.', PASSWORD_TOO_LONG: 'Пароль не должен превышать 72 байта.' })[error.code] || errorText(error.code);
+        } finally { submit.disabled = false; }
+      });
+      profile.replaceChildren(content);
+      form.querySelector('input').focus();
+    } catch (error) {
+      await window.AppModal.alert('Не удалось загрузить форму смены пароля. Попробуйте ещё раз.');
+    } finally { link.removeAttribute('aria-busy'); }
+  });
 
   function api(url, options) {
     return authFetch(url, options || {}).then(async (response) => {
@@ -34,7 +92,7 @@
   function setNotice(text, isError) {
     const notice = document.getElementById('messengerSecurityNotice');
     if (!notice) return;
-    notice.textContent = text || '';
+    notice.textContent = isError ? text || '' : '';
     notice.classList.toggle('is-error', Boolean(isError));
   }
 
@@ -44,49 +102,46 @@
     wrapper.dataset.provider = provider;
     const copy = document.createElement('div');
     copy.className = 'messenger-security-copy';
+    const icon = document.createElement('img');
+    icon.className = 'messenger-security-icon';
+    icon.src = `/static/uploads/auth/${provider === 'tg' ? 'telegram' : 'max'}-auth.png`;
+    icon.alt = '';
     const title = document.createElement('h3');
     title.className = 'messenger-security-title';
-    title.innerHTML = `<i class="fas ${icons[provider]}" aria-hidden="true"></i>`;
-    title.append(document.createTextNode(labels[provider]));
+    title.textContent = labels[provider];
     const state = document.createElement('p');
     state.className = 'messenger-security-state';
     state.textContent = channel ? `Привязан профиль ${channel.masked}` : 'Не привязан';
-    if (availability?.available === true) state.textContent += '. Бот магазина настроен.';
-    if (availability?.available === false) {
-      state.textContent += availability.reason === 'BOT_TENANT_CONFLICT'
-        ? '. Конфигурация бота требует проверки владельцем.'
-        : '. Бот магазина отключён или не настроен.';
-    }
-    copy.append(title, state);
+    copy.append(icon, title, state);
 
     const actions = document.createElement('div');
     actions.className = 'messenger-security-actions';
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = channel ? 'btn btn-danger' : 'btn btn-primary';
-    button.textContent = channel ? 'Отвязать' : `Привязать ${labels[provider]}`;
+    const pending = pendingLinks.get(provider);
+    const ready = !channel && pending && pending.expiresAt > Date.now();
+    const button = document.createElement(ready ? 'a' : 'button');
+    if (ready) { button.href = pending.url; button.target = '_blank'; button.rel = 'noopener'; }
+    else button.type = 'button';
+    button.className = 'btn btn-sm';
+    button.textContent = channel ? 'Отвязать' : pendingLinks.has(provider) ? `Открыть ${labels[provider]}` : 'Привязать';
     button.disabled = !channel && availability?.available === false;
-    button.addEventListener('click', () => channel ? showUnlink(provider) : startLink(provider, button));
+    if (!ready) button.addEventListener('click', () => channel ? showUnlink(provider) : startLink(provider, button));
     actions.append(button);
-    if (channel && provider === 'tg') {
-      const reconnect = document.createElement('button');
-      reconnect.type = 'button';
-      reconnect.className = 'btn btn-primary';
-      reconnect.textContent = 'Подключить бота магазина';
-      reconnect.disabled = availability?.available === false;
-      reconnect.addEventListener('click', () => startLink(provider, reconnect));
-      actions.prepend(reconnect);
-    }
     wrapper.append(copy, actions);
     return wrapper;
   }
 
-  async function render() {
+  async function render(force = false) {
     const list = document.getElementById('messengerSecurityList');
     if (!list) return;
     list.setAttribute('aria-busy', 'true');
     try {
-      const result = await api('/api/auth/messenger-links');
+      let result = !force && bindingsCache;
+      if (!result) {
+        if (!bindingsRequest) bindingsRequest = api('/api/auth/messenger-links').finally(() => { bindingsRequest = null; });
+        result = await bindingsRequest;
+        bindingsCache = result;
+      }
+      if (!list.isConnected) return;
       list.replaceChildren(card('max', result.channels.max, result.availability?.max), card('tg', result.channels.tg, result.availability?.tg));
       list.removeAttribute('aria-busy');
     } catch (error) {
@@ -96,20 +151,34 @@
   }
 
   async function startLink(provider, button) {
-    const popup = window.AuthCard.openProviderWindow();
+    const pending = pendingLinks.get(provider);
+    if (pending && pending.expiresAt > Date.now()) {
+      window.AuthCard.openProviderWindow(pending.url);
+      return;
+    }
+    pendingLinks.delete(provider);
     button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = `Открываем ${labels[provider]}…`;
+    button.classList.add('is-opening');
+    button.setAttribute('aria-busy', 'true');
     setNotice('Создаём безопасную ссылку…', false);
     try {
       const result = await api(`/api/auth/messenger-links/${provider}`, { method: 'POST', signal: AbortSignal.timeout(15000) });
-      if (popup) popup.location.replace(result.link);
-      else setNotice(`Разрешите всплывающие окна и снова нажмите «Привязать ${labels[provider]}».`, true);
+      const url = new URL(result.link);
+      if (url.protocol !== 'https:' || !['t.me', 'max.ru'].includes(url.hostname)) throw new Error('BOT_LINK_INVALID');
+      pendingLinks.set(provider, { url: url.href, expiresAt: Date.parse(result.expires_at) });
+      const popup = window.AuthCard.openProviderWindow(url.href);
+      if (!popup) setNotice(`Разрешите всплывающие окна и снова нажмите «Привязать ${labels[provider]}».`, true);
       if (popup) setNotice(`Завершите привязку в ${labels[provider]}. Статус обновится автоматически.`, false);
       clearInterval(pollTimer);
       pollTimer = setInterval(async () => {
-        if (!window.AppModal?.isOpen()) return clearInterval(pollTimer);
+        if (!document.getElementById('messengerSecurityContent')?.getClientRects().length) return clearInterval(pollTimer);
         try {
           const status = await api('/api/auth/messenger-links');
+          bindingsCache = status;
           if (status.channels?.[provider]) {
+            pendingLinks.delete(provider);
             clearInterval(pollTimer);
             await render();
             setNotice(`${labels[provider]} успешно привязан.`, false);
@@ -117,63 +186,59 @@
         } catch (_) {}
       }, 2000);
     } catch (error) {
-      if (popup) popup.close();
       setNotice(errorText(error.code), true);
     } finally {
       button.disabled = false;
+      button.textContent = pendingLinks.has(provider) ? `Открыть ${labels[provider]}` : originalText;
+      button.classList.remove('is-opening');
+      button.removeAttribute('aria-busy');
+      if (pendingLinks.has(provider)) await render();
     }
   }
 
-  function showUnlink(provider) {
-    document.getElementById('messengerSecurityConfirm')?.remove();
-    const panel = document.createElement('div');
-    panel.id = 'messengerSecurityConfirm';
-    panel.className = 'messenger-security-confirm';
-    const label = document.createElement('label');
-    label.className = 'field-label';
-    label.htmlFor = 'messengerSecurityPassword';
-    label.textContent = `Чтобы отвязать ${labels[provider]}, введите текущий пароль`;
-    const input = document.createElement('input');
-    input.id = 'messengerSecurityPassword';
-    input.type = 'password';
-    input.autocomplete = 'current-password';
-    input.className = 'control';
-    const submit = document.createElement('button');
-    submit.type = 'button';
-    submit.className = 'btn btn-danger';
-    submit.textContent = 'Подтвердить отвязку';
-    submit.addEventListener('click', async () => {
-      if (!input.value) { setNotice('Введите текущий пароль.', true); input.focus(); return; }
-      submit.disabled = true;
-      try {
-        await api(`/api/auth/messenger-links/${provider}`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ current_password: input.value }),
-        });
-        panel.remove();
-        await render();
-        setNotice(`${labels[provider]} отвязан.`, false);
-      } catch (error) {
-        setNotice(errorText(error.code), true);
-        input.select();
-      } finally {
-        submit.disabled = false;
-      }
+  async function showUnlink(provider) {
+    const confirmed = await window.AppModal.confirm({
+      title: `Отвязать ${labels[provider]}?`,
+      message: `Вход и получение кодов через этот аккаунт ${labels[provider]} станут недоступны до повторной привязки.`,
+      saveText: 'Отвязать',
     });
-    input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); submit.click(); } });
-    panel.append(label, input, submit);
-    document.getElementById('messengerSecurityContent').append(panel);
-    input.focus();
+    if (!confirmed) return;
+    try {
+      await api(`/api/auth/messenger-links/${provider}`, { method: 'DELETE' });
+      bindingsCache = null;
+      await render(true);
+      setNotice(`${labels[provider]} отвязан.`, false);
+    } catch (error) {
+      setNotice(errorText(error.code), true);
+    }
   }
 
-  trigger.addEventListener('click', () => {
-    trigger.closest('.user-menu-wrapper')?.classList.remove('active');
+  trigger.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const profile = document.getElementById('userMenuDropdown');
+    const profileNodes = Array.from(profile.childNodes);
     const content = document.createElement('div');
     content.id = 'messengerSecurityContent';
-    const intro = document.createElement('p');
-    intro.className = 'auth-stage-copy';
-    intro.textContent = 'Привяжите личный профиль через бота вашего магазина для входа и восстановления пароля. MAX используется первым.';
+    content.className = 'messenger-security-content';
+    const toolbar = document.createElement('div');
+    toolbar.className = 'messenger-security-toolbar';
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'messenger-security-back';
+    back.setAttribute('aria-label', 'Назад');
+    back.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+    back.addEventListener('click', (event) => {
+      event.stopPropagation();
+      clearInterval(pollTimer);pollTimer = null;
+      profile.replaceChildren(...profileNodes);
+      profile.classList.remove('is-messengers-screen');
+      trigger.focus();
+    });
+    const heading = document.createElement('h2');
+    heading.textContent = 'Мессенджеры';
+    toolbar.append(back, heading);
+    const panel = document.createElement('div');
+    panel.className = 'messenger-security-panel';
     const list = document.createElement('div');
     list.id = 'messengerSecurityList';
     list.className = 'messenger-security-list';
@@ -182,13 +247,10 @@
     notice.id = 'messengerSecurityNotice';
     notice.className = 'messenger-security-notice';
     notice.setAttribute('aria-live', 'polite');
-    content.append(intro, list, notice);
-    window.AppModal.open({
-      title: 'Безопасность входа',
-      content,
-      hideFooter: true,
-      onClose: () => { if (pollTimer) clearInterval(pollTimer); pollTimer = null; },
-    });
+    panel.append(list);
+    content.append(toolbar, panel, notice);
+    profile.classList.add('is-messengers-screen');
+    profile.replaceChildren(content);
     render();
   });
 })();

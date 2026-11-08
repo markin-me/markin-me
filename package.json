@@ -8,6 +8,8 @@
     "emoji:atlas": "node scripts/build-emoji-atlas.js",
     "domain:connect": "node scripts/connect-tenant-domain.js",
     "dev:pwa:tunnel": "node scripts/dev-pwa-tunnel.js",
+    "telegram:webhook:tunnel": "node scripts/dev-pwa-tunnel.js --telegram-webhook --tenant 1 --service-port 3107 --port 3507",
+    "max:webhook:tunnel": "node scripts/dev-pwa-tunnel.js --max-webhook --tenant 1 --service-port 3107 --port 3510",
     "payment:webhook:tunnel": "node scripts/dev-pwa-tunnel.js --payment-webhook",
     "addr:index:v1": "node scripts/import-local-address-v1.js",
     "address:service:install": "npm --prefix services/address-service install",

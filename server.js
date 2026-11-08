@@ -1353,6 +1353,7 @@ app.get('/manifest.json', async (req, res) => {
 // Service Worker для PWA (Android / установка на домашний экран)
 const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/css/style.css?v=20260925-stock-inline-v2'),
+  app.locals.assetUrl('/static/css/app-modal-confirmation.css'),
   app.locals.assetUrl('/static/js/auth.js'),
   app.locals.assetUrl('/static/js/current-time.js'),
   app.locals.assetUrl('/static/js/theme.js'),

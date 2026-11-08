@@ -223,11 +223,9 @@
         <% } else { %>
             <div class="auth-login-options" id="authLoginOptions">
                 <button type="button" class="auth-secondary" data-messenger-purpose="login">Выбрать способ входа</button>
-                <button type="button" class="auth-link-button" data-messenger-purpose="password_reset">Восстановить пароль</button>
             </div>
             <div class="auth-stage" id="messengerAuthStage">
                 <div id="employeeAuthCardMount"></div>
-                <button type="button" class="auth-password-cancel auth-link-button" data-messenger-purpose="password_reset">Восстановить пароль</button>
             </div>
             <div class="auth-stage" id="passwordChangeStage">
                 <div class="auth-stage-copy">Смена пароля добровольная. Введите текущий пароль и задайте новый.</div>
@@ -254,6 +252,9 @@
         </div>
     </div>
 
+    <%- include('../partials/modal') %>
+
+    <script src="<%= assetUrl('/static/js/appModal.js') %>"></script>
     <script src="<%= assetUrl('/static/js/auth-card.js') %>"></script>
     <script>
         const mode = '<%= mode %>';
@@ -319,12 +320,12 @@
         }
         function continueAuth(result) {
             saveAuth(result);
+            window.AppModal?.close('auth-success');
             if (requestedPasswordChange && Number(result.user?.id) > 0) {
                 requestedPasswordChange = false;
                 return showStage('passwordChangeStage', 'Сменить пароль');
             }
             if (result.next === 'select-role') return showRoleSelection(result.roles || []);
-            showSuccess('Вход выполнен. Перенаправление...');
             setTimeout(() => { window.location.href = result.redirect || '/dashboard/products'; }, 300);
         }
         function showRoleSelection(roles) {
@@ -356,31 +357,35 @@
             return result;
         }
 
-        function openMessengerStage(purpose) {
+        function openMessengerStage() {
             employeeAuthCard?.dispose();
             employeeAuthCard = window.AuthCard.create({
                 context: 'employee',
-                purpose,
                 dependencies: {
                     apiJson: employeeCardApi, messengerErrorText: errorText,
                     normalizePhone: value => String(value || '').replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7'),
                     enforcePhonePrefix: input => { if (!input.value) input.value = '+7'; }
                 },
-                onSuccess: result => {
-                    if (purpose === 'password_reset') {
-                        employeeAuthCard?.dispose();
-                        showSuccess('Пароль изменён. Теперь войдите с новым паролем.');
-                        setTimeout(showLoginStage, 900);
-                        return;
-                    }
-                    continueAuth(result);
-                }
+                onSuccess: continueAuth
             });
-            document.getElementById('employeeAuthCardMount').replaceChildren(employeeAuthCard);
-            showStage('messengerAuthStage', purpose === 'password_reset' ? 'Восстановить пароль' : 'Вход для сотрудников');
+            showStage('messengerAuthStage', 'Вход для сотрудников');
+            if (window.AppModal) {
+                window.AppModal.open({
+                    title: 'Вход',
+                    content: employeeAuthCard,
+                    showSave: false,
+                    showCancel: false,
+                    hideFooter: true,
+                    closeOnBackdrop: false,
+                    closeOnEsc: false,
+                    onClose: () => employeeAuthCard?.dispose()
+                });
+            } else {
+                document.getElementById('employeeAuthCardMount').replaceChildren(employeeAuthCard);
+            }
         }
 
-        document.querySelectorAll('[data-messenger-purpose]').forEach(button => button.addEventListener('click', () => openMessengerStage(button.dataset.messengerPurpose)));
+        document.querySelectorAll('[data-messenger-purpose]').forEach(button => button.addEventListener('click', openMessengerStage));
         document.getElementById('messengerCancelButton')?.addEventListener('click', showLoginStage);
         if (mode === 'login' && !requestedPasswordChange) openMessengerStage('login');
 

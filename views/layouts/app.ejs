@@ -155,6 +155,7 @@
   </script>
 
   <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css?v=20261014-sidebar-profile-role-v1') %>" />
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/app-modal-confirmation.css') %>" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <% if (appPageStyles.length) { %>
     <% appPageStyles.forEach(function (src) { %>
@@ -334,6 +335,7 @@
         var logoutBtn = document.getElementById('userMenuLogout');
         
         if (!btn || !menuWrapper || !dropdown) return;
+        document.body.appendChild(dropdown);
 
         var profilePhotoState = null;
         var profilePhotoImages = [document.getElementById('shopHeaderProfileImg'), document.getElementById('adminUserMenuPhoto')].filter(Boolean);
@@ -446,8 +448,15 @@
 
         // Кнопка выхода
         if (logoutBtn) {
-          logoutBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
+          window.requestAdminLogout = async function () {
+            if (window.AppModal) {
+              var confirmed = await window.AppModal.confirm({
+                title: 'Выйти из аккаунта?',
+                message: 'Для работы под своим профилем потребуется войти снова.',
+                saveText: 'Выйти'
+              });
+              if (!confirmed) return;
+            }
             if (typeof logout === 'function') {
               logout();
             } else {
@@ -462,12 +471,16 @@
               localStorage.removeItem('tenant');
               window.location.href = '/login';
             }
+          };
+          logoutBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            void window.requestAdminLogout();
           });
         }
 
         // Закрытие меню при клике вне его
         document.addEventListener('click', function (e) {
-          if (menuWrapper && !menuWrapper.contains(e.target)) {
+          if (menuWrapper && !menuWrapper.contains(e.target) && !dropdown.contains(e.target)) {
             menuWrapper.classList.remove('active');
           }
         });

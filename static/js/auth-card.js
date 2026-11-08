@@ -29,12 +29,16 @@
     const employee=context==='employee',recovery=employee&&options.purpose==='password_reset',api=d.apiJson;
     if(typeof api!=='function')throw new Error('AUTH_CARD_API_REQUIRED');
     const root=document.createElement('div');root.className='shop-auth shop-auth--browser';root.dataset.authContext=context;
+    if(!recovery)root.classList.add('shop-auth--client-layout');
     const title=document.createElement('div');title.className='shop-auth-title';title.textContent=recovery?'Восстановить пароль':employee?'Вход для сотрудников':'Войти';root.append(title);
+    const employeePhoneWrap=document.createElement('label');employeePhoneWrap.className='shop-auth-field';employeePhoneWrap.append(document.createTextNode('Номер телефона'));
+    const employeePhone=document.createElement('input');employeePhone.className='control';employeePhone.type='tel';employeePhone.placeholder='+7 (999) 999-99-99';employeePhone.autocomplete='tel';employeePhone.inputMode='tel';employeePhone.value=options.phone||'+7';employeePhoneWrap.append(employeePhone);
+    if(employee&&!recovery)root.append(employeePhoneWrap);
     const methods=document.createElement('div');methods.className='shop-auth-methods';root.append(methods);
     const form=document.createElement('form');form.className='shop-auth-form hidden';root.append(form);
-    if(!employee)root.insertBefore(form,methods);
+    if(!recovery)root.insertBefore(form,methods);
     const message=document.createElement('div');message.className='shop-auth-text muted';message.setAttribute('role','status');message.setAttribute('aria-live','polite');root.append(message);
-    const errorText=code=>({BROWSER_CONTACT_MIGRATION_REQUIRED:'Вход через мессенджер временно недоступен. Попробуйте позже.',EMPLOYEE_CONTACT_CONFLICT:'Не удалось подтвердить номер. Обратитесь к администратору.',PASSWORD_CHANGE_REQUIRED:'Сначала смените пароль обычным способом входа.',ACCOUNT_PERSON_CONFLICT:'Не удалось подтвердить профиль. Обратитесь в магазин.',MAX_TLS_UNTRUSTED:'MAX временно недоступен. Попробуйте позже.',MAX_WEBHOOK_NOT_READY:'MAX временно недоступен. Попробуйте позже.',MAX_API_UNAVAILABLE:'MAX временно недоступен. Попробуйте позже.',REQUEST_EXPIRED:'Запрос истёк. Начните вход заново.',REQUEST_INVALID:'Начните вход заново в этой вкладке.',LOGIN_RATE_LIMITED:'Слишком много попыток. Попробуйте позже.',INVALID_CREDENTIALS:'Не удалось войти. Проверьте введённые данные.',TENANT_BOT_UNAVAILABLE:'Мессенджер временно недоступен. Попробуйте позже.',BOT_TENANT_CONFLICT:'Вход через мессенджер временно недоступен. Попробуйте позже.',EMPLOYEE_MESSENGER_NOT_LINKED:'Подтвердите личность логином и паролем в этой карточке.'})[code]||'Не удалось выполнить вход. Попробуйте снова.';
+    const errorText=code=>({BROWSER_CONTACT_MIGRATION_REQUIRED:'Вход через мессенджер временно недоступен. Попробуйте позже.',EMPLOYEE_NOT_FOUND:'Сотрудника с данным номером телефона не существует',EMPLOYEE_CONTACT_CONFLICT:'Не удалось подтвердить номер. Обратитесь к администратору.',PHONE_REQUIRED:'Введите номер телефона.',PASSWORD_CHANGE_REQUIRED:'Сначала смените пароль обычным способом входа.',ACCOUNT_PERSON_CONFLICT:'Не удалось подтвердить профиль. Обратитесь в магазин.',MAX_TLS_UNTRUSTED:'MAX временно недоступен. Попробуйте позже.',MAX_WEBHOOK_NOT_READY:'MAX временно недоступен. Попробуйте позже.',MAX_API_UNAVAILABLE:'MAX временно недоступен. Попробуйте позже.',REQUEST_EXPIRED:'Запрос истёк. Начните вход заново.',REQUEST_INVALID:'Начните вход заново в этой вкладке.',LOGIN_RATE_LIMITED:'Слишком много попыток. Попробуйте позже.',INVALID_CREDENTIALS:'Не удалось войти. Проверьте введённые данные.',TENANT_BOT_UNAVAILABLE:'Мессенджер временно недоступен. Попробуйте позже.',BOT_TENANT_CONFLICT:'Вход через мессенджер временно недоступен. Попробуйте позже.',EMPLOYEE_MESSENGER_NOT_LINKED:'Подтвердите личность логином и паролем в этой карточке.'})[code]||'Не удалось выполнить вход. Попробуйте снова.';
     const input=(label,type,placeholder)=>{const wrap=document.createElement('label');wrap.className='shop-auth-field';wrap.append(document.createTextNode(label));const el=document.createElement('input');el.className='control';el.type=type;el.placeholder=placeholder;el.required=true;wrap.append(el);form.append(wrap);return el;};
     const identity=input(recovery?'Новый пароль':employee?'Логин':'Номер телефона',recovery?'password':employee?'text':'tel',recovery?'От 12 символов':employee?'Логин сотрудника@компания':'+7 (999) 999-99-99');
     identity.autocomplete=employee?'username':'tel';identity.autocapitalize='off';
@@ -44,10 +48,11 @@
     if(recovery){identity.autocomplete='new-password';secret.autocomplete='new-password';identity.minLength=12;secret.minLength=12;form.classList.remove('hidden');}
     if(!recovery)secret.autocomplete=employee?'current-password':'bday';if(!employee){secret.inputMode='numeric';secret.addEventListener('input',()=>{if(customerPhase==='birthday')d.handleBirthdayInput?.(secret);else secret.value=secret.value.replace(/\D/g,'').slice(0,4);});}
     const submit=document.createElement('button');submit.type='submit';submit.className='btn btn-primary';submit.textContent=recovery?'Подтвердить в мессенджере':'Войти';form.append(submit);
+    const credentialCancel=document.createElement('button');credentialCancel.type='button';credentialCancel.className='auth-link-button hidden';credentialCancel.textContent='ОТМЕНИТЬ';form.append(credentialCancel);
     const codeWrap=document.createElement('div');codeWrap.className='shop-auth-code-wrap hidden';
     const codeMeta=document.createElement('div');codeMeta.className='shop-auth-code-meta hidden';
     const codeInputs=[];
-    if(!employee){
+    if(!recovery){
       for(let i=0;i<4;i++){
         const cell=document.createElement('input');cell.type='text';cell.inputMode='numeric';cell.maxLength=4;
         cell.className='shop-auth-code-cell';cell.autocomplete=i===0?'one-time-code':'off';cell.setAttribute('aria-label',`Цифра ${i+1} кода`);
@@ -58,13 +63,13 @@
     }
     const progress=document.createElement('div');progress.className='shop-auth-text muted';progress.setAttribute('role','status');root.append(progress);
     let disposed=false,requestId='',timer=null,checking=false,busy=false,deadlineAt=0,credentialBinding=false;
-    let customerPhase='phone',codeRequest='',codeProvider='',resendAt=0,customerRun=0;
+    let customerPhase='phone',codeRequest='',codeProvider='',resendAt=0,customerRun=0,codeExpiresAt=0,credentialReturnState=null;
     const otherProviderRequests=new Set();
     let codeExpiryTimer=null;
     const stopCodeCountdown=()=>{clearInterval(codeExpiryTimer);codeExpiryTimer=null;};
     const startCodeCountdown=seconds=>{
       stopCodeCountdown();
-      const until=Date.now()+Math.max(0,Number(seconds)||0)*1000;
+      const until=Date.now()+Math.max(0,Number(seconds)||0)*1000;codeExpiresAt=until;
       const countdown=document.createElement('span');codeMeta.append(countdown);
       const update=()=>{
         const remaining=Math.max(0,Math.ceil((until-Date.now())/1000));
@@ -74,10 +79,11 @@
       update();if(until>Date.now())codeExpiryTimer=setInterval(update,1000);
     };
     let phoneTimer=null,phoneController=null,lastPhone='',lastCode='',observedPhone='7',lookupInFlight=false;
-    const retryButton=document.createElement('button');retryButton.type='button';retryButton.className=employee?'btn hidden':'btn btn-primary';retryButton.textContent='Продолжить';retryButton.disabled=employee||!/^7\d{10}$/.test(identity.value.replace(/\D/g,''));if(!employee)root.insertBefore(retryButton,form);
+    const retryButton=document.createElement('button');retryButton.type='button';retryButton.className=recovery?'btn hidden':'btn btn-primary';retryButton.textContent='Продолжить';retryButton.disabled=employee?!/^7\d{10}$/.test(employeePhone.value.replace(/\D/g,'')):!/^7\d{10}$/.test(identity.value.replace(/\D/g,''));root.insertBefore(retryButton,form);
+    const phoneInput=employee?employeePhone:identity;
     const customerError=error=>{
       methods.classList.remove('hidden');
-      guestButton.classList.remove('hidden');
+      if(!employee)guestButton.classList.remove('hidden');
       if(error.payload?.delivery_failed){
         customerStep('methods');root.classList.add('shop-auth--code');retryButton.classList.add('hidden');
         alternative.classList.add('hidden');resendButton.classList.add('hidden');switchButton.classList.add('hidden');
@@ -91,6 +97,7 @@
         return;
       }
       if(customerPhase==='phone'){
+        if(employee)methods.classList.add('hidden');
         buttons.forEach(button=>button.classList.add('hidden'));
         alternative.classList.add('hidden');resendButton.classList.add('hidden');switchButton.classList.add('hidden');
       }
@@ -101,38 +108,42 @@
         alternative.classList.add('hidden');resendButton.classList.add('hidden');switchButton.classList.add('hidden');
         guestButton.classList.remove('hidden');return;
       }
-      message.textContent=({PHONE_REQUIRED:'Введите номер телефона.',CODE_INVALID:'Неверный четырёхзначный код.',CODE_EXPIRED:'Код истёк. Запросите новый.',CODE_ALREADY_USED:'Этот код уже использован.',CODE_ATTEMPTS_EXCEEDED:'Лимит попыток исчерпан. Запросите новый код.',CODE_RATE_LIMITED:'Слишком много запросов кода. Попробуйте позже.',CODE_RESEND_TOO_SOON:'Подождите минуту перед повторной отправкой.',CODE_DELIVERY_FAILED:'Код не доставлен. Повторите отправку или выберите другой доступный канал.',TELEGRAM_BOT_START_REQUIRED:'Откройте Telegram-бота магазина и нажмите Start, затем повторите отправку.',CUSTOMER_CODE_REQUIRED:'Для подтверждённого номера нужен код. Начните вход заново.',CONTACT_PHONE_MISMATCH:'Поделитесь контактом с тем же номером, который указан в карточке входа.'})[error.message]||errorText(error.message);
+      message.textContent=({PHONE_REQUIRED:'Введите номер телефона.',CODE_INVALID:'Неверный четырёхзначный код.',CODE_EXPIRED:'Код истёк. Запросите новый.',CODE_ALREADY_USED:'Этот код уже использован.',CODE_ATTEMPTS_EXCEEDED:'Лимит попыток исчерпан. Запросите новый код.',CODE_DELIVERY_FAILED:'Код не доставлен. Повторите отправку или выберите другой доступный канал.',TELEGRAM_BOT_START_REQUIRED:'Откройте Telegram-бота магазина и нажмите Start, затем повторите отправку.',CUSTOMER_CODE_REQUIRED:'Для подтверждённого номера нужен код. Начните вход заново.',CONTACT_PHONE_MISMATCH:'Поделитесь контактом с тем же номером, который указан в карточке входа.'})[error.message]||errorText(error.message);
       if(error.payload?.fallback_available){methods.classList.remove('hidden');buttons.forEach(b=>b.classList.add('hidden'));alternative.classList.add('hidden');switchButton.classList.remove('hidden');switchButton.dataset.provider='tg';switchButton.textContent='Отправить в Telegram';}
     };
     const customerStep=phase=>{
       stopCodeCountdown();
       root.classList.toggle('shop-auth--code',phase==='code');
-      customerPhase=phase;form.classList.toggle('hidden',!['code','birthday'].includes(phase));
+      customerPhase=phase;form.classList.toggle('hidden',!['code','birthday','credentials'].includes(phase));
       if(phase==='phone'||phase==='code')delete root.dataset.existingUnverified;
-      secret.parentElement.classList.toggle('hidden',phase!=='birthday');secret.required=phase==='birthday';
+      if(employee){employeePhoneWrap.classList.toggle('hidden',phase==='credentials');retryButton.classList.toggle('hidden',phase!=='phone');}
+      identity.parentElement.classList.toggle('hidden',employee&&phase!=='credentials');
+      if(employee)identity.required=phase==='credentials';
+      secret.parentElement.classList.toggle('hidden',phase!=='birthday'&&phase!=='credentials');secret.required=phase==='birthday'||phase==='credentials';
       codeWrap.classList.toggle('hidden',phase!=='code');codeInputs.forEach(cell=>{cell.value='';});lastCode='';
       codeWrap.classList.remove('is-verifying');
       codeMeta.classList.toggle('hidden',phase!=='code');
-      secret.value='';secret.maxLength=phase==='code'?4:10;secret.autocomplete=phase==='code'?'one-time-code':'bday';
-      secret.parentElement.firstChild.textContent=phase==='code'?'Код из бота':'Дата рождения';secret.placeholder=phase==='code'?'0000':'ДД.ММ.ГГГГ';
-      submit.textContent=phase==='phone'?'Продолжить':phase==='methods'?'Изменить номер':'Войти';
+      secret.value='';secret.maxLength=phase==='code'?4:phase==='credentials'?524:10;secret.autocomplete=phase==='code'?'one-time-code':phase==='credentials'?'current-password':'bday';
+      secret.parentElement.firstChild.textContent=phase==='code'?'Код из бота':phase==='credentials'?'Пароль':'Дата рождения';secret.placeholder=phase==='code'?'0000':phase==='credentials'?'Пароль':'ДД.ММ.ГГГГ';
+      submit.textContent=phase==='credentials'?'ВОЙТИ':phase==='phone'?'Продолжить':phase==='methods'?'Изменить номер':'Войти';
       submit.classList.toggle('btn-primary',phase!=='methods');
-      submit.classList.toggle('hidden',phase!=='birthday');
+      submit.classList.toggle('hidden',phase!=='birthday'&&phase!=='credentials');
+      credentialCancel.classList.toggle('hidden',phase!=='credentials');
       identity.readOnly=false;
       root.querySelector('[data-auth-cancel]')?.classList.toggle('hidden',phase==='phone');
     };
     const customerStart=async provider=>{
       const run=++customerRun;
-      const phone=identity.value;
+      const phone=phoneInput.value;
       phoneController?.abort();phoneController=new AbortController();const controller=phoneController;
       const timeout=setTimeout(()=>controller.abort(),15000);
       let result;
-      try{result=await api('/api/public/auth/phone-flow/start',{method:'POST',signal:controller.signal,body:{phone,provider}});}finally{clearTimeout(timeout);}
+      try{result=await api(employee?'/api/auth/phone-flow/start':'/api/public/auth/phone-flow/start',{method:'POST',signal:controller.signal,body:{phone,provider}});}finally{clearTimeout(timeout);}
       if(disposed||run!==customerRun)return;
       retryButton.classList.add('hidden');
       methods.classList.remove('hidden');
       buttons.forEach(b=>b.classList.toggle('hidden',result.mode==='code'||!result.channels.includes(b.dataset.provider)));
-      alternative.classList.toggle('hidden',result.mode==='code'||!result.birthday_allowed);guestButton.classList.remove('hidden');
+      alternative.classList.toggle('hidden',!employee&&(result.mode==='code'||!result.birthday_allowed));if(!employee)guestButton.classList.remove('hidden');
       if(result.mode==='code'){
         codeRequest=result.request_id;codeProvider=result.provider;resendAt=Date.now()+Number(result.resend_after??60)*1000;customerStep('code');
         resendButton.classList.remove('hidden');switchButton.classList.add('hidden');
@@ -144,7 +155,7 @@
         });
         codeMeta.textContent=`Код отправлен в ${result.provider==='max'?'MAX':'Telegram'}.`;message.textContent='';codeInputs[0]?.focus();
         startCodeCountdown(result.expires_in);
-      }else{customerStep('methods');root.dataset.existingUnverified=String(result.customer_exists===true);resendButton.classList.add('hidden');switchButton.classList.add('hidden');message.textContent=result.relink_required?'':'Подтвердите номер в мессенджере или продолжите как гость.';}
+      }else{customerStep('methods');root.dataset.existingUnverified=String((employee?result.employee_exists:result.customer_exists)===true);resendButton.classList.add('hidden');switchButton.classList.add('hidden');message.textContent=result.relink_required?'':employee?'Подтвердите номер в мессенджере.':'Подтвердите номер в мессенджере или продолжите как гость.';}
     };
     const remember=()=>{if(recovery)return;try{if(requestId)sessionStorage.setItem(pendingKey(context),JSON.stringify({id:requestId,at:Date.now()}));else sessionStorage.removeItem(pendingKey(context));}catch(error){console.warn('AUTH_PENDING_STORAGE_UNAVAILABLE');}};
     const endpoint=employee?'/api/auth/messenger-browser':'/api/public/auth/messenger-browser';
@@ -180,8 +191,7 @@
         if(disposed || requestId!==checkedId)return;
         if(result.state==='confirmed')await finish(result);
         else if(result.required_action){
-          progress.textContent=employee?({share_contact:'В боте поделитесь собственным контактом системной кнопкой. На компьютере можно открыть ту же ссылку на телефоне, не закрывая эту вкладку.',employee_credentials:'Контакт получен. Один раз подтвердите личность существующим логином и паролем здесь, затем нажмите «Авторизоваться» в боте.',confirm_in_bot:'Подтвердите этот запрос кнопкой «Авторизоваться» в боте.'})[result.required_action] || '':'';
-          if(employee&&!recovery&&result.required_action==='employee_credentials'){credentialBinding=true;form.classList.remove('hidden');submit.textContent='Подтвердить личность';}
+          progress.textContent=employee?({share_contact:'В боте поделитесь собственным контактом системной кнопкой. На компьютере можно открыть ту же ссылку на телефоне, не закрывая эту вкладку.',confirm_in_bot:'Подтвердите этот запрос кнопкой «Авторизоваться» в боте.'})[result.required_action] || '':'';
         }
       }catch(e){
         if(disposed || requestId!==checkedId)return;
@@ -195,79 +205,94 @@
       if(activeProviderLink?.url===url&&activeProviderLink.popup&&!activeProviderLink.popup.closed){activeProviderLink.popup.location.href=url;activeProviderLink.popup.focus();return activeProviderLink.popup;}
       return openProviderWindow(url);
     };
-    const cancel=()=>{stop();if(!employee)customerRun++;activeProviderLink=null;credentialBinding=false;progress.textContent='';submit.textContent=recovery?'Подтвердить в мессенджере':'Войти';const id=requestId;requestId='';remember();if(id)api(endpoint+'/status',{method:'POST',signal:AbortSignal.timeout(15000),body:{request_id:id,cancel:true}}).catch(()=>{console.warn('AUTH_CANCEL_NOT_CONFIRMED');});};
+    const cancel=()=>{stop();if(!recovery)customerRun++;activeProviderLink=null;credentialBinding=false;progress.textContent='';submit.textContent=recovery?'Подтвердить в мессенджере':'Войти';const id=requestId;requestId='';remember();if(id)api(endpoint+'/status',{method:'POST',signal:AbortSignal.timeout(15000),body:{request_id:id,cancel:true}}).catch(()=>{console.warn('AUTH_CANCEL_NOT_CONFIRMED');});};
     const buttons=[];
-    for(const provider of (employee?['tg','max']:['max','tg'])){
+    for(const provider of ['max','tg']){
       const button=document.createElement('button');button.type='button';button.className='shop-auth-social-btn shop-auth-method';button.dataset.provider=provider;
       const icon=document.createElement('img');icon.src='/static/uploads/auth/'+(provider==='tg'?'telegram':'max')+'-auth.png';icon.alt='';button.append(icon);
-      if(employee)button.append(document.createTextNode(provider==='tg'?'Войти через Telegram':'Войти через MAX'));
-      else{
-        const label=document.createElement('span');label.className='shop-auth-method-label';
-        const action=document.createElement('span');action.textContent='Войти';
-        const channel=document.createElement('span');channel.textContent=provider==='max'?'через MAX':'через Telegram';
-        label.append(action,channel);button.append(label);
-      }
+      const label=document.createElement('span');label.className='shop-auth-method-label';
+      const action=document.createElement('span');action.textContent='Войти';
+      const channel=document.createElement('span');channel.textContent=provider==='max'?'через MAX':'через Telegram';
+      label.append(action,channel);button.append(label);
       methods.append(button);buttons.push(button);
       button.addEventListener('click',async()=>{
         if(disposed)return;
-        if(!employee&&customerPhase==='code'&&button.dataset.codeChannel==='true'){
+        if(!recovery&&customerPhase==='code'&&button.dataset.codeChannel==='true'){
           if(busy)return;busy=true;button.disabled=true;button.classList.add('is-loading');
           try{await customerStart(provider);}catch(error){customerError(error);}
           finally{busy=false;button.disabled=false;button.classList.remove('is-loading');}
           return;
         }
-        if(!employee&&requestId&&activeProviderLink?.provider===provider){activeProviderLink.popup=openCustomerProvider(activeProviderLink.url);return;}
+        if(!recovery&&requestId&&activeProviderLink?.provider===provider){activeProviderLink.popup=openCustomerProvider(activeProviderLink.url);return;}
         if(recovery&&(identity.value.length<12||identity.value!==secret.value)){message.textContent='Введите одинаковый новый пароль от 12 символов в оба поля.';form.classList.remove('hidden');identity.focus();return;}
         if(busy)return;
-        if(!employee&&requestId&&activeProviderLink?.provider!==provider){otherProviderRequests.add(requestId);requestId='';}
+        if(!recovery&&requestId&&activeProviderLink?.provider!==provider){otherProviderRequests.add(requestId);requestId='';}
         cancel();const run=customerRun;busy=true;buttons.forEach(b=>b.disabled=true);button.classList.add('is-loading');if(employee)form.classList.add('hidden');
-        let popup=employee?openProviderWindow():null;
+        let popup=recovery?openProviderWindow():null;
         const label=button.querySelector('.shop-auth-method-label'),labelParts=label?[...label.childNodes]:[];
-        if(!employee){button.setAttribute('aria-busy','true');label.textContent=provider==='tg'?'Открываем Telegram…':'Открываем MAX…';}
-        message.textContent=employee?'Создаём запрос входа…':'';
-        try{const result=await api(endpoint+'/start',{method:'POST',body:{provider,phone:employee?undefined:identity.value,purpose:recovery?'password_reset':'login'},signal:AbortSignal.timeout(15000)});if(disposed||!employee&&run!==customerRun){popup?.close();return;}
+        if(!recovery){button.setAttribute('aria-busy','true');label.textContent=provider==='tg'?'Открываем Telegram…':'Открываем MAX…';}
+        message.textContent=recovery?'Создаём запрос входа…':'';
+        try{const result=await api(endpoint+'/start',{method:'POST',body:{provider,phone:employee?employeePhone.value:identity.value,purpose:recovery?'password_reset':'login'},signal:AbortSignal.timeout(15000)});if(disposed||!employee&&run!==customerRun){popup?.close();return;}
           requestId=result.request_id;deadlineAt=Date.now()+180000;remember();const url=new URL(result.bot_link);
           if(url.protocol!=='https:' || !['t.me','max.ru'].includes(url.hostname))throw new Error('BOT_LINK_INVALID');
-          if(employee){if(popup)popup.location.replace(url.href);}
+          if(recovery){if(popup)popup.location.replace(url.href);}
           else{popup=openCustomerProvider(url.href);activeProviderLink={provider,url:url.href,popup};}
-          message.replaceChildren(document.createTextNode(employee?'Нажмите «Авторизоваться» в боте, затем вернитесь сюда. ':''));
+          message.replaceChildren(document.createTextNode(recovery?'Подтвердите свой номер системной кнопкой в боте, затем вернитесь сюда. ':''));
           const link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener';link.textContent=employee?'Открыть бота':provider==='tg'?'Открыть Telegram':'Открыть MAX';
-          if(!employee){link.className='btn shop-auth-open-provider';link.addEventListener('click',event=>{event.preventDefault();if(activeProviderLink)activeProviderLink.popup=openCustomerProvider(url.href);});}
-          if(employee||!popup)message.append(link);timer=setTimeout(check,1500);
+          if(!recovery){link.className='btn shop-auth-open-provider';link.addEventListener('click',event=>{event.preventDefault();if(activeProviderLink)activeProviderLink.popup=openCustomerProvider(url.href);});}
+          if(recovery||!popup)message.append(link);timer=setTimeout(check,1500);
         }catch(e){popup?.close();if(disposed||!employee&&run!==customerRun)return;cancel();if(employee)message.textContent=errorText(e.message);else{customerStep('methods');customerError(e);}}finally{busy=false;buttons.forEach(b=>b.disabled=false);button.classList.remove('is-loading');button.removeAttribute('aria-busy');if(label){label.replaceChildren(...labelParts);if(requestId&&activeProviderLink?.provider===provider)label.textContent=provider==='tg'?'Открыть Telegram':'Открыть MAX';}}
       });
     }
-    const alternative=document.createElement('button');alternative.type='button';alternative.className='btn btn-primary';alternative.textContent=recovery?'Задать новый пароль':employee?'По логину и паролю':'По телефону';methods.append(alternative);
-    alternative.addEventListener('click',()=>{cancel();message.textContent='';if(!employee){customerStep('birthday');secret.focus();return;}form.classList.toggle('hidden');if(!form.classList.contains('hidden'))identity.focus();});
+    const alternative=document.createElement('button');alternative.type='button';alternative.className=employee&&!recovery?'btn shop-auth-guest':'btn btn-primary';alternative.textContent=recovery?'Задать новый пароль':employee?'По логину и паролю':'По телефону';methods.append(alternative);
+    alternative.addEventListener('click',()=>{
+      if(!employee){cancel();message.textContent='';progress.textContent='';customerStep('birthday');secret.focus();return;}
+      credentialReturnState={phase:customerPhase,code:codeInputs.map(cell=>cell.value),message:message.textContent,progress:progress.textContent,expiresAt:codeExpiresAt};
+      message.textContent='';progress.textContent='';customerStep('credentials');methods.classList.add('hidden');identity.focus();
+    });
+    credentialCancel.addEventListener('click',async()=>{
+      if(!employee||busy)return;
+      const previous=credentialReturnState||{phase:'phone',code:[],message:'',progress:'',remaining:0};credentialReturnState=null;
+      identity.value='';secret.value='';customerStep(previous.phase);message.textContent=previous.message;progress.textContent=previous.progress;
+      methods.classList.toggle('hidden',previous.phase==='phone');
+      if(previous.phase==='code'){
+        previous.code.forEach((value,index)=>{if(codeInputs[index])codeInputs[index].value=value;});
+        secret.value=previous.code.join('');codeMeta.textContent=`Код отправлен в ${codeProvider==='max'?'MAX':'Telegram'}.`;startCodeCountdown(Math.max(0,Math.ceil((previous.expiresAt-Date.now())/1000)));codeInputs.find(cell=>!cell.value)?.focus()||codeInputs[0]?.focus();
+      }else if(previous.phase==='methods')methods.querySelector('button:not(.hidden):not([disabled])')?.focus();
+      else phoneInput.focus();
+    });
     const guestButton=document.createElement('button');guestButton.type='button';guestButton.className='btn shop-auth-guest';
     const guestTitle=document.createElement('span');guestTitle.textContent='Войти как гость';
     const guestHint=document.createElement('span');guestHint.className='shop-auth-guest-hint';guestHint.textContent='Без подтверждения номера';
     guestButton.append(guestTitle,guestHint);if(!employee)methods.append(guestButton);
     guestButton.addEventListener('click',async()=>{if(busy)return;const run=customerRun;busy=true;guestButton.disabled=true;try{const result=await api('/api/public/auth/guest',{method:'POST',body:{phone:identity.value}});if(!disposed&&run===customerRun)await finish(result);}catch(e){if(!disposed&&run===customerRun)message.textContent=errorText(e.message);}finally{busy=false;guestButton.disabled=false;}});
     const resendButton=document.createElement('button'),switchButton=document.createElement('button');
-    for(const b of [resendButton,switchButton]){b.type='button';b.className='btn hidden';if(!employee)methods.append(b);}
-    if(!employee)methods.insertBefore(switchButton,guestButton);
+    for(const b of [resendButton,switchButton]){b.type='button';b.className='btn hidden';if(!recovery)methods.append(b);}
+    if(!recovery)methods.insertBefore(switchButton,employee?alternative:guestButton);
     resendButton.classList.add('shop-auth-resend');
     resendButton.textContent='Повторить отправку';switchButton.textContent='Использовать другой канал';
-    for(const b of [resendButton,switchButton])b.addEventListener('click',async()=>{if(busy)return;if(b===resendButton&&Date.now()<resendAt){message.textContent='Повторная отправка доступна через минуту после предыдущей.';return;}busy=true;b.disabled=true;try{await customerStart(b===resendButton?codeProvider:b.dataset.provider);}catch(e){customerError(e);}finally{busy=false;b.disabled=false;}});
-    if(!employee){customerStep('phone');methods.classList.add('hidden');alternative.textContent='Войти по дате рождения';}
+    for(const b of [resendButton,switchButton])b.addEventListener('click',async()=>{if(busy)return;busy=true;b.disabled=true;try{await customerStart(b===resendButton?codeProvider:b.dataset.provider);}catch(e){customerError(e);}finally{busy=false;b.disabled=false;}});
+    if(!recovery){customerStep('phone');methods.classList.add('hidden');alternative.textContent=employee?'По логину и паролю':'Войти по дате рождения';}
     const lookupPhone=async(manual=false)=>{
-      const phone=identity.value.replace(/\D/g,'');
+      const phone=phoneInput.value.replace(/\D/g,'');
       if(disposed||lookupInFlight||busy||phone.length!==11||phone[0]!=='7'||!manual&&phone===lastPhone)return;
       clearTimeout(phoneTimer);lookupInFlight=true;retryButton.disabled=true;
       lastPhone=phone;message.textContent='';retryButton.textContent='Проверяем…';retryButton.classList.remove('hidden');
       const run=customerRun+1;
       try{await customerStart();}catch(error){
-        if(disposed||run!==customerRun||phone!==identity.value.replace(/\D/g,''))return;
+        if(disposed||run!==customerRun||phone!==phoneInput.value.replace(/\D/g,''))return;
         customerError(error);retryButton.classList.add('hidden');
       }finally{
-        if(run===customerRun){lookupInFlight=false;retryButton.textContent='Продолжить';retryButton.disabled=!/^7\d{10}$/.test(identity.value.replace(/\D/g,''));}
+        if(run===customerRun){lookupInFlight=false;retryButton.textContent='Продолжить';retryButton.disabled=!/^7\d{10}$/.test(phoneInput.value.replace(/\D/g,''));}
       }
     };
-    retryButton.addEventListener('click',()=>void lookupPhone(true));
-    if(!employee){
-      identity.addEventListener('input',()=>{
-        const digits=identity.value.replace(/\D/g,'');if(digits===observedPhone)return;observedPhone=digits;
+    retryButton.addEventListener('click',()=>{
+      void lookupPhone(true);
+    });
+    if(!recovery){
+      phoneInput.addEventListener('input',()=>{
+        d.enforcePhonePrefix?.(phoneInput);
+        const digits=phoneInput.value.replace(/\D/g,'');if(digits===observedPhone)return;observedPhone=digits;
         clearTimeout(phoneTimer);phoneController?.abort();cancel();codeRequest='';lastPhone='';lastCode='';lookupInFlight=false;
         customerStep('phone');methods.classList.add('hidden');retryButton.textContent='Продолжить';retryButton.classList.remove('hidden');retryButton.disabled=!/^7\d{10}$/.test(digits);message.textContent='';
         phoneTimer=setTimeout(()=>void lookupPhone(),450);
@@ -299,13 +324,13 @@
     form.addEventListener('submit',async event=>{event.preventDefault();if(recovery){message.textContent='Выберите Telegram или MAX для подтверждения смены пароля.';return;}if(busy)return;busy=true;submit.disabled=true;message.textContent='Выполняем вход…';
       const proofRequestId=credentialBinding?requestId:'';
       const submitRun=customerRun;
-      if(!employee&&customerPhase!=='birthday'){
+      if(customerPhase!=='birthday'&&customerPhase!=='credentials'){
         const run=customerRun;
         if(customerPhase==='code'){codeWrap.classList.add('is-verifying');message.textContent='Выполняем вход…';}
         codeInputs.forEach(cell=>cell.disabled=true);
         try{
           if(customerPhase==='code'){
-            const result=await api('/api/public/auth/phone-flow/verify',{method:'POST',body:{request_id:codeRequest,code:secret.value}});
+            const result=await api(employee?'/api/auth/phone-flow/verify':'/api/public/auth/phone-flow/verify',{method:'POST',body:{request_id:codeRequest,code:secret.value}});
             if(!disposed&&run===customerRun)await finish(result);
           }
           else if(customerPhase==='methods'){customerStep('phone');methods.classList.add('hidden');message.textContent='';}
@@ -318,23 +343,13 @@
         else await finish(result);}
       catch(e){if(!disposed&&(employee||submitRun===customerRun))message.textContent=errorText(e.message);}finally{busy=false;submit.disabled=false;}
     });
-    const cancelButton=document.createElement('button');cancelButton.type='button';cancelButton.dataset.authCancel='';cancelButton.className=employee?'auth-link-button':'btn hidden';cancelButton.textContent='Отменить';cancelButton.addEventListener('click',()=>{
-      cancel();
-      if(!employee){
-        clearTimeout(phoneTimer);phoneController?.abort();lookupInFlight=false;lastPhone='';codeRequest='';lastCode='';
-        customerStep('phone');methods.classList.add('hidden');
-        retryButton.textContent='Продолжить';retryButton.classList.remove('hidden');
-        retryButton.disabled=!/^7\d{10}$/.test(identity.value.replace(/\D/g,''));
-        identity.focus();message.textContent='';
-      }else message.textContent='Вход отменён. Можно выбрать способ снова.';
-    });if(employee)root.append(cancelButton);
     const resume=()=>{if(!document.hidden)void check();};document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);
     root.dispose=()=>{disposed=true;stopCodeCountdown();clearTimeout(phoneTimer);phoneController?.abort();cancel();root.querySelectorAll('button,input').forEach(el=>el.disabled=true);document.removeEventListener('visibilitychange',resume);window.removeEventListener('focus',resume);};
     if(!recovery&&!options.phone){const pending=pendingRequest(context);if(pending){requestId=pending.id;deadlineAt=pending.at+180000;message.textContent='Проверяем ранее начатый вход…';timer=setTimeout(check,0);}}
-    if(!employee){
+    if(!recovery){
       const header=document.createElement('div');header.className='shop-auth-customer-header';
       const content=document.createElement('div');content.className='shop-auth-customer-content';
-      header.append(title,identity.parentElement,retryButton);
+      header.append(title,employee?employeePhoneWrap:identity.parentElement,retryButton);
       content.append(...root.children);root.append(header,content);
     }
     return root;

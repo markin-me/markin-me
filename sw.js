@@ -249,6 +249,7 @@ var ACTIVE_CACHE_NAMES = [CORE_CACHE_NAME, HTML_CACHE_NAME, FONT_CACHE_NAME, IMA
 var COURIER_SCREEN_PATH = "/dashboard/courier-screen";
 var CORE_ASSETS = [
   "/static/css/style.css",
+  "/static/css/app-modal-confirmation.css",
   "/static/js/auth.js",
   "/static/js/current-time.js",
   "/static/js/theme.js",

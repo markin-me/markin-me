@@ -1609,7 +1609,8 @@
     event.stopImmediatePropagation();
     openUnsavedDialog(() => {
       state.allowPageLeave = true;
-      if (logoutButton && typeof logout === 'function') logout();
+      if (logoutButton && typeof window.requestAdminLogout === 'function') void window.requestAdminLogout();
+      else if (logoutButton && typeof logout === 'function') logout();
       else if (targetUrl) window.location.assign(targetUrl.href);
     });
   }

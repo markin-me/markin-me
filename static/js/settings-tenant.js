@@ -22872,7 +22872,7 @@
 
 
 
-          if (!window.confirm("Удалить домен?")) return;
+          if (!await window.AppModal.confirm({ message: "Удалить домен?" })) return;
 
 
 
@@ -28877,7 +28877,7 @@
 
 
 
-        if (!confirm("Отключить уведомления РІ этот чат?")) return;
+        if (!await window.AppModal.confirm({ message: "Отключить уведомления РІ этот чат?" })) return;
 
 
 
@@ -28921,7 +28921,7 @@
 
         if (!storeId || !bindingId) return;
 
-        if (!confirm("Отключить уведомления в этот MAX-аккаунт?")) return;
+        if (!await window.AppModal.confirm({ message: "Отключить уведомления в этот MAX-аккаунт?" })) return;
 
         try {
 
@@ -40565,7 +40565,7 @@
 
 
 
-        const confirmed = window.confirm(
+        const confirmed = await window.AppModal.confirm({ message:
 
 
 
@@ -40573,7 +40573,7 @@
 
 
 
-        );
+        });
 
 
 
@@ -45528,7 +45528,7 @@
 
 
         const isRegenerate = printApiSelectedConnectionId > 0;
-        if (isRegenerate && !confirm("Перевыпустить ключ? Для Bot этого подключения потребуется новый token.")) return;
+        if (isRegenerate && !await window.AppModal.confirm({ message: "Перевыпустить ключ? Для Bot этого подключения потребуется новый token." })) return;
         const res = await authFetch(isRegenerate ? "/api/admin/tenant/print-api/regenerate" : "/api/admin/tenant/print-api", {
 
 
@@ -47217,7 +47217,7 @@
 
 
 
-          if (!confirm("Отключить Telegram?")) return;
+          if (!await window.AppModal.confirm({ message: "Отключить Telegram?" })) return;
 
 
 
@@ -58722,7 +58722,7 @@
 
 
 
-    function closeDeliveryTab(key, options = {}) {
+    async function closeDeliveryTab(key, options = {}) {
 
 
 
@@ -58778,7 +58778,7 @@
 
 
 
-        && !window.confirm("Закрыть вкладку зоны доставки без сохранения?")
+        && !await window.AppModal.confirm({ message: "Закрыть вкладку зоны доставки без сохранения?" })
 
 
 
@@ -65072,7 +65072,7 @@
 
 
 
-        if (!confirm("Удалить эту настройку доставки?")) return;
+        if (!await window.AppModal.confirm({ message: "Удалить эту настройку доставки?" })) return;
 
 
 
@@ -65116,7 +65116,7 @@
 
 
 
-        if (!confirm("Удалить эту настройку доставки?")) return;
+        if (!await window.AppModal.confirm({ message: "Удалить эту настройку доставки?" })) return;
 
 
 
@@ -72488,7 +72488,7 @@
 
 
 
-        if (!confirm("Удалить эту зону доставки?")) return;
+        if (!await window.AppModal.confirm({ message: "Удалить эту зону доставки?" })) return;
 
 
 
@@ -72864,7 +72864,7 @@
 
 
 
-        if (!confirm("Удалить эту зону доставки?")) return;
+        if (!await window.AppModal.confirm({ message: "Удалить эту зону доставки?" })) return;
 
 
 

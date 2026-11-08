@@ -1185,22 +1185,6 @@
       var clientPhone = order.customer_phone || "—";
       setTextAll(infoEls.clientName, clientName);
       setTextAll(infoEls.clientPhone, clientPhone);
-      var audit=root.querySelector('[data-order-identity-audit]');
-      if(!audit&&infoEls.clientPhone[0]?.parentElement){
-        audit=document.createElement('div');audit.dataset.orderIdentityAudit='';audit.className='muted';
-        infoEls.clientPhone[0].parentElement.appendChild(audit);
-      }
-      if(audit){
-        var auditLines=[];
-        if(order.auth_status_at_creation)auditLines.push(order.auth_status_at_creation==='unverified'?'Оформлен без подтверждения':'Оформлен подтверждённым клиентом');
-        if(order.customer_id)auditLines.push('Владелец: #'+order.customer_id+(order.owner_phone?' · '+order.owner_phone:''));
-        if(order.guest_session_audit_id)auditLines.push('Сессия оформления: '+order.guest_session_audit_id);
-        if(order.bonus_phone)auditLines.push('Бонусы на номер: '+order.bonus_phone+' · Начислено: '+Number(order.bonus_accrued||0));
-        if(order.bonus_transaction_ids?.length)auditLines.push('Бонусные операции: '+order.bonus_transaction_ids.map(function(id){return '#'+id;}).join(', '));
-        audit.replaceChildren();
-        auditLines.forEach(function(text){var line=document.createElement('div');line.textContent=text;audit.appendChild(line);});
-        audit.hidden=!auditLines.length;
-      }
 
       var clientId = Number(order.customer_id || 0);
       var clientPhoneValue = String(order.customer_phone || "").trim();

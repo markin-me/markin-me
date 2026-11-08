@@ -3995,9 +3995,26 @@
     state._homeBonusLoading = null;
   }
 
+  function refreshKsoCheckoutBonusSection() {
+    const currentSection = openCartSheetCtx?.checkoutEl?.querySelector?.(".shop-checkout-kso-bonus-section");
+    if (!currentSection) return;
+    const nextSection = buildCartBonusRedeemSection();
+    if (!nextSection) {
+      currentSection.remove();
+      return;
+    }
+    nextSection.classList.add("shop-checkout-card-subsection", "shop-checkout-kso-bonus-section");
+    currentSection.replaceWith(nextSection);
+    bindCartBonusRedeemSection(nextSection);
+    if (typeof window.refreshShopCartBonusRedeemUi === "function") {
+      window.refreshShopCartBonusRedeemUi();
+    }
+  }
+
   async function refreshHomeBonusConfigUi(options = {}) {
     invalidateHomeBonusConfig();
     const config = await loadHomeBonusConfig(options);
+    refreshKsoCheckoutBonusSection();
     const sheet = document.querySelector(".shop-bonus-cards-sheet");
     if (sheet) renderBonusCardsSheetContent(sheet);
     syncMobileUiState("bonus-config-refresh");

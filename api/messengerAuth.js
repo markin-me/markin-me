@@ -366,7 +366,7 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
       if (!roles.length) throw new MessengerAuthError('ROLE_NOT_ASSIGNED', 403);
     }
     const account = await loadAccountLink(conn, scope, true);
-    if ((scope.accountType === 'customer' || provider === 'tg' && options.requireContact) && !contact) {
+    if ((scope.accountType === 'customer' || scope.accountType === 'employee' || provider === 'tg' && options.requireContact) && !contact) {
       const [proof] = await conn.query(
         `SELECT c.id FROM auth_account_links a
          JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.provider=?
@@ -377,7 +377,7 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
              : "EXISTS (SELECT 1 FROM cust_customers cc WHERE cc.tenant_id=a.tenant_id AND cc.id=a.account_id AND cc.phone_verified_at IS NOT NULL)"}
          LIMIT 1`, [provider, scope.tenantId, scope.accountType, scope.accountId, normalizedProviderUserId]
       );
-      if (!proof.length) {
+      if (!proof.length || scope.accountType === 'employee') {
         if (challenge.completed_provider_user_id && String(challenge.completed_provider_user_id) !== normalizedProviderUserId) {
           throw new MessengerAuthError('LINK_USER_CONFLICT', 409);
         }
@@ -594,7 +594,7 @@ async function issueCodeChallenge(db, options) {
 async function issueCodeChallengeLocked(db, options) {
   const scope = normalizeScope(options);
   const purpose = String(options?.purpose || '').trim().toLowerCase();
-  const customerLogin=scope.accountType==='customer'&&purpose==='login';
+  const browserLogin=['customer','employee'].includes(scope.accountType)&&purpose==='login';
   if (!CODE_PURPOSES.has(purpose)) throw new MessengerAuthError('BAD_PURPOSE', 400);
   await assertAccountActive(db, scope);
   const channels = await getAccountChannels(db, scope, { includePrivate: true });
@@ -630,16 +630,16 @@ async function issueCodeChallengeLocked(db, options) {
      ORDER BY id DESC`,
     [scope.tenantId, scope.accountType, scope.accountId, purpose, pending?.id || null, pending?.id || null]
   );
-  if (!customerLogin && accountRateRows.length >= MAX_ACCOUNT_REQUESTS_PER_WINDOW) {
+  if (!browserLogin && accountRateRows.length >= MAX_ACCOUNT_REQUESTS_PER_WINDOW) {
     throw new MessengerAuthError('CODE_RATE_LIMITED', 429, { retryAfter: REQUEST_WINDOW_MINUTES * 60 });
   }
   const latest = accountRateRows.find((row) => row.delivery_status !== 'failed');
   const resendWait = Number(latest?.resend_seconds || 0);
-  if (resendWait>0) {
+  if (!browserLogin&&resendWait>0) {
     const retryAfter = Math.max(1,resendWait);
     throw new MessengerAuthError('CODE_RESEND_TOO_SOON', 429, { retryAfter });
   }
-  if (requestedIpHash && !customerLogin) {
+  if (requestedIpHash && !browserLogin) {
     const [[ipRate]] = await db.query(
       `SELECT COUNT(*) AS count FROM auth_verification_challenges
        WHERE requested_ip_hash=? AND created_at > DATE_SUB(NOW(), INTERVAL ${REQUEST_WINDOW_MINUTES} MINUTE)
@@ -945,7 +945,7 @@ async function hasBrowserAccountBinding(conn,{tenantId,accountType,provider,uid}
   return legacy.length===1;
 }
 
-async function createBrowserRequest(db, { tenantId, accountType, provider, binding, ipAddress, purpose='login', guestSessionHash=null }) {
+async function createBrowserRequest(db, { tenantId, accountType, provider, binding, ipAddress, purpose='login', guestSessionHash=null, requestedPhone=null }) {
   await assertBrowserSchema(db);
   if (!['customer','employee'].includes(accountType)) throw new MessengerAuthError('INVALID_ACCOUNT_SCOPE');
   if(!['login','password_reset','profile_link'].includes(purpose)||(accountType==='customer'&&purpose==='password_reset')
@@ -958,9 +958,9 @@ async function createBrowserRequest(db, { tenantId, accountType, provider, bindi
   const publicId = randomPublicId(), token = `b_${crypto.randomBytes(30).toString('base64url')}`;
   const expiresMinutes = purpose === 'profile_link' ? 10 : 3;
   await db.query(`INSERT INTO auth_browser_requests
-    (public_id,token_hash,browser_hash,ip_hash,tenant_id,account_type,provider,purpose,guest_session_hash,expires_at)
-    VALUES (?,?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL ? MINUTE))`,
-  [publicId,tokenHash(token),tokenHash(binding),hash,tenantId,accountType,provider,purpose,guestSessionHash,expiresMinutes]);
+    (public_id,token_hash,browser_hash,ip_hash,tenant_id,account_type,provider,purpose,guest_session_hash,requested_phone,expires_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL ? MINUTE))`,
+  [publicId,tokenHash(token),tokenHash(binding),hash,tenantId,accountType,provider,purpose,guestSessionHash,requestedPhone,expiresMinutes]);
   await ensureBrowserOperation(db, {
     publicId, tenantId, provider, purpose, expiresInSeconds: expiresMinutes * 60,
   });
@@ -1007,9 +1007,7 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
       await conn.query("UPDATE auth_browser_requests SET contact_phone=?,contact_name=?,contact_verified_at=NOW(),requested_phone=IF(account_type='customer',?,requested_phone) WHERE public_id=?",
         [phone,String(contact.name || '').replace(/[\p{C}]/gu,'').trim().slice(0,100) || null,phone,r.public_id]);
       if(r.account_type==='customer')r.requested_phone=phone;
-      if(r.account_type==='employee'){
-        await conn.commit();return {ok:true,contactReceived:true,reference:`r_${r.public_id}`,accountType:r.account_type};
-      }
+      if(r.account_type==='employee'&&r.requested_phone&&r.requested_phone!==phone)throw new MessengerAuthError('CONTACT_PHONE_MISMATCH',409);
       r.contact_phone=phone;r.contact_name=String(contact.name || '').replace(/[\p{C}]/gu,'').trim().slice(0,100);r.contact_verified_at=true;confirm=true;
     }
     if (!confirm) {
@@ -1017,7 +1015,7 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
       const known=await hasBrowserAccountBinding(conn,{tenantId,accountType:r.account_type,provider,uid});
       await conn.query("UPDATE auth_browser_requests SET state='started',provider_user_id=? WHERE public_id=?", [uid,r.public_id]);
       if(!known && r.purpose==='password_reset')throw new MessengerAuthError('EMPLOYEE_MESSENGER_NOT_LINKED');
-      await conn.commit(); return { ok: true, purpose:r.purpose,contactRequired:r.account_type==='customer'?!r.contact_verified_at:!known&&!r.contact_verified_at };
+      await conn.commit(); return { ok: true, purpose:r.purpose,contactRequired:!r.contact_verified_at };
     }
     if (r.state === 'confirmed') { await conn.commit(); return { ok: true, confirmed: true, purpose:r.purpose }; }
     if (r.state !== 'started' || r.provider_user_id !== uid) throw new MessengerAuthError('REQUEST_NOT_STARTED');
@@ -1030,15 +1028,38 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
     const column = provider === 'tg' ? 'telegram_user_id' : 'max_user_id';
     let accountId;
     if (r.account_type === 'employee') {
-      const [employees] = await conn.query(`SELECT DISTINCT u.id FROM auth_account_links a
+      const [employees] = await conn.query(`SELECT DISTINCT u.id,u.phone FROM auth_account_links a
         JOIN auth_account_messenger_links m ON m.account_link_id=a.id
         JOIN auth_messenger_channels c ON c.id=m.channel_id AND c.person_id=a.person_id AND c.revoked_at IS NULL
         JOIN app_users u ON u.tenant_id=a.tenant_id AND u.id=a.account_id AND u.is_active=1 AND u.employee_status='active'
         WHERE a.tenant_id=? AND a.account_type='employee' AND c.provider=? AND c.provider_user_id=?
           AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)
         LIMIT 2`, [tenantId,provider,uid]);
-      if (employees.length !== 1) throw new MessengerAuthError('EMPLOYEE_MESSENGER_NOT_LINKED');
-      accountId = Number(employees[0].id);
+      if(employees.length===1){
+        if(require('./helpers').normalizePhone(employees[0].phone)!==r.contact_phone)throw new MessengerAuthError('CONTACT_PHONE_MISMATCH',409);
+        accountId=Number(employees[0].id);
+      }
+      else{
+        if(!r.contact_verified_at||!r.contact_phone)throw new MessengerAuthError('CONTACT_REQUIRED',409);
+        const [candidates]=await conn.query(`SELECT u.id,u.phone FROM app_users u
+          WHERE u.tenant_id=? AND u.is_active=1 AND u.employee_status='active'
+            AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)
+          FOR UPDATE`,[tenantId]);
+        const matches=candidates.filter(employee=>require('./helpers').normalizePhone(employee.phone)===r.contact_phone);
+        if(matches.length!==1)throw new MessengerAuthError('EMPLOYEE_CONTACT_CONFLICT',403);
+        accountId=Number(matches[0].id);
+        const [other]=await conn.query(`SELECT a.account_id FROM auth_account_links a JOIN auth_account_messenger_links m ON m.account_link_id=a.id
+          JOIN auth_messenger_channels c ON c.id=m.channel_id WHERE a.tenant_id=? AND a.account_type='employee' AND a.account_id<>? AND c.provider=? AND c.provider_user_id=?`,[tenantId,accountId,provider,uid]);
+        if(other.length)throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
+        const existing=await loadAccountLink(conn,{tenantId,accountType:'employee',accountId},true);
+        if(existing&&channel&&Number(existing.person_id)!==Number(channel.person_id))throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
+        let personId=Number(existing?.person_id||channel?.person_id||0);
+        if(!personId){const [person]=await conn.query('INSERT INTO auth_people (created_at,updated_at) VALUES (NOW(),NOW())');personId=Number(person.insertId);}
+        if(!channel){const [createdChannel]=await conn.query('INSERT INTO auth_messenger_channels (person_id,provider,provider_user_id,verified_at) VALUES (?,?,?,NOW())',[personId,provider,uid]);channel={id:createdChannel.insertId,person_id:personId};}
+        let accountLinkId=existing?.id;
+        if(!accountLinkId){const [accountLink]=await conn.query("INSERT INTO auth_account_links (person_id,tenant_id,account_type,account_id,linked_at) VALUES (?,?,'employee',?,NOW())",[personId,tenantId,accountId]);accountLinkId=accountLink.insertId;}
+        await conn.query('INSERT INTO auth_account_messenger_links (account_link_id,channel_id,provider,verified_at) VALUES (?,?,?,NOW()) ON DUPLICATE KEY UPDATE channel_id=VALUES(channel_id),verified_at=NOW()',[accountLinkId,channel.id,provider]);
+      }
       await ensureEmployeeCustomer(conn,tenantId,accountId,{provider,providerUserId:uid,phone:r.contact_phone,requirePhone:true});
     } else {
       const policy=customerPolicy;
@@ -1115,7 +1136,7 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
     await conn.query("UPDATE auth_browser_requests SET state='confirmed',account_id=?,expires_at=IF(account_type='customer' AND guest_session_hash IS NULL,DATE_ADD(NOW(),INTERVAL 10 MINUTE),expires_at) WHERE public_id=?",[accountId,r.public_id]);
     await conn.commit();
     if(relinkedCustomerId)console.info('CUSTOMER_MESSENGER_RELINKED',{tenantId,provider,accountRef:crypto.createHash('sha256').update(`${tenantId}:${relinkedCustomerId}`).digest('hex').slice(0,16)});
-    return { ok:true,confirmed:true,purpose:r.purpose,context:r.purpose==='profile_link'?'PROFILE_LINK':r.account_type==='customer'?'LOGIN':undefined,guestConfirmed:r.purpose==='profile_link',autoConfirmed:r.account_type==='customer'&&Boolean(contact) };
+    return { ok:true,confirmed:true,purpose:r.purpose,accountType:r.account_type,context:r.purpose==='profile_link'?'PROFILE_LINK':r.account_type==='customer'?'LOGIN':undefined,guestConfirmed:r.purpose==='profile_link',autoConfirmed:Boolean(contact) };
   } catch (error) {
     await conn.rollback();
     if (error instanceof MessengerAuthError) {
@@ -1198,7 +1219,7 @@ async function consumeBrowserRequest(db, { tenantId, accountType, requestId, bin
       if(r.state==='started'){
         const linked=await hasBrowserAccountBinding(conn,{tenantId,accountType,provider:r.provider,uid:r.provider_user_id});
         if(!linked){
-          requiredAction = !r.contact_verified_at ? 'share_contact' : accountType==='employee' ? 'employee_credentials' : 'confirm_in_bot';
+          requiredAction = !r.contact_verified_at ? 'share_contact' : 'confirm_in_bot';
           if(accountType==='customer' && r.contact_verified_at){
             const candidate=await findPhoneCustomer(conn,tenantId,r.contact_phone);
             if(candidate){
@@ -1224,21 +1245,14 @@ async function consumeBrowserRequest(db, { tenantId, accountType, requestId, bin
   } catch(error){await conn.rollback();throw error;} finally{conn.release();}
 }
 
-async function verifyCustomerBrowserCode(db,{tenantId,requestId,binding,code,onVerified}){
-  const [rows]=await db.query("SELECT *,expires_at>NOW() valid FROM auth_browser_requests WHERE public_id=? AND tenant_id=? AND account_type='customer'",[requestId,tenantId]);
+async function verifyBrowserCode(db,{tenantId,accountType,requestId,binding,code,validateAccount,onVerified}){
+  const [rows]=await db.query('SELECT *,expires_at>NOW() valid FROM auth_browser_requests WHERE public_id=? AND tenant_id=? AND account_type=?',[requestId,tenantId,accountType]);
   const r=rows[0];
   if(!r || !safeEqual(r.browser_hash,tokenHash(binding || '')) || !Number(r.valid) || r.state!=='pending' || !r.code_challenge_id || !r.account_id)throw new MessengerAuthError('REQUEST_INVALID',403);
-  const result=await verifyCodeChallenge(db,{tenantId,accountType:'customer',accountId:r.account_id,purpose:'login',requestId:r.code_challenge_id,code,onVerified:async(conn,challenge)=>{
+  const result=await verifyCodeChallenge(db,{tenantId,accountType,accountId:r.account_id,purpose:'login',requestId:r.code_challenge_id,code,onVerified:async(conn,challenge)=>{
     const [[current]]=await conn.query('SELECT *,expires_at>NOW() valid FROM auth_browser_requests WHERE public_id=? AND tenant_id=? FOR UPDATE',[requestId,tenantId]);
     if(!Number(current?.valid) || current.state!=='pending' || current.code_challenge_id!==r.code_challenge_id)throw new MessengerAuthError('REQUEST_EXPIRED',409);
-    const policy=await require('./helpers/customerAuth').settings(conn,tenantId);
-    if(!policy[current.provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
-    await require('./messengerDelivery').getTenantBotConfig(conn,tenantId,current.provider,{customer:true});
-    const [links]=await conn.query(`SELECT c.id FROM cust_customers c JOIN auth_account_links a ON a.tenant_id=c.tenant_id AND a.account_type='customer' AND a.account_id=c.id
-      JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.provider=? AND m.channel_id=?
-      JOIN auth_messenger_channels ch ON ch.id=m.channel_id AND ch.person_id=a.person_id AND ch.revoked_at IS NULL
-      WHERE c.tenant_id=? AND c.id=? AND c.phone=? AND c.phone_verified_at IS NOT NULL LIMIT 1`,[current.provider,challenge.channel_id,tenantId,current.account_id,current.requested_phone]);
-    if(!links.length)throw new MessengerAuthError('MESSENGER_NOT_LINKED',403);
+    await validateAccount(conn,current,challenge);
     // OTP proves the already-verified identity; guest ownership is still checked
     // against the stored session hash in customerBrowserSession/promoteGuest.
     current.state='confirmed';current.contact_phone=current.requested_phone;current.contact_verified_at=true;
@@ -1249,8 +1263,37 @@ async function verifyCustomerBrowserCode(db,{tenantId,requestId,binding,code,onV
   return result.value;
 }
 
+async function verifyCustomerBrowserCode(db,options){
+  return verifyBrowserCode(db,{...options,accountType:'customer',validateAccount:async(conn,current,challenge)=>{
+    const policy=await require('./helpers/customerAuth').settings(conn,options.tenantId);
+    if(!policy[current.provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
+    await require('./messengerDelivery').getTenantBotConfig(conn,options.tenantId,current.provider,{customer:true});
+    const [links]=await conn.query(`SELECT c.id FROM cust_customers c JOIN auth_account_links a ON a.tenant_id=c.tenant_id AND a.account_type='customer' AND a.account_id=c.id
+      JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.provider=? AND m.channel_id=?
+      JOIN auth_messenger_channels ch ON ch.id=m.channel_id AND ch.person_id=a.person_id AND ch.revoked_at IS NULL
+      WHERE c.tenant_id=? AND c.id=? AND c.phone=? AND c.phone_verified_at IS NOT NULL LIMIT 1`,[current.provider,challenge.channel_id,options.tenantId,current.account_id,current.requested_phone]);
+    if(!links.length)throw new MessengerAuthError('MESSENGER_NOT_LINKED',403);
+  }});
+}
+
+async function verifyEmployeeBrowserCode(db,options){
+  return verifyBrowserCode(db,{...options,accountType:'employee',validateAccount:async(conn,current,challenge)=>{
+    await require('./messengerDelivery').getTenantBotConfig(conn,options.tenantId,current.provider);
+    const [links]=await conn.query(`SELECT u.id FROM app_users u
+      JOIN ten_tenants t ON t.id=u.tenant_id AND t.is_active=1
+      JOIN auth_account_links a ON a.tenant_id=u.tenant_id AND a.account_type='employee' AND a.account_id=u.id
+      JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.provider=? AND m.channel_id=?
+      JOIN auth_messenger_channels ch ON ch.id=m.channel_id AND ch.person_id=a.person_id AND ch.revoked_at IS NULL
+      WHERE u.tenant_id=? AND u.id=? AND u.is_active=1 AND u.employee_status='active'
+        AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)
+      LIMIT 1`,[current.provider,challenge.channel_id,options.tenantId,current.account_id]);
+    if(!links.length)throw new MessengerAuthError('MESSENGER_NOT_LINKED',403);
+  }});
+}
+
 module.exports = {
   verifyCustomerBrowserCode,
+  verifyEmployeeBrowserCode,
   assertBrowserSchema,
   browserBinding, createBrowserRequest, browserBotAction, consumeBrowserRequest, proveBrowserEmployee,
   completeBotLoginRequest,
