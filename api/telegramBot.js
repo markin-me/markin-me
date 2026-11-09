@@ -154,7 +154,7 @@ async function processUpdate(db, apiBase, update, options = {}) {
             [resolvedTgUserId, Number(tokenRow.tenant_id), payload]
           );
         } catch (err) {
-          console.error('AUTH_DUAL_WRITE_TG_LINK_LEGACY_FAILED:', err.message || err);
+          console.error('AUTH_DUAL_WRITE_TG_LINK_LEGACY_FAILED:', telegramErrorReason(err));
         }
         await send(chatId, '\u0054\u0065\u006c\u0065\u0067\u0072\u0061\u006d \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d \u043a \u0432\u0430\u0448\u0435\u043c\u0443 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0443.');
         return;

@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { connectStoreChat } = require('./telegramBot');
-const { requestTelegramApi } = require('./telegramApi');
+const { requestTelegramApi, telegramErrorReason } = require('./telegramApi');
 const { keepCurrentOperationPending, markCurrentOperation, recordCurrentServiceMessage } = require('./messengerCleanup');
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
@@ -174,7 +174,7 @@ async function bindByLinkToken(db, tenantId, tgUserId, token) {
       [String(tgUserId), Number(tenantId), String(token || '').trim()]
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_TG_LINK_FAILED:', err.code || err.name);
+    console.error('AUTH_DUAL_WRITE_TG_LINK_FAILED:', telegramErrorReason(err));
   }
   return { ok: true, customerId: Number(row.customer_id) };
 }
@@ -241,7 +241,7 @@ async function rememberPendingOrigin(db, tenantId, tgUserId, origin) {
       [Number(tenantId), tokenKey, normalized]
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_TG_PENDING_ORIGIN_FAILED:', err.code || err.name);
+    console.error('AUTH_DUAL_WRITE_TG_PENDING_ORIGIN_FAILED:', telegramErrorReason(err));
   }
 }
 

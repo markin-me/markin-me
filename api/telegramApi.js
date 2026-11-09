@@ -15,6 +15,15 @@ const CONNECT_PHASES = Object.freeze({
 });
 const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
 const CAUSE_CODES = new Set([...Object.keys(CONNECT_PHASES), ...TIMEOUT_CODES, 'ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET']);
+const SAFE_REASONS = new Set([...CLASSIFICATIONS, ...CAUSE_CODES,
+  'TELEGRAM_CHAT_UNAVAILABLE', 'TELEGRAM_TOKEN_REJECTED', 'TELEGRAM_BOT_BLOCKED', 'TELEGRAM_DELIVERY_FAILED',
+  'TELEGRAM_BOT_START_REQUIRED', 'CODE_DELIVERY_FAILED', 'WEBHOOK_IN_PROGRESS', 'BOT_SCOPE_MISMATCH',
+  'INVALID_BOT_SCOPE', 'TENANT_BOT_UNAVAILABLE', 'BOT_TENANT_CONFLICT', 'AUTH_WEBHOOK_SECRET_REQUIRED',
+  'AUTH_CODE_PEPPER_REQUIRED', 'BROWSER_CONTACT_MIGRATION_REQUIRED', 'INVALID_ACCOUNT_SCOPE',
+  'ER_NO_SUCH_TABLE', 'ER_BAD_FIELD_ERROR', 'ER_DUP_ENTRY', 'ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT',
+  'ER_ACCESS_DENIED_ERROR', 'ER_CON_COUNT_ERROR', 'PROTOCOL_CONNECTION_LOST',
+]);
+const SAFE_ERROR_NAMES = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AbortError', 'TimeoutError']);
 
 function nowMs() {
   return Number(process.hrtime.bigint()) / 1e6;
@@ -30,28 +39,31 @@ function telegramErrorReason(error) {
   const chain = errorChain(error);
   const classified = chain.find(item => CLASSIFICATIONS.has(item.classification));
   if (classified) return classified.classification;
-  if (chain.some(item => item.name === 'TimeoutError')) return 'TELEGRAM_API_TIMEOUT';
-  const code = String(error?.code || error?.name || 'UNKNOWN');
-  return /^[A-Z][A-Z0-9_]{0,79}$/i.test(code) ? code : 'UNKNOWN';
+  // Only the HTTP boundary can attribute a timeout to Telegram (a DB can time out too).
+  if (SAFE_REASONS.has(error?.code)) return error.code;
+  return SAFE_ERROR_NAMES.has(error?.name) ? error.name : 'UNKNOWN';
 }
 
 function networkFailure(error, signal, stage, httpStatus) {
   const chain = errorChain(error);
   const causeCode = chain.map(item => item.code).find(code => CAUSE_CODES.has(code)) || null;
   const connecting = stage === 'await_headers' && CONNECT_PHASES[causeCode];
+  const deadlineAbort = signal.aborted && signal.reason?.name === 'TimeoutError'
+    && chain.some(item => item.name === 'AbortError' || item.code === 'ABORT_ERR');
   const timedOut = chain.some(item => item.name === 'TimeoutError')
-    || (signal.aborted && signal.reason?.name === 'TimeoutError') || TIMEOUT_CODES.has(causeCode);
+    || deadlineAbort || TIMEOUT_CODES.has(causeCode);
   return {
     classification: connecting ? 'TELEGRAM_CONNECT_FAILED' : timedOut ? 'TELEGRAM_API_TIMEOUT' : 'TELEGRAM_DELIVERY_UNKNOWN',
     // Awaiting fetch() alone cannot distinguish DNS, TCP, TLS and a lost response.
-    phase: connecting || (stage === 'read_body' ? 'read_body' : causeCode === 'UND_ERR_HEADERS_TIMEOUT' ? 'await_headers' : 'unknown'),
-    deliveryOutcome: connecting ? 'not_sent' : [400, 401, 403, 429].includes(httpStatus) ? 'rejected' : 'unknown',
+    phase: connecting || (stage === 'prepare_request' || stage === 'read_body' ? stage : causeCode === 'UND_ERR_HEADERS_TIMEOUT' ? 'await_headers' : 'unknown'),
+    deliveryOutcome: connecting || stage === 'prepare_request' ? 'not_sent' : [400, 401, 403, 429].includes(httpStatus) ? 'rejected' : 'unknown',
     stage, causeCode, httpStatus, retryAfter: 0,
   };
 }
 
 function apiFailure(httpStatus, data) {
-  const apiCode = Number.isInteger(data?.error_code) ? data.error_code : httpStatus;
+  // A conflicting body must not turn an HTTP 5xx into a definitive rejection/429.
+  const apiCode = httpStatus >= 400 ? httpStatus : Number.isInteger(data?.error_code) ? data.error_code : httpStatus;
   const rateLimited = apiCode === 429 || httpStatus === 429;
   const rejected = [400, 401, 403, 429].includes(apiCode) || [400, 401, 403, 429].includes(httpStatus);
   return {
@@ -79,13 +91,16 @@ async function requestTelegramApi(apiBase, method, body, options = {}) {
   if (!['sendMessage', 'answerCallbackQuery'].includes(method)) throw new Error('TELEGRAM_METHOD_NOT_SUPPORTED');
   const signal = options.signal || AbortSignal.timeout(10000);
   const startedAtMonoMs = nowMs();
-  let stage = 'await_headers';
+  let stage = 'prepare_request';
   let httpStatus = null;
   let diagnostic;
   try {
+    signal.throwIfAborted();
+    const encodedBody = JSON.stringify(body);
+    stage = 'await_headers';
     const response = await fetch(`${apiBase}/${method}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal,
+      body: encodedBody, signal,
     });
     httpStatus = response.status;
     stage = 'read_body';
@@ -94,14 +109,16 @@ async function requestTelegramApi(apiBase, method, body, options = {}) {
       data = await response.json();
     } catch (error) {
       // A non-JSON HTTP rejection is still an HTTP error, not a successful send.
-      if (!response.ok && error.name === 'SyntaxError' && !signal.aborted) data = null;
+      if (!response.ok && error.name === 'SyntaxError') data = null;
       else throw error;
     }
     if (!response.ok || data?.ok === false) {
       diagnostic = apiFailure(httpStatus, data);
       throw deliveryError(diagnostic);
     }
-    if (data?.ok !== true || (method === 'sendMessage' && !Number.isInteger(data.result?.message_id))) {
+    const validResult = method === 'answerCallbackQuery' ? data?.result === true
+      : Number.isSafeInteger(data?.result?.message_id) && data.result.message_id >= 0;
+    if (data?.ok !== true || !validResult) {
       diagnostic = { classification: 'TELEGRAM_DELIVERY_UNKNOWN', phase: 'read_body', stage,
         deliveryOutcome: 'unknown', httpStatus, causeCode: null, retryAfter: 0 };
       throw deliveryError(diagnostic);
