@@ -3,12 +3,9 @@
  * Режим polling (локально) или webhook (прод).
  */
 const crypto = require('crypto');
+const { requestTelegramApi, telegramErrorReason } = require('./telegramApi');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const TG_LOGIN_START_PAYLOADS = new Set(['login', 'auth', 'link', 'shop']);
-
-function nowMs() {
-  return Number(process.hrtime.bigint()) / 1e6;
-}
 
 async function sendContactRequestMessage(apiBase, chatId, onTelegramApiTiming = null) {
   return sendMessage(
@@ -96,8 +93,9 @@ async function processUpdate(db, apiBase, update, options = {}) {
       return;
     }
 
-    if (!text.startsWith('/start')) return;
-    const rawPayload = text.slice(5).trim();
+    const start = text.match(/^\/start(?:@\w+)?(?:\s+(.+))?$/i);
+    if (!start) return;
+    const rawPayload = String(start[1] || '').trim();
     const payload = (rawPayload.split(/\s/)[0] || rawPayload).replace(/[^a-zA-Z0-9_-]/g, '');
 
     if (payload) {
@@ -177,7 +175,7 @@ async function processUpdate(db, apiBase, update, options = {}) {
 
     await sendContactRequestMessage(apiBase, chatId, options.onTelegramApiTiming);
   } catch (err) {
-    console.error('Telegram bot processUpdate:', err.code || err.name);
+    console.error('Telegram bot processUpdate:', telegramErrorReason(err));
     if (typeof options.onAuthLink === 'function') throw err;
     try {
       await send(chatId, '\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u043f\u043e\u0437\u0436\u0435.');
@@ -230,22 +228,7 @@ function startPolling(db, token) {
 async function sendMessage(apiBase, chatId, text, extra = null, onTelegramApiTiming = null) {
   const body = { chat_id: chatId, text };
   if (extra && typeof extra === 'object') Object.assign(body, extra);
-  const startedAt = nowMs();
-  try {
-    const res = await fetch(`${apiBase}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10000),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.description || 'sendMessage failed');
-    return data;
-  } finally {
-    if (typeof onTelegramApiTiming === 'function') {
-      try { onTelegramApiTiming(nowMs() - startedAt); } catch (_) {}
-    }
-  }
+  return requestTelegramApi(apiBase, 'sendMessage', body, { onTiming: onTelegramApiTiming });
 }
 
 async function handleWebhookUpdate(db, token, update, options = {}) {

@@ -43,6 +43,7 @@ const {
   deliverCode,
 } = require('./api/messengerDelivery');
 const { handleTenantTelegramUpdate } = require('./api/tenantTelegramBot');
+const { telegramErrorReason } = require('./api/telegramApi');
 const { handleTenantMaxUpdate } = require('./api/maxBotPolling');
 const {
   createServiceInteractionContext,
@@ -314,6 +315,8 @@ function beginTelegramWebhookTiming(req, res, update, tenantId = null) {
     authMs: 0,
     telegramApiMs: 0,
     telegramApiCalls: 0,
+    telegramApiFirstStartMs: null,
+    telegramApiLastEndMs: null,
     duplicate: false,
     result: 'processing',
     error: null,
@@ -339,6 +342,8 @@ function beginTelegramWebhookTiming(req, res, update, tenantId = null) {
       authMs: round(timing.authMs),
       telegramApiMs: round(timing.telegramApiMs),
       telegramApiCalls: timing.telegramApiCalls,
+      telegramApiFirstStartMs: timing.telegramApiFirstStartMs,
+      telegramApiLastEndMs: timing.telegramApiLastEndMs,
       totalMs: round(nowMs() - ingressMonoMs),
       duplicate: timing.duplicate,
       result: closedEarly ? 'connection_closed' : timing.result,
@@ -350,9 +355,25 @@ function beginTelegramWebhookTiming(req, res, update, tenantId = null) {
   res.once('close', () => {
     if (!res.writableEnded) writeLog(true);
   });
-  timing.addTelegramApi = (durationMs) => {
-    timing.telegramApiMs += Math.max(0, Number(durationMs) || 0);
+  timing.addTelegramApi = (durationMs, details = {}) => {
+    const duration = Math.max(0, Number(durationMs) || 0);
+    timing.telegramApiMs += duration;
     timing.telegramApiCalls += 1;
+    if (!Number.isFinite(details.startedAtMonoMs)) return;
+    const startMs = Math.max(0, details.startedAtMonoMs - ingressMonoMs);
+    const round = value => Math.round(value * 10) / 10;
+    timing.telegramApiFirstStartMs = timing.telegramApiFirstStartMs == null
+      ? round(startMs) : Math.min(timing.telegramApiFirstStartMs, round(startMs));
+    timing.telegramApiLastEndMs = Math.max(timing.telegramApiLastEndMs || 0, round(startMs + duration));
+    // One line, no raw update, URL, Telegram user/chat ID or message contents.
+    console.info('TELEGRAM_API_TIMING', JSON.stringify({
+      eventId: timing.eventId, tenantId: timing.tenantId, type: timing.type,
+      receivedAt: timing.receivedAt, call: timing.telegramApiCalls,
+      method: details.method, startMs: round(startMs), endMs: round(startMs + duration),
+      durationMs: round(duration), stage: details.stage, phase: details.phase,
+      classification: details.classification, deliveryOutcome: details.deliveryOutcome,
+      httpStatus: details.httpStatus, causeCode: details.causeCode, retryAfter: details.retryAfter,
+    }));
   };
   return timing;
 }
@@ -2206,10 +2227,10 @@ async function handleTenantBotWebhook(req, res, provider) {
         },
         loginEnabled: config.enabled||customerEnabled,
         miniAppEnabled: config.miniAppEnabled,
-        onTelegramApiTiming: timing ? durationMs => timing.addTelegramApi(durationMs) : null,
+        onTelegramApiTiming: timing ? timing.addTelegramApi : null,
         onAuthLogin: async ({ providerUserId, token }) => {
           const result=await measureWebhookStage(timing, 'authMs', () => completeBotLoginRequest(eventDb, provider, providerUserId, token, config.tenantId,
-            message => deliverCode(eventDb, message, { onTelegramApiTiming: timing ? durationMs => timing.addTelegramApi(durationMs) : null })));
+            message => deliverCode(eventDb, message, { onTelegramApiTiming: timing ? timing.addTelegramApi : null })));
           if(!result.ok)await markCurrentOperation('error');
           if(provider==='tg')await recordCurrentTelegramUserServiceMessage(req.body?.message,'start');
           return result;
@@ -2251,7 +2272,7 @@ async function handleTenantBotWebhook(req, res, provider) {
     }
     return res.sendStatus(200);
   } catch (error) {
-    const reason = String(error.code || error.name || 'UNKNOWN');
+    const reason = provider === 'tg' ? telegramErrorReason(error) : String(error.code || error.name || 'UNKNOWN');
     if (timing) {
       timing.result = 'error';
       timing.error = /^[A-Z0-9_]+$/i.test(reason) ? reason : 'UNKNOWN';
@@ -2303,16 +2324,16 @@ app.post('/api/telegram/webhook', async (req, res) => {
     }
     const webhookResult = await processWebhookEvent(db, 'tg', update, (eventDb) => handleTelegramWebhookUpdate(eventDb, token, update, {
       onAuthLink: async () => ({ ok: false }),
-      onTelegramApiTiming: durationMs => timing.addTelegramApi(durationMs),
+      onTelegramApiTiming: timing.addTelegramApi,
     }));
     timing.duplicate = Boolean(webhookResult?.duplicate);
     timing.result = timing.duplicate ? 'duplicate' : 'processed';
     return res.sendStatus(200);
   } catch (err) {
-    const reason = String(err.code || err.name || 'UNKNOWN');
+    const reason = telegramErrorReason(err);
     timing.result = 'error';
     timing.error = /^[A-Z0-9_]+$/i.test(reason) ? reason : 'UNKNOWN';
-    console.error('Telegram webhook:', err.code || err.name || 'WEBHOOK_PROCESSING_FAILED');
+    console.error('Telegram webhook:', timing.error);
     return res.sendStatus(500);
   }
 });

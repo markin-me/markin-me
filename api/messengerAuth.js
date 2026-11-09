@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { promisify } = require('util');
+const { telegramErrorReason } = require('./telegramApi');
 const { ensureEmployeeCustomer } = require('./helpers/employeeCustomer');
 const {
   ensureBrowserOperation,
@@ -720,8 +721,9 @@ async function issueCodeChallengeLocked(db, options) {
   } catch (error) {
     console.error('AUTH_CODE_DELIVERY_FAILED', {
       provider: channel.provider, tenantId: scope.tenantId,
-      reason: /^[A-Z0-9_]+$/.test(String(error.code || error.cause?.code || ''))
-        ? (error.code || error.cause.code) : 'DELIVERY_ERROR',
+      reason: channel.provider === 'tg' ? telegramErrorReason(error)
+        : (/^[A-Z0-9_]+$/.test(String(error.code || error.cause?.code || ''))
+          ? (error.code || error.cause.code) : 'DELIVERY_ERROR'),
       httpStatus: Number(error.httpStatus) || undefined
     });
     await db.query(
