@@ -1,12 +1,9 @@
 const crypto = require('crypto');
 const { connectStoreChat } = require('./telegramBot');
+const { requestTelegramApi, telegramErrorReason } = require('./telegramApi');
 const { keepCurrentOperationPending, markCurrentOperation, recordCurrentServiceMessage } = require('./messengerCleanup');
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
-
-function nowMs() {
-  return Number(process.hrtime.bigint()) / 1e6;
-}
 
 function makeOneTimeToken() {
   if (crypto.randomUUID) return crypto.randomUUID().replaceAll('-', '') + crypto.randomBytes(8).toString('hex');
@@ -124,26 +121,7 @@ async function inferTenantOrigin(db, tenantId) {
 async function sendTelegramMessage(token, chatId, text, extra = null, onTelegramApiTiming = null) {
   const body = { chat_id: chatId, text: String(text || '') };
   if (extra && typeof extra === 'object') Object.assign(body, extra);
-  const startedAt = nowMs();
-  let res;
-  let data;
-  try {
-    res = await fetch(`${TELEGRAM_API}${token}/sendMessage`, {
-      method: 'POST',
-      signal: AbortSignal.timeout(10000),
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    data = await res.json().catch(() => null);
-  } finally {
-    if (typeof onTelegramApiTiming === 'function') {
-      try { onTelegramApiTiming(nowMs() - startedAt); } catch (_) {}
-    }
-  }
-  if (!res.ok || data?.ok !== true) {
-    const code=({400:'TELEGRAM_CHAT_UNAVAILABLE',401:'TELEGRAM_TOKEN_REJECTED',403:'TELEGRAM_BOT_BLOCKED',429:'TELEGRAM_RATE_LIMITED'})[res.status] || 'TELEGRAM_DELIVERY_FAILED';
-    throw Object.assign(new Error(code),{code,httpStatus:res.status});
-  }
+  const data = await requestTelegramApi(`${TELEGRAM_API}${token}`, 'sendMessage', body, { onTiming: onTelegramApiTiming });
   await recordCurrentServiceMessage({
     provider: 'tg', chatId: data.result?.chat?.id || chatId, messageId: data.result?.message_id,
   });
@@ -196,7 +174,7 @@ async function bindByLinkToken(db, tenantId, tgUserId, token) {
       [String(tgUserId), Number(tenantId), String(token || '').trim()]
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_TG_LINK_FAILED:', err.code || err.name);
+    console.error('AUTH_DUAL_WRITE_TG_LINK_FAILED:', telegramErrorReason(err));
   }
   return { ok: true, customerId: Number(row.customer_id) };
 }
@@ -263,7 +241,7 @@ async function rememberPendingOrigin(db, tenantId, tgUserId, origin) {
       [Number(tenantId), tokenKey, normalized]
     );
   } catch (err) {
-    console.error('AUTH_DUAL_WRITE_TG_PENDING_ORIGIN_FAILED:', err.code || err.name);
+    console.error('AUTH_DUAL_WRITE_TG_PENDING_ORIGIN_FAILED:', telegramErrorReason(err));
   }
 }
 
@@ -396,18 +374,9 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
   if(callback && /^auth:(?:b_[A-Za-z0-9_-]{40}|r_[A-Za-z0-9_-]{43})$/.test(String(callback.data)) && options.onBrowserAuth){
     if(callback.message?.chat?.type!=='private' || String(callback.message.chat.id)!==String(callback.from?.id) || callback.from?.is_bot)return;
     const result=await options.onBrowserAuth({providerUserId:String(callback.from.id),token:callback.data.slice(5),confirm:true});
-    const callbackStartedAt=nowMs();
-    let response;
-    let answer;
-    try {
-      response=await fetch(`${TELEGRAM_API}${tenantBot.token}/answerCallbackQuery`,{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),body:JSON.stringify({callback_query_id:callback.id,text:result.ok?'Вход подтверждён':'Запрос истёк или доступ не разрешён'})});
-      answer=await response.json().catch(()=>null);
-    } finally {
-      if(typeof options.onTelegramApiTiming==='function'){
-        try{options.onTelegramApiTiming(nowMs()-callbackStartedAt);}catch(_){}
-      }
-    }
-    if(!response.ok || !answer?.ok)throw Object.assign(new Error('TG_CALLBACK_FAILED'),{code:'TG_CALLBACK_FAILED'});
+    await requestTelegramApi(`${TELEGRAM_API}${tenantBot.token}`, 'answerCallbackQuery', {
+      callback_query_id: callback.id, text: result.ok ? 'Вход подтверждён' : 'Запрос истёк или доступ не разрешён',
+    }, { onTiming: options.onTelegramApiTiming });
     await send(callback.from.id,result.ok
       ? result.purpose==='password_reset'?'✅ Подтверждение смены пароля принято. Вернитесь в исходную вкладку CRM.':'Подтверждение принято. Вернитесь в исходную вкладку — CRM завершит вход там.'
       :result.error==='EMPLOYEE_MESSENGER_NOT_LINKED'?'Привязка не подтверждена. Начните вход заново в исходной карточке.'
