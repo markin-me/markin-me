@@ -498,5 +498,30 @@ deploy не состоялся и отправка реальных сообще
 реальные Telegram-интеграции. Автоматические тесты в этом проходе не запускались;
 исторический результат mock-аудита 100/0 не является проверкой VPS-развёртывания.
 
+### После разрешения изменять тестовую БД: проверен безопасный путь исправления
+
+Пользователь дополнительно разрешил необходимые изменения внутри test DB.
+Это снимает запрет на согласованные test DDL, но не даёт отсутствующие MySQL-права
+и не разрешает глобальные GRANT/изменения других пользователей или production.
+
+Read-only проверки уточнили: Percona Server 8.0.37-29; объект ROUTINES действительно
+PROCEDURE. `SHOW CREATE PROCEDURE` разрешён, но поле `Create Procedure` возвращает
+NULL. Точный SQL всех 9 триггеров доступен через `SHOW CREATE TRIGGER`.
+У восьми чужих триггеров один общий DEFINER; его полномочия не установлены.
+У test user нет SUPER/SET_USER_ID: он не сможет восстановить исходный чужой DEFINER
+после DROP/CREATE, то есть точный rollback не обеспечен. Неполный backup и слепое
+пересоздание не выполнялись; DDL/изменений данных по-прежнему ноль.
+
+Поэтому работа упирается не в дополнительное пользовательское разрешение, а в
+подтверждённое администраторское подключение/действия DBA. Нужно получить полный
+backup definitions с характеристиками создания и выполнить обратимое исправление
+владельцев только test stored objects либо документально подтвердить изоляцию
+существующих definers. Не выдавать runtime-пользователю глобальные SUPER/SET_USER_ID
+или глобальный SELECT ради обхода проверки. Пароли/секреты не передавать в чат.
+
+Непрозрачность `SHOW CREATE PROCEDURE` и требования к чужому DEFINER соответствуют
+[MySQL SHOW CREATE PROCEDURE](https://dev.mysql.com/doc/refman/8.0/en/show-create-procedure.html)
+и [Stored Object Access Control](https://dev.mysql.com/doc/refman/8.0/en/stored-objects-security.html).
+
 Документация: [Node AbortSignal.timeout](https://nodejs.org/api/globals.html#static-method-abortsignaltimeoutdelay),
 [Telegram API / ResponseParameters](https://core.telegram.org/bots/api#responseparameters).
