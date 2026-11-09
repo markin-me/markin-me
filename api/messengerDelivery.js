@@ -7,6 +7,10 @@ const { recordServiceMessage } = require('./messengerCleanup');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const DELIVERY_TIMEOUT_MS = 10000;
 
+function nowMs() {
+  return Number(process.hrtime.bigint()) / 1e6;
+}
+
 async function loadMessengerProfilePhoto(config, providerUserId, avatarUrl) {
   try {
     if(config.provider==='max'){
@@ -183,23 +187,30 @@ function codeMessage(purpose, code, expiresInMinutes) {
   return `${label}: ${code}. Он действует ${expiresInMinutes} мин. Никому не сообщайте этот код.`;
 }
 
-async function sendTelegramText(token, providerUserId, text, signal, extra = {}) {
-  const response = await fetch(`${TELEGRAM_API}${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...extra, chat_id: providerUserId, text }),
-    signal,
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok || data?.ok !== true) {
-    const error = new Error('TELEGRAM_DELIVERY_FAILED');
-    error.code = ({ 401: 'TELEGRAM_TOKEN_REJECTED', 403: 'TELEGRAM_BOT_BLOCKED',
-      400: 'TELEGRAM_CHAT_UNAVAILABLE', 429: 'TELEGRAM_RATE_LIMITED' })[response.status] || 'TELEGRAM_DELIVERY_FAILED';
-    error.httpStatus = response.status;
-    error.retryAfter = Number(data?.parameters?.retry_after) || 0;
-    throw error;
+async function sendTelegramText(token, providerUserId, text, signal, extra = {}, onTelegramApiTiming = null) {
+  const startedAt = nowMs();
+  try {
+    const response = await fetch(`${TELEGRAM_API}${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...extra, chat_id: providerUserId, text }),
+      signal,
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || data?.ok !== true) {
+      const error = new Error('TELEGRAM_DELIVERY_FAILED');
+      error.code = ({ 401: 'TELEGRAM_TOKEN_REJECTED', 403: 'TELEGRAM_BOT_BLOCKED',
+        400: 'TELEGRAM_CHAT_UNAVAILABLE', 429: 'TELEGRAM_RATE_LIMITED' })[response.status] || 'TELEGRAM_DELIVERY_FAILED';
+      error.httpStatus = response.status;
+      error.retryAfter = Number(data?.parameters?.retry_after) || 0;
+      throw error;
+    }
+    return data.result;
+  } finally {
+    if (typeof onTelegramApiTiming === 'function') {
+      try { onTelegramApiTiming(nowMs() - startedAt); } catch (_) {}
+    }
   }
-  return data.result;
 }
 
 async function deliverCode(db, { tenantId, provider, providerUserId, code, purpose, expiresInMinutes, operationId }, options={}) {
@@ -227,7 +238,9 @@ async function deliverCode(db, { tenantId, provider, providerUserId, code, purpo
       });
       return;
     }
-    const message = await sendTelegramText(token, providerUserId, text, controller.signal);
+    const message = await sendTelegramText(
+      token, providerUserId, text, controller.signal, {}, options.onTelegramApiTiming
+    );
     await recordServiceMessage(db, {
       operationId,
       provider: 'tg',

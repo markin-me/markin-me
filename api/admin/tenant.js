@@ -14,7 +14,8 @@ const os = require('os');
 const { execFile } = require('child_process');
 const { domainToASCII, domainToUnicode } = require('url');
 const chatTempRuntime = require('../chatTemp');
-const { getTenantBotConfig } = require('../messengerDelivery');
+const { getTenantBotConfig, getTenantWebhookSecret } = require('../messengerDelivery');
+const { setWebhook: setTelegramWebhook } = require('../telegramBot');
 const { geocodeStoreAddress } = require('../../data/map-geocoder');
 const {
   ensureTenantMapConfigColumns,
@@ -4272,6 +4273,27 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const nextSiteMenuIconUrls = siteMenuItemsJson !== undefined
         ? collectSiteMenuIconUrls(nextSiteMenuItemsJson)
         : null;
+
+      const savesTelegramSettings = [telegramBotUsername, telegramBotToken, tgMiniAppEnabled, tgLoginEnabled]
+        .some(value => value !== undefined);
+      if (savesTelegramSettings && nextTelegramBotToken && nextTelegramBotUsername) {
+        const webhookBaseUrl = normalizeAbsoluteBaseUrl(`${req.protocol}://${req.get('host')}`, { httpsOnly: true });
+        if (!webhookBaseUrl) {
+          return res.status(400).json({ ok: false, error: 'TELEGRAM_WEBHOOK_HTTPS_REQUIRED' });
+        }
+        try {
+          await setTelegramWebhook(
+            nextTelegramBotToken,
+            `${webhookBaseUrl}/api/telegram/webhook/${tenantId}`,
+            getTenantWebhookSecret({ tenantId: Number(tenantId), provider: 'tg' }),
+            { allowedUpdates: ['message', 'callback_query', 'my_chat_member'] }
+          );
+        } catch (error) {
+          console.error('TENANT_TELEGRAM_WEBHOOK_REGISTRATION_FAILED:', error.code || error.name);
+          return res.status(502).json({ ok: false, error: error.code === 'AUTH_WEBHOOK_SECRET_REQUIRED'
+            ? error.code : 'TELEGRAM_WEBHOOK_REGISTRATION_FAILED' });
+        }
+      }
 
       const [tenantUpdate] = await db.query(
         'UPDATE ten_tenants SET name=?, email=IF(?, ?, email), phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=? AND (NOT ? OR email <=> ?)',
