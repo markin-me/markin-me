@@ -188,11 +188,14 @@ test('non-JSON HTTP errors preserve rejection; body deadlines preserve known HTT
   await assert.rejects(requestTelegramApi(API, 'sendMessage', {}), {
     classification: 'TELEGRAM_API_REJECTED', code: 'TELEGRAM_TOKEN_REJECTED', deliveryOutcome: 'rejected',
   });
-  global.fetch = async () => ({ ok: false, status: 429,
-    json: async () => { throw new DOMException('fixture timeout', 'TimeoutError'); } });
-  await assert.rejects(requestTelegramApi(API, 'sendMessage', {}), {
-    classification: 'TELEGRAM_API_TIMEOUT', phase: 'read_body', httpStatus: 429, deliveryOutcome: 'rejected',
-  });
+  for (const [status, code] of [[400, 'TELEGRAM_CHAT_UNAVAILABLE'], [401, 'TELEGRAM_TOKEN_REJECTED'],
+    [403, 'TELEGRAM_BOT_BLOCKED'], [429, 'TELEGRAM_RATE_LIMITED']]) {
+    global.fetch = async () => ({ ok: false, status,
+      json: async () => { throw new DOMException('fixture timeout', 'TimeoutError'); } });
+    await assert.rejects(requestTelegramApi(API, 'sendMessage', {}), {
+      classification: 'TELEGRAM_API_TIMEOUT', code, phase: 'read_body', httpStatus: status, deliveryOutcome: 'rejected',
+    });
+  }
 });
 
 test('a caller cancellation is unknown, not an invented API timeout', async t => {

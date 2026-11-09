@@ -66,9 +66,11 @@ function apiFailure(httpStatus, data) {
 
 function deliveryError(diagnostic) {
   // Existing notification callers use these semantic codes to revoke unreachable contacts.
-  const code = diagnostic.classification === 'TELEGRAM_API_REJECTED'
-    ? ({ 400: 'TELEGRAM_CHAT_UNAVAILABLE', 401: 'TELEGRAM_TOKEN_REJECTED', 403: 'TELEGRAM_BOT_BLOCKED' })[diagnostic.httpStatus >= 400 ? diagnostic.httpStatus : diagnostic.telegramErrorCode] || 'TELEGRAM_DELIVERY_FAILED'
-    : diagnostic.classification;
+  const rejectionCode = ({ 400: 'TELEGRAM_CHAT_UNAVAILABLE', 401: 'TELEGRAM_TOKEN_REJECTED',
+    403: 'TELEGRAM_BOT_BLOCKED', 429: 'TELEGRAM_RATE_LIMITED' })[
+    diagnostic.httpStatus >= 400 ? diagnostic.httpStatus : diagnostic.telegramErrorCode];
+  const code = rejectionCode || (diagnostic.classification === 'TELEGRAM_API_REJECTED'
+    ? 'TELEGRAM_DELIVERY_FAILED' : diagnostic.classification);
   // Never retain raw fetch errors, response descriptions, URLs or request bodies.
   return Object.assign(new Error(code), { code, ...diagnostic });
 }
