@@ -347,6 +347,7 @@
   function syncViewport() {
     syncOrdersStagesPlacement();
     if (isMobile()) {
+      ensureMobileBackEntry();
       moveAccountControls();
       if (usesDedicatedMobileNavigation()) {
         restoreContextActions();
@@ -448,10 +449,35 @@
     }
     syncViewport();
   });
+  function ensureMobileBackEntry() {
+    if (!isMobile() || history.state?.adminMobileBack) return;
+    history.pushState({ ...history.state, adminMobileBack: true }, '', location.href);
+  }
+
   window.addEventListener('popstate', function () {
-    if (!window.NewOrderBridge?.hasEditingOrders() || !isEditorNavigation()) return;
-    goBack();
-    history.pushState({ ...history.state, orderEditor: true }, '', location.href);
+    if (!isMobile()) {
+      if (!window.NewOrderBridge?.hasEditingOrders() || !isEditorNavigation()) return;
+      goBack();
+      history.pushState({ ...history.state, orderEditor: true }, '', location.href);
+      return;
+    }
+    // Keep the browser on this document and reuse its existing Back actions.
+    history.pushState({ ...history.state, adminMobileBack: true }, '', location.href);
+    if (usesDedicatedMobileNavigation()) {
+      if (body.classList.contains('chat-mobile-right-open')) {
+        document.getElementById('chatMobileRightBackBtn')?.click();
+      } else if (!body.classList.contains('chat-mobile-left-open')) {
+        document.getElementById('chatMobileClientsBackBtn')?.click();
+      } else {
+        openSidebar();
+      }
+      return;
+    }
+    if (mobileSubview || currentLevel !== getRootLevel()) {
+      goBack();
+      return;
+    }
+    openSidebar();
   });
   syncViewport();
 })();

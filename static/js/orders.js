@@ -7231,7 +7231,7 @@
   let audioUnlocked = false;
 
   function unlockAudioOnce() {
-    if (isCourierWorkspace || audioUnlocked) return;
+    if (!ORDER_BROWSER_ALERTS_ENABLED || isCourierWorkspace || audioUnlocked) return;
     const url = state.tenantSounds && state.tenantSounds.sound_new_order_url;
     if (!url) return;
     const audio = new Audio(url);
@@ -9584,7 +9584,7 @@
 
       if (isCourierWorkspace) refreshCourierConnectionBanner();
 
-      if (!isCourierWorkspace) {
+      if (!isCourierWorkspace && ORDER_BROWSER_ALERTS_ENABLED) {
         document.addEventListener("click", unlockAudioOnce, { once: true });
         document.addEventListener("keydown", unlockAudioOnce, { once: true });
       }

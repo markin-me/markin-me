@@ -16464,8 +16464,18 @@ body.page-shop #shopCartFooterActions > #shopCartClearBtn{
   aspect-ratio: auto;
 }
 
-.bonus-level-preview-main > .shop-guest-bonus-balance{
-  margin-top: 10px;
+.shop-guest-bonus-balance-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shop-guest-bonus-balance-row > .shop-home-bonus-card__action{
+  margin-top: 0;
+  max-width: none;
+  flex-shrink: 0;
+  padding: 0 12px;
 }
 
 .shop-bonus-level-balance-label{
@@ -18694,6 +18704,9 @@ body.page-kso .shop-checkout-customer-phone{
   justify-content:center;
   flex:1;
   padding:0;
+}
+.shop-address-list-view--with-inline-toggle > .shop-delivery-toggle-wrap{
+  flex: 0 0 auto;
 }
 .shop-delivery-toggle{
   display:inline-flex;
@@ -21790,6 +21803,13 @@ body.page-kso .shop-checkout-customer-phone{
   font-size: 13px;
   line-height: 1.3;
   color: var(--color-text-muted);
+}
+
+.shop-checkout-card-grid--modes :is(.shop-checkout-card-option__title, .shop-checkout-card-option__value, .shop-checkout-card-option__meta){
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .shop-checkout-card-option.is-active .shop-checkout-card-option__title,
@@ -25674,7 +25694,10 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   }
 
   .shop-mobile-order-total-btn {
-    height: var(--shop-mobile-action-h);
+    height: auto;
+    min-height: var(--shop-mobile-action-h);
+    padding: 8px 18px;
+    line-height: 1.2;
     flex: 1;
     min-width: 0;
     display: inline-flex;
@@ -28153,7 +28176,10 @@ body.page-shop #appModal.team-unsaved-modal .app-modal-footer .btn:hover{backgro
 #appModal:has(> .app-modal-body.shop-profile-return-sheet) .shop-profile-orders-sheet-content,
 .shop-orders-page .shop-orders-page-content{padding:16px;box-sizing:border-box;}
 @media(max-width:768px){
-  body:not(.shop-orders-details-active) .shop-orders-page-header [data-orders-page-back],
+  body:not(.shop-orders-details-active) .shop-orders-page:not(.shop-orders-from-profile) .shop-orders-page-header [data-orders-page-back],
   .shop-company-chat-overlay.is-messages-home #shopCompanyChatBackBtn,
   .shop-company-chat-overlay.is-messages-home #shopCompanyChatCloseBtn{display:none;}
 }
+
+#shopOrderDetailsTotalValue, #shopMobileOrderTotalBtn .shop-checkout-total { display: flex; flex-direction: column; align-items: center; }
+#shopOrderDetailsTotalValue small, #shopMobileOrderTotalBtn .shop-checkout-total small { font-size: 11px; font-weight: 400; line-height: 1.25; }

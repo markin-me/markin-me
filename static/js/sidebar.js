@@ -42,6 +42,7 @@
       sidebar.classList.add('is-open');
       overlay.classList.add('is-active');
       document.body.classList.add('sidebar-open');
+      document.getElementById('adminMobileMenuBtn')?.setAttribute('aria-expanded', 'true');
     });
   }
 
@@ -55,6 +56,7 @@
       sidebar.classList.remove('is-open');
       overlay.classList.remove('is-active');
       document.body.classList.remove('sidebar-open');
+      document.getElementById('adminMobileMenuBtn')?.setAttribute('aria-expanded', 'false');
     });
   }
 
@@ -96,11 +98,49 @@
     const clickedInsideSidebar = sidebar.contains(target);
     const clickedEdgeToggle = edgeToggle && edgeToggle.contains(target);
     const clickedOpenTab = openTab && openTab.contains(target);
+    const clickedMenuButton = target.closest('#adminMobileMenuBtn');
 
-    if (!clickedInsideSidebar && !clickedEdgeToggle && !clickedOpenTab) {
+    if (!clickedInsideSidebar && !clickedEdgeToggle && !clickedOpenTab && !clickedMenuButton) {
       closeMobileSidebar();
     }
-  });
+  }, true);
+
+  let sidebarGesture = null;
+  document.addEventListener('touchstart', (event) => {
+    sidebarGesture = null;
+    if (!isMobile() || event.touches.length !== 1) return;
+    if (document.body.classList.contains('modal-open') || document.body.classList.contains('sheet-open')) return;
+    const touch = event.touches[0];
+    const opened = sidebar.classList.contains('is-open');
+    if (!opened && touch.clientX > 28) return;
+    if (opened && !sidebar.contains(event.target)) return;
+    if (event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    sidebarGesture = { x: touch.clientX, y: touch.clientY, id: touch.identifier, opened, time: event.timeStamp };
+  }, { capture: true, passive: true });
+
+  document.addEventListener('touchmove', (event) => {
+    if (!sidebarGesture) return;
+    const touch = event.touches[0];
+    if (event.touches.length !== 1 || touch.identifier !== sidebarGesture.id
+      || Math.abs(touch.clientY - sidebarGesture.y) > 40) sidebarGesture = null;
+  }, { capture: true, passive: true });
+
+  document.addEventListener('touchend', (event) => {
+    const gesture = sidebarGesture;
+    sidebarGesture = null;
+    if (!gesture || !isMobile() || event.timeStamp - gesture.time > 650) return;
+    const touch = Array.from(event.changedTouches).find((item) => item.identifier === gesture.id);
+    if (!touch) return;
+    const dx = touch.clientX - gesture.x;
+    const dy = touch.clientY - gesture.y;
+    if (Math.abs(dx) < 64 || Math.abs(dx) < Math.abs(dy) * 2) return;
+    if ((!gesture.opened && dx < 0) || (gesture.opened && dx > 0)) return;
+    if (event.cancelable) event.preventDefault();
+    if (gesture.opened) closeMobileSidebar();
+    else openMobileSidebar();
+  }, { capture: true, passive: false });
+
+  document.addEventListener('touchcancel', () => { sidebarGesture = null; }, { capture: true, passive: true });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && isMobile() && sidebar.classList.contains('is-open')) {

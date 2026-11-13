@@ -1445,9 +1445,10 @@
       <div class="bonus-level-preview-card" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
           <div class="bonus-level-preview-title${stackedTitle ? " shop-home-bonus-card__title" : ""}" style="${titleStyle}">${titleHtml}</div>
-          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">${escapeHtml(coinName)}</div>
+          <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">${escapeHtml(coinName)}${guestCard && state.homeBonusConfig?.account?.notice ? ` · <span class="shop-guest-bonus-balance">${escapeHtml(state.homeBonusConfig.account.notice)}</span>` : ""}</div>
+          ${guestCard ? '<div class="shop-guest-bonus-balance-row">' : ""}
           <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">${formatShopBonusMoney(getBonusLevelPreviewBalance(level))}</div>
-          ${guestCard ? `<div class="shop-guest-bonus-balance" style="color:${escapeHtml(contentColor)};">${escapeHtml(state.homeBonusConfig?.account?.notice || "")}</div><button class="shop-home-bonus-card__action" type="button">Как списать?</button>` : ""}
+          ${guestCard ? '<button class="shop-home-bonus-card__action" type="button">Как списать?</button></div>' : ""}
           ${showQr ? `<div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>` : ""}
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
@@ -3429,9 +3430,15 @@
     });
   }
 
+  const catalogPromoEnabled = false;
   function renderCatalogPromoBlock() {
     const host = elCatalogPromoBlock;
     if (!host) return;
+    if (!catalogPromoEnabled) {
+      host.classList.add("hidden");
+      if (host.childNodes.length) host.replaceChildren();
+      return;
+    }
     const orders = Array.isArray(window._activeOrders) ? window._activeOrders : [];
     const level = getHomeBonusFirstLevel(state.homeBonusConfig);
     const bonusCardHtml = level
@@ -3554,12 +3561,15 @@
   }
 
   function restoreHomeNavAfterHomeSiteMenuOpen() {
+    if (document.body.classList.contains("shop-orders-page-active")) return;
     if (typeof setActiveNav !== "function") return;
     setActiveNav("menu");
     requestAnimationFrame(() => {
+      if (document.body.classList.contains("shop-orders-page-active")) return;
       if (typeof setActiveNav === "function") setActiveNav("menu");
     });
     setTimeout(() => {
+      if (document.body.classList.contains("shop-orders-page-active")) return;
       if (typeof setActiveNav === "function") setActiveNav("menu");
     }, 120);
   }
@@ -3786,20 +3796,11 @@
   }
 
   function openHomeGuestBonusAction() {
-    if (!getCustomerToken()) {
-      if (typeof openProfileSheet === "function") {
-        openProfileSheet({
-          onLoginSuccess: () => {
-            if (window.AppModal?.isOpen?.() && sheetNavigationState.type === "profile") {
-              window.AppModal.close("sheet");
-            }
-            void refreshHomeBonusConfigUi({ skipPendingModal: true });
-          },
-        });
-      }
+    if (getCustomerToken().startsWith("g_") && state.homeBonusConfig?.account?.is_guest && state.homeBonusConfig.account.is_joined === true) {
+      openHomeBonusCardsSheet();
       return;
     }
-    openHomeBonusCardsSheet();
+    void joinHomeBonusProgram();
   }
 
   function bindBonusCardsPreviewActions(wrap, levels, options = {}) {
@@ -4314,11 +4315,11 @@
     }
     if (token.startsWith("g_")) {
       await ensureShopLateLoaded();
-      await openProfileSettingsPage(null, { confirmNumber: true, preserveBackground: true, confirmationOptions: {
-        title: "Подтвердите номер телефона",
-        message: "Чтобы присоединиться к бонусной системе, необходимо войти через Telegram или MAX",
-        cancelText: "Отмена",
-      } });
+      openLoginSheet({onSuccess: customer => {
+        if (!customer || customer.is_guest || getCustomerToken().startsWith("g_")) return;
+        window.AppModal?.close("bonus-join-login");
+        void joinHomeBonusProgram(joinOptions);
+      }});
       return;
     }
     if (!joinOptions.confirmed) {
@@ -6062,7 +6063,9 @@
     });
     document.body.classList.toggle("shop-home-tab-active", tab === "home");
 
-    const modeRaw = String(stateSnapshot.footerMode || "nav");
+    const paymentWidgetOpen = Array.from(document.querySelectorAll('.shop-payment-widget-active'))
+      .some(node => node.isConnected && !node.closest('.hidden'));
+    const modeRaw = paymentWidgetOpen ? "hidden" : String(stateSnapshot.footerMode || "nav");
     const sheetOpen = Boolean(stateSnapshot?.sheet?.open);
     const sheetType = String(stateSnapshot?.sheet?.type || "").trim();
     const benefitsInnerOverlayOpen = document.body.classList.contains("shop-benefits-overlay-open");
@@ -6179,7 +6182,9 @@
     const sheetType = String(sheetNavigationState?.type || "").trim() || null;
     const sheetScreen = String(sheetNavigationState?.screen || "").trim() || null;
     const panel = resolveMobilePanelSnapshot(sheetOpen, sheetType, sheetScreen, sheetNavigationState?.data);
-    const footerMode = resolveMobileFooterModeByPanel(panel, {
+    const paymentWidgetOpen = Array.from(document.querySelectorAll('.shop-payment-widget-active'))
+      .some(node => node.isConnected && !node.closest('.hidden'));
+    const footerMode = paymentWidgetOpen ? "hidden" : resolveMobileFooterModeByPanel(panel, {
       sheetOpen,
       sheetType,
       sheetScreen,
@@ -6193,9 +6198,10 @@
     } catch {}
 
     let tab = currentTab || "menu";
-    if(document.body.classList.contains("shop-orders-page-active"))tab="orders";
+    const ordersTab = document.getElementById("shopProfileOrdersPage")?.classList.contains("shop-orders-from-profile") ? "profile" : "orders";
+    if(document.body.classList.contains("shop-orders-page-active"))tab=ordersTab;
     if (!currentTab) {
-      if (panel === "orders" || panel === "profile-order-details" && document.body.classList.contains("shop-orders-page-active")) tab = "orders";
+      if (panel === "orders" || panel === "profile-order-details" && document.body.classList.contains("shop-orders-page-active")) tab = ordersTab;
       else if (panel === "categories") tab = "menu";
       else if (panel === "benefits" || panel === "benefit-gift-claim" || panel === "benefit-apply") tab = "benefits";
       else if (panel === "cart" || panel === "checkout") tab = "cart";
@@ -10082,15 +10088,15 @@
 
   function buildGuestBonusBalanceHtml() {
     const account=state.homeBonusConfig?.account;
-    if(!account?.is_guest)return "";
+    if(!account?.is_guest || account.is_joined !== true)return "";
     return `<div class="shop-bonus-level-balance-main shop-guest-bonus-balance"><div class="shop-bonus-level-balance-label">${escapeHtml(state.homeBonusConfig?.settings?.bonus_coin_name || "Бонусы")}</div><div class="shop-bonus-level-balance-value">${formatShopBonusMoney(account.balance)}</div><div class="shop-cart-bonus-join-text">${escapeHtml(account.notice)}</div></div>`;
   }
 
   function buildHomeGuestBonusCardHtml(level) {
     if (!level) return "";
-    if(state.homeBonusConfig?.account?.is_guest && Number(state.homeBonusConfig.account.level_id)>0){
-      return buildBonusLevelPreviewCardHtml(level,{homeCard:true,showQr:false,guestCard:true})
-        .replace('class="bonus-level-preview-card"','class="bonus-level-preview-card shop-home-bonus-card__preview"');
+    if (getCustomerToken().startsWith("g_") && state.homeBonusConfig?.account?.is_guest && state.homeBonusConfig.account.is_joined === true) {
+      return buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false, guestCard: true })
+        .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"');
     }
     const mainColor = "#f3f4f6";
     const baseColor = "#d1d5db";
@@ -10103,7 +10109,7 @@
     const titleStyle = level?.title_background_enabled === false
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
       : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
-    const actionText = getCustomerToken().startsWith("g_") ? "Как списать?" : getCustomerToken()
+    const actionText = getCustomerToken()
       ? "\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u0442\u044c\u0441\u044f"
       : "\u041d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e \u0432\u043e\u0439\u0442\u0438";
 
@@ -10123,7 +10129,6 @@
           <div class="bonus-level-preview-title shop-home-bonus-card__title" style="${titleStyle}">
             ${logoHtml}<span class="shop-home-bonus-card__title-text"><span class="shop-home-bonus-card__program-name">${escapeHtml(programName)}</span><span class="shop-home-bonus-card__level-name">${escapeHtml(levelTitle)}</span></span>
           </div>
-          ${buildGuestBonusBalanceHtml()}
           <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
@@ -10202,7 +10207,7 @@
       ? `color:${escapeHtml(titleColor)};background:transparent;padding:0;border-radius:0;${showTitle ? "" : "display:none;"}`
       : `color:${escapeHtml(titleColor)};background:#ffffff;padding:2px 10px;border-radius:999px;${showTitle ? "" : "display:none;"}`;
     const qrStyle = level?.qr_enabled === false ? "display:none;" : "";
-    const actionText = getCustomerToken().startsWith("g_") ? "Как списать?" : getCustomerToken()
+    const actionText = getCustomerToken()
       ? "\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u0442\u044c\u0441\u044f"
       : "\u041d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e \u0432\u043e\u0439\u0442\u0438";
 
@@ -10216,13 +10221,12 @@
     const levelTitle = level?.title || "Уровень";
     const logoHtml = programLogo ? `<img class="shop-home-bonus-card__program-logo" src="${escapeHtml(programLogo)}" style="width:2.6em;height:2.6em;border-radius:2px;margin-right:0;object-fit:contain;display:inline-block;vertical-align:middle;">` : "";
 
-    const bonusCardHtml = level ? (state.homeBonusConfig?.account?.is_guest && Number(state.homeBonusConfig.account.level_id)>0 ? buildHomeGuestBonusCardHtml(level) : `
+    const bonusCardHtml = level ? (getCustomerToken().startsWith("g_") && state.homeBonusConfig?.account?.is_guest ? buildHomeGuestBonusCardHtml(level) : `
       <div class="bonus-level-preview-card shop-home-bonus-card__preview" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
           <div class="bonus-level-preview-title shop-home-bonus-card__title" style="${titleStyle}">
             ${logoHtml}<span class="shop-home-bonus-card__title-text"><span class="shop-home-bonus-card__program-name">${escapeHtml(programName)}</span><span class="shop-home-bonus-card__level-name">${escapeHtml(levelTitle)}</span></span>
           </div>
-          ${buildGuestBonusBalanceHtml()}
           <button class="shop-home-bonus-card__action" type="button">${escapeHtml(actionText)}</button>
         </div>
         <div class="bonus-level-preview-sub" style="color:${escapeHtml(contentColor)};">
@@ -10272,11 +10276,15 @@
       state._homeBonusLoading = null;
     }
     if (state.homeBonusConfig && state._homeBonusToken === token) return state.homeBonusConfig;
-    if (state._homeBonusLoading) return state._homeBonusLoading;
-    if (state._homeBonusToken !== token) state.homeBonusConfig = null;
+    if (state._homeBonusLoading && state._homeBonusToken === token) return state._homeBonusLoading;
+    if (state._homeBonusToken !== token) {
+      state.homeBonusConfig = null;
+      state._homeBonusLoading = null;
+    }
     state._homeBonusToken = token;
-    state._homeBonusLoading = apiJson("/api/public/bonus/config")
+    const request = apiJson("/api/public/bonus/config")
       .then((json) => {
+        if (getCustomerToken() !== token || state._homeBonusLoading !== request) return null;
         state.homeBonusConfig = json?.data && typeof json.data === "object" ? json.data : null;
         renderHomeBonusCard();
         if (openCartSheetCtx?.listEl && openCartSheetCtx?.totalEl) {
@@ -10297,13 +10305,15 @@
       })
       .catch((err) => {
         console.error("Failed to load bonus config:", err);
+        if (getCustomerToken() !== token || state._homeBonusLoading !== request) return null;
         elHomeBonusCard.classList.add("hidden");
         elHomeBonusCard.innerHTML = "";
         return null;
       })
       .finally(() => {
-        state._homeBonusLoading = null;
+        if (state._homeBonusLoading === request) state._homeBonusLoading = null;
       });
+    state._homeBonusLoading = request;
     return state._homeBonusLoading;
   }
 
@@ -19879,8 +19889,13 @@ function updateCartBadge() {
     return true;
   }
 
-  function getShopPullRefreshScrollTop() {
-    return Math.max(0, Number(window.scrollY || document.documentElement?.scrollTop || document.body?.scrollTop || 0));
+  function getShopPullRefreshScrollTarget(target) {
+    for (let node = target instanceof Element ? target : null; node && node !== document.body; node = node.parentElement) {
+      if (node.scrollHeight > node.clientHeight && /^(auto|scroll)$/.test(getComputedStyle(node).overflowY)) {
+        return node;
+      }
+    }
+    return document.scrollingElement || document.documentElement;
   }
 
   function ensureShopPullRefreshIndicator() {
@@ -19934,11 +19949,14 @@ function updateCartBadge() {
       pulling: false,
       refreshing: false,
       distance: 0,
+      eligible: false,
+      scrollTarget: null,
     };
     const stateRef = shopPullRefreshState;
     const threshold = SHOP_PULL_REFRESH_THRESHOLD;
 
     const cancelPull = () => {
+      stateRef.eligible = false;
       if (!stateRef.pulling && stateRef.distance <= 0) return;
       stateRef.pulling = false;
       stateRef.distance = 0;
@@ -19946,9 +19964,14 @@ function updateCartBadge() {
     };
 
     document.addEventListener("touchstart", (event) => {
+      cancelPull();
       if (stateRef.refreshing || !isMobilePullRefreshAvailable()) return;
       const touch = event.touches && event.touches[0];
-      if (!touch || getShopPullRefreshScrollTop() > 1) return;
+      if (!touch || event.touches.length !== 1) return;
+      const scrollTarget = getShopPullRefreshScrollTarget(event.target);
+      if (scrollTarget.scrollTop > 1) return;
+      stateRef.eligible = true;
+      stateRef.scrollTarget = scrollTarget;
       stateRef.startX = touch.clientX;
       stateRef.startY = touch.clientY;
       stateRef.distance = 0;
@@ -19956,29 +19979,31 @@ function updateCartBadge() {
     }, { passive: true });
 
     document.addEventListener("touchmove", (event) => {
-      if (stateRef.refreshing) return;
-      if (!isMobilePullRefreshAvailable()) {
+      if (stateRef.refreshing || !stateRef.eligible) return;
+      if (!event.cancelable || !isMobilePullRefreshAvailable()) {
         cancelPull();
         return;
       }
       const touch = event.touches && event.touches[0];
-      if (!touch || getShopPullRefreshScrollTop() > 1) {
+      if (!touch || event.touches.length !== 1 || stateRef.scrollTarget.scrollTop > 1) {
         cancelPull();
         return;
       }
       const dy = touch.clientY - stateRef.startY;
       const dx = Math.abs(touch.clientX - stateRef.startX);
-      if (dy <= SHOP_PULL_REFRESH_CANCEL_DISTANCE || dx > dy) {
+      if (dy <= 0 || dx > dy) {
         cancelPull();
         return;
       }
+      event.preventDefault();
+      if (dy <= SHOP_PULL_REFRESH_CANCEL_DISTANCE) return;
       stateRef.pulling = true;
       stateRef.distance = Math.min(SHOP_PULL_REFRESH_MAX_DISTANCE, dy * 0.55);
       setShopPullRefreshProgress(stateRef.distance, false);
-      if (stateRef.distance > 8) event.preventDefault();
     }, { passive: false });
 
     const finishPull = () => {
+      stateRef.eligible = false;
       if (!stateRef.pulling || stateRef.refreshing) return;
       const shouldRefresh = stateRef.distance >= threshold;
       stateRef.pulling = false;
@@ -19992,7 +20017,7 @@ function updateCartBadge() {
     };
 
     document.addEventListener("touchend", finishPull, { passive: true });
-    document.addEventListener("touchcancel", finishPull, { passive: true });
+    document.addEventListener("touchcancel", cancelPull, { passive: true });
   }
 
 

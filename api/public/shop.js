@@ -510,6 +510,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const key=String(req.headers['idempotency-key'] || '');
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) throw paymentError('PAYMENT_INPUT_INVALID',400);
       let order=await authorizeOnlineOrder(req);
+      const availability=await onlineAvailability(order.tenant_id,order.store_id);
+      if(!availability.available)throw paymentError(availability.code || 'ONLINE_PAYMENT_NOT_AVAILABLE',409);
       if(!Number(order.online_payment_required) || order.payment_code!=='online') {
         const conn=await db.getConnection();
         try {
@@ -3884,7 +3886,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if(guest){
         // Expose only the balance and public card level, never the customer's identity or ledger.
         const context=await customerBonus.phoneContext(db,tenantId,guest.phone);
-        account={balance:context.balance,level_id:context.levelId,is_guest:true,can_redeem:false,
+        account={balance:context.balance,level_id:context.levelId,is_guest:true,is_joined:context.joined,can_redeem:false,
           notice:'Только начисление'};
       }
       const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows, promotedAccount);
