@@ -16796,29 +16796,17 @@
 
   function openNewOrderMobileOverlayPage(backdrop, title, onBack, beforeBack = null) {
     if (!isNewOrderEditorSurface() || !window.matchMedia("(max-width: 768px)").matches) return;
-    if (!window.__adminMobilePages?.openSubview(title, onBack, { beforeBack })) return;
+    if (!window.__adminMobilePages?.openSubview(title, onBack, { beforeBack, key: backdrop.id, element: backdrop })) return;
     backdrop.dataset.mobilePage = "1";
     document.body.classList.add("new-order-mobile-subpage");
-    if (backdrop.dataset.swipeBound) return;
-    backdrop.dataset.swipeBound = "1";
-    let start = null;
-    backdrop.addEventListener("touchstart", (event) => {
-      const touch = event.touches.length === 1 ? event.touches[0] : null;
-      start = touch && touch.clientX <= 28 ? { x: touch.clientX, y: touch.clientY } : null;
-    }, { passive: true });
-    backdrop.addEventListener("touchcancel", () => { start = null; }, { passive: true });
-    backdrop.addEventListener("touchend", (event) => {
-      const touch = event.changedTouches[0];
-      if (start && touch && touch.clientX - start.x > 80 && Math.abs(touch.clientY - start.y) < 60 && backdrop.dataset.mobilePage === "1") window.__adminMobilePages.back();
-      start = null;
-    }, { passive: true });
+
   }
 
   function closeNewOrderMobileOverlayPage(backdrop) {
     if (backdrop.dataset.mobilePage !== "1") return;
     delete backdrop.dataset.mobilePage;
-    document.body.classList.remove("new-order-mobile-subpage");
     window.__adminMobilePages?.closeSubview();
+    if (!document.querySelector('[data-mobile-page="1"]')) document.body.classList.remove("new-order-mobile-subpage");
   }
 
   function closeProductOverlay() {
@@ -19764,6 +19752,7 @@
   function closeOptionOverlay() {
     const { backdrop, list } = getOptionOverlayElements();
     if (!backdrop) return;
+    closeNewOrderMobileOverlayPage(backdrop);
     backdrop.classList.add("hidden");
     backdrop.onclick = null;
     if (list) list.innerHTML = "";
@@ -19814,6 +19803,7 @@
   function closeCheckoutCategoriesOverlay() {
     const { backdrop, list } = getCheckoutCategoriesOverlayElements();
     if (!backdrop) return;
+    closeNewOrderMobileOverlayPage(backdrop);
     backdrop.classList.add("hidden");
     backdrop.onclick = null;
     if (list) list.innerHTML = "";
@@ -19862,6 +19852,7 @@
     renderRows();
 
     backdrop.classList.remove("hidden");
+    openNewOrderMobileOverlayPage(backdrop, title.textContent, closeCheckoutCategoriesOverlay);
     backdrop.onclick = (e) => {
       const closeBtn = e.target.closest("[data-action='checkout-categories-overlay-close']");
       if (closeBtn || e.target === backdrop) {
@@ -19929,6 +19920,7 @@
     title.textContent = String(fallbackTitle || "РћРїС†РёСЏ");
     list.innerHTML = `<div class="new-order-option-sheet-empty">Р—Р°РіСЂСѓР·РєР°...</div>`;
     backdrop.classList.remove("hidden");
+    openNewOrderMobileOverlayPage(backdrop, title.textContent, closeOptionOverlay);
 
     const details = await loadOptionGroupDetails(gid);
     const group = details?.group || null;

@@ -48,6 +48,58 @@
   const viewStack = [{ level: getRootLevel(), title: rootTitle }];
   let currentLevel = getRootLevel();
   let mobileSubview = null;
+  let closingSubview = false;
+  let restoringView = false;
+  let pendingRightView = null;
+  let navigationRevision = 0;
+  const scrollSelector = '.panel-body, .no-scrollbar, .orders-list, .products-grid, .clients-list, .team-editor-scroll';
+
+  function captureViewScroll(view = viewStack[viewStack.length - 1]) {
+    if (!view || !isMobile()) return;
+    const column = view.subview?.element || (currentLevel === 'right' ? rightColumn : currentLevel === 'center' ? centerColumn : leftColumn);
+    view.scroll = { x: window.scrollX, y: window.scrollY, nodes: [column, ...column.querySelectorAll(scrollSelector)].map((node, index) => ({
+      id: node.id, index, top: node.scrollTop, left: node.scrollLeft,
+    })) };
+  }
+
+  function restoreViewScroll(view) {
+    const revision = ++navigationRevision;
+    window.requestAnimationFrame(function () {
+      if (revision !== navigationRevision) return;
+      const column = view?.subview?.element || (currentLevel === 'right' ? rightColumn : currentLevel === 'center' ? centerColumn : leftColumn);
+      const nodes = [column, ...column.querySelectorAll(scrollSelector)];
+      if (view?.scroll) {
+        view.scroll.nodes.forEach(function (saved) {
+          const node = saved.id ? document.getElementById(saved.id) : nodes[saved.index];
+          if (node && column.contains(node)) { node.scrollTop = saved.top; node.scrollLeft = saved.left; }
+        });
+        window.scrollTo(view.scroll.x, view.scroll.y);
+      } else {
+        nodes.forEach(function (node) { node.scrollTop = 0; });
+        window.scrollTo(0, 0);
+      }
+    });
+  }
+
+  function rememberRightView(key, restore, restoreOrigin) {
+    if (!isMobile() || usesDedicatedMobileNavigation() || restoringView || mobileSubview) return;
+    const context = { key: String(key), restore };
+    if (currentLevel !== 'right') {
+      const origin = viewStack[viewStack.length - 1];
+      if (currentLevel === 'center' && origin && typeof restoreOrigin === 'function') origin.restore = restoreOrigin;
+      pendingRightView = context;
+      return;
+    }
+    const current = viewStack[viewStack.length - 1];
+    if (current?.key && current.key !== context.key) {
+      captureViewScroll(current);
+      viewStack.push({ level: 'right', title: titleNode.textContent, ...context });
+    } else if (current) Object.assign(current, context);
+  }
+
+  document.addEventListener('click', function () {
+    if (!restoringView) captureViewScroll();
+  }, true);
   let actionOrigin = null;
   let movedActions = null;
 
@@ -240,43 +292,82 @@
   function showLevel(level, title, push) {
     if (!isMobile()) return;
     const nextLevel = level === "right" ? "right" : level === "center" ? "center" : "left";
+    const changedLevel = currentLevel !== nextLevel;
+    if (changedLevel && push) captureViewScroll();
     currentLevel = nextLevel;
     body.classList.remove("admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");
     body.classList.add("admin-mobile-pages", "admin-mobile-view-" + nextLevel);
     if (isEditorNavigation()) document.dispatchEvent(new CustomEvent('neworder:editor-view'));
     titleNode.textContent = String(title || rootTitle).trim() || rootTitle;
-    const isRoot = nextLevel === getRootLevel();
+    const isRoot = nextLevel === getRootLevel() && !mobileSubview;
     menuButton.classList.toggle("hidden", !isRoot);
     backButton.classList.toggle("hidden", isRoot);
     moveContextActions(nextLevel);
     moveOrderTabs();
     syncOrderTabsHeader();
-    if (isEditorNavigation() && nextLevel === getRootLevel()) viewStack.splice(0, viewStack.length, { level: getRootLevel(), title: titleNode.textContent });
+    if (isEditorNavigation() && nextLevel === getRootLevel() && push && !mobileSubview) {
+      const root = viewStack.find((view) => view.level === nextLevel && !view.subview);
+      viewStack.splice(0, viewStack.length, { ...root, level: nextLevel, title: titleNode.textContent });
+    }
     else if (push) viewStack.push({ level: nextLevel, title: titleNode.textContent });
 
-    window.requestAnimationFrame(function () {
-      const column = nextLevel === "right" ? rightColumn : nextLevel === "center" ? centerColumn : leftColumn;
-      const scrollable = column.querySelector(".panel-body");
-      if (scrollable) scrollable.scrollTop = 0;
-      window.scrollTo(0, 0);
-    });
+    if (nextLevel === 'right' && pendingRightView) {
+      Object.assign(viewStack[viewStack.length - 1], pendingRightView);
+      pendingRightView = null;
+    }
+    if (changedLevel || push) restoreViewScroll(viewStack[viewStack.length - 1]);
+  }
+
+  function restorePreviousView() {
+    const previous = viewStack[viewStack.length - 1] || { level: getRootLevel(), title: rootTitle };
+    mobileSubview = previous.subview || null;
+    showLevel(previous.level, previous.title, false);
+    if (mobileSubview) {
+      menuButton.classList.add('hidden');
+      backButton.classList.remove('hidden');
+    }
+    restoreViewScroll(previous);
+    return previous;
   }
 
   function goBack() {
+    if (!isMobile() || restoringView) return;
     if (mobileSubview) {
       if (mobileSubview.beforeBack && mobileSubview.beforeBack() === false) return;
       const subview = mobileSubview;
       mobileSubview = null;
-      if (viewStack.length > 1 && viewStack[viewStack.length - 1]?.subview) viewStack.pop();
-      if (typeof subview.onBack === "function") subview.onBack();
-      const previousSubviewView = viewStack[viewStack.length - 1] || { level: "right", title: rootTitle };
-      showLevel(previousSubviewView.level, previousSubviewView.title, false);
+      if (viewStack[viewStack.length - 1]?.subview) viewStack.pop();
+      closingSubview = true;
+      try { if (typeof subview.onBack === 'function') subview.onBack(); }
+      finally { closingSubview = false; }
+      restorePreviousView();
       return;
     }
-    if (isEditorNavigation() && currentLevel === 'center') return;
-    if (viewStack.length > 1) viewStack.pop();
-    const previous = viewStack[viewStack.length - 1] || { level: "left", title: rootTitle };
-    showLevel(previous.level, previous.title, false);
+    const localBack = (currentLevel === 'right'
+      ? ['settingsDeliveryZoneColorEditorBackBtn', 'clientOrderBackBtn']
+      : currentLevel === 'center' ? ['clientsToolbarBackBtn'] : [])
+      .map((id) => document.getElementById(id)).find((button) => button && button.getClientRects().length);
+    if (localBack) { localBack.click(); return; }
+    if (body.classList.contains('team-rbac-permission-mode')) {
+      const returnToRole = Array.from(document.querySelectorAll('[data-rbac-return-editor]')).find((button) => button.getClientRects().length);
+      if (returnToRole) { returnToRole.click(); return; }
+    }
+    if (usesDedicatedMobileNavigation()) {
+      if (body.classList.contains('chat-mobile-right-open')) document.getElementById('chatMobileRightBackBtn')?.click();
+      else if (!body.classList.contains('chat-mobile-left-open')) document.getElementById('chatMobileClientsBackBtn')?.click();
+      else openSidebar();
+      return;
+    }
+    if (viewStack.length <= 1) { openSidebar(); return; }
+    const outgoing = viewStack.pop();
+    const previous = restorePreviousView();
+    if (outgoing.level === 'right' && typeof previous.restore === 'function') {
+      restoringView = true;
+      Promise.resolve().then(previous.restore).catch(console.error).finally(function () {
+        restoringView = false;
+        restoreViewScroll(previous);
+      });
+    }
   }
 
   function resolveRightTitle(fallback) {
@@ -376,6 +467,16 @@
   window.addEventListener("resize", syncViewport);
   window.addEventListener("pageshow", syncViewport);
   window.__adminMobilePages = {
+    rememberRightView,
+    forgetRightView: function (key) {
+      if (pendingRightView?.key === key) pendingRightView = null;
+      for (let index = viewStack.length - 1; index >= 0; index -= 1) {
+        if (viewStack[index].key !== key) continue;
+        if (index === viewStack.length - 1) { delete viewStack[index].key; delete viewStack[index].restore; }
+        else viewStack.splice(index, 1);
+      }
+    },
+    canGoBack: function () { return Boolean(mobileSubview || (usesDedicatedMobileNavigation() ? !body.classList.contains('chat-mobile-left-open') : currentLevel !== getRootLevel())); },
     openCenter: function (title) {
       if (!isMobile() || usesDedicatedMobileNavigation()) return false;
       if (currentLevel !== "center") {
@@ -390,6 +491,10 @@
       if (currentLevel !== "right") {
         showLevel("right", resolveRightTitle(title), true);
       } else {
+        if (title) {
+          titleNode.textContent = String(title);
+          viewStack[viewStack.length - 1].title = String(title);
+        }
         moveOrderTabs();
         syncOrderTabsHeader();
       }
@@ -398,15 +503,20 @@
     openSubview: function (title, onBack, options) {
       if (!isMobile() || usesDedicatedMobileNavigation() || (currentLevel !== "center" && currentLevel !== "right")) return false;
       const sourceLevel = currentLevel;
+      const key = options?.key || 'subview';
+      if (!mobileSubview || mobileSubview.key !== key) captureViewScroll();
+      const previousSubview = mobileSubview;
       mobileSubview = {
+        key,
+        element: options?.element || null,
         title: String(title || "").trim() || rootTitle,
         onBack: typeof onBack === "function" ? onBack : null,
         keepOrderTabs: options?.keepOrderTabs === true,
         beforeBack: typeof options?.beforeBack === "function" ? options.beforeBack : null,
       };
-      if (!viewStack[viewStack.length - 1]?.subview) {
-        viewStack.push({ level: sourceLevel, title: mobileSubview.title, subview: true });
-      }
+      const entry = { level: sourceLevel, title: mobileSubview.title, subview: mobileSubview };
+      if (previousSubview?.key === key) Object.assign(viewStack[viewStack.length - 1], entry);
+      else viewStack.push(entry);
       titleNode.textContent = mobileSubview.title;
       titleNode.classList.remove("hidden");
       if (headerCopy) headerCopy.classList.remove("hidden");
@@ -416,11 +526,10 @@
       return true;
     },
     closeSubview: function () {
-      if (!mobileSubview) return false;
+      if (!mobileSubview || closingSubview) return false;
       mobileSubview = null;
       if (viewStack.length > 1 && viewStack[viewStack.length - 1]?.subview) viewStack.pop();
-      const previous = viewStack[viewStack.length - 1] || { level: "right", title: rootTitle };
-      showLevel(previous.level, previous.title, false);
+      restorePreviousView();
       return true;
     },
     getEditorView: function () { return { level: currentLevel, title: titleNode.textContent }; },
@@ -443,12 +552,44 @@
       viewStack.splice(0, viewStack.length, { level: 'center', title: 'Каталог' }, { level: 'right', title: 'Заказ' });
       currentLevel = 'right';
     } else if (editorReturnView) {
-      currentLevel = 'right';
-      viewStack.splice(0, viewStack.length, { level: 'center', title: rootTitle }, { level: 'right', title: rootTitle });
+      currentLevel = editorReturnView.level;
+      viewStack.splice(0, viewStack.length, ...editorReturnView.stack);
       editorReturnView = null;
     }
     syncViewport();
   });
+  let backGesture = null;
+  document.addEventListener('touchstart', function (event) {
+    backGesture = null;
+    if (!isMobile() || event.touches.length !== 1 || sidebar.classList.contains('is-open')) return;
+    if (!mobileSubview && (body.classList.contains('modal-open') || body.classList.contains('sheet-open'))) return;
+    const target = event.target;
+    if (mobileSubview ? !target.closest('[data-mobile-page="1"], .admin-benefits-page, #appModal') : !rightColumn.contains(target)) return;
+    if (!mobileSubview && (usesDedicatedMobileNavigation() ? !body.classList.contains('chat-mobile-right-open') : currentLevel !== 'right')) return;
+    if (target.closest('input, textarea, select, [contenteditable="true"], canvas, video, .leaflet-container, [role="slider"]')) return;
+    let node = target;
+    while (node && node !== rightColumn) {
+      if (node.scrollWidth > node.clientWidth + 2 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return;
+      node = node.parentElement;
+    }
+    const touch = event.touches[0];
+    backGesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp };
+  }, { capture: true, passive: true });
+  document.addEventListener('touchmove', function (event) {
+    if (!backGesture) return;
+    if (event.touches.length !== 1 || Math.abs(event.touches[0].clientY - backGesture.y) > 40) backGesture = null;
+  }, { capture: true, passive: true });
+  document.addEventListener('touchcancel', function () { backGesture = null; }, { capture: true, passive: true });
+  document.addEventListener('touchend', function (event) {
+    const gesture = backGesture;
+    backGesture = null;
+    if (!gesture || event.timeStamp - gesture.time > 650) return;
+    const touch = Array.from(event.changedTouches).find(function (item) { return item.identifier === gesture.id; });
+    if (!touch || touch.clientX - gesture.x < 80 || touch.clientX - gesture.x < Math.abs(touch.clientY - gesture.y) * 2) return;
+    if (event.cancelable) event.preventDefault();
+    goBack();
+  }, { capture: true, passive: false });
+
   function ensureMobileBackEntry() {
     if (!isMobile() || history.state?.adminMobileBack) return;
     history.pushState({ ...history.state, adminMobileBack: true }, '', location.href);
@@ -463,21 +604,7 @@
     }
     // Keep the browser on this document and reuse its existing Back actions.
     history.pushState({ ...history.state, adminMobileBack: true }, '', location.href);
-    if (usesDedicatedMobileNavigation()) {
-      if (body.classList.contains('chat-mobile-right-open')) {
-        document.getElementById('chatMobileRightBackBtn')?.click();
-      } else if (!body.classList.contains('chat-mobile-left-open')) {
-        document.getElementById('chatMobileClientsBackBtn')?.click();
-      } else {
-        openSidebar();
-      }
-      return;
-    }
-    if (mobileSubview || currentLevel !== getRootLevel()) {
-      goBack();
-      return;
-    }
-    openSidebar();
+    goBack();
   });
   syncViewport();
 })();

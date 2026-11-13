@@ -4127,6 +4127,12 @@
   async function setActiveTabKey(key) {
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
+    if (document.body.classList.contains('page-clients')) {
+      const originView = state.currentView;
+      window.__adminMobilePages?.rememberRightView('clients:' + key, () => setActiveTabKey(key), () => {
+        if (state.currentView !== originView) switchView(originView);
+      });
+    }
     if (document.body?.classList?.contains('page-chat')) {
       chatRightForceEmpty = false;
     }
@@ -4218,6 +4224,7 @@
     if (idx === -1) return;
     const closedTab = tabsState.tabs[idx];
     const wasActive = tabsState.activeKey === key;
+    window.__adminMobilePages?.forgetRightView('clients:' + key);
     tabsState.tabs.splice(idx, 1);
     tabsState.activationToken += 1;
 
@@ -4646,7 +4653,16 @@
     const { backdrop } = getClientBenefitsOverlayElements();
     if (backdrop) backdrop.classList.add("admin-benefits-page");
     document.body.classList.add("admin-benefits-page-open");
-    window.__adminMobilePages.openSubview(String(title || "Выгоды"), closeClientBenefitsOverlay);
+    window.__adminMobilePages.openSubview(String(title || "Выгоды"), closeClientBenefitsOverlay, {
+      key: 'benefits',
+      element: backdrop,
+      beforeBack: () => {
+        const button = window.AdminBenefitsModal?.getElements?.()?.backBtn;
+        if (!button || button.classList.contains('hidden')) return true;
+        button.click();
+        return false;
+      },
+    });
     return true;
   }
 
@@ -27066,7 +27082,8 @@
             mountClientMobilePaymentPage();
             window.__adminMobilePages.openSubview(
               `Принять оплату №${String(Number(targetOrder?.id || 0) || "—")}`,
-              () => window.AppModal?.close?.("back")
+              () => window.AppModal?.close?.("back"),
+              { key: 'payment', element: document.getElementById('appModal') }
             );
           },
           onClose() {

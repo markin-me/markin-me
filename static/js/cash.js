@@ -2836,6 +2836,7 @@
     function setActiveOrderTab(key) {
       var tab = getTabByKey(key);
       if (!tab) return;
+      window.__adminMobilePages?.rememberRightView('cash:' + key, function () { setActiveOrderTab(key); });
       tabsState.activeKey = key;
       state.activeOrderId = String(tab && tab.type || 'order') === 'client' ? 0 : Number(tab && tab.orderId || 0);
       closeInlineStatusMenus();
@@ -3059,6 +3060,7 @@
       var index = tabsState.tabs.findIndex(function (tab) { return String(tab && tab.key || '') === String(key || ''); });
       if (index === -1) return;
       var wasActive = String(tabsState.activeKey || '') === String(key || '');
+      window.__adminMobilePages?.forgetRightView('cash:' + key);
       tabsState.tabs.splice(index, 1);
       if (wasActive) {
         var next = tabsState.tabs[index] || tabsState.tabs[index - 1] || null;

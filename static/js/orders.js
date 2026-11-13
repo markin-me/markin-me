@@ -2213,6 +2213,7 @@
 
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
+    window.__adminMobilePages?.rememberRightView('orders:' + key, () => setActiveOrderTab(key, { openMobile: true }));
     if (tabsState.activeKey === key && mountedCheckoutTabKey === key && isCheckoutTab(tab)) {
       renderOrderTabs();
       syncActiveOrderRowState();
@@ -2242,9 +2243,9 @@
       renderOrderTabs();
       syncActiveOrderRowState();
       setOrdersCheckoutLayoutEnabled(false);
-      activateClientTab(tab, { openMobile }).catch(console.error);
+      const activation = activateClientTab(tab, { openMobile }).catch(console.error);
       schedulePersistOrdersCache();
-      return;
+      return activation;
     }
 
     if (isCheckoutTab(tab)) {
@@ -2833,6 +2834,7 @@
     if(tabToClose.type==='print'){ordersPrintPanel?.clearPrintApiTabState(key);if(tabsState.activeKey===key)showOrdersPrintPanel(false);}
     if (tabToClose.key === mountedCheckoutTabKey) captureCheckoutSessionForTab(tabToClose);
     const wasActive = tabsState.activeKey === key;
+    window.__adminMobilePages?.forgetRightView('orders:' + key);
     tabsState.tabs.splice(idx, 1);
 
     if (!tabsState.tabs.length) {

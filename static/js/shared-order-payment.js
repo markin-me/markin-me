@@ -1438,7 +1438,7 @@
       onOpen: function () {
         document.body.classList.add('admin-payment-page-open');
         mountMobilePaymentPage();
-        window.__adminMobilePages?.openSubview?.(title, function () { window.AppModal?.close?.('back'); });
+        window.__adminMobilePages?.openSubview?.(title, function () { window.AppModal?.close?.('back'); }, { key: 'payment', element: document.getElementById('appModal') });
       },
       onClose: function () {
         window.__adminMobilePages?.closeSubview?.();

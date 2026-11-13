@@ -13840,6 +13840,7 @@ const isViewMode = state.comboPanel.mode === "view";
   async function setActiveTabKey(key, { activate = true } = {}) {
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
+    window.__adminMobilePages?.rememberRightView('products:' + key, () => setActiveTabKey(key));
     if (tabsState.activeKey === key) {
       renderTabs();
       return;
@@ -14073,6 +14074,7 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
     
+    window.__adminMobilePages?.forgetRightView('products:' + key);
     tabsState.tabs.splice(idx, 1);
     if (wasActive) {
       const next = tabsState.tabs[idx] || tabsState.tabs[idx - 1];
