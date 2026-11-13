@@ -6,7 +6,11 @@ const crypto = require('crypto');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const TG_LOGIN_START_PAYLOADS = new Set(['login', 'auth', 'link', 'shop']);
 
-async function sendContactRequestMessage(apiBase, chatId) {
+function nowMs() {
+  return Number(process.hrtime.bigint()) / 1e6;
+}
+
+async function sendContactRequestMessage(apiBase, chatId, onTelegramApiTiming = null) {
   return sendMessage(
     apiBase,
     chatId,
@@ -17,11 +21,12 @@ async function sendContactRequestMessage(apiBase, chatId) {
         resize_keyboard: true,
         one_time_keyboard: true,
       },
-    }
+    },
+    onTelegramApiTiming
   );
 }
 
-async function connectStoreChat(db, apiBase, chatId, payload, tenantId = null) {
+async function connectStoreChat(db, apiBase, chatId, payload, tenantId = null, onTelegramApiTiming = null) {
   const [rows] = await db.query(
     `SELECT id, tenant_id, store_id, secret_key FROM ten_store_telegram
      WHERE connect_token=? AND (? IS NULL OR tenant_id=?)
@@ -47,14 +52,18 @@ async function connectStoreChat(db, apiBase, chatId, payload, tenantId = null) {
   await sendMessage(
     apiBase,
     chatId,
-    `\u0413\u043e\u0442\u043e\u0432\u043e. \u0412\u044b \u0431\u0443\u0434\u0435\u0442\u0435 \u043f\u043e\u043b\u0443\u0447\u0430\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0437\u0430\u043a\u0430\u0437\u0430\u0445 \u043f\u043e \u0444\u0438\u043b\u0438\u0430\u043b\u0443 \u00ab${storeName}\u00bb.`
+    `\u0413\u043e\u0442\u043e\u0432\u043e. \u0412\u044b \u0431\u0443\u0434\u0435\u0442\u0435 \u043f\u043e\u043b\u0443\u0447\u0430\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0437\u0430\u043a\u0430\u0437\u0430\u0445 \u043f\u043e \u0444\u0438\u043b\u0438\u0430\u043b\u0443 \u00ab${storeName}\u00bb.`,
+    null,
+    onTelegramApiTiming
   );
   const secretKey = row.secret_key || '';
   if (secretKey) {
     await sendMessage(
       apiBase,
       chatId,
-      `\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u044d\u0442\u0438 \u043a\u043b\u044e\u0447\u0438 \u0432 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u0445 \u0444\u0438\u043b\u0438\u0430\u043b\u0430 \u043f\u0440\u0438 \u043d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e\u0441\u0442\u0438:\n\nAPI key: ${chatId}\nSecret key: ${secretKey}`
+      `\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u044d\u0442\u0438 \u043a\u043b\u044e\u0447\u0438 \u0432 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u0445 \u0444\u0438\u043b\u0438\u0430\u043b\u0430 \u043f\u0440\u0438 \u043d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e\u0441\u0442\u0438:\n\nAPI key: ${chatId}\nSecret key: ${secretKey}`,
+      null,
+      onTelegramApiTiming
     );
   }
   return true;
@@ -63,6 +72,9 @@ async function connectStoreChat(db, apiBase, chatId, payload, tenantId = null) {
 async function processUpdate(db, apiBase, update, options = {}) {
   const message = update.message;
   if (!message) return;
+  const send = (chatId, text, extra = null) => sendMessage(
+    apiBase, chatId, text, extra, options.onTelegramApiTiming
+  );
 
   const text = String(message.text || '').trim();
   const chatId = message.chat?.id;
@@ -77,8 +89,7 @@ async function processUpdate(db, apiBase, update, options = {}) {
 
   try {
     if (contactPhone) {
-      await sendMessage(
-        apiBase,
+      await send(
         chatId,
         '\u0421\u043f\u0430\u0441\u0438\u0431\u043e. \u041d\u043e\u043c\u0435\u0440 \u043f\u043e\u043b\u0443\u0447\u0435\u043d. \u0412\u0445\u043e\u0434 \u0431\u0443\u0434\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u043f\u043e\u0441\u043b\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u044f \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438.'
       );
@@ -97,8 +108,7 @@ async function processUpdate(db, apiBase, update, options = {}) {
           providerUserId: tgUserId != null ? String(tgUserId) : String(chatId),
           token: payload,
         });
-        await sendMessage(
-          apiBase,
+        await send(
           chatId,
           result?.ok
             ? 'Telegram успешно привязан к выбранной учётной записи.'
@@ -108,7 +118,7 @@ async function processUpdate(db, apiBase, update, options = {}) {
       }
 
       if (TG_LOGIN_START_PAYLOADS.has(String(payload).toLowerCase())) {
-        await sendContactRequestMessage(apiBase, chatId);
+        await sendContactRequestMessage(apiBase, chatId, options.onTelegramApiTiming);
         return;
       }
 
@@ -148,12 +158,12 @@ async function processUpdate(db, apiBase, update, options = {}) {
         } catch (err) {
           console.error('AUTH_DUAL_WRITE_TG_LINK_LEGACY_FAILED:', err.message || err);
         }
-        await sendMessage(apiBase, chatId, '\u0054\u0065\u006c\u0065\u0067\u0072\u0061\u006d \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d \u043a \u0432\u0430\u0448\u0435\u043c\u0443 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0443.');
+        await send(chatId, '\u0054\u0065\u006c\u0065\u0067\u0072\u0061\u006d \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d \u043a \u0432\u0430\u0448\u0435\u043c\u0443 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0443.');
         return;
       }
 
-      if (!await connectStoreChat(db, apiBase, chatId, payload)) {
-        await sendMessage(apiBase, chatId, 'Ссылка недействительна или истекла. Получите новую в настройках филиала.');
+      if (!await connectStoreChat(db, apiBase, chatId, payload, null, options.onTelegramApiTiming)) {
+        await send(chatId, 'Ссылка недействительна или истекла. Получите новую в настройках филиала.');
       }
       return;
     }
@@ -165,12 +175,12 @@ async function processUpdate(db, apiBase, update, options = {}) {
       [chatId, secretKey, expiresAt]
     );
 
-    await sendContactRequestMessage(apiBase, chatId);
+    await sendContactRequestMessage(apiBase, chatId, options.onTelegramApiTiming);
   } catch (err) {
     console.error('Telegram bot processUpdate:', err.code || err.name);
     if (typeof options.onAuthLink === 'function') throw err;
     try {
-      await sendMessage(apiBase, chatId, '\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u043f\u043e\u0437\u0436\u0435.');
+      await send(chatId, '\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u043f\u043e\u0437\u0436\u0435.');
     } catch (_) {}
   }
 }
@@ -217,18 +227,25 @@ function startPolling(db, token) {
   };
 }
 
-async function sendMessage(apiBase, chatId, text, extra = null) {
+async function sendMessage(apiBase, chatId, text, extra = null, onTelegramApiTiming = null) {
   const body = { chat_id: chatId, text };
   if (extra && typeof extra === 'object') Object.assign(body, extra);
-
-  const res = await fetch(`${apiBase}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.description || 'sendMessage failed');
-  return data;
+  const startedAt = nowMs();
+  try {
+    const res = await fetch(`${apiBase}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.description || 'sendMessage failed');
+    return data;
+  } finally {
+    if (typeof onTelegramApiTiming === 'function') {
+      try { onTelegramApiTiming(nowMs() - startedAt); } catch (_) {}
+    }
+  }
 }
 
 async function handleWebhookUpdate(db, token, update, options = {}) {
@@ -237,7 +254,7 @@ async function handleWebhookUpdate(db, token, update, options = {}) {
   await processUpdate(db, apiBase, update, options);
 }
 
-async function setWebhook(token, webhookUrl, secret = '') {
+async function setWebhook(token, webhookUrl, secret = '', options = {}) {
   if (!token || !webhookUrl) return;
   const apiBase = `${TELEGRAM_API}${token.trim()}`;
   const res = await fetch(`${apiBase}/setWebhook`, {
@@ -246,8 +263,9 @@ async function setWebhook(token, webhookUrl, secret = '') {
     body: JSON.stringify({
       url: webhookUrl,
       ...(String(secret || '').trim() ? { secret_token: String(secret).trim() } : {}),
-      allowed_updates: ['message'],
+      allowed_updates: options.allowedUpdates || ['message'],
     }),
+    signal: AbortSignal.timeout(15000),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.description || 'setWebhook failed');
