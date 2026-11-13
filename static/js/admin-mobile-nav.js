@@ -51,11 +51,13 @@
   let closingSubview = false;
   let restoringView = false;
   let pendingRightView = null;
+  let lastRightView = null;
   let navigationRevision = 0;
   const scrollSelector = '.panel-body, .no-scrollbar, .orders-list, .products-grid, .clients-list, .team-editor-scroll';
 
   function captureViewScroll(view = viewStack[viewStack.length - 1]) {
     if (!view || !isMobile()) return;
+    if (view.level === 'right' && !view.subview) view.selection = selectedRightTabSignature();
     const column = view.subview?.element || (currentLevel === 'right' ? rightColumn : currentLevel === 'center' ? centerColumn : leftColumn);
     view.scroll = { x: window.scrollX, y: window.scrollY, nodes: [column, ...column.querySelectorAll(scrollSelector)].map((node, index) => ({
       id: node.id, index, top: node.scrollTop, left: node.scrollLeft,
@@ -291,9 +293,11 @@
 
   function showLevel(level, title, push) {
     if (!isMobile()) return;
+    if (backGesture?.source) clearSwipe();
     const nextLevel = level === "right" ? "right" : level === "center" ? "center" : "left";
     const changedLevel = currentLevel !== nextLevel;
     if (changedLevel && push) captureViewScroll();
+    if (changedLevel && currentLevel === 'right' && !mobileSubview && viewStack[viewStack.length - 1]?.level === 'right') lastRightView = viewStack[viewStack.length - 1];
     currentLevel = nextLevel;
     body.classList.remove("admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");
     body.classList.add("admin-mobile-pages", "admin-mobile-view-" + nextLevel);
@@ -332,6 +336,7 @@
 
   function goBack() {
     if (!isMobile() || restoringView) return;
+    if (backGesture?.source) clearSwipe();
     if (mobileSubview) {
       if (mobileSubview.beforeBack && mobileSubview.beforeBack() === false) return;
       const subview = mobileSubview;
@@ -359,7 +364,9 @@
       return;
     }
     if (viewStack.length <= 1) { openSidebar(); return; }
+    captureViewScroll();
     const outgoing = viewStack.pop();
+    if (outgoing.level === 'right') lastRightView = outgoing;
     const previous = restorePreviousView();
     if (outgoing.level === 'right' && typeof previous.restore === 'function') {
       restoringView = true;
@@ -470,6 +477,7 @@
     rememberRightView,
     forgetRightView: function (key) {
       if (pendingRightView?.key === key) pendingRightView = null;
+      if (lastRightView?.key === key) lastRightView = null;
       for (let index = viewStack.length - 1; index >= 0; index -= 1) {
         if (viewStack[index].key !== key) continue;
         if (index === viewStack.length - 1) { delete viewStack[index].key; delete viewStack[index].restore; }
@@ -558,37 +566,147 @@
     }
     syncViewport();
   });
+  function selectedRightTabSignature() {
+    const hosts = isEditorNavigation() ? [catalogTabs, document.getElementById('newOrderTabs')]
+      : ['orders', 'courier-screen'].includes(activePage) ? [document.getElementById('orderTabs')]
+      : orderTabs.concat([document.getElementById('teamTabs')]);
+    for (const host of hosts) {
+      const tab = host?.querySelector('.product-tab.is-active, [role="tab"][aria-selected="true"]');
+      if (tab) return JSON.stringify({ ...tab.dataset });
+    }
+    return null;
+  }
+
+  function openSelectedRightView() {
+    if (usesDedicatedMobileNavigation()) { window.__adminChatMobileApi?.openSelectedRightPanel?.(); return; }
+    const selected = pendingRightView;
+    const previous = lastRightView && (!selected || selected.key === lastRightView.key)
+      && lastRightView.selection === selectedRightTabSignature() ? lastRightView : null;
+    window.__adminMobilePages.openRight(previous?.title);
+    if (previous) {
+      Object.assign(viewStack[viewStack.length - 1], previous);
+      restoreViewScroll(previous);
+    }
+  }
+
   let backGesture = null;
-  document.addEventListener('touchstart', function (event) {
+  let swipeFrame = null;
+  let swipeTimer = null;
+  function clearSwipe() {
+    if (swipeFrame !== null) cancelAnimationFrame(swipeFrame);
+    if (swipeTimer !== null) clearTimeout(swipeTimer);
+    swipeFrame = swipeTimer = null;
+    if (backGesture?.source) {
+      [backGesture.source, backGesture.preview].filter(Boolean).forEach((node) => {
+        node.classList.remove('admin-swipe-source', 'admin-swipe-preview', 'admin-swipe-settling');
+        ['x', 'top', 'left', 'width', 'height'].forEach((name) => node.style.removeProperty('--admin-swipe-' + name));
+      });
+    }
+    body.classList.remove('admin-swipe-active');
     backGesture = null;
-    if (!isMobile() || event.touches.length !== 1 || sidebar.classList.contains('is-open')) return;
+  }
+  function paintSwipe(gesture) {
+    gesture.source.style.setProperty('--admin-swipe-x', gesture.dx + 'px');
+    if (gesture.preview) gesture.preview.style.setProperty('--admin-swipe-x', (gesture.dx - gesture.direction * gesture.width) + 'px');
+  }
+  function startSwipe(gesture, direction) {
+    const previous = viewStack[viewStack.length - 2];
+    gesture.direction = direction;
+    gesture.source = mobileSubview?.element || (gesture.fromCenter ? centerColumn : rightColumn);
+    if (direction < 0) gesture.preview = rightColumn;
+    else if (mobileSubview) gesture.preview = previous?.subview?.element || (currentLevel === 'center' ? centerColumn : rightColumn);
+    else if (!usesDedicatedMobileNavigation() && previous?.level === 'center') gesture.preview = centerColumn;
+    else if (usesDedicatedMobileNavigation() && !body.classList.contains('chat-right-order-mode')) gesture.preview = centerColumn;
+    if (gesture.preview === gesture.source) gesture.preview = null;
+    // Local Back actions replace content in the same column; do not preview a different column.
+    if (direction > 0 && ['settingsDeliveryZoneColorEditorBackBtn', 'clientOrderBackBtn'].some((id) => document.getElementById(id)?.getClientRects().length)) gesture.preview = null;
+    const rect = gesture.source.getBoundingClientRect();
+    gesture.width = rect.width;
+    captureViewScroll();
+    body.classList.add('admin-swipe-active');
+    gesture.source.classList.add('admin-swipe-source');
+    if (gesture.preview) {
+      const node = gesture.preview;
+      node.style.setProperty('--admin-swipe-top', Math.max(0, rect.top) + 'px');
+      node.style.setProperty('--admin-swipe-left', rect.left + 'px');
+      node.style.setProperty('--admin-swipe-width', rect.width + 'px');
+      node.style.setProperty('--admin-swipe-height', Math.max(0, window.innerHeight - Math.max(0, rect.top)) + 'px');
+      node.classList.add('admin-swipe-preview');
+    }
+  }
+  function finishSwipe(commit) {
+    const gesture = backGesture;
+    if (gesture?.settling) return;
+    if (!gesture?.source) { clearSwipe(); return; }
+    if (swipeFrame !== null) { cancelAnimationFrame(swipeFrame); swipeFrame = null; }
+    gesture.settling = true;
+    [gesture.source, gesture.preview].filter(Boolean).forEach((node) => node.classList.add('admin-swipe-settling'));
+    gesture.dx = commit ? gesture.direction * gesture.width : 0;
+    paintSwipe(gesture);
+    const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180;
+    swipeTimer = setTimeout(function () {
+      const forward = gesture.direction < 0;
+      clearSwipe();
+      if (commit) { if (forward) openSelectedRightView(); else goBack(); }
+    }, duration);
+  }
+  document.addEventListener('touchstart', function (event) {
+    if (backGesture?.settling) return;
+    clearSwipe();
+    if (!isMobile() || restoringView || event.touches.length !== 1 || sidebar.classList.contains('is-open')) return;
     if (!mobileSubview && (body.classList.contains('modal-open') || body.classList.contains('sheet-open'))) return;
     const target = event.target;
-    if (mobileSubview ? !target.closest('[data-mobile-page="1"], .admin-benefits-page, #appModal') : !rightColumn.contains(target)) return;
-    if (!mobileSubview && (usesDedicatedMobileNavigation() ? !body.classList.contains('chat-mobile-right-open') : currentLevel !== 'right')) return;
-    if (target.closest('input, textarea, select, [contenteditable="true"], canvas, video, .leaflet-container, [role="slider"]')) return;
+    const fromCenter = !mobileSubview && centerColumn.contains(target)
+      && (usesDedicatedMobileNavigation() ? !body.classList.contains('chat-mobile-left-open') && !body.classList.contains('chat-mobile-right-open') : currentLevel === 'center');
+    if (!fromCenter && (mobileSubview ? !mobileSubview.element?.contains(target) : !rightColumn.contains(target))) return;
+    if (!fromCenter && !mobileSubview && (usesDedicatedMobileNavigation() ? !body.classList.contains('chat-mobile-right-open') : currentLevel !== 'right')) return;
+    if (target.closest('input, textarea, select, [contenteditable="true"], canvas, video, .leaflet-container, [role="slider"], .chat-message-bubble')) return;
     let node = target;
-    while (node && node !== rightColumn) {
-      if (node.scrollWidth > node.clientWidth + 2 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return;
+    while (node && node !== (fromCenter ? centerColumn : rightColumn)) {
+      if (node.scrollWidth > node.clientWidth + 2) {
+        const style = getComputedStyle(node);
+        const scrollsVertically = node.scrollHeight > node.clientHeight + 2 && /auto|scroll/.test(style.overflowY);
+        if (/auto|scroll/.test(style.overflowX) && (!scrollsVertically || style.touchAction === 'pan-x')) return;
+      }
       node = node.parentElement;
     }
     const touch = event.touches[0];
-    backGesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp };
+    backGesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, dx: 0, time: event.timeStamp, fromCenter };
   }, { capture: true, passive: true });
   document.addEventListener('touchmove', function (event) {
-    if (!backGesture) return;
-    if (event.touches.length !== 1 || Math.abs(event.touches[0].clientY - backGesture.y) > 40) backGesture = null;
-  }, { capture: true, passive: true });
-  document.addEventListener('touchcancel', function () { backGesture = null; }, { capture: true, passive: true });
+    const gesture = backGesture;
+    if (!gesture || gesture.settling) return;
+    const touch = event.touches[0];
+    if (event.touches.length !== 1 || touch.identifier !== gesture.id) { finishSwipe(false); return; }
+    const dx = touch.clientX - gesture.x;
+    const dy = touch.clientY - gesture.y;
+    if (!gesture.source) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { clearSwipe(); return; }
+      if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
+      if (gesture.fromCenter ? dx >= 0 : dx <= 0) { clearSwipe(); return; }
+      if (!event.cancelable) { clearSwipe(); return; }
+      event.preventDefault();
+      startSwipe(gesture, dx < 0 ? -1 : 1);
+    } else if (!event.cancelable) { finishSwipe(false); return; }
+    else event.preventDefault();
+    gesture.dx = gesture.direction * Math.min(gesture.width, Math.max(0, dx * gesture.direction));
+    if (swipeFrame === null) swipeFrame = requestAnimationFrame(function () { swipeFrame = null; if (backGesture === gesture) paintSwipe(gesture); });
+  }, { capture: true, passive: false });
+  document.addEventListener('touchcancel', function () { finishSwipe(false); }, { capture: true, passive: true });
   document.addEventListener('touchend', function (event) {
     const gesture = backGesture;
-    backGesture = null;
-    if (!gesture || event.timeStamp - gesture.time > 650) return;
-    const touch = Array.from(event.changedTouches).find(function (item) { return item.identifier === gesture.id; });
-    if (!touch || touch.clientX - gesture.x < 80 || touch.clientX - gesture.x < Math.abs(touch.clientY - gesture.y) * 2) return;
+    if (!gesture || gesture.settling) return;
+    if (!gesture.source) { clearSwipe(); return; }
+    const touch = Array.from(event.changedTouches).find((item) => item.identifier === gesture.id);
+    if (!touch) { finishSwipe(false); return; }
+    gesture.dx = gesture.direction * Math.min(gesture.width, Math.max(0, (touch.clientX - gesture.x) * gesture.direction));
+    const distance = Math.abs(gesture.dx);
+    const speed = distance / Math.max(1, event.timeStamp - gesture.time);
     if (event.cancelable) event.preventDefault();
-    goBack();
+    finishSwipe(distance >= Math.min(80, gesture.width * 0.2) || (distance >= 32 && speed >= 0.45));
   }, { capture: true, passive: false });
+  window.addEventListener('resize', clearSwipe);
+  window.addEventListener('pagehide', clearSwipe);
 
   function ensureMobileBackEntry() {
     if (!isMobile() || history.state?.adminMobileBack) return;

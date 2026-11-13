@@ -34304,8 +34304,8 @@ body:is(.page-new-order,.new-order-editor-active) .page-col-left > .panel:not(#c
     display:none !important;
   }
 
-  body.page-orders.admin-mobile-pages.admin-mobile-view-right #orderTabsHeader,
-  body.page-orders.admin-mobile-pages.admin-mobile-view-right #orderTabsHeaderCheckout{
+  body.page-orders.admin-mobile-pages #orderTabsHeader,
+  body.page-orders.admin-mobile-pages #orderTabsHeaderCheckout{
     display:none !important;
   }
 
@@ -34616,8 +34616,8 @@ body:is(.page-new-order,.new-order-editor-active) .page-col-left > .panel:not(#c
     padding-top:10px;
   }
 
-  body.page-courier-screen.admin-mobile-pages.admin-mobile-view-right #orderTabsHeader,
-  body.page-courier-screen.admin-mobile-pages.admin-mobile-view-right #orderTabsHeaderCheckout{
+  body.page-courier-screen.admin-mobile-pages #orderTabsHeader,
+  body.page-courier-screen.admin-mobile-pages #orderTabsHeaderCheckout{
     display:none !important;
   }
 
@@ -35605,7 +35605,7 @@ body:is(.page-new-order,.new-order-editor-active) #newOrderProductsGrid.is-share
   body.page-chat.new-order-editor-active.admin-mobile-pages .page-col{
     visibility:visible;transition:none;
   }
-  body:is(.page-new-order,.new-order-editor-active).admin-mobile-view-right #newOrderTabsHeader{display:none}
+  body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages #newOrderTabsHeader{display:none}
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages .page-col-left,
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages .page-col-right{padding:0;height:calc(100dvh - var(--header-height));min-height:0;overflow:hidden}
   body:is(.page-new-order,.new-order-editor-active).admin-mobile-pages .page-col-left > .panel,
@@ -35922,3 +35922,34 @@ body.page-products .products-main-toolbar{height:58px;min-height:58px;box-sizing
 body.page-products .products-main-toolbar > .products-header-selection{flex:0 0 20px}
 body.page-products .products-main-toolbar > .toolbar-title{flex:1;min-width:0}
 body.page-products .products-main-toolbar > .products-bulk-toolbar{flex:1;width:auto;min-width:0}
+
+@media (max-width:768px){
+  body[data-admin-active-page].admin-swipe-active .admin-swipe-source,
+  body[data-admin-active-page].admin-swipe-active .admin-swipe-preview{
+    transform:translate3d(var(--admin-swipe-x, 0px),0,0) !important;
+    transition:none !important;
+    will-change:transform;
+  }
+  body[data-admin-active-page].admin-swipe-active .admin-swipe-source{z-index:27}
+  body[data-admin-active-page].admin-swipe-active .admin-swipe-preview{
+    display:flex !important;
+    flex-direction:column;
+    position:fixed !important;
+    inset:auto !important;
+    top:var(--admin-swipe-top) !important;
+    left:var(--admin-swipe-left) !important;
+    width:var(--admin-swipe-width) !important;
+    height:var(--admin-swipe-height) !important;
+    min-height:0 !important;
+    max-height:var(--admin-swipe-height) !important;
+    box-sizing:border-box;
+    background:var(--color-surface);
+    overflow:hidden;
+    pointer-events:none !important;
+    z-index:26;
+  }
+  body[data-admin-active-page].admin-swipe-active .admin-swipe-settling{transition:transform 180ms ease-out !important}
+}
+@media (max-width:768px) and (prefers-reduced-motion:reduce){
+  body[data-admin-active-page].admin-swipe-active .admin-swipe-settling{transition:none !important}
+}

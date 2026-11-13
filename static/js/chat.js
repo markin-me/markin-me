@@ -18465,6 +18465,9 @@
     initHeaderClientOpenAction();
 
     window.__adminChatMobileApi = {
+      openSelectedRightPanel() {
+        if (Number(state.activeClientId || 0) > 0) return syncMobileChatView('right');
+      },
       openClientsPanel(options = {}) {
         return openClientsPanel(options);
       },
