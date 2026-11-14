@@ -1458,14 +1458,14 @@ async function buildCustomerBonusCard({ db, tenantId, customerId }) {
          SELECT tenant_id, customer_id, COUNT(*) AS total_orders,
                 COALESCE(SUM(COALESCE(total_price, 0)), 0) AS total_spent
            FROM order_orders
-          WHERE tenant_id = ? AND is_active = 1 AND customer_id IS NOT NULL
+          WHERE tenant_id = ? AND is_active = 1 AND customer_id = ?
           GROUP BY tenant_id, customer_id
        ) order_metrics
          ON order_metrics.tenant_id = c.tenant_id
         AND order_metrics.customer_id = c.id
       WHERE c.tenant_id = ? AND c.id = ?
       LIMIT 1`,
-    [tenantId, tenantId, customerId]
+    [tenantId, customerId, tenantId, customerId]
   );
   if (!customerRow) {
     throw Object.assign(new Error('CUSTOMER_NOT_FOUND'), { statusCode: 404 });
@@ -1571,8 +1571,16 @@ async function buildCustomerBonusCard({ db, tenantId, customerId }) {
   };
 }
 
-module.exports = function makeAdminBonusRouter({ db, helpers, can }) {
+module.exports = function makeAdminBonusRouter({ db, helpers, can, ordersEvents }) {
   const router = express.Router();
+  router.use((req, res, next) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) res.once('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) ordersEvents?.publish(helpers.getTenantId(req), 0,
+        'reference.changed', { names: ['client-benefits', 'bonus-config'], customer_id: Number(String(req.path).match(/^\/customers\/(\d+)/)?.[1] || 0) });
+    });
+    next();
+  });
+
 
   router.post('/customers/:customerId/join', async (req, res) => {
     let conn;

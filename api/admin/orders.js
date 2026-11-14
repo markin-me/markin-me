@@ -2555,6 +2555,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (req.rbacContext === "courier" || accessRule === "assigned" || accessRule === "own") {
         return res.json({
           ok: true,
+          epoch: ordersEvents.getEpoch(),
           data: [],
           cursor,
           reset_required: cursorState.resetRequired || cursor > Math.max(0, since),
@@ -2564,6 +2565,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (cursorState.resetRequired) {
         return res.json({
           ok: true,
+          epoch: ordersEvents.getEpoch(),
           data: [],
           cursor,
           reset_required: true,
@@ -2573,6 +2575,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const data = ordersEvents.getChanges(tenantId, storeId, since);
       res.json({
         ok: true,
+          epoch: ordersEvents.getEpoch(),
         data,
         cursor,
         reset_required: false,
@@ -2952,6 +2955,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
 
       const existing = existingRows[0] || {};
+      if (isPaidRaw === 1 && Object.prototype.hasOwnProperty.call(req.body || {}, "expected_total")) {
+        const expectedTotal = Number(req.body.expected_total);
+        if (!Number.isFinite(expectedTotal) || Math.abs(expectedTotal - Number(existing.total_price)) > 0.01) {
+          throw Object.assign(new Error("ORDER_PRICING_CHANGED"), { code: "ORDER_PRICING_CHANGED" });
+        }
+      }
       if (req.rbacContext === "courier" && (Number(existing.assigned_user_id || 0) !== Number(req.user?.userId || 0) || Number(existing.is_paid) === 1)) {
         await conn.rollback(); transactionStarted = false; conn.release(); conn = null;
         return res.status(Number(existing.is_paid) === 1 ? 409 : 403).json({ ok: false, error: Number(existing.is_paid) === 1 ? "ORDER_ALREADY_PAID" : "RESOURCE_FORBIDDEN" });
@@ -3069,6 +3078,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
       if (conn) conn.release();
       console.error(e);
+      if (e?.code === "ORDER_PRICING_CHANGED") return res.status(409).json({ ok: false, error: e.code });
       if (e?.code === "IDEMPOTENCY_KEY_INVALID") {
         return res.status(400).json({ ok: false, error: e.code });
       }
@@ -3962,6 +3972,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
+      if (typeof req.validateCheckout === 'function' && !await req.validateCheckout(res)) return;
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [existingRows] = await db.query(
@@ -5064,6 +5075,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         data: {
           id,
           public_id: payload?.public_id || existing?.public_id || null,
+          order: payload,
         },
       });
     } catch (e) {

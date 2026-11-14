@@ -525,6 +525,16 @@
     productRam.clear();
     productPending.clear();
     productGenerations.clear();
+    benefitsRam.clear();
+    benefitsPending.clear();
+    knownBenefitCustomers.clear();
+    benefitsInvalidationTask = Promise.resolve();
+    clientResourceVerified.clear();
+    clientResourceDirty.clear();
+    clientResourcePending.clear();
+    passportPending.clear();
+    ordersResourceSynchronized = false;
+    clientEventsSynchronized = false;
   }
 
   function isFullOrderPassport(order) {
@@ -603,6 +613,31 @@
     });
   }
 
+  const passportPending = new Map();
+  const passportVersions = new Map();
+  async function loadOrderPassport(orderId, loader, options = {}) {
+    const cache = options.cache || orderPassportScope(options);
+    const id = Number(orderId || 0);
+    const key = `${cache.namespace}:${id}`;
+    if (!options.force) {
+      const cached = await readOrderPassport(id, { ...options, cache, allowStale: false });
+      if (cached) return cached.order;
+    }
+    if (passportPending.has(key)) return passportPending.get(key);
+    const version = passportVersions.get(key) || 0;
+    const authToken = window.localStorage.getItem("authToken");
+    const task = Promise.resolve().then(loader).then(async order => {
+      if (authToken !== window.localStorage.getItem("authToken")
+        || orderPassportScope().namespace !== cache.namespace) throw new Error("ORDER_SCOPE_CHANGED");
+      if ((passportVersions.get(key) || 0) !== version) throw new Error("ORDER_SNAPSHOT_INVALIDATED");
+      if (!isFullOrderPassport(order)) throw new Error("ORDER_PASSPORT_INCOMPLETE");
+      await writeOrderPassport(order, { cache, authoritative: true });
+      return order;
+    }).finally(() => { if (passportPending.get(key) === task) passportPending.delete(key); });
+    passportPending.set(key, task);
+    return task;
+  }
+
   const orderPassport = {
     domain: ORDER_PASSPORT_DOMAIN,
     version: ORDER_PASSPORT_VERSION,
@@ -611,15 +646,411 @@
     scope: orderPassportScope,
     isFull: isFullOrderPassport,
     read: readOrderPassport,
+    load: loadOrderPassport,
     write: writeOrderPassport,
     merge: mergeOrderPassport,
     mergePatch: mergeOrderPassportPatch,
   };
 
+  let ordersResourceSynchronized = false;
+  const clientResourcePending = new Map();
+  const clientResourceVerified = new Set();
+  const clientResourceDirty = new Set();
+  const clientResourceVersions = new Map();
+  function clientResourceContext(kind, clientId) {
+    const cache = createScope({ domain: "clients:shared", version: 1 });
+    const id = Number(clientId || 0);
+    const entry = `${kind}:${id}`;
+    return { cache, id, entry, key: `${cache.namespace}:${entry}` };
+  }
+  async function loadClientResource(kind, clientId, loader, options = {}) {
+    void ensureClientEvents().catch(error => console.error('Client synchronization failed:', error));
+    const context = clientResourceContext(kind, clientId);
+    const { cache, entry, key } = context;
+    if (!cache.complete || !(context.id > 0)) return loader();
+    const cached = !options.force ? await cache.getEntry(entry, { allowStale: true }) : null;
+    const synchronized = ["orders", "header"].includes(kind) ? ordersResourceSynchronized
+      : clientEventsSynchronized && ["profile", "addresses", "discounts"].includes(kind);
+    if (cached && !cached.stale && !clientResourceDirty.has(key) && (synchronized || clientResourceVerified.has(key))) return cached.data;
+    const refresh = () => {
+      if (clientResourcePending.has(key)) return clientResourcePending.get(key);
+      const version = clientResourceVersions.get(key) || 0;
+      const authToken = window.localStorage.getItem("authToken");
+      const task = Promise.resolve().then(loader).then(async data => {
+        if (authToken !== window.localStorage.getItem("authToken")
+          || clientResourceContext(kind, clientId).key !== key) throw new Error("CLIENT_SCOPE_CHANGED");
+        if ((clientResourceVersions.get(key) || 0) !== version) {
+          if (!options.retried) {
+            if (clientResourcePending.get(key) === task) clientResourcePending.delete(key);
+            return loadClientResource(kind, clientId, loader, { ...options, force: true, retried: true });
+          }
+          throw new Error("CLIENT_DATA_INVALIDATED");
+        }
+        await cache.set(entry, data, { ttlMs: ORDER_PASSPORT_TTL_MS });
+        clientResourceVerified.add(key);
+        clientResourceDirty.delete(key);
+        return data;
+      }).finally(() => { if (clientResourcePending.get(key) === task) clientResourcePending.delete(key); });
+      clientResourcePending.set(key, task);
+      return task;
+    };
+    if (cached && !clientResourceDirty.has(key) && options.allowStale === true) {
+      void refresh().then(data => document.dispatchEvent(new CustomEvent("dashboard:client-resource-updated", {
+        detail: { clientId: context.id, kind, data, namespace: cache.namespace },
+      }))).catch(error => console.warn("Client background refresh failed:", error));
+      return cached.data;
+    }
+    return refresh();
+  }
+  async function invalidateClientResource(kind, clientId) {
+    const { cache, entry, key } = clientResourceContext(kind, clientId);
+    clientResourceVerified.delete(key);
+    clientResourceDirty.add(key);
+    clientResourceVersions.set(key, (clientResourceVersions.get(key) || 0) + 1);
+    clientResourcePending.delete(key);
+    await cache.remove(entry);
+    document.dispatchEvent(new CustomEvent("dashboard:client-data-invalidated", { detail: { kind, clientId: Number(clientId) } }));
+  }
+  const clientData = {
+    load: loadClientResource, invalidate: invalidateClientResource, ensureSync: ensureClientEvents,
+    async mutation(url, method) {
+      if (["GET", "HEAD"].includes(String(method || "GET").toUpperCase())) return;
+      const client = String(url).match(/^\/api\/admin\/clients\/(\d+)(?:\/|$)/);
+      if (client) {
+        const suffix = String(url).slice(client[0].endsWith("/") ? client[0].length - 1 : client[0].length).split("?")[0];
+        const profileChange = !suffix;
+        const addressChange = /^\/addresses(?:\/|$)/.test(suffix);
+        const benefitChange = /^\/(?:discounts|benefits)(?:\/|$)/.test(suffix);
+        const kinds = profileChange ? ["profile", "addresses", "discounts", "orders", "header"]
+          : addressChange ? ["addresses"] : benefitChange ? ["discounts"] : [];
+        await Promise.all(kinds.map(kind => invalidateClientResource(kind, Number(client[1]))));
+        if (profileChange || benefitChange) await clientBenefits.invalidate(Number(client[1]));
+      }
+      const bonus = String(url).match(/^\/api\/admin\/bonus\/customers\/(\d+)(?:\/|$)/);
+      if (bonus) await clientBenefits.invalidate(Number(bonus[1]));
+      if (String(url).startsWith("/api/admin/bonus/config")) await invalidateClientResource("bonus-config", 1);
+    },
+    setOrdersSynchronized(value) {
+      ordersResourceSynchronized = value === true;
+      if (!ordersResourceSynchronized) {
+        for (const key of clientResourceVerified) {
+          if (/:(?:orders|header):\d+$/.test(key)) clientResourceVerified.delete(key);
+        }
+      }
+    },
+  };
+  window.addEventListener("offline", () => clientData.setOrdersSynchronized(false));
+  window.addEventListener("online", () => clientResourceVerified.clear());
+  document.addEventListener("dashboard:order-updated", event => {
+    if (event.detail?.localOnly) return;
+    const order = event.detail?.order;
+    if (!order) return;
+    const customerId = Number(order.customer_id || 0);
+    if (customerId > 0) {
+      for (const kind of ["orders", "header"]) void invalidateClientResource(kind, customerId)
+        .catch(error => console.warn("Client order cache invalidation failed:", error));
+    }
+    const cache = orderPassportScope();
+    const key = `${cache.namespace}:${Number(order.id)}`;
+    passportVersions.set(key, (passportVersions.get(key) || 0) + 1);
+    if (event.detail?.removed) {
+      void cache.remove(String(order.id)).catch(console.warn);
+    } else if (isFullOrderPassport(order)) {
+      void writeOrderPassport(order, { cache, authoritative: true }).catch(console.warn);
+    } else {
+      void cache.remove(String(order.id)).catch(console.warn);
+    }
+  });
+
+  let clientEventsSynchronized = false;
+  let clientEventsInstalled = false, clientEventsStarting = null, clientEventsUnsubscribe = null;
+  let clientEventsCursor = 0, clientEventsEpoch = null, clientEventsSerial = Promise.resolve();
+  async function ensureClientEvents() {
+    if (clientEventsInstalled) return;
+    if (clientEventsStarting) return clientEventsStarting;
+    clientEventsStarting = (async () => {
+      const cache = createScope({ domain: 'clients:shared', version: 1 });
+      if (!cache.complete || !window.localStorage.getItem('authToken')) return;
+      const stored = await cache.get('sync');
+      if (cache.namespace !== createScope({ domain: 'clients:shared', version: 1 }).namespace) return;
+      clientEventsCursor = Number(stored?.cursor || 0); clientEventsEpoch = stored?.epoch || null;
+      clientEventsUnsubscribe = realtime.subscribe('clients', () => ({ since: clientEventsCursor, epoch: clientEventsEpoch }), message => {
+        if (message.type === 'connection.closed') { clientEventsSynchronized = false; return; }
+        if (message.type === 'clients.error') { clientEventsSynchronized = false; console.error('Client subscription failed:', message.error); return; }
+        clientEventsSerial = clientEventsSerial.then(async () => {
+          if (cache.namespace !== createScope({ domain: 'clients:shared', version: 1 }).namespace) return;
+          const incoming = message.type === 'clients.event' ? [message.event] : message.changes || [];
+          const reset = message.reset_required || message.type === 'clients.invalidate'
+            || incoming.some(event => !(Number(event.data?.client_id) > 0))
+            || (message.type === 'clients.ready' && !clientEventsEpoch);
+          const ids = new Set();
+          const sectionsById = {};
+          if (reset) {
+            clientEventsCursor = 0;
+            clientEventsSynchronized = false;
+            for (const key of clientResourcePending.keys()) clientResourceVersions.set(key, (clientResourceVersions.get(key) || 0) + 1);
+            await cache.clear(); clientResourceVerified.clear();
+          }
+          const changes = incoming;
+          for (const event of changes) {
+            const id = Number(event.data?.client_id || 0);
+            if (id > 0) ids.add(id);
+            clientEventsCursor = Math.max(clientEventsCursor, Number(event.id || 0));
+          }
+          for (const id of ids) {
+            const sections = changes.filter(event => Number(event.data?.client_id) === id).map(event => event.data?.section);
+            sectionsById[id] = sections;
+            const kinds = new Set();
+            for (const section of sections) {
+              (section === 'addresses' ? ['addresses'] : section === 'benefits' ? ['discounts']
+                : section === 'profile' ? ['profile'] : ['profile', 'addresses', 'discounts']).forEach(kind => kinds.add(kind));
+            }
+            await Promise.all([...kinds].map(kind => invalidateClientResource(kind, id)));
+            if (sections.some(section => section !== 'addresses')) await clientBenefits.invalidate(id);
+          }
+          if (message.type === 'clients.ready') {
+            clientEventsEpoch = message.epoch; clientEventsCursor = Math.max(clientEventsCursor, Number(message.cursor || 0));
+          }
+          await cache.set('sync', { epoch: clientEventsEpoch, cursor: clientEventsCursor });
+          if (message.type === 'clients.ready') clientEventsSynchronized = true;
+          document.dispatchEvent(new CustomEvent('admin:clients-changed', { detail: { ids: [...ids], sections: sectionsById, resync: reset } }));
+        }).catch(error => console.error('Client event apply failed:', error));
+        return clientEventsSerial;
+      });
+      clientEventsInstalled = true;
+    })().finally(() => { clientEventsStarting = null; });
+    return clientEventsStarting;
+  }
+  function resetClientEvents() {
+    clientEventsUnsubscribe?.(); clientEventsUnsubscribe = null; clientEventsInstalled = false; clientEventsSynchronized = false;
+    clientEventsCursor = 0; clientEventsEpoch = null;
+    void ensureClientEvents().catch(console.error);
+  }
+  document.addEventListener('tenantStoreChanged', resetClientEvents);
+  window.addEventListener('storage', event => {
+    if (['authToken', 'activeStoreId', 'user', 'tenant'].includes(event.key)) resetClientEvents();
+  });
+
+  // Shared client benefits data uses the existing persisted snapshot format.
+  const benefitsPending = new Map();
+  const benefitsRam = new Map();
+  const benefitsGenerations = new Map();
+  const benefitsListeners = new Set();
+  const knownBenefitCustomers = new Set();
+  let benefitsInvalidationTask = Promise.resolve();
+  function benefitsIdentity(customerId, options = {}) {
+    const identity = currentIdentity();
+    const tenantId = Number(options.tenantId || identity.tenantId || 0);
+    const storeId = Number(options.storeId || identity.storeId || 0);
+    const id = Number(customerId || 0);
+    if (id > 0) knownBenefitCustomers.add(id);
+    const key = `benefits-snapshot:v1:t${tenantId}:s${storeId}:c${id}`;
+    return { tenantId, storeId, id, key, runtimeKey: `${key}:${window.localStorage.getItem("authToken") || ""}` };
+  }
+  function validBenefits(data, identity) {
+    return identity.tenantId > 0 && identity.storeId > 0 && identity.id > 0
+      && Number(data?.client_id) === identity.id && Number(data?.store_id) === identity.storeId
+      && data?.benefits && data?.bonuses;
+  }
+  async function readBenefits(customerId, options = {}) {
+    await benefitsInvalidationTask;
+    const identity = benefitsIdentity(customerId, options);
+    if (!(identity.id > 0 && identity.tenantId > 0 && identity.storeId > 0)) return null;
+    const record = benefitsRam.get(identity.runtimeKey) || await read(identity.key);
+    const age = Date.now() - Number(record?.fetchedAt || 0);
+    if (record?.version !== 1 || Number(record.tenantId) !== identity.tenantId
+      || Number(record.storeId) !== identity.storeId || Number(record.customerId) !== identity.id
+      || age < 0 || age > 7 * 24 * 60 * 60 * 1000 || !validBenefits(record.data, identity)) return null;
+    benefitsRam.set(identity.runtimeKey, record);
+    return { snapshot: record.data, stale: age > 5 * 60 * 1000 };
+  }
+  async function writeBenefits(customerId, data, options = {}) {
+    const identity = benefitsIdentity(customerId, options);
+    if (!validBenefits(data, identity)) throw new Error('BENEFITS_SNAPSHOT_INVALID');
+    const record = { version: 1, tenantId: identity.tenantId,
+      storeId: identity.storeId, customerId: identity.id, fetchedAt: Date.now(), data };
+    await write(identity.key, record);
+    benefitsRam.set(identity.runtimeKey, record);
+    void prunePrefix(`benefits-snapshot:v1:t${identity.tenantId}:s${identity.storeId}:`, 200)
+      .catch(error => console.warn('Benefits cache cleanup failed', error));
+    benefitsListeners.forEach(listener => listener({ tenantId: identity.tenantId, storeId: identity.storeId, id: identity.id }, data));
+    return data;
+  }
+  function refreshBenefits(customerId, loader, options = {}) {
+    const identity = benefitsIdentity(customerId, options);
+    if (benefitsPending.has(identity.runtimeKey)) return benefitsPending.get(identity.runtimeKey);
+    const generation = benefitsGenerations.get(identity.key) || 0;
+    const authToken = window.localStorage.getItem("authToken");
+    const task = Promise.resolve().then(loader).then(async data => {
+      if ((benefitsGenerations.get(identity.key) || 0) !== generation) {
+        if (!options.retried) {
+          if (benefitsPending.get(identity.runtimeKey) === task) benefitsPending.delete(identity.runtimeKey);
+          return refreshBenefits(customerId, loader, { ...options, retried: true });
+        }
+        throw new Error('BENEFITS_SNAPSHOT_INVALIDATED');
+      }
+      if (authToken !== window.localStorage.getItem("authToken")
+        || Number(currentIdentity().tenantId) !== identity.tenantId
+        || Number(currentIdentity().storeId) !== identity.storeId) throw new Error('BENEFITS_SCOPE_CHANGED');
+      await writeBenefits(customerId, data, identity);
+      return data;
+    }).finally(() => {
+      if (benefitsPending.get(identity.runtimeKey) === task) benefitsPending.delete(identity.runtimeKey);
+    });
+    benefitsPending.set(identity.runtimeKey, task);
+    return task;
+  }
+  async function loadBenefits(customerId, loader, options = {}) {
+    await benefitsInvalidationTask;
+    if (!options.force) {
+      const cached = await readBenefits(customerId, options);
+      if (cached) {
+        if (cached.stale) void refreshBenefits(customerId, loader, options)
+          .catch(error => console.warn('Benefits background refresh failed', error));
+        return cached.snapshot;
+      }
+    }
+    return refreshBenefits(customerId, loader, options);
+  }
+  const clientBenefits = {
+    read: readBenefits, write: writeBenefits, load: loadBenefits,
+    async invalidate(customerId, options = {}) {
+      const identity = benefitsIdentity(customerId, options);
+      benefitsGenerations.set(identity.key, (benefitsGenerations.get(identity.key) || 0) + 1);
+      benefitsPending.delete(identity.runtimeKey);
+      benefitsRam.delete(identity.runtimeKey);
+      await remove(identity.key);
+      benefitsListeners.forEach(listener => listener({ tenantId: identity.tenantId, storeId: identity.storeId, id: identity.id }, null));
+    },
+    subscribe(listener) { benefitsListeners.add(listener); return () => benefitsListeners.delete(listener); },
+  };
+
+  document.addEventListener('admin:reference-changed', event => {
+    const names = event.detail?.names || [];
+    if (!names.includes('client-benefits') && !names.includes('bonus-config')) return;
+    const customerId = Number(event.detail?.customer_id || 0);
+    const ids = customerId > 0 ? [customerId] : [...knownBenefitCustomers];
+    const scope = benefitsIdentity(0);
+    const task = benefitsInvalidationTask.catch(() => {}).then(async () => {
+      const current = benefitsIdentity(0);
+      if (current.tenantId !== scope.tenantId || current.storeId !== scope.storeId) return;
+      if (!customerId) {
+        const identity = benefitsIdentity(0);
+        await prunePrefix(`benefits-snapshot:v1:t${identity.tenantId}:s${identity.storeId}:`, 0);
+      }
+      await Promise.all(ids.map(async id => {
+        await clientBenefits.invalidate(id);
+        await invalidateClientResource('discounts', id);
+      }));
+      if (names.includes('bonus-config')) await invalidateClientResource('bonus-config', 1);
+    });
+    benefitsInvalidationTask = task;
+    void task.catch(error => console.error('Benefits invalidation failed:', error));
+  });
+
+  // One administrative connection is shared by commands and data subscriptions.
+  let eventSocket = null, eventSocketReady = null, eventReconnectTimer = null, eventScope = null;
+  const eventSubscriptions = new Map();
+  const eventListeners = new Set();
+  function eventContext() {
+    const identity = currentIdentity();
+    return JSON.stringify([identity.userId, identity.tenantId, identity.storeId, window.localStorage.getItem("authToken")]);
+  }
+  function notifyEvent(message) {
+    eventListeners.forEach(listener => { try { listener(message); } catch (error) { console.error('Admin event consumer failed:', error); } });
+    const topic = String(message.type || '').split('.')[0];
+    const subscription = eventSubscriptions.get(topic);
+    if (subscription) subscription.listeners.forEach(listener => {
+      try { const result = listener(message); result?.catch(error => console.error('Admin subscription consumer failed:', error)); }
+      catch (error) { console.error('Admin subscription consumer failed:', error); }
+    });
+  }
+  function sendEventSubscription(topic, subscription, socket) {
+    const options = subscription.options();
+    socket.send(JSON.stringify({ ...options, type: `${topic}.subscribe`,
+      token: window.localStorage.getItem("authToken"), store_id: Number(currentIdentity().storeId) }));
+  }
+  function connectEventSocket() {
+    const scope = eventContext();
+    if (eventSocketReady && scope === eventScope) return eventSocketReady;
+    if (eventSocket) { const previous = eventSocket; eventSocket = null; previous.close(); }
+    clearTimeout(eventReconnectTimer); eventReconnectTimer = null;
+    eventScope = scope;
+    if (!window.localStorage.getItem("authToken")) return Promise.reject(new Error('ADMIN_SOCKET_AUTH_REQUIRED'));
+    if (typeof WebSocket === 'undefined') return Promise.reject(new Error('ADMIN_SOCKET_UNAVAILABLE'));
+    const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/admin/orders-ws`);
+    eventSocket = socket;
+    eventSocketReady = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { reject(new Error('ADMIN_SOCKET_TIMEOUT')); socket.close(); }, 10000);
+      socket.addEventListener('message', event => {
+        if (eventSocket !== socket || eventContext() !== scope) return;
+        let message;
+        try { message = JSON.parse(event.data); } catch (error) { console.error('Invalid admin event:', error); return; }
+        if (message.type === 'ready') {
+          clearTimeout(timer); socket.checkoutCommands = message.checkout_commands === true;
+          if (message.data_events !== true && eventSubscriptions.size) {
+            reject(new Error('ADMIN_SERVER_RESTART_REQUIRED')); socket.close(1008, 'Server upgrade required'); return;
+          }
+          eventSubscriptions.forEach((subscription, topic) => sendEventSubscription(topic, subscription, socket));
+          resolve(socket);
+        }
+        notifyEvent(message);
+      });
+      socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('ADMIN_SOCKET_UNAVAILABLE')); socket.close(); }, { once: true });
+      socket.addEventListener('close', event => {
+        clearTimeout(timer); reject(new Error('ADMIN_SOCKET_CLOSED'));
+        if (eventSocket !== socket) return;
+        eventSocket = null; eventSocketReady = null;
+        clientData.setOrdersSynchronized(false);
+        notifyEvent({ type: 'connection.closed', code: event.code });
+        eventSubscriptions.forEach(subscription => subscription.listeners.forEach(listener => {
+          try { listener({ type: 'connection.closed', code: event.code }); } catch (error) { console.error(error); }
+        }));
+        if (event.code !== 1008 && eventContext() === scope && eventSubscriptions.size) {
+          eventReconnectTimer = setTimeout(() => { eventReconnectTimer = null; void connectEventSocket().catch(error => console.warn('Admin reconnect failed:', error)); }, 2000);
+        }
+      }, { once: true });
+    });
+    return eventSocketReady;
+  }
+  const realtime = {
+    connect: connectEventSocket,
+    onMessage(listener) { eventListeners.add(listener); return () => eventListeners.delete(listener); },
+    subscribe(topic, options, listener) {
+      let subscription = eventSubscriptions.get(topic);
+      const existing = Boolean(subscription);
+      if (!subscription) { subscription = { options, listeners: new Set() }; eventSubscriptions.set(topic, subscription); }
+      subscription.listeners.add(listener);
+      const openSocket = typeof WebSocket !== 'undefined' && eventSocket?.readyState === WebSocket.OPEN && eventScope === eventContext();
+      if (openSocket && !existing) sendEventSubscription(topic, subscription, eventSocket);
+      else if (!openSocket) void connectEventSocket().catch(error => console.warn('Admin connection failed:', error));
+      return () => {
+        subscription.listeners.delete(listener);
+        if (!subscription.listeners.size && eventSubscriptions.get(topic) === subscription) {
+          eventSubscriptions.delete(topic);
+          if (eventSocket?.readyState === WebSocket.OPEN) eventSocket.send(JSON.stringify({ type: `${topic}.unsubscribe` }));
+        }
+      };
+    },
+  };
+  document.addEventListener('tenantStoreChanged', () => {
+    const previous = eventSocket; eventSocket = null; eventSocketReady = null;
+    if (previous) notifyEvent({ type: 'connection.closed', code: 1000 });
+    previous?.close(); resetRuntimeScope();
+    if (eventSubscriptions.size && window.localStorage.getItem('authToken')) void connectEventSocket().catch(console.error);
+  });
+  window.addEventListener('storage', event => {
+    if (!['authToken', 'activeStoreId', 'user', 'tenant'].includes(event.key)) return;
+    const previous = eventSocket; eventSocket = null; eventSocketReady = null;
+    if (previous) notifyEvent({ type: 'connection.closed', code: 1000 });
+    previous?.close(); resetRuntimeScope();
+    if (eventSubscriptions.size && window.localStorage.getItem('authToken')) void connectEventSocket().catch(console.warn);
+  });
+
   window.AdminPersistentCache = { read, write, remove, prunePrefix, scope, createScope, cleanup,
     scheduleMaintenance, isQuotaError,
     currentIdentity, resetRuntimeScope, readProductCatalog, writeProductCatalog,
-    loadProductCatalog, invalidateProductCatalog, orderPassport };
+    loadProductCatalog, invalidateProductCatalog, orderPassport, clientBenefits, clientData, realtime };
   if (window.__ADMIN_PERSISTENT_CACHE_TEST__) {
     window.AdminPersistentCache.__test = { resolveScope, entryIsStale };
   }

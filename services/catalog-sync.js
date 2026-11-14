@@ -75,6 +75,7 @@ async function recordScopeChanges(options, entityIds) {
       operation: String(options.operation || 'upsert'),
     });
   }
+  if (Array.isArray(options.pendingChanges)) options.pendingChanges.push(...changes);
   if (options.deferEmit !== true) scheduleAfterCommit(options.db, changes);
   return ids;
 }
@@ -109,6 +110,7 @@ async function recordTenantChanges(options, entityIds) {
       operation: String(options.operation || 'upsert'),
     })));
   }
+  if (Array.isArray(options.pendingChanges)) options.pendingChanges.push(...changes);
   if (options.deferEmit !== true) scheduleAfterCommit(options.db, changes);
   return ids;
 }
@@ -184,4 +186,4 @@ function subscribe(tenantId, storeId, listener) {
   return () => { set.delete(listener); if (!set.size) listeners.delete(channel); };
 }
 
-module.exports = { revision, recordScopeChange, recordScopeChanges, recordTenantChange, recordTenantChanges, getManifest, getChanges, subscribe };
+module.exports = { publishCommittedChanges: changes => changes.forEach(emit), revision, recordScopeChange, recordScopeChanges, recordTenantChange, recordTenantChanges, getManifest, getChanges, subscribe };

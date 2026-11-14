@@ -14,7 +14,6 @@
   const CHAT_UNREAD_EVENT = "dashboard:chat-unread-changed";
   const TENANT_DATA_CHANGED_EVENT = "tenantDataChanged";
   const THREAD_SYNC_SAVE_DEBOUNCE_MS = 220;
-  const THREAD_SYNC_SUMMARY_POLL_MS = 15000;
   const THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS = 25000;
   const THREAD_SYNC_WAIT_TIMEOUT_MS = 20000;
   const THREAD_SYNC_WAIT_RETRY_MS = 250;
@@ -23,7 +22,6 @@
   const SUMMARIES_SSE_PULL_DEBOUNCE_MS = 450;
   const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
   const ENABLE_ACTIVE_THREAD_SSE = true;
-  const ACTIVE_ORDERS_POLL_MS = 60000;
   const ACTIVE_ORDERS_VISIBILITY_REFRESH_DEBOUNCE_MS = 45000;
   const ACTIVE_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
   const CHAT_AUTOSCROLL_MS = 170;
@@ -570,12 +568,9 @@
     summariesWaitLoopToken: 0,
     summariesUpdatedAt: "",
     summariesRevision: 0,
-    summariesPollTimer: 0,
     summariesSyncInFlight: null,
     summariesSyncPendingForceThreads: false,
     summariesLastSyncedAt: 0,
-    activeOrdersPollTimer: 0,
-    activeOrdersPollInFlight: false,
     foregroundSyncInFlight: false,
     foregroundSyncLastAt: 0,
     readSyncLastAt: 0,
@@ -4647,6 +4642,12 @@
     }
   }
 
+  document.addEventListener("dashboard:client-data-invalidated", event => {
+    const key = normalizeClientIdKey(event.detail?.clientId);
+    if (event.detail?.kind === "orders") state.clientOrdersCache.delete(key);
+    if (event.detail?.kind === "profile") state.clientProfileCache.delete(key);
+  });
+
   function getSharedClientOrdersFetcher() {
     if (typeof window === "undefined") return null;
     if (typeof window.__markinMeSharedOrdersFetcher === "function") {
@@ -4654,8 +4655,9 @@
     }
     const inFlight = new Map();
     window.__markinMeSharedOrdersFetcher = async (clientId, requestFactory) => {
-      const key = String(Number(clientId || 0) || "");
-      if (!key || typeof requestFactory !== "function") {
+      const id = Number(clientId || 0);
+      const key = `${getSharedClientDetailsCacheKey()}:${localStorage.getItem("authToken") || ""}:${id}`;
+      if (!(id > 0) || typeof requestFactory !== "function") {
         return requestFactory();
       }
       if (inFlight.has(key)) return inFlight.get(key);
@@ -4677,13 +4679,11 @@
   }
 
   async function fetchClientOrdersFresh(clientId) {
-    return apiJson(buildFreshClientOrdersUrl(clientId), {
-      cache: "no-store",
-      headers: {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        Pragma: "no-cache",
-      },
-    });
+    const fetcher = getSharedClientOrdersFetcher();
+    const loader = () => fetcher(clientId, () => apiJson(`/api/admin/clients/${Number(clientId)}/orders`));
+    return window.AdminPersistentCache?.clientData
+      ? window.AdminPersistentCache.clientData.load("orders", clientId, loader)
+      : loader();
   }
 
   function buildFreshHeaderOrderCandidateUrl(clientId) {
@@ -4693,13 +4693,10 @@
   }
 
   async function fetchHeaderOrderCandidateFresh(clientId) {
-    return apiJson(buildFreshHeaderOrderCandidateUrl(clientId), {
-      cache: "no-store",
-      headers: {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        Pragma: "no-cache",
-      },
-    });
+    const loader = () => apiJson(`/api/admin/clients/${Number(clientId)}/orders/header-candidate`);
+    return window.AdminPersistentCache?.clientData
+      ? window.AdminPersistentCache.clientData.load("header", clientId, loader)
+      : loader();
   }
 
   function buildFreshOrderDetailsUrl(orderId) {
@@ -4708,14 +4705,12 @@
     return `/api/admin/orders/${id}?_=${Date.now()}`;
   }
 
-  async function fetchOrderDetailsFresh(orderId) {
-    return apiJson(buildFreshOrderDetailsUrl(orderId), {
-      cache: "no-store",
-      headers: {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        Pragma: "no-cache",
-      },
-    });
+  async function fetchOrderDetailsFresh(orderId, options = {}) {
+    const loader = () => apiJson(`/api/admin/orders/${Number(orderId)}`);
+    const passport = window.AdminPersistentCache?.orderPassport;
+    if (!passport?.load) return loader();
+    const order = await passport.load(orderId, () => loader().then(json => json.data), options);
+    return { ok: true, data: order };
   }
 
   function buildChatSseUrl(url, actorValue, extraParams = {}) {
@@ -4763,8 +4758,7 @@
 
   async function ensureOrderDetailsDependencies() {
     if (!getOrdersRightApi()) {
-      await ensureAdminAsset("sharedOrderPayment");
-      await ensureAdminAsset("sharedOrderItems");
+      await Promise.all([ensureAdminAsset("sharedOrderPayment"), ensureAdminAsset("sharedOrderItems")]);
       await ensureAdminAsset("orders");
     }
     const api = getOrdersRightApi();
@@ -7298,8 +7292,7 @@
               ) {
                 applyPeerTypingState(waitedClientId, waited.typing);
               }
-            } else {
-              // Pull summaries when messages changed or when reason is unknown.
+            } else if (waited?.changed || waited?.messageChanged || waited?.timeout !== true) {
               await syncRemoteSummariesSnapshot({ forceThreads: waited?.timeout !== true }).catch(console.error);
             }
             if (nextUpdatedAt || state.summariesUpdatedAt) {
@@ -7324,15 +7317,6 @@
       })().catch(console.error);
     }
 
-    if (!CHAT_SSE_ENABLED && !state.summariesPollTimer) {
-      state.summariesPollTimer = window.setInterval(async () => {
-        try {
-          await syncRemoteSummariesSnapshot();
-        } catch (err) {
-          console.error(err);
-        }
-      }, THREAD_SYNC_SUMMARY_POLL_MS);
-    }
   }
 
   function stopRemoteSyncLoops() {
@@ -7359,15 +7343,10 @@
     state.summariesSsePullPending = false;
     state.summariesSsePullInFlight = false;
 
-    if (state.summariesPollTimer) {
-      window.clearInterval(state.summariesPollTimer);
-      state.summariesPollTimer = 0;
-    }
   }
 
   function pauseRealtimeSync(options = {}) {
     stopRemoteSyncLoops();
-    stopActiveOrdersPollTimer();
 
     Object.keys(state.remoteSaveTimers || {}).forEach((key) => {
       const timerId = Number(state.remoteSaveTimers[key] || 0);
@@ -7392,7 +7371,6 @@
   function resumeRealtimeSync() {
     if (!isChatWidgetEnabledRuntime()) return;
     startRemoteSyncLoops();
-    ensureActiveOrdersPollTimer();
   }
 
   function loadStore() {
@@ -10549,70 +10527,7 @@
     return setActiveOrders(nextList);
   }
 
-  async function refreshActiveOrdersForActiveClient(options = {}) {
-    if (!isChatWidgetEnabledRuntime()) return false;
-    const clientId = Number(options.clientId || state.activeClientId || 0);
-    if (!Number.isFinite(clientId) || clientId <= 0) return false;
-    if (state.activeOrdersPollInFlight) return false;
-
-    state.activeOrdersPollInFlight = true;
-    try {
-      const ordersJson = await fetchClientOrdersFresh(clientId);
-      if (Number(state.activeClientId || 0) !== clientId) return false;
-      const nextOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
-      setCachedActiveClientOrders(clientId, nextOrders);
-      const changed = setActiveOrders(nextOrders, { forceRightOrderRefresh: true });
-      try {
-        const candidateJson = await fetchHeaderOrderCandidateFresh(clientId);
-        if (Number(state.activeClientId || 0) === clientId) {
-          const candidateOrder = candidateJson && candidateJson.data && typeof candidateJson.data === "object"
-            ? candidateJson.data
-            : null;
-          if (candidateOrder && Number(candidateOrder.id || 0) > 0) {
-            state.headerOrderSnapshot = { ...candidateOrder };
-            upsertActiveOrder(candidateOrder);
-          } else {
-            state.headerOrderSnapshot = null;
-          }
-        }
-      } catch (candidateErr) {
-        if (!isAbortError(candidateErr)) console.error(candidateErr);
-      }
-      state.activeOrdersHydratedClientId = Number(clientId || 0);
-      state.activeOrdersLastFetchedAt = Date.now();
-      if (changed || options.forceHydrate) {
-        hydrateHeaderOrderDetails(state.requestToken, clientId).catch(console.error);
-      }
-      return changed;
-    } catch (err) {
-      if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return false;
-      console.error(err);
-      return false;
-    } finally {
-      state.activeOrdersPollInFlight = false;
-    }
-  }
-
-  function ensureActiveOrdersPollTimer() {
-    if (!isChatWidgetEnabledRuntime()) return;
-    if (state.activeOrdersPollTimer) return;
-    state.activeOrdersPollTimer = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      if (!state.activeClientId) return;
-      refreshActiveOrdersForActiveClient().catch(console.error);
-    }, ACTIVE_ORDERS_POLL_MS);
-  }
-
-  function stopActiveOrdersPollTimer() {
-    if (!state.activeOrdersPollTimer) return;
-    window.clearInterval(state.activeOrdersPollTimer);
-    state.activeOrdersPollTimer = 0;
-  }
-
   function initOrderHeaderLiveSync() {
-    if (isChatWidgetEnabledRuntime()) {
-      ensureActiveOrdersPollTimer();
-    }
     if (initOrderHeaderLiveSync.bound) return;
     initOrderHeaderLiveSync.bound = true;
 
@@ -10657,18 +10572,6 @@
       }
     });
 
-    document.addEventListener("visibilitychange", () => {
-      if (!isChatWidgetEnabledRuntime()) return;
-      if (document.visibilityState !== "visible") return;
-      const now = Date.now();
-      if (
-        now - Number(state.activeOrdersLastFetchedAt || 0)
-        < ACTIVE_ORDERS_VISIBILITY_REFRESH_DEBOUNCE_MS
-      ) {
-        return;
-      }
-      refreshActiveOrdersForActiveClient({ force: false, forceHydrate: true }).catch(console.error);
-    });
   }
 
   function hexToRgba(hex, alpha) {
@@ -12850,7 +12753,6 @@
     if (!shared) return false;
     if (shared.client) {
       state.activeClient = { ...state.activeClient, ...shared.client };
-      setCachedActiveClientProfile(clientId, state.activeClient);
       syncClientIdentityIntoList(clientId, state.activeClient);
     }
     // Order cards hydrate from the shared store-scoped passport cache.
@@ -13928,7 +13830,7 @@
     if (isVirtual && !phoneDigits && !hasOrders) return true;
     const normalizedName = normalizeClientNameIdentity(client.name);
     if (!normalizedName) return false;
-    return /^\u0433\u043e\u0441\u0442\u044c\b/.test(normalizedName);
+    return /^\u0433\u043e\u0441\u0442\u044c(?:$|\s|#|\u2116|\d)/.test(normalizedName);
   }
 
   function destroyClientThreadState(clientId, options = {}) {
@@ -17357,17 +17259,22 @@
   async function openCanonicalChatOrder(orderId, options = {}) {
     const id = Number(orderId || 0);
     if (!Number.isFinite(id) || id <= 0) return Promise.resolve(null);
-    const backToClient = options.backToClient === true;
-    const ordersRightApi = await ensureOrderDetailsDependencies();
-    if (typeof ordersRightApi.openOrderPassport !== "function") return Promise.resolve(null);
-    syncMobileChatView("right");
-    return ordersRightApi.openOrderPassport(id, {
-      source: "chat",
-      nested: backToClient,
-      openMobile: false,
-      capabilities: { payment: true, status: true, edit: true, print: true },
-      onBack: () => restoreChatAfterOrder(backToClient),
-    });
+    const openedAt = performance.now();
+    try {
+      const backToClient = options.backToClient === true;
+      const ordersRightApi = await ensureOrderDetailsDependencies();
+      if (typeof ordersRightApi.openOrderPassport !== "function") return Promise.resolve(null);
+      syncMobileChatView("right");
+      return await ordersRightApi.openOrderPassport(id, {
+        source: "chat",
+        nested: backToClient,
+        openMobile: false,
+        capabilities: { payment: true, status: true, edit: true, print: true },
+        onBack: () => restoreChatAfterOrder(backToClient),
+      });
+    } finally {
+      console.info('[order-timing]', { stage: 'chat-open-order', orderId: id, durationMs: Math.round(performance.now() - openedAt) });
+    }
   }
 
   function bindChatRightOrderOpenRequests() {
@@ -17505,7 +17412,7 @@
         body: { status_id: nextStatusId },
       });
 
-      const json = await fetchOrderDetailsFresh(id);
+      const json = await fetchOrderDetailsFresh(id, { force: true });
       const freshOrder = json?.data || null;
       if (!freshOrder || typeof freshOrder !== "object") return;
 
@@ -17680,13 +17587,18 @@
 
     try {
       // Stale-while-revalidate: show cache instantly, but always revalidate from API.
-      const shouldFetchClientProfile = true;
+      const cachedProfile = getCachedActiveClientProfile(clientId);
+      const cachedOrders = getCachedActiveClientOrders(clientId);
+      // Display cached data immediately, then reconcile current financial/order state.
+      const shouldFetchClientProfile = !cachedProfile;
       const shouldFetchOrdersFromNetwork = shouldFetchOrders === true;
       const ordersRequest = shouldFetchOrdersFromNetwork
         ? fetchClientOrdersFresh(clientId).then(data => ({data}), error => ({error})) : null;
 
       const clientJson = shouldFetchClientProfile
-        ? await apiJson(`/api/admin/clients/${clientId}`)
+        ? await (window.AdminPersistentCache?.clientData
+            ? window.AdminPersistentCache.clientData.load("profile", clientId, () => apiJson(`/api/admin/clients/${clientId}`))
+            : apiJson(`/api/admin/clients/${clientId}`))
         : { data: state.activeClient || selectedFromList || buildOptimisticActiveClientProfile(clientId, selectedFromList) };
       if (requestId !== state.requestToken) return;
 
@@ -17696,8 +17608,10 @@
         || buildOptimisticActiveClientProfile(clientId, selectedFromList);
       renderChatHeader();
       if (state.activeClient && typeof state.activeClient === "object") {
-        setCachedActiveClientProfile(clientId, state.activeClient);
-        setSharedClientDetailsToLocalStorage(clientId, { client: state.activeClient });
+        if (shouldFetchClientProfile) {
+          setCachedActiveClientProfile(clientId, state.activeClient);
+          setSharedClientDetailsToLocalStorage(clientId, { client: state.activeClient });
+        }
       }
       const syncedIdentity = syncClientIdentityIntoList(clientId, state.activeClient);
       if (syncedIdentity.changed) {
@@ -17720,6 +17634,7 @@
           phone: syncedIdentity.nextPhone,
         }).catch(console.error);
       }
+      if (cachedProfile || cachedOrders) finishHeaderLoading();
       if (shouldFetchOrdersFromNetwork) {
         try {
           const ordersResult = await ordersRequest;
@@ -17765,11 +17680,10 @@
       }
     } catch (err) {
       if (requestId !== state.requestToken) return;
-      console.error(err);
+      console.error('CHAT_CLIENT_PROFILE_LOAD_FAILED', { clientId: Number(clientId), virtual: selectedFromList?._isVirtualChatClient === true, error: err });
       state.activeClient = selectedFromList
         || state.activeClient
         || buildOptimisticActiveClientProfile(clientId, selectedFromList);
-      setActiveOrders([], { forceRender: true });
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
         if (isAdminMobileChatLayout()) {
@@ -17860,9 +17774,13 @@
     const isGuestClient = isGuestChatClient(selectedFromList);
     state.activeClient = isGuestClient
       ? buildGuestActiveClientProfile(id, selectedFromList)
-      : (selectedFromList || buildOptimisticActiveClientProfile(id, selectedFromList));
+      : (getCachedActiveClientProfile(id) || selectedFromList || buildOptimisticActiveClientProfile(id, selectedFromList));
+    if (!isGuestClient && !getCachedActiveClientProfile(id)) hydrateActiveClientFromSharedCache(id);
+    const cachedOrders = !isGuestClient
+      ? (getCachedActiveClientOrders(id) || getSharedClientDetailsFromLocalStorage(id)?.orders || null)
+      : null;
     try {
-      setActiveOrders([], { forceRender: true });
+      setActiveOrders(cachedOrders || [], { forceRender: true });
     } catch (err) {
       console.error("Failed to reset active orders on chat client select:", err);
     }
@@ -18465,8 +18383,14 @@
     initHeaderClientOpenAction();
 
     window.__adminChatMobileApi = {
-      openSelectedRightPanel() {
-        if (Number(state.activeClientId || 0) > 0) return syncMobileChatView('right');
+      openSelectedRightPanel(options = {}) {
+        const orderId = Number(options.orderId || 0);
+        if (orderId > 0) upsertChatRightTab('order', orderId);
+        const selectedKey = state.activeRightTabKey;
+        if (state.rightTabs.some(tab => buildChatRightTabKey(tab.kind, tab.id) === selectedKey)) {
+          return activateChatRightTab(selectedKey).catch(console.error);
+        }
+        if (Number(state.activeClientId || 0) > 0) return openClientDetailsPanel().catch(console.error);
       },
       openClientsPanel(options = {}) {
         return openClientsPanel(options);

@@ -19,8 +19,11 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
     if (['POST','PUT','PATCH','DELETE'].includes(req.method)) {
       res.on('finish',()=>{
         if(res.statusCode<200 || res.statusCode>=300)return;
-        const match=String(req.path).match(/^\/(\d+)(?:\/addresses(?:\/|$)|$)/);
-        if(match || req.path==='/') ordersEvents?.publish(helpers.getTenantId(req),helpers.getStoreId(req),'client.changed',{client_id:Number(match?.[1] || 0)});
+        const match=String(req.path).match(/^\/(\d+)(?:\/(?:addresses|benefits|discounts)(?:\/|$)|$)/);
+        if(match || req.path==='/') ordersEvents?.publish(helpers.getTenantId(req),helpers.getStoreId(req),'client.changed',{
+          client_id:Number(match?.[1] || 0), section: String(req.path).includes('/addresses') ? 'addresses'
+            : /\/(?:benefits|discounts)(?:\/|$)/.test(String(req.path)) ? 'benefits' : 'profile',
+        });
       });
     }
     next();

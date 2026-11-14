@@ -27,10 +27,6 @@
   const MARKETING_BANNERS_STORAGE_KEY = `dashboard:marketing:banners:v1:${tenantId}`;
   const BONUS_HISTORY_PAGE_SIZE = 50;
   const BONUS_LEVEL_FLIP_ANIMATION_MS = 560;
-  const CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION = 1;
-  const CLIENT_BENEFITS_SNAPSHOT_FRESH_MS = 5 * 60 * 1000;
-  const CLIENT_BENEFITS_SNAPSHOT_HARD_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
-  const CLIENT_BENEFITS_SNAPSHOT_CACHE_MAX = 200;
 
   function writePersistedMobileChatView(view) {
     if (!document.body || !document.body.classList.contains("page-chat")) return String(view || "");
@@ -77,19 +73,19 @@
       const err = json?.error || `API_ERROR (${res.status})`;
       throw new Error(err);
     }
+    if (!["GET", "HEAD"].includes(String(opts.method || "GET").toUpperCase())) {
+      void window.AdminPersistentCache?.clientData?.mutation(url, opts.method)
+        .catch(error => console.warn("Client cache mutation invalidation failed:", error));
+    }
     return json;
   }
 
   async function fetchClientOrdersShared(clientId) {
     const id = Number(clientId || 0);
-    if (!Number.isFinite(id) || id <= 0) {
-      return apiJson(`/api/admin/clients/${clientId}/orders`);
-    }
-    const shared = typeof window !== "undefined" ? window.__markinMeSharedOrdersFetcher : null;
-    if (typeof shared === "function") {
-      return shared(id, () => apiJson(`/api/admin/clients/${id}/orders`));
-    }
-    return apiJson(`/api/admin/clients/${id}/orders`);
+    const loader = () => apiJson(`/api/admin/clients/${id}/orders`);
+    return window.AdminPersistentCache?.clientData
+      ? window.AdminPersistentCache.clientData.load("orders", id, loader)
+      : loader();
   }
 
   function readSharedOrderDetailsCache() {
@@ -1231,7 +1227,10 @@
   }
 
   async function loadBonusCardsStorage() {
-    const json = await apiJson('/api/admin/bonus/config');
+    const loader = () => apiJson('/api/admin/bonus/config');
+    const json = window.AdminPersistentCache?.clientData
+      ? await window.AdminPersistentCache.clientData.load("bonus-config", 1, loader)
+      : await loader();
     const levels = Array.isArray(json?.levels) ? json.levels.map(mapBonusApiLevelToState) : [];
     const referralLevels = Array.isArray(json?.referral_levels)
       ? json.referral_levels.map(mapBonusApiReferralLevelToState)
@@ -4794,10 +4793,6 @@
     return `t${scope.tenantId}:s${scope.storeId}:c${scope.customerId}`;
   }
 
-  function getClientBenefitsSnapshotPersistentKey(customerId) {
-    return `benefits-snapshot:v${CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION}:${getClientBenefitsSnapshotSlot(customerId)}`;
-  }
-
   function isValidClientBenefitsSnapshot(snapshot, scope) {
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return false;
     if (Number(snapshot.client_id || 0) !== scope.customerId) return false;
@@ -4843,54 +4838,15 @@
   }
 
   async function readPersistentClientBenefitsSnapshot(customerId) {
-    if (!window.AdminPersistentCache) return null;
-    const scope = getClientBenefitsSnapshotScope(customerId);
-    const key = getClientBenefitsSnapshotPersistentKey(customerId);
-    try {
-      const record = await window.AdminPersistentCache.read(key);
-      const fetchedAt = Number(record?.fetchedAt || 0);
-      const age = Date.now() - fetchedAt;
-      const valid = Number(record?.version || 0) === CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION
-        && Number(record?.tenantId || 0) === scope.tenantId
-        && Number(record?.storeId || 0) === scope.storeId
-        && Number(record?.customerId || 0) === scope.customerId
-        && fetchedAt > 0
-        && age >= 0
-        && age <= CLIENT_BENEFITS_SNAPSHOT_HARD_EXPIRY_MS
-        && isValidClientBenefitsSnapshot(record?.data, scope);
-      if (!valid) {
-        if (record) void window.AdminPersistentCache.remove(key).catch(() => {});
-        return null;
-      }
-      return { snapshot: record.data, stale: age > CLIENT_BENEFITS_SNAPSHOT_FRESH_MS };
-    } catch (error) {
-      console.warn("Client benefits cache read failed:", error);
-      return null;
-    }
-  }
-
-  async function persistClientBenefitsSnapshot(customerId, snapshot) {
-    if (!window.AdminPersistentCache) return;
-    const scope = getClientBenefitsSnapshotScope(customerId);
-    const key = getClientBenefitsSnapshotPersistentKey(customerId);
-    const prefix = `benefits-snapshot:v${CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION}:t${scope.tenantId}:s${scope.storeId}:`;
-    try {
-      await window.AdminPersistentCache.write(key, {
-        version: CLIENT_BENEFITS_SNAPSHOT_CACHE_VERSION,
-        tenantId: scope.tenantId,
-        storeId: scope.storeId,
-        customerId: scope.customerId,
-        fetchedAt: Date.now(),
-        data: snapshot,
-      });
-      void window.AdminPersistentCache.prunePrefix(prefix, CLIENT_BENEFITS_SNAPSHOT_CACHE_MAX).catch(() => {});
-    } catch (error) {
-      console.warn("Client benefits cache write failed:", error);
-    }
+    return window.AdminPersistentCache?.clientBenefits?.read(customerId, getClientBenefitsSnapshotScope(customerId)) || null;
   }
 
   function fetchClientBenefitsSnapshot(customerId, slot, generation) {
-    const request = apiJson(`/api/admin/clients/${customerId}/benefits-snapshot`)
+    const scope = getClientBenefitsSnapshotScope(customerId);
+    const loader = () => apiJson(`/api/admin/clients/${customerId}/benefits-snapshot`).then(json => json?.data || null);
+    const request = (window.AdminPersistentCache?.clientBenefits
+      ? window.AdminPersistentCache.clientBenefits.load(customerId, loader, { ...scope, force: true }).then(data => ({ data }))
+      : apiJson(`/api/admin/clients/${customerId}/benefits-snapshot`))
       .then(async (json) => {
         const snapshot = json?.data || null;
         if ((state.clientBenefitsSnapshotGenerationByCustomer.get(slot) || 0) !== generation) {
@@ -4898,7 +4854,6 @@
         }
         const applied = applyClientBenefitsSnapshot(customerId, snapshot);
         if (!applied) throw new Error("BENEFITS_SNAPSHOT_INVALID");
-        await persistClientBenefitsSnapshot(customerId, applied);
         patchVisibleClientBenefitsSnapshot(customerId, applied);
         return applied;
       })
@@ -4924,18 +4879,29 @@
     state.clientBenefitsSnapshotByCustomer.delete(slot);
     state.clientBenefitsSnapshotRequestByCustomer.delete(slot);
     if (!window.AdminPersistentCache) return Promise.resolve();
-    return window.AdminPersistentCache.remove(getClientBenefitsSnapshotPersistentKey(id)).catch((error) => {
+    return window.AdminPersistentCache.clientBenefits.invalidate(id, getClientBenefitsSnapshotScope(id)).catch((error) => {
       console.warn("Client benefits cache invalidation failed:", error);
     });
   }
+
+  window.AdminPersistentCache?.clientBenefits?.subscribe((identity, snapshot) => {
+    const scope = getClientBenefitsSnapshotScope(identity.id);
+    if (Number(identity.tenantId) !== scope.tenantId || Number(identity.storeId) !== scope.storeId) return;
+    const slot = getClientBenefitsSnapshotSlot(identity.id);
+    if (snapshot) {
+      applyClientBenefitsSnapshot(identity.id, snapshot);
+      patchVisibleClientBenefitsSnapshot(identity.id, snapshot);
+    } else {
+      state.clientBenefitsSnapshotDirty.add(slot);
+      state.clientBenefitsSnapshotByCustomer.delete(slot);
+    }
+  });
 
   async function ensureClientBenefitsSnapshot(customerId, options = {}) {
     const id = Number(customerId || 0);
     if (!(id > 0)) return null;
     const slot = getClientBenefitsSnapshotSlot(id);
     const force = options?.force === true || state.clientBenefitsSnapshotDirty.has(slot);
-    const cached = state.clientBenefitsSnapshotByCustomer.get(slot) || null;
-    if (!force && cached) return cached;
     const activeRequest = state.clientBenefitsSnapshotRequestByCustomer.get(slot);
     if (activeRequest) return activeRequest;
     const generation = state.clientBenefitsSnapshotGenerationByCustomer.get(slot) || 0;
@@ -4969,7 +4935,10 @@
     if (options?.refreshDiscounts === true && Number(state.activeClientId || 0) === normalizedCustomerId) {
       void loadClientDiscounts({ preferCache: true, refresh: true }).catch(console.error);
     }
-    const invalidation = invalidateClientBenefitsSnapshot(normalizedCustomerId);
+    const invalidation = Promise.all([
+      invalidateClientBenefitsSnapshot(normalizedCustomerId),
+      window.AdminPersistentCache?.clientData?.invalidate("discounts", normalizedCustomerId),
+    ]);
     const modalIsVisible = Number(state.clientBenefitsModal.customerId || 0) === normalizedCustomerId
       && !document.getElementById("adminBenefitsOverlay")?.classList.contains("hidden");
     if (modalIsVisible) {
@@ -24972,8 +24941,7 @@
     } else if (viewName === 'subscription-info') {
       renderTabs();
     } else if (viewName === 'clients') {
-      maybeLoadMoreClientsOnScroll();
-      ensureClientsScrollable().catch(console.error);
+      scheduleClientsScrollCheck();
     }
 
     syncDiscountToolbarState();
@@ -26036,7 +26004,10 @@
     }
 
     if (!refresh) return;
-    const json = await apiJson(`/api/admin/clients/${clientId}/addresses`);
+    const loader = () => apiJson(`/api/admin/clients/${clientId}/addresses`);
+    const json = window.AdminPersistentCache?.clientData
+      ? await window.AdminPersistentCache.clientData.load("addresses", clientId, loader)
+      : await loader();
     const rows = Array.isArray(json.data) ? json.data : [];
     state.addresses = rows;
     setCachedClientDetails(clientId, { addresses: rows });
@@ -26213,7 +26184,10 @@
     if (!refresh) return;
 
     try {
-      const json = await apiJson(`/api/admin/clients/${clientId}/discounts`);
+      const loader = () => apiJson(`/api/admin/clients/${clientId}/discounts`);
+      const json = window.AdminPersistentCache?.clientData
+        ? await window.AdminPersistentCache.clientData.load("discounts", clientId, loader, { force: options.refresh === true })
+        : await loader();
       const rows = Array.isArray(json.data) ? json.data : [];
       state.clientDiscounts = rows;
       setCachedClientDetails(clientId, { discounts: rows });
@@ -27173,7 +27147,10 @@
 
     const requestId = ++orderRequestToken;
     try {
-      const json = await apiJson(`/api/admin/orders/${id}`);
+      const passport = window.AdminPersistentCache?.orderPassport;
+      const json = passport?.load
+        ? { data: await passport.load(id, () => apiJson(`/api/admin/orders/${id}`).then(result => result.data)) }
+        : await apiJson(`/api/admin/orders/${id}`);
       if (requestId !== orderRequestToken) return;
       const order = json?.data || null;
       if (!order) {
@@ -27325,7 +27302,11 @@
     let loadedClient = passportSnapshot?.client || null;
     try {
       if (!loadedClient || dirty.base) {
-        const json = await apiJson(`/api/admin/clients/${state.activeClientId}`);
+        const clientId = Number(state.activeClientId);
+        const loader = () => apiJson(`/api/admin/clients/${clientId}`);
+        const json = window.AdminPersistentCache?.clientData
+          ? await window.AdminPersistentCache.clientData.load("profile", clientId, loader)
+          : await loader();
         if (requestToken !== clientProfileRequestToken) return;
         if (!isExpectedClientTabActive()) return;
         loadedClient = json?.data || null;
@@ -27447,6 +27428,26 @@
     if (addrFormCard) addrFormCard.classList.add("hidden");
     if (addrToggleBtn) addrToggleBtn.textContent = "+ \u041d\u043e\u0432\u044b\u0439 \u0430\u0434\u0440\u0435\u0441";
   }
+
+  document.addEventListener('admin:clients-changed', event => {
+    const ids = event.detail?.resync ? [...state.clientDetailsCache.keys()].map(Number) : event.detail?.ids || [];
+    ids.forEach(id => {
+      const sections = event.detail?.resync ? [] : event.detail?.sections?.[id] || [];
+      const unknown = !sections.length || sections.some(section => !['profile', 'addresses', 'benefits'].includes(section));
+      if (unknown || sections.includes('profile')) state.clientDetailsCache.delete(String(id));
+      markClientPassportDirty(id, {
+        base: unknown || sections.includes('profile') || sections.includes('benefits'),
+        addresses: unknown || sections.includes('addresses'),
+        orders: unknown,
+      });
+    });
+    const activeId = Number(state.activeClientId || 0);
+    if (activeId > 0 && (event.detail?.resync || ids.includes(activeId))) {
+      const activeTab = tabsState.tabs.find(tab => tab.key === tabsState.activeKey);
+      if (activeTab?.type === 'client' && Number(activeTab.id) === activeId && clientInfoWrap?.getClientRects().length) void openClientById(activeId).catch(console.error);
+    }
+  });
+  void window.AdminPersistentCache?.clientData?.ensureSync().catch(console.error);
 
   async function selectClient(id, preferredTitle = "", options = {}) {
     const clientId = Number(id) || null;
@@ -27604,18 +27605,36 @@
   function writeClientsListCache() {
     if (isPresenceSensitiveClientsList()) return;
     if (!window.AdminPersistentCache) return;
-    const data = { query: clientsListCacheKey(), rows: state.clients, offset: state.clientsOffset, total: state.clientsTotal, hasMore: state.clientsHasMore };
+    const rows = state.clients.slice(0, CLIENTS_PAGE_LIMIT);
+    const data = { query: clientsListCacheKey(), rows, offset: rows.length, total: state.clientsTotal, hasMore: state.clientsHasMore || state.clients.length > rows.length };
     void window.AdminPersistentCache.write(clientsListCacheKey(), data)
       .then(() => window.AdminPersistentCache.prunePrefix(CLIENTS_LIST_CACHE_PREFIX, CLIENTS_LIST_CACHE_MAX_QUERIES))
       .catch((err) => console.warn('Clients list cache write failed:', err));
   }
 
+  function isClientsListVisible() {
+    if (!elClientsScroll || state.currentView !== 'clients' || document.visibilityState === 'hidden') return false;
+    if (document.body.classList.contains('admin-swipe-active') || window.__adminMobilePages?.isRestoringScroll?.()) return false;
+    return elClientsScroll.clientHeight > 0 && elClientsScroll.getClientRects().length > 0;
+  }
+
+  let clientsScrollCheckFrame = null;
+  function scheduleClientsScrollCheck() {
+    if (clientsScrollCheckFrame !== null) return;
+    clientsScrollCheckFrame = requestAnimationFrame(() => {
+      clientsScrollCheckFrame = null;
+      maybeLoadMoreClientsOnScroll();
+    });
+  }
+
   async function loadMoreClients() {
     if (state.clientsLoading) return;
     if (!state.clientsHasMore) return;
+    if (state.clientsOffset > 0 && !isClientsListVisible()) return;
 
     state.clientsLoading = true;
     const token = clientsRequestToken;
+    let loaded = false;
     try {
       const qs = buildClientsListQuery(state.clientsOffset, CLIENTS_PAGE_LIMIT);
       const json = await apiJson(`/api/admin/clients?${qs.toString()}`);
@@ -27628,17 +27647,16 @@
       state.clients = (state.clients || []).concat(append);
       state.clientsOffset += chunk.length;
       if (Number.isFinite(Number(json.total))) state.clientsTotal = Number(json.total);
-      state.clientsHasMore = json.has_more === true || (json.has_more === undefined && chunk.length > 0 && state.clients.length < state.clientsTotal);
+      state.clientsHasMore = chunk.length > 0 && (json.has_more === true || (json.has_more === undefined && state.clients.length < state.clientsTotal));
 
       appendClients(append);
       writeClientsListCache();
       refreshCustomFilterCountsFromClientList();
+      loaded = true;
     } finally {
       if (token === clientsRequestToken) {
         state.clientsLoading = false;
-        if (state.currentView === "clients") {
-          maybeLoadMoreClientsOnScroll();
-        }
+        if (loaded) scheduleClientsScrollCheck();
       }
     }
   }
@@ -27647,7 +27665,7 @@
     if (!elClientsScroll) return;
     let guard = 0;
     while (
-      state.currentView === "clients" &&
+      isClientsListVisible() &&
       state.clientsHasMore &&
       !state.clientsLoading &&
       elClientsScroll.scrollHeight <= (elClientsScroll.clientHeight + 20) &&
@@ -27666,26 +27684,24 @@
     });
     state.clientsLoading = false;
     const cached = await readClientsListCache();
-    const cachedRows = Array.isArray(cached?.rows) ? cached.rows : [];
+    if (requestToken !== clientsRequestToken) return;
+    const storedRows = Array.isArray(cached?.rows) ? cached.rows : [];
+    const cachedRows = storedRows.slice(0, CLIENTS_PAGE_LIMIT);
     state.clients = cachedRows;
-    state.clientsOffset = Number(cached?.offset || cachedRows.length || 0);
+    state.clientsOffset = cachedRows.length;
     state.clientsTotal = Number(cached?.total || 0);
-    state.clientsHasMore = cached?.hasMore !== false;
+    state.clientsHasMore = storedRows.length > cachedRows.length || cached?.hasMore !== false;
     rememberCustomers(cachedRows);
     renderClients();
     refreshCustomFilterCountsFromClientList();
 
     renderFilters();
-    const cachedOffset = state.clientsOffset;
     if (cachedRows.length) {
       state.clientsOffset = 0;
       state.clientsHasMore = true;
     }
     await loadMoreClients();
-    if (cachedRows.length) {
-      state.clientsOffset = Math.max(cachedOffset, state.clientsOffset);
-      writeClientsListCache();
-    }
+    if (requestToken !== clientsRequestToken) return;
     await ensureClientsScrollable();
     await totalsPromise;
   }
@@ -27753,8 +27769,7 @@
   }
 
   function maybeLoadMoreClientsOnScroll() {
-    if (!elClientsScroll) return;
-    if (state.currentView !== "clients") return;
+    if (!isClientsListVisible()) return;
     if (state.clientsLoading || !state.clientsHasMore) return;
     const nearBottom =
       (elClientsScroll.scrollTop + elClientsScroll.clientHeight) >=
@@ -27834,7 +27849,10 @@
     if (e.key === "Escape") closeSearch();
   });
   if (elClientsScroll) {
-    elClientsScroll.addEventListener("scroll", maybeLoadMoreClientsOnScroll, { passive: true });
+    elClientsScroll.addEventListener("scroll", scheduleClientsScrollCheck, { passive: true });
+    document.addEventListener('admin:mobile-view-restored', scheduleClientsScrollCheck);
+    document.addEventListener('visibilitychange', scheduleClientsScrollCheck);
+    window.addEventListener('resize', scheduleClientsScrollCheck);
   }
 
   // -----------------------------

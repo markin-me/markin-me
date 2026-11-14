@@ -348,6 +348,9 @@
   const rightDeliveryQuotePending = new Map();
   const rightBenefitsPreviewPending = new Map();
   const rightBenefitsPreviewUpdatedAt = new Map();
+  let rightBenefitsRequestSequence = 0;
+  const rightBenefitsRulesRevisionByClientId = new Map();
+  const rightBonusCardDirtyByClientId = new Set();
   let resolveLocalEditorDataReady;
   const localEditorDataReadyPromise = new Promise(resolve => { resolveLocalEditorDataReady = resolve; });
 
@@ -365,6 +368,11 @@
 
   function isNewOrderEditorSurface() {
     return document.body.matches('.page-new-order, .new-order-editor-active');
+  }
+
+  function canRunNewOrderBackgroundWork() {
+    return isNewOrderEditorSurface() && document.visibilityState !== 'hidden'
+      && !document.body.classList.contains('admin-payment-open');
   }
 
   function editorWorkspaceScope() {
@@ -447,7 +455,7 @@
       state.rightActiveOrderId = state.rightOrders[0]?.id || null;
     }
     try {
-      await persistEditorWorkspace({ background: true });
+      await measureOrderStage('persist-editor-after-save', draftId, () => persistEditorWorkspace({ background: true }));
     } catch (error) {
       state.rightOrders = previous.rightOrders;
       state.rightActiveOrderId = previous.rightActiveOrderId;
@@ -888,6 +896,7 @@
       labels.paymentMethod?.[selectValues.paymentMethod] || selectValues.paymentMethod || "",
       selectValues.paymentMethod
     );
+    const noAutofillReadonly = window.matchMedia("(max-width: 768px)").matches ? "" : "readonly";
     const renderCartThumb = (item) => {
       const photos = Array.isArray(item?.photos) ? item.photos.filter(Boolean).slice(0, 4) : [];
       const bogoBadgeText = getNewOrderBuyXGetYBadgeText(item);
@@ -914,11 +923,11 @@
         <div class="new-order-right-form-row">
           <label class="new-order-right-form-field">
             <span class="new-order-right-form-label">РќРѕРјРµСЂ С‚РµР»РµС„РѕРЅР°</span>
-            <input class="control new-order-right-phone" type="text" inputmode="tel" value="${escapeHtml(formatPhoneRuInput(String(form.phone || "")))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="phone" placeholder="+7 (999) 999-99-99" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_phone_${Number(active?.id || 0)}" />
+            <input class="control new-order-right-phone" type="text" inputmode="tel" value="${escapeHtml(formatPhoneRuInput(String(form.phone || "")))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="phone" placeholder="+7 (999) 999-99-99" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" ${noAutofillReadonly} data-no-autofill="1" name="noaf_phone_${Number(active?.id || 0)}" />
           </label>
           <label class="new-order-right-form-field">
             <span class="new-order-right-form-label">РРјСЏ</span>
-            <input class="control" type="text" value="${escapeHtml(String(form.name || ""))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="name" placeholder="РРјСЏ РєР»РёРµРЅС‚Р°" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_name_${Number(active?.id || 0)}" />
+            <input class="control" type="text" value="${escapeHtml(String(form.name || ""))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="name" placeholder="РРјСЏ РєР»РёРµРЅС‚Р°" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" ${noAutofillReadonly} data-no-autofill="1" name="noaf_name_${Number(active?.id || 0)}" />
           </label>
         </div>
 
@@ -930,7 +939,7 @@
           <label class="new-order-right-form-field">
             <span class="new-order-right-form-label">РђРґСЂРµСЃ</span>
             <span class="new-order-right-address-wrap">
-              <input class="control" type="text" value="${escapeHtml(String(form.address || ""))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="address" placeholder="Р’РІРµРґРёС‚Рµ Р°РґСЂРµСЃ" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_address_${Number(active?.id || 0)}" />
+              <input class="control" type="text" value="${escapeHtml(String(form.address || ""))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="address" placeholder="Р’РІРµРґРёС‚Рµ Р°РґСЂРµСЃ" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" ${noAutofillReadonly} data-no-autofill="1" name="noaf_address_${Number(active?.id || 0)}" />
               <button type="button" class="new-order-right-address-edit" title="Р”РѕР±Р°РІРёС‚СЊ Р°РґСЂРµСЃ" aria-label="Р”РѕР±Р°РІРёС‚СЊ Р°РґСЂРµСЃ">
                 <i class="fas fa-pen"></i>
               </button>
@@ -980,7 +989,7 @@
 
         <label class="new-order-right-form-field is-comment">
           <span class="new-order-right-form-label">РљРѕРјРјРµРЅС‚Р°СЂРёР№</span>
-          <textarea class="control new-order-right-comment" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="comment" placeholder="Р’РІРµРґРёС‚Рµ РєРѕРјРјРµРЅС‚Р°СЂРёР№ Рє Р·Р°РєР°Р·Сѓ" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_comment_${Number(active?.id || 0)}">${escapeHtml(String(form.comment || ""))}</textarea>
+          <textarea class="control new-order-right-comment" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="comment" placeholder="Р’РІРµРґРёС‚Рµ РєРѕРјРјРµРЅС‚Р°СЂРёР№ Рє Р·Р°РєР°Р·Сѓ" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" ${noAutofillReadonly} data-no-autofill="1" name="noaf_comment_${Number(active?.id || 0)}">${escapeHtml(String(form.comment || ""))}</textarea>
         </label>
 
         <div class="new-order-right-divider"></div>
@@ -1539,10 +1548,29 @@
     };
   }
 
+  async function loadRightOrderReference(name, url, field, onUpdate) {
+    const load = async () => {
+      const json = await apiJson(url);
+      if (!Array.isArray(json?.[field])) throw new Error(`INVALID_ORDER_REFERENCE:${name}`);
+      return json[field];
+    };
+    return window.AdminReferenceCache
+      ? window.AdminReferenceCache.getOrLoadReference(name, {
+        load, validate: Array.isArray, isActive: canRunNewOrderBackgroundWork,
+        onUpdate: onUpdate || (() => {
+          const refresh = { 'order-delivery-types': loadRightDeliveryTypes, 'order-time-options': loadRightTimeOptions,
+            'order-statuses': loadRightOrderStatuses, stores: loadRightPickupStores }[name];
+          if (refresh) void refresh().then(() => queueRenderRightOrderTabs()).catch(console.error);
+        }),
+      })
+      : load();
+  }
+
   async function loadRightDeliveryTypes() {
     try {
-      const json = await apiJson("/api/admin/tenant/order-delivery-types");
-      const items = Array.isArray(json?.items) ? json.items : [];
+      const items = await loadRightOrderReference("order-delivery-types", "/api/admin/tenant/order-delivery-types", "items", () => {
+        void loadRightDeliveryTypes().then(() => queueRenderRightOrderTabs()).catch(console.error);
+      });
       state.rightDeliveryTypes = items
         .map(normalizeRightDeliveryTypeRef)
         .filter((item) => item.code)
@@ -1564,6 +1592,7 @@
             return json.items;
           },
           validate: Array.isArray,
+          isActive: canRunNewOrderBackgroundWork,
           onUpdate: items => {
             state.rightPaymentTypes = items.map(normalizeRightPaymentTypeRef).filter(item => item.code);
             sharedOrderPayment?.clearCache?.();
@@ -1584,8 +1613,9 @@
 
   async function loadRightTimeOptions() {
     try {
-      const json = await apiJson("/api/admin/tenant/order-time-options");
-      const items = Array.isArray(json?.items) ? json.items : [];
+      const items = await loadRightOrderReference("order-time-options", "/api/admin/tenant/order-time-options", "items", () => {
+        void loadRightTimeOptions().then(() => queueRenderRightOrderTabs()).catch(console.error);
+      });
       state.rightTimeOptions = items
         .map(normalizeRightTimeOptionRef)
         .filter((item) => item.code)
@@ -1598,8 +1628,9 @@
 
   async function loadRightOrderStatuses() {
     try {
-      const json = await apiJson("/api/admin/orders/statuses");
-      const items = Array.isArray(json?.data) ? json.data : [];
+      const items = await loadRightOrderReference("order-statuses", "/api/admin/orders/statuses", "data", () => {
+        void loadRightOrderStatuses().then(() => queueRenderRightOrderTabs()).catch(console.error);
+      });
       state.rightOrderStatuses = items
         .map((item) => ({
           id: Number(item?.id || 0),
@@ -1622,8 +1653,9 @@
         state.rightPickupStores = [];
         return;
       }
-      const json = await apiJson(`/api/public/tenant/stores?tenant_id=${tenantId}`);
-      const stores = Array.isArray(json?.stores) ? json.stores : [];
+      const stores = await loadRightOrderReference("stores", `/api/public/tenant/stores?tenant_id=${tenantId}`, "stores", () => {
+        void loadRightPickupStores().then(() => queueRenderRightOrderTabs()).catch(console.error);
+      });
       state.rightPickupStores = stores
         .map((s) => ({
           id: Number(s?.id || 0),
@@ -1897,6 +1929,13 @@
     return Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
   }
 
+  document.addEventListener('admin:reference-changed', event => {
+    const names = event.detail?.names || [];
+    if (names.includes('delivery-settings')) {
+      state.rightDeliverySettingsReady = false;
+      if (canRunNewOrderBackgroundWork() && state.rightOrders.length) void ensureRightDeliverySettingsLoaded().catch(console.error);
+    }
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void ensureRightDeliverySettingsLoaded();
   });
@@ -1919,8 +1958,7 @@
 
   async function ensureRightDeliverySettingsLoaded() {
     const scope = newOrderCacheScopeKey();
-    if (rightDeliverySettingsScope === scope && state.rightDeliverySettingsReady
-      && Date.now() - rightDeliverySettingsCheckedAt < 60000) return state.rightDeliverySettings;
+    if (rightDeliverySettingsScope === scope && state.rightDeliverySettingsReady) return state.rightDeliverySettings;
     if (state.rightDeliverySettingsPromise && rightDeliverySettingsScope === scope) return state.rightDeliverySettingsPromise;
     rightDeliverySettingsScope = scope;
     state.rightDeliverySettingsLoading = true;
@@ -2741,6 +2779,13 @@
     };
   }
 
+  document.addEventListener("dashboard:client-data-invalidated", event => {
+    if (event.detail?.kind !== "discounts") return;
+    const clientId = Number(event.detail.clientId);
+    state.rightClientDiscountsByClientId.delete(clientId);
+    invalidateRightOrderLiveSummaryByClientId(clientId);
+  });
+
   async function ensureRightClientDiscountsLoaded(clientId) {
     const id = Number(clientId || 0);
     if (!(id > 0)) return [];
@@ -2751,15 +2796,17 @@
     if (state.rightClientDiscountsLoadingByClientId.has(id)) return [];
     state.rightClientDiscountsLoadingByClientId.add(id);
     try {
-      const json = await apiJson(`/api/admin/clients/${id}/discounts`);
+      const loader = () => apiJson(`/api/admin/clients/${id}/discounts`);
+      const json = window.AdminPersistentCache?.clientData
+        ? await window.AdminPersistentCache.clientData.load("discounts", id, loader)
+        : await loader();
       const rows = Array.isArray(json?.data) ? json.data : [];
       const normalized = rows.map((row) => normalizeRightClientDiscountRow(row)).filter((row) => row.id > 0);
       state.rightClientDiscountsByClientId.set(id, normalized);
       invalidateRightOrderLiveSummaryByClientId(id);
       return normalized;
-    } catch {
-      state.rightClientDiscountsByClientId.set(id, []);
-      invalidateRightOrderLiveSummaryByClientId(id);
+    } catch (error) {
+      console.error("Client discounts load failed:", error);
       return [];
     } finally {
       state.rightClientDiscountsLoadingByClientId.delete(id);
@@ -4535,11 +4582,17 @@
     return summary ? cloneRightOrderBenefitsSummary(summary) : null;
   }
 
+  function isRightOrderBenefitsRulesCurrent(previewData) {
+    const until = Date.parse(previewData?.client_calculation?.valid_until || '');
+    return Number.isFinite(until) && until > Date.now();
+  }
+
   function buildRightOrderBenefitsLocalPreviewData(previewData, {
     order = null,
     previewRequest = null,
   } = {}) {
     if (!previewData || typeof previewData !== "object") return null;
+    if (previewData.client_calculation?.valid_until && !isRightOrderBenefitsRulesCurrent(previewData)) return null;
     const form = order?.form && typeof order.form === "object" ? order.form : {};
     const selection = getRightOrderBenefitsSelectionState(form);
     const selectedDiscountKey = buildRightOrderBenefitsLocalDiscountKey(
@@ -4557,7 +4610,8 @@
     const discountRules = Array.isArray(clientCalculation?.discount_rules) ? clientCalculation.discount_rules : [];
     const promoRules = Array.isArray(clientCalculation?.promo_rules) ? clientCalculation.promo_rules : [];
 
-    if (Number(clientCalculation?.version || 0) >= 2 && (discountRules.length || promoRules.length)) {
+    if (Number(clientCalculation?.version || 0) >= 2
+      && (discountRules.length || promoRules.length || !hasRightOrderBenefitsSelection(form))) {
       const effectivePreviewRequest = previewRequest && typeof previewRequest === "object"
         ? previewRequest
         : buildRightOrderBenefitsPreviewRequest(order);
@@ -4745,15 +4799,17 @@
       : (cloneRightOrderBenefitsPreviewData(previewData) || null);
   }
 
-  function invalidateRightOrderBenefitsPreview(orderId) {
+  function invalidateRightOrderBenefitsPreview(orderId, opts = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     invalidateRightOrderLiveSummary(id);
     ["customer", "all"].forEach((mode) => {
       const slot = getRightOrderBenefitsCacheSlot(id, mode);
       if (!slot) return;
-      state.rightBenefitsPreviewByOrder.delete(slot);
-      state.rightBenefitsPreviewKeyByOrder.delete(slot);
+      if (!opts.preserveSnapshot) {
+        state.rightBenefitsPreviewByOrder.delete(slot);
+        state.rightBenefitsPreviewKeyByOrder.delete(slot);
+      }
       rightBenefitsPreviewUpdatedAt.delete(slot);
       state.rightBenefitsLoadingByOrder.delete(slot);
       state.rightBenefitsReqSeqByOrder.delete(slot);
@@ -4873,6 +4929,9 @@
     });
     const form = safeOrder.form && typeof safeOrder.form === "object" ? safeOrder.form : {};
     return JSON.stringify({
+      scope: newOrderCacheScopeKey(),
+      settingsRevision: checkoutSettingsRevision,
+      rulesRevision: rightBenefitsRulesRevisionByClientId.get(Number(form.clientId || 0)) || 0,
       mode: activeMode,
       customerId: Number(form.clientId || 0) || null,
       phone: normalizePhoneRu(form.phone),
@@ -4911,6 +4970,13 @@
         staleSnapshot = snapshot;
       }
       if (expectedKey && storedKey === expectedKey && snapshot) return resolvePreview(snapshot);
+      if (snapshot && opts.preserveDisplay) {
+        try {
+          const saved = JSON.parse(storedKey || 'null');
+          const expected = JSON.parse(expectedKey);
+          if (saved && JSON.stringify({ ...saved, rulesRevision: expected.rulesRevision }) === expectedKey) return snapshot;
+        } catch (error) { console.error('Invalid benefits display key:', error); }
+      }
       if (allowClientCache && clientId > 0) {
         const clientSlot = getRightOrderBenefitsClientCacheSlot(clientId, mode);
         const clientSnapshot = clientSlot ? (state.rightBenefitsPreviewByClientMode.get(clientSlot) || null) : null;
@@ -4932,6 +4998,7 @@
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? order.form : {};
     const hasClient = Number(form.clientId || 0) > 0;
+    if (rightBonusCardDirtyByClientId.has(Number(form.clientId || 0))) return false;
     const strictCurrentSelection = opts?.strictCurrentSelection === true;
     const preferredMode = hasClient
       ? "customer"
@@ -4943,7 +5010,8 @@
       const basePreview = getRightOrderBenefitsPreviewSnapshot(order, {
         mode,
         preferApplied: !strictCurrentSelection,
-        allowStale: !strictCurrentSelection,
+        // The cart key changes, but its saved rules can price the new cart.
+        allowStale: true,
         allowClientCache: true,
         resolveForOrder: false,
       });
@@ -4973,6 +5041,42 @@
       });
     }
     const form = order.form && typeof order.form === "object" ? order.form : {};
+    const mode = getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode());
+    const slot = getRightOrderBenefitsCacheSlot(id, mode);
+    const expectedKey = buildRightOrderBenefitsPreviewKey(order, mode);
+    const freshness = rightBenefitsPreviewUpdatedAt.get(slot);
+    const currentPreview = state.rightBenefitsPreviewByOrder.get(slot);
+    const reusable = currentPreview?.client_calculation?.valid_until
+      ? isRightOrderBenefitsRulesCurrent(currentPreview)
+      : freshness?.key === expectedKey && Date.now() - Number(freshness.updatedAt || 0) < 30000;
+    if (opts.authoritative !== true && state.rightBenefitsPreviewKeyByOrder.get(slot) === expectedKey
+      && !rightBonusCardDirtyByClientId.has(Number(form.clientId || 0)) && reusable && currentPreview) return currentPreview;
+    if (opts.authoritative !== true && Number(form.clientId || 0) > 0 && window.AdminPersistentCache?.clientBenefits) {
+      const savedRules = getRightOrderBenefitsPreviewSnapshot(order, {
+        mode: "customer", allowStale: true, allowClientCache: true, resolveForOrder: false,
+      });
+      const snapshot = !rightBonusCardDirtyByClientId.has(Number(form.clientId))
+        && Number(savedRules?.client_calculation?.version || 0) >= 2 && isRightOrderBenefitsRulesCurrent(savedRules)
+        ? null : await loadRightClientBenefitsSnapshot(Number(form.clientId));
+      // Only the existing versioned rule evaluator can replace a UI preview request.
+      const rules = snapshot?.benefits?.customer || savedRules;
+      const currentOrder = state.rightOrders.find(row => Number(row.id) === id);
+      if (currentOrder && Number(currentOrder.form?.clientId) === Number(form.clientId)
+        && Number(rules?.client_calculation?.version || 0) >= 2 && isRightOrderBenefitsRulesCurrent(rules)
+        && (rules.client_calculation.discount_rules?.length || rules.client_calculation.promo_rules?.length
+          || !hasRightOrderBenefitsSelection(currentOrder.form))) {
+        const local = buildRightOrderBenefitsLocalPreviewData(rules, { order: currentOrder });
+        if (local?.summary) {
+          const slot = getRightOrderBenefitsCacheSlot(id, "customer");
+          state.rightBenefitsPreviewByOrder.set(slot, local);
+          state.rightBenefitsPreviewKeyByOrder.set(slot, buildRightOrderBenefitsPreviewKey(currentOrder, "customer"));
+          invalidateRightOrderLiveSummary(id);
+          if (opts.render !== false) queueRenderRightOrderTabs();
+          if (opts.renderOverlay === true) queueRenderRightBenefitsModal(id);
+          return local;
+        }
+      }
+    }
     const hasPreviewState = ["customer", "all"].some((mode) => {
       const slot = getRightOrderBenefitsCacheSlot(id, mode);
       return state.rightBenefitsPreviewByOrder.has(slot) || state.rightBenefitsPreviewKeyByOrder.has(slot);
@@ -4983,13 +5087,6 @@
       || (Array.isArray(form.cartItems) ? form.cartItems : []).some((item) => Number(item?.is_gift_reward || 0) === 1)
     );
     if (!shouldRefresh) return null;
-    const mode = getRightOrderBenefitsPreferredMode(form, getActiveRightOrderBenefitsMode());
-    const slot = getRightOrderBenefitsCacheSlot(id, mode);
-    const expectedKey = buildRightOrderBenefitsPreviewKey(order, mode);
-    const freshness = rightBenefitsPreviewUpdatedAt.get(slot);
-    if (state.rightBenefitsPreviewKeyByOrder.get(slot) === expectedKey && freshness?.key === expectedKey
-      && Date.now() - Number(freshness.updatedAt || 0) < 30000
-      && state.rightBenefitsPreviewByOrder.has(slot)) return state.rightBenefitsPreviewByOrder.get(slot);
     return loadRightOrderBenefitsPreview(id, {
       force: true,
       render: opts?.render !== false,
@@ -5143,7 +5240,14 @@
   async function loadRightOrderBenefitsPreview(orderId, opts = {}) {
     const order = state.rightOrders.find(row => Number(row.id) === Number(orderId));
     const key = `${newOrderCacheScopeKey()}:${checkoutSettingsRevision}:${orderId}:${buildRightOrderBenefitsPreviewKey(order, opts.mode)}`;
-    if (!opts.prefetchedData && rightBenefitsPreviewPending.has(key)) return rightBenefitsPreviewPending.get(key);
+    if (!opts.prefetchedData && rightBenefitsPreviewPending.has(key)) {
+      const data = await rightBenefitsPreviewPending.get(key);
+      if (opts.render) {
+        queueRenderRightOrderTabs();
+        if (opts.renderOverlay !== false) queueRenderRightBenefitsModal(orderId);
+      }
+      return data;
+    }
     const task = loadRightOrderBenefitsPreviewTask(orderId, opts);
     rightBenefitsPreviewPending.set(key, task);
     try { return await task; }
@@ -5157,6 +5261,9 @@
     if (index < 0) return null;
     const requestedMode = normalizeRightOrderBenefitsMode(opts?.mode || getActiveRightOrderBenefitsMode());
     const customerId = Number(await ensureRightOrderBenefitsCustomerId(id) || 0);
+    if (customerId > 0 && !opts?.prefetchedData && window.AdminPersistentCache?.clientBenefits) {
+      await loadRightClientBenefitsSnapshot(customerId, { cacheOnly: true });
+    }
     const mode = requestedMode === "customer" && !(customerId > 0)
       ? "all"
       : requestedMode;
@@ -5171,15 +5278,15 @@
     const cacheSlot = getRightOrderBenefitsCacheSlot(id, mode);
     const requestKey = buildRightOrderBenefitsPreviewKey(order, mode);
     const clientCacheSlot = getRightOrderBenefitsClientCacheSlot(customerId, mode);
-    if (!opts?.force && requestKey === String(state.rightBenefitsPreviewKeyByOrder.get(cacheSlot) || "")) {
+    if (!opts?.force && !opts?.prefetchedData && requestKey === String(state.rightBenefitsPreviewKeyByOrder.get(cacheSlot) || "")) {
       const cached = state.rightBenefitsPreviewByOrder.get(cacheSlot) || null;
-      if (cached) return cached;
+      if (cached && (!cached.client_calculation?.valid_until || isRightOrderBenefitsRulesCurrent(cached))) return cached;
     }
     let seededFromClientCache = false;
-    if (!opts?.force && !opts?.prefetchedData && clientCacheSlot) {
+    if (!opts?.prefetchedData && clientCacheSlot) {
       const cachedByClientMode = state.rightBenefitsPreviewByClientMode.get(clientCacheSlot) || null;
       if (cachedByClientMode) {
-        const clonedCached = cloneRightOrderBenefitsPreviewData(cachedByClientMode);
+        const clonedCached = buildRightOrderBenefitsLocalPreviewData(cachedByClientMode, { order });
         if (clonedCached) {
           state.rightBenefitsPreviewByOrder.set(cacheSlot, clonedCached);
           state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, requestKey);
@@ -5194,7 +5301,7 @@
       }
     }
 
-    const requestSeq = Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) + 1;
+    const requestSeq = ++rightBenefitsRequestSequence;
     state.rightBenefitsReqSeqByOrder.set(cacheSlot, requestSeq);
     const snapshotBeforeRequest = state.rightBenefitsPreviewByOrder.get(cacheSlot) || null;
     const keyBeforeRequest = String(state.rightBenefitsPreviewKeyByOrder.get(cacheSlot) || "");
@@ -5218,6 +5325,11 @@
         nextData = cloneRightOrderBenefitsPreviewData(json?.data || null);
       }
       if (Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) !== requestSeq) return null;
+      const currentOrder = state.rightOrders.find(row => Number(row.id) === id);
+      if (!currentOrder || buildRightOrderBenefitsPreviewKey(currentOrder, mode) !== requestKey) {
+        state.rightBenefitsLoadingByOrder.delete(cacheSlot);
+        return null;
+      }
       const responseMode = normalizeRightOrderBenefitsMode(nextData?.mode || mode);
       if (responseMode !== mode) {
         state.rightBenefitsLoadingByOrder.delete(cacheSlot);
@@ -5252,6 +5364,8 @@
     } catch (error) {
       if (Number(state.rightBenefitsReqSeqByOrder.get(cacheSlot) || 0) !== requestSeq) return null;
       state.rightBenefitsLoadingByOrder.delete(cacheSlot);
+      const currentOrder = state.rightOrders.find(row => Number(row.id) === id);
+      if (!currentOrder || buildRightOrderBenefitsPreviewKey(currentOrder, mode) !== requestKey) throw error;
       if (snapshotBeforeRequest) {
         state.rightBenefitsPreviewByOrder.set(cacheSlot, snapshotBeforeRequest);
         state.rightBenefitsPreviewKeyByOrder.set(cacheSlot, keyBeforeRequest);
@@ -5275,6 +5389,7 @@
     const delay = Math.max(0, Number(opts?.delay ?? 180));
     const timer = setTimeout(() => {
       state.rightBenefitsRefreshTimerByOrder.delete(id);
+      if (!canRunNewOrderBackgroundWork()) return;
       const index = getRightOrderIndexById(id);
       if (index < 0) return;
       const order = state.rightOrders[index] || {};
@@ -5360,6 +5475,7 @@
           preferApplied: true,
           allowStale: false,
           allowClientCache: true,
+          preserveDisplay: rightBonusCardDirtyByClientId.has(clientId),
         })
       : null;
     const benefitsPreviewSummary = (() => {
@@ -7288,6 +7404,18 @@
     scheduleDurableCreateDraftSave();
   }
 
+  async function measureOrderStage(stage, orderId, run) {
+    const started = performance.now();
+    let completed = false;
+    try {
+      const result = await run();
+      completed = true;
+      return result;
+    } finally {
+      console.info('[order-timing]', { stage, orderId: Number(orderId || 0), durationMs: Math.round(performance.now() - started), completed });
+    }
+  }
+
   async function openRightOrderPaymentDraft(order) {
     if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
       showNewOrderAlert("Не удалось открыть модалку оплаты");
@@ -7380,24 +7508,22 @@
       const clientId = Number(order?.form?.clientId || 0);
       // These requests use independent inputs; reuse their existing in-flight work.
       await Promise.all([
-        ensureRightOrderBenefitsPreviewFresh(id, {
+        measureOrderStage('prepare-benefits', editOrderId || id, () => ensureRightOrderBenefitsPreviewFresh(id, {
           render: true,
           renderOverlay: Number(state.benefitsModal.orderId || 0) === id,
-        }),
-        clientId > 0 ? ensureRightBonusCardLoaded(clientId) : Promise.resolve(null),
-        isDeliveryMethod
-          ? ensureRightDeliveryQuoteFresh(order, getRightOrderLiveSummary(order, { force: true }), { render: true })
-          : Promise.resolve(null),
+        })),
+        clientId > 0 ? measureOrderStage('prepare-bonus', editOrderId || id, () => ensureRightBonusCardLoaded(clientId, { strict: true })) : Promise.resolve(null),
+
       ]);
       order = state.rightOrders[index] || order;
       const resolvedClientId = Number(order?.form?.clientId || 0);
       if (resolvedClientId > 0 && !state.rightBonusCardByClientId.has(resolvedClientId)) {
-        await ensureRightBonusCardLoaded(resolvedClientId);
+        await measureOrderStage('prepare-resolved-client-bonus', editOrderId || id, () => ensureRightBonusCardLoaded(resolvedClientId));
         order = state.rightOrders[index] || order;
       }
       // Benefits can change the subtotal used by delivery pricing.
       if (isDeliveryMethod) {
-        await ensureRightDeliveryQuoteFresh(order, getRightOrderLiveSummary(order, { force: true }), { render: true });
+        await measureOrderStage('prepare-delivery-after-benefits', editOrderId || id, () => ensureRightDeliveryQuoteFresh(order, getRightOrderLiveSummary(order, { force: true }), { render: true }));
         order = state.rightOrders[index] || order;
       }
     } catch (error) {
@@ -7668,54 +7794,55 @@
       syncRightOrderFormPayment(id, paymentPayload);
     }
 
+    const checkout = {
+      statusId: isEditSubmit && selectedOrderStatusId > 0 && selectedOrderStatusId !== initialOrderStatusId ? selectedOrderStatusId : null,
+      payment: paymentDeferred ? null : { is_paid: 1, payment_code: payload.payment_code,
+        change_from: payload.change_from, expected_total: Number(summary.payableTotal) },
+      preview: !isEditSubmit && benefitsPreviewSummary ? buildRightOrderBenefitsPreviewRequest(order, { includeMode: true, mode: "customer" }) : null,
+      expectedItemsTotal: roundPrice(Number(summary.subtotalAfterCustomerDiscount || 0) + Number(summary.bonusRedeemAmount || 0)),
+    };
     setRightOrderSubmitFeedback(id, true);
     try {
+      let submittedOrder = null;
       let submittedPublicId = "";
       let submittedId = 0;
       let submittedStockLevels = [];
       let paymentStepError = null;
       if (isEditSubmit) {
         const editStoreId = Number(order?.storeId || 0) > 0 ? Number(order.storeId) : null;
-        const json = await apiJson(`/api/admin/orders/${editOrderId}`, {
+        const json = await measureOrderStage('save-order', editOrderId, () => apiJson(`/api/admin/orders/${editOrderId}`, {
+          checkout,
           method: "PUT",
           headers: editStoreId ? { "x-store-id": String(editStoreId) } : undefined,
           body: JSON.stringify(payload),
-        });
-        if (selectedOrderStatusId > 0 && selectedOrderStatusId !== initialOrderStatusId) {
-          await apiJson(`/api/admin/orders/${editOrderId}/status`, {
-            method: "PUT",
-            headers: editStoreId ? { "x-store-id": String(editStoreId) } : undefined,
-            body: JSON.stringify({ status_id: selectedOrderStatusId }),
-          });
-        }
+        }));
+        submittedOrder = json?.data?.order || null;
+        if (json?.data?.operationError) paymentStepError = json.data.operationError;
         submittedId = Number(json?.data?.id || editOrderId || 0);
         submittedPublicId = String(json?.data?.public_id || "").trim();
       } else {
         const submissionId = String(order?.submissionId || "").trim();
         writeDurableCreateDraftNow();
-        const json = await apiJson("/api/public/orders", {
+        const json = await measureOrderStage('create-order', id, () => apiJson("/api/public/orders", {
+          checkout,
           method: "POST",
           headers: { "Idempotency-Key": submissionId },
           body: JSON.stringify(payload),
-        });
+        }));
         submittedPublicId = String(json?.data?.public_id || "").trim();
         submittedId = Number(json?.data?.id || 0);
         submittedStockLevels = Array.isArray(json?.data?.stock_levels) ? json.data.stock_levels : [];
+        submittedOrder = json?.data?.order || null;
+        if (json?.data?.operationError) paymentStepError = json.data.operationError;
       }
       if (!isEditSubmit && submittedStockLevels.length) applyAuthoritativeOrderStockLevels(submittedStockLevels);
-      if (!paymentDeferred && submittedId > 0) {
-        try {
-          await apiJson(`/api/admin/orders/${submittedId}/paid`, {
-            method: "PUT",
-            body: JSON.stringify({
-              is_paid: 1,
-              payment_code: payload.payment_code,
-              change_from: payload.change_from,
-            }),
-          });
-        } catch (error) {
-          paymentStepError = error;
-        }
+      if (submittedOrder) {
+        document.dispatchEvent(new CustomEvent("dashboard:order-updated", { detail: { order: submittedOrder } }));
+      }
+      const submittedClientId = Number(order?.form?.clientId || 0);
+      if (submittedClientId > 0 && window.AdminPersistentCache?.clientBenefits) {
+        void window.AdminPersistentCache.clientBenefits.invalidate(submittedClientId, sharedProductCacheScope())
+          .catch(error => console.warn("Benefits cache invalidation failed:", error));
       }
       const latestIndex = getRightOrderIndexById(id);
       if (!isEditSubmit && latestIndex >= 0) {
@@ -7750,14 +7877,20 @@
             updatedOrderId: isEditSubmit && submittedId > 0 ? submittedId : null,
             updatedOrderPublicId: isEditSubmit ? (submittedPublicId || null) : null,
             submittedMode: isEditSubmit ? "edit" : "create",
+            order: submittedOrder,
           },
         })
       );
       if (!submittedStockLevels.length) void refreshNewOrderInventory();
       if (paymentStepError) {
-        showNewOrderAlert(`${isEditSubmit ? "Заказ сохранен" : "Заказ оформлен"}, но принять оплату не удалось: ${paymentStepError?.message || "UNKNOWN"}`);
+        showNewOrderAlert(`\u0417\u0430\u043a\u0430\u0437 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d, \u043d\u043e \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044f ${paymentStepError.stage || "payment"} \u043d\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430: ${paymentStepError.error || paymentStepError.message || "UNKNOWN"}`);
       }
     } catch (e) {
+      if (e?.message === "ORDER_PRICING_CHANGED") {
+        if (e.data?.preview) await loadRightOrderBenefitsPreview(id, { mode: "customer", prefetchedData: e.data.preview, render: true });
+        showNewOrderAlert("\u0421\u0443\u043c\u043c\u0430 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0430\u0441\u044c. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0438\u0442\u043e\u0433 \u0438 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0435 \u043e\u043f\u043b\u0430\u0442\u0443 \u043f\u043e\u0432\u0442\u043e\u0440\u043d\u043e.");
+        return;
+      }
       if (!isEditSubmit && (e instanceof TypeError || e?.responseReceived !== true)) {
         showNewOrderAlert("Не удалось подтвердить создание заказа. Повторите отправку — дубликат создан не будет.");
         return;
@@ -8199,7 +8332,8 @@
     checkoutSettingsRevision = String(snapshot.checkoutSettingsRevision || "");
     for (const entry of (Array.isArray(snapshot.benefitsPreviewCache) ? snapshot.benefitsPreviewCache : [])) {
       const age = Date.now() - Number(entry.updatedAt || 0);
-      if (age < 0 || age >= 30000 || !entry.slot || !entry.key || !entry.data) continue;
+      if (age < 0 || !entry.slot || !entry.key || !entry.data) continue;
+      if (entry.data.client_calculation?.valid_until ? !isRightOrderBenefitsRulesCurrent(entry.data) : age >= 30000) continue;
       state.rightBenefitsPreviewByOrder.set(entry.slot, entry.data);
       state.rightBenefitsPreviewKeyByOrder.set(entry.slot, entry.key);
       rightBenefitsPreviewUpdatedAt.set(entry.slot, { key: entry.key, updatedAt: entry.updatedAt });
@@ -8427,7 +8561,10 @@
     const cache=clientLocalScope(),key=`${cache?.namespace}:${clientId}`;
     if(clientLocalRequests.has(key))return clientLocalRequests.get(key);
     const task=(async()=>{
-      const json=await apiJson(`/api/admin/clients/${clientId}/addresses`);
+      const loader = () => apiJson(`/api/admin/clients/${clientId}/addresses`);
+      const json = window.AdminPersistentCache?.clientData
+        ? await window.AdminPersistentCache.clientData.load("addresses", clientId, loader)
+        : await loader();
       const rows=(Array.isArray(json.data)?json.data:[]).map(normalizeClientAddressRow).filter(row=>row.id>0);
       await applyClientAddressSnapshot(cache,clientId,rows);
       return rows;
@@ -8449,9 +8586,14 @@
     const cache=clientLocalScope();
     const previous=await readClientLocal(`client:${clientId}`);
     let row;
-    try { row=(await apiJson(`/api/admin/clients/${clientId}`)).data; }
+    try {
+      const loader = () => apiJson(`/api/admin/clients/${clientId}`);
+      row = (window.AdminPersistentCache?.clientData
+        ? await window.AdminPersistentCache.clientData.load("profile", clientId, loader)
+        : await loader()).data;
+    }
     catch(error) {
-      if(Number(error.status)!==404)throw error;
+      if(Number(error.httpStatus || error.status)!==404)throw error;
       row=null;
     }
     if(cache?.namespace!==clientLocalScope()?.namespace)return;
@@ -8469,76 +8611,38 @@
     await writeClientLocal(cache,`client:${clientId}`,{phone});
     await fetchClientAddressSnapshot(clientId);
   }
-  let clientWarmGeneration=0;
-  async function warmLocalClients() {
-    const generation=++clientWarmGeneration,cache=clientLocalScope();
-    if(!cache?.complete || navigator.onLine===false)return;
-    const previous=await readClientLocal("directory") || [];
-    const directory=[];
-    for(let offset=0;generation===clientWarmGeneration;offset+=100){
-      const json=await apiJson(`/api/admin/clients?mode=lightweight&include_addresses=1&limit=100&offset=${offset}`);
-      if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
-      const rows=Array.isArray(json.data)?json.data:[];
-      for(const row of rows){
-        if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
-        const phone=normalizePhoneRu(row.phone);
-        directory.push({id:Number(row.id),phone});
-        if(phone.length===11){
-          await writeClientLocal(cache,`phone:${phone}`,{found:true,clientId:Number(row.id),name:String(row.name || '')});
-          await writeClientLocal(cache,`client:${row.id}`,{phone});
-        }
-        if(!Array.isArray(row.addresses))throw new Error('CLIENT_ADDRESSES_SNAPSHOT_MISSING');
-        const addresses=row.addresses.map(normalizeClientAddressRow).filter(address=>address.id>0);
-        await applyClientAddressSnapshot(cache,Number(row.id),addresses);
-      }
-      if(rows.length<100)break;
-      await new Promise(resolve=>setTimeout(resolve,100));
-    }
-    if(generation!==clientWarmGeneration || cache.namespace!==clientLocalScope()?.namespace)return;
-    const phones=new Set(directory.map(row=>row.phone));
-    const ids=new Set(directory.map(row=>row.id));
-    for(const old of previous){
-      if(!phones.has(old.phone))await cache.remove(`phone:${old.phone}`);
-      if(!ids.has(old.id)){await cache.remove(`addresses:${old.id}`);await cache.remove(`client:${old.id}`);state.rightClientAddressesByClientId.delete(old.id);}
-    }
-    await writeClientLocal(cache,'directory',directory);
-    state.rightClientLookupCache.clear();
+  function connectClientSync() {
+    return window.AdminPersistentCache.clientData.ensureSync();
   }
-  let clientSyncAbort=null;
-  async function connectClientSync() {
-    clientSyncAbort?.abort();
-    const controller=new AbortController();clientSyncAbort=controller;
-    const scope=clientLocalScope()?.namespace;
-    try{
-      const token=localStorage.getItem('authToken');
-      const response=await fetch('/api/admin/clients/sync/events',{signal:controller.signal,headers:{Authorization:`Bearer ${token}`,'x-store-id':String(getStoreIdFromStorage())}});
-      if(!response.ok || !response.body)throw new Error(`CLIENT_SYNC_${response.status}`);
-      const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
-      while(!controller.signal.aborted){
-        const {value,done}=await reader.read();if(done)break;
-        buffer+=decoder.decode(value,{stream:true});
-        let boundary;
-        while((boundary=buffer.indexOf('\n\n'))>=0){
-          const message=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);
-          const line=message.split('\n').find(line=>line.startsWith('data: '));
-          if(!line){if(document.visibilityState!=='hidden')void ensureRightDeliverySettingsLoaded();continue;}
-          if(scope!==clientLocalScope()?.namespace)return;
-          const event=JSON.parse(line.slice(6));
-          void ensureRightDeliverySettingsLoaded();
-          if(event.resync || !event.client_id){
-            void warmLocalClients().catch(error=>console.warn('Client warmup:',error));
-            for(const id of new Set(state.rightOrders.map(order=>Number(order.form?.clientId || 0)).filter(Boolean)))void refreshLocalClient(id).catch(error=>console.warn('Client resync:',error));
-          }
-          else{
-            state.rightClientLookupCache.clear();
-            void refreshLocalClient(Number(event.client_id)).catch(error=>console.warn('Client refresh:',error));
-          }
-        }
+  document.addEventListener('admin:clients-changed', event => {
+    const scope = clientLocalScope()?.namespace;
+    void (async () => {
+      const cache = clientLocalScope();
+      const ids = new Set(event.detail?.ids || []);
+      if (event.detail?.resync) {
+        await cache.clear(); state.rightClientLookupCache.clear(); state.rightClientAddressesByClientId.clear();
+        state.rightOrders.forEach(order => { if (Number(order.form?.clientId) > 0) ids.add(Number(order.form.clientId)); });
       }
-    }catch(error){if(!controller.signal.aborted)console.warn('Client realtime:',error);}
-    if(!controller.signal.aborted && scope===clientLocalScope()?.namespace)setTimeout(connectClientSync,3000);
-  }
-  setTimeout(()=>{void connectClientSync();},0);
+      for (const id of ids) {
+        if (scope !== clientLocalScope()?.namespace) return;
+        const sections = event.detail?.resync ? [] : event.detail?.sections?.[id] || [];
+        const active = canRunNewOrderBackgroundWork() && state.rightOrders.some(order => Number(order.form?.clientId) === id);
+        if (sections.length && sections.every(section => section === 'benefits')) continue;
+        if (sections.length && sections.every(section => section === 'addresses')) {
+          await cache.remove(`addresses:${id}`);
+          state.rightClientAddressesByClientId.delete(id);
+          if (active) await fetchClientAddressSnapshot(id);
+          continue;
+        }
+        const previous = await readClientLocal(`client:${id}`);
+        if (previous?.phone) await cache.remove(`phone:${previous.phone}`);
+        await cache.remove(`addresses:${id}`); await cache.remove(`client:${id}`);
+        state.rightClientLookupCache.clear(); state.rightClientAddressesByClientId.delete(id);
+        if (active) await refreshLocalClient(id);
+      }
+    })().catch(error => console.error('Client cache update failed:', error));
+  });
+  void connectClientSync().catch(console.error);
 
   async function lookupClientByPhoneForRightOrder(orderId, phoneValue, opts = {}) {
     const normalizedDigits = normalizePhoneRu(phoneValue);
@@ -8639,7 +8743,9 @@
     state.rightOrders[index] = { ...order, form };
     invalidateRightOrderBenefitsPreview(Number(orderId || 0));
     scheduleRightOrderBenefitsRefresh(Number(orderId || 0));
-    void prefetchRightOrderBenefitsModes(Number(orderId || 0), { force: true });
+    if (Number(state.benefitsModal.orderId || 0) === Number(orderId || 0)) {
+      void prefetchRightOrderBenefitsModes(Number(orderId || 0), { force: true });
+    }
     renderRightOrderTabs();
     if (payload?.found) {
       void hydrateSelectedRightOrderClient(Number(orderId || 0), Number(payload.clientId || 0));
@@ -9634,7 +9740,7 @@
   async function loadRightBonusCard(customerId, opts = {}) {
     const id = Number(customerId || 0);
     if (!(id > 0)) return null;
-    if (!opts?.force && state.rightBonusCardByClientId.has(id)) {
+    if (!opts?.force && !rightBonusCardDirtyByClientId.has(id) && state.rightBonusCardByClientId.has(id)) {
       const cached = state.rightBonusCardByClientId.get(id) || null;
       state.bonusCardModal.customerId = id;
       state.bonusCardModal.data = cached;
@@ -9687,19 +9793,77 @@
     }
   }
 
+  window.AdminPersistentCache?.clientBenefits?.subscribe((identity, snapshot) => {
+    if (Number(identity.tenantId) !== Number(getTenantIdFromStorage())
+      || Number(identity.storeId) !== Number(getStoreIdFromStorage())) return;
+    const customerId = Number(identity.id);
+    rightBenefitsRulesRevisionByClientId.set(customerId, (rightBenefitsRulesRevisionByClientId.get(customerId) || 0) + 1);
+    if (snapshot?.bonuses) {
+      rightBonusCardDirtyByClientId.delete(customerId);
+      state.rightBonusCardByClientId.set(customerId, snapshot.bonuses);
+    } else rightBonusCardDirtyByClientId.add(customerId);
+    for (const mode of ["customer", "all"]) {
+      const slot = getRightOrderBenefitsClientCacheSlot(customerId, mode);
+      if (mode === "customer" && snapshot?.benefits?.customer) {
+        state.rightBenefitsPreviewByClientMode.set(slot, cloneRightOrderBenefitsPreviewData(snapshot.benefits.customer));
+      } else state.rightBenefitsPreviewByClientMode.delete(slot);
+    }
+    state.rightOrders.forEach(order => {
+      if (Number(order?.form?.clientId) !== customerId) return;
+      invalidateRightOrderBenefitsPreview(Number(order.id), { preserveSnapshot: !snapshot });
+      if (snapshot) seedRightOrderBenefitsPreviewLocally(Number(order.id));
+      else if (canRunNewOrderBackgroundWork() && !state.rightCheckoutSubmittingByOrder.get(Number(order.id))) {
+        scheduleRightOrderBenefitsRefresh(Number(order.id));
+        void ensureRightBonusCardLoaded(customerId, { render: true }).catch(console.error);
+      }
+    });
+    invalidateRightOrderLiveSummaryByClientId(customerId);
+    if (canRunNewOrderBackgroundWork() && state.rightOrders.some(order => Number(order?.form?.clientId) === customerId)) queueRenderRightOrderTabs();
+  });
+
+  async function loadRightClientBenefitsSnapshot(customerId, opts = {}) {
+    const cache = window.AdminPersistentCache?.clientBenefits;
+    if (!cache) return null;
+    const scope = sharedProductCacheScope();
+    const snapshot = opts.cacheOnly
+      ? (await cache.read(customerId, scope))?.snapshot
+      : await cache.load(customerId,
+          () => apiJson(`/api/admin/clients/${customerId}/benefits-snapshot`).then(json => json?.data),
+          { ...scope, force: opts.force === true });
+    if (Number(getTenantIdFromStorage()) !== Number(scope.tenantId)
+      || Number(getStoreIdFromStorage()) !== Number(scope.storeId)) throw new Error("BENEFITS_SCOPE_CHANGED");
+    if (snapshot?.bonuses) {
+      rightBonusCardDirtyByClientId.delete(Number(customerId));
+      state.rightBonusCardByClientId.set(Number(customerId), snapshot.bonuses);
+      invalidateRightOrderLiveSummaryByClientId(customerId);
+    }
+    for (const mode of ["customer"]) {
+      const preview = snapshot?.benefits?.customer;
+      const slot = getRightOrderBenefitsClientCacheSlot(customerId, mode);
+      if (preview && slot) state.rightBenefitsPreviewByClientMode.set(slot, cloneRightOrderBenefitsPreviewData(preview));
+    }
+    return snapshot;
+  }
+
   async function ensureRightBonusCardLoaded(customerId, opts = {}) {
     const id = Number(customerId || 0);
     if (!(id > 0)) return null;
-    if (!opts?.force && state.rightBonusCardByClientId.has(id)) {
+    if (!opts?.force && !rightBonusCardDirtyByClientId.has(id) && state.rightBonusCardByClientId.has(id)) {
       return state.rightBonusCardByClientId.get(id) || null;
     }
     const existingPromise = state.rightBonusCardPromiseByClientId.get(id);
-    if (!opts?.force && existingPromise) return existingPromise;
+    if (!opts?.force && existingPromise) {
+      const data = await existingPromise;
+      if (opts?.render) queueRenderRightOrderTabs();
+      return data;
+    }
     if (state.rightBonusCardLoadingByClientId.has(id)) return null;
     state.rightBonusCardLoadingByClientId.add(id);
     const requestPromise = (async () => {
-      const json = await apiJson(`/api/admin/bonus/customers/${id}/card`);
+      const snapshot = await loadRightClientBenefitsSnapshot(id, opts);
+      const json = snapshot ? { data: snapshot.bonuses } : await apiJson(`/api/admin/bonus/customers/${id}/card`);
       const data = json?.data && typeof json.data === "object" ? json.data : null;
+      rightBonusCardDirtyByClientId.delete(id);
       state.rightBonusCardByClientId.set(id, data);
       invalidateRightOrderLiveSummaryByClientId(id);
       if (Number(state.bonusCardModal.customerId || 0) === id) {
@@ -9714,6 +9878,7 @@
       return data;
     } catch (error) {
       if (opts?.showError) showNewOrderAlert("Не удалось загрузить бонусы клиента");
+      if (opts?.strict) throw error;
       return null;
     } finally {
       if (state.rightBonusCardPromiseByClientId.get(id) === requestPromise) {
@@ -9734,6 +9899,7 @@
         body: "{}",
       });
       state.rightBonusCardByClientId.delete(customerId);
+      await window.AdminPersistentCache?.clientBenefits?.invalidate(customerId, sharedProductCacheScope());
       invalidateRightOrderLiveSummaryByClientId(customerId);
       await loadRightBonusCard(customerId, { render: true });
       if (state.bonusCardModal.data) {
@@ -17874,45 +18040,29 @@
     return error;
   }
 
-  function ensureAdminOrderSocket() {
-    if (adminOrderSocketReady) return adminOrderSocketReady;
-    if (typeof WebSocket !== 'function') return Promise.reject(adminOrderTransportError());
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${location.host}/api/admin/orders-ws`);
-    adminOrderSocket = socket;
-    adminOrderSocketReady = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { reject(adminOrderTransportError()); socket.close(); }, 3000);
-      const fail = () => { clearTimeout(timer); reject(adminOrderTransportError()); };
-      socket.addEventListener('error', fail, { once: true });
-      socket.addEventListener('close', fail, { once: true });
-      socket.addEventListener('message', event => {
-        let message;
-        try { message = JSON.parse(event.data); } catch (_) { return; }
-        if (message.type === 'ready') { clearTimeout(timer); resolve(socket); return; }
-        if (message.type !== 'order.result') return;
-        const pending = adminOrderCommands.get(message.request_id);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        adminOrderCommands.delete(message.request_id);
-        if (message.payload?.ok === true) pending.resolve(message.payload);
-        else {
-          const error = new Error(message.payload?.error || `API_ERROR_${message.status}`);
-          error.httpStatus = message.status;
-          error.responseReceived = true;
-          pending.reject(error);
-        }
-      });
-    });
-    socket.addEventListener('close', () => {
-      if (adminOrderSocket === socket) { adminOrderSocket = null; adminOrderSocketReady = null; }
+  window.AdminPersistentCache?.realtime?.onMessage(message => {
+    if (message.type === 'connection.closed') {
+      adminOrderSocket = null; adminOrderSocketReady = null;
       for (const [id, pending] of adminOrderCommands) {
-        if (pending.socket !== socket) continue;
-        clearTimeout(pending.timer);
-        adminOrderCommands.delete(id);
+        clearTimeout(pending.timer); adminOrderCommands.delete(id);
         pending.reject(adminOrderTransportError(true));
       }
-    });
-    return adminOrderSocketReady;
+      return;
+    }
+    if (message.type !== 'order.result') return;
+    const pending = adminOrderCommands.get(message.request_id);
+    if (!pending) return;
+    clearTimeout(pending.timer); adminOrderCommands.delete(message.request_id);
+    if (message.payload?.ok === true) pending.resolve(message.payload);
+    else {
+      const error = new Error(message.payload?.error || `API_ERROR_${message.status}`);
+      error.httpStatus = message.status; error.responseReceived = true; error.data = message.payload?.data;
+      pending.reject(error);
+    }
+  });
+  function ensureAdminOrderSocket() {
+    if (!window.AdminPersistentCache?.realtime) return Promise.reject(adminOrderTransportError());
+    return window.AdminPersistentCache.realtime.connect().then(socket => { adminOrderSocket = socket; return socket; });
   }
 
   async function sendAdminOrderCommand(url, opts, headers) {
@@ -17921,6 +18071,7 @@
     const socket = await ensureAdminOrderSocket();
     if (token !== localStorage.getItem('authToken') || storeId !== String(localStorage.getItem('activeStoreId') || '1')) throw new Error('ORDER_SCOPE_CHANGED');
     if (socket.readyState !== WebSocket.OPEN) throw adminOrderTransportError();
+    if (opts.checkout && !socket.checkoutCommands) throw new Error("CHECKOUT_SERVER_RESTART_REQUIRED");
     const creating = url === '/api/public/orders';
     const requestId = creating ? headers['Idempotency-Key'] : createOrderSubmissionId();
     if (adminOrderCommands.has(requestId)) throw new Error('ORDER_SUBMISSION_BUSY');
@@ -17933,7 +18084,7 @@
       adminOrderCommands.set(requestId, pending);
       try {
         socket.send(JSON.stringify({type: creating ? 'order.create' : 'order.update', request_id: requestId,
-          order_id: creating ? null : Number(url.split('/').pop()), token, store_id: Number(storeId), body}));
+          order_id: creating ? null : Number(url.split('/').pop()), token, store_id: Number(storeId), body, checkout: opts.checkout || null}));
       } catch (_) {
         clearTimeout(pending.timer);
         adminOrderCommands.delete(requestId);
@@ -17942,7 +18093,19 @@
     });
   }
 
-  async function apiJson(url, opts = {}) {
+  const newOrderReadRequests = new Map();
+  function apiJson(url, opts = {}) {
+    if (String(opts.method || "GET").toUpperCase() !== "GET") return apiJsonTask(url, opts);
+    const key = JSON.stringify([newOrderCacheScopeKey(), localStorage.getItem("authToken"), url, opts.headers || {}]);
+    if (newOrderReadRequests.has(key)) return newOrderReadRequests.get(key);
+    const task = apiJsonTask(url, opts).finally(() => {
+      if (newOrderReadRequests.get(key) === task) newOrderReadRequests.delete(key);
+    });
+    newOrderReadRequests.set(key, task);
+    return task;
+  }
+
+  async function apiJsonTask(url, opts = {}) {
     const token = localStorage.getItem("authToken");
     const storeId = localStorage.getItem("activeStoreId") || "1";
     const headers = {
@@ -17973,13 +18136,24 @@
         }
       }
     }
-    const res = await fetch(url, { method: opts.method || "GET", headers, body: opts.body });
+    const commandFallback = orderCommand && opts.checkout;
+    const res = await fetch(commandFallback ? "/api/admin/orders/checkout" : url, {
+      method: commandFallback ? "POST" : (opts.method || "GET"), headers,
+      body: commandFallback ? JSON.stringify({ type: opts.method === "POST" ? "order.create" : "order.update",
+        order_id: opts.method === "PUT" ? Number(url.split('/').pop()) : null,
+        body: typeof opts.body === "string" ? JSON.parse(opts.body) : opts.body, checkout: opts.checkout }) : opts.body,
+    });
     const data = await res.json().catch(() => null);
     if (!data || data.ok !== true) {
       const error = new Error(data?.error || `API_ERROR_${res.status}`);
       error.httpStatus = res.status;
       error.responseReceived = Boolean(data);
+      error.data = data?.data;
       throw error;
+    }
+    if (!["GET", "HEAD"].includes(String(opts.method || "GET").toUpperCase())) {
+      void window.AdminPersistentCache?.clientData?.mutation(url, opts.method)
+        .catch(error => console.warn("Client cache mutation invalidation failed:", error));
     }
     return data;
   }
@@ -18051,6 +18225,7 @@
       const value = row?.stock_qty == null ? null : Number(row.stock_qty);
       const stockQty = Number.isFinite(value) ? value : null;
       const isAvailable = stockQty == null || stockQty > 0;
+      if (state.inventoryByProductId.get(productId)?.stock_qty !== stockQty) invalidateNewOrderEffectiveStockConfigs([productId]);
       state.inventoryByProductId.set(productId, { stock_qty: stockQty, is_available: isAvailable });
       const cachedProduct = state.productByIdCache.get(productId);
       if (cachedProduct) {
@@ -20755,7 +20930,19 @@
     };
   }
 
-  async function preloadAllCategoryProducts(categoryIds) {
+  const categoryPreloadRequests = new Map();
+  function preloadAllCategoryProducts(categoryIds) {
+    const ids = [...new Set((Array.isArray(categoryIds) ? categoryIds : []).map(Number).filter(id => id > 0))].sort((a, b) => a - b);
+    const key = `${newOrderCacheScopeKey()}:${ids.join(",")}`;
+    if (categoryPreloadRequests.has(key)) return categoryPreloadRequests.get(key);
+    const task = preloadAllCategoryProductsTask(ids).finally(() => {
+      if (categoryPreloadRequests.get(key) === task) categoryPreloadRequests.delete(key);
+    });
+    categoryPreloadRequests.set(key, task);
+    return task;
+  }
+
+  async function preloadAllCategoryProductsTask(categoryIds) {
     const ids = [...new Set((Array.isArray(categoryIds) ? categoryIds : [])
       .map((id) => Number(id || 0))
       .filter((id) => Number.isFinite(id) && id > 0))];
@@ -22852,8 +23039,10 @@
     const scopeKey = newOrderCacheScopeKey();
     const run = () => {
       if (generation !== idleWarmupGeneration || newOrderCacheScopeKey() !== scopeKey) return;
-      if (state.rightDeliverySettingsPromise) return;
-      void ensureRightDeliverySettingsLoaded().catch(() => {});
+      const activeOrder = state.rightOrders.find(order => Number(order.id) === Number(state.rightActiveOrderId));
+      if (!activeOrder || !isNewOrderEditorSurface() || !isDeliveryMethodCode(activeOrder.form?.pickupMethod)
+        || state.rightDeliverySettingsPromise) return;
+      void ensureRightDeliverySettingsLoaded().catch(error => console.error('Delivery preparation failed:', error));
     };
     if (typeof window.requestIdleCallback === "function") {
       window.requestIdleCallback(run, { timeout: 4000 });
@@ -22896,7 +23085,56 @@
     return true;
   }
 
+  const effectiveStockPendingByProductId = new Map();
+  const effectiveStockVerifiedByProductId = new Map();
+  function invalidateNewOrderEffectiveStockConfigs(productIds = null) {
+    const ids = productIds || [...effectiveStockRequestGenerationByProductId.keys()];
+    for (const id of ids.map(Number).filter(id => id > 0)) {
+      effectiveStockVerifiedByProductId.delete(id);
+      effectiveStockPendingByProductId.delete(`${newOrderCacheScopeKey()}:${id}`);
+      effectiveStockRequestGenerationByProductId.set(id, (effectiveStockRequestGenerationByProductId.get(id) || 0) + 1);
+    }
+    if (!productIds) effectiveStockPendingByProductId.clear();
+    void window.CatalogRepository?.invalidateEffectiveStockConfigs?.(ids)
+      .catch(error => console.error('Effective stock cache invalidation failed:', error));
+  }
   async function refreshNewOrderEffectiveStockConfigs(productIds) {
+    const scope = newOrderCacheScopeKey();
+    const ids = [...new Set((Array.isArray(productIds) ? productIds : []).map(Number).filter(id => id > 0))];
+    const candidates = ids.filter(id => effectiveStockVerifiedByProductId.get(id) !== scope);
+    if (candidates.length && window.CatalogRepository?.readEffectiveStockConfigs) {
+      const generations = new Map(candidates.map(id => [id, effectiveStockRequestGenerationByProductId.get(id) || 0]));
+      const saved = await window.CatalogRepository.readEffectiveStockConfigs(candidates);
+      if (scope !== newOrderCacheScopeKey()) return false;
+      const applied = candidates.filter(id => (effectiveStockRequestGenerationByProductId.get(id) || 0) === generations.get(id)
+        && saved[id] && applyNewOrderEffectiveStockConfig(id, saved[id]));
+      applied.forEach(id => effectiveStockVerifiedByProductId.set(id, scope));
+      if (applied.length) {
+        patchActiveCatalogItems(applied);
+        patchCheckoutCatalogItems(applied);
+        reconcileDurableDraftInventory();
+        queueRenderRightOrderTabs();
+      }
+    }
+    const pending = [...new Set(ids.map(id => effectiveStockPendingByProductId.get(`${scope}:${id}`)).filter(Boolean))];
+    const missing = ids.filter(id => effectiveStockVerifiedByProductId.get(id) !== scope
+      && !effectiveStockPendingByProductId.has(`${scope}:${id}`));
+    if (missing.length) {
+      const task = refreshNewOrderEffectiveStockConfigsTask(missing).finally(() => {
+        missing.forEach(id => {
+          if (effectiveStockPendingByProductId.get(`${scope}:${id}`) === task) effectiveStockPendingByProductId.delete(`${scope}:${id}`);
+        });
+      });
+      missing.forEach(id => effectiveStockPendingByProductId.set(`${scope}:${id}`, task));
+      pending.push(task);
+    }
+    const results = await Promise.all(pending);
+    return results.some(Boolean);
+  }
+
+  async function refreshNewOrderEffectiveStockConfigsTask(productIds) {
+    const scope = newOrderCacheScopeKey();
+    const repositoryContext = window.CatalogRepository?.effectiveStockConfigContext?.();
     const ids = [...new Set((Array.isArray(productIds) ? productIds : [])
       .map(Number).filter((id) => Number.isFinite(id) && id > 0))];
     if (!ids.length || !navigator.onLine) return false;
@@ -22913,11 +23151,18 @@
           method: "POST",
           body: JSON.stringify({ ids: chunk }),
         });
+        if (scope !== newOrderCacheScopeKey()) return false;
         const data = json?.data && typeof json.data === "object" ? json.data : {};
         chunk.forEach((id) => {
           if (effectiveStockRequestGenerationByProductId.get(id) !== requestGenerations.get(id)) return;
-          if (applyNewOrderEffectiveStockConfig(id, data[id] || data[String(id)])) appliedIds.push(id);
+          if (applyNewOrderEffectiveStockConfig(id, data[id] || data[String(id)])) {
+            effectiveStockVerifiedByProductId.set(id, scope);
+            appliedIds.push(id);
+          }
         });
+        const saved = Object.fromEntries(chunk.filter(id => effectiveStockVerifiedByProductId.get(id) === scope
+          && effectiveStockRequestGenerationByProductId.get(id) === requestGenerations.get(id)).map(id => [id, data[id] || data[String(id)]]));
+        if (repositoryContext) await window.CatalogRepository.writeEffectiveStockConfigs(saved, repositoryContext);
       }
       if (appliedIds.length) {
         patchActiveCatalogItems(appliedIds);
@@ -23110,7 +23355,9 @@
             if (Number(product?.id || 0) === productId) applyStock(product);
           });
         });
-        window.CatalogRepository?.patchProductAuthoritative?.(productId, { stock_qty: inventory.stock_qty });
+        if (!wasReady || previous.get(productId)?.stock_qty !== inventory.stock_qty) {
+          window.CatalogRepository?.patchProductAuthoritative?.(productId, { stock_qty: inventory.stock_qty });
+        }
       });
       const appliedChangedIds = [];
       changedIds.forEach((productId) => {
@@ -24622,7 +24869,6 @@
       if (productsGridEl.parentElement) productsGridEl.parentElement.scrollTop = Number(src.editorScroll?.catalog || 0);
       if (rightContentEl?.parentElement) rightContentEl.parentElement.scrollTop = Number(src.editorScroll?.order || 0);
     });
-    renderRightOrderTabs();
     state.rightOrders.forEach((row) => {
       const orderId = Number(row?.id || 0);
       if (orderId > 0) scheduleRightOrderBenefitsRefresh(orderId, { delay: 0 });
@@ -24980,34 +25226,77 @@
     return repositoryInventoryRefreshPromise;
   }
   let newOrderStockSocket = null;
+  let deferredCheckoutSettings = null;
   let newOrderStockReconnectTimer = null;
   let newOrderStockRefreshTimer = null;
   const pendingNewOrderStockProductIds = new Set();
 
   function closeNewOrderStockSocket() {
+    invalidateNewOrderEffectiveStockConfigs();
     if (newOrderStockReconnectTimer) clearTimeout(newOrderStockReconnectTimer);
     newOrderStockReconnectTimer = null;
     const socket = newOrderStockSocket;
     newOrderStockSocket = null;
+    deferredCheckoutSettings = null;
     if (socket) {
       try { socket.close(); } catch {}
     }
   }
 
+  let newOrderInventoryRefreshNeeded = false;
   function queueNewOrderStockRefresh(productIds) {
+    newOrderInventoryRefreshNeeded = true;
+    if (productIds?.length) invalidateNewOrderEffectiveStockConfigs(productIds);
     (Array.isArray(productIds) ? productIds : []).forEach((id) => {
       const pid = Number(id || 0);
       if (pid > 0) pendingNewOrderStockProductIds.add(pid);
     });
-    if (newOrderStockRefreshTimer) return;
+    flushNewOrderStockRefresh();
+  }
+  function flushNewOrderStockRefresh() {
+    if (!newOrderInventoryRefreshNeeded || newOrderStockRefreshTimer || !canRunNewOrderBackgroundWork()) return;
     newOrderStockRefreshTimer = setTimeout(() => {
       newOrderStockRefreshTimer = null;
+      if (!canRunNewOrderBackgroundWork()) return;
+      newOrderInventoryRefreshNeeded = false;
       const ids = [...pendingNewOrderStockProductIds];
       pendingNewOrderStockProductIds.clear();
       void Promise.resolve(requestRepositoryInventoryRefresh())
         .then(() => refreshNewOrderEffectiveStockConfigs(ids));
     }, 40);
   }
+
+  function requestNewOrderCheckoutSettings() {
+    const socket = newOrderStockSocket;
+    if (typeof WebSocket !== 'function' || !canRunNewOrderBackgroundWork() || socket?.readyState !== WebSocket.OPEN
+      || checkoutSettingsRequestPending || checkoutSettingsWantedRevision === checkoutSettingsRevision) return;
+    checkoutSettingsRequestPending = true;
+    socket.send(JSON.stringify({ type: "checkout.settings.get" }));
+  }
+
+  function resumeNewOrderBackgroundWork() {
+    if (!canRunNewOrderBackgroundWork()) return;
+    flushNewOrderStockRefresh();
+    if (deferredCheckoutSettings) {
+      const deferred = deferredCheckoutSettings;
+      deferredCheckoutSettings = null;
+      void applyNewOrderCheckoutSettings(deferred.data, deferred.socket, deferred.scope).catch(error => {
+        checkoutSettingsRequestPending = false;
+        console.error('Deferred checkout settings failed:', error);
+      });
+    } else requestNewOrderCheckoutSettings();
+    void Promise.all([loadRightDeliveryTypes(), loadRightTimeOptions(), loadRightOrderStatuses(), loadRightPickupStores(), loadRightPaymentTypes()])
+      .then(() => queueRenderRightOrderTabs()).catch(error => console.error('Editor reference refresh failed:', error));
+    const orderId = Number(state.rightActiveOrderId || 0);
+    if (orderId > 0) {
+      scheduleRightOrderBenefitsRefresh(orderId);
+      const order = state.rightOrders.find(row => Number(row.id) === orderId);
+      if (isDeliveryMethodCode(order?.form?.pickupMethod)) void ensureRightDeliverySettingsLoaded().catch(console.error);
+    }
+  }
+  document.addEventListener('visibilitychange', resumeNewOrderBackgroundWork);
+  document.addEventListener('neworder:editor-layout', event => { if (event.detail?.active) resumeNewOrderBackgroundWork(); });
+  document.addEventListener('admin:payment-visibility', event => { if (!event.detail?.active) resumeNewOrderBackgroundWork(); });
 
   async function applyNewOrderCheckoutSettings(data, socket, scope) {
     await bootstrapDataReadyPromise;
@@ -25023,10 +25312,10 @@
     if (revision !== checkoutSettingsRevision || checkoutSettingsWantedRevision === "resync") {
       // Public delivery methods are site-filtered; keep the full admin list.
       const [deliveryTypes, timeOptions, statuses, stores] = await Promise.all([
-        apiJson("/api/admin/tenant/order-delivery-types"),
-        apiJson("/api/admin/tenant/order-time-options"),
-        apiJson("/api/admin/orders/statuses"),
-        apiJson(`/api/public/tenant/stores?tenant_id=${getTenantIdFromStorage()}`),
+        loadRightOrderReference("order-delivery-types", "/api/admin/tenant/order-delivery-types", "items").then(items => ({ items })),
+        loadRightOrderReference("order-time-options", "/api/admin/tenant/order-time-options", "items").then(items => ({ items })),
+        loadRightOrderReference("order-statuses", "/api/admin/orders/statuses", "data").then(data => ({ data })),
+        loadRightOrderReference("stores", `/api/public/tenant/stores?tenant_id=${getTenantIdFromStorage()}`, "stores").then(stores => ({ stores })),
       ]);
       if (newOrderStockSocket !== socket || scope !== newOrderCacheScopeKey()) return;
       if (/^\d+$/.test(checkoutSettingsWantedRevision) && BigInt(revision) < BigInt(checkoutSettingsWantedRevision)) {
@@ -25074,14 +25363,16 @@
         if (payload?.type === "checkout.settings.version" || payload?.type === "checkout.settings.changed") {
           checkoutSettingsWantedRevision = String(payload.revision || "resync");
           void bootstrapDataReadyPromise.then(() => {
-            if (newOrderStockSocket !== socket || checkoutSettingsRequestPending) return;
-            if (checkoutSettingsWantedRevision === checkoutSettingsRevision) return;
-            checkoutSettingsRequestPending = true;
-            socket.send(JSON.stringify({ type: "checkout.settings.get" }));
+            if (newOrderStockSocket !== socket) return;
+            requestNewOrderCheckoutSettings();
           }).catch(error => console.error("Checkout settings revision:", error));
           return;
         }
         if (payload?.type === "checkout.settings.snapshot") {
+          if (!canRunNewOrderBackgroundWork()) {
+            deferredCheckoutSettings = { data: payload.data, socket, scope: newOrderCacheScopeKey() };
+            return;
+          }
           void applyNewOrderCheckoutSettings(payload.data, socket, newOrderCacheScopeKey()).catch(error => {
             checkoutSettingsRequestPending = false;
             console.error("Checkout settings sync:", error);
@@ -25107,7 +25398,9 @@
     socket.addEventListener("close", () => {
       if (newOrderStockSocket !== socket) return;
       checkoutSettingsRequestPending = false;
+      deferredCheckoutSettings = null;
       rightBenefitsPreviewUpdatedAt.clear();
+      invalidateNewOrderEffectiveStockConfigs();
       newOrderStockSocket = null;
       newOrderStockReconnectTimer = setTimeout(ensureNewOrderStockSocket, 1200 + Math.floor(Math.random() * 800));
     });
@@ -25126,7 +25419,7 @@
       } else if (type === "categories") {
         pendingRepositoryCategories = true;
       } else if (type === "inventory") {
-        void requestRepositoryInventoryRefresh();
+        queueNewOrderStockRefresh(event.ids || []);
         return;
       } else {
         return;
@@ -25161,6 +25454,7 @@
         }
 
         if (productIds.length) {
+          invalidateNewOrderEffectiveStockConfigs(productIds);
           productIds.forEach((productId) => state.effectiveStockConfigByProductId.delete(Number(productId)));
           applyNewOrderRepositoryProductChanges(productIds);
           productIds.forEach((productId) => {
@@ -25257,12 +25551,27 @@
     state.rightDeliverySettingsReady = false;
     state.rightDeliverySettingsPromise = null;
     state.rightDeliverySettingsLoading = false;
-    clientWarmGeneration++;
     state.rightClientLookupCache.clear();
     state.rightClientLookupPromiseByPhone.clear();
     state.rightClientAddressesByClientId.clear();
     state.rightClientAddressesPromiseByClientId.clear();
     state.rightClientAddressesByOrder.clear();
+    state.rightBonusCardByClientId.clear();
+    state.rightBonusCardPromiseByClientId.clear();
+    state.rightBonusCardLoadingByClientId.clear();
+    rightBonusCardDirtyByClientId.clear();
+    rightBenefitsRulesRevisionByClientId.clear();
+    rightBenefitsPreviewUpdatedAt.clear();
+    rightBenefitsPreviewPending.clear();
+    state.rightBenefitsPreviewByOrder.clear();
+    state.rightBenefitsPreviewKeyByOrder.clear();
+    state.rightBenefitsPreviewByClientMode.clear();
+    state.rightBenefitsReqSeqByOrder.clear();
+    state.rightBenefitsLoadingByOrder.clear();
+    if (newOrderStockRefreshTimer) clearTimeout(newOrderStockRefreshTimer);
+    newOrderStockRefreshTimer = null;
+    newOrderInventoryRefreshNeeded = false;
+    pendingNewOrderStockProductIds.clear();
     rightAddressMapModeEnabled=null;
     rightAddressMapModePromise=null;
     closeRightAddressOverlay();
@@ -25272,7 +25581,6 @@
     inventoryRequestGeneration += 1;
     state.inventoryByProductId.clear();
     state.effectiveStockConfigByProductId.clear();
-    effectiveStockRequestGenerationByProductId.clear();
     state.inventoryRevision = null;
     state.inventoryReady = false;
     state.inventoryFreshReady = false;

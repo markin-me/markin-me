@@ -51,6 +51,7 @@
   let scope = null;
   let previousReadScope = null;
   let scopeGeneration = 0;
+  let effectiveConfigGeneration = 0;
   let initPromise = null;
   let persistTimer = null;
   let persistPromise = null;
@@ -2396,6 +2397,48 @@
     foregroundQuietUntil = 0;
   }
 
+  function effectiveStockConfigContext() {
+    return { namespace: scope?.namespace, generation: scopeGeneration, configGeneration: effectiveConfigGeneration,
+      revision: revision(manifest.durableRevision), synchronized: syncState === "online" };
+  }
+  function isCurrentEffectiveStockConfigContext(context) {
+    const current = effectiveStockConfigContext();
+    return context?.synchronized && current.synchronized && context.namespace === current.namespace
+      && context.generation === current.generation && context.configGeneration === current.configGeneration
+      && context.revision === current.revision;
+  }
+  async function readEffectiveStockConfigs(productIds) {
+    await init();
+    const context = effectiveStockConfigContext();
+    if (!scope?.complete || !context.synchronized) return {};
+    const targetScope = scope;
+    const ids = uniqueIds(productIds);
+    const records = await loadPersistentRecords(ids.map(id => `effective-stock:${id}`), targetScope, context.generation);
+    if (!isCurrentEffectiveStockConfigContext(context)) return {};
+    const result = {};
+    for (const id of ids) {
+      const record = records.get(`effective-stock:${id}`);
+      if (record?.revision === context.revision && typeof record.data?.is_fulfillable === "boolean") result[id] = record.data;
+    }
+    return result;
+  }
+  async function writeEffectiveStockConfigs(rows, context) {
+    if (!scope?.complete || !isCurrentEffectiveStockConfigContext(context)) return false;
+    const targetScope = scope;
+    await Promise.all(Object.entries(rows).map(async ([id, data]) => {
+      if (!(Number(id) > 0) || typeof data?.is_fulfillable !== "boolean") return;
+      await targetScope.set(`effective-stock:${id}`, { revision: context.revision, data }, { ttlMs: RECORD_TTL_MS });
+      if (!isCurrentEffectiveStockConfigContext(context)) await targetScope.remove(`effective-stock:${id}`);
+    }));
+    return isCurrentEffectiveStockConfigContext(context);
+  }
+  async function invalidateEffectiveStockConfigs(productIds) {
+    effectiveConfigGeneration += 1;
+    const targetScope = scope;
+    if (!targetScope?.complete) return;
+    await Promise.all(uniqueIds(productIds || []).map(id => targetScope.remove(`effective-stock:${id}`)));
+  }
+
   function subscribe(listener) {
     if (typeof listener !== "function") return function () {};
     listeners.add(listener);
@@ -2418,6 +2461,7 @@
     getTrackedCoverageCategoryIds, getCoverageTargetIds, startDownloadJob, resumeDownloadJob, getDownloadJob, cancelDownloadJob,
     beginForegroundWork, endForegroundWork, withForegroundWork,
     getRootCategoryId, getDescendantCategoryIds, subscribe, getScope, clearRuntime,
+    effectiveStockConfigContext, readEffectiveStockConfigs, writeEffectiveStockConfigs, invalidateEffectiveStockConfigs,
     getCombo, getComboForOrder, getAllCombos, getAffectedComboIds, getAffectedComboIdsForBlocks, getComboBlock, getAllComboBlocks, upsertComboBlock, upsertComboBundle, upsertComboBundles, removeCombo, removeComboBlock, ensureComboBlocks,
     ensureCombos, ensureAllCombos, ensureCombosForCategoryCodes, isComboReady,
     startSync, stopSync, reconcile, getSyncState,

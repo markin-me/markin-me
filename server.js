@@ -2524,9 +2524,9 @@ app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
 });
 
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers, presenceService, ordersEvents }));
-app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers, can }));
+app.use('/api/admin/bonus', authMiddleware, makeAdminBonusRouter({ db, helpers, can, ordersEvents }));
 app.use('/api/admin/subscriptions', authMiddleware, makeAdminSubscriptionsRouter({ db, helpers }));
-app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
+app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers, ordersEvents }));
 app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessagesRouter({
   db,
   helpers,
@@ -2535,6 +2535,16 @@ app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessa
 }));
 const adminOrdersRouter=makeAdminOrdersRouter({db,helpers,ordersEvents,can});
 publicShopRouter.setAbandonedCleanup(()=>adminOrdersRouter.cleanupAbandoned(app.get('paymentServiceClient')));
+app.post('/api/admin/orders/checkout', authMiddleware, requireAdminPermission, (req, res, next) => {
+  const value = req.body || {};
+  if (!['order.create', 'order.update'].includes(value.type) || !value.body || typeof value.body !== 'object'
+    || Array.isArray(value.body) || !value.checkout || typeof value.checkout !== 'object' || Array.isArray(value.checkout)
+    || (value.type === 'order.update' && !(Number(value.order_id) > 0))) return res.status(400).json({ ok: false, error: 'INVALID_CHECKOUT_COMMAND' });
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  dispatchAdminOrderCommand({ type: value.type, body: value.body, checkout: value.checkout,
+    order_id: Number(value.order_id), token, store_id: helpers.getStoreId(req),
+    request_id: req.headers['idempotency-key'] || crypto.randomUUID() }, res).catch(next);
+});
 app.use('/api/admin/orders', authMiddleware, adminOrdersRouter);
 app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers, ordersEvents, can }));
 app.use('/api/admin/payment-connections', authMiddleware, makePaymentConnectionsRouter({ db }));
@@ -2661,6 +2671,7 @@ app.post('/api/admin/analytics/expense-documents/receipts', authMiddleware, asyn
       );
     }
     await connection.commit();
+    ordersEvents.publish(tenantId, 0, 'reference.changed', { names: ['expense-documents'] });
     return res.status(201).json({ ok: true, documentId });
   } catch (error) {
     await connection.rollback();
@@ -2731,6 +2742,7 @@ app.post('/api/admin/analytics/expense-documents/manual', authMiddleware, async 
       [rows]
     );
     await connection.commit();
+    ordersEvents.publish(tenantId, 0, 'reference.changed', { names: ['expense-documents'] });
     return res.status(201).json({ ok: true, documentId });
   } catch (error) {
     await connection.rollback();
@@ -2783,6 +2795,7 @@ app.delete('/api/admin/analytics/expense-documents/:id', authMiddleware, async (
       [documentId, tenantId]
     );
     if (!result?.affectedRows) return res.status(404).json({ ok: false, error: 'DOCUMENT_NOT_FOUND' });
+    ordersEvents.publish(tenantId, 0, 'reference.changed', { names: ['expense-documents'] });
     return res.json({ ok: true });
   } catch (error) {
     console.error('Expense document delete failed:', error);
@@ -3406,18 +3419,24 @@ const server = listenTarget.path
   : app.listen(listenTarget.port, listenTarget.host);
 createStockWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer, submitOrder: publicShopRouter.submitOrder, loadCheckoutSettings: publicShopRouter.loadCheckoutSettings });
 createOrdersWebSocketHub({ server, db, ordersEvents, authenticateCustomer: publicShopRouter.authenticateCustomer });
-createAdminOrderCommandsHub({ server, ordersEvents, dispatch(message, res) {
+const adminCheckoutStep = Symbol('adminCheckoutStep');
+createAdminOrderCommandsHub({ server, ordersEvents, dispatch: dispatchAdminOrderCommand });
+function dispatchAdminOrderCommand(message, res) {
+  if (message.checkout) return completeAdminCheckout(message, res);
   return new Promise((resolve, reject) => {
     res.once('finish', resolve);
     const creating = message.type === 'order.create';
+    const subscription = ['orders.subscribe', 'clients.subscribe', 'references.subscribe'].includes(message.type);
+    const subscriptionPath = message.type === 'clients.subscribe' ? '/clients' : '/orders/changes';
     const req = {
-      app, method: creating ? 'POST' : 'PUT',
-      url: creating ? '/orders' : `/orders/${Number(message.order_id)}`,
-      path: creating ? '/orders' : `/orders/${Number(message.order_id)}`,
+      app, method: subscription ? 'GET' : creating ? 'POST' : 'PUT',
+      url: subscription ? subscriptionPath : creating ? '/orders' : `/orders/${Number(message.order_id)}`,
+      path: subscription ? subscriptionPath : creating ? '/orders' : `/orders/${Number(message.order_id)}`,
       query: {}, params: {}, body: message.body,
+      validateCheckout: typeof message.validateCheckout === 'function' ? message.validateCheckout : null,
       headers: {
         authorization: `Bearer ${String(message.token || '')}`,
-        'x-store-id': String(message.store_id), 'x-rbac-context': 'new-order',
+        'x-store-id': String(message.store_id), 'x-rbac-context': subscription ? (['courier', 'cash'].includes(message.context) ? message.context : message.type === 'clients.subscribe' ? 'marketing' : 'orders') : 'new-order',
         'idempotency-key': message.request_id,
       },
       get(name) { return this.headers[String(name).toLowerCase()]; },
@@ -3437,14 +3456,81 @@ createAdminOrderCommandsHub({ server, ordersEvents, dispatch(message, res) {
         });
       }
       return requireAdminPermission(req, res, () => {
-        req.url = `/${Number(message.order_id)}`;
+        if (subscription) return res.json({ ok: true, data: {
+          tenant_id: helpers.getTenantId(req), store_id: helpers.getStoreId(req),
+          restricted: req.rbacContext === 'courier' || ['assigned', 'own'].includes(String(req.permission?.accessRule || 'all')),
+        } });
+        req.url = message[adminCheckoutStep] ? message.stepPath || `/${Number(message.order_id)}` : `/${Number(message.order_id)}`;
         req.path = req.url;
+        req.method = message[adminCheckoutStep] ? message.stepMethod || req.method : req.method;
         adminOrdersRouter.handle(req, res, fail);
       });
     })).catch(reject);
   });
-} });
+}
 
+// One client command, using the existing authorized calculation/save/payment handlers.
+async function completeAdminCheckout(message, res) {
+  const { EventEmitter } = require('events');
+  const step = async (changes) => {
+    const response = new EventEmitter();
+    response.statusCode = 200;
+    response.headersSent = false;
+    const headers = new Map();
+    response.setHeader = (name, value) => headers.set(String(name).toLowerCase(), value);
+    response.getHeader = name => headers.get(String(name).toLowerCase());
+    response.status = code => { response.statusCode = code; return response; };
+    let result;
+    response.json = json => { if (response.headersSent) return response; result = json; response.headersSent = true; response.emit('finish'); return response; };
+    response.end = () => response.json({ ok: false, error: 'CHECKOUT_STEP_EMPTY' });
+    await dispatchAdminOrderCommand({ ...message, checkout: null, ...changes, [adminCheckoutStep]: true }, response);
+    return { status: response.statusCode, json: result };
+  };
+  let saved = null;
+  try {
+    const checkout = message.checkout;
+    const validateCheckout = async (targetRes) => {
+      // Edits use the existing order update handler; do not gate saving on a second benefits preview.
+      if (message.type === 'order.update' || !checkout.preview) return true;
+      const draft = { ...checkout.preview, customer_id: message.body.customer_id,
+        method_code: message.body.method_code, exclude_order_id: message.type === 'order.update' ? Number(message.order_id) : null };
+      const preview = await step({ type: 'order.update', stepMethod: 'POST', stepPath: '/benefits/preview', body: draft });
+      if (!preview.json?.ok) { targetRes.status(preview.status).json(preview.json); return false; }
+      const actual = Number(preview.json.data?.summary?.items_total);
+      const expected = Number(checkout.expectedItemsTotal);
+      if (!Number.isFinite(actual) || !Number.isFinite(expected) || Math.abs(actual - expected) > 0.01) {
+        targetRes.status(409).json({ ok: false, error: 'ORDER_PRICING_CHANGED', data: { preview: preview.json.data } });
+        return false;
+      }
+      return true;
+    };
+    const result = await step({ validateCheckout });
+    if (!result.json?.ok) return res.status(result.status).json(result.json);
+    saved = result.json;
+    const id = Number(saved.data?.id || message.order_id);
+    let operationError = null;
+    let finalOrder = saved.data?.order || null;
+    if (Number(checkout.statusId) > 0) {
+      const status = await step({ type: 'order.update', order_id: id, stepPath: `/${id}/status`, body: { status_id: Number(checkout.statusId) } });
+      if (!status.json?.ok) operationError = { stage: 'status', error: status.json?.error || 'STATUS_SAVE_FAILED' };
+      else if (Array.isArray(status.json.data?.items)) finalOrder = status.json.data;
+    }
+    if (!operationError && checkout.payment) {
+      const payment = await step({ type: 'order.update', order_id: id, stepPath: `/${id}/paid`, body: checkout.payment });
+      if (!payment.json?.ok) operationError = { stage: 'payment', error: payment.json?.error || 'PAYMENT_SAVE_FAILED' };
+      else if (Array.isArray(payment.json.data?.items)) finalOrder = payment.json.data;
+    }
+    const snapshot = finalOrder ? { json: { ok: true, data: finalOrder } }
+      : await step({ type: 'order.update', order_id: id, stepMethod: 'GET', stepPath: `/${id}`, body: {} });
+    return res.json({ ...saved, data: { ...saved.data, checkoutCompleted: !operationError,
+      operationError, order: snapshot.json?.ok ? snapshot.json.data : null,
+      snapshotError: snapshot.json?.ok ? null : snapshot.json?.error || 'ORDER_SNAPSHOT_UNAVAILABLE' } });
+  } catch (error) {
+    if (saved) return res.json({ ...saved, data: { ...saved.data, checkoutCompleted: false,
+      operationError: { stage: 'completion', error: error.code || error.message || 'CHECKOUT_COMPLETION_FAILED' } } });
+    throw error;
+  }
+}
 
 server.on('listening', () => {
   require('./api/printPush').setPrintEventsHub(ordersEvents);

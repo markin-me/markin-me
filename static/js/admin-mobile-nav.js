@@ -53,7 +53,76 @@
   let pendingRightView = null;
   let lastRightView = null;
   let navigationRevision = 0;
+  let scrollRestorePending = false;
   const scrollSelector = '.panel-body, .no-scrollbar, .orders-list, .products-grid, .clients-list, .team-editor-scroll';
+
+  const accordionSelector = '.acc-item, details';
+  let accordionStorageKey = '';
+  let accordionState = {};
+
+  function loadAccordionState() {
+    const identity = window.AdminPersistentCache?.currentIdentity?.() || {};
+    accordionStorageKey = ['admin:accordions:v1', identity.userId || '', identity.tenantId || '', identity.storeId || '', location.pathname].join(':');
+    try { accordionState = JSON.parse(sessionStorage.getItem(accordionStorageKey) || '{}') || {}; }
+    catch (error) { console.warn('Accordion state could not be read', error); accordionState = {}; }
+  }
+
+  function accordionKey(item) {
+    const trigger = item.matches('details') ? null : item.querySelector('[data-acc-trigger]');
+    const panel = trigger && item.querySelector('[data-acc-panel]');
+    if (!item.matches('details') && (!trigger || !panel)) return null;
+    const parts = [];
+    let node = item;
+    while (node && node !== body) {
+      if (node.id) { parts.unshift('#' + node.id); break; }
+      parts.unshift(node.tagName + ':' + Array.prototype.indexOf.call(node.parentElement.children, node));
+      node = node.parentElement;
+    }
+    const entity = rightColumn.contains(item) ? selectedRightTabSignature() || '' : '';
+    return entity + ':' + (trigger?.dataset.rbacNode || parts.join('/'));
+  }
+
+  function restoreAccordions(root) {
+    if (!root?.isConnected) return;
+    const items = root.matches?.(accordionSelector) ? [root, ...root.querySelectorAll(accordionSelector)] : root.querySelectorAll(accordionSelector);
+    items.forEach((item) => {
+      const key = accordionKey(item);
+      if (!key) return;
+      const saved = accordionState[key];
+      if (item.matches('details')) {
+        if (typeof saved === 'boolean' && item.open !== saved) item.open = saved;
+        return;
+      }
+      const trigger = item.querySelector('[data-acc-trigger]');
+      const panel = item.querySelector('[data-acc-panel]');
+      const open = typeof saved === 'boolean' ? saved : panel.classList.contains('is-open') || trigger.classList.contains('is-open');
+      trigger.classList.toggle('is-open', open);
+      panel.classList.toggle('is-open', open);
+      // An open panel must keep its contents visible even when measured in a hidden column.
+      panel.style.maxHeight = open ? 'none' : '0px';
+    });
+  }
+
+  function rememberAccordion(item) {
+    if (!item?.isConnected) return;
+    const key = accordionKey(item);
+    if (!key) return;
+    accordionState[key] = item.matches('details') ? item.open : Boolean(item.querySelector('[data-acc-panel]')?.classList.contains('is-open'));
+    try { sessionStorage.setItem(accordionStorageKey, JSON.stringify(accordionState)); }
+    catch (error) { console.warn('Accordion state could not be saved', error); }
+  }
+
+  document.addEventListener('click', (event) => {
+    const trigger = event.target.closest('[data-acc-trigger]');
+    const item = trigger?.closest('.acc-item');
+    // Capture runs before module click handlers; save after the complete event dispatch.
+    if (item) setTimeout(() => rememberAccordion(item), 0);
+  }, true);
+  document.addEventListener('toggle', (event) => {
+    if (event.target.matches?.('details')) rememberAccordion(event.target);
+  }, true);
+  document.addEventListener('tenantStoreChanged', () => { loadAccordionState(); restoreAccordions(document.querySelector('.main-container')); });
+  window.addEventListener('pageshow', () => restoreAccordions(document.querySelector('.main-container')));
 
   function captureViewScroll(view = viewStack[viewStack.length - 1]) {
     if (!view || !isMobile()) return;
@@ -65,6 +134,7 @@
   }
 
   function restoreViewScroll(view) {
+    scrollRestorePending = true;
     const revision = ++navigationRevision;
     window.requestAnimationFrame(function () {
       if (revision !== navigationRevision) return;
@@ -80,6 +150,8 @@
         nodes.forEach(function (node) { node.scrollTop = 0; });
         window.scrollTo(0, 0);
       }
+      scrollRestorePending = false;
+      document.dispatchEvent(new CustomEvent('admin:mobile-view-restored', { detail: { level: currentLevel } }));
     });
   }
 
@@ -301,6 +373,7 @@
     currentLevel = nextLevel;
     body.classList.remove("admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");
     body.classList.add("admin-mobile-pages", "admin-mobile-view-" + nextLevel);
+    restoreAccordions(nextLevel === 'right' ? rightColumn : nextLevel === 'center' ? centerColumn : leftColumn);
     if (isEditorNavigation()) document.dispatchEvent(new CustomEvent('neworder:editor-view'));
     titleNode.textContent = String(title || rootTitle).trim() || rootTitle;
     const isRoot = nextLevel === getRootLevel() && !mobileSubview;
@@ -475,6 +548,7 @@
   window.addEventListener("pageshow", syncViewport);
   window.__adminMobilePages = {
     rememberRightView,
+    isRestoringScroll: function () { return scrollRestorePending; },
     forgetRightView: function (key) {
       if (pendingRightView?.key === key) pendingRightView = null;
       if (lastRightView?.key === key) lastRightView = null;
@@ -615,11 +689,13 @@
     gesture.source = mobileSubview?.element || (gesture.fromCenter ? centerColumn : rightColumn);
     if (direction < 0) gesture.preview = rightColumn;
     else if (mobileSubview) gesture.preview = previous?.subview?.element || (currentLevel === 'center' ? centerColumn : rightColumn);
+    else if (!usesDedicatedMobileNavigation() && previous?.level === 'left') gesture.preview = leftColumn;
     else if (!usesDedicatedMobileNavigation() && previous?.level === 'center') gesture.preview = centerColumn;
+    else if (usesDedicatedMobileNavigation() && gesture.fromCenter) gesture.preview = leftColumn;
     else if (usesDedicatedMobileNavigation() && !body.classList.contains('chat-right-order-mode')) gesture.preview = centerColumn;
     if (gesture.preview === gesture.source) gesture.preview = null;
     // Local Back actions replace content in the same column; do not preview a different column.
-    if (direction > 0 && ['settingsDeliveryZoneColorEditorBackBtn', 'clientOrderBackBtn'].some((id) => document.getElementById(id)?.getClientRects().length)) gesture.preview = null;
+    if (direction > 0 && (gesture.fromCenter ? ['clientsToolbarBackBtn'] : ['settingsDeliveryZoneColorEditorBackBtn', 'clientOrderBackBtn']).some((id) => document.getElementById(id)?.getClientRects().length)) gesture.preview = null;
     const rect = gesture.source.getBoundingClientRect();
     gesture.width = rect.width;
     captureViewScroll();
@@ -632,6 +708,7 @@
       node.style.setProperty('--admin-swipe-width', rect.width + 'px');
       node.style.setProperty('--admin-swipe-height', Math.max(0, window.innerHeight - Math.max(0, rect.top)) + 'px');
       node.classList.add('admin-swipe-preview');
+      restoreAccordions(node);
     }
   }
   function finishSwipe(commit) {
@@ -671,7 +748,7 @@
       node = node.parentElement;
     }
     const touch = event.touches[0];
-    backGesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, dx: 0, time: event.timeStamp, fromCenter };
+    backGesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, dx: 0, time: event.timeStamp, fromCenter, canBackFromCenter: fromCenter && window.__adminMobilePages.canGoBack() };
   }, { capture: true, passive: true });
   document.addEventListener('touchmove', function (event) {
     const gesture = backGesture;
@@ -683,7 +760,7 @@
     if (!gesture.source) {
       if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { clearSwipe(); return; }
       if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
-      if (gesture.fromCenter ? dx >= 0 : dx <= 0) { clearSwipe(); return; }
+      if (gesture.fromCenter ? dx > 0 && !gesture.canBackFromCenter : dx <= 0) { clearSwipe(); return; }
       if (!event.cancelable) { clearSwipe(); return; }
       event.preventDefault();
       startSwipe(gesture, dx < 0 ? -1 : 1);
@@ -724,5 +801,16 @@
     history.pushState({ ...history.state, adminMobileBack: true }, '', location.href);
     goBack();
   });
+  loadAccordionState();
+  const accordionRoot = document.querySelector('.main-container');
+  restoreAccordions(accordionRoot);
+  if (accordionRoot) {
+    const accordionObserver = new MutationObserver((records) => {
+      records.forEach((record) => record.addedNodes.forEach((node) => {
+        if (node.nodeType === 1) restoreAccordions(node);
+      }));
+    });
+    accordionObserver.observe(accordionRoot, { childList: true, subtree: true });
+  }
   syncViewport();
 })();

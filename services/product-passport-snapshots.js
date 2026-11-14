@@ -208,7 +208,7 @@ async function markRelatedProductsDirty({ db, tenantId, storeId, productIds, cat
   return related;
 }
 
-async function prepareRelatedProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert' }) {
+async function prepareRelatedProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert', pendingCatalogChanges = null }) {
   const related = await resolveRelatedProductIds({ db, tenantId, productIds });
   if (!related.length) return [];
   await db.query(
@@ -220,7 +220,7 @@ async function prepareRelatedProductsDirty({ db, tenantId, storeId, productIds, 
   );
   if (catalogChangeScope === 'store') {
     await catalogSync.recordScopeChanges({
-      db, tenantId, storeId, entityType: 'product', operation, deferEmit: true,
+      db, tenantId, storeId, entityType: 'product', operation, deferEmit: true, pendingChanges: pendingCatalogChanges,
     }, related);
   }
   return related;

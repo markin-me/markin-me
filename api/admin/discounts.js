@@ -2186,7 +2186,7 @@ async function generateUniquePromoCodes(conn, { tenantId, storeId, discountId, c
   return created;
 }
 
-module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
+module.exports = function makeAdminDiscountsRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
 
   async function resolveCatalogDiscountProductIds(tenantId, storeId, discountId) {
@@ -2241,6 +2241,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         await productPassportSnapshots.markProductsDirty({
           db, tenantId, storeId, productIds, catalogChangeScope: 'store',
         });
+        ordersEvents?.publish(tenantId, 0, 'reference.changed', { names: ['client-benefits'], store_id: storeId });
         return originalJson(payload);
       } catch (error) {
         console.error('discount catalog change recording failed:', error);

@@ -1918,8 +1918,16 @@
   }
 
   async function apiGetProductionZones() {
-    return api("/api/admin/tenant/production-zones");
+    return window.AdminReferenceCache.getOrLoadReference("production-zones", {
+      load: () => api("/api/admin/tenant/production-zones"),
+      validate: (result) => result?.ok === true && Array.isArray(result?.data?.zones),
+    });
   }
+
+  document.addEventListener("admin:reference-changed", (event) => {
+    if (!event.detail?.resync && !event.detail?.names?.includes("production-zones")) return;
+    state.productionZonesLoaded = false;
+  });
 
   async function apiGetComboBlocks() {
     if (window.CatalogRepository) {

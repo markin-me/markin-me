@@ -1,4 +1,5 @@
 function createOrdersEventsHub() {
+  const epoch = require('crypto').randomUUID();
   const channels = new Map();
   const waiters = new Map();
   const subscribers = new Map();
@@ -39,6 +40,10 @@ function createOrdersEventsHub() {
       Array.from(set).forEach((resolveWaiter) => {
         try { resolveWaiter({ timeout: false, cursor: payload.id }); } catch {}
       });
+    }
+    // Orders change personal usage limits, bonus balances and progress together.
+    if ((event === 'order.created' || event === 'order.updated') && Number(data?.customer_id) > 0) {
+      publish(tenantId, 0, 'reference.changed', { names: ['client-benefits'], customer_id: Number(data.customer_id) });
     }
   }
 
@@ -145,6 +150,7 @@ function createOrdersEventsHub() {
 
   return {
     publish,
+    getEpoch: () => epoch,
     getChanges,
     getCurrentCursor,
     getOldestCursor,

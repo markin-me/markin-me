@@ -384,7 +384,12 @@
     if (orderDetailsRevalidation.has(runtimeKey)) return orderDetailsRevalidation.get(runtimeKey);
     const startGeneration = orderDetailsMutationGeneration.get(runtimeKey) || 0;
     let superseded = false;
-    const promise = apiJson(`/api/admin/orders/${id}`)
+    const loader = () => apiJson(`/api/admin/orders/${id}`);
+    const passport = window.AdminPersistentCache?.orderPassport;
+    const request = passport?.load
+      ? passport.load(id, () => loader().then(json => json.data), { cache: context.cache, force: true }).then(data => ({ data }))
+      : loader();
+    const promise = request
       .then(async (json) => {
         const fullOrder = json?.data || null;
         if (!isFullOrder(fullOrder)) return null;
@@ -748,6 +753,7 @@
     draggingOrderIds: [],
     selectedOrderIds: new Set(),
     lastEventId: null,
+    lastEventEpoch: null,
     storeTimezone: "+0",
     tenantSounds: {},
     storeAddressMapEnabled: false,
@@ -5072,6 +5078,7 @@
       loading: false,
     };
     state.lastEventId = Number(snapshot.syncCursor || 0) || null;
+    state.lastEventEpoch = snapshot.syncEpoch || null;
     ordersPersistentCacheRestored = true;
     courierCachedSnapshotVisible = isCourierWorkspace;
     ordersCachedSnapshotVisible = !isCourierWorkspace;
@@ -5086,6 +5093,7 @@
       orders: state.orders.map((order) => ({ ...order })),
       pagination: { hasMore: state.ordersPagination.hasMore, nextOffset: state.ordersPagination.nextOffset },
       syncCursor: Number(state.lastEventId || 0),
+      syncEpoch: state.lastEventEpoch,
       query: currentOrdersQuery(),
       statuses: Array.isArray(state.statuses) ? state.statuses.map((status) => ({ ...status })) : [],
       updatedAt: Date.now(),
@@ -6841,7 +6849,8 @@
   // -----------------------------
   // Data loading
   // -----------------------------
-  async function loadStatuses({ context = null } = {}) {
+  async function loadStatuses({ context = null, force = false } = {}) {
+    if (!force && state.statuses.length && orderStageCountersQueryKey === currentOrdersQueryKey()) return true;
     const countersRevision=orderStageCountersRevision;
     const scopeRevision=orderStatusScopeRevision;
     const dateKey=currentOrdersQueryKey();
@@ -7216,20 +7225,6 @@
   // -----------------------------
   // SSE
   // -----------------------------
-  let stageRefreshTimer = null;
-  function scheduleStageRefresh() {
-    if (stageRefreshTimer) return;
-    stageRefreshTimer = setTimeout(async () => {
-      stageRefreshTimer = null;
-      try {
-        await loadStatuses();
-        renderStages();
-      } catch (e) {
-        console.error(e);
-      }
-    }, 200);
-  }
-
   let audioUnlocked = false;
 
   function unlockAudioOnce() {
@@ -7461,6 +7456,7 @@
     const rows = Array.isArray(changes) ? changes : [];
     const createdOrders = [];
     rows.forEach((evt) => {
+      if (!/^order\./.test(String(evt?.event || ""))) return;
       const eventOrderId = Number(evt?.data?.id || 0);
       const hadOrder = eventOrderId > 0 && state.orders.some((row) => Number(row?.id || 0) === eventOrderId);
       const nextOrder = handleOrderEvent(evt?.data, { persistList: false });
@@ -7493,6 +7489,7 @@
     const cursor = Number(json?.cursor || 0);
     return {
       changes: Array.isArray(json?.data) ? json.data : [],
+      epoch: json?.epoch || null,
       cursor: Number.isFinite(cursor) && cursor > 0 ? cursor : 0,
       resetRequired: json?.reset_required === true,
       reason: String(json?.reason || "").trim() || null,
@@ -7503,7 +7500,11 @@
     const since = Number(state.lastEventId || 0);
     const payload = await fetchOrdersChanges(since);
     if (context && !isCurrentCourierSyncContext(context)) return { ...payload, obsolete: true };
+    if (state.lastEventEpoch && payload.epoch && state.lastEventEpoch !== payload.epoch) {
+      return { ...payload, resetRequired: true, reason: 'server_restarted' };
+    }
     if (payload.resetRequired) return payload;
+    state.lastEventEpoch = payload.epoch || state.lastEventEpoch;
     if (payload.changes.length) {
       applyOrdersChangesEvents(payload.changes, { notifyCreated, advanceCursor: false, persist: false });
     }
@@ -7513,6 +7514,7 @@
     }
     const persisted = await persistOrdersListCache();
     if (!persisted) throw new Error("ORDERS_RECONCILIATION_PERSIST_FAILED");
+    window.AdminPersistentCache?.clientData?.setOrdersSynchronized(true);
     if (!isCourierWorkspace) {
       ordersNetworkConfirmed = true;
       ordersRefreshFailed = false;
@@ -7524,7 +7526,7 @@
   async function bootstrapOrdersData({ keepSelection = false, preserveExisting = false, context = null } = {}) {
     if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
     if (ordersPersistentCacheRestored && Number(state.lastEventId || 0) > 0) {
-      await loadStatuses({ context });
+      await loadStatuses({ context, force: true });
       if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       ensureActiveStatusSelection();
       const synced = await synchronizeOrdersChanges({ notifyCreated: false, context });
@@ -7539,10 +7541,11 @@
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const bootstrap = await fetchOrdersChanges(0);
       if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
+      state.lastEventEpoch = bootstrap.epoch || null;
       const snapshotCursor = Number(bootstrap.cursor || 0);
       state.lastEventId = snapshotCursor > 0 ? snapshotCursor : null;
 
-      await loadStatuses({ context });
+      await loadStatuses({ context, force: true });
       if (context && !isCurrentCourierSyncContext(context)) return { obsolete: true };
       ensureActiveStatusSelection();
       ordersPersistentCacheRestored = false;
@@ -7739,135 +7742,74 @@
     });
   }
 
-  let ordersLongPollActive = false;
-  let ordersLongPollToken = 0;
-  let ordersWaitAbortController = null;
-
-  async function waitOrdersChanges(since, timeoutMs = 20000) {
-    const qs = new URLSearchParams({
-      since: String(Number(since || 0)),
-      timeout_ms: String(Math.max(1000, Number(timeoutMs || 20000))),
-      _ts: String(Date.now()),
-    });
-    const controller = new AbortController();
-    ordersWaitAbortController = controller;
-    try {
-      const json = await apiJson(`/api/admin/orders/changes/wait?${qs.toString()}`, {
-        signal: controller.signal,
-      });
-      const data = json?.data || {};
-      return {
-        changed: data.changed === true,
-        timeout: data.timeout === true,
-        cursor: Number(data.cursor || 0),
-        resetRequired: data.reset_required === true,
-        reason: String(data.reason || "").trim() || null,
-      };
-    } finally {
-      if (ordersWaitAbortController === controller) {
-        ordersWaitAbortController = null;
-      }
-    }
-  }
-
+  let ordersRealtimeUnsubscribe = null;
+  let ordersRealtimeSerial = Promise.resolve();
+  let ordersRealtimeGeneration = 0;
   function startOrdersPolling() {
-    if(!isCourierWorkspace)void orderStatusQueue.restore();
-    if (ordersLongPollActive) return;
-    if (isCourierWorkspace && courierOfflineState.reconciling) return;
-    if (document.visibilityState && document.visibilityState !== "visible") return;
-    ordersLongPollActive = true;
-    ordersLongPollToken += 1;
-    const token = ordersLongPollToken;
-    const syncContext = courierSyncContext();
-    const courierContext = isCourierWorkspace ? syncContext : null;
-
-    const tickChanges = async () => {
-      while (ordersLongPollActive && token === ordersLongPollToken) {
-        warmOrderPrintOptions();
-        try {
-          const waited = await waitOrdersChanges(state.lastEventId || 0, 20000);
-          if (!ordersLongPollActive || token !== ordersLongPollToken) return;
-          if (!isCurrentCourierSyncContext(syncContext)) return;
-
-          if (courierContext && (waited.changed || waited.resetRequired)) {
-            stopOrdersPolling();
-            await reconcileCourierAfterReconnect({ reason: "long-poll" });
-            return;
-          }
-
-          if (waited.resetRequired) {
-            await bootstrapOrdersData({
-              keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
-              preserveExisting: true,
-              context: syncContext,
-            });
-            continue;
-          }
-
-          if (waited.changed) {
-            const synced = await synchronizeOrdersChanges({ notifyCreated: true, context: syncContext });
-            if (synced?.obsolete) return;
-            if (synced.resetRequired) {
-              await bootstrapOrdersData({
-                keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
-                preserveExisting: true,
-                context: syncContext,
-              });
-            }
-          }
-        } catch (e) {
-          if (isAbortError(e)) return;
-          if (courierContext && isLikelyNetworkError(e)) {
-            stopOrdersPolling();
-            void reconcileCourierAfterReconnect({ reason: "poll-recovery" });
-            return;
-          }
-          console.error(e);
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
+    if (!isCourierWorkspace) void orderStatusQueue.restore();
+    if (ordersRealtimeUnsubscribe || (isCourierWorkspace && courierOfflineState.reconciling)) return;
+    if (document.visibilityState === 'hidden') return;
+    const realtime = window.AdminPersistentCache?.realtime;
+    if (!realtime) throw new Error('ADMIN_REALTIME_UNAVAILABLE');
+    const generation = ++ordersRealtimeGeneration;
+    const context = courierSyncContext();
+    ordersRealtimeUnsubscribe = realtime.subscribe('orders', () => ({
+      since: Number(state.lastEventId || 0), epoch: state.lastEventEpoch,
+      context: isCourierWorkspace ? 'courier' : 'orders',
+    }), message => {
+      if (message.type === 'connection.closed' || message.type === 'orders.error') {
+        window.AdminPersistentCache?.clientData?.setOrdersSynchronized(false);
+        if (message.error) console.error('Orders subscription failed:', message.error);
+        return;
       }
-    };
-
-    void tickChanges();
+      ordersRealtimeSerial = ordersRealtimeSerial.then(async () => {
+        if (generation !== ordersRealtimeGeneration || !isCurrentCourierSyncContext(context)) return;
+        const reset = message.reset_required || message.type === 'orders.invalidate';
+        if (reset) {
+          window.AdminPersistentCache?.clientData?.setOrdersSynchronized(false);
+          ordersPersistentCacheRestored = false;
+          state.lastEventId = null; state.lastEventEpoch = message.epoch || state.lastEventEpoch;
+          if (isCourierWorkspace) {
+            stopOrdersPolling(); await reconcileCourierAfterReconnect({ reason: 'socket-resync' });
+          } else {
+            await bootstrapOrdersData({ keepSelection: true, preserveExisting: true, context });
+          }
+          return;
+        }
+        const changes = message.type === 'orders.event' ? [message.event] : message.changes || [];
+        const unseen = changes.filter(event => Number(event.id) > Number(state.lastEventId || 0));
+        if (unseen.length) applyOrdersChangesEvents(unseen, { notifyCreated: true, advanceCursor: true, persist: false });
+        if (message.type === 'orders.ready') {
+          state.lastEventEpoch = message.epoch;
+          state.lastEventId = Math.max(Number(state.lastEventId || 0), Number(message.cursor || 0));
+          window.AdminPersistentCache?.clientData?.setOrdersSynchronized(true);
+        }
+        if (unseen.length || message.type === 'orders.ready') {
+          if (!await persistOrdersListCache()) throw new Error('ORDERS_RECONCILIATION_PERSIST_FAILED');
+        }
+      }).catch(error => {
+        window.AdminPersistentCache?.clientData?.setOrdersSynchronized(false);
+        console.error('Orders realtime apply failed:', error);
+      });
+      return ordersRealtimeSerial;
+    });
   }
-
   function stopOrdersPolling() {
-    if (ordersWaitAbortController) {
-      try { ordersWaitAbortController.abort(); } catch {}
-      ordersWaitAbortController = null;
-    }
-    ordersLongPollActive = false;
-    ordersLongPollToken += 1;
+    ordersRealtimeGeneration++;
+    ordersRealtimeUnsubscribe?.(); ordersRealtimeUnsubscribe = null;
+    window.AdminPersistentCache?.clientData?.setOrdersSynchronized(false);
   }
 
   async function resumeOrdersRealtime() {
-    if (document.visibilityState && document.visibilityState !== "visible") return;
+    if (document.visibilityState === "hidden") return;
     if (isCourierWorkspace) {
       await reconcileCourierAfterReconnect({ reason: "visible" });
       void prewarmCourierOrderDetails();
       return;
     }
-    const context = courierSyncContext();
-    try {
-      if (!state.lastEventId) {
-        await bootstrapOrdersData({
-          keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
-          context,
-        });
-      } else {
-        const synced = await synchronizeOrdersChanges({ notifyCreated: false, context });
-        if (synced?.resetRequired) {
-          await bootstrapOrdersData({
-            keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId),
-            preserveExisting: true,
-            context,
-          });
-        }
-      }
-    } catch (err) {
-      if (!isAbortError(err)) {
-        console.error(err);
-      }
+    // The subscription replays missed events; HTTP is only for an absent/reset snapshot.
+    if (!state.lastEventEpoch) {
+      await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId), context: courierSyncContext() });
     }
     startOrdersPolling();
   }
@@ -7877,7 +7819,6 @@
       stopOrdersPolling();
       return;
     }
-    warmOrderPrintOptions();
     Promise.resolve()
       .finally(() => {
         if (isCourierWorkspace) {
@@ -8239,14 +8180,36 @@
     else { renderOrderTabs(); schedulePersistOrdersCache(); }
   });
 
-  document.addEventListener("neworder:order-submitted", (evt) => {
+  document.addEventListener("neworder:order-submitted", async (evt) => {
     const updatedId = Number(evt.detail?.updatedOrderId || 0);
+    const savedId = updatedId || Number(evt.detail?.createdOrderId || 0);
     const activeTab = updatedId > 0
       ? tabsState.tabs.find(tab => Number(tab.orderId) === updatedId && normalizeTabMode(tab.mode) === 'edit')
       : tabsState.tabs.find(tab => tab.key === tabsState.activeKey);
-    if (!activeTab || !isCheckoutTab(activeTab)) return;
-    closeOrderTab(activeTab.key, { editorExit: true });
-    bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) }).catch(console.error);
+    if (!activeTab || !isCheckoutTab(activeTab) || !(savedId > 0)) return;
+    if (evt.detail?.order) handleOrderEvent(evt.detail.order, { skipStageRefresh: true });
+    activeTab.orderId = savedId;
+    activeTab.mode = "view";
+    activeTab.checkoutSession = null;
+    activeTab.checkoutSessionHydrating = false;
+    const savedOrder = evt.detail?.order || state.orders.find(order => Number(order.id) === savedId) || null;
+    activeTab.order = savedOrder || { ...activeTab.order, id: savedId };
+    activeTab.title = buildOrderTabTitle(activeTab.order);
+    if (!updatedId) {
+      const oldKey = activeTab.key;
+      activeTab.key = buildOrderTabKey(savedId);
+      if (tabsState.activeKey === oldKey) tabsState.activeKey = activeTab.key;
+      if (mountedCheckoutTabKey === oldKey) mountedCheckoutTabKey = null;
+      window.__adminMobilePages?.forgetRightView('orders:' + oldKey);
+    }
+    if (tabsState.activeKey === activeTab.key) {
+      await setActiveOrderTab(activeTab.key, { openMobile: true });
+      if (document.body.classList.contains('page-chat')) {
+        await window.__adminChatMobileApi?.openSelectedRightPanel({ orderId: savedId });
+      } else {
+        window.__adminMobilePages?.openRight();
+      }
+    } else { renderOrderTabs(); schedulePersistOrdersCache(); }
   });
 
   closeButtons.forEach((btn) => btn.addEventListener("click", clearSelection));
@@ -8500,14 +8463,16 @@
     });
   }
 
+  document.addEventListener('admin:reference-changed', event => {
+    if (!(event.detail?.names || []).includes('order-references')) return;
+    void loadStatuses({ force: true }).then(() => renderStages()).catch(console.error);
+  });
   let printOptionsWarmScope = '';
-  let printOptionsWarmAt = 0;
   function warmOrderPrintOptions() {
     if (!workspaceCapabilities.print || navigator.onLine === false || document.visibilityState === 'hidden') return;
     const scopeKey = printOptionsScopeKey();
-    if (scopeKey === printOptionsWarmScope && Date.now() - printOptionsWarmAt < 60000) return;
+    if (scopeKey === printOptionsWarmScope) return;
     printOptionsWarmScope = scopeKey;
-    printOptionsWarmAt = Date.now();
     void getOrderPrintOptions().catch(error => {
       console.error('Не удалось обновить настройки печати:', error);
     });

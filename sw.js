@@ -49,12 +49,17 @@ self.addEventListener("fetch", function (event) {
   }
 
   if (isStaticAssetRequest(requestUrl)) {
-    event.respondWith(staleWhileRevalidate(request, CORE_CACHE_NAME));
+    event.respondWith(requestUrl.searchParams.get('v') && request.cache !== 'reload' && request.cache !== 'no-store'
+      ? versionedAsset(request, CORE_CACHE_NAME)
+      : staleWhileRevalidate(request, CORE_CACHE_NAME));
     return;
   }
 
   if (isFontAwesomeRequest(requestUrl)) {
-    event.respondWith(staleWhileRevalidate(request, FONT_CACHE_NAME));
+    var immutableFont = /\/ajax\/libs\/[^/]+\/\d+\.\d+\.\d+(?:[-+][^/]+)?\//.test(requestUrl.pathname);
+    event.respondWith(immutableFont && request.cache !== 'reload' && request.cache !== 'no-store'
+      ? versionedAsset(request, FONT_CACHE_NAME)
+      : staleWhileRevalidate(request, FONT_CACHE_NAME));
   }
 });
 
@@ -336,6 +341,15 @@ async function networkFirst(request, cacheName) {
     if (cachedResponse) return cachedResponse;
     throw error;
   }
+}
+
+async function versionedAsset(request, cacheName) {
+  var cache = await caches.open(cacheName);
+  var cachedResponse = await cache.match(request);
+  if (cachedResponse) return cachedResponse;
+  var response = await fetch(request);
+  if (shouldCacheResponse(response)) await cache.put(request, response.clone());
+  return response;
 }
 
 async function staleWhileRevalidate(request, cacheName) {

@@ -54,8 +54,6 @@
     var clientDiscountsEmpty = document.getElementById('clientDiscountsEmpty');
     if (!journalListEl) return;
 
-    var WAIT_TIMEOUT_MS = 20000;
-    var WAIT_RETRY_MS = 1500;
     var CASH_WORKSPACE_DOMAIN = 'cash:workspace';
     var CASH_WORKSPACE_VERSION = 1;
     var CASH_WORKSPACE_KEY = 'last-workspace';
@@ -69,8 +67,8 @@
       { value: 'other', label: 'Другая сумма' },
     ];
     var clickTimer = null;
-    var waitAbortController = null;
     var expenseDocumentSwipeStart = null;
+    var expenseDocumentsRefreshRequested = false;
     var state = {
       statuses: [],
       orders: [],
@@ -95,6 +93,7 @@
       storeTimezone: '+0',
       activeOrderId: 0,
       eventsCursor: 0,
+      eventsEpoch: null,
       waitLoopToken: 0,
       loading: false,
       loadPromise: null,
@@ -162,18 +161,6 @@
           return json;
         });
       });
-    }
-
-    function sleepMs(ms) {
-      return new Promise(function (resolve) { window.setTimeout(resolve, Math.max(0, Number(ms || 0))); });
-    }
-
-    function isAbortError(err) {
-      if (!err) return false;
-      var name = String(err.name || '').toLowerCase();
-      if (name === 'aborterror') return true;
-      var message = String(err.message || '').toLowerCase();
-      return message.indexOf('aborted') !== -1;
     }
 
     function money(value) {
@@ -251,6 +238,7 @@
         paymentMethods: Array.isArray(state.paymentMethods) ? state.paymentMethods.slice() : [],
         storeTimezone: String(state.storeTimezone || '+0'),
         syncCursor: Number(state.eventsCursor || 0),
+        syncEpoch: state.eventsEpoch,
         updatedAt: Date.now(),
       };
       return context.cache.set(CASH_WORKSPACE_KEY, snapshot, { ttlMs: CASH_WORKSPACE_TTL_MS })
@@ -278,6 +266,7 @@
       state.paymentMethods = Array.isArray(snapshot.paymentMethods) ? snapshot.paymentMethods.slice() : [];
       state.storeTimezone = String(snapshot.storeTimezone || '+0');
       state.eventsCursor = Number(snapshot.syncCursor || 0);
+      state.eventsEpoch = snapshot.syncEpoch || null;
       cashSnapshotVisible = true;
       return true;
     }
@@ -3458,6 +3447,10 @@
         state.expenseDocumentsLoadPromise = null;
         state.expenseDocumentsRequestKey = '';
         if (state.currentSection === 'expenses') renderJournal();
+        if (expenseDocumentsRefreshRequested) {
+          expenseDocumentsRefreshRequested = false;
+          void refreshVisibleExpenseDocuments();
+        }
       });
       state.expenseDocumentsLoadPromise = requestPromise;
       return requestPromise;
@@ -3788,7 +3781,8 @@
       if (navigator.onLine === false) return Promise.resolve(false);
       return apiJson('/api/admin/orders/changes?since=0').then(function (json) {
         var cursor = Number(json && json.cursor || 0);
-        if (Number.isFinite(cursor) && cursor > 0) state.eventsCursor = cursor;
+        if (Number.isFinite(cursor) && cursor >= 0) state.eventsCursor = cursor;
+        state.eventsEpoch = json && json.epoch || null;
         return persistCashWorkspace();
       }).catch(function (err) {
         console.error('cash events bootstrap error:', err);
@@ -3800,10 +3794,15 @@
       return apiJson('/api/admin/orders/changes?since=' + String(Number(state.eventsCursor || 0))).then(function (json) {
         if (!isCurrentCashContext(context)) return;
         var cursor = Number(json && json.cursor || 0);
-        if (json && json.reset_required === true) {
-          state.eventsCursor = Number.isFinite(cursor) && cursor > 0 ? cursor : 0;
-          return persistCashWorkspace(context);
+        if (json && (json.reset_required === true || (state.eventsEpoch && json.epoch !== state.eventsEpoch))) {
+          return loadOrders().then(function () { return loadPeriodAggregate(); }).then(function (ok) {
+            if (ok !== true || !isCurrentCashContext(context)) throw new Error('CASH_RESYNC_FAILED');
+            state.eventsCursor = Number.isFinite(cursor) && cursor > 0 ? cursor : 0;
+            state.eventsEpoch = json.epoch || null;
+            return persistCashWorkspace(context);
+          });
         }
+        state.eventsEpoch = json && json.epoch || state.eventsEpoch;
         var nextCursor = Number(state.eventsCursor || 0);
         if (Number.isFinite(cursor) && cursor > 0) nextCursor = Math.max(nextCursor, cursor);
         var changes = Array.isArray(json && json.data) ? json.data : [];
@@ -3828,74 +3827,66 @@
       });
     }
 
-    function waitForOrderChanges() {
-      var qs = new URLSearchParams({
-        since: String(Number(state.eventsCursor || 0)),
-        timeout_ms: String(WAIT_TIMEOUT_MS),
-        _ts: String(Date.now()),
-      });
-      var controller = new AbortController();
-      waitAbortController = controller;
-      return apiJson('/api/admin/orders/changes/wait?' + qs.toString(), { signal: controller.signal }).then(function (json) {
-        return json && json.data ? json.data : {};
-      }).finally(function () {
-        if (waitAbortController === controller) {
-          waitAbortController = null;
-        }
-      });
-    }
-
+    var cashOrdersUnsubscribe = null;
+    var cashOrdersSerial = Promise.resolve();
     function stopWaitLoop() {
       state.waitLoopToken += 1;
-      if (waitAbortController) {
-        try { waitAbortController.abort(); } catch {}
-        waitAbortController = null;
-      }
+      if (cashOrdersUnsubscribe) cashOrdersUnsubscribe();
+      cashOrdersUnsubscribe = null;
     }
 
     function startWaitLoop() {
-      if (navigator.onLine === false) return;
-      if (document.visibilityState && document.visibilityState !== 'visible') return;
+      if (cashOrdersUnsubscribe || navigator.onLine === false || document.visibilityState === 'hidden') return;
+      var realtime = window.AdminPersistentCache && window.AdminPersistentCache.realtime;
+      if (!realtime) throw new Error('ADMIN_REALTIME_UNAVAILABLE');
       var token = ++state.waitLoopToken;
-      (async function runWaitLoop() {
-        if (!(Number(state.eventsCursor || 0) > 0)) await bootstrapEventsCursor();
-        while (token === state.waitLoopToken) {
-          if (navigator.onLine === false) return;
-          try {
-            var data = await waitForOrderChanges();
-            var cursor = Number(data && data.cursor || 0);
-            if (data && data.reset_required === true) {
-              stopWaitLoop();
-              await refreshCashWorkspace(cashSyncContext());
-              return;
-            }
-            if (data && data.changed === true) {
-              try {
-                await fetchOrderChanges();
-              } catch (deltaErr) {
-                console.error('cash changes fetch error:', deltaErr);
-                await loadOrders();
-              }
-            } else if (Number.isFinite(cursor) && cursor > 0 && !(Number(state.eventsCursor || 0) > 0)) {
-              state.eventsCursor = cursor;
-              await persistCashWorkspace();
-            } else if (!data || data.timeout !== true) {
-              await sleepMs(WAIT_RETRY_MS);
-            }
-          } catch (err) {
-            if (isAbortError(err)) return;
-            if (navigator.onLine === false) {
-              stopWaitLoop();
-              cashRefreshFailed = false;
-              refreshCashConnectionBanner();
-              return;
-            }
-            console.error('cash wait loop error:', err);
-            await sleepMs(WAIT_RETRY_MS);
-          }
+      var context = cashSyncContext();
+      cashOrdersUnsubscribe = realtime.subscribe('orders', function () {
+        return { since: Number(state.eventsCursor || 0), epoch: state.eventsEpoch, context: 'cash' };
+      }, function (message) {
+        if (message.type === 'connection.closed' || message.type === 'orders.error') {
+          cashNetworkConfirmed = false;
+          if (message.error) console.error('Cash subscription failed:', message.error);
+          refreshCashConnectionBanner();
+          return;
         }
-      })().catch(function (err) {
-        console.error('cash wait init error:', err);
+        cashOrdersSerial = cashOrdersSerial.then(async function () {
+          if (token !== state.waitLoopToken || !isCurrentCashContext(context)) return;
+          if (message.reset_required || message.type === 'orders.invalidate') {
+            state.eventsCursor = 0;
+            state.eventsEpoch = message.epoch || null;
+            stopWaitLoop();
+            await loadOrders();
+            if (isCurrentCashContext(context)) await refreshCashWorkspace(context);
+            return;
+          }
+          var changes = message.type === 'orders.event' ? [message.event] : message.changes || [];
+          var cursor = Number(state.eventsCursor || 0);
+          var changed = false;
+          changes.forEach(function (event) {
+            if (Number(event.id) <= cursor) return;
+            cursor = Math.max(cursor, Number(event.id || 0));
+            if (/^order\./.test(event.event) && applyOrderChange(event.data)) changed = true;
+          });
+          if (changed && await loadPeriodAggregate() !== true) throw new Error('CASH_DELTA_AGGREGATE_REFRESH_FAILED');
+          if (token !== state.waitLoopToken || !isCurrentCashContext(context)) return;
+          if (message.type === 'orders.ready') {
+            cursor = Math.max(cursor, Number(message.cursor || 0));
+            state.eventsEpoch = message.epoch;
+            cashNetworkConfirmed = true;
+            cashRefreshFailed = false;
+          }
+          state.eventsCursor = cursor;
+          await persistCashWorkspace(context);
+          if (changed) renderAll();
+          refreshCashConnectionBanner();
+        }).catch(function (error) {
+          cashNetworkConfirmed = false;
+          cashRefreshFailed = true;
+          refreshCashConnectionBanner();
+          console.error('Cash event apply failed:', error);
+        });
+        return cashOrdersSerial;
       });
     }
 
@@ -4002,11 +3993,7 @@
       });
     }
 
-    document.addEventListener('expense-documents-changed', function () {
-      loadExpenseDocuments().then(function () {
-        if (state.currentSection === 'expenses') renderAll();
-      }).catch(function (error) { console.error('expense documents refresh error:', error); });
-    });
+    document.addEventListener('expense-documents-changed', refreshVisibleExpenseDocuments);
 
 
     if (orderFilterWrapEl) {
@@ -4392,12 +4379,20 @@
       void refreshCashWorkspace(cashSyncContext());
     });
 
-    window.setInterval(function () {
+    function refreshVisibleExpenseDocuments() {
       if (document.visibilityState !== 'visible' || state.currentSection !== 'expenses') return;
-      loadExpenseDocuments().then(function (changed) {
+      if (state.expenseDocumentsLoadPromise) {
+        expenseDocumentsRefreshRequested = true;
+        return state.expenseDocumentsLoadPromise;
+      }
+      return loadExpenseDocuments().then(function (changed) {
         if (changed) renderAll();
-      }).catch(function (error) { console.error('expense documents background refresh error:', error); });
-    }, 3000);
+      }).catch(function (error) { console.error('expense documents event refresh error:', error); });
+    }
+    document.addEventListener('admin:reference-changed', function (event) {
+      if ((event.detail && event.detail.names || []).indexOf('expense-documents') !== -1) refreshVisibleExpenseDocuments();
+    });
+    document.addEventListener('visibilitychange', refreshVisibleExpenseDocuments);
 
     window.addEventListener('pagehide', function () {
       stopWaitLoop();
@@ -4434,6 +4429,7 @@
       cashPassportChecksInFlight.clear();
       state.activeOrderId = 0;
       state.eventsCursor = 0;
+      state.eventsEpoch = null;
       tabsState.tabs = [];
       tabsState.activeKey = null;
       cashSnapshotVisible = false;

@@ -102,7 +102,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         [tenantId, storeId, productId, nextQty]
       );
 
+      const pendingCatalogChanges = [];
       const affectedProductIds = await productPassportSnapshots.prepareRelatedProductsDirty({
+        pendingCatalogChanges,
         db: conn,
         tenantId,
         storeId,
@@ -116,6 +118,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         entityType: 'product',
         operation: 'upsert',
         deferEmit: true,
+        pendingChanges: pendingCatalogChanges,
       }, affectedProductIds);
       await catalogSync.recordScopeChanges({
         db: conn,
@@ -124,10 +127,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         entityType: 'inventory',
         operation: 'stock',
         deferEmit: true,
+        pendingChanges: pendingCatalogChanges,
       }, affectedProductIds);
 
       await conn.commit();
       transactionStarted = false;
+      catalogSync.publishCommittedChanges(pendingCatalogChanges);
       productPassportSnapshots.activatePreparedProductsDirty({
         tenantId,
         storeId,

@@ -44,6 +44,7 @@ const {
   applyStockDeductionForOrderItems,
   buildStockAvailabilityForOrderItems,
   checkStockAvailabilityForOrderItems,
+  createStockAvailabilityContext,
 } = require('../helpers/orderStock');
 const {
   registerCheckoutBenefitsPreviewProvider,
@@ -4283,6 +4284,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     }
   });
 
+  function publishCustomerBenefitsAfterResponse(res, tenantId, customerId) {
+    if (!(Number(customerId) > 0)) return;
+    res.once('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        ordersEvents?.publish(tenantId, 0, 'reference.changed', { names: ['client-benefits'], customer_id: Number(customerId) });
+      }
+    });
+  }
+
   router.post('/bonus/join', async (req, res) => {
     let conn = null;
     try {
@@ -4291,6 +4301,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
       const customerId = Number(customer.id || 0);
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
       const incomingReferralCode = getIncomingReferralCode(req);
       if (incomingReferralCode) {
@@ -4552,6 +4563,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const customerId = Number(customer?.id || 0);
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
       const levelId = Number(req.body?.level_id || req.body?.levelId || 0);
       if (!(levelId > 0)) return res.status(400).json({ ok: false, error: 'INVALID_LEVEL' });
@@ -17567,6 +17579,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!ids.length) return res.json({ ok: true, data: {} });
       if (ids.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
 
+      const stockContext = createStockAvailabilityContext({ db, tenantId, storeId });
+
       const toNum = (v, fallback = 0) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -18202,6 +18216,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             let check = null;
             while (true) {
               check = await checkStockAvailabilityForOrderItems({
+                context: stockContext,
                 db, tenantId, storeId,
                 items: [{ product_id: Number(item.target_product_id), qty: Number(item.qty || 1), variants: variant, ingredients: candidateIngredients }],
               });
@@ -18326,6 +18341,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
         const isFulfillable = async (candidate, ingredientIndexes) => {
           const check = await checkStockAvailabilityForOrderItems({
+            context: stockContext,
             db, tenantId, storeId,
             items: [{
               product_id: Number(pid), qty: 1,
@@ -21178,8 +21194,35 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       .filter(Boolean);
   }
 
+  function getCheckoutBenefitsNextChangeAt(discounts, rewards, startedAt) {
+    const now = new Date(startedAt);
+    const midnight = new Date(now);
+    midnight.setHours(24, 0, 0, 0);
+    let next = midnight.getTime();
+    const include = value => {
+      const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+      if (Number.isFinite(time) && time > startedAt) next = Math.min(next, time);
+    };
+    for (const discount of discounts || []) {
+      if (discount.starts_at) include(discount.starts_at);
+      if (discount.ends_at) include(new Date(new Date(discount.ends_at).getTime() + 1));
+      for (const [field, inclusive] of [['schedule_time_start', false], ['schedule_time_end', true]]) {
+        const match = String(discount[field] || '').match(/^(\d{1,2}):(\d{2})/);
+        if (!match) continue;
+        const boundary = new Date(now);
+        boundary.setHours(Number(match[1]), Number(match[2]) + (inclusive ? 1 : 0), 0, 0);
+        include(boundary);
+      }
+    }
+    for (const reward of rewards || []) {
+      if (reward.expires_at) include(new Date(new Date(reward.expires_at).getTime() + 1));
+    }
+    return new Date(next).toISOString();
+  }
+
   function buildCheckoutBenefitsClientCalculationMatrix({
     scopeKey = '',
+    validUntil = null,
     subtotalBeforeDiscount,
     itemsBaseTotal,
     methodCode,
@@ -21334,6 +21377,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     return {
       version: 2,
+      valid_until: validUntil,
       scope_key: publicDiscountText(scopeKey),
       discount_rules: discountRules,
       promo_rules: promoRules,
@@ -21406,6 +21450,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     draft,
     mode = 'customer',
   }) {
+    const calculationStartedAt = Date.now();
     const customerId = Number(customer?.id || 0) || null;
     const normalizedDraft = draft && typeof draft === 'object' ? draft : {};
     const excludeOrderId = Number(normalizedDraft?.exclude_order_id || 0) || null;
@@ -22371,6 +22416,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     });
     const clientCalculation = buildCheckoutBenefitsClientCalculationMatrix({
       scopeKey: clientCalculationScopeKey,
+      validUntil: getCheckoutBenefitsNextChangeAt(benefitDiscountRows, rewardRows, calculationStartedAt),
       subtotalBeforeDiscount,
       itemsBaseTotal,
       methodCode,
@@ -22885,6 +22931,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const rewardId = Number(req.body?.reward_id || 0);
       if (!(rewardId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'REWARD_INVALID' });
@@ -22984,6 +23031,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const rewardId = Number(req.body?.reward_id || 0);
       if (!(rewardId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'REWARD_INVALID' });
@@ -23072,6 +23120,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const promoCodeId = Number(req.body?.promo_code_id || 0);
       if (!(promoCodeId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
@@ -23227,6 +23276,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const discountId = Number(req.body?.discount_id || 0);
       if (!(discountId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
@@ -23362,6 +23412,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const discountId = Number(req.body?.discount_id || 0);
       if (!(discountId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'DISCOUNT_INVALID' });
@@ -23701,6 +23752,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           });
         }
       }
+      if (typeof req.validateCheckout === 'function' && !await req.validateCheckout(res)) return;
       await ensureOrderDeliveryTypeColumns();
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 

@@ -1162,8 +1162,21 @@
     var isPaidOrderFn = typeof options.isPaidOrder === 'function' ? options.isPaidOrder : isPaidOrder;
     var submitPayload = typeof options.submitPayload === 'function' ? options.submitPayload : null;
     var onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : function () {};
-    var onOpen = typeof options.onOpen === 'function' ? options.onOpen : function () {};
-    var onClose = typeof options.onClose === 'function' ? options.onClose : function () {};
+    var paymentVisible = false;
+    var onOpen = function () {
+      paymentVisible = true;
+      document.body.classList.add('admin-payment-open');
+      document.dispatchEvent(new CustomEvent('admin:payment-visibility', { detail: { active: true } }));
+      if (typeof options.onOpen === 'function') options.onOpen();
+    };
+    var onClose = function () {
+      if (paymentVisible) {
+        paymentVisible = false;
+        document.body.classList.remove('admin-payment-open');
+        document.dispatchEvent(new CustomEvent('admin:payment-visibility', { detail: { active: false } }));
+      }
+      if (typeof options.onClose === 'function') options.onClose();
+    };
     var onError = typeof options.onError === 'function'
       ? options.onError
       : function (err) { console.error('shared order payment error:', err); };
@@ -1244,6 +1257,7 @@
 
   function open(options) {
     options = options || {};
+    var preparationStarted = performance.now();
     var order = options.order || null;
     var apiJson = options.apiJson;
     var collectPayloadOnly = !!options.collectPayloadOnly;
@@ -1351,6 +1365,11 @@
                 finish(payload);
                 return true;
               }
+              var operationStarted = performance.now();
+              var operationCompleted = false;
+              function reportOperationTiming() {
+                console.info('[order-timing]', { stage: mode === 'refund' ? 'save-refund' : 'save-payment-dialog', orderId: orderId, durationMs: Math.round(performance.now() - operationStarted), completed: operationCompleted });
+              }
               if (submitPayload) {
                 return Promise.resolve(submitPayload({
                   mode: mode,
@@ -1361,13 +1380,14 @@
                   var data = result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'data')
                     ? result.data
                     : result;
+                  operationCompleted = true;
                   if (data) onSuccess(data);
                   finish(data);
                   return true;
                 }).catch(function (err) {
                   controller.setError(translateOrderSettlementError(err, mode));
                   return false;
-                });
+                }).finally(reportOperationTiming);
               }
               return apiJson(
                 mode === 'refund'
@@ -1379,13 +1399,14 @@
                 }
               ).then(function (json) {
                 var data = json && json.data || null;
+                operationCompleted = true;
                 onSuccess(data);
                 finish(data);
                 return true;
               }).catch(function (err) {
                 controller.setError(translateOrderSettlementError(err, mode));
                 return false;
-              });
+              }).finally(reportOperationTiming);
             },
             onClose: function () {
               toggleCashPaymentModalSkin(false);
@@ -1394,6 +1415,7 @@
             },
           });
           onOpen();
+          console.info('[order-timing]', { stage: 'open-payment-dialog', orderId: orderId, durationMs: Math.round(performance.now() - preparationStarted) });
         });
       });
     }).catch(function (err) {
