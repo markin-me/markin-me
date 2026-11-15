@@ -25,11 +25,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     });
   }
 
-  async function applyInlineStockAdjustment(req, { tenantId, storeId, productId, stockQty }) {
-    let conn = null;
+  async function applyInlineStockAdjustment(req, { tenantId, storeId, productId, stockQty, connection = null }) {
+    let conn = connection;
     let transactionStarted = false;
     try {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      for (let attempt = 0; !connection && attempt < 2; attempt += 1) {
         const candidate = await db.getConnection();
         try {
           await candidate.ping();
@@ -43,8 +43,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         }
       }
       if (!conn) throw new Error('DB_CONNECTION_UNAVAILABLE');
-      await conn.beginTransaction();
-      transactionStarted = true;
+      if (!connection) {
+        await conn.beginTransaction();
+        transactionStarted = true;
+      }
 
       const [rows] = await conn.query(
         `SELECT p.id, p.unit_id, p.base_unit_id, p.cost_price, p.price, s.qty AS stock_qty
@@ -57,7 +59,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         [storeId, tenantId, productId]
       );
       if (!rows.length) {
-        await conn.rollback();
+        if (!connection) await conn.rollback();
         transactionStarted = false;
         return { notFound: true };
       }
@@ -66,7 +68,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const previousQty = product.stock_qty == null ? null : Number(product.stock_qty);
       const nextQty = stockQty == null ? null : Number(stockQty);
       if (previousQty === nextQty) {
-        await conn.commit();
+        if (!connection) await conn.commit();
         transactionStarted = false;
         return { changed: false, previousQty, stockQty: nextQty };
       }
@@ -130,20 +132,23 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         pendingChanges: pendingCatalogChanges,
       }, affectedProductIds);
 
-      await conn.commit();
+      if (!connection) await conn.commit();
       transactionStarted = false;
-      catalogSync.publishCommittedChanges(pendingCatalogChanges);
-      productPassportSnapshots.activatePreparedProductsDirty({
-        tenantId,
-        storeId,
-        productIds: affectedProductIds,
-      });
+      if (!connection) {
+        catalogSync.publishCommittedChanges(pendingCatalogChanges);
+        productPassportSnapshots.activatePreparedProductsDirty({
+          tenantId,
+          storeId,
+          productIds: affectedProductIds,
+        });
+      }
       return {
         changed: true,
         documentId: Number(documentResult.insertId),
         previousQty,
         stockQty: nextQty,
         affectedProductIds,
+        pendingCatalogChanges,
       };
     } catch (error) {
       if (transactionStarted && conn) {
@@ -153,7 +158,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       }
       throw error;
     } finally {
-      if (conn) {
+      if (conn && !connection) {
         try { conn.release(); } catch (_) {}
       }
     }
@@ -549,6 +554,60 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
   function normalizeProductFulfillmentMode(value) {
     return String(value || "").trim() === "made_to_order" ? "made_to_order" : "stock";
+  }
+
+  function validateProductPreorder(body, current = {}) {
+    const hasMode = Object.prototype.hasOwnProperty.call(body, 'sale_mode');
+    const hasSettings = Object.prototype.hasOwnProperty.call(body, 'preorder_settings_json');
+    const mode = hasMode ? body.sale_mode : (current.sale_mode || 'order');
+    const invalid = (message) => ({ error: 'BAD_PREORDER_SETTINGS', message });
+    if (!['order', 'preorder'].includes(mode)) return invalid('Неизвестный режим продажи.');
+    let settings = hasSettings ? body.preorder_settings_json : current.preorder_settings_json;
+    if (typeof settings === 'string') {
+      try { settings = JSON.parse(settings); } catch (_) { return invalid('Некорректный JSON условий предзаказа.'); }
+    }
+    if (settings == null) {
+      return mode === 'preorder' ? invalid('Заполните условия предзаказа.') : { mode, settings: null, hasMode, hasSettings };
+    }
+    const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
+    const validDate = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      && Number(value.slice(0, 4)) >= 1000 && Number(value.slice(0, 4)) <= 9999
+      && Number.isFinite(Date.parse(`${value}T00:00:00Z`))
+      && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+    const period = (value) => validDate(value.start) && validDate(value.end) && value.start <= value.end;
+    if (!object(settings) || settings.version !== 1 || !Number.isSafeInteger(settings.lead_hours) || settings.lead_hours <= 0) {
+      return invalid('Минимальный интервал должен быть целым положительным числом часов.');
+    }
+    const acceptance = settings.acceptance;
+    const receipt = settings.receipt;
+    if (!object(acceptance) || !['any', 'period'].includes(acceptance.mode)
+      || (acceptance.mode === 'period' && !period(acceptance))) return invalid('Укажите корректный период приёма предзаказов.');
+    if (!object(receipt) || !['any', 'period', 'dates'].includes(receipt.mode)
+      || (receipt.mode === 'period' && !period(receipt))) return invalid('Укажите корректный период получения.');
+    if (!Array.isArray(receipt.weekdays) || receipt.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) {
+      return invalid('Некорректные дни недели для получения.');
+    }
+    if (!Array.isArray(receipt.dates) || receipt.dates.some((date) => !validDate(date))
+      || (receipt.mode === 'dates' && !receipt.dates.length)) return invalid('Выберите корректные даты получения.');
+    const weekdays = [...new Set(receipt.weekdays)].sort((a, b) => a - b);
+    const dates = [...new Set(receipt.dates)].sort();
+    const allowedWeekday = (date) => !weekdays.length || weekdays.includes((new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7);
+    if (receipt.mode === 'dates' && !dates.some(allowedWeekday)) return invalid('Выбранные даты не пересекаются с днями получения.');
+    if (receipt.mode === 'period' && weekdays.length) {
+      const start = new Date(`${receipt.start}T00:00:00Z`);
+      let intersects = false;
+      for (let offset = 0; offset < 7; offset++) {
+        const date = new Date(start.getTime() + offset * 86400000).toISOString().slice(0, 10);
+        if (date > receipt.end) break;
+        if (allowedWeekday(date)) { intersects = true; break; }
+      }
+      if (!intersects) return invalid('Период не пересекается с днями получения.');
+    }
+    return { mode, hasMode, hasSettings, settings: {
+      version: 1, lead_hours: settings.lead_hours,
+      acceptance: { mode: acceptance.mode, start: acceptance.mode === 'period' ? acceptance.start : null, end: acceptance.mode === 'period' ? acceptance.end : null },
+      receipt: { mode: receipt.mode, start: receipt.mode === 'period' ? receipt.start : null, end: receipt.mode === 'period' ? receipt.end : null, dates: receipt.mode === 'dates' ? dates : [], weekdays },
+    } };
   }
 
   function readProductNutritionNumber(value) {
@@ -1601,7 +1660,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
           : (categoryCodes.length ? ` AND c.category_code IN (${categoryCodes.map(() => '?').join(',')})` : ''));
       const [combos] = await db.query(
         `SELECT c.id, c.tenant_id, c.title, c.description, c.discount_percent, c.category_code,
-                c.image_url, c.is_active, c.sort_order, c.created_at, c.updated_at
+                c.image_url, c.is_active, c.sale_mode, c.preorder_settings_json, c.sort_order, c.created_at, c.updated_at
            FROM prod_combos c
           WHERE c.tenant_id=?${filterSql}
           ORDER BY c.sort_order ASC, c.id ASC`,
@@ -2429,7 +2488,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         `SELECT p.id, p.name, p.sku, p.description_short, p.description, p.price, p.old_price,
                 p.promo_enabled, p.promo_title, p.promo_discount_percent, p.cost_price,
                 p.unit_id, p.base_unit_id, p.base_qty, p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent, p.photos_json, p.blocks_config_json, p.is_active, p.site_visibility,
-                p.fulfillment_mode,
+                p.fulfillment_mode, p.sale_mode, p.preorder_settings_json,
                 p.production_zone_id,
                 p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
                 p.client_composition, p.tech_process,
@@ -2579,7 +2638,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         p.unit_id, p.base_unit_id, p.base_qty,
         p.photos_json, p.blocks_config_json,
         p.is_active, p.site_visibility,
-        p.fulfillment_mode,
+        p.fulfillment_mode, p.sale_mode, p.preorder_settings_json,
         p.production_zone_id,
         p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
         p.client_composition, p.tech_process,
@@ -2823,18 +2882,20 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const photosArr = helpers.safeJsonArray(req.body.photos_json || req.body.photos);
       const photos_json = photosArr.length ? JSON.stringify(photosArr.slice(0, 10)) : null;
 
+      const preorder = validateProductPreorder(req.body);
+      if (preorder.error) return res.status(400).json({ ok: false, ...preorder });
       const [result] = await db.query(
         `INSERT INTO prod_products
           (tenant_id, name, sku, description_short, description, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json, is_active, site_visibility,
            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
-           show_description_short, show_description, show_client_composition, show_tech_process)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           show_description_short, show_description, show_client_composition, show_tech_process, sale_mode, preorder_settings_json)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
           price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
-          show_description_short, show_description, show_client_composition, show_tech_process
+          show_description_short, show_description, show_client_composition, show_tech_process, preorder.mode, preorder.settings == null ? null : JSON.stringify(preorder.settings)
         ]
       );
 
@@ -2927,7 +2988,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       // Запоминаем файлы фото, которые были удалены пользователем.
       // Физически удаляем их только после успешного сохранения товара.
       const [oldRows] = await db.query(
-        'SELECT photos_json FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
+        'SELECT photos_json, sale_mode, preorder_settings_json FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
       );
       if (oldRows.length) {
@@ -2936,18 +2997,21 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         removedPhotos = oldPhotos.filter((u) => !newSet.has(u));
       }
 
+      const preorder = validateProductPreorder(req.body, oldRows[0]);
+      if (preorder.error) return res.status(400).json({ ok: false, ...preorder });
+
       await db.query(
         `UPDATE prod_products
          SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, promo_enabled=?, promo_title=?, promo_discount_percent=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, production_zone_id=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
              nutrition_protein_100g=?, nutrition_fat_100g=?, nutrition_carbs_100g=?, client_composition=?, tech_process=?,
-             show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?, updated_at=CURRENT_TIMESTAMP
+             show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?, sale_mode=?, preorder_settings_json=?, updated_at=CURRENT_TIMESTAMP
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
           price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
-          show_description_short, show_description, show_client_composition, show_tech_process,
+          show_description_short, show_description, show_client_composition, show_tech_process, preorder.mode, preorder.settings == null ? null : JSON.stringify(preorder.settings),
           tenantId, id
         ]
       );
@@ -2980,6 +3044,89 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     }
   });
 
+  router.patch('/prod_products/bulk', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const storeId = getRequestedCatalogStoreId(req);
+    const items = req.body?.items;
+    if (!Array.isArray(items) || !items.length || items.length > 1000
+      || items.some(item => !Number.isSafeInteger(item?.id) || item.id <= 0)
+      || new Set(items.map(item => item.id)).size !== items.length) {
+      return res.status(400).json({ ok:false, error:'BAD_BULK_UPDATE', message:'Некорректный список выбранных товаров.' });
+    }
+    let conn = null;
+    const adjustments = [];
+    let committed = false;
+    const invalid = message => { const error = new Error(message); error.code = 'BAD_BULK_UPDATE'; throw error; };
+    try {
+      if (!(await hasCatalogStoreScope(tenantId,storeId))) return res.status(404).json({ok:false,error:'STORE_NOT_FOUND'});
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+      const ids = items.map(item => item.id).sort((a,b)=>a-b);
+      const [rows] = await conn.query(`SELECT id, sale_mode, preorder_settings_json FROM prod_products WHERE tenant_id=? AND id IN (${ids.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`,[tenantId,...ids]);
+      if (rows.length !== ids.length) invalid('Один из выбранных товаров больше недоступен.');
+      const current = new Map(rows.map(row=>[Number(row.id),row]));
+      const allowed = new Set(['id','is_active','site_visibility','fulfillment_mode','production_zone_id','stock','category_ids','sale_mode','preorder_settings_json']);
+      for (const item of items.slice().sort((a,b)=>a.id-b.id)) {
+        if (Object.keys(item).some(key=>!allowed.has(key))) invalid('Недопустимое поле массового изменения.');
+        const updates = [], params = [];
+        for (const field of ['is_active','site_visibility']) if (Object.hasOwn(item,field)) {
+          if (![0,1].includes(item[field])) invalid('Некорректное значение переключателя.');
+          updates.push(`${field}=?`); params.push(item[field]);
+        }
+        if (Object.hasOwn(item,'fulfillment_mode')) {
+          if (!['stock','made_to_order'].includes(item.fulfillment_mode)) invalid('Некорректный учёт и списание.');
+          if (item.fulfillment_mode === 'made_to_order') {
+            const [ingredients] = await conn.query('SELECT ingredient_id FROM prod_product_ingredients WHERE tenant_id=? AND product_id=? LIMIT 1',[tenantId,item.id]);
+            if (!ingredients.length) invalid(`Для товара ${item.id} нужно заполнить состав.`);
+          }
+          updates.push('fulfillment_mode=?'); params.push(item.fulfillment_mode);
+        }
+        if (Object.hasOwn(item,'production_zone_id')) {
+          const zone = item.production_zone_id;
+          if (zone !== null) {
+            if (!Number.isSafeInteger(zone) || zone <= 0) invalid('Некорректная зона производства.');
+            const [zones] = await conn.query('SELECT id FROM prod_production_zones WHERE tenant_id=? AND id=? AND is_active=1',[tenantId,zone]);
+            if (!zones.length) invalid('Зона производства недоступна.');
+          }
+          updates.push('production_zone_id=?'); params.push(zone);
+        }
+        if (Object.hasOwn(item,'sale_mode') || Object.hasOwn(item,'preorder_settings_json')) {
+          const preorder = validateProductPreorder(item,current.get(item.id));
+          if (preorder.error) invalid(preorder.message);
+          updates.push('sale_mode=?','preorder_settings_json=?');
+          params.push(preorder.mode,preorder.settings == null ? null : JSON.stringify(preorder.settings));
+        }
+        if (updates.length) await conn.query(`UPDATE prod_products SET ${updates.join(', ')}, updated_at=CURRENT_TIMESTAMP WHERE tenant_id=? AND id=?`,[...params,tenantId,item.id]);
+        if (Object.hasOwn(item,'category_ids')) {
+          if (!Array.isArray(item.category_ids) || item.category_ids.some(id=>!Number.isSafeInteger(id) || id<=0)) invalid('Некорректные категории.');
+          if (item.category_ids.length) {
+            const [categories] = await conn.query('SELECT id FROM prod_categories WHERE tenant_id=? AND id IN (?)',[tenantId,[...new Set(item.category_ids)]]);
+            if (categories.length !== new Set(item.category_ids).size) invalid('Одна из выбранных категорий недоступна.');
+          }
+          await helpers.setProductCategories(conn,tenantId,item.id,item.category_ids);
+        }
+        if (Object.hasOwn(item,'stock')) {
+          if (item.stock !== null && (!Number.isFinite(item.stock) || item.stock<0)) invalid('Некорректный остаток.');
+          const result = await applyInlineStockAdjustment(req,{tenantId,storeId,productId:item.id,stockQty:item.stock,connection:conn});
+          if (result.notFound) invalid('Товар не найден.');
+          if (result.changed) adjustments.push({id:item.id,...result});
+        }
+      }
+      await conn.commit();
+      committed = true;
+      for (const adjustment of adjustments) {
+        catalogSync.publishCommittedChanges(adjustment.pendingCatalogChanges);
+        productPassportSnapshots.activatePreparedProductsDirty({tenantId,storeId,productIds:adjustment.affectedProductIds});
+        await publishStockChanged(tenantId,storeId,{source:'products.bulk_adjustment',product_ids:[adjustment.id],affected_product_ids:adjustment.affectedProductIds,document_id:adjustment.documentId,stock_qty:adjustment.stockQty,previous_stock_qty:adjustment.previousQty});
+      }
+      return res.json({ok:true,updated_ids:ids});
+    } catch (error) {
+      if (!committed && conn) await conn.rollback();
+      console.error('Product bulk update failed:',error);
+      return res.status(error.code==='BAD_BULK_UPDATE'?400:500).json({ok:false,error:error.code==='BAD_BULK_UPDATE'?'BAD_BULK_UPDATE':'DB_ERROR',...(error.code==='BAD_BULK_UPDATE'?{message:error.message}:{})});
+    } finally { conn?.release(); }
+  });
+
   // PATCH /api/prod_products/:id — только cost_price, price, base_qty (для пересчёта по составу)
   router.patch('/prod_products/:id', async (req, res) => {
     try {
@@ -3001,6 +3148,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const hasIsActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_active');
       const hasSiteVisibility = Object.prototype.hasOwnProperty.call(req.body || {}, 'site_visibility');
       const hasFulfillmentMode = Object.prototype.hasOwnProperty.call(req.body || {}, 'fulfillment_mode');
+      const hasPreorder = Object.prototype.hasOwnProperty.call(req.body || {}, 'sale_mode')
+        || Object.prototype.hasOwnProperty.call(req.body || {}, 'preorder_settings_json');
       const hasProductionZoneId = Object.prototype.hasOwnProperty.call(req.body || {}, 'production_zone_id');
       const hasCategoryIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'category_ids');
       const hasStock = Object.prototype.hasOwnProperty.call(req.body || {}, 'stock');
@@ -3026,6 +3175,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const fulfillment_mode = normalizeProductFulfillmentMode(req.body.fulfillment_mode);
+      let preorder = null;
+      if (hasPreorder) {
+        const [rows] = await db.query('SELECT sale_mode, preorder_settings_json FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, id]);
+        if (!rows.length) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+        preorder = validateProductPreorder(req.body, rows[0]);
+        if (preorder.error) return res.status(400).json({ ok: false, ...preorder });
+      }
       if (isInlineStockAdjustment) {
         const adjustment = await applyInlineStockAdjustment(req, {
           tenantId,
@@ -3074,6 +3230,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       if (hasIsActive) { updates.push('is_active=?'); params.push(is_active); }
       if (hasSiteVisibility) { updates.push('site_visibility=?'); params.push(site_visibility); }
       if (hasFulfillmentMode) { updates.push('fulfillment_mode=?'); params.push(fulfillment_mode); }
+      if (preorder) {
+        updates.push('sale_mode=?', 'preorder_settings_json=?');
+        params.push(preorder.mode, preorder.settings == null ? null : JSON.stringify(preorder.settings));
+      }
       if (hasProductionZoneId) { updates.push('production_zone_id=?'); params.push(production_zone_id); }
       if (updates.length > 0) {
         params.push(tenantId, id);
@@ -5541,7 +5701,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const [rows] = await db.query(
-        `SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at
+        `SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sale_mode, preorder_settings_json, sort_order, created_at, updated_at
          FROM prod_combos WHERE tenant_id=? ORDER BY sort_order ASC, id ASC`,
         [tenantId]
       );
@@ -5558,7 +5718,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [[row]] = await db.query(
-        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1',
+        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sale_mode, preorder_settings_json, sort_order, created_at, updated_at FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
       );
       if (!row) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
@@ -5591,6 +5751,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   });
 
   router.post('/admin/combos', async (req, res) => {
+    let conn = null;
     try {
       const tenantId = helpers.getTenantId(req);
       const title = helpers.strOrNull(req.body.title);
@@ -5601,9 +5762,13 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const isActive = req.body.is_active === false || req.body.is_active === '0' ? 0 : 1;
       const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
       if (!title || !title.trim()) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
-      const [result] = await db.query(
-        'INSERT INTO prod_combos (tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order) VALUES (?,?,?,?,?,?,?,?)',
-        [tenantId, title.trim(), description, discountPercent, categoryCode, imageUrl, isActive, sortOrder]
+      const preorder = validateProductPreorder(req.body);
+      if (preorder.error) return res.status(400).json({ ok: false, ...preorder });
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+      const [result] = await conn.query(
+        'INSERT INTO prod_combos (tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, sale_mode, preorder_settings_json) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        [tenantId, title.trim(), description, discountPercent, categoryCode, imageUrl, isActive, sortOrder, preorder.mode, preorder.settings == null ? null : JSON.stringify(preorder.settings)]
       );
       const comboId = result.insertId;
       const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
@@ -5611,28 +5776,31 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         const b = blocks[i];
         const blockId = Number(b.block_id);
         if (!Number.isFinite(blockId) || blockId <= 0) continue;
-        await db.query(
+        await conn.query(
           'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
           [tenantId, comboId, blockId, Number(b.sort_order) ?? i]
         );
       }
-      const [[row]] = await db.query(
-        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
+      const [[row]] = await conn.query(
+        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sale_mode, preorder_settings_json, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
         [comboId]
       );
+      await conn.commit();
       res.status(201).json({ ok: true, data: row });
     } catch (e) {
+      if (conn) await conn.rollback();
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
+    } finally { conn?.release(); }
   });
 
   router.patch('/admin/combos/:id', async (req, res) => {
+    let conn = null;
     try {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
-      const [[existing]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, id]);
+      const [[existing]] = await db.query('SELECT id, sale_mode, preorder_settings_json FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, id]);
       if (!existing) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       const title = helpers.strOrNull(req.body.title);
       const description = req.body.description !== undefined ? helpers.strOrNull(req.body.description) : undefined;
@@ -5641,6 +5809,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const imageUrl = req.body.image_url !== undefined ? (helpers.strOrNull(req.body.image_url) || null) : undefined;
       const isActive = req.body.is_active !== undefined ? (req.body.is_active === false || req.body.is_active === '0' || req.body.is_active === 0 ? 0 : 1) : null;
       const sortOrder = req.body.sort_order !== undefined ? (helpers.numOrNull(req.body.sort_order) ?? 0) : null;
+      const preorder = validateProductPreorder(req.body, existing);
+      if (preorder.error) return res.status(400).json({ ok: false, ...preorder });
       const updates = [];
       const params = [];
       if (title !== null) { updates.push('title=?'); params.push(title.trim()); }
@@ -5650,31 +5820,44 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (imageUrl !== undefined) { updates.push('image_url=?'); params.push(imageUrl); }
       if (isActive !== null) { updates.push('is_active=?'); params.push(isActive); }
       if (sortOrder !== null) { updates.push('sort_order=?'); params.push(sortOrder); }
+      if (preorder.hasMode || preorder.hasSettings) {
+        updates.push('sale_mode=?', 'preorder_settings_json=?');
+        params.push(preorder.mode, preorder.settings == null ? null : JSON.stringify(preorder.settings));
+      }
+      conn = await db.getConnection();
+      await conn.beginTransaction();
       if (updates.length) {
         params.push(tenantId, id);
-        await db.query('UPDATE prod_combos SET ' + updates.join(', ') + ' WHERE tenant_id=? AND id=?', params);
+        await conn.query('UPDATE prod_combos SET ' + updates.join(', ') + ' WHERE tenant_id=? AND id=?', params);
       }
       if (Array.isArray(req.body.blocks)) {
-        await db.query('DELETE FROM prod_combo_set_blocks WHERE tenant_id=? AND combo_id=?', [tenantId, id]);
+        await conn.query('DELETE FROM prod_combo_set_blocks WHERE tenant_id=? AND combo_id=?', [tenantId, id]);
         for (let i = 0; i < req.body.blocks.length; i++) {
           const b = req.body.blocks[i];
           const blockId = Number(b.block_id);
           if (!Number.isFinite(blockId) || blockId <= 0) continue;
-          await db.query(
+          await conn.query(
             'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
             [tenantId, id, blockId, Number(b.sort_order) ?? i]
           );
         }
       }
-      const [[row]] = await db.query(
-        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
+      const [[row]] = await conn.query(
+        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sale_mode, preorder_settings_json, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
         [id]
       );
-      res.json({ ok: true, data: row });
+      const [blocks] = await conn.query(
+        `SELECT sb.block_id, sb.sort_order, b.title AS block_title
+         FROM prod_combo_set_blocks sb
+         JOIN prod_combo_blocks b ON b.tenant_id=sb.tenant_id AND b.id=sb.block_id
+         WHERE sb.tenant_id=? AND sb.combo_id=? ORDER BY sb.sort_order, sb.id`, [tenantId, id]);
+      await conn.commit();
+      res.json({ ok: true, data: row, blocks });
     } catch (e) {
+      if (conn) await conn.rollback();
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
-    }
+    } finally { conn?.release(); }
   });
 
   router.put('/admin/combos/:id/blocks', async (req, res) => {

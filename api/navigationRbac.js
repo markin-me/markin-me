@@ -154,6 +154,8 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
       ? 'settings.payments.manage' : 'settings.payments.read';
   }
   if (route.startsWith('/orders')) {
+    if (route === '/orders/preorder-availability') return context === 'new-order' ? 'new_order.create' : 'orders.list.read';
+    if (/^\/orders\/\d+\/preorder-availability$/.test(route)) return 'orders.list.update';
     if (route.includes('/cash-summary') || route.includes('/cash-day')) return byAction('cash.journal', 'read');
     if (context === 'new-order' && (route === '/orders/statuses' || route === '/orders/benefits/preview')) return 'new_order.create';
     if (context === 'courier') {

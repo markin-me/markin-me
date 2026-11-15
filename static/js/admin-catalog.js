@@ -144,6 +144,7 @@
       editorReady,
       dataVersion: passport?.revision?.data_version || null,
       editorSchemaVersion: passport?.editor?.schema_version || null,
+      preorderFields: Object.prototype.hasOwnProperty.call(passport?.product || {}, "preorder_settings_json") && ["order", "preorder"].includes(passport?.product?.sale_mode),
       revision: passport?.revision?.revision || passport?.revision?.updated_at || null,
     };
   }
@@ -153,6 +154,7 @@
       row && typeof row === "object"
       && normalizeId(row.productId) === normalizeId(id)
       && row.orderReady === true
+      && row.preorderFields === true
       && row.dataVersion === "full-product-passport-v1"
     );
   }
@@ -804,6 +806,8 @@
     const productId = normalizeId(passport.product.id ?? passport.product.product_id);
     return Boolean(
       productId
+      && ["order", "preorder"].includes(passport.product.sale_mode)
+      && Object.prototype.hasOwnProperty.call(passport.product, "preorder_settings_json")
       && passport.stock && typeof passport.stock === "object"
       && passport.availability && typeof passport.availability === "object"
       && ((passport.units && typeof passport.units === "object" && Array.isArray(passport.unitConversions))
@@ -1595,6 +1599,8 @@
   function isComboReady(comboId, options = {}) {
     const id = normalizeId(comboId);
     if (!id || !combosById.has(id) || !comboRelationsById.has(id)) return false;
+    const combo = combosById.get(id);
+    if (!['order', 'preorder'].includes(combo.sale_mode) || !Object.prototype.hasOwnProperty.call(combo, 'preorder_settings_json')) return false;
     const relations = comboRelationsById.get(id) || [];
     if (relations.some((relation) => !comboBlocksById.has(relation.blockId))) return false;
     const requireEditor = options.requiredCompleteness === "editor-ready";
@@ -1660,6 +1666,7 @@
         Number(product.is_active ?? product.active ?? 1) === 1
         && Number(product.site_visibility ?? product.visible ?? 1) === 1
         && product.is_available === true
+        && (combo.sale_mode === 'preorder' || product.sale_mode !== 'preorder')
       )),
     }));
     const isAvailable = blocks.every((block) => block.products.length >= Math.max(1, Number(block.min_select || 1)));

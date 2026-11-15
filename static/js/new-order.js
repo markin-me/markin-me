@@ -224,6 +224,7 @@
     rightDeliveryTypes: [],
     rightPaymentTypes: [],
     rightTimeOptions: [],
+    rightPreorderAvailability: new Map(),
     rightOrderStatuses: [],
     rightDeliverySettings: null,
     rightDeliverySettingsReady: false,
@@ -644,6 +645,13 @@
     const cartSummary = getRightOrderLiveSummary(active);
     scheduleRightDeliveryQuoteRefresh(activeOrderId);
     const cartItems = cartSummary.cartItems;
+    let preorderAvailability = getRightPreorderAvailability(active);
+    if (!preorderAvailability) {
+      void ensureRightPreorderAvailability(active).then(() => {
+        if (Number(state.rightActiveOrderId) === Number(active.id)) queueRenderRightOrderTabs();
+      });
+      preorderAvailability = getRightPreorderAvailability(active);
+    }
     const snapshotForLinePricing = isEditCheckout ? getRightOrderActiveEditPricingSnapshot(active) : null;
     const snapshotItemsTotalAfterDiscount = snapshotForLinePricing
       ? Number(
@@ -826,12 +834,12 @@
     const resolvedPaymentMethod = paymentMethodOptions.includes(currentPaymentCode) ? currentPaymentCode : fallbackPaymentCode;
 
     const activeTimeOptions = (Array.isArray(state.rightTimeOptions) ? state.rightTimeOptions : [])
-      .filter((item) => Number(item?.is_active || 0) === 1);
+      .filter((item) => (Number(item?.is_active || 0) === 1 || (isEditCheckout && preorderAvailability?.data && item.code === 'on_date')) && (!preorderAvailability?.data || item.code === 'on_date'));
     const cookWhenLabels = Object.fromEntries(
       activeTimeOptions.map((item) => [String(item?.code || ""), String(item?.title || item?.code || "")])
     );
     const cookWhenOptions = activeTimeOptions.map((item) => String(item?.code || "")).filter(Boolean);
-    const fallbackCookWhenCode = cookWhenOptions[0] || "asap";
+    const fallbackCookWhenCode = cookWhenOptions[0] || (preorderAvailability?.data ? 'on_date' : 'asap');
     const currentCookWhenCode = String(form.cookWhen || "").trim();
     const resolvedCookWhen = cookWhenOptions.includes(currentCookWhenCode) ? currentCookWhenCode : fallbackCookWhenCode;
 
@@ -839,10 +847,17 @@
     const initialDateByKind = cookWhenKind === "on_date" ? getTomorrowIsoDate() : formatIsoDate(getTodayDate());
     const currentTime = String(form.dateTime || "").trim();
     const currentDate = String(form.scheduledDate || "").trim();
-    const resolvedDate = /^\d{4}-\d{2}-\d{2}$/.test(currentDate) ? currentDate : initialDateByKind;
+    const resolvedDate = preorderAvailability?.data
+      ? (preorderAvailability.data.dates.some(item => item.date === currentDate) ? currentDate : (preorderAvailability.data.dates[0]?.date || ''))
+      : (/^\d{4}-\d{2}-\d{2}$/.test(currentDate) ? currentDate : initialDateByKind);
     const effectiveDateForTime = cookWhenKind === "on_date" ? resolvedDate : formatIsoDate(getTodayDate());
-    const timeSlots = buildTimeSlotsForOptionWithDate(resolvedCookWhen, effectiveDateForTime);
-    const resolvedDateTime = timeSlots.includes(currentTime) ? currentTime : (timeSlots[0] || "18:00");
+    const timeSlots = preorderAvailability?.data ? getRightPreorderSlots(active,resolvedDate) : buildTimeSlotsForOptionWithDate(resolvedCookWhen, effectiveDateForTime);
+    const resolvedDateTime = timeSlots.includes(currentTime) ? currentTime : (timeSlots[0] || (preorderAvailability?.data ? '' : "18:00"));
+    if (preorderAvailability?.data) {
+      form.cookWhen = resolvedCookWhen;
+      form.scheduledDate = resolvedDate;
+      form.dateTime = resolvedDateTime;
+    }
 
 
     const selectValues = {
@@ -947,6 +962,7 @@
           </label>
         </div>
 
+        ${preorderAvailability?.error ? `<div role="alert">${escapeHtml(preorderAvailability.error)}</div>` : preorderAvailability?.data && !preorderAvailability.data.dates.length ? '<div role="alert">Нет общей доступной даты получения.</div>' : ''}
         <div class="new-order-right-form-row ${cookWhenKind !== "asap" ? "is-three-cols" : ""}">
           <div class="new-order-right-form-field">
             <span class="new-order-right-form-label">РљРѕРіРґР° РїСЂРёРіРѕС‚РѕРІРёС‚СЊ</span>
@@ -1349,6 +1365,14 @@
                   </div>
                   <div class="new-order-right-cart-item-main">
                     <div class="new-order-right-cart-item-title">${qty} × ${escapeHtml(title)}</div>
+                    ${(() => {
+                      const preorder = item.type === 'combo'
+                        ? preorderAvailability?.data?.combos?.find(combo => Number(combo.combo_id) === Number(item.combo_id))
+                        : preorderAvailability?.data?.products.find(product => Number(product.product_id) === Number(item.product_id));
+                      if (!preorder) return '';
+                      const daysHtml = window.SharedProductDetails.getPreorderWeekdaysHtml(preorder.settings?.receipt?.weekdays);
+                      return `<span class="new-order-cart-preorder-badge${daysHtml ? ' has-preorder-weekdays' : ''}">\u041f\u043e \u043f\u0440\u0435\u0434\u0437\u0430\u043a\u0430\u0437\u0443${daysHtml ? ` ${daysHtml}` : ''}</span>`;
+                    })()}
                     ${item?.durableDraftIssue ? `<div class="new-order-right-cart-item-sub" style="color:#b91c1c">${escapeHtml(item.durableDraftIssue)}</div>` : ""}
                     <div class="new-order-right-cart-item-sub">
                       ${compositionBodyHtml}${autoFreeLineHtml}
@@ -1662,6 +1686,7 @@
           name: String(s?.name || "").trim(),
           address: String(s?.address || "").trim(),
           city: String(s?.city || s?.city_name || "").trim(),
+          timezone: s?.timezone ?? null,
           is_active: Number(s?.is_active || 0),
         }))
         .filter((s) => Number(s.is_active || 0) === 1)
@@ -1805,6 +1830,53 @@
     return "asap";
   }
 
+  function getRightPreorderRequest(order) {
+    const items = (order?.form?.cartItems || []).map(item => ({
+      type: item.type, combo_id: Number(item.combo_id || 0), product_id: Number(item.product_id || item.productId || 0),
+      option_item_ids: item.option_item_ids, option_items: item.option_items || item.options,
+      qty: Number(item.qty ?? item.quantity ?? 0), selections: item.selections,
+    }));
+    const method = String(order?.form?.pickupMethod || 'delivery');
+    const quote = state.rightDeliveryQuoteByOrder.get(Number(order?.id)) || getRightOrderStoredAddressDraft(Number(order?.id),order);
+    const storeId = Number(order?.storeId || (isDeliveryMethodCode(method) ? quote?.delivery_store_id : getRightOrderPreferredPickupStoreId()) || getStoreIdFromStorage());
+    const editId = Number(order?.editOrderId || 0);
+    return {items, method, storeId, editId, key:JSON.stringify([newOrderCacheScopeKey(),items,method,storeId,editId,Math.floor(Date.now()/60000)])};
+  }
+
+  function getRightPreorderAvailability(order) {
+    const request = getRightPreorderRequest(order);
+    const cached = state.rightPreorderAvailability.get(Number(order?.id));
+    return cached?.key === request.key ? cached : null;
+  }
+
+  async function ensureRightPreorderAvailability(order, {force = false} = {}) {
+    const request = getRightPreorderRequest(order), id = Number(order?.id);
+    const cached = state.rightPreorderAvailability.get(id);
+    if (cached?.key === request.key && (!force || cached.pending)) {
+      if (cached.promise) await cached.promise;
+      return cached;
+    }
+    const entry = {key:request.key, pending:true, data:null, error:''};
+    state.rightPreorderAvailability.set(id,entry);
+    entry.promise = (async () => {
+      try {
+        const result = await apiJson(`/api/admin/orders/${request.editId > 0 ? `${request.editId}/` : ''}preorder-availability`, {
+          method:'POST', headers:{'x-store-id':String(request.storeId)},
+          body:JSON.stringify({items:request.items,method_code:request.method}),
+        });
+        if (!result.ok) throw new Error(result.error || 'PREORDER_SETTINGS_INVALID');
+        entry.data = result.data;
+      } catch (error) { entry.error = getRightOrderBenefitsActionErrorMessage(error); }
+      finally { entry.pending = false; entry.promise = null; }
+    })();
+    await entry.promise;
+    return entry;
+  }
+
+  function getRightPreorderSlots(order, date) {
+    return getRightPreorderAvailability(order)?.data?.dates?.find(item => item.date === date)?.slots || [];
+  }
+
   function isCashPaymentCode(code) {
     const c = String(code || "").trim().toLowerCase();
     return c === "cash" || c.includes("РЅР°Р»") || c.includes("cash");
@@ -1822,11 +1894,12 @@
     const selected = String(selectedIsoDate || "");
     const minIso = formatIsoDate(minDate);
 
+    const preorder = getRightPreorderAvailability(state.rightOrders.find(order => Number(order.id) === Number(orderId)));
     const cells = [];
     for (let i = 0; i < firstWeekday; i += 1) cells.push('<span class="new-order-right-calendar-cell is-empty"></span>');
     for (let day = 1; day <= daysInMonth; day += 1) {
       const dateIso = formatIsoDate(new Date(monthStart.getFullYear(), monthStart.getMonth(), day));
-      const isDisabled = dateIso < minIso;
+      const isDisabled = preorder?.data ? !preorder.data.dates.some(item => item.date === dateIso) : dateIso < minIso;
       const isSelected = !isDisabled && dateIso === selected;
       cells.push(
         `<button type="button" class="new-order-right-calendar-cell ${isSelected ? "is-selected" : ""}" ${isDisabled ? "disabled" : ""} data-action="right-date-select" data-order-id="${Number(orderId || 0)}" data-value="${dateIso}">${day}</button>`
@@ -3567,6 +3640,12 @@
 
   function getRightOrderBenefitsActionErrorMessage(err) {
     switch (String(err?.message || "").trim()) {
+      case 'PREORDER_PARENT_REQUIRED': return '\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u0435 \u0441\u043e\u0441\u0442\u0430\u0432: \u043f\u0440\u0435\u0434\u0437\u0430\u043a\u0430\u0437\u043d\u044b\u0439 \u0442\u043e\u0432\u0430\u0440 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0432 \u043e\u0431\u044b\u0447\u043d\u043e\u043c \u0442\u043e\u0432\u0430\u0440\u0435 \u0438\u043b\u0438 \u043a\u043e\u043c\u0431\u043e.';
+      case 'PREORDER_DATE_REQUIRED': return 'Для предзаказа выберите дату и время получения.';
+      case 'PREORDER_ACCEPTANCE_CLOSED': return 'Приём предзаказов одной из позиций сейчас закрыт.';
+      case 'PREORDER_LEAD_TIME':
+      case 'PREORDER_RECEIPT_UNAVAILABLE': return 'Выбранная дата или время не подходят условиям предзаказа. Выберите доступное получение.';
+      case 'PREORDER_SETTINGS_INVALID': return 'Некорректные условия предзаказа. Проверьте настройки товара.';
       case "PROMO_CODE_REQUIRED":
         return "Введите промокод.";
       case "PROMO_INVALID":
@@ -7496,7 +7575,7 @@
     const cookWhenOptions = activeTimeOptions.map((item) => String(item?.code || "")).filter(Boolean);
     const fallbackCookWhenCode = cookWhenOptions[0] || "asap";
     const rawTimeOptionCode = String(form.cookWhen || "asap").trim() || "asap";
-    const timeOptionCode = cookWhenOptions.includes(rawTimeOptionCode) ? rawTimeOptionCode : fallbackCookWhenCode;
+    let timeOptionCode = cookWhenOptions.includes(rawTimeOptionCode) ? rawTimeOptionCode : fallbackCookWhenCode;
     const isDeliveryMethod = isDeliveryMethodCode(methodCode);
     const isPickupMethod = isPickupLikeMethod(methodCode);
     setRightOrderSubmitFeedback(id, true, { overlay: false });
@@ -7569,6 +7648,20 @@
       return;
     }
 
+    const preorderAvailability = await ensureRightPreorderAvailability(order,{force:true});
+    if (preorderAvailability.data) timeOptionCode = 'on_date';
+    if (preorderAvailability.error || (preorderAvailability.data && !preorderAvailability.data.dates.length)) {
+      setRightOrderSubmitFeedback(id, false);
+      showNewOrderAlert(preorderAvailability.error || 'Нет общей доступной даты получения товаров по предзаказу.');
+      return;
+    }
+    if (preorderAvailability.data && (form.cookWhen !== 'on_date' || !getRightPreorderSlots(order,form.scheduledDate).includes(form.dateTime))) {
+      queueRenderRightOrderTabs();
+      setRightOrderSubmitFeedback(id, false);
+      showNewOrderAlert('Выберите доступную дату и время получения предзаказа.');
+      return;
+    }
+
     const cookWhenKind = getCookWhenKind(timeOptionCode);
     let scheduledAt = null;
     if (cookWhenKind === "at_time" || cookWhenKind === "on_date") {
@@ -7577,7 +7670,7 @@
         ? currentDateValue
         : (cookWhenKind === "on_date" ? getTomorrowIsoDate() : formatIsoDate(getTodayDate()));
       const slotsDateValue = cookWhenKind === "on_date" ? baseDateValue : formatIsoDate(getTodayDate());
-      const timeSlots = buildTimeSlotsForOptionWithDate(timeOptionCode, slotsDateValue);
+      const timeSlots = preorderAvailability.data ? getRightPreorderSlots(order,slotsDateValue) : buildTimeSlotsForOptionWithDate(timeOptionCode, slotsDateValue);
       const currentTimeValue = String(form.dateTime || "").trim();
       const timeValue = timeSlots.includes(currentTimeValue) ? currentTimeValue : (timeSlots[0] || currentTimeValue);
       if (!/^\d{1,2}:\d{2}$/.test(timeValue)) {
@@ -7886,6 +7979,12 @@
         showNewOrderAlert(`\u0417\u0430\u043a\u0430\u0437 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d, \u043d\u043e \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044f ${paymentStepError.stage || "payment"} \u043d\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430: ${paymentStepError.error || paymentStepError.message || "UNKNOWN"}`);
       }
     } catch (e) {
+      if (String(e?.message || '').startsWith('PREORDER_')) {
+        state.rightPreorderAvailability.delete(id);
+        queueRenderRightOrderTabs();
+        showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(e));
+        return;
+      }
       if (e?.message === "ORDER_PRICING_CHANGED") {
         if (e.data?.preview) await loadRightOrderBenefitsPreview(id, { mode: "customer", prefetchedData: e.data.preview, render: true });
         showNewOrderAlert("\u0421\u0443\u043c\u043c\u0430 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0430\u0441\u044c. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0438\u0442\u043e\u0433 \u0438 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0435 \u043e\u043f\u043b\u0430\u0442\u0443 \u043f\u043e\u0432\u0442\u043e\u0440\u043d\u043e.");
@@ -16325,6 +16424,10 @@
             <div class="shop-pd-title">${escapeHtml(String(combo?.title || "РљРѕРјР±Рѕ"))}</div>
           </div>
           ${String(combo?.description || "").trim() ? `<div class="shop-combo-detail-caption">${escapeHtml(String(combo.description || "").trim())}</div>` : ""}
+          ${(() => {
+            const lines = window.SharedProductDetails.getPreorderDescription(combo);
+            return lines.length ? `<div class="shop-pd-preorder">${lines.map(line => `<div>${escapeHtml(line)}</div>`).join('')}</div>` : '';
+          })()}
           <div class="shop-combo-list">${rowsHtml || `<div class="shop-combo-picker-empty">РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… С‚РѕРІР°СЂРѕРІ</div>`}</div>
         </div>
       </div>
@@ -16883,6 +16986,13 @@
     state.comboModal.selectionStateByBlock = blocks.map(() => makeEmptyComboBlockState());
 
     const sourceCartItem = opts?.cartItem && typeof opts.cartItem === "object" ? opts.cartItem : null;
+    if (sourceCartItem && getComboSeedSelectionsFromCartItem(sourceCartItem).some((selection, index) =>
+      !blocks[index]?.products?.some(product => Number(product.product_id) === Number(selection.product_id)))) {
+      closeComboOverlay();
+      showNewOrderAlert('\u0421\u043e\u0441\u0442\u0430\u0432 \u043a\u043e\u043c\u0431\u043e \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f. \u0423\u0434\u0430\u043b\u0438\u0442\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u044e \u0438 \u0441\u043e\u0431\u0435\u0440\u0438\u0442\u0435 \u043a\u043e\u043c\u0431\u043e \u0437\u0430\u043d\u043e\u0432\u043e.');
+      return;
+    }
+
     if (sourceCartItem) {
       const seedRows = getComboSeedSelectionsFromCartItem(sourceCartItem);
       seedRows.forEach((seed, blockIndex) => {
@@ -18113,7 +18223,7 @@
       "x-rbac-context": "new-order",
       ...(opts.headers || {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      "x-store-id": storeId,
+      "x-store-id": opts.headers?.['x-store-id'] || storeId,
     };
     const orderCommand = (opts.method === 'PUT' && /^\/api\/admin\/orders\/\d+$/.test(url))
       || (opts.method === 'POST' && url === '/api/public/orders' && headers['Idempotency-Key']);
@@ -18151,7 +18261,7 @@
       error.data = data?.data;
       throw error;
     }
-    if (!["GET", "HEAD"].includes(String(opts.method || "GET").toUpperCase())) {
+    if (!["GET", "HEAD"].includes(String(opts.method || "GET").toUpperCase()) && !url.endsWith('/preorder-availability')) {
       void window.AdminPersistentCache?.clientData?.mutation(url, opts.method)
         .catch(error => console.warn("Client cache mutation invalidation failed:", error));
     }
@@ -23426,6 +23536,7 @@
           name: String(s?.name || "").trim(),
           address: String(s?.address || "").trim(),
           city: String(s?.city || s?.city_name || "").trim(),
+          timezone: s?.timezone ?? null,
           is_active: Number(s?.is_active || 0),
         }))
         .filter((s) => Number(s.is_active || 0) === 1)
@@ -25168,6 +25279,14 @@
 
   if (window.SharedProductDetails) {
     window.SharedProductDetails.configure({
+      showPreorderMediaLabel: true,
+      getPreorderToday: () => {
+        const order = state.rightOrders.find(row => Number(row.id) === Number(state.rightActiveOrderId));
+        const storeId = order ? getRightPreorderRequest(order).storeId : getStoreIdFromStorage();
+        const store = state.rightPickupStores.find(row => Number(row.id) === storeId);
+        if (store?.timezone == null || !Number.isFinite(Number(store.timezone))) return null;
+        return new Date(Date.now() + Number(store.timezone)*3600000).toISOString().slice(0,10);
+      },
       getPassport: id => window.CatalogRepository?.getProductPassport(id),
       getProduct: getNewOrderPresentationProduct,
       ensurePassports: getNewOrderSharedPassports,

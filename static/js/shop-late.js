@@ -20,7 +20,7 @@
 
   async function ensureProduct(pid) {
     const id = Number(pid);
-    if (state.productCache.has(id)) {
+    if (state.productCache.has(id) && ['order', 'preorder'].includes(state.productCache.get(id)?.sale_mode)) {
       const cached = state.productCache.get(id);
       if (typeof mergeProductPassport === "function") {
         mergeProductPassport(id, { product: cached });
@@ -29,7 +29,7 @@
     }
     if (typeof preloadProductPassportsBatch === "function") {
       await preloadProductPassportsBatch([id], { details: false }).catch(() => {});
-      if (state.productCache.has(id)) return state.productCache.get(id);
+      if (['order', 'preorder'].includes(state.productCache.get(id)?.sale_mode)) return state.productCache.get(id);
     }
 
     const json = await apiJson('/api/public/products/batch/by-ids', {
@@ -390,7 +390,7 @@ function applyProductPassportPayload(productId, payload) {
             items: Array.isArray(group?.items) ? group.items : [],
           };
       state.optionGroupCache.set(`${groupId}:${pid}`, details);
-      state.optionGroupCache.set(`${groupId}:0`, details);
+
     });
   }
   if (
@@ -601,6 +601,8 @@ function seedComboPreviewCachesFromComboData(comboData) {
         const cachedProduct = {
           id: productId,
           name: str(prod.product_name || ""),
+          sale_mode: prod.sale_mode,
+          preorder_settings_json: prod.preorder_settings_json,
           title: str(prod.product_name || ""),
           description_short: str(prod.product_description_short || ""),
           price: Number(prod.price || 0),
@@ -674,13 +676,13 @@ function clonePlainComboPreviewValue(value) {
   return value;
 }
 
-async function resolveComboDetails(comboId) {
+async function resolveComboDetails(comboId, { force = false } = {}) {
   const safeComboId = Number(comboId || 0);
   if (!Number.isFinite(safeComboId) || safeComboId <= 0) return null;
 
   const now = Date.now();
   const cached = comboDetailsCache.get(safeComboId);
-  if (cached && cached.promise && Number(cached.expiresAt || 0) > now) {
+  if (!force && cached && cached.promise && Number(cached.expiresAt || 0) > now) {
     return cached.promise;
   }
 
@@ -688,6 +690,8 @@ async function resolveComboDetails(comboId) {
     const json = await apiJson("/api/public/combos/" + encodeURIComponent(safeComboId));
     const data = json?.data || null;
     seedComboPreviewCachesFromComboData(data);
+    const cachedEntry = comboDetailsCache.get(safeComboId);
+    if (cachedEntry) cachedEntry.data = data;
     if (data && typeof window.queueProductStockAvailabilityRefresh === "function") {
       window.queueProductStockAvailabilityRefresh(collectComboProductIds(data), {
         reason: "combo_details",
@@ -2124,6 +2128,13 @@ async function mountProductDetails(options = {}) {
       );
     const isEditFromCart = !!(editingComboItem && String(editingComboItem?.type || "") === "combo");
 
+    if (seedComboItem && (seedComboItem.selections || []).some((selection, index) =>
+      !blocks[index]?.products?.some(product => Number(product.product_id) === Number(selection.product_id)))) {
+      showToast('\u0421\u043e\u0441\u0442\u0430\u0432 \u043a\u043e\u043c\u0431\u043e \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f. \u0423\u0434\u0430\u043b\u0438\u0442\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u044e \u0438 \u0441\u043e\u0431\u0435\u0440\u0438\u0442\u0435 \u043a\u043e\u043c\u0431\u043e \u0437\u0430\u043d\u043e\u0432\u043e.');
+      onBack?.();
+      return;
+    }
+
     if (seedComboItem) {
       comboQty = Math.max(1, Number(seedComboItem.qty || seedComboItem.quantity || 1));
       const selList = Array.isArray(seedComboItem.selections) ? seedComboItem.selections : [];
@@ -3340,6 +3351,18 @@ async function mountProductDetails(options = {}) {
         captionEl.className = "shop-combo-detail-caption";
         captionEl.textContent = caption;
         wrap.appendChild(captionEl);
+      }
+
+      const preorderLines = getSharedShopProductRuntime().getProductPreorderDescription(combo);
+      if (preorderLines.length) {
+        const conditions = document.createElement('div');
+        conditions.className = 'shop-pd-preorder';
+        for (const text of preorderLines) {
+          const line = document.createElement('div');
+          line.textContent = text;
+          conditions.appendChild(line);
+        }
+        wrap.appendChild(conditions);
       }
 
       const list = document.createElement("div");
@@ -32829,10 +32852,26 @@ function setBottomNavActive(tab) {
     const limit = Math.min(end, 24 * 60 - 1);
     while (slot <= limit) {
       const localDay=new Date(`${targetKey}T00:00:00Z`);
-      if(!schedule || window.ShopCheckoutSchedule.allows(schedule,localDay,slot))slots.push(formatMinutesToTime(slot));
+      if((!schedule || window.ShopCheckoutSchedule.allows(schedule,localDay,slot))
+        && (!schedule?.preorder || checkoutPreorderAllows(schedule.preorder,targetKey,slot,schedule.timezone)))slots.push(formatMinutesToTime(slot));
       slot += stepMinutes;
     }
     return slots;
+  }
+
+  function checkoutPreorderAllows(preorder, date, minutes, timezone) {
+    if (preorder.error) return false;
+    if (!preorder.products.length) return true;
+    if (date <= getTodayDateString(timezone)) return false;
+    const weekday = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
+    const timestamp = Date.parse(`${date}T00:00:00Z`) + minutes * 60000 - Number(timezone || 0) * 3600000;
+    return preorder.products.every(({ settings }) => {
+      const receipt = settings.receipt;
+      return timestamp >= Date.now() + settings.lead_hours * 3600000
+        && (receipt.mode !== 'period' || (date >= receipt.start && date <= receipt.end))
+        && (receipt.mode !== 'dates' || receipt.dates.includes(date))
+        && (!receipt.weekdays.length || receipt.weekdays.includes(weekday));
+    });
   }
 
   let shopPaymentWidgetSession=null;
@@ -33199,6 +33238,43 @@ function setBottomNavActive(tab) {
       delayMs: 0,
     })).catch(() => {});
 
+    if (!isKsoCheckout) {
+      const productIds = new Set();
+      const comboIds = new Set();
+      const addProducts = item => {
+        const id = Number(item.product_id);
+        if (id > 0) productIds.add(id);
+        for (const option of item.option_items || item.options || []) {
+          const target = Number(option.target_product_id || option.product_id);
+          if (target > 0 && Number(option.qty ?? option.quantity ?? 1) > 0) productIds.add(target);
+        }
+      };
+      for (const item of state.cart || []) {
+        if (!(Number(item.qty) > 0)) continue;
+        if (item.type === 'combo') {
+          comboIds.add(Number(item.combo_id));
+          for (const selection of item.selections || []) addProducts(selection);
+        } else addProducts(item);
+      }
+      try {
+        const [response] = await Promise.all([
+          productIds.size ? apiJson('/api/public/products/batch/by-ids', { method:'POST', body:{ ids:[...productIds] } }) : Promise.resolve({data:{}}),
+          ...[...comboIds].map(id => resolveComboDetails(id, {force:true})),
+        ]);
+        for (const id of productIds) {
+          const product = response?.data?.[id];
+          if (!product || !['order','preorder'].includes(product.sale_mode)) throw new Error('Не удалось обновить условия товаров корзины.');
+          const updated = { ...state.productCache.get(id), ...product };
+          state.productCache.set(id,updated);
+          mergeProductPassport(id,{product:updated});
+        }
+      } catch (error) {
+        console.error('Checkout product conditions refresh failed',error);
+        alert('Не удалось обновить условия товаров корзины. Повторите открытие оформления.');
+        __forceHideCheckoutDeliveryProgress = false;
+        return;
+      }
+    }
     const cfg = await getOrderConfig();
     let defaultDeliverySettings = getCartPricingCachedDeliverySettings();
     const initialPricingSnapshot = buildCartPricingSnapshot();
@@ -34663,6 +34739,7 @@ function setBottomNavActive(tab) {
       const now=getStoreDateNow(timezone);
       const schedule={hours:pointHours || [],sets,timezone};
       schedule.isOpen=window.ShopCheckoutSchedule.allows(schedule,now,now.getUTCHours()*60+now.getUTCMinutes());
+      schedule.preorder = getCheckoutPreorders(schedule.timezone);
       return schedule;
     }
 
@@ -34670,16 +34747,66 @@ function setBottomNavActive(tab) {
       return getCheckoutTimeScheduleContext().timezone || storeTimezone || "+0";
     }
 
+    function getCheckoutPreorders(timezone) {
+      const ids = new Set();
+      const combos = new Map();
+      const addOptions = item => {
+        for (const option of item.option_items || item.options || []) {
+          if (Number(option.qty ?? option.quantity ?? 1) > 0) ids.add(Number(option.target_product_id || option.product_id));
+        }
+      };
+      for (const item of state.cart || []) {
+        if (!(Number(item.qty) > 0)) continue;
+        if (item.type === 'combo') {
+          const comboId = Number(item.combo_id);
+          const combo = comboDetailsCache.get(comboId)?.data
+            || [...state.combosByCategory.values()].flat().find(row => Number(row.id) === comboId);
+          combos.set(`combo:${comboId}`, combo);
+          for (const row of item.selections || []) { ids.add(Number(row.product_id)); addOptions(row); }
+        }
+        else ids.add(Number(item.product_id));
+        addOptions(item);
+      }
+      const result = { products: [], error: '' };
+      const today = getTodayDateString(timezone);
+      const entities = new Map([...ids].filter(id => id > 0).map(id => [id, state.productCache.get(id)]));
+      for (const [id, combo] of combos) entities.set(id, combo);
+      for (const [id, product] of entities) {
+        if (!product || !['order','preorder'].includes(product.sale_mode)) {
+          result.error = 'Не удалось получить режим продажи товаров. Обновите корзину.';
+          continue;
+        }
+        if (product.sale_mode !== 'preorder') continue;
+        let settings = product.preorder_settings_json;
+        try { if (typeof settings === 'string') settings = JSON.parse(settings); }
+        catch (error) { result.error = 'Не удалось прочитать условия предзаказа.'; }
+        if (!settings || !Number.isSafeInteger(settings.lead_hours) || settings.lead_hours <= 0
+          || !['any','period'].includes(settings.acceptance?.mode)
+          || !['any','period','dates'].includes(settings.receipt?.mode)
+          || !Array.isArray(settings.receipt.weekdays) || !Array.isArray(settings.receipt.dates)) {
+          result.error = 'Некорректные условия предзаказа. Обновите корзину.';
+          continue;
+        }
+        result.products.push({ product_id: id, settings });
+        if (settings.acceptance.mode === 'period' && (today < settings.acceptance.start || today > settings.acceptance.end)) {
+          result.error = `Сейчас предзаказ товара «${product.name}» не принимается.`;
+        }
+      }
+      return result;
+    }
+
     function getCheckoutAvailableTimeState() {
       const selectedMethod=methodSelect.getValue() || methodDefault || 'takeaway';
       if(!(cfg.methods || []).some(method=>method.code===selectedMethod))return {availableOptions:[],fallbackCode:''};
       const schedule = getCheckoutTimeScheduleContext();
+      if (schedule.preorder.error) return { availableOptions: [], fallbackCode: '', error: schedule.preorder.error };
+      const hasPreorder = schedule.preorder.products.length > 0;
       const atTimeOption=timeOptionByCodeInitial.at_time;
       const todaySlots=atTimeOption?buildTimeSlots(atTimeOption,null,schedule.timezone,schedule):[];
       const onDateOption=timeOptionByCodeInitial.on_date;
-      const futureSlots=onDateOption && getCheckoutSelectableDates(7).some(date=>buildTimeSlots(onDateOption,date,schedule.timezone,schedule).length>0);
+      const futureSlots=onDateOption && getCheckoutSelectableDates(hasPreorder ? 1 : 7).some(date=>buildTimeSlots(onDateOption,date,schedule.timezone,schedule).length>0);
       const configured=new Set((cfg.timeOptions || []).map(option=>option.code));
-      const availableOptions=timeOptions.filter(option=>configured.has(option.code) && (option.code==='asap'?schedule.isOpen:option.code==='at_time'?todaySlots.length>0:option.code==='on_date' && futureSlots));
+      const availableOptions=timeOptions.filter(option=>configured.has(option.code) && (!hasPreorder || option.code==='on_date') && (option.code==='asap'?schedule.isOpen:option.code==='at_time'?todaySlots.length>0:option.code==='on_date' && futureSlots));
       const defaultFallback=schedule.isOpen?'asap':todaySlots.length?'at_time':'on_date';
       const fallbackCode = availableOptions.some(opt => opt.code === defaultFallback)
         ? defaultFallback
@@ -34904,7 +35031,8 @@ function setBottomNavActive(tab) {
       const first = new Date(year, month, 1);
       const daysInMonth = new Date(year, month + 1, 0).getDate();
       const offset = (first.getDay() + 6) % 7;
-      const todayKey = toShopDateKey(new Date());
+      const schedule = getCheckoutTimeScheduleContext();
+      const todayKey = getTodayDateString(schedule.timezone);
       const selectedKey = toShopDateKey(selectedDate);
 
       const monthTitle = first.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
@@ -34920,7 +35048,8 @@ function setBottomNavActive(tab) {
         const key = toShopDateKey(d);
         const isSelected = key === selectedKey;
         const isToday = key === todayKey;
-        const isPast = key <= todayKey;
+        const isPast = key <= todayKey
+          || !buildTimeSlots(timeOptionByCodeInitial.on_date,d,schedule.timezone,schedule).length;
 
         const classes = [
           "date-cell",
@@ -35034,6 +35163,48 @@ function setBottomNavActive(tab) {
     function getCheckoutSelectableDates(limit = 30) {
       const dates = [];
       const startDate = getCheckoutStoreTodayDate();
+      const schedule = getCheckoutTimeScheduleContext();
+      const preorder = schedule.preorder;
+      if (preorder.error) return dates;
+      if (preorder.products.length) {
+        const tomorrow = new Date(startDate);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        let start = getDateString(tomorrow);
+        let end = '9999-12-31';
+        let explicitDates = null;
+        for (const { settings } of preorder.products) {
+          const leadDate = new Date(Date.now() + settings.lead_hours * 3600000 + Number(schedule.timezone || 0) * 3600000);
+          if (!Number.isFinite(leadDate.getTime())) return dates;
+          start = [start, leadDate.toISOString().slice(0,10)].sort().pop();
+          const receipt = settings.receipt;
+          if (receipt.mode === 'period') {
+            start = [start, receipt.start].sort().pop();
+            end = [end, receipt.end].sort()[0];
+          }
+          if (receipt.mode === 'dates') explicitDates = explicitDates === null ? receipt.dates.slice() : explicitDates.filter(date => receipt.dates.includes(date));
+        }
+        const option = timeOptionByCodeInitial.on_date;
+        if (!option || start > end) return dates;
+        const addDate = (key) => {
+          const date = parseShopDateKey(key);
+          if (date && key >= start && key <= end && buildTimeSlots(option,date,schedule.timezone,schedule).length) dates.push(date);
+        };
+        if (explicitDates !== null) {
+          for (const key of [...new Set(explicitDates)].sort()) { addDate(key); if (dates.length >= limit) break; }
+        } else {
+          const cursor = parseShopDateKey(start);
+          // Weekly store schedules and weekday intersections repeat every seven days.
+          // One extra week covers the partial first day caused by lead_hours.
+          const maxDays = limit * 7 + 7;
+          for (let index = 0; index < maxDays && dates.length < limit; index++) {
+            const key = getDateString(cursor);
+            if (key > end) break;
+            addDate(key);
+            cursor.setDate(cursor.getDate() + 1);
+          }
+        }
+        return dates;
+      }
       for (let index = 1; index <= limit; index += 1) {
         const nextDate = new Date(startDate);
         nextDate.setDate(startDate.getDate() + index);
@@ -35065,9 +35236,24 @@ function setBottomNavActive(tab) {
         return;
       }
       const nextState = getCheckoutAvailableTimeState();
+      timeUnavailableNote.textContent = nextState.error || (getCheckoutTimeScheduleContext().preorder.products.length
+        ? 'Нет общего времени получения для товаров корзины. Оформите несовместимые товары отдельно.'
+        : 'Нет доступного времени оформления');
       currentAvailableTimeOptions = nextState.availableOptions;
       timeUnavailableNote.classList.toggle('hidden',currentAvailableTimeOptions.length>0);
       currentAvailableTimeCodes = new Set(currentAvailableTimeOptions.map((option) => option.code));
+
+      const dateSchedule = getCheckoutTimeScheduleContext();
+      if (dateSchedule.preorder.products.length && !buildTimeSlots(timeOptionByCode.on_date,selectedDate,dateSchedule.timezone,dateSchedule).length) {
+        const first = getCheckoutSelectableDates(1)[0];
+        if (first) {
+          selectedDate = first;
+          dateDisplay.textContent = formatDateDisplay(first);
+          calendarViewYear = first.getFullYear();
+          calendarViewMonth = first.getMonth();
+        }
+        timeInput.value = '';
+      }
 
       const selectedCode = timeSelect.getValue();
       if (!currentAvailableTimeCodes.has(selectedCode)) {
@@ -35148,7 +35334,8 @@ function setBottomNavActive(tab) {
       timeSelect.setValue("on_date", false);
       const selectableDates = getCheckoutSelectableDates();
       const selectedDateKey = toShopDateKey(selectedDate);
-      if (selectedDateKey && !selectableDates.some((date) => toShopDateKey(date) === selectedDateKey)) {
+      if (selectedDateKey && !selectableDates.some((date) => toShopDateKey(date) === selectedDateKey)
+        && buildTimeSlots(config,selectedDate,getCheckoutTimeTimezone(),getCheckoutTimeScheduleContext()).length) {
         selectableDates.unshift(new Date(selectedDate));
       }
       let sheetDate = selectableDates.find((date) => toShopDateKey(date) === selectedDateKey) || selectableDates[0] || new Date(selectedDate);
@@ -35405,7 +35592,7 @@ function setBottomNavActive(tab) {
         refreshCheckoutTimeAvailability();
       }
       clearTimeout(checkoutTimeTimer);
-      checkoutTimeTimer=setTimeout(()=>syncCheckoutClock(),window.ShopCheckoutSchedule.nextDelay(schedule,cfg.timeOptions || []));
+      checkoutTimeTimer=setTimeout(()=>syncCheckoutClock(),Math.min(schedule.preorder.products.length ? 60000 : Infinity,window.ShopCheckoutSchedule.nextDelay(schedule,cfg.timeOptions || [])));
     }
     const resumeCheckoutClock=()=>{if(!document.hidden)syncCheckoutClock();};
     const updateCheckoutSettings=event=>{
@@ -37148,6 +37335,18 @@ function setBottomNavActive(tab) {
       const orderTotalWithDelivery = roundPrice(Number(snapshotTotal || 0));
       const getCheckoutOrderErrorMessage = (err) => {
         switch (err?.message) {
+          case "PREORDER_PARENT_REQUIRED":
+            return '\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u0435 \u0441\u043e\u0441\u0442\u0430\u0432: \u043f\u0440\u0435\u0434\u0437\u0430\u043a\u0430\u0437\u043d\u044b\u0439 \u0442\u043e\u0432\u0430\u0440 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0432 \u043e\u0431\u044b\u0447\u043d\u043e\u043c \u0442\u043e\u0432\u0430\u0440\u0435 \u0438\u043b\u0438 \u043a\u043e\u043c\u0431\u043e.';
+          case "PREORDER_DATE_REQUIRED":
+            return "В корзине есть предзаказ. Выберите дату получения не раньше завтра.";
+          case "PREORDER_ACCEPTANCE_CLOSED":
+            return "Период приёма одного из предзаказов закрыт. Проверьте товары корзины.";
+          case "PREORDER_LEAD_TIME":
+            return "До получения осталось меньше времени, чем требуется для предзаказа. Выберите более позднее время.";
+          case "PREORDER_RECEIPT_UNAVAILABLE":
+            return "Выбранные дата или время не подходят для всех товаров корзины. Проверьте условия предзаказов и расписание точки.";
+          case "PREORDER_SETTINGS_INVALID":
+            return "Условия одного из предзаказов некорректны. Оформление этого товара сейчас недоступно.";
           case "DISCOUNT_INVALID":
             return "Выбранная скидка больше недоступна.";
           case "DISCOUNT_NOT_AVAILABLE":

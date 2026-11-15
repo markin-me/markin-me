@@ -1046,7 +1046,8 @@
       || timeOptionCode === "asap"
     );
     if (isUrgent) return "Быстрее";
-    return formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim() || "—";
+    const schedule = formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim() || "—";
+    return order.sale_mode === 'preorder' ? `Предзаказ · ${schedule}` : schedule;
   }
 
   function buildCourierScheduleBadgeHtml(order) {
@@ -5997,7 +5998,8 @@
     setTextAll(infoEls.deliveryZone, zoneVisible ? buildOrderDeliveryZoneLabel(order) : "");
     setHiddenAll(infoEls.deliveryZoneRow, !zoneVisible);
 
-    const intervalText = formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim();
+    const intervalValue = formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim();
+    const intervalText = order.sale_mode === 'preorder' ? `Предзаказ · ${intervalValue}` : intervalValue;
     setTextAll(infoEls.deliveryInterval, intervalText || "—");
     setHiddenAll(infoEls.deliveryIntervalRow, !intervalText);
 

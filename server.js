@@ -2533,7 +2533,7 @@ app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessa
   ensurePushSubscriptionsTable: makeChatTempRouter.ensurePushSubscriptionsTable,
   sendPushToSubscriptions: makeChatTempRouter.sendPushToSubscriptions,
 }));
-const adminOrdersRouter=makeAdminOrdersRouter({db,helpers,ordersEvents,can});
+const adminOrdersRouter=makeAdminOrdersRouter({db,helpers,ordersEvents,can,validateCheckoutPreorders:publicShopRouter.validateCheckoutPreorders});
 publicShopRouter.setAbandonedCleanup(()=>adminOrdersRouter.cleanupAbandoned(app.get('paymentServiceClient')));
 app.post('/api/admin/orders/checkout', authMiddleware, requireAdminPermission, (req, res, next) => {
   const value = req.body || {};

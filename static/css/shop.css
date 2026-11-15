@@ -14653,6 +14653,28 @@ body.page-shop .shop-cart-content .shop-cart-mode-header.is-condensed .shop-cart
   display: none;
 }
 
+.shop-cart-items-section .shop-cart-item-row .cart-bottom-row__badges.has-preorder{
+  flex-wrap:wrap;
+  overflow:visible;
+}
+
+.shop-cart-items-section .shop-cart-item-row .cart-preorder-badge{
+  display:inline-flex;
+  align-items:center;
+  flex:0 0 auto;
+  max-width:100%;
+  box-sizing:border-box;
+  min-height:24px;
+  padding:5px 9px;
+  border-radius:999px;
+  background:linear-gradient(135deg,var(--shop-buy),#ffb15a);
+  color:var(--shop-buy-text);
+  font-size:12px;
+  font-weight:900;
+  line-height:1.2;
+  overflow-wrap:anywhere;
+}
+
 .shop-cart-items-section .shop-cart-item-row .cart-bottom-row__main{
   min-width: 0;
   flex: 1 1 auto;

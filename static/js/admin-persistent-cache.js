@@ -9,7 +9,7 @@
   const productPending = new Map();
   const productGenerations = new Map();
   const ORDER_PASSPORT_DOMAIN = "orders:detail:shared";
-  const ORDER_PASSPORT_VERSION = 1;
+  const ORDER_PASSPORT_VERSION = 2;
   const ORDER_PASSPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const ORDER_PASSPORT_MAX = 200;
   const MAINTENANCE_BATCH_SIZE = 50;

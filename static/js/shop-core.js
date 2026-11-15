@@ -1,6 +1,16 @@
   let sharedShopProductRuntime = null;
   function getSharedShopProductRuntime() {
     if (!sharedShopProductRuntime) sharedShopProductRuntime = window.SharedProductRuntime.create({
+      showPreorderMediaLabel: true,
+      getPreorderToday: () => {
+        const config = window.__shopOrderConfig;
+        if (!config) return null;
+        const storeId = window._deliveryMode === 'pickup' ? window._selectedPickupStoreId
+          : state.selectedAddress?.delivery_store_id || config.deliverySettings?.default_store_id;
+        const store = (config.checkoutStores || []).find(row => Number(row.id) === Number(storeId || config.settingsStoreId));
+        const timezone = store?.timezone ?? config.storeTimezone;
+        return timezone == null ? null : new Date(Date.now() + Number(timezone)*3600000).toISOString().slice(0,10);
+      },
       get $() { return $; },
       get COMBO_GRID_IMAGE_READY_LIMIT() { return COMBO_GRID_IMAGE_READY_LIMIT; },
       get OPTIMIZED_IMAGE_TEMPLATE_LIMIT() { return OPTIMIZED_IMAGE_TEMPLATE_LIMIT; },
@@ -729,6 +739,7 @@
   }
 
   let storefrontScheduleTimer = null;
+  let preorderStatusDay = '';
   function syncStorefrontSchedules() {
     const config = window.__shopOrderConfig;
     if (!Array.isArray(config?.checkoutStores) || document.body.classList.contains('page-kso')) return;
@@ -749,6 +760,15 @@
     if (addressPickupVisible) void renderAddressPickupList();
     if (pickupVisible) renderPickupList();
     window.dispatchEvent(new CustomEvent('shop:storefront-schedules'));
+    if (sharedShopProductRuntime) {
+      const today = sharedShopProductRuntime.getPreorderToday();
+      if (today && today !== preorderStatusDay) {
+        preorderStatusDay = today;
+        const ids = [...state.productCache.values()].filter(product => product.sale_mode === 'preorder').map(product => Number(product.id));
+        if (ids.length) scheduleSyncAllProductCardsFromCart(ids);
+        elProductsGrid?.querySelectorAll('.sp-card[data-combo-id]').forEach(card => card.__syncPreorderState?.());
+      }
+    }
     clearTimeout(storefrontScheduleTimer);
     const delays = config.checkoutStores.map(store => checkoutScheduleNextDelay({
       timezone: store.timezone,
@@ -15343,6 +15363,13 @@ async function initAddresses() {
       bottomRow.className = "cart-bottom-row";
       const bottomBadges = document.createElement("div");
       bottomBadges.className = "cart-bottom-row__badges";
+      if (isShopPage() && product.sale_mode === "preorder") {
+        const preorderBadge = document.createElement("span");
+        preorderBadge.className = "cart-preorder-badge";
+        preorderBadge.textContent = 'По предзаказу';
+        bottomBadges.classList.add("has-preorder");
+        bottomBadges.appendChild(preorderBadge);
+      }
       if (cartBuyXGetYBadge) bottomBadges.appendChild(cartBuyXGetYBadge);
       if (priceState.badgeEl) bottomBadges.appendChild(priceState.createBadgeMirror());
       bottomRow.appendChild(bottomBadges);
@@ -17006,6 +17033,7 @@ function updateCartBadge() {
     const wasEmpty = cartCountTotal() === 0;
     const p = state.productCache.get(pid);
     if (qtyDelta > 0 && p && !isProductAvailable(p)) return Number(cartQty(pid) || 0);
+    if (qtyDelta > 0 && getSharedShopProductRuntime().getProductPreorderInfo(p)?.isOpen === false) return Number(cartQty(pid) || 0);
 
     const targetKey = resolveCartKeyForQtyChange(pid, qtyDelta, cartKey, state.cart);
     if (!targetKey) return Number(cartQty(pid) || 0);
@@ -19449,6 +19477,7 @@ function updateCartBadge() {
       || p;
     const pid = Number(effectiveProduct.id);
     if (!Number.isFinite(pid)) return;
+    if (getSharedShopProductRuntime().getProductPreorderInfo(effectiveProduct)?.isOpen === false) return;
     const wasEmpty = cartCountTotal() === 0;
     const mainUpsellBlockBefore = elCartList?.querySelector(".shop-cart-upsell") || null;
     const sheetUpsellBlockBefore = openCartSheetCtx?.listEl

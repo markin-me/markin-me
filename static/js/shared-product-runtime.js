@@ -261,6 +261,8 @@ function buildProductOptionGroupsFromBatch(productId, assignments, optionGroupsB
         return runtime.normalizeOptionItemForDisplay({
           id: Number(item.id),
           target_product_id: Number(item.target_product_id || 0),
+          product_sale_mode: item.product_sale_mode,
+          product_preorder_settings_json: item.product_preorder_settings_json,
           title: runtime.str(item.product_name || item.name || ""),
           product_price: Number(item.product_price || 0),
           product_base_qty: Number(item.product_base_qty || 1) || 1,

@@ -11561,14 +11561,77 @@ body[data-admin-active-page] > .modal-backdrop{z-index:1290}
 }
 
 #productEditorForm .product-fulfillment-row{
-  display:flex;
-  gap:12px;
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  min-width:0;
+  gap:8px;
   align-items:flex-start;
 }
 
 #productEditorForm .product-fulfillment-row .product-fulfillment-mode-field{
   flex:1 1 0;
+  min-width:0;
 }
+
+#productEditorForm .product-fulfillment-row .product-fulfillment-select-trigger{
+  min-width:0;
+  max-width:100%;
+  box-sizing:border-box;
+  padding:0 8px;
+  gap:4px;
+  font-size:12px;
+}
+
+#productEditorForm .product-fulfillment-row .product-fulfillment-select-trigger > span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+#peSaleModeMenu{
+  left:auto;
+  right:0;
+  width:200px;
+}
+
+#pePreorderConditions{min-width:0;padding:12px}
+.product-preorder-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 16px;gap:8px;align-items:start}
+.product-preorder-title{font-size:14px;align-self:center}
+.product-preorder-lead{min-width:0;position:relative}
+.product-preorder-lead.is-editing #pePreorderLead{visibility:hidden}
+.product-preorder-custom{position:absolute;inset:0;display:flex;align-items:center;gap:4px;height:36px;padding:0 8px;box-sizing:border-box;border:1px solid var(--color-border);border-radius:999px;background:var(--color-surface)}
+.product-preorder-custom input{min-width:0;width:100%;border:0;background:transparent;color:var(--color-text);font:inherit;font-size:12px;font-weight:800;outline:none;appearance:textfield;-moz-appearance:textfield}
+.product-preorder-custom input::-webkit-inner-spin-button,
+.product-preorder-custom input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.product-preorder-custom:focus-within{border-color:var(--color-primary)}
+.product-preorder-custom button{flex:none;display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--color-primary);cursor:pointer}
+.product-preorder-toggle{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0;padding:0;border:0;background:transparent;color:var(--color-text);font:inherit;text-align:left;cursor:pointer}
+.product-preorder-head > .product-preorder-toggle{height:36px;justify-content:center}
+.product-preorder-toggle b{font-size:14px}
+.product-preorder-toggle i{font-size:10px}
+.product-preorder-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px}
+.product-preorder-columns > div{min-width:0}
+.product-preorder-columns > div > b{display:block;font-size:13px;margin-bottom:8px}
+#pePreorderConditions .new-order-right-select-trigger{min-width:0;width:100%;box-sizing:border-box;padding:0 8px;gap:4px;font-size:12px;height:36px;background:var(--color-surface)}
+#pePreorderConditions .new-order-right-select-trigger span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#pePreorderConditions .new-order-right-select-menu{width:100%;min-width:0;box-sizing:border-box;padding:4px}
+#pePreorderConditions .new-order-right-select-option{width:100%;min-width:0;height:auto;min-height:34px;white-space:normal;font-size:12px}
+#pePreorderConditions .new-order-right-calendar{position:static;transform:none;width:100%;min-width:0;box-sizing:border-box;padding:6px;border-radius:12px;box-shadow:none;margin-top:8px;gap:6px}
+#pePreorderConditions .new-order-right-calendar-head{grid-template-columns:22px minmax(0,1fr) 22px;gap:2px}
+#pePreorderConditions .new-order-right-calendar-title{font-size:12px;overflow-wrap:anywhere}
+#pePreorderConditions .new-order-right-calendar-nav{width:22px;height:24px}
+#pePreorderConditions .new-order-right-calendar-grid,
+#pePreorderConditions .new-order-right-calendar-weekdays{grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+#pePreorderConditions .new-order-right-calendar-cell{width:100%;min-width:0;height:24px;padding:0;font-size:11px}
+#pePreorderConditions .new-order-right-calendar-weekdays span{font-size:10px}
+#pePreorderConditions .is-in-range{background:var(--color-primary);color:var(--on-primary);border-color:var(--color-primary);opacity:.6}
+#pePreorderConditions small{display:block;font-size:11px;color:var(--color-text-muted);overflow-wrap:anywhere}
+.product-preorder-weekdays{margin-top:16px}
+.product-preorder-weekdays > b{font-size:13px}
+#pePreorderWeekdays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin:8px 0}
+#pePreorderWeekdays button{min-width:0;height:30px;padding:0;border:1px solid var(--color-border);border-radius:999px;background:var(--color-surface);color:var(--color-text);cursor:pointer}
+#pePreorderWeekdays button[aria-pressed="true"]{background:var(--color-primary);border-color:var(--color-primary);color:var(--on-primary)}
 
 #productEditorForm .product-fulfillment-mode-field .new-order-right-select-wrap,
 #productEditorForm .product-fulfillment-mode-field .new-order-right-select-trigger{
@@ -35563,6 +35626,9 @@ body:is(.page-new-order,.new-order-editor-active,.page-orders) :is(#newOrderTabs
 .product-tab-edit-icon{flex:0 0 auto;font-size:10px}
 .new-order-product-flight{position:fixed;z-index:10000;pointer-events:none;object-fit:contain;border-radius:14px;filter:drop-shadow(0 4px 8px #0003);will-change:transform,opacity}
 body:is(.page-new-order,.new-order-editor-active) #newOrderProductsGrid.is-shared-catalog{display:block}
+.new-order-cart-preorder-badge{display:inline-flex;align-items:center;margin-top:4px;padding:4px 8px;border-radius:999px;background:linear-gradient(135deg,var(--shop-buy,#ff7415),#ffb15a);color:var(--shop-buy-text,#fff);font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap}
+.new-order-cart-preorder-badge.has-preorder-weekdays{display:inline-block;max-width:100%;box-sizing:border-box;white-space:normal;font-weight:400}
+.new-order-cart-preorder-badge.has-preorder-weekdays strong{font-weight:800}
 #newOrderProductOverlay.is-shared-product .new-order-product-sheet-list{padding:0;display:block;overflow:hidden;flex:1 1 0;min-height:0}
 #newOrderProductOverlay.is-shared-product .new-order-shared-product-host{height:100%;min-height:0}
 #newOrderProductOverlay.is-shared-product .new-order-product-sheet-footer{display:none}
