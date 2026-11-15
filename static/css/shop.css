@@ -28183,3 +28183,60 @@ body.page-shop #appModal.team-unsaved-modal .app-modal-footer .btn:hover{backgro
 
 #shopOrderDetailsTotalValue, #shopMobileOrderTotalBtn .shop-checkout-total { display: flex; flex-direction: column; align-items: center; }
 #shopOrderDetailsTotalValue small, #shopMobileOrderTotalBtn .shop-checkout-total small { font-size: 11px; font-weight: 400; line-height: 1.25; }
+
+/* Catalog cards reserve the same space with or without text and discounts. */
+body.page-shop .shop-products-grid > .sp-card{
+  display: grid;
+  grid-template-rows: auto auto;
+  aspect-ratio: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  align-self: start;
+}
+body.page-shop .shop-products-grid > .sp-card > .sp-media{
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: 1 / 1;
+}
+body.page-shop .shop-products-grid > .sp-card > .sp-info{
+  display: grid;
+  grid-template-rows: calc(var(--sp-title-size) * 1.15 * 2) calc(var(--sp-sub-size) * 1.2 * 2 + 1px) calc(var(--qty-pill-h) + 14px);
+  min-height: 0;
+  max-height: none;
+}
+body.page-shop .shop-products-grid > .sp-card .sp-title,
+body.page-shop .shop-products-grid > .sp-card .sp-sub{
+  min-height: 0;
+  max-height: 100%;
+  margin: 0;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+body.page-shop .shop-products-grid > .sp-card .sp-sub--defaults{
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+body.page-shop .shop-products-grid > .sp-card .sp-sub-line{
+  flex: 0 0 calc(var(--sp-sub-size) * 1.2);
+  line-height: 1.2;
+}
+body.page-shop .shop-products-grid > .sp-card .sp-bottom{
+  margin-top: 0;
+  min-height: 0;
+  align-items: flex-end;
+}
+body.page-shop .shop-products-grid > .sp-card .qty-pill__center{
+  align-items: flex-end;
+}
+body.page-shop .shop-products-grid > .sp-card .sp-price-stack,
+body.page-shop .shop-products-grid > .sp-card .sp-cart-total-stack{
+  justify-content: flex-end;
+  transform: none;
+}
