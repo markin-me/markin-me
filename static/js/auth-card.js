@@ -82,6 +82,12 @@
     const retryButton=document.createElement('button');retryButton.type='button';retryButton.className=recovery?'btn hidden':'btn btn-primary';retryButton.textContent='Продолжить';retryButton.disabled=employee?!/^7\d{10}$/.test(employeePhone.value.replace(/\D/g,'')):!/^7\d{10}$/.test(identity.value.replace(/\D/g,''));root.insertBefore(retryButton,form);
     const phoneInput=employee?employeePhone:identity;
     const customerError=error=>{
+      if(employee&&!recovery&&!['PHONE_REQUIRED','EMPLOYEE_NOT_FOUND','CODE_INVALID','CODE_EXPIRED','CODE_ALREADY_USED','CODE_ATTEMPTS_EXCEEDED','CODE_RESEND_TOO_SOON','LOGIN_RATE_LIMITED'].includes(error.message)){
+        customerStep('methods');methods.classList.remove('hidden');
+        buttons.forEach(button=>button.classList.add('hidden'));
+        alternative.classList.remove('hidden');resendButton.classList.add('hidden');switchButton.classList.add('hidden');
+        message.textContent='Вход через мессенджеры сейчас недоступен. Используйте логин и пароль.';return;
+      }
       methods.classList.remove('hidden');
       if(!employee)guestButton.classList.remove('hidden');
       if(error.payload?.delivery_failed){
@@ -241,10 +247,11 @@
           const link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener';link.textContent=employee?'Открыть бота':provider==='tg'?'Открыть Telegram':'Открыть MAX';
           if(!recovery){link.className='btn shop-auth-open-provider';link.addEventListener('click',event=>{event.preventDefault();if(activeProviderLink)activeProviderLink.popup=openCustomerProvider(url.href);});}
           if(recovery||!popup)message.append(link);timer=setTimeout(check,1500);
-        }catch(e){popup?.close();if(disposed||!employee&&run!==customerRun)return;cancel();if(employee)message.textContent=errorText(e.message);else{customerStep('methods');customerError(e);}}finally{busy=false;buttons.forEach(b=>b.disabled=false);button.classList.remove('is-loading');button.removeAttribute('aria-busy');if(label){label.replaceChildren(...labelParts);if(requestId&&activeProviderLink?.provider===provider)label.textContent=provider==='tg'?'Открыть Telegram':'Открыть MAX';}}
+        }catch(e){popup?.close();if(disposed||!employee&&run!==customerRun)return;cancel();if(employee){if(recovery)message.textContent=errorText(e.message);else customerError(e);}else{customerStep('methods');customerError(e);}}finally{busy=false;buttons.forEach(b=>b.disabled=false);button.classList.remove('is-loading');button.removeAttribute('aria-busy');if(label){label.replaceChildren(...labelParts);if(requestId&&activeProviderLink?.provider===provider)label.textContent=provider==='tg'?'Открыть Telegram':'Открыть MAX';}}
       });
     }
-    const alternative=document.createElement('button');alternative.type='button';alternative.className=employee&&!recovery?'btn shop-auth-guest':'btn btn-primary';alternative.textContent=recovery?'Задать новый пароль':employee?'По логину и паролю':'По телефону';methods.append(alternative);
+    const alternative=document.createElement('button');alternative.type='button';alternative.className=employee&&!recovery?'btn shop-auth-guest':'btn btn-primary';alternative.textContent=recovery?'Задать новый пароль':employee?'По логину и паролю':'По телефону';
+    methods.append(alternative);
     alternative.addEventListener('click',()=>{
       if(!employee){cancel();message.textContent='';progress.textContent='';customerStep('birthday');secret.focus();return;}
       credentialReturnState={phase:customerPhase,code:codeInputs.map(cell=>cell.value),message:message.textContent,progress:progress.textContent,expiresAt:codeExpiresAt};

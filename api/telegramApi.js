@@ -1,6 +1,8 @@
 'use strict';
 
-// Shared HTTP boundary for message delivery, not webhook registration or polling.
+const { fetchTelegram } = require('./telegramTransport');
+
+// Shared HTTP boundary. Uses the application's fetch transport (IPv6 on the VPS).
 const CLASSIFICATIONS = new Set([
   'TELEGRAM_API_TIMEOUT', 'TELEGRAM_CONNECT_FAILED', 'TELEGRAM_RATE_LIMITED',
   'TELEGRAM_API_REJECTED', 'TELEGRAM_DELIVERY_UNKNOWN',
@@ -47,6 +49,15 @@ function telegramErrorReason(error) {
 function networkFailure(error, signal, stage, httpStatus) {
   const chain = errorChain(error);
   const causeCode = chain.map(item => item.code).find(code => CAUSE_CODES.has(code)) || null;
+  const transportError = chain.find(item => CLASSIFICATIONS.has(item.classification));
+  if (transportError) {
+    return {
+      classification: transportError.classification,
+      phase: transportError.phase || 'unknown',
+      deliveryOutcome: transportError.deliveryOutcome || 'unknown',
+      stage, causeCode: causeCode || transportError.code || null, httpStatus, retryAfter: 0,
+    };
+  }
   const connecting = stage === 'await_headers' && CONNECT_PHASES[causeCode];
   const deadlineAbort = signal.aborted && signal.reason?.name === 'TimeoutError'
     && chain.some(item => item.name === 'AbortError' || item.code === 'ABORT_ERR');
@@ -88,7 +99,7 @@ function deliveryError(diagnostic) {
 }
 
 async function requestTelegramApi(apiBase, method, body, options = {}) {
-  if (!['sendMessage', 'answerCallbackQuery'].includes(method)) throw new Error('TELEGRAM_METHOD_NOT_SUPPORTED');
+  if (!['sendMessage', 'answerCallbackQuery', 'getUpdates', 'getWebhookInfo', 'deleteWebhook', 'editMessageReplyMarkup'].includes(method)) throw new Error('TELEGRAM_METHOD_NOT_SUPPORTED');
   const signal = options.signal || AbortSignal.timeout(10000);
   const startedAtMonoMs = nowMs();
   let stage = 'prepare_request';
@@ -98,9 +109,9 @@ async function requestTelegramApi(apiBase, method, body, options = {}) {
     signal.throwIfAborted();
     const encodedBody = JSON.stringify(body);
     stage = 'await_headers';
-    const response = await fetch(`${apiBase}/${method}`, {
+    const response = await fetchTelegram(`${apiBase}/${method}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: encodedBody, signal,
+      body: encodedBody, signal, requestTimeoutMs: method === 'getUpdates' ? 35000 : 10000,
     });
     httpStatus = response.status;
     stage = 'read_body';
@@ -116,7 +127,10 @@ async function requestTelegramApi(apiBase, method, body, options = {}) {
       diagnostic = apiFailure(httpStatus, data);
       throw deliveryError(diagnostic);
     }
-    const validResult = method === 'answerCallbackQuery' ? data?.result === true
+    const validResult = ['answerCallbackQuery', 'deleteWebhook'].includes(method) ? data?.result === true
+      : method === 'getUpdates' ? Array.isArray(data?.result) && data.result.every(update => Number.isSafeInteger(update?.update_id) && update.update_id >= 0)
+      : method === 'getWebhookInfo' ? typeof data?.result?.url === 'string'
+      : method === 'editMessageReplyMarkup' ? data?.result === true || Number.isSafeInteger(data?.result?.message_id)
       : Number.isSafeInteger(data?.result?.message_id) && data.result.message_id >= 0;
     if (data?.ok !== true || !validResult) {
       diagnostic = { classification: 'TELEGRAM_DELIVERY_UNKNOWN', phase: 'read_body', stage,

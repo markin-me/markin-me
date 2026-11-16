@@ -553,13 +553,6 @@
 
       <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSitePanel">
         <div class="settings-site-form settings-panel-scroll">
-          <fieldset class="settings-site-field" id="customerAuthSettings" disabled>
-            <legend class="field-label">АВТОРИЗАЦИЯ ПОКУПАТЕЛЕЙ</legend>
-            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="tg" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Telegram для покупателей</span></label>
-            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="max" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">MAX для покупателей</span></label>
-            <button class="btn btn-primary" type="button" id="customerAuthSave">Сохранить авторизацию</button>
-          </fieldset>
-          <div class="muted" role="status" id="customerAuthNotice"></div>
           <div class="settings-site-field">
             <label class="field-label">НАЗВАНИЕ САЙТА</label>
             <div class="site-name-row">
@@ -598,6 +591,13 @@
       </div>
 <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsTelegramAppPanel">
         <div class="settings-site-form settings-panel-scroll">
+          <fieldset class="settings-site-field" id="customerAuthSettings" disabled>
+            <legend class="field-label">АВТОРИЗАЦИЯ ПОКУПАТЕЛЕЙ</legend>
+            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="tg" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Telegram для покупателей</span></label>
+            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="max" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">MAX для покупателей</span></label>
+            <button class="btn btn-primary" type="button" id="customerAuthSave">Сохранить авторизацию</button>
+          </fieldset>
+          <div class="muted" role="status" id="customerAuthNotice"></div>
           <div class="settings-auth-top">
             <div class="settings-auth-photo-column">
               <div class="settings-site-field">
@@ -648,15 +648,6 @@
             </div>
           </div>
 
-          <div class="settings-site-field">
-            <label class="field-label">MINI APP В СООБЩЕНИИ БОТА</label>
-            <span class="field-hint">Показывать кнопку перехода в Telegram mini app после авторизации</span>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" id="tenantTelegramMiniAppEnabled" />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Включено</span>
-            </label>
-          </div>
         </div>
         <div class="panel-footer" id="settingsTelegramFooter">
           <div class="product-footer-actions">

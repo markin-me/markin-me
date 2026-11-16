@@ -1,7 +1,10 @@
 'use strict';
 
+const { fetchTelegram } = require('./telegramTransport');
+
 const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
+const { requestTelegramApi } = require('./telegramApi');
 
 const operationStorage = new AsyncLocalStorage();
 const MAX_DELETE_ATTEMPTS = 5;
@@ -25,6 +28,20 @@ function logTrackingError(stage, error) {
   if (now - lastTrackingErrorAt < 60000) return;
   lastTrackingErrorAt = now;
   console.error('AUTH_SERVICE_CLEANUP_TRACKING_FAILED', { stage, reason: safeErrorCode(error) });
+}
+
+function monotonicMs() {
+  return Number(process.hrtime.bigint()) / 1e6;
+}
+
+async function measureOperationTracking(context, handler) {
+  if (typeof context?.onTrackingTiming !== 'function') return handler();
+  const startedAt = monotonicMs();
+  try {
+    return await handler();
+  } finally {
+    try { context.onTrackingTiming(monotonicMs() - startedAt); } catch (_) {}
+  }
 }
 
 async function ensureOperation(db, details) {
@@ -64,7 +81,8 @@ function createServiceInteractionContext(db, details) {
   if (!tenantId || !['tg', 'max'].includes(provider) || !eventKey) return null;
   const publicId = crypto.createHash('sha256')
     .update(`${tenantId}:${provider}:${eventKey}`, 'utf8').digest('base64url');
-  return { db, tenantId, provider, sourceType: 'interaction', publicId, interaction: true, keepPending: false };
+  return { db, tenantId, provider, sourceType: 'interaction', publicId, interaction: true, keepPending: false,
+    onTrackingTiming: details.onTrackingTiming };
 }
 
 async function markOperation(db, id, outcome) {
@@ -122,12 +140,14 @@ function runWithOperation(context, handler) {
     try {
       const result = await handler();
       if (context.interaction && context.operationId && !context.keepPending) {
-        await markOperation(context.db, context.operationId, 'success');
+        await measureOperationTracking(context,
+          () => markOperation(context.db, context.operationId, 'success'));
       }
       return result;
     } catch (error) {
       if (context.interaction && context.operationId) {
-        await markOperation(context.db, context.operationId, 'error');
+        await measureOperationTracking(context,
+          () => markOperation(context.db, context.operationId, 'error'));
       }
       throw error;
     }
@@ -142,7 +162,8 @@ function markCurrentOperation(outcome) {
     context.keepPending = false;
     return Promise.resolve(true);
   }
-  return markOperation(context.db, context.operationId, outcome);
+  return measureOperationTracking(context,
+    () => markOperation(context.db, context.operationId, outcome));
 }
 
 function keepCurrentOperationPending() {
@@ -198,6 +219,12 @@ async function recordServiceMessage(db, details) {
         [String(details.chatId), String(details.messageId), delay, delay, delay, delay, details.operationId]
       );
     }
+    if (details.hasReplyKeyboard || details.hasInlineKeyboard) {
+      await conn.query(`UPDATE auth_service_messages SET has_reply_keyboard=?,has_inline_keyboard=?
+        WHERE operation_id=? AND chat_id=? AND message_id=?`,
+      [details.hasReplyKeyboard ? 1 : 0, details.hasInlineKeyboard ? 1 : 0,
+        details.operationId, String(details.chatId), String(details.messageId)]);
+    }
     await conn.commit();
     return true;
   } catch (error) {
@@ -212,17 +239,19 @@ async function recordServiceMessage(db, details) {
 async function recordCurrentServiceMessage(details) {
   const context = currentOperation();
   if (!context) return false;
-  if (!context.operationId && context.interaction) {
-    context.operationId = await ensureOperation(context.db, {
-      sourceType: 'interaction', publicId: context.publicId, tenantId: context.tenantId,
-      provider: context.provider, purpose: 'interaction', kind: 'interaction', expiresInSeconds: 10 * 60,
-    });
-    if (context.operationId && context.outcome) {
-      await markOperation(context.db, context.operationId, context.outcome);
+  return measureOperationTracking(context, async () => {
+    if (!context.operationId && context.interaction) {
+      context.operationId = await ensureOperation(context.db, {
+        sourceType: 'interaction', publicId: context.publicId, tenantId: context.tenantId,
+        provider: context.provider, purpose: 'interaction', kind: 'interaction', expiresInSeconds: 10 * 60,
+      });
+      if (context.operationId && context.outcome) {
+        await markOperation(context.db, context.operationId, context.outcome);
+      }
     }
-  }
-  if (!context.operationId) return false;
-  return recordServiceMessage(context.db, { ...details, operationId: context.operationId });
+    if (!context.operationId) return false;
+    return recordServiceMessage(context.db, { ...details, operationId: context.operationId });
+  });
 }
 
 async function recordCurrentTelegramUserServiceMessage(message, serviceMessageType) {
@@ -237,37 +266,39 @@ async function recordCurrentTelegramUserServiceMessage(message, serviceMessageTy
       || !/^[1-9][0-9]{0,19}$/.test(chatId) || providerUserId !== chatId
       || !Number.isSafeInteger(messageId) || messageId <= 0) return false;
 
-  const sourceTable = context.sourceType === 'challenge'
-    ? 'auth_verification_challenges' : 'auth_browser_requests';
-  const providerUserColumn = context.sourceType === 'challenge'
-    ? 'completed_provider_user_id' : 'provider_user_id';
-  const params = [context.publicId, context.tenantId, providerUserId];
-  let sourceCondition = '';
-  if (serviceMessageType === 'start') {
-    const token = String(message?.text || '').match(/^\/start(?:@\w+)?\s+([abl]_[A-Za-z0-9_-]{40})$/)?.[1];
-    if (!token || (token.startsWith('b_') ? 'browser' : 'challenge') !== context.sourceType) return false;
-    sourceCondition = ' AND token_hash=?';
-    params.push(crypto.createHash('sha256').update(token).digest());
-  } else if (serviceMessageType === 'contact') {
-    if (!message?.contact?.user_id || String(message.contact.user_id) !== providerUserId
-        || message.forward_origin || message.forward_date || message.forward_from
-        || message.forward_from_chat || message.forward_sender_name) return false;
-  } else {
-    return false;
-  }
+  return measureOperationTracking(context, async () => {
+    const sourceTable = context.sourceType === 'challenge'
+      ? 'auth_verification_challenges' : 'auth_browser_requests';
+    const providerUserColumn = context.sourceType === 'challenge'
+      ? 'completed_provider_user_id' : 'provider_user_id';
+    const params = [context.publicId, context.tenantId, providerUserId];
+    let sourceCondition = '';
+    if (serviceMessageType === 'start') {
+      const token = String(message?.text || '').match(/^\/start(?:@\w+)?\s+([abl]_[A-Za-z0-9_-]{40})$/)?.[1];
+      if (!token || (token.startsWith('b_') ? 'browser' : 'challenge') !== context.sourceType) return false;
+      sourceCondition = ' AND token_hash=?';
+      params.push(crypto.createHash('sha256').update(token).digest());
+    } else if (serviceMessageType === 'contact') {
+      if (!message?.contact?.user_id || String(message.contact.user_id) !== providerUserId
+          || message.forward_origin || message.forward_date || message.forward_from
+          || message.forward_from_chat || message.forward_sender_name) return false;
+    } else {
+      return false;
+    }
 
-  const [sources] = await context.db.query(
-    `SELECT public_id FROM ${sourceTable}
-     WHERE public_id=? AND tenant_id=? AND provider='tg' AND ${providerUserColumn}=?${sourceCondition}
-     LIMIT 1`, params
-  );
-  if (sources.length !== 1) return false;
-  return recordServiceMessage(context.db, {
-    operationId: context.operationId, provider: 'tg', chatId, messageId: String(messageId),
+    const [sources] = await context.db.query(
+      `SELECT public_id FROM ${sourceTable}
+       WHERE public_id=? AND tenant_id=? AND provider='tg' AND ${providerUserColumn}=?${sourceCondition}
+       LIMIT 1`, params
+    );
+    if (sources.length !== 1) return false;
+    return recordServiceMessage(context.db, {
+      operationId: context.operationId, provider: 'tg', chatId, messageId: String(messageId),
+    });
   });
 }
 
-async function resolveServiceOperation(db, { tenantId, provider, token, providerUserId }) {
+async function resolveServiceOperation(db, { tenantId, provider, token, providerUserId, onTrackingTiming }) {
   // Source auth tables use the connection's SQL clock; only their remaining duration
   // crosses into the cleanup queue, whose DATETIME(6) values are UTC throughout.
   const normalizedToken = String(token || '');
@@ -338,7 +369,7 @@ async function resolveServiceOperation(db, { tenantId, provider, token, provider
         );
         if (interactions[0]) {
           return { db, operationId: interactions[0].operation_id, tenantId: Number(tenantId), provider,
-            sourceType: 'interaction', interaction: true, keepPending: false };
+            sourceType: 'interaction', interaction: true, keepPending: false, onTrackingTiming };
         }
       }
     }
@@ -347,7 +378,7 @@ async function resolveServiceOperation(db, { tenantId, provider, token, provider
       ? await ensureChallengeOperation(db, { ...row, publicId: row.public_id, tenantId: row.tenant_id, expiresInSeconds: row.remaining_seconds })
       : await ensureBrowserOperation(db, { ...row, publicId: row.public_id, tenantId: row.tenant_id, expiresInSeconds: row.remaining_seconds });
     return id ? { db, operationId: id, tenantId: Number(row.tenant_id), provider,
-      sourceType, publicId: row.public_id } : null;
+      sourceType, publicId: row.public_id, onTrackingTiming } : null;
   } catch (error) {
     logTrackingError('resolve_operation', error);
     return null;
@@ -358,20 +389,51 @@ function deletionError(code, permanent = false, retryAfter = 0) {
   return Object.assign(new Error(code), { code, permanent, retryAfter });
 }
 
-async function deleteTelegramMessage(token, row) {
-  const response = await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
+async function telegramCleanupRequest(token, method, body) {
+  const response = await fetchTelegram(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(DELETE_TIMEOUT_MS),
-    body: JSON.stringify({ chat_id: row.chat_id, message_id: Number(row.message_id) }),
+    body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => null);
-  if (response.ok && data?.ok === true && data.result === true) return { alreadyMissing: false };
+  if (response.ok && data?.ok === true && (data.result === true || Number.isSafeInteger(data.result?.message_id))) return { alreadyMissing: false };
   const description = String(data?.description || '').toLowerCase();
   if (response.status === 400 && description.includes('message to delete not found')) return { alreadyMissing: true };
+  if (method === 'editMessageReplyMarkup' && response.status === 400
+      && (description.includes('message is not modified') || description.includes('message to edit not found'))) return { alreadyMissing: true };
   if (response.status === 429) throw deletionError('TELEGRAM_DELETE_RATE_LIMITED', false, Number(data?.parameters?.retry_after) || 1);
   if ([400, 401, 403].includes(response.status)) throw deletionError(
     response.status === 400 ? 'TELEGRAM_DELETE_REJECTED' : response.status === 401 ? 'TELEGRAM_TOKEN_REJECTED' : 'TELEGRAM_DELETE_FORBIDDEN', true
   );
   throw deletionError('TELEGRAM_DELETE_FAILED');
+}
+
+async function deleteTelegramMessage(token, row) {
+  return telegramCleanupRequest(token, 'deleteMessage', { chat_id: row.chat_id, message_id: Number(row.message_id) });
+}
+
+async function clearTelegramControls(db, token, row, leaseToken) {
+  if (row.controls_cleared_at || (!row.has_reply_keyboard && !row.has_inline_keyboard)) return;
+  if (row.has_inline_keyboard) await telegramCleanupRequest(token, 'editMessageReplyMarkup', {
+    chat_id: row.chat_id, message_id: Number(row.message_id), reply_markup: { inline_keyboard: [] },
+  });
+  if (row.has_reply_keyboard && !row.cleanup_message_id) {
+    // A newer operation in the same shared bot/chat may still need its keyboard.
+    const [newer] = await db.query(`SELECT m.id FROM auth_service_messages m
+      JOIN auth_service_operations o ON o.operation_id=m.operation_id
+      JOIN ten_tenants t ON t.id=m.tenant_id
+      WHERE m.provider='tg' AND m.chat_id=? AND m.has_reply_keyboard=1 AND m.id<>?
+        AND o.status='pending' AND o.expires_at>UTC_TIMESTAMP(6) AND TRIM(t.telegram_bot_token)=? LIMIT 1`,
+    [row.chat_id, row.id, token]);
+    if (!newer.length) {
+      const sent = await requestTelegramApi(`https://api.telegram.org/bot${token}`, 'sendMessage', {
+        chat_id: row.chat_id, text: 'Запрос завершён.', reply_markup: { remove_keyboard: true },
+      });
+      row.cleanup_message_id = sent.result.message_id;
+      await db.query('UPDATE auth_service_messages SET cleanup_message_id=? WHERE id=? AND lease_token=?',
+        [row.cleanup_message_id, row.id, leaseToken]);
+    }
+  }
+  await db.query('UPDATE auth_service_messages SET controls_cleared_at=UTC_TIMESTAMP(6) WHERE id=? AND lease_token=?', [row.id, leaseToken]);
 }
 
 async function deleteMaxMessage(token, row) {
@@ -400,6 +462,12 @@ function createMessengerCleanupWorker(db) {
   let lastWorkerErrorAt = 0;
 
   async function tick() {
+    // Browser completion/cancellation can happen without another incoming update.
+    const [finished] = await db.query(`SELECT o.operation_id,
+      CASE WHEN r.state IN ('confirmed','consumed') THEN 'success' ELSE 'cancelled' END outcome
+      FROM auth_service_operations o JOIN auth_browser_requests r ON r.public_id=o.source_public_id AND r.tenant_id=o.tenant_id AND r.provider=o.provider
+      WHERE o.source_type='browser' AND o.status='pending' AND r.state IN ('confirmed','consumed','cancelled') LIMIT 100`);
+    for (const operation of finished) await markOperation(db, operation.operation_id, operation.outcome);
     await db.query(
       `UPDATE auth_service_operations SET status='expired',completed_at=expires_at,updated_at=UTC_TIMESTAMP(6)
        WHERE status='pending' AND expires_at<=UTC_TIMESTAMP(6) LIMIT 100`
@@ -426,6 +494,10 @@ function createMessengerCleanupWorker(db) {
       const [[tenant]] = await db.query('SELECT telegram_bot_token,max_bot_token FROM ten_tenants WHERE id=? LIMIT 1', [candidate.tenant_id]);
       const token = String(candidate.provider === 'tg' ? tenant?.telegram_bot_token || '' : tenant?.max_bot_token || '').trim();
       if (!token) throw deletionError('MESSENGER_BOT_TOKEN_UNAVAILABLE', true);
+      if (candidate.provider === 'tg') await clearTelegramControls(db, token, candidate, leaseToken);
+      if (candidate.provider === 'tg' && candidate.cleanup_message_id) {
+        await deleteTelegramMessage(token, { ...candidate, message_id: candidate.cleanup_message_id });
+      }
       const result = candidate.provider === 'tg'
         ? await deleteTelegramMessage(token, candidate)
         : await deleteMaxMessage(token, candidate);

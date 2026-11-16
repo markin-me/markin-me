@@ -50,6 +50,10 @@ function randomPublicId() {
   return crypto.randomBytes(32).toString('base64url');
 }
 
+function monotonicMs() {
+  return Number(process.hrtime.bigint()) / 1e6;
+}
+
 function randomLinkToken() {
   return `a_${crypto.randomBytes(30).toString('base64url')}`;
 }
@@ -781,6 +785,7 @@ async function verifyCodeChallenge(db, options) {
     throw new MessengerAuthError('CODE_INVALID', 400);
   }
   const conn = await db.getConnection();
+  let cleanupOutcome = null;
   try {
     await conn.beginTransaction();
     const [rows] = await conn.query(
@@ -793,11 +798,11 @@ async function verifyCodeChallenge(db, options) {
     if (!challenge || challenge.delivery_status !== 'sent') throw new MessengerAuthError('CODE_NOT_REQUESTED', 400);
     if (challenge.consumed_at) throw new MessengerAuthError('CODE_ALREADY_USED', 400);
     if (!Number(challenge.expires_valid)) {
-      await markOperation(db, cleanupOperationId('challenge', requestId), 'expired');
+      cleanupOutcome = 'expired';
       throw new MessengerAuthError('CODE_EXPIRED', 400);
     }
     if (Number(challenge.attempts || 0) >= Number(challenge.max_attempts || MAX_CODE_ATTEMPTS)) {
-      await markOperation(db, cleanupOperationId('challenge', requestId), 'error');
+      cleanupOutcome = 'error';
       throw new MessengerAuthError('CODE_ATTEMPTS_EXCEEDED', 429);
     }
     const digest = await hashCode(code, challenge.code_salt, codeScopeKey(scope, purpose, requestId));
@@ -805,7 +810,7 @@ async function verifyCodeChallenge(db, options) {
       await conn.query('UPDATE auth_verification_challenges SET attempts=attempts+1 WHERE id=?', [Number(challenge.id)]);
       await conn.commit();
       if (Number(challenge.attempts || 0) + 1 >= Number(challenge.max_attempts || MAX_CODE_ATTEMPTS)) {
-        await markOperation(db, cleanupOperationId('challenge', requestId), 'error');
+        cleanupOutcome = 'error';
       }
       throw new MessengerAuthError('CODE_INVALID', 400, {
         attemptsRemaining: Math.max(0, Number(challenge.max_attempts) - Number(challenge.attempts) - 1),
@@ -820,13 +825,14 @@ async function verifyCodeChallenge(db, options) {
       [Number(challenge.id)]
     );
     await conn.commit();
-    await markOperation(db, cleanupOperationId('challenge', requestId), 'success');
+    cleanupOutcome = 'success';
     return { ok: true, value, provider: String(challenge.provider) };
   } catch (error) {
     try { await conn.rollback(); } catch (_) {}
     throw error;
   } finally {
     conn.release();
+    if (cleanupOutcome) await markOperation(db, cleanupOperationId('challenge', requestId), cleanupOutcome);
   }
 }
 
@@ -848,7 +854,7 @@ function webhookEventKey(provider, update) {
   return crypto.createHash('sha256').update(stableJson(update), 'utf8').digest('hex');
 }
 
-async function processWebhookEvent(db, rawProvider, update, handler, namespace = '') {
+async function processWebhookEvent(db, rawProvider, update, handler, namespace = '', timingHooks = null) {
   const provider = normalizeProvider(rawProvider);
   const originalKey = webhookEventKey(provider, update);
   const eventKey = namespace
@@ -859,7 +865,16 @@ async function processWebhookEvent(db, rawProvider, update, handler, namespace =
   const eventDb = connectionDatabase(lockConnection);
   let acquired = false;
   try {
-    const [[lock]] = await lockConnection.query('SELECT GET_LOCK(?, 1) AS acquired', [lockName]);
+    const lockStartedAt = monotonicMs();
+    let lock;
+    try {
+      const [rows] = await lockConnection.query('SELECT GET_LOCK(?, 1) AS acquired', [lockName]);
+      lock = rows[0];
+    } finally {
+      if (typeof timingHooks?.onEventLockWait === 'function') {
+        try { timingHooks.onEventLockWait(monotonicMs() - lockStartedAt); } catch (_) {}
+      }
+    }
     acquired = Number(lock?.acquired) === 1;
     if (!acquired) throw new MessengerAuthError('WEBHOOK_IN_PROGRESS', 503);
     const [existing] = await eventDb.query(
@@ -867,6 +882,14 @@ async function processWebhookEvent(db, rawProvider, update, handler, namespace =
       [provider, eventKey]
     );
     if (existing[0]?.status === 'done') return { duplicate: true };
+    // Preserve delivery history when moving from route-scoped webhooks to a
+    // single bot-scoped poller (including several tenants sharing that bot).
+    const legacyKeys = (timingHooks?.legacyNamespaces || []).filter(n => n !== namespace)
+      .map(n => n ? crypto.createHash('sha256').update(`${n}:${originalKey}`).digest('hex') : originalKey);
+    if (legacyKeys.length) {
+      const [legacy] = await eventDb.query("SELECT event_key FROM auth_webhook_events WHERE provider=? AND event_key IN (?) AND status='done' LIMIT 1", [provider, legacyKeys]);
+      if (legacy.length) return { duplicate: true };
+    }
     if (!existing.length) {
       await eventDb.query(
         `INSERT INTO auth_webhook_events (provider, event_key, status, received_at)
@@ -947,6 +970,28 @@ async function hasBrowserAccountBinding(conn,{tenantId,accountType,provider,uid}
   return legacy.length===1;
 }
 
+async function restoreVerifiedBrowserContact(conn, request, uid) {
+  // Reuse phone proof only through the same active account/channel binding.
+  // Guest profile linking still requires the native contact for that operation.
+  if (request.contact_verified_at || request.guest_session_hash || request.purpose === 'profile_link') return;
+  const customer = request.account_type === 'customer';
+  const [accounts] = await conn.query(`SELECT DISTINCT u.id,u.phone,${customer ? 'u.phone_verified_at' : 'ec.phone_verified_at'} verified_at
+    FROM auth_account_links a
+    JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.verified_at IS NOT NULL
+    JOIN auth_messenger_channels c ON c.id=m.channel_id AND c.person_id=a.person_id AND c.revoked_at IS NULL AND c.verified_at IS NOT NULL
+    JOIN ${customer ? 'cust_customers' : 'app_users'} u ON u.tenant_id=a.tenant_id AND u.id=a.account_id AND u.is_active=1
+    ${customer ? '' : "JOIN auth_employee_customer_links ec ON ec.tenant_id=u.tenant_id AND ec.employee_id=u.id AND ec.conflict_code IS NULL AND u.employee_status='active'"}
+    WHERE a.tenant_id=? AND a.account_type=? AND c.provider=? AND c.provider_user_id=? LIMIT 2`,
+  [request.tenant_id, request.account_type, request.provider, uid]);
+  if (accounts.length !== 1 || !accounts[0].verified_at) return;
+  const phone = require('./helpers').normalizePhone(accounts[0].phone);
+  if (!/^\d{10,15}$/.test(phone) || request.requested_phone && request.requested_phone !== phone
+      || request.account_id && Number(request.account_id) !== Number(accounts[0].id)) return;
+  await conn.query('UPDATE auth_browser_requests SET contact_phone=?,contact_verified_at=NOW() WHERE public_id=?', [phone, request.public_id]);
+  request.contact_phone = phone;
+  request.contact_verified_at = true;
+}
+
 async function createBrowserRequest(db, { tenantId, accountType, provider, binding, ipAddress, purpose='login', guestSessionHash=null, requestedPhone=null }) {
   await assertBrowserSchema(db);
   if (!['customer','employee'].includes(accountType)) throw new MessengerAuthError('INVALID_ACCOUNT_SCOPE');
@@ -1015,6 +1060,7 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
     if (!confirm) {
       if (r.state === 'confirmed') { await conn.commit(); return { ok: true, confirmed: true, purpose:r.purpose }; }
       const known=await hasBrowserAccountBinding(conn,{tenantId,accountType:r.account_type,provider,uid});
+      if (known && provider === 'tg') await restoreVerifiedBrowserContact(conn, r, uid);
       await conn.query("UPDATE auth_browser_requests SET state='started',provider_user_id=? WHERE public_id=?", [uid,r.public_id]);
       if(!known && r.purpose==='password_reset')throw new MessengerAuthError('EMPLOYEE_MESSENGER_NOT_LINKED');
       await conn.commit(); return { ok: true, purpose:r.purpose,contactRequired:!r.contact_verified_at };
@@ -1197,6 +1243,7 @@ async function proveBrowserEmployee(db,{tenantId,accountId,requestId,binding,pas
 
 async function consumeBrowserRequest(db, { tenantId, accountType, requestId, binding, guestToken, storeId=1, cancel, onVerified }) {
   const conn=await db.getConnection();
+  let cleanupOutcome = null;
   try {
     await conn.beginTransaction();
     const [rows]=await conn.query('SELECT *, (expires_at>NOW()) AS valid FROM auth_browser_requests WHERE public_id=? AND tenant_id=? AND account_type=? FOR UPDATE',[requestId,tenantId,accountType]);
@@ -1209,11 +1256,11 @@ async function consumeBrowserRequest(db, { tenantId, accountType, requestId, bin
     if (cancel) {
       await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE public_id=? AND state IN ('pending','started','confirmed')",[requestId]);
       await conn.commit();
-      await markOperation(db, cleanupOperationId('browser', requestId), 'cancelled');
+      cleanupOutcome = 'cancelled';
       return {ok:true,state:'cancelled'};
     }
     if (Number(r.valid)!==1 || ['consumed','cancelled'].includes(r.state)) {
-      if (Number(r.valid)!==1) await markOperation(db, cleanupOperationId('browser', requestId), 'expired');
+      if (Number(r.valid)!==1) cleanupOutcome = 'expired';
       throw new MessengerAuthError('REQUEST_EXPIRED',409);
     }
     if(r.state!=='confirmed'){
@@ -1242,9 +1289,12 @@ async function consumeBrowserRequest(db, { tenantId, accountType, requestId, bin
     const value=await onVerified(conn,r);
     await conn.query("UPDATE auth_browser_requests SET state='consumed' WHERE public_id=?",[requestId]);
     await conn.commit();
-    await markOperation(db, cleanupOperationId('browser', requestId), 'success');
+    cleanupOutcome = 'success';
     return {ok:true,state:'confirmed',...value};
-  } catch(error){await conn.rollback();throw error;} finally{conn.release();}
+  } catch(error){await conn.rollback();throw error;} finally {
+    conn.release();
+    if (cleanupOutcome) await markOperation(db, cleanupOperationId('browser', requestId), cleanupOutcome);
+  }
 }
 
 async function verifyBrowserCode(db,{tenantId,accountType,requestId,binding,code,validateAccount,onVerified}){

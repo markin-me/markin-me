@@ -7,6 +7,16 @@
   let bindingsCache = null;
   let bindingsRequest = null;
   const pendingLinks = new Map();
+  const profileMenu = document.getElementById('userMenuDropdown');
+  const rootProfileNodes = Array.from(profileMenu.childNodes);
+  let profileOpenVersion = 0;
+  document.getElementById('shopProfileBtn')?.addEventListener('click', () => {
+    profileOpenVersion++;
+    if (profileMenu.firstChild === rootProfileNodes[0]) return;
+    clearInterval(pollTimer);pollTimer = null;
+    profileMenu.replaceChildren(...rootProfileNodes);
+    profileMenu.classList.remove('is-messengers-screen');
+  }, true);
 
   document.getElementById('userMenuChangePassword')?.addEventListener('click', async event => {
     event.preventDefault();
@@ -16,6 +26,7 @@
     const link = event.currentTarget;
     if (link.getAttribute('aria-busy') === 'true') return;
     link.setAttribute('aria-busy', 'true');
+    const openedVersion = profileOpenVersion;
     try {
       const response = await fetch(link.href);
       if (!response.ok) throw new Error('PASSWORD_FORM_LOAD_FAILED');
@@ -32,9 +43,16 @@
       notice.setAttribute('role', 'status');
       content.append(notice);
       const restore = () => { profile.replaceChildren(...profileNodes); link.focus(); };
-      const cancel = content.querySelector('.auth-password-cancel');
-      cancel.textContent = 'ОТМЕНИТЬ';
-      cancel.removeAttribute('href');
+      content.querySelector('.auth-password-cancel').remove();
+      const toolbar = document.createElement('div');
+      toolbar.className = 'messenger-security-toolbar';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'messenger-security-back';
+      cancel.setAttribute('aria-label', 'Назад');
+      cancel.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
+      toolbar.append(cancel, heading);
+      content.prepend(toolbar);
       cancel.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); restore(); });
       content.querySelectorAll('.password-toggle').forEach(button => button.addEventListener('click', () => {
         const input = content.querySelector('#' + button.dataset.target);
@@ -57,6 +75,7 @@
           notice.textContent = ({ CURRENT_PASSWORD_INVALID: 'Текущий пароль указан неверно.', PASSWORD_TOO_WEAK: 'Добавьте латинские буквы обоих регистров и цифры.', PASSWORD_TOO_SHORT: 'Минимум 12 символов.', PASSWORD_TOO_LONG: 'Пароль не должен превышать 72 байта.' })[error.code] || errorText(error.code);
         } finally { submit.disabled = false; }
       });
+      if (openedVersion !== profileOpenVersion || !document.getElementById('shopProfileBtn')?.closest('.user-menu-wrapper')?.classList.contains('active')) return;
       profile.replaceChildren(content);
       form.querySelector('input').focus();
     } catch (error) {

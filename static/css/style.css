@@ -751,10 +751,13 @@ body[data-admin-active-page] .shop-header-profile-img{width:24px;height:24px;fle
 .app-modal.messenger-settings-modal{inset:auto;top:50%;left:50%;right:auto;bottom:auto;width:min(460px,calc(100vw - 24px));height:min(460px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);border:0;border-radius:36px;background:var(--color-surface-2);box-shadow:0 16px 40px rgba(15,23,42,.25);transform:translate(-50%,-46%) scale(.98)}
 .app-modal.messenger-settings-modal.is-open{transform:translate(-50%,-50%) scale(1)}
 .app-modal.messenger-settings-modal>.app-modal-header{display:none}
-.app-modal.messenger-settings-modal>.app-modal-body{padding:0;overflow-y:auto;background:var(--color-surface-2)}
+.app-modal.messenger-settings-modal>.app-modal-body{padding:0;overflow-y:auto;background:var(--color-surface)}
 .app-modal.messenger-settings-modal>.app-modal-body::after{display:none}
 .messenger-security-content{min-height:100%;padding:16px 10px 24px;box-sizing:border-box}
-body[data-admin-active-page] .user-menu-dropdown.is-messengers-screen{background:var(--color-surface-2)}
+body[data-admin-active-page] .is-messengers-screen>.messenger-security-content{height:100%;display:grid;grid-template-rows:minmax(52px,1fr) auto minmax(0,1fr)}
+body[data-admin-active-page] .is-messengers-screen>.messenger-security-content>.messenger-security-toolbar{align-self:start}
+body[data-admin-active-page] .is-messengers-screen>.messenger-security-content>.messenger-security-notice{align-self:start}
+body[data-admin-active-page] .user-menu-dropdown.is-messengers-screen{background:var(--color-surface)}
 body[data-admin-active-page] #userMenuMessengerSecurity > i{color:var(--color-primary)}
 body[data-admin-active-page] #userMenuLogout{justify-content:center;text-align:center;text-transform:uppercase}
 body[data-admin-active-page] #userMenuLogout > i{display:none}

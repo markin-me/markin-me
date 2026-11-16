@@ -122,7 +122,6 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can
     max_bot_token: 'settings.system.integrations',
     max_mini_app_enabled: 'settings.system.integrations',
     max_login_enabled: 'settings.system.integrations',
-    tg_mini_app_enabled: 'settings.system.integrations',
     tg_login_enabled: 'settings.system.integrations',
     chat_welcome_message: 'settings.chat.update',
     chat_welcome_enabled: 'settings.chat.update',
@@ -1135,6 +1134,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can
       custom_domain_ascii: primaryDomain ? primaryDomain.domain_ascii : null
     };
     delete nextTenant.password_hash;
+    delete nextTenant.tg_mini_app_enabled;
     delete nextTenant.map_provider_accounts_json;
     const integrationAccess = typeof can === 'function'
       ? await can(req.user, 'settings.system.integrations', { tenant_id: Number(tenant.id) })
@@ -1826,6 +1826,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can
     if (!tenant || typeof tenant !== 'object') return null;
     const source = { ...tenant };
     delete source.password_hash;
+    delete source.tg_mini_app_enabled;
     delete source.map_provider_accounts_json;
     delete source.site_menu_items_json;
     delete source.telegram_bot_token;
@@ -3994,7 +3995,6 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const maxBotToken = req.body.max_bot_token !== undefined ? helpers.strOrNull(req.body.max_bot_token) : undefined;
       const maxMiniAppEnabled = req.body.max_mini_app_enabled !== undefined ? (helpers.toBool(req.body.max_mini_app_enabled, false) ? 1 : 0) : undefined;
       const maxLoginEnabled = req.body.max_login_enabled !== undefined ? (helpers.toBool(req.body.max_login_enabled, false) ? 1 : 0) : undefined;
-      const tgMiniAppEnabled = req.body.tg_mini_app_enabled !== undefined ? (helpers.toBool(req.body.tg_mini_app_enabled, false) ? 1 : 0) : undefined;
       const tgLoginEnabled = req.body.tg_login_enabled !== undefined ? (helpers.toBool(req.body.tg_login_enabled, false) ? 1 : 0) : undefined;
       const chatWelcomeMessage = req.body.chat_welcome_message !== undefined ? helpers.strOrNull(req.body.chat_welcome_message) : undefined;
       const chatWelcomeEnabled = req.body.chat_welcome_enabled !== undefined
@@ -4215,7 +4215,6 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const nextMaxLoginEnabled = maxLoginEnabled !== undefined ? maxLoginEnabled : (current.max_login_enabled ?? 0);
       const nextTelegramBotUsername = telegramBotUsername !== undefined ? telegramBotUsername : (current.telegram_bot_username ?? null);
       const nextTelegramBotToken = telegramBotToken !== undefined ? telegramBotToken : (current.telegram_bot_token ?? null);
-      const nextTgMiniAppEnabled = tgMiniAppEnabled !== undefined ? tgMiniAppEnabled : (current.tg_mini_app_enabled ?? 0);
       const nextTgLoginEnabled = tgLoginEnabled !== undefined ? tgLoginEnabled : (current.tg_login_enabled ?? 0);
       const nextChatWelcomeMessage = chatWelcomeMessage !== undefined ? chatWelcomeMessage : (current.chat_welcome_message ?? null);
       const nextChatWelcomeEnabled = chatWelcomeEnabled !== undefined
@@ -4274,9 +4273,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
         ? collectSiteMenuIconUrls(nextSiteMenuItemsJson)
         : null;
 
-      const savesTelegramSettings = [telegramBotUsername, telegramBotToken, tgMiniAppEnabled, tgLoginEnabled]
+      const savesTelegramSettings = [telegramBotUsername, telegramBotToken, tgLoginEnabled]
         .some(value => value !== undefined);
-      if (savesTelegramSettings && nextTelegramBotToken && nextTelegramBotUsername) {
+      if (savesTelegramSettings && nextTelegramBotToken && nextTelegramBotUsername
+          && !require('../telegramPolling').pollingOwnsToken(nextTelegramBotToken)) {
         const webhookBaseUrl = normalizeAbsoluteBaseUrl(`${req.protocol}://${req.get('host')}`, { httpsOnly: true });
         if (!webhookBaseUrl) {
           return res.status(400).json({ ok: false, error: 'TELEGRAM_WEBHOOK_HTTPS_REQUIRED' });
@@ -4296,8 +4296,8 @@ async function fetchStoreWithHours(tenantId, storeId) {
       }
 
       const [tenantUpdate] = await db.query(
-        'UPDATE ten_tenants SET name=?, email=IF(?, ?, email), phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=? AND (NOT ? OR email <=> ?)',
-        [nextName, changesTenantEmail, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextImportantMessagesEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId, changesTenantEmail, current.email]
+        'UPDATE ten_tenants SET name=?, email=IF(?, ?, email), phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=? AND (NOT ? OR email <=> ?)',
+        [nextName, changesTenantEmail, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextImportantMessagesEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId, changesTenantEmail, current.email]
       );
       if (changesTenantEmail && !tenantUpdate.affectedRows) {
         return res.status(409).json({ ok: false, error: 'TENANT_CREDENTIAL_CHANGED' });

@@ -14,19 +14,22 @@ const SQL_PREVIEW_MAX_LEN = Math.max(40, Number(process.env.DB_SQL_PREVIEW_MAX_L
 const DB_TRANSIENT_RETRY_COUNT = Math.max(0, Number(process.env.DB_TRANSIENT_RETRY_COUNT || 1) || 1);
 const DB_TRANSIENT_RETRY_DELAY_MS = Math.max(0, Number(process.env.DB_TRANSIENT_RETRY_DELAY_MS || 80) || 80);
 
-const pool = mysql.createPool({
+const connectionOptions = {
   host: process.env.DB_HOST || "localhost",
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD || "",
   database: process.env.DB_NAME || "test_shop",
   port: process.env.DB_PORT || 3306,
   charset: "utf8mb4_unicode_ci",
-  waitForConnections: true,
-  connectionLimit: DB_CONNECTION_LIMIT,
-  queueLimit: 0,
   connectTimeout: 20000,
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
+};
+const pool = mysql.createPool({
+  ...connectionOptions,
+  waitForConnections: true,
+  connectionLimit: DB_CONNECTION_LIMIT,
+  queueLimit: 0,
 });
 
 pool.on("connection", (conn) => {
@@ -217,6 +220,21 @@ promisePool.getConnection = async function instrumentedGetConnection(...args) {
   }
 
   return wrapQueryable(connection, "connection");
+};
+
+// Polling advisory locks must not consume all request-pool slots.
+promisePool.getDedicatedConnection = async function getDedicatedConnection() {
+  const connection = mysql.createConnection(connectionOptions);
+  connection.on("error", () => connection.destroy());
+  const queryable = connection.promise();
+  try {
+    await queryable.connect();
+    await queryable.query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+    return wrapQueryable(queryable, "connection");
+  } catch (error) {
+    connection.destroy();
+    throw error;
+  }
 };
 
 promisePool.withRequestMetrics = withRequestMetrics;

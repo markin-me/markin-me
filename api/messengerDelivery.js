@@ -76,7 +76,7 @@ async function getTenantBotConfig(db, tenantId, provider, options = {}) {
   }
   const [rows] = await db.query(
     `SELECT id, is_active, name, site_name, telegram_bot_username, telegram_bot_token, tg_login_enabled,
-            tg_mini_app_enabled, max_bot_id, max_bot_token, max_login_enabled, max_mini_app_enabled
+            max_bot_id, max_bot_token, max_login_enabled, max_mini_app_enabled
      FROM ten_tenants WHERE id=? LIMIT 1`, [Number(tenantId)]
   );
   const row = rows[0];
@@ -85,12 +85,12 @@ async function getTenantBotConfig(db, tenantId, provider, options = {}) {
   const enabled = options.customer
     ? Boolean((await require('./helpers/customerAuth').settings(db,tenantId))[provider])
     : Number(provider === 'max' ? row?.max_login_enabled : row?.tg_login_enabled) === 1;
-  const miniAppEnabled = Number(provider === 'max' ? row?.max_mini_app_enabled : row?.tg_mini_app_enabled) === 1;
   if (!row || Number(row.is_active) !== 1 || !token || !identifier || (!options.allowDisabled && !enabled)) {
     throw new MessengerAuthError('TENANT_BOT_UNAVAILABLE', 409);
   }
   // Shared bots are routed by a server-side one-time request, not by a browser tenant ID.
-  return { tenantId: Number(tenantId), provider, token, identifier, enabled, miniAppEnabled, brand: String(row.site_name || row.name || '').trim() };
+  return { tenantId: Number(tenantId), provider, token, identifier, enabled,
+    ...(provider === 'max' ? { miniAppEnabled: Number(row.max_mini_app_enabled) === 1 } : {}), brand: String(row.site_name || row.name || '').trim() };
 }
 
 async function getTenantChannelAvailability(db, tenantId) {

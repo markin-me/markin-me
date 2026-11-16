@@ -561,7 +561,6 @@
 
 
 
-    tg_mini_app_enabled: 1,
 
 
 
@@ -5555,7 +5554,6 @@
 
 
 
-      const tgMiniAppEnabledInput = document.getElementById("tenantTelegramMiniAppEnabled");
 
 
 
@@ -5603,15 +5601,6 @@
 
 
 
-      if (tgMiniAppEnabledInput) {
-
-
-
-        tgMiniAppEnabledInput.checked = Number(tenant.tg_mini_app_enabled ?? 1) === 1;
-
-
-
-      }
 
 
 
@@ -5651,7 +5640,6 @@
 
 
 
-        tg_mini_app_enabled: Number(tenant.tg_mini_app_enabled ?? 1) === 1 ? 1 : 0,
 
 
 
@@ -5715,7 +5703,6 @@
 
 
 
-      if (tgMiniAppEnabledInput) tgMiniAppEnabledInput.disabled = true;
 
 
 
@@ -24136,7 +24123,6 @@
 
 
 
-    const tgMiniAppEnabledEl = document.getElementById("tenantTelegramMiniAppEnabled");
 
 
 
@@ -25220,7 +25206,6 @@
 
 
 
-        tg_mini_app_enabled: tgMiniAppEnabledEl && tgMiniAppEnabledEl.checked ? 1 : 0,
 
 
 
@@ -25252,7 +25237,6 @@
 
 
 
-      if (tgMiniAppEnabledEl) tgMiniAppEnabledEl.checked = Number(values.tg_mini_app_enabled || 0) === 1;
 
 
 
@@ -25312,7 +25296,6 @@
 
 
 
-      if (tgMiniAppEnabledEl) tgMiniAppEnabledEl.disabled = !telegramDraftMode;
 
 
 
@@ -25497,7 +25480,6 @@
 
 
 
-          tg_mini_app_enabled: telegramDraft.tg_mini_app_enabled ? 1 : 0,
 
 
 
@@ -25553,7 +25535,6 @@
 
 
 
-            tg_mini_app_enabled: Number(data.tenant.tg_mini_app_enabled ?? 1) === 1 ? 1 : 0,
 
 
 
@@ -26493,42 +26474,6 @@
 
 
 
-
-
-
-    if (tgMiniAppEnabledEl) {
-
-
-
-      tgMiniAppEnabledEl.addEventListener("change", function () {
-
-
-
-        if (telegramDraftMode) {
-
-
-
-          telegramDraft.tg_mini_app_enabled = tgMiniAppEnabledEl.checked ? 1 : 0;
-
-
-
-        } else {
-
-
-
-          updateTenantFields({ tg_mini_app_enabled: tgMiniAppEnabledEl.checked ? 1 : 0 });
-
-
-
-        }
-
-
-
-      });
-
-
-
-    }
 
 
 

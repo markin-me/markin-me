@@ -4,6 +4,8 @@
  */
 const crypto = require('crypto');
 const { requestTelegramApi, telegramErrorReason } = require('./telegramApi');
+
+const { fetchTelegram } = require('./telegramTransport');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const TG_LOGIN_START_PAYLOADS = new Set(['login', 'auth', 'link', 'shop']);
 
@@ -84,6 +86,9 @@ async function processUpdate(db, apiBase, update, options = {}) {
     || ''
   ).trim();
 
+  // System bot does not authorize unsolicited contacts or a bare Start.
+  if (contactPhone || /^\/start(?:@\w+)?\s*$/i.test(text)) return;
+
   try {
     if (contactPhone) {
       await send(
@@ -116,7 +121,6 @@ async function processUpdate(db, apiBase, update, options = {}) {
       }
 
       if (TG_LOGIN_START_PAYLOADS.has(String(payload).toLowerCase())) {
-        await sendContactRequestMessage(apiBase, chatId, options.onTelegramApiTiming);
         return;
       }
 
@@ -199,7 +203,7 @@ function startPolling(db, token) {
     if (stopped) return;
     try {
       const url = `${apiBase}/getUpdates?offset=${offset}&timeout=25`;
-      const res = await fetch(url);
+      const res = await fetchTelegram(url, { requestTimeoutMs: 30000 });
       const data = await res.json();
       if (!data.ok || !Array.isArray(data.result)) return;
       for (const u of data.result) {
@@ -239,8 +243,9 @@ async function handleWebhookUpdate(db, token, update, options = {}) {
 
 async function setWebhook(token, webhookUrl, secret = '', options = {}) {
   if (!token || !webhookUrl) return;
+  if (require('./telegramPolling').pollingOwnsToken(token)) throw Object.assign(new Error('TELEGRAM_POLLING_ENABLED'), { code: 'TELEGRAM_POLLING_ENABLED' });
   const apiBase = `${TELEGRAM_API}${token.trim()}`;
-  const res = await fetch(`${apiBase}/setWebhook`, {
+  const res = await fetchTelegram(`${apiBase}/setWebhook`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -248,7 +253,7 @@ async function setWebhook(token, webhookUrl, secret = '', options = {}) {
       ...(String(secret || '').trim() ? { secret_token: String(secret).trim() } : {}),
       allowed_updates: options.allowedUpdates || ['message'],
     }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(15000), requestTimeoutMs: 15000,
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.description || 'setWebhook failed');
@@ -258,10 +263,10 @@ async function setWebhook(token, webhookUrl, secret = '', options = {}) {
 async function deleteWebhook(token) {
   if (!token) return;
   const apiBase = `${TELEGRAM_API}${token.trim()}`;
-  const res = await fetch(`${apiBase}/deleteWebhook`, {
+  const res = await fetchTelegram(`${apiBase}/deleteWebhook`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ drop_pending_updates: false }),
+    body: JSON.stringify({ drop_pending_updates: false }), requestTimeoutMs: 15000,
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.description || 'deleteWebhook failed');
