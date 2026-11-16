@@ -1,5 +1,6 @@
 const { confirmMaxLink, sendMaxMessage, getTenantMaxBotId } = require('./maxIntegration');
 const crypto = require('crypto');
+const { listTemplates, renderTemplate } = require('./botContentTemplates');
 const { keepCurrentOperationPending, markCurrentOperation, recordCurrentServiceMessage } = require('./messengerCleanup');
 
 function normalizeUpdatesPayload(data) {
@@ -766,7 +767,32 @@ async function sendTenantMaxProfileHint(db, tenantId, token, userId, send) {
       : undefined });
 }
 
-async function handleTenantMaxUpdate(db, helpers, { tenantId, token }, u, options = {}, send = sendTenantMaxMessage) {
+async function sendConfiguredMaxWelcome(db, tenantId, storeId, token, userId, send) {
+  const templates = await listTemplates(db, tenantId, Number(storeId || 1), 'max');
+  const welcome = templates.find((item) => item.key === 'welcome');
+  const links = await getTenantReturnLinks(db, tenantId);
+  const [[tenant]] = await db.query('SELECT name,site_name FROM ten_tenants WHERE id=? LIMIT 1', [tenantId]);
+  const text = renderTemplate(welcome?.text || welcome?.default_text || '', {
+    store_name: String(tenant?.site_name || tenant?.name || '').trim(),
+    site_url: links.siteUrl,
+    mini_app_url: links.miniAppUrl,
+  });
+  const buttons = [];
+  const siteUrl = toMaxInlineLinkUrl(links.siteUrl);
+  const miniAppUrl = toMaxInlineLinkUrl(links.miniAppUrl);
+  if (siteUrl && isMaxInlineLinkUrl(siteUrl)) buttons.push([{ type: 'link', text: 'Открыть магазин', url: siteUrl }]);
+  if (miniAppUrl && isMaxInlineLinkUrl(miniAppUrl)) buttons.push([{ type: 'link', text: 'Открыть mini app', url: miniAppUrl }]);
+  await send({
+    db,
+    tenantId,
+    botToken: token,
+    maxUserId: userId,
+    text,
+    extraPayload: buttons.length ? { attachments: [{ type: 'inline_keyboard', payload: { buttons } }] } : undefined,
+  });
+}
+
+async function handleTenantMaxUpdate(db, helpers, { tenantId, storeId = 1, token }, u, options = {}, send = sendTenantMaxMessage) {
   if(u?.update_type==='message_callback' && /^auth:(?:b_[A-Za-z0-9_-]{40}|r_[A-Za-z0-9_-]{43})$/.test(String(u.callback?.payload)) && options.onBrowserAuth){
     const uid=String(u.callback?.user?.user_id || '');
     if(!uid || u.callback.user.is_bot)return;
@@ -780,14 +806,14 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, token }, u, option
   }
   const parsed = parseUpdate(u);
   if (options.loginEnabled === false) {
-    if (parsed.userId && (parsed.payload || isPlainStartCommand(parsed.text) || parsed.updateType === 'bot_started')) {
+    if (parsed.userId && parsed.payload) {
       await markCurrentOperation('error');
       const links = await getTenantReturnLinks(db, tenantId);
       await send({ db, tenantId, botToken: token, maxUserId: parsed.userId,
         text: 'Вход через бота отключён в настройках магазина.',
         extraPayload: links.miniAppUrl ? { attachments: [{ type: 'inline_keyboard', payload: { buttons: [[{ type: 'link', text: 'Открыть мини-приложение', url: links.miniAppUrl }]] } }] } : undefined });
     }
-    return;
+    if (parsed.payload) return;
   }
 
   const startToken = parsed.payload || extractStartAppToken(parsed.text);
@@ -886,33 +912,7 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, token }, u, option
   }
 
   if ((isPlainStartCommand(parsed.text) || parsed.updateType === 'bot_started') && parsed.userId) {
-    const pendingOrigin = await readPendingOrigin(db, tenantId, parsed.userId);
-    const knownCustomerId = await findKnownCustomerForAuth(
-      db,
-      helpers,
-      tenantId,
-      parsed.userId,
-      null
-    );
-    if (knownCustomerId) {
-      const loginMessage = await buildLoginMessage(
-        db,
-        tenantId,
-        knownCustomerId,
-        '\u041c\u044b \u0443\u0437\u043d\u0430\u043b\u0438 \u0432\u0430\u0448 \u0430\u043a\u043a\u0430\u0443\u043d\u0442. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435, \u043a\u0443\u0434\u0430 \u043f\u0435\u0440\u0435\u0439\u0442\u0438:',
-        pendingOrigin
-      );
-      await send({
-        db,
-        tenantId,
-        botToken: token,
-        maxUserId: parsed.userId,
-        text: loginMessage.text,
-        extraPayload: loginMessage.extraPayload || undefined,
-      });
-      return;
-    }
-    await sendTenantMaxProfileHint(db, tenantId, token, parsed.userId, send);
+    await sendConfiguredMaxWelcome(db, tenantId, storeId, token, parsed.userId, send);
     return;
   }
 

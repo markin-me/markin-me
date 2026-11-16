@@ -43,6 +43,7 @@ const { createTelegramPolling, pollingOwnsToken, botKey } = require('./api/teleg
 const {
   createMessengerCleanupWorker,
 } = require('./api/messengerCleanup');
+const { createCampaignDeliveryWorker } = require('./api/campaignDelivery');
 const {
   readSystemSettings,
   writeSystemSettings,
@@ -88,6 +89,7 @@ const makeAdminTeamRouter = require('./api/admin/team');
 const makePublicShopRouter = require('./api/public/shop');
 const makePrintApiRouter = require('./api/print');
 const makeChatTempRouter = require('./api/chatTemp');
+const { sendImportantMessagePush } = require('./api/importantMessagePush');
 const {
   BASE_ACTION_LABELS,
   NAVIGATION_RBAC_NODES,
@@ -110,6 +112,16 @@ const telegramPolling = createTelegramPolling(db, async (token, update) => {
     if (config.token !== token) throw new Error('BOT_SCOPE_MISMATCH');
     await handleTenantMessengerUpdate(eventDb, helpers, config, update, event, null, operation);
   }, namespace, { legacyNamespaces: await telegramLegacyNamespaces(db, token) });
+});
+const campaignDeliveryWorker = createCampaignDeliveryWorker(db, {
+  onStorefrontStarted: ({ tenantId, storeId, message }) => sendImportantMessagePush({
+    db,
+    ensurePushSubscriptionsTable: makeChatTempRouter.ensurePushSubscriptionsTable,
+    sendPushToSubscriptions: makeChatTempRouter.sendPushToSubscriptions,
+    tenantId,
+    storeId,
+    message,
+  }),
 });
 // Only trusted reverse proxies may supply client IP/protocol for login limits and HTTPS checks.
 app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
@@ -3507,7 +3519,16 @@ server.on('listening', () => {
   console.log(`🚀 Сервер запущен на ${PORT}`);
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
   // Webhook registration is an explicit operator action, never a startup side effect.
-  messengerCleanupWorker.start();
+  if (String(process.env.DISABLE_MESSENGER_CLEANUP || '').trim() !== '1') {
+    messengerCleanupWorker.start();
+  } else {
+    console.log('Messenger cleanup worker disabled for this process.');
+  }
+  if (String(process.env.ENABLE_CAMPAIGN_DELIVERY_WORKER || '').trim() === '1') {
+    campaignDeliveryWorker.start();
+  } else {
+    console.log('Campaign delivery worker disabled for this process.');
+  }
   telegramPolling.start().catch(error => console.error('TELEGRAM_POLLING_START_FAILED', { reason: telegramErrorReason(error) }));
 
 });
@@ -3522,7 +3543,7 @@ server.on('error', (err) => {
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.once(signal, () => {
-    Promise.all([telegramPolling.stop(), messengerCleanupWorker.stop()])
+    Promise.all([telegramPolling.stop(), messengerCleanupWorker.stop(), campaignDeliveryWorker.stop()])
       .then(() => server.close(() => process.exit(0)))
       .catch(() => process.exit(1));
     setTimeout(() => process.exit(1), 15000).unref();

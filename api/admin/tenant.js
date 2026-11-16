@@ -16,6 +16,11 @@ const { domainToASCII, domainToUnicode } = require('url');
 const chatTempRuntime = require('../chatTemp');
 const { getTenantBotConfig, getTenantWebhookSecret } = require('../messengerDelivery');
 const { setWebhook: setTelegramWebhook } = require('../telegramBot');
+const {
+  listTemplates: listBotContentTemplates,
+  resetTemplate: resetBotContentTemplate,
+  saveTemplates: saveBotContentTemplates,
+} = require('../botContentTemplates');
 const { geocodeStoreAddress } = require('../../data/map-geocoder');
 const {
   ensureTenantMapConfigColumns,
@@ -69,6 +74,50 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can
       }
     });
     next();
+  });
+  router.get('/bot-content/:provider', async (req, res, next) => {
+    try {
+      if (!await requireTenantPermissions(req, res, ['settings.site.read'])) return;
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const templates = await listBotContentTemplates(db, tenantId, storeId, req.params.provider);
+      return res.json({ ok: true, data: { provider: req.params.provider, templates } });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ ok: false, error: error.code });
+      return next(error);
+    }
+  });
+  router.put('/bot-content/:provider', async (req, res, next) => {
+    try {
+      if (!await requireTenantPermissions(req, res, ['settings.system.integrations'])) return;
+      const templates = await saveBotContentTemplates(db, {
+        tenantId: helpers.getTenantId(req),
+        storeId: helpers.getStoreId(req),
+        provider: req.params.provider,
+        templates: req.body?.templates,
+        userId: req.user?.id,
+      });
+      return res.json({ ok: true, data: { provider: req.params.provider, templates } });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ ok: false, error: error.code, variable: error.variable });
+      return next(error);
+    }
+  });
+  router.delete('/bot-content/:provider/:templateKey', async (req, res, next) => {
+    try {
+      if (!await requireTenantPermissions(req, res, ['settings.system.integrations'])) return;
+      await resetBotContentTemplate(
+        db,
+        helpers.getTenantId(req),
+        helpers.getStoreId(req),
+        req.params.provider,
+        String(req.params.templateKey || '').trim()
+      );
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ ok: false, error: error.code });
+      return next(error);
+    }
   });
   router.get('/customer-auth',async(req,res,next)=>{
     try{

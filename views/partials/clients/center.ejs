@@ -9,11 +9,97 @@
         <div class="toolbar-title" id="clientsToolbarTitle">
           <i class="fas fa-users"></i>
           <span id="clientsToolbarText">Клиенты</span>
+          <label class="switch important-messages-title-switch hidden" id="clientsImportantMessagesSwitchWrap" title="Включить или выключить PROMO сообщения" aria-label="Включить или выключить PROMO сообщения">
+            <input class="switch-input" type="checkbox" id="clientsImportantMessagesEnabledSwitch" />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
           <span id="clientsOnlineCount" class="clients-online-count">· — онлайн</span>
         </div>
       </div>
 
       <div class="toolbar-right">
+        <form class="cl-search-wrap hidden" id="importantMessagesSearchWrap" role="search">
+          <input
+            id="importantMessagesSearch"
+            class="cl-search-input"
+            type="search"
+            placeholder="Поиск по названию"
+            aria-label="Поиск проморассылок"
+            autocomplete="off"
+            tabindex="-1"
+          />
+          <button id="importantMessagesSearchToggle" class="icon-btn cl-search-toggle" type="button" aria-label="Поиск" title="Поиск" aria-controls="importantMessagesSearch" aria-expanded="false">
+            <i class="fas fa-search" aria-hidden="true"></i>
+          </button>
+        </form>
+
+        <div class="new-order-right-select-wrap cash-toolbar-filter hidden" id="importantMessagesFilterWrap">
+          <button class="new-order-right-select-trigger cash-toolbar-filter-trigger" type="button" id="importantMessagesFilterBtn" aria-haspopup="listbox" aria-expanded="false">
+            <span class="cash-toolbar-filter-main">
+              <i class="fas fa-filter" aria-hidden="true"></i>
+              <span id="importantMessagesFilterLabel">Фильтр</span>
+            </span>
+            <i class="fas fa-chevron-down" aria-hidden="true"></i>
+          </button>
+          <div class="new-order-right-select-menu no-scrollbar important-messages-filter-menu" id="importantMessagesFilterMenu" aria-label="Фильтр проморассылок">
+            <div class="important-messages-filter-group">
+              <button class="important-messages-filter-title" type="button" data-important-filter-section aria-expanded="false">
+                <span>Статус</span><i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="important-messages-filter-options">
+                <label class="important-messages-filter-option" data-important-filter-status="draft"><input type="checkbox" /> <span>Черновики</span></label>
+                <label class="important-messages-filter-option" data-important-filter-status="scheduled"><input type="checkbox" /> <span>Запланированные</span></label>
+                <label class="important-messages-filter-option" data-important-filter-status="active"><input type="checkbox" /> <span>Активные</span></label>
+                <label class="important-messages-filter-option" data-important-filter-status="paused"><input type="checkbox" /> <span>Приостановленные</span></label>
+                <label class="important-messages-filter-option" data-important-filter-status="completed"><input type="checkbox" /> <span>Завершённые</span></label>
+              </div>
+            </div>
+            <div class="important-messages-filter-group">
+              <button class="important-messages-filter-title" type="button" data-important-filter-section aria-expanded="false">
+                <span>Сортировка</span><i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="important-messages-filter-options">
+                <label class="important-messages-filter-option" data-important-sort="storefront"><input name="important-messages-sort" type="radio" checked /> <span>Порядок на сайте</span></label>
+                <label class="important-messages-filter-option" data-important-sort="newest"><input name="important-messages-sort" type="radio" /> <span>Сначала новые</span></label>
+                <label class="important-messages-filter-option" data-important-sort="oldest"><input name="important-messages-sort" type="radio" /> <span>Сначала старые</span></label>
+                <label class="important-messages-filter-option" data-important-sort="nearest"><input name="important-messages-sort" type="radio" /> <span>Ближайший запуск</span></label>
+                <label class="important-messages-filter-option" data-important-sort="title"><input name="important-messages-sort" type="radio" /> <span>По названию</span></label>
+              </div>
+            </div>
+            <div class="important-messages-filter-group is-open">
+              <button class="important-messages-filter-title" type="button" data-important-filter-section aria-expanded="true">
+                <span>Тип публикации</span><i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="important-messages-filter-options">
+                <label class="important-messages-filter-option" data-important-filter-type="none"><input type="checkbox" /> <span>Информация</span></label>
+                <label class="important-messages-filter-option" data-important-filter-type="promo_code"><input type="checkbox" /> <span>Промокод</span></label>
+                <label class="important-messages-filter-option" data-important-filter-type="product"><input type="checkbox" /> <span>Товар</span></label>
+                <label class="important-messages-filter-option" data-important-filter-type="product_collection"><input type="checkbox" /> <span>Подборка</span></label>
+              </div>
+            </div>
+            <div class="important-messages-filter-group">
+              <button class="important-messages-filter-title" type="button" data-important-filter-section aria-expanded="false">
+                <span>Каналы</span><i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="important-messages-filter-options">
+                <label class="important-messages-filter-option" data-important-filter-channel="storefront"><input type="checkbox" /> <span>Сайт</span></label>
+                <label class="important-messages-filter-option" data-important-filter-channel="telegram"><input type="checkbox" /> <span>Telegram</span></label>
+                <label class="important-messages-filter-option" data-important-filter-channel="max"><input type="checkbox" /> <span>MAX</span></label>
+              </div>
+            </div>
+            <div class="important-messages-filter-group">
+              <button class="important-messages-filter-title" type="button" data-important-filter-section aria-expanded="false">
+                <span>Сайт</span><i class="fas fa-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div class="important-messages-filter-options">
+                <label class="important-messages-filter-option" data-important-filter-visibility="visible"><input type="checkbox" /> <span>Показывается</span></label>
+                <label class="important-messages-filter-option" data-important-filter-visibility="hidden"><input type="checkbox" /> <span>Скрыта</span></label>
+              </div>
+            </div>
+            <button class="important-messages-filter-reset" type="button" data-important-filter-reset>Сбросить</button>
+          </div>
+        </div>
+
         <!-- Expandable search with toggle -->
         <div class="cl-search-wrap" id="clientsSearchWrap">
           <input
@@ -44,16 +130,10 @@
         </div>
 
         <!-- Add button (context-dependent) -->
-        <label class="switch settings-chat-subheader-switch hidden" id="clientsBannersSwitchWrap" title="Показывать блоки на витрине">
+        <label class="switch settings-chat-subheader-switch hidden" id="clientsBannersSwitchWrap" title="Показывать блоки на сайте">
           <input class="switch-input" type="checkbox" id="clientsBannersEnabledSwitch" />
           <span class="switch-ui" aria-hidden="true"></span>
-          <span class="switch-text">Показывать на витрине</span>
-        </label>
-
-        <label class="switch settings-chat-subheader-switch hidden" id="clientsImportantMessagesSwitchWrap" title="Вкл/выкл PROMO сообщений">
-          <input class="switch-input" type="checkbox" id="clientsImportantMessagesEnabledSwitch" />
-          <span class="switch-ui" aria-hidden="true"></span>
-          <span class="switch-text">Вкл/выкл PROMO сообщений</span>
+          <span class="switch-text">Показывать на сайте</span>
         </label>
 
         <label class="bonus-point-rate-control hidden" id="clientsBonusPointRateWrap" title="Курс бонусов">
@@ -126,7 +206,7 @@
           <div class="banners-placement-zone" id="bannersPlacementZone">
             <div class="banners-placement-head">
               <div class="banners-placement-copy">
-                <div class="banners-placement-title">Размещение на витрине</div>
+                <div class="banners-placement-title">Размещение на сайте</div>
               </div>
             </div>
 
@@ -144,7 +224,7 @@
         </div>
       </div>
 
-      <div class="content-view hidden" data-view-content="important-messages">
+      <div class="content-view hidden important-messages-content-view" data-view-content="important-messages">
         <div class="orders-list" id="importantMessagesList"></div>
         <div class="empty-hint hidden" id="importantMessagesEmptyHint">Пока нет Promo рассылок. Нажмите «+», чтобы создать новую рассылку.</div>
       </div>
@@ -235,7 +315,7 @@
       <div class="admin-sheet-header">
         <div>
           <div class="admin-sheet-title" id="bannerPickerTitle">Размещение баннеров</div>
-          <div class="admin-sheet-subtitle" id="bannerPickerSubtitle">Выберите баннеры для блока на витрине</div>
+          <div class="admin-sheet-subtitle" id="bannerPickerSubtitle">Выберите баннеры для блока на сайте</div>
         </div>
         <button
           type="button"

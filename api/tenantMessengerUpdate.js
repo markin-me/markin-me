@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { recordMessengerBotContact } = require('./messengerBotContacts');
 const { completeLinkChallenge, completeBotLoginRequest, browserBotAction } = require('./messengerAuth');
 const { getTenantBotConfig, getTenantWebhookSecret, recordTenantTelegramContact, deliverCode } = require('./messengerDelivery');
 const { handleTenantTelegramUpdate } = require('./tenantTelegramBot');
@@ -140,14 +141,15 @@ async function handleTenantMessengerUpdate(eventDb, helpers, ingressConfig, upda
       return result;
     },
   };
+  await recordMessengerBotContact(eventDb, config, update);
   if (provider === 'tg') {
     await recordTenantTelegramContact(eventDb, config, update);
     await handleTenantTelegramUpdate(eventDb, helpers, {
-      tenantId: config.tenantId, token: config.token, username: config.identifier,
+      tenantId: config.tenantId, storeId: config.storeId, token: config.token, username: config.identifier,
     }, update, options);
   } else {
     await handleTenantMaxUpdate(eventDb, helpers, {
-      tenantId: config.tenantId, token: config.token,
+      tenantId: config.tenantId, storeId: config.storeId, token: config.token,
     }, update, options);
   }
   });

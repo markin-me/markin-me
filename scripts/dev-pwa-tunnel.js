@@ -354,11 +354,11 @@ async function main() {
     }
     const route=messengerWebhookMode?`/api/${maxWebhookMode?'max':'telegram'}/webhook/${tenantId}`:'/webhooks/yookassa';
     const secretHeader=maxWebhookMode?'x-max-bot-api-secret':'x-telegram-bot-api-secret-token';
-    const servicePort=Number(messengerWebhookMode?(readArgValue('--service-port') || 3107):(serviceEnv.PAYMENT_SERVICE_PORT || 3500));
+    const servicePort=Number(messengerWebhookMode?(readArgValue('--service-port') || serviceEnv.PORT):(serviceEnv.PAYMENT_SERVICE_PORT || 3500));
     const proxyPort=Number(readArgValue('--port') || (maxWebhookMode?3509:telegramWebhookMode?3507:3501));
     if(!Number.isInteger(servicePort) || servicePort<1 || servicePort>65535 || !Number.isInteger(proxyPort)
       || proxyPort<1 || proxyPort>65535 || proxyPort===3000 || proxyPort===servicePort
-      || (messengerWebhookMode && servicePort!==3107))throw new Error('Invalid webhook ports.');
+      || (messengerWebhookMode && servicePort===3000))throw new Error('Invalid webhook ports.');
     webhookProxy=http.createServer((req,res)=>{
       if(req.method!=='POST' || req.url!==route){res.writeHead(404);return res.end();}
       if(messengerWebhookMode && !verifyTelegramSecret(req.headers[secretHeader])){res.writeHead(401);return res.end();}

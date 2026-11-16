@@ -74,11 +74,11 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
   }
   if (msg.chat?.type !== 'private' || String(chatId) !== String(fromId)) return;
   if (options.loginEnabled === false) {
-    if (payload || isPlainStart(text)) {
+    if (payload) {
       await markCurrentOperation('error');
       await send(chatId, 'Вход через бота отключён в настройках магазина.');
     }
-    return;
+    if (payload) return;
   }
 
   if(payload.startsWith('b_') && options.onBrowserAuth){

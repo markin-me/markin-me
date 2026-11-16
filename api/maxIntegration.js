@@ -83,10 +83,13 @@ async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPa
 
   const first = await sendOnce(makePayload(true));
   if (requireMessageConfirmation && (!first.ok || !first.data?.message)) {
-    const code = !first.ok
+    const attachmentNotReady = String(first.data?.code || '') === 'attachment.not.ready';
+    const code = attachmentNotReady
+      ? 'MAX_ATTACHMENT_NOT_READY'
+      : !first.ok
       ? ({ 401: 'MAX_TOKEN_REJECTED', 403: 'MAX_BOT_BLOCKED', 429: 'MAX_RATE_LIMITED' })[first.status] || 'MAX_DELIVERY_FAILED'
       : 'MAX_INVALID_DELIVERY_RESPONSE';
-    throw Object.assign(new Error(code), { code, httpStatus: first.status });
+    throw Object.assign(new Error(code), { code, ...(attachmentNotReady ? {} : { httpStatus: first.status }) });
   }
   if (first.ok) return { ok: true, data: first.data };
 
